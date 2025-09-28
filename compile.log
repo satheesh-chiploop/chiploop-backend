@@ -1,0 +1,16 @@
+design.v:31: warning: macro counter_4b undefined (and assumed null) at this point.
+design.v:31: warning: macro reset undefined (and assumed null) at this point.
+design.v:31: warning: macro enable undefined (and assumed null) at this point.
+design.v:31: warning: macro q undefined (and assumed null) at this point.
+design.v:31: warning: macro posedge undefined (and assumed null) at this point.
+design.v:31: warning: macro always undefined (and assumed null) at this point.
+design.v:31: syntax error
+I give up.design.v:31: warning: macro counter_4b undefined (and assumed null) at this point.
+design.v:31: warning: macro reset undefined (and assumed null) at this point.
+design.v:31: warning: macro enable undefined (and assumed null) at this point.
+design.v:31: warning: macro q undefined (and assumed null) at this point.
+design.v:31: warning: macro posedge undefined (and assumed null) at this point.
+design.v:31: warning: macro always undefined (and assumed null) at this point.
+design.v:31: syntax error
+I give up.
+
