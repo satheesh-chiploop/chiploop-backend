@@ -7,6 +7,8 @@ from fastapi.responses import FileResponse
 import os
 import importlib.util
 from langchain_ollama import OllamaLLM
+from fastapi.responses import JSONResponse
+
 llm = OllamaLLM(model="mistral")
 
 from spec_agent import spec_agent
@@ -60,81 +62,102 @@ async def run_workflow(
     file: UploadFile = File(None),
     spec_text: str = Form(None)
 ):
-    data = json.loads(workflow)
-    state = {}
+    try:
+        data = json.loads(workflow)
+        state = {}
 
-    if file:
-        contents = await file.read()
-        filename = f"uploads/{file.filename}"
-        os.makedirs("uploads", exist_ok=True)
-        with open(filename, "wb") as f:
-            f.write(contents)
-        state["uploaded_file"] = filename
+        if file:
+            contents = await file.read()
+            filename = f"uploads/{file.filename}"
+            os.makedirs("uploads", exist_ok=True)
+            with open(filename, "wb") as f:
+                f.write(contents)
+            state["uploaded_file"] = filename
 
-    if spec_text:
-        state["spec"] = spec_text
+        if spec_text:
+            state["spec"] = spec_text
 
-    results: Dict[str, str] = {}
-    artifacts: Dict[str, Dict[str, str]] = {}
+        results: Dict[str, str] = {}
+        artifacts: Dict[str, Dict[str, str]] = {}
 
-    for node in data["nodes"]:
-        label = node["label"]
-        func = AGENT_FUNCTIONS.get(label)
-        if func:
-            state = func(state)
-            results[label] = state.get("status", "✅ Done")
-            artifacts[label] = {
-                "artifact": state.get("artifact"),
-                "artifact_log": state.get("artifact_log"),
-            }
-        else:
-            results[label] = "⚠ No implementation yet."
+        for node in data.get("nodes", []):
+            label = node.get("label")
+            func = AGENT_FUNCTIONS.get(label)
+            if func:
+                state = func(state)
+                results[label] = state.get("status", "✅ Done")
+                artifacts[label] = {
+                    "artifact": state.get("artifact"),
+                    "artifact_log": state.get("artifact_log"),
+                }
+            else:
+                results[label] = "⚠ No implementation yet."
 
-    return {
-        "workflow_results": results,
-        "artifacts": artifacts,
-        "state": state,
-    }
+        return JSONResponse(
+            content={
+                "workflow_results": results,
+                "artifacts": artifacts,
+                "state": state,
+                "status": "success",
+            },
+            status_code=200,
+        )
+    except Exception as e:
+        return JSONResponse(
+            content={"status": "error", "message": str(e)},
+            status_code=500,
+        )
+
 
 @app.post("/create_agent")
 async def create_agent(agent_name: str = Form(...), description: str = Form(...)):
-    os.makedirs("agents", exist_ok=True)
-    filename = f"agents/{agent_name}.py"
+    try:
+        os.makedirs("agents", exist_ok=True)
+        filename = f"agents/{agent_name}.py"
 
-    # Ask Ollama to generate the Python code for the agent
-    prompt = f"""
-    Write a Python function for an agent named {agent_name}_agent.
+        # Ask Ollama to generate the Python code for the agent
+        prompt = f"""
+        Write a Python function for an agent named {agent_name}_agent.
 
-    Requirements:
-    - Function signature: def {agent_name}_agent(state: dict) -> dict
-    - The agent is described as: {description}
-    - It must always:
-        * Update state["status"]
-        * Save output to backend/{agent_name}.txt
-        * Save logs to backend/{agent_name}_log.txt
-        * Update state["artifact"] and state["artifact_log"]
-    - Keep the implementation self-contained and runnable.
-    """
+        Requirements:
+        - Function signature: def {agent_name}_agent(state: dict) -> dict
+        - The agent is described as: {description}
+        - It must always:
+            * Update state["status"]
+            * Save output to backend/{agent_name}.txt
+            * Save logs to backend/{agent_name}_log.txt
+            * Update state["artifact"] and state["artifact_log"]
+        - Keep the implementation self-contained and runnable.
+        """
 
-    generated_code = llm.invoke(prompt)
+        generated_code = llm.invoke(prompt)
 
-    # Save to file
-    with open(filename, "w", encoding="utf-8") as f:
-        f.write(generated_code)
+        # Save to file
+        with open(filename, "w", encoding="utf-8") as f:
+            f.write(generated_code)
 
-    # Dynamically import the new agent
-    spec = importlib.util.spec_from_file_location(f"{agent_name}_agent", filename)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    func = getattr(module, f"{agent_name}_agent")
+        # Dynamically import the new agent
+        spec = importlib.util.spec_from_file_location(f"{agent_name}_agent", filename)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        func = getattr(module, f"{agent_name}_agent")
 
-    # Register in runtime
-    AGENT_FUNCTIONS[f"✨ {agent_name} Agent"] = func
+        # Register in runtime
+        AGENT_FUNCTIONS[f"✨ {agent_name} Agent"] = func
 
-    return {
-        "message": f"Agent '{agent_name}' created successfully using AI",
-        "file": filename,
-    }
+        return JSONResponse(
+            content={
+                "status": "success",
+                "message": f"Agent '{agent_name}' created successfully using AI",
+                "file": filename,
+            },
+            status_code=200,
+        )
+    except Exception as e:
+        return JSONResponse(
+            content={"status": "error", "message": str(e)},
+            status_code=500,
+        )
 
 @app.get("/artifact/{filename}")
 def get_artifact(filename: str):
