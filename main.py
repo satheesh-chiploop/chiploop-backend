@@ -15,6 +15,10 @@ from optimizer_agent import optimizer_agent
 
 app = FastAPI(title="ChipLoop Backend")
 
+@app.get("/")
+async def root():
+    return {"status": "ok", "message": "Backend is live"}
+
 origins = [
     "http://localhost:3000",
     "https://chiploop-saas.vercel.app",  # your deployed frontend
