@@ -68,10 +68,10 @@ async def run_workflow(
     spec_text: str = Form(None)
 ):
 
-logger.info("🚀 run_workflow called")
-logger.info(f"workflow raw: {workflow[:200] if workflow else '❌ missing'}")
-logger.info(f"spec_text: {spec_text}")
-logger.info(f"file: {file.filename if file else '❌ none'}")
+    logger.info("🚀 run_workflow called")
+    logger.info(f"workflow raw: {workflow[:200] if workflow else '❌ missing'}")
+    logger.info(f"spec_text: {spec_text}")
+    logger.info(f"file: {file.filename if file else '❌ none'}")
 
     try:
         logger.info("🚀 /run_workflow called")
