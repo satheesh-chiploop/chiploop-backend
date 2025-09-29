@@ -6,6 +6,7 @@ import json
 from fastapi.responses import FileResponse
 import os
 import importlib.util
+import logging
 from langchain_ollama import OllamaLLM
 from fastapi.responses import JSONResponse
 
@@ -56,6 +57,9 @@ AGENT_FUNCTIONS = {
     "🛠 Optimizer Agent": optimizer_agent,
 }
 
+
+logger = logging.getLogger("uvicorn.error")
+
 @app.post("/run_workflow")
 async def run_workflow(
     workflow: str = Form(...),
@@ -63,6 +67,7 @@ async def run_workflow(
     spec_text: str = Form(None)
 ):
     try:
+        logger.info("🚀 /run_workflow called")
         data = json.loads(workflow)
         state = {}
 
@@ -73,9 +78,11 @@ async def run_workflow(
             with open(filename, "wb") as f:
                 f.write(contents)
             state["uploaded_file"] = filename
+            logger.info(f"📁 File uploaded: {filename}")
 
         if spec_text:
             state["spec"] = spec_text
+            logger.info("📝 Spec text provided")
 
         results: Dict[str, str] = {}
         artifacts: Dict[str, Dict[str, str]] = {}
@@ -84,14 +91,20 @@ async def run_workflow(
             label = node.get("label")
             func = AGENT_FUNCTIONS.get(label)
             if func:
-                state = func(state)
-                results[label] = state.get("status", "✅ Done")
-                artifacts[label] = {
-                    "artifact": state.get("artifact"),
-                    "artifact_log": state.get("artifact_log"),
-                }
+                try:
+                    state = func(state)
+                    results[label] = state.get("status", "✅ Done")
+                    artifacts[label] = {
+                        "artifact": state.get("artifact"),
+                        "artifact_log": state.get("artifact_log"),
+                    }
+                    logger.info(f"✅ Agent executed: {label}")
+                except Exception as agent_err:
+                    results[label] = f"❌ Error: {str(agent_err)}"
+                    logger.error(f"Agent {label} failed: {agent_err}")
             else:
                 results[label] = "⚠ No implementation yet."
+                logger.warning(f"No function found for agent: {label}")
 
         return JSONResponse(
             content={
@@ -102,7 +115,9 @@ async def run_workflow(
             },
             status_code=200,
         )
+
     except Exception as e:
+        logger.error(f"❌ Error in /run_workflow: {e}")
         return JSONResponse(
             content={"status": "error", "message": str(e)},
             status_code=500,
@@ -112,10 +127,10 @@ async def run_workflow(
 @app.post("/create_agent")
 async def create_agent(agent_name: str = Form(...), description: str = Form(...)):
     try:
+        logger.info(f"✨ Creating agent: {agent_name}")
         os.makedirs("agents", exist_ok=True)
         filename = f"agents/{agent_name}.py"
 
-        # Ask Ollama to generate the Python code for the agent
         prompt = f"""
         Write a Python function for an agent named {agent_name}_agent.
 
@@ -132,18 +147,16 @@ async def create_agent(agent_name: str = Form(...), description: str = Form(...)
 
         generated_code = llm.invoke(prompt)
 
-        # Save to file
         with open(filename, "w", encoding="utf-8") as f:
             f.write(generated_code)
 
-        # Dynamically import the new agent
         spec = importlib.util.spec_from_file_location(f"{agent_name}_agent", filename)
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         func = getattr(module, f"{agent_name}_agent")
 
-        # Register in runtime
         AGENT_FUNCTIONS[f"✨ {agent_name} Agent"] = func
+        logger.info(f"✅ Agent registered: {agent_name}")
 
         return JSONResponse(
             content={
@@ -153,11 +166,14 @@ async def create_agent(agent_name: str = Form(...), description: str = Form(...)
             },
             status_code=200,
         )
+
     except Exception as e:
+        logger.error(f"❌ Error in /create_agent: {e}")
         return JSONResponse(
             content={"status": "error", "message": str(e)},
             status_code=500,
         )
+
 
 @app.get("/artifact/{filename}")
 def get_artifact(filename: str):
