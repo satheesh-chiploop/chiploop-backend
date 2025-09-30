@@ -7,10 +7,9 @@ from fastapi.responses import FileResponse
 import os
 import importlib.util
 import logging
-from langchain_ollama import OllamaLLM
+
 from fastapi.responses import JSONResponse
 
-llm = OllamaLLM(model="mistral")
 
 from spec_agent import spec_agent
 from rtl_agent import rtl_agent
