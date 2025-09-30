@@ -57,7 +57,7 @@ def spec_agent(state: dict) -> dict:
     try:
         print("\n🚀 Compiling...")
         result = subprocess.run(
-            ["iverilog", "-o", "design.out", "design.v"],
+            ["/usr/bin/iverilog", "-o", "design.out", "design.v"],
             check=True,
             capture_output=True,
             text=True

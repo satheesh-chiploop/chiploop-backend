@@ -18,7 +18,7 @@ def rtl_agent(state: dict) -> dict:
 
     try:
         result = subprocess.run(
-            ["iverilog", "-tnull", rtl_file],  # quick syntax check
+            ["/usr/bin/iverilog", "-tnull", rtl_file],  # quick syntax check
             check=False, capture_output=True, text=True
         )
         with open(log_path, "a") as logf:  # append new results
