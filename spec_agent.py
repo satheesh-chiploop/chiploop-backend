@@ -1,11 +1,9 @@
-
 import subprocess
 import os
+from openai import OpenAI
 
-from langchain_ollama import OllamaLLM
-
-# Initialize LLM once
-llm = OllamaLLM(model="mistral")
+# Initialize OpenAI client
+client = OpenAI()
 
 def spec_agent(state: dict) -> dict:
     print("\n🚀 Running Spec Agent...")
@@ -17,41 +15,38 @@ def spec_agent(state: dict) -> dict:
 
     # Build prompt
     prompt = f"""
-     You are a Verilog-2005 code generator.
+    You are a Verilog-2005 code generator.
 
     Task:
     - Write synthesizable Verilog-2005 code (not SystemVerilog).
     - Do not use markdown or ``` fences.
-    - Use lower-case signal names (clk, reset, enable) to avoid binding issues.
-    - Always declare every signal used in the code (clk, reset, enable, etc.).
-    - Do not include natural language.
+    - Use lower-case signal names (clk, reset, enable).
+    - Always declare every signal used.
     - Only output Verilog starting with 'module'.
-    - If reset is required, use a single always block with either synchronous or asynchronous reset.
-    - Module name must match the spec.
     - End with 'endmodule'.
 
     Spec: {spec}
     """
 
-    rtl_code = llm.invoke(prompt)
+    # Call OpenAI (text completion)
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": prompt}]
+    )
+    rtl_code = response.choices[0].message.content.strip()
 
-    # 🔥 Strip markdown fences
+    # 🔥 Strip markdown fences if any
     rtl_code = rtl_code.replace("```verilog", "").replace("```systemverilog", "").replace("```", "").strip()
 
     # Ensure file starts at "module"
     if "module" in rtl_code:
-      rtl_code = rtl_code[rtl_code.index("module"):]
+        rtl_code = rtl_code[rtl_code.index("module"):]
 
-    # Call Ollama
-
-    state["rtl"] = rtl_code
-
-        # Save Verilog
+    # Save Verilog file
     with open("design.v", "w", encoding="utf-8") as f:
         f.write(rtl_code)
 
     # Always create compile.log
-
     log_path = "spec_agent_compile.log"
     if os.path.exists(log_path):
         os.remove(log_path)
@@ -79,6 +74,7 @@ def spec_agent(state: dict) -> dict:
         with open(log_path, "a") as logf:
             logf.write(state["error_log"])
 
+    state["rtl"] = rtl_code
     state["artifact"] = "design.v"
     state["artifact_log"] = "spec_agent_compile.log"
 
@@ -92,4 +88,3 @@ if __name__ == "__main__":
     print(result["status"])
     if "error_log" in result:
         print(result["error_log"])
-
