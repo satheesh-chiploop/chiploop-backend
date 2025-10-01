@@ -1,8 +1,8 @@
 import os
 import subprocess
-from langchain_ollama import OllamaLLM
+from openai import OpenAI
 
-llm = OllamaLLM(model="mistral")
+client = OpenAI()
 
 def optimizer_agent(state: dict) -> dict:
     print("\n⚡ Running Optimizer Agent...")
@@ -29,7 +29,11 @@ Task:
 - Module name must match the spec.
 - End with 'endmodule'.
 """
-    optimized_rtl = llm.invoke(prompt)
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",  # or "gpt-4o" if you prefer full
+        messages=[{"role": "user", "content": prompt}],
+    )
+    optimized_rtl = response.choices[0].message.content
 
     # 🔥 Strip markdown fences
     optimized_rtl = (

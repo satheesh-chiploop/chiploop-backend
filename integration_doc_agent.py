@@ -1,7 +1,7 @@
 from datetime import datetime
-from langchain_ollama import OllamaLLM
+from openai import OpenAI
 
-llm = OllamaLLM(model="mistral")
+client = OpenAI()
 
 def integration_doc_agent(state: dict) -> dict:
     print("\n📗 Running Integration Doc Agent...")
@@ -33,7 +33,11 @@ Constraints:
 [RTL]
 {rtl}
 """
-    doc_md = llm.invoke(prompt)
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",  # or "gpt-4o" if you prefer full
+        messages=[{"role": "user", "content": prompt}],
+    )
+    doc_md = response.choices[0].message.content
     fn = f"integration_doc_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md"
     with open(fn, "w", encoding="utf-8") as f:
         f.write(doc_md)
