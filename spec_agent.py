@@ -1,49 +1,60 @@
 import subprocess
 import os
-from openai import OpenAI
-
-# Initialize OpenAI client
-client = OpenAI()
+import datetime
 
 def spec_agent(state: dict) -> dict:
-    print("\n🚀 Running Spec Agent...")
+    print("\n🚀 Running Spec Agent (FAKE mode)...")
     spec = state.get("spec", "")
 
     if not spec:
         state["status"] = "❌ No spec provided"
         return state
 
-    # Build prompt
-    prompt = f"""
-    You are a Verilog-2005 code generator.
-
-    Task:
-    - Write synthesizable Verilog-2005 code (not SystemVerilog).
-    - Do not use markdown or ``` fences.
-    - Use lower-case signal names (clk, reset, enable).
-    - Always declare every signal used.
-    - Only output Verilog starting with 'module'.
-    - End with 'endmodule'.
-
-    Spec: {spec}
-    """
-
-    # Call OpenAI (text completion)
-    response = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[{"role": "user", "content": prompt}]
-    )
-    rtl_code = response.choices[0].message.content.strip()
-
-    # 🔥 Strip markdown fences if any
-    rtl_code = rtl_code.replace("```verilog", "").replace("```systemverilog", "").replace("```", "").strip()
-
-    # Ensure file starts at "module"
-    if "module" in rtl_code:
-        rtl_code = rtl_code[rtl_code.index("module"):]
+    # Choose fake Verilog depending on spec keywords
+    if "adder" in spec.lower():
+        rtl_code = """\
+module fake_adder (
+    input wire [3:0] a,
+    input wire [3:0] b,
+    output wire [4:0] sum
+);
+    assign sum = a + b;
+endmodule
+"""
+    elif "counter" in spec.lower():
+        rtl_code = """\
+module fake_counter (
+    input wire clk,
+    input wire reset,
+    output reg [3:0] count
+);
+    always @(posedge clk or posedge reset) begin
+        if (reset)
+            count <= 4'b0000;
+        else
+            count <= count + 1;
+    end
+endmodule
+"""
+    else:
+        rtl_code = """\
+module fake_module (
+    input wire clk,
+    input wire reset,
+    output reg flag
+);
+    always @(posedge clk or posedge reset) begin
+        if (reset)
+            flag <= 1'b0;
+        else
+            flag <= ~flag;
+    end
+endmodule
+"""
 
     # Save Verilog file
-    with open("design.v", "w", encoding="utf-8") as f:
+    verilog_file = "design.v"
+    with open(verilog_file, "w", encoding="utf-8") as f:
         f.write(rtl_code)
 
     # Always create compile.log
@@ -55,28 +66,29 @@ def spec_agent(state: dict) -> dict:
 
     # Try compilation with Icarus
     try:
-        print("\n🚀 Compiling...")
+        print("\n🚀 Compiling fake Verilog...")
         result = subprocess.run(
-            ["/usr/bin/iverilog", "-o", "design.out", "design.v"],
+            ["/usr/bin/iverilog", "-o", "design.out", verilog_file],
             check=True,
             capture_output=True,
             text=True
         )
-        state["status"] = "✅ Compilation successful"
+        state["status"] = "✅ Fake compilation successful"
         state["compiler_output"] = result.stdout.strip()
 
         with open(log_path, "a") as logf:
             logf.write(result.stdout or "")
     except subprocess.CalledProcessError as e:
-        state["status"] = "❌ Compilation failed"
+        state["status"] = "❌ Fake compilation failed"
         state["error_log"] = (e.stderr or e.stdout or "").strip()
 
         with open(log_path, "a") as logf:
             logf.write(state["error_log"])
 
+    # Attach artifacts to state
     state["rtl"] = rtl_code
-    state["artifact"] = "design.v"
-    state["artifact_log"] = "spec_agent_compile.log"
+    state["artifact"] = verilog_file
+    state["artifact_log"] = log_path
 
     return state
 
