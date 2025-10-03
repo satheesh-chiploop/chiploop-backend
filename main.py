@@ -1,12 +1,15 @@
-from fastapi import FastAPI, UploadFile, File, Form
+from fastapi import FastAPI, UploadFile, File, Form, Request, HTTPException, Depends
 from pydantic import BaseModel
 from typing import List, Dict
 from fastapi.middleware.cors import CORSMiddleware
 import json
 from fastapi.responses import FileResponse
+import jwt
 import os
 import importlib.util
 import logging
+# ---------------- JWT Verification ----------------
+SUPABASE_JWT_SECRET = os.getenv("SUPABASE_JWT_SECRET", "")
 from openai import OpenAI
 client = OpenAI()
 
@@ -16,6 +19,7 @@ from fastapi.responses import JSONResponse
 from spec_agent import spec_agent
 from rtl_agent import rtl_agent
 from optimizer_agent import optimizer_agent
+
 
 app = FastAPI(title="ChipLoop Backend")
 
@@ -61,15 +65,33 @@ AGENT_FUNCTIONS = {
 
 logger = logging.getLogger("uvicorn.error")
 
+
+def verify_token(request: Request):
+    auth = request.headers.get("Authorization")
+    if not auth or not auth.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    token = auth.split(" ")[1]
+    try:
+        payload = jwt.decode(token, SUPABASE_JWT_SECRET, algorithms=["HS256"])
+        return payload
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Token expired")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
 @app.post("/run_workflow")
 
 async def run_workflow(
+    request: Request,
     workflow: str = Form(...),
     file: UploadFile = File(None),
-    spec_text: str = Form(None)
+    spec_text: str = Form(None),
+    user=Depends(verify_token)   # <-- enforce JWT here
 ):
 
+
     logger.info("🚀 run_workflow called")
+    logger.info(f"Authenticated user: {user.get('sub') if user else '❌ none'}")
     logger.info(f"workflow raw: {workflow[:200] if workflow else '❌ missing'}")
     logger.info(f"spec_text: {spec_text}")
     logger.info(f"file: {file.filename if file else '❌ none'}")
