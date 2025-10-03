@@ -94,7 +94,7 @@ def verify_token(request: Request):
 
 async def run_workflow(
     request: Request,
-    workflow: str = Form(...),
+    workflow: str = Form("{}"),
     file: UploadFile = File(None),
     spec_text: str = Form(None),
     user=Depends(verify_token)   # <-- enforce JWT here
