@@ -10,6 +10,10 @@ import importlib.util
 import logging
 # ---------------- JWT Verification ----------------
 SUPABASE_JWT_SECRET = os.getenv("SUPABASE_JWT_SECRET", "")
+
+logger = logging.getLogger("uvicorn.error")
+logger.info(f"🔑 Loaded SUPABASE_JWT_SECRET length: {len(SUPABASE_JWT_SECRET)}")
+
 from openai import OpenAI
 client = OpenAI()
 
@@ -63,20 +67,27 @@ AGENT_FUNCTIONS = {
 }
 
 
-logger = logging.getLogger("uvicorn.error")
-
-
 def verify_token(request: Request):
     auth = request.headers.get("Authorization")
     if not auth or not auth.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Unauthorized")
     token = auth.split(" ")[1]
+
+    if not SUPABASE_JWT_SECRET:
+        logger.error("❌ SUPABASE_JWT_SECRET is not set!")
+        raise HTTPException(status_code=500, detail="Server misconfigured")
+
     try:
-        payload = jwt.decode(token, SUPABASE_JWT_SECRET, algorithms=["HS256"])
+        payload = jwt.decode(
+            token,
+            SUPABASE_JWT_SECRET,
+            algorithms=["HS256"],
+            audience="authenticated"   # required by Supabase
+        )
+        logger.info(f"✅ Token decoded for user: {payload.get('sub')}")
         return payload
-    except jwt.ExpiredSignatureError:
-        raise HTTPException(status_code=401, detail="Token expired")
-    except jwt.InvalidTokenError:
+    except Exception as e:
+        logger.error(f"❌ Token decode failed: {str(e)}")
         raise HTTPException(status_code=401, detail="Invalid token")
 
 @app.post("/run_workflow")
