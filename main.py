@@ -368,8 +368,19 @@ async def stripe_webhook(request: Request):
 
 @app.post("/create-customer-portal-session")
 async def create_customer_portal_session(user=Depends(verify_token)):
+    """
+    Create a Stripe Billing Portal session for the logged-in user.
+    Allows users to manage (cancel/update) their subscriptions.
+    """
     try:
-        response = supabase.table("profiles").select("stripe_customer_id").eq("id", user.get("sub")).single().execute()
+        response = (
+            supabase.table("profiles")
+            .select("stripe_customer_id")
+            .eq("id", user.get("sub"))
+            .single()
+            .execute()
+        )
+
         if not response.data or "stripe_customer_id" not in response.data:
             return {"error": "Stripe customer not found for this user"}
 
@@ -377,9 +388,14 @@ async def create_customer_portal_session(user=Depends(verify_token)):
 
         session = stripe.billing_portal.Session.create(
             customer=customer_id,
-            return_url="return_url="https://chiploop-saas.vercel.app/?portal=success"
+            # ✅ Corrected the return_url
+            return_url="https://chiploop-saas.vercel.app/?portal=success"
         )
+
         return {"url": session.url}
+
     except Exception as e:
         return {"error": str(e)}
+
+
 
