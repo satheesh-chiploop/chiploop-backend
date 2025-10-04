@@ -8,6 +8,11 @@ import jwt
 import os
 import importlib.util
 import logging
+from supabase import create_client, Client
+
+SUPABASE_URL = os.environ["SUPABASE_URL"]
+SUPABASE_SERVICE_ROLE_KEY = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 # ---------------- JWT Verification ----------------
 SUPABASE_JWT_SECRET = os.getenv("SUPABASE_JWT_SECRET", "")
 
@@ -91,7 +96,6 @@ def verify_token(request: Request):
         raise HTTPException(status_code=401, detail="Invalid token")
 
 @app.post("/run_workflow")
-
 async def run_workflow(
     request: Request,
     workflow: str = Form("{}"),
@@ -99,7 +103,14 @@ async def run_workflow(
     spec_text: str = Form(None),
     user=Depends(verify_token)   # <-- enforce JWT here
 ):
-
+    workflow_row = supabase.table("workflows").insert({
+        "user_id": user.get("sub"),
+        "name": "Digital Loop run",
+        "status": "running",
+        "logs": "",
+        "artifacts": {}
+    }).execute()
+    workflow_id = workflow_row.data[0]["id"]
 
     logger.info("🚀 run_workflow called")
     logger.info(f"Authenticated user: {user.get('sub') if user else '❌ none'}")
@@ -107,23 +118,30 @@ async def run_workflow(
     logger.info(f"spec_text: {spec_text}")
     logger.info(f"file: {file.filename if file else '❌ none'}")
 
+    artifact_dir = f"artifacts/{user.get('sub')}/{workflow_id}"
+    os.makedirs(artifact_dir, exist_ok=True)
+
     try:
         logger.info("🚀 /run_workflow called")
         data = json.loads(workflow)
         state = {}
 
+        # --- uploaded file goes into artifact_dir ---
         if file:
             contents = await file.read()
-            filename = f"uploads/{file.filename}"
-            os.makedirs("uploads", exist_ok=True)
-            with open(filename, "wb") as f:
+            upload_path = os.path.join(artifact_dir, file.filename)
+            with open(upload_path, "wb") as f:
                 f.write(contents)
-            state["uploaded_file"] = filename
-            logger.info(f"📁 File uploaded: {filename}")
+            state["uploaded_file"] = upload_path
+            logger.info(f"📁 File uploaded: {upload_path}")
 
+        # --- spec text saved into artifact_dir ---
         if spec_text:
             state["spec"] = spec_text
-            logger.info("📝 Spec text provided")
+            spec_file = os.path.join(artifact_dir, "spec.txt")
+            with open(spec_file, "w") as f:
+                f.write(spec_text)
+            logger.info("📝 Spec text provided and saved")
 
         results: Dict[str, str] = {}
         artifacts: Dict[str, Dict[str, str]] = {}
@@ -135,8 +153,17 @@ async def run_workflow(
                 try:
                     state = func(state)
                     results[label] = state.get("status", "✅ Done")
+
+                    # save agent artifact if present
+                    art_path = None
+                    if state.get("artifact"):
+                        safe_label = label.replace(" ", "_").replace("📘", "").replace("💻", "").replace("🛠", "")
+                        art_path = os.path.join(artifact_dir, f"{safe_label}.txt")
+                        with open(art_path, "w") as f:
+                            f.write(state["artifact"] or "")
+
                     artifacts[label] = {
-                        "artifact": state.get("artifact"),
+                        "artifact": f"/{art_path}" if art_path else None,
                         "artifact_log": state.get("artifact_log"),
                     }
                     logger.info(f"✅ Agent executed: {label}")
@@ -146,6 +173,12 @@ async def run_workflow(
             else:
                 results[label] = "⚠ No implementation yet."
                 logger.warning(f"No function found for agent: {label}")
+
+        supabase.table("workflows").update({
+            "status": "success",
+            "logs": json.dumps(results),
+            "artifacts": artifacts
+        }).eq("id", workflow_id).execute()
 
         return JSONResponse(
             content={
@@ -226,3 +259,46 @@ def get_artifact(filename: str):
     if os.path.exists(path):
         return FileResponse(path, filename=filename)
     return {"error": "File not found"}
+
+# ---------- Workflow Persistence Routes ----------
+
+@app.post("/workflows/start")
+async def start_workflow(name: str = Form(...), user=Depends(verify_token)):
+    row = {
+        "user_id": user.get("sub"),
+        "name": name,
+        "status": "running",
+        "logs": "",
+        "artifacts": {}
+    }
+    res = supabase.table("workflows").insert(row).execute()
+    return res.data[0]
+
+@app.patch("/workflows/{workflow_id}/complete")
+async def complete_workflow(workflow_id: str, status: str = Form(...), logs: str = Form(""), artifacts: str = Form("{}"), user=Depends(verify_token)):
+    try:
+        artifacts_json = json.loads(artifacts) if artifacts else {}
+    except:
+        artifacts_json = {}
+    update = {
+        "status": status,
+        "logs": logs,
+        "artifacts": artifacts_json
+    }
+    res = supabase.table("workflows").update(update).eq("id", workflow_id).execute()
+    return res.data[0]
+
+@app.get("/workflows/history")
+async def get_history(user=Depends(verify_token)):
+    res = (
+        supabase.table("workflows")
+        .select("*")
+        .eq("user_id", user.get("sub"))
+        .order("created_at", desc=True)
+        .execute()
+    )
+    return res.data
+
+from fastapi.staticfiles import StaticFiles
+os.makedirs("artifacts", exist_ok=True)
+app.mount("/artifacts", StaticFiles(directory="artifacts"), name="artifacts")
