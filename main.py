@@ -307,26 +307,38 @@ app.mount("/artifacts", StaticFiles(directory="artifacts"), name="artifacts")
 
 from fastapi import APIRouter, Request
 
+
 @app.post("/create-checkout-session")
 async def create_checkout_session(request: Request):
     try:
         data = await request.json()
+
+        #  Try to extract user_id from request body if provided
+        user_id = data.get("user_id", "unknown")
+
         session = stripe.checkout.Session.create(
-             payment_method_types=["card"],
-             mode="subscription",
-             line_items=[{
+            payment_method_types=["card"],
+            mode="subscription",
+            line_items=[
+                {
                     "price": os.getenv("STRIPE_PRICE_ID"),
                     "quantity": 1,
-             }],
-             success_url="https://chiploop-saas.vercel.app/success",
-             cancel_url="https://chiploop-saas.vercel.app/cancel",
-             metadata={
-                    "user_id": user.get("sub") # ← pass Supabase user ID here
-             }
-        ) 
+                }
+            ],
+            success_url="https://chiploop-saas.vercel.app/success",
+            cancel_url="https://chiploop-saas.vercel.app/cancel",
+            metadata={
+                "user_id": user_id,  # Safe even if not provided
+            },
+        )
+
+        print(f"✅ Stripe session created for user {user_id}: {session.url}")
         return {"url": session.url}
+
     except Exception as e:
+        print("❌ Stripe checkout creation failed:", str(e))
         return {"error": str(e)}
+
 @app.post("/stripe-webhook")
 async def stripe_webhook(request: Request):
     payload = await request.body()
