@@ -11,6 +11,7 @@ import importlib.util
 import logging
 from supabase import create_client, Client
 stripe.api_key = os.getenv("STRIPE_SECRET_KEY")
+endpoint_secret = os.getenv("STRIPE_WEBHOOK_SECRET")
 SUPABASE_URL = os.environ["SUPABASE_URL"]
 SUPABASE_SERVICE_ROLE_KEY = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
@@ -311,15 +312,74 @@ async def create_checkout_session(request: Request):
     try:
         data = await request.json()
         session = stripe.checkout.Session.create(
-            payment_method_types=["card"],
-            mode="subscription",
-            line_items=[{
-                "price": os.getenv("STRIPE_PRICE_ID"),
-                "quantity": 1,
-            }],
-            success_url="https://chiploop-saas.vercel.app/success",
-            cancel_url="https://chiploop-saas.vercel.app/cancel",
+             payment_method_types=["card"],
+             mode="subscription",
+             line_items=[{
+                    "price": os.getenv("STRIPE_PRICE_ID"),
+                    "quantity": 1,
+             }],
+             success_url="https://chiploop-saas.vercel.app/success",
+             cancel_url="https://chiploop-saas.vercel.app/cancel",
+             metadata={
+                    "user_id": user.get("sub") # ← pass Supabase user ID here
+             }
+        ) 
+        return {"url": session.url}
+    except Exception as e:
+        return {"error": str(e)}
+@app.post("/stripe-webhook")
+async def stripe_webhook(request: Request):
+    payload = await request.body()
+    sig_header = request.headers.get("stripe-signature")
+
+    try:
+        event = stripe.Webhook.construct_event(
+            payload, sig_header, endpoint_secret
+        )
+    except ValueError:
+        return {"error": "Invalid payload"}
+    except stripe.error.SignatureVerificationError:
+        return {"error": "Invalid signature"}
+
+    # Handle event
+    if event["type"] == "checkout.session.completed":
+        session = event["data"]["object"]
+        user_id = session["metadata"]["user_id"]
+        supabase.table("profiles").update({
+            "subscription_status": "active",
+            "stripe_customer_id": session["customer"]  
+        }).eq("id", user_id).execute()
+
+    elif event["type"] == "customer.subscription.updated":
+        subscription = event["data"]["object"]
+        user_id = subscription["metadata"].get("user_id")
+        supabase.table("profiles").update({
+            "subscription_status": subscription["status"]
+        }).eq("id", user_id).execute()
+
+    elif event["type"] == "customer.subscription.deleted":
+        subscription = event["data"]["object"]
+        user_id = subscription["metadata"].get("user_id")
+        supabase.table("profiles").update({
+            "subscription_status": "canceled"
+        }).eq("id", user_id).execute()
+
+    return {"status": "success"}
+
+@app.post("/create-customer-portal-session")
+async def create_customer_portal_session(user=Depends(verify_token)):
+    try:
+        response = supabase.table("profiles").select("stripe_customer_id").eq("id", user.get("sub")).single().execute()
+        if not response.data or "stripe_customer_id" not in response.data:
+            return {"error": "Stripe customer not found for this user"}
+
+        customer_id = response.data["stripe_customer_id"]
+
+        session = stripe.billing_portal.Session.create(
+            customer=customer_id,
+            return_url="return_url="https://chiploop-saas.vercel.app/?portal=success"
         )
         return {"url": session.url}
     except Exception as e:
         return {"error": str(e)}
+
