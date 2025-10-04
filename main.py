@@ -6,10 +6,11 @@ import json
 from fastapi.responses import FileResponse
 import jwt
 import os
+import stripe
 import importlib.util
 import logging
 from supabase import create_client, Client
-
+stripe.api_key = os.getenv("STRIPE_SECRET_KEY")
 SUPABASE_URL = os.environ["SUPABASE_URL"]
 SUPABASE_SERVICE_ROLE_KEY = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
@@ -302,3 +303,23 @@ async def get_history(user=Depends(verify_token)):
 from fastapi.staticfiles import StaticFiles
 os.makedirs("artifacts", exist_ok=True)
 app.mount("/artifacts", StaticFiles(directory="artifacts"), name="artifacts")
+
+from fastapi import APIRouter, Request
+
+@app.post("/create-checkout-session")
+async def create_checkout_session(request: Request):
+    try:
+        data = await request.json()
+        session = stripe.checkout.Session.create(
+            payment_method_types=["card"],
+            mode="subscription",
+            line_items=[{
+                "price": os.getenv("STRIPE_PRICE_ID"),
+                "quantity": 1,
+            }],
+            success_url="https://chiploop-saas.vercel.app/success",
+            cancel_url="https://chiploop-saas.vercel.app/cancel",
+        )
+        return {"url": session.url}
+    except Exception as e:
+        return {"error": str(e)}
