@@ -309,12 +309,11 @@ from fastapi import APIRouter, Request
 
 
 @app.post("/create-checkout-session")
-async def create_checkout_session(request: Request):
+async def create_checkout_session(request: Request, user=Depends(verify_token)):
     try:
         data = await request.json()
 
-        #  Try to extract user_id from request body if provided
-        user_id = data.get("user_id", "unknown")
+        user_id = user.get("sub", "unknown")  # pulled from Supabase JWT
 
         session = stripe.checkout.Session.create(
             payment_method_types=["card"],
@@ -328,7 +327,7 @@ async def create_checkout_session(request: Request):
             success_url="https://chiploop-saas.vercel.app/success",
             cancel_url="https://chiploop-saas.vercel.app/cancel",
             metadata={
-                "user_id": user_id,  # Safe even if not provided
+                "user_id": user_id,
             },
         )
 
@@ -338,6 +337,7 @@ async def create_checkout_session(request: Request):
     except Exception as e:
         print("❌ Stripe checkout creation failed:", str(e))
         return {"error": str(e)}
+
 
 @app.post("/stripe-webhook")
 async def stripe_webhook(request: Request):
