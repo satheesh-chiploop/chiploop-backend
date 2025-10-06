@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File, Form, Request, HTTPException, Depends
+from fastapi import FastAPI, UploadFile, File, Form, Request, HTTPException, Depends,Query
 from pydantic import BaseModel
 from typing import List, Dict
 from fastapi.middleware.cors import CORSMiddleware
@@ -353,28 +353,35 @@ async def stripe_webhook(request: Request):
     except stripe.error.SignatureVerificationError:
         return {"error": "Invalid signature"}
 
-    # Handle event
+    # --- Handle Stripe events ---
     if event["type"] == "checkout.session.completed":
         session = event["data"]["object"]
-        user_id = session["metadata"]["user_id"]
-        supabase.table("profiles").update({
-            "subscription_status": "active",
-            "stripe_customer_id": session["customer"]  
-        }).eq("id", user_id).execute()
+        user_id = session["metadata"].get("user_id")
+        customer_id = session.get("customer")
+
+        if user_id and customer_id:
+            supabase.table("workflows").update({
+                "subscription_status": "basic",
+                "stripe_customer_id": customer_id
+            }).eq("user_id", user_id).execute()
 
     elif event["type"] == "customer.subscription.updated":
         subscription = event["data"]["object"]
         user_id = subscription["metadata"].get("user_id")
-        supabase.table("profiles").update({
-            "subscription_status": subscription["status"]
-        }).eq("id", user_id).execute()
+
+        if user_id:
+            supabase.table("workflows").update({
+                "subscription_status": subscription["status"]
+            }).eq("user_id", user_id).execute()
 
     elif event["type"] == "customer.subscription.deleted":
         subscription = event["data"]["object"]
         user_id = subscription["metadata"].get("user_id")
-        supabase.table("profiles").update({
-            "subscription_status": "canceled"
-        }).eq("id", user_id).execute()
+
+        if user_id:
+            supabase.table("workflows").update({
+                "subscription_status": "free"
+            }).eq("user_id", user_id).execute()
 
     return {"status": "success"}
 
@@ -386,9 +393,9 @@ async def create_customer_portal_session(user=Depends(verify_token)):
     """
     try:
         response = (
-            supabase.table("profiles")
+            supabase.table("workflows")
             .select("stripe_customer_id")
-            .eq("id", user.get("sub"))
+            .eq("user_id", user.get("sub"))
             .single()
             .execute()
         )
@@ -400,7 +407,6 @@ async def create_customer_portal_session(user=Depends(verify_token)):
 
         session = stripe.billing_portal.Session.create(
             customer=customer_id,
-            # ✅ Corrected the return_url
             return_url="https://chiploop-saas.vercel.app/?portal=success"
         )
 
@@ -408,6 +414,7 @@ async def create_customer_portal_session(user=Depends(verify_token)):
 
     except Exception as e:
         return {"error": str(e)}
+
 
 
 
