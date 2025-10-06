@@ -349,41 +349,57 @@ async def stripe_webhook(request: Request):
             payload, sig_header, endpoint_secret
         )
     except ValueError:
+        print("❌ Invalid payload")
         return {"error": "Invalid payload"}
     except stripe.error.SignatureVerificationError:
+        print("❌ Invalid Stripe signature")
         return {"error": "Invalid signature"}
 
     # --- Handle Stripe events ---
-    if event["type"] == "checkout.session.completed":
-        session = event["data"]["object"]
-        user_id = session["metadata"].get("user_id")
-        customer_id = session.get("customer")
+    event_type = event["type"]
+    data = event["data"]["object"]
+
+    if event_type == "checkout.session.completed":
+        user_id = data.get("metadata", {}).get("user_id")
+        customer_id = data.get("customer")
 
         if user_id and customer_id:
+            print(f"✅ Checkout completed for user {user_id}")
             supabase.table("workflows").update({
                 "subscription_status": "basic",
                 "stripe_customer_id": customer_id
             }).eq("user_id", user_id).execute()
+        else:
+            print("⚠️ Missing user_id or customer_id in checkout.session.completed")
 
-    elif event["type"] == "customer.subscription.updated":
-        subscription = event["data"]["object"]
-        user_id = subscription["metadata"].get("user_id")
+    elif event_type == "customer.subscription.updated":
+        user_id = data.get("metadata", {}).get("user_id")
+        new_status = data.get("status")
 
         if user_id:
+            print(f"🔄 Subscription updated for user {user_id}: {new_status}")
             supabase.table("workflows").update({
-                "subscription_status": subscription["status"]
+                "subscription_status": new_status
             }).eq("user_id", user_id).execute()
+        else:
+            print("⚠️ Missing user_id in customer.subscription.updated")
 
-    elif event["type"] == "customer.subscription.deleted":
-        subscription = event["data"]["object"]
-        user_id = subscription["metadata"].get("user_id")
+    elif event_type == "customer.subscription.deleted":
+        user_id = data.get("metadata", {}).get("user_id")
 
         if user_id:
+            print(f"❌ Subscription canceled for user {user_id}")
             supabase.table("workflows").update({
                 "subscription_status": "free"
             }).eq("user_id", user_id).execute()
+        else:
+            print("⚠️ Missing user_id in customer.subscription.deleted")
+
+    else:
+        print(f"ℹ️ Unhandled event type: {event_type}")
 
     return {"status": "success"}
+
 
 @app.post("/create-customer-portal-session")
 async def create_customer_portal_session(user=Depends(verify_token)):
