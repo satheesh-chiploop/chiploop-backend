@@ -483,4 +483,7 @@ async def run_ai(prompt: str):
         logger.error(f"❌ Both Portkey and Ollama failed: {e}")
         return {"error": f"Both Portkey and Ollama failed: {str(e)}"}
 
-
+@app.get("/run_ai")
+async def run_ai_get(prompt: str):
+    """GET version of run_ai (for testing or browser use)"""
+    return await run_ai(prompt)
