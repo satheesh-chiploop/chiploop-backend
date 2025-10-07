@@ -432,5 +432,55 @@ async def create_customer_portal_session(user=Depends(verify_token)):
         return {"error": str(e)}
 
 
+# ---------- Portkey + Ollama Fallback ----------
+from portkey_ai import Portkey
+import requests, json
+
+PORTKEY_API_KEY = os.getenv("PORTKEY_API_KEY")
+USE_LOCAL_OLLAMA = os.getenv("USE_LOCAL_OLLAMA", "false").lower() == "true"
+OLLAMA_URL = "http://127.0.0.1:11434/api/generate"
+
+client = Portkey(api_key=PORTKEY_API_KEY)
+
+@app.post("/run_ai")
+async def run_ai(prompt: str):
+    """
+    Try Portkey/OpenAI first, then fall back to local Ollama if it fails.
+    USE_LOCAL_OLLAMA=true forces Ollama directly.
+    """
+    try:
+        if not USE_LOCAL_OLLAMA:
+            completion = await client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": prompt}],
+                stream=False,
+                timeout=30,
+            )
+            return {
+                "backend": "Portkey/OpenAI",
+                "output": completion.choices[0].message.content,
+            }
+    except Exception as e:
+        logger.warning(f"[⚠️ Portkey failed, falling back to Ollama] {e}")
+
+    # ---- Ollama fallback ----
+    try:
+        payload = {"model": "llama3", "prompt": prompt}
+        r = requests.post(OLLAMA_URL, json=payload, stream=True, timeout=60)
+        r.raise_for_status()
+        out = []
+        for line in r.iter_lines():
+            if not line:
+                continue
+            try:
+                j = json.loads(line.decode())
+                if "response" in j:
+                    out.append(j["response"])
+            except Exception:
+                pass
+        return {"backend": "Ollama", "output": "".join(out)}
+    except Exception as e:
+        logger.error(f"❌ Both Portkey and Ollama failed: {e}")
+        return {"error": f"Both Portkey and Ollama failed: {str(e)}"}
 
 
