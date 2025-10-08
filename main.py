@@ -13,6 +13,13 @@ from supabase import create_client, Client
 import time
 import requests
 from portkey_ai import Portkey
+from fastapi import FastAPI, BackgroundTasks
+from fastapi.responses import JSONResponse
+from datetime import datetime
+import uuid
+import traceback
+
+
 
 # ---------- Environment & Setup ----------
 stripe.api_key = os.getenv("STRIPE_SECRET_KEY")
@@ -150,51 +157,92 @@ AGENT_FUNCTIONS = {
 
 @app.post("/run_workflow")
 async def run_workflow(
-    request: Request,
-    workflow: str = Form("{}"),
+    background_tasks: BackgroundTasks,
+    workflow: str = Form(...),
     file: UploadFile = File(None),
     spec_text: str = Form(None),
-    user=Depends(verify_token)   # <-- enforce JWT here
+    user=Depends(verify_token)  # ✅ JWT auth
 ):
-    workflow_row = supabase.table("workflows").insert({
-        "user_id": user.get("sub"),
-        "name": "Digital Loop run",
-        "status": "running",
-        "logs": "",
-        "artifacts": {}
-    }).execute()
-    workflow_id = workflow_row.data[0]["id"]
-
-    logger.info("🚀 run_workflow called")
-    logger.info(f"Authenticated user: {user.get('sub') if user else '❌ none'}")
-    logger.info(f"workflow raw: {workflow[:200] if workflow else '❌ missing'}")
-    logger.info(f"spec_text: {spec_text}")
-    logger.info(f"file: {file.filename if file else '❌ none'}")
-
-    artifact_dir = f"artifacts/{user.get('sub')}/{workflow_id}"
-    os.makedirs(artifact_dir, exist_ok=True)
-
+    """
+    Asynchronous Spec2RTL workflow runner (JWT + Supabase integrated)
+    - Creates workflow entry tied to the authenticated user
+    - Executes Spec → RTL → Optimizer agents in background
+    - Returns immediately to prevent 502 timeouts
+    """
     try:
-        logger.info("🚀 /run_workflow called")
-        data = json.loads(workflow)
-        state = {}
+        user_id = user.get("sub") if user else "anonymous"
+        workflow_id = str(uuid.uuid4())
+        now = datetime.utcnow()
 
-        # --- uploaded file goes into artifact_dir ---
+        # ✅ Insert workflow record into Supabase
+        supabase.table("workflows").insert({
+            "id": workflow_id,
+            "user_id": user_id,
+            "name": "Digital Loop Run",
+            "status": "running",
+            "phase": "Spec2RTL",
+            "logs": "🚀 Workflow started asynchronously.",
+            "created_at": now,
+            "updated_at": now,
+            "artifacts": {}
+        }).execute()
+
+        artifact_dir = f"artifacts/{user_id}/{workflow_id}"
+        os.makedirs(artifact_dir, exist_ok=True)
+
+        logger.info(f"🚀 run_workflow called by user: {user_id}")
+        logger.info(f"workflow raw: {workflow[:200] if workflow else '❌ missing'}")
+        logger.info(f"spec_text: {spec_text}")
+        logger.info(f"file: {file.filename if file else '❌ none'}")
+
+        # --- Save file (if any) ---
+        upload_path = None
         if file:
             contents = await file.read()
             upload_path = os.path.join(artifact_dir, file.filename)
             with open(upload_path, "wb") as f:
                 f.write(contents)
-            state["uploaded_file"] = upload_path
             logger.info(f"📁 File uploaded: {upload_path}")
 
-        # --- spec text saved into artifact_dir ---
+        # --- Save spec text (if any) ---
+        if spec_text:
+            spec_path = os.path.join(artifact_dir, "spec.txt")
+            with open(spec_path, "w") as f:
+                f.write(spec_text)
+            logger.info("📝 Spec text saved successfully")
+
+        # --- Start background task ---
+        background_tasks.add_task(
+            execute_workflow_background,
+            workflow_id,
+            user_id,
+            workflow,
+            spec_text,
+            upload_path,
+            artifact_dir
+        )
+
+        return {
+            "job_id": workflow_id,
+            "status": "started",
+            "message": "Workflow queued successfully."
+        }
+
+    except Exception as e:
+        logger.error(f"❌ Error in run_workflow: {e}")
+        return {"status": "error", "message": str(e)}
+
+
+def execute_workflow_background(workflow_id, user_id, workflow, spec_text, upload_path, artifact_dir):
+    """Executes Spec → RTL → Optimizer agent chain asynchronously."""
+    try:
+        logger.info(f"🧠 [BG] Executing workflow {workflow_id} for user {user_id}")
+        data = json.loads(workflow)
+        state = {}
+        if upload_path:
+            state["uploaded_file"] = upload_path
         if spec_text:
             state["spec"] = spec_text
-            spec_file = os.path.join(artifact_dir, "spec.txt")
-            with open(spec_file, "w") as f:
-                f.write(spec_text)
-            logger.info("📝 Spec text provided and saved")
 
         results: Dict[str, str] = {}
         artifacts: Dict[str, Dict[str, str]] = {}
@@ -207,7 +255,7 @@ async def run_workflow(
                     state = func(state)
                     results[label] = state.get("status", "✅ Done")
 
-                    # save agent artifact if present
+                    # Save artifact if available
                     art_path = None
                     if state.get("artifact"):
                         safe_label = label.replace(" ", "_").replace("📘", "").replace("💻", "").replace("🛠", "")
@@ -219,6 +267,7 @@ async def run_workflow(
                         "artifact": f"/{art_path}" if art_path else None,
                         "artifact_log": state.get("artifact_log"),
                     }
+
                     logger.info(f"✅ Agent executed: {label}")
                 except Exception as agent_err:
                     results[label] = f"❌ Error: {str(agent_err)}"
@@ -227,29 +276,24 @@ async def run_workflow(
                 results[label] = "⚠ No implementation yet."
                 logger.warning(f"No function found for agent: {label}")
 
+        # ✅ Update workflow record
         supabase.table("workflows").update({
             "status": "success",
             "logs": json.dumps(results),
-            "artifacts": artifacts
+            "artifacts": artifacts,
+            "updated_at": datetime.utcnow(),
         }).eq("id", workflow_id).execute()
 
-        return JSONResponse(
-            content={
-                "workflow_results": results,
-                "artifacts": artifacts,
-                "state": state,
-                "status": "success",
-            },
-            status_code=200,
-        )
+        logger.info(f"✅ [BG] Workflow {workflow_id} completed successfully.")
 
     except Exception as e:
-        logger.error(f"❌ Error in /run_workflow: {e}")
-        return JSONResponse(
-            content={"status": "error", "message": str(e)},
-            status_code=500,
-        )
-
+        err_trace = traceback.format_exc()
+        logger.error(f"❌ [BG] Workflow {workflow_id} failed:\n{err_trace}")
+        supabase.table("workflows").update({
+            "status": "failed",
+            "logs": f"❌ Workflow failed: {str(e)}\n{err_trace}",
+            "updated_at": datetime.utcnow(),
+        }).eq("id", workflow_id).execute()
 
 @app.post("/create_agent")
 async def create_agent(agent_name: str = Form(...), description: str = Form(...)):
