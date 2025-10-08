@@ -234,11 +234,16 @@ async def run_workflow(
 
 
 def execute_workflow_background(workflow_id, user_id, workflow, spec_text, upload_path, artifact_dir):
-    """Executes Spec → RTL → Optimizer agent chain asynchronously."""
+    """
+    Executes Spec → RTL → Optimizer agent chain asynchronously.
+    Updates Supabase logs incrementally so the frontend receives
+    realtime console updates via Supabase Realtime.
+    """
     try:
         logger.info(f"🧠 [BG] Executing workflow {workflow_id} for user {user_id}")
         data = json.loads(workflow)
         state = {}
+
         if upload_path:
             state["uploaded_file"] = upload_path
         if spec_text:
@@ -247,18 +252,53 @@ def execute_workflow_background(workflow_id, user_id, workflow, spec_text, uploa
         results: Dict[str, str] = {}
         artifacts: Dict[str, Dict[str, str]] = {}
 
+        # --- Log workflow start ---
+        start_log = "🚀 Starting workflow...\n"
+        supabase.table("workflows").update({
+            "logs": start_log,
+            "status": "running",
+            "updated_at": datetime.utcnow().isoformat(),
+        }).eq("id", workflow_id).execute()
+
+        # --- Iterate through each agent node ---
         for node in data.get("nodes", []):
             label = node.get("label")
             func = AGENT_FUNCTIONS.get(label)
+
             if func:
                 try:
+                    # --- Get current logs ---
+                    existing = (
+                        supabase.table("workflows")
+                        .select("logs")
+                        .eq("id", workflow_id)
+                        .single()
+                        .execute()
+                    )
+                    prev_logs = existing.data.get("logs", "") if existing.data else ""
+
+                    # --- Log agent start ---
+                    running_entry = f"{prev_logs}\n⚙️ Running {label}..."
+                    supabase.table("workflows").update({
+                        "logs": running_entry,
+                        "status": "running",
+                        "updated_at": datetime.utcnow().isoformat(),
+                    }).eq("id", workflow_id).execute()
+
+                    # --- Execute the agent function ---
                     state = func(state)
                     results[label] = state.get("status", "✅ Done")
 
-                    # Save artifact if available
+                    # --- Save artifact if available ---
                     art_path = None
                     if state.get("artifact"):
-                        safe_label = label.replace(" ", "_").replace("📘", "").replace("💻", "").replace("🛠", "")
+                        safe_label = (
+                            label.replace(" ", "_")
+                            .replace("📘", "")
+                            .replace("💻", "")
+                            .replace("🛠", "")
+                            .strip()
+                        )
                         art_path = os.path.join(artifact_dir, f"{safe_label}.txt")
                         with open(art_path, "w") as f:
                             f.write(state["artifact"] or "")
@@ -268,32 +308,48 @@ def execute_workflow_background(workflow_id, user_id, workflow, spec_text, uploa
                         "artifact_log": state.get("artifact_log"),
                     }
 
+                    # --- Log agent completion ---
+                    completed_entry = (
+                        f"{running_entry}\n✅ Agent executed: {label} at "
+                        f"{datetime.utcnow().isoformat()}"
+                    )
+                    supabase.table("workflows").update({
+                        "logs": completed_entry,
+                        "updated_at": datetime.utcnow().isoformat(),
+                    }).eq("id", workflow_id).execute()
+
                     logger.info(f"✅ Agent executed: {label}")
+
                 except Exception as agent_err:
+                    # --- Log error for this agent ---
+                    err_entry = (
+                        f"{prev_logs}\n❌ {label} failed: {agent_err}"
+                    )
+                    supabase.table("workflows").update({
+                        "logs": err_entry,
+                        "status": "failed",
+                        "updated_at": datetime.utcnow().isoformat(),
+                    }).eq("id", workflow_id).execute()
+
                     results[label] = f"❌ Error: {str(agent_err)}"
                     logger.error(f"Agent {label} failed: {agent_err}")
+
             else:
-                results[label] = "⚠ No implementation yet."
-                logger.warning(f"No function found for agent: {label}")
+                # --- No function defined for agent ---
+                missing_entry = (
+                    f"\n⚠️ No implementation found for agent: {label}"
+                )
+                existing = (
+                    supabase.table("workflows")
+                    .select("logs")
+                    .eq("id", workflow_id)
+                    .single()
+                    .execute()
+                )
+                prev_logs = existing.data.get("logs", "") if existing.data else ""
+                supabase.table("workflows").update({
 
-        # ✅ Update workflow record
-        supabase.table("workflows").update({
-            "status": "success",
-            "logs": json.dumps(results),
-            "artifacts": artifacts,
-            "updated_at": datetime.utcnow().isoformat(),
-        }).eq("id", workflow_id).execute()
 
-        logger.info(f"✅ [BG] Workflow {workflow_id} completed successfully.")
-
-    except Exception as e:
-        err_trace = traceback.format_exc()
-        logger.error(f"❌ [BG] Workflow {workflow_id} failed:\n{err_trace}")
-        supabase.table("workflows").update({
-            "status": "failed",
-            "logs": f"❌ Workflow failed: {str(e)}\n{err_trace}",
-            "updated_at": datetime.utcnow(),
-        }).eq("id", workflow_id).execute()
 
 @app.post("/create_agent")
 async def create_agent(agent_name: str = Form(...), description: str = Form(...)):
