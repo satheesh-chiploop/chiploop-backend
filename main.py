@@ -239,7 +239,7 @@ import uuid
 import traceback
 from supabase import create_client, Client
 from typing import Dict
-from .auth import verify_token  # ensure this import is present
+
 
 # --- Supabase client ---
 SUPABASE_URL = os.getenv("SUPABASE_URL")
