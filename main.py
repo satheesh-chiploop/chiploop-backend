@@ -233,17 +233,104 @@ async def run_workflow(
         return {"status": "error", "message": str(e)}
 
 
+from fastapi import BackgroundTasks, Depends
+from datetime import datetime
+import uuid
+import traceback
+from supabase import create_client, Client
+from typing import Dict
+from .auth import verify_token  # ensure this import is present
+
+# --- Supabase client ---
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+
+
+@app.post("/run_workflow")
+async def run_workflow(
+    background_tasks: BackgroundTasks,
+    workflow: str = Form(...),
+    file: UploadFile = File(None),
+    spec_text: str = Form(None),
+    user=Depends(verify_token)  # ✅ JWT auth
+):
+    """
+    Asynchronous Spec2RTL workflow runner (JWT + Supabase integrated)
+    - Creates workflow entry tied to the authenticated user
+    - Executes Spec → RTL → Optimizer agents in background
+    - Returns immediately to prevent 502 timeouts
+    """
+    try:
+        user_id = user.get("sub") if user else "anonymous"
+        workflow_id = str(uuid.uuid4())
+        now = datetime.utcnow()
+
+        # ✅ Insert workflow record into Supabase
+        supabase.table("workflows").insert({
+            "id": workflow_id,
+            "user_id": user_id,
+            "name": "Digital Loop Run",
+            "status": "running",
+            "phase": "Spec2RTL",
+            "logs": "🚀 Workflow started asynchronously.",
+            "created_at": now,
+            "updated_at": now,
+            "artifacts": {}
+        }).execute()
+
+        artifact_dir = f"artifacts/{user_id}/{workflow_id}"
+        os.makedirs(artifact_dir, exist_ok=True)
+
+        logger.info(f"🚀 run_workflow called by user: {user_id}")
+        logger.info(f"workflow raw: {workflow[:200] if workflow else '❌ missing'}")
+        logger.info(f"spec_text: {spec_text}")
+        logger.info(f"file: {file.filename if file else '❌ none'}")
+
+        # --- Save file (if any) ---
+        upload_path = None
+        if file:
+            contents = await file.read()
+            upload_path = os.path.join(artifact_dir, file.filename)
+            with open(upload_path, "wb") as f:
+                f.write(contents)
+            logger.info(f"📁 File uploaded: {upload_path}")
+
+        # --- Save spec text (if any) ---
+        if spec_text:
+            spec_path = os.path.join(artifact_dir, "spec.txt")
+            with open(spec_path, "w") as f:
+                f.write(spec_text)
+            logger.info("📝 Spec text saved successfully")
+
+        # --- Start background task ---
+        background_tasks.add_task(
+            execute_workflow_background,
+            workflow_id,
+            user_id,
+            workflow,
+            spec_text,
+            upload_path,
+            artifact_dir
+        )
+
+        return {
+            "job_id": workflow_id,
+            "status": "started",
+            "message": "Workflow queued successfully."
+        }
+
+    except Exception as e:
+        logger.error(f"❌ Error in run_workflow: {e}")
+        return {"status": "error", "message": str(e)}
+
+
 def execute_workflow_background(workflow_id, user_id, workflow, spec_text, upload_path, artifact_dir):
-    """
-    Executes Spec → RTL → Optimizer agent chain asynchronously.
-    Updates Supabase logs incrementally so the frontend receives
-    realtime console updates via Supabase Realtime.
-    """
+    """Executes Spec → RTL → Optimizer agent chain asynchronously."""
     try:
         logger.info(f"🧠 [BG] Executing workflow {workflow_id} for user {user_id}")
         data = json.loads(workflow)
         state = {}
-
         if upload_path:
             state["uploaded_file"] = upload_path
         if spec_text:
@@ -252,53 +339,18 @@ def execute_workflow_background(workflow_id, user_id, workflow, spec_text, uploa
         results: Dict[str, str] = {}
         artifacts: Dict[str, Dict[str, str]] = {}
 
-        # --- Log workflow start ---
-        start_log = "🚀 Starting workflow...\n"
-        supabase.table("workflows").update({
-            "logs": start_log,
-            "status": "running",
-            "updated_at": datetime.utcnow().isoformat(),
-        }).eq("id", workflow_id).execute()
-
-        # --- Iterate through each agent node ---
         for node in data.get("nodes", []):
             label = node.get("label")
             func = AGENT_FUNCTIONS.get(label)
-
             if func:
                 try:
-                    # --- Get current logs ---
-                    existing = (
-                        supabase.table("workflows")
-                        .select("logs")
-                        .eq("id", workflow_id)
-                        .single()
-                        .execute()
-                    )
-                    prev_logs = existing.data.get("logs", "") if existing.data else ""
-
-                    # --- Log agent start ---
-                    running_entry = f"{prev_logs}\n⚙️ Running {label}..."
-                    supabase.table("workflows").update({
-                        "logs": running_entry,
-                        "status": "running",
-                        "updated_at": datetime.utcnow().isoformat(),
-                    }).eq("id", workflow_id).execute()
-
-                    # --- Execute the agent function ---
                     state = func(state)
                     results[label] = state.get("status", "✅ Done")
 
-                    # --- Save artifact if available ---
+                    # Save artifact if available
                     art_path = None
                     if state.get("artifact"):
-                        safe_label = (
-                            label.replace(" ", "_")
-                            .replace("📘", "")
-                            .replace("💻", "")
-                            .replace("🛠", "")
-                            .strip()
-                        )
+                        safe_label = label.replace(" ", "_").replace("📘", "").replace("💻", "").replace("🛠", "")
                         art_path = os.path.join(artifact_dir, f"{safe_label}.txt")
                         with open(art_path, "w") as f:
                             f.write(state["artifact"] or "")
@@ -308,46 +360,32 @@ def execute_workflow_background(workflow_id, user_id, workflow, spec_text, uploa
                         "artifact_log": state.get("artifact_log"),
                     }
 
-                    # --- Log agent completion ---
-                    completed_entry = (
-                        f"{running_entry}\n✅ Agent executed: {label} at "
-                        f"{datetime.utcnow().isoformat()}"
-                    )
-                    supabase.table("workflows").update({
-                        "logs": completed_entry,
-                        "updated_at": datetime.utcnow().isoformat(),
-                    }).eq("id", workflow_id).execute()
-
                     logger.info(f"✅ Agent executed: {label}")
-
                 except Exception as agent_err:
-                    # --- Log error for this agent ---
-                    err_entry = (
-                        f"{prev_logs}\n❌ {label} failed: {agent_err}"
-                    )
-                    supabase.table("workflows").update({
-                        "logs": err_entry,
-                        "status": "failed",
-                        "updated_at": datetime.utcnow().isoformat(),
-                    }).eq("id", workflow_id).execute()
-
                     results[label] = f"❌ Error: {str(agent_err)}"
                     logger.error(f"Agent {label} failed: {agent_err}")
-
             else:
-                # --- No function defined for agent ---
-                missing_entry = (
-                    f"\n⚠️ No implementation found for agent: {label}"
-                )
-                existing = (
-                    supabase.table("workflows")
-                    .select("logs")
-                    .eq("id", workflow_id)
-                    .single()
-                    .execute()
-                )
-                prev_logs = existing.data.get("logs", "") if existing.data else ""
-                supabase.table("workflows").update({
+                results[label] = "⚠ No implementation yet."
+                logger.warning(f"No function found for agent: {label}")
+
+        # ✅ Update workflow record
+        supabase.table("workflows").update({
+            "status": "success",
+            "logs": json.dumps(results),
+            "artifacts": artifacts,
+            "updated_at": datetime.utcnow(),
+        }).eq("id", workflow_id).execute()
+
+        logger.info(f"✅ [BG] Workflow {workflow_id} completed successfully.")
+
+    except Exception as e:
+        err_trace = traceback.format_exc()
+        logger.error(f"❌ [BG] Workflow {workflow_id} failed:\n{err_trace}")
+        supabase.table("workflows").update({
+            "status": "failed",
+            "logs": f"❌ Workflow failed: {str(e)}\n{err_trace}",
+            "updated_at": datetime.utcnow(),
+        }).eq("id", workflow_id).execute()
 
 
 
