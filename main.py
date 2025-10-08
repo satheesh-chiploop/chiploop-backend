@@ -1,37 +1,38 @@
-from fastapi import FastAPI, UploadFile, File, Form, Request, HTTPException, Depends,Query
+from fastapi import FastAPI, UploadFile, File, Form, Request, HTTPException, Depends, Query
 from pydantic import BaseModel
 from typing import List, Dict
 from fastapi.middleware.cors import CORSMiddleware
 import json
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse, JSONResponse
 import jwt
 import os
 import stripe
 import importlib.util
 import logging
 from supabase import create_client, Client
+import time
+import requests
+from portkey_ai import Portkey
+
+# ---------- Environment & Setup ----------
 stripe.api_key = os.getenv("STRIPE_SECRET_KEY")
 endpoint_secret = os.getenv("STRIPE_WEBHOOK_SECRET")
+
 SUPABASE_URL = os.environ["SUPABASE_URL"]
 SUPABASE_SERVICE_ROLE_KEY = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
-# ---------------- JWT Verification ----------------
-SUPABASE_JWT_SECRET = os.getenv("SUPABASE_JWT_SECRET", "")
 
+SUPABASE_JWT_SECRET = os.getenv("SUPABASE_JWT_SECRET", "")
 logger = logging.getLogger("uvicorn.error")
 logger.info(f"🔑 Loaded SUPABASE_JWT_SECRET length: {len(SUPABASE_JWT_SECRET)}")
 
-from openai import OpenAI
-client = OpenAI()
+PORTKEY_API_KEY = os.getenv("PORTKEY_API_KEY")
+USE_LOCAL_OLLAMA = os.getenv("USE_LOCAL_OLLAMA", "false").lower() == "true"
+OLLAMA_URL = "http://127.0.0.1:11434/api/generate"
 
-from fastapi.responses import JSONResponse
+client = Portkey(api_key=PORTKEY_API_KEY)
 
-
-from spec_agent import spec_agent
-from rtl_agent import rtl_agent
-from optimizer_agent import optimizer_agent
-
-
+# ---------- FastAPI App ----------
 app = FastAPI(title="ChipLoop Backend")
 
 @app.get("/")
@@ -40,62 +41,112 @@ async def root():
 
 origins = [
     "http://localhost:3000",
-    "https://chiploop-saas.vercel.app",  # your deployed frontend
-    # you can add custom domain later, e.g. "https://chiploop.ai"
+    "https://chiploop-saas.vercel.app",
 ]
 
-# Allow frontend → backend calls (CORS)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,  # for dev; restrict later
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# ---------- Models ----------
-class Node(BaseModel):
-    id: str
-    label: str
+# ---------- JWT Verify ----------
+def verify_token(request: Request):
+    auth = request.headers.get("Authorization")
+    if not auth or not auth.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    token = auth.split(" ")[1]
+    if not SUPABASE_JWT_SECRET:
+        logger.error("❌ SUPABASE_JWT_SECRET is not set!")
+        raise HTTPException(status_code=500, detail="Server misconfigured")
+    try:
+        payload = jwt.decode(token, SUPABASE_JWT_SECRET, algorithms=["HS256"], audience="authenticated")
+        logger.info(f"✅ Token decoded for user: {payload.get('sub')}")
+        return payload
+    except Exception as e:
+        logger.error(f"❌ Token decode failed: {str(e)}")
+        raise HTTPException(status_code=401, detail="Invalid token")
 
-class Edge(BaseModel):
-    source: str
-    target: str
+# ---------- Shared Helpers (Streaming + Logging) ----------
+def update_workflow_log(workflow_name, new_log, status="running", phase="init", artifacts=None):
+    try:
+        record = {
+            "logs": new_log,
+            "status": status,
+            "phase": phase,
+            "artifacts": artifacts or {},
+            "updated_at": "now()"
+        }
+        supabase.table("workflows").update(record).eq("name", workflow_name).execute()
+        logger.info(f"✅ Workflows table updated for '{workflow_name}' (phase={phase})")
+    except Exception as e:
+        logger.warning(f"⚠️ Workflow log update failed for '{workflow_name}' (phase={phase}): {e}")
 
-class Workflow(BaseModel):
-    nodes: List[Node]
-    edges: List[Edge]
+async def stream_agent_response(agent_name: str, prompt: str, phase: str):
+    """
+    Generic streaming helper usable by any agent (Spec, RTL, Verify, etc.)
+    """
+    backend = "Ollama" if USE_LOCAL_OLLAMA else "Portkey/OpenAI"
+    start_time = time.time()
+    collected_output = []
 
+    def generate_stream():
+        try:
+            if not USE_LOCAL_OLLAMA:
+                # Future-ready Portkey/OpenAI route
+                completion = client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[{"role": "user", "content": prompt}],
+                    stream=True,
+                )
+                for chunk in completion:
+                    if chunk and hasattr(chunk, "choices"):
+                        delta = chunk.choices[0].delta.get("content", "")
+                        if delta:
+                            collected_output.append(delta)
+                            yield delta
+            else:
+                # Local Ollama streaming
+                payload = {"model": "llama3", "prompt": prompt}
+                with requests.post(OLLAMA_URL, json=payload, stream=True) as r:
+                    for line in r.iter_lines():
+                        if not line:
+                            continue
+                        try:
+                            j = json.loads(line.decode())
+                            if "response" in j:
+                                token = j["response"]
+                                collected_output.append(token)
+                                yield token
+                        except Exception:
+                            continue
+        finally:
+            duration = round(time.time() - start_time, 2)
+            update_workflow_log(
+                agent_name,
+                "".join(collected_output),
+                status="completed",
+                phase=phase,
+                artifacts={"duration": duration, "backend": backend}
+            )
+
+    return StreamingResponse(generate_stream(), media_type="text/plain")
+
+# ---------- Core Routes ----------
+from openai import OpenAI
+client_openai = OpenAI()
+
+from spec_agent import spec_agent
+from rtl_agent import rtl_agent
+from optimizer_agent import optimizer_agent
 
 AGENT_FUNCTIONS = {
     "📘 Spec Agent": spec_agent,
     "💻 RTL Agent": rtl_agent,
     "🛠 Optimizer Agent": optimizer_agent,
 }
-
-
-def verify_token(request: Request):
-    auth = request.headers.get("Authorization")
-    if not auth or not auth.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Unauthorized")
-    token = auth.split(" ")[1]
-
-    if not SUPABASE_JWT_SECRET:
-        logger.error("❌ SUPABASE_JWT_SECRET is not set!")
-        raise HTTPException(status_code=500, detail="Server misconfigured")
-
-    try:
-        payload = jwt.decode(
-            token,
-            SUPABASE_JWT_SECRET,
-            algorithms=["HS256"],
-            audience="authenticated"   # required by Supabase
-        )
-        logger.info(f"✅ Token decoded for user: {payload.get('sub')}")
-        return payload
-    except Exception as e:
-        logger.error(f"❌ Token decode failed: {str(e)}")
-        raise HTTPException(status_code=401, detail="Invalid token")
 
 @app.post("/run_workflow")
 async def run_workflow(
@@ -432,22 +483,22 @@ async def create_customer_portal_session(user=Depends(verify_token)):
         return {"error": str(e)}
 
 
-# ---------- Portkey + Ollama Fallback ----------
-from portkey_ai import Portkey
-import requests, json
+# ---------- Agent Streaming Endpoints ----------
+@app.get("/spec_agent")
+async def spec_agent_stream(prompt: str):
+    return await stream_agent_response("Spec2RTL", prompt, phase="spec_agent")
 
-PORTKEY_API_KEY = os.getenv("PORTKEY_API_KEY")
-USE_LOCAL_OLLAMA = os.getenv("USE_LOCAL_OLLAMA", "false").lower() == "true"
-OLLAMA_URL = "http://127.0.0.1:11434/api/generate"
+@app.get("/rtl_agent")
+async def rtl_agent_stream(prompt: str):
+    return await stream_agent_response("Spec2RTL", prompt, phase="rtl_agent")
 
-client = Portkey(api_key=PORTKEY_API_KEY)
+@app.get("/verify_agent")
+async def verify_agent_stream(prompt: str):
+    return await stream_agent_response("Spec2RTL", prompt, phase="verify_agent")
 
+# ---------- Existing run_ai Endpoint ----------
 @app.post("/run_ai")
 async def run_ai(prompt: str):
-    """
-    Try Portkey/OpenAI first, then fall back to local Ollama if it fails.
-    USE_LOCAL_OLLAMA=true forces Ollama directly.
-    """
     try:
         if not USE_LOCAL_OLLAMA:
             completion = await client.chat.completions.create(
@@ -463,7 +514,6 @@ async def run_ai(prompt: str):
     except Exception as e:
         logger.warning(f"[⚠️ Portkey failed, falling back to Ollama] {e}")
 
-    # ---- Ollama fallback ----
     try:
         payload = {"model": "llama3", "prompt": prompt}
         r = requests.post(OLLAMA_URL, json=payload, stream=True, timeout=60)
@@ -485,5 +535,6 @@ async def run_ai(prompt: str):
 
 @app.get("/run_ai")
 async def run_ai_get(prompt: str):
-    """GET version of run_ai (for testing or browser use)"""
     return await run_ai(prompt)
+
+

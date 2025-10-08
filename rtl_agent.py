@@ -1,40 +1,143 @@
-import subprocess
 import os
+import re
+import json
+import datetime
+import subprocess
+import requests
+from portkey_ai import Portkey
+from openai import OpenAI
+
+OLLAMA_URL = "http://127.0.0.1:11434/api/generate"
+USE_LOCAL_OLLAMA = os.getenv("USE_LOCAL_OLLAMA", "false").lower() == "true"
+PORTKEY_API_KEY = os.getenv("PORTKEY_API_KEY")
+client_portkey = Portkey(api_key=PORTKEY_API_KEY)
+client_openai = OpenAI()
 
 def rtl_agent(state: dict) -> dict:
-    print("\n🛠 Running RTL Agent (Lint Check)...")
+    print("\n🧠 Running RTL Agent (Spec-Aware Validation)...")
 
-    rtl_file = state.get("rtl_file", "design.v")
+    rtl_file = state.get("artifact", "design.v")
+    spec_file = state.get("spec_json", None)
+
     if not os.path.exists(rtl_file):
-        state["status"] = "❌ RTL file not found"
+        state["status"] = f"❌ RTL file '{rtl_file}' not found."
         return state
+    if not spec_file or not os.path.exists(spec_file):
+        state["status"] = "⚠ Spec JSON not found — limited validation mode."
+        spec = {}
+    else:
+        with open(spec_file, "r") as f:
+            spec = json.load(f)
 
+    # --- Step 1: Basic Verilog Syntax Lint via Icarus ---
     log_path = "rtl_agent_compile.log"
-    # Reset log at start of RTL lint
-    if os.path.exists(log_path):
-        os.remove(log_path)
-    with open(log_path, "w") as logf:
-        logf.write("")
-
     try:
         result = subprocess.run(
-            ["/usr/bin/iverilog", "-tnull", rtl_file],  # quick syntax check
-            check=False, capture_output=True, text=True
+            ["/usr/bin/iverilog", "-o", "rtl_check.out", rtl_file],
+            check=True, capture_output=True, text=True
         )
-        with open(log_path, "a") as logf:  # append new results
-            if result.returncode == 0:
-                state["status"] = "✅ RTL passed lint check"
-                state["rtl_clean"] = rtl_file
-                logf.write("Lint passed successfully\n")
-            else:
-                state["status"] = "⚠ RTL had lint issues"
-                state["lint_log"] = result.stderr or result.stdout
-                logf.write(state["lint_log"] + "\n")
+        compile_status = "✅ Verilog syntax check passed."
+    except subprocess.CalledProcessError as e:
+        compile_status = "⚠ Verilog syntax check failed."
+        error_log = (e.stderr or e.stdout or "").strip()
+        with open(log_path, "w") as logf:
+            logf.write(error_log)
+        state.update({"status": compile_status, "error_log": error_log})
+        return state
 
-        state["artifact"] = rtl_file
-        state["artifact_log"] = "rtl_agent_compile.log"
+    # --- Step 2: Extract RTL ports from Verilog ---
+    with open(rtl_file, "r") as f:
+        verilog_text = f.read()
 
+    ports = re.findall(r"(input|output|inout)\s+(?:wire|reg)?\s*(?:\[[^\]]+\]\s*)?(\w+)", verilog_text)
+    port_names = [p[1] for p in ports]
+    print(f"🔍 Extracted ports: {port_names}")
+
+    clocks_detected = [p for p in port_names if re.search(r"clk|clock", p, re.IGNORECASE)]
+    resets_detected = [p for p in port_names if re.search(r"rst|reset", p, re.IGNORECASE)]
+
+    # --- Step 3: Validate with spec.json ---
+    issues = []
+    if "clock" in spec:
+        for clk in spec["clock"]:
+            name = clk["name"]
+            if name not in port_names:
+                issues.append(f"❌ Clock '{name}' missing in RTL ports.")
+    if "reset" in spec:
+        for rst in spec["reset"]:
+            name = rst["name"]
+            if name not in port_names:
+                issues.append(f"❌ Reset '{name}' missing in RTL ports.")
+    if "io" in spec:
+        for pin in spec["io"].get("inputs", []):
+            pin_name = re.split(r"\[", pin)[0]
+            if pin_name not in port_names:
+                issues.append(f"⚠ Input '{pin}' not found in RTL.")
+        for pin in spec["io"].get("outputs", []):
+            pin_name = re.split(r"\[", pin)[0]
+            if pin_name not in port_names:
+                issues.append(f"⚠ Output '{pin}' not found in RTL.")
+
+    # --- Step 4: Optional LLM-style linting (logical) ---
+    lint_feedback = ""
+    try:
+        lint_prompt = f"""
+You are a senior RTL reviewer.
+Analyze the following Verilog code for any logic or style issues (not syntax).
+Summarize issues clearly.
+
+{verilog_text[:3000]}
+"""
+        if USE_LOCAL_OLLAMA:
+            payload = {"model": "llama3", "prompt": lint_prompt}
+            r = requests.post(OLLAMA_URL, json=payload, timeout=60)
+            lint_feedback = r.text.strip()
+        else:
+            response = client_portkey.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": lint_prompt}],
+            )
+            lint_feedback = response.choices[0].message["content"]
     except Exception as e:
-        state["status"] = f"❌ RTL Agent failed: {str(e)}"
+        lint_feedback = f"(Skipped LLM lint due to {e})"
 
+    # --- Step 5: Log Summary ---
+    with open(log_path, "w") as logf:
+        logf.write(f"RTL Validation Log — {datetime.datetime.now()}\n\n")
+        logf.write(f"{compile_status}\n\n")
+        if issues:
+            logf.write("Spec mismatches:\n")
+            logf.writelines(f"- {i}\n" for i in issues)
+        else:
+            logf.write("✅ All spec ports found in RTL.\n")
+        logf.write("\n🔍 LLM Review Summary:\n")
+        logf.write(lint_feedback)
+
+    # --- Step 6: Update state ---
+    if issues:
+        overall_status = "⚠ RTL validation completed with mismatches."
+    else:
+        overall_status = "✅ RTL validated successfully."
+
+    state.update({
+        "status": overall_status,
+        "artifact_log": log_path,
+        "lint_feedback": lint_feedback,
+        "port_list": port_names,
+        "clock_ports": clocks_detected,
+        "reset_ports": resets_detected,
+        "issues": issues,
+    })
+
+    print(f"🧾 RTL Agent completed — {overall_status}")
     return state
+
+
+# --- Local Test Example ---
+if __name__ == "__main__":
+    state = {
+        "artifact": "uart_tx.v",
+        "spec_json": "uart_tx_spec.json"
+    }
+    result = rtl_agent(state)
+    print(json.dumps(result, indent=2))
