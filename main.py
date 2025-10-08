@@ -264,7 +264,7 @@ async def run_workflow(
     try:
         user_id = user.get("sub") if user else "anonymous"
         workflow_id = str(uuid.uuid4())
-        now = datetime.utcnow()
+        now = datetime.utcnow().isoformat()
 
         # ✅ Insert workflow record into Supabase
         supabase.table("workflows").insert({
@@ -373,7 +373,7 @@ def execute_workflow_background(workflow_id, user_id, workflow, spec_text, uploa
             "status": "success",
             "logs": json.dumps(results),
             "artifacts": artifacts,
-            "updated_at": datetime.utcnow(),
+            "updated_at": datetime.utcnow().isoformat(),
         }).eq("id", workflow_id).execute()
 
         logger.info(f"✅ [BG] Workflow {workflow_id} completed successfully.")
@@ -384,7 +384,7 @@ def execute_workflow_background(workflow_id, user_id, workflow, spec_text, uploa
         supabase.table("workflows").update({
             "status": "failed",
             "logs": f"❌ Workflow failed: {str(e)}\n{err_trace}",
-            "updated_at": datetime.utcnow(),
+            "updated_at": datetime.utcnow().isoformat(),
         }).eq("id", workflow_id).execute()
 
 
