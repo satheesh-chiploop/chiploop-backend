@@ -22,9 +22,22 @@ def rtl_agent(state: dict) -> dict:
     os.makedirs(workflow_dir, exist_ok=True)
     os.chdir(workflow_dir)
     # --------------------------------------------
+    rtl_file = state.get("artifact")
+    if not rtl_file or not os.path.exists(rtl_file):
+        v_files = [f for f in os.listdir(workflow_dir) if f.endswith(".v")]
+        if not v_files:
+          raise FileNotFoundError(f"No RTL (.v) file found in {workflow_dir}")
+        rtl_file = os.path.join(workflow_dir, v_files[0])  # pick the first .v file found
 
-    rtl_file = state.get("artifact", os.path.join(workflow_dir, "design.v"))
-    spec_file = state.get("spec_json", os.path.join(workflow_dir, "spec.json"))
+    print(f"✅ Using RTL file: {rtl_file}")
+    # Detect the JSON spec file dynamically
+
+    if not spec_file or not os.path.exists(spec_file):
+        json_candidates = [f for f in os.listdir(workflow_dir) if f.endswith("_spec.json")]
+        if not json_candidates:
+          raise FileNotFoundError(f"No spec JSON file found in {workflow_dir}")
+        spec_file = os.path.join(workflow_dir, json_candidates[0])
+        
 
     if not os.path.exists(rtl_file):
         state["status"] = f"❌ RTL file '{rtl_file}' not found."
