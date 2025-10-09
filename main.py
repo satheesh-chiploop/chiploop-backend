@@ -186,14 +186,17 @@ logger.info(f"🧠 Loaded agents: {list(AGENT_REGISTRY.keys())}")
 
 
 AGENT_FUNCTIONS = {
-    "📘 Spec Agent": spec_agent,
-    "💻 RTL Agent": rtl_agent,
-    "🧩 Testbench Agent": testbench_agent_uvm,
-    "🧠 Testcase Agent": testcase_agent,
-    "⚖️ Assertion Agent": assertion_agent,
-    "🎯 Covergroup Agent": covergroup_agent,
-    "▶️ Simulation Agent": simulation_agent,
-    "📊 Coverage Agent": coverage_agent,
+    "Spec Agent": spec_agent,
+    "RTL Agent": rtl_agent,
+    "Testbench Agent": testbench_agent_uvm,
+    "Testcase Agent": testcase_agent,
+    "Assertion Agent": assertion_agent,
+    "Covergroup Agent": covergroup_agent,
+    "Simulation Agent": simulation_agent,
+    "Coverage Agent": coverage_agent,
+    "Optimizer Agent" : optimizer_agent,
+    "Arch Doc Agent" : arch_doc_agent,
+   "Integration Doc Agent" : integration_doc_agent,
 }
 @app.post("/run_workflow")
 async def run_workflow(
