@@ -178,15 +178,17 @@ def load_custom_agents():
 
 logger.info(f"🧠 Loaded agents: {list(AGENT_REGISTRY.keys())}")
 
+
 AGENT_FUNCTIONS = {
-   "testbench_agent": testbench_agent_uvm,
-    "arch_doc_agent":arch_doc_agent,
-    "integration_doc_agent":integration_doc_agent,
     "📘 Spec Agent": spec_agent,
     "💻 RTL Agent": rtl_agent,
-    "🛠 Optimizer Agent": optimizer_agent,
+    "🧩 Testbench Agent": testbench_agent_uvm,
+    "🧠 Testcase Agent": testcase_agent,
+    "⚖️ Assertion Agent": assertion_agent,
+    "🎯 Covergroup Agent": covergroup_agent,
+    "▶️ Simulation Agent": simulation_agent,
+    "📊 Coverage Agent": coverage_agent,
 }
-
 @app.post("/run_workflow")
 async def run_workflow(
     background_tasks: BackgroundTasks,

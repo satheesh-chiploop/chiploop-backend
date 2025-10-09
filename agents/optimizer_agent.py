@@ -20,26 +20,25 @@ def optimizer_agent(state: dict) -> dict:
     workflow_id = state.get("workflow_id", "default")
     workflow_dir = state.get("workflow_dir", f"backend/workflows/{workflow_id}")
     os.makedirs(workflow_dir, exist_ok=True)
-    os.chdir(workflow_dir)
     # --------------------------------------
 
-    rtl_code = state.get("rtl") or ""
-    spec_json = state.get("spec_json", os.path.join(workflow_dir, "auto_module_spec.json"))
-
+    # --- Load RTL ---
+    rtl_code = state.get("rtl", "")
     if not rtl_code:
-        # if not present, read from previous stage file
-        rtl_path = os.path.join(workflow_dir, "auto_module.v")
-        if os.path.exists(rtl_path):
-            with open(rtl_path, "r") as f:
+        v_files = [f for f in os.listdir(workflow_dir) if f.endswith(".v")]
+        if v_files:
+            rtl_path = os.path.join(workflow_dir, v_files[0])
+            with open(rtl_path, "r", encoding="utf-8") as f:
                 rtl_code = f.read()
         else:
             state["status"] = "❌ No RTL available to optimize"
             return state
 
-    # --- Load spec for multi-clock/reset awareness ---
+    # --- Load Spec for multi-clock/reset awareness ---
+    spec_json_path = state.get("spec_json") or os.path.join(workflow_dir, "auto_module_spec.json")
     spec_context = ""
-    if os.path.exists(spec_json):
-        with open(spec_json, "r") as f:
+    if os.path.exists(spec_json_path):
+        with open(spec_json_path, "r", encoding="utf-8") as f:
             spec = json.load(f)
             clocks = spec.get("clock", [])
             resets = spec.get("reset", [])
@@ -96,17 +95,31 @@ Task:
                         continue
         else:
             print("🌐 Using Portkey backend for optimization...")
-            completion = client_portkey.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[{"role": "user", "content": prompt}],
-                stream=True,
-            )
-            for chunk in completion:
-                if chunk and hasattr(chunk, "choices"):
-                    delta = chunk.choices[0].delta.get("content", "")
-                    if delta:
-                        optimized_rtl += delta
-                        print(delta, end="", flush=True)
+            try:
+                completion = client_portkey.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[{"role": "user", "content": prompt}],
+                    stream=True,
+                )
+                for chunk in completion:
+                    if chunk and hasattr(chunk, "choices"):
+                        delta = chunk.choices[0].delta.get("content", "")
+                        if delta:
+                            optimized_rtl += delta
+                            print(delta, end="", flush=True)
+            except Exception as e:
+                print(f"⚠️ Portkey failed, falling back to Ollama: {e}")
+                payload = {"model": "llama3", "prompt": prompt}
+                with requests.post(OLLAMA_URL, json=payload, stream=True, timeout=600) as r:
+                    for line in r.iter_lines():
+                        if not line:
+                            continue
+                        try:
+                            j = json.loads(line.decode())
+                            if "response" in j:
+                                optimized_rtl += j["response"]
+                        except Exception:
+                            continue
     except Exception as e:
         print(f"⚠️ LLM optimization failed: {e}")
         state["status"] = f"⚠️ Optimization LLM failed: {e}"
