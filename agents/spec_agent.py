@@ -18,9 +18,7 @@ def spec_agent(state: dict) -> dict:
     # --- Added for multi-user workflow isolation ---
     workflow_id = state.get("workflow_id", "default")
     workflow_dir = state.get("workflow_dir", f"backend/workflows/{workflow_id}")
-    os.makedirs(workflow_dir, exist_ok=True)
-    os.chdir(workflow_dir)
-    # ------------------------------------------------
+    os.makedirs(workflow_dir, exist_ok=True)    # ------------------------------------------------
 
     spec_data = state.get("spec", "")
     if not spec_data:
@@ -171,6 +169,10 @@ Design Guidelines:
             ["/usr/bin/iverilog", "-o", "design.out", verilog_file],
             check=True, capture_output=True, text=True
         )
+        if result.returncode == 0:
+             compile_status = "✅ Verilog syntax check passed."
+        else:
+             compile_status = "⚠ Verilog syntax check failed."
         state["status"] = "✅ RTL and spec.json generated successfully"
         with open(log_path, "a") as logf:
             logf.write(result.stdout or "")

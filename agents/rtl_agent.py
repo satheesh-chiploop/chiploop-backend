@@ -20,7 +20,6 @@ def rtl_agent(state: dict) -> dict:
     workflow_id = state.get("workflow_id", "default")
     workflow_dir = state.get("workflow_dir", f"backend/workflows/{workflow_id}")
     os.makedirs(workflow_dir, exist_ok=True)
-    os.chdir(workflow_dir)
     # --------------------------------------------
     rtl_file = state.get("artifact")
     if not rtl_file or not os.path.exists(rtl_file):
@@ -31,7 +30,7 @@ def rtl_agent(state: dict) -> dict:
 
     print(f"✅ Using RTL file: {rtl_file}")
     # Detect the JSON spec file dynamically
-
+    spec_file = state.get("spec_json")
     if not spec_file or not os.path.exists(spec_file):
         json_candidates = [f for f in os.listdir(workflow_dir) if f.endswith("_spec.json")]
         if not json_candidates:
@@ -123,7 +122,7 @@ Summarize issues clearly.
                 model="gpt-4o-mini",
                 messages=[{"role": "user", "content": lint_prompt}],
             )
-            lint_feedback = response.choices[0].message["content"]
+            lint_feedback = response.choices[0].message.get("content", "")  
     except Exception as e:
         lint_feedback = f"(Skipped LLM lint due to {e})"
 
