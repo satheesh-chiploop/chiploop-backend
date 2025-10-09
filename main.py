@@ -148,7 +148,7 @@ client_openai = OpenAI()
 from agents.spec_agent import spec_agent
 from agents.rtl_agent import rtl_agent
 from agents.optimizer_agent import optimizer_agent
-from agents.testbench_agent_uvm import run_testbench_agent_uvm
+from agents.testbench_agent_uvm import testbench_agent_uvm
 from agents.arch_doc_agent import arch_doc_agent
 from agents.integration_doc_agent import integration_doc_agent
 
