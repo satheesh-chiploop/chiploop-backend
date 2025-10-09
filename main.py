@@ -145,11 +145,43 @@ async def stream_agent_response(agent_name: str, prompt: str, phase: str):
 from openai import OpenAI
 client_openai = OpenAI()
 
-from spec_agent import spec_agent
-from rtl_agent import rtl_agent
-from optimizer_agent import optimizer_agent
+from agents.spec_agent import spec_agent
+from agents.rtl_agent import rtl_agent
+from agents.optimizer_agent import optimizer_agent
+from agents.testbench_agent_uvm import run_testbench_agent_uvm
+from agents.arch_doc_agent import arch_doc_agent
+from agents.integration_doc_agent import integration_doc_agent
+
+import importlib
+import pkgutil
+import agents
+# Prebuilt system agents (always available)
+
+AGENT_REGISTRY = {
+    "spec_agent": spec_agent,
+    "rtl_agent": rtl_agent,
+    "optimizer_agent": optimizer_agent,
+}
+
+def load_custom_agents():
+    """Dynamically load user-created agents in /agents directory."""
+    global AGENT_REGISTRY
+    for _, name, _ in pkgutil.iter_modules(agents.__path__):
+        if name not in AGENT_REGISTRY:  # avoid overwriting prebuilt ones
+            try:
+                module = importlib.import_module(f"agents.{name}")
+                if hasattr(module, "run_agent"):
+                    AGENT_REGISTRY[name] = module.run_agent
+                    logger.info(f"⚡ Custom agent loaded: {name}")
+            except Exception as e:
+                logger.warning(f"⚠️ Could not load {name}: {e}")
+
+logger.info(f"🧠 Loaded agents: {list(AGENT_REGISTRY.keys())}")
 
 AGENT_FUNCTIONS = {
+   "testbench_agent": testbench_agent_uvm,
+    "arch_doc_agent":arc_doc_agent,
+    "integration_doc_agent":integration_doc_agent",
     "📘 Spec Agent": spec_agent,
     "💻 RTL Agent": rtl_agent,
     "🛠 Optimizer Agent": optimizer_agent,
@@ -324,11 +356,21 @@ async def run_workflow(
         logger.error(f"❌ Error in run_workflow: {e}")
         return {"status": "error", "message": str(e)}
 
+@app.post("/reload_agents")
+async def reload_agents():
+    try:
+        load_custom_agents()
+        return {"status": "success", "loaded_agents": list(AGENT_REGISTRY.keys())}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
 
 def execute_workflow_background(workflow_id, user_id, workflow, spec_text, upload_path, artifact_dir):
-    """Executes Spec → RTL → Optimizer agent chain asynchronously."""
+    """Executes workflow dynamically using hybrid agent registry (prebuilt + custom)."""
     try:
         logger.info(f"🧠 [BG] Executing workflow {workflow_id} for user {user_id}")
+        workflow_dir = f"backend/workflows/{workflow_id}"
+        os.makedirs(workflow_dir, exist_ok=True)
+
         data = json.loads(workflow)
         state = {}
         if upload_path:
@@ -339,11 +381,33 @@ def execute_workflow_background(workflow_id, user_id, workflow, spec_text, uploa
         results: Dict[str, str] = {}
         artifacts: Dict[str, Dict[str, str]] = {}
 
+        # Merge static and dynamic agents into one lookup map
+        agent_map = dict(AGENT_FUNCTIONS)
+        agent_map.update(AGENT_REGISTRY)
+
         for node in data.get("nodes", []):
             label = node.get("label")
-            func = AGENT_FUNCTIONS.get(label)
+            normalized = (
+                label.lower()
+                .replace("📘", "")
+                .replace("💻", "")
+                .replace("🛠", "")
+                .replace("🧪", "")
+                .replace("✨", "")
+                .replace("agent", "")
+                .strip()
+                .replace(" ", "_")
+                + "_agent"
+            )
+
+            # Try to resolve agent: prefer AGENT_FUNCTIONS (prebuilt), else dynamic
+            func = agent_map.get(label) or agent_map.get(normalized)
+
             if func:
                 try:
+                    logger.info(f"🚀 Executing agent: {label}")
+                    update_workflow_log(workflow_id, f"🚀 Running {label}\n")
+
                     state = func(state)
                     results[label] = state.get("status", "✅ Done")
 
@@ -361,12 +425,16 @@ def execute_workflow_background(workflow_id, user_id, workflow, spec_text, uploa
                     }
 
                     logger.info(f"✅ Agent executed: {label}")
+                    update_workflow_log(workflow_id, f"✅ Completed {label}\n")
+
                 except Exception as agent_err:
                     results[label] = f"❌ Error: {str(agent_err)}"
                     logger.error(f"Agent {label} failed: {agent_err}")
+                    update_workflow_log(workflow_id, f"❌ {label} failed: {agent_err}\n")
             else:
-                results[label] = "⚠ No implementation yet."
+                results[label] = "⚠ No implementation found."
                 logger.warning(f"No function found for agent: {label}")
+                update_workflow_log(workflow_id, f"⚠ Missing agent: {label}\n")
 
         # ✅ Update workflow record
         supabase.table("workflows").update({
@@ -386,7 +454,6 @@ def execute_workflow_background(workflow_id, user_id, workflow, spec_text, uploa
             "logs": f"❌ Workflow failed: {str(e)}\n{err_trace}",
             "updated_at": datetime.utcnow().isoformat(),
         }).eq("id", workflow_id).execute()
-
 
 
 @app.post("/create_agent")

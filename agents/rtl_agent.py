@@ -16,8 +16,15 @@ client_openai = OpenAI()
 def rtl_agent(state: dict) -> dict:
     print("\n🧠 Running RTL Agent (Spec-Aware Validation)...")
 
-    rtl_file = state.get("artifact", "design.v")
-    spec_file = state.get("spec_json", None)
+    # --- Added: Multi-user workflow isolation ---
+    workflow_id = state.get("workflow_id", "default")
+    workflow_dir = state.get("workflow_dir", f"backend/workflows/{workflow_id}")
+    os.makedirs(workflow_dir, exist_ok=True)
+    os.chdir(workflow_dir)
+    # --------------------------------------------
+
+    rtl_file = state.get("artifact", os.path.join(workflow_dir, "design.v"))
+    spec_file = state.get("spec_json", os.path.join(workflow_dir, "spec.json"))
 
     if not os.path.exists(rtl_file):
         state["status"] = f"❌ RTL file '{rtl_file}' not found."
@@ -30,7 +37,7 @@ def rtl_agent(state: dict) -> dict:
             spec = json.load(f)
 
     # --- Step 1: Basic Verilog Syntax Lint via Icarus ---
-    log_path = "rtl_agent_compile.log"
+    log_path = os.path.join(workflow_dir, "rtl_agent_compile.log")
     try:
         result = subprocess.run(
             ["/usr/bin/iverilog", "-o", "rtl_check.out", rtl_file],
@@ -42,7 +49,13 @@ def rtl_agent(state: dict) -> dict:
         error_log = (e.stderr or e.stdout or "").strip()
         with open(log_path, "w") as logf:
             logf.write(error_log)
-        state.update({"status": compile_status, "error_log": error_log})
+        state.update({
+            "status": compile_status,
+            "error_log": error_log,
+            "artifact_log": log_path,
+            "workflow_id": workflow_id,
+            "workflow_dir": workflow_dir
+        })
         return state
 
     # --- Step 2: Extract RTL ports from Verilog ---
@@ -78,15 +91,12 @@ def rtl_agent(state: dict) -> dict:
             if pin_name not in port_names:
                 issues.append(f"⚠ Output '{pin}' not found in RTL.")
 
-    # --- Step 4: Optional LLM-style linting (logical) ---
+    # --- Step 4: Optional LLM-based linting ---
     lint_feedback = ""
     try:
         lint_prompt = f"""
 You are a senior RTL reviewer.
 Analyze the following Verilog code for any logic or style issues (not syntax).
-Generate syntactically correct Verilog-2001 code. 
-Ensure all ports are declared inside parentheses in the module declaration. 
-End every statement with a semicolon and close with `endmodule` only once.
 Summarize issues clearly.
 
 {verilog_text[:3000]}
@@ -117,10 +127,7 @@ Summarize issues clearly.
         logf.write(lint_feedback)
 
     # --- Step 6: Update state ---
-    if issues:
-        overall_status = "⚠ RTL validation completed with mismatches."
-    else:
-        overall_status = "✅ RTL validated successfully."
+    overall_status = "⚠ RTL validation completed with mismatches." if issues else "✅ RTL validated successfully."
 
     state.update({
         "status": overall_status,
@@ -130,6 +137,8 @@ Summarize issues clearly.
         "clock_ports": clocks_detected,
         "reset_ports": resets_detected,
         "issues": issues,
+        "workflow_id": workflow_id,
+        "workflow_dir": workflow_dir
     })
 
     print(f"🧾 RTL Agent completed — {overall_status}")
@@ -140,7 +149,8 @@ Summarize issues clearly.
 if __name__ == "__main__":
     state = {
         "artifact": "uart_tx.v",
-        "spec_json": "uart_tx_spec.json"
+        "spec_json": "uart_tx_spec.json",
+        "workflow_id": "test_run_1"
     }
     result = rtl_agent(state)
     print(json.dumps(result, indent=2))

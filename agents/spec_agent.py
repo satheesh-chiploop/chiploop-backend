@@ -15,6 +15,13 @@ client_openai = OpenAI()
 def spec_agent(state: dict) -> dict:
     print("\n🚀 Running Spec Agent v4 (Spec JSON + RTL Generator)...")
 
+    # --- Added for multi-user workflow isolation ---
+    workflow_id = state.get("workflow_id", "default")
+    workflow_dir = state.get("workflow_dir", f"backend/workflows/{workflow_id}")
+    os.makedirs(workflow_dir, exist_ok=True)
+    os.chdir(workflow_dir)
+    # ------------------------------------------------
+
     spec_data = state.get("spec", "")
     if not spec_data:
         state["status"] = "❌ No spec provided"
@@ -73,7 +80,8 @@ def spec_agent(state: dict) -> dict:
         "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     }
 
-    spec_json_path = f"{module_name}_spec.json"
+    # --- Modified to write inside workflow dir ---
+    spec_json_path = os.path.join(workflow_dir, f"{module_name}_spec.json")
     with open(spec_json_path, "w", encoding="utf-8") as f:
         json.dump(canonical_spec, f, indent=2)
 
@@ -95,7 +103,6 @@ Generate syntactically correct Verilog-2001 code.
 Ensure all ports are declared inside parentheses in the module declaration. 
 End every statement with a semicolon and close with `endmodule` only once.
 
-
 Specification JSON:
 {json.dumps(canonical_spec, indent=2)}
 
@@ -110,7 +117,6 @@ Design Guidelines:
 - For control or arithmetic designs, infer appropriate logic cleanly.
 """
 
-    # --- Generate RTL ---
     rtl_code = ""
     try:
         if USE_LOCAL_OLLAMA:
@@ -144,17 +150,15 @@ Design Guidelines:
         state["status"] = f"❌ LLM generation failed: {e}"
         return state
 
-    # --- Clean and save RTL ---
     rtl_code = rtl_code.replace("```verilog", "").replace("```", "").strip()
     if "module" in rtl_code:
         rtl_code = rtl_code[rtl_code.index("module"):]
 
-    verilog_file = f"{module_name}.v"
+    verilog_file = os.path.join(workflow_dir, f"{module_name}.v")
     with open(verilog_file, "w", encoding="utf-8") as f:
         f.write(rtl_code)
 
-    # --- Compile with Icarus Verilog ---
-    log_path = "spec_agent_compile.log"
+    log_path = os.path.join(workflow_dir, "spec_agent_compile.log")
     with open(log_path, "w") as logf:
         logf.write(f"Spec processed at {datetime.datetime.now()}\n")
         logf.write(f"Module: {module_name}\n")
@@ -174,29 +178,14 @@ Design Guidelines:
         with open(log_path, "a") as logf:
             logf.write(state["error_log"])
 
-    # --- Update return state ---
     state.update({
         "artifact": verilog_file,
         "artifact_log": log_path,
         "spec_json": spec_json_path,
         "rtl": rtl_code,
+        "workflow_dir": workflow_dir,
+        "workflow_id": workflow_id,
     })
 
     print(f"\n✅ Generated {verilog_file} and {spec_json_path}")
-
     return state
-
-# --- Local test ---
-if __name__ == "__main__":
-    example = {
-        "module": "uart_tx",
-        "description": "UART transmitter with start/stop bit, configurable baud rate, and 8-bit data input.",
-        "clock": {"name": "clk_core", "frequency_mhz": 100},
-        "reset": {"name": "rst_n", "active_low": True},
-        "io": {
-            "inputs": ["data_in[7:0]", "tx_start"],
-            "outputs": ["tx_serial", "tx_done"]
-        }
-    }
-    result = spec_agent({"spec": json.dumps(example)})
-    print(result["status"])
