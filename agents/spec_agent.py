@@ -156,11 +156,11 @@ Design Guidelines:
     rtl_code = rtl_code.replace("```verilog", "").replace("```", "").strip()
     if "module" in rtl_code:
         rtl_code = rtl_code[rtl_code.index("module"):]
-
+    os.makedirs(workflow_dir, exist_ok=True) 
     verilog_file = os.path.join(workflow_dir, f"{module_name}.v")
     with open(verilog_file, "w", encoding="utf-8") as f:
         f.write(rtl_code)
-
+ 
     log_path = os.path.join(workflow_dir, "spec_agent_compile.log")
     with open(log_path, "w") as logf:
         logf.write(f"Spec processed at {datetime.datetime.now()}\n")
