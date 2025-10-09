@@ -81,6 +81,9 @@ def spec_agent(state: dict) -> dict:
     }
 
     # --- Modified to write inside workflow dir ---
+    workflow_dir = state.get("workflow_dir", f"backend/workflows/{workflow_id}")
+    os.makedirs(workflow_dir, exist_ok=True)
+
     spec_json_path = os.path.join(workflow_dir, f"{module_name}_spec.json")
     with open(spec_json_path, "w", encoding="utf-8") as f:
         json.dump(canonical_spec, f, indent=2)
