@@ -377,7 +377,8 @@ def execute_workflow_background(workflow_id, user_id, workflow, spec_text, uploa
             state["uploaded_file"] = upload_path
         if spec_text:
             state["spec"] = spec_text
-
+        state["workflow_id"] = workflow_id
+        state["workflow_dir"] = f"backend/workflows/{workflow_id}"
         results: Dict[str, str] = {}
         artifacts: Dict[str, Dict[str, str]] = {}
 
