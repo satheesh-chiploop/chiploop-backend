@@ -151,6 +151,12 @@ from agents.optimizer_agent import optimizer_agent
 from agents.testbench_agent_uvm import testbench_agent_uvm
 from agents.arch_doc_agent import arch_doc_agent
 from agents.integration_doc_agent import integration_doc_agent
+from agents.testcase_agent import testcase_agent
+from agents.assertion_agent import assertion_agent
+from agents.simulation_agent import simulation_agent
+from agents.coverage_agent import coverage_agent
+from agents.covergroup_agent import covergroup_agent
+
 
 import importlib
 import pkgutil
