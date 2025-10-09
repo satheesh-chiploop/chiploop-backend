@@ -84,6 +84,9 @@ def rtl_agent(state: dict) -> dict:
         lint_prompt = f"""
 You are a senior RTL reviewer.
 Analyze the following Verilog code for any logic or style issues (not syntax).
+Generate syntactically correct Verilog-2001 code. 
+Ensure all ports are declared inside parentheses in the module declaration. 
+End every statement with a semicolon and close with `endmodule` only once.
 Summarize issues clearly.
 
 {verilog_text[:3000]}

@@ -91,6 +91,10 @@ You are a professional digital design engineer.
 Generate synthesizable Verilog-2005 code for this specification.
 Output must start with 'module' and end with 'endmodule'.
 Do NOT include markdown code fences or explanations.
+Generate syntactically correct Verilog-2001 code. 
+Ensure all ports are declared inside parentheses in the module declaration. 
+End every statement with a semicolon and close with `endmodule` only once.
+
 
 Specification JSON:
 {json.dumps(canonical_spec, indent=2)}
