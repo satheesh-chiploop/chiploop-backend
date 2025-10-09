@@ -416,6 +416,7 @@ def execute_workflow_background(workflow_id, user_id, workflow, spec_text, uploa
                     art_path = None
                     if state.get("artifact"):
                         safe_label = label.replace(" ", "_").replace("📘", "").replace("💻", "").replace("🛠", "")
+                        os.makedirs(artifact_dir, exist_ok=True)
                         art_path = os.path.join(artifact_dir, f"{safe_label}.txt")
                         with open(art_path, "w") as f:
                             f.write(state["artifact"] or "")
