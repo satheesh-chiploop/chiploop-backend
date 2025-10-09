@@ -181,7 +181,7 @@ logger.info(f"🧠 Loaded agents: {list(AGENT_REGISTRY.keys())}")
 AGENT_FUNCTIONS = {
    "testbench_agent": testbench_agent_uvm,
     "arch_doc_agent":arc_doc_agent,
-    "integration_doc_agent":integration_doc_agent",
+    "integration_doc_agent":integration_doc_agent,
     "📘 Spec Agent": spec_agent,
     "💻 RTL Agent": rtl_agent,
     "🛠 Optimizer Agent": optimizer_agent,
