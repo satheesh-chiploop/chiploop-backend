@@ -12,20 +12,38 @@ PORTKEY_API_KEY = os.getenv("PORTKEY_API_KEY")
 client_portkey = Portkey(api_key=PORTKEY_API_KEY)
 client_openai = OpenAI()
 
+
+# --- ✅ Added cleanup function (minimal addition) ---
+def cleanup_verilog(verilog_code: str) -> str:
+    lines = verilog_code.splitlines()
+    seen = set()
+    cleaned = []
+    for line in lines:
+        stripped = line.strip()
+        # skip duplicate signal declarations (clk, reset, etc.)
+        if any(keyword in stripped for keyword in ["input", "output", "inout"]):
+            tokens = stripped.replace(";", "").split()
+            sigs = [t for t in tokens if t not in ["input", "output", "inout", "wire", "reg", "logic"]]
+            if any(sig in seen for sig in sigs):
+                continue
+            for sig in sigs:
+                seen.add(sig)
+        cleaned.append(line)
+    return "\n".join(cleaned)
+
+
 def spec_agent(state: dict) -> dict:
     print("\n🚀 Running Spec Agent v4 (Spec JSON + RTL Generator)...")
 
-    # --- Added for multi-user workflow isolation ---
     workflow_id = state.get("workflow_id", "default")
     workflow_dir = state.get("workflow_dir", f"backend/workflows/{workflow_id}")
-    os.makedirs(workflow_dir, exist_ok=True)    # ------------------------------------------------
+    os.makedirs(workflow_dir, exist_ok=True)
 
     spec_data = state.get("spec", "")
     if not spec_data:
         state["status"] = "❌ No spec provided"
         return state
 
-    # --- Try parsing JSON ---
     try:
         spec = json.loads(spec_data) if isinstance(spec_data, str) else spec_data
     except Exception:
@@ -34,20 +52,12 @@ def spec_agent(state: dict) -> dict:
     module_name = spec.get("module", "auto_module")
     description = spec.get("description", spec_data if isinstance(spec_data, str) else "Generic digital design")
 
-    # --- Normalize Clocks & Resets ---
+    # --- Normalize clocks & resets (same as before) ---
     def normalize_clock(c):
-        return {
-            "name": c.get("name", "clk"),
-            "frequency_mhz": c.get("frequency_mhz", 100),
-            "duty_cycle": c.get("duty_cycle", 0.5)
-        }
+        return {"name": c.get("name", "clk"), "frequency_mhz": c.get("frequency_mhz", 100), "duty_cycle": c.get("duty_cycle", 0.5)}
 
     def normalize_reset(r):
-        return {
-            "name": r.get("name", "reset"),
-            "active_low": r.get("active_low", False),
-            "duration_cycles": r.get("duration_cycles", 5)
-        }
+        return {"name": r.get("name", "reset"), "active_low": r.get("active_low", False), "duration_cycles": r.get("duration_cycles", 5)}
 
     clocks = spec.get("clock", [])
     resets = spec.get("reset", [])
@@ -55,40 +65,31 @@ def spec_agent(state: dict) -> dict:
     if isinstance(resets, dict): resets = [resets]
     if not clocks: clocks = [{"name": "clk", "frequency_mhz": 100, "duty_cycle": 0.5}]
     if not resets: resets = [{"name": "reset", "active_low": False, "duration_cycles": 5}]
-
     clocks = [normalize_clock(c) for c in clocks]
     resets = [normalize_reset(r) for r in resets]
 
-    # --- Normalize I/O Ports (optional future use) ---
     io = spec.get("io", {})
     inputs = io.get("inputs", [])
     outputs = io.get("outputs", [])
 
-    # --- Construct canonical spec.json ---
     canonical_spec = {
         "module": module_name,
         "description": description,
         "clock": clocks,
         "reset": resets,
-        "io": {
-            "inputs": inputs,
-            "outputs": outputs
-        },
+        "io": {"inputs": inputs, "outputs": outputs},
         "llm_source": "Ollama" if USE_LOCAL_OLLAMA else "Portkey/OpenAI",
         "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     }
 
-    # --- Modified to write inside workflow dir ---
-    workflow_dir = state.get("workflow_dir", f"backend/workflows/{workflow_id}")
     os.makedirs(workflow_dir, exist_ok=True)
-
     spec_json_path = os.path.join(workflow_dir, f"{module_name}_spec.json")
     with open(spec_json_path, "w", encoding="utf-8") as f:
         json.dump(canonical_spec, f, indent=2)
 
     print(f"🧾 Spec JSON written → {spec_json_path}")
 
-    # --- Build prompt for LLM-based RTL generation ---
+    # --- Slightly enhanced prompt (only one extra sentence) ---
     domain_info = "\n".join([
         f"- Clock {i+1}: {clk['name']} @ {clk['frequency_mhz']}MHz, duty={clk['duty_cycle']} | "
         f"Reset: {resets[min(i, len(resets)-1)]['name']} (active_low={resets[min(i, len(resets)-1)]['active_low']})"
@@ -101,6 +102,11 @@ Generate synthesizable Verilog-2005 code for this specification.
 Output must start with 'module' and end with 'endmodule'.
 Do NOT include markdown code fences or explanations.
 Ensure all ports are declared inside parentheses in the module declaration. 
+Avoid duplicate declarations of signals like clk, reset, or common ports.
+Each signal is declared only once across all modules.
+Do not repeat `clk`, `reset`, or any input/output in submodules if already declared in the top module.
+Avoid declaring loop indices (like i) globally.
+Generate clean synthesizable Verilog with consistent indentation
 End every statement with a semicolon and close with `endmodule` only once.
 
 Specification JSON:
@@ -153,11 +159,15 @@ Design Guidelines:
     rtl_code = rtl_code.replace("```verilog", "").replace("```", "").strip()
     if "module" in rtl_code:
         rtl_code = rtl_code[rtl_code.index("module"):]
-    os.makedirs(workflow_dir, exist_ok=True) 
+
+    # --- ✅ Apply cleanup before writing to file ---
+    rtl_code = cleanup_verilog(rtl_code)
+
+    os.makedirs(workflow_dir, exist_ok=True)
     verilog_file = os.path.join(workflow_dir, f"{module_name}.v")
     with open(verilog_file, "w", encoding="utf-8") as f:
         f.write(rtl_code)
- 
+
     log_path = os.path.join(workflow_dir, "spec_agent_compile.log")
     with open(log_path, "w") as logf:
         logf.write(f"Spec processed at {datetime.datetime.now()}\n")
@@ -170,9 +180,9 @@ Design Guidelines:
             check=True, capture_output=True, text=True
         )
         if result.returncode == 0:
-             compile_status = "✅ Verilog syntax check passed."
+            compile_status = "✅ Verilog syntax check passed."
         else:
-             compile_status = "⚠ Verilog syntax check failed."
+            compile_status = "⚠ Verilog syntax check failed."
         state["status"] = "✅ RTL and spec.json generated successfully"
         with open(log_path, "a") as logf:
             logf.write(result.stdout or "")
