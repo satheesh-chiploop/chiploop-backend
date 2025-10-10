@@ -1,5 +1,9 @@
-
 import os, subprocess, datetime, re
+import importlib.util
+
+def has_pyuvm():
+    return importlib.util.find_spec("pyuvm") is not None
+
 
 def simulation_agent(state: dict) -> dict:
     print("\n▶️ Running Simulation Agent...")
@@ -16,7 +20,8 @@ def simulation_agent(state: dict) -> dict:
     if not rtl_file or not tb_dir:
         raise FileNotFoundError("Missing RTL or Testbench for simulation.")
 
-    tb_files = [os.path.join(tb_dir, f) for f in os.listdir(tb_dir) if f.endswith(".sv") or f.endswith(".py")]
+    tb_files = [os.path.join(tb_dir, f) for f in os.listdir(tb_dir)
+                if f.endswith(".sv") or f.endswith(".py")]
     sim_exe = os.path.join(workflow_dir, "sim.out")
     sim_log = os.path.join(workflow_dir, "simulation_run.log")
     sim_summary = os.path.join(workflow_dir, "simulation_summary.txt")
@@ -41,19 +46,31 @@ def simulation_agent(state: dict) -> dict:
                 "--sv", "--trace",
                 "--top-module", "tb_top"
             ]
+
             compile_proc = subprocess.run(cmd_compile, capture_output=True, text=True)
+
+            # --- Fallback if Verilator fails (UVM unsupported) ---
             if compile_proc.returncode != 0:
-                raise subprocess.CalledProcessError(
-                    compile_proc.returncode, cmd_compile, compile_proc.stdout, compile_proc.stderr
-                )
+                print("⚠️ Verilator failed — retrying with Icarus Verilog (UVM-lite fallback)...")
+                cmd_compile = ["iverilog", "-g2012", "-o", sim_exe, rtl_file, *tb_files]
+                run_compile = subprocess.run(cmd_compile, capture_output=True, text=True)
+                if run_compile.returncode != 0:
+                    raise subprocess.CalledProcessError(
+                        run_compile.returncode, cmd_compile,
+                        run_compile.stdout, run_compile.stderr
+                    )
+                run_proc = subprocess.run(["vvp", sim_exe], capture_output=True, text=True)
+                sim_output = run_proc.stdout + run_proc.stderr
+            else:
+                print("▶️ Running simulation...")
+                run_proc = subprocess.run(["obj_dir/Vtb_top"], capture_output=True, text=True)
+                sim_output = run_proc.stdout + run_proc.stderr
 
-            print("▶️ Running simulation...")
-            run_proc = subprocess.run(["obj_dir/Vtb_top"], capture_output=True, text=True)
-            sim_output = run_proc.stdout + run_proc.stderr
-
+        # --- Save logs ---
         with open(sim_log, "w", encoding="utf-8") as f:
             f.write(sim_output)
 
+        # --- Extract test results ---
         test_results = []
         for line in sim_output.splitlines():
             if re.search(r"TEST\s*:\s*\w+", line, re.IGNORECASE):
@@ -74,10 +91,8 @@ def simulation_agent(state: dict) -> dict:
         failed = len([t for t in test_results if "FAIL" in t[1] or "ERROR" in t[1]])
         total = len(test_results)
 
-        summary_lines = [
-            "Simulation Summary:",
-            "-------------------"
-        ]
+        # --- Build summary ---
+        summary_lines = ["Simulation Summary:", "-------------------"]
         for name, status in test_results:
             emoji = "✅" if "PASS" in status else ("❌" if "FAIL" in status or "ERROR" in status else "⚪")
             summary_lines.append(f"{emoji} {name:<30} : {status}")
@@ -109,6 +124,3 @@ def simulation_agent(state: dict) -> dict:
             f.write(e.stderr or "")
         state["status"] = f"❌ Simulation failed: {e}"
         return state
-
-
-
