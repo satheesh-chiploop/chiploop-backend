@@ -755,4 +755,32 @@ async def run_ai(prompt: str):
 async def run_ai_get(prompt: str):
     return await run_ai(prompt)
 
+@app.post("/register_runner")
+async def register_runner(request: Request):
+    try:
+        data = await request.json()
+        runner_name = data.get("runner_name")
+        email = data.get("email")
+        token = data.get("token")
+
+        if not (runner_name and email and token):
+            return JSONResponse(
+                {"status": "error", "message": "Missing fields"}, status_code=400
+            )
+
+        # Insert or update runner info
+        supabase.table("runners").upsert({
+            "runner_name": runner_name,
+            "email": email,
+            "token": token
+        }).execute()
+
+        logger.info(f"✅ Runner registered: {runner_name}")
+        return JSONResponse({"status": "success", "runner": runner_name})
+
+    except Exception as e:
+        logger.error(f"❌ register_runner failed: {e}")
+        return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
+
+
 
