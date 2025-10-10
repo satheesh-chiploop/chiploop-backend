@@ -37,13 +37,14 @@ def simulation_agent(state: dict) -> dict:
             sim_output = run_proc.stdout + run_proc.stderr
 
         else:
-            print("🛠 Compiling design with Verilator...")
+            print("🛠 Compiling design with Verilator (with coverage)...")
             cmd_compile = [
                 "verilator", "--cc", rtl_file,
                 "--exe", "--build",
                 "-I", tb_dir,
                 *tb_files,
                 "--sv", "--trace",
+                "--coverage",                   # ✅ real line/toggle/branch coverage
                 "--top-module", "tb_top"
             ]
 
@@ -65,6 +66,19 @@ def simulation_agent(state: dict) -> dict:
                 print("▶️ Running simulation...")
                 run_proc = subprocess.run(["obj_dir/Vtb_top"], capture_output=True, text=True)
                 sim_output = run_proc.stdout + run_proc.stderr
+
+                # ✅ Extract real Verilator coverage if available
+                vdb_path = os.path.join(workflow_dir, "sim.vdb")
+                if os.path.exists(vdb_path):
+                    cov_dir = os.path.join(workflow_dir, "coverage")
+                    os.makedirs(cov_dir, exist_ok=True)
+                    subprocess.run([
+                        "verilator_coverage",
+                        "--write-info", "max",
+                        "--annotate", cov_dir,
+                        vdb_path
+                    ])
+                    print(f"📊 Real Verilator coverage written to {cov_dir}")
 
         # --- Save logs ---
         with open(sim_log, "w", encoding="utf-8") as f:
@@ -98,8 +112,8 @@ def simulation_agent(state: dict) -> dict:
             summary_lines.append(f"{emoji} {name:<30} : {status}")
         summary_lines.append("-------------------")
         summary_lines.append(f"Total: {total} | Passed: {passed} | Failed: {failed}")
-        summary_text = "\n".join(summary_lines)
 
+        summary_text = "\n".join(summary_lines)
         with open(sim_summary, "w", encoding="utf-8") as f:
             f.write(summary_text)
 
