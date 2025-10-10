@@ -45,6 +45,7 @@ def simulation_agent(state: dict) -> dict:
                 *tb_files,
                 "--sv", "--trace",
                 "--coverage",                   # ✅ real line/toggle/branch coverage
+                "-I", "/root/chiploop-backend/uvm_stub",
                 "--top-module", "tb_top"
             ]
 
@@ -53,7 +54,7 @@ def simulation_agent(state: dict) -> dict:
             # --- Fallback if Verilator fails (UVM unsupported) ---
             if compile_proc.returncode != 0:
                 print("⚠️ Verilator failed — retrying with Icarus Verilog (UVM-lite fallback)...")
-                cmd_compile = ["iverilog", "-g2012", "-o", sim_exe, rtl_file, *tb_files]
+                cmd_compile = ["iverilog", "-g2012", "-I", "/root/chiploop-backend/uvm_stub","-o", sim_exe, rtl_file, *tb_files]
                 run_compile = subprocess.run(cmd_compile, capture_output=True, text=True)
                 if run_compile.returncode != 0:
                     raise subprocess.CalledProcessError(
