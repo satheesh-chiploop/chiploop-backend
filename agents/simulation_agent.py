@@ -1,3 +1,4 @@
+
 import os, subprocess, datetime, re
 
 def simulation_agent(state: dict) -> dict:
@@ -15,21 +16,40 @@ def simulation_agent(state: dict) -> dict:
     if not rtl_file or not tb_dir:
         raise FileNotFoundError("Missing RTL or Testbench for simulation.")
 
-    tb_files = [os.path.join(tb_dir, f) for f in os.listdir(tb_dir) if f.endswith(".sv")]
+    tb_files = [os.path.join(tb_dir, f) for f in os.listdir(tb_dir) if f.endswith(".sv") or f.endswith(".py")]
     sim_exe = os.path.join(workflow_dir, "sim.out")
     sim_log = os.path.join(workflow_dir, "simulation_run.log")
     sim_summary = os.path.join(workflow_dir, "simulation_summary.txt")
 
     try:
-        print("🛠 Compiling design...")
-        cmd_compile = ["iverilog", "-g2012", "-o", sim_exe, rtl_file] + tb_files
-        compile_proc = subprocess.run(cmd_compile, capture_output=True, text=True)
-        if compile_proc.returncode != 0:
-            raise subprocess.CalledProcessError(compile_proc.returncode, cmd_compile, compile_proc.stdout, compile_proc.stderr)
+        # --- Detect pyuvm testbench first ---
+        if any(f.endswith(".py") for f in tb_files):
+            print("🐍 Detected pyuvm testbench — running Python-based simulation...")
+            run_proc = subprocess.run(
+                ["python3", os.path.join(tb_dir, "run_test.py")],
+                capture_output=True, text=True
+            )
+            sim_output = run_proc.stdout + run_proc.stderr
 
-        print("▶️ Running simulation...")
-        run_proc = subprocess.run(["vvp", sim_exe], capture_output=True, text=True)
-        sim_output = run_proc.stdout + run_proc.stderr
+        else:
+            print("🛠 Compiling design with Verilator...")
+            cmd_compile = [
+                "verilator", "--cc", rtl_file,
+                "--exe", "--build",
+                "-I", tb_dir,
+                *tb_files,
+                "--sv", "--trace",
+                "--top-module", "tb_top"
+            ]
+            compile_proc = subprocess.run(cmd_compile, capture_output=True, text=True)
+            if compile_proc.returncode != 0:
+                raise subprocess.CalledProcessError(
+                    compile_proc.returncode, cmd_compile, compile_proc.stdout, compile_proc.stderr
+                )
+
+            print("▶️ Running simulation...")
+            run_proc = subprocess.run(["obj_dir/Vtb_top"], capture_output=True, text=True)
+            sim_output = run_proc.stdout + run_proc.stderr
 
         with open(sim_log, "w", encoding="utf-8") as f:
             f.write(sim_output)
@@ -45,8 +65,8 @@ def simulation_agent(state: dict) -> dict:
                     test_results.append((test_name, test_status))
 
         if not test_results:
-            uvm_pass = len(re.findall(r"UVM_INFO", sim_output))
-            uvm_fail = len(re.findall(r"UVM_ERROR|UVM_FATAL", sim_output))
+            uvm_pass = len(re.findall(r"(UVM_INFO|PYUVM_INFO)", sim_output))
+            uvm_fail = len(re.findall(r"(UVM_ERROR|UVM_FATAL|PYUVM_ERROR)", sim_output))
             test_results.append(("uvm_info_blocks", f"{uvm_pass} INFO"))
             test_results.append(("uvm_error_blocks", f"{uvm_fail} ERRORS"))
 
@@ -89,3 +109,6 @@ def simulation_agent(state: dict) -> dict:
             f.write(e.stderr or "")
         state["status"] = f"❌ Simulation failed: {e}"
         return state
+
+
+

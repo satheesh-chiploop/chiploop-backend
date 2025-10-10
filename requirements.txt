@@ -7,3 +7,5 @@ pydantic
 supabase
 stripe
 portkey-ai
+pyuvm>=2.8.1
+cocotb>=1.8.0
