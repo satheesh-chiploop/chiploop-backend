@@ -107,7 +107,11 @@ Each signal is declared only once across all modules.
 Do not repeat `clk`, `reset`, or any input/output in submodules if already declared in the top module.
 Avoid declaring loop indices (like i) globally.
 Generate clean synthesizable Verilog with consistent indentation
+Do NOT include undefined macros like `sv`, `enable`, or custom defines.
 End every statement with a semicolon and close with `endmodule` only once.
+Provide only compilable Verilog/SystemVerilog code — no explanations or comments outside the code.
+Include all input/output declarations explicitly
+
 
 Specification JSON:
 {json.dumps(canonical_spec, indent=2)}

@@ -110,7 +110,24 @@ def rtl_agent(state: dict) -> dict:
 You are a senior RTL reviewer.
 Analyze the following Verilog code for any logic or style issues (not syntax).
 Summarize issues clearly.
-
+Make sure below rules are followed
+Generate synthesizable Verilog-2005 code for this specification.
+Output must start with 'module' and end with 'endmodule'.
+Do NOT include markdown code fences or explanations.
+Ensure all ports are declared inside parentheses in the module declaration. 
+Avoid duplicate declarations of signals like clk, reset, or common ports.
+Each signal is declared only once across all modules.
+Do not repeat `clk`, `reset`, or any input/output in submodules if already declared in the top module.
+Avoid declaring loop indices (like i) globally.
+Generate clean synthesizable Verilog with consistent indentation
+Do NOT include undefined macros like `sv`, `enable`, or custom defines.
+End every statement with a semicolon and close with `endmodule` only once.
+Provide only compilable Verilog/SystemVerilog code — no explanations or comments outside the code.
+Include all input/output declarations explicitly
+- Use lowercase signal names.
+- Declare all ports explicitly.
+- For multiple clocks, create independent always blocks.
+- For control or arithmetic designs, infer appropriate logic cleanly.
 {verilog_text[:3000]}
 """
         if USE_LOCAL_OLLAMA:
