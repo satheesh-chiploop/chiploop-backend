@@ -223,7 +223,20 @@ Guidelines:
             "workflow_id": workflow_id,
             "workflow_dir": str(workflow_dir),
         })
-
+        try:
+            tb_files = [f for f in os.listdir(tb_dir) if f.endswith(".sv") and "tb" in f.lower()]
+            if tb_files:
+                tb_path = tb_dir / tb_files[0]
+                with open(tb_path, "r+", encoding="utf-8") as f:
+                   content = f.read()
+                   if '`include "uvm_macros.svh"' not in content:
+                     f.seek(0, 0)
+                     f.write('`include "uvm_macros.svh"\n' + content)
+                     print(f"✅ Inserted `uvm_macros.svh` include in {tb_files[0]}")
+            else:
+                print("⚠️ No testbench file found to insert `uvm_macros.svh` include.")
+        except Exception as e:
+            print(f"⚠️ Failed to insert UVM macro include: {e}")
         print(f"\n✅ UVM Testbench Agent completed — TB @ {tb_dir}")
         return state
 
