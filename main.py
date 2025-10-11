@@ -345,7 +345,7 @@ def execute_workflow_background(workflow_id, user_id, workflow, spec_text, uploa
                 try:
                     logger.info(f"🚀 Executing agent: {label}")
                     update_workflow_log(workflow_id, f"🚀 Running {label}\n")
-                     if label.strip().lower().startswith("simulation"):
+                    if label.strip().lower().startswith("simulation"):
                         logger.info("▶️ Reached Simulation Agent → queuing for ChipRunner and stopping local agent chain.")
                         supabase.table("workflows").update({
                                 "status": "queued",
@@ -378,7 +378,7 @@ def execute_workflow_background(workflow_id, user_id, workflow, spec_text, uploa
                     results[label] = f"❌ Error: {str(agent_err)}"
                     logger.error(f"Agent {label} failed: {agent_err}")
                     update_workflow_log(workflow_id, f"❌ {label} failed: {agent_err}\n")
-      except Exception as e:
+    except Exception as e:
         logger.error(f"❌ Workflow execution failed: {e}\n{traceback.format_exc()}")
         update_workflow_log(workflow_id, f"❌ Workflow failed: {e}\n")
 
