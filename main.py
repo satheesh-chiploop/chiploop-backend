@@ -345,6 +345,17 @@ def execute_workflow_background(workflow_id, user_id, workflow, spec_text, uploa
                 try:
                     logger.info(f"🚀 Executing agent: {label}")
                     update_workflow_log(workflow_id, f"🚀 Running {label}\n")
+                     if label.strip().lower().startswith("simulation"):
+                        logger.info("▶️ Reached Simulation Agent → queuing for ChipRunner and stopping local agent chain.")
+                        supabase.table("workflows").update({
+                                "status": "queued",
+                                "phase": "simulation",
+                                "runner_assigned": None,
+                                "updated_at": datetime.utcnow().isoformat()
+                        }).eq("id", workflow_id).execute()
+                        update_workflow_log(workflow_id, "🟡 Queued for ChipRunner (Simulation phase)\n")
+                        return  # stop after queuing
+
                     state = func(state)
                     results[label] = state.get("status", "✅ Done")
                     art_path = None
@@ -361,23 +372,13 @@ def execute_workflow_background(workflow_id, user_id, workflow, spec_text, uploa
                     }
 
                     logger.info(f"✅ Agent executed: {label}")
-                    update_workflow_log(workflow_id, f"✅ Completed {label}\n")
-                    if label.strip().lower().startswith("simulation"):
-                        logger.info("▶️ Reached Simulation Agent → queuing for ChipRunner and stopping local agent chain.")
-                        supabase.table("workflows").update({
-                                "status": "queued",
-                                "phase": "simulation",
-                                "runner_assigned": None,
-                                "updated_at": datetime.utcnow().isoformat()
-                        }).eq("id", workflow_id).execute()
-                        update_workflow_log(workflow_id, "🟡 Queued for ChipRunner (Simulation phase)\n")
-                        return  # stop after queuing
+                    update_workflow_log(workflow_id, f"✅ Completed {label}\n
 
                 except Exception as agent_err:
                     results[label] = f"❌ Error: {str(agent_err)}"
                     logger.error(f"Agent {label} failed: {agent_err}")
                     update_workflow_log(workflow_id, f"❌ {label} failed: {agent_err}\n")
-    except Exception as e:
+      except Exception as e:
         logger.error(f"❌ Workflow execution failed: {e}\n{traceback.format_exc()}")
         update_workflow_log(workflow_id, f"❌ Workflow failed: {e}\n")
 
