@@ -782,5 +782,30 @@ async def register_runner(request: Request):
         logger.error(f"❌ register_runner failed: {e}")
         return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
 
+@app.post("/upload_results")
+async def upload_results(request: Request):
+    """
+    Called by runner after job completion to upload logs and results.
+    """
+    try:
+        data = await request.json()
+        workflow_id = data.get("workflow_id")
+        logs = data.get("logs", "")
+        artifacts = data.get("artifacts", {})
+        status = data.get("status", "completed")
+
+        supabase.table("workflows").update({
+            "status": status,
+            "logs": logs,
+            "artifacts": artifacts,
+            "completed_at": datetime.utcnow().isoformat()
+        }).eq("id", workflow_id).execute()
+
+        logger.info(f"✅ Results uploaded for workflow {workflow_id}")
+        return JSONResponse({"status": "success", "workflow_id": workflow_id})
+    except Exception as e:
+        logger.error(f"❌ Error in /upload_results: {e}")
+        return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
+
 
 
