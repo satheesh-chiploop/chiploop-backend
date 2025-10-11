@@ -343,7 +343,17 @@ def execute_workflow_background(workflow_id, user_id, workflow, spec_text, uploa
                 try:
                     logger.info(f"🚀 Executing agent: {label}")
                     update_workflow_log(workflow_id, f"🚀 Running {label}\n")
+                    if "Simulation" in label:
+                        logger.info(f"▶️ Queuing Simulation phase for ChipRunner instead of local execution...")
+                        supabase.table("workflows").update({
+                           "status": "queued",
+                           "phase": "simulation",
+                           "updated_at": datetime.utcnow().isoformat(),
+                           "runner_assigned": None
+                        }).eq("id", workflow_id).execute()
 
+                        logger.info(f"🟡 Workflow {workflow_id} queued for runner execution (Simulation phase).")
+                        return  # stop local agent chain here
                     state = func(state)
                     results[label] = state.get("status", "✅ Done")
 
