@@ -372,7 +372,7 @@ def execute_workflow_background(workflow_id, user_id, workflow, spec_text, uploa
                     }
 
                     logger.info(f"✅ Agent executed: {label}")
-                    update_workflow_log(workflow_id, f"✅ Completed {label}\n
+                    update_workflow_log(workflow_id, f"✅ Completed {label}\n")
 
                 except Exception as agent_err:
                     results[label] = f"❌ Error: {str(agent_err)}"
