@@ -222,7 +222,7 @@ async def run_workflow(
             "id": workflow_id,
             "user_id": user_id,
             "name": "Digital Loop Run",
-            "status": "running",
+            "status": "queued",
             "phase": "Spec2RTL",
             "logs": "🚀 Workflow started asynchronously.",
             "created_at": now,
@@ -314,7 +314,7 @@ async def run_workflow(
             "id": workflow_id,
             "user_id": user_id,
             "name": "Digital Loop Run",
-            "status": "running",
+            "status": "queued",
             "phase": "Spec2RTL",
             "logs": "🚀 Workflow started asynchronously.",
             "created_at": now,
@@ -768,11 +768,13 @@ async def register_runner(request: Request):
                 {"status": "error", "message": "Missing fields"}, status_code=400
             )
 
-        # Insert or update runner info
+        # Insert or update runner info (add status + last_seen)
         supabase.table("runners").upsert({
             "runner_name": runner_name,
             "email": email,
-            "token": token
+            "token": token,
+            "status": "idle",
+            "last_seen": datetime.utcnow().isoformat()
         }).execute()
 
         logger.info(f"✅ Runner registered: {runner_name}")
@@ -781,6 +783,7 @@ async def register_runner(request: Request):
     except Exception as e:
         logger.error(f"❌ register_runner failed: {e}")
         return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
+
 
 @app.post("/upload_results")
 async def upload_results(request: Request):
@@ -793,7 +796,9 @@ async def upload_results(request: Request):
         logs = data.get("logs", "")
         artifacts = data.get("artifacts", {})
         status = data.get("status", "completed")
+        runner_name = data.get("runner_name")
 
+        # Update workflow status and logs
         supabase.table("workflows").update({
             "status": status,
             "logs": logs,
@@ -801,11 +806,95 @@ async def upload_results(request: Request):
             "completed_at": datetime.utcnow().isoformat()
         }).eq("id", workflow_id).execute()
 
+        # 🆕 Optional but recommended: mark runner idle after upload
+        if runner_name:
+            supabase.table("runners").update({
+                "status": "idle",
+                "current_job": None,
+                "last_seen": datetime.utcnow().isoformat()
+            }).eq("runner_name", runner_name).execute()
+
         logger.info(f"✅ Results uploaded for workflow {workflow_id}")
         return JSONResponse({"status": "success", "workflow_id": workflow_id})
+
     except Exception as e:
         logger.error(f"❌ Error in /upload_results: {e}")
         return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
+
+
+@app.get("/get_job")
+async def get_job(runner: str):
+    """
+    Runner polls this endpoint to get the next available job.
+    If no job is available, it just updates its last_seen timestamp.
+    """
+    try:
+        # Look for any queued workflow
+        res = supabase.table("workflows").select("*").eq("status", "queued").limit(1).execute()
+        if not res.data:
+            # No jobs — update runner heartbeat
+            supabase.table("runners").update({
+                "status": "idle",
+                "last_seen": datetime.utcnow().isoformat()
+            }).eq("runner_name", runner).execute()
+            return {"job": None}
+
+        job = res.data[0]
+        workflow_id = job["id"]
+
+        # Assign the job to this runner
+        supabase.table("workflows").update({
+            "status": "assigned",
+            "runner_assigned": runner,
+            "updated_at": datetime.utcnow().isoformat()
+        }).eq("id", workflow_id).execute()
+
+        # Mark runner busy
+        supabase.table("runners").update({
+            "status": "busy",
+            "last_seen": datetime.utcnow().isoformat()
+        }).eq("runner_name", runner).execute()
+
+        logger.info(f"🎯 Job {workflow_id} assigned to runner {runner}")
+
+        return {
+            "job": {
+                "workflow_id": workflow_id,
+                "design_dir": f"backend/workflows/{workflow_id}",
+                "top_module": job.get("top_module", "tb_counter_4b")
+            }
+        }
+
+    except Exception as e:
+        logger.error(f"❌ Error in /get_job: {e}")
+        return {"job": None, "error": str(e)}
+
+
+@app.post("/heartbeat")
+async def heartbeat(request: Request):
+    """
+    Simple heartbeat to keep runner alive and update its last_seen timestamp.
+    """
+    try:
+        data = await request.json()
+        runner_name = data.get("runner_name")
+        status = data.get("status", "idle")
+
+        if not runner_name:
+            return JSONResponse({"status": "error", "message": "Missing runner_name"}, status_code=400)
+
+        supabase.table("runners").update({
+            "status": status,
+            "last_seen": datetime.utcnow().isoformat()
+        }).eq("runner_name", runner_name).execute()
+
+        logger.info(f"❤️ Heartbeat from {runner_name} ({status})")
+        return {"status": "ok"}
+    except Exception as e:
+        logger.error(f"❌ Heartbeat error: {e}")
+        return {"status": "error", "message": str(e)}, 500
+
+
 
 
 
