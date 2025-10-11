@@ -377,7 +377,9 @@ def execute_workflow_background(workflow_id, user_id, workflow, spec_text, uploa
                     results[label] = f"❌ Error: {str(agent_err)}"
                     logger.error(f"Agent {label} failed: {agent_err}")
                     update_workflow_log(workflow_id, f"❌ {label} failed: {agent_err}\n")
-
+    except Exception as e:
+        logger.error(f"❌ Workflow execution failed: {e}\n{traceback.format_exc()}")
+        update_workflow_log(workflow_id, f"❌ Workflow failed: {e}\n")
 
 @app.post("/create_agent")
 async def create_agent(agent_name: str = Form(...), description: str = Form(...)):
