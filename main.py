@@ -198,83 +198,6 @@ AGENT_FUNCTIONS = {
     "Arch Doc Agent" : arch_doc_agent,
    "Integration Doc Agent" : integration_doc_agent,
 }
-@app.post("/run_workflow")
-async def run_workflow(
-    background_tasks: BackgroundTasks,
-    workflow: str = Form(...),
-    file: UploadFile = File(None),
-    spec_text: str = Form(None),
-    user=Depends(verify_token)  # ✅ JWT auth
-):
-    """
-    Asynchronous Spec2RTL workflow runner (JWT + Supabase integrated)
-    - Creates workflow entry tied to the authenticated user
-    - Executes Spec → RTL → Optimizer agents in background
-    - Returns immediately to prevent 502 timeouts
-    """
-    try:
-        user_id = user.get("sub") if user else "anonymous"
-        workflow_id = str(uuid.uuid4())
-        now = datetime.utcnow().isoformat()
-
-        # ✅ Insert workflow record into Supabase
-        supabase.table("workflows").insert({
-            "id": workflow_id,
-            "user_id": user_id,
-            "name": "Digital Loop Run",
-            "status": "queued",
-            "phase": "Spec2RTL",
-            "logs": "🚀 Workflow started asynchronously.",
-            "created_at": now,
-            "updated_at": now,
-            "artifacts": {}
-        }).execute()
-
-        artifact_dir = f"artifacts/{user_id}/{workflow_id}"
-        os.makedirs(artifact_dir, exist_ok=True)
-
-        logger.info(f"🚀 run_workflow called by user: {user_id}")
-        logger.info(f"workflow raw: {workflow[:200] if workflow else '❌ missing'}")
-        logger.info(f"spec_text: {spec_text}")
-        logger.info(f"file: {file.filename if file else '❌ none'}")
-
-        # --- Save file (if any) ---
-        upload_path = None
-        if file:
-            contents = await file.read()
-            upload_path = os.path.join(artifact_dir, file.filename)
-            with open(upload_path, "wb") as f:
-                f.write(contents)
-            logger.info(f"📁 File uploaded: {upload_path}")
-
-        # --- Save spec text (if any) ---
-        if spec_text:
-            spec_path = os.path.join(artifact_dir, "spec.txt")
-            with open(spec_path, "w") as f:
-                f.write(spec_text)
-            logger.info("📝 Spec text saved successfully")
-
-        # --- Start background task ---
-        background_tasks.add_task(
-            execute_workflow_background,
-            workflow_id,
-            user_id,
-            workflow,
-            spec_text,
-            upload_path,
-            artifact_dir
-        )
-
-        return {
-            "job_id": workflow_id,
-            "status": "started",
-            "message": "Workflow queued successfully."
-        }
-
-    except Exception as e:
-        logger.error(f"❌ Error in run_workflow: {e}")
-        return {"status": "error", "message": str(e)}
-
 
 from fastapi import BackgroundTasks, Depends
 from datetime import datetime
@@ -347,15 +270,16 @@ async def run_workflow(
             logger.info("📝 Spec text saved successfully")
 
         # --- Start background task ---
-        background_tasks.add_task(
-            execute_workflow_background,
-            workflow_id,
-            user_id,
-            workflow,
-            spec_text,
-            upload_path,
-            artifact_dir
-        )
+# --- Queue job for chiploop-runner instead of running locally ---
+        supabase.table("workflows").update({
+             "status": "queued",
+             "phase": "simulation",
+             "updated_at": datetime.utcnow().isoformat(),
+             "runner_assigned": None
+         }).eq("id", workflow_id).execute()
+
+        logger.info(f"🟡 Workflow {workflow_id} queued for runner execution.")
+
 
         return {
             "job_id": workflow_id,
