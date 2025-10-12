@@ -27,7 +27,15 @@ Include:
 - coverpoints for key signals (clk, reset, enable, state, count, etc.)
 - cross coverage for enable × reset, state × output, etc.
 - add bins for min/mid/max values.
+Output: A compilable covergroup definition (.sv file) for QuestaSim.
 
+Rules:
+- Start with a covergroup declaration:
+  covergroup cg_<module_name> @(posedge <clock_port>);
+- Add coverpoints for each input/output signal.
+- No English text, comments, or markdown.
+- End with 'endgroup'.
+- Ensure all names match the DUT port list.
 Output only SystemVerilog covergroup code (no markdown fences).
 RTL snippet:
 {rtl_text[:2000]}

@@ -150,6 +150,16 @@ Guidelines:
 - Output only synthesizable SystemVerilog/UVM code fragments.
 - Do not include ``` fences.
 - Keep compatible with UVM 1.2.
+- output: Complete set of compilable UVM files (driver, monitor, env, seq, test, top testbench).
+- Start each file with:
+  `include "uvm_macros.svh"
+  import uvm_pkg::*;`
+- Use consistent naming: <module>_drv, <module>_env, <module>_seq, etc.
+- Generate only valid SystemVerilog code, no comments or text.
+- The top-level testbench module must instantiate the DUT and UVM environment.
+- All paths, interfaces, and connections must match DUT port names.
+- End every file with `endclass`, `endmodule`, or `endinterface` as appropriate.
+- No markdown, prose, or commentary before or after code.
 """
 
         extra_uvm = ""

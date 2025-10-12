@@ -29,7 +29,16 @@ Given the RTL module below, generate SVA assertions to verify:
 - Counter or FSM transition validity
 - Clock stability
 - Overflow/underflow protection (if applicable)
+Output: A single .sv file containing only valid SVA code.
 
+Rules:
+- Do not include English text, comments, or markdown.
+- Start with:
+  `default clocking @(posedge <clock_port>); endclocking`
+- Include property/assert/cover constructs only.
+- End the file cleanly with no trailing commentary.
+- Use port names from the spec JSON exactly.
+- Ensure syntax correctness for QuestaSim.
 Use `assert property` syntax, include a `default clocking @(posedge clk)` if needed.
 Each property should have a label and UVM-style message.
 
