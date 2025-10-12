@@ -320,8 +320,8 @@ def execute_workflow_background(workflow_id, user_id, workflow, spec_text, uploa
         artifacts: Dict[str, Dict[str, str]] = {}
 
         # Merge static and dynamic agents into one lookup map
-        agent_map = dict(AGENT_REGISTRY)
-        agent_map.update(AGENT_FUNCTIONS)
+        agent_map = dict(AGENT_FUNCTIONS)
+        agent_map.update(AGENT_REGISTRY)
 
         for node in data.get("nodes", []):
             label = node.get("label")
@@ -345,7 +345,7 @@ def execute_workflow_background(workflow_id, user_id, workflow, spec_text, uploa
                 try:
                     logger.info(f"🚀 Executing agent: {label}")
                     update_workflow_log(workflow_id, f"🚀 Running {label}\n")
-                    if label.strip().lower()("simulation agent"):
+                    if label.strip().lower() == "simulation agent":
                         logger.info("▶️ Reached Simulation Agent → queuing for ChipRunner and stopping local agent chain.")
                         supabase.table("workflows").update({
                                 "status": "queued",
