@@ -821,6 +821,17 @@ async def heartbeat(request: Request):
         logger.error(f"❌ Heartbeat error: {e}")
         return {"status": "error", "message": str(e)}, 500
 
+@app.get("/download_artifacts/{workflow_id}")
+async def download_artifacts(workflow_id: str):
+    """
+    Returns the Verilog, testbench, and spec files for a given workflow.
+    """
+    base_path = Path(f"backend/workflows/{workflow_id}")
+    files = {}
+    for file in base_path.glob("*"):
+        if file.is_file():
+            files[file.name] = file.read_text()
+    return JSONResponse(files)
 
 
 
