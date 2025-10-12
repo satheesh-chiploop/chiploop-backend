@@ -714,8 +714,7 @@ async def upload_results(request: Request):
         supabase.table("workflows").update({
             "status": status,
             "logs": logs,
-            "artifacts": artifacts,
-            "completed_at": datetime.utcnow().isoformat()
+            "artifacts": artifacts
         }).eq("id", workflow_id).execute()
 
         # 🆕 Optional but recommended: mark runner idle after upload
