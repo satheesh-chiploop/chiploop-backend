@@ -700,7 +700,8 @@ async def register_runner(request: Request):
 @app.post("/upload_results")
 async def upload_results(request: Request):
     """
-    Called by runner after job completion to upload logs and results.
+    Called by ChipRunner after job completion (simulation + coverage).
+    Updates workflow logs, artifacts, and marks the runner idle.
     """
     try:
         data = await request.json()
@@ -710,14 +711,14 @@ async def upload_results(request: Request):
         status = data.get("status", "completed")
         runner_name = data.get("runner_name")
 
-        # Update workflow status and logs
+        # 🧠 Update workflow record with logs and artifacts
         supabase.table("workflows").update({
             "status": status,
             "logs": logs,
             "artifacts": artifacts
         }).eq("id", workflow_id).execute()
 
-        # 🆕 Optional but recommended: mark runner idle after upload
+        # 🧩 Mark runner as idle (optional, good housekeeping)
         if runner_name:
             supabase.table("runners").update({
                 "status": "idle",
@@ -725,12 +726,26 @@ async def upload_results(request: Request):
                 "last_seen": datetime.utcnow().isoformat()
             }).eq("runner_name", runner_name).execute()
 
+        # 🧾 Log to server output
         logger.info(f"✅ Results uploaded for workflow {workflow_id}")
-        return JSONResponse({"status": "success", "workflow_id": workflow_id})
+        logger.info(f"📦 Artifacts: {list(artifacts.keys()) if artifacts else 'None'}")
+
+        # 🪶 Append a note to the workflow log
+        update_workflow_log(workflow_id, "✅ Simulation + Coverage results uploaded successfully.\n")
+
+        return JSONResponse({
+            "status": "success",
+            "workflow_id": workflow_id,
+            "message": "Results uploaded and workflow updated successfully."
+        })
 
     except Exception as e:
         logger.error(f"❌ Error in /upload_results: {e}")
-        return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
+        return JSONResponse(
+            {"status": "error", "message": str(e)},
+            status_code=500
+        )
+
 
 
 @app.get("/get_job")
