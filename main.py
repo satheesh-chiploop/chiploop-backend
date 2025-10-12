@@ -757,9 +757,9 @@ async def get_job(runner: str):
 
         # Assign the job to this runner
         supabase.table("workflows").update({
-            "status": "queued"
-            "runner_assigned": None
-            "phase": "simulation"
+            "status": "queued",
+            "runner_assigned": None,
+            "phase": "simulation",
             "updated_at": datetime.utcnow().isoformat()
         }).eq("id", workflow_id).execute()
 
