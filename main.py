@@ -831,7 +831,7 @@ async def download_artifacts(workflow_id: str, file_path: str):
     Example: /download_artifacts/<workflow_id>/uvm_tb_counter_4b/tb_counter_4b.sv
     """
     try:
-        base_dir = Path(f"backend/workflows/{workflow_id}")
+        base_dir = Path(f"/root/chiploop-backend/backend/workflows/{workflow_id}")
         abs_path = base_dir / file_path
 
         if not abs_path.exists():
