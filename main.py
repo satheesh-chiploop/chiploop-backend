@@ -821,17 +821,57 @@ async def heartbeat(request: Request):
         logger.error(f"❌ Heartbeat error: {e}")
         return {"status": "error", "message": str(e)}, 500
 
-@app.get("/download_artifacts/{workflow_id}")
-async def download_artifacts(workflow_id: str):
+from fastapi.responses import FileResponse
+from fastapi import HTTPException
+
+@app.get("/download_artifacts/{workflow_id}/{file_path:path}")
+async def download_artifacts(workflow_id: str, file_path: str):
     """
-    Returns the Verilog, testbench, and spec files for a given workflow.
+    Serves any file from the workflow directory, including nested ones.
+    Example: /download_artifacts/<workflow_id>/uvm_tb_counter_4b/tb_counter_4b.sv
     """
-    base_path = Path(f"backend/workflows/{workflow_id}")
-    files = {}
-    for file in base_path.glob("*"):
-        if file.is_file():
-            files[file.name] = file.read_text()
-    return JSONResponse(files)
+    try:
+        base_dir = Path(f"backend/workflows/{workflow_id}")
+        abs_path = base_dir / file_path
+
+        if not abs_path.exists():
+            raise HTTPException(status_code=404, detail=f"File not found: {file_path}")
+
+        # Optional: security guard to prevent path traversal
+        if not abs_path.resolve().is_relative_to(base_dir.resolve()):
+            raise HTTPException(status_code=400, detail="Invalid file path")
+
+        return FileResponse(
+            abs_path,
+            filename=abs_path.name,
+            media_type="application/octet-stream"
+        )
+    except Exception as e:
+        logger.error(f"❌ Error downloading artifact {file_path}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/list_artifacts/{workflow_id}")
+async def list_artifacts(workflow_id: str):
+    """
+    Lists all files under the workflow folder recursively.
+    Enables the runner to discover dynamic module/testbench names.
+    """
+    try:
+        base_path = Path(f"/root/chiploop-backend/backend/workflows/{workflow_id}")
+        if not base_path.exists():
+            return {"workflow_id": workflow_id, "files": []}
+
+        files = []
+        for root, _, filenames in os.walk(base_path):
+            for f in filenames:
+                rel_path = os.path.relpath(os.path.join(root, f), base_path)
+                files.append(rel_path.replace("\\", "/"))
+        return {"workflow_id": workflow_id, "files": files}
+    except Exception as e:
+        logger.error(f"❌ Error listing artifacts for {workflow_id}: {e}")
+        return {"workflow_id": workflow_id, "files": []}
+
 
 
 
