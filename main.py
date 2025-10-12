@@ -237,7 +237,7 @@ async def run_workflow(
             "id": workflow_id,
             "user_id": user_id,
             "name": "Digital Loop Run",
-            "status": "queued",
+            "status": "running",
             "phase": "Spec2RTL",
             "logs": "🚀 Workflow started asynchronously.",
             "created_at": now,
