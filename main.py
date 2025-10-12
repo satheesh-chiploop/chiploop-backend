@@ -320,8 +320,8 @@ def execute_workflow_background(workflow_id, user_id, workflow, spec_text, uploa
         artifacts: Dict[str, Dict[str, str]] = {}
 
         # Merge static and dynamic agents into one lookup map
-        agent_map = dict(AGENT_FUNCTIONS)
-        agent_map.update(AGENT_REGISTRY)
+        agent_map = dict(AGENT_REGISTRY)
+        agent_map.update(AGENT_FUNCTIONS)
 
         for node in data.get("nodes", []):
             label = node.get("label")
