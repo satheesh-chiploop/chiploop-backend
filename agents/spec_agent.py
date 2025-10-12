@@ -111,7 +111,6 @@ Do NOT include undefined macros like `sv`, `enable`, or custom defines.
 End every statement with a semicolon and close with `endmodule` only once.
 Provide only compilable Verilog/SystemVerilog code — no explanations or comments outside the code.
 Include all input/output declarations explicitly
-Each port must have: {name, direction (input/output), width, description}. 
 Do not include any prose or sentences outside JSON. 
 
 Specification JSON:
