@@ -20,7 +20,6 @@ colorama               # Colored CLI logs
 # --- Database / Supabase Enhancements ---
 psycopg2-binary        # For direct PostgreSQL interactions (if needed)
 # --- Analog Simulation ---
-ngspice                # Command-line simulator
 pyspice                # Python bindings for ngspice
 
 # --- Embedded Loop ---
