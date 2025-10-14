@@ -32,7 +32,7 @@ def cleanup_verilog(verilog_code: str) -> str:
     return "\n".join(cleaned)
 
 
-def spec_agent(state: dict) -> dict:
+def run_agent(state: dict) -> dict:
     print("\n🚀 Running Spec Agent v4 (Spec JSON + RTL Generator)...")
 
     workflow_id = state.get("workflow_id", "default")

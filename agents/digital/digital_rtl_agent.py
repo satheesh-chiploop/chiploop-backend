@@ -13,7 +13,7 @@ PORTKEY_API_KEY = os.getenv("PORTKEY_API_KEY")
 client_portkey = Portkey(api_key=PORTKEY_API_KEY)
 client_openai = OpenAI()
 
-def rtl_agent(state: dict) -> dict:
+def run_agent(state: dict) -> dict:
     print("\n🧠 Running RTL Agent (Spec-Aware Validation)...")
 
     # --- Added: Multi-user workflow isolation ---

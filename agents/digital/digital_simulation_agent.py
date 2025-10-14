@@ -5,7 +5,7 @@ def has_pyuvm():
     return importlib.util.find_spec("pyuvm") is not None
 
 
-def simulation_agent(state: dict) -> dict:
+def run_agent(state: dict) -> dict:
     print("\n▶️ Running Simulation Agent...")
 
     workflow_id = state.get("workflow_id", "default")

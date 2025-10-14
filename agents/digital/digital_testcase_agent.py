@@ -8,7 +8,7 @@ PORTKEY_API_KEY = os.getenv("PORTKEY_API_KEY")
 client_portkey = Portkey(api_key=PORTKEY_API_KEY)
 client_openai = OpenAI()
 
-def testcase_agent(state: dict) -> dict:
+def run_agent(state: dict) -> dict:
     print("\n🧩 Running Testcase Agent...")
 
     workflow_id = state.get("workflow_id", "default")

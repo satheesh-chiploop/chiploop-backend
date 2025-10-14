@@ -18,7 +18,7 @@ client_portkey = Portkey(api_key=PORTKEY_API_KEY)
 client_openai = OpenAI()
 
 
-def testbench_agent_uvm(state: dict) -> dict:
+def run_agent(state: dict) -> dict:
     """
     Generate a complete UVM-style verification scaffold for the given RTL and spec.
     Supports multi-user isolation, multi-clock/reset, and LLM-based stimulus generation.

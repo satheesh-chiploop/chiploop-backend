@@ -11,3 +11,19 @@ pyuvm>=2.8.1
 cocotb>=1.8.0
 cocotb-coverage
 pytest
+# --- Core Environment ---
+python-dotenv          # Load environment variables from .env
+aiofiles               # Async file I/O for FastAPI (if handling file uploads)
+loguru                 # Elegant structured logging (better than print)
+colorama               # Colored CLI logs
+
+# --- Database / Supabase Enhancements ---
+psycopg2-binary        # For direct PostgreSQL interactions (if needed)
+supabase-py            # ✅ Ensure you have this exact package (not older 'supabase')
+
+# --- Analog Simulation ---
+ngspice                # Command-line simulator
+pyspice                # Python bindings for ngspice
+
+# --- Embedded Loop ---
+pyserial               # For UART / serial interaction with simavr

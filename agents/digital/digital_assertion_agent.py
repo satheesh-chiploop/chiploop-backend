@@ -6,7 +6,7 @@ USE_LOCAL_OLLAMA = os.getenv("USE_LOCAL_OLLAMA", "false").lower() == "true"
 PORTKEY_API_KEY = os.getenv("PORTKEY_API_KEY")
 client_portkey = Portkey(api_key=PORTKEY_API_KEY)
 
-def assertion_agent(state: dict) -> dict:
+def run_agent(state: dict) -> dict:
     print("\n🧠 Running Assertion Agent...")
 
     workflow_id = state.get("workflow_id", "default")

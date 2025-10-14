@@ -14,7 +14,7 @@ PORTKEY_API_KEY = os.getenv("PORTKEY_API_KEY")
 client_portkey = Portkey(api_key=PORTKEY_API_KEY)
 
 
-def coverage_agent(state: dict) -> dict:
+def run_agent(state: dict) -> dict:
     """
     Analyze functional & code coverage results after simulation.
 
