@@ -1,879 +1,595 @@
-from fastapi import FastAPI, UploadFile, File, Form, Request, HTTPException, Depends, Query
-from pydantic import BaseModel
-from typing import List, Dict
-from fastapi.middleware.cors import CORSMiddleware
-import json
-from fastapi.responses import FileResponse, StreamingResponse, JSONResponse
-import jwt
+# main.py
+# ChipLoop backend (FastAPI) — loop-aware workflows + per-run logging
+
 import os
-import stripe
-import importlib.util
-import logging
-from supabase import create_client, Client
-import time
-import requests
-from portkey_ai import Portkey
-from fastapi import FastAPI, BackgroundTasks
-from fastapi.responses import JSONResponse
-from datetime import datetime
+import json
 import uuid
 import traceback
-from pathlib import Path
+from datetime import datetime
+from typing import Dict, Any, Optional
 
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Depends, Query, BackgroundTasks, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
+import logging
+logger = logging.getLogger("chiploop")
+logging.basicConfig(level=logging.INFO)
 
-# ---------- Environment & Setup ----------
-stripe.api_key = os.getenv("STRIPE_SECRET_KEY")
-endpoint_secret = os.getenv("STRIPE_WEBHOOK_SECRET")
+# ---------------- Supabase client ----------------
+try:
+    from supabase import create_client, Client  # supabase-py v2
+except ImportError:
+    raise RuntimeError("Please install supabase-py v2: pip install supabase")
 
-SUPABASE_URL = os.environ["SUPABASE_URL"]
-SUPABASE_SERVICE_ROLE_KEY = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+SUPABASE_URL = os.environ.get("SUPABASE_URL") or os.environ.get("NEXT_PUBLIC_SUPABASE_URL")
+SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or os.environ.get("NEXT_PUBLIC_SUPABASE_ANON_KEY")
+if not SUPABASE_URL or not SUPABASE_KEY:
+    raise RuntimeError("Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY/NEXT_PUBLIC_SUPABASE_ANON_KEY")
 
-SUPABASE_JWT_SECRET = os.getenv("SUPABASE_JWT_SECRET", "")
-logger = logging.getLogger("uvicorn.error")
-logger.info(f"🔑 Loaded SUPABASE_JWT_SECRET length: {len(SUPABASE_JWT_SECRET)}")
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-PORTKEY_API_KEY = os.getenv("PORTKEY_API_KEY")
-USE_LOCAL_OLLAMA = os.getenv("USE_LOCAL_OLLAMA", "false").lower() == "true"
-OLLAMA_URL = "http://127.0.0.1:11434/api/generate"
+# ---------------- Auth helper (JWT) ----------------
+# If you already have a stronger verify function, keep that and delete this one.
+import jwt  # PyJWT
 
-client = Portkey(api_key=PORTKEY_API_KEY)
+SUPABASE_JWT_SECRET = os.environ.get("SUPABASE_JWT_SECRET")
 
-# ---------- FastAPI App ----------
-app = FastAPI(title="ChipLoop Backend")
+def verify_token(request: Request) -> Dict[str, Any]:
+    """Best-effort JWT decode from Authorization: Bearer <token>. Fallback to anonymous."""
+    auth = request.headers.get("authorization") or request.headers.get("Authorization") or ""
+    token = auth.replace("Bearer ", "").strip()
+    if token and SUPABASE_JWT_SECRET:
+        try:
+            payload = jwt.decode(token, SUPABASE_JWT_SECRET, algorithms=["HS256"])
+            return payload  # should contain sub/user id
+        except Exception as e:
+            logger.warning(f"JWT decode failed, continuing as anonymous: {e}")
+    return {"sub": "anonymous"}
 
-@app.get("/")
-async def root():
-    return {"status": "ok", "message": "Backend is live"}
-
-origins = [
-    "http://localhost:3000",
-    "https://chiploop-saas.vercel.app",
-]
+# ---------------- FastAPI app ----------------
+app = FastAPI(title="ChipLoop API", version="1.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
+    allow_origins=["*"],  # tighten later
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# ---------- JWT Verify ----------
-def verify_token(request: Request):
-    auth = request.headers.get("Authorization")
-    if not auth or not auth.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Unauthorized")
-    token = auth.split(" ")[1]
-    if not SUPABASE_JWT_SECRET:
-        logger.error("❌ SUPABASE_JWT_SECRET is not set!")
-        raise HTTPException(status_code=500, detail="Server misconfigured")
-    try:
-        payload = jwt.decode(token, SUPABASE_JWT_SECRET, algorithms=["HS256"], audience="authenticated")
-        logger.info(f"✅ Token decoded for user: {payload.get('sub')}")
-        return payload
-    except Exception as e:
-        logger.error(f"❌ Token decode failed: {str(e)}")
-        raise HTTPException(status_code=401, detail="Invalid token")
+# ==========================================================
+# ✅ DIGITAL AGENTS (labels must match the frontend exactly)
+# ==========================================================
+from agents.digital.digital_testbench_agent_uvm import run_agent as digital_testbench_agent_uvm
+from agents.digital.digital_arch_doc_agent import run_agent as digital_arch_doc_agent
+from agents.digital.digital_integration_doc_agent import run_agent as digital_integration_doc_agent
+from agents.digital.digital_testcase_agent import run_agent as digital_testcase_agent
+from agents.digital.digital_assertion_agent import run_agent as digital_assertion_agent
+from agents.digital.digital_covergroup_agent import run_agent as digital_covergroup_agent
+from agents.digital.digital_spec_agent import run_agent as digital_spec_agent
+from agents.digital.digital_rtl_agent import run_agent as digital_rtl_agent
+from agents.digital.digital_simulation_agent import run_agent as digital_simulation_agent
+from agents.digital.digital_coverage_agent import run_agent as digital_coverage_agent
+from agents.digital.digital_optimizer_agent import run_agent as digital_optimizer_agent
 
-# ---------- Shared Helpers (Streaming + Logging) ----------
-def update_workflow_log(workflow_name, new_log, status="running", phase="init", artifacts=None):
-    try:
-        record = {
-            "logs": new_log,
-            "status": status,
-            "phase": phase,
-            "artifacts": artifacts or {},
-            "updated_at": "now()"
-        }
-        supabase.table("workflows").update(record).eq("name", workflow_name).execute()
-        logger.info(f"✅ Workflows table updated for '{workflow_name}' (phase={phase})")
-    except Exception as e:
-        logger.warning(f"⚠️ Workflow log update failed for '{workflow_name}' (phase={phase}): {e}")
-
-async def stream_agent_response(agent_name: str, prompt: str, phase: str):
-    """
-    Generic streaming helper usable by any agent (Spec, RTL, Verify, etc.)
-    """
-    backend = "Ollama" if USE_LOCAL_OLLAMA else "Portkey/OpenAI"
-    start_time = time.time()
-    collected_output = []
-
-    def generate_stream():
-        try:
-            if not USE_LOCAL_OLLAMA:
-                # Future-ready Portkey/OpenAI route
-                completion = client.chat.completions.create(
-                    model="gpt-4o-mini",
-                    messages=[{"role": "user", "content": prompt}],
-                    stream=True,
-                )
-                for chunk in completion:
-                    if chunk and hasattr(chunk, "choices"):
-                        delta = chunk.choices[0].delta.get("content", "")
-                        if delta:
-                            collected_output.append(delta)
-                            yield delta
-            else:
-                # Local Ollama streaming
-                payload = {"model": "llama3", "prompt": prompt}
-                with requests.post(OLLAMA_URL, json=payload, stream=True) as r:
-                    for line in r.iter_lines():
-                        if not line:
-                            continue
-                        try:
-                            j = json.loads(line.decode())
-                            if "response" in j:
-                                token = j["response"]
-                                collected_output.append(token)
-                                yield token
-                        except Exception:
-                            continue
-        finally:
-            duration = round(time.time() - start_time, 2)
-            update_workflow_log(
-                agent_name,
-                "".join(collected_output),
-                status="completed",
-                phase=phase,
-                artifacts={"duration": duration, "backend": backend}
-            )
-
-    return StreamingResponse(generate_stream(), media_type="text/plain")
-
-# ---------- Core Routes ----------
-from openai import OpenAI
-client_openai = OpenAI()
-
-from agents.spec_agent import spec_agent
-from agents.rtl_agent import rtl_agent
-from agents.optimizer_agent import optimizer_agent
-from agents.testbench_agent_uvm import testbench_agent_uvm
-from agents.arch_doc_agent import arch_doc_agent
-from agents.integration_doc_agent import integration_doc_agent
-from agents.testcase_agent import testcase_agent
-from agents.assertion_agent import assertion_agent
-from agents.simulation_agent import simulation_agent
-from agents.coverage_agent import coverage_agent
-from agents.covergroup_agent import covergroup_agent
-
-
-import importlib
-import pkgutil
-import agents
-# Prebuilt system agents (always available)
-
-AGENT_REGISTRY = {
-    "spec_agent": spec_agent,
-    "rtl_agent": rtl_agent,
-    "optimizer_agent": optimizer_agent,
+DIGITAL_AGENT_FUNCTIONS: Dict[str, Any] = {
+    "Digital Spec Agent": digital_spec_agent,
+    "Digital RTL Agent": digital_rtl_agent,
+    "Digital Sim Agent": digital_simulation_agent,          # ← exact label used by UI
+    "Digital Coverage Agent": digital_coverage_agent,
+    "Digital Opitmizer Agent": digital_optimizer_agent,     # ← keep typo to match existing label
+    "Digital Testbench Agent": digital_testbench_agent_uvm,
+    "Digital Arch Doc Agent": digital_arch_doc_agent,
+    "Digital Integration Doc Agent": digital_integration_doc_agent,
+    "Digital Testcase Agent": digital_testcase_agent,
+    "Digital Assertion Agent": digital_assertion_agent,
+    "Digital CoverGroup Agent": digital_covergroup_agent,
 }
 
+# ==========================================================
+# ✅ ANALOG AGENTS
+# ==========================================================
+from agents.analog.analog_spec_agent import run_agent as analog_spec_agent
+from agents.analog.analog_netlist_agent import run_agent as analog_netlist_agent
+from agents.analog.analog_sim_agent import run_agent as analog_sim_agent
+from agents.analog.analog_result_agent import run_agent as analog_result_agent
+
+ANALOG_AGENT_FUNCTIONS: Dict[str, Any] = {
+    "Analog Spec Agent": analog_spec_agent,
+    "Analog Netlist Agent": analog_netlist_agent,
+    "Analog Sim Agent": analog_sim_agent,
+    "Analog Result Agent": analog_result_agent,
+}
+
+# ==========================================================
+# ✅ EMBEDDED AGENTS
+# ==========================================================
+from agents.embedded.embedded_spec_agent import run_agent as embedded_spec_agent
+from agents.embedded.embedded_code_agent import run_agent as embedded_code_agent
+from agents.embedded.embedded_sim_agent import run_agent as embedded_sim_agent
+from agents.embedded.embedded_result_agent import run_agent as embedded_result_agent
+
+EMBEDDED_AGENT_FUNCTIONS: Dict[str, Any] = {
+    "Embedded Spec Agent": embedded_spec_agent,
+    "Embedded Code Agent": embedded_code_agent,
+    "Embedded Sim Agent": embedded_sim_agent,
+    "Embedded Result Agent": embedded_result_agent,
+}
+
+# ==========================================================
+# 🧠 UNIFIED + CUSTOM REGISTRY
+# ==========================================================
+AGENT_FUNCTIONS: Dict[str, Any] = {}
+AGENT_FUNCTIONS.update(DIGITAL_AGENT_FUNCTIONS)
+AGENT_FUNCTIONS.update(ANALOG_AGENT_FUNCTIONS)
+AGENT_FUNCTIONS.update(EMBEDDED_AGENT_FUNCTIONS)
+
+# Dynamically load user-created agents as modules under `agents/` (optional)
+import importlib, pkgutil, agents
+AGENT_REGISTRY: Dict[str, Any] = {}  # custom/marketplace registry
+
 def load_custom_agents():
-    """Dynamically load user-created agents in /agents directory."""
     global AGENT_REGISTRY
     for _, name, _ in pkgutil.iter_modules(agents.__path__):
-        if name not in AGENT_REGISTRY:  # avoid overwriting prebuilt ones
+        if name not in AGENT_REGISTRY:
             try:
                 module = importlib.import_module(f"agents.{name}")
                 if hasattr(module, "run_agent"):
                     AGENT_REGISTRY[name] = module.run_agent
                     logger.info(f"⚡ Custom agent loaded: {name}")
             except Exception as e:
-                logger.warning(f"⚠️ Could not load {name}: {e}")
+                logger.warning(f"⚠️ Could not load custom agent {name}: {e}")
 
-logger.info(f"🧠 Loaded agents: {list(AGENT_REGISTRY.keys())}")
+load_custom_agents()
 
+# ==========================================================
+# ---------- Logging Helpers (ID-based) ----------
+# ==========================================================
 
-AGENT_FUNCTIONS = {
-    "Spec Agent": spec_agent,
-    "RTL Agent": rtl_agent,
-    "Testbench Agent": testbench_agent_uvm,
-    "Testcase Agent": testcase_agent,
-    "Assertion Agent": assertion_agent,
-    "Covergroup Agent": covergroup_agent,
-    "Simulation Agent": simulation_agent,
-    "Coverage Agent": coverage_agent,
-    "Optimizer Agent" : optimizer_agent,
-    "Arch Doc Agent" : arch_doc_agent,
-   "Integration Doc Agent" : integration_doc_agent,
-}
-
-from fastapi import BackgroundTasks, Depends
-from datetime import datetime
-import uuid
-import traceback
-from supabase import create_client, Client
-from typing import Dict
-
-
-# --- Supabase client ---
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
-
-
-@app.post("/run_workflow")
-async def run_workflow(
-    background_tasks: BackgroundTasks,
-    workflow: str = Form(...),
-    file: UploadFile = File(None),
-    spec_text: str = Form(None),
-    user=Depends(verify_token)  # ✅ JWT auth
-):
+def append_log_workflow(workflow_id: str, line: str, status: Optional[str] = None,
+                        phase: Optional[str] = None, artifacts: Optional[dict] = None):
     """
-    Asynchronous Spec2RTL workflow runner (JWT + Supabase integrated)
-    - Creates workflow entry tied to the authenticated user
-    - Executes Spec → RTL → Optimizer agents in background
-    - Returns immediately to prevent 502 timeouts
+    Append a line to workflows.logs by workflow ID, and optionally update status/phase/artifacts.
     """
     try:
-        user_id = user.get("sub") if user else "anonymous"
-        workflow_id = str(uuid.uuid4())
-        now = datetime.utcnow().isoformat()
-
-        # ✅ Insert workflow record into Supabase
-        supabase.table("workflows").insert({
-            "id": workflow_id,
-            "user_id": user_id,
-            "name": "Digital Loop Run",
-            "status": "running",
-            "phase": "Spec2RTL",
-            "logs": "🚀 Workflow started asynchronously.",
-            "created_at": now,
-            "updated_at": now,
-            "artifacts": {}
-        }).execute()
-
-        artifact_dir = f"artifacts/{user_id}/{workflow_id}"
-        os.makedirs(artifact_dir, exist_ok=True)
-
-        logger.info(f"🚀 run_workflow called by user: {user_id}")
-        logger.info(f"workflow raw: {workflow[:200] if workflow else '❌ missing'}")
-        logger.info(f"spec_text: {spec_text}")
-        logger.info(f"file: {file.filename if file else '❌ none'}")
-
-        # --- Save file (if any) ---
-        upload_path = None
-        if file:
-            contents = await file.read()
-            upload_path = os.path.join(artifact_dir, file.filename)
-            with open(upload_path, "wb") as f:
-                f.write(contents)
-            logger.info(f"📁 File uploaded: {upload_path}")
-
-        # --- Save spec text (if any) ---
-        if spec_text:
-            spec_path = os.path.join(artifact_dir, "spec.txt")
-            with open(spec_path, "w") as f:
-                f.write(spec_text)
-            logger.info("📝 Spec text saved successfully")
-
-        # --- Start background task ---
-# --- Queue job for chiploop-runner instead of running locally ---
-        background_tasks.add_task(
-           execute_workflow_background,
-           workflow_id,
-           user_id,
-           workflow,
-           spec_text,
-           upload_path,
-           artifact_dir
-         )
-        logger.info(f"🟡 Workflow {workflow_id} Started background  execution.")
-
-
-        return {
-            "job_id": workflow_id,
-            "status": "started",
-            "message": "Workflow started in background."
-        }
-
+        row = supabase.table("workflows").select("logs").eq("id", workflow_id).single().execute()
+        current = (row.data or {}).get("logs") or ""
+        new_logs = (current + ("\n" if current else "") + line).strip()
+        update = {"logs": new_logs, "updated_at": datetime.utcnow().isoformat()}
+        if status: update["status"] = status
+        if phase:  update["phase"] = phase
+        if artifacts is not None: update["artifacts"] = artifacts
+        supabase.table("workflows").update(update).eq("id", workflow_id).execute()
     except Exception as e:
-        logger.error(f"❌ Error in run_workflow: {e}")
-        return {"status": "error", "message": str(e)}
+        logger.warning(f"⚠️ append_log_workflow failed: {e}")
 
-@app.post("/reload_agents")
-async def reload_agents():
+def append_log_run(run_id: str, line: str, status: Optional[str] = None,
+                   artifacts_path: Optional[str] = None):
+    """
+    Append a line to runs.logs by run ID, and optionally update status and artifacts_path.
+    """
     try:
-        load_custom_agents()
-        return {"status": "success", "loaded_agents": list(AGENT_REGISTRY.keys())}
+        row = supabase.table("runs").select("logs").eq("id", run_id).single().execute()
+        current = (row.data or {}).get("logs") or ""
+        new_logs = (current + ("\n" if current else "") + line).strip()
+        update = {"logs": new_logs}
+        if status: update["status"] = status
+        if artifacts_path is not None: update["artifacts_path"] = artifacts_path
+        supabase.table("runs").update(update).eq("id", run_id).execute()
     except Exception as e:
-        return {"status": "error", "message": str(e)}
+        logger.warning(f"⚠️ append_log_run failed: {e}")
 
-def execute_workflow_background(workflow_id, user_id, workflow, spec_text, upload_path, artifact_dir):
-    """Executes workflow dynamically using hybrid agent registry (prebuilt + custom)."""
-    try:
-        logger.info(f"🧠 [BG] Executing workflow {workflow_id} for user {user_id}")
-        workflow_dir = f"backend/workflows/{workflow_id}"
-        os.makedirs(workflow_dir, exist_ok=True)
+# ==========================================================
+# ---------- Routes ----------
+# ==========================================================
 
-        data = json.loads(workflow)
-        state = {}
-        if upload_path:
-            state["uploaded_file"] = upload_path
-        if spec_text:
-            state["spec"] = spec_text
-        state["workflow_id"] = workflow_id
-        state["workflow_dir"] = f"backend/workflows/{workflow_id}"
-        results: Dict[str, str] = {}
-        artifacts: Dict[str, Dict[str, str]] = {}
+@app.get("/health")
+def health():
+    return {"ok": True, "ts": datetime.utcnow().isoformat()}
 
-        # Merge static and dynamic agents into one lookup map
-        agent_map = dict(AGENT_FUNCTIONS)
-        agent_map.update(AGENT_REGISTRY)
-
-        for node in data.get("nodes", []):
-            label = node.get("label")
-            normalized = (
-                label.lower()
-                .replace("📘", "")
-                .replace("💻", "")
-                .replace("🛠", "")
-                .replace("🧪", "")
-                .replace("✨", "")
-                .replace("agent", "")
-                .strip()
-                .replace(" ", "_")
-                + "_agent"
-            )
-
-            # Try to resolve agent: prefer AGENT_FUNCTIONS (prebuilt), else dynamic
-            func = agent_map.get(label) or agent_map.get(normalized)
-
-            if func:
-                try:
-                    logger.info(f"🚀 Executing agent: {label}")
-                    update_workflow_log(workflow_id, f"🚀 Running {label}\n")
-                    if label.strip().lower() == "simulation agent":
-                        logger.info("▶️ Reached Simulation Agent → queuing for ChipRunner and stopping local agent chain.")
-                        supabase.table("workflows").update({
-                                "status": "queued",
-                                "phase": "simulation",
-                                "runner_assigned": None
-                        }).eq("id", workflow_id).execute()
-                        update_workflow_log(workflow_id, "🟡 Queued for ChipRunner (Simulation phase)\n")
-                        return  # stop after queuing
-
-                    state = func(state)
-                    results[label] = state.get("status", "✅ Done")
-                    art_path = None
-                    if state.get("artifact"):
-                        safe_label = label.replace(" ", "_").replace("📘", "").replace("💻", "").replace("🛠", "")
-                        os.makedirs(artifact_dir, exist_ok=True)
-                        art_path = os.path.join(artifact_dir, f"{safe_label}.txt")
-                        with open(art_path, "w") as f:
-                            f.write(state["artifact"] or "")
-
-                    artifacts[label] = {
-                        "artifact": f"/{art_path}" if art_path else None,
-                        "artifact_log": state.get("artifact_log"),
-                    }
-
-                    logger.info(f"✅ Agent executed: {label}")
-                    update_workflow_log(workflow_id, f"✅ Completed {label}\n")
-
-                except Exception as agent_err:
-                    results[label] = f"❌ Error: {str(agent_err)}"
-                    logger.error(f"Agent {label} failed: {agent_err}")
-                    update_workflow_log(workflow_id, f"❌ {label} failed: {agent_err}\n")
-    except Exception as e:
-        logger.error(f"❌ Workflow execution failed: {e}\n{traceback.format_exc()}")
-        update_workflow_log(workflow_id, f"❌ Workflow failed: {e}\n")
-
-@app.post("/create_agent")
-async def create_agent(agent_name: str = Form(...), description: str = Form(...)):
-    try:
-        logger.info(f"✨ Creating agent: {agent_name}")
-        os.makedirs("agents", exist_ok=True)
-        filename = f"agents/{agent_name}.py"
-
-        prompt = f"""
-        Write a Python function for an agent named {agent_name}_agent.
-
-        Requirements:
-        - Function signature: def {agent_name}_agent(state: dict) -> dict
-        - The agent is described as: {description}
-        - It must always:
-            * Update state["status"]
-            * Save output to backend/{agent_name}.txt
-            * Save logs to backend/{agent_name}_log.txt
-            * Update state["artifact"] and state["artifact_log"]
-        - Keep the implementation self-contained and runnable.
-        """
-
-        resp = client.chat.completions.create(
-               model="gpt-4o-mini",
-               messages=[{"role": "user", "content": prompt}],
-          )
-        generated_code = resp.choices[0].message.content
-
-        with open(filename, "w", encoding="utf-8") as f:
-            f.write(generated_code)
-
-        spec = importlib.util.spec_from_file_location(f"{agent_name}_agent", filename)
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        func = getattr(module, f"{agent_name}_agent")
-
-        AGENT_FUNCTIONS[f"✨ {agent_name} Agent"] = func
-        logger.info(f"✅ Agent registered: {agent_name}")
-
-        return JSONResponse(
-            content={
-                "status": "success",
-                "message": f"Agent '{agent_name}' created successfully using AI",
-                "file": filename,
-            },
-            status_code=200,
-        )
-
-    except Exception as e:
-        logger.error(f"❌ Error in /create_agent: {e}")
-        return JSONResponse(
-            content={"status": "error", "message": str(e)},
-            status_code=500,
-        )
-
-
-@app.get("/artifact/{filename}")
-def get_artifact(filename: str):
-    path = os.path.join(os.getcwd(), filename)
-    if os.path.exists(path):
-        return FileResponse(path, filename=filename)
-    return {"error": "File not found"}
-
-# ---------- Workflow Persistence Routes ----------
-
-@app.post("/workflows/start")
-async def start_workflow(name: str = Form(...), user=Depends(verify_token)):
-    row = {
-        "user_id": user.get("sub"),
-        "name": name,
-        "status": "running",
-        "logs": "",
-        "artifacts": {}
-    }
-    res = supabase.table("workflows").insert(row).execute()
-    return res.data[0]
-
-@app.patch("/workflows/{workflow_id}/complete")
-async def complete_workflow(workflow_id: str, status: str = Form(...), logs: str = Form(""), artifacts: str = Form("{}"), user=Depends(verify_token)):
-    try:
-        artifacts_json = json.loads(artifacts) if artifacts else {}
-    except:
-        artifacts_json = {}
-    update = {
-        "status": status,
-        "logs": logs,
-        "artifacts": artifacts_json
-    }
-    res = supabase.table("workflows").update(update).eq("id", workflow_id).execute()
-    return res.data[0]
-
-@app.get("/workflows/history")
-async def get_history(user=Depends(verify_token)):
+@app.get("/runs/recent")
+def recent_runs(request: Request, limit: int = Query(10, ge=1, le=50)):
+    user = verify_token(request)
     res = (
-        supabase.table("workflows")
-        .select("*")
+        supabase.table("runs")
+        .select("id, workflow_id, loop_type, status, created_at, completed_at, artifacts_path")
         .eq("user_id", user.get("sub"))
         .order("created_at", desc=True)
+        .limit(limit)
         .execute()
     )
     return res.data
 
-from fastapi.staticfiles import StaticFiles
-os.makedirs("artifacts", exist_ok=True)
-app.mount("/artifacts", StaticFiles(directory="artifacts"), name="artifacts")
-
-from fastapi import APIRouter, Request
-
-
-@app.post("/create-checkout-session")
-async def create_checkout_session(request: Request, user=Depends(verify_token)):
-    try:
-        data = await request.json()
-
-        user_id = user.get("sub", "unknown")  # pulled from Supabase JWT
-
-        session = stripe.checkout.Session.create(
-            payment_method_types=["card"],
-            mode="subscription",
-            line_items=[
-                {
-                    "price": os.getenv("STRIPE_PRICE_ID"),
-                    "quantity": 1,
-                }
-            ],
-            success_url="https://chiploop-saas.vercel.app/success",
-            cancel_url="https://chiploop-saas.vercel.app/cancel",
-            metadata={
-                "user_id": user_id,
-            },
-        )
-
-        print(f"✅ Stripe session created for user {user_id}: {session.url}")
-        return {"url": session.url}
-
-    except Exception as e:
-        print("❌ Stripe checkout creation failed:", str(e))
-        return {"error": str(e)}
-
-
-@app.post("/stripe-webhook")
-async def stripe_webhook(request: Request):
-    payload = await request.body()
-    sig_header = request.headers.get("stripe-signature")
-
-    try:
-        event = stripe.Webhook.construct_event(
-            payload, sig_header, endpoint_secret
-        )
-    except ValueError:
-        print("❌ Invalid payload")
-        return {"error": "Invalid payload"}
-    except stripe.error.SignatureVerificationError:
-        print("❌ Invalid Stripe signature")
-        return {"error": "Invalid signature"}
-
-    # --- Handle Stripe events ---
-    event_type = event["type"]
-    data = event["data"]["object"]
-
-    if event_type == "checkout.session.completed":
-        user_id = data.get("metadata", {}).get("user_id")
-        customer_id = data.get("customer")
-
-        if user_id and customer_id:
-            print(f"✅ Checkout completed for user {user_id}")
-            supabase.table("workflows").update({
-                "subscription_status": "basic",
-                "stripe_customer_id": customer_id
-            }).eq("user_id", user_id).execute()
-        else:
-            print("⚠️ Missing user_id or customer_id in checkout.session.completed")
-
-    elif event_type == "customer.subscription.updated":
-        user_id = data.get("metadata", {}).get("user_id")
-        new_status = data.get("status")
-
-        if user_id:
-            print(f"🔄 Subscription updated for user {user_id}: {new_status}")
-            supabase.table("workflows").update({
-                "subscription_status": new_status
-            }).eq("user_id", user_id).execute()
-        else:
-            print("⚠️ Missing user_id in customer.subscription.updated")
-
-    elif event_type == "customer.subscription.deleted":
-        user_id = data.get("metadata", {}).get("user_id")
-
-        if user_id:
-            print(f"❌ Subscription canceled for user {user_id}")
-            supabase.table("workflows").update({
-                "subscription_status": "free"
-            }).eq("user_id", user_id).execute()
-        else:
-            print("⚠️ Missing user_id in customer.subscription.deleted")
-
-    else:
-        print(f"ℹ️ Unhandled event type: {event_type}")
-
-    return {"status": "success"}
-
-
-@app.post("/create-customer-portal-session")
-async def create_customer_portal_session(user=Depends(verify_token)):
+@app.post("/run_workflow")
+async def run_workflow(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    workflow: str = Form(...),
+    file: UploadFile = File(None),
+    spec_text: str = Form(None)
+):
     """
-    Create a Stripe Billing Portal session for the logged-in user.
-    Allows users to manage (cancel/update) their subscriptions.
+    Starts a workflow run:
+      - Reads loop_type from payload
+      - Creates rows in workflows + runs
+      - Queues background execution
     """
     try:
-        response = (
-            supabase.table("workflows")
-            .select("stripe_customer_id")
-            .eq("user_id", user.get("sub"))
-            .single()
-            .execute()
-        )
+        user = verify_token(request)
+        user_id = user.get("sub") or "anonymous"
+        workflow_id = str(uuid.uuid4())
+        run_id = str(uuid.uuid4())
+        now = datetime.utcnow().isoformat()
 
-        if not response.data or "stripe_customer_id" not in response.data:
-            return {"error": "Stripe customer not found for this user"}
+        data = json.loads(workflow)
+        # payload contains nodes with exact backend "label"
+        loop_type = (data.get("loop_type") or "digital").lower().strip()
 
-        customer_id = response.data["stripe_customer_id"]
-
-        session = stripe.billing_portal.Session.create(
-            customer=customer_id,
-            return_url="https://chiploop-saas.vercel.app/?portal=success"
-        )
-
-        return {"url": session.url}
-
-    except Exception as e:
-        return {"error": str(e)}
-
-
-# ---------- Agent Streaming Endpoints ----------
-@app.get("/spec_agent")
-async def spec_agent_stream(prompt: str):
-    return await stream_agent_response("Spec2RTL", prompt, phase="spec_agent")
-
-@app.get("/rtl_agent")
-async def rtl_agent_stream(prompt: str):
-    return await stream_agent_response("Spec2RTL", prompt, phase="rtl_agent")
-
-@app.get("/verify_agent")
-async def verify_agent_stream(prompt: str):
-    return await stream_agent_response("Spec2RTL", prompt, phase="verify_agent")
-
-# ---------- Existing run_ai Endpoint ----------
-@app.post("/run_ai")
-async def run_ai(prompt: str):
-    try:
-        if not USE_LOCAL_OLLAMA:
-            completion = await client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[{"role": "user", "content": prompt}],
-                stream=False,
-                timeout=30,
-            )
-            return {
-                "backend": "Portkey/OpenAI",
-                "output": completion.choices[0].message.content,
-            }
-    except Exception as e:
-        logger.warning(f"[⚠️ Portkey failed, falling back to Ollama] {e}")
-
-    try:
-        payload = {"model": "llama3", "prompt": prompt}
-        r = requests.post(OLLAMA_URL, json=payload, stream=True, timeout=60)
-        r.raise_for_status()
-        out = []
-        for line in r.iter_lines():
-            if not line:
-                continue
-            try:
-                j = json.loads(line.decode())
-                if "response" in j:
-                    out.append(j["response"])
-            except Exception:
-                pass
-        return {"backend": "Ollama", "output": "".join(out)}
-    except Exception as e:
-        logger.error(f"❌ Both Portkey and Ollama failed: {e}")
-        return {"error": f"Both Portkey and Ollama failed: {str(e)}"}
-
-@app.get("/run_ai")
-async def run_ai_get(prompt: str):
-    return await run_ai(prompt)
-
-@app.post("/register_runner")
-async def register_runner(request: Request):
-    try:
-        data = await request.json()
-        runner_name = data.get("runner_name")
-        email = data.get("email")
-        token = data.get("token")
-
-        if not (runner_name and email and token):
-            return JSONResponse(
-                {"status": "error", "message": "Missing fields"}, status_code=400
-            )
-
-        # Insert or update runner info (add status + last_seen)
-        supabase.table("runners").upsert({
-            "runner_name": runner_name,
-            "email": email,
-            "token": token,
-            "status": "idle",
-            "last_seen": datetime.utcnow().isoformat()
+        # Insert workflow row (back-compat with current UI)
+        supabase.table("workflows").insert({
+            "id": workflow_id,
+            "user_id": user_id,
+            "name": f"{loop_type.capitalize()} Loop Run",
+            "status": "running",
+            "phase": "queued",
+            "logs": "🚀 Workflow queued.",
+            "created_at": now,
+            "updated_at": now,
+            "artifacts": {},
+            "loop_type": loop_type,
+            "definitions": data
         }).execute()
 
-        logger.info(f"✅ Runner registered: {runner_name}")
-        return JSONResponse({"status": "success", "runner": runner_name})
+        # Prepare artifact dir
+        artifact_dir = os.path.join("artifacts", user_id, workflow_id)
+        os.makedirs(artifact_dir, exist_ok=True)
 
-    except Exception as e:
-        logger.error(f"❌ register_runner failed: {e}")
-        return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
+        # Save uploaded file (optional)
+        upload_path = None
+        if file is not None:
+            contents = await file.read()
+            upload_path = os.path.join(artifact_dir, file.filename)
+            with open(upload_path, "wb") as f:
+                f.write(contents)
 
+        # Save spec text (optional)
+        if spec_text:
+            with open(os.path.join(artifact_dir, "spec.txt"), "w") as f:
+                f.write(spec_text)
 
-@app.post("/upload_results")
-async def upload_results(request: Request):
-    """
-    Called by ChipRunner after job completion (simulation + coverage).
-    Updates workflow logs, artifacts, and marks the runner idle.
-    """
-    try:
-        data = await request.json()
-        workflow_id = data.get("workflow_id")
-        logs = data.get("logs", "")
-        artifacts = data.get("artifacts", {})
-        status = data.get("status", "completed")
-        runner_name = data.get("runner_name")
-
-        # 🧠 Update workflow record with logs and artifacts
-        supabase.table("workflows").update({
-            "status": status,
-            "logs": logs,
-            "artifacts": artifacts
-        }).eq("id", workflow_id).execute()
-
-        # 🧩 Mark runner as idle (optional, good housekeeping)
-        if runner_name:
-            supabase.table("runners").update({
-                "status": "idle",
-                "current_job": None,
-                "last_seen": datetime.utcnow().isoformat()
-            }).eq("runner_name", runner_name).execute()
-
-        # 🧾 Log to server output
-        logger.info(f"✅ Results uploaded for workflow {workflow_id}")
-        logger.info(f"📦 Artifacts: {list(artifacts.keys()) if artifacts else 'None'}")
-
-        # 🪶 Append a note to the workflow log
-        update_workflow_log(workflow_id, "✅ Simulation + Coverage results uploaded successfully.\n")
-
-        return JSONResponse({
-            "status": "success",
+        # Insert per-run row (clean execution history)
+        supabase.table("runs").insert({
+            "id": run_id,
+            "user_id": user_id,
             "workflow_id": workflow_id,
-            "message": "Results uploaded and workflow updated successfully."
-        })
+            "loop_type": loop_type,
+            "status": "running",
+            "logs": "🚀 Run started.",
+            "artifacts_path": artifact_dir,
+            "created_at": now
+        }).execute()
 
-    except Exception as e:
-        logger.error(f"❌ Error in /upload_results: {e}")
-        return JSONResponse(
-            {"status": "error", "message": str(e)},
-            status_code=500
+        append_log_workflow(workflow_id, f"📘 Loop: {loop_type}", phase="start")
+        append_log_run(run_id, f"📘 Loop: {loop_type}")
+
+        # Queue background execution
+        background_tasks.add_task(
+            execute_workflow_background,
+            workflow_id,
+            run_id,
+            user_id,
+            loop_type,
+            json.dumps(data),
+            spec_text,
+            upload_path,
+            artifact_dir
         )
 
-
-
-@app.get("/get_job")
-async def get_job(runner: str):
-    """
-    Runner polls this endpoint to get the next available job.
-    If no job is available, it just updates its last_seen timestamp.
-    """
-    try:
-        # Look for any queued workflow
-        res = supabase.table("workflows").select("*").eq("status", "queued").limit(1).execute()
-        if not res.data:
-            # No jobs — update runner heartbeat
-            supabase.table("runners").update({
-                "status": "idle",
-                "last_seen": datetime.utcnow().isoformat()
-            }).eq("runner_name", runner).execute()
-            return {"job": None}
-
-        job = res.data[0]
-        workflow_id = job["id"]
-
-        # Assign the job to this runner
-        supabase.table("workflows").update({
-            "status": "queued",
-            "runner_assigned": None,
-            "phase": "simulation",
-            "updated_at": datetime.utcnow().isoformat()
-        }).eq("id", workflow_id).execute()
-
-        # Mark runner busy
-        supabase.table("runners").update({
-            "status": "busy",
-            "last_seen": datetime.utcnow().isoformat()
-        }).eq("runner_name", runner).execute()
-
-        logger.info(f"🎯 Job {workflow_id} assigned to runner {runner}")
-
-        return {
-            "job": {
-                "workflow_id": workflow_id,
-                "design_dir": f"backend/workflows/{workflow_id}",
-                "top_module": job.get("top_module", "tb_counter_4b")
-            }
-        }
+        return JSONResponse({"workflow_id": workflow_id, "run_id": run_id, "loop_type": loop_type, "status": "queued"})
 
     except Exception as e:
-        logger.error(f"❌ Error in /get_job: {e}")
-        return {"job": None, "error": str(e)}
-
-
-@app.post("/heartbeat")
-async def heartbeat(request: Request):
-    """
-    Simple heartbeat to keep runner alive and update its last_seen timestamp.
-    """
-    try:
-        data = await request.json()
-        runner_name = data.get("runner_name")
-        status = data.get("status", "idle")
-
-        if not runner_name:
-            return JSONResponse({"status": "error", "message": "Missing runner_name"}, status_code=400)
-
-        supabase.table("runners").update({
-            "status": status,
-            "last_seen": datetime.utcnow().isoformat()
-        }).eq("runner_name", runner_name).execute()
-
-        logger.info(f"❤️ Heartbeat from {runner_name} ({status})")
-        return {"status": "ok"}
-    except Exception as e:
-        logger.error(f"❌ Heartbeat error: {e}")
-        return {"status": "error", "message": str(e)}, 500
-
-from fastapi.responses import FileResponse
-from fastapi import HTTPException
-
-@app.get("/download_artifacts/{workflow_id}/{file_path:path}")
-async def download_artifacts(workflow_id: str, file_path: str):
-    """
-    Serves any file from the workflow directory, including nested ones.
-    Example: /download_artifacts/<workflow_id>/uvm_tb_counter_4b/tb_counter_4b.sv
-    """
-    try:
-        base_dir = Path(f"/root/chiploop-backend/backend/workflows/{workflow_id}")
-        abs_path = base_dir / file_path
-
-        if not abs_path.exists():
-            raise HTTPException(status_code=404, detail=f"File not found: {file_path}")
-
-        # Optional: security guard to prevent path traversal
-        if not abs_path.resolve().is_relative_to(base_dir.resolve()):
-            raise HTTPException(status_code=400, detail="Invalid file path")
-
-        return FileResponse(
-            abs_path,
-            filename=abs_path.name,
-            media_type="application/octet-stream"
-        )
-    except Exception as e:
-        logger.error(f"❌ Error downloading artifact {file_path}: {e}")
+        logger.error(f"❌ run_workflow failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+# ==========================================================
+# ---------- Background executor ----------
+# ==========================================================
 
-@app.get("/list_artifacts/{workflow_id}")
-async def list_artifacts(workflow_id: str):
+def execute_workflow_background(
+    workflow_id: str,
+    run_id: str,
+    user_id: str,
+    loop_type: str,
+    workflow_json: str,
+    spec_text: Optional[str],
+    upload_path: Optional[str],
+    artifact_dir: str,
+):
     """
-    Lists all files under the workflow folder recursively.
-    Enables the runner to discover dynamic module/testbench names.
+    Executes the workflow with loop-aware agent resolution and dual logging (workflows + runs).
+    - Exact label resolution against DIGITAL/ANALOG/EMBEDDED maps
+    - Falls back to AGENT_REGISTRY (custom agents)
+    - Queues at *Sim Agent* phase for external runner (any loop)
     """
     try:
-        base_path = Path(f"/root/chiploop-backend/backend/workflows/{workflow_id}")
-        if not base_path.exists():
-            return {"workflow_id": workflow_id, "files": []}
+        os.makedirs(artifact_dir, exist_ok=True)
+        data = json.loads(workflow_json)
 
-        files = []
-        for root, _, filenames in os.walk(base_path):
-            for f in filenames:
-                rel_path = os.path.relpath(os.path.join(root, f), base_path)
-                files.append(rel_path.replace("\\", "/"))
-        return {"workflow_id": workflow_id, "files": files}
+        loop_map = {
+            "digital": DIGITAL_AGENT_FUNCTIONS,
+            "analog": ANALOG_AGENT_FUNCTIONS,
+            "embedded": EMBEDDED_AGENT_FUNCTIONS,
+        }.get(loop_type, DIGITAL_AGENT_FUNCTIONS)
+
+        # Merge with dynamic/custom agents
+        agent_map = dict(loop_map)
+        agent_map.update(AGENT_REGISTRY)
+
+        append_log_workflow(workflow_id, "⚡ Executing workflow agents ...")
+        append_log_run(run_id, "⚡ Executing workflow agents ...")
+
+        nodes = data.get("nodes", []) or []
+        for node in nodes:
+            label = (node or {}).get("label", "")
+            step = label or "agent"
+
+            append_log_workflow(workflow_id, f"⚙️ Running {step} ...")
+            append_log_run(run_id, f"⚙️ Running {step} ...")
+
+            # Queue to external runner at Simulation phase (for any loop)
+            if " sim agent" in step.lower():
+                # Mark workflow queued for simulation runner
+                supabase.table("workflows").update({
+                    "status": "queued",
+                    "phase": "simulation",
+                    "runner_assigned": None,
+                    "updated_at": datetime.utcnow().isoformat()
+                }).eq("id", workflow_id).execute()
+
+                append_log_workflow(workflow_id, "🟡 Queued for ChipRunner (Simulation phase).", phase="simulation")
+                append_log_run(run_id, "🟡 Queued for ChipRunner (Simulation phase).", status="queued", artifacts_path=artifact_dir)
+                return  # external runner will pick up
+
+            # Resolve function
+            fn = agent_map.get(step)
+            if not fn:
+                msg = f"❌ No agent implementation found for: {step}"
+                append_log_workflow(workflow_id, msg)
+                append_log_run(run_id, msg)
+                continue
+
+            try:
+                # Execute agent function; pass a unified state
+                state = {"workflow_id": workflow_id, "run_id": run_id, "artifact_dir": artifact_dir}
+                if upload_path: state["uploaded_file"] = upload_path
+                if spec_text:   state["spec"] = spec_text
+
+                result = fn(state)  # your agents accept a dict 'state'
+
+                # Save artifacts if provided
+                if isinstance(result, dict):
+                    label_safe = step.replace(" ", "_")
+                    out_path = None
+                    if result.get("artifact") is not None:
+                        os.makedirs(artifact_dir, exist_ok=True)
+                        out_path = os.path.join(artifact_dir, f"{label_safe}.txt")
+                        with open(out_path, "w") as f:
+                            f.write(str(result.get("artifact") or ""))
+
+                    # Persist artifacts metadata on workflow row
+                    row = supabase.table("workflows").select("artifacts").eq("id", workflow_id).single().execute()
+                    artifacts = (row.data or {}).get("artifacts") or {}
+                    artifacts[step] = {
+                        "artifact": (f"/{out_path}" if out_path else None),
+                        "artifact_log": result.get("artifact_log"),
+                        "log": result.get("log"),
+                        "code": result.get("code"),
+                    }
+                    supabase.table("workflows").update({"artifacts": artifacts}).eq("id", workflow_id).execute()
+
+                append_log_workflow(workflow_id, f"✅ {step} done")
+                append_log_run(run_id, f"✅ {step} done")
+
+            except Exception as agent_err:
+                err = f"❌ {step} failed: {agent_err}"
+                append_log_workflow(workflow_id, err)
+                append_log_run(run_id, err)
+
+        append_log_workflow(workflow_id, "🎉 Workflow complete", status="completed", phase="done")
+        append_log_run(run_id, "🎉 Run complete", status="completed")
+
     except Exception as e:
-        logger.error(f"❌ Error listing artifacts for {workflow_id}: {e}")
-        return {"workflow_id": workflow_id, "files": []}
+        err = f"❌ Workflow crashed: {e}\n{traceback.format_exc()}"
+        append_log_workflow(workflow_id, err, status="failed", phase="error")
+        append_log_run(run_id, err, status="failed")
+from fastapi import Body
+from fastapi.responses import FileResponse
+from pathlib import Path
 
+# ---------- Helpers ----------
+def _artifacts_dir_for_workflow(workflow_id: str) -> Path:
+    # Prefer the latest run row (artifacts_path), fallback to canonical path using workflows.user_id
+    try:
+        r = supabase.table("runs").select("artifacts_path").eq("workflow_id", workflow_id).order("created_at", desc=True).limit(1).execute()
+        path = (r.data or [{}])[0].get("artifacts_path")
+        if path and Path(path).exists():
+            return Path(path)
+    except Exception:
+        pass
 
+    wf = supabase.table("workflows").select("user_id").eq("id", workflow_id).single().execute()
+    user_id = (wf.data or {}).get("user_id") or "anonymous"
+    p = Path("artifacts") / user_id / workflow_id
+    return p
 
+def _touch_runner_seen(runner_name: str):
+    try:
+        supabase.table("runners").update({"last_seen": datetime.utcnow().isoformat()}).eq("runner_name", runner_name).execute()
+    except Exception:
+        pass
 
+# ---------- 1) Register runner ----------
+@app.post("/register_runner")
+def register_runner(payload: dict = Body(...)):
+    """
+    Body: { runner_name, email, token }
+    Upserts runner and marks online.
+    """
+    runner = {
+        "runner_name": payload.get("runner_name"),
+        "email": payload.get("email"),
+        "token": payload.get("token"),
+        "status": "idle",
+        "last_seen": datetime.utcnow().isoformat(),
+    }
+    if not runner["runner_name"]:
+        raise HTTPException(status_code=400, detail="runner_name required")
+    # upsert by runner_name
+    supabase.table("runners").upsert(runner, on_conflict="runner_name").execute()
+    return {"ok": True, "runner": runner}
 
+# ---------- 2) Get a queued job (simulation) ----------
+@app.get("/get_job")
+def get_job(runner: str):
+    """
+    Query: ?runner=<runner_name>
+    Finds a workflow queued for 'simulation' phase and assigns it.
+    Returns: { job: { workflow_id, loop_type, top_module?, ... } } or { job: null }
+    """
+    if not runner:
+        raise HTTPException(status_code=400, detail="runner required")
+
+    _touch_runner_seen(runner)
+
+    # Find first queued workflow for simulation
+    q = (
+        supabase.table("workflows")
+        .select("id, user_id, loop_type, params")
+        .eq("status", "queued")
+        .eq("phase", "simulation")
+        .is_("runner_assigned", None)
+        .order("created_at", desc=False)
+        .limit(1)
+        .execute()
+    )
+    rows = q.data or []
+    if not rows:
+        return {"job": None}
+
+    wf = rows[0]
+    workflow_id = wf["id"]
+    loop_type = (wf.get("loop_type") or "digital")
+    params = wf.get("params") or ""
+    # Allow a 'top_module=<name>' hint in workflows.params
+    top_module = None
+    if isinstance(params, str) and "top_module" in params:
+        # naive parse "top_module=<name>" from params text
+        for token in params.replace(",", " ").split():
+            if token.startswith("top_module="):
+                top_module = token.split("=", 1)[1].strip()
+
+    # Assign runner
+    supabase.table("workflows").update({
+        "runner_assigned": runner,
+        "status": "running",
+        "updated_at": datetime.utcnow().isoformat(),
+    }).eq("id", workflow_id).execute()
+
+    supabase.table("runners").upsert({
+        "runner_name": runner,
+        "status": "busy",
+        "current_job": workflow_id,
+        "last_seen": datetime.utcnow().isoformat()
+    }, on_conflict="runner_name").execute()
+
+    job = {
+        "workflow_id": workflow_id,
+        "loop_type": loop_type,
+        "top_module": top_module or "tb_counter_4b",
+    }
+    return {"job": job}
+
+# ---------- 3) Upload results from runner ----------
+@app.post("/upload_results")
+def upload_results(payload: dict = Body(...)):
+    """
+    Body: { workflow_id, status, logs, artifacts?, runner_name }
+    - Appends logs
+    - Updates workflow status/phase
+    - Marks run completed
+    """
+    workflow_id = payload.get("workflow_id")
+    status = (payload.get("status") or "completed").lower()
+    logs = payload.get("logs") or ""
+    artifacts = payload.get("artifacts") or {}
+    runner_name = payload.get("runner_name")
+
+    if not workflow_id:
+        raise HTTPException(status_code=400, detail="workflow_id required")
+
+    # Append logs and finalize workflow
+    append_log_workflow(workflow_id, logs, status=status, phase="done")
+
+    # Clear runner assignment and mark status
+    supabase.table("workflows").update({
+        "status": status,
+        "phase": "done",
+        "runner_assigned": None,
+        "updated_at": datetime.utcnow().isoformat(),
+    }).eq("id", workflow_id).execute()
+
+    # Mark latest run completed
+    try:
+        r = supabase.table("runs").select("id").eq("workflow_id", workflow_id).order("created_at", desc=True).limit(1).execute()
+        if (r.data or []):
+            run_id = r.data[0]["id"]
+            append_log_run(run_id, f"📦 Runner '{runner_name}' uploaded results.", status=status)
+            supabase.table("runs").update({
+                "status": status,
+                "completed_at": datetime.utcnow().isoformat()
+            }).eq("id", run_id).execute()
+    except Exception as e:
+        logger.warning(f"runs finalize failed: {e}")
+
+    # Optionally merge artifacts metadata into workflow row
+    try:
+        row = supabase.table("workflows").select("artifacts").eq("id", workflow_id).single().execute()
+        cur = (row.data or {}).get("artifacts") or {}
+        cur["runner_upload"] = artifacts
+        supabase.table("workflows").update({"artifacts": cur}).eq("id", workflow_id).execute()
+    except Exception as e:
+        logger.warning(f"artifacts merge failed: {e}")
+
+    if runner_name:
+        supabase.table("runners").upsert({
+            "runner_name": runner_name,
+            "status": "idle",
+            "current_job": None,
+            "last_seen": datetime.utcnow().isoformat()
+        }, on_conflict="runner_name").execute()
+
+    return {"ok": True}
+
+# ---------- 4) List artifacts for a workflow ----------
+@app.get("/list_artifacts/{workflow_id}")
+def list_artifacts(workflow_id: str):
+    base = _artifacts_dir_for_workflow(workflow_id)
+    files = []
+    if base.exists():
+        for p in base.rglob("*"):
+            if p.is_file():
+                files.append(str(p.relative_to(base)))
+    return {"files": files, "base": str(base)}
+
+# ---------- 5) Download a specific artifact file ----------
+@app.get("/download_artifacts/{workflow_id}/{rel_path:path}")
+def download_artifact(workflow_id: str, rel_path: str):
+    base = _artifacts_dir_for_workflow(workflow_id)
+    # prevent path traversal
+    requested = (base / rel_path).resolve()
+    if not str(requested).startswith(str(base.resolve())):
+        raise HTTPException(status_code=400, detail="invalid path")
+    if not requested.exists() or not requested.is_file():
+        raise HTTPException(status_code=404, detail="file not found")
+    return FileResponse(str(requested))

@@ -1,3 +1,182 @@
-def run_agent(input_data=None):
-    print("Running  Analog Spec Agent")
-    return {"status": "success"}
+# backend/agents/analog/analog_spec_agent.py
+import os, json, base64, requests
+from datetime import datetime
+from typing import Dict, Any, List
+from portkey_ai import Portkey
+from openai import OpenAI
+
+# ---- Config (consistent with Digital agents) ----
+OLLAMA_URL = "http://127.0.0.1:11434/api/generate"
+USE_LOCAL_OLLAMA = os.getenv("USE_LOCAL_OLLAMA", "false").lower() == "true"
+PORTKEY_API_KEY = os.getenv("PORTKEY_API_KEY")
+client_portkey = Portkey(api_key=PORTKEY_API_KEY)
+client_openai = OpenAI()
+
+
+def _save_uploaded_files(workflow_dir: str, uploaded_files: List[Dict[str, Any]]) -> List[str]:
+    """Save user-uploaded PDK/model files. Supports raw bytes or base64."""
+    pdk_dir = os.path.join(workflow_dir, "pdk")
+    os.makedirs(pdk_dir, exist_ok=True)
+
+    saved = []
+    for f in uploaded_files or []:
+        fname = f.get("filename") or f.get("name") or "model.lib"
+        path = os.path.join(pdk_dir, fname)
+        content = f.get("content")
+        content_b64 = f.get("content_b64")
+
+        if isinstance(content, (bytes, bytearray)):
+            with open(path, "wb") as out:
+                out.write(content)
+        elif isinstance(content, str):
+            # assume already text
+            with open(path, "w", encoding="utf-8") as out:
+                out.write(content)
+        elif content_b64:
+            with open(path, "wb") as out:
+                out.write(base64.b64decode(content_b64))
+        else:
+            # empty placeholder to ensure path existence
+            open(path, "a").close()
+
+        saved.append(os.path.relpath(path, workflow_dir))
+    return saved
+
+
+def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Analog Spec Agent (LLM + Fallback, Tech/PDK aware)
+    - Prompts LLM to produce a generic analog spec JSON using a standard schema
+    - Captures 'technology', 'supply_voltage', 'temperature', and optional PDK/model files
+    - Saves analog_spec.json and log
+    """
+    print("\n🧠 Running Analog Spec Agent...")
+
+    workflow_id = state.get("workflow_id", "analog_default")
+    workflow_dir = state.get("workflow_dir", f"backend/workflows/{workflow_id}")
+    os.makedirs(workflow_dir, exist_ok=True)
+
+    user_prompt = (state.get("user_prompt") or "").strip() or \
+        "Design an analog circuit (e.g., op-amp, filter, oscillator) with reasonable defaults."
+    technology = (state.get("technology") or "generic").strip()
+    vdd = (state.get("supply_voltage") or "1.8V").strip()
+    temperature = (state.get("temperature") or "25C").strip()
+    uploaded_files = state.get("uploaded_files", [])  # [{filename, content|content_b64}, ...]
+
+    # Save PDK/models (if any)
+    saved_pdk_files = _save_uploaded_files(workflow_dir, uploaded_files)
+
+    # LLM schema prompt (prompt-agnostic, schema-enforced)
+    schema_prompt = f"""
+You are an analog circuit design assistant.
+Interpret the following user request and produce a JSON specification
+for an analog circuit that could implement it.
+
+User request:
+\"\"\"{user_prompt}\"\"\"
+
+Your output must follow this schema exactly:
+
+{{
+  "title": "string, name of the circuit",
+  "description": "short summary of the circuit purpose",
+  "technology": "string, e.g., {technology}",
+  "vdd": "string, e.g., {vdd}",
+  "temperature": "string, e.g., {temperature}",
+  "components": [
+    {{
+      "type": "resistor | capacitor | transistor | mosfet | opamp | diode | voltage_source | current_source | etc",
+      "name": "unique label (e.g., R1, C1, Q1, M1, U1)",
+      "value": "string with units if applicable (10k, 100n, 1mA, etc.)",
+      "model": "optional model name",
+      "connections": {{
+        "pos": "node1",
+        "neg": "node2",
+        "...": "other pins for devices (g,d,s,b / c,b,e / inp,inn,out,vp,vm)"
+      }}
+    }}
+  ],
+  "signals": {{
+    "Vin": "SPICE source definition (e.g., sine(0 1 1k) or ac 1)",
+    "Vout": "output node name"
+  }},
+  "analysis": {{
+    "type": "AC | TRANSIENT | DC",
+    "start": "start freq/time",
+    "stop": "stop freq/time",
+    "points": "sweep points or step",
+    "step": "optional transient step"
+  }}
+}}
+
+Rules:
+- Return **valid JSON only**. No markdown or commentary.
+- Populate technology, vdd, temperature fields (use the hints above).
+- Ensure components list matches the intent in the user request.
+"""
+
+    analog_spec = {}
+    llm_error = None
+
+    try:
+        print(f"🌐 Using {'Ollama' if USE_LOCAL_OLLAMA else 'Portkey/OpenAI'} for spec...")
+        if USE_LOCAL_OLLAMA:
+            payload = {"model": "llama3", "prompt": schema_prompt}
+            r = requests.post(OLLAMA_URL, json=payload, timeout=600)
+            text = r.text.strip()
+        else:
+            completion = client_portkey.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": schema_prompt}],
+            )
+            text = completion.choices[0].message.content.strip()
+
+        analog_spec = json.loads(text)
+        print("✅ Spec generated by LLM.")
+    except Exception as e:
+        llm_error = str(e)
+        print(f"⚠️ LLM failed, using fallback: {llm_error}")
+        analog_spec = {
+            "title": "RC_Fallback_Filter",
+            "description": "Fallback RC low-pass filter",
+            "technology": technology,
+            "vdd": vdd,
+            "temperature": temperature,
+            "components": [
+                {"type": "resistor", "name": "R1", "value": "1k", "connections": {"pos": "in", "neg": "out"}},
+                {"type": "capacitor", "name": "C1", "value": "1u", "connections": {"pos": "out", "neg": "0"}}
+            ],
+            "signals": {"Vin": "sine(0 1 1k)", "Vout": "out"},
+            "analysis": {"type": "AC", "start": "1", "stop": "1e6", "points": "10"}
+        }
+
+    # Attach PDK info into spec
+    analog_spec["technology"] = analog_spec.get("technology") or technology
+    analog_spec["vdd"] = analog_spec.get("vdd") or vdd
+    analog_spec["temperature"] = analog_spec.get("temperature") or temperature
+    analog_spec["pdk_files"] = saved_pdk_files
+
+    # Save outputs
+    spec_path = os.path.join(workflow_dir, "analog_spec.json")
+    log_path = os.path.join(workflow_dir, "analog_spec_agent.log")
+    with open(spec_path, "w", encoding="utf-8") as f:
+        json.dump(analog_spec, f, indent=2)
+    with open(log_path, "w", encoding="utf-8") as log:
+        log.write(f"[{datetime.utcnow().isoformat()}Z] Prompt: {user_prompt}\n")
+        if llm_error:
+            log.write(f"LLM Error: {llm_error}\n")
+        log.write(json.dumps(analog_spec, indent=2))
+
+    state.update({
+        "status": "✅ Analog Spec Generated",
+        "spec_file": spec_path,
+        "artifact_log": log_path,
+        "technology": analog_spec["technology"],
+        "supply_voltage": analog_spec["vdd"],
+        "temperature": analog_spec["temperature"],
+        "pdk_dir": os.path.join(workflow_dir, "pdk") if saved_pdk_files else None,
+        "analog_spec": analog_spec,
+        "workflow_dir": workflow_dir
+    })
+    print(f"✅ Spec saved: {spec_path}")
+    return state
