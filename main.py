@@ -243,13 +243,15 @@ async def run_workflow(
         # ✅ Build clean payload to avoid sending user_id=None
         if user_id:
             workflow_record["user_id"] = user_id
+        clean_record = {k: v for k, v in workflow_record.items() if v is not None}
 
-        payload = {k: v for k, v in workflow_record.items() if v is not None}
+        # ✅ Hard check: remove user_id if still None or missing
+        if "user_id" not in clean_record or not clean_record.get("user_id"):
+            clean_record.pop("user_id", None)
 
-        supabase.table("workflows").insert(payload).execute()
-
-
-
+        # 🚀 Insert final payload
+        supabase.table("workflows").insert(clean_record).execute()
+      
 
         # Prepare artifact dir
         user_folder = str(user_id or "anonymous") 
