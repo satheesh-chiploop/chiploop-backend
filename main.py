@@ -217,7 +217,7 @@ async def run_workflow(
     """
     try:
         user = verify_token(request)
-        user_id = user.get("sub") if user and user.get("sub") else None
+        user_id = user.get("sub") if user and user.get("sub") and user.get("sub") != "anonymous" else None
         workflow_id = str(uuid.uuid4())
         run_id = str(uuid.uuid4())
         now = datetime.utcnow().isoformat()
@@ -242,7 +242,8 @@ async def run_workflow(
         }).execute()
 
         # Prepare artifact dir
-        artifact_dir = os.path.join("artifacts", user_id, workflow_id)
+        user_folder = str(user_id or "anonymous") 
+        artifact_dir = os.path.join("artifacts", user_folder, workflow_id)
         os.makedirs(artifact_dir, exist_ok=True)
 
         # Save uploaded file (optional)
