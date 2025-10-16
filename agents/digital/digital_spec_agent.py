@@ -207,8 +207,8 @@ Design Guidelines:
     })
     # --- 📦 Upload artifacts to Supabase Storage ---
     try:
-       user_id = state.get("user_id", "anonymous")
-       workflow_id = state.get("workflow_id", "default")
+        user_id = state.get("user_id", "anonymous")
+        workflow_id = state.get("workflow_id", "default")
 
     # Upload Spec JSON
         spec_storage = upload_artifact_generic(
