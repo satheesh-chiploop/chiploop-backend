@@ -6,7 +6,7 @@ import subprocess
 import requests
 from portkey_ai import Portkey
 from openai import OpenAI
-
+from utils.artifact_utils import upload_artifact_generic, append_artifact_record
 OLLAMA_URL = "http://127.0.0.1:11434/api/generate"
 USE_LOCAL_OLLAMA = os.getenv("USE_LOCAL_OLLAMA", "false").lower() == "true"
 PORTKEY_API_KEY = os.getenv("PORTKEY_API_KEY")
@@ -169,6 +169,53 @@ Include all input/output declarations explicitly
         "workflow_id": workflow_id,
         "workflow_dir": workflow_dir
     })
+    # --- 📦 Upload artifacts to Supabase Storage ---
+    try:
+        user_id = state.get("user_id", "anonymous")
+        workflow_id = state.get("workflow_id", "default")
+
+    # Upload RTL compile log
+        rtl_log_storage = upload_artifact_generic(
+            local_path=log_path,
+            user_id=user_id,
+            workflow_id=workflow_id,
+            agent_label="rtl"
+        )
+        if rtl_log_storage:
+            append_artifact_record(workflow_id, "rtl_agent_log", rtl_log_storage)
+
+        # Upload lint feedback text as file
+        lint_file = os.path.join(workflow_dir, "rtl_agent_lint_feedback.txt")
+        with open(lint_file, "w") as lf:
+            lf.write(lint_feedback)
+        lint_storage = upload_artifact_generic(
+            local_path=lint_file,
+            user_id=user_id,
+            workflow_id=workflow_id,
+            agent_label="rtl"
+        )
+        if lint_storage:
+            append_artifact_record(workflow_id, "rtl_agent_lint_feedback", lint_storage)
+
+    # Upload validation summary (optional)
+        summary_file = os.path.join(workflow_dir, "rtl_agent_summary.txt")
+        with open(summary_file, "w") as sf:
+           sf.write(f"{overall_status}\n\nPorts: {port_names}\nClocks: {clocks_detected}\nResets: {resets_detected}\nIssues:\n")
+           for i in issues:
+             sf.write(f" - {i}\n")
+        summary_storage = upload_artifact_generic(
+           local_path=summary_file,
+           user_id=user_id,
+           workflow_id=workflow_id,
+           agent_label="rtl"
+        )
+        if summary_storage:
+           append_artifact_record(workflow_id, "rtl_agent_report", summary_storage)
+
+        print("🧩 RTL Agent artifacts uploaded successfully.")
+
+    except Exception as e:
+        print(f"⚠️ RTL Agent artifact upload failed: {e}")
 
     print(f"🧾 RTL Agent completed — {overall_status}")
     return state

@@ -206,43 +206,43 @@ Design Guidelines:
         "workflow_id": workflow_id,
     })
     # --- 📦 Upload artifacts to Supabase Storage ---
-    try:
-        user_id = state.get("user_id", "anonymous")
-        workflow_id = state.get("workflow_id", "default")
+   try:
+       user_id = state.get("user_id", "anonymous")
+       workflow_id = state.get("workflow_id", "default")
 
     # Upload Spec JSON
-        spec_storage = upload_artifact_generic(
+       spec_storage = upload_artifact_generic(
            local_path=spec_json_path,
            user_id=user_id,
            workflow_id=workflow_id,
            agent_label="spec"
         )
-        if spec_storage:
-          append_artifact_record(workflow_id, "spec_json", spec_storage)
+       if spec_storage:
+          append_artifact_record(workflow_id, "spec_agent_report", spec_storage)
 
        # Upload Verilog RTL
-        rtl_storage = upload_artifact_generic(
+       rtl_storage = upload_artifact_generic(
           local_path=verilog_file,
           user_id=user_id,
           workflow_id=workflow_id,
           agent_label="rtl"
        )
-        if rtl_storage:
-          append_artifact_record(workflow_id, "rtl_file", rtl_storage)
+       if rtl_storage:
+          append_artifact_record(workflow_id, "spec_agent_output", rtl_storage)
 
        # Upload compile log
-        log_storage = upload_artifact_generic(
+      log_storage = upload_artifact_generic(
           local_path=log_path,
           user_id=user_id,
           workflow_id=workflow_id,
           agent_label="logs"
-        )
-        if log_storage:
-          append_artifact_record(workflow_id, "compile_log", log_storage)
+      )
+      if log_storage:
+          append_artifact_record(workflow_id, "spec_agent_log", log_storage)
 
-        print("🧩 All artifacts uploaded to Supabase Storage.")
+      print("🧩 All artifacts uploaded to Supabase Storage.")
     except Exception as e:
-        print(f"⚠️ Artifact upload failed: {e}")
+      print(f"⚠️ Artifact upload failed: {e}")
 
     print(f"\n✅ Generated {verilog_file} and {spec_json_path}")
     return state
