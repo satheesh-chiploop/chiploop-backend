@@ -227,19 +227,25 @@ async def run_workflow(
         loop_type = (data.get("loop_type") or "digital").lower().strip()
 
         # Insert workflow row (back-compat with current UI)
-        supabase.table("workflows").insert({
-            "id": workflow_id,
-            "user_id": user_id,
-            "name": f"{loop_type.capitalize()} Loop Run",
-            "status": "running",
-            "phase": "queued",
-            "logs": "🚀 Workflow queued.",
-            "created_at": now,
-            "updated_at": now,
-            "artifacts": {},
-            "loop_type": loop_type,
-            "definitions": data
-        }).execute()
+        workflow_record = {
+           "id": workflow_id,
+           "name": f"{loop_type.capitalize()} Loop Run",
+           "status": "running",
+           "phase": "queued",
+           "logs": "🚀 Workflow queued.",
+           "created_at": now,
+           "updated_at": now,
+           "artifacts": {},
+           "loop_type": loop_type,
+           "definitions": data
+        }
+
+        if user_id:
+           workflow_record["user_id"] = user_id
+
+        supabase.table("workflows").insert(workflow_record).execute()
+
+
 
         # Prepare artifact dir
         user_folder = str(user_id or "anonymous") 
