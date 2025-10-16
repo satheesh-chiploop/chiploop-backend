@@ -227,9 +227,9 @@ async def run_workflow(
         # payload contains nodes with exact backend "label"
         loop_type = (data.get("loop_type") or "digital").lower().strip()
 
-        # Insert workflow row (back-compat with current UI)
-        workflow_record = {
+        supabase.table("workflows").insert({
            "id": workflow_id,
+           "user_id": user_id,
            "name": f"{loop_type.capitalize()} Loop Run",
            "status": "running",
            "phase": "queued",
@@ -239,28 +239,7 @@ async def run_workflow(
            "artifacts": {},
            "loop_type": loop_type,
            "definitions": data
-        }
-        # ✅ Insert workflow row (safe for NOT NULL user_id)
-        # ✅ Build clean payload to avoid sending user_id=None
-        if user_id:
-            workflow_record["user_id"] = user_id
-        clean_record = {k: v for k, v in workflow_record.items() if v is not None}
-
-        # ✅ Manual REST insert (bypass supabase-py schema)
-        resp = httpx.post(
-            f"{SUPABASE_URL}/rest/v1/workflows",
-            headers={
-              "apikey": SUPABASE_KEY,
-              "Authorization": f"Bearer {SUPABASE_KEY}",
-              "Content-Type": "application/json",
-              "Prefer": "return=representation",
-            },
-            json=clean_record,
-            timeout=10.0,
-        )
-        if resp.status_code >= 400:
-            raise RuntimeError(f"Supabase insert failed: {resp.text}")
-      
+        }).execute()
 
         # Prepare artifact dir
         user_folder = str(user_id or "anonymous") 
