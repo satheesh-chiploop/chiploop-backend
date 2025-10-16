@@ -5,6 +5,7 @@ import os
 import json
 import uuid
 import traceback
+import httpx
 from datetime import datetime
 from typing import Dict, Any, Optional
 
@@ -245,8 +246,20 @@ async def run_workflow(
             workflow_record["user_id"] = user_id
         clean_record = {k: v for k, v in workflow_record.items() if v is not None}
 
-        # 🚀 Insert final payload
-        supabase.table("workflows").insert(clean_record).execute()
+         ✅ Manual REST insert (bypass supabase-py schema)
+        resp = httpx.post(
+            f"{SUPABASE_URL}/rest/v1/workflows",
+            headers={
+              "apikey": SUPABASE_KEY,
+              "Authorization": f"Bearer {SUPABASE_KEY}",
+              "Content-Type": "application/json",
+              "Prefer": "return=representation",
+            },
+            json=clean_record,
+            timeout=10.0,
+        )
+        if resp.status_code >= 400:
+            raise RuntimeError(f"Supabase insert failed: {resp.text}")
       
 
         # Prepare artifact dir
