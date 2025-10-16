@@ -239,8 +239,11 @@ async def run_workflow(
            "loop_type": loop_type,
            "definitions": data
         }
-
-        if user_id:
+        # ✅ Insert workflow row (safe for NOT NULL user_id)
+        if not user_id:
+        # Remove key entirely to let Supabase use DEFAULT auth.uid()
+           workflow_record.pop("user_id", None)
+        else:      
            workflow_record["user_id"] = user_id
 
         supabase.table("workflows").insert(workflow_record).execute()
