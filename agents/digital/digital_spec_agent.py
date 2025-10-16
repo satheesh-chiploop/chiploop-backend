@@ -218,27 +218,27 @@ Design Guidelines:
            agent_label="spec"
         )
         if spec_storage:
-          append_artifact_record(workflow_id, "spec_agent_report", spec_storage)
+           append_artifact_record(workflow_id, "spec_agent_report", spec_storage)
 
        # Upload Verilog RTL
         rtl_storage = upload_artifact_generic(
-          local_path=verilog_file,
-          user_id=user_id,
-          workflow_id=workflow_id,
-          agent_label="rtl"
-       )
+           local_path=verilog_file,
+           user_id=user_id,
+           workflow_id=workflow_id,
+           agent_label="rtl"
+        )
         if rtl_storage:
-          append_artifact_record(workflow_id, "spec_agent_output", rtl_storage)
+           append_artifact_record(workflow_id, "spec_agent_output", rtl_storage)
 
        # Upload compile log
         log_storage = upload_artifact_generic(
-          local_path=log_path,
-          user_id=user_id,
-          workflow_id=workflow_id,
-          agent_label="logs"
+           local_path=log_path,
+           user_id=user_id,
+           workflow_id=workflow_id,
+           agent_label="logs"
         )
         if log_storage:
-          append_artifact_record(workflow_id, "spec_agent_log", log_storage)
+           append_artifact_record(workflow_id, "spec_agent_log", log_storage)
 
         print("🧩 All artifacts uploaded to Supabase Storage.")
     except Exception as e:
