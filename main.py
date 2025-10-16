@@ -246,7 +246,7 @@ async def run_workflow(
             workflow_record["user_id"] = user_id
         clean_record = {k: v for k, v in workflow_record.items() if v is not None}
 
-         ✅ Manual REST insert (bypass supabase-py schema)
+        # ✅ Manual REST insert (bypass supabase-py schema)
         resp = httpx.post(
             f"{SUPABASE_URL}/rest/v1/workflows",
             headers={
