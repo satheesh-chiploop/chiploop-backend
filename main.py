@@ -217,7 +217,7 @@ async def run_workflow(
     """
     try:
         user = verify_token(request)
-        user_id = user.get("sub") or "anonymous"
+        user_id = user.get("sub") if user and user.get("sub") else None
         workflow_id = str(uuid.uuid4())
         run_id = str(uuid.uuid4())
         now = datetime.utcnow().isoformat()
