@@ -245,10 +245,6 @@ async def run_workflow(
             workflow_record["user_id"] = user_id
         clean_record = {k: v for k, v in workflow_record.items() if v is not None}
 
-        # ✅ Hard check: remove user_id if still None or missing
-        if "user_id" not in clean_record or not clean_record.get("user_id"):
-            clean_record.pop("user_id", None)
-
         # 🚀 Insert final payload
         supabase.table("workflows").insert(clean_record).execute()
       
