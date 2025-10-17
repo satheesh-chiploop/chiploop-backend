@@ -362,15 +362,15 @@ def execute_workflow_background(
         # Merge with dynamic/custom agents
         agent_map = dict(loop_map)
         agent_map.update(AGENT_REGISTRY)
-        missing = [n["label"] for n in nodes if n["label"] not in agent_map]
-        if missing:
-          append_log_workflow(workflow_id, f"⚠️ Missing agent implementations: {', '.join(missing)}")
 
         append_log_workflow(workflow_id, "⚡ Executing workflow agents ...")
         append_log_run(run_id, "⚡ Executing workflow agents ...")
         time.sleep(0.2)
 
         nodes = data.get("nodes", []) or []
+        missing = [n["label"] for n in nodes if n["label"] not in agent_map]
+        if missing:
+          append_log_workflow(workflow_id, f"⚠️ Missing agent implementations: {', '.join(missing)}")
         for node in nodes:
             label = (node or {}).get("label", "")
             step = label or "agent"
