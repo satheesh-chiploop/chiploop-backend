@@ -119,13 +119,38 @@ EMBEDDED_AGENT_FUNCTIONS: Dict[str, Any] = {
     "Embedded Result Agent": embedded_result_agent,
 }
 
+SYSTEM_AGENT_FUNCTIONS: Dict[str,Any] = {
+    "Digital Spec Agent": digital_spec_agent,
+    "Digital RTL Agent": digital_rtl_agent,
+    "Digital Sim Agent": digital_simulation_agent,          # ← exact label used by UI
+    "Digital Coverage Agent": digital_coverage_agent,
+    "Digital Opitmizer Agent": digital_optimizer_agent,     # ← keep typo to match existing label
+    "Digital Testbench Agent": digital_testbench_agent_uvm,
+    "Digital Arch Doc Agent": digital_arch_doc_agent,
+    "Digital Integration Doc Agent": digital_integration_doc_agent,
+    "Digital Testcase Agent": digital_testcase_agent,
+    "Digital Assertion Agent": digital_assertion_agent,
+    "Digital CoverGroup Agent": digital_covergroup_agent,
+    "Analog Spec Agent": analog_spec_agent,
+    "Analog Netlist Agent": analog_netlist_agent,
+    "Analog Sim Agent": analog_sim_agent,
+    "Analog Result Agent": analog_result_agent,
+    "Embedded Spec Agent": embedded_spec_agent,
+    "Embedded Code Agent": embedded_code_agent,
+    "Embedded Sim Agent": embedded_sim_agent,
+    "Embedded Result Agent": embedded_result_agent,      
+}
+
 # ==========================================================
 # 🧠 UNIFIED + CUSTOM REGISTRY
 # ==========================================================
-AGENT_FUNCTIONS: Dict[str, Any] = {}
-AGENT_FUNCTIONS.update(DIGITAL_AGENT_FUNCTIONS)
-AGENT_FUNCTIONS.update(ANALOG_AGENT_FUNCTIONS)
-AGENT_FUNCTIONS.update(EMBEDDED_AGENT_FUNCTIONS)
+
+AGENT_FUNCTIONS: Dict[str, Dict[str, Any]] = {
+    "digital": DIGITAL_AGENT_FUNCTIONS,
+    "analog": ANALOG_AGENT_FUNCTIONS,
+    "embedded": EMBEDDED_AGENT_FUNCTIONS,
+    "system": SYSTEM_AGENT_FUNCTIONS
+}
 
 # Dynamically load user-created agents as modules under `agents/` (optional)
 import importlib, pkgutil, agents
@@ -202,6 +227,15 @@ def recent_runs(request: Request, limit: int = Query(10, ge=1, le=50)):
         .execute()
     )
     return res.data
+
+@app.get("/stats")
+def stats():
+    wf = supabase.table("workflows").select("id", count="exact").execute()
+    run = supabase.table("runs").select("id", count="exact").execute()
+    return {
+        "workflows": wf.count if hasattr(wf, "count") else None,
+        "runs": run.count if hasattr(run, "count") else None,
+    }
 
 @app.post("/run_workflow")
 async def run_workflow(
@@ -319,15 +353,18 @@ def execute_workflow_background(
         os.makedirs(artifact_dir, exist_ok=True)
         data = json.loads(workflow_json)
 
-        loop_map = {
-            "digital": DIGITAL_AGENT_FUNCTIONS,
-            "analog": ANALOG_AGENT_FUNCTIONS,
-            "embedded": EMBEDDED_AGENT_FUNCTIONS,
-        }.get(loop_type, DIGITAL_AGENT_FUNCTIONS)
+        if loop_type not in AGENT_FUNCTIONS:
+           append_log_workflow(workflow_id, f"⚠️ Unknown loop_type={loop_type}, defaulting to digital.")
+           loop_type = "digital"
+
+        loop_map = AGENT_FUNCTIONS.get(loop_type, DIGITAL_AGENT_FUNCTIONS)
 
         # Merge with dynamic/custom agents
         agent_map = dict(loop_map)
         agent_map.update(AGENT_REGISTRY)
+        missing = [n["label"] for n in nodes if n["label"] not in agent_map]
+        if missing:
+          append_log_workflow(workflow_id, f"⚠️ Missing agent implementations: {', '.join(missing)}")
 
         append_log_workflow(workflow_id, "⚡ Executing workflow agents ...")
         append_log_run(run_id, "⚡ Executing workflow agents ...")
