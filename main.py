@@ -12,6 +12,8 @@ from typing import Dict, Any, Optional
 
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Depends, Query, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
+from backend.agent_capabilities import AGENT_CAPABILITIES
+from backend.utils.graph_utils import build_capability_graph, serialize_graph
 from fastapi.responses import JSONResponse
 
 import logging
@@ -118,6 +120,7 @@ EMBEDDED_AGENT_FUNCTIONS: Dict[str, Any] = {
     "Embedded Sim Agent": embedded_sim_agent,
     "Embedded Result Agent": embedded_result_agent,
 }
+from agents.system.system_workflow_agent import run_agent as system_workflow_agent
 
 SYSTEM_AGENT_FUNCTIONS: Dict[str,Any] = {
     "Digital Spec Agent": digital_spec_agent,
@@ -138,7 +141,8 @@ SYSTEM_AGENT_FUNCTIONS: Dict[str,Any] = {
     "Embedded Spec Agent": embedded_spec_agent,
     "Embedded Code Agent": embedded_code_agent,
     "Embedded Sim Agent": embedded_sim_agent,
-    "Embedded Result Agent": embedded_result_agent,      
+    "Embedded Result Agent": embedded_result_agent, 
+    "System Workflow Agent": system_workflow_agent,     
 }
 
 # ==========================================================
@@ -358,6 +362,17 @@ def execute_workflow_background(
            loop_type = "digital"
 
         loop_map = AGENT_FUNCTIONS.get(loop_type, DIGITAL_AGENT_FUNCTIONS)
+
+        if loop_type == "system":
+            has_validation = any(
+                n.get("label") == "System Workflow Agent"
+                for n in (data.get("nodes") or [])
+            )
+            if not has_validation:
+                logger.info("🧩 Auto-appending System Workflow Agent as final step for System Loop.")
+                # Append as a node for execution
+                data["nodes"].append({"label": "System Workflow Agent"})
+                append_log_workflow(workflow_id, "🧩 Added System Workflow Agent as final validation step.")
 
         # Merge with dynamic/custom agents
         agent_map = dict(loop_map)
@@ -644,3 +659,33 @@ def download_artifact(workflow_id: str, rel_path: str):
     if not requested.exists() or not requested.is_file():
         raise HTTPException(status_code=404, detail="file not found")
     return FileResponse(str(requested))
+
+@app.get("/list_agents")
+async def list_agents():
+    G = build_capability_graph(AGENT_CAPABILITIES)
+    return {
+        "status": "ok",
+        "agents": AGENT_CAPABILITIES,
+        "graph": serialize_graph(G)
+    }
+
+from planner.ai_workflow_planner import plan_workflow
+
+
+@app.post("/plan_workflow")
+async def plan_workflow_api(request: Request):
+    data = await request.json()
+    user_prompt = data.get("prompt", "")
+    workflow_id = data.get("workflow_id", "manual_plan")
+    plan = plan_workflow(user_prompt, AGENT_CAPABILITIES, workflow_id)
+    return {"status": "ok", "plan": plan}
+
+
+from planner.ai_agent_planner import plan_agent
+
+@app.post("/plan_agent")
+async def plan_agent_api(request: Request):
+    data = await request.json()
+    prompt = data.get("prompt", "")
+    plan = plan_agent(prompt)
+    return {"status": "ok", "agent": plan}

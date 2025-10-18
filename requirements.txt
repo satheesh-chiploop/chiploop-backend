@@ -24,3 +24,6 @@ pyspice                # Python bindings for ngspice
 
 # --- Embedded Loop ---
 pyserial               # For UART / serial interaction with simavr
+networkx
+matplotlib
+jsonschema
