@@ -689,3 +689,98 @@ async def plan_agent_api(request: Request):
     prompt = data.get("prompt", "")
     plan = plan_agent(prompt)
     return {"status": "ok", "agent": plan}
+
+@app.post("/save_custom_agent")
+async def save_custom_agent(request: Request):
+    """
+    Save AI-generated agent from planner into Supabase `agents` table.
+    """
+    try:
+        data = await request.json()
+        agent = data.get("agent", {})
+        if not agent.get("agent_name"):
+            return {"status": "error", "message": "agent_name missing"}
+
+        record = {
+            "agent_name": agent.get("agent_name"),
+            "loop_type": agent.get("domain", "system"),
+            "tool": "AI Agent Planner",
+            "script_path": None,
+            "description": agent.get("description", ""),
+            "is_custom": True,
+            "is_prebuilt": False,
+            "is_marketplace": False,
+        }
+
+        res = supabase.table("agents").insert(record).execute()
+        if hasattr(res, "data") and res.data:
+            logger.info(f"💾 Saved new custom agent: {agent.get('agent_name')}")
+            return {"status": "ok", "data": res.data}
+        else:
+            logger.warning(f"⚠️ Supabase returned empty response for {agent.get('agent_name')}")
+            return {"status": "warning", "message": "Insert may not have completed"}
+
+    except Exception as e:
+        logger.error(f"❌ Failed to save custom agent: {e}")
+        return {"status": "error", "message": str(e)}
+
+
+@app.post("/save_custom_workflow")
+async def save_custom_workflow(request: Request):
+    """
+    Save a workflow (manual or AI-created) into Supabase.
+    Automatically adds 'System Workflow Agent' if workflow spans multiple domains.
+    """
+    try:
+        data = await request.json()
+        wf = data.get("workflow", {})
+        name = wf.get("workflow_name", "Untitled Workflow")
+        loop_type = wf.get("loop_type", "system")
+        nodes = wf.get("nodes", [])
+        edges = wf.get("edges", [])
+
+        # 🧩 Detect involved domains from node labels
+        domains = set()
+        for node in nodes:
+            label = node.get("data", {}).get("backendLabel", "")
+            if "digital" in label.lower():
+                domains.add("digital")
+            elif "analog" in label.lower():
+                domains.add("analog")
+            elif "embedded" in label.lower():
+                domains.add("embedded")
+            elif "system" in label.lower():
+                domains.add("system")
+
+        # ✅ Auto-append System Workflow Agent if multiple domains are involved
+        if len(domains) > 1 and not any("System Workflow Agent" in n.get("data", {}).get("backendLabel", "") for n in nodes):
+            system_agent = {
+                "id": "system_validation_" + str(len(nodes) + 1),
+                "type": "default",
+                "data": {
+                    "uiLabel": "System Workflow Agent",
+                    "backendLabel": "System Workflow Agent",
+                    "description": "Validates cross-domain integration.",
+                },
+                "position": {"x": 400, "y": 400},
+            }
+            nodes.append(system_agent)
+            logger.info(f"🧩 Auto-added System Workflow Agent to {name}")
+
+        # 🗄️ Save into Supabase
+        result = supabase.table("workflows").insert({
+            "name": name,
+            "loop_type": loop_type,
+            "nodes": nodes,
+            "edges": edges,
+            "status": "saved"
+        }).execute()
+
+        logger.info(f"💾 Workflow saved: {name} with domains {list(domains)}")
+        return {"status": "ok", "data": result.data}
+
+    except Exception as e:
+        logger.error(f"❌ Failed to save workflow: {e}")
+        return {"status": "error", "message": str(e)}
+
+
