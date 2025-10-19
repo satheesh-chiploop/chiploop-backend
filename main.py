@@ -685,18 +685,6 @@ async def plan_workflow_api(request: Request):
 #  🔥 Memory-Aware Planner + Spec Analyzer Integration
 # ==========================================================
 
-from fastapi import Request
-from datetime import datetime
-import json, logging, os
-from supabase import create_client
-from utils.llm_utils import run_llm_fallback
-
-logger = logging.getLogger("chiploop")
-
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-
 
 # ---------- /analyze_spec ----------
 @app.post("/analyze_spec")
