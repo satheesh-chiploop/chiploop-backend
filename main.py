@@ -796,7 +796,7 @@ async def auto_compose_workflow(request: Request):
         goal = data.get("goal", "")
         logger.info(f"🧠 Auto-composing workflow for goal: {goal}")
 
-        from ai_work_planner import auto_compose_workflow_graph
+        from planner.ai_work_planner import auto_compose_workflow_graph
         graph = await auto_compose_workflow_graph(goal)
 
         return {"status": "ok", **graph}
