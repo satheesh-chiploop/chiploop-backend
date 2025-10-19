@@ -55,7 +55,18 @@ def plan_workflow(prompt: str, agent_capabilities: dict, workflow_id: str = None
                 json={"model": "llama3", "prompt": system_prompt + "\n" + prompt}
             )
             response_text = resp.text
-            return safe_parse_plan(response_text)
+                        # --- After receiving content from Portkey/OpenAI/Ollama ---
+            plan = safe_parse_plan(content if 'content' in locals() else response_text)
+
+            # 🔍 Detect missing agents
+            from agent_capabilities import AGENT_CAPABILITIES
+            existing = set(AGENT_CAPABILITIES.keys())
+            suggested = set(plan.get("agents", []))
+            missing = list(suggested - existing)
+            plan["missing_agents"] = missing
+            logger.info(f"🧩 Missing agents detected: {missing}")
+            return plan
+
         except Exception as e:
             logger.warning(f"Ollama failed: {e}")
 
@@ -74,7 +85,19 @@ def plan_workflow(prompt: str, agent_capabilities: dict, workflow_id: str = None
             }
             r = requests.post(f"{PORTKEY_BASE_URL}/v1/chat/completions", json=payload, headers=headers, timeout=60)
             content = r.json()["choices"][0]["message"]["content"]
-            return safe_parse_plan(content)
+                        # --- After receiving content from Portkey/OpenAI/Ollama ---
+            plan = safe_parse_plan(content if 'content' in locals() else response_text)
+
+            # 🔍 Detect missing agents
+            from agent_capabilities import AGENT_CAPABILITIES
+            existing = set(AGENT_CAPABILITIES.keys())
+            suggested = set(plan.get("agents", []))
+            missing = list(suggested - existing)
+            plan["missing_agents"] = missing
+            logger.info(f"🧩 Missing agents detected: {missing}")
+            return plan
+
+
         except Exception as e:
             logger.warning(f"Portkey fallback failed: {e}")
 
@@ -89,7 +112,18 @@ def plan_workflow(prompt: str, agent_capabilities: dict, workflow_id: str = None
                 temperature=0.3
             )
             content = resp.choices[0].message.content
-            return safe_parse_plan(content)
+            # --- After receiving content from Portkey/OpenAI/Ollama ---
+            plan = safe_parse_plan(content if 'content' in locals() else response_text)
+
+            # 🔍 Detect missing agents
+            from agent_capabilities import AGENT_CAPABILITIES
+            existing = set(AGENT_CAPABILITIES.keys())
+            suggested = set(plan.get("agents", []))
+            missing = list(suggested - existing)
+            plan["missing_agents"] = missing
+            logger.info(f"🧩 Missing agents detected: {missing}")
+            return plan
+
         except Exception as e:
             logger.error(f"OpenAI fallback failed: {e}")
 
@@ -114,18 +148,39 @@ def safe_parse_plan(text: str) -> dict:
         logger.warning(f"⚠️ Failed to parse plan: {e}")
         return {"loop_type": "unknown", "agents": []}
 
+
+def register_new_agent(agent_data: dict):
+    """Persist newly generated agent so it can be reused."""
+    name = agent_data["agent_name"].replace(" ", "_").lower()
+    path = f"agents/custom/{name}.py"
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as f:
+        f.write(agent_data["full_code"])
+    logger.info(f"💾 Custom agent saved to {path}")
+
+
 import json, random
 from .ai_agent_planner import plan_agent_fallback
 from utils.llm_utils import run_llm_fallback  # your existing chain
 
-async def auto_compose_workflow_graph(goal: str):
+
+async def auto_compose_workflow_graph(goal: str, preplan: dict | None = None):
     """
     Builds a structured workflow graph (nodes + edges)
-    and creates missing agents if needed.
+    using a preplan if provided, or generates one internally.
     """
-    # --- Step 1: Ask LLM for required agents ---
+    if preplan:
+        logger.info("📎 Using preplan from frontend to skip re-planning.")
+        plan_data = preplan
+    else:
+        logger.info("🧠 No preplan supplied — generating plan internally.")
+        from agent_capabilities import AGENT_CAPABILITIES
+        plan_data = plan_workflow(goal, AGENT_CAPABILITIES)
+
     prompt = f"""You are ChipLoop workflow architect.
     Build a workflow for this goal: {goal}.
+    Here is a pre-generated plan you must follow:
+    {json.dumps(plan_data, indent=2)}
     Use known agents from AGENT_CAPABILITIES.
     Output valid JSON with keys: nodes, edges, summary.
     """
@@ -137,12 +192,29 @@ async def auto_compose_workflow_graph(goal: str):
         plan = {"nodes": [], "edges": [], "summary": response}
 
     # --- Step 2: Detect missing agents ---
-    existing_agents = [a["data"]["backendLabel"] for a in plan.get("nodes", [])]
-    from agent_capabilities import AGENT_CAPABILITIES
-    missing = [a for a in existing_agents if a not in AGENT_CAPABILITIES]
+    # Prefer preplan's missing_agents if available
+    missing = []
+    if preplan and preplan.get("missing_agents"):
+        missing = preplan["missing_agents"]
+        logger.info(f"📎 Using missing_agents from preplan: {missing}")
+    else:
+    # Fallback: detect from current graph
+        existing_agents = [a["data"]["backendLabel"] for a in plan.get("nodes", [])]
+        from agent_capabilities import AGENT_CAPABILITIES
+        missing = [a for a in existing_agents if a not in AGENT_CAPABILITIES]
+        logger.info(f"🧩 Detected missing agents: {missing}")
 
-    for agent in missing:
-        await plan_agent_fallback(agent)  # creates agent & stores in Supabase
+# Create and persist any missing agents
+    if missing:
+        from .ai_agent_planner import plan_agent_fallback
+        for m in missing:
+            try:
+                new_agent = await plan_agent_fallback(m)
+                # Persist the new agent so it can be reused later
+                register_new_agent(new_agent)
+                logger.info(f"✅ Auto-created & saved missing agent: {m}")
+            except Exception as e:
+                logger.warning(f"⚠️ Failed to generate missing agent {m}: {e}")
 
     # --- Step 3: Auto-position nodes ---
     for i, n in enumerate(plan.get("nodes", [])):
