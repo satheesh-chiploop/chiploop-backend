@@ -681,6 +681,158 @@ async def plan_workflow_api(request: Request):
     return {"status": "ok", "plan": plan}
 
 
+# ==========================================================
+#  🔥 Memory-Aware Planner + Spec Analyzer Integration
+# ==========================================================
+
+from fastapi import Request
+from datetime import datetime
+import json, logging, os
+from supabase import create_client
+from utils.llm_utils import run_llm_fallback
+
+logger = logging.getLogger("chiploop")
+
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+
+# ---------- /analyze_spec ----------
+@app.post("/analyze_spec")
+async def analyze_spec(request: Request):
+    """
+    Analyze prompt/spec → compute coverage → store in spec_coverage.
+    """
+    data = await request.json()
+    goal = data.get("goal", "")
+    user_id = data.get("user_id", "anonymous")
+
+    analyzer_prompt = f"""
+    You are ChipLoop's Spec Analyzer.
+    Analyze: "{goal}"
+
+    Score each dimension (0–25):
+    - Intent (what to achieve)
+    - I/O (inputs, outputs, data flow)
+    - Constraints (timing, power, area)
+    - Verification (how to validate)
+
+    Suggest up to 5 clarifying questions to improve coverage.
+    Return clean JSON:
+    {{
+      "normalized_spec": "...",
+      "intent": <int>,
+      "io": <int>,
+      "constraints": <int>,
+      "verification": <int>,
+      "questions": ["...", "..."]
+    }}
+    """
+
+    try:
+        response = await run_llm_fallback(analyzer_prompt)
+        result = json.loads(response)
+        total = (
+            result.get("intent", 0)
+            + result.get("io", 0)
+            + result.get("constraints", 0)
+            + result.get("verification", 0)
+        )
+        result["total_score"] = total
+
+        # Save to spec_coverage
+        supabase.table("spec_coverage").insert({
+            "user_id": user_id,
+            "goal": goal,
+            "normalized_spec": result.get("normalized_spec"),
+            "intent_score": result.get("intent"),
+            "io_score": result.get("io"),
+            "constraint_score": result.get("constraints"),
+            "verification_score": result.get("verification"),
+            "total_score": total,
+            "clarifying_questions": result.get("questions"),
+            "created_at": datetime.utcnow().isoformat()
+        }).execute()
+
+        return {"status": "ok", "coverage": result}
+
+    except Exception as e:
+        logger.error(f"❌ Analyzer failed: {e}")
+        return {"status": "error", "message": str(e)}
+
+
+# ---------- /plan_workflow_memory ----------
+@app.post("/plan_workflow_memory")
+async def plan_workflow_memory(request: Request):
+    """
+    Plans workflow using memory from user_memory and agent_memory.
+    """
+    data = await request.json()
+    goal = data.get("goal", "")
+    user_id = data.get("user_id", "anonymous")
+
+    # Retrieve memory context
+    user_mem = supabase.table("user_memory").select("*").eq("user_id", user_id).execute()
+    user_data = user_mem.data[0] if user_mem.data else {}
+    agent_mem = supabase.table("agent_memory").select("*").execute()
+    agent_data = agent_mem.data or []
+
+    memory_context = f"""
+    Recent goals: {user_data.get('recent_goals', [])}
+    Frequent agents: {user_data.get('frequent_agents', [])}
+    Known agent types: {[a['agent_name'] for a in agent_data[:8]]}
+    """
+
+    planner_prompt = f"""
+    You are ChipLoop's Memory-Aware Planner.
+    Use the memory below to propose a workflow for goal: "{goal}"
+
+    Memory Context:
+    {memory_context}
+
+    Return only JSON:
+    {{
+      "loop_type": "<digital|analog|embedded|system>",
+      "agents": ["Agent A", "Agent B", ...]
+    }}
+    """
+
+    try:
+        response = await run_llm_fallback(planner_prompt)
+        plan = json.loads(response)
+
+        # Update user memory (append goal + agents)
+        supabase.table("user_memory").upsert({
+            "user_id": user_id,
+            "recent_goals": (user_data.get("recent_goals", []) + [goal])[-5:],
+            "frequent_agents": list(set(user_data.get("frequent_agents", []) + plan.get("agents", []))),
+            "updated_at": datetime.utcnow().isoformat(),
+        }).execute()
+
+        return {"status": "ok", "plan": plan}
+
+    except Exception as e:
+        logger.error(f"❌ Memory planner failed: {e}")
+        return {"status": "error", "message": str(e)}
+
+
+# ---------- Memory Update Helper for Auto-Compose ----------
+def update_agent_memory(agent_name: str, workflow_name: str):
+    """Update agent usage and last_used_in list."""
+    try:
+        record = {
+            "agent_name": agent_name,
+            "last_used_in": [workflow_name],
+            "updated_at": datetime.utcnow().isoformat()
+        }
+        supabase.table("agent_memory").upsert(record).execute()
+    except Exception as e:
+        logger.warning(f"⚠️ Failed to update agent memory for {agent_name}: {e}")
+
+
+
+
 from planner.ai_agent_planner import plan_agent
 
 @app.post("/plan_agent")
