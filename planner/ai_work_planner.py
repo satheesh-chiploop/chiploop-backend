@@ -131,22 +131,34 @@ def plan_workflow(prompt: str, agent_capabilities: dict, workflow_id: str = None
     logger.error("❌ All AI backends failed for workflow planning.")
     return {"loop_type": "unknown", "agents": []}
 
-def safe_parse_plan(text: str) -> dict:
+def safe_parse_plan(text: str):
     """
-    Extracts and parses JSON safely from LLM output.
+    Robustly extract JSON from LLM responses that may include extra text.
     """
-    try:
-        json_start = text.find("{")
-        json_end = text.rfind("}") + 1
-        json_str = text[json_start:json_end]
-        plan = json.loads(json_str)
-        if not isinstance(plan, dict) or "agents" not in plan:
-            raise ValueError("Invalid JSON plan format")
-        logger.info(f"✅ Parsed workflow plan: {plan}")
-        return plan
-    except Exception as e:
-        logger.warning(f"⚠️ Failed to parse plan: {e}")
+    import json, re, logging
+    logger = logging.getLogger("planner")
+
+    if not text:
         return {"loop_type": "unknown", "agents": []}
+
+    # 🧩 Try strict JSON first
+    try:
+        return json.loads(text)
+    except Exception:
+        pass
+
+    # 🔍 Try to extract JSON substring using regex
+    try:
+        match = re.search(r"\{[\s\S]*\}", text)
+        if match:
+            snippet = match.group(0)
+            return json.loads(snippet)
+    except Exception as e:
+        logger.warning(f"⚠️ safe_parse_plan fallback failed: {e}")
+
+    # 🪫 Final fallback
+    logger.warning("⚠️ Failed to parse plan: returning empty template.")
+    return {"loop_type": "unknown", "agents": []}
 
 
 def register_new_agent(agent_data: dict):
