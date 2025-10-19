@@ -12,8 +12,8 @@ from typing import Dict, Any, Optional
 
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Depends, Query, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
-from backend.agent_capabilities import AGENT_CAPABILITIES
-from backend.utils.graph_utils import build_capability_graph, serialize_graph
+from agent_capabilities import AGENT_CAPABILITIES
+from utils.graph_utils import build_capability_graph, serialize_graph
 from fastapi.responses import JSONResponse
 
 import logging
