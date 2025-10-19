@@ -241,6 +241,18 @@ async def auto_compose_workflow_graph(goal: str, preplan: dict | None = None):
         ]
     logger.success("✅ Auto-compose complete.")
 
+    try:
+        for node in plan.get("nodes", []):
+            agent_name = node["data"]["backendLabel"]
+            supabase.table("agent_memory").upsert({
+                "agent_name": agent_name,
+                "last_used_in": [goal],
+                "updated_at": datetime.utcnow().isoformat()
+            }).execute()
+        logger.info("🧠 Agent memory updated successfully.")
+    except Exception as e:
+        logger.warning(f"⚠️ Failed to update agent memory: {e}")
+        
     return {
         "nodes": plan.get("nodes", []),
         "edges": plan.get("edges", []),
