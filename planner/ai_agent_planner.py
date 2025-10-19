@@ -154,3 +154,21 @@ def safe_parse_agent(text: str) -> dict:
             "description": "Invalid JSON",
             "full_code": text[:1000],
         }
+# --- Simple async wrapper for plan_agent ---
+async def plan_agent_fallback(prompt: str) -> dict:
+    """
+    Async-compatible fallback to generate a new agent using the existing plan_agent().
+    """
+    try:
+        agent = plan_agent(prompt)
+        return agent
+    except Exception as e:
+        logger.error(f"❌ plan_agent_fallback failed for {prompt}: {e}")
+        return {
+            "agent_name": "UnknownAgent",
+            "domain": "unknown",
+            "inputs": [],
+            "outputs": [],
+            "description": "Agent generation failed.",
+            "full_code": "",
+        }

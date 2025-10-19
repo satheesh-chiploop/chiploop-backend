@@ -783,4 +783,24 @@ async def save_custom_workflow(request: Request):
         logger.error(f"❌ Failed to save workflow: {e}")
         return {"status": "error", "message": str(e)}
 
+@app.post("/auto_compose_workflow")
+async def auto_compose_workflow(request: Request):
+    """
+    Auto-compose a workflow graph from a user goal.
+    - Uses LLM fallback chain (Ollama → Portkey → OpenAI)
+    - Calls Agent Planner for missing agents
+    - Returns nodes + edges for rendering
+    """
+    try:
+        data = await request.json()
+        goal = data.get("goal", "")
+        logger.info(f"🧠 Auto-composing workflow for goal: {goal}")
+
+        from ai_work_planner import auto_compose_workflow_graph
+        graph = await auto_compose_workflow_graph(goal)
+
+        return {"status": "ok", **graph}
+    except Exception as e:
+        logger.error(f"❌ Auto-compose failed: {e}")
+        return {"status": "error", "message": str(e)}
 

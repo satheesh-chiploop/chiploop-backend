@@ -113,3 +113,53 @@ def safe_parse_plan(text: str) -> dict:
     except Exception as e:
         logger.warning(f"⚠️ Failed to parse plan: {e}")
         return {"loop_type": "unknown", "agents": []}
+
+import json, random
+from .ai_agent_planner import plan_agent_fallback
+from utils.llm_utils import run_llm_fallback  # your existing chain
+
+async def auto_compose_workflow_graph(goal: str):
+    """
+    Builds a structured workflow graph (nodes + edges)
+    and creates missing agents if needed.
+    """
+    # --- Step 1: Ask LLM for required agents ---
+    prompt = f"""You are ChipLoop workflow architect.
+    Build a workflow for this goal: {goal}.
+    Use known agents from AGENT_CAPABILITIES.
+    Output valid JSON with keys: nodes, edges, summary.
+    """
+    response = await run_llm_fallback(prompt)
+
+    try:
+        plan = json.loads(response)
+    except Exception:
+        plan = {"nodes": [], "edges": [], "summary": response}
+
+    # --- Step 2: Detect missing agents ---
+    existing_agents = [a["data"]["backendLabel"] for a in plan.get("nodes", [])]
+    from agent_capabilities import AGENT_CAPABILITIES
+    missing = [a for a in existing_agents if a not in AGENT_CAPABILITIES]
+
+    for agent in missing:
+        await plan_agent_fallback(agent)  # creates agent & stores in Supabase
+
+    # --- Step 3: Auto-position nodes ---
+    for i, n in enumerate(plan.get("nodes", [])):
+        n.setdefault("id", f"n{i+1}")
+        n.setdefault("position", {"x": 150 * i, "y": 100 + 60 * (i % 2)})
+
+    # --- Step 4: Auto-connect if edges missing ---
+    if not plan.get("edges"):
+        plan["edges"] = [
+            {"source": plan["nodes"][i]["id"], "target": plan["nodes"][i+1]["id"]}
+            for i in range(len(plan["nodes"]) - 1)
+        ]
+    logger.success("✅ Auto-compose complete.")
+
+    return {
+        "nodes": plan.get("nodes", []),
+        "edges": plan.get("edges", []),
+        "summary": plan.get("summary", "Auto-composed workflow complete."),
+    }
+
