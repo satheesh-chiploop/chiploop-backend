@@ -669,7 +669,7 @@ async def list_agents():
         "graph": serialize_graph(G)
     }
 
-from planner.ai_workflow_planner import plan_workflow
+from planner.ai_work_planner import plan_workflow
 
 
 @app.post("/plan_workflow")
