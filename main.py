@@ -720,6 +720,17 @@ async def analyze_spec(request: Request):
 
     try:
         response = await run_llm_fallback(analyzer_prompt)
+
+# Extract first valid JSON block from the response
+        try:
+            match = re.search(r"\{[\s\S]*\}", response)
+            if not match:
+              raise ValueError("No JSON found in LLM response")
+            json_str = match.group(0)
+            result = json.loads(json_str)
+        except Exception as parse_err:
+            logger.error(f"JSON parse failed: {parse_err} | Raw response: {response[:200]}")
+            raise
         result = json.loads(response)
         total = (
             result.get("intent", 0)
