@@ -3,6 +3,7 @@ import json
 import requests
 from loguru import logger
 from openai import OpenAI
+from utils.llm_utils import run_llm_fallback 
 
 # Reuse your environment variable pattern
 USE_LOCAL_OLLAMA = os.getenv("USE_LOCAL_OLLAMA", "false").lower() == "true"
@@ -173,7 +174,6 @@ def register_new_agent(agent_data: dict):
 
 import json, random
 from .ai_agent_planner import plan_agent_fallback
-from utils.llm_utils import run_llm_fallback  # your existing chain
 
 
 async def auto_compose_workflow_graph(goal: str, preplan: dict | None = None):

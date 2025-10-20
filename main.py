@@ -15,7 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from agent_capabilities import AGENT_CAPABILITIES
 from utils.graph_utils import build_capability_graph, serialize_graph
 from fastapi.responses import JSONResponse
-
+from utils.llm_utils import run_llm_fallback
 import logging
 logger = logging.getLogger("chiploop")
 logging.basicConfig(level=logging.INFO)
