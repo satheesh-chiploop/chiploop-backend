@@ -6,7 +6,6 @@ python-multipart
 pydantic
 supabase
 stripe
-portkey-ai
 pyuvm>=2.8.1
 cocotb>=1.8.0
 cocotb-coverage
@@ -27,3 +26,17 @@ pyserial               # For UART / serial interaction with simavr
 networkx
 matplotlib
 jsonschema
+
+# === LLM + AI Integrations ===
+openai>=1.40.0           # Whisper + GPT access
+httpx>=0.27.0            # async HTTP client
+tiktoken>=0.7.0          # for token counting (if needed)
+portkey-ai>=1.0.0        # optional (for BYOK / LLM router)
+
+# === Notion Integration ===
+notion-client>=2.2.0
+
+# === Audio & Transcription ===
+faster-whisper>=0.10.0   # for local transcription
+ffmpeg-python>=0.2.0     # audio decode support
+pydub>=0.25.1            # optional (audio conversion utilities)
