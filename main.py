@@ -19,6 +19,8 @@ from fastapi.responses import JSONResponse
 from utils.llm_utils import run_llm_fallback
 from utils.audio_utils import transcribe_audio
 from utils.notion_utils import append_to_notion, get_or_create_notion_page
+from fastapi import WebSocket
+import asyncio
 
 
 import logging
@@ -1007,5 +1009,32 @@ async def summarize_notion(user_id: str = Form("anonymous")):
 
     summary = run_llm_fallback(f"Summarize this chip design spec in JSON (intent, inputs, outputs, constraints, verification): {text}")
     return {"status": "ok", "summary": summary}
+
+# ==============================
+# 🔄 WebSocket for Live Spec Feedback
+# ==============================
+
+
+@app.websocket("/spec_live_feedback")
+async def spec_live_feedback(websocket: WebSocket):
+    await websocket.accept()
+    print("✅ WebSocket connection accepted")
+    try:
+        while True:
+            # You can later replace this with live DB or Notion updates
+            message = {
+                "summary": {
+                    "Intent": "4-bit synchronous counter",
+                    "IO": ["clk", "rst", "en", "count[3:0]"],
+                    "Constraints": ["100MHz", "≤1mW"],
+                    "Verification": ["basic testbench"]
+                },
+                "coverage": 78
+            }
+            await websocket.send_json(message)
+            await asyncio.sleep(5)
+    except Exception as e:
+        print(f"⚠️ WebSocket disconnected: {e}")
+
 
 
