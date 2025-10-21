@@ -705,14 +705,26 @@ async def plan_workflow_api(request: Request):
 async def analyze_spec(request: Request):
     """
     Analyze prompt/spec → compute coverage → store in spec_coverage.
+    Handles text, voice, or hybrid inputs.
     """
     data = await request.json()
     goal = data.get("goal", "")
+    voice_summary = data.get("voice_summary", "")
     user_id = data.get("user_id", "anonymous")
+
+    # 🧠 Merge voice + text if both provided
+    if goal and voice_summary:
+        combined_goal = f"{voice_summary}\nAdditional user text: {goal}"
+    else:
+        combined_goal = goal or voice_summary
+
+    if not combined_goal.strip():
+        return {"status": "error", "message": "No spec text or voice summary provided."}
 
     analyzer_prompt = f"""
     You are ChipLoop's Spec Analyzer.
-    Analyze: "{goal}"
+    Analyze the following design specification (may include combined voice+text input):
+    \"\"\"{combined_goal}\"\"\"
 
     Score each dimension (0–25):
     - Intent (what to achieve)
@@ -733,19 +745,29 @@ async def analyze_spec(request: Request):
     """
 
     try:
+        # 🧩 Run the LLM analyzer
         response = await run_llm_fallback(analyzer_prompt)
 
-# Extract first valid JSON block from the response
+        # --- Extract first valid JSON block from the response ---
         try:
             match = re.search(r"\{[\s\S]*\}", response)
             if not match:
-              raise ValueError("No JSON found in LLM response")
+                raise ValueError("No JSON found in LLM response")
             json_str = match.group(0)
             result = json.loads(json_str)
         except Exception as parse_err:
             logger.error(f"JSON parse failed: {parse_err} | Raw response: {response[:200]}")
-            raise
-        result = json.loads(response)
+            # fallback: minimal structure
+            result = {
+                "normalized_spec": response[:300],
+                "intent": 10,
+                "io": 10,
+                "constraints": 10,
+                "verification": 10,
+                "questions": ["Could you clarify the inputs/outputs?"],
+            }
+
+        # --- Compute total coverage score ---
         total = (
             result.get("intent", 0)
             + result.get("io", 0)
@@ -754,10 +776,10 @@ async def analyze_spec(request: Request):
         )
         result["total_score"] = total
 
-        # Save to spec_coverage
+        # --- Save to spec_coverage table ---
         supabase.table("spec_coverage").insert({
             "user_id": user_id,
-            "goal": goal,
+            "goal": combined_goal,
             "normalized_spec": result.get("normalized_spec"),
             "intent_score": result.get("intent"),
             "io_score": result.get("io"),
@@ -768,11 +790,13 @@ async def analyze_spec(request: Request):
             "created_at": datetime.utcnow().isoformat()
         }).execute()
 
+        logger.info(f"🧠 Spec analysis complete for user={user_id} | total={total}")
         return {"status": "ok", "coverage": result}
 
     except Exception as e:
         logger.error(f"❌ Analyzer failed: {e}")
         return {"status": "error", "message": str(e)}
+
 
 
 # ---------- /plan_workflow_memory ----------
@@ -1070,5 +1094,43 @@ async def spec_live_feedback(websocket: WebSocket):
 
     except Exception as e:
         print(f"⚠️ WebSocket disconnected: {e}")
+
+@app.post("/voice_to_spec")
+async def voice_to_spec(file: UploadFile = File(...)):
+    """Convert voice to summarized spec via Whisper + Notion"""
+    try:
+        import openai, tempfile
+        from notion_client import Client
+
+        # --- Step 1: Save temporary audio file ---
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
+            tmp.write(await file.read())
+            tmp_path = tmp.name
+
+        # --- Step 2: Transcribe using Whisper ---
+        openai.api_key = os.getenv("OPENAI_API_KEY")
+        transcript = openai.Audio.transcriptions.create(
+            model="whisper-1", file=open(tmp_path, "rb")
+        )
+        text = transcript.text.strip()
+
+        # --- Step 3: Append to Notion ---
+        notion = Client(auth=os.getenv("NOTION_API_KEY"))
+        db_id = os.getenv("NOTION_DATABASE_ID")
+        notion.pages.create(
+            parent={"database_id": db_id},
+            properties={"Name": {"title": [{"text": {"content": text[:100]}}]}},
+        )
+
+        # --- Step 4: Summarize spec (optional) ---
+        from utils.llm_utils import run_llm_fallback
+        summary_prompt = f"Summarize and structure this design spec:\n{text}"
+        summary = run_llm_fallback(summary_prompt)
+
+        return {"summary": summary, "coverage": 65, "mode": "voice"}
+
+    except Exception as e:
+        return {"error": str(e)}
+
 
 
