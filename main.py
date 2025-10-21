@@ -46,6 +46,13 @@ import jwt  # PyJWT
 
 SUPABASE_JWT_SECRET = os.environ.get("SUPABASE_JWT_SECRET")
 
+from notion_client import Client as NotionClient
+import asyncio
+
+# === Notion + Supabase setup ===
+notion = NotionClient(auth=os.getenv("NOTION_API_KEY"))
+
+
 def verify_token(request: Request) -> Dict[str, Any]:
     """Best-effort JWT decode from Authorization: Bearer <token>. Fallback to anonymous."""
     auth = request.headers.get("authorization") or request.headers.get("Authorization") or ""
@@ -1019,22 +1026,49 @@ async def summarize_notion(user_id: str = Form("anonymous")):
 async def spec_live_feedback(websocket: WebSocket):
     await websocket.accept()
     print("✅ WebSocket connection accepted")
+
     try:
         while True:
-            # You can later replace this with live DB or Notion updates
-            message = {
-                "summary": {
-                    "Intent": "4-bit synchronous counter",
-                    "IO": ["clk", "rst", "en", "count[3:0]"],
-                    "Constraints": ["100MHz", "≤1mW"],
-                    "Verification": ["basic testbench"]
-                },
-                "coverage": 78
-            }
-            await websocket.send_json(message)
+            try:
+                # === 1. Fetch latest entry from Notion database ===
+                notion_data = notion.databases.query(
+                    **{
+                        "database_id": os.getenv("NOTION_DATABASE_ID"),
+                        "sorts": [{"property": "Last edited time", "direction": "descending"}],
+                        "page_size": 1,
+                    }
+                )
+                latest_page = notion_data["results"][0]
+                notion_summary = latest_page["properties"].get("Name", {}).get("title", [{}])[0].get("plain_text", "")
+                last_edit_time = latest_page["last_edited_time"]
+
+                # === 2. Get latest coverage from Supabase ===
+                coverage_row = (
+                    supabase.table("spec_coverage")
+                    .select("intent_score, io_score, constraint_score, verification_score, total_score")
+                    .order("created_at", desc=True)
+                    .limit(1)
+                    .execute()
+                )
+                coverage = coverage_row.data[0] if coverage_row.data else None
+
+                # === 3. Combine & send ===
+                message = {
+                    "summary": {
+                        "Notion_Summary": notion_summary or "Waiting for new Notion content...",
+                        "Last_Updated": last_edit_time,
+                    },
+                    "coverage": coverage.get("total_score", 0) if coverage else 0,
+                }
+                await websocket.send_json(message)
+
+            except Exception as inner_e:
+                print(f"⚠️ Inner loop error in WebSocket: {inner_e}")
+                await websocket.send_json({"error": str(inner_e)})
+
             await asyncio.sleep(5)
+
     except Exception as e:
         print(f"⚠️ WebSocket disconnected: {e}")
-
 
 
