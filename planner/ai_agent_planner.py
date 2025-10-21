@@ -2,7 +2,7 @@ import json
 from loguru import logger
 from utils.llm_utils import run_llm_fallback
 
-from datetime import datatime
+from datetime import datetime
 def plan_agent_fallback(goal, user_id):
     from planner.ai_work_planner import analyze_spec
 
