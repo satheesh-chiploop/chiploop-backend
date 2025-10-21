@@ -1,7 +1,6 @@
 import json
 from loguru import logger
 from utils.llm_utils import run_llm_fallback
-from utils.supabase_utils import supabase
 from planner.ai_work_planner import analyze_spec
 from datetime import datatime
 
