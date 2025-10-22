@@ -26,23 +26,18 @@ async def fetch_agent_memory():
         logger.warning(f"⚠️ Failed to fetch agent_memory: {e}")
     return []
 
-
-async def plan_agent_with_memory(goal: str, user_id: str = "anonymous") -> dict:
+async def plan_agent_with_memory(goal: str, user_id: str = "anonymous", coverage: dict | None = None) -> dict:
+    logger.info(f"🧠 Planning agent with memory for goal: {goal}")
+  if not coverage:
+    try:
+        coverage = await analyze_spec({"goal": goal, "user_id": user_id})
+    except Exception as e:
     """
     Agentic Agent Planner (Memory + Spec-Aware)
     1️⃣ Analyze spec
     2️⃣ Fetch memory context
     3️⃣ Generate agent plan or reuse from memory
     """
-
-    logger.info(f"🧠 Planning agent with memory for goal: {goal}")
-
-    # --- Step 1. Analyze spec
-    try:
-        coverage = await analyze_spec({"goal": goal, "user_id": user_id})
-        total_score = coverage.get("total_score", 0)
-        logger.info(f"📊 Spec coverage score: {total_score}%")
-    except Exception as e:
         logger.warning(f"⚠️ Spec analysis failed: {e}")
         coverage = {
             "intent_score": 0,
