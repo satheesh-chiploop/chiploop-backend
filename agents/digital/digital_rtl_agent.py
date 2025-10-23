@@ -10,7 +10,10 @@ from utils.artifact_utils import upload_artifact_generic, append_artifact_record
 OLLAMA_URL = "http://127.0.0.1:11434/api/generate"
 USE_LOCAL_OLLAMA = os.getenv("USE_LOCAL_OLLAMA", "false").lower() == "true"
 PORTKEY_API_KEY = os.getenv("PORTKEY_API_KEY")
-client_portkey = Portkey(api_key=PORTKEY_API_KEY)
+client_portkey = Portkey(
+    api_key=os.getenv("PORTKEY_API_KEY"),
+    provider="chiploop"  # 👈 same as your provider slug
+)
 client_openai = OpenAI()
 
 def run_agent(state: dict) -> dict:
