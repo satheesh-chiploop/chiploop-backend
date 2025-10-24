@@ -213,7 +213,7 @@ User request:
         artifact_list = state.get("artifact_list", [])
         if artifact_list:
             for f in artifact_list:
-            append_artifact_record(workflow_id, "spec_agent_output", f)
+              append_artifact_record(workflow_id, "spec_agent_output", f)
     except Exception as e:
           print(f"⚠️ Artifact append failed: {e}")
     except Exception as e:
