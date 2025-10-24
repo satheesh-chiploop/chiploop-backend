@@ -93,7 +93,9 @@ def run_agent(state: dict) -> dict:
 
   
     ports = re.findall(r"(?:input|output|inout)\s+(?:wire|reg|logic)?\s*(?:\[[^\]]+\]\s*)?(\w+)", verilog_text)
-    port_names = [p[1] for p in ports]
+    ports = re.findall(r"(?:input|output|inout)\s+(?:wire|reg|logic)?\s*(?:\[[^\]]+\]\s*)?(\w+)", verilog_text)
+    port_names = ports
+
     print(f"🔍 Extracted ports: {port_names}")
 
     clocks_detected = [p for p in port_names if re.search(r"clk|clock", p, re.IGNORECASE)]
@@ -256,7 +258,8 @@ Include all input/output declarations explicitly
 
     print(f"🧾 RTL Agent completed — {overall_status}")
     if artifact_list:
-        state["validated_modules"] = [os.path.basename(f) for f in artifact_list]
+        for f in artifact_list:
+           append_artifact_record(workflow_id, "rtl_agent_output", f)
 
     return state
 

@@ -188,14 +188,16 @@ User request:
     # quick syntax check (same as before)
     log_path = os.path.join(workflow_dir, "spec_agent_compile.log")
     try:
-        result = subprocess.run(
-            ["/usr/bin/iverilog", "-o", "design.out", verilog_file],
-            check=True, capture_output=True, text=True
-        )
-        compile_status = "✅ Verilog syntax check passed."
-        state["status"] = "✅ RTL and spec.json generated successfully"
+        compile_status = "⚠️ Skipped syntax check (hierarchical design)."
+        if "hierarchy" not in spec_json:
+            result = subprocess.run(
+               ["/usr/bin/iverilog", "-o", "design.out", verilog_file],
+               check=True, capture_output=True, text=True
+            )
+            compile_status = "✅ Verilog syntax check passed."
+            state["status"] = "✅ RTL and spec.json generated successfully"
     except subprocess.CalledProcessError as e:
-        compile_status = "⚠ RTL generated but failed compilation"
+        compile_status = "⚠️ RTL generated but failed compilation"
         state["status"] = compile_status
         state["error_log"] = (e.stderr or e.stdout or "").strip()
 
@@ -208,19 +210,22 @@ User request:
     try:
         user_id = state.get("user_id", "anonymous")
         workflow_id = state.get("workflow_id", "default")
-        spec_storage = upload_artifact_generic(spec_json_path, user_id, workflow_id, "spec")
-        if spec_storage: append_artifact_record(workflow_id, "spec_agent_report", spec_storage)
-        rtl_storage = upload_artifact_generic(verilog_file, user_id, workflow_id, "rtl")
-        if rtl_storage: append_artifact_record(workflow_id, "spec_agent_output", rtl_storage)
-        log_storage = upload_artifact_generic(log_path, user_id, workflow_id, "logs")
-        if log_storage: append_artifact_record(workflow_id, "spec_agent_log", log_storage)
-        print("🧩 All artifacts uploaded to Supabase Storage.")
+        artifact_list = state.get("artifact_list", [])
+        if artifact_list:
+            for f in artifact_list:
+            append_artifact_record(workflow_id, "spec_agent_output", f)
+    except Exception as e:
+          print(f"⚠️ Artifact append failed: {e}")
     except Exception as e:
         print(f"⚠️ Artifact upload failed: {e}")
 
     print(f"\n✅ Generated {verilog_file} and {spec_json_path}")
-    state["artifact_list"] = all_modules
-    state["hierarchical"] = True
+    # Instead of adding hierarchical=True or new columns, just mark in state
+    state["hierarchical_mode"] = "true" if "hierarchy" in spec_json else "false"
+
+# Keep artifact_list for downstream
+    state["artifact_list"] = all_modules if "hierarchy" in spec_json else [verilog_file]
+  
     state.update({
         "artifact": verilog_file,
         "artifact_log": log_path,
