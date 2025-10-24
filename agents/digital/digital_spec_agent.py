@@ -3,6 +3,8 @@ import os
 import datetime
 import json
 import requests
+import re
+
 from utils.artifact_utils import upload_artifact_generic, append_artifact_record
 from portkey_ai import Portkey
 from openai import OpenAI
@@ -36,170 +38,153 @@ def cleanup_verilog(verilog_code: str) -> str:
     return "\n".join(cleaned)
 
 
+# ... keep imports and setup as-is (Portkey client etc.)
+
 def run_agent(state: dict) -> dict:
-    print("\n🚀 Running Spec Agent v4 (Spec JSON + RTL Generator)...")
+    print("\n🚀 Running Spec Agent v5 (LLM JSON-first + RTL)...")
 
     workflow_id = state.get("workflow_id", "default")
     workflow_dir = state.get("workflow_dir", f"backend/workflows/{workflow_id}")
     os.makedirs(workflow_dir, exist_ok=True)
 
-    spec_data = state.get("spec", "")
-    if not spec_data:
+    user_prompt = state.get("spec", "")
+    if not user_prompt:
         state["status"] = "❌ No spec provided"
         return state
 
-    try:
-        spec = json.loads(spec_data) if isinstance(spec_data, str) else spec_data
-    except Exception:
-        spec = {"description": spec_data}
-
-    module_name = spec.get("module", "auto_module")
-    description = spec.get("description", spec_data if isinstance(spec_data, str) else "Generic digital design")
-
-    # --- Normalize clocks & resets (same as before) ---
-    def normalize_clock(c):
-        return {"name": c.get("name", "clk"), "frequency_mhz": c.get("frequency_mhz", 100), "duty_cycle": c.get("duty_cycle", 0.5)}
-
-    def normalize_reset(r):
-        return {"name": r.get("name", "reset"), "active_low": r.get("active_low", False), "duration_cycles": r.get("duration_cycles", 5)}
-
-    clocks = spec.get("clock", [])
-    resets = spec.get("reset", [])
-    if isinstance(clocks, dict): clocks = [clocks]
-    if isinstance(resets, dict): resets = [resets]
-    if not clocks: clocks = [{"name": "clk", "frequency_mhz": 100, "duty_cycle": 0.5}]
-    if not resets: resets = [{"name": "reset", "active_low": False, "duration_cycles": 5}]
-    clocks = [normalize_clock(c) for c in clocks]
-    resets = [normalize_reset(r) for r in resets]
-
-    io = spec.get("io", {})
-    inputs = io.get("inputs", [])
-    outputs = io.get("outputs", [])
-
-    canonical_spec = {
-        "module": module_name,
-        "description": description,
-        "clock": clocks,
-        "reset": resets,
-        "io": {"inputs": inputs, "outputs": outputs},
-        "llm_source": "Ollama" if USE_LOCAL_OLLAMA else "Portkey/OpenAI",
-        "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    }
-
-    os.makedirs(workflow_dir, exist_ok=True)
-    spec_json_path = os.path.join(workflow_dir, f"{module_name}_spec.json")
-    with open(spec_json_path, "w", encoding="utf-8") as f:
-        json.dump(canonical_spec, f, indent=2)
-
-    print(f"🧾 Spec JSON written → {spec_json_path}")
-
-    # --- Slightly enhanced prompt (only one extra sentence) ---
-    domain_info = "\n".join([
-        f"- Clock {i+1}: {clk['name']} @ {clk['frequency_mhz']}MHz, duty={clk['duty_cycle']} | "
-        f"Reset: {resets[min(i, len(resets)-1)]['name']} (active_low={resets[min(i, len(resets)-1)]['active_low']})"
-        for i, clk in enumerate(clocks)
-    ])
-
+    # ✅ NEW: unified prompt (LLM decides everything; JSON is authoritative)
     prompt = f"""
 You are a professional digital design engineer.
-Generate synthesizable Verilog-2005 code for this specification.
-Output must start with 'module' and end with 'endmodule'.
-Do NOT include markdown code fences or explanations.
-Ensure all ports are declared inside parentheses in the module declaration. 
-Avoid duplicate declarations of signals like clk, reset, or common ports.
-Each signal is declared only once across all modules.
-Do not repeat `clk`, `reset`, or any input/output in submodules if already declared in the top module.
-Avoid declaring loop indices (like i) globally.
-Generate clean synthesizable Verilog with consistent indentation
-Do NOT include undefined macros like `sv`, `enable`, or custom defines.
-End every statement with a semicolon and close with `endmodule` only once.
-Provide only compilable Verilog/SystemVerilog code — no explanations or comments outside the code.
-Include all input/output declarations explicitly
-Do not include any prose or sentences outside JSON. 
 
-Specification JSON:
-{json.dumps(canonical_spec, indent=2)}
+You will produce output in this exact order:
+1) A SINGLE JSON object that fully describes the requested module, with the keys:
+   - module_name: string (exact module name to use in RTL)
+   - hierarchy_role: "top" | "submodule"
+   - description: string (one paragraph)
+   - ports: array of objects, each: 
+       {{ "name": string, "direction": "input"|"output"|"inout", "width": int (>=1), 
+          "type": "wire"|"reg"|null, "active_low": bool|null, "kind": "clock"|"reset"|"data"|null, 
+          "description": string|null }}
+   - clock: OPTIONAL array of clock domain objects (if applicable):
+       [{{ "name": string, "frequency_mhz": number|null, "duty_cycle": number|null }}]
+   - reset: OPTIONAL array of reset objects (if applicable):
+       [{{ "name": string, "active_low": bool|null, "sync": bool|null, "duration_cycles": int|null }}]
+   - parameters: OPTIONAL array of parameter objects:
+       [{{ "name": string, "type": "int"|"logic"|"bit"|"string"|null, "default": any|null, "description": string|null }}]
+   - constraints: OPTIONAL object (e.g., timing/reset/protocol notes)
+   - rationale: brief string explaining naming and ports as derived from user text
+   - examples: OPTIONAL object with small usage or testbench hints
+   IMPORTANT:
+   - Respect EXACT user-provided names and structure if present.
+   - Do NOT add default ports (like clk or reset) unless clearly implied or explicitly requested by the user.
+   - widths are integers (1 means scalar).
+   - Keep field names exactly as above.
 
-Clock & Reset Context:
-{domain_info}
+2) The Verilog-2005 implementation, delimited with the exact markers:
+---BEGIN VERILOG---
+<full synthesizable Verilog-2005 code here>
+---END VERILOG---
 
-Design Guidelines:
-- Follow Verilog-2005 (not SystemVerilog).
-- Use lowercase signal names.
-- Declare all ports explicitly.
-- For multiple clocks, create independent always blocks.
-- For control or arithmetic designs, infer appropriate logic cleanly.
-"""
+Rules for Verilog:
+- Must be synthesizable Verilog-2005 (no SystemVerilog).
+- File/module name must match JSON.module_name exactly.
+- Start with 'module' and end with 'endmodule'. No markdown fences.
+- Declare all ports explicitly in the module port list; avoid duplicates.
+- Use only defined signals; terminate statements; one 'endmodule'.
+- No commentary or prose outside JSON and the delimited Verilog section.
+
+User request:
+{user_prompt}
+""".strip()
 
     rtl_code = ""
+    spec_json = {}
     try:
-        if USE_LOCAL_OLLAMA:
-            print("⚙️ Using Ollama locally for Verilog generation...")
-            payload = {"model": "llama3", "prompt": prompt}
-            with requests.post(OLLAMA_URL, json=payload, stream=True, timeout=600) as r:
-                for line in r.iter_lines():
-                    if not line:
-                        continue
-                    try:
-                        j = json.loads(line.decode())
-                        if "response" in j:
-                            rtl_code += j["response"]
-                            print(j["response"], end="", flush=True)
-                    except Exception:
-                        continue
-        else:
-            print("🌐 Using Portkey/OpenAI backend..for rtl code generation start.")
-            completion = client_portkey.chat.completions.create(
-                model="@chiploop/gpt-4o-mini",
-                messages=[{"role": "user", "content": prompt}],
-                stream=False,
-            )
-  
-            rtl_code = completion.choices[0].message.content or ""
-            print("✅ Portkey response received successfully.")
+        print("🌐 Using Portkey/OpenAI backend..for rtl code generation start.")
+        completion = client_portkey.chat.completions.create(
+            model="@chiploop/gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            stream=False,
+        )
+        llm_output = completion.choices[0].message.content or ""
+        print("✅ Portkey response received successfully.")
     except Exception as e:
-            print(f"❌ Portkey call failed: {repr(e)}")
-            state["status"] = f"❌ LLM generation failed: {e}"
-            return state
+        print(f"❌ Portkey call failed: {repr(e)}")
+        state["status"] = f"❌ LLM generation failed: {e}"
+        return state
     print("🌐 Using Portkey/OpenAI backend..for rtl code generation end.")
 
- 
-    rtl_code = rtl_code.replace("```verilog", "").replace("```", "").strip()
+    # ✅ Split JSON and Verilog blocks
+    try:
+        if "---BEGIN VERILOG---" in llm_output:
+            spec_part, rtl_part = llm_output.split("---BEGIN VERILOG---", 1)
+            rtl_code = rtl_part.split("---END VERILOG---")[0].strip()
+        else:
+            spec_part = llm_output
+            rtl_code = ""
+        spec_json = json.loads(spec_part.strip())
+    except Exception as e:
+        print(f"⚠️ Failed to parse LLM JSON; capturing raw: {e}")
+        spec_json = {"description": "LLM JSON parse failed", "raw": spec_part.strip()}
+    
+    # ✅ Determine module_name from JSON first; fallback to Verilog header; final fallback 'auto_module'
+    module_name = spec_json.get("module_name")
+    if not module_name and rtl_code:
+        import re
+        m = re.search(r"module\s+([A-Za-z_][A-Za-z0-9_]*)", rtl_code)
+        module_name = m.group(1) if m else None
+    if not module_name:
+        module_name = "auto_module"
+
+    # ✅ Write spec JSON and RTL
+    spec_json_path = os.path.join(workflow_dir, f"{module_name}_spec.json")
+    with open(spec_json_path, "w", encoding="utf-8") as f:
+        json.dump(spec_json, f, indent=2)
+
+    # strip accidental fences and sanitize
+    rtl_code = (rtl_code or "").replace("```verilog", "").replace("```", "").strip()
     if "module" in rtl_code:
         rtl_code = rtl_code[rtl_code.index("module"):]
-
-    # --- ✅ Apply cleanup before writing to file ---
-    rtl_code = cleanup_verilog(rtl_code)
 
     os.makedirs(workflow_dir, exist_ok=True)
     verilog_file = os.path.join(workflow_dir, f"{module_name}.v")
     with open(verilog_file, "w", encoding="utf-8") as f:
         f.write(rtl_code)
 
+    # quick syntax check (same as before)
     log_path = os.path.join(workflow_dir, "spec_agent_compile.log")
-    with open(log_path, "w") as logf:
-        logf.write(f"Spec processed at {datetime.datetime.now()}\n")
-        logf.write(f"Module: {module_name}\n")
-        logf.write(f"Detected {len(clocks)} clock(s), {len(resets)} reset(s)\n")
-
     try:
         result = subprocess.run(
             ["/usr/bin/iverilog", "-o", "design.out", verilog_file],
             check=True, capture_output=True, text=True
         )
-        if result.returncode == 0:
-            compile_status = "✅ Verilog syntax check passed."
-        else:
-            compile_status = "⚠ Verilog syntax check failed."
+        compile_status = "✅ Verilog syntax check passed."
         state["status"] = "✅ RTL and spec.json generated successfully"
-        with open(log_path, "a") as logf:
-            logf.write(result.stdout or "")
     except subprocess.CalledProcessError as e:
-        state["status"] = "⚠ RTL generated but failed compilation"
+        compile_status = "⚠ RTL generated but failed compilation"
+        state["status"] = compile_status
         state["error_log"] = (e.stderr or e.stdout or "").strip()
-        with open(log_path, "a") as logf:
-            logf.write(state["error_log"])
 
+    with open(log_path, "w") as logf:
+        logf.write(f"Spec processed at {datetime.datetime.now()}\n")
+        logf.write(f"Module: {module_name}\n")
+        logf.write(f"{compile_status}\n")
+
+    # upload artifacts (unchanged)
+    try:
+        user_id = state.get("user_id", "anonymous")
+        workflow_id = state.get("workflow_id", "default")
+        spec_storage = upload_artifact_generic(spec_json_path, user_id, workflow_id, "spec")
+        if spec_storage: append_artifact_record(workflow_id, "spec_agent_report", spec_storage)
+        rtl_storage = upload_artifact_generic(verilog_file, user_id, workflow_id, "rtl")
+        if rtl_storage: append_artifact_record(workflow_id, "spec_agent_output", rtl_storage)
+        log_storage = upload_artifact_generic(log_path, user_id, workflow_id, "logs")
+        if log_storage: append_artifact_record(workflow_id, "spec_agent_log", log_storage)
+        print("🧩 All artifacts uploaded to Supabase Storage.")
+    except Exception as e:
+        print(f"⚠️ Artifact upload failed: {e}")
+
+    print(f"\n✅ Generated {verilog_file} and {spec_json_path}")
     state.update({
         "artifact": verilog_file,
         "artifact_log": log_path,
@@ -208,46 +193,6 @@ Design Guidelines:
         "workflow_dir": workflow_dir,
         "workflow_id": workflow_id,
     })
-    # --- 📦 Upload artifacts to Supabase Storage ---
-    try:
-        user_id = state.get("user_id", "anonymous")
-        workflow_id = state.get("workflow_id", "default")
-
-    # Upload Spec JSON
-        spec_storage = upload_artifact_generic(
-           local_path=spec_json_path,
-           user_id=user_id,
-           workflow_id=workflow_id,
-           agent_label="spec"
-        )
-        if spec_storage:
-           append_artifact_record(workflow_id, "spec_agent_report", spec_storage)
-
-       # Upload Verilog RTL
-        rtl_storage = upload_artifact_generic(
-           local_path=verilog_file,
-           user_id=user_id,
-           workflow_id=workflow_id,
-           agent_label="rtl"
-        )
-        if rtl_storage:
-           append_artifact_record(workflow_id, "spec_agent_output", rtl_storage)
-
-       # Upload compile log
-        log_storage = upload_artifact_generic(
-           local_path=log_path,
-           user_id=user_id,
-           workflow_id=workflow_id,
-           agent_label="logs"
-        )
-        if log_storage:
-           append_artifact_record(workflow_id, "spec_agent_log", log_storage)
-
-        print("🧩 All artifacts uploaded to Supabase Storage.")
-    except Exception as e:
-        print(f"⚠️ Artifact upload failed: {e}")
-
-    print(f"\n✅ Generated {verilog_file} and {spec_json_path}")
     return state
 
 

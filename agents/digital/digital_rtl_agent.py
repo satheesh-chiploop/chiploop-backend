@@ -83,6 +83,23 @@ def run_agent(state: dict) -> dict:
     clocks_detected = [p for p in port_names if re.search(r"clk|clock", p, re.IGNORECASE)]
     resets_detected = [p for p in port_names if re.search(r"rst|reset", p, re.IGNORECASE)]
 
+    if "io" not in spec and "ports" in spec and isinstance(spec["ports"], list):
+    ins = []
+    outs = []
+    for p in spec["ports"]:
+        try:
+            nm = p.get("name")
+            if not nm: continue
+            if p.get("direction") == "input":
+                width = int(p.get("width", 1))
+                ins.append(nm if width == 1 else f"{nm}[{width-1}:0]")
+            elif p.get("direction") == "output":
+                width = int(p.get("width", 1))
+                outs.append(nm if width == 1 else f"{nm}[{width-1}:0]")
+        except Exception:
+            continue
+    spec["io"] = {"inputs": ins, "outputs": outs}
+
     # --- Step 3: Validate with spec.json ---
     issues = []
     if "clock" in spec:
