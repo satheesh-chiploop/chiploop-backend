@@ -178,6 +178,7 @@ User request:
                f.write(code)
             all_modules.append(fpath)
         state["artifact_list"] = all_modules
+        verilog_file = all_modules[-1] if all_modules else os.path.join(workflow_dir, "top.v")
     else:
     # single-module fallback
         verilog_file = os.path.join(workflow_dir, f"{module_name}.v")
