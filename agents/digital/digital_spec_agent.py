@@ -53,22 +53,22 @@ def run_agent(state: dict) -> dict:
         return state
 
     # ✅ NEW: unified prompt (LLM decides everything; JSON is authoritative)
-    prompt = """
+    prompt = f"""
 You are a professional digital design engineer.
 User request:
 {user_prompt}
 You will produce output in this exact order:
 1) A JSON object or array that fully describes all modules .
    - If the design contains multiple modules, return a top-level object:
-       {
+       {{
          "design_name": "top_module_name",
-         "hierarchy": {
+         "hierarchy": {{
             "modules": "submodules here",
             "top_module": "integration details here"
-         }
-       }
+         }}
+       }}
    - Each module entry must contain:
-       { "name", "description", "ports", "functionality", "rtl_output_file" }
+       {{ "name", "description", "ports", "functionality", "rtl_output_file" }}
    - "top_module" should include "submodules" array with instance and connection details.
    - module_name: string (exact module name to use in RTL)
    - hierarchy_role: "top" | "submodule"
