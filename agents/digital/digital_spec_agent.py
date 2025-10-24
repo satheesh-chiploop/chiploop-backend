@@ -62,8 +62,8 @@ You will produce output in this exact order:
        {
          "design_name": "top_module_name",
          "hierarchy": {
-            "modules": (list of submodules here),
-            "top_module": (integration details here)
+            "modules": "submodules here",
+            "top_module": "integration details here"
          }
        }
    - Each module entry must contain:
