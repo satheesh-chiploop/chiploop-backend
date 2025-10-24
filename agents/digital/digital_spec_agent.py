@@ -150,8 +150,8 @@ Guidelines:
             if len(modules) == 1 or (
               top.get("name") and modules and top.get("name") == modules[0].get("name")
             ):
-            print("🔧 Auto-flattening single-module or redundant hierarchy.")
-            spec_json = modules[0]
+        print("🔧 Auto-flattening single-module or redundant hierarchy.")
+        spec_json = modules[0]
 
     # ✅ FIX 4: normalize names
     if isinstance(spec_json, dict):
