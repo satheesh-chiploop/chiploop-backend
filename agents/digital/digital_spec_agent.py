@@ -149,12 +149,13 @@ Design Guidelines:
                     except Exception:
                         continue
         else:
-            print("🌐 Using Portkey/OpenAI backend...")
+            print("🌐 Using Portkey/OpenAI backend..for rtl code generation start.")
             completion = client_portkey.chat.completions.create(
                 model="@chiploop/gpt-4o-mini",
                 messages=[{"role": "user", "content": prompt}],
                 stream=True,
             )
+            print("🌐 Using Portkey/OpenAI backend..for rtl code generation end.")
             for chunk in completion:
                 if chunk and hasattr(chunk, "choices"):
                     delta = chunk.choices[0].delta.get("content", "")
