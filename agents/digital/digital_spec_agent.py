@@ -11,8 +11,7 @@ OLLAMA_URL = "http://127.0.0.1:11434/api/generate"
 USE_LOCAL_OLLAMA = os.getenv("USE_LOCAL_OLLAMA", "false").lower() == "true"
 PORTKEY_API_KEY = os.getenv("PORTKEY_API_KEY")
 client_portkey = Portkey(
-    api_key=PORTKEY_API_KEY,
-    base_url="https://api.portkey.ai"
+    api_key=PORTKEY_API_KEY
 )
 
 client_openai = OpenAI()
@@ -155,6 +154,7 @@ Design Guidelines:
                 messages=[{"role": "user", "content": prompt}],
                 stream=False,
             )
+  
             rtl_code = completion.choices[0].message.content or ""
             print("✅ Portkey response received successfully.")
     except Exception as e:
