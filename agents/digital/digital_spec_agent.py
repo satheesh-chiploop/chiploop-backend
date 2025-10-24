@@ -41,7 +41,7 @@ def cleanup_verilog(verilog_code: str) -> str:
 # ... keep imports and setup as-is (Portkey client etc.)
 
 def run_agent(state: dict) -> dict:
-    print("\n🚀 Running Spec Agent v5 (LLM JSON-first + RTL)...")
+    print("\n🚀 Running Spec Agent  (LLM JSON-first + RTL)...")
 
     workflow_id = state.get("workflow_id", "default")
     workflow_dir = state.get("workflow_dir", f"backend/workflows/{workflow_id}")
@@ -124,117 +124,124 @@ User request:
         state["status"] = f"❌ LLM generation failed: {e}"
         return state
     print("🌐 Using Portkey/OpenAI backend..for rtl code generation end.")
-
-    # ✅ Split JSON and Verilog blocks
-    try:
-        if "---BEGIN VERILOG---" in llm_output:
-            spec_part, rtl_part = llm_output.split("---BEGIN VERILOG---", 1)
-            rtl_code = rtl_part.split("---END VERILOG---")[0].strip()
-        else:
-            spec_part = llm_output
-            rtl_code = ""
-        spec_json = json.loads(spec_part.strip())
-    except Exception as e:
-        print(f"⚠️ Failed to parse LLM JSON; capturing raw: {e}")
-        spec_json = {"description": "LLM JSON parse failed", "raw": spec_part.strip()}
     
-    # ✅ Determine module_name from JSON first; fallback to Verilog header; final fallback 'auto_module'
-    module_name = spec_json.get("module_name")
-    if not module_name and rtl_code:
-        import re
-        m = re.search(r"module\s+([A-Za-z_][A-Za-z0-9_]*)", rtl_code)
-        module_name = m.group(1) if m else None
-    if not module_name:
-        module_name = "auto_module"
+     # --- Extract all verilog blocks ---
+    verilog_blocks = re.findall(r"---BEGIN\s+([\w\-.]+)---(.*?)---END\s+\1---", llm_output, re.DOTALL)
+    verilog_map = {fname.strip(): code.strip() for fname, code in verilog_blocks}
 
-    # ✅ Write spec JSON and RTL
+    # --- Split JSON from Verilog ---
+    try:
+        spec_part = llm_output.split("---BEGIN", 1)[0].strip()
+        spec_json = json.loads(spec_part)
+    except Exception as e:
+        print(f"⚠️ Failed to parse LLM JSON: {e}")
+        spec_json = {"description": "LLM JSON parse failed", "raw": spec_part}
+
+    # --- Normalize keys (fix 'name' issue) ---
+    if isinstance(spec_json, dict):
+        if "name" not in spec_json and "module_name" in spec_json:
+            spec_json["name"] = spec_json["module_name"]
+        if "hierarchy" in spec_json:
+            hierarchy = spec_json["hierarchy"]
+            if "modules" in hierarchy:
+                for m in hierarchy["modules"]:
+                    if "name" not in m and "module_name" in m:
+                        m["name"] = m["module_name"]
+            if "top_module" in hierarchy:
+                top = hierarchy["top_module"]
+                if "name" not in top and "module_name" in top:
+                    top["name"] = top["module_name"]
+
+    module_name = spec_json.get("name") or spec_json.get("module_name") or "auto_module"
     spec_json_path = os.path.join(workflow_dir, f"{module_name}_spec.json")
     with open(spec_json_path, "w", encoding="utf-8") as f:
         json.dump(spec_json, f, indent=2)
 
-    # strip accidental fences and sanitize
-    rtl_code = (rtl_code or "").replace("```verilog", "").replace("```", "").strip()
-    if "module" in rtl_code:
-        rtl_code = rtl_code[rtl_code.index("module"):]
+    all_modules = []
+    verilog_file = None
 
-    os.makedirs(workflow_dir, exist_ok=True)
+    # --- Hierarchical Path ---
     if "hierarchy" in spec_json:
         hierarchy = spec_json["hierarchy"]
-        all_modules = []
+        print("🧱 Detected hierarchical design.")
         if "modules" in hierarchy:
             for m in hierarchy["modules"]:
-                fname = m.get("rtl_output_file", f"{m['name']}.v")
-                code = m.get("rtl_code") or ""
+                mname = m.get("name", "unnamed_module")
+                fname = m.get("rtl_output_file", f"{mname}.v")
+                code = (m.get("rtl_code") or verilog_map.get(fname, "")).strip()
                 fpath = os.path.join(workflow_dir, fname)
                 with open(fpath, "w") as f:
-                   f.write(code)
-                   all_modules.append(fpath)
+                    f.write(code)
+                all_modules.append(fpath)
+                print(f"✅ Wrote {len(code)} chars to {fname}")
         if "top_module" in hierarchy:
             top = hierarchy["top_module"]
-            fname = top.get("rtl_output_file", f"{top['name']}.v")
-            code = top.get("rtl_code") or ""
+            tname = top.get("name", "top_module")
+            fname = top.get("rtl_output_file", f"{tname}.v")
+            code = (top.get("rtl_code") or verilog_map.get(fname, "")).strip()
             fpath = os.path.join(workflow_dir, fname)
             with open(fpath, "w") as f:
-               f.write(code)
+                f.write(code)
             all_modules.append(fpath)
-        state["artifact_list"] = all_modules
+            print(f"✅ Wrote {len(code)} chars to {fname}")
         verilog_file = all_modules[-1] if all_modules else os.path.join(workflow_dir, "top.v")
+        state["artifact_list"] = all_modules
+
+    # --- Flat Path ---
     else:
-    # single-module fallback
+        print("📄 Detected flat design.")
+        flat_code = verilog_map.get(f"{module_name}.v") or ""
+        if not flat_code:
+            # fallback: single VERILOG block extraction
+            match = re.search(r"---BEGIN VERILOG---(.*?)---END VERILOG---", llm_output, re.DOTALL)
+            if match:
+                flat_code = match.group(1).strip()
         verilog_file = os.path.join(workflow_dir, f"{module_name}.v")
         with open(verilog_file, "w") as f:
-            f.write(rtl_code)
+            f.write(flat_code)
         state["artifact"] = verilog_file
+        all_modules = [verilog_file]
+        print(f"✅ Wrote {len(flat_code)} chars to {verilog_file}")
 
-    # quick syntax check (same as before)
+    # --- Syntax check for flat ---
     log_path = os.path.join(workflow_dir, "spec_agent_compile.log")
     try:
-        compile_status = "⚠️ Skipped syntax check (hierarchical design)."
         if "hierarchy" not in spec_json:
             result = subprocess.run(
-               ["/usr/bin/iverilog", "-o", "design.out", verilog_file],
-               check=True, capture_output=True, text=True
+                ["/usr/bin/iverilog", "-o", "design.out", verilog_file],
+                check=True, capture_output=True, text=True
             )
             compile_status = "✅ Verilog syntax check passed."
-            state["status"] = "✅ RTL and spec.json generated successfully"
+        else:
+            compile_status = "⚙️ Skipped syntax check (hierarchical)."
     except subprocess.CalledProcessError as e:
         compile_status = "⚠️ RTL generated but failed compilation"
-        state["status"] = compile_status
-        state["error_log"] = (e.stderr or e.stdout or "").strip()
+        state["error_log"] = e.stderr or e.stdout or ""
+    state["status"] = compile_status
 
     with open(log_path, "w") as logf:
         logf.write(f"Spec processed at {datetime.datetime.now()}\n")
         logf.write(f"Module: {module_name}\n")
         logf.write(f"{compile_status}\n")
 
-    # upload artifacts (unchanged)
+    # --- Upload artifacts (no DB schema change) ---
     try:
-        user_id = state.get("user_id", "anonymous")
-        workflow_id = state.get("workflow_id", "default")
-        artifact_list = state.get("artifact_list", [])
-        if artifact_list:
-            for f in artifact_list:
-              append_artifact_record(workflow_id, "spec_agent_output", f)
+        for f in all_modules:
+            append_artifact_record(workflow_id, "spec_agent_output", f)
+        append_artifact_record(workflow_id, "spec_agent_log", log_path)
+        append_artifact_record(workflow_id, "spec_agent_report", spec_json_path)
     except Exception as e:
-          print(f"⚠️ Artifact append failed: {e}")
-    except Exception as e:
-        print(f"⚠️ Artifact upload failed: {e}")
+        print(f"⚠️ Artifact append failed: {e}")
 
-    print(f"\n✅ Generated {verilog_file} and {spec_json_path}")
-    # Instead of adding hierarchical=True or new columns, just mark in state
-    state["hierarchical_mode"] = "true" if "hierarchy" in spec_json else "false"
-
-# Keep artifact_list for downstream
-    state["artifact_list"] = all_modules if "hierarchy" in spec_json else [verilog_file]
-  
+    # --- Final state ---
     state.update({
         "artifact": verilog_file,
+        "artifact_list": all_modules,
         "artifact_log": log_path,
         "spec_json": spec_json_path,
-        "rtl": rtl_code,
         "workflow_dir": workflow_dir,
         "workflow_id": workflow_id,
+        "hierarchical_mode": "true" if "hierarchy" in spec_json else "false",
     })
+    print(f"✅ Completed Spec Agent for workflow {workflow_id}")
     return state
-
-
