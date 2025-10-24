@@ -53,7 +53,7 @@ def run_agent(state: dict) -> dict:
         return state
 
     # ✅ NEW: unified prompt (LLM decides everything; JSON is authoritative)
-    prompt = f"""
+    prompt = """
 You are a professional digital design engineer.
 
 You will produce output in this exact order:
