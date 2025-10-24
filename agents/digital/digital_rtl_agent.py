@@ -11,8 +11,8 @@ OLLAMA_URL = "http://127.0.0.1:11434/api/generate"
 USE_LOCAL_OLLAMA = os.getenv("USE_LOCAL_OLLAMA", "false").lower() == "true"
 PORTKEY_API_KEY = os.getenv("PORTKEY_API_KEY")
 client_portkey = Portkey(
-    api_key=os.getenv("PORTKEY_API_KEY"),
-    provider="chiploop"  # 👈 same as your provider slug
+    api_key=PORTKEY_API_KEY,
+    base_url="https://api.portkey.ai"
 )
 client_openai = OpenAI()
 
@@ -139,7 +139,7 @@ Include all input/output declarations explicitly
             lint_feedback = r.text.strip()
         else:
             response = client_portkey.chat.completions.create(
-                model="gpt-4o-mini",
+                model="@chiploop/gpt-4o-mini",
                 messages=[{"role": "user", "content": lint_prompt}],
             )
             lint_feedback = response.choices[0].message.get("content", "")  
