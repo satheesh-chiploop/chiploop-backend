@@ -23,12 +23,27 @@ def run_agent(state: dict) -> dict:
     workflow_dir = state.get("workflow_dir", f"backend/workflows/{workflow_id}")
     os.makedirs(workflow_dir, exist_ok=True)
     # --------------------------------------------
-    rtl_file = state.get("artifact")
-    if not rtl_file or not os.path.exists(rtl_file):
-        v_files = [f for f in os.listdir(workflow_dir) if f.endswith(".v")]
-        if not v_files:
-          raise FileNotFoundError(f"No RTL (.v) file found in {workflow_dir}")
-        rtl_file = os.path.join(workflow_dir, v_files[0])  # pick the first .v file found
+    artifact_list = state.get("artifact_list", [])
+    if artifact_list:
+        print(f"🧩 Hierarchical design detected with {len(artifact_list)} modules.")
+        merged_path = os.path.join(workflow_dir, "hierarchy_compile.v")
+        with open(merged_path, "w") as merged:
+            for fpath in artifact_list:
+                if not os.path.exists(fpath):
+                    print(f"⚠️ Missing module file: {fpath}")
+                    continue
+                with open(fpath, "r") as src:
+                    merged.write(f"// === {os.path.basename(fpath)} ===\n")
+                    merged.write(src.read() + "\n\n")
+        rtl_file = merged_path
+    else:
+        rtl_file = state.get("artifact")
+        if not rtl_file or not os.path.exists(rtl_file):
+            v_files = [f for f in os.listdir(workflow_dir) if f.endswith(".v")]
+            if not v_files:
+                raise FileNotFoundError(f"No RTL (.v) file found in {workflow_dir}")
+            rtl_file = os.path.join(workflow_dir, v_files[0])
+
 
     print(f"✅ Using RTL file: {rtl_file}")
     # Detect the JSON spec file dynamically
@@ -76,7 +91,8 @@ def run_agent(state: dict) -> dict:
     with open(rtl_file, "r") as f:
         verilog_text = f.read()
 
-    ports = re.findall(r"(input|output|inout)\s+(?:wire|reg)?\s*(?:\[[^\]]+\]\s*)?(\w+)", verilog_text)
+  
+    ports = re.findall(r"(?:input|output|inout)\s+(?:wire|reg|logic)?\s*(?:\[[^\]]+\]\s*)?(\w+)", verilog_text)
     port_names = [p[1] for p in ports]
     print(f"🔍 Extracted ports: {port_names}")
 
@@ -127,8 +143,10 @@ def run_agent(state: dict) -> dict:
     try:
         lint_prompt = f"""
 You are a senior RTL reviewer.
-Analyze the following Verilog code for any logic or style issues (not syntax).
-Summarize issues clearly.
+Analyze the following Verilog hierarchy for logic or style issues.
+If multiple modules are present, ensure consistent signal naming,
+no duplicate clk/reset declarations, and correct submodule instantiations.
+Summarize key issues clearly.
 Make sure below rules are followed
 Generate synthesizable Verilog-2005 code for this specification.
 Output must start with 'module' and end with 'endmodule'.
@@ -237,6 +255,9 @@ Include all input/output declarations explicitly
         print(f"⚠️ RTL Agent artifact upload failed: {e}")
 
     print(f"🧾 RTL Agent completed — {overall_status}")
+    if artifact_list:
+        state["validated_modules"] = [os.path.basename(f) for f in artifact_list]
+
     return state
 
 

@@ -57,7 +57,18 @@ def run_agent(state: dict) -> dict:
 You are a professional digital design engineer.
 
 You will produce output in this exact order:
-1) A SINGLE JSON object that fully describes the requested module, with the keys:
+1) A JSON object or array that fully describes all modules in the hierarchy.
+   - If the design contains multiple modules, return a top-level object:
+       {
+         "design_name": "top_module_name",
+         "hierarchy": {
+            "modules": [ ... list of submodules ... ],
+            "top_module": { ... integration details ... }
+         }
+       }
+   - Each module entry must contain:
+       { "name", "description", "ports", "functionality", "rtl_output_file" }
+   - "top_module" should include "submodules" array with instance and connection details.
    - module_name: string (exact module name to use in RTL)
    - hierarchy_role: "top" | "submodule"
    - description: string (one paragraph)
@@ -147,9 +158,32 @@ User request:
         rtl_code = rtl_code[rtl_code.index("module"):]
 
     os.makedirs(workflow_dir, exist_ok=True)
-    verilog_file = os.path.join(workflow_dir, f"{module_name}.v")
-    with open(verilog_file, "w", encoding="utf-8") as f:
-        f.write(rtl_code)
+    if "hierarchy" in spec_json:
+        hierarchy = spec_json["hierarchy"]
+        all_modules = []
+        if "modules" in hierarchy:
+            for m in hierarchy["modules"]:
+                fname = m.get("rtl_output_file", f"{m['name']}.v")
+                code = m.get("rtl_code") or ""
+                fpath = os.path.join(workflow_dir, fname)
+                with open(fpath, "w") as f:
+                   f.write(code)
+                   all_modules.append(fpath)
+        if "top_module" in hierarchy:
+            top = hierarchy["top_module"]
+            fname = top.get("rtl_output_file", f"{top['name']}.v")
+            code = top.get("rtl_code") or ""
+            fpath = os.path.join(workflow_dir, fname)
+            with open(fpath, "w") as f:
+               f.write(code)
+            all_modules.append(fpath)
+        state["artifact_list"] = all_modules
+    else:
+    # single-module fallback
+        verilog_file = os.path.join(workflow_dir, f"{module_name}.v")
+        with open(verilog_file, "w") as f:
+            f.write(rtl_code)
+        state["artifact"] = verilog_file
 
     # quick syntax check (same as before)
     log_path = os.path.join(workflow_dir, "spec_agent_compile.log")
@@ -185,6 +219,8 @@ User request:
         print(f"⚠️ Artifact upload failed: {e}")
 
     print(f"\n✅ Generated {verilog_file} and {spec_json_path}")
+    state["artifact_list"] = all_modules
+    state["hierarchical"] = True
     state.update({
         "artifact": verilog_file,
         "artifact_log": log_path,
