@@ -153,19 +153,17 @@ Design Guidelines:
             completion = client_portkey.chat.completions.create(
                 model="@chiploop/gpt-4o-mini",
                 messages=[{"role": "user", "content": prompt}],
-                stream=True,
+                stream=False,
             )
-            print("🌐 Using Portkey/OpenAI backend..for rtl code generation end.")
-            for chunk in completion:
-                if chunk and hasattr(chunk, "choices"):
-                    delta = chunk.choices[0].delta.get("content", "")
-                    if delta:
-                        rtl_code += delta
-                        print(delta, end="", flush=True)
+            rtl_code = completion.choices[0].message.content or ""
+            print("✅ Portkey response received successfully.")
     except Exception as e:
-        state["status"] = f"❌ LLM generation failed: {e}"
-        return state
+            print(f"❌ Portkey call failed: {repr(e)}")
+            state["status"] = f"❌ LLM generation failed: {e}"
+            return state
+    print("🌐 Using Portkey/OpenAI backend..for rtl code generation end.")
 
+ 
     rtl_code = rtl_code.replace("```verilog", "").replace("```", "").strip()
     if "module" in rtl_code:
         rtl_code = rtl_code[rtl_code.index("module"):]
