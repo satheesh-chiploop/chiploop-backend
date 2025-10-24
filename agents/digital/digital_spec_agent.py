@@ -145,12 +145,22 @@ Guidelines:
         h = spec_json["hierarchy"]
         if isinstance(h, dict):
             modules = h.get("modules", [])
-            if len(modules) == 1 and not h.get("top_module"):
-                print("🔧 Auto-flattening single-module hierarchy.")
-                spec_json = modules[0]
+            top = h.get("top_module", {})
+        # Auto-flatten when only one module or top has same name
+            if len(modules) == 1 or (
+              top.get("name") and modules and top.get("name") == modules[0].get("name")
+            ):
+            print("🔧 Auto-flattening single-module or redundant hierarchy.")
+            spec_json = modules[0]
 
     # ✅ FIX 4: normalize names
     if isinstance(spec_json, dict):
+        module_name = (
+            spec_json.get("name")
+            or spec_json.get("module_name")
+            or spec_json.get("design_name")
+            or "auto_module"
+        )
         if "name" not in spec_json and "module_name" in spec_json:
             spec_json["name"] = spec_json["module_name"]
         if "hierarchy" in spec_json:
