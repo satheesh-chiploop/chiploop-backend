@@ -55,9 +55,10 @@ def run_agent(state: dict) -> dict:
     # ✅ NEW: unified prompt (LLM decides everything; JSON is authoritative)
     prompt = """
 You are a professional digital design engineer.
-
+User request:
+{user_prompt}
 You will produce output in this exact order:
-1) A JSON object or array that fully describes all modules in the hierarchy.
+1) A JSON object or array that fully describes all modules .
    - If the design contains multiple modules, return a top-level object:
        {
          "design_name": "top_module_name",
@@ -105,7 +106,6 @@ Rules for Verilog:
 - No commentary or prose outside JSON and the delimited Verilog section.
 
 User request:
-{user_prompt}
 """.strip()
 
     rtl_code = ""
