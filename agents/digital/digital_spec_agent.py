@@ -33,7 +33,7 @@ def run_agent(state: dict) -> dict:
     # -----------------------------------------------------------------
     # 1️⃣ Build LLM Prompt  (User first, then structured format)
     # -----------------------------------------------------------------
-prompt = f"""
+    prompt = f"""
 USER DESIGN REQUEST:
 {user_prompt}
 
@@ -116,7 +116,6 @@ for all modules, enclosed using these exact delimiters:
 - Every module must include name, ports, functionality, rtl_output_file.
 - Use clean, compact JSON (no comments, no ```json).
 """.strip()
-
     # -----------------------------------------------------------------
     # 2️⃣ LLM Call
     # -----------------------------------------------------------------
