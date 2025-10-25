@@ -237,17 +237,22 @@ for all modules, enclosed using these exact delimiters: for each module , user t
 # 9️⃣ Write Verilog file(s)
 # -----------------------------------------------------------------
     all_modules = []
-
     if verilog_map:
         print(f"🧱 Writing {len(verilog_map)} Verilog module(s).")
+        verilog_file = None  # track top separately
         for fname, code in verilog_map.items():
             fpath = os.path.join(workflow_dir, fname)
             with open(fpath, "w", encoding="utf-8") as vf:
-                vf.write(code)
+              vf.write(code)
             print(f"✅ Wrote {len(code)} chars to {fname}")
             all_modules.append(fpath)
-    # Set top-level artifact if known
-        verilog_file = os.path.join(workflow_dir, f"{module_name}.v")
+        # Identify top module file automatically
+            if "top" in fname.lower() or "system" in fname.lower():
+              verilog_file = fpath
+    # fallback if no top identified
+        if not verilog_file:
+            verilog_file = all_modules[-1]
+
     else:
         print("⚠️ No Verilog found, writing empty stub.")
         verilog_file = os.path.join(workflow_dir, f"{module_name}.v")
