@@ -5,6 +5,7 @@ from datetime import datetime
 from loguru import logger
 from openai import OpenAI
 from utils.llm_utils import run_llm_fallback 
+from portkey_ai import Portkey
 
 # Reuse your environment variable pattern
 USE_LOCAL_OLLAMA = os.getenv("USE_LOCAL_OLLAMA", "false").lower() == "true"
