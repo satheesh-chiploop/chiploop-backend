@@ -125,6 +125,11 @@ Guidelines:
         state["status"] = f"❌ LLM generation failed: {e}"
         return state
 
+    raw_output_path = os.path.join(workflow_dir, "llm_raw_output.txt")
+    with open(raw_output_path, "w", encoding="utf-8") as rawf:
+        rawf.write(llm_output)
+    print(f"📄 Saved full LLM output to {raw_output_path}")
+
     # ✅ FIX 2: better Verilog extraction (supports multiple + fallback)
     verilog_blocks = re.findall(
         r"---BEGIN\s+([\w\-.]+)---(.*?)---END\s+\1---", llm_output, re.DOTALL
