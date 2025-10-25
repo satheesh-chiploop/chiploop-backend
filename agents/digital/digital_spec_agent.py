@@ -65,10 +65,15 @@ You will produce output in this exact order:
    - Each module entry must contain:
        {{ "name", "description", "ports", "functionality", "rtl_output_file" }}
    - "top_module" should include "submodules" array with instance and connection details.
-2) The Verilog-2005 implementation, delimited with:
----BEGIN VERILOG---
-<full synthesizable Verilog-2005 code here>
----END VERILOG---
+2) Immediately after the JSON, output the Verilog-2005 implementation.
+   IMPORTANT: It must be delimited EXACTLY as shown below (these markers are mandatory):
+
+   >>>---BEGIN VERILOG---
+   <full synthesizable Verilog-2005 code here>
+   ---END VERILOG---<<<
+
+   Do not omit these delimiters. Do not include any text or explanation outside these blocks.
+
    - Each module entry must contain:
        {{ "name", "description", "ports", "functionality", "rtl_output_file" }}
    - "top_module" should include "submodules" array with instance and connection details.
@@ -139,6 +144,14 @@ Guidelines:
     except Exception as e:
         print(f"⚠️ JSON parse failed: {e}")
         spec_json = {"description": "LLM JSON parse failed", "raw": spec_part}
+
+    trailing_text = ""
+    if "}" in llm_output:
+        trailing_text = llm_output.split("}", 1)[-1].strip()
+    # Only keep if it looks like Verilog (starts with 'module')
+        if trailing_text.lower().startswith("module"):
+           print("⚙️ Captured trailing Verilog after JSON.")
+           spec_json["rtl_code"] = trailing_text  
 
     # ✅ FIX 3: Auto-flatten fake hierarchy
     if "hierarchy" in spec_json:
