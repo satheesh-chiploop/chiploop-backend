@@ -142,7 +142,7 @@ Guidelines:
         )
         if generic_blocks:
             verilog_blocks = [("default.v", generic_blocks[0])]
-             print("🧩 Captured generic VERILOG block.")
+            print("🧩 Captured generic VERILOG block.")
     verilog_map = {fname.strip(): code.strip() for fname, code in verilog_blocks}
     if not verilog_map:
         alt = re.search(r"---BEGIN VERILOG---(.*?)---END VERILOG---", llm_output, re.DOTALL)
