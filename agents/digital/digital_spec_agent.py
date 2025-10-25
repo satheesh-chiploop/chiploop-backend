@@ -33,7 +33,7 @@ def run_agent(state: dict) -> dict:
     # -----------------------------------------------------------------
     # 1️⃣ Build LLM Prompt  (User first, then structured format)
     # -----------------------------------------------------------------
-    prompt = f"""
+     prompt = f"""
 USER DESIGN REQUEST:
 {user_prompt}
 
@@ -41,67 +41,80 @@ USER DESIGN REQUEST:
 
 You are a professional ASIC RTL design engineer.
 
-Generate two outputs in order:
+🔒 IMPORTANT OUTPUT FORMAT RULES
+- DO NOT use markdown code fences (no ```json, no ```verilog).
+- DO NOT include explanations, headers, or extra text.
+- ONLY produce raw JSON followed immediately by the Verilog code markers.
+- JSON must be the **first output**, and Verilog must start only after JSON ends.
+
+---
+
+Generate two outputs in this strict order:
 
 1️⃣ **JSON SPECIFICATION**
-   Provide a complete JSON object defining all modules and their properties.
 
-   - If hierarchical (multiple modules):
+   Output a JSON object describing all modules and hierarchy. Use this schema:
+
+   - Hierarchical (multiple modules):
      {{
        "design_name": "top_module_name",
        "hierarchy": {{
          "modules": [
            {{
              "name": "sub_module_a",
-             "description": "Purpose of the submodule.",
+             "description": "Purpose of submodule.",
              "ports": [
                 {{"name": "a", "direction": "input", "width": 8}},
                 {{"name": "b", "direction": "input", "width": 8}},
                 {{"name": "y", "direction": "output", "width": 8}}
              ],
-             "functionality": "Brief logic description.",
+             "functionality": "Logic description.",
              "rtl_output_file": "sub_module_a.v"
            }}
          ],
          "top_module": {{
            "name": "top_module_name",
-           "description": "Purpose of the top module.",
+           "description": "Describe top-level integration.",
            "ports": [
              {{"name": "clk", "direction": "input", "width": 1}},
              {{"name": "reset_n", "direction": "input", "width": 1, "active_low": true}},
              {{"name": "result", "direction": "output", "width": 8}}
            ],
-           "functionality": "Describe top-level integration.",
+           "functionality": "Describe how submodules are connected.",
            "rtl_output_file": "top_module_name.v"
          }}
        }}
      }}
 
-   - If flat (single module):
+   - Flat (single module):
      {{
        "name": "module_name",
-       "description": "Explain the module function.",
+       "description": "Explain purpose.",
        "ports": [
          {{"name": "clk", "direction": "input", "width": 1, "type": "wire"}},
          {{"name": "reset_n", "direction": "input", "width": 1, "active_low": true}},
          {{"name": "enable", "direction": "input", "width": 1}},
          {{"name": "count", "direction": "output", "width": 4, "type": "reg"}}
        ],
-       "functionality": "Describe internal behavior.",
+       "functionality": "Describe logic.",
        "rtl_output_file": "module_name.v"
      }}
 
+---
+
 2️⃣ **VERILOG CODE**
-   Then output synthesizable Verilog-2005 implementation using these exact markers:
+Immediately after the JSON, output the complete synthesizable Verilog-2005 implementation
+for all modules, enclosed using these exact delimiters:
 
-   ---BEGIN VERILOG---
-   <Verilog code here>
-   ---END VERILOG---
+---BEGIN VERILOG---
+<Verilog code here>
+---END VERILOG---
 
-Guidelines:
-- JSON must come **first**.
-- Every module (including top) must include: name, ports, functionality, rtl_output_file.
-- Do not include explanations outside JSON or Verilog markers.
+🧠 Guidelines:
+- JSON first, Verilog second.
+- Do NOT wrap JSON or Verilog in triple backticks or markdown blocks.
+- Every module must include name, ports, functionality, rtl_output_file.
+- Use clean, compact JSON (no comments, no ```json).
 """.strip()
 
     # -----------------------------------------------------------------
