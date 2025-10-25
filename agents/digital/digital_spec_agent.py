@@ -177,9 +177,10 @@ for all modules, enclosed using these exact delimiters: for each module , user t
 
             # ✅ Extract each module definition
             module_defs = re.findall(
-                r"(?s)(module\s+(\w+)\s*\([^;]*?;\s*.*?endmodule)",
+                r"(?s)(module\s+(\w+)\b.*?endmodule)",
                 flat_code,
             )
+            
             
             if module_defs:
                 print(f"🧩 Detected combined VERILOG block — splitting into {len(module_defs)} modules.")
