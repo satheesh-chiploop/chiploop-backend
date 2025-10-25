@@ -261,20 +261,27 @@ for all modules, enclosed using these exact delimiters: for each module , user t
     # -----------------------------------------------------------------
     log_path = os.path.join(workflow_dir, "spec_agent_compile.log")
     compile_status = "✅ Generated successfully."
+
     try:
+        # include all generated .v files for hierarchical designs
+        compile_cmd = ["/usr/bin/iverilog", "-o", "temp.out"] + all_modules
+        print(f"🧩 Running syntax check: {' '.join(os.path.basename(f) for f in compile_cmd[3:])}")
+
         subprocess.run(
-            ["/usr/bin/iverilog", "-o", "temp.out", verilog_file],
-            check=True, capture_output=True, text=True
+            compile_cmd,
+            check=True,
+            capture_output=True,
+            text=True
         )
+
+        with open(log_path, "w") as lf:
+            lf.write("Verilog syntax check passed.\n")
+
     except subprocess.CalledProcessError as e:
         compile_status = "⚠️ RTL generated but syntax check failed."
         with open(log_path, "w") as lf:
             lf.write(e.stderr or e.stdout or "")
         print("⚠️ Verilog syntax check failed.")
-    else:
-        with open(log_path, "w") as lf:
-            lf.write("Verilog syntax check passed.\n")
-
     # -----------------------------------------------------------------
     # 11️⃣ Record artifacts
     # -----------------------------------------------------------------
