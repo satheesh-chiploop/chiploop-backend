@@ -225,19 +225,27 @@ for all modules, enclosed using these exact delimiters: for each module , user t
     # -----------------------------------------------------------------
     # 9️⃣ Write Verilog file(s)
     # -----------------------------------------------------------------
+    # -----------------------------------------------------------------
+# 9️⃣ Write Verilog file(s)
+# -----------------------------------------------------------------
     all_modules = []
-    verilog_file = os.path.join(workflow_dir, f"{module_name}.v")
 
     if verilog_map:
-        _, flat_code = next(iter(verilog_map.items()))
-        with open(verilog_file, "w", encoding="utf-8") as vf:
-            vf.write(flat_code)
-        print(f"✅ Wrote {len(flat_code)} chars to {verilog_file}")
-        all_modules.append(verilog_file)
+        print(f"🧱 Writing {len(verilog_map)} Verilog module(s).")
+        for fname, code in verilog_map.items():
+            fpath = os.path.join(workflow_dir, fname)
+            with open(fpath, "w", encoding="utf-8") as vf:
+                vf.write(code)
+            print(f"✅ Wrote {len(code)} chars to {fname}")
+            all_modules.append(fpath)
+    # Set top-level artifact if known
+        verilog_file = os.path.join(workflow_dir, f"{module_name}.v")
     else:
         print("⚠️ No Verilog found, writing empty stub.")
+        verilog_file = os.path.join(workflow_dir, f"{module_name}.v")
         open(verilog_file, "w").close()
         all_modules.append(verilog_file)
+
 
     # -----------------------------------------------------------------
     # 🔟 Syntax check
