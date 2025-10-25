@@ -106,10 +106,10 @@ Generate two outputs in this strict order:
 
 2️⃣ **VERILOG CODE**
 Immediately after the JSON, output the complete synthesizable Verilog-2005 implementation
-for all modules, enclosed using these exact delimiters:
+for all modules, enclosed using these exact delimiters: for each module , user these markers as below
 
 ---BEGIN VERILOG---
-<Verilog code here>
+<module Verilog code here>
 ---END VERILOG---
 
 🧠 Guidelines:
@@ -117,6 +117,7 @@ for all modules, enclosed using these exact delimiters:
 - Do NOT wrap JSON or Verilog in triple backticks or markdown blocks.
 - Every module must include name, ports, functionality, rtl_output_file.
 - Use clean, compact JSON (no comments, no ```json).
+- Each module must appear in its own BEGIN/END block delimiters
 """.strip()
     # -----------------------------------------------------------------
     # 2️⃣ LLM Call
@@ -173,7 +174,14 @@ for all modules, enclosed using these exact delimiters:
             print("⚠️ No Verilog markers found in LLM output.")
 
     verilog_map = {fname.strip(): code.strip() for fname, code in verilog_blocks}
-
+    if len(verilog_map) == 1 and "hierarchy" in spec_json:
+        sole_file, flat_code = next(iter(verilog_map.items()))
+        module_defs = re.findall(
+            r"(module\s+(\w+)\s*\(.*?endmodule)", flat_code, re.DOTALL
+        )
+        if module_defs:
+            print(f"🧩 Splitting combined Verilog into {len(module_defs)} modules.")
+            verilog_map = {f"{mname}.v": code.strip() for code, mname in module_defs}
     # -----------------------------------------------------------------
     # 6️⃣ Auto-Flatten for simple cases
     # -----------------------------------------------------------------
