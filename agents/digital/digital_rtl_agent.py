@@ -68,10 +68,18 @@ def run_agent(state: dict) -> dict:
     # --- Step 1: Basic Verilog Syntax Lint via Icarus ---
     log_path = os.path.join(workflow_dir, "rtl_agent_compile.log")
     try:
+        # 🔧 Hierarchical compilation: include all modules
+        v_files = [os.path.join(workflow_dir, f) for f in os.listdir(workflow_dir) if f.endswith(".v")]
+        compile_cmd = ["/usr/bin/iverilog", "-o", "rtl_check.out"] + v_files
+        print(f"🧩 Running hierarchical compile on {len(v_files)} RTL files: {[os.path.basename(f) for f in v_files]}")
+
         result = subprocess.run(
-            ["/usr/bin/iverilog", "-o", "rtl_check.out", rtl_file],
-            check=True, capture_output=True, text=True
+           compile_cmd,
+           check=True,
+           capture_output=True,
+           text=True
         )
+
         compile_status = "✅ Verilog syntax check passed."
     except subprocess.CalledProcessError as e:
         compile_status = "⚠ Verilog syntax check failed."
