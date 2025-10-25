@@ -146,12 +146,16 @@ Guidelines:
         if isinstance(h, dict):
             modules = h.get("modules", [])
             top = h.get("top_module", {})
+            # If only top_module exists and no submodules → treat as flat
+            if not modules and top:
+                print("🔧 Auto-flattening hierarchy with only top_module.")
+                spec_json = top
         # Auto-flatten when only one module or top has same name
-            if len(modules) == 1 or (
-              top.get("name") and modules and top.get("name") == modules[0].get("name")
+            elif len(modules) == 1 or (
+                top.get("name") and modules and top.get("name") == modules[0].get("name")
             ):
-              print("🔧 Auto-flattening single-module or redundant hierarchy.")
-              spec_json = modules[0]
+                print("🔧 Auto-flattening single-module or redundant hierarchy.")
+                spec_json = modules[0]
 
     # ✅ FIX 4: normalize names
     if isinstance(spec_json, dict):
