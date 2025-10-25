@@ -158,6 +158,7 @@ for all modules, enclosed using these exact delimiters: for each module , user t
     # -----------------------------------------------------------------
     # 5️⃣ Extract Verilog
     # -----------------------------------------------------------------
+    # ① Capture named module blocks if present
     verilog_blocks = re.findall(
         r"---BEGIN\s+([\w\-.]+)---(.*?)---END\s+\1---",
         llm_output,
@@ -165,33 +166,26 @@ for all modules, enclosed using these exact delimiters: for each module , user t
     )
     verilog_map = {fname.strip(): code.strip() for fname, code in verilog_blocks}
 
-    # If generic VERILOG block is present, extract and split modules inside
+    # ② If only generic VERILOG blocks exist, capture *all* of them
     if (not verilog_map) or (list(verilog_map.keys()) == ["VERILOG"]):
-        generic_match = re.search(
+        generic_blocks = re.findall(
             r"---BEGIN\s+VERILOG---(.*?)---END\s+VERILOG---",
             llm_output,
             re.DOTALL,
         )
-        if generic_match:
-            flat_code = generic_match.group(1).strip()
-
-            # ✅ Extract each module definition
-            module_defs = re.findall(
-                r"(?sm)^\s*module\s+(\w+).*?endmodule",
-                flat_code,
-            )
-
-            
-            
-            if module_defs:
-                print(f"🧩 Detected combined VERILOG block — splitting into {len(module_defs)} modules.")
-                verilog_map = {f"{mname}.v": code.strip() for code, mname in module_defs}
-            else:
-                # fallback if only one module exists
-                print("🧩 Single module detected in VERILOG block.")
-                verilog_map = {"auto_module.v": flat_code}
+        if generic_blocks:
+            print(f"🧩 Found {len(generic_blocks)} generic VERILOG block(s).")
+            verilog_map = {}
+            for i, block in enumerate(generic_blocks, 1):
+                m = re.search(r"module\s+(\w+)", block)
+                if m:
+                    fname = f"{m.group(1)}.v"
+                else:
+                    fname = f"auto_module_{i}.v"
+                verilog_map[fname] = block.strip()
         else:
             print("⚠️ No VERILOG markers found at all.")
+
     # -----------------------------------------------------------------
     # 6️⃣ Auto-Flatten for simple cases
     # -----------------------------------------------------------------
