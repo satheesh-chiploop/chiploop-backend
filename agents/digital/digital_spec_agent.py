@@ -132,40 +132,34 @@ Guidelines:
 
     # ✅ FIX 2: better Verilog extraction (supports multiple + fallback)
     verilog_blocks = re.findall(
-        r"---BEGIN\s+([\w\-.]+)---(.*?)---END\s+\1---", llm_output, re.DOTALL
+        r"---BEGIN\s+([\w\-.]+)---(.*?)---END\s+\1---",
+        llm_output,
+        re.DOTALL,
     )
+
+    # 2️⃣ Capture generic ---BEGIN VERILOG--- ... ---END VERILOG---
     if not verilog_blocks:
         generic_blocks = re.findall(
             r"---BEGIN\s+VERILOG---(.*?)---END\s+VERILOG---",
             llm_output,
-            re.DOTALL
+            re.DOTALL,
         )
         if generic_blocks:
             verilog_blocks = [("default.v", generic_blocks[0])]
             print("🧩 Captured generic VERILOG block.")
+
+    # 3️⃣ Build map
     verilog_map = {fname.strip(): code.strip() for fname, code in verilog_blocks}
+
+    # 4️⃣ If still empty, fallback to tail text that looks like Verilog
     if not verilog_map:
-        alt = re.search(r"---BEGIN VERILOG---(.*?)---END VERILOG---", llm_output, re.DOTALL)
-        if alt:
-            verilog_map["default.v"] = alt.group(1).strip()
+        # Anything after the last closing brace
+        tail = llm_output.split("}", 1)[-1].strip() if "}" in llm_output else ""
+        if tail.lower().startswith("module"):
+            print("⚙️ Fallback: captured Verilog from tail text.")
+            verilog_map["default.v"] = tail
         else:
-            print("⚠️ No explicit Verilog markers found; will rely on rtl_code fields.")
-
-    # --- Extract JSON part safely ---
-    try:
-        spec_part = llm_output.split("---BEGIN", 1)[0].strip()
-        spec_json = json.loads(spec_part)
-    except Exception as e:
-        print(f"⚠️ JSON parse failed: {e}")
-        spec_json = {"description": "LLM JSON parse failed", "raw": spec_part}
-
-    trailing_text = ""
-    if "}" in llm_output:
-        trailing_text = llm_output.split("}", 1)[-1].strip()
-    # Only keep if it looks like Verilog (starts with 'module')
-        if trailing_text.lower().startswith("module"):
-           print("⚙️ Captured trailing Verilog after JSON.")
-           spec_json["rtl_code"] = trailing_text  
+            print("⚠️ No explicit Verilog markers or trailing module code found.")    
 
     # ✅ FIX 3: Auto-flatten fake hierarchy
     if "hierarchy" in spec_json:
