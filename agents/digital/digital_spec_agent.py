@@ -68,9 +68,9 @@ You will produce output in this exact order:
 2) Immediately after the JSON, output the Verilog-2005 implementation.
    IMPORTANT: It must be delimited EXACTLY as shown below (these markers are mandatory):
 
-   >>>---BEGIN VERILOG---
+   ---BEGIN VERILOG---
    <full synthesizable Verilog-2005 code here>
-   ---END VERILOG---<<<
+   ---END VERILOG---
 
    Do not omit these delimiters. Do not include any text or explanation outside these blocks.
 
