@@ -159,29 +159,35 @@ for all modules, enclosed using these exact delimiters: for each module , user t
     # 5️⃣ Extract Verilog
     # -----------------------------------------------------------------
     verilog_blocks = re.findall(
-        r"---BEGIN\s+([\w\-.]+)---(.*?)---END\s+\1---", llm_output, re.DOTALL
+        r"---BEGIN\s+([\w\-.]+)---(.*?)---END\s+\1---",
+        llm_output,
+        re.DOTALL,
     )
-    if not verilog_blocks:
+
+    verilog_map = {fname.strip(): code.strip() for fname, code in verilog_blocks}
+
+    # If no named blocks found, capture generic VERILOG block and auto-split
+    if not verilog_map:
         match = re.search(
             r"---BEGIN\s+VERILOG---(.*?)---END\s+VERILOG---",
             llm_output,
             re.DOTALL,
         )
         if match:
-            verilog_blocks = [("default.v", match.group(1).strip())]
-            print("🧩 Captured generic VERILOG block.")
+            flat_code = match.group(1).strip()
+            module_defs = re.findall(
+                r"(module\s+(\w+)\s*\(.*?endmodule)",
+                flat_code,
+                re.DOTALL,
+            )
+            if module_defs:
+                print(f"🧩 Splitting combined Verilog into {len(module_defs)} modules.")
+                verilog_map = {f"{mname}.v": code.strip() for code, mname in module_defs}
+            else:
+                print("🧩 Single flat module detected.")
+                verilog_map = {"auto_module.v": flat_code}
         else:
             print("⚠️ No Verilog markers found in LLM output.")
-
-    verilog_map = {fname.strip(): code.strip() for fname, code in verilog_blocks}
-    if len(verilog_map) == 1 and "hierarchy" in spec_json:
-        sole_file, flat_code = next(iter(verilog_map.items()))
-        module_defs = re.findall(
-            r"(module\s+(\w+)\s*\(.*?endmodule)", flat_code, re.DOTALL
-        )
-        if module_defs:
-            print(f"🧩 Splitting combined Verilog into {len(module_defs)} modules.")
-            verilog_map = {f"{mname}.v": code.strip() for code, mname in module_defs}
     # -----------------------------------------------------------------
     # 6️⃣ Auto-Flatten for simple cases
     # -----------------------------------------------------------------
