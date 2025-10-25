@@ -177,9 +177,10 @@ for all modules, enclosed using these exact delimiters: for each module , user t
 
             # ✅ Extract each module definition
             module_defs = re.findall(
-                r"(?s)(module\s+(\w+)\b.*?endmodule)",
+                r"(?sm)^\s*module\s+(\w+).*?endmodule",
                 flat_code,
             )
+
             
             
             if module_defs:
