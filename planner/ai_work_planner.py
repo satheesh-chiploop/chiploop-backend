@@ -8,9 +8,14 @@ from utils.llm_utils import run_llm_fallback
 
 # Reuse your environment variable pattern
 USE_LOCAL_OLLAMA = os.getenv("USE_LOCAL_OLLAMA", "false").lower() == "true"
-PORTKEY_API_KEY = os.getenv("PORTKEY_API_KEY")
-PORTKEY_BASE_URL = os.getenv("PORTKEY_BASE_URL", "https://api.portkey.ai")
+
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+
+PORTKEY_API_KEY = os.getenv("PORTKEY_API_KEY")
+client_portkey = Portkey(api_key=PORTKEY_API_KEY)
+client_openai = OpenAI()
+
+
 
 def plan_workflow(prompt: str, agent_capabilities: dict, workflow_id: str = None) -> dict:
     """
@@ -76,20 +81,21 @@ def plan_workflow(prompt: str, agent_capabilities: dict, workflow_id: str = None
     if PORTKEY_API_KEY:
         try:
             logger.info("🪄 Using Portkey API for workflow planning...")
-            headers = {
-                "x-portkey-api-key": PORTKEY_API_KEY,
-                "Content-Type": "application/json"
-            }
-            payload = {
-                "model": "gpt-4o-mini",
-                "messages": messages,
-                "temperature": 0.3
-            }
-            r = requests.post(f"{PORTKEY_BASE_URL}/v1/chat/completions", json=payload, headers=headers, timeout=60)
-            content = r.json()["choices"][0]["message"]["content"]
-                        # --- After receiving content from Portkey/OpenAI/Ollama ---
-            plan = safe_parse_plan(content if 'content' in locals() else response_text)
 
+            print("🌐 Calling LLM via Portkey...")
+
+            completion = client_portkey.chat.completions.create(
+                model="@chiploop/gpt-5-mini",     
+                messages=messages,
+                temperature=0.3,                  
+                stream=False
+            )
+
+            llm_output = completion.choices[0].message.content or ""
+            print("✅ Response received.")
+
+            plan = safe_parse_plan(llm_output)
+            
             # 🔍 Detect missing agents
             from agent_capabilities import AGENT_CAPABILITIES
             existing = set(AGENT_CAPABILITIES.keys())
