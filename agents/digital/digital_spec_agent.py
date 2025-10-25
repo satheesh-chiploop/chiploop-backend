@@ -163,31 +163,33 @@ for all modules, enclosed using these exact delimiters: for each module , user t
         llm_output,
         re.DOTALL,
     )
-
     verilog_map = {fname.strip(): code.strip() for fname, code in verilog_blocks}
 
-    # If no named blocks found, capture generic VERILOG block and auto-split
+    # If generic VERILOG block is present, extract and split modules inside
     if not verilog_map:
-        match = re.search(
+        generic_match = re.search(
             r"---BEGIN\s+VERILOG---(.*?)---END\s+VERILOG---",
             llm_output,
             re.DOTALL,
         )
-        if match:
-            flat_code = match.group(1).strip()
+        if generic_match:
+            flat_code = generic_match.group(1).strip()
+
+            # ✅ Extract each module definition
             module_defs = re.findall(
-                r"(module\s+(\w+)\s*\(.*?endmodule)",
+                r"(?ms)(module\s+(\w+)\s*\(.*?endmodule)",
                 flat_code,
-                re.DOTALL,
             )
+
             if module_defs:
-                print(f"🧩 Splitting combined Verilog into {len(module_defs)} modules.")
+                print(f"🧩 Detected combined VERILOG block — splitting into {len(module_defs)} modules.")
                 verilog_map = {f"{mname}.v": code.strip() for code, mname in module_defs}
             else:
-                print("🧩 Single flat module detected.")
+                # fallback if only one module exists
+                print("🧩 Single module detected in VERILOG block.")
                 verilog_map = {"auto_module.v": flat_code}
         else:
-            print("⚠️ No Verilog markers found in LLM output.")
+            print("⚠️ No VERILOG markers found at all.")
     # -----------------------------------------------------------------
     # 6️⃣ Auto-Flatten for simple cases
     # -----------------------------------------------------------------
