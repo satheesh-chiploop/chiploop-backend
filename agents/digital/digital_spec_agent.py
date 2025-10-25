@@ -166,7 +166,7 @@ for all modules, enclosed using these exact delimiters: for each module , user t
     verilog_map = {fname.strip(): code.strip() for fname, code in verilog_blocks}
 
     # If generic VERILOG block is present, extract and split modules inside
-    if not verilog_map:
+    if (not verilog_map) or (list(verilog_map.keys()) == ["VERILOG"]):
         generic_match = re.search(
             r"---BEGIN\s+VERILOG---(.*?)---END\s+VERILOG---",
             llm_output,
