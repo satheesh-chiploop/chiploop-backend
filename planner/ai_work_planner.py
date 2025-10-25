@@ -88,7 +88,7 @@ def plan_workflow(prompt: str, agent_capabilities: dict, workflow_id: str = None
             completion = client_portkey.chat.completions.create(
                 model="@chiploop/gpt-5-mini",     
                 messages=messages,
-                temperature=0.3,                  
+                temperature=1,                  
                 stream=False
             )
 
