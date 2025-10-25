@@ -33,7 +33,7 @@ def run_agent(state: dict) -> dict:
     # -----------------------------------------------------------------
     # 1️⃣ Build LLM Prompt  (User first, then structured format)
     # -----------------------------------------------------------------
-     prompt = f"""
+prompt = f"""
 USER DESIGN REQUEST:
 {user_prompt}
 
