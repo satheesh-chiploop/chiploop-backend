@@ -235,11 +235,16 @@ Output valid JSON with keys: nodes, edges, summary.
         missing = preplan["missing_agents"]
         logger.info(f"📎 Using missing_agents from preplan: {missing}")
     else:
-        existing_agents = [a["data"]["backendLabel"] for a in plan.get("nodes", [])]
+        existing_agents = [
+            a.get("data", {}).get("backendLabel")
+            or a.get("type")
+            or a.get("label")
+            or "unknown_agent"
+            for a in plan.get("nodes", [])
+        ]
         from agent_capabilities import AGENT_CAPABILITIES
         missing = [a for a in existing_agents if a not in AGENT_CAPABILITIES]
         logger.info(f"🧩 Detected missing agents: {missing}")
-
     # --- Step 4: Create and persist any missing agents ---
     if missing:
         from .ai_agent_planner import plan_agent_fallback
