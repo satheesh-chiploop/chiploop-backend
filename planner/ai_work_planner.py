@@ -217,10 +217,17 @@ Output valid JSON with keys: nodes, edges, summary.
 """
     response = await run_llm_fallback(prompt)
 
+    cleaned = (
+        response.strip()
+            .replace("```json", "")
+            .replace("```", "")
+            .strip()
+        )
+
     try:
-        plan = json.loads(response)
+        plan = json.loads(cleaned)
     except Exception:
-        plan = {"nodes": [], "edges": [], "summary": response}
+        plan = {"nodes": [], "edges": [], "summary": cleaned}
 
     # --- Step 3: Detect missing agents ---
     missing = []
