@@ -934,10 +934,11 @@ async def auto_compose_workflow(request: Request):
     try:
         data = await request.json()
         goal = data.get("goal", "")
+        preplan = data.get("preplan", None)
         logger.info(f"🧠 Auto-composing workflow for goal: {goal}")
-
+        logger.info(f"📥 Received preplan: {type(preplan)} | Keys: {list(preplan.keys()) if isinstance(preplan, dict) else 'None'}")
         from planner.ai_work_planner import auto_compose_workflow_graph
-        graph = await auto_compose_workflow_graph(goal)
+        graph = await auto_compose_workflow_graph(goal,preplan)
 
         return {"status": "ok", **graph}
     except Exception as e:
