@@ -3,8 +3,13 @@ from loguru import logger
 from utils.llm_utils import run_llm_fallback
 
 from datetime import datetime
-def plan_agent_fallback(goal, user_id):
-    from planner.ai_work_planner import analyze_spec
+
+from utils.spec_analyzer import analyze_spec_text
+
+async def plan_agent_fallback(goal, user_id="anonymous"):
+    result = await analyze_spec_text(goal, user_id=user_id)
+    coverage = result.get("coverage", {})
+
 
 async def fetch_user_memory(user_id: str):
     """Fetch user memory context from Supabase."""

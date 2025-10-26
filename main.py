@@ -699,104 +699,16 @@ async def plan_workflow_api(request: Request):
 #  🔥 Memory-Aware Planner + Spec Analyzer Integration
 # ==========================================================
 
+from utils.spec_analyzer import analyze_spec_text
 
-# ---------- /analyze_spec ----------
 @app.post("/analyze_spec")
 async def analyze_spec(request: Request):
-    """
-    Analyze prompt/spec → compute coverage → store in spec_coverage.
-    Handles text, voice, or hybrid inputs.
-    """
     data = await request.json()
     goal = data.get("goal", "")
     voice_summary = data.get("voice_summary", "")
     user_id = data.get("user_id", "anonymous")
-
-    # 🧠 Merge voice + text if both provided
-    if goal and voice_summary:
-        combined_goal = f"{voice_summary}\nAdditional user text: {goal}"
-    else:
-        combined_goal = goal or voice_summary
-
-    if not combined_goal.strip():
-        return {"status": "error", "message": "No spec text or voice summary provided."}
-
-    analyzer_prompt = f"""
-    You are ChipLoop's Spec Analyzer.
-    Analyze the following design specification (may include combined voice+text input):
-    \"\"\"{combined_goal}\"\"\"
-
-    Score each dimension (0–25):
-    - Intent (what to achieve)
-    - I/O (inputs, outputs, data flow)
-    - Constraints (timing, power, area)
-    - Verification (how to validate)
-
-    Suggest up to 5 clarifying questions to improve coverage.
-    Return clean JSON:
-    {{
-      "normalized_spec": "...",
-      "intent": <int>,
-      "io": <int>,
-      "constraints": <int>,
-      "verification": <int>,
-      "questions": ["...", "..."]
-    }}
-    """
-
-    try:
-        # 🧩 Run the LLM analyzer
-        response = await run_llm_fallback(analyzer_prompt)
-
-        # --- Extract first valid JSON block from the response ---
-        try:
-            match = re.search(r"\{[\s\S]*\}", response)
-            if not match:
-                raise ValueError("No JSON found in LLM response")
-            json_str = match.group(0)
-            result = json.loads(json_str)
-        except Exception as parse_err:
-            logger.error(f"JSON parse failed: {parse_err} | Raw response: {response[:200]}")
-            # fallback: minimal structure
-            result = {
-                "normalized_spec": response[:300],
-                "intent": 10,
-                "io": 10,
-                "constraints": 10,
-                "verification": 10,
-                "questions": ["Could you clarify the inputs/outputs?"],
-            }
-
-        # --- Compute total coverage score ---
-        total = (
-            result.get("intent", 0)
-            + result.get("io", 0)
-            + result.get("constraints", 0)
-            + result.get("verification", 0)
-        )
-        result["total_score"] = total
-
-        # --- Save to spec_coverage table ---
-        supabase.table("spec_coverage").insert({
-            "user_id": user_id,
-            "goal": combined_goal,
-            "normalized_spec": result.get("normalized_spec"),
-            "intent_score": result.get("intent"),
-            "io_score": result.get("io"),
-            "constraint_score": result.get("constraints"),
-            "verification_score": result.get("verification"),
-            "total_score": total,
-            "clarifying_questions": result.get("questions"),
-            "created_at": datetime.utcnow().isoformat()
-        }).execute()
-
-        logger.info(f"🧠 Spec analysis complete for user={user_id} | total={total}")
-        return {"status": "ok", "coverage": result}
-
-    except Exception as e:
-        logger.error(f"❌ Analyzer failed: {e}")
-        return {"status": "error", "message": str(e)}
-
+    return await analyze_spec_text(goal, voice_summary, user_id)
+# ---------- /analyze_spec ----------
 
 
 # ---------- /plan_workflow_memory ----------
