@@ -238,14 +238,14 @@ Output valid JSON with keys: nodes, edges, summary.
         existing_agents = []
         for a in plan.get("nodes", []):
         # Prefer the explicit 'agent' field from JSON; fall back to 'type'
-        agent_name = (
-            a.get("agent")
-            or a.get("data", {}).get("backendLabel")
-            or a.get("type")
-            or a.get("label")
-            or "unknown_agent"
-        )
-        existing_agents.append(agent_name)
+            agent_name = (
+                a.get("agent")
+                or a.get("data", {}).get("backendLabel")
+                or a.get("type")
+                or a.get("label")
+                or "unknown_agent"
+            )
+            existing_agents.append(agent_name)
 
         from agent_capabilities import AGENT_CAPABILITIES
         missing = [a for a in existing_agents if a not in AGENT_CAPABILITIES]
