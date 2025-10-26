@@ -105,11 +105,11 @@ Return valid JSON only:
     # Step 6: Merge metadata
     plan["coverage"] = coverage
     plan["context_used"] = memory_context
-
+    insert_user_id = None if user_id == "anonymous" else user_id
     # Step 7: Update memory
     try:
         supabase.table("user_memory").upsert({
-            "user_id": user_id,
+            "user_id": insert_user_id,
             "recent_goals": list(set(memory_context.get("recent_goals", []) + [goal])),
             "frequent_agents": list(set(memory_context.get("frequent_agents", []) + [plan.get("agent_name")])),
             "updated_at": datetime.utcnow().isoformat(),

@@ -898,13 +898,15 @@ async def save_custom_workflow(request: Request):
 
         # --- Prepare payload for Supabase ---
         payload = {
-            "user_id": user_id,
+            "user_id": user_id if user_id != "anonymous" else None,
             "name": name,
             "goal": goal,
             "summary": summary or f"Workflow for {goal[:80]}",
             "loop_type": loop_type,
-            "nodes": nodes,
-            "edges": edges,
+            "definitions": {
+              "nodes": nodes,
+              "edges": edges,
+            },
             "status": "saved",
             "created_at": datetime.utcnow().isoformat(),
             "updated_at": datetime.utcnow().isoformat(),
