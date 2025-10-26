@@ -6,7 +6,7 @@ from loguru import logger
 from openai import OpenAI
 from utils.llm_utils import run_llm_fallback 
 from portkey_ai import Portkey
-
+from supabase_client import supabase
 # Reuse your environment variable pattern
 USE_LOCAL_OLLAMA = os.getenv("USE_LOCAL_OLLAMA", "false").lower() == "true"
 
@@ -235,16 +235,24 @@ Output valid JSON with keys: nodes, edges, summary.
         missing = preplan["missing_agents"]
         logger.info(f"📎 Using missing_agents from preplan: {missing}")
     else:
-        existing_agents = [
-            a.get("data", {}).get("backendLabel")
+        existing_agents = []
+        for a in plan.get("nodes", []):
+        # Prefer the explicit 'agent' field from JSON; fall back to 'type'
+        agent_name = (
+            a.get("agent")
+            or a.get("data", {}).get("backendLabel")
             or a.get("type")
             or a.get("label")
             or "unknown_agent"
-            for a in plan.get("nodes", [])
-        ]
+        )
+        existing_agents.append(agent_name)
+
         from agent_capabilities import AGENT_CAPABILITIES
         missing = [a for a in existing_agents if a not in AGENT_CAPABILITIES]
-        logger.info(f"🧩 Detected missing agents: {missing}")
+
+        logger.info(f"🔍 LLM suggested agents: {existing_agents}")
+        logger.info(f"📚 Known agents: {list(AGENT_CAPABILITIES.keys())[:10]}")
+        logger.info(f"🧩 Missing agents: {missing}")
     # --- Step 4: Create and persist any missing agents ---
     if missing:
         from .ai_agent_planner import plan_agent_fallback
