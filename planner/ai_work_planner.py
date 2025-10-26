@@ -6,6 +6,19 @@ from loguru import logger
 from openai import OpenAI
 from utils.llm_utils import run_llm_fallback 
 from portkey_ai import Portkey
+# ---------------- Supabase client ----------------
+try:
+    from supabase import create_client, Client  # supabase-py v2
+except ImportError:
+    raise RuntimeError("Please install supabase-py v2: pip install supabase")
+
+SUPABASE_URL = os.environ.get("SUPABASE_URL") or os.environ.get("NEXT_PUBLIC_SUPABASE_URL")
+SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or os.environ.get("NEXT_PUBLIC_SUPABASE_ANON_KEY")
+if not SUPABASE_URL or not SUPABASE_KEY:
+    raise RuntimeError("Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY/NEXT_PUBLIC_SUPABASE_ANON_KEY")
+
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+
 from supabase_client import supabase
 # Reuse your environment variable pattern
 USE_LOCAL_OLLAMA = os.getenv("USE_LOCAL_OLLAMA", "false").lower() == "true"
