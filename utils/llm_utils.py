@@ -8,9 +8,17 @@ from openai import OpenAI
 # --- Environment configuration ---
 USE_LOCAL_OLLAMA = os.getenv("USE_LOCAL_OLLAMA", "false").lower() == "true"
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434/api/generate")
-PORTKEY_API_KEY = os.getenv("PORTKEY_API_KEY")
-PORTKEY_BASE_URL = os.getenv("PORTKEY_BASE_URL", "https://api.portkey.ai")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+from portkey_ai import Portkey
+from openai import OpenAI
+
+# ---------------------------------------------------------------------
+# Setup
+# ---------------------------------------------------------------------
+PORTKEY_API_KEY = os.getenv("PORTKEY_API_KEY")
+client_portkey = Portkey(api_key=PORTKEY_API_KEY)
+client_openai = OpenAI()
+
 
 async def run_llm_fallback(prompt: str) -> str:
     """
@@ -51,28 +59,21 @@ async def run_llm_fallback(prompt: str) -> str:
     # --- 2️⃣ Try Portkey ---
     if PORTKEY_API_KEY:
         try:
-            headers = {
-                "x-portkey-api-key": PORTKEY_API_KEY,
-                "Content-Type": "application/json",
-            }
-            body = {
-                "model": "gpt-4o-mini",
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0.3,
-            }
-            logger.info("🌐 Using Portkey backend...")
-            r = requests.post(
-                f"{PORTKEY_BASE_URL}/v1/chat/completions",
-                json=body,
-                headers=headers,
-                timeout=60,
+            logger.info("🌐 Using Portkey SDK backend...")
+
+            completion = client_portkey.chat.completions.create(
+               model="@chiploop/gpt-4o-mini",  # or "@chiploop/gpt-4o-mini"
+               messages=[{"role": "user", "content": prompt}],
+               temperature=1,
+               stream=False,
             )
-            data = r.json()
-            content = data["choices"][0]["message"]["content"]
+
+            content = completion.choices[0].message.content or ""
             logger.info("✅ Portkey inference successful.")
             return content
+
         except Exception as e:
-            logger.warning(f"⚠️ Portkey failed: {e}")
+            logger.warning(f"⚠️ Portkey SDK failed: {e}")
 
     # --- 3️⃣ Fallback to OpenAI ---
     if OPENAI_API_KEY:
