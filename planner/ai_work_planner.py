@@ -199,13 +199,13 @@ async def auto_compose_workflow_graph(goal: str, preplan: dict | str | None = No
                 logger.warning(f"⚠️ Failed to parse preplan string: {e}")
                 preplan = None
 
-    if preplan and isinstance(preplan, dict):
+    if preplan and isinstance(preplan, dict) and len(preplan.keys()) > 0:
         logger.info("📎 Using preplan from frontend to skip re-planning.")
         plan_data = preplan
     else:
         logger.info("🧠 No valid preplan supplied — generating plan internally.")
         from agent_capabilities import AGENT_CAPABILITIES
-        plan_data = await plan_workflow(goal, AGENT_CAPABILITIES)
+        plan_data = plan_workflow(goal, AGENT_CAPABILITIES)
 
     # --- Step 2: Construct LLM prompt ---
     prompt = f"""You are ChipLoop workflow architect.
