@@ -265,17 +265,28 @@ Output valid JSON with keys: nodes, edges, summary.
     logger.success("✅ Auto-compose complete.")
 
     # --- Step 7: Update agent memory ---
+    
+    # --- Step 7: Update agent memory ---
     try:
         for node in plan.get("nodes", []):
-            agent_name = node["data"]["backendLabel"]
+        # handle both {"data": {...}} and flat {"type": "..."} formats
+            agent_name = (
+                node.get("data", {}).get("backendLabel")
+                or node.get("type")
+                or node.get("label")
+                or "unknown_agent"
+            )
+
             supabase.table("agent_memory").upsert({
-                "agent_name": agent_name,
-                "last_used_in": [goal],
-                "updated_at": datetime.utcnow().isoformat()
+               "agent_name": agent_name,
+               "last_used_in": [goal],
+               "updated_at": datetime.utcnow().isoformat()
             }).execute()
+
         logger.info("🧠 Agent memory updated successfully.")
     except Exception as e:
         logger.warning(f"⚠️ Failed to update agent memory: {e}")
+
 
     return {
         "nodes": plan.get("nodes", []),
