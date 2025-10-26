@@ -183,27 +183,38 @@ def register_new_agent(agent_data: dict):
 import json, random
 from .ai_agent_planner import plan_agent_fallback
 
-
-async def auto_compose_workflow_graph(goal: str, preplan: dict | None = None):
+async def auto_compose_workflow_graph(goal: str, preplan: dict | str | None = None):
     """
     Builds a structured workflow graph (nodes + edges)
     using a preplan if provided, or generates one internally.
     """
+    # --- Step 1: Handle preplan or re-plan internally ---
     if preplan:
+        # Handle JSON string sent from frontend
+        if isinstance(preplan, str):
+            try:
+                preplan = json.loads(preplan)
+                logger.info("✅ Parsed preplan string into dict.")
+            except Exception as e:
+                logger.warning(f"⚠️ Failed to parse preplan string: {e}")
+                preplan = None
+
+    if preplan and isinstance(preplan, dict):
         logger.info("📎 Using preplan from frontend to skip re-planning.")
         plan_data = preplan
     else:
-        logger.info("🧠 No preplan supplied — generating plan internally.")
+        logger.info("🧠 No valid preplan supplied — generating plan internally.")
         from agent_capabilities import AGENT_CAPABILITIES
-        plan_data = plan_workflow(goal, AGENT_CAPABILITIES)
+        plan_data = await plan_workflow(goal, AGENT_CAPABILITIES)
 
+    # --- Step 2: Construct LLM prompt ---
     prompt = f"""You are ChipLoop workflow architect.
-    Build a workflow for this goal: {goal}.
-    Here is a pre-generated plan you must follow:
-    {json.dumps(plan_data, indent=2)}
-    Use known agents from AGENT_CAPABILITIES.
-    Output valid JSON with keys: nodes, edges, summary.
-    """
+Build a workflow for this goal: {goal}.
+Here is a pre-generated plan you must follow:
+{json.dumps(plan_data, indent=2)}
+Use known agents from AGENT_CAPABILITIES.
+Output valid JSON with keys: nodes, edges, summary.
+"""
     response = await run_llm_fallback(prompt)
 
     try:
@@ -211,44 +222,42 @@ async def auto_compose_workflow_graph(goal: str, preplan: dict | None = None):
     except Exception:
         plan = {"nodes": [], "edges": [], "summary": response}
 
-    # --- Step 2: Detect missing agents ---
-    # Prefer preplan's missing_agents if available
+    # --- Step 3: Detect missing agents ---
     missing = []
-    if preplan and preplan.get("missing_agents"):
+    if isinstance(preplan, dict) and preplan.get("missing_agents"):
         missing = preplan["missing_agents"]
         logger.info(f"📎 Using missing_agents from preplan: {missing}")
     else:
-    # Fallback: detect from current graph
         existing_agents = [a["data"]["backendLabel"] for a in plan.get("nodes", [])]
         from agent_capabilities import AGENT_CAPABILITIES
         missing = [a for a in existing_agents if a not in AGENT_CAPABILITIES]
         logger.info(f"🧩 Detected missing agents: {missing}")
 
-# Create and persist any missing agents
+    # --- Step 4: Create and persist any missing agents ---
     if missing:
         from .ai_agent_planner import plan_agent_fallback
         for m in missing:
             try:
                 new_agent = await plan_agent_fallback(m)
-                # Persist the new agent so it can be reused later
                 register_new_agent(new_agent)
                 logger.info(f"✅ Auto-created & saved missing agent: {m}")
             except Exception as e:
                 logger.warning(f"⚠️ Failed to generate missing agent {m}: {e}")
 
-    # --- Step 3: Auto-position nodes ---
+    # --- Step 5: Auto-layout nodes ---
     for i, n in enumerate(plan.get("nodes", [])):
         n.setdefault("id", f"n{i+1}")
         n.setdefault("position", {"x": 150 * i, "y": 100 + 60 * (i % 2)})
 
-    # --- Step 4: Auto-connect if edges missing ---
+    # --- Step 6: Auto-connect edges ---
     if not plan.get("edges"):
         plan["edges"] = [
-            {"source": plan["nodes"][i]["id"], "target": plan["nodes"][i+1]["id"]}
+            {"source": plan["nodes"][i]["id"], "target": plan["nodes"][i + 1]["id"]}
             for i in range(len(plan["nodes"]) - 1)
         ]
     logger.success("✅ Auto-compose complete.")
 
+    # --- Step 7: Update agent memory ---
     try:
         for node in plan.get("nodes", []):
             agent_name = node["data"]["backendLabel"]
@@ -260,7 +269,7 @@ async def auto_compose_workflow_graph(goal: str, preplan: dict | None = None):
         logger.info("🧠 Agent memory updated successfully.")
     except Exception as e:
         logger.warning(f"⚠️ Failed to update agent memory: {e}")
-        
+
     return {
         "nodes": plan.get("nodes", []),
         "edges": plan.get("edges", []),
