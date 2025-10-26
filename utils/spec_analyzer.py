@@ -62,12 +62,12 @@ async def analyze_spec_text(goal: str, voice_summary: str = "", user_id: str = "
 
     total = sum(result.get(k, 0) for k in ("intent", "io", "constraints", "verification"))
     result["total_score"] = total
-
+    insert_user_id = None if user_id == "anonymous" else user_id
     # --- Optional Supabase logging ---
     if supabase:
         try:
             supabase.table("spec_coverage").insert({
-                "user_id": user_id,
+                "user_id": insert_user_id,
                 "goal": combined_goal,
                 "normalized_spec": result.get("normalized_spec"),
                 "intent_score": result.get("intent"),

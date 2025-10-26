@@ -848,22 +848,27 @@ async def save_custom_agent(request: Request):
         logger.error(f"❌ Failed to save custom agent: {e}")
         return {"status": "error", "message": str(e)}
 
-
 @app.post("/save_custom_workflow")
 async def save_custom_workflow(request: Request):
     """
     Save a workflow (manual or AI-created) into Supabase.
     Automatically adds 'System Workflow Agent' if workflow spans multiple domains.
+    Stores nodes, edges, goal, and summary for Canvas restore and dashboard preview.
     """
     try:
         data = await request.json()
         wf = data.get("workflow", {})
+
+        # --- Extract user workflow data ---
+        user_id = wf.get("user_id", None)  # optional for logged-in users
         name = wf.get("workflow_name", "Untitled Workflow")
+        goal = wf.get("goal", "")
+        summary = wf.get("summary", "")
         loop_type = wf.get("loop_type", "system")
         nodes = wf.get("nodes", [])
         edges = wf.get("edges", [])
 
-        # 🧩 Detect involved domains from node labels
+        # --- Domain detection for auto system agent ---
         domains = set()
         for node in nodes:
             label = node.get("data", {}).get("backendLabel", "")
@@ -876,10 +881,10 @@ async def save_custom_workflow(request: Request):
             elif "system" in label.lower():
                 domains.add("system")
 
-        # ✅ Auto-append System Workflow Agent if multiple domains are involved
+        # ✅ Auto-append System Workflow Agent if multiple domains exist
         if len(domains) > 1 and not any("System Workflow Agent" in n.get("data", {}).get("backendLabel", "") for n in nodes):
             system_agent = {
-                "id": "system_validation_" + str(len(nodes) + 1),
+                "id": f"system_validation_{len(nodes) + 1}",
                 "type": "default",
                 "data": {
                     "uiLabel": "System Workflow Agent",
@@ -891,21 +896,30 @@ async def save_custom_workflow(request: Request):
             nodes.append(system_agent)
             logger.info(f"🧩 Auto-added System Workflow Agent to {name}")
 
-        # 🗄️ Save into Supabase
-        result = supabase.table("workflows").insert({
+        # --- Prepare payload for Supabase ---
+        payload = {
+            "user_id": user_id,
             "name": name,
+            "goal": goal,
+            "summary": summary or f"Workflow for {goal[:80]}",
             "loop_type": loop_type,
             "nodes": nodes,
             "edges": edges,
-            "status": "saved"
-        }).execute()
+            "status": "saved",
+            "created_at": datetime.utcnow().isoformat(),
+            "updated_at": datetime.utcnow().isoformat(),
+        }
 
-        logger.info(f"💾 Workflow saved: {name} with domains {list(domains)}")
+        # --- Insert into Supabase ---
+        result = supabase.table("workflows").insert(payload).execute()
+
+        logger.info(f"💾 Workflow saved: {name} | domains={list(domains)} | user={user_id or 'anonymous'}")
         return {"status": "ok", "data": result.data}
 
     except Exception as e:
         logger.error(f"❌ Failed to save workflow: {e}")
         return {"status": "error", "message": str(e)}
+
 
 @app.post("/auto_compose_workflow")
 async def auto_compose_workflow(request: Request):
