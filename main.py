@@ -901,7 +901,7 @@ async def save_custom_workflow(request: Request):
 
         # --- Prepare payload for Supabase ---
         payload = {
-            "user_id": user_id or "anonymous",
+            "user_id": user_id if user_id and len(user_id) == 36 else None,
             "name": name,
             "goal": goal,
             "summary": summary or f"Workflow for {goal[:80]}",
@@ -917,6 +917,7 @@ async def save_custom_workflow(request: Request):
 
         # --- Insert into Supabase ---
         result = supabase.table("workflows").insert(payload).execute()
+        logger.info(f"💾 Workflow save payload user_id={user_id} (len={len(user_id) if user_id else 0})")
 
         logger.info(f"💾 Workflow saved: {name} | domains={list(domains)} | user={user_id or 'anonymous'}")
         return {"status": "ok", "data": result.data}
