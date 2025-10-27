@@ -901,7 +901,7 @@ async def save_custom_workflow(request: Request):
 
         # --- Prepare payload for Supabase ---
         payload = {
-            "user_id": user_id if user_id != "anonymous" else None,
+            "user_id": user_id or "anonymous",
             "name": name,
             "goal": goal,
             "summary": summary or f"Workflow for {goal[:80]}",
