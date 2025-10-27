@@ -858,6 +858,7 @@ async def save_custom_workflow(request: Request):
     try:
         data = await request.json()
         wf = data.get("workflow", {})
+        logger.info(f"💾 Saving workflow → name={data.get('name')} | user={data.get('user_id')} | keys={list(data.keys())}")
 
         # --- Extract user workflow data ---
         user_id = wf.get("user_id", None)  # optional for logged-in users

@@ -268,6 +268,13 @@ Output valid JSON with keys: nodes, edges, summary.
         ]
         from agent_capabilities import AGENT_CAPABILITIES
         missing = [a for a in existing_agents if a not in AGENT_CAPABILITIES]
+
+         # ✅ Remove duplicates while preserving order
+        seen = set()
+        existing_agents = [a for a in existing_agents if not (a in seen or seen.add(a))]
+
+        if len(existing_agents) < len(plan.get("nodes", [])):
+            logger.warning(f"🧹 Deduplicated agents: {existing_agents}")
        
         logger.info(f"🔍 LLM suggested agents: {existing_agents}")
 
