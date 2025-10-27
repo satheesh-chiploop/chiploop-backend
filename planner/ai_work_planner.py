@@ -23,6 +23,22 @@ PORTKEY_API_KEY = os.getenv("PORTKEY_API_KEY")
 client_portkey = Portkey(api_key=PORTKEY_API_KEY)
 client_openai = OpenAI()
 
+import re
+
+def extract_json_block(text):
+    """Extract valid JSON block from any LLM text output."""
+    if isinstance(text, dict):
+        return text
+    if not isinstance(text, str):
+        return {}
+
+    match = re.search(r"\{[\s\S]*\}", text)
+    if match:
+        try:
+            return json.loads(match.group(0))
+        except json.JSONDecodeError:
+            pass
+    return {}
 
 
 def plan_workflow(prompt: str, agent_capabilities: dict, workflow_id: str = None) -> dict:
@@ -223,18 +239,11 @@ Use known agents from AGENT_CAPABILITIES.
 Output valid JSON with keys: nodes, edges, summary.
 """
     response = await run_llm_fallback(prompt)
+    plan = extract_json_block(response)
 
-    cleaned = (
-        response.strip()
-            .replace("```json", "")
-            .replace("```", "")
-            .strip()
-        )
-
-    try:
-        plan = json.loads(cleaned)
-    except Exception:
-        plan = {"nodes": [], "edges": [], "summary": cleaned}
+    if not plan:
+        logger.warning("⚠️ No valid JSON detected, falling back to empty plan.")
+        plan = {"nodes": [], "edges": [], "summary": str(response)}
 
     # --- Step 3: Detect missing agents ---
     missing = []
@@ -253,15 +262,19 @@ Output valid JSON with keys: nodes, edges, summary.
                 or "unknown_agent"
             )
             existing_agents.append(agent_name)
-
+        existing_agents = [
+            a for a in existing_agents
+            if a.lower() not in ["process", "flow", "pipeline", "unknown_agent"]
+        ]
         from agent_capabilities import AGENT_CAPABILITIES
         missing = [a for a in existing_agents if a not in AGENT_CAPABILITIES]
-
+       
         logger.info(f"🔍 LLM suggested agents: {existing_agents}")
+
         logger.info(f"📚 Known agents: {list(AGENT_CAPABILITIES.keys())[:10]}")
         logger.info(f"🧩 Missing agents: {missing}")
     # --- Step 4: Create and persist any missing agents ---
-    if missing:
+    if missing and any(m not in ["process", "flow", "pipeline"] for m in missing):
         from .ai_agent_planner import plan_agent_fallback
         for m in missing:
             try:
