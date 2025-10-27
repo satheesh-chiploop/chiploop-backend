@@ -225,18 +225,48 @@ async def auto_compose_workflow_graph(goal: str, preplan: dict | str | None = No
     if preplan and isinstance(preplan, dict) and len(preplan.keys()) > 0:
         logger.info("📎 Using preplan from frontend to skip re-planning.")
         plan_data = preplan
+
+        prompt = f"""
+You are ChipLoop Workflow Architect.
+
+User goal:
+{goal}
+
+A preplan has already been generated with identified agents and their order of execution.
+Here is the preplan JSON:
+{json.dumps(plan_data, indent=2)}
+
+🧠 Instructions:
+- Use ONLY the agents listed in the preplan.
+- Do NOT create new or repeated agent instances.
+- Build logical connections (edges) between agents to represent workflow data flow.
+- Maintain order and hierarchy from the preplan.
+- Add a concise "summary" explaining how this workflow achieves the goal.
+- Output a valid JSON object with the following keys only: summary, nodes, edges.
+
+Each node must include:
+- id (n1, n2, ...)
+- type (agent name from preplan)
+- position (x, y) spaced horizontally
+"""    
     else:
         logger.info("🧠 No valid preplan supplied — generating plan internally.")
         from agent_capabilities import AGENT_CAPABILITIES
         plan_data = plan_workflow(goal, AGENT_CAPABILITIES)
+        prompt = f"""
+You are ChipLoop Workflow Architect.
 
-    # --- Step 2: Construct LLM prompt ---
-    prompt = f"""You are ChipLoop workflow architect.
-Build a workflow for this goal: {goal}.
-Here is a pre-generated plan you must follow:
+Goal:
+{goal}
+
+Available agents:
 {json.dumps(plan_data, indent=2)}
-Use known agents from AGENT_CAPABILITIES.
-Output valid JSON with keys: nodes, edges, summary.
+
+🧠 Instructions:
+- Choose the minimum number of relevant agents.
+- Each agent can appear only once.
+- Do NOT invent unknown or placeholder agents.
+- Build a clean JSON workflow with keys: summary, nodes, edges.
 """
     response = await run_llm_fallback(prompt)
     plan = extract_json_block(response)

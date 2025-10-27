@@ -857,17 +857,19 @@ async def save_custom_workflow(request: Request):
     """
     try:
         data = await request.json()
-        wf = data.get("workflow", {})
         logger.info(f"💾 Saving workflow → name={data.get('name')} | user={data.get('user_id')} | keys={list(data.keys())}")
 
-        # --- Extract user workflow data ---
-        user_id = wf.get("user_id", None)  # optional for logged-in users
-        name = wf.get("workflow_name", "Untitled Workflow")
+        # Support both flat and nested payloads
+        wf = data.get("workflow", data)
+
+        user_id = wf.get("user_id", data.get("user_id", "anonymous"))
+        name = wf.get("workflow_name") or wf.get("name") or "Untitled Workflow"
         goal = wf.get("goal", "")
-        summary = wf.get("summary", "")
+        summary = wf.get("summary") or wf.get("data", {}).get("summary", "")
         loop_type = wf.get("loop_type", "system")
-        nodes = wf.get("nodes", [])
-        edges = wf.get("edges", [])
+        nodes = wf.get("nodes") or wf.get("data", {}).get("nodes", [])
+        edges = wf.get("edges") or wf.get("data", {}).get("edges", [])
+
 
         # --- Domain detection for auto system agent ---
         domains = set()
