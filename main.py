@@ -857,6 +857,13 @@ async def save_custom_workflow(request: Request):
     """
     try:
         data = await request.json()
+        print("\n\n========== DEBUG SAVE_CUSTOM_WORKFLOW ==========")
+        print("RAW data keys:", list(data.keys()))
+        print("RAW data:", data)
+        print("RAW workflow type:", type(data.get("workflow")))
+        print("RAW workflow keys:", list(data.get("workflow", {}).keys()) if isinstance(data.get("workflow"), dict) else data.get("workflow"))
+        print("===============================================\n\n")
+
         logger.info(f"💾 Saving workflow → name={data.get('name')} | user={data.get('user_id')} | keys={list(data.keys())}")
 
         # Support both flat and nested payloads
