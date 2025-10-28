@@ -864,7 +864,7 @@ async def save_custom_workflow(request: Request):
         print("RAW workflow keys:", list(data.get("workflow", {}).keys()) if isinstance(data.get("workflow"), dict) else data.get("workflow"))
         print("===============================================\n\n")
 
-        logger.info(f"💾 Saving workflow → name={data.get('name')} | user={data.get('user_id')} | keys={list(data.keys())}")
+    
 
         # Support both flat and nested payloads
         wf = data.get("workflow", data)
@@ -874,8 +874,6 @@ async def save_custom_workflow(request: Request):
         name = (
           data.get("workflow", {}).get("workflow_name")
           or data.get("workflow", {}).get("name")
-          or wf.get("workflow_name")
-          or wf.get("name")
           or "Untitled Workflow"
         )
         
