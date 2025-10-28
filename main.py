@@ -1070,5 +1070,72 @@ async def voice_to_spec(file: UploadFile = File(...)):
     except Exception as e:
         return {"error": str(e)}
 
+# ---------- DELETE a saved custom workflow ----------
+@app.delete("/delete_custom_workflow")
+def delete_custom_workflow(request: Request, name: str = Query(...)):
+    """
+    Deletes a workflow by name for the current user.
+    Removes associated runs too.
+    """
+    user = verify_token(request)
+    user_id = user.get("sub") if user and user.get("sub") != "anonymous" else None
+
+    # Find workflow by name and user
+    q = supabase.table("workflows").select("id").eq("name", name)
+    q = q.eq("user_id", user_id) if user_id else q.is_("user_id", None)
+    res = q.limit(1).execute()
+    if not res.data:
+        return {"status": "ok", "deleted": 0, "message": "No such workflow"}
+
+    wf_id = res.data[0]["id"]
+
+    # Delete dependent runs
+    try:
+        supabase.table("runs").delete().eq("workflow_id", wf_id).execute()
+    except Exception:
+        pass
+
+    # Delete workflow
+    supabase.table("workflows").delete().eq("id", wf_id).execute()
+    return {"status": "ok", "deleted": 1, "workflow_id": wf_id}
+
+
+# ---------- RENAME a saved custom workflow ----------
+@app.post("/rename_custom_workflow")
+async def rename_custom_workflow(request: Request):
+    """
+    Renames a saved workflow for the current user.
+    Body: { "old_name": "Foo", "new_name": "Bar" }
+    """
+    try:
+        data = await request.json()
+        old_name = data.get("old_name")
+        new_name = data.get("new_name")
+
+        if not old_name or not new_name:
+            raise HTTPException(status_code=400, detail="Both old_name and new_name required")
+
+        user = verify_token(request)
+        user_id = user.get("sub") if user and user.get("sub") != "anonymous" else None
+
+        q = supabase.table("workflows").select("id").eq("name", old_name)
+        q = q.eq("user_id", user_id) if user_id else q.is_("user_id", None)
+        res = q.limit(1).execute()
+        if not res.data:
+            return {"status": "error", "message": "Workflow not found"}
+
+        wf_id = res.data[0]["id"]
+        supabase.table("workflows").update({
+            "name": new_name,
+            "updated_at": datetime.utcnow().isoformat()
+        }).eq("id", wf_id).execute()
+
+        return {"status": "ok", "workflow_id": wf_id, "new_name": new_name}
+
+    except Exception as e:
+        logger.error(f"❌ Rename failed: {e}")
+        return {"status": "error", "message": str(e)}
+
+
 
 
