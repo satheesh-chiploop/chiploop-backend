@@ -876,12 +876,17 @@ async def save_custom_workflow(request: Request):
           or data.get("workflow", {}).get("name")
           or "Untitled Workflow"
         )
+
+        name= str(name).strip()
+        logger.info(f"💾 Normalized workflow name: '{name}' (type={type(name)})")
         
         goal = wf.get("goal", "")
         summary = wf.get("summary") or wf.get("data", {}).get("summary", "")
         loop_type = wf.get("loop_type", "system")
         nodes = wf.get("nodes") or wf.get("data", {}).get("nodes", [])
         edges = wf.get("edges") or wf.get("data", {}).get("edges", [])
+
+        logger.info(f"📦 Saving workflow: name={name}, loop_type={loop_type}, nodes={len(nodes)}, edges={len(edges)}, user={user_id}")
 
         for node in nodes:
             if "data" not in node and "type" in node:
