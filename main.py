@@ -870,7 +870,12 @@ async def save_custom_workflow(request: Request):
         nodes = wf.get("nodes") or wf.get("data", {}).get("nodes", [])
         edges = wf.get("edges") or wf.get("data", {}).get("edges", [])
 
-
+        for node in nodes:
+        if "data" not in node and "type" in node:
+            node["data"] = {"backendLabel": node["type"]}
+        elif "data" in node and "backendLabel" not in node["data"]:
+            node["data"]["backendLabel"] = node.get("type", "Unknown")
+            
         # --- Domain detection for auto system agent ---
         domains = set()
         for node in nodes:
