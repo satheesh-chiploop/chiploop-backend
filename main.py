@@ -863,7 +863,13 @@ async def save_custom_workflow(request: Request):
         wf = data.get("workflow", data)
 
         user_id = wf.get("user_id", data.get("user_id", "anonymous"))
-        name = wf.get("workflow_name") or wf.get("name") or "Untitled Workflow"
+        name = (
+          wf.get("workflow_name")
+          or wf.get("name")
+          or data.get("workflow_name")
+          or data.get("name")
+          or "Untitled Workflow"
+        )
         goal = wf.get("goal", "")
         summary = wf.get("summary") or wf.get("data", {}).get("summary", "")
         loop_type = wf.get("loop_type", "system")
