@@ -869,6 +869,13 @@ async def save_custom_workflow(request: Request):
         # Support both flat and nested payloads
         wf = data.get("workflow", data)
 
+      
+        headers = request.headers
+        auth_user_id = headers.get("x-user-id") or headers.get("x-supabase-user-id")
+
+        if data.get("user_id") is None and auth_user_id:
+            data["user_id"] = auth_user_id
+
         user_id = wf.get("user_id", data.get("user_id", "anonymous"))
 
         name = (
