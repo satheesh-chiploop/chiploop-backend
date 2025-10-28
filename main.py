@@ -866,6 +866,8 @@ async def save_custom_workflow(request: Request):
         name = (
           wf.get("workflow_name")
           or wf.get("name")
+          or (wf.get("workflow", {}) or {}).get("name")
+          or (data.get("workflow", {}) or {}).get("name")
           or data.get("workflow_name")
           or data.get("name")
           or "Untitled Workflow"
