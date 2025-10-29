@@ -877,14 +877,23 @@ async def save_custom_workflow(request: Request):
           or headers.get("x-supabase-user-id")
           or headers.get("x-client-user-id")
         )
+        # ✅ Step 3: Fallback to JWT (for logged-in Supabase users)
+        jwt_user_id = None
+        try:
+          token_data = verify_token(request)
+          jwt_user_id = token_data.get("sub")
+        except Exception:
+           pass
 
-        # ✅ Step 3: final priority order (header > body > anonymous)
-        auth_user_id = header_user_id or body_user_id or "anonymous"
+    # ✅ Step 4: Final priority (header > body > JWT > anonymous)
+        auth_user_id = header_user_id or body_user_id or jwt_user_id or "anonymous"
 
+        # ✅ Apply consistently to both data & workflow objects
         data["user_id"] = auth_user_id
         wf["user_id"] = auth_user_id
         user_id = auth_user_id
-
+        logger.info(f"💾 Final resolved user_id={user_id}")
+        
         name = (
           data.get("workflow", {}).get("workflow_name")
           or data.get("workflow", {}).get("name")
