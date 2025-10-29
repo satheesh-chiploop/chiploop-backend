@@ -875,14 +875,18 @@ async def save_custom_workflow(request: Request):
            or headers.get("x-supabase-user-id")
            or headers.get("x-client-user-id")
 )
-        if not data.get("user_id") and auth_user_id:
-           data["user_id"] = auth_user_id
-        
-        user_id = (
-           data.get("user_id")
-           or wf.get("user_id")
-           or "anonymous"
-        )
+        # Try JWT if no header
+        if not auth_user_id:
+           user = verify_token(request)
+           auth_user_id = user.get("sub")
+
+        # Normalize length & type
+        if not auth_user_id or len(auth_user_id) != 36:
+           auth_user_id = "anonymous"
+
+        data["user_id"] = auth_user_id
+        wf["user_id"] = auth_user_id
+        user_id = auth_user_id
 
         name = (
           data.get("workflow", {}).get("workflow_name")
