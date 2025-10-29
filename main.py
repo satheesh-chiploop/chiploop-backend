@@ -867,22 +867,19 @@ async def save_custom_workflow(request: Request):
     
 
         # Support both flat and nested payloads
-        wf = data.get("workflow", data)
+        wf = data.get("workflow", {})
+        body_user_id = data.get("user_id") or wf.get("user_id")
 
+        # ✅ Step 2: extract from headers if body didn’t include
         headers = request.headers
-        auth_user_id = (
-           headers.get("x-user-id")
-           or headers.get("x-supabase-user-id")
-           or headers.get("x-client-user-id")
-)
-        # Try JWT if no header
-        if not auth_user_id:
-           user = verify_token(request)
-           auth_user_id = user.get("sub")
+        header_user_id = (
+          headers.get("x-user-id")
+          or headers.get("x-supabase-user-id")
+          or headers.get("x-client-user-id")
+        )
 
-        # Normalize length & type
-        if not auth_user_id or len(auth_user_id) != 36:
-           auth_user_id = "anonymous"
+        # ✅ Step 3: final priority order (header > body > anonymous)
+        auth_user_id = header_user_id or body_user_id or "anonymous"
 
         data["user_id"] = auth_user_id
         wf["user_id"] = auth_user_id
