@@ -895,7 +895,7 @@ async def save_custom_workflow(request: Request):
         logger.info(f"💾 Final resolved user_id={user_id}")
         
         name = (
-          data.get("workflow", {}).get("workflow")
+          data.get("workflow", {}).get("workflow_name")
           or data.get("workflow", {}).get("name")
           or "Untitled Workflow"
         )
