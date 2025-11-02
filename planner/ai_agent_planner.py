@@ -119,4 +119,26 @@ Return valid JSON only:
         logger.warning(f"⚠️ Failed to update user memory: {e}")
 
     logger.info(f"✅ Agent plan ready: {plan.get('agent_name', 'Unnamed_Agent')}")
+    # ✅ Ensure Agent Planner shares same missing-agent logic as Workflow Builder
+    from agent_capabilities import AGENT_CAPABILITIES
+    from agents.agent_selector import select_required_agents
+
+    structured_spec = plan.get("structured_spec_final", {})
+
+    # 1) Determine required agents (deterministic AGX selector)
+    required_agents = select_required_agents(structured_spec)
+
+    # 2) Determine what the LLM suggested (if planning created an agent chain)
+    suggested_agents = plan.get("agents", [])
+
+    # 3) Compute missing agents (agents that must exist but do not yet)
+    existing = set(AGENT_CAPABILITIES.keys())
+    missing = [a for a in required_agents if a not in existing]
+
+    # 4) Store result so Auto-Compose will generate them
+    plan["missing_agents"] = missing
+
+    logger.info(f"🔁 Shared Engine → Agent Planner Missing Agents: {missing}")
+
+    
     return plan

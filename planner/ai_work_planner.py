@@ -23,6 +23,10 @@ PORTKEY_API_KEY = os.getenv("PORTKEY_API_KEY")
 client_portkey = Portkey(api_key=PORTKEY_API_KEY)
 client_openai = OpenAI()
 
+from planner.capability_graph import get_candidate_agents
+from planner.ranking import rank_candidates
+from planner.mycelium_memory import memory_lookup
+
 import re
 
 def extract_json_block(text):
@@ -40,128 +44,117 @@ def extract_json_block(text):
             pass
     return {}
 
+    
 
-def plan_workflow(prompt: str, agent_capabilities: dict, workflow_id: str = None) -> dict:
+async def plan_workflow(prompt: str, structured_spec_final=None) -> dict:
     """
-    Generates an AI workflow plan from user intent using LLM (Ollama → Portkey → OpenAI fallback).
+    Generates an AI workflow plan from user intent using LLM (Portkey-first).
+    Now enhanced with structured_spec_final → AGX-context-informed LLM planning.
     """
 
     logger.info(f"🧠 Planning workflow for goal: {prompt[:100]}...")
 
-    # --- 1. Build planning context ---
+    from agent_capabilities import AGENT_CAPABILITIES
+    from planner.capability_graph import get_candidate_agents, extract_niches
+    import json
+
+    # 🔹 Capability context for the LLM
     context = "\n".join([
-        f"- {name}: domain={meta['domain']}, inputs={meta['inputs']}, outputs={meta['outputs']}, desc={meta['description']}"
-        for name, meta in agent_capabilities.items()
+        f"- {name}: {meta.get('description', '')}"
+        for name, meta in AGENT_CAPABILITIES.items()
     ])
 
+    # 🔹 If structured spec is present → Infer design niches & candidate agents
+    niches = extract_niches(structured_spec_final) if structured_spec_final else []
+    candidate_agents = get_candidate_agents(structured_spec_final) if structured_spec_final else list(AGENT_CAPABILITIES.keys())
+
+    structured_context = ""
+    if structured_spec_final:
+        structured_context = f"""
+Structured Digital Spec:
+{json.dumps(structured_spec_final, indent=2)}
+
+Detected Design Niches:
+{', '.join(niches) if niches else "none"}
+
+Recommended Agent Candidates (Do not invent new agent names):
+{candidate_agents}
+
+You MUST select agents that satisfy these architectural constraints:
+- Respect multi-clock & multi-reset domain boundaries.
+- If multiple power domains → include 'Power Intent Agent'.
+- If CDC crossings present → include 'CDC Guard Agent'.
+- If PDC crossings present → include 'PDC Guard Agent'.
+- Always generate the minimal correct chain (no unnecessary agents).
+"""
+
+    # ✅ Your original rule prompt remains intact
     system_prompt = f"""
-    You are an AI Workflow Planner for ChipLoop.
-    You have access to these agents:
-    {context}
+You are an AI Workflow Planner for ChipLoop.
+You have access to these agents:
+{context}
 
-    Given a user goal, you must return valid JSON in the format:
-    {{
-        "loop_type": "<digital|analog|embedded|system>",
-        "agents": ["Agent1", "Agent2", ...]
-    }}
+{structured_context}
 
-    Rules:
-    - Choose the minimal set of agents required.
-    - Always end with "System Workflow Agent" if the loop_type is "system".
-    - Only use existing agents.
-    - Never output text outside JSON.
-    """
+Given a user goal, you must return valid JSON in the format:
+{{
+    "loop_type": "<digital|analog|embedded|system>",
+    "agents": ["Agent1", "Agent2", ...]
+}}
+
+Rules:
+- Choose the minimal set of agents required.
+- Always end with "System Workflow Agent" if the loop_type is "system".
+- Only use existing agents (NO new agent names).
+- Never output text outside JSON.
+"""
 
     messages = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": f"User goal: {prompt}"}
     ]
 
-    # --- 2. Try local Ollama first ---
-    if USE_LOCAL_OLLAMA:
-        try:
-            logger.info("🦙 Using local Ollama model for workflow planning...")
-            resp = requests.post(
-                "http://localhost:11434/api/generate",
-                json={"model": "llama3", "prompt": system_prompt + "\n" + prompt}
-            )
-            response_text = resp.text
-                        # --- After receiving content from Portkey/OpenAI/Ollama ---
-            plan = safe_parse_plan(content if 'content' in locals() else response_text)
-
-            # 🔍 Detect missing agents
-            from agent_capabilities import AGENT_CAPABILITIES
-            existing = set(AGENT_CAPABILITIES.keys())
-            suggested = set(plan.get("agents", []))
-            missing = list(suggested - existing)
-            plan["missing_agents"] = missing
-            logger.info(f"🧩 Missing agents detected: {missing}")
-            return plan
-
-        except Exception as e:
-            logger.warning(f"Ollama failed: {e}")
-
-    # --- 3. Try Portkey (if configured) ---
+    # --- 3. Try Portkey (Primary Backend) ---
     if PORTKEY_API_KEY:
         try:
             logger.info("🪄 Using Portkey API for workflow planning...")
 
-            print("🌐 Calling LLM via Portkey...")
-
             completion = client_portkey.chat.completions.create(
-                model="@chiploop/gpt-5-mini",     
+                model="@chiploop/gpt-5-mini",
                 messages=messages,
-                temperature=1,                  
+                temperature=0.5,     # ⬇️ Less randomness = more stable planning
                 stream=False
             )
 
             llm_output = completion.choices[0].message.content or ""
-            print("✅ Response received.")
-
             plan = safe_parse_plan(llm_output)
-            
-            # 🔍 Detect missing agents
-            from agent_capabilities import AGENT_CAPABILITIES
+
+            # ✅ Detect missing agents
             existing = set(AGENT_CAPABILITIES.keys())
             suggested = set(plan.get("agents", []))
             missing = list(suggested - existing)
-            plan["missing_agents"] = missing
-            logger.info(f"🧩 Missing agents detected: {missing}")
-            return plan
 
+            # ✅ Merge deterministic required agents (AGX selector)
+            if structured_spec_final:
+                from agents.agent_selector import select_required_agents
+                required = select_required_agents(structured_spec_final)
+                missing = list({*missing, *required})
+
+            plan["missing_agents"] = missing
+
+            logger.info(f"🧩 Missing agents detected (to autogen in auto-compose): {missing}")
+            return plan
 
         except Exception as e:
             logger.warning(f"Portkey fallback failed: {e}")
 
-    # --- 4. Fallback to direct OpenAI ---
-    if OPENAI_API_KEY:
-        try:
-            logger.info("🌐 Using OpenAI fallback for workflow planning...")
-            client = OpenAI(api_key=OPENAI_API_KEY)
-            resp = client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=messages,
-                temperature=0.3
-            )
-            content = resp.choices[0].message.content
-            # --- After receiving content from Portkey/OpenAI/Ollama ---
-            plan = safe_parse_plan(content if 'content' in locals() else response_text)
-
-            # 🔍 Detect missing agents
-            from agent_capabilities import AGENT_CAPABILITIES
-            existing = set(AGENT_CAPABILITIES.keys())
-            suggested = set(plan.get("agents", []))
-            missing = list(suggested - existing)
-            plan["missing_agents"] = missing
-            logger.info(f"🧩 Missing agents detected: {missing}")
-            return plan
-
-        except Exception as e:
-            logger.error(f"OpenAI fallback failed: {e}")
-
     # --- 5. If all fail ---
     logger.error("❌ All AI backends failed for workflow planning.")
     return {"loop_type": "unknown", "agents": []}
+
+
+
+
 
 def safe_parse_plan(text: str):
     """
@@ -205,8 +198,8 @@ def register_new_agent(agent_data: dict):
 
 import json, random
 from .ai_agent_planner import plan_agent_fallback
+async def auto_compose_workflow_graph(goal: str, structured_spec_final: dict, preplan=dict | str | None = None):
 
-async def auto_compose_workflow_graph(goal: str, preplan: dict | str | None = None):
     """
     Builds a structured workflow graph (nodes + edges)
     using a preplan if provided, or generates one internally.
@@ -311,20 +304,35 @@ Available agents:
         logger.info(f"📚 Known agents: {list(AGENT_CAPABILITIES.keys())[:10]}")
         logger.info(f"🧩 Missing agents: {missing}")
     # --- Step 4: Create and persist any missing agents ---
-    if missing and any(m not in ["process", "flow", "pipeline"] for m in missing):
-        from .ai_agent_planner import plan_agent_fallback
-        for m in missing:
-            try:
-                new_agent = await plan_agent_fallback(m)
-                register_new_agent(new_agent)
-                logger.info(f"✅ Auto-created & saved missing agent: {m}")
-            except Exception as e:
-                logger.warning(f"⚠️ Failed to generate missing agent {m}: {e}")
+    from agents.agent_generator import generate_agent,reload_custom_agents
+    from agent_capabilities import AGENT_CAPABILITIES
+
+    for agent in missing:
+        if agent not in AGENT_CAPABILITIES:     # means it does not exist yet
+            await generate_agent(agent, structured_spec_final)
+        # IMPORTANT: dynamically load new agent into runtime registry
+            reload_custom_agents()
 
     # --- Step 5: Auto-layout nodes ---
     for i, n in enumerate(plan.get("nodes", [])):
-        n.setdefault("id", f"n{i+1}")
-        n.setdefault("position", {"x": 150 * i, "y": 100 + 60 * (i % 2)})
+
+    agent_name = (
+        n.get("agent")
+        or n.get("data", {}).get("backendLabel")
+        or n.get("type")
+        or n.get("label")
+        or "unknown_agent"
+    )
+
+    n["id"] = f"n{i+1}"
+    n["position"] = {"x": 150 * i, "y": 100 + 60 * (i % 2)}
+
+    # ✅ Standardize node data structure for frontend & execution
+    n["data"] = {
+        "uiLabel": agent_name.replace("_", " ").title(),   # What user sees
+        "backendLabel": agent_name,                        # Execution lookup key
+        "desc": f"Auto-composed: {agent_name}"
+    }
 
     # --- Step 6: Auto-connect edges ---
     if not plan.get("edges"):
@@ -357,10 +365,11 @@ Available agents:
     except Exception as e:
         logger.warning(f"⚠️ Failed to update agent memory: {e}")
 
-
     return {
         "nodes": plan.get("nodes", []),
         "edges": plan.get("edges", []),
         "summary": plan.get("summary", "Auto-composed workflow complete."),
+        "structured_spec_final": structured_spec_final,  
     }
+    
 

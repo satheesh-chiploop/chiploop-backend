@@ -42,4 +42,30 @@ AGENT_CAPABILITIES = {
         "outputs": ["system_validation.json"],
         "description": "Performs cross-loop integration and validation."
     },
+    
 }
+
+# backend/agent_capabilities.py
+AGENT_CAPABILITIES.update({
+    "Power Intent Agent": {
+        "domain": "digital",
+        "inputs": ["structured_spec.json"],
+        "outputs": ["power_intent.upf"],
+        "description": "Generates UPF/CPF based on multi-power domain architecture.",
+        "requires": ["multi_power_domain"]
+    },
+    "CDC Guard Agent": {
+        "domain": "digital",
+        "inputs": ["structured_spec.json"],
+        "outputs": ["cdc_wrappers.v"],
+        "description": "Inserts synchronizers based on CDC detection.",
+        "requires": ["has_cdc"]
+    },
+    "PDC Guard Agent": {
+        "domain": "digital",
+        "inputs": ["structured_spec.json"],
+        "outputs": ["pdc_wrappers.v"],
+        "description": "Inserts level shifters and isolation.",
+        "requires": ["has_pdc"]
+    }
+})

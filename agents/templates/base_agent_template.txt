@@ -1,0 +1,33 @@
+from agents.base_agent import BaseAgent
+from utils.llm_utils import run_llm_fallback
+import os
+import json
+
+class {sanitized_agent_name}(BaseAgent):
+    """
+    ChipLoop Agent
+    Purpose: {agent_name}
+
+    This agent is automatically generated based on:
+      - Structured specification context
+      - Capability signature metadata
+      - User refinement history (AGX memory)
+    """
+
+    async def run(self, state):
+        structured = state.get("structured_spec_final", {})
+        artifact_dir = state["artifact_dir"]
+        os.makedirs(artifact_dir, exist_ok=True)
+
+        # === Your agent logic goes here ===
+        # | structured → gives hardware architecture context
+        # | If you need to generate code, call:
+        # |   code = await run_llm_fallback("<generation prompt>")
+        # |   Save to artifact_dir as needed
+
+        # Example placeholder (safe default):
+        artifact_path = os.path.join(artifact_dir, "{sanitized_agent_name}.json")
+        json.dump(structured, open(artifact_path, "w"), indent=2)
+
+        log = f"{sanitized_agent_name} executed successfully using structured spec context."
+        return {"artifact": artifact_path, "log": log, "code": None}

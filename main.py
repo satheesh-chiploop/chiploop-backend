@@ -32,7 +32,7 @@ try:
     from supabase import create_client, Client  # supabase-py v2
 except ImportError:
     raise RuntimeError("Please install supabase-py v2: pip install supabase")
-    
+
 SUPABASE_URL = os.environ.get("SUPABASE_URL") or os.environ.get("NEXT_PUBLIC_SUPABASE_URL")
 SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")  # <<< REMOVE fallback
 
@@ -693,7 +693,11 @@ async def plan_workflow_api(request: Request):
     data = await request.json()
     user_prompt = data.get("prompt", "")
     workflow_id = data.get("workflow_id", "manual_plan")
-    plan = plan_workflow(user_prompt, AGENT_CAPABILITIES, workflow_id)
+    structured_spec_final = data.get("structured_spec_final")
+    plan = await plan_workflow(
+       user_prompt,
+       structured_spec_final=structured_spec_final
+    )
     return {"status": "ok", "plan": plan}
 
 
@@ -702,6 +706,14 @@ async def plan_workflow_api(request: Request):
 # ==========================================================
 
 from utils.spec_analyzer import analyze_spec_text
+from utils.domain_classifier import detect_domain
+from analyze.digital.analyze_spec_digital import analyze_spec_digital, finalize_spec_digital
+
+
+# backend/main.py  (inside /analyze_spec)
+from backend.utils.domain_classifier import detect_domain
+from backend.spec_analyzer import analyze_spec_text  # your existing analyzer
+from backend.analyze.digital.analyze_spec_digital import analyze_spec_digital, finalize_spec_digital
 
 @app.post("/analyze_spec")
 async def analyze_spec(request: Request):
@@ -709,8 +721,47 @@ async def analyze_spec(request: Request):
     goal = data.get("goal", "")
     voice_summary = data.get("voice_summary", "")
     user_id = data.get("user_id", "anonymous")
-    return await analyze_spec_text(goal, voice_summary, user_id)
-# ---------- /analyze_spec ----------
+
+    combined = (voice_summary or "") + "\n" + (goal or "")
+    domain_info = await detect_domain(combined)
+    domain = (domain_info.get("domain") or "mixed").lower()
+    conf = domain_info.get("confidence") or {}
+    max_conf = max(conf.values()) if conf else 0.0
+
+    logger = logging.getLogger(__name__)
+
+    # after domain_info = await detect_domain(...)
+
+    logger.info("AnalyzeSpec: domain=%s conf=%s reason=%s",
+            domain_info.get("domain"),
+            domain_info.get("confidence"),
+            domain_info.get("reason"))
+
+
+    if domain == "digital" and max_conf >= 0.70:
+        result = await analyze_spec_digital(goal, voice_summary, user_id)
+    else:
+        # keep current behavior for analog/embedded/mixed for now
+        result = await analyze_spec_text(goal, voice_summary, user_id)
+
+    return {
+        "domain_info": domain_info,
+        "result": result
+    }
+
+# New endpoint to finalize after SHORT form is submitted from UI
+@app.post("/finalize_spec")
+async def finalize_spec(request: Request):
+    data = await request.json()
+    user_id = data.get("user_id", "anonymous")
+    structured_spec_draft = data.get("structured_spec_draft", {})
+    answers = data.get("answers", {})  # { "path": value, ... }
+
+    # For now we only support digital finalize; can branch by engine if needed
+    result = await finalize_spec_digital(structured_spec_draft, answers, user_id)
+    return result
+
+
 
 
 # ---------- /plan_workflow_memory ----------
@@ -990,7 +1041,8 @@ async def auto_compose_workflow(request: Request):
         logger.info(f"🧠 Auto-composing workflow for goal: {goal}")
         logger.info(f"📥 Received preplan: {type(preplan)} | Keys: {list(preplan.keys()) if isinstance(preplan, dict) else 'None'}")
         from planner.ai_work_planner import auto_compose_workflow_graph
-        graph = await auto_compose_workflow_graph(goal,preplan)
+        structured_spec_final = data.get("structured_spec_final")
+        graph = await auto_compose_workflow_graph(goal,structured_spec_final=structured_spec_final,preplan)
 
         return {"status": "ok", **graph}
     except Exception as e:
@@ -1179,6 +1231,36 @@ async def rename_custom_workflow(request: Request):
         logger.error(f"❌ Rename failed: {e}")
         return {"status": "error", "message": str(e)}
 
+@app.get("/api/agents/get_code")
+async def get_agent_code(agent: str):
+    from agent_capabilities import AGENT_CAPABILITIES
+    import pathlib
+
+    possible_paths = [
+        f"backend/agents/custom/{agent.lower()}.py",
+        f"backend/agents/{agent.lower()}.py"
+    ]
+
+    for path in possible_paths:
+        if os.path.exists(path):
+            return open(path).read()
+
+    return ""
+
+@app.post("/api/agents/save_code")
+async def save_agent_code(data: dict):
+    agent = data["agent"]
+    code = data["code"]
+
+    file_path = f"backend/agents/custom/{agent.lower()}.py"
+    with open(file_path, "w") as f:
+        f.write(code)
+
+    # Reload custom agents
+    from agents.loader import load_custom_agents
+    load_custom_agents()
+
+    return {"status": "ok"}
 
 
 
