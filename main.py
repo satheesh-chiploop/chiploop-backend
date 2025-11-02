@@ -711,9 +711,9 @@ from analyze.digital.analyze_spec_digital import analyze_spec_digital, finalize_
 
 
 # backend/main.py  (inside /analyze_spec)
-from backend.utils.domain_classifier import detect_domain
-from backend.spec_analyzer import analyze_spec_text  # your existing analyzer
-from backend.analyze.digital.analyze_spec_digital import analyze_spec_digital, finalize_spec_digital
+from utils.domain_classifier import detect_domain
+from utils.spec_analyzer import analyze_spec_text  # your existing analyzer
+from analyze.digital.analyze_spec_digital import analyze_spec_digital, finalize_spec_digital
 
 @app.post("/analyze_spec")
 async def analyze_spec(request: Request):
@@ -1237,8 +1237,8 @@ async def get_agent_code(agent: str):
     import pathlib
 
     possible_paths = [
-        f"backend/agents/custom/{agent.lower()}.py",
-        f"backend/agents/{agent.lower()}.py"
+        f"agents/custom/{agent.lower()}.py",
+        f"agents/{agent.lower()}.py"
     ]
 
     for path in possible_paths:
@@ -1252,7 +1252,7 @@ async def save_agent_code(data: dict):
     agent = data["agent"]
     code = data["code"]
 
-    file_path = f"backend/agents/custom/{agent.lower()}.py"
+    file_path = f"agents/custom/{agent.lower()}.py"
     with open(file_path, "w") as f:
         f.write(code)
 
