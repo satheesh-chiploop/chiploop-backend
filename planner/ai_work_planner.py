@@ -6,6 +6,7 @@ from loguru import logger
 from openai import OpenAI
 from utils.llm_utils import run_llm_fallback 
 from portkey_ai import Portkey
+from typing import Optional, Union
 # ---------------- Supabase client ----------------
 
 from supabase import create_client
@@ -198,7 +199,7 @@ def register_new_agent(agent_data: dict):
 
 import json, random
 from .ai_agent_planner import plan_agent_fallback
-async def auto_compose_workflow_graph(goal: str, structured_spec_final: dict, preplan=dict | str | None = None):
+async def auto_compose_workflow_graph(goal: str, structured_spec_final: dict, preplan=  Optional[Union[dict, str]] = None):
 
     """
     Builds a structured workflow graph (nodes + edges)
