@@ -292,7 +292,7 @@ Available agents:
                 or a.get("label")
                 or "unknown_agent"
             )
-            existing_agents.append(agent_name)
+        existing_agents.append(agent_name)
         existing_agents = [
             a for a in existing_agents
             if a.lower() not in ["process", "flow", "pipeline", "unknown_agent"]
@@ -324,13 +324,13 @@ Available agents:
     # --- Step 5: Auto-layout nodes ---
     for i, n in enumerate(plan.get("nodes", [])):
 
-    agent_name = (
-        n.get("agent")
-        or n.get("data", {}).get("backendLabel")
-        or n.get("type")
-        or n.get("label")
-        or "unknown_agent"
-    )
+        agent_name = (
+            n.get("agent")
+            or n.get("data", {}).get("backendLabel")
+            or n.get("type")
+            or n.get("label")
+            or "unknown_agent"
+        )
 
     n["id"] = f"n{i+1}"
     n["position"] = {"x": 150 * i, "y": 100 + 60 * (i % 2)}
