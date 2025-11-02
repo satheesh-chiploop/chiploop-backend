@@ -199,7 +199,14 @@ def register_new_agent(agent_data: dict):
 
 import json, random
 from .ai_agent_planner import plan_agent_fallback
-async def auto_compose_workflow_graph(goal: str, structured_spec_final: dict, preplan=  Optional[Union[dict, str]] = None):
+
+
+async def auto_compose_workflow_graph(
+    goal: str,
+    structured_spec_final: dict,
+    preplan: Optional[Union[dict, str]] = None
+):
+
 
     """
     Builds a structured workflow graph (nodes + edges)
