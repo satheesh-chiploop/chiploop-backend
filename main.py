@@ -1042,7 +1042,7 @@ async def auto_compose_workflow(request: Request):
         logger.info(f"📥 Received preplan: {type(preplan)} | Keys: {list(preplan.keys()) if isinstance(preplan, dict) else 'None'}")
         from planner.ai_work_planner import auto_compose_workflow_graph
         structured_spec_final = data.get("structured_spec_final")
-        graph = await auto_compose_workflow_graph(goal,structured_spec_final=structured_spec_final,preplan)
+        graph = await auto_compose_workflow_graph(goal,structured_spec_final=structured_spec_final,preplan=preplan)
 
         return {"status": "ok", **graph}
     except Exception as e:
