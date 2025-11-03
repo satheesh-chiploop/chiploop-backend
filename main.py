@@ -1293,6 +1293,56 @@ Additional Inferred Design Details:
 """
 
     return {"final_text": final_text}
+    
+@app.post("/finalize_spec_natural_sentences")
+async def finalize_spec_natural_sentences(data: dict):
+    """
+    Convert missing field edited values into natural language sentences
+    and append them to the original user prompt.
+    """
+    original = data.get("original_text", "").strip()
+    missing = data.get("missing", [])
+    edited_values = data.get("edited_values", {})
+
+    additions = []
+
+    for item in missing:
+        path = item.get("path", "")
+        ask = item.get("ask", "")
+        value = edited_values.get(path, "").strip()
+
+        if not value:
+            continue
+
+        # LLM prompt to convert user value into a natural sentence
+        sentence_prompt = f"""
+        Convert the following design clarification into a clear, single natural language sentence.
+        
+        Clarification request:
+        "{ask}"
+
+        Confirmed value:
+        "{value}"
+
+        Requirements:
+        - Do not rewrite the original specification.
+        - Do not add details that were not provided.
+        - Make it direct, factual, and concise.
+        - Use the tone: "The top-level module name is ALU_TOP."
+        """
+
+        sentence = await run_llm_fallback(sentence_prompt)
+        additions.append(f"- {sentence.strip()}")
+
+    additions_text = "\n".join(additions)
+
+    final_text = f"""{original}
+
+Additional Inferred Design Details:
+{additions_text}
+"""
+
+    return {"final_text": final_text}
 
 
 
