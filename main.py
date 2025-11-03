@@ -21,6 +21,7 @@ from utils.audio_utils import transcribe_audio
 from utils.notion_utils import append_to_notion, get_or_create_notion_page
 from fastapi import WebSocket
 import asyncio
+from planner.auto_fill_missing import auto_fill_missing_fields
 
 
 import logging
@@ -1261,7 +1262,7 @@ async def save_agent_code(data: dict):
     load_custom_agents()
 
     return {"status": "ok"}
-    
+
 @app.post("/finalize_spec")
 async def finalize_spec(payload: dict):
     draft = payload.get("structured_spec_draft")
@@ -1276,6 +1277,13 @@ async def finalize_spec(payload: dict):
             "ready_for_planning": True
         }
     }
+@app.post("/auto_fill_missing")
+async def auto_fill_missing_route(data: dict):
+    original_text = data.get("original_text", "")
+    structured_spec = data.get("structured_spec_draft", {})
+    missing_fields = data.get("missing", [])
+    improved = await auto_fill_missing_fields(original_text, structured_spec, missing_fields)
+    return {"status": "ok", "improved_spec": improved}
 
 
 
