@@ -750,20 +750,6 @@ async def analyze_spec(request: Request):
         "result": result
     }
 
-# New endpoint to finalize after SHORT form is submitted from UI
-@app.post("/finalize_spec")
-async def finalize_spec(request: Request):
-    data = await request.json()
-    user_id = data.get("user_id", "anonymous")
-    structured_spec_draft = data.get("structured_spec_draft", {})
-    answers = data.get("answers", {})  # { "path": value, ... }
-
-    # For now we only support digital finalize; can branch by engine if needed
-    result = await finalize_spec_digital(structured_spec_draft, answers, user_id)
-    return result
-
-
-
 
 # ---------- /plan_workflow_memory ----------
 @app.post("/plan_workflow_memory")
@@ -1263,20 +1249,7 @@ async def save_agent_code(data: dict):
 
     return {"status": "ok"}
 
-@app.post("/finalize_spec")
-async def finalize_spec(payload: dict):
-    draft = payload.get("structured_spec_draft")
-    from spec_extractor_digital import finalize_structured_spec
 
-    final_spec, coverage = finalize_structured_spec(draft)
-    return {
-        "status": "ok",
-        "result": {
-            "structured_spec_final": final_spec,
-            "coverage": coverage,
-            "ready_for_planning": True
-        }
-    }
 @app.post("/auto_fill_missing")
 async def auto_fill_missing_route(data: dict):
     original_text = data.get("original_text", "")
@@ -1284,6 +1257,43 @@ async def auto_fill_missing_route(data: dict):
     missing_fields = data.get("missing", [])
     improved = await auto_fill_missing_fields(original_text, structured_spec, missing_fields)
     return {"status": "ok", "improved_spec": improved}
+
+
+@app.post("/finalize_spec_natural")
+async def finalize_spec_natural(data: dict):
+    """
+    Take the original prompt + missing field metadata and generate
+    human natural language sentences that append to the prompt.
+    """
+    original = data.get("original_text", "").strip()
+    missing = data.get("missing", [])
+
+    additions = []
+
+    for item in missing:
+        path = item.get("path", "")
+        ask = item.get("ask", "")
+
+        # Convert missing field ask → natural language sentence
+        sentence_prompt = f"""
+        Convert the following design clarification request into a single clear natural language sentence.
+        Do NOT change meaning. Be concise and accurate.
+        Clarification request:
+        "{ask}"
+        """
+        sentence = await run_llm_fallback(sentence_prompt)  # ✅ Already exists in your backend
+        additions.append(f"- {sentence.strip()}")
+
+    additions_text = "\n".join(additions)
+
+    final_text = f"""{original}
+
+Additional Inferred Design Details:
+{additions_text}
+"""
+
+    return {"final_text": final_text}
+
 
 
 
