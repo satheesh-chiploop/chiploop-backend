@@ -1263,7 +1263,7 @@ async def save_agent_code(data: dict):
 
     return {"status": "ok"}
 
-@app.post("/finalize_spec")
+@app.post("/api/finalize_spec")
 async def finalize_spec(payload: dict):
     draft = payload.get("structured_spec_draft")
     from spec_extractor_digital import finalize_structured_spec
@@ -1277,7 +1277,7 @@ async def finalize_spec(payload: dict):
             "ready_for_planning": True
         }
     }
-@app.post("/auto_fill_missing")
+@app.post("/api/auto_fill_missing")
 async def auto_fill_missing_route(data: dict):
     original_text = data.get("original_text", "")
     structured_spec = data.get("structured_spec_draft", {})
