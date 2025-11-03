@@ -1232,7 +1232,7 @@ async def rename_custom_workflow(request: Request):
         logger.error(f"❌ Rename failed: {e}")
         return {"status": "error", "message": str(e)}
 
-@app.get("/api/agents/get_code")
+@app.get("/agents/get_code")
 async def get_agent_code(agent: str):
     from agent_capabilities import AGENT_CAPABILITIES
     import pathlib
@@ -1248,7 +1248,7 @@ async def get_agent_code(agent: str):
 
     return ""
 
-@app.post("/api/agents/save_code")
+@app.post("/agents/save_code")
 async def save_agent_code(data: dict):
     agent = data["agent"]
     code = data["code"]
@@ -1263,7 +1263,7 @@ async def save_agent_code(data: dict):
 
     return {"status": "ok"}
 
-@app.post("/api/finalize_spec")
+@app.post("/finalize_spec")
 async def finalize_spec(payload: dict):
     draft = payload.get("structured_spec_draft")
     from spec_extractor_digital import finalize_structured_spec
@@ -1277,7 +1277,7 @@ async def finalize_spec(payload: dict):
             "ready_for_planning": True
         }
     }
-@app.post("/api/auto_fill_missing")
+@app.post("/auto_fill_missing")
 async def auto_fill_missing_route(data: dict):
     original_text = data.get("original_text", "")
     structured_spec = data.get("structured_spec_draft", {})
