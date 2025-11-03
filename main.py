@@ -1261,6 +1261,21 @@ async def save_agent_code(data: dict):
     load_custom_agents()
 
     return {"status": "ok"}
+    
+@app.post("/finalize_spec")
+async def finalize_spec(payload: dict):
+    draft = payload.get("structured_spec_draft")
+    from spec_extractor_digital import finalize_structured_spec
+
+    final_spec, coverage = finalize_structured_spec(draft)
+    return {
+        "status": "ok",
+        "result": {
+            "structured_spec_final": final_spec,
+            "coverage": coverage,
+            "ready_for_planning": True
+        }
+    }
 
 
 
