@@ -1250,13 +1250,7 @@ async def save_agent_code(data: dict):
     return {"status": "ok"}
 
 
-@app.post("/auto_fill_missing")
-async def auto_fill_missing_route(data: dict):
-    original_text = data.get("original_text", "")
-    structured_spec = data.get("structured_spec_draft", {})
-    missing_fields = data.get("missing", [])
-    improved = await auto_fill_missing_fields(original_text, structured_spec, missing_fields)
-    return {"status": "ok", "improved_spec": improved}
+
 
 
 @app.post("/finalize_spec_natural_sentences")
@@ -1346,7 +1340,26 @@ Additional Inferred Design Details:
         "coverage_final": int(coverage_final) if isinstance(coverage_final, (int, float)) else 0,
         "additions": additions
     }
-    
+
+
+
+@app.post("/auto_fill_missing_fields")
+async def auto_fill_missing_fields_endpoint(payload: dict):
+    original_text = payload.get("user_prompt") or payload.get("original_text")
+    structured_spec_draft = payload.get("structured_spec_draft")
+    missing_fields = payload.get("missing") or payload.get("remaining_missing_fields") or []
+
+    improved_text, structured_spec_enhanced, remaining_missing_fields, auto_filled_values = \
+        await auto_fill_missing_fields(original_text, structured_spec_draft, missing_fields)
+
+    return {
+        "improved_text": improved_text,
+        "structured_spec_enhanced": structured_spec_enhanced,
+        "remaining_missing_fields": remaining_missing_fields,
+        "auto_filled_values": auto_filled_values
+    }
+
+
 
 
 

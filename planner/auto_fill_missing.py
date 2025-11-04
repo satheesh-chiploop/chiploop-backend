@@ -1,9 +1,10 @@
 from utils.llm_utils import run_llm_fallback
+import re
 
 async def auto_fill_missing_fields(original_text: str, structured_spec_draft: dict, missing_fields: list):
     """
-    Insert missing values into the original text using minimal rewriting.
-    Each auto-inserted value is wrapped in [brackets] for user visibility/editing.
+    Auto-fill missing fields using LLM. The model wraps suggested new values in [brackets].
+    We extract those values and return them for UI editing.
     """
     missing_summary = "\n".join([
         f"- {m['path']}: {m['ask']}"
@@ -15,6 +16,7 @@ You are assisting in refining a hardware specification.
 
 User specification:
 
+{original_text}
 
 Detected missing or incomplete details:
 {missing_summary}
@@ -27,5 +29,24 @@ Your task:
 - Do not add explanations. Return only the revised spec.
 """
 
-    improved = await run_llm_fallback(prompt)
-    return improved.strip()
+    improved_text = (await run_llm_fallback(prompt)).strip()
+
+    # ✅ Extract suggested inserted values inside [...]
+    extracted_pairs = re.findall(r"([A-Za-z0-9_\[\].]+)\s*[:=]\s*\[([^\]]+)\]", improved_text)
+
+    auto_filled_values = {
+        path: value for path, value in extracted_pairs
+    }
+
+    # ✅ Convert missing field objects → UI string list
+    remaining_missing_fields = [m["path"] for m in missing_fields]
+
+    # ✅ structured_spec stays same for now — finalize will convert it
+    structured_spec_enhanced = structured_spec_draft
+
+    return improved_text, structured_spec_enhanced, remaining_missing_fields, auto_filled_values
+
+
+
+
+
