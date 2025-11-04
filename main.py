@@ -1259,65 +1259,29 @@ async def auto_fill_missing_route(data: dict):
     return {"status": "ok", "improved_spec": improved}
 
 
-@app.post("/finalize_spec_natural")
-async def finalize_spec_natural(data: dict):
-    """
-    Take the original prompt + missing field metadata and generate
-    human natural language sentences that append to the prompt.
-    """
-    original = data.get("original_text", "").strip()
-    missing = data.get("missing", [])
-
-    additions = []
-
-    for item in missing:
-        path = item.get("path", "")
-        ask = item.get("ask", "")
-
-        # Convert missing field ask → natural language sentence
-        sentence_prompt = f"""
-        Convert the following design clarification request into a single clear natural language sentence.
-        Do NOT change meaning. Be concise and accurate.
-        Clarification request:
-        "{ask}"
-        """
-        sentence = await run_llm_fallback(sentence_prompt)  # ✅ Already exists in your backend
-        additions.append(f"- {sentence.strip()}")
-
-    additions_text = "\n".join(additions)
-
-    final_text = f"""{original}
-
-Additional Inferred Design Details:
-{additions_text}
-"""
-
-    return {"final_text": final_text}
-    
 @app.post("/finalize_spec_natural_sentences")
 async def finalize_spec_natural_sentences(data: dict):
     """
-    Convert missing field edited values into natural language sentences
-    and append them to the original user prompt.
+    Convert edited missing values into natural language sentences and append to original prompt.
+    Then recompute structured spec + real coverage and return all in one shot.
+    Optional: if structured_spec_draft is provided, we finalize from the draft for higher accuracy.
     """
-    original = data.get("original_text", "").strip()
+    original = (data.get("original_text") or "").strip()
     missing = data.get("missing", [])
     edited_values = data.get("edited_values", {})
+    structured_spec_draft = data.get("structured_spec_draft")  # optional
 
     additions = []
-
     for item in missing:
         path = item.get("path", "")
         ask = item.get("ask", "")
-        value = edited_values.get(path, "").strip()
-
+        value = (edited_values.get(path) or "").strip()
         if not value:
             continue
 
-        # LLM prompt to convert user value into a natural sentence
         sentence_prompt = f"""
         Convert the following design clarification into a clear, single natural language sentence.
-        
+
         Clarification request:
         "{ask}"
 
@@ -1330,19 +1294,56 @@ async def finalize_spec_natural_sentences(data: dict):
         - Make it direct, factual, and concise.
         - Use the tone: "The top-level module name is ALU_TOP."
         """
-
         sentence = await run_llm_fallback(sentence_prompt)
         additions.append(f"- {sentence.strip()}")
 
     additions_text = "\n".join(additions)
-
     final_text = f"""{original}
 
 Additional Inferred Design Details:
 {additions_text}
-"""
+""".strip()
 
-    return {"final_text": final_text}
+    # --- Recompute structured spec + coverage ---
+    try:
+        # Prefer finalizing from a known draft if provided
+        from analyze.digital.analyze_spec_digital import analyze_spec_digital, finalize_spec_digital
+
+        if structured_spec_draft:
+            # Merge edited values into draft (path strings like "clock.freq")
+            for path, value in edited_values.items():
+                keys = path.split(".")
+                target = structured_spec_draft
+                for k in keys[:-1]:
+                    target = target.setdefault(k, {})
+                target[keys[-1]] = value
+            final = await finalize_spec_digital(structured_spec_draft)
+            structured_final = final.get("structured_spec_final", final)
+            coverage_final = final.get("coverage", 0)
+        else:
+            # Fallback: analyze the natural-language final text to produce structure + coverage
+            analyzed = await analyze_spec_digital(final_text, voice_summary="", user_id="anonymous")
+            # support either shape: {structured_spec_final, coverage} OR nested result
+            structured_final = analyzed.get("structured_spec_final") or analyzed.get("structured_spec_draft") or analyzed
+            coverage_final = (
+                analyzed.get("coverage")
+                or (analyzed.get("coverage", {}) if isinstance(analyzed.get("coverage"), dict) else {})
+                or analyzed.get("coverage_score")
+                or 0
+            )
+            # Handle nested object coverage.total_score
+            if isinstance(coverage_final, dict) and "total_score" in coverage_final:
+                coverage_final = coverage_final["total_score"]
+
+    except Exception as e:
+        # Never fail the finalize call—return at least the final_text
+        structured_final, coverage_final = {}, 0
+
+    return {
+        "final_text": final_text,
+        "structured_spec_final": structured_final,
+        "coverage_final": coverage_final,
+    }
 
 
 
