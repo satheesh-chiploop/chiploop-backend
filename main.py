@@ -1340,11 +1340,13 @@ Additional Inferred Design Details:
         structured_final, coverage_final = {}, 0
 
     return {
+        "status": "ok",
         "final_text": final_text,
         "structured_spec_final": structured_final,
-        "coverage_final": coverage_final,
+        "coverage_final": int(coverage_final) if isinstance(coverage_final, (int, float)) else 0,
+        "additions": additions
     }
-
+    
 
 
 
