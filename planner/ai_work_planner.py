@@ -123,7 +123,6 @@ Rules:
             completion = client_portkey.chat.completions.create(
                 model="@chiploop/gpt-5-mini",
                 messages=messages,
-                temperature=0.5,     # ⬇️ Less randomness = more stable planning
                 stream=False
             )
 
