@@ -45,7 +45,19 @@ Your task:
     auto_filled_values = {path.strip(): val.strip() for path, val in labeled_pairs}
 
     # ✅ 2) Fallback: assign bracket values by position to paths NOT already filled
-    bracket_values = re.findall(r"\[([^\]]+)\]", improved_text)
+    missing_section_match = re.search(
+       r"Detected missing or incomplete details:(.*?)(?:\n\n|$)",
+       improved_text,
+       flags=re.DOTALL
+    )
+
+    if missing_section_match:
+       missing_section = missing_section_match.group(1)
+       bracket_values = re.findall(r"\[([^\]]+)\]", missing_section)
+    else:
+    # fallback: no missing block found → do not extract from full text
+       bracket_values = []
+
 
     b_index = 0
     for m in missing_fields:
