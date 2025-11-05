@@ -38,15 +38,13 @@ Your task:
      #   path: value for path, value in extracted_pairs
     #}
 
-    auto_filled_values = {}
-    for m in missing_fields:
-       path = m["path"]
-    # Look for [value] that follows this path in the improved_text
-       pattern = re.escape(path) + r"\s*[:=]\s*\[([^\]]+)\]"
-       match = re.search(pattern, improved_text)
-       if match:
-          auto_filled_values[path] = match.group(1).strip()
+    # ✅ Extract values solely based on bracket order from LLM output
+    bracket_values = re.findall(r"\[([^\]]+)\]", improved_text)
 
+    auto_filled_values = {}
+    for i, m in enumerate(missing_fields):
+        if i < len(bracket_values):
+           auto_filled_values[m["path"]] = bracket_values[i].strip()
     # ✅ Convert missing field objects → UI string list
     #remaining_missing_fields = [m["path"] for m in missing_fields]
     remaining_missing_fields = missing_fields
