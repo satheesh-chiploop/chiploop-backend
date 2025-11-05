@@ -1265,6 +1265,9 @@ async def finalize_spec_natural_sentences(data: dict):
 
     # ✅ Prefer improved (LLM-enhanced) text if available
     base_text = improved_raw if improved_raw else original_raw
+    # --- REMOVE incomplete / missing details block ---
+    base_text = re.sub(r"Detected missing or incomplete details:.*?(?=Additional Inferred Design Details:|$)", "", base_text, flags=re.DOTALL).strip()
+
 
     missing = data.get("missing", [])
     edited_values = data.get("edited_values", {})
@@ -1323,10 +1326,9 @@ Additional Inferred Design Details:
                or final
             )
 
-            coverage_final = final.get("coverage") or final.get("coverage_score") or 0
+            coverage = final.get("coverage") or final.get("coverage_score") or {}
+            coverage_final = coverage.get("total_score", 0) if isinstance(coverage, dict) else coverage
 
-            if isinstance(coverage_final, dict) and "total_score" in coverage_final:
-               coverage_final = coverage_final["total_score"]
            
         else:
             # Fallback: analyze the natural-language final text to produce structure + coverage
