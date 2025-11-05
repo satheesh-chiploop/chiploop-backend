@@ -1260,39 +1260,38 @@ async def finalize_spec_natural_sentences(data: dict):
     Then recompute structured spec + real coverage and return all in one shot.
     Optional: if structured_spec_draft is provided, we finalize from the draft for higher accuracy.
     """
-    original = (data.get("original_text") or "").strip()
+    original_raw = (data.get("original_text") or "").strip()
+    improved_raw = (data.get("improved_text") or "").strip()
+
+    # ✅ Prefer improved (LLM-enhanced) text if available
+    base_text = improved_raw if improved_raw else original_raw
+
     missing = data.get("missing", [])
     edited_values = data.get("edited_values", {})
     structured_spec_draft = data.get("structured_spec_draft")  # optional
 
     additions = []
     for item in missing:
-        path = item.get("path", "")
-        ask = item.get("ask", "")
-        value = (edited_values.get(path) or "").strip()
-        if not value:
-            continue
+      path = item.get("path", "")
+      ask = item.get("ask", "") or path.replace("_", " ").replace(".", " → ")
+      value = (edited_values.get(path) or "").strip()
+      if not value:
+        continue
 
-        sentence_prompt = f"""
-        Convert the following design clarification into a clear, single natural language sentence.
+    sentence_prompt = f"""
+    Write one clear natural language design clarification sentence.
+    Clarification: "{ask}"
+    Value: "{value}"
+    Style example: "The clock frequency is 200 MHz."
+    Do NOT repeat or rewrite the original spec.
+    Keep concise, factual, and correct.
+    """
+    sentence = (await run_llm_fallback(sentence_prompt)).strip()
+    additions.append(f"- {sentence}")
 
-        Clarification request:
-        "{ask}"
-
-        Confirmed value:
-        "{value}"
-
-        Requirements:
-        - Do not rewrite the original specification.
-        - Do not add details that were not provided.
-        - Make it direct, factual, and concise.
-        - Use the tone: "The top-level module name is ALU_TOP."
-        """
-        sentence = await run_llm_fallback(sentence_prompt)
-        additions.append(f"- {sentence.strip()}")
 
     additions_text = "\n".join(additions)
-    final_text = f"""{original}
+    final_text = f"""{base_text}
 
 Additional Inferred Design Details:
 {additions_text}
@@ -1316,9 +1315,20 @@ Additional Inferred Design Details:
                 target[keys[-1]] = value
             if additions_text and additions_text.strip():
                structured_spec_draft["natural_language_notes"] = additions_text.strip()
+
             final = await finalize_spec_digital(structured_spec_draft)
-            structured_final = final.get("structured_spec_final", final)
-            coverage_final = final.get("coverage", 0)
+
+            structured_final = (
+               final.get("structured_spec_final")
+               or final.get("structured_spec_draft")
+               or final
+            )
+
+            coverage_final = final.get("coverage") or final.get("coverage_score") or 0
+
+            if isinstance(coverage_final, dict) and "total_score" in coverage_final:
+               coverage_final = coverage_final["total_score"]
+           
         else:
             # Fallback: analyze the natural-language final text to produce structure + coverage
             analyzed = await analyze_spec_digital(final_text, voice_summary="", user_id="anonymous")
