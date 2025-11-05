@@ -1272,22 +1272,21 @@ async def finalize_spec_natural_sentences(data: dict):
 
     additions = []
     for item in missing:
-      path = item.get("path", "")
-      ask = item.get("ask", "") or path.replace("_", " ").replace(".", " → ")
-      value = (edited_values.get(path) or "").strip()
-      if not value:
+        path = item.get("path", "")
+        ask = item.get("ask", "") or path.replace("_", " ").replace(".", " → ")
+        value = (edited_values.get(path) or "").strip()
+        if not value:
         continue
-
-    sentence_prompt = f"""
-    Write one clear natural language design clarification sentence.
-    Clarification: "{ask}"
-    Value: "{value}"
-    Style example: "The clock frequency is 200 MHz."
-    Do NOT repeat or rewrite the original spec.
-    Keep concise, factual, and correct.
-    """
-    sentence = (await run_llm_fallback(sentence_prompt)).strip()
-    additions.append(f"- {sentence}")
+        sentence_prompt = f"""
+        Write one clear natural language design clarification sentence.
+        Clarification: "{ask}"
+        Value: "{value}"
+        Style example: "The clock frequency is 200 MHz."
+        Do NOT repeat or rewrite the original spec.
+        Keep concise, factual, and correct.
+        """.strip()
+        sentence = (await run_llm_fallback(sentence_prompt)).strip()
+        additions.append(f"- {sentence}")
 
 
     additions_text = "\n".join(additions)
