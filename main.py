@@ -1276,7 +1276,7 @@ async def finalize_spec_natural_sentences(data: dict):
         ask = item.get("ask", "") or path.replace("_", " ").replace(".", " → ")
         value = (edited_values.get(path) or "").strip()
         if not value:
-        continue
+           continue
         sentence_prompt = f"""
         Write one clear natural language design clarification sentence.
         Clarification: "{ask}"
