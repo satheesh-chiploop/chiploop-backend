@@ -1303,18 +1303,43 @@ Additional Inferred Design Details:
     try:
         # Prefer finalizing from a known draft if provided
         from analyze.digital.analyze_spec_digital import analyze_spec_digital, finalize_spec_digital
-
-
-        
-
+  
         if structured_spec_draft:
             # Merge edited values into draft (path strings like "clock.freq")
+
+            # Merge edited values into draft (path strings like "clock_domains[0].frequency_mhz")
+            def _apply_value(spec: dict, path: str, value: Any):
+                import re
+                # split on '.' and brackets, keep only tokens
+                tokens = [t for t in re.split(r"\.|\[|\]", path) if t != ""]
+                target = spec
+                for tok in tokens[:-1]:
+                    if tok.isdigit():                 # array index
+                        target = target[int(tok)]
+                    else:
+                  # ensure dict exists for next hop
+                        if tok not in target or not isinstance(target[tok], (dict, list)):
+                # guess next token; if next token is a digit we need a list
+                # else a dict
+                            next_idx = tokens.index(tok) + 1
+                            is_list = next_idx < len(tokens) and tokens[next_idx].isdigit()
+                            target[tok] = [] if is_list else {}
+                        target = target[tok]
+                last = tokens[-1]
+                if last.isdigit():
+        # ensure list is big enough
+                    idx = int(last)
+                    if not isinstance(target, list):
+                        raise ValueError(f"Path expects list at '{path}'")
+                    while len(target) <= idx:
+                        target.append({})
+                    target[idx] = value
+                else:
+                    target[last] = value
+
             for path, value in edited_values.items():
-                keys = path.split(".")
-                target = structured_spec_draft
-                for k in keys[:-1]:
-                    target = target.setdefault(k, {})
-                target[keys[-1]] = value
+              _apply_value(structured_spec_draft, path, value)
+    
             if additions_text and additions_text.strip():
                structured_spec_draft["natural_language_notes"] = additions_text.strip()
 
@@ -1327,7 +1352,18 @@ Additional Inferred Design Details:
             )
 
             coverage = final.get("coverage") or final.get("coverage_score") or {}
-            coverage_final = coverage.get("total_score", 0) if isinstance(coverage, dict) else coverage
+
+            # Normalize coverage to a single numeric score
+            if isinstance(coverage, dict):
+              coverage_final = (
+                coverage.get("total_score")
+                or coverage.get("overall_score")
+                or coverage.get("score", {}).get("total")
+                or 0
+              )
+            else:
+              coverage_final = coverage
+
 
            
         else:
