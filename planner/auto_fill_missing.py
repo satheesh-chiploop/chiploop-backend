@@ -32,14 +32,24 @@ Your task:
     improved_text = (await run_llm_fallback(prompt)).strip()
 
     # ✅ Extract suggested inserted values inside [...]
-    extracted_pairs = re.findall(r"([A-Za-z0-9_\[\].]+)\s*[:=]\s*\[([^\]]+)\]", improved_text)
+    #extracted_pairs = re.findall(r"([A-Za-z0-9_\[\].]+)\s*[:=]\s*\[([^\]]+)\]", improved_text)
 
-    auto_filled_values = {
-        path: value for path, value in extracted_pairs
-    }
+    #auto_filled_values = {
+     #   path: value for path, value in extracted_pairs
+    #}
+
+    auto_filled_values = {}
+    for m in missing_fields:
+       path = m["path"]
+    # Look for [value] that follows this path in the improved_text
+       pattern = re.escape(path) + r"\s*[:=]\s*\[([^\]]+)\]"
+       match = re.search(pattern, improved_text)
+       if match:
+          auto_filled_values[path] = match.group(1).strip()
 
     # ✅ Convert missing field objects → UI string list
-    remaining_missing_fields = [m["path"] for m in missing_fields]
+    #remaining_missing_fields = [m["path"] for m in missing_fields]
+    remaining_missing_fields = missing_fields
 
     # ✅ structured_spec stays same for now — finalize will convert it
     structured_spec_enhanced = structured_spec_draft
