@@ -1303,6 +1303,9 @@ Additional Inferred Design Details:
         # Prefer finalizing from a known draft if provided
         from analyze.digital.analyze_spec_digital import analyze_spec_digital, finalize_spec_digital
 
+
+        
+
         if structured_spec_draft:
             # Merge edited values into draft (path strings like "clock.freq")
             for path, value in edited_values.items():
@@ -1311,6 +1314,8 @@ Additional Inferred Design Details:
                 for k in keys[:-1]:
                     target = target.setdefault(k, {})
                 target[keys[-1]] = value
+            if additions_text and additions_text.strip():
+               structured_spec_draft["natural_language_notes"] = additions_text.strip()
             final = await finalize_spec_digital(structured_spec_draft)
             structured_final = final.get("structured_spec_final", final)
             coverage_final = final.get("coverage", 0)
