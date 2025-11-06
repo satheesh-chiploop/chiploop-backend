@@ -1521,6 +1521,30 @@ async def finalize_spec_natural_sentences(data: dict):
         # Never fail the finalize call—return at least the final_text
         structured_final, coverage_final = {}, 0
 
+    for item in missing:
+        path = item.get("path", "")
+        if path in edited_values and item.get("type") == "enum":
+            val = str(edited_values[path]).lower().replace(" ", "").replace("-", "")
+            options = [o.lower().replace(" ", "").replace("-", "") for o in item.get("options", [])]
+
+        # If direct match → keep it
+            if val not in options:
+            # Best-effort normalization mappings (still dynamic)
+                if val in ("none", "no"):
+                   val = "not_required"
+                elif val in ("yes", "true"):
+                   val = "required"
+                else:
+                   val = "unspecified"
+
+            edited_values[path] = val
+
+# --- Remove already-resolved missing fields (dynamic) ---
+    remaining_missing = [
+        m for m in (final.get("remaining_missing", []) if "final" in locals() else [])
+        if m.get("path") not in edited_values
+    ]
+
     return {
         "status": "ok",
         "final_text": final_text,
