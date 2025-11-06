@@ -1364,12 +1364,10 @@ Additional Inferred Design Details:
 
             final = await finalize_spec_digital(structured_spec_draft)
 
-            structured_final = (
-               final.get("structured_spec_final")
-               or final.get("structured_spec_draft")
-               or final
-            )
+            structured_final = structured_spec_draft
+               
             print("final result raw:", final)
+            print("structured_final", structured_spec)
 
             coverage = final.get("coverage") or final.get("coverage_score") or {}
 
