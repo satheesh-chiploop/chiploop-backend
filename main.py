@@ -1381,8 +1381,12 @@ Additional Inferred Design Details:
             
             print("structured_spec_draft AFTER merge:", structured_spec_draft)
 
-            structured_spec_draft = convert_numeric_types(structured_spec_draft)
-            print("structured_spec_draft after type normalization:", structured_spec_draft)
+            try
+               structured_spec_draft = convert_numeric_types(structured_spec_draft)
+               print("structured_spec_draft after type normalization:", structured_spec_draft)
+            except Exception as e:
+               print("🔥 ERROR in convert_numeric_types:", e)
+               print("Offending structured_spec_draft:", structured_spec_draft)
 
             final = await finalize_spec_digital(structured_spec_draft)
 
