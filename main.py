@@ -55,19 +55,6 @@ import asyncio
 # === Notion + Supabase setup ===
 notion = NotionClient(auth=os.getenv("NOTION_API_KEY"))
 
-def normalize_value(path, value):
-    # find matching missing field entry
-    mf = next((m for m in missing if m.get("path") == path), None)
-    if mf and mf.get("type") == "number":
-        # safe numeric conversion
-        try:
-            return int(value)
-        except:
-            try:
-                return float(value)
-            except:
-                return value  # fallback: leave unchanged
-    return value
 
 
 # --- merge helper for nested spec paths ---
@@ -1340,6 +1327,18 @@ async def finalize_spec_natural_sentences(data: dict):
 
     missing = data.get("missing", [])
     edited_values = data.get("edited_values", {})
+    def normalize_value(path, value):
+        mf = next((m for m in missing if m.get("path") == path), None)
+        if mf and mf.get("type") == "number":
+            try:
+                return int(value)
+            except:
+                try:
+                   return float(value)
+                except:
+                   return value
+        return value
+
     edited_values = {path: normalize_value(path, val) for path, val in edited_values.items()}
     structured_spec_draft = data.get("structured_spec_draft")  # optional
     user_id = data.get("user_id",None)
