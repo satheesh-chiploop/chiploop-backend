@@ -1320,15 +1320,14 @@ async def finalize_spec_natural_sentences(data: dict):
     improved_raw = (data.get("improved_text") or "").strip()
 
     # ✅ Prefer improved (LLM-enhanced) text if available
-    base_text = improved_raw if improved_raw else original_raw
+    base_text = improved_raw if (improved_raw and len(improved_raw) > len(original_raw)) else original_raw
     # --- REMOVE incomplete / missing details block ---
-    if "Detected missing or incomplete details:" in base_text:
-        base_text = re.sub(
-            r"Detected missing or incomplete details:.*?(?=Additional Inferred Design Details:|$)",
-            "",
-            base_text,
-            flags=re.DOTALL
-        ).strip()
+    base_text = re.sub(
+        r"Detected missing or incomplete details:\s*\n(?:- .*\n)*",
+        "",
+        base_text,
+        flags=re.MULTILINE
+    ).strip()
 
 
     missing = data.get("missing", [])
