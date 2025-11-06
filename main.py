@@ -1388,7 +1388,7 @@ Additional Inferred Design Details:
                print("🔥 ERROR in convert_numeric_types:", e)
                print("Offending structured_spec_draft:", structured_spec_draft)
 
-            final = await finalize_spec_digital(structured_spec_draft)
+            final = await finalize_spec_digital(structured_spec_draft,edited_values,user_id)
 
             structured_final = structured_spec_draft
                
