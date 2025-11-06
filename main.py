@@ -1322,7 +1322,13 @@ async def finalize_spec_natural_sentences(data: dict):
     # ✅ Prefer improved (LLM-enhanced) text if available
     base_text = improved_raw if improved_raw else original_raw
     # --- REMOVE incomplete / missing details block ---
-    base_text = re.sub(r"Detected missing or incomplete details:.*?(?=Additional Inferred Design Details:|$)", "", base_text, flags=re.DOTALL).strip()
+    if "Detected missing or incomplete details:" in base_text:
+        base_text = re.sub(
+            r"Detected missing or incomplete details:.*?(?=Additional Inferred Design Details:|$)",
+            "",
+            base_text,
+            flags=re.DOTALL
+        ).strip()
 
 
     missing = data.get("missing", [])
@@ -1418,7 +1424,9 @@ async def finalize_spec_natural_sentences(data: dict):
 
             final = await finalize_spec_digital(structured_spec_draft,edited_values,user_id)
 
-            structured_final = structured_spec_draft
+            structured_final = final.get("structured_spec_final", structured_spec_draft)
+
+            
                
             print("final result raw:", final)
             print("structured_final", structured_final)
