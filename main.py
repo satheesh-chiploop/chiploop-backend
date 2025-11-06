@@ -1259,7 +1259,15 @@ async def finalize_spec_natural_sentences(data: dict):
     Convert edited missing values into natural language sentences and append to original prompt.
     Then recompute structured spec + real coverage and return all in one shot.
     Optional: if structured_spec_draft is provided, we finalize from the draft for higher accuracy.
+
+
     """
+
+    
+    print("\n---- FINALIZE (request) ----")
+    print("keys:", list(data.keys()))
+    d = data.get("structured_spec_draft")
+    print("structured_spec_draft is None?", d )
     original_raw = (data.get("original_text") or "").strip()
     improved_raw = (data.get("improved_text") or "").strip()
 
