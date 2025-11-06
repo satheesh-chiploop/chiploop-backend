@@ -1407,6 +1407,29 @@ async def finalize_spec_natural_sentences(data: dict):
                     apply_spec_value(structured_spec_draft, path, value)
                 except Exception as e:
                     print(f"❌ ERROR applying {path} = {value} → {e}")
+
+            # ✅ Mark edited fields as user-confirmed so coverage increases
+            for item in missing:
+                path = item.get("path")
+                if path in edited_values:
+        # Mark explicit confirmation in the structured spec
+                    try:
+                        tokens = [t for t in re.split(r"\.|\[|\]", path) if t]
+                        target = structured_spec_draft
+                        for t in tokens[:-1]:
+                           target = target[int(t)] if t.isdigit() else target.get(t, target)
+                           last = tokens[-1]
+
+                        # Add a confidence marker without overwriting actual field values
+                        if isinstance(target, dict):
+                           meta = target.setdefault("_confirmed", {})
+                           meta[last] = True
+
+                    except Exception as e:
+                        print(f"⚠️ Confirmation tag failed for {path}: {e}")
+
+
+
     
             if additions_text and additions_text.strip():
                structured_spec_draft["natural_language_notes"] = additions_text.strip()
