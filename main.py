@@ -87,6 +87,23 @@ def apply_spec_value(spec: dict, path: str, value: Any):
     else:
         target[last] = value
 
+def convert_numeric_types(obj):
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            obj[k] = convert_numeric_types(v)
+        return obj
+    elif isinstance(obj, list):
+        return [convert_numeric_types(x) for x in obj]
+    elif isinstance(obj, str):
+        # Dynamic: convert numbers only if safe
+        try:
+            if '.' in obj:
+                return float(obj)
+            return int(obj)
+        except:
+            return obj
+    else:
+        return obj
 
 
 def verify_token(request: Request) -> Dict[str, Any]:
@@ -1297,10 +1314,7 @@ async def finalize_spec_natural_sentences(data: dict):
     """
 
     
-    print("\n---- FINALIZE (request) ----")
-    print("keys:", list(data.keys()))
-    d = data.get("structured_spec_draft")
-    print("structured_spec_draft is None?", d )
+
     original_raw = (data.get("original_text") or "").strip()
     improved_raw = (data.get("improved_text") or "").strip()
 
@@ -1348,7 +1362,7 @@ Additional Inferred Design Details:
     try:
         # Prefer finalizing from a known draft if provided
         from analyze.digital.analyze_spec_digital import analyze_spec_digital, finalize_spec_digital
-        print("Structured_spec_draft just before if",structured_spec_draft)
+
         if structured_spec_draft:
             # Merge edited values into draft (path strings like "clock.freq")
 
@@ -1366,6 +1380,9 @@ Additional Inferred Design Details:
 
             
             print("structured_spec_draft AFTER merge:", structured_spec_draft)
+
+            structured_spec_draft = convert_numeric_types(structured_spec_draft)
+            print("structured_spec_draft after type normalization:", structured_spec_draft)
 
             final = await finalize_spec_digital(structured_spec_draft)
 
