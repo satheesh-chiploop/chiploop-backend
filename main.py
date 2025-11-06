@@ -1327,6 +1327,7 @@ async def finalize_spec_natural_sentences(data: dict):
     missing = data.get("missing", [])
     edited_values = data.get("edited_values", {})
     structured_spec_draft = data.get("structured_spec_draft")  # optional
+    user_id = data.get("user_id",None)
 
     print("Structured_spec_draft just before merge",structured_spec_draft)
     print("Edited_values just before merge",edited_values)
