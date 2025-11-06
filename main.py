@@ -1348,12 +1348,20 @@ async def finalize_spec_natural_sentences(data: dict):
     print("missing_values just before merge",missing)
 
     additions = []
+
+    additions = [] 
+
     for item in missing:
         path = item.get("path", "")
         ask = item.get("ask", "") or path.replace("_", " ").replace(".", " → ")
-        value = (edited_values.get(path) or "").strip()
+
+    # ✅ FIXED: safe numeric + string handling
+        raw_val = edited_values.get(path, "")
+        value = str(raw_val).strip()
+
         if not value:
            continue
+
         sentence_prompt = f"""
         Write one clear natural language design clarification sentence.
         Clarification: "{ask}"
@@ -1362,16 +1370,18 @@ async def finalize_spec_natural_sentences(data: dict):
         Do NOT repeat or rewrite the original spec.
         Keep concise, factual, and correct.
         """.strip()
+
         sentence = (await run_llm_fallback(sentence_prompt)).strip()
         additions.append(f"- {sentence}")
-
 
     additions_text = "\n".join(additions)
     final_text = f"""{base_text}
 
-Additional Inferred Design Details:
-{additions_text}
-""".strip()
+    Additional Inferred Design Details:
+    {additions_text}
+    """.strip()
+
+    
 
     # --- Recompute structured spec + coverage ---
     try:
