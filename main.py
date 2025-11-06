@@ -1394,7 +1394,7 @@ Additional Inferred Design Details:
             structured_final = structured_spec_draft
                
             print("final result raw:", final)
-            print("structured_final", structured_spec)
+            print("structured_final", structured_final)
 
             coverage = final.get("coverage") or final.get("coverage_score") or {}
 
