@@ -1281,6 +1281,10 @@ async def finalize_spec_natural_sentences(data: dict):
     edited_values = data.get("edited_values", {})
     structured_spec_draft = data.get("structured_spec_draft")  # optional
 
+    print("Structured_spec_draft just before merge",structured_spec_draft)
+    print("Edited_values just before merge",edited_values)
+    print("missing_values just before merge",missing)
+
     additions = []
     for item in missing:
         path = item.get("path", "")
@@ -1311,16 +1315,15 @@ Additional Inferred Design Details:
     try:
         # Prefer finalizing from a known draft if provided
         from analyze.digital.analyze_spec_digital import analyze_spec_digital, finalize_spec_digital
-  
+        print("Structured_spec_draft just before if",structured_spec_draft)
         if structured_spec_draft:
             # Merge edited values into draft (path strings like "clock.freq")
 
             # Merge edited values into draft (path strings like "clock_domains[0].frequency_mhz")
             print("\n---- FINALIZE START ----")
-            print("original_text:", original_text[:120], "...")
             print("edited_values:", edited_values)
             print("missing:", missing)
-            print("structured_spec_draft BEFORE merge:", structured_spec_draft)
+            print("structured_spec_draft inside if :", structured_spec_draft)
             def _apply_value(spec: dict, path: str, value: Any):
                 import re
                 # split on '.' and brackets, keep only tokens
