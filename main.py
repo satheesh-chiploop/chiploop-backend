@@ -1398,7 +1398,10 @@ async def finalize_spec_natural_sentences(data: dict):
             print("structured_spec_draft inside if :", structured_spec_draft)
             
             for path, value in edited_values.items():
-              apply_spec_value(structured_spec_draft, path, value)
+                try:
+                    apply_spec_value(structured_spec_draft, path, value)
+                except Exception as e:
+                    print(f"❌ ERROR applying {path} = {value} → {e}")
     
             if additions_text and additions_text.strip():
                structured_spec_draft["natural_language_notes"] = additions_text.strip()
