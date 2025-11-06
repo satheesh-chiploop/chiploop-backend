@@ -55,38 +55,44 @@ import asyncio
 # === Notion + Supabase setup ===
 notion = NotionClient(auth=os.getenv("NOTION_API_KEY"))
 
-
-
-# --- merge helper for nested spec paths ---
 def apply_spec_value(spec: dict, path: str, value: Any):
     import re
+
     tokens = [t for t in re.split(r"\.|\[|\]", path) if t]
     target = spec
 
-    for i, tok in enumerate(tokens[:-1]):
+    for tok in tokens[:-1]:
         if tok.isdigit():
-            target = target[int(tok)]
+            idx = int(tok)
+            # Ensure target is a list
+            if not isinstance(target, list):
+                raise ValueError(f"Expected list in path: {path}")
+            # ✅ Auto-expand list dynamically
+            while len(target) <= idx:
+                target.append({})
+            target = target[idx]
         else:
-            next_tok = tokens[i + 1] if i + 1 < len(tokens) else None
-            if next_tok and next_tok.isdigit():
-                if tok not in target or not isinstance(target.get(tok), list):
-                    target[tok] = []
-                target = target[tok]
-            else:
-                if tok not in target or not isinstance(target.get(tok), dict):
-                    target[tok] = {}
-                target = target[tok]
+            # Ensure dict key exists
+            if tok not in target or not isinstance(target[tok], (dict, list)):
+                # Detect next token - if numeric → create list, else dict
+                next_tok_index = tokens.index(tok) + 1
+                is_next_list = next_tok_index < len(tokens) and tokens[next_tok_index].isdigit()
+                target[tok] = [] if is_next_list else {}
+            target = target[tok]
 
     last = tokens[-1]
     if last.isdigit():
         idx = int(last)
         if not isinstance(target, list):
-            return
+            raise ValueError(f"Expected list before index in path: {path}")
         while len(target) <= idx:
             target.append({})
         target[idx] = value
     else:
         target[last] = value
+
+
+# --- merge helper for nested spec paths ---
 
 def convert_numeric_types(obj):
     if isinstance(obj, dict):
