@@ -1308,6 +1308,11 @@ Additional Inferred Design Details:
             # Merge edited values into draft (path strings like "clock.freq")
 
             # Merge edited values into draft (path strings like "clock_domains[0].frequency_mhz")
+            print("\n---- FINALIZE START ----")
+            print("original_text:", original_text[:120], "...")
+            print("edited_values:", edited_values)
+            print("missing:", missing)
+            print("structured_spec_draft BEFORE merge:", structured_spec_draft)
             def _apply_value(spec: dict, path: str, value: Any):
                 import re
                 # split on '.' and brackets, keep only tokens
@@ -1343,6 +1348,9 @@ Additional Inferred Design Details:
             if additions_text and additions_text.strip():
                structured_spec_draft["natural_language_notes"] = additions_text.strip()
 
+            
+            print("structured_spec_draft AFTER merge:", structured_spec_draft)
+
             final = await finalize_spec_digital(structured_spec_draft)
 
             structured_final = (
@@ -1350,8 +1358,11 @@ Additional Inferred Design Details:
                or final.get("structured_spec_draft")
                or final
             )
+            print("final result raw:", final)
 
             coverage = final.get("coverage") or final.get("coverage_score") or {}
+
+            print("DEBUG coverage_obj:", coverage)
 
             # Normalize coverage to a single numeric score
             if isinstance(coverage, dict):
@@ -1364,6 +1375,8 @@ Additional Inferred Design Details:
             else:
               coverage_final = coverage
 
+            print("coverage_final computed:", coverage_final)
+            print("---- FINALIZE END ----\n")
 
            
         else:
