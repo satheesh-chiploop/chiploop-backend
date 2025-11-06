@@ -55,6 +55,28 @@ import asyncio
 # === Notion + Supabase setup ===
 notion = NotionClient(auth=os.getenv("NOTION_API_KEY"))
 
+
+def find_missing_generic(spec, path=""):
+    missing = []
+
+    if isinstance(spec, dict):
+        for key, value in spec.items():
+            new_path = f"{path}.{key}" if path else key
+            missing += find_missing_generic(value, new_path)
+
+    elif isinstance(spec, list):
+        for index, item in enumerate(spec):
+            new_path = f"{path}[{index}]"
+            missing += find_missing_generic(item, new_path)
+
+    else:
+        # ✅ Value-level missing check (dynamic, not hard-coded)
+        if spec in (None, "", "unspecified"):
+            missing.append({"path": path})
+
+    return missing
+
+
 def apply_spec_value(spec: dict, path: str, value: Any):
     import re
 
@@ -1453,11 +1475,13 @@ async def finalize_spec_natural_sentences(data: dict):
             final = await finalize_spec_digital(structured_spec_draft,edited_values,user_id)
 
             structured_final = final.get("structured_spec_final", structured_spec_draft)
+            remaining_missing = final.get("remaining_missing",[])
 
             
                
             print("final result raw:", final)
             print("structured_final", structured_final)
+            print("Remaining missing",remaining_missing)
 
             coverage = final.get("coverage") or final.get("coverage_score") or {}
 
@@ -1503,7 +1527,8 @@ async def finalize_spec_natural_sentences(data: dict):
         "structured_spec_final": structured_final,
         "coverage": int(coverage_final) if isinstance(coverage_final, (int, float)) else 0,
         "coverage_final": int(coverage_final) if isinstance(coverage_final, (int, float)) else 0,
-        "additions": additions
+        "additions": additions,
+        "remaining_missing": remaining_missing,
     }
 
 
