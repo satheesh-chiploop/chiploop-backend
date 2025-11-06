@@ -1357,6 +1357,23 @@ async def finalize_spec_natural_sentences(data: dict):
         flags=re.MULTILINE
     ).strip()
 
+    # Remove autofill hint lines like: field_name: [value]
+    base_text = re.sub(
+        r"^[A-Za-z0-9_.\[\]-]+\s*:\s*\[.*?\]\s*$",
+        "",
+        base_text,
+        flags=re.MULTILINE
+    ).strip()
+
+    # Remove any pre-existing "Additional Inferred Design Details" block if present
+    base_text = re.sub(
+        r"Additional Inferred Design Details:.*$",
+        "",
+        base_text,
+        flags=re.DOTALL
+    ).strip()
+
+
 
     missing = data.get("missing", [])
     edited_values = data.get("edited_values", {})
