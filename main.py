@@ -56,6 +56,39 @@ import asyncio
 notion = NotionClient(auth=os.getenv("NOTION_API_KEY"))
 
 
+# --- merge helper for nested spec paths ---
+def apply_spec_value(spec: dict, path: str, value: Any):
+    import re
+    tokens = [t for t in re.split(r"\.|\[|\]", path) if t]
+    target = spec
+
+    for i, tok in enumerate(tokens[:-1]):
+        if tok.isdigit():
+            target = target[int(tok)]
+        else:
+            next_tok = tokens[i + 1] if i + 1 < len(tokens) else None
+            if next_tok and next_tok.isdigit():
+                if tok not in target or not isinstance(target.get(tok), list):
+                    target[tok] = []
+                target = target[tok]
+            else:
+                if tok not in target or not isinstance(target.get(tok), dict):
+                    target[tok] = {}
+                target = target[tok]
+
+    last = tokens[-1]
+    if last.isdigit():
+        idx = int(last)
+        if not isinstance(target, list):
+            return
+        while len(target) <= idx:
+            target.append({})
+        target[idx] = value
+    else:
+        target[last] = value
+
+
+
 def verify_token(request: Request) -> Dict[str, Any]:
     """Best-effort JWT decode from Authorization: Bearer <token>. Fallback to anonymous."""
     auth = request.headers.get("authorization") or request.headers.get("Authorization") or ""
@@ -1324,37 +1357,9 @@ Additional Inferred Design Details:
             print("edited_values:", edited_values)
             print("missing:", missing)
             print("structured_spec_draft inside if :", structured_spec_draft)
-            def _apply_value(spec: dict, path: str, value: Any):
-                import re
-                # split on '.' and brackets, keep only tokens
-                tokens = [t for t in re.split(r"\.|\[|\]", path) if t != ""]
-                target = spec
-                for tok in tokens[:-1]:
-                    if tok.isdigit():                 # array index
-                        target = target[int(tok)]
-                    else:
-                  # ensure dict exists for next hop
-                        if tok not in target or not isinstance(target[tok], (dict, list)):
-                # guess next token; if next token is a digit we need a list
-                # else a dict
-                            next_idx = tokens.index(tok) + 1
-                            is_list = next_idx < len(tokens) and tokens[next_idx].isdigit()
-                            target[tok] = [] if is_list else {}
-                        target = target[tok]
-                last = tokens[-1]
-                if last.isdigit():
-        # ensure list is big enough
-                    idx = int(last)
-                    if not isinstance(target, list):
-                        raise ValueError(f"Path expects list at '{path}'")
-                    while len(target) <= idx:
-                        target.append({})
-                    target[idx] = value
-                else:
-                    target[last] = value
-
+            
             for path, value in edited_values.items():
-              _apply_value(structured_spec_draft, path, value)
+              apply_spec_value(structured_spec_draft, path, value)
     
             if additions_text and additions_text.strip():
                structured_spec_draft["natural_language_notes"] = additions_text.strip()
