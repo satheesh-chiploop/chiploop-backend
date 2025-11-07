@@ -154,7 +154,6 @@ Rules:
                         plan["missing_agents"].append(candidate)
 
             logger.info(f"🧠 After behavioral LLM inference, missing agents: {plan['missing_agents']}")
--
 
             logger.info(f"🧩 Missing agents detected (to autogen in auto-compose): {missing}")
             return plan
