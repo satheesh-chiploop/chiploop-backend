@@ -1,0 +1,54 @@
+from base_agent import BaseAgent
+from utils.llm_utils import run_llm_fallback
+from utils.artifact_utils import save_artifact
+
+class {{class_name}}(BaseAgent):
+    """
+    {{description}}
+    """
+
+    async def run(self, state):
+        """
+        Inputs:
+            state["structured_spec"] : The structured specification for the design
+            state["design_context"]  : Context from previously selected agents (if any)
+
+        Output Artifact Contents:
+            {
+              "behavior_description": string (high-level operation behavior)
+              "signal_definitions": { signal_name: intended role }
+              "state_machine": {
+                  "states": [...],
+                  "transitions": { state: next_state_condition }
+              }
+            }
+        """
+
+        structured_spec = state.get("structured_spec", {})
+        design_context = state.get("design_context", {})
+
+        prompt = f"""
+You are generating control / coordination logic behavior.
+
+Derive:
+1. High-level function of this component
+2. Input → output signal role mapping
+3. If applicable, a clear state machine (states + transitions)
+
+Use information from:
+STRUCTURED SPEC:
+{structured_spec}
+
+DESIGN CONTEXT:
+{design_context}
+"""
+
+        result = await run_llm_fallback(prompt)
+
+        artifact_path = save_artifact("{{artifact_name}}.json", result)
+
+        return {
+            "artifact": artifact_path,
+            "log": "Behavioral agent successfully derived functional behavior.",
+            "code": None
+        }

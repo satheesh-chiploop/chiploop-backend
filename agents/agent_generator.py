@@ -124,3 +124,67 @@ def reload_custom_agents():
 
             # Register into capability registry
             AGENT_CAPABILITIES[mod_name] = {"generated": True}
+
+
+import os
+from loguru import logger
+
+def sanitize_class_name(name: str):
+    # Convert "Digital Alu Controller Agent" → "DigitalAluControllerAgent"
+    return "".join(word.capitalize() for word in name.replace("_", " ").split())
+
+def sanitize_file_name(name: str):
+    # Convert to python file name
+    return name.lower().replace(" ", "_") + ".py"
+
+
+def generate_behavioral_agent(agent_name: str, loop_type: str):
+    """
+    Generate a *functional behavioral agent* that derives both:
+       - Finite State Machine behavior
+       - Signal role / dataflow mapping
+
+    Folder structure used:
+       agents/<loop_type>/<agent_name>.py
+    """
+
+    base_dir = os.path.dirname(__file__)  # points to /backend/agents/
+    loop_dir = os.path.join(base_dir, loop_type)
+    os.makedirs(loop_dir, exist_ok=True)
+
+    file_name = sanitize_file_name(agent_name)
+    script_path = os.path.join(loop_dir, file_name)
+    class_name = sanitize_class_name(agent_name)
+
+    template_path = os.path.join(base_dir, "base_agent_behavioral_template.txt")
+    if not os.path.exists(template_path):
+        raise FileNotFoundError(
+            f"⚠ Missing behavioral agent template: {template_path}\n"
+            f"Create it using Step 1 instructions."
+        )
+
+    # Load behavioral template
+    with open(template_path, "r", encoding="utf-8") as f:
+        template = f.read()
+
+    # Fill placeholders
+    generated_code = (
+        template
+        .replace("{{class_name}}", class_name)
+        .replace("{{description}}", f"Behavioral agent for: {agent_name}")
+        .replace("{{artifact_name}}", file_name.replace(".py", ""))
+    )
+
+    # Write agent source file
+    with open(script_path, "w", encoding="utf8") as f:
+        f.write(generated_code)
+
+    logger.success(f"✅ Behavioral agent created at: {script_path}")
+
+    return {
+        "agent_name": agent_name,
+        "class_name": class_name,
+        "loop_type": loop_type,
+        "path": script_path,
+        "description": f"Behavioral agent auto-derived for {agent_name}",
+    }

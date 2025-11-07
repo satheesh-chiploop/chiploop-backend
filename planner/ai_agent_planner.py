@@ -1,10 +1,20 @@
+
+import os
 import json
-from loguru import logger
-from utils.llm_utils import run_llm_fallback
-
+import uuid
 from datetime import datetime
+from loguru import logger
 
-from utils.spec_analyzer import analyze_spec_text
+from utils.llm_utils import run_llm_fallback
+from utils.spec_analyzer import analyze_spec_text  # keep as fallback if needed
+
+# Reuse the same supabase client pattern as ai_work_planner
+from supabase import create_client
+SUPABASE_URL = os.environ.get("SUPABASE_URL") or os.environ.get("NEXT_PUBLIC_SUPABASE_URL")
+SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or os.environ.get("NEXT_PUBLIC_SUPABASE_ANON_KEY")
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+
 
 async def plan_agent_fallback(goal, user_id="anonymous"):
     result = await analyze_spec_text(goal, user_id=user_id)
@@ -31,114 +41,227 @@ async def fetch_agent_memory():
         logger.warning(f"⚠️ Failed to fetch agent_memory: {e}")
     return []
 
-async def plan_agent_with_memory(goal: str, user_id: str = "anonymous", coverage: dict | None = None) -> dict:
-    logger.info(f"🧠 Planning agent with memory for goal: {goal}")
+# ---------- Helpers ----------
+def slugify_filename(name: str) -> str:
+    base = name.lower()
+    base = "".join(ch if ch.isalnum() else "_" for ch in base)
+    base = base.strip("_")
+    return f"{base}.py" if not base.endswith(".py") else base
 
-    # Step 1: Spec Analysis (if not provided)
-    if not coverage:
-        try:
-            coverage = await analyze_spec({"goal": goal, "user_id": user_id})
-        except Exception as e:
-            logger.warning(f"⚠️ Spec analysis failed: {e}")
-            coverage = {
-                "intent_score": 0,
-                "io_score": 0,
-                "constraint_score": 0,
-                "verification_score": 0,
-                "total_score": 0,
-            }
+def infer_loop_type(structured_spec_final: dict, preplan: dict, fallback: str = "digital") -> str:
+    # Order: preplan.loop_type → structured_spec_final.loop_type → fallback
+    if isinstance(preplan, dict) and preplan.get("loop_type"):
+        return preplan["loop_type"]
+    if isinstance(structured_spec_final, dict) and structured_spec_final.get("loop_type"):
+        return structured_spec_final["loop_type"]
+    return fallback
 
-    # Step 2: Fetch memory
-    user_mem = await fetch_user_memory(user_id)
-    agent_mem = await fetch_agent_memory()
+def ensure_agents_folder(path: str):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
 
-    memory_context = {
-        "recent_goals": user_mem.get("recent_goals", []),
-        "frequent_agents": user_mem.get("frequent_agents", []),
-        "preferred_style": user_mem.get("preferred_style", ""),
-        "known_agents": [a["agent_name"] for a in agent_mem],
-    }
+# ---------- New, deterministic generator ----------
+async def plan_agent_with_memory(payload: dict) -> dict:
+    """
+    Generate a single, user-named agent with deterministic filename and persist it.
+    Expected payload keys:
+      - goal: str
+      - user_id: str (uuid)
+      - missing_agent: str (final, user-approved display name)
+      - file_name: str (deterministic python filename; optional if name given)
+      - preplan: dict | None
+      - structured_spec_final: dict | None
+    Returns:
+      {
+        "agent_name": str,
+        "file_name": str,
+        "script_path": str,
+        "domain": str,
+        "description": str,
+        "capability_tags": list[str],
+        "input_schema": str,
+        "output_schema": str,
+        "example_prompt": str,
+        "full_code": str
+      }
+    """
+    # ---- 1) Parse inputs ----
+    goal = payload.get("goal", "").strip()
+    user_id = payload.get("user_id") or None
+    final_name = payload.get("missing_agent", "").strip()  # enforced display name
+    file_name = payload.get("file_name", "").strip()
+    preplan = payload.get("preplan") or {}
+    structured_spec_final = payload.get("structured_spec_final") or {}
 
-    # Step 3: Prompt
-    prompt = f"""You are ChipLoop’s Agentic Agent Planner.
-Your task is to design or reuse agents intelligently based on spec coverage and memory context.
+    if not final_name:
+        raise ValueError("missing_agent is required")
+    if not file_name:
+        file_name = slugify_filename(final_name)
 
-Goal: {goal}
-📊 Spec Coverage: {coverage.get('total_score', 0)}%
-User Context:
-- Recent Goals: {memory_context['recent_goals']}
-- Frequent Agents: {memory_context['frequent_agents']}
-- Preferred Style: {memory_context['preferred_style']}
-Known Agents: {memory_context['known_agents']}
+    loop_type = infer_loop_type(structured_spec_final, preplan, fallback="digital")
+    logger.info(f"🧱 Generating agent: name='{final_name}', file='{file_name}', loop='{loop_type}'")
 
-If an agent already exists with similar capability, suggest reusing or enhancing it.
-Otherwise, create a new agent definition.
+    # ---- 2) Build prompt (spec-aware, preplan-aware, deterministic name) ----
+    system = (
+        "You are ChipLoop’s Agent Code Generator. "
+        "Use EXACTLY the provided agent_name. Do not rename it."
+    )
+    user_prompt = f"""
+agent_name: {final_name}
+goal: {goal}
 
-Return valid JSON only:
+structured_spec_final (JSON):
+{json.dumps(structured_spec_final or {}, indent=2)}
+
+preplan (JSON) - use only as context, do NOT invent new agents:
+{json.dumps(preplan or {}, indent=2)}
+
+Return VALID JSON ONLY in this exact shape (no extra text):
 {{
-  "agent_name": "",
+  "agent_name": "{final_name}",
   "description": "",
-  "domain": "digital | analog | embedded",
+  "domain": "digital | analog | embedded | system",
   "capability_tags": [],
   "input_schema": "",
   "output_schema": "",
-  "example_prompt": ""
+  "example_prompt": "",
+  "full_code": ""
 }}
+- "full_code" must be a complete Python agent module (import-safe).
+- The code must implement a callable `run(inputs: dict) -> dict`.
+- Respect multi-clock/multi-reset/power domains if present in structured_spec_final.
+- If CDC/PDC is implied by spec, include clear TODOs or simple checks accordingly.
 """
 
-    # Step 4: LLM call
-    response = await run_llm_fallback(prompt)
+    # ---- 3) LLM call ----
+    raw = await run_llm_fallback(
+        prompt=f"{system}\n\n{user_prompt}"
+    )
 
-    # Step 5: Safe JSON parse
+    # ---- 4) Safe JSON parse ----
     try:
-        start, end = response.find("{"), response.rfind("}")
-        plan = json.loads(response[start:end+1]) if start != -1 and end != -1 else {}
+        start, end = raw.find("{"), raw.rfind("}")
+        plan = json.loads(raw[start:end+1]) if start != -1 and end != -1 else {}
     except Exception as e:
-        logger.error(f"❌ JSON parse failed: {e} | Raw: {response[:200]}")
+        logger.error(f"❌ JSON parse failed: {e} | Raw head: {raw[:200]}")
         plan = {
-            "agent_name": "Unnamed_Agent",
-            "description": response[:200],
-            "domain": "unknown",
+            "agent_name": final_name,
+            "description": raw[:200],
+            "domain": loop_type if loop_type in ["digital", "analog", "embedded", "system"] else "digital",
             "capability_tags": [],
+            "input_schema": "",
+            "output_schema": "",
+            "example_prompt": "",
+            "full_code": f"# Fallback stub for {final_name}\n\ndef run(inputs: dict) -> dict:\n    return {{'status': 'stub', 'inputs': inputs}}",
         }
 
-    # Step 6: Merge metadata
-    plan["coverage"] = coverage
-    plan["context_used"] = memory_context
-    insert_user_id = data.get("user_id") or str(uuid.uuid4())
-    
-    # Step 7: Update memory
+    # ---- 5) Enforce the final name and filename ----
+    plan["agent_name"] = final_name
+    plan["file_name"] = file_name
+
+    # Domain normalization (map to loop_type constraint in DB)
+    domain = str(plan.get("domain") or loop_type).lower()
+    if domain not in ["digital", "analog", "embedded", "system"]:
+        domain = loop_type
+    plan["domain"] = domain
+
+    # ---- 6) Persist code to filesystem (same convention as workflow side) ----
+    # We keep parity with ai_work_planner.register_new_agent: agents/custom/{name}.py
+    slug = file_name[:-3] if file_name.endswith(".py") else file_name
+    script_path = f"agents/custom/{slug}.py"
+    ensure_agents_folder(script_path)
+    with open(script_path, "w", encoding="utf-8") as f:
+        f.write(plan.get("full_code") or "")
+
+    plan["script_path"] = script_path
+
+    # ---- 7) Upsert into public.agents ----
+    # Unique key = (owner_id, agent_name) via your index; set is_custom = true
     try:
-        supabase.table("user_memory").upsert({
-            "user_id": insert_user_id,
-            "recent_goals": list(set(memory_context.get("recent_goals", []) + [goal])),
-            "frequent_agents": list(set(memory_context.get("frequent_agents", []) + [plan.get("agent_name")])),
-            "updated_at": datetime.utcnow().isoformat(),
+        supabase.table("agents").upsert({
+            "agent_name": final_name,
+            "loop_type": domain if domain in ["digital", "analog", "embedded"] else None,
+            "tool": None,
+            "script_path": script_path,
+            "description": plan.get("description"),
+            "is_custom": True,
+            "is_marketplace": False,
+            "owner_id": user_id,
+            "is_prebuilt": False,
+        }, on_conflict="id").execute()
+    except Exception as e:
+        logger.warning(f"⚠️ Upsert to agents failed (non-fatal): {e}")
+
+    # ---- 8) Update agent_memory (optional but nice) ----
+    try:
+        supabase.table("agent_memory").upsert({
+            "agent_name": final_name,
+            "capability_tags": plan.get("capability_tags") or [],
+            "last_used_in": [goal] if goal else [],
+            "version": "v1",
+            "updated_at": datetime.utcnow().isoformat()
         }).execute()
     except Exception as e:
-        logger.warning(f"⚠️ Failed to update user memory: {e}")
+        logger.warning(f"⚠️ Upsert to agent_memory failed (non-fatal): {e}")
 
-    logger.info(f"✅ Agent plan ready: {plan.get('agent_name', 'Unnamed_Agent')}")
-    # ✅ Ensure Agent Planner shares same missing-agent logic as Workflow Builder
-    from agent_capabilities import AGENT_CAPABILITIES
-    from agents.agent_selector import select_required_agents
+    logger.success(f"✅ Generated & saved agent: {final_name} → {script_path}")
+    return {
+        "agent_name": plan["agent_name"],
+        "file_name": plan["file_name"],
+        "script_path": plan["script_path"],
+        "domain": plan["domain"],
+        "description": plan.get("description", ""),
+        "capability_tags": plan.get("capability_tags", []),
+        "input_schema": plan.get("input_schema", ""),
+        "output_schema": plan.get("output_schema", ""),
+        "example_prompt": plan.get("example_prompt", ""),
+        "full_code": plan.get("full_code", ""),
+    }
 
-    structured_spec = plan.get("structured_spec_final", {})
+from agents.agent_generator import generate_behavioral_agent
 
-    # 1) Determine required agents (deterministic AGX selector)
-    required_agents = select_required_agents(structured_spec)
 
-    # 2) Determine what the LLM suggested (if planning created an agent chain)
-    suggested_agents = plan.get("agents", [])
+async def generate_missing_agents_batch(payload: dict):
+    """
+    payload = {
+      "goal": str,
+      "user_id": str,
+      "agent_names": [str, ...],
+      "structured_spec_final": dict
+    }
+    """
+    goal = payload.get("goal", "")
+    user_id = payload.get("user_id")
+    agent_names = payload.get("agent_names", [])
+    structured_spec = payload.get("structured_spec_final") or {}
 
-    # 3) Compute missing agents (agents that must exist but do not yet)
-    existing = set(AGENT_CAPABILITIES.keys())
-    missing = [a for a in required_agents if a not in existing]
+    loop_type = (structured_spec.get("loop_type") or "digital").lower()
+    if loop_type not in ["digital", "analog", "embedded"]:
+        loop_type = "digital"
 
-    # 4) Store result so Auto-Compose will generate them
-    plan["missing_agents"] = missing
+    results = []
 
-    logger.info(f"🔁 Shared Engine → Agent Planner Missing Agents: {missing}")
+    for name in agent_names:
+        info = generate_behavioral_agent(name, loop_type)
 
-    
-    return plan
+        # Save in Supabase
+        supabase.table("agents").upsert({
+            "agent_name": info["agent_name"],
+            "loop_type": loop_type,
+            "script_path": info["path"],
+            "description": info["description"],
+            "is_custom": True,
+            "owner_id": user_id,
+            "is_prebuilt": False
+        }).execute()
+
+        results.append(info)
+
+    return {
+        "created_agents": results,
+        "loop_type": loop_type
+    }
+
+
+
+
+
