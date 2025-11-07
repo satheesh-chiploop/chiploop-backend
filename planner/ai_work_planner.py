@@ -52,6 +52,19 @@ async def plan_workflow(prompt: str, structured_spec_final=None) -> dict:
     Generates an AI workflow plan from user intent using LLM (Portkey-first).
     Now enhanced with structured_spec_final → AGX-context-informed LLM planning.
     """
+    if not structured_spec_final:
+        from fastapi.testclient import TestClient
+        from main import app
+        client = TestClient(app)
+
+        resp = client.post("/analyze_spec", json={"goal": prompt, "voice_summary": "", "user_id": "anonymous"})
+        try:
+            structured_spec_final = resp.json()["result"]["structured_spec_final"]
+            logger.info("🔄 Auto-analyzed spec for Agent Planner path.")
+        except Exception:
+            structured_spec_final = None
+            logger.warning("⚠️ Failed to auto-analyze spec, continuing without structured_spec_final.")
+    # --- END NEW ---
 
     logger.info(f"🧠 Planning workflow for goal: {prompt[:100]}...")
 
