@@ -1483,11 +1483,19 @@ async def finalize_spec_natural_sentences(data: dict):
             print("structured_spec_draft AFTER merge:", structured_spec_draft)
 
             try:
-               structured_spec_draft = convert_numeric_types(structured_spec_draft)
-               print("structured_spec_draft after type normalization:", structured_spec_draft)
+                structured_spec_draft = convert_numeric_types(structured_spec_draft)
+                print("structured_spec_draft after type normalization:", structured_spec_draft)
                # ✅ Recompute missing from updated spec
-               from analyze.digital.missing_slot_detector import detect_missing_slots
-               remaining_missing = detect_missing_slots(structured_spec_draft)
+                from analyze.digital.missing_slot_detector import detect_missing_slots
+                detected_missing = detect_missing_slots(structured_spec_draft)
+               # Treat client-provided missing as the *original frozen catalog*
+                initial_missing_catalog = {m.get("path") for m in (missing or []) if m and m.get("path")}
+
+               # Filter: only keep the ones that were originally missing
+                remaining_missing = [
+                    m for m in detected_missing
+                    if m.get("path") in initial_missing_catalog
+                ]
             except Exception as e:
                print("🔥 ERROR in convert_numeric_types:", e)
                print("Offending structured_spec_draft:", structured_spec_draft)
@@ -1495,7 +1503,7 @@ async def finalize_spec_natural_sentences(data: dict):
             final = await finalize_spec_digital(structured_spec_draft,edited_values,user_id)
 
             structured_final = final.get("structured_spec_final", structured_spec_draft)
-            remaining_missing = final.get("remaining_missing",[])
+      
 
             
                
@@ -1503,20 +1511,9 @@ async def finalize_spec_natural_sentences(data: dict):
             print("structured_final", structured_final)
             print("Remaining missing",remaining_missing)
 
-            coverage = final.get("coverage") or final.get("coverage_score") or {}
-
-            print("DEBUG coverage_obj:", coverage)
-
-            # Normalize coverage to a single numeric score
-            if isinstance(coverage, dict):
-              coverage_final = (
-                coverage.get("total_score")
-                or coverage.get("overall_score")
-                or coverage.get("score", {}).get("total")
-                or 0
-              )
-            else:
-              coverage_final = coverage
+            total_slots = max(1, len(initial_missing_catalog))
+            covered_slots = total_slots - len(remaining_missing)
+            coverage_final = round((covered_slots / total_slots) * 100)
 
             print("coverage_final computed:", coverage_final)
             print("---- FINALIZE END ----\n")
