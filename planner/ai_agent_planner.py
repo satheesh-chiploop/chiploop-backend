@@ -292,7 +292,7 @@ async def generate_missing_agents_batch(payload: dict) -> dict:
                 "script_path": info["path"],
                 "description": info["description"],
                 "is_custom": True,
-                "owner_id": user_id,
+                "owner_id": None,
                 "is_prebuilt": False
             }).execute()
         except Exception as e:
