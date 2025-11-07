@@ -21,6 +21,35 @@ Rules:
 - Do not ask for already-specified or confident fields.
 - Do not output commentary; JSON only.
 """
+def _filter_confirmed_slots(slots, struct_spec):
+    filtered = []
+    for slot in slots:
+        path = slot.get("path", "")
+        parts = re.split(r'\.|\[|\]', path)
+        parts = [p for p in parts if p not in ("", None)]
+        
+        cursor = struct_spec
+        confirmed_cursor = None
+        ok = True
+        for p in parts:
+            if p.isdigit():
+                p = int(p)
+                if not isinstance(cursor, list) or p >= len(cursor):
+                    ok = False; break
+                cursor = cursor[p]
+                confirmed_cursor = cursor.get("_confirmed", {}) if isinstance(cursor, dict) else None
+            else:
+                if not isinstance(cursor, dict) or p not in cursor:
+                    ok = False; break
+                cursor = cursor[p]
+                confirmed_cursor = cursor.get("_confirmed", {}) if isinstance(cursor, dict) else None
+        
+        # If `_confirmed` marks this field as confirmed → skip it
+        if confirmed_cursor and parts[-1] in confirmed_cursor:
+            continue
+        
+        filtered.append(slot)
+    return filtered
 
 def _safe_json_array(resp: str) -> List[Dict[str, Any]]:
     m = re.search(r"\[[\s\S]*\]", resp)
@@ -30,4 +59,6 @@ def _safe_json_array(resp: str) -> List[Dict[str, Any]]:
 
 async def detect_missing_slots(struct_spec: Dict[str, Any]) -> List[Dict[str, Any]]:
     resp = await run_llm_fallback(f"{_SLOT_PROMPT}\n\nSTRUCT:\n{json.dumps(struct_spec, ensure_ascii=False)}")
-    return _safe_json_array(resp)
+    slots = _safe_json_array(resp)
+    return _filter_confirmed_slots(slots, struct_spec)
+
