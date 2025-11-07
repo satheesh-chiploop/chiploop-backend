@@ -218,14 +218,56 @@ Return VALID JSON ONLY in this exact shape (no extra text):
     }
 
 from agents.agent_generator import generate_behavioral_agent
+# --- NEW: LLM-based detection + batch behavioral generator ---
 
-
-async def generate_missing_agents_batch(payload: dict):
+async def llm_detect_missing_behavioral_agents(structured_spec_final: dict) -> dict:
     """
+    Ask the LLM whether a separate behavioral/control agent is needed.
+    No hard-coded keywords. Pure reasoning on spec.
+    Returns JSON:
+      { "controller_required": bool, "agent_name": "..." }
+    """
+    prompt = f"""
+You are a micro-architecture expert. Decide if a separate CONTROL/COORDINATION/SEQUENCING agent
+is required for this design, distinct from datapath/RTL generation.
+
+A behavioral control agent is needed if any of these hold:
+- Multiple operations require decode/selection
+- Multi-step sequencing or state progression exists
+- Handshake/enable/writeback control is implied
+- A controller FSM is needed to drive the datapath
+
+Return STRICT JSON only:
+{{
+  "controller_required": true | false,
+  "agent_name": "Human-readable agent name if required, else empty string"
+}}
+
+STRUCTURED_SPEC:
+{json.dumps(structured_spec_final, indent=2)}
+""".strip()
+
+    raw = await run_llm_fallback(prompt)
+    try:
+        start, end = raw.find("{"), raw.rfind("}")
+        decision = json.loads(raw[start:end+1]) if start != -1 and end != -1 else {}
+    except Exception as e:
+        logger.warning(f"LLM decision parse failed: {e} | raw head: {raw[:200]}")
+        decision = {"controller_required": False, "agent_name": ""}
+
+    # normalize
+    decision["controller_required"] = bool(decision.get("controller_required"))
+    decision["agent_name"] = (decision.get("agent_name") or "").strip()
+    return decision
+
+
+async def generate_missing_agents_batch(payload: dict) -> dict:
+    """
+    Batch-create behavioral agents with functionality output (FSM + signal roles).
     payload = {
       "goal": str,
       "user_id": str,
-      "agent_names": [str, ...],
+      "agent_names": [str,...],
       "structured_spec_final": dict
     }
     """
@@ -238,28 +280,34 @@ async def generate_missing_agents_batch(payload: dict):
     if loop_type not in ["digital", "analog", "embedded"]:
         loop_type = "digital"
 
-    results = []
-
+    created = []
     for name in agent_names:
         info = generate_behavioral_agent(name, loop_type)
 
-        # Save in Supabase
-        supabase.table("agents").upsert({
+        # Persist in agents table
+        try:
+            supabase.table("agents").upsert({
+                "agent_name": info["agent_name"],
+                "loop_type": loop_type,
+                "script_path": info["path"],
+                "description": info["description"],
+                "is_custom": True,
+                "owner_id": user_id,
+                "is_prebuilt": False
+            }).execute()
+        except Exception as e:
+            logger.warning(f"agents upsert failed for {name}: {e}")
+
+        created.append({
             "agent_name": info["agent_name"],
-            "loop_type": loop_type,
-            "script_path": info["path"],
+            "loop_type": info["loop_type"],
+            "path": info["path"],
             "description": info["description"],
-            "is_custom": True,
-            "owner_id": user_id,
-            "is_prebuilt": False
-        }).execute()
+        })
 
-        results.append(info)
+    return {"created_agents": created, "loop_type": loop_type}
 
-    return {
-        "created_agents": results,
-        "loop_type": loop_type
-    }
+
 
 
 

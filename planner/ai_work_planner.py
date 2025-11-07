@@ -142,6 +142,20 @@ Rules:
 
             plan["missing_agents"] = missing
 
+            from palnner.ai_agent_planner import llm_detect_missing_behavioral_agents
+
+            if structured_spec_final:
+                decision = await llm_detect_missing_behavioral_agents(structured_spec_final)
+
+                if decision.get("controller_required", False):
+                    candidate = (decision.get("agent_name") or "").strip()
+
+                    if candidate and candidate not in plan["agents"] and candidate not in plan["missing_agents"]:
+                        plan["missing_agents"].append(candidate)
+
+            logger.info(f"🧠 After behavioral LLM inference, missing agents: {plan['missing_agents']}")
+-
+
             logger.info(f"🧩 Missing agents detected (to autogen in auto-compose): {missing}")
             return plan
 
