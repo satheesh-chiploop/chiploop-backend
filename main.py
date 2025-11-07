@@ -1485,6 +1485,9 @@ async def finalize_spec_natural_sentences(data: dict):
             try:
                structured_spec_draft = convert_numeric_types(structured_spec_draft)
                print("structured_spec_draft after type normalization:", structured_spec_draft)
+               # ✅ Recompute missing from updated spec
+               from analyze.digital.missing_slot_detector import detect_missing_slots
+               remaining_missing = detect_missing_slots(structured_spec_draft)
             except Exception as e:
                print("🔥 ERROR in convert_numeric_types:", e)
                print("Offending structured_spec_draft:", structured_spec_draft)
