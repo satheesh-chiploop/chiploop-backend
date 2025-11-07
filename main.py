@@ -1590,6 +1590,13 @@ async def auto_fill_missing_fields_endpoint(payload: dict):
         "auto_filled_values": auto_filled_values
     }
 
+from planner.ai_agent_planner import generate_missing_agents_batch
+
+@app.post("/generate_missing_agents_batch")
+async def api_generate_missing_agents_batch(request: Request):
+    payload = await request.json()
+    result = await generate_missing_agents_batch(payload)
+    return result
 
 
 
