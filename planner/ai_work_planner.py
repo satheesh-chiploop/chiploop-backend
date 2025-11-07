@@ -142,7 +142,7 @@ Rules:
 
             plan["missing_agents"] = missing
 
-            from palnner.ai_agent_planner import llm_detect_missing_behavioral_agents
+            from planner.ai_agent_planner import llm_detect_missing_behavioral_agents
 
             if structured_spec_final:
                 decision = await llm_detect_missing_behavioral_agents(structured_spec_final)
