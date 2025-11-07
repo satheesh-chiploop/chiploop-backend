@@ -1487,7 +1487,7 @@ async def finalize_spec_natural_sentences(data: dict):
                 print("structured_spec_draft after type normalization:", structured_spec_draft)
                # ✅ Recompute missing from updated spec
                 from analyze.digital.missing_slot_detector import detect_missing_slots
-                detected_missing = detect_missing_slots(structured_spec_draft)
+                detected_missing = await detect_missing_slots(structured_spec_draft)
                # Treat client-provided missing as the *original frozen catalog*
                 initial_missing_catalog = {m.get("path") for m in (missing or []) if m and m.get("path")}
 
