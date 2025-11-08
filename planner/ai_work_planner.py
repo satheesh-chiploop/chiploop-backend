@@ -93,17 +93,17 @@ async def plan_workflow(prompt: str, structured_spec_final=None) -> dict:
 
 
     try:
-    sem = await suggest_agents_semantic(prompt, user_id, top_k=5)
+        sem = await suggest_agents_semantic(prompt, user_id, top_k=5)
 
-    semantic_names = [r["agent_name"] for r in sem if r.get("agent_name")]
+        semantic_names = [r["agent_name"] for r in sem if r.get("agent_name")]
 
-    if semantic_names:
-        logger.info(f"🌱 Semantic reuse candidates found: {semantic_names}")
+        if semantic_names:
+           logger.info(f"🌱 Semantic reuse candidates found: {semantic_names}")
 
         # Add to candidate list (no duplicates)
-        for a in semantic_names:
-            if a not in candidate_agents:
-                candidate_agents.append(a)
+            for a in semantic_names:
+                if a not in candidate_agents:
+                     candidate_agents.append(a)
 
     except Exception as e:
         logger.warning(f"⚠️ Semantic suggestion failed: {e}")
