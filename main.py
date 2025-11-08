@@ -1596,7 +1596,12 @@ from planner.ai_agent_planner import generate_missing_agents_batch
 async def api_generate_missing_agents_batch(request: Request):
     payload = await request.json()
     result = await generate_missing_agents_batch(payload)
-    return result
+    created_names = result.get("created", [])
+    return {
+        "status": "ok",
+        "created": created_names
+    }
+ 
 
 
 

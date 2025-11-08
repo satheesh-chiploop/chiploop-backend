@@ -6,7 +6,9 @@ from datetime import datetime
 from loguru import logger
 
 from utils.llm_utils import run_llm_fallback
-from utils.spec_analyzer import analyze_spec_text  # keep as fallback if needed
+from utils.spec_analyzer import analyze_spec_text 
+from utils.semantic import summarize_capability_long
+from utils.semantic import compute_embedding
 
 # Reuse the same supabase client pattern as ai_work_planner
 from supabase import create_client
@@ -14,6 +16,20 @@ SUPABASE_URL = os.environ.get("SUPABASE_URL") or os.environ.get("NEXT_PUBLIC_SUP
 SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or os.environ.get("NEXT_PUBLIC_SUPABASE_ANON_KEY")
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
+def infer_capability_tags(agent_name: str, loop_type: str):
+    name = agent_name.lower()
+    tags = [loop_type]  # domain tag (digital / analog / embedded)
+
+    if "control" in name or "sequenc" in name or "fsm" in name:
+        tags.append("control")
+    elif "compute" in name or "alu" in name or "exec" in name:
+        tags.append("compute")
+    elif "decode" in name or "decoder" in name:
+        tags.append("decode")
+    else:
+        tags.append("general")
+
+    return tags
 
 
 async def plan_agent_fallback(goal, user_id="anonymous"):
@@ -292,12 +308,37 @@ async def generate_missing_agents_batch(payload: dict) -> dict:
                 "script_path": info["path"],
                 "description": info["description"],
                 "is_custom": True,
-                "owner_id": None,
+                "owner_id": user_id,
                 "is_prebuilt": False
             }).execute()
         except Exception as e:
             logger.warning(f"agents upsert failed for {name}: {e}")
 
+        try:
+            # 1) Build/refine description (2–4 sentences)
+            clean_desc = await summarize_capability_long(info["description"])
+
+            # 2) Compute embedding
+            emb = await compute_embedding(clean_desc)
+
+            tags = infer_capability_tags(info["agent_name"], loop_type)
+
+            # 4) Upsert memory row (per-user scope)
+            supabase.table("agent_memory").upsert({
+                "user_id": user_id,                           # <-- per-user
+                "agent_name": info["agent_name"],
+                "capability_tags": tags,
+                "success_rate": 0.0,
+                "last_used_in": [goal] if goal else [],
+                "version": "v1",
+                "updated_at": datetime.utcnow().isoformat(),
+                "capability_embedding": emb                   # <-- vector(1536)
+            }).execute()
+
+            logger.info(f"🧠 Capability embedding stored for {info['agent_name']}")
+        except Exception as e:
+            logger.warning(f"⚠️ Capability memory update failed for {info['agent_name']}: {e}")
+        # --- end dynamic capability memory ---
         created.append({
             "agent_name": info["agent_name"],
             "loop_type": info["loop_type"],
@@ -306,6 +347,9 @@ async def generate_missing_agents_batch(payload: dict) -> dict:
         })
 
     return {"created_agents": created, "loop_type": loop_type}
+
+
+
 
 
 

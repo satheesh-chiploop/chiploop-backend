@@ -74,7 +74,7 @@ async def plan_workflow(prompt: str, structured_spec_final=None) -> dict:
            logger.info("🔄 Auto-analyzed spec for Agent Planner path (using structured_spec_draft).")
     else:
            logger.warning("⚠️ Auto-analyze spec produced no structured spec.")
-           
+
     logger.info(f"🧠 Planning workflow for goal: {prompt[:100]}...")
 
     from agent_capabilities import AGENT_CAPABILITIES
@@ -90,6 +90,23 @@ async def plan_workflow(prompt: str, structured_spec_final=None) -> dict:
     # 🔹 If structured spec is present → Infer design niches & candidate agents
     niches = extract_niches(structured_spec_final) if structured_spec_final else []
     candidate_agents = get_candidate_agents(structured_spec_final) if structured_spec_final else list(AGENT_CAPABILITIES.keys())
+
+
+    try:
+    sem = await suggest_agents_semantic(prompt, user_id, top_k=5)
+
+    semantic_names = [r["agent_name"] for r in sem if r.get("agent_name")]
+
+    if semantic_names:
+        logger.info(f"🌱 Semantic reuse candidates found: {semantic_names}")
+
+        # Add to candidate list (no duplicates)
+        for a in semantic_names:
+            if a not in candidate_agents:
+                candidate_agents.append(a)
+
+    except Exception as e:
+        logger.warning(f"⚠️ Semantic suggestion failed: {e}")
 
     structured_context = ""
     if structured_spec_final:
@@ -413,5 +430,20 @@ Available agents:
         "summary": plan.get("summary", "Auto-composed workflow complete."),
         "structured_spec_final": structured_spec_final,  
     }
+
+async def suggest_agents_semantic(spec_text: str, user_id: str, top_k: int = 5):
+    """Return user-scoped agents most semantically similar to the current spec."""
+    # 1) Embed the current goal/spec
+    q_emb = await compute_embedding(spec_text)
+
+    # 2) Call RPC for nearest neighbors
+    res = supabase.rpc(
+        "match_agents_user",
+        {"query_embedding": q_emb, "in_user_id": user_id, "match_count": top_k}
+    ).execute()
+
+    rows = res.data or []
+    # rows: [{agent_name: "...", similarity: 0.87}, ...]
+    return rows
     
 
