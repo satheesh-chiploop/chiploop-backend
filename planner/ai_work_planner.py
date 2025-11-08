@@ -98,12 +98,12 @@ async def plan_workflow(prompt: str, structured_spec_final=None) -> dict:
         semantic_names = [r["agent_name"] for r in sem if r.get("agent_name")]
 
         if semantic_names:
-           logger.info(f"🌱 Semantic reuse candidates found: {semantic_names}")
+            logger.info(f"🌱 Semantic reuse candidates found: {semantic_names}")
 
         # Add to candidate list (no duplicates)
             for a in semantic_names:
                 if a not in candidate_agents:
-                     candidate_agents.append(a)
+                    candidate_agents.append(a)
 
     except Exception as e:
         logger.warning(f"⚠️ Semantic suggestion failed: {e}")
