@@ -7,6 +7,8 @@ from openai import OpenAI
 from utils.llm_utils import run_llm_fallback 
 from portkey_ai import Portkey
 from typing import Optional, Union
+from utils.semantic import summarize_capability_long
+from utils.semantic import compute_embedding
 # ---------------- Supabase client ----------------
 
 from supabase import create_client
