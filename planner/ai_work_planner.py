@@ -47,7 +47,7 @@ def extract_json_block(text):
 
     
 
-async def plan_workflow(prompt: str, structured_spec_final=None) -> dict:
+async def plan_workflow(prompt: str, structured_spec_final=None, user_id="anonymous") -> dict:
     """
     Generates an AI workflow plan from user intent using LLM (Portkey-first).
     Now enhanced with structured_spec_final → AGX-context-informed LLM planning.
