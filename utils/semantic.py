@@ -2,6 +2,11 @@
 from datetime import datetime
 from portkey_ai import Portkey
 from utils.llm_utils import run_llm_fallback  # you already use this
+from openai import OpenAI
+import os
+
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+client = OpenAI(api_key=OPENAI_API_KEY)
 
 import os
 PORTKEY_API_KEY = os.getenv("PORTKEY_API_KEY")
@@ -25,9 +30,17 @@ Description:
     return (text or "").strip()
 
 async def compute_embedding(text: str) -> list[float]:
-    """Return embedding vector from OpenAI via Portkey (text-embedding-3-small)."""
-    resp = portkey.embeddings.create(
-        model="text-embedding-3-small",
+    """
+    Compute embedding vector using OpenAI directly (not Portkey).
+    This ensures compatibility with pgvector and avoids Portkey headers.
+    """
+    text = text.strip()
+    if not text:
+        return []
+
+    resp = client.embeddings.create(
+        model="text-embedding-3-small",   # ✅ recommended lightweight model
         input=text
     )
-    return resp.data[0].embedding  # list[float]
+
+    return resp.data[0].embedding
