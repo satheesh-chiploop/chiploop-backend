@@ -54,7 +54,7 @@ async def plan_workflow(prompt: str, structured_spec_final=None, user_id="anonym
     Generates an AI workflow plan from user intent using LLM (Portkey-first).
     Now enhanced with structured_spec_final → AGX-context-informed LLM planning.
     """
-
+    logger.info(f"Plan workflow for user_id : {user_id}...")
 
     if not structured_spec_final:
         from fastapi.testclient import TestClient
