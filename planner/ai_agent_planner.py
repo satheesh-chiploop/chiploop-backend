@@ -263,6 +263,9 @@ STRUCTURED_SPEC:
 {json.dumps(structured_spec_final, indent=2)}
 """.strip()
 
+
+    print("Structured spec final from llm-detect",structured_spec_final)
+
     raw = await run_llm_fallback(prompt)
     try:
         start, end = raw.find("{"), raw.rfind("}")
