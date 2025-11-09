@@ -435,17 +435,32 @@ Available agents:
 
 async def suggest_agents_semantic(spec_text: str, user_id: str, top_k: int = 5):
     """Return user-scoped agents most semantically similar to the current spec."""
-    # 1) Embed the current goal/spec
+
+    # 🚫 Skip when anonymous (cannot call UUID RPC)
+    if not user_id or user_id == "anonymous":
+        logger.info("🟡 Skipping semantic agent reuse (user is anonymous).")
+        return []
+
+    # ✅ Compute embedding using direct OpenAI embedding
     q_emb = await compute_embedding(spec_text)
 
-    # 2) Call RPC for nearest neighbors
-    res = supabase.rpc(
-        "match_agents_user",
-        {"query_embedding": q_emb, "in_user_id": user_id, "match_count": top_k}
-    ).execute()
+    # ✅ Call RPC with correct parameter names
+    try:
+        res = supabase.rpc(
+            "match_agents_user",
+            {
+                "query_embedding": q_emb,
+                "in_user_id": user_id,
+                "match_count": top_k
+            }
+        ).execute()
 
-    rows = res.data or []
-    # rows: [{agent_name: "...", similarity: 0.87}, ...]
-    return rows
-    
+        matches = res.data or []
+        logger.info(f"🌱 Semantic matches returned: {matches}")
+        return matches
+
+    except Exception as e:
+        logger.warning(f"⚠️ Semantic suggestion failed: {e}")
+        return []
+
 
