@@ -9,6 +9,7 @@ from utils.llm_utils import run_llm_fallback
 from utils.spec_analyzer import analyze_spec_text 
 from utils.semantic import summarize_capability_long
 from utils.semantic import compute_embedding
+from utils.semantic import build_capability_signature
 
 # Reuse the same supabase client pattern as ai_work_planner
 from supabase import create_client
@@ -319,10 +320,18 @@ async def generate_missing_agents_batch(payload: dict) -> dict:
 
         try:
             # 1) Build/refine description (2–4 sentences)
-            clean_desc = await summarize_capability_long(info["description"])
+          #  clean_desc = await summarize_capability_long(info["description"])
+            capability_text = build_capability_signature({
+                "agent_name": info["agent_name"],
+                "description": info["description"],
+                "capability_tags": infer_capability_tags(info["agent_name"], loop_type),
+                "purpose": info["description"],   # description ~ purpose
+                "interfaces": structured_spec.get("signals", [])  # optional & available here
+            })
+
 
             # 2) Compute embedding
-            emb = await compute_embedding(clean_desc)
+            emb = await compute_embedding(capability_text)
 
             tags = infer_capability_tags(info["agent_name"], loop_type)
 

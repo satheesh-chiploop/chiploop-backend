@@ -1604,6 +1604,43 @@ async def api_generate_missing_agents_batch(request: Request):
         "status": "ok",
         "created": created_names
     }
+@app.post("/build_workflow")
+async def build_workflow(request: Request):
+    """
+    Build workflow graph directly from selected agents.
+    No re-planning, no missing-agent generation.
+    Pure graph assembly for System Planner Step 3.
+    """
+    try:
+        data = await request.json()
+        user_id = data.get("user_id", "anonymous")
+        agents = data.get("agents", [])
+
+        if not agents or not isinstance(agents, list):
+            raise HTTPException(status_code=400, detail="agents[] list required")
+
+        # Import local workflow builder
+        from planner.ai_work_planner import auto_compose_workflow_graph
+
+        # Convert selected agents → preplan format expected by auto_compose_workflow_graph
+        preplan = {
+            "loop_type": "system",   # default safe
+            "agents": agents,
+            "missing_agents": []     # we do NOT want auto-generation here
+        }
+
+        # We intentionally pass structured_spec_final=None → no re-analysis
+        graph = await auto_compose_workflow_graph(
+            goal="User selected workflow",
+            structured_spec_final=None,
+            preplan=preplan
+        )
+
+        return {"status": "ok", "workflow": graph}
+
+    except Exception as e:
+        logger.error(f"❌ build_workflow failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
  
 
 

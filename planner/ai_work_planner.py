@@ -9,6 +9,7 @@ from portkey_ai import Portkey
 from typing import Optional, Union
 from utils.semantic import summarize_capability_long
 from utils.semantic import compute_embedding
+from utils.semantic import build_capability_signature
 # ---------------- Supabase client ----------------
 
 from supabase import create_client
@@ -442,7 +443,8 @@ async def suggest_agents_semantic(spec_text: str, user_id: str, top_k: int = 5):
         return []
 
     # ✅ Compute embedding using direct OpenAI embedding
-    q_emb = await compute_embedding(spec_text)
+    query_text = summarize_capability_long(spec_text)
+    q_emb = await compute_embedding(query_text)
 
     # ✅ Call RPC with correct parameter names
     try:

@@ -44,3 +44,20 @@ async def compute_embedding(text: str) -> list[float]:
     )
 
     return resp.data[0].embedding
+
+def build_capability_signature(agent: dict) -> str:
+    name = agent.get("agent_name", "")
+    desc = agent.get("description", "")
+    tags = ", ".join(agent.get("capability_tags", []) or [])
+    io = agent.get("interfaces", "")  # if exists
+    purpose = agent.get("purpose", "")
+
+    signature = f"""
+Agent Name: {name}
+Purpose: {desc or purpose}
+Capabilities: {tags}
+Interfaces / IO Behavior: {io}
+
+This agent is used when workflows require the above capabilities.
+"""
+    return signature.strip()
