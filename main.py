@@ -1614,7 +1614,8 @@ async def build_workflow(request: Request):
     try:
         data = await request.json()
         user_id = data.get("user_id", "anonymous")
-        final_agents = data.get("agents", [])
+        final_agents = data.get("final_agents") or data.get("agents") or []
+
 
         if not final_agents or not isinstance(final_agents, list):
             raise HTTPException(status_code=400, detail="final_agents[] list required")
