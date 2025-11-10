@@ -1614,10 +1614,10 @@ async def build_workflow(request: Request):
     try:
         data = await request.json()
         user_id = data.get("user_id", "anonymous")
-        agents = data.get("agents", [])
+        final_agents = data.get("agents", [])
 
-        if not agents or not isinstance(agents, list):
-            raise HTTPException(status_code=400, detail="agents[] list required")
+        if not final_agents or not isinstance(final_agents, list):
+            raise HTTPException(status_code=400, detail="final_agents[] list required")
 
         # Import local workflow builder
         from planner.ai_work_planner import auto_compose_workflow_graph
@@ -1625,7 +1625,7 @@ async def build_workflow(request: Request):
         # Convert selected agents → preplan format expected by auto_compose_workflow_graph
         preplan = {
             "loop_type": "system",   # default safe
-            "agents": agents,
+            "agents": final_agents,
             "missing_agents": []     # we do NOT want auto-generation here
         }
 
@@ -1633,7 +1633,8 @@ async def build_workflow(request: Request):
         graph = await auto_compose_workflow_graph(
             goal="User selected workflow",
             structured_spec_final=None,
-            preplan=preplan
+            preplan=preplan,
+            final_agents=final_agents
         )
 
         return {"status": "ok", "workflow": graph}

@@ -258,7 +258,8 @@ from .ai_agent_planner import plan_agent_fallback
 async def auto_compose_workflow_graph(
     goal: str,
     structured_spec_final: dict,
-    preplan: Optional[Union[dict, str]] = None
+    preplan: Optional[Union[dict, str]] = None,
+    final_agents: Optional[list] = None
 ):
 
 
