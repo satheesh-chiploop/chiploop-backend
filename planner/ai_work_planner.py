@@ -267,6 +267,42 @@ async def auto_compose_workflow_graph(
     Builds a structured workflow graph (nodes + edges)
     using a preplan if provided, or generates one internally.
     """
+    logger.info(f"🔍 DEBUG: Received final_agents = {final_agents}")
+    logger.info(f"🔍 DEBUG: Received preplan = {preplan}")
+        # ✅ If System Planner provided final agent list, skip LLM planning & use it directly
+    if final_agents and isinstance(final_agents, list) and len(final_agents) > 0:
+        logger.info("✅ Using final_agents from System Planner (skipping re-planning and missing-agent detect).")
+
+        # Build a simple preplan-style plan
+        plan = {
+            "nodes": [
+                {
+                    "id": f"n{i+1}",
+                    "type": agent_name,
+                    "data": {
+                        "uiLabel": agent_name.replace("_", " ").title(),
+                        "backendLabel": agent_name,
+                        "desc": f"Auto-composed: {agent_name}",
+                    },
+                    "position": {"x": 150 * i, "y": 100 + 60 * (i % 2)},
+                }
+                for i, agent_name in enumerate(final_agents)
+            ],
+            "edges": [
+                {"source": f"n{i+1}", "target": f"n{i+2}"}
+                for i in range(len(final_agents) - 1)
+            ],
+            "summary": "Workflow composed from System Planner final agent list.",
+        }
+
+        logger.success("✅ Auto-compose complete (System Planner final agent list).")
+        return {
+            "nodes": plan["nodes"],
+            "edges": plan["edges"],
+            "summary": plan["summary"],
+            "structured_spec_final": structured_spec_final,
+        }
+
     # --- Step 1: Handle preplan or re-plan internally ---
     if preplan:
         # Handle JSON string sent from frontend
@@ -332,10 +368,14 @@ Available agents:
         plan = {"nodes": [], "edges": [], "summary": str(response)}
 
     # --- Step 3: Detect missing agents ---
-    missing = []
-    if isinstance(preplan, dict) and preplan.get("missing_agents"):
-        missing = preplan["missing_agents"]
-        logger.info(f"📎 Using missing_agents from preplan: {missing}")
+    # --- Step 3: Detect missing agents (but override if final_agents supplied) ---
+    if final_agents:
+        logger.info("✅ Using final_agents provided by frontend — skipping missing-agent inference.")
+        plan["nodes"] = [
+           {"type": agent, "agent": agent} for agent in final_agents
+        ]
+        missing = []
+
     else:
         existing_agents = []
         for a in plan.get("nodes", []):
