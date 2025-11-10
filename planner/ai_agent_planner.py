@@ -358,6 +358,8 @@ async def generate_missing_agents_batch(payload: dict) -> dict:
             "description": info["description"],
         })
 
+    logger.info(f" Final created agent {created}")
+
     return {"created_agents": created, "loop_type": loop_type}
 
 
