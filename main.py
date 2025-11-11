@@ -1241,8 +1241,7 @@ def delete_custom_workflow(request: Request, name: str = Query(...)):
     Deletes a workflow by name for the current user.
     Removes associated runs too.
     """
-    user = verify_token(request)
-    user_id = user.get("sub") if user and user.get("sub") != "anonymous" else None
+    user_id = request.query_params.get("user_id")
 
     # Find workflow by name and user
     q = supabase.table("workflows").select("id").eq("name", name)
@@ -1651,8 +1650,7 @@ def delete_custom_agent(request: Request, name: str = Query(...)):
     """
     Delete a custom agent by name (scoped per user; only is_custom=True).
     """
-    user = verify_token(request)
-    user_id = user.get("sub") if user and user.get("sub") != "anonymous" else None
+    user_id = request.query_params.get("user_id")
 
     q = supabase.table("agents") \
         .select("id") \
