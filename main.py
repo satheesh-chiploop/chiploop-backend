@@ -1599,10 +1599,11 @@ from planner.ai_agent_planner import generate_missing_agents_batch
 async def api_generate_missing_agents_batch(request: Request):
     payload = await request.json()
     result = await generate_missing_agents_batch(payload)
-    created_names = result.get("created", [])
+    created_names = result.get("created_agents", [])
     return {
         "status": "ok",
-        "created": created_names
+        "created_agents": created_names,
+        "loop_type": result.get("loop_type")
     }
 @app.post("/build_workflow")
 async def build_workflow(request: Request):
