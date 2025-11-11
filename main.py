@@ -1645,6 +1645,64 @@ async def build_workflow(request: Request):
         logger.error(f"❌ build_workflow failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
  
+# ---------- DELETE a saved custom agent ----------
+@app.delete("/delete_custom_agent")
+def delete_custom_agent(request: Request, name: str = Query(...)):
+    """
+    Delete a custom agent by name (scoped per user; only is_custom=True).
+    """
+    user = verify_token(request)
+    user_id = user.get("sub") if user and user.get("sub") != "anonymous" else None
+
+    q = supabase.table("agents") \
+        .select("id") \
+        .eq("agent_name", name) \
+        .eq("is_custom", True)
+    q = q.eq("user_id", user_id) if user_id else q.is_("user_id", None)
+    res = q.limit(1).execute()
+
+    if not res.data:
+        return {"status": "ok", "deleted": 0, "message": "No such custom agent"}
+
+    agent_id = res.data[0]["id"]
+    supabase.table("agents").delete().eq("id", agent_id).execute()
+    return {"status": "ok", "deleted": 1, "agent_id": agent_id}
+
+
+# ---------- RENAME a saved custom agent ----------
+@app.post("/rename_custom_agent")
+async def rename_custom_agent(request: Request):
+    """
+    Rename a saved custom agent (scoped per user; only is_custom=True).
+    Body: { "old_name": "X", "new_name": "Y" }
+    """
+    data = await request.json()
+    old_name = data.get("old_name")
+    new_name = data.get("new_name")
+
+    if not old_name or not new_name:
+        raise HTTPException(status_code=400, detail="old_name and new_name required")
+
+    user = verify_token(request)
+    user_id = user.get("sub") if user and user.get("sub") != "anonymous" else None
+
+    q = supabase.table("agents") \
+        .select("id") \
+        .eq("agent_name", old_name) \
+        .eq("is_custom", True)
+    q = q.eq("user_id", user_id) if user_id else q.is_("user_id", None)
+    res = q.limit(1).execute()
+
+    if not res.data:
+        return {"status": "error", "message": "Agent not found"}
+
+    agent_id = res.data[0]["id"]
+    supabase.table("agents").update({
+        "agent_name": new_name,
+        "updated_at": datetime.utcnow().isoformat()
+    }).eq("id", agent_id).execute()
+
+    return {"status": "ok", "agent_id": agent_id, "new_name": new_name}
 
 
 
