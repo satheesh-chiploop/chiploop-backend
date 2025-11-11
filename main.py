@@ -1658,14 +1658,23 @@ def delete_custom_agent(request: Request, name: str = Query(...)):
         .select("id") \
         .eq("agent_name", name) \
         .eq("is_custom", True)
-    q = q.eq("user_id", user_id) if user_id else q.is_("user_id", None)
+
+    # ✅ match what frontend loads: owner_id, NOT user_id
+    q = q.eq("owner_id", user_id) if user_id else q.is_("owner_id", None)
+   
     res = q.limit(1).execute()
 
     if not res.data:
         return {"status": "ok", "deleted": 0, "message": "No such custom agent"}
 
     agent_id = res.data[0]["id"]
-    supabase.table("agents").delete().eq("id", agent_id).execute()
+    supabase.table("agents") \
+      .delete() \
+      .eq("agent_name", name) \
+      .eq("is_custom", True) \
+      .eq("owner_id", user_id) \
+      .execute()
+    
     return {"status": "ok", "deleted": 1, "agent_id": agent_id}
 
 
