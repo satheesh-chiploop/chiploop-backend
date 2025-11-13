@@ -1816,9 +1816,21 @@ STRICT RULES:
         raw_answers = data.get("suggested_answers", {})
 
         # Convert dict → ordered list aligned with questions
-        suggested_answers = [raw_answers.get(q, "") for q in data.get("questions", [])]
+
+         ✅ Convert dict → ordered list aligned with Q1..Qn
+        suggested_answers = []
+        for idx, q in enumerate(questions):
+            key = f"Q{idx + 1}"
+            suggested_answers.append(raw_answers.get(key, ""))
+
         refined_prompt = data.get("refined_prompt", prompt)
         loop_interpretation = data.get("loop_interpretation", previous_interpretation)
+
+        # 🔍 Debug logging
+        print(f"🔍 clarify_intent_round parsed questions: {questions}")
+        print(f"🔍 clarify_intent_round raw_answers: {raw_answers}")
+        print(f"🔍 clarify_intent_round suggested_answers list: {suggested_answers}")
+
 
         return JSONResponse({
             "status": "ok",
