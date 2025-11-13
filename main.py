@@ -1277,9 +1277,8 @@ async def rename_custom_workflow(request: Request):
 
         if not old_name or not new_name:
             raise HTTPException(status_code=400, detail="Both old_name and new_name required")
-
-        user = verify_token(request)
-        user_id = user.get("sub") if user and user.get("sub") != "anonymous" else None
+            
+        user_id = (await request.json()).get("user_id") or None
 
         q = supabase.table("workflows").select("id").eq("name", old_name)
         q = q.eq("user_id", user_id) if user_id else q.is_("user_id", None)
@@ -1690,8 +1689,8 @@ async def rename_custom_agent(request: Request):
     if not old_name or not new_name:
         raise HTTPException(status_code=400, detail="old_name and new_name required")
 
-    user = verify_token(request)
-    user_id = user.get("sub") if user and user.get("sub") != "anonymous" else None
+
+    user_id = (await request.json()).get("user_id") or None
 
     q = supabase.table("agents") \
         .select("id") \
