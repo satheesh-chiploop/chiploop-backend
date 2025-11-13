@@ -1813,13 +1813,14 @@ STRICT RULES:
 
         # Ensure structure
         questions = data.get("questions", [])
+        question_keys = []
         question_keys = [f"Q{i+1}" for i in range(len(questions))]
         raw_answers = data.get("suggested_answers", {})
 
         # Convert dict → ordered list aligned with questions
 
         #✅ Convert dict → ordered list aligned with Q1..Qn
-        suggested_answers = raw_answers
+        suggested_answers = []
         for idx, q in enumerate(questions):
             key = f"Q{idx + 1}"
             suggested_answers.append(raw_answers.get(key, ""))
