@@ -1831,7 +1831,7 @@ STRICT RULES:
         print(f"🔍 clarify_intent_round parsed questions: {questions}")
         print(f"🔍 clarify_intent_round raw_answers: {raw_answers}")
         print(f"🔍 clarify_intent_round suggested_answers list: {suggested_answers}")
-        print(f"🔍 clarify_intent_round question_keys list: {question_keys}}")
+        print(f"🔍 clarify_intent_round question_keys list: {question_keys}")
 
 
 
