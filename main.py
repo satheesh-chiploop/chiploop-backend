@@ -1783,6 +1783,8 @@ STRICT RULES:
    Keep it short but meaningful.
 
 7. refined_prompt must rewrite the user design intent clearly and cleanly.
+
+8. Each question MUST have a practical suggested answer.
         """
 
 
@@ -1800,6 +1802,8 @@ STRICT RULES:
         # -----------------------------
         from utils.llm_utils import run_llm_fallback
         llm_raw = await run_llm_fallback(system_prompt + "\n" + llm_input)
+
+        print("LLM RAW RESULT:", llm_raw)
 
         try:
             data = json.loads(llm_raw)
