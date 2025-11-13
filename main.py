@@ -1277,7 +1277,7 @@ async def rename_custom_workflow(request: Request):
 
         if not old_name or not new_name:
             raise HTTPException(status_code=400, detail="Both old_name and new_name required")
-            
+
         user_id = (await request.json()).get("user_id") or None
 
         q = supabase.table("workflows").select("id").eq("name", old_name)
@@ -1709,6 +1709,138 @@ async def rename_custom_agent(request: Request):
     }).eq("id", agent_id).execute()
 
     return {"status": "ok", "agent_id": agent_id, "new_name": new_name}
+
+# ==========================================================
+# 🧭 DESIGN INTENT PLANNER (ClarifyLoop)
+# ==========================================================
+
+@app.post("/clarify_intent_round")
+async def clarify_intent_round(request: Request):
+    """
+    Handles one LLM clarification round for Design Intent Planner.
+    Generates questions, refined prompt, and loop-wise interpretation.
+    """
+    try:
+        body = await request.json()
+        user_id = body.get("user_id", "anonymous")
+        round_num = int(body.get("round", 1))
+        prompt = body.get("prompt", "").strip()
+        previous_interpretation = body.get("previous_loop_interpretation", {})
+
+        # ✅ Question limits per round
+        question_limits = {1: 10, 2: 7, 3: 5}
+        max_questions = question_limits.get(round_num, 4)
+
+        # -----------------------------
+        # Build LLM prompt dynamically
+        # -----------------------------
+        system_prompt = f"""
+You are ChipLoop’s Design Intent Clarifier.
+You are in clarification round {round_num} for refining an engineering design intent.
+
+Use the previous interpretation (if any) to keep context consistent.
+
+Your goals:
+1. Generate up to {max_questions} clarifying questions (fewer if clear).
+2. Suggest concise answers for each question (user can edit later).
+3. Return a more professional 'refined_prompt' (rewrite user’s design in clearer form).
+4. Update the loop-wise interpretation:
+   - Digital
+   - Embedded
+   - Analog
+   - System
+
+Return **strict JSON only**:
+{{
+  "questions": ["Question 1", "Question 2", ...],
+  "suggested_answers": ["Answer 1", "Answer 2", ...],
+  "refined_prompt": "<professional rewrite>",
+  "loop_interpretation": {{
+     "digital": "...",
+     "embedded": "...",
+     "analog": "...",
+     "system": "..."
+  }}
+}}
+        """.strip()
+
+        # 🧠 Build input for model
+        llm_input = f"""
+### USER DESIGN INTENT
+{prompt}
+
+### PREVIOUS LOOP INTERPRETATION
+{json.dumps(previous_interpretation, indent=2)}
+        """
+
+        # -----------------------------
+        # Run LLM (via Portkey/OpenAI)
+        # -----------------------------
+        from utils.llm_utils import run_llm_fallback
+        llm_raw = await run_llm_fallback(system_prompt + "\n" + llm_input)
+
+        try:
+            data = json.loads(llm_raw)
+        except Exception:
+            # fallback if the LLM returned text-like JSON
+            data = json.loads(re.search(r"\{.*\}", llm_raw, re.S).group(0))
+
+        # Ensure structure
+        questions = data.get("questions", [])
+        suggested_answers = data.get("suggested_answers", [])
+        refined_prompt = data.get("refined_prompt", prompt)
+        loop_interpretation = data.get("loop_interpretation", previous_interpretation)
+
+        return JSONResponse({
+            "status": "ok",
+            "round": round_num,
+            "max_questions": max_questions,
+            "questions": questions,
+            "suggested_answers": suggested_answers,
+            "refined_prompt": refined_prompt,
+            "loop_interpretation": loop_interpretation,
+        })
+
+    except Exception as e:
+        import traceback
+        logger.error(f"❌ clarify_intent_round failed: {e}\n{traceback.format_exc()}")
+        return JSONResponse({"status": "error", "message": str(e)})
+
+
+@app.post("/save_design_intent_draft")
+async def save_design_intent_draft(request: Request):
+    """
+    Saves the finalized design intent (after user clicks 'Done') into design_intent_drafts table.
+    """
+    try:
+        data = await request.json()
+        user_id = data.get("user_id", "anonymous")
+        title = data.get("title", "Untitled Design Intent")
+        refined_prompt = data.get("refined_prompt", "")
+        implementation_strategy = data.get("implementation_strategy", "")
+        structured_intent = data.get("structured_intent", {})
+        version = int(data.get("version", 1))
+
+        payload = {
+            "id": str(uuid.uuid4()),
+            "user_id": user_id,
+            "title": title,
+            "refined_prompt": refined_prompt,
+            "implementation_strategy": implementation_strategy,
+            "structured_intent": structured_intent,
+            "version": version,
+            "created_at": datetime.utcnow().isoformat(),
+            "updated_at": datetime.utcnow().isoformat(),
+        }
+
+        supabase.table("design_intent_drafts").insert(payload).execute()
+        logger.info(f"💾 Design Intent Draft saved for user {user_id}: {title}")
+
+        return JSONResponse({"status": "ok", "data": payload})
+    except Exception as e:
+        logger.error(f"❌ save_design_intent_draft failed: {e}")
+        return JSONResponse({"status": "error", "message": str(e)})
+
 
 
 
