@@ -1728,41 +1728,63 @@ async def clarify_intent_round(request: Request):
         previous_interpretation = body.get("previous_loop_interpretation", {})
 
         # ✅ Question limits per round
-        question_limits = {1: 10, 2: 7, 3: 5}
+        question_limits = {1: 5, 2: 5, 3: 5}
         max_questions = question_limits.get(round_num, 4)
 
         # -----------------------------
         # Build LLM prompt dynamically
         # -----------------------------
-        system_prompt = f"""
-You are ChipLoop’s Design Intent Clarifier.
-You are in clarification round {round_num} for refining an engineering design intent.
 
-Use the previous interpretation (if any) to keep context consistent.
+        system_prompt = """
+You are the Design Intent Clarify Agent for chip/system design.
+Your job is to ask EXACTLY 5 clarifying questions per round.
 
-Your goals:
-1. Generate up to {max_questions} clarifying questions (fewer if clear).
-2. Suggest concise answers for each question (user can edit later).
-3. Return a more professional 'refined_prompt' (rewrite user’s design in clearer form).
-4. Update the loop-wise interpretation:
-   - Digital
-   - Embedded
-   - Analog
-   - System
+STRICT RULES:
 
-Return **strict JSON only**:
-{{
-  "questions": ["Question 1", "Question 2", ...],
-  "suggested_answers": ["Answer 1", "Answer 2", ...],
-  "refined_prompt": "<professional rewrite>",
-  "loop_interpretation": {{
-     "digital": "...",
-     "embedded": "...",
-     "analog": "...",
-     "system": "..."
-  }}
-}}
-        """.strip()
+1. ALWAYS generate exactly 5 clarifying questions per round.
+
+2. Only generate questions from RELEVANT domains:
+   - DIGITAL (logic, datapath, clocking, interfaces, FSMs)
+   - EMBEDDED (firmware flow, interrupts, sleep modes, memory)
+   - ANALOG (sensor interfaces, ADC, DAC, amplifiers, power rails)
+   - SYSTEM (integration, block interactions, power modes, timing)
+
+3. DO NOT ask about a domain that is NOT implied by the user's design intent.
+   Examples:
+   - If user mentions only digital → ask 5 DIGITAL questions.
+   - If user mentions only firmware → embed+system only.
+   - If user mentions analog sensors → include analog.
+   - If user mentions all → mix all 4 domains.
+
+4. OUTPUT MUST ALWAYS BE STRICT JSON:
+{
+  "questions": ["Q1", "Q2", "Q3", "Q4", "Q5"], 
+  "suggested_answers": {
+      "Q1": "answer1",
+      "Q2": "answer2",
+      "Q3": "answer3",
+      "Q4": "answer4",
+      "Q5": "answer5"
+  },
+  "loop_interpretation": {
+      "digital": "...",
+      "embedded": "...",
+      "analog": "...",
+      "system": "..."
+  },
+  "refined_prompt": "Professionally rewritten updated design intent.",
+  "structured_intent": {...}
+}
+
+5. Suggested answers must be practical, realistic, and helpful for the domain.
+   The user will edit these answers directly.
+
+6. loop_interpretation should reflect the user's intent + the answers.
+   Keep it short but meaningful.
+
+7. refined_prompt must rewrite the user design intent clearly and cleanly.
+        """
+
 
         # 🧠 Build input for model
         llm_input = f"""
@@ -1787,7 +1809,10 @@ Return **strict JSON only**:
 
         # Ensure structure
         questions = data.get("questions", [])
-        suggested_answers = data.get("suggested_answers", [])
+        raw_answers = data.get("suggested_answers", {})
+
+        # Convert dict → ordered list aligned with questions
+        suggested_answers = [raw_answers.get(q, "") for q in data.get("questions", [])]
         refined_prompt = data.get("refined_prompt", prompt)
         loop_interpretation = data.get("loop_interpretation", previous_interpretation)
 
