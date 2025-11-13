@@ -1817,7 +1817,7 @@ STRICT RULES:
 
         # Convert dict → ordered list aligned with questions
 
-         ✅ Convert dict → ordered list aligned with Q1..Qn
+        #✅ Convert dict → ordered list aligned with Q1..Qn
         suggested_answers = []
         for idx, q in enumerate(questions):
             key = f"Q{idx + 1}"
