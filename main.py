@@ -1852,12 +1852,8 @@ STRICT RULES:
         logger.error(f"❌ clarify_intent_round failed: {e}\n{traceback.format_exc()}")
         return JSONResponse({"status": "error", "message": str(e)})
 
-
 @app.post("/save_design_intent_draft")
 async def save_design_intent_draft(request: Request):
-    """
-    Saves the finalized design intent (after user clicks 'Done') into design_intent_drafts table.
-    """
     try:
         data = await request.json()
         user_id = data.get("user_id", "anonymous")
@@ -1865,6 +1861,8 @@ async def save_design_intent_draft(request: Request):
         refined_prompt = data.get("refined_prompt", "")
         implementation_strategy = data.get("implementation_strategy", "")
         structured_intent = data.get("structured_intent", {})
+        qa_pairs = data.get("qa_pairs", {})        # ← ADD THIS
+        full_intent = data.get("full_intent", {})  # ← ADD THIS
         version = int(data.get("version", 1))
 
         payload = {
@@ -1874,6 +1872,8 @@ async def save_design_intent_draft(request: Request):
             "refined_prompt": refined_prompt,
             "implementation_strategy": implementation_strategy,
             "structured_intent": structured_intent,
+            "qa_pairs": qa_pairs,                # ← ADD THIS
+            "full_intent": full_intent,          # ← ADD THIS
             "version": version,
             "created_at": datetime.utcnow().isoformat(),
             "updated_at": datetime.utcnow().isoformat(),
@@ -1883,9 +1883,7 @@ async def save_design_intent_draft(request: Request):
         logger.info(f"💾 Design Intent Draft saved for user {user_id}: {title}")
 
         return JSONResponse({"status": "ok", "data": payload})
-    except Exception as e:
-        logger.error(f"❌ save_design_intent_draft failed: {e}")
-        return JSONResponse({"status": "error", "message": str(e)})
+
 
 
 
