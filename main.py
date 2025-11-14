@@ -1883,7 +1883,10 @@ async def save_design_intent_draft(request: Request):
         logger.info(f"💾 Design Intent Draft saved for user {user_id}: {title}")
 
         return JSONResponse({"status": "ok", "data": payload})
-
+        
+    except Exception as e:
+        logger.error(f"❌ save_design_intent_draft failed: {e}")
+        return JSONResponse({"status": "error", "message": str(e)})
 
 
 
