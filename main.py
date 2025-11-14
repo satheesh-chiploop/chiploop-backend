@@ -1872,8 +1872,8 @@ async def save_design_intent_draft(request: Request):
             "refined_prompt": refined_prompt,
             "implementation_strategy": implementation_strategy,
             "structured_intent": structured_intent,
-            "qa_pairs": qa_pairs,                # ← ADD THIS
-            "full_intent": full_intent,          # ← ADD THIS
+            "qa_pairs": qa_pairs,                
+            "full_intent": full_intent,         
             "version": version,
             "created_at": datetime.utcnow().isoformat(),
             "updated_at": datetime.utcnow().isoformat(),
