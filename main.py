@@ -1298,6 +1298,47 @@ async def rename_custom_workflow(request: Request):
         logger.error(f"❌ Rename failed: {e}")
         return {"status": "error", "message": str(e)}
 
+@app.post("/publish_custom_workflow")
+async def publish_custom_workflow(request: Request):
+    """
+    Submit a custom workflow to marketplace_submissions as a pending entry.
+    """
+    try:
+        data = await request.json()
+        workflow_name = data.get("workflow_name")
+        user_id = data.get("user_id")
+
+        if not workflow_name or not user_id:
+            return {"status": "error", "message": "workflow_name and user_id required"}
+
+        # Find workflow row for this user
+        q = supabase.table("workflows").select("*").eq("name", workflow_name)
+        q = q.eq("user_id", user_id) if user_id else q.is_("user_id", None)
+        res = q.limit(1).execute()
+
+        if not res.data:
+            return {"status": "error", "message": "Workflow not found"}
+
+        wf_row = res.data[0]
+
+        # For workflow-only submissions, agent_json must still be non-null → use empty object
+        submission = {
+            "agent_id": None,
+            "submitted_by": user_id,
+            "agent_json": {},            # required NOT NULL
+            "workflow_json": wf_row,
+            "status": "pending",
+        }
+
+        supabase.table("marketplace_submissions").insert(submission).execute()
+        logger.info(f"🧩 Marketplace submission created for workflow '{workflow_name}' by {user_id}")
+
+        return {"status": "ok"}
+    except Exception as e:
+        logger.error(f"❌ publish_custom_workflow failed: {e}")
+        return {"status": "error", "message": str(e)}
+
+
 @app.get("/agents/get_code")
 async def get_agent_code(agent: str):
     from agent_capabilities import AGENT_CAPABILITIES
@@ -1710,6 +1751,55 @@ async def rename_custom_agent(request: Request):
 
     return {"status": "ok", "agent_id": agent_id, "new_name": new_name}
 
+
+@app.post("/publish_custom_agent")
+async def publish_custom_agent(request: Request):
+    """
+    Submit a custom agent to marketplace_submissions as a pending entry.
+    """
+    try:
+        data = await request.json()
+        agent_name = data.get("agent_name")
+        user_id = data.get("user_id")
+
+        if not agent_name or not user_id:
+            return {"status": "error", "message": "agent_name and user_id required"}
+
+        # Find this user's custom agent by name
+        q = (
+            supabase.table("agents")
+            .select("*")
+            .eq("agent_name", agent_name)
+            .eq("is_custom", True)
+        )
+        # Match how delete_custom_agent scopes by owner_id
+        q = q.eq("owner_id", user_id) if user_id else q.is_("owner_id", None)
+        res = q.limit(1).execute()
+
+        if not res.data:
+            return {"status": "error", "message": "Custom agent not found"}
+
+        agent_row = res.data[0]
+        agent_id = agent_row.get("id")
+
+        # Insert submission into marketplace_submissions
+        submission = {
+            "agent_id": agent_id,
+            "submitted_by": user_id,
+            "agent_json": agent_row,
+            "workflow_json": None,
+            "status": "pending",
+        }
+
+        supabase.table("marketplace_submissions").insert(submission).execute()
+        logger.info(f"🧩 Marketplace submission created for agent '{agent_name}' by {user_id}")
+
+        return {"status": "ok", "submission_id": submission.get("submission_id")}
+    except Exception as e:
+        logger.error(f"❌ publish_custom_agent failed: {e}")
+        return {"status": "error", "message": str(e)}
+
+
 # ==========================================================
 # 🧭 DESIGN INTENT PLANNER (ClarifyLoop)
 # ==========================================================
@@ -1883,7 +1973,7 @@ async def save_design_intent_draft(request: Request):
         logger.info(f"💾 Design Intent Draft saved for user {user_id}: {title}")
 
         return JSONResponse({"status": "ok", "data": payload})
-        
+
     except Exception as e:
         logger.error(f"❌ save_design_intent_draft failed: {e}")
         return JSONResponse({"status": "error", "message": str(e)})
