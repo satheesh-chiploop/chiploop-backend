@@ -1053,19 +1053,19 @@ async def save_custom_workflow(request: Request):
                 domains.add("system")
 
         # ✅ Auto-append System Workflow Agent if multiple domains exist
-        if len(domains) > 1 and not any("System Workflow Agent" in n.get("data", {}).get("backendLabel", "") for n in nodes):
-            system_agent = {
-                "id": f"system_validation_{len(nodes) + 1}",
-                "type": "default",
-                "data": {
-                    "uiLabel": "System Workflow Agent",
-                    "backendLabel": "System Workflow Agent",
-                    "description": "Validates cross-domain integration.",
-                },
-                "position": {"x": 400, "y": 400},
-            }
-            nodes.append(system_agent)
-            logger.info(f"🧩 Auto-added System Workflow Agent to {name}")
+        #if len(domains) > 1 and not any("System Workflow Agent" in n.get("data", {}).get("backendLabel", "") for n in nodes):
+        #   system_agent = {
+        #       "id": f"system_validation_{len(nodes) + 1}",
+        #       "type": "default",
+        #       "data": {
+        #           "uiLabel": "System Workflow Agent",
+        #            "backendLabel": "System Workflow Agent",
+        #           "description": "Validates cross-domain integration.",
+        #       },
+        #         "position": {"x": 400, "y": 400},
+        #   }
+        #   nodes.append(system_agent)
+        #     logger.info(f"🧩 Auto-added System Workflow Agent to {name}")
 
         # --- Prepare payload for Supabase ---
         payload = {
