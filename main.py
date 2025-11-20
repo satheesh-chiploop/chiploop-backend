@@ -463,7 +463,7 @@ def execute_workflow_background(
         #   has_validation = any(
         #       n.get("label") == "System Workflow Agent"
         #        for n in (data.get("nodes") or [])
-            )
+         #   )
         #   if not has_validation:
         #        logger.info("🧩 Auto-appending System Workflow Agent as final step for System Loop.")
                 # Append as a node for execution
