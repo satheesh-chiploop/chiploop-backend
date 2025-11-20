@@ -147,7 +147,6 @@ Given a user goal, you must return valid JSON in the format:
 
 Rules:
 - Choose the minimal set of agents required.
-- Always end with "System Workflow Agent" if the loop_type is "system".
 - Only use existing agents (NO new agent names).
 - Never output text outside JSON.
 """
