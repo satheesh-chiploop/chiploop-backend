@@ -459,16 +459,16 @@ def execute_workflow_background(
 
         loop_map = AGENT_FUNCTIONS.get(loop_type, DIGITAL_AGENT_FUNCTIONS)
 
-        if loop_type == "system":
-            has_validation = any(
-                n.get("label") == "System Workflow Agent"
-                for n in (data.get("nodes") or [])
+        # if loop_type == "system":
+        #   has_validation = any(
+        #       n.get("label") == "System Workflow Agent"
+        #        for n in (data.get("nodes") or [])
             )
-            if not has_validation:
-                logger.info("🧩 Auto-appending System Workflow Agent as final step for System Loop.")
+        #   if not has_validation:
+        #        logger.info("🧩 Auto-appending System Workflow Agent as final step for System Loop.")
                 # Append as a node for execution
-                data["nodes"].append({"label": "System Workflow Agent"})
-                append_log_workflow(workflow_id, "🧩 Added System Workflow Agent as final validation step.")
+        #       data["nodes"].append({"label": "System Workflow Agent"})
+        #      append_log_workflow(workflow_id, "🧩 Added System Workflow Agent as final validation step.")
 
         # Merge with dynamic/custom agents
         agent_map = dict(loop_map)
