@@ -372,6 +372,8 @@ async def run_workflow(
         data = json.loads(workflow)
         # payload contains nodes with exact backend "label"
         loop_type = (data.get("loop_type") or "digital").lower().strip()
+        logger.info(f"[DEBUG] Client submitted loop_type={data.get('loop_type')}")
+        logger.info(f"[DEBUG] Normalized loop_type={loop_type}")
 
         supabase.table("workflows").insert({
            "id": workflow_id,
@@ -508,6 +510,31 @@ def execute_workflow_background(
             label = (node or {}).get("label", "")
             step = label or "agent"
             msg = f"⚙️ Running {step} ..."
+            # ------------------------------------------------------
+            # 🔍 DEBUG: PRINT LOOP TYPE + FOUND NODE
+            # ------------------------------------------------------
+            logger.info(f"[DEBUG] loop_type={loop_type} | step={step}")
+
+            # ------------------------------------------------------
+            # 🧠 Detect domain of this step
+            # ------------------------------------------------------
+            node_domain = detect_domain_from_label(step)
+
+            # ------------------------------------------------------
+            # 🚫 SKIP nodes that do NOT match the loop (unless system loop)
+            # ------------------------------------------------------
+            if loop_type != "system" and node_domain != loop_type:
+                logger.info(
+                   f"[SKIP] Skipping agent '{step}' because its domain={node_domain} "
+                   f"but loop_type={loop_type}"
+                )
+                append_log_workflow(workflow_id,
+                   f"⏭️ Skipped {step} (domain={node_domain}, loop={loop_type})"
+                )
+                append_log_run(run_id,
+                   f"⏭️ Skipped {step} (domain={node_domain}, loop={loop_type})"
+                )
+                continue   
             logger.info(msg)
             append_log_workflow(workflow_id, msg)
             append_log_run(run_id, msg)
