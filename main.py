@@ -56,6 +56,17 @@ import asyncio
 notion = NotionClient(auth=os.getenv("NOTION_API_KEY"))
 
 
+def detect_domain_from_label(label: str):
+    l = label.lower()
+    if "digital" in l:
+        return "digital"
+    if "embedded" in l:
+        return "embedded"
+    if "analog" in l:
+        return "analog"
+    return "system"
+
+
 def find_missing_generic(spec, path=""):
     missing = []
 
@@ -457,7 +468,18 @@ def execute_workflow_background(
            append_log_workflow(workflow_id, f"⚠️ Unknown loop_type={loop_type}, defaulting to digital.")
            loop_type = "digital"
 
-        loop_map = AGENT_FUNCTIONS.get(loop_type, DIGITAL_AGENT_FUNCTIONS)
+        #loop_map = AGENT_FUNCTIONS.get(loop_type, DIGITAL_AGENT_FUNCTIONS)
+
+        # For system: merge ALL domains
+        if loop_type == "system":
+           loop_map = {}
+           loop_map.update(DIGITAL_AGENT_FUNCTIONS)
+           loop_map.update(ANALOG_AGENT_FUNCTIONS)
+           loop_map.update(EMBEDDED_AGENT_FUNCTIONS)
+           loop_map.update(SYSTEM_AGENT_FUNCTIONS)
+        else:
+    # Only agents from this domain
+           loop_map = AGENT_FUNCTIONS.get(loop_type, DIGITAL_AGENT_FUNCTIONS)
 
         # if loop_type == "system":
         #   has_validation = any(
