@@ -17,6 +17,8 @@ client_portkey = Portkey(
 client_openai = OpenAI()
 
 def run_agent(state: dict) -> dict:
+
+    agent_name = "Digital RTL Agent"
     print("\n🧠 Running RTL Agent (Spec-Aware Validation)...")
 
     # --- Added: Multi-user workflow isolation ---
@@ -222,7 +224,7 @@ Include all input/output declarations explicitly
     try:
         user_id = state.get("user_id", "anonymous")  # kept if you still need it later
         workflow_id = state.get("workflow_id", "default")
-        agent_name = "Digital RTL Agent"
+
 
         # 1) RTL compile log
         try:
