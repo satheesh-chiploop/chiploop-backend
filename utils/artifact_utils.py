@@ -1,102 +1,146 @@
-"""
-artifact_utils.py
-Generic helper functions for uploading agent outputs (artifacts)
-to Supabase Storage and updating the workflows.artifacts JSON field.
-"""
-
 import os
-from supabase import create_client, Client
-from typing import Optional, Dict
+import uuid
+import logging
+from typing import Dict, List, Optional
 
-# --------------------------------------------------------------------
-# 🔧 Initialize Supabase client (service role key for full access)
-# --------------------------------------------------------------------
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
-if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
-    raise RuntimeError("Supabase URL or SERVICE KEY missing from environment")
+from supabase_client import get_supabase_admin_client
 
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+logger = logging.getLogger("chiploop")
+
+supabase_client = get_supabase_admin_client()
 
 
-# --------------------------------------------------------------------
-# 📦 Upload any file to Supabase Storage
-# --------------------------------------------------------------------
-def upload_artifact_generic(
-    local_path: str, user_id: str, workflow_id: str, agent_label: str
-) -> Optional[str]:
+# ---------- Core helpers ----------
+
+def _normalize_artifacts_dict(raw) -> Dict[str, List[str]]:
     """
-    Uploads a local file to the 'artifacts' bucket in Supabase Storage.
-    Returns the relative bucket path (without 'artifacts/' prefix) or None on failure.
+    Ensure artifacts is always a dict[str, list[str]].
+    Handles None, empty, or wrong types gracefully.
     """
-    try:
-        if not os.path.exists(local_path):
-            print(f"⚠️ File not found: {local_path}")
-            return None
+    if not raw:
+        return {}
 
-        filename = os.path.basename(local_path)
-        bucket_path = f"{user_id}/workflows/{workflow_id}/{agent_label}/{filename}"
+    if isinstance(raw, dict):
+        fixed: Dict[str, List[str]] = {}
+        for k, v in raw.items():
+            if v is None:
+                continue
+            if isinstance(v, list):
+                fixed[k] = [str(x) for x in v if x]
+            else:
+                fixed[k] = [str(v)]
+        return fixed
 
-        with open(local_path, "rb") as f:
-            result = supabase.storage.from_("artifacts").upload(bucket_path, f)
-
-        if isinstance(result, dict) and result.get("error"):
-            raise Exception(result["error"]["message"])
-
-        print(f"✅ Uploaded artifact: {bucket_path}")
-        return bucket_path
-    except Exception as e:
-        print(f"❌ Upload failed for {local_path}: {e}")
-        return None
+    # Anything else – reset
+    return {}
 
 
-# --------------------------------------------------------------------
-# 🧱 Append artifact entry to workflows.artifacts JSON field
-# --------------------------------------------------------------------
-def append_artifact_record(workflow_id: str, key: str, path: str) -> None:
-    """
-    Inserts or updates a single artifact entry inside the workflows.artifacts JSON.
-    Example:
-        append_artifact_record('abcd123', 'rtl_file', 'user1/workflows/abcd123/rtl/counter.v')
-    """
-    try:
-        # Fetch existing artifacts
-        existing = (
-            supabase.table("workflows")
-            .select("artifacts")
-            .eq("id", workflow_id)
-            .single()
-            .execute()
-        )
-
-        artifacts: Dict[str, str] = existing.data.get("artifacts", {}) if existing.data else {}
-        artifacts[key] = path  # add or overwrite
-
-        # Push update
-        supabase.table("workflows").update({"artifacts": artifacts}).eq("id", workflow_id).execute()
-        print(f"🧩 Updated artifacts JSON for workflow {workflow_id} with key '{key}'")
-    except Exception as e:
-        print(f"❌ Failed to update artifact record: {e}")
-
-
-# --------------------------------------------------------------------
-# 🧹 Optional cleanup
-# --------------------------------------------------------------------
-def delete_artifact_from_storage(path: str) -> bool:
-    """Removes a file from the Supabase 'artifacts' bucket."""
-    try:
-        result = supabase.storage.from_("artifacts").remove([path])
-        print(f"🗑️ Deleted artifact: {path}")
-        return True
-    except Exception as e:
-        print(f"❌ Failed to delete artifact: {e}")
-        return False
-
+# ---------- Public API ----------
 
 def reset_workflow_artifacts(workflow_id: str) -> None:
-    """Clears the artifacts JSON for a given workflow."""
+    """
+    Reset artifacts field for a workflow to an empty dict.
+    Use this at the start of a run if you want a clean slate.
+    """
     try:
-        supabase.table("workflows").update({"artifacts": {}}).eq("id", workflow_id).execute()
-        print(f"♻️ Reset artifacts for workflow {workflow_id}")
+        logger.info(f"[ARTIFACTS] Resetting artifacts for workflow_id={workflow_id}")
+        supabase_client.table("workflows").update(
+            {"artifacts": {}}
+        ).eq("id", workflow_id).execute()
     except Exception as e:
-        print(f"❌ Failed to reset artifacts: {e}")
+        logger.error(f"[ARTIFACTS] Failed to reset artifacts for {workflow_id}: {e}")
+
+
+def append_artifact_record(
+    workflow_id: str,
+    key: str,
+    path: Optional[str],
+) -> None:
+    """
+    Append a single artifact path under a logical key for the workflow.
+
+    Example:
+      append_artifact_record(workflow_id, "rtl_agent_lint_feedback",
+                             "anonymous/workflows/<id>/rtl/rtl_agent_lint_feedback.txt")
+    """
+    if not path:
+        logger.warning(f"[ARTIFACTS] Not recording artifact for key={key}: empty path")
+        return
+
+    path = str(path)
+
+    try:
+        resp = supabase_client.table("workflows") \
+            .select("artifacts") \
+            .eq("id", workflow_id) \
+            .single() \
+            .execute()
+
+        data = getattr(resp, "data", resp)
+        existing_raw = data.get("artifacts") if data else {}
+        artifacts = _normalize_artifacts_dict(existing_raw)
+
+        current_list = artifacts.get(key, [])
+        if path not in current_list:
+            current_list.append(path)
+        artifacts[key] = current_list
+
+        supabase_client.table("workflows").update(
+            {"artifacts": artifacts}
+        ).eq("id", workflow_id).execute()
+
+        logger.info(f"[ARTIFACTS] Recorded artifact key={key} path={path} for workflow={workflow_id}")
+
+    except Exception as e:
+        logger.error(
+            f"[ARTIFACTS] Failed to append artifact record for workflow={workflow_id}, "
+            f"key={key}, path={path}: {e}"
+        )
+
+
+def upload_artifact_generic(
+    *,
+    local_path: str,
+    user_id: Optional[str],
+    workflow_id: str,
+    agent_label: str,
+) -> Optional[str]:
+    """
+    Upload a local file into the 'artifacts' bucket and return the storage path
+    that the frontend can use with createSignedUrl.
+
+    Returns:
+      "user_id/workflows/<workflow_id>/<agent_label>/<filename>"  (string)
+      or None on failure.
+    """
+    if not os.path.exists(local_path):
+        logger.error(f"[ARTIFACTS] Local file does not exist: {local_path}")
+        return None
+
+    # Fallback to "anonymous" if user_id is missing
+    user_segment = user_id or "anonymous"
+
+    filename = os.path.basename(local_path)
+    bucket_path = f"{user_segment}/workflows/{workflow_id}/{agent_label}/{filename}"
+
+    try:
+        logger.info(
+            f"[ARTIFACTS] Uploading file {local_path} -> bucket 'artifacts' path={bucket_path}"
+        )
+        with open(local_path, "rb") as f:
+            supabase_client.storage.from_("artifacts").upload(
+                file=f,
+                path=bucket_path,
+                file_options={"cache-control": "3600", "upsert": True},
+            )
+
+        logger.info(f"[ARTIFACTS] Upload success path={bucket_path}")
+        return bucket_path
+
+    except Exception as e:
+        logger.error(
+            f"[ARTIFACTS] Failed to upload artifact {local_path} "
+            f"for workflow_id={workflow_id}, agent_label={agent_label}: {e}"
+        )
+        return None
+

@@ -206,16 +206,19 @@ Guidelines:
             log.write(f"[{datetime.now()}] ⚠️ Embedded Spec Agent failed, using fallback: {e}\n")
 
     # --- Save spec JSON to disk ---
+
+
     firmware_name = spec_json.get("firmware_name") or "firmware"
     spec_path = os.path.join(workflow_dir, f"{firmware_name}_embedded_spec.json")
     with open(spec_path, "w", encoding="utf-8") as f:
         json.dump(spec_json, f, indent=2)
 
+    # 🔴 IMPORTANT: these keys are what the Embedded Code Agent / system will look for
     state.update(
         {
             "status": "✅ Embedded Spec Generated",
-            "spec_file": spec_path,          # IMPORTANT: used by Embedded Code Agent
-            "embedded_spec_path": spec_path, # optional, explicit name
+            "spec_file": spec_path,           # used by Embedded Code Agent
+            "embedded_spec_path": spec_path,  # explicit extra name (optional)
             "workflow_dir": workflow_dir,
             "workflow_id": workflow_id,
         }
@@ -223,3 +226,4 @@ Guidelines:
 
     print(f"✅ Embedded spec saved to {spec_path}")
     return state
+    
