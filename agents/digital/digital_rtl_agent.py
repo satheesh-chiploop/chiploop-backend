@@ -6,7 +6,8 @@ import subprocess
 import requests
 from portkey_ai import Portkey
 from openai import OpenAI
-from utils.artifact_utils import upload_artifact_generic, append_artifact_record
+from utils.artifact_utils import save_text_artifact_and_record
+
 OLLAMA_URL = "http://127.0.0.1:11434/api/generate"
 USE_LOCAL_OLLAMA = os.getenv("USE_LOCAL_OLLAMA", "false").lower() == "true"
 PORTKEY_API_KEY = os.getenv("PORTKEY_API_KEY")
@@ -99,8 +100,7 @@ def run_agent(state: dict) -> dict:
     with open(rtl_file, "r") as f:
         verilog_text = f.read()
 
-  
-    ports = re.findall(r"(?:input|output|inout)\s+(?:wire|reg|logic)?\s*(?:\[[^\]]+\]\s*)?(\w+)", verilog_text)
+
     ports = re.findall(r"(?:input|output|inout)\s+(?:wire|reg|logic)?\s*(?:\[[^\]]+\]\s*)?(\w+)", verilog_text)
     port_names = ports
 
@@ -217,57 +217,90 @@ Include all input/output declarations explicitly
         "workflow_dir": workflow_dir
     })
     # --- 📦 Upload artifacts to Supabase Storage ---
+
+        # --- 📦 Upload artifacts to Supabase Storage ---
     try:
-        user_id = state.get("user_id", "anonymous")
+        user_id = state.get("user_id", "anonymous")  # kept if you still need it later
         workflow_id = state.get("workflow_id", "default")
+        agent_name = "Digital RTL Agent"
 
-    # Upload RTL compile log
-        rtl_log_storage = upload_artifact_generic(
-            local_path=log_path,
-            user_id=user_id,
-            workflow_id=workflow_id,
-            agent_label="rtl"
-        )
-        if rtl_log_storage:
-            append_artifact_record(workflow_id, "rtl_agent_log", rtl_log_storage)
+        # 1) RTL compile log
+        try:
+            with open(log_path, "r") as lf:
+                log_content = lf.read()
+            save_text_artifact_and_record(
+                workflow_id=workflow_id,
+                agent_name=agent_name,
+                subdir="rtl",
+                filename="rtl_agent_compile.log",
+                content=log_content,
+            )
+        except Exception as e:
+            print(f"⚠️ Failed to upload RTL log artifact: {e}")
 
-        # Upload lint feedback text as file
+        # 2) Lint feedback
         lint_file = os.path.join(workflow_dir, "rtl_agent_lint_feedback.txt")
-        with open(lint_file, "w") as lf:
-            lf.write(lint_feedback)
-        lint_storage = upload_artifact_generic(
-            local_path=lint_file,
-            user_id=user_id,
-            workflow_id=workflow_id,
-            agent_label="rtl"
-        )
-        if lint_storage:
-            append_artifact_record(workflow_id, "rtl_agent_lint_feedback", lint_storage)
+        try:
+            with open(lint_file, "w") as lf:
+                lf.write(lint_feedback or "")
+            with open(lint_file, "r") as lf:
+                lint_content = lf.read()
+            save_text_artifact_and_record(
+                workflow_id=workflow_id,
+                agent_name=agent_name,
+                subdir="rtl",
+                filename="rtl_agent_lint_feedback.txt",
+                content=lint_content,
+            )
+        except Exception as e:
+            print(f"⚠️ Failed to upload RTL lint feedback artifact: {e}")
 
-    # Upload validation summary (optional)
+        # 3) Validation summary
         summary_file = os.path.join(workflow_dir, "rtl_agent_summary.txt")
-        with open(summary_file, "w") as sf:
-           sf.write(f"{overall_status}\n\nPorts: {port_names}\nClocks: {clocks_detected}\nResets: {resets_detected}\nIssues:\n")
-           for i in issues:
-             sf.write(f" - {i}\n")
-        summary_storage = upload_artifact_generic(
-           local_path=summary_file,
-           user_id=user_id,
-           workflow_id=workflow_id,
-           agent_label="rtl"
-        )
-        if summary_storage:
-           append_artifact_record(workflow_id, "rtl_agent_report", summary_storage)
+        try:
+            with open(summary_file, "w") as sf:
+                sf.write(
+                    f"{overall_status}\n\n"
+                    f"Ports: {port_names}\n"
+                    f"Clocks: {clocks_detected}\n"
+                    f"Resets: {resets_detected}\n"
+                    "Issues:\n"
+                )
+                for i in issues:
+                    sf.write(f" - {i}\n")
+
+            with open(summary_file, "r") as sf:
+                summary_content = sf.read()
+            save_text_artifact_and_record(
+                workflow_id=workflow_id,
+                agent_name=agent_name,
+                subdir="rtl",
+                filename="rtl_agent_summary.txt",
+                content=summary_content,
+            )
+        except Exception as e:
+            print(f"⚠️ Failed to upload RTL summary artifact: {e}")
 
         print("🧩 RTL Agent artifacts uploaded successfully.")
 
     except Exception as e:
         print(f"⚠️ RTL Agent artifact upload failed: {e}")
 
-    print(f"🧾 RTL Agent completed — {overall_status}")
     if artifact_list:
         for f in artifact_list:
-           append_artifact_record(workflow_id, "rtl_agent_output", f)
+            try:
+                with open(f, "r") as vf:
+                   v_content = vf.read()
+                save_text_artifact_and_record(
+                    workflow_id=workflow_id,
+                    agent_name=agent_name,
+                    subdir="rtl",
+                    filename=os.path.basename(f),
+                    content=v_content,
+                )
+            except Exception as e:
+                print(f"⚠️ Failed to upload RTL module artifact {f}: {e}")
+    
 
     return state
 
@@ -279,5 +312,5 @@ if __name__ == "__main__":
         "spec_json": "uart_tx_spec.json",
         "workflow_id": "test_run_1"
     }
-    result = rtl_agent(state)
+    result = run_agent(state)
     print(json.dumps(result, indent=2))

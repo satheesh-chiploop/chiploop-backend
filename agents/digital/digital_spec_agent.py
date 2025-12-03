@@ -3,7 +3,7 @@ import re
 import json
 import subprocess
 import datetime
-from utils.artifact_utils import append_artifact_record
+from utils.artifact_utils import save_text_artifact_and_record
 from portkey_ai import Portkey
 from openai import OpenAI
 
@@ -229,9 +229,7 @@ for all modules, enclosed using these exact delimiters: for each module , user t
     # -----------------------------------------------------------------
     # 9️⃣ Write Verilog file(s)
     # -----------------------------------------------------------------
-    # -----------------------------------------------------------------
-# 9️⃣ Write Verilog file(s)
-# -----------------------------------------------------------------
+
     all_modules = []
     if verilog_map:
         print(f"🧱 Writing {len(verilog_map)} Verilog module(s).")
@@ -285,14 +283,74 @@ for all modules, enclosed using these exact delimiters: for each module , user t
     # -----------------------------------------------------------------
     # 11️⃣ Record artifacts
     # -----------------------------------------------------------------
+        # -----------------------------------------------------------------
+    # 11️⃣ Upload artifacts to Supabase Storage + record JSON
+    # -----------------------------------------------------------------
     try:
-        for f in all_modules:
-            append_artifact_record(workflow_id, "spec_agent_output", f)
-        append_artifact_record(workflow_id, "spec_agent_json", spec_json_path)
-        append_artifact_record(workflow_id, "spec_agent_log", log_path)
-        append_artifact_record(workflow_id, "llm_raw_output", raw_output_path)
+        agent_name = "Digital Spec Agent"
+
+        # 11.1 LLM raw output
+        try:
+            with open(raw_output_path, "r", encoding="utf-8") as f:
+                raw_content = f.read()
+            save_text_artifact_and_record(
+                workflow_id=workflow_id,
+                agent_name=agent_name,
+                subdir="spec",
+                filename="llm_raw_output.txt",
+                content=raw_content,
+            )
+        except Exception as e:
+            print(f"⚠️ Failed to upload raw LLM output artifact: {e}")
+
+        # 11.2 Spec JSON
+        try:
+            with open(spec_json_path, "r", encoding="utf-8") as f:
+                spec_content = f.read()
+            save_text_artifact_and_record(
+                workflow_id=workflow_id,
+                agent_name=agent_name,
+                subdir="spec",
+                filename=os.path.basename(spec_json_path),
+                content=spec_content,
+            )
+        except Exception as e:
+            print(f"⚠️ Failed to upload spec JSON artifact: {e}")
+
+        # 11.3 Compile log
+        try:
+            with open(log_path, "r", encoding="utf-8") as f:
+                log_content = f.read()
+            save_text_artifact_and_record(
+                workflow_id=workflow_id,
+                agent_name=agent_name,
+                subdir="spec",
+                filename="spec_agent_compile.log",
+                content=log_content,
+            )
+        except Exception as e:
+            print(f"⚠️ Failed to upload spec agent compile log artifact: {e}")
+
+        # 11.4 Verilog modules (each .v file)
+        for fpath in all_modules:
+            try:
+                with open(fpath, "r", encoding="utf-8") as f:
+                    v_content = f.read()
+                save_text_artifact_and_record(
+                    workflow_id=workflow_id,
+                    agent_name=agent_name,
+                    subdir="spec",
+                    filename=os.path.basename(fpath),
+                    content=v_content,
+                )
+            except Exception as e:
+                print(f"⚠️ Failed to upload Verilog artifact {fpath}: {e}")
+
+        print("🧩 Spec Agent artifacts uploaded successfully.")
+
     except Exception as e:
-        print(f"⚠️ Artifact append failed: {e}")
+        print(f"⚠️ Spec Agent artifact upload failed: {e}")
+
 
     # -----------------------------------------------------------------
     # 12️⃣ Finalize state
