@@ -497,6 +497,18 @@ def execute_workflow_background(
         # Merge with dynamic/custom agents
         agent_map = dict(loop_map)
         agent_map.update(AGENT_REGISTRY)
+                # 🔗 Shared state across all agents in this workflow
+        shared_state = {
+            "workflow_id": workflow_id,
+            "run_id": run_id,
+            "artifact_dir": artifact_dir,
+        }
+        if user_id:
+            shared_state["user_id"] = user_id
+        if upload_path:
+            shared_state["uploaded_file"] = upload_path
+        if spec_text:
+            shared_state["spec"] = spec_text
 
         append_log_workflow(workflow_id, "⚡ Executing workflow agents ...")
         append_log_run(run_id, "⚡ Executing workflow agents ...")
@@ -565,15 +577,17 @@ def execute_workflow_background(
                 continue
 
             try:
-                # Execute agent function; pass a unified state
-                state = {"workflow_id": workflow_id, "run_id": run_id, "artifact_dir": artifact_dir}
-                if upload_path: state["uploaded_file"] = upload_path
-                if spec_text:   state["spec"] = spec_text
+
+                # Execute agent function; start from shared_state snapshot
+                state = dict(shared_state)  # shallow copy
 
                 result = fn(state)  # your agents accept a dict 'state'
 
                 # Save artifacts if provided
                 if isinstance(result, dict):
+                    # 🧠 Merge new keys (spec_json, spec_file, etc.) back into shared_state
+                    shared_state.update(result)
+
                     label_safe = step.replace(" ", "_")
                     out_path = None
                     if result.get("artifact") is not None:

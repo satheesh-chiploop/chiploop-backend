@@ -84,9 +84,9 @@ def run_agent(state: dict) -> dict:
             "Design firmware that monitors an overheat_flag coming from digital logic "
             "and prints an alert message when it is asserted."
         )
-
-    digital_spec_path = state.get("digital_spec_json")
+    digital_spec_path = state.get("spec_json") or state.get("digital_spec_json")
     digital_spec = _load_digital_spec(digital_spec_path)
+
     inferred_inputs, inferred_outputs = _infer_digital_io(digital_spec)
 
     # We put a compact hint of digital IO into the LLM prompt.
@@ -208,39 +208,43 @@ Guidelines:
 
     # --- Save spec JSON to disk ---
 
+        # --- Save spec JSON to disk + upload artifacts ---
     try:
         agent_name = "Embedded Spec Agent"
 
         firmware_name = spec_json.get("firmware_name") or "firmware"
         spec_path = os.path.join(workflow_dir, f"{firmware_name}_embedded_spec.json")
 
-        # 1) Upload the embedded spec JSON
+        # 1) Write the embedded spec JSON to disk
+        with open(spec_path, "w", encoding="utf-8") as f:
+            json.dump(spec_json, f, indent=2)
+
+        # 2) Upload the embedded spec JSON as an artifact
         with open(spec_path, "r", encoding="utf-8") as f:
             spec_content = f.read()
-        save_text_artifact_and_record( 
+        save_text_artifact_and_record(
             workflow_id=workflow_id,
             agent_name=agent_name,
             subdir="embedded",
             filename=os.path.basename(spec_path),
             content=spec_content,
         )
-   
-    # 2) Upload the log file (if it exists)
+
+        # 3) Upload the log file (if it exists)
         if os.path.exists(log_path):
             with open(log_path, "r", encoding="utf-8") as f:
-               log_content = f.read()
+                log_content = f.read()
             save_text_artifact_and_record(
-               workflow_id=workflow_id,
-               agent_name=agent_name,
-               subdir="embedded",
-               filename="embedded_spec_agent.log",
-               content=log_content,
+                workflow_id=workflow_id,
+                agent_name=agent_name,
+                subdir="embedded",
+                filename="embedded_spec_agent.log",
+                content=log_content,
             )
 
         print("🧩 Embedded Spec Agent artifacts uploaded successfully.")
     except Exception as e:
         print(f"⚠️ Embedded Spec Agent artifact upload failed: {e}")
-
 
 
     
