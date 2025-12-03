@@ -2,7 +2,7 @@ import os
 import json
 import datetime
 import subprocess
-from utils.artifact_utils import upload_artifact_generic, append_artifact_record
+from utils.artifact_utils import save_text_artifact_and_record
 
 def run_agent(state: dict) -> dict:
     """
@@ -60,30 +60,44 @@ def run_agent(state: dict) -> dict:
         logf.write(f"Summary: {summary}\n")
 
     # --- Upload artifacts to Supabase ---
+        # --- Upload artifacts to Supabase (new helper) ---
     try:
-        user_id = state.get("user_id", "anonymous")
+        agent_name = "System Workflow Agent"
 
-        validation_storage = upload_artifact_generic(
-            local_path=validation_path,
-            user_id=user_id,
-            workflow_id=workflow_id,
-            agent_label="system_validation"
-        )
-        if validation_storage:
-            append_artifact_record(workflow_id, "system_validation_report", validation_storage)
+        # 1) System validation JSON
+        try:
+            with open(validation_path, "r", encoding="utf-8") as f:
+                validation_content = f.read()
 
-        log_storage = upload_artifact_generic(
-            local_path=log_path,
-            user_id=user_id,
-            workflow_id=workflow_id,
-            agent_label="system_logs"
-        )
-        if log_storage:
-            append_artifact_record(workflow_id, "system_validation_log", log_storage)
+            save_text_artifact_and_record(
+                workflow_id=workflow_id,
+                agent_name=agent_name,
+                subdir="system",
+                filename="system_validation.json",
+                content=validation_content,
+            )
+        except Exception as e:
+            print(f"⚠️ Failed to upload system validation report: {e}")
+
+        # 2) System workflow log
+        try:
+            with open(log_path, "r", encoding="utf-8") as f:
+                log_content = f.read()
+
+            save_text_artifact_and_record(
+                workflow_id=workflow_id,
+                agent_name=agent_name,
+                subdir="system",
+                filename="system_workflow_agent.log",
+                content=log_content,
+            )
+        except Exception as e:
+            print(f"⚠️ Failed to upload system workflow log: {e}")
 
         print("🧩 System artifacts uploaded to Supabase.")
     except Exception as e:
         print(f"⚠️ Artifact upload failed: {e}")
+
 
     # --- Finalize state ---
     state.update({
