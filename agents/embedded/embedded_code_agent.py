@@ -84,7 +84,7 @@ REQUIREMENTS:
             code_raw = response.json().get("response", "").strip()
         else:
             completion = client_portkey.chat.completions.create(
-                model="gpt-4o-mini",
+                model="@chiploop/gpt-4o-mini",
                 messages=[{"role": "user", "content": prompt}],
             )
             code_raw = completion.choices[0].message.content.strip()
