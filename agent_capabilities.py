@@ -1,16 +1,19 @@
 # backend/agent_capabilities.py
+
 AGENT_CAPABILITIES = {
     "Digital Spec Agent": {
         "domain": "digital",
         "inputs": [],
-        "outputs": ["digital_spec.json"],
-        "description": "Creates structured digital spec JSON from user input."
+        # Digital spec agent typically produces a structured *_spec.json and one or more RTL modules
+        "outputs": ["*_spec.json", "*.v"],
+        "description": "Creates a structured digital spec JSON and baseline Verilog modules from user input."
     },
     "Digital RTL Agent": {
         "domain": "digital",
-        "inputs": ["digital_spec.json"],
-        "outputs": ["rtl.v"],
-        "description": "Generates Verilog RTL from digital spec."
+        # RTL agent consumes the generated spec JSON + RTL files for validation / lint / compile
+        "inputs": ["*_spec.json", "*.v"],
+        "outputs": ["rtl_agent_compile.log", "rtl_agent_summary.txt"],
+        "description": "Validates and compiles generated Verilog RTL against the spec; produces logs and summary."
     },
     "Analog Spec Agent": {
         "domain": "analog",
@@ -26,26 +29,42 @@ AGENT_CAPABILITIES = {
     },
     "Embedded Spec Agent": {
         "domain": "embedded",
-        "inputs": [],
-        "outputs": ["embedded_spec.json"],
-        "description": "Creates firmware spec JSON."
+        # If digital spec exists, embedded spec can optionally use it, but it can also run standalone
+        "inputs": ["*_spec.json"],
+        "outputs": ["*_embedded_spec.json"],
+        "description": "Creates firmware spec JSON describing how software interacts with the digital block."
     },
     "Embedded Code Agent": {
         "domain": "embedded",
-        "inputs": ["embedded_spec.json"],
+        "inputs": ["*_embedded_spec.json"],
         "outputs": ["main.c"],
-        "description": "Generates embedded C firmware."
+        "description": "Generates embedded C firmware from the embedded spec."
     },
+
+    # ✅ NEW: include simulation + demo result agents so the planner can select them
+    "Embedded Sim Agent": {
+        "domain": "embedded",
+        "inputs": ["main.c", "*_embedded_spec.json", "*.v"],
+        "outputs": ["telemetry.json", "simulation.log"],
+        "description": "Simulates firmware behavior over time and generates structured telemetry for demos/analysis."
+    },
+    "Embedded Result Agent": {
+        "domain": "embedded",
+        "inputs": ["telemetry.json"],
+        "outputs": ["result_summary.txt"],
+        "description": "Generates a short demo-ready summary report based on telemetry."
+    },
+
     "System Workflow Agent": {
         "domain": "system",
-        "inputs": ["rtl.v", "analog_netlist.cir", "main.c"],
+        # System flow can orchestrate or validate across loops; include sim/result outputs as possible dependencies
+        "inputs": ["*.v", "analog_netlist.cir", "main.c", "telemetry.json", "result_summary.txt"],
         "outputs": ["system_validation.json"],
-        "description": "Performs cross-loop integration and validation."
+        "description": "Performs cross-loop integration and validation; can include demo artifacts (telemetry/results)."
     },
-    
 }
 
-# backend/agent_capabilities.py
+# Preserve your extended agents section (unchanged except for keeping the file consistent)
 AGENT_CAPABILITIES.update({
     "Power Intent Agent": {
         "domain": "digital",
