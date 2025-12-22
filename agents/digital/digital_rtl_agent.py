@@ -220,7 +220,7 @@ Include all input/output declarations explicitly
     })
     # --- 📦 Upload artifacts to Supabase Storage ---
 
-        # --- 📦 Upload artifacts to Supabase Storage ---
+    # --- 📦 Upload artifacts to Supabase Storage ---
     try:
         user_id = state.get("user_id", "anonymous")  # kept if you still need it later
         workflow_id = state.get("workflow_id", "default")
