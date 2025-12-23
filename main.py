@@ -609,7 +609,7 @@ def execute_workflow_background(
                         existing = {}
                     legacy = {
                         "artifact": (f"/{out_path}" if out_path else None),
-                        "artifact_log": result.get("artifact_log"),
+                        "local_artifact_log": result.get("artifact_log"),
                         "log": result.get("log"),
                         "code": result.get("code"),
                     }
