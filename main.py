@@ -599,12 +599,25 @@ def execute_workflow_background(
                     # Persist artifacts metadata on workflow row
                     row = supabase.table("workflows").select("artifacts").eq("id", workflow_id).single().execute()
                     artifacts = (row.data or {}).get("artifacts") or {}
-                    artifacts[step] = {
+
+                    # Persist artifacts metadata on workflow row
+                    row = supabase.table("workflows").select("artifacts").eq("id", workflow_id).single().execute()
+                    artifacts = (row.data or {}).get("artifacts") or {}
+
+                    existing = artifacts.get(step) or {}
+                    if not isinstance(existing, dict):
+                        existing = {}
+                    legacy = {
                         "artifact": (f"/{out_path}" if out_path else None),
                         "artifact_log": result.get("artifact_log"),
                         "log": result.get("log"),
                         "code": result.get("code"),
                     }
+
+                    # ✅ Merge legacy fields into existing per-file artifacts (do NOT replace)
+                    existing.update({k: v for k, v in legacy.items() if v is not None})
+                    artifacts[step] = existing    
+                    
                     supabase.table("workflows").update({"artifacts": artifacts}).eq("id", workflow_id).execute()
 
                 msg = f"✅ {step} done"
