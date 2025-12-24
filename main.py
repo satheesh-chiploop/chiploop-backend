@@ -8,6 +8,12 @@ import traceback
 import httpx
 import re
 import time;time.sleep(0.2)
+import io
+import zipfile
+from typing import Any, Iterable
+from fastapi.responses import StreamingResponse
+from fastapi import HTTPException
+
 from datetime import datetime
 from typing import Dict, Any, Optional
 
@@ -2054,7 +2060,109 @@ async def save_design_intent_draft(request: Request):
         logger.error(f"❌ save_design_intent_draft failed: {e}")
         return JSONResponse({"status": "error", "message": str(e)})
 
+ARTIFACT_BUCKET = os.getenv("ARTIFACT_BUCKET_NAME", "artifacts")
 
+
+def _iter_leaf_strings(obj: Any) -> Iterable[str]:
+    """
+    Walk any nested dict/list and yield leaf string values.
+    We only want strings that look like storage object paths.
+    """
+    if isinstance(obj, dict):
+        for v in obj.values():
+            yield from _iter_leaf_strings(v)
+    elif isinstance(obj, list):
+        for v in obj:
+            yield from _iter_leaf_strings(v)
+    elif isinstance(obj, str):
+        s = obj.strip()
+        if s:
+            yield s
+
+
+def _normalize_storage_path(p: str) -> str:
+    """
+    Your artifacts JSON sometimes stores:
+      - "/artifacts/anonymous/<id>/X.txt"  (web route)
+      - "backend/workflows/<id>/spec/file.v" (storage object path)
+    For storage download we need the *object path* inside the bucket.
+
+    Rules:
+    - If it starts with "/artifacts/anonymous/", strip leading "/artifacts/anonymous/".
+    - If it starts with "/artifacts/", strip leading "/artifacts/".
+    - Else use as-is.
+    """
+    p = p.strip()
+    if p.startswith("/artifacts/anonymous/"):
+        return p[len("/artifacts/anonymous/") :]
+    if p.startswith("/artifacts/"):
+        return p[len("/artifacts/") :]
+    if p.startswith("/"):
+        return p[1:]
+    return p
+
+
+@app.get("/workflow/{workflow_id}/download_zip")
+def download_workflow_zip(workflow_id: str):
+    # 1) Load artifacts JSON
+    row = (
+        supabase.table("workflows")
+        .select("artifacts")
+        .eq("id", workflow_id)
+        .single()
+        .execute()
+    )
+
+    artifacts = (row.data or {}).get("artifacts") or {}
+    if not artifacts:
+        raise HTTPException(status_code=404, detail="No artifacts found for this workflow.")
+
+    # 2) Collect storage paths
+    raw_paths = list(_iter_leaf_strings(artifacts))
+    storage_paths = []
+    seen = set()
+    for p in raw_paths:
+        sp = _normalize_storage_path(p)
+        # ignore obvious non-storage values
+        if not sp or sp.endswith(".txt") is False and "backend/workflows/" not in sp and "/" not in sp:
+            # (keep this loose; you can tighten later)
+            pass
+        if sp not in seen:
+            storage_paths.append(sp)
+            seen.add(sp)
+
+    if not storage_paths:
+        raise HTTPException(status_code=404, detail="No downloadable storage paths found in artifacts JSON.")
+
+    # 3) Build ZIP in-memory
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for sp in storage_paths:
+            try:
+                res = supabase.storage.from_(ARTIFACT_BUCKET).download(sp)
+                # supabase-py returns bytes
+                if not res:
+                    continue
+
+                # Put in zip with a friendly name
+                # Example: backend/workflows/<id>/spec/top_module.v -> spec/top_module.v
+                arcname = sp
+                needle = f"backend/workflows/{workflow_id}/"
+                if needle in sp:
+                    arcname = sp.split(needle, 1)[1]
+                zf.writestr(arcname, res)
+            except Exception as e:
+                # Don’t fail whole zip; include an error file instead
+                zf.writestr(f"errors/{sp.replace('/', '_')}.error.txt", f"Failed to download {sp}\n{e}\n")
+
+    buf.seek(0)
+
+    filename = f"workflow_{workflow_id}_artifacts.zip"
+    return StreamingResponse(
+        buf,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 
