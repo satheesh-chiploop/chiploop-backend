@@ -1,8 +1,10 @@
 import os
 import json
 from datetime import datetime
-from openai import OpenAI
+from typing import Any, Dict, Optional
+
 from portkey_ai import Portkey
+from openai import OpenAI
 
 from utils.artifact_utils import save_text_artifact_and_record
 
@@ -14,17 +16,17 @@ client_portkey = Portkey(api_key=PORTKEY_API_KEY)
 client_openai = OpenAI()
 
 
-def _pick_embedded_spec_path(state: dict) -> str | None:
+def _pick_embedded_spec_path(state: dict) -> Optional[str]:
     """
     Embedded Spec Agent has varied keys over iterations.
     Try a few common ones and return the first path that exists.
     """
     candidates = [
         state.get("embedded_spec_json"),
-        state.get("embedded_spec_file"),
+        state.get("embedded_spec_path"),
         state.get("spec_file"),
-        state.get("spec_json"),
-        state.get("code_spec_json"),
+        state.get("embedded_spec_file"),
+        state.get("spec_json"),  # sometimes misused; keep as last resort
     ]
     for p in candidates:
         if isinstance(p, str) and p and os.path.exists(p):
@@ -32,8 +34,17 @@ def _pick_embedded_spec_path(state: dict) -> str | None:
     return None
 
 
+def _safe_json_load(path: str) -> Dict[str, Any]:
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        with open(path, "r", encoding="utf-8") as f:
+            return {"_raw_text": f.read()}
+
+
 def run_agent(state: dict) -> dict:
-    print("\n💻 Running Embedded Code Agent (JSON-driven)…")
+    print("\n💻 Running Embedded Code Agent (C++17)…")
 
     workflow_id = state.get("workflow_id", "default")
     workflow_dir = state.get("workflow_dir") or f"backend/workflows/{workflow_id}"
@@ -41,99 +52,105 @@ def run_agent(state: dict) -> dict:
     os.makedirs(embedded_dir, exist_ok=True)
 
     log_path = os.path.join(embedded_dir, "embedded_code_agent.log")
-    code_path = os.path.join(embedded_dir, "main.c")
+    code_path = os.path.join(embedded_dir, "main.cpp")
 
     spec_path = _pick_embedded_spec_path(state)
-
     if not spec_path:
         msg = "❌ Missing embedded spec file for code generation"
         print(msg)
-        with open(log_path, "a", encoding="utf-8") as log:
-            log.write(f"[{datetime.now()}] {msg}\n")
-            log.write(f"State keys present: {list(state.keys())}\n")
-
-        # Upload log even on failure (helps debug in UI)
         try:
-            with open(log_path, "r", encoding="utf-8") as f:
-                save_text_artifact_and_record(
-                    workflow_id=workflow_id,
-                    agent_name="Embedded Code Agent",
-                    subdir="embedded",
-                    filename="embedded_code_agent.log",
-                    content=f.read(),
-                )
+            with open(log_path, "a", encoding="utf-8") as log:
+                log.write(f"[{datetime.now()}] {msg}\n")
+                log.write(f"State keys present: {list(state.keys())}\n")
+        except Exception:
+            pass
+
+        # Upload log even on failure
+        try:
+            if os.path.exists(log_path):
+                with open(log_path, "r", encoding="utf-8") as f:
+                    save_text_artifact_and_record(
+                        workflow_id=workflow_id,
+                        agent_name="Embedded Code Agent",
+                        subdir="embedded",
+                        filename="embedded_code_agent.log",
+                        content=f.read(),
+                    )
         except Exception as e:
             print(f"⚠️ Failed to upload embedded code log artifact: {e}")
 
         state.update({"status": msg, "artifact_log": log_path})
         return state
 
-    # Persist for compatibility so downstream agents can rely on it
-    state["spec_file"] = spec_path
+    spec = _safe_json_load(spec_path)
 
-    # Load spec JSON (fallback to raw text if needed)
-    with open(spec_path, "r", encoding="utf-8") as f:
-        try:
-            spec = json.load(f)
-        except Exception as e:
-            f.seek(0)
-            spec = {"_raw_text": f.read()}
-            with open(log_path, "a", encoding="utf-8") as log:
-                log.write(f"[{datetime.now()}] ⚠️ Spec not valid JSON, using raw text. Error: {e}\n")
-
-    # Build a clean summary for the LLM
+    # Build a compact summary for the LLM
     if "_raw_text" in spec:
         spec_summary = spec["_raw_text"]
+        control_period = 100
     else:
+        timing = spec.get("timing", {}) if isinstance(spec.get("timing"), dict) else {}
+        control_period = int(timing.get("control_period_ms", 100) or 100)
         spec_summary = {
-            "firmware_name": spec.get("firmware_name", "firmware"),
+            "firmware_name": spec.get("firmware_name", "embedded_control_loop"),
             "description": spec.get("description", ""),
-            "inputs_from_digital": spec.get("inputs_from_digital", []),
-            "outputs_to_digital": spec.get("outputs_to_digital", []),
-            "control_logic": spec.get("control_logic", ""),
-            "polling_interval_ms": spec.get("polling_interval_ms", 100),
+            "target": spec.get("target", {}),
+            "timing": spec.get("timing", {"control_period_ms": control_period}),
             "logging": spec.get("logging", {}),
+            "signals": spec.get("signals", {}),
+            "behavior": spec.get("behavior", {}),
         }
 
     prompt = f"""
-You are an embedded C firmware engineer.
+You are a senior embedded firmware engineer.
 
-Generate clean, compilable C code based on this firmware specification.
-Target a generic bare-metal microcontroller (no OS). You may assume simple stubs
-like read_signal_u32(name) / read_signal_bool(name) for reading from digital logic.
+Generate clean, compilable C++17 code for a GENERIC bare-metal firmware control loop.
+The code must implement the behavior described in the firmware specification.
 
-FIRMWARE SPECIFICATION (JSON or TEXT):
+FIRMWARE SPEC (JSON or TEXT):
 {json.dumps(spec_summary, indent=2) if isinstance(spec_summary, dict) else spec_summary}
 
-REQUIREMENTS:
-- Output ONLY C source code (no markdown, no ``` fences, no explanations).
-- Include: #include lines, helper stubs, and a main() loop.
-- Implement the described control_logic.
-- If polling_interval_ms exists, use a delay_ms(polling_interval_ms) stub.
-- Keep it generic C (no Arduino/STM32-specific APIs).
+MANDATORY REQUIREMENTS:
+- Output ONLY C++ source code (no markdown, no ``` fences, no explanations).
+- Produce a single file main.cpp.
+- Provide a minimal HAL layer as stubs:
+  - bool hal_read_bool(const char* name);
+  - uint32_t hal_read_u32(const char* name);
+  - void hal_write_bool(const char* name, bool v);
+  - void hal_write_u32(const char* name, uint32_t v);
+  - void hal_delay_ms(uint32_t ms);
+  - void log_printf(const char* fmt, ...);
+- Use the spec timing.control_period_ms for loop delay.
+- Use spec.signals.inputs_from_digital and outputs_to_digital names as-is (do NOT rename signals).
+- On startup, drive outputs_to_digital to their default_value if provided, else 0.
+- Implement spec.behavior.rules in a straightforward, deterministic way:
+  - 'when' conditions based on available boolean/uint signals
+  - 'then' actions for logging and setting outputs
+- Keep it generic: no vendor SDKs, no Arduino, no STM32 headers.
+
+QUALITY EXPECTATIONS:
+- Clear structure (init, loop, helper functions)
+- Type-safe wrappers for signals where possible
+- No hardcoded domain names like "overheat_flag" unless present in spec
 """.strip()
 
-    code = None
-    llm_error = None
+    code: Optional[str] = None
+    llm_error: Optional[str] = None
 
     try:
         if USE_LOCAL_OLLAMA:
             import requests
-            resp = requests.post(
-                OLLAMA_URL,
-                json={"model": "llama3", "prompt": prompt},
-                timeout=600,
-            )
+            resp = requests.post(OLLAMA_URL, json={"model": "llama3", "prompt": prompt}, timeout=600)
             resp.raise_for_status()
             code_raw = (resp.json().get("response") or "").strip()
         else:
             completion = client_portkey.chat.completions.create(
                 model="@chiploop/gpt-4o-mini",
                 messages=[{"role": "user", "content": prompt}],
+                stream=False,
             )
             code_raw = (completion.choices[0].message.content or "").strip()
 
-        # Strip accidental fences
         text = code_raw.strip()
         if text.startswith("```"):
             parts = text.split("```")
@@ -147,44 +164,87 @@ REQUIREMENTS:
     except Exception as e:
         llm_error = str(e)
 
+    # Robust generic fallback (NO domain-specific signal names)
     if not code:
-        polling = 100
-        if isinstance(spec_summary, dict):
-            polling = int(spec_summary.get("polling_interval_ms", 100) or 100)
+        period = 100
+        inputs = []
+        outputs = []
+        try:
+            if isinstance(spec_summary, dict):
+                period = int(spec_summary.get("timing", {}).get("control_period_ms", 100) or 100)
+                signals = spec_summary.get("signals", {}) if isinstance(spec_summary.get("signals"), dict) else {}
+                inputs = signals.get("inputs_from_digital", []) if isinstance(signals.get("inputs_from_digital"), list) else []
+                outputs = signals.get("outputs_to_digital", []) if isinstance(signals.get("outputs_to_digital"), list) else []
+        except Exception:
+            pass
 
-        code = f"""#include <stdio.h>
-#include <stdint.h>
-#include <stdbool.h>
+        # Pick a boolean input if any, else generic placeholder
+        bool_inputs = [s for s in inputs if isinstance(s, dict) and s.get("type") == "bool" and s.get("name")]
+        sample_bool = bool_inputs[0]["name"] if bool_inputs else "status_flag"
 
-static uint32_t read_signal_u32(const char *name) {{
+        code = f"""#include <cstdint>
+#include <cstdarg>
+#include <cstdio>
+#include <cstring>
+
+// --------------------
+// Minimal HAL stubs
+// --------------------
+static bool hal_read_bool(const char* name) {{
     (void)name;
-    return 0;
+    return false;
 }}
 
-static bool read_signal_bool(const char *name) {{
+static uint32_t hal_read_u32(const char* name) {{
     (void)name;
-    static int counter = 0;
-    counter++;
-    return (counter % 10) == 0;
+    return 0u;
 }}
 
-static void delay_ms(unsigned int ms) {{
+static void hal_write_bool(const char* name, bool v) {{
+    (void)name; (void)v;
+}}
+
+static void hal_write_u32(const char* name, uint32_t v) {{
+    (void)name; (void)v;
+}}
+
+static void hal_delay_ms(uint32_t ms) {{
     (void)ms;
 }}
 
-int main(void) {{
-    while (1) {{
-        bool overheat_flag = read_signal_bool("overheat_flag");
-        if (overheat_flag) {{
-            printf("WARNING: Overheat detected!\\n");
-        }}
-        delay_ms({polling});
+static void log_printf(const char* fmt, ...) {{
+    va_list args;
+    va_start(args, fmt);
+    (void)vprintf(fmt, args);
+    va_end(args);
+}}
+
+// --------------------
+// Firmware logic
+// --------------------
+static void firmware_init() {{
+    // Drive safe defaults (generic)
+    // (If your spec provides outputs_to_digital, the LLM path sets them explicitly)
+}}
+
+static void firmware_step() {{
+    // Generic example: read one status flag and log when asserted
+    if (hal_read_bool("{sample_bool}")) {{
+        log_printf("[INFO] {sample_bool} asserted\\n");
+    }}
+}}
+
+int main() {{
+    firmware_init();
+    while (true) {{
+        firmware_step();
+        hal_delay_ms({period}u);
     }}
     return 0;
 }}
 """
         with open(log_path, "a", encoding="utf-8") as log:
-            log.write(f"[{datetime.now()}] ⚠️ LLM failed. Fallback code used.\n")
+            log.write(f"[{datetime.now()}] ⚠️ LLM failed. Fallback C++ used.\n")
             if llm_error:
                 log.write(f"Error: {llm_error}\n")
 
@@ -201,18 +261,19 @@ int main(void) {{
                 workflow_id=workflow_id,
                 agent_name=agent_name,
                 subdir="embedded",
-                filename="main.c",
+                filename="main.cpp",
                 content=f.read(),
             )
 
-        with open(log_path, "r", encoding="utf-8") as f:
-            save_text_artifact_and_record(
-                workflow_id=workflow_id,
-                agent_name=agent_name,
-                subdir="embedded",
-                filename="embedded_code_agent.log",
-                content=f.read(),
-            )
+        if os.path.exists(log_path):
+            with open(log_path, "r", encoding="utf-8") as f:
+                save_text_artifact_and_record(
+                    workflow_id=workflow_id,
+                    agent_name=agent_name,
+                    subdir="embedded",
+                    filename="embedded_code_agent.log",
+                    content=f.read(),
+                )
 
         print("🧩 Embedded Code Agent artifacts uploaded successfully.")
     except Exception as e:
@@ -220,7 +281,7 @@ int main(void) {{
 
     state.update(
         {
-            "status": "✅ Embedded Code Generated",
+            "status": "✅ Embedded C++ Code Generated",
             "code_file": code_path,
             "artifact_log": log_path,
             "workflow_dir": workflow_dir,
@@ -228,5 +289,5 @@ int main(void) {{
         }
     )
 
-    print(f"✅ Embedded firmware C code saved to {code_path}")
+    print(f"✅ Embedded firmware C++ code saved to {code_path}")
     return state
