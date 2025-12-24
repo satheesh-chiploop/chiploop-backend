@@ -1,293 +1,294 @@
 import os
 import json
 from datetime import datetime
-from typing import Any, Dict, Optional
-
-from portkey_ai import Portkey
-from openai import OpenAI
+from typing import Any, Dict, Optional, List
 
 from utils.artifact_utils import save_text_artifact_and_record
 
-USE_LOCAL_OLLAMA = os.getenv("USE_LOCAL_OLLAMA", "false").lower() == "true"
-OLLAMA_URL = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434/api/generate")
+try:
+    from openai import OpenAI
+except Exception:
+    OpenAI = None
 
-PORTKEY_API_KEY = os.getenv("PORTKEY_API_KEY")
-client_portkey = Portkey(api_key=PORTKEY_API_KEY)
-client_openai = OpenAI()
+client_openai = OpenAI() if OpenAI else None
 
 
-def _pick_embedded_spec_path(state: dict) -> Optional[str]:
-    """
-    Embedded Spec Agent has varied keys over iterations.
-    Try a few common ones and return the first path that exists.
-    """
-    candidates = [
-        state.get("embedded_spec_json"),
-        state.get("embedded_spec_path"),
-        state.get("spec_file"),
-        state.get("embedded_spec_file"),
-        state.get("spec_json"),  # sometimes misused; keep as last resort
-    ]
-    for p in candidates:
-        if isinstance(p, str) and p and os.path.exists(p):
-            return p
+def _log(log_path: str, msg: str) -> None:
+    print(msg)
+    with open(log_path, "a", encoding="utf-8") as f:
+        f.write(f"[{datetime.now().isoformat()}] {msg}\n")
+
+
+def _find_existing_json_path(state: dict, candidates: List[str]) -> Optional[str]:
+    for k in candidates:
+        v = state.get(k)
+        if isinstance(v, str) and v and os.path.exists(v) and v.lower().endswith(".json"):
+            return v
     return None
 
 
-def _safe_json_load(path: str) -> Dict[str, Any]:
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        with open(path, "r", encoding="utf-8") as f:
-            return {"_raw_text": f.read()}
+def _load_json(path: str) -> dict:
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
 
 
-def run_agent(state: dict) -> dict:
-    print("\n💻 Running Embedded Code Agent (C++17)…")
+def _gen_cpp_from_spec(spec: Dict[str, Any]) -> str:
+    mmio = (spec.get("mmio") or {})
+    base = mmio.get("base_address", "0x40000000")
+    regs = mmio.get("registers", [])
 
-    workflow_id = state.get("workflow_id", "default")
-    workflow_dir = state.get("workflow_dir") or f"backend/workflows/{workflow_id}"
-    embedded_dir = os.path.join(workflow_dir, "embedded")
-    os.makedirs(embedded_dir, exist_ok=True)
+    # Extract CONTROL0/STATUS0 bitfields if present
+    control = next((r for r in regs if r.get("name") == "CONTROL0"), None) or {}
+    status = next((r for r in regs if r.get("name") == "STATUS0"), None) or {}
+    control_fields = control.get("fields", []) or []
+    status_fields = status.get("fields", []) or []
 
-    log_path = os.path.join(embedded_dir, "embedded_code_agent.log")
-    code_path = os.path.join(embedded_dir, "main.cpp")
+    def field_enum(fields: list) -> str:
+        lines = []
+        for f in fields:
+            name = str(f.get("name", "sig")).upper()
+            lsb = int(f.get("lsb", 0))
+            msb = int(f.get("msb", lsb))
+            lines.append(f"  {name}_LSB = {lsb},")
+            lines.append(f"  {name}_MSB = {msb},")
+        return "\n".join(lines) if lines else "  // (none)\n"
 
-    spec_path = _pick_embedded_spec_path(state)
-    if not spec_path:
-        msg = "❌ Missing embedded spec file for code generation"
-        print(msg)
-        try:
-            with open(log_path, "a", encoding="utf-8") as log:
-                log.write(f"[{datetime.now()}] {msg}\n")
-                log.write(f"State keys present: {list(state.keys())}\n")
-        except Exception:
-            pass
+    # A generic firmware skeleton that looks like real bare-metal style:
+    # - MMIO reads/writes
+    # - register bit packing helpers
+    # - a simple poll loop (no hard-coded semantic signal names)
+    return f"""\
+/*
+ * Auto-generated generic firmware skeleton (C++).
+ * Integration model: AXI4-Lite MMIO register block exported by RTL.
+ *
+ * NOTE: This is scaffolding. Real firmware will add startup code, clock init,
+ * UART, IRQ handlers, and platform headers.
+ */
 
-        # Upload log even on failure
-        try:
-            if os.path.exists(log_path):
-                with open(log_path, "r", encoding="utf-8") as f:
-                    save_text_artifact_and_record(
-                        workflow_id=workflow_id,
-                        agent_name="Embedded Code Agent",
-                        subdir="embedded",
-                        filename="embedded_code_agent.log",
-                        content=f.read(),
-                    )
-        except Exception as e:
-            print(f"⚠️ Failed to upload embedded code log artifact: {e}")
+#include <cstdint>
 
-        state.update({"status": msg, "artifact_log": log_path})
-        return state
+namespace mmio {{
+  static constexpr uintptr_t BASE = {base};
 
-    spec = _safe_json_load(spec_path)
+  // Register offsets (bytes)
+  static constexpr uintptr_t CONTROL0_OFF = 0x00;
+  static constexpr uintptr_t STATUS0_OFF  = 0x04;
+  static constexpr uintptr_t IRQ_STATUS_OFF = 0x08;
+  static constexpr uintptr_t IRQ_MASK_OFF   = 0x0C;
 
-    # Build a compact summary for the LLM
-    if "_raw_text" in spec:
-        spec_summary = spec["_raw_text"]
-        control_period = 100
-    else:
-        timing = spec.get("timing", {}) if isinstance(spec.get("timing"), dict) else {}
-        control_period = int(timing.get("control_period_ms", 100) or 100)
-        spec_summary = {
-            "firmware_name": spec.get("firmware_name", "embedded_control_loop"),
-            "description": spec.get("description", ""),
-            "target": spec.get("target", {}),
-            "timing": spec.get("timing", {"control_period_ms": control_period}),
-            "logging": spec.get("logging", {}),
-            "signals": spec.get("signals", {}),
-            "behavior": spec.get("behavior", {}),
-        }
+  inline void write32(uintptr_t off, uint32_t v) {{
+    *reinterpret_cast<volatile uint32_t*>(BASE + off) = v;
+  }}
 
-    prompt = f"""
-You are a senior embedded firmware engineer.
+  inline uint32_t read32(uintptr_t off) {{
+    return *reinterpret_cast<volatile uint32_t*>(BASE + off);
+  }}
 
-Generate clean, compilable C++17 code for a GENERIC bare-metal firmware control loop.
-The code must implement the behavior described in the firmware specification.
+  inline uint32_t set_field(uint32_t reg, uint32_t lsb, uint32_t msb, uint32_t value) {{
+    const uint32_t width = (msb - lsb + 1u);
+    const uint32_t mask  = (width >= 32u) ? 0xFFFFFFFFu : ((1u << width) - 1u);
+    reg &= ~(mask << lsb);
+    reg |= ((value & mask) << lsb);
+    return reg;
+  }}
 
-FIRMWARE SPEC (JSON or TEXT):
-{json.dumps(spec_summary, indent=2) if isinstance(spec_summary, dict) else spec_summary}
-
-MANDATORY REQUIREMENTS:
-- Output ONLY C++ source code (no markdown, no ``` fences, no explanations).
-- Produce a single file main.cpp.
-- Provide a minimal HAL layer as stubs:
-  - bool hal_read_bool(const char* name);
-  - uint32_t hal_read_u32(const char* name);
-  - void hal_write_bool(const char* name, bool v);
-  - void hal_write_u32(const char* name, uint32_t v);
-  - void hal_delay_ms(uint32_t ms);
-  - void log_printf(const char* fmt, ...);
-- Use the spec timing.control_period_ms for loop delay.
-- Use spec.signals.inputs_from_digital and outputs_to_digital names as-is (do NOT rename signals).
-- On startup, drive outputs_to_digital to their default_value if provided, else 0.
-- Implement spec.behavior.rules in a straightforward, deterministic way:
-  - 'when' conditions based on available boolean/uint signals
-  - 'then' actions for logging and setting outputs
-- Keep it generic: no vendor SDKs, no Arduino, no STM32 headers.
-
-QUALITY EXPECTATIONS:
-- Clear structure (init, loop, helper functions)
-- Type-safe wrappers for signals where possible
-- No hardcoded domain names like "overheat_flag" unless present in spec
-""".strip()
-
-    code: Optional[str] = None
-    llm_error: Optional[str] = None
-
-    try:
-        if USE_LOCAL_OLLAMA:
-            import requests
-            resp = requests.post(OLLAMA_URL, json={"model": "llama3", "prompt": prompt}, timeout=600)
-            resp.raise_for_status()
-            code_raw = (resp.json().get("response") or "").strip()
-        else:
-            completion = client_portkey.chat.completions.create(
-                model="@chiploop/gpt-4o-mini",
-                messages=[{"role": "user", "content": prompt}],
-                stream=False,
-            )
-            code_raw = (completion.choices[0].message.content or "").strip()
-
-        text = code_raw.strip()
-        if text.startswith("```"):
-            parts = text.split("```")
-            text = parts[1].strip() if len(parts) >= 2 else text
-        code = text
-
-        with open(log_path, "a", encoding="utf-8") as log:
-            log.write(f"[{datetime.now()}] ✅ Embedded Code Agent executed successfully.\n")
-            log.write(f"Spec used: {spec_path}\n")
-
-    except Exception as e:
-        llm_error = str(e)
-
-    # Robust generic fallback (NO domain-specific signal names)
-    if not code:
-        period = 100
-        inputs = []
-        outputs = []
-        try:
-            if isinstance(spec_summary, dict):
-                period = int(spec_summary.get("timing", {}).get("control_period_ms", 100) or 100)
-                signals = spec_summary.get("signals", {}) if isinstance(spec_summary.get("signals"), dict) else {}
-                inputs = signals.get("inputs_from_digital", []) if isinstance(signals.get("inputs_from_digital"), list) else []
-                outputs = signals.get("outputs_to_digital", []) if isinstance(signals.get("outputs_to_digital"), list) else []
-        except Exception:
-            pass
-
-        # Pick a boolean input if any, else generic placeholder
-        bool_inputs = [s for s in inputs if isinstance(s, dict) and s.get("type") == "bool" and s.get("name")]
-        sample_bool = bool_inputs[0]["name"] if bool_inputs else "status_flag"
-
-        code = f"""#include <cstdint>
-#include <cstdarg>
-#include <cstdio>
-#include <cstring>
-
-// --------------------
-// Minimal HAL stubs
-// --------------------
-static bool hal_read_bool(const char* name) {{
-    (void)name;
-    return false;
+  inline uint32_t get_field(uint32_t reg, uint32_t lsb, uint32_t msb) {{
+    const uint32_t width = (msb - lsb + 1u);
+    const uint32_t mask  = (width >= 32u) ? 0xFFFFFFFFu : ((1u << width) - 1u);
+    return (reg >> lsb) & mask;
+  }}
 }}
 
-static uint32_t hal_read_u32(const char* name) {{
-    (void)name;
-    return 0u;
-}}
+enum Control0Bits {{
+{field_enum(control_fields)}
+}};
 
-static void hal_write_bool(const char* name, bool v) {{
-    (void)name; (void)v;
-}}
+enum Status0Bits {{
+{field_enum(status_fields)}
+}};
 
-static void hal_write_u32(const char* name, uint32_t v) {{
-    (void)name; (void)v;
-}}
-
-static void hal_delay_ms(uint32_t ms) {{
-    (void)ms;
-}}
-
-static void log_printf(const char* fmt, ...) {{
-    va_list args;
-    va_start(args, fmt);
-    (void)vprintf(fmt, args);
-    va_end(args);
-}}
-
-// --------------------
-// Firmware logic
-// --------------------
-static void firmware_init() {{
-    // Drive safe defaults (generic)
-    // (If your spec provides outputs_to_digital, the LLM path sets them explicitly)
-}}
-
-static void firmware_step() {{
-    // Generic example: read one status flag and log when asserted
-    if (hal_read_bool("{sample_bool}")) {{
-        log_printf("[INFO] {sample_bool} asserted\\n");
-    }}
+static void delay_cycles(volatile uint32_t cycles) {{
+  while (cycles--) {{
+    __asm__ volatile("nop");
+  }}
 }}
 
 int main() {{
-    firmware_init();
-    while (true) {{
-        firmware_step();
-        hal_delay_ms({period}u);
-    }}
-    return 0;
+  // Example: write deterministic pattern into CONTROL0 fields (if any).
+  uint32_t ctrl = 0;
+
+  // If your spec has CONTROL0 fields, you can set them here.
+  // Example pattern: set each 1-bit field to 1.
+  // (This is generic and safe; replace with real behavior.)
+"""
+
+    # append generic field sets
+    # We'll set 1-bit controls to 1, multi-bit to 1.
+    # If none, just keep ctrl=0.
+    # (Do not hard-code semantic names.)
+    # We'll build at generation time.
+    # This function returns string; we will inject below in Python.
+    """
+
+
+def _append_field_sets(control_fields: list) -> str:
+    lines = []
+    for f in control_fields:
+        lsb = int(f.get("lsb", 0))
+        msb = int(f.get("msb", lsb))
+        name = str(f.get("name", "sig")).upper()
+        # set a small non-zero value within width
+        lines.append(f"  // CONTROL0.{name} ({msb}:{lsb})")
+        lines.append(f"  ctrl = mmio::set_field(ctrl, {lsb}, {msb}, 1u);")
+    return "\n".join(lines) if lines else "  // No CONTROL0 fields found in spec.\n"
+
+
+def _append_status_reads(status_fields: list) -> str:
+    lines = []
+    lines.append("    const uint32_t st = mmio::read32(mmio::STATUS0_OFF);")
+    if not status_fields:
+        lines.append("    (void)st; // No STATUS0 fields in spec.\n")
+        return "\n".join(lines)
+    lines.append("    // Extract fields (generic); hook into logging/UART as needed.")
+    for f in status_fields:
+        lsb = int(f.get("lsb", 0))
+        msb = int(f.get("msb", lsb))
+        name = str(f.get("name", "sig")).upper()
+        lines.append(f"    volatile uint32_t {name.lower()} = mmio::get_field(st, {lsb}, {msb});")
+        lines.append(f"    (void){name.lower()};")
+    return "\n".join(lines)
+
+
+def _render_cpp(spec: Dict[str, Any]) -> str:
+    mmio = (spec.get("mmio") or {})
+    base = mmio.get("base_address", "0x40000000")
+    regs = mmio.get("registers", [])
+    control = next((r for r in regs if r.get("name") == "CONTROL0"), None) or {}
+    status = next((r for r in regs if r.get("name") == "STATUS0"), None) or {}
+    control_fields = control.get("fields", []) or []
+    status_fields = status.get("fields", []) or []
+
+    # Start with base template from _gen_cpp_from_spec
+    base_cpp = _gen_cpp_from_spec(spec)
+
+    # Inject field sets and loop body and close main()
+    injected = (
+        base_cpp
+        + _append_field_sets(control_fields)
+        + f"""
+
+  mmio::write32(mmio::CONTROL0_OFF, ctrl);
+
+  while (true) {{
+{_append_status_reads(status_fields)}
+    // Simple pacing; replace with timer interrupt/RTOS tick in real systems.
+    delay_cycles(50000);
+  }}
+
+  return 0;
 }}
 """
-        with open(log_path, "a", encoding="utf-8") as log:
-            log.write(f"[{datetime.now()}] ⚠️ LLM failed. Fallback C++ used.\n")
-            if llm_error:
-                log.write(f"Error: {llm_error}\n")
+    )
+    # Fix base placeholder duplication (because _gen_cpp_from_spec ends mid-string)
+    # Ensure it compiles cleanly.
+    return injected.replace('"""\n\n\n', "")
 
-    # Write code file
-    with open(code_path, "w", encoding="utf-8") as f:
-        f.write(code)
 
-    # Upload artifacts to Supabase storage + record
+def _maybe_llm_improve_cpp(spec: Dict[str, Any], cpp: str, log_path: str) -> str:
+    """
+    Optional LLM improvement step:
+    - keep MMIO approach
+    - do not invent semantic signal meaning
+    - improve structure/comments slightly
+    """
+    if not client_openai:
+        return cpp
+
     try:
-        agent_name = "Embedded Code Agent"
-
-        with open(code_path, "r", encoding="utf-8") as f:
-            save_text_artifact_and_record(
-                workflow_id=workflow_id,
-                agent_name=agent_name,
-                subdir="embedded",
-                filename="main.cpp",
-                content=f.read(),
-            )
-
-        if os.path.exists(log_path):
-            with open(log_path, "r", encoding="utf-8") as f:
-                save_text_artifact_and_record(
-                    workflow_id=workflow_id,
-                    agent_name=agent_name,
-                    subdir="embedded",
-                    filename="embedded_code_agent.log",
-                    content=f.read(),
-                )
-
-        print("🧩 Embedded Code Agent artifacts uploaded successfully.")
+        prompt = (
+            "You are an expert embedded firmware engineer.\n"
+            "Improve this generic C++ bare-metal firmware skeleton while keeping it hardware-agnostic:\n"
+            "- MUST keep MMIO register access style\n"
+            "- MUST NOT invent semantic meaning for signals (no 'overheat_flag' etc.)\n"
+            "- MAY add a lightweight driver class + clean structure\n"
+            "- MUST return code only (no markdown)\n\n"
+            f"SPEC_JSON:\n{json.dumps(spec, indent=2)}\n\n"
+            f"CODE:\n{cpp}\n"
+        )
+        resp = client_openai.chat.completions.create(
+            model=os.getenv("EMBEDDED_CODE_MODEL", "gpt-4o-mini"),
+            messages=[
+                {"role": "system", "content": "Return code only. No markdown."},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.2,
+        )
+        return resp.choices[0].message.content.strip()
     except Exception as e:
-        print(f"⚠️ Embedded Code Agent artifact upload failed: {e}")
+        _log(log_path, f"LLM improve step skipped/failed: {e}")
+        return cpp
 
-    state.update(
-        {
-            "status": "✅ Embedded C++ Code Generated",
-            "code_file": code_path,
-            "artifact_log": log_path,
-            "workflow_dir": workflow_dir,
-            "workflow_id": workflow_id,
-        }
+
+def run_agent(state: dict) -> dict:
+    print("\n💻 Running Embedded Code Agent (generic C++ firmware)…")
+
+    workflow_id = state.get("workflow_id", "default")
+    workflow_dir = state.get("workflow_dir") or f"backend/workflows/{workflow_id}"
+
+    os.makedirs("artifact", exist_ok=True)
+    log_path = os.path.join("artifact", "embedded_code_agent.log")
+    with open(log_path, "w", encoding="utf-8") as f:
+        f.write("Embedded Code Agent Log\n")
+
+    # Find embedded spec JSON
+    embedded_spec_path = _find_existing_json_path(
+        state,
+        candidates=[
+            "embedded_spec_json_path",
+            "embedded_spec_path",
+            "code_spec_json",
+            "spec_json_path",
+        ],
     )
 
-    print(f"✅ Embedded firmware C++ code saved to {code_path}")
+    embedded_spec = None
+    if embedded_spec_path:
+        embedded_spec = _load_json(embedded_spec_path)
+        _log(log_path, f"Loaded embedded spec from: {embedded_spec_path}")
+    elif isinstance(state.get("embedded_spec_json"), dict):
+        embedded_spec = state["embedded_spec_json"]
+        _log(log_path, "Loaded embedded spec from state['embedded_spec_json']")
+    else:
+        _log(log_path, "ERROR: Could not locate embedded spec JSON.")
+        save_text_artifact_and_record(
+            workflow_id=workflow_id,
+            agent_name="Embedded Code Agent",
+            subdir="embedded",
+            filename="embedded_code_agent.log",
+            content=open(log_path, "r", encoding="utf-8").read(),
+        )
+        state["embedded_code_error"] = "missing_embedded_spec"
+        return state
+
+    cpp = _render_cpp(embedded_spec)
+    cpp = _maybe_llm_improve_cpp(embedded_spec, cpp, log_path)
+
+    save_text_artifact_and_record(
+        workflow_id=workflow_id,
+        agent_name="Embedded Code Agent",
+        subdir="embedded",
+        filename="main.cpp",
+        content=cpp,
+    )
+    save_text_artifact_and_record(
+        workflow_id=workflow_id,
+        agent_name="Embedded Code Agent",
+        subdir="embedded",
+        filename="embedded_code_agent.log",
+        content=open(log_path, "r", encoding="utf-8").read(),
+    )
+
+    state["embedded_code_path"] = os.path.join(workflow_dir, "embedded", "main.cpp")
     return state
+
