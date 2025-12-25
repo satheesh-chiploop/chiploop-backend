@@ -234,6 +234,8 @@ EMBEDDED_AGENT_FUNCTIONS: Dict[str, Any] = {
     "Embedded Result Agent": embedded_result_agent,
 }
 from agents.system.system_workflow_agent import run_agent as system_workflow_agent
+from agents.system.system_cosim_integration_agent import run_agent as system_cosim_integration_agent
+from agents.system.system_iss_bridge_agent import run_agent as system_iss_bridge_agent
 
 SYSTEM_AGENT_FUNCTIONS: Dict[str,Any] = {
     "Digital Spec Agent": digital_spec_agent,
@@ -255,7 +257,9 @@ SYSTEM_AGENT_FUNCTIONS: Dict[str,Any] = {
     "Embedded Code Agent": embedded_code_agent,
     "Embedded Sim Agent": embedded_sim_agent,
     "Embedded Result Agent": embedded_result_agent, 
-    "System Workflow Agent": system_workflow_agent,     
+    "System Workflow Agent": system_workflow_agent,  
+    "System CoSim Integration Agent": system_cosim_integration_agent,
+    "System ISS Bridge Agent": system_iss_bridge_agent,  
 }
 
 # ==========================================================
