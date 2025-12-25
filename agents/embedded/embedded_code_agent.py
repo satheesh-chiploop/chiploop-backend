@@ -37,13 +37,12 @@ def _gen_cpp_from_spec(spec: Dict[str, Any]) -> str:
     base = mmio.get("base_address", "0x40000000")
     regs = mmio.get("registers", [])
 
-    # Extract CONTROL0/STATUS0 bitfields if present
     control = next((r for r in regs if r.get("name") == "CONTROL0"), None) or {}
-    status = next((r for r in regs if r.get("name") == "STATUS0"), None) or {}
-    control_fields = control.get("fields", []) or []
-    status_fields = status.get("fields", []) or []
+    status  = next((r for r in regs if r.get("name") == "STATUS0"),  None) or {}
 
     def field_enum(fields: list) -> str:
+        if not fields:
+            return "  // (none)\n"
         lines = []
         for f in fields:
             name = str(f.get("name", "sig")).upper()
@@ -51,19 +50,12 @@ def _gen_cpp_from_spec(spec: Dict[str, Any]) -> str:
             msb = int(f.get("msb", lsb))
             lines.append(f"  {name}_LSB = {lsb},")
             lines.append(f"  {name}_MSB = {msb},")
-        return "\n".join(lines) if lines else "  // (none)\n"
+        return "\n".join(lines)
 
-    # A generic firmware skeleton that looks like real bare-metal style:
-    # - MMIO reads/writes
-    # - register bit packing helpers
-    # - a simple poll loop (no hard-coded semantic signal names)
     return f"""\
 /*
  * Auto-generated generic firmware skeleton (C++).
  * Integration model: AXI4-Lite MMIO register block exported by RTL.
- *
- * NOTE: This is scaffolding. Real firmware will add startup code, clock init,
- * UART, IRQ handlers, and platform headers.
  */
 
 #include <cstdint>
@@ -71,7 +63,6 @@ def _gen_cpp_from_spec(spec: Dict[str, Any]) -> str:
 namespace mmio {{
   static constexpr uintptr_t BASE = {base};
 
-  // Register offsets (bytes)
   static constexpr uintptr_t CONTROL0_OFF = 0x00;
   static constexpr uintptr_t STATUS0_OFF  = 0x04;
   static constexpr uintptr_t IRQ_STATUS_OFF = 0x08;
@@ -101,11 +92,11 @@ namespace mmio {{
 }}
 
 enum Control0Bits {{
-{field_enum(control_fields)}
+{field_enum(control.get("fields", []))}
 }};
 
 enum Status0Bits {{
-{field_enum(status_fields)}
+{field_enum(status.get("fields", []))}
 }};
 
 static void delay_cycles(volatile uint32_t cycles) {{
@@ -115,13 +106,9 @@ static void delay_cycles(volatile uint32_t cycles) {{
 }}
 
 int main() {{
-  // Example: write deterministic pattern into CONTROL0 fields (if any).
   uint32_t ctrl = 0;
-
-  // If your spec has CONTROL0 fields, you can set them here.
-  // Example pattern: set each 1-bit field to 1.
-  // (This is generic and safe; replace with real behavior.)
 """
+
 
     # append generic field sets
     # We'll set 1-bit controls to 1, multi-bit to 1.
