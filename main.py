@@ -190,7 +190,7 @@ from agents.digital.digital_simulation_agent import run_agent as digital_simulat
 from agents.digital.digital_coverage_agent import run_agent as digital_coverage_agent
 from agents.digital.digital_optimizer_agent import run_agent as digital_optimizer_agent
 from agents.digital.digital_architecture_agent import run_agent as digital_architecture_agent
-from agents.digital_microarchitecture_agent import run_agent as digital_microarchitecture_agent
+from agents.digital.digital_microarchitecture_agent import run_agent as digital_microarchitecture_agent
 from agents.digital.digital_register_map_agent import run_agent as digital_register_map_agent
 from agents.digital.digital_clock_reset_arch_agent import run_agent as digital_clock_reset_arch_agent
 from agents.digital.digital_rtl_linting_agent import run_agent as digital_rtl_linting_agent
