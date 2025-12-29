@@ -1,9 +1,17 @@
 # backend/agent_capabilities.py
-
+#
 # NOTE:
 # - This file is used by the planner/router to decide which agent can satisfy a task.
 # - Keep 'outputs' aligned with what each agent actually uploads into Supabase Storage.
 # - Use glob-like patterns where filenames are dynamic (e.g., <module>_spec.json).
+#
+# V&V (Cocotb/Verilator/SymbiYosys) agents added:
+# - Testbench Generator Agent
+# - Functional Coverage Agent
+# - Formal Verification Agent
+# - Simulation Control Agent
+# - Bug Localization Agent
+# - Golden Model Comparison Agent
 
 AGENT_CAPABILITIES = {
     # -------------------------
@@ -55,7 +63,7 @@ AGENT_CAPABILITIES = {
     },
 
     # -------------------------
-    # DIGITAL: RTL Quality & Correctness (NEW)
+    # DIGITAL: RTL Quality & Correctness
     # -------------------------
     "Digital RTL Linting Agent": {
         "domain": "digital",
@@ -90,6 +98,89 @@ AGENT_CAPABILITIES = {
         "inputs": ["*_spec.json", "*.v", "*.sv", "regmap.json"],
         "outputs": ["assertions.sv", "assertions_readme.md", "sva_agent.log"],
         "description": "Generates SystemVerilog Assertions (SVA) for protocols, safety checks, and basic liveness properties aligned to the spec/regmap.",
+    },
+
+    # -------------------------
+    # VERIFICATION & VALIDATION (Cocotb + Verilator + SymbiYosys)
+    # -------------------------
+    "Digital Testbench Generator Agent": {
+        "domain": "digital",
+        "inputs": ["*_spec.json", "*.v", "*.sv", "digital_architecture.json", "digital_microarchitecture.json", "regmap.json", "clock_reset_architecture.json"],
+        # Generated/uploaded by the agent into vv/tb (filenames are stable except test_<top>.py)
+        "outputs": [
+            "vv/tb/test_*.py",
+            "vv/tb/Makefile",
+            "vv/tb/README.md",
+            "vv/tb/tb_generation_report.json",
+            "testbench_generator_agent.log",
+        ],
+        "description": "Generates Cocotb testbench skeletons (directed + constrained-random stub) and a Verilator-friendly Makefile using spec-derived clocks/resets/ports.",
+        "requires": ["cocotb", "verilator"],
+    },
+
+    "Digital Functional Coverage Agent": {
+        "domain": "digital",
+        "inputs": ["*_spec.json", "*.v", "*.sv"],
+        "outputs": [
+            "vv/tb/coverage_model.py",
+            "vv/tb/COVERAGE.md",
+            "vv/tb/coverage_generation_report.json",
+            "functional_coverage_agent.log",
+        ],
+        "description": "Generates lightweight functional coverage sampling for Cocotb (optionally uses cocotb-coverage) and produces coverage reports.",
+        "requires": ["cocotb"],
+    },
+
+    "Digital Golden Model Comparison Agent": {
+        "domain": "digital",
+        "inputs": ["*_spec.json", "*.v", "*.sv", "digital_architecture.json", "digital_microarchitecture.json", "regmap.json"],
+        "outputs": [
+            "vv/tb/scoreboard.py",
+            "vv/tb/SCOREBOARD.md",
+            "vv/tb/golden_model_generation_report.json",
+            "golden_model_comparison_agent.log",
+        ],
+        "description": "Generates a Python scoreboard + golden model stub for Cocotb; supports RTL vs reference model checks and scoreboarding.",
+        "requires": ["cocotb"],
+    },
+
+    "Digital Simulation Control Agent": {
+        "domain": "digital",
+        "inputs": ["vv/tb/Makefile", "vv/tb/test_*.py", "*.v", "*.sv", "*_spec.json"],
+        "outputs": [
+            "vv/tb/run_regression.py",
+            "vv/tb/SIM_CONTROL.md",
+            "vv/tb/sim_control_generation_report.json",
+            "simulation_control_agent.log",
+        ],
+        "description": "Generates regression orchestration (multi-test, multi-seed) for Cocotb+Verilator runs; seed management and JSON summary output.",
+        "requires": ["make", "cocotb", "verilator"],
+    },
+
+    "Digital Bug Localization Agent": {
+        "domain": "digital",
+        "inputs": ["simulation.log", "vv/tb/run_regression.py", "vv/tb/test_*.py"],
+        "outputs": [
+            "vv/tb/bug_localize.py",
+            "vv/tb/BUG_LOCALIZE.md",
+            "vv/tb/bug_localization_generation_report.json",
+            "bug_localization_agent.log",
+        ],
+        "description": "Heuristic failure root-cause hints by scanning logs for assertion/mismatch signatures; points to likely first divergence.",
+        "requires": [],
+    },
+
+    "Digital Formal Verification Agent": {
+        "domain": "digital",
+        "inputs": ["*_spec.json", "*.v", "*.sv", "assertions.sv", "clock_reset_architecture.json"],
+        "outputs": [
+            "vv/formal/*.sby",
+            "vv/formal/*_formal.sv",
+            "vv/formal/formal_report.json",
+            "formal_verification_agent.log",
+        ],
+        "description": "Generates SymbiYosys orchestration configs and a minimal formal wrapper; optionally runs sby if available.",
+        "requires": ["sby", "yosys"],
     },
 
     # -------------------------

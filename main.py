@@ -198,6 +198,12 @@ from agents.digital.digital_rtl_refactoring_agent import run_agent as digital_rt
 from agents.digital.digital_cdc_analysis_agent import run_agent as digital_cdc_analysis_agent
 from agents.digital.digital_reset_integrity_agent import run_agent as digital_reset_integrity_agent
 from agents.digital.digital_sva_assertions_agent import run_agent as digital_sva_assertions_agent
+from agents.digital.digital_bug_localization_agent import run_agent as digital_bug_localization_agent
+from agents.digital.digital_formal_verification_agent import run_agent as digital_formal_verification_agent
+from agents.digital.digital_functional_coverage_agent import run_agent as digital_functional_coverage_agent
+from agents.digital.digital_simulation_control_agent import run_agent as digital_simulation_control_agent
+from agents.digital.digital_testbench_generator_agent import run_agent as digital_testbench_generator_agent
+from agents.digital.digital_golden_model_comparison_agent import run_agent as digital_golden_model_comparison_agent
 
 
 DIGITAL_AGENT_FUNCTIONS: Dict[str, Any] = {
@@ -221,6 +227,12 @@ DIGITAL_AGENT_FUNCTIONS: Dict[str, Any] = {
     "Digital Reset Integrity Agent": digital_reset_integrity_agent,
     "Digital RTL Refactoring Agent": digital_rtl_refactoring_agent,
     "Digital Assertions (SVA) Agent": digital_sva_assertions_agent,
+    "Digital Testbench Generator Agent": digital_testbench_generator_agent,
+    "Digital Functional Coverage Agent": digital_functional_coverage_agent,
+    "Digital Golden Model Comparison Agent": digital_golden_model_comparison_agent,
+    "Digital Simulation Control Agent": digital_simulation_control_agent,
+    "Digital Bug Localization Agent": digital_bug_localization_agent,
+    "Digital Formal Verification Agent": digital_formal_verification_agent,
 }
 
 # ==========================================================
@@ -276,7 +288,13 @@ SYSTEM_AGENT_FUNCTIONS: Dict[str,Any] = {
     "Digital CDC Analysis Agent": digital_cdc_analysis_agent,
     "Digital Reset Integrity Agent": digital_reset_integrity_agent,
     "Digital RTL Refactoring Agent": digital_rtl_refactoring_agent,
-    "Digital Assertions (SVA) Agent": digital_sva_assertions_agent,   
+    "Digital Assertions (SVA) Agent": digital_sva_assertions_agent,
+    "Digital Testbench Generator Agent": digital_testbench_generator_agent,
+    "Digital Functional Coverage Agent": digital_functional_coverage_agent,
+    "Digital Golden Model Comparison Agent": digital_golden_model_comparison_agent,
+    "Digital Simulation Control Agent": digital_simulation_control_agent,
+    "Digital Bug Localization Agent": digital_bug_localization_agent,
+    "Digital Formal Verification Agent": digital_formal_verification_agent,   
     "Analog Spec Agent": analog_spec_agent,
     "Analog Netlist Agent": analog_netlist_agent,
     "Analog Sim Agent": analog_sim_agent,
