@@ -183,6 +183,50 @@ AGENT_CAPABILITIES = {
         "requires": ["sby", "yosys"],
     },
 
+     # -------------------------
+    # Extended / optional digital flow agents
+    # -------------------------
+# -------------------------
+    # SIGNOFF / HANDOFF (Open-source friendly)
+    # -------------------------
+    "Digital Synthesis Readiness Agent": {
+        "domain": "digital",
+        "inputs": ["*_spec.json", "*.v", "*.sv", "digital_architecture.json", "digital_microarchitecture.json", "clock_reset_architecture.json"],
+        "outputs": [
+            "signoff/synthesis_readiness_report.md",
+            "signoff/synthesis_readiness_findings.json",
+            "signoff/yosys_synth.log",
+        ],
+        "description": "Checks synthesizable subset red flags and runs open-source synthesis sanity (Yosys) to assess readiness; reports timing/area intent gaps from spec.",
+        "requires": ["yosys"],
+    },
+
+    "Digital Power Intent (UPF-lite) Agent": {
+        "domain": "digital",
+        "inputs": ["*_spec.json", "digital_architecture.json"],
+        "outputs": [
+            "signoff/power_intent.upf",
+            "signoff/power_intent_report.md",
+            "signoff/power_intent_findings.json",
+        ],
+        "description": "Generates a UPF-lite power intent file (domains + optional isolation/retention) derived from spec/architecture (no hardcoding).",
+        "requires": [],
+    },
+
+    "Digital IP Packaging & Handoff Agent": {
+        "domain": "digital",
+        "inputs": ["*_spec.json", "*.v", "*.sv", "regmap.json", "signoff/power_intent.upf", "signoff/synthesis_readiness_findings.json", "vv/**"],
+        "outputs": [
+            "handoff/ip_packaging_report.md",
+            "handoff/ip_packaging_report.json",
+            "handoff/MANIFEST.json",
+            "handoff/DELIVERABLES.md",
+        ],
+        "description": "Creates SoC-ready IP package folder layout + manifest + checklist; bundles key RTL/docs/constraints/power/verification collateral.",
+        "requires": [],
+    },
+
+
     # -------------------------
     # ANALOG
     # -------------------------

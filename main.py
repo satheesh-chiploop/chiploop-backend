@@ -204,6 +204,9 @@ from agents.digital.digital_functional_coverage_agent import run_agent as digita
 from agents.digital.digital_simulation_control_agent import run_agent as digital_simulation_control_agent
 from agents.digital.digital_testbench_generator_agent import run_agent as digital_testbench_generator_agent
 from agents.digital.digital_golden_model_comparison_agent import run_agent as digital_golden_model_comparison_agent
+from agents.digital.digital_ip_packaging_handoff_agent import run_agent as digital_ip_packaging_handoff_agent
+from agents.digital.digital_power_intent_upf_agent import run_agent as digital_power_intent_upf_agent
+from agents.digital.digital_synthesis_readiness_agent import run_agent as digital_synthesis_readiness_agent
 
 
 DIGITAL_AGENT_FUNCTIONS: Dict[str, Any] = {
@@ -233,6 +236,9 @@ DIGITAL_AGENT_FUNCTIONS: Dict[str, Any] = {
     "Digital Simulation Control Agent": digital_simulation_control_agent,
     "Digital Bug Localization Agent": digital_bug_localization_agent,
     "Digital Formal Verification Agent": digital_formal_verification_agent,
+    "Digital Synthesis Readiness Agent": digital_synthesis_readiness_agent,
+    "Digital Power Intent (UPF-lite) Agent": digital_power_intent_upf_agent,
+    "Digital IP Packaging & Handoff Agent": digital_ip_packaging_handoff_agent,
 }
 
 # ==========================================================
@@ -295,6 +301,9 @@ SYSTEM_AGENT_FUNCTIONS: Dict[str,Any] = {
     "Digital Simulation Control Agent": digital_simulation_control_agent,
     "Digital Bug Localization Agent": digital_bug_localization_agent,
     "Digital Formal Verification Agent": digital_formal_verification_agent,   
+    "Digital Synthesis Readiness Agent": digital_synthesis_readiness_agent,
+    "Digital Power Intent (UPF-lite) Agent": digital_power_intent_upf_agent,
+    "Digital IP Packaging & Handoff Agent": digital_ip_packaging_handoff_agent, 
     "Analog Spec Agent": analog_spec_agent,
     "Analog Netlist Agent": analog_netlist_agent,
     "Analog Sim Agent": analog_sim_agent,

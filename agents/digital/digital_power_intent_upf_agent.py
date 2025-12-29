@@ -1,0 +1,254 @@
+"""
+ChipLoop Open-Source Signoff / Handoff Agents
+
+Design goals:
+- deterministic outputs
+- derive intent from prior artifacts (`digital_spec_json`, RTL outputs, architecture) rather than hardcoding
+- best-effort integration with open-source tools (Yosys/OpenROAD/Verilator/etc.)
+- always produce: (1) human report (MD) and (2) machine findings (JSON)
+"""
+
+import os
+import re
+import json
+import shutil
+import hashlib
+import subprocess
+from datetime import datetime
+from typing import Any, Dict, List, Optional, Tuple
+
+from utils.artifact_utils import save_text_artifact_and_record
+
+
+def _now() -> str:
+    return datetime.now().isoformat()
+
+def _write(path: str, content: str) -> None:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(content)
+
+def _read_json(path: str) -> Dict[str, Any]:
+    try:
+        if path and os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return {}
+
+def _which(binname: str) -> Optional[str]:
+    return shutil.which(binname)
+
+def _run(cmd: List[str], cwd: Optional[str]=None, timeout: int=300) -> Dict[str, Any]:
+    try:
+        p = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout)
+        return {"cmd": cmd, "returncode": p.returncode, "stdout": p.stdout or "", "stderr": p.stderr or ""}
+    except Exception as e:
+        return {"cmd": cmd, "returncode": -1, "stdout": "", "stderr": str(e)}
+
+def _record(workflow_id: str, agent_name: str, subdir: str, filename: str, content: str) -> Optional[str]:
+    try:
+        return save_text_artifact_and_record(
+            workflow_id=workflow_id,
+            agent_name=agent_name,
+            subdir=subdir,
+            filename=filename,
+            content=content,
+        )
+    except Exception:
+        return None
+
+def _collect_rtl_files(workflow_dir: str) -> List[str]:
+    exts = (".v", ".sv", ".vh", ".svh")
+    out: List[str] = []
+    for root, _, files in os.walk(workflow_dir):
+        for fn in files:
+            if fn.lower().endswith(exts):
+                out.append(os.path.join(root, fn))
+    out.sort()
+    return out
+
+def _pick_top(spec: Dict[str, Any], rtl_files: List[str], state_top: Optional[str]) -> str:
+    if state_top:
+        return state_top
+    top = (spec.get("top_module") or {}).get("name")
+    if isinstance(top, str) and top.strip():
+        return top.strip()
+    mod_re = re.compile(r"^\s*module\s+([a-zA-Z_][a-zA-Z0-9_$]*)\b")
+    for f in rtl_files:
+        try:
+            with open(f, "r", encoding="utf-8", errors="ignore") as fh:
+                for line in fh:
+                    m = mod_re.match(line)
+                    if m:
+                        return m.group(1)
+        except Exception:
+            continue
+    return "top"
+
+# ----------------------------
+# Power Intent (UPF-lite) Agent
+# ----------------------------
+
+def _find_power_intent(spec: Dict[str, Any], arch: Dict[str, Any]) -> Dict[str, Any]:
+    intent = spec.get("power_intent") or spec.get("power") or spec.get("upf") or {}
+    domains: List[Dict[str, Any]] = []
+
+    spec_domains = intent.get("domains")
+    if isinstance(spec_domains, list) and spec_domains:
+        for d in spec_domains:
+            if isinstance(d, dict) and d.get("name"):
+                domains.append({
+                    "name": d["name"],
+                    "elements": d.get("elements") or d.get("instances") or ["*"],
+                    "primary_power_net": d.get("primary_power_net") or d.get("vdd") or "VDD",
+                    "primary_ground_net": d.get("primary_ground_net") or d.get("vss") or "VSS",
+                })
+
+    if not domains:
+        blocks = arch.get("blocks") or arch.get("modules") or []
+        pd_map: Dict[str, List[str]] = {}
+        if isinstance(blocks, list):
+            for b in blocks:
+                if isinstance(b, dict):
+                    pd = b.get("power_domain") or b.get("power")
+                    inst = b.get("instance") or b.get("name")
+                    if pd and inst:
+                        pd_map.setdefault(pd, []).append(inst)
+        for pd, insts in pd_map.items():
+            domains.append({"name": pd, "elements": insts, "primary_power_net": "VDD", "primary_ground_net": "VSS"})
+
+    if not domains:
+        domains = [{"name": "PD_TOP", "elements": ["*"], "primary_power_net": "VDD", "primary_ground_net": "VSS"}]
+
+    isolation = intent.get("isolation") if isinstance(intent.get("isolation"), list) else []
+    retention = intent.get("retention") if isinstance(intent.get("retention"), list) else []
+    return {"domains": domains, "isolation": isolation, "retention": retention}
+
+def _generate_upf(top: str, p: Dict[str, Any]) -> str:
+    lines: List[str] = []
+    lines += [
+        "# UPF generated by ChipLoop Power Intent (UPF-lite) Agent",
+        f"# Top: {top}",
+        "",
+        "# Global supplies",
+        "create_supply_port VDD",
+        "create_supply_port VSS",
+        "create_supply_net VDD",
+        "create_supply_net VSS",
+        "connect_supply_net VDD -ports VDD",
+        "connect_supply_net VSS -ports VSS",
+        "",
+        "# Power domains",
+    ]
+    for d in p["domains"]:
+        dn = d["name"]
+        elems = d.get("elements") or ["*"]
+        elem_str = " ".join(elems)
+        lines.append(f"create_power_domain {dn} -elements {{{elem_str}}}")
+        lines.append(f"set_domain_supply_net {dn} -primary_power_net {d.get('primary_power_net','VDD')} -primary_ground_net {d.get('primary_ground_net','VSS')}")
+        lines.append("")
+
+    if p.get("isolation"):
+        lines.append("# Isolation intent")
+        for iso in p["isolation"]:
+            if not isinstance(iso, dict) or not iso.get("name"):
+                continue
+            name = iso["name"]
+            to_dom = iso.get("to") or iso.get("sink") or ""
+            clamp = iso.get("clamp_value", 0)
+            sig = iso.get("isolation_signal") or iso.get("signal") or ""
+            sense = iso.get("isolation_sense") or iso.get("sense") or "high"
+            lines.append(f"create_isolation_strategy {name} -domain {to_dom} -isolation_signal {sig} -isolation_sense {sense} -clamp_value {clamp}")
+            frm = iso.get("from") or iso.get("source")
+            to = iso.get("to") or iso.get("sink")
+            if frm and to:
+                lines.append(f"set_isolation {name} -from {frm} -to {to}")
+            lines.append("")
+    else:
+        lines += ["# No explicit isolation strategies found in spec/architecture.", ""]
+
+    if p.get("retention"):
+        lines.append("# Retention intent")
+        for r in p["retention"]:
+            if not isinstance(r, dict) or not r.get("name"):
+                continue
+            name = r["name"]
+            dom = r.get("domain") or ""
+            save = r.get("save_signal") or ""
+            restore = r.get("restore_signal") or ""
+            lines.append(f"create_retention_strategy {name} -domain {dom} -save_signal {save} -restore_signal {restore}")
+            lines.append("")
+    else:
+        lines += ["# No explicit retention strategies found in spec/architecture.", ""]
+
+    return "\n".join(lines).strip() + "\n"
+
+def run_agent(state: dict) -> dict:
+    agent_name = "Power Intent (UPF-lite) Agent"
+    print("\n⚡ Running Power Intent (UPF-lite) Agent...")
+
+    workflow_id = state.get("workflow_id", "default")
+    workflow_dir = state.get("workflow_dir", f"backend/workflows/{workflow_id}")
+    os.makedirs(workflow_dir, exist_ok=True)
+    os.makedirs("artifact", exist_ok=True)
+
+    spec_path = state.get("spec_json") or os.path.join(workflow_dir, "digital", "spec.json")
+    arch_path = state.get("arch_json") or os.path.join(workflow_dir, "digital", "digital_architecture.json")
+    spec = _read_json(spec_path)
+    arch = _read_json(arch_path)
+
+    rtl_files = state.get("rtl_files") or _collect_rtl_files(workflow_dir)
+    top = _pick_top(spec, rtl_files, state.get("top_module"))
+
+    p = _find_power_intent(spec, arch)
+    upf_txt = _generate_upf(top, p)
+
+    out_root = os.path.join(workflow_dir, "signoff")
+    os.makedirs(out_root, exist_ok=True)
+    _write(os.path.join(out_root, "power_intent.upf"), upf_txt)
+
+    findings = {
+        "type": "power_intent_upf_lite",
+        "version": "1.0",
+        "top_module": top,
+        "spec_path": spec_path,
+        "arch_path": arch_path if os.path.exists(arch_path) else None,
+        "domains": p["domains"],
+        "isolation": p.get("isolation", []),
+        "retention": p.get("retention", []),
+    }
+
+    report = ["# Power Intent Report (UPF-lite)\n",
+              f"- Top: `{top}`",
+              f"- Domains: `{len(p['domains'])}`\n",
+              "## Domains"]
+    for d in p["domains"]:
+        report.append(f"- **{d['name']}** elements: `{', '.join(d.get('elements', []))}` supply: `{d.get('primary_power_net','VDD')}/{d.get('primary_ground_net','VSS')}`")
+    report.append("\n## Isolation")
+    report.append("- None specified." if not p.get("isolation") else "")
+    if p.get("isolation"):
+        for iso in p["isolation"]:
+            report.append(f"- {iso}")
+    report.append("\n## Retention")
+    report.append("- None specified." if not p.get("retention") else "")
+    if p.get("retention"):
+        for r in p["retention"]:
+            report.append(f"- {r}")
+    report.append("\n## Output")
+    report.append("- `signoff/power_intent.upf` generated.\n")
+    report_md = "\n".join([x for x in report if x != ""]) + "\n"
+
+    _write(os.path.join(out_root, "power_intent_report.md"), report_md)
+    _write(os.path.join(out_root, "power_intent_findings.json"), json.dumps(findings, indent=2))
+
+    artifacts = {}
+    artifacts["upf"] = _record(workflow_id, agent_name, "signoff", "power_intent.upf", upf_txt)
+    artifacts["report_md"] = _record(workflow_id, agent_name, "signoff", "power_intent_report.md", report_md)
+    artifacts["findings_json"] = _record(workflow_id, agent_name, "signoff", "power_intent_findings.json", json.dumps(findings, indent=2))
+    findings["artifacts"] = artifacts
+
+    state.setdefault("signoff", {})
+    state["signoff"]["power_intent"] = findings
+    return state
