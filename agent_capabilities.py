@@ -339,6 +339,53 @@ AGENT_CAPABILITIES = {
         "description": "Inserts level shifters and isolation.",
         "requires": ["has_pdc"],
     },
+
+       # -------------------------
+    # VALIDATION: Hardware Test Validation Loop (TestFlow-style)
+    # -------------------------
+    "Validation Instrument Setup Agent": {
+        "domain": "validation",
+        "inputs": ["user_id", "workflow_id", "instrument_ids(optional)"],
+        "outputs": ["validation/bench_setup.json"],
+        "description": "Resolves the user's bench setup from registered instruments (or defaults) and writes bench_setup.json for downstream validation agents.",
+        "tags": ["validation", "bench", "instruments", "setup", "pyvisa", "scpi"],
+    },
+
+    "Validation Test Plan Agent": {
+        "domain": "validation",
+        "inputs": ["workflow_id", "datasheet_text", "goal(optional)"],
+        "outputs": ["validation/test_plan.json"],
+        "description": "Generates a structured hardware validation test plan from datasheet/spec text; uses generic instrument types (psu/dmm/scope).",
+        "tags": ["validation", "test-plan", "datasheet", "llm", "coverage"],
+    },
+
+    "Validation Sequence Builder Agent": {
+        "domain": "validation",
+        "inputs": ["workflow_id", "bench_setup", "test_plan"],
+        "outputs": ["validation/test_sequence.json"],
+        "description": "Builds an executable SCPI test sequence (steps) from bench_setup + test_plan (initially Keysight-class examples; transport is PyVISA/SCPI).",
+        "tags": ["validation", "sequence", "scpi", "pyvisa", "keysight", "automation"],
+    },
+
+    "Validation Execution Orchestrator Agent": {
+        "domain": "validation",
+        "inputs": ["workflow_id", "test_sequence"],
+        "outputs": ["validation/results.json", "validation/results.csv", "validation/run_manifest.json"],
+        "description": "Executes the validation test_sequence and produces results artifacts. MVP uses a stub executor; next step swaps in real PyVISA I/O.",
+        "tags": ["validation", "execution", "orchestrator", "results", "pyvisa", "scpi"],
+    },
+
+    "Validation Analytics Agent": {
+        "domain": "validation",
+        "inputs": ["workflow_id", "test_plan", "validation_results"],
+        "outputs": [
+            "validation/analytics.json",
+            "validation/analytics.md",
+            "validation/results_evaluated.json",
+        ],
+        "description": "Applies test_plan measurement limits (min/max) to captured results and generates analytics + a demo-ready report.",
+        "tags": ["validation", "analytics", "limits", "pass-fail", "report"],
+    },
 }
 
 

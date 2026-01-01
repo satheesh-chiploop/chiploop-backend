@@ -141,7 +141,7 @@ You have access to these agents:
 
 Given a user goal, you must return valid JSON in the format:
 {{
-    "loop_type": "<digital|analog|embedded|system>",
+    "loop_type": "<digital|analog|embedded|system|validation>",
     "agents": ["Agent1", "Agent2", ...]
 }}
 

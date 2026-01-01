@@ -163,7 +163,7 @@ Return VALID JSON ONLY in this exact shape (no extra text):
         plan = {
             "agent_name": final_name,
             "description": raw[:200],
-            "domain": loop_type if loop_type in ["digital", "analog", "embedded", "system"] else "digital",
+            "domain": loop_type if loop_type in ["digital", "analog", "embedded", "system","validation"] else "digital",
             "capability_tags": [],
             "input_schema": "",
             "output_schema": "",
@@ -177,7 +177,7 @@ Return VALID JSON ONLY in this exact shape (no extra text):
 
     # Domain normalization (map to loop_type constraint in DB)
     domain = str(plan.get("domain") or loop_type).lower()
-    if domain not in ["digital", "analog", "embedded", "system"]:
+    if domain not in ["digital", "analog", "embedded", "system","validation"]:
         domain = loop_type
     plan["domain"] = domain
 
@@ -196,7 +196,7 @@ Return VALID JSON ONLY in this exact shape (no extra text):
     try:
         supabase.table("agents").upsert({
             "agent_name": final_name,
-            "loop_type": domain if domain in ["digital", "analog", "embedded"] else None,
+            "loop_type": domain if domain in ["digital", "analog", "embedded","system","validation"] else None,
             "tool": None,
             "script_path": script_path,
             "description": plan.get("description"),
@@ -297,7 +297,7 @@ async def generate_missing_agents_batch(payload: dict) -> dict:
     structured_spec = payload.get("structured_spec_final") or {}
 
     loop_type = (structured_spec.get("loop_type") or "digital").lower()
-    if loop_type not in ["digital", "analog", "embedded"]:
+    if loop_type not in ["digital", "analog", "embedded","system","validation"]:
         loop_type = "digital"
 
     created = []

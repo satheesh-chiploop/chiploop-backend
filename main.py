@@ -10,6 +10,8 @@ import re
 import time;time.sleep(0.2)
 import io
 import zipfile
+from pydantic import BaseModel, Field
+from typing import Optional, Dict, Any, Literal
 from typing import Any, Iterable
 from fastapi.responses import StreamingResponse
 from fastapi import HTTPException
@@ -70,6 +72,8 @@ def detect_domain_from_label(label: str):
         return "embedded"
     if "analog" in l:
         return "analog"
+    if "validation" in l:
+        return "validation"
     return "system"
 
 
@@ -166,6 +170,27 @@ def verify_token(request: Request) -> Dict[str, Any]:
 
 # ---------------- FastAPI app ----------------
 app = FastAPI(title="ChipLoop API", version="1.0")
+
+
+# ---------------- Validation Loop: Instruments (API schemas) ----------------
+
+class InstrumentRegisterIn(BaseModel):
+    nickname: str = Field(..., min_length=1)
+    instrument_type: str = Field(..., min_length=1)     # e.g. "scope", "psu", "smu", "dmm"
+    transport: str = Field(..., min_length=1)           # e.g. "pyvisa"
+    interface: str = Field(..., min_length=1)           # e.g. "TCPIP", "USB", "GPIB"
+    resource_string: str = Field(..., min_length=1)     # VISA resource string
+    vendor: Optional[str] = None
+    model: Optional[str] = None
+    scpi_idn: Optional[str] = None
+    capabilities: Optional[Dict[str, Any]] = None
+    metadata: Optional[Dict[str, Any]] = None
+    make_default: Optional[bool] = False
+
+class InstrumentSetDefaultIn(BaseModel):
+    instrument_id: Optional[str] = None
+    nickname: Optional[str] = None
+
 
 app.add_middleware(
     CORSMiddleware,
@@ -270,6 +295,26 @@ EMBEDDED_AGENT_FUNCTIONS: Dict[str, Any] = {
     "Embedded Sim Agent": embedded_sim_agent,
     "Embedded Result Agent": embedded_result_agent,
 }
+
+from agents.validation.validation_instrument_setup_agent import run_agent as validation_instrument_setup_agent
+from agents.validation.validation_test_plan_agent import run_agent as validation_test_plan_agent
+from agents.validation.validation_sequence_builder_agent import run_agent as validation_sequence_builder_agent
+from agents.validation.validation_executor_orchestrator_agent import run_agent as validation_executor_orchestrator_agent
+from agents.validation.validation_analytics_agent import run_agent as validation_analytics_agent
+
+#  VALIDATION FUNCTIONS
+# ==========================================================
+VALIDATION_AGENT_FUNCTIONS: Dict[str, Any] = {
+    # Day-1: keep empty or add stubs; we’ll populate with real PyVISA agents next.
+    # Examples of future labels:
+    "Validation Instrument Setup Agent": validation_instrument_setup_agent,
+    "Validation Test Plan Agent": validation_test_plan_agent,
+    "Validation Sequence Builder Agent": validation_sequence_builder_agent,
+    "Validation Executor Orchestrator Agent": validation_executor_orchestrator_agent,
+    # "Measurement Logger Agent": validation_logger_agent,
+    "Validation Analytics Agent": validation_analytics_agent,
+    # "Validation Debug Agent": validation_debug_agent,
+}
 from agents.system.system_workflow_agent import run_agent as system_workflow_agent
 from agents.system.system_cosim_integration_agent import run_agent as system_cosim_integration_agent
 from agents.system.system_iss_bridge_agent import run_agent as system_iss_bridge_agent
@@ -312,10 +357,16 @@ SYSTEM_AGENT_FUNCTIONS: Dict[str,Any] = {
     "Embedded Code Agent": embedded_code_agent,
     "Embedded Sim Agent": embedded_sim_agent,
     "Embedded Result Agent": embedded_result_agent, 
+    "Validation Instrument Setup Agent": validation_instrument_setup_agent,
+    "Validation Test Plan Agent": validation_test_plan_agent,
+    "Validation Sequence Builder Agent": validation_sequence_builder_agent,
+    "Validation Executor Orchestrator Agent": validation_executor_orchestrator_agent,
+    "Validation Analytics Agent": validation_analytics_agent,
     "System Workflow Agent": system_workflow_agent,  
     "System CoSim Integration Agent": system_cosim_integration_agent,
     "System ISS Bridge Agent": system_iss_bridge_agent,  
 }
+
 
 # ==========================================================
 # 🧠 UNIFIED + CUSTOM REGISTRY
@@ -325,7 +376,8 @@ AGENT_FUNCTIONS: Dict[str, Dict[str, Any]] = {
     "digital": DIGITAL_AGENT_FUNCTIONS,
     "analog": ANALOG_AGENT_FUNCTIONS,
     "embedded": EMBEDDED_AGENT_FUNCTIONS,
-    "system": SYSTEM_AGENT_FUNCTIONS
+    "system": SYSTEM_AGENT_FUNCTIONS,
+    "validation": VALIDATION_AGENT_FUNCTIONS,
 }
 
 # Dynamically load user-created agents as modules under `agents/` (optional)
@@ -386,6 +438,14 @@ def append_log_run(run_id: str, line: str, status: Optional[str] = None,
 # ==========================================================
 # ---------- Routes ----------
 # ==========================================================
+
+def _require_user_id(request: Request) -> str:
+    token_data = verify_token(request)
+    user_id = token_data.get("sub")
+    if not user_id or user_id == "anonymous":
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    return user_id
+
 
 @app.get("/health")
 def health():
@@ -543,6 +603,7 @@ def execute_workflow_background(
            loop_map.update(DIGITAL_AGENT_FUNCTIONS)
            loop_map.update(ANALOG_AGENT_FUNCTIONS)
            loop_map.update(EMBEDDED_AGENT_FUNCTIONS)
+           loop_map.update(VALIDATION_AGENT_FUNCTIONS)
            loop_map.update(SYSTEM_AGENT_FUNCTIONS)
         else:
     # Only agents from this domain
@@ -1005,7 +1066,7 @@ async def plan_workflow_memory(request: Request):
 
     Return only JSON:
     {{
-      "loop_type": "<digital|analog|embedded|system>",
+      "loop_type": "<digital|analog|embedded|system|validation>",
       "agents": ["Agent A", "Agent B", ...]
     }}
     """
@@ -2001,6 +2062,7 @@ STRICT RULES:
       "digital": "...",
       "embedded": "...",
       "analog": "...",
+      "validation": "...",
       "system": "..."
   },
   "refined_prompt": "Professionally rewritten updated design intent.",
@@ -2222,6 +2284,208 @@ def download_workflow_zip(workflow_id: str):
         media_type="application/zip",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+@app.post("/validation/instruments/register")
+async def validation_register_instrument(payload: InstrumentRegisterIn, request: Request):
+    user_id = _require_user_id(request)
+
+    row = {
+        "user_id": user_id,
+        "nickname": payload.nickname.strip(),
+        "vendor": payload.vendor,
+        "model": payload.model,
+        "instrument_type": payload.instrument_type.strip(),
+        "transport": payload.transport.strip(),
+        "interface": payload.interface.strip(),
+        "resource_string": payload.resource_string.strip(),
+        "scpi_idn": payload.scpi_idn,
+        "capabilities": payload.capabilities or {},
+        "metadata": payload.metadata or {},
+    }
+
+    # If this is the first instrument, or user asked, make it default
+    # (unique partial index ensures only one default per user)
+    existing = supabase.table("validation_instruments") \
+        .select("id,is_default") \
+        .eq("user_id", user_id) \
+        .limit(1) \
+        .execute()
+
+    should_make_default = bool(payload.make_default) or (not existing.data)
+    if should_make_default:
+        # clear any existing default
+        supabase.table("validation_instruments") \
+            .update({"is_default": False}) \
+            .eq("user_id", user_id) \
+            .eq("is_default", True) \
+            .execute()
+        row["is_default"] = True
+
+    # Upsert by (user_id, nickname) unique index
+    res = supabase.table("validation_instruments") \
+        .upsert(row, on_conflict="user_id,nickname") \
+        .execute()
+
+    return {"ok": True, "instrument": (res.data[0] if res.data else None)}
+
+@app.get("/validation/instruments")
+async def validation_list_instruments(request: Request):
+    user_id = _require_user_id(request)
+
+    res = supabase.table("validation_instruments") \
+        .select("*") \
+        .eq("user_id", user_id) \
+        .order("created_at", desc=True) \
+        .execute()
+
+    return {"ok": True, "instruments": res.data or []}
+
+@app.get("/validation/instruments/default")
+async def validation_get_default_instrument(request: Request):
+    user_id = _require_user_id(request)
+
+    res = supabase.table("validation_instruments") \
+        .select("*") \
+        .eq("user_id", user_id) \
+        .eq("is_default", True) \
+        .limit(1) \
+        .execute()
+
+    return {"ok": True, "instrument": (res.data[0] if res.data else None)}
+
+
+@app.post("/validation/instruments/default")
+async def validation_set_default_instrument(payload: InstrumentSetDefaultIn, request: Request):
+    user_id = _require_user_id(request)
+
+    if not payload.instrument_id and not payload.nickname:
+        raise HTTPException(status_code=400, detail="Provide instrument_id or nickname")
+
+    # resolve target instrument row
+    q = supabase.table("validation_instruments").select("id").eq("user_id", user_id)
+    if payload.instrument_id:
+        q = q.eq("id", payload.instrument_id)
+    else:
+        q = q.eq("nickname", payload.nickname)
+
+    found = q.limit(1).execute()
+    if not found.data:
+        raise HTTPException(status_code=404, detail="Instrument not found")
+
+    target_id = found.data[0]["id"]
+
+    # clear existing default, then set new default
+    supabase.table("validation_instruments") \
+        .update({"is_default": False}) \
+        .eq("user_id", user_id) \
+        .eq("is_default", True) \
+        .execute()
+
+    supabase.table("validation_instruments") \
+        .update({"is_default": True}) \
+        .eq("user_id", user_id) \
+        .eq("id", target_id) \
+        .execute()
+
+    return {"ok": True, "default_instrument_id": target_id}
+
+def _guess_capabilities(instrument_type: str) -> dict:
+    t = (instrument_type or "").lower()
+    if "scope" in t or "oscillo" in t:
+        return {
+            "category": "oscilloscope",
+            "scpi": {"idn": "*IDN?", "meas_vpp": "MEAS:VPP?", "meas_freq": "MEAS:FREQ?"},
+        }
+    if "power" in t and ("supply" in t or "psu" in t):
+        return {
+            "category": "power_supply",
+            "scpi": {"idn": "*IDN?", "set_v": "VOLT {ch},{v}", "set_i": "CURR {ch},{i}", "out": "OUTP {ch},{state}"},
+        }
+    if "dmm" in t or "multimeter" in t:
+        return {
+            "category": "dmm",
+            "scpi": {"idn": "*IDN?", "meas_vdc": "MEAS:VOLT:DC?", "meas_idc": "MEAS:CURR:DC?"},
+        }
+    if "load" in t:
+        return {
+            "category": "electronic_load",
+            "scpi": {"idn": "*IDN?", "mode_cc": "FUNC CURR", "set_i": "CURR {i}", "input": "INP {state}"},
+        }
+    return {"category": "generic", "scpi": {"idn": "*IDN?"}}
+
+
+@app.post("/validation/instruments/{instrument_id}/probe")
+async def validation_probe_instrument(instrument_id: str, request: Request):
+    """
+    Test connection to the instrument using its resource_string.
+    MVP behavior:
+      - If PyVISA is available AND VALIDATION_PROBE_MODE != "stub", try real *IDN?
+      - Otherwise, return a mocked IDN so UI can proceed.
+    Also stores scpi_idn + a capabilities_guess into validation_instruments.
+    """
+    user_id = _require_user_id(request)
+
+    # 1) Load instrument row and verify ownership
+    res = supabase.table("validation_instruments") \
+        .select("*") \
+        .eq("user_id", user_id) \
+        .eq("id", instrument_id) \
+        .limit(1) \
+        .execute()
+
+    if not res.data:
+        raise HTTPException(status_code=404, detail="Instrument not found")
+
+    inst = res.data[0]
+    resource = inst.get("resource_string")
+    instrument_type = inst.get("instrument_type") or "generic"
+
+    scpi_idn = None
+    ok = False
+    probe_mode = (os.environ.get("VALIDATION_PROBE_MODE") or "stub").lower()
+
+    # 2) Try real probe (optional)
+    if probe_mode != "stub":
+        try:
+            import pyvisa  # pip install pyvisa
+            rm = pyvisa.ResourceManager()
+            h = rm.open_resource(resource)
+            # keep conservative defaults
+            try:
+                h.timeout = 3000  # ms
+            except Exception:
+                pass
+            scpi_idn = str(h.query("*IDN?")).strip()
+            try:
+                h.close()
+            except Exception:
+                pass
+            ok = True
+        except Exception as e:
+            # fall back to stub (don’t block the demo)
+            ok = False
+            scpi_idn = f"PROBE_FAILED({type(e).__name__})"
+
+    # 3) Stub probe (default)
+    if not ok and probe_mode == "stub":
+        scpi_idn = inst.get("scpi_idn") or "MOCK,INSTRUMENT,0,1"
+        ok = True
+
+    capabilities_guess = _guess_capabilities(instrument_type)
+
+    # 4) Persist probe results for “feels real” UX
+    supabase.table("validation_instruments") \
+        .update({
+            "scpi_idn": scpi_idn,
+            "capabilities": capabilities_guess,
+            "updated_at": datetime.utcnow().isoformat(),
+        }) \
+        .eq("user_id", user_id) \
+        .eq("id", instrument_id) \
+        .execute()
+
+    return {"ok": ok, "scpi_idn": scpi_idn, "capabilities_guess": capabilities_guess}
+
 
 
 
