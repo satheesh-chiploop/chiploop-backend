@@ -174,7 +174,7 @@ def _record_text(workflow_id: str, agent_name: str, subdir: str, filename: str, 
         )
     except Exception:
         return None
-    def _gen_sby(top: str, rtl_files: List[str], clk: Optional[str], rst: Optional[Dict[str, Any]]) -> str:
+def _gen_sby(top: str, rtl_files: List[str], clk: Optional[str], rst: Optional[Dict[str, Any]]) -> str:
         rel_files = [os.path.relpath(f) for f in rtl_files[:200]]
         files_block = "\n".join(rel_files)
         read_cmds = "\n".join([f"read_verilog -sv {rf}" for rf in rel_files])
@@ -224,8 +224,7 @@ module {top}_formal;
   end
 endmodule
 """
-
-    def run_agent(state: dict) -> dict:
+def run_agent(state: dict) -> dict:
         agent_name = "Formal Verification Agent"
         print("\n🧠 Running Formal Verification Agent (SymbiYosys)...")
 
