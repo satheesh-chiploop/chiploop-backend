@@ -299,7 +299,7 @@ EMBEDDED_AGENT_FUNCTIONS: Dict[str, Any] = {
 from agents.validation.validation_instrument_setup_agent import run_agent as validation_instrument_setup_agent
 from agents.validation.validation_test_plan_agent import run_agent as validation_test_plan_agent
 from agents.validation.validation_sequence_builder_agent import run_agent as validation_sequence_builder_agent
-from agents.validation.validation_executor_orchestrator_agent import run_agent as validation_executor_orchestrator_agent
+from agents.validation.validation_execution_orchestrator_agent import run_agent as validation_execution_orchestrator_agent
 from agents.validation.validation_analytics_agent import run_agent as validation_analytics_agent
 
 #  VALIDATION FUNCTIONS
@@ -310,7 +310,7 @@ VALIDATION_AGENT_FUNCTIONS: Dict[str, Any] = {
     "Validation Instrument Setup Agent": validation_instrument_setup_agent,
     "Validation Test Plan Agent": validation_test_plan_agent,
     "Validation Sequence Builder Agent": validation_sequence_builder_agent,
-    "Validation Executor Orchestrator Agent": validation_executor_orchestrator_agent,
+    "Validation Execution Orchestrator Agent": validation_execution_orchestrator_agent,
     # "Measurement Logger Agent": validation_logger_agent,
     "Validation Analytics Agent": validation_analytics_agent,
     # "Validation Debug Agent": validation_debug_agent,
@@ -360,7 +360,7 @@ SYSTEM_AGENT_FUNCTIONS: Dict[str,Any] = {
     "Validation Instrument Setup Agent": validation_instrument_setup_agent,
     "Validation Test Plan Agent": validation_test_plan_agent,
     "Validation Sequence Builder Agent": validation_sequence_builder_agent,
-    "Validation Executor Orchestrator Agent": validation_executor_orchestrator_agent,
+    "Validation Execution Orchestrator Agent": validation_execution_orchestrator_agent,
     "Validation Analytics Agent": validation_analytics_agent,
     "System Workflow Agent": system_workflow_agent,  
     "System CoSim Integration Agent": system_cosim_integration_agent,
