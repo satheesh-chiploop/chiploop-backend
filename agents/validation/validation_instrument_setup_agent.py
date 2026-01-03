@@ -1,6 +1,5 @@
 import os, json, datetime
 from utils.artifact_utils import save_text_artifact_and_record
-from utils.supabase_utils import get_supabase  # use whatever helper you already use
 
 # ---------------- Supabase client ----------------
 try:
@@ -8,8 +7,9 @@ try:
 except ImportError:
     raise RuntimeError("Please install supabase-py v2: pip install supabase")
 
+# Use the same env strategy as main.py
 SUPABASE_URL = os.environ.get("SUPABASE_URL") or os.environ.get("NEXT_PUBLIC_SUPABASE_URL")
-SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")  # <<< REMOVE fallback
+SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
 
 if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
     raise RuntimeError("Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY")
@@ -27,24 +27,32 @@ def run_agent(state: dict) -> dict:
     workflow_id = state.get("workflow_id")
     user_id = state.get("user_id")
     instrument_ids = state.get("instrument_ids")  # optional list[uuid]
+
     if not workflow_id or not user_id:
         state["status"] = "❌ Missing workflow_id or user_id"
         return state
 
-
-
-    q = supabase.table("validation_instruments").select("*").eq("user_id", user_id)
-
     instruments = []
     if instrument_ids:
-        instruments = supabase.table("validation_instruments")\
-            .select("*")\
-            .in_("id", instrument_ids)\
-            .eq("user_id", user_id)\
-            .execute().data or []
+        instruments = (
+            supabase.table("validation_instruments")
+            .select("*")
+            .in_("id", instrument_ids)
+            .eq("user_id", user_id)
+            .execute()
+            .data
+            or []
+        )
     else:
-        # Prefer all defaults (or single default) — depending on your UX
-        instruments = q.eq("is_default", True).execute().data or []
+        instruments = (
+            supabase.table("validation_instruments")
+            .select("*")
+            .eq("user_id", user_id)
+            .eq("is_default", True)
+            .execute()
+            .data
+            or []
+        )
 
     bench_setup = {
         "workflow_id": workflow_id,
@@ -66,17 +74,17 @@ def run_agent(state: dict) -> dict:
                 "is_default": inst.get("is_default", False),
             }
             for inst in instruments
-        ]
+        ],
     }
 
-    # Save artifact
     save_text_artifact_and_record(
         workflow_id=workflow_id,
         rel_path="validation/bench_setup.json",
         content=json.dumps(bench_setup, indent=2),
-        content_type="application/json"
+        content_type="application/json",
     )
 
     state["bench_setup"] = bench_setup
     state["status"] = "✅ Bench setup resolved"
     return state
+
