@@ -301,6 +301,7 @@ from agents.validation.validation_test_plan_agent import run_agent as validation
 from agents.validation.validation_sequence_builder_agent import run_agent as validation_sequence_builder_agent
 from agents.validation.validation_execution_orchestrator_agent import run_agent as validation_execution_orchestrator_agent
 from agents.validation.validation_analytics_agent import run_agent as validation_analytics_agent
+from agents.validation.validation_scope_agent import run_agent as validation_scope_agent
 
 #  VALIDATION FUNCTIONS
 # ==========================================================
@@ -313,6 +314,7 @@ VALIDATION_AGENT_FUNCTIONS: Dict[str, Any] = {
     "Validation Execution Orchestrator Agent": validation_execution_orchestrator_agent,
     # "Measurement Logger Agent": validation_logger_agent,
     "Validation Analytics Agent": validation_analytics_agent,
+    "Validation Scope Agent": validation_scope_agent,
     # "Validation Debug Agent": validation_debug_agent,
 }
 from agents.system.system_workflow_agent import run_agent as system_workflow_agent
@@ -362,6 +364,7 @@ SYSTEM_AGENT_FUNCTIONS: Dict[str,Any] = {
     "Validation Sequence Builder Agent": validation_sequence_builder_agent,
     "Validation Execution Orchestrator Agent": validation_execution_orchestrator_agent,
     "Validation Analytics Agent": validation_analytics_agent,
+    "Validation Scope Agent": validation_scope_agent,
     "System Workflow Agent": system_workflow_agent,  
     "System CoSim Integration Agent": system_cosim_integration_agent,
     "System ISS Bridge Agent": system_iss_bridge_agent,  
@@ -480,6 +483,7 @@ async def run_workflow(
     workflow: str = Form(...),
     file: UploadFile = File(None),
     spec_text: str = Form(None)
+    instrument_ids: Optional[str] = Form(None),
 ):
     """
     Starts a workflow run:
@@ -495,6 +499,13 @@ async def run_workflow(
         now = datetime.utcnow().isoformat()
 
         data = json.loads(workflow)
+
+        # ✅ attach instrument IDs into workflow payload so agents can read it
+        if instrument_ids:
+          try:
+            data["instrument_ids"] = json.loads(instrument_ids)
+          except Exception:
+            data["instrument_ids"] = instrument_ids  # fallback
         # payload contains nodes with exact backend "label"
         loop_type = (data.get("loop_type") or "digital").lower().strip()
         logger.info(f"[DEBUG] Client submitted loop_type={data.get('loop_type')}")

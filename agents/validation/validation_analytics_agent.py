@@ -118,7 +118,8 @@ def run_agent(state: dict) -> dict:
       - validation/analytics_summary.md
     """
     workflow_id = state.get("workflow_id")
-    plan = state.get("test_plan") or state.get("validation_test_plan") or {}
+    plan = state.get("scoped_test_plan") or state.get("test_plan") or state.get("validation_test_plan") or {}
+
     results = state.get("validation_results") or {}
 
     if not workflow_id:

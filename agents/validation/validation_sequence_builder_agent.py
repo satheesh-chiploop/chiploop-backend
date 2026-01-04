@@ -10,7 +10,8 @@ def _pick_instrument(bench_setup: dict, inst_type: str):
 def run_agent(state: dict) -> dict:
     workflow_id = state.get("workflow_id")
     bench = state.get("bench_setup") or {}
-    plan = state.get("test_plan") or {}
+    plan = state.get("scoped_test_plan") or state.get("test_plan") or {}
+
 
     if not workflow_id or not bench or not plan:
         state["status"] = "❌ Missing workflow_id / bench_setup / test_plan"
