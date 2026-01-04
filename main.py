@@ -516,13 +516,17 @@ async def run_workflow(
         # ✅ attach instrument IDs into workflow payload so agents can read it
         if instrument_ids:
           try:
-            data["instrument_ids"] = json.loads(instrument_ids)
+            data["instrument_ids"] = json.loads(form.get("instrument_ids") or "null")
           except Exception:
             data["instrument_ids"] = instrument_ids  # fallback
         # payload contains nodes with exact backend "label"
         loop_type = (data.get("loop_type") or "digital").lower().strip()
         logger.info(f"[DEBUG] Client submitted loop_type={data.get('loop_type')}")
+        logger.info(f"[DEBUG] Client submitted loop_type={data.get('instrument_ids')}")
         logger.info(f"[DEBUG] Normalized loop_type={loop_type}")
+        logger.info(f"[DEBUG] user_id ={user_id}"))
+        if not user_id:
+          user_id = request.headers.get("x-user-id")
 
         supabase.table("workflows").insert({
            "id": workflow_id,
@@ -659,6 +663,11 @@ def execute_workflow_background(
             shared_state["uploaded_file"] = upload_path
         if spec_text:
             shared_state["spec"] = spec_text
+
+        # ✅ ADD THIS
+        instrument_ids = (data or {}).get("instrument_ids")
+        if instrument_ids:
+            shared_state["instrument_ids"] = instrument_ids         
 
         append_log_workflow(workflow_id, "⚡ Executing workflow agents ...")
         append_log_run(run_id, "⚡ Executing workflow agents ...")
