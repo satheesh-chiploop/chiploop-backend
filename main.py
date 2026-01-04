@@ -443,11 +443,24 @@ def append_log_run(run_id: str, line: str, status: Optional[str] = None,
 # ==========================================================
 
 def _require_user_id(request: Request) -> str:
+    # 1) Header fallback (same pattern you already use elsewhere)
+    headers = request.headers
+    header_user_id = (
+        headers.get("x-user-id")
+        or headers.get("x-supabase-user-id")
+        or headers.get("x-client-user-id")
+    )
+    if header_user_id:
+        return header_user_id
+
+    # 2) JWT fallback
     token_data = verify_token(request)
     user_id = token_data.get("sub")
     if not user_id or user_id == "anonymous":
         raise HTTPException(status_code=401, detail="Unauthorized")
     return user_id
+
+
 
 
 @app.get("/health")
