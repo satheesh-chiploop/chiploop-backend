@@ -482,7 +482,7 @@ async def run_workflow(
     background_tasks: BackgroundTasks,
     workflow: str = Form(...),
     file: UploadFile = File(None),
-    spec_text: str = Form(None)
+    spec_text: str = Form(None),
     instrument_ids: Optional[str] = Form(None),
 ):
     """
