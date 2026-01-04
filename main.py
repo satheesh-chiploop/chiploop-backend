@@ -524,7 +524,7 @@ async def run_workflow(
         logger.info(f"[DEBUG] Client submitted loop_type={data.get('loop_type')}")
         logger.info(f"[DEBUG] Client submitted loop_type={data.get('instrument_ids')}")
         logger.info(f"[DEBUG] Normalized loop_type={loop_type}")
-        logger.info(f"[DEBUG] user_id ={user_id}"))
+        logger.info(f"[DEBUG] user_id ={user_id}")
         if not user_id:
           user_id = request.headers.get("x-user-id")
 
