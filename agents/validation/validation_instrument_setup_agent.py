@@ -77,11 +77,14 @@ def run_agent(state: dict) -> dict:
         ],
     }
 
+    # ✅ Upload artifact using the SAME convention as digital_spec_agent.py:
+    # save_text_artifact_and_record(workflow_id, agent_name, subdir, filename, content)
     save_text_artifact_and_record(
         workflow_id=workflow_id,
-        rel_path="validation/bench_setup.json",
+        agent_name="Validation Instrument Setup Agent",
+        subdir="validation",
+        filename="bench_setup.json",
         content=json.dumps(bench_setup, indent=2),
-        content_type="application/json",
     )
 
     state["bench_setup"] = bench_setup
