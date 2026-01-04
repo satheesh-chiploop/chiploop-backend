@@ -386,6 +386,15 @@ AGENT_CAPABILITIES = {
         "description": "Applies test_plan measurement limits (min/max) to captured results and generates analytics + a demo-ready report.",
         "tags": ["validation", "analytics", "limits", "pass-fail", "report"],
     },
+
+    "Validation Scope Agent": {
+        "domain": "validation",
+        "inputs": ["workflow_id", "test_plan", "scope(optional)"],
+        "outputs": ["validation/scope_selection.json", "validation/scoped_test_plan.json"],
+        "description": "Applies user-selected scope (by tags or test names) to the generated validation test_plan and produces a scoped test plan for downstream sequence building.",
+        "tags": ["validation", "scope", "selection", "filter", "test-plan"],
+    },
+
 }
 
 
