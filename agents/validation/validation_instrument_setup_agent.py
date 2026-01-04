@@ -24,13 +24,23 @@ def run_agent(state: dict) -> dict:
     - Else: use user's default instruments from validation_instruments (is_default=true)
     Produces bench_setup.json used by downstream agents.
     """
+    print("\n[DEBUG][ValidationInstrumentSetup] ENTER run_agent")
+    print("[DEBUG][ValidationInstrumentSetup] state keys:", list(state.keys()))
+
     workflow_id = state.get("workflow_id")
     user_id = state.get("user_id")
     instrument_ids = state.get("instrument_ids")  # optional list[uuid]
 
+    print("[DEBUG][ValidationInstrumentSetup] workflow_id:", workflow_id)
+    print("[DEBUG][ValidationInstrumentSetup] user_id:", user_id)
+    print("[DEBUG][ValidationInstrumentSetup] instrument_ids:", instrument_ids)
+
     if not workflow_id or not user_id:
+        print("[DEBUG][ValidationInstrumentSetup] ❌ Missing workflow_id or user_id")
         state["status"] = "❌ Missing workflow_id or user_id"
         return state
+
+    print("[DEBUG][ValidationInstrumentSetup] Fetching instruments from Supabase...")
 
     instruments = []
     if instrument_ids:
@@ -53,6 +63,10 @@ def run_agent(state: dict) -> dict:
             .data
             or []
         )
+    print(
+        "[DEBUG][ValidationInstrumentSetup] instruments fetched:",
+        len(instruments),
+    )
 
     bench_setup = {
         "workflow_id": workflow_id,
@@ -77,15 +91,21 @@ def run_agent(state: dict) -> dict:
         ],
     }
 
+    
+    print("[DEBUG][ValidationInstrumentSetup] bench_setup built")
+    print("[DEBUG][ValidationInstrumentSetup] calling save_text_artifact_and_record()")
+
     # ✅ Upload artifact using the SAME convention as digital_spec_agent.py:
     # save_text_artifact_and_record(workflow_id, agent_name, subdir, filename, content)
-    save_text_artifact_and_record(
+    path = save_text_artifact_and_record(
         workflow_id=workflow_id,
         agent_name="Validation Instrument Setup Agent",
         subdir="validation",
         filename="bench_setup.json",
         content=json.dumps(bench_setup, indent=2),
     )
+
+    print("[DEBUG][ValidationInstrumentSetup] artifact save returned:", path)
 
     state["bench_setup"] = bench_setup
     state["status"] = "✅ Bench setup resolved"
