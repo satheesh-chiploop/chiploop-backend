@@ -31,6 +31,18 @@ def run_agent(state: dict) -> dict:
     user_id = state.get("user_id")
     instrument_ids = state.get("instrument_ids")  # optional list[uuid]
 
+        # ✅ Normalize instrument_ids: it may arrive as a JSON string like '["uuid"]'
+    if isinstance(instrument_ids, str):
+        try:
+            instrument_ids = json.loads(instrument_ids)
+        except Exception:
+            # fallback: treat as single id string
+            instrument_ids = [instrument_ids]
+
+    if instrument_ids and not isinstance(instrument_ids, list):
+        instrument_ids = [instrument_ids]
+
+
     print("[DEBUG][ValidationInstrumentSetup] workflow_id:", workflow_id)
     print("[DEBUG][ValidationInstrumentSetup] user_id:", user_id)
     print("[DEBUG][ValidationInstrumentSetup] instrument_ids:", instrument_ids)
