@@ -677,6 +677,13 @@ def execute_workflow_background(
         if spec_text:
             shared_state["spec"] = spec_text
 
+        scope_json = form.get("scope_json")
+        if scope_json:
+          try:
+            shared_state["scope"] = json.loads(scope_json)
+          except Exception:
+            shared_state["scope"] = {}
+
         # ✅ ADD THIS
         instrument_ids = (data or {}).get("instrument_ids")
         if instrument_ids:
@@ -2531,6 +2538,34 @@ async def validation_probe_instrument(instrument_id: str, request: Request):
         .execute()
 
     return {"ok": ok, "scpi_idn": scpi_idn, "capabilities_guess": capabilities_guess}
+
+@app.post("/validation/test_plan/preview")
+async def validation_test_plan_preview(request: Request):
+    """
+    Generates validation test plan JSON from datasheet text (preview step for Scope modal).
+    Reuses Validation Test Plan Agent.
+    """
+    data = await request.json()
+    workflow_id = data.get("workflow_id")
+    datasheet_text = (data.get("datasheet_text") or "").strip()
+    goal = data.get("goal") or "Create a validation test plan"
+
+    if not workflow_id or not datasheet_text:
+        return {"status": "error", "message": "workflow_id and datasheet_text are required"}
+
+    # reuse existing agent
+    from agents.validation.validation_test_plan_agent import run_agent as validation_test_plan_agent
+
+    state = {
+        "workflow_id": workflow_id,
+        "datasheet_text": datasheet_text,
+        "goal": goal,
+    }
+    out_state = validation_test_plan_agent(state)
+
+    plan = out_state.get("test_plan") or {}
+    return {"status": "ok", "test_plan": plan}
+
 
 
 

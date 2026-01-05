@@ -18,7 +18,6 @@ def _to_float(x: Any) -> Optional[float]:
         s = x.strip()
         if not s:
             return None
-        # Strip common unit suffixes (very light touch)
         for suf in ["V", "A", "mV", "uV", "nV", "Hz", "kHz", "MHz", "GHz", "Ohm", "Ω", "s", "ms", "us", "ns"]:
             if s.endswith(suf):
                 s = s[: -len(suf)].strip()
@@ -28,7 +27,6 @@ def _to_float(x: Any) -> Optional[float]:
         except Exception:
             return None
     if isinstance(x, dict):
-        # common shapes: {"value": 1.23}, {"val": 1.23}, {"reading": 1.23}
         for k in ["value", "val", "reading", "measured", "result"]:
             if k in x:
                 return _to_float(x.get(k))
@@ -53,10 +51,6 @@ def _within_limit(val: float, mn: Optional[float], mx: Optional[float]) -> bool:
 
 
 def _index_results_by_test(results: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
-    """
-    Returns {test_name: test_result_obj}
-    Accepts multiple shapes; best-effort.
-    """
     out: Dict[str, Dict[str, Any]] = {}
     for t in (results or {}).get("tests", []) or []:
         name = t.get("name") or t.get("test_name") or t.get("id") or "unnamed_test"
@@ -65,27 +59,17 @@ def _index_results_by_test(results: Dict[str, Any]) -> Dict[str, Dict[str, Any]]
 
 
 def _extract_signal_value(test_result: Dict[str, Any], signal: str) -> Optional[float]:
-    """
-    Attempts to extract a measured value for `signal` from a test result object.
-    Supports:
-      - test_result["captures"][signal] = number|str|dict
-      - test_result["measurements"] = [{"signal":"VOUT","value":1.2}, ...]
-      - test_result["readings"][signal] = ...
-    """
     if not test_result:
         return None
 
-    # 1) captures dict
     caps = test_result.get("captures")
     if isinstance(caps, dict):
         if signal in caps:
             return _to_float(caps.get(signal))
-        # also try case-insensitive match
         for k, v in caps.items():
             if str(k).strip().lower() == str(signal).strip().lower():
                 return _to_float(v)
 
-    # 2) readings dict
     readings = test_result.get("readings")
     if isinstance(readings, dict):
         if signal in readings:
@@ -94,7 +78,6 @@ def _extract_signal_value(test_result: Dict[str, Any], signal: str) -> Optional[
             if str(k).strip().lower() == str(signal).strip().lower():
                 return _to_float(v)
 
-    # 3) measurements list
     meas_list = test_result.get("measurements")
     if isinstance(meas_list, list):
         for m in meas_list:
@@ -102,7 +85,6 @@ def _extract_signal_value(test_result: Dict[str, Any], signal: str) -> Optional[
                 continue
             s = m.get("signal") or m.get("name")
             if s and str(s).strip().lower() == str(signal).strip().lower():
-                # common keys for value
                 for k in ["value", "val", "reading", "measured", "result"]:
                     if k in m:
                         return _to_float(m.get(k))
@@ -111,15 +93,8 @@ def _extract_signal_value(test_result: Dict[str, Any], signal: str) -> Optional[
 
 
 def run_agent(state: dict) -> dict:
-    """
-    Step 2E: Evaluate captured values against limits from validation/test_plan.json.
-    Produces:
-      - validation/analytics.json
-      - validation/analytics_summary.md
-    """
     workflow_id = state.get("workflow_id")
     plan = state.get("scoped_test_plan") or state.get("test_plan") or state.get("validation_test_plan") or {}
-
     results = state.get("validation_results") or {}
 
     if not workflow_id:
@@ -133,6 +108,8 @@ def run_agent(state: dict) -> dict:
     if not results or not isinstance(results, dict) or not results.get("tests"):
         state["status"] = "❌ Missing validation_results in state (expected state['validation_results'])"
         return state
+
+    agent_name = "Validation Analytics Agent"
 
     results_by_test = _index_results_by_test(results)
 
@@ -173,7 +150,7 @@ def run_agent(state: dict) -> dict:
                 ok = _within_limit(measured_val, mn, mx)
                 status = "pass" if ok else "fail"
             else:
-                test_pass = False  # missing measurement should fail for MVP
+                test_pass = False
 
             if status == "fail":
                 test_pass = False
@@ -214,15 +191,15 @@ def run_agent(state: dict) -> dict:
             }
         )
 
-    # Artifact: analytics.json
+    # ✅ FIX: use correct artifact_utils signature
     save_text_artifact_and_record(
         workflow_id=workflow_id,
-        rel_path="validation/analytics.json",
+        agent_name=agent_name,
+        subdir="validation",
+        filename="analytics.json",
         content=json.dumps(analytics, indent=2),
-        content_type="application/json",
     )
 
-    # Artifact: analytics_summary.md
     s = analytics["summary"]
     lines = []
     lines.append(f"# Validation Analytics Summary\n")
@@ -247,9 +224,10 @@ def run_agent(state: dict) -> dict:
 
     save_text_artifact_and_record(
         workflow_id=workflow_id,
-        rel_path="validation/analytics_summary.md",
+        agent_name=agent_name,
+        subdir="validation",
+        filename="analytics_summary.md",
         content="\n".join(lines),
-        content_type="text/markdown",
     )
 
     state["validation_analytics"] = analytics

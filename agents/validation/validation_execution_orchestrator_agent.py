@@ -114,6 +114,8 @@ def run_agent(state: dict) -> dict:
         state["status"] = "❌ Missing workflow_id or test_sequence"
         return state
 
+    agent_name = "Validation Execution Orchestrator Agent"
+
     # Decide executor mode: "pyvisa" (default) or "stub"
     mode = (os.getenv("VALIDATION_EXECUTION_MODE") or "pyvisa").lower()
 
@@ -126,9 +128,7 @@ def run_agent(state: dict) -> dict:
     }
 
     # Build instrument map from sequence["instruments"]
-    # This is the bench-selected instrument rows (includes resource_string, id, user_id, etc.)
     instruments = (seq.get("instruments") or {})
-    # Cache handles by resource string (so we don't reconnect every command)
     handle_cache: Dict[str, Any] = {}
 
     def _get_handle(rm, resource: str):
@@ -137,8 +137,6 @@ def run_agent(state: dict) -> dict:
         return handle_cache[resource]
 
     if mode == "stub":
-        # Keep your old behavior if you want a quick demo fallback
-        # (But your plan is to run pyvisa now.)
         for test in seq.get("tests", []):
             captures = {}
             for step in test.get("steps", []):
@@ -155,9 +153,8 @@ def run_agent(state: dict) -> dict:
             results_rows.append({"test": test.get("name"), "passed": passed, **captures})
 
     else:
-        # Real PyVISA execution
         try:
-            import pyvisa  # pip install pyvisa  (plus a backend like pyvisa-py or NI-VISA)
+            import pyvisa
         except Exception as e:
             state["status"] = f"❌ PyVISA not available: {type(e).__name__}: {e}"
             return state
@@ -174,7 +171,7 @@ def run_agent(state: dict) -> dict:
                 if step.get("type") != "scpi":
                     continue
 
-                inst_key = step.get("instrument")  # "psu"/"dmm"/"scope"
+                inst_key = step.get("instrument")
                 resource = step.get("resource")
                 cmd = (step.get("cmd") or "").strip()
                 cap_as = step.get("capture_as")
@@ -200,25 +197,20 @@ def run_agent(state: dict) -> dict:
                     ok_all = False
                     continue
 
-                # If this is *IDN?, store it and (best-effort) update DB row
                 if cmd == "*IDN?":
                     idn = str(val).strip()
                     captures[f"{inst_key}_idn"] = idn
 
-                    # Update DB scpi_idn if we can find the instrument row
                     inst_row = instruments.get(inst_key) or {}
                     _update_instrument_idn_if_possible(inst_row, idn)
 
-                # Capture measurement value if requested
                 if cap_as:
                     if expect == "string":
                         captures[cap_as] = str(val).strip()
                     else:
-                        # Try float conversion; fall back to raw
                         f = _safe_float(val)
                         captures[cap_as] = f if f is not None else str(val).strip()
 
-            # Step 2E will compute passed based on limits; for now keep boolean on command success
             passed = bool(ok_all)
 
             results_json["tests"].append({
@@ -231,7 +223,6 @@ def run_agent(state: dict) -> dict:
             row = {"test": test_name, "passed": passed, **captures}
             results_rows.append(row)
 
-        # Close all handles
         for h in handle_cache.values():
             try:
                 h.close()
@@ -251,15 +242,20 @@ def run_agent(state: dict) -> dict:
         writer.writerow(r)
     csv_out = buf.getvalue()
 
+    # ✅ FIX: use correct artifact_utils signature
     save_text_artifact_and_record(
-        workflow_id, "validation/results.json",
-        json.dumps(results_json, indent=2),
-        "application/json"
+        workflow_id=workflow_id,
+        agent_name=agent_name,
+        subdir="validation",
+        filename="results.json",
+        content=json.dumps(results_json, indent=2),
     )
     save_text_artifact_and_record(
-        workflow_id, "validation/results.csv",
-        csv_out,
-        "text/csv"
+        workflow_id=workflow_id,
+        agent_name=agent_name,
+        subdir="validation",
+        filename="results.csv",
+        content=csv_out,
     )
 
     manifest = {
@@ -269,9 +265,11 @@ def run_agent(state: dict) -> dict:
         "notes": "PyVISA SCPI execution. Step 2E will apply pass/fail using limits from validation/test_plan.json."
     }
     save_text_artifact_and_record(
-        workflow_id, "validation/run_manifest.json",
-        json.dumps(manifest, indent=2),
-        "application/json"
+        workflow_id=workflow_id,
+        agent_name=agent_name,
+        subdir="validation",
+        filename="run_manifest.json",
+        content=json.dumps(manifest, indent=2),
     )
 
     state["validation_results"] = results_json

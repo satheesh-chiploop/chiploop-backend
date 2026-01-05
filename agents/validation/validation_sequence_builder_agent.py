@@ -74,13 +74,16 @@ def run_agent(state: dict) -> dict:
             "tags": t.get("tags", []),
             "steps": steps
         })
-
+    # ✅ FIX: use correct artifact_utils signature
     save_text_artifact_and_record(
         workflow_id=workflow_id,
-        rel_path="validation/test_sequence.json",
+        agent_name="Validation Sequence Builder Agent",
+        subdir="validation",
+        filename="test_sequence.json",
         content=json.dumps(sequence, indent=2),
-        content_type="application/json"
     )
+
+    
 
     state["test_sequence"] = sequence
     state["status"] = "✅ SCPI sequence generated"
