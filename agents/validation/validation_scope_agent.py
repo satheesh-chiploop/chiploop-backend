@@ -120,19 +120,24 @@ def run_agent(state: dict) -> dict:
     }
     scoped_plan["tests"] = selected
 
+    agent_name = "Validation Scope Agent"
+
     # Save artifacts
+      # ✅ Save artifacts using correct artifact_utils signature
     save_text_artifact_and_record(
         workflow_id=workflow_id,
-        rel_path="validation/scope_selection.json",
+        agent_name=agent_name,
+        subdir="validation",
+        filename="scope_selection.json",
         content=json.dumps(scoped_plan["scope"], indent=2),
-        content_type="application/json",
     )
 
     save_text_artifact_and_record(
         workflow_id=workflow_id,
-        rel_path="validation/scoped_test_plan.json",
+        agent_name=agent_name,
+        subdir="validation",
+        filename="scoped_test_plan.json",
         content=json.dumps(scoped_plan, indent=2),
-        content_type="application/json",
     )
 
     state["scoped_test_plan"] = scoped_plan

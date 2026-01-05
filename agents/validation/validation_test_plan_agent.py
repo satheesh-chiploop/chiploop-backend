@@ -14,7 +14,8 @@ def run_agent(state: dict) -> dict:
     Output is structured and instrument-typed (psu/dmm/scope).
     """
     workflow_id = state.get("workflow_id")
-    datasheet_text = (state.get("datasheet_text") or "").strip()
+    datasheet_text = (state.get("datasheet_text") or state.get("spec") or "").strip()
+
     goal = (state.get("goal") or "Create a validation test plan").strip()
 
     if not workflow_id or not datasheet_text:
@@ -72,10 +73,13 @@ Rules:
 
     save_text_artifact_and_record(
         workflow_id=workflow_id,
-        rel_path="validation/test_plan.json",
+        agent_name="Validation Test Plan Agent",
+        subdir="validation",
+        filename="test_plan.json",
         content=json.dumps(plan, indent=2),
-        content_type="application/json"
     )
+
+
 
     state["test_plan"] = plan
     state["status"] = "✅ Validation test plan created"
