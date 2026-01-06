@@ -137,8 +137,13 @@ def save_text_artifact_and_record(
 
         # supabase.storage.from_(bucket).upload(path, content[, ...])
         storage = supabase.storage.from_(ARTIFACT_BUCKET)
-        storage.upload(storage_path, content.encode("utf-8"), {"content-type": "text/plain"},{"upsert": True})
+        storage.upload(storage_path, content.encode("utf-8"), {"content-type": "text/plain"},{"upsert": True})  
 
+        try:
+          storage.upload(storage_path, content.encode("utf-8"), {"content-type": "text/plain"})
+        except Exception as e:
+          # overwrite existing file if it already exists (409 Duplicate)
+          storage.update(storage_path, content.encode("utf-8"), {"content-type": "text/plain"})
         # Record in workflows.artifacts — key is usually the filename or a logical name
         key = filename
         append_artifact_record(workflow_id, agent_name, key, storage_path)
