@@ -497,6 +497,7 @@ async def run_workflow(
     file: UploadFile = File(None),
     spec_text: str = Form(None),
     instrument_ids: Optional[str] = Form(None),
+    scope_json: Optional[str] = Form(None),
 ):
     """
     Starts a workflow run:
@@ -599,7 +600,8 @@ async def run_workflow(
             json.dumps(data),
             spec_text,
             upload_path,
-            artifact_dir
+            artifact_dir,
+            scope_json,
         )
 
         return JSONResponse({"workflow_id": workflow_id, "run_id": run_id, "loop_type": loop_type, "status": "queued"})
@@ -621,6 +623,7 @@ def execute_workflow_background(
     spec_text: Optional[str],
     upload_path: Optional[str],
     artifact_dir: str,
+    scope_json=None,
 ):
     """
     Executes the workflow with loop-aware agent resolution and dual logging (workflows + runs).
@@ -677,7 +680,8 @@ def execute_workflow_background(
         if spec_text:
             shared_state["spec"] = spec_text
 
-        scope_json = form.get("scope_json")
+
+
         if scope_json:
           try:
             shared_state["scope"] = json.loads(scope_json)
