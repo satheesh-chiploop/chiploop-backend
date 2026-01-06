@@ -137,7 +137,7 @@ def save_text_artifact_and_record(
 
         # supabase.storage.from_(bucket).upload(path, content[, ...])
         storage = supabase.storage.from_(ARTIFACT_BUCKET)
-        storage.upload(storage_path, content.encode("utf-8"), {"content-type": "text/plain"})
+        storage.upload(storage_path, content.encode("utf-8"), {"content-type": "text/plain"},{"upsert": True})
 
         # Record in workflows.artifacts — key is usually the filename or a logical name
         key = filename
