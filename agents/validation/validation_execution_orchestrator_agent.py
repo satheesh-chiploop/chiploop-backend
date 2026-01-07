@@ -112,9 +112,17 @@ def run_agent(state: dict) -> dict:
 
     if not workflow_id or not seq:
         state["status"] = "❌ Missing workflow_id or test_sequence"
+        logger.warning(
+          "[EXECUTION ORCH] Early return | "
+          f"has_test_sequence={bool(test_sequence)} | "
+          f"has_workflow_id={bool(workflow_id)} | "
+          f"state_keys={list(state.keys())}"
+        )
         return state
 
     agent_name = "Validation Execution Orchestrator Agent"
+
+    logger.info(f"[DEBUG] {agent_name} status={state.get('status')}")
 
     # Decide executor mode: "pyvisa" (default) or "stub"
     mode = (os.getenv("VALIDATION_EXECUTION_MODE") or "pyvisa").lower()

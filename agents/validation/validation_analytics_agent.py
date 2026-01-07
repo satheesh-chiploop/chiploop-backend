@@ -97,6 +97,17 @@ def run_agent(state: dict) -> dict:
     plan = state.get("scoped_test_plan") or state.get("test_plan") or state.get("validation_test_plan") or {}
     results = state.get("validation_results") or {}
 
+    if not workflow_id or not test_plan or not results:
+      logger.warning(
+        "[ANALYTICS] Early return | "
+        f"workflow_id={bool(workflow_id)} | "
+        f"test_plan={bool(test_plan)} | "
+        f"validation_results={bool(results)} | "
+        f"state_keys={list(state.keys())}"
+      )
+      state["status"] = "❌ Missing inputs for analytics"
+      return state
+
     if not workflow_id:
         state["status"] = "❌ Missing workflow_id"
         return state
