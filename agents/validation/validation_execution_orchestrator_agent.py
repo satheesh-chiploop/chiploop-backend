@@ -3,7 +3,10 @@ import json
 import csv
 import io
 import datetime
+import logging
+logger = logging.getLogger(__name__)
 from typing import Any, Dict, Optional, Tuple
+
 
 from utils.artifact_utils import save_text_artifact_and_record
 

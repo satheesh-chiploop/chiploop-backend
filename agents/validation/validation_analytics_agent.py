@@ -3,6 +3,8 @@
 import json
 import math
 import datetime
+import logging
+logger = logging.getLogger(__name__)
 from typing import Any, Dict, Optional, Tuple, List
 
 from utils.artifact_utils import save_text_artifact_and_record
@@ -99,11 +101,11 @@ def run_agent(state: dict) -> dict:
 
     if not workflow_id or not test_plan or not results:
       logger.warning(
-        "[ANALYTICS] Early return | "
-        f"workflow_id={bool(workflow_id)} | "
-        f"test_plan={bool(test_plan)} | "
-        f"validation_results={bool(results)} | "
-        f"state_keys={list(state.keys())}"
+       "[ANALYTICS] Early return | "
+       f"workflow_id={bool(workflow_id)} | "
+       f"plan={bool(plan)} | "
+       f"validation_results={bool(results)} | "
+       f"state_keys={list(state.keys())}"
       )
       state["status"] = "❌ Missing inputs for analytics"
       return state
