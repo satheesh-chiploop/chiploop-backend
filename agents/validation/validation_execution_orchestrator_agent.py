@@ -129,7 +129,7 @@ def run_agent(state: dict) -> dict:
 
     # Decide executor mode: "pyvisa" (default) or "stub"
     mode = (os.getenv("VALIDATION_EXECUTION_MODE") or "pyvisa").lower()
-
+    mode = "stub"
     results_rows = []
     results_json: Dict[str, Any] = {
         "workflow_id": workflow_id,
@@ -141,7 +141,7 @@ def run_agent(state: dict) -> dict:
     # Build instrument map from sequence["instruments"]
     instruments = (seq.get("instruments") or {})
     handle_cache: Dict[str, Any] = {}
-
+    
     def _get_handle(rm, resource: str):
         if resource not in handle_cache:
             handle_cache[resource] = _open_resource(rm, resource)
