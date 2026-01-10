@@ -15,6 +15,7 @@ from typing import Optional, Dict, Any, Literal
 from typing import Any, Iterable
 from fastapi.responses import StreamingResponse
 from fastapi import HTTPException
+from typing import List
 
 from datetime import datetime
 from typing import Dict, Any, Optional
@@ -200,6 +201,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+
+class BenchCreateIn(BaseModel):
+    name: str
+    location: Optional[str] = None
+    org_id: Optional[str] = None
+    instrument_ids: List[str] = []
+    schematic: Dict[str, Any] = Field(default_factory=dict)  # connectivity intent / bench schematic
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
 # ==========================================================
 # ✅ DIGITAL AGENTS (labels must match the frontend exactly)
 # ==========================================================
@@ -302,6 +314,8 @@ from agents.validation.validation_sequence_builder_agent import run_agent as val
 from agents.validation.validation_execution_orchestrator_agent import run_agent as validation_execution_orchestrator_agent
 from agents.validation.validation_analytics_agent import run_agent as validation_analytics_agent
 from agents.validation.validation_scope_agent import run_agent as validation_scope_agent
+from agents.validation.validation_connectivity_intent_agent import run_agent as validation_connectivity_intent_agent
+from agents.validation.validation_wiring_instructions_agent import run_agent as validation_wiring_instructions_agent
 
 #  VALIDATION FUNCTIONS
 # ==========================================================
@@ -310,6 +324,8 @@ VALIDATION_AGENT_FUNCTIONS: Dict[str, Any] = {
     # Examples of future labels:
     "Validation Instrument Setup Agent": validation_instrument_setup_agent,
     "Validation Test Plan Agent": validation_test_plan_agent,
+    "Validation Connectivity Intent Agent": validation_connectivity_intent_agent,
+    "Validation Wiring Instructions Agent": validation_wiring_instructions_agent,
     "Validation Scope Agent": validation_scope_agent,
     "Validation Sequence Builder Agent": validation_sequence_builder_agent,
     "Validation Execution Orchestrator Agent": validation_execution_orchestrator_agent,
@@ -361,6 +377,8 @@ SYSTEM_AGENT_FUNCTIONS: Dict[str,Any] = {
     "Embedded Result Agent": embedded_result_agent, 
     "Validation Instrument Setup Agent": validation_instrument_setup_agent,
     "Validation Test Plan Agent": validation_test_plan_agent,
+    "Validation Connectivity Intent Agent": validation_connectivity_intent_agent,
+    "Validation Wiring Instructions Agent": validation_wiring_instructions_agent,
     "Validation Scope Agent": validation_scope_agent,
     "Validation Sequence Builder Agent": validation_sequence_builder_agent,
     "Validation Execution Orchestrator Agent": validation_execution_orchestrator_agent,
@@ -497,6 +515,7 @@ async def run_workflow(
     file: UploadFile = File(None),
     spec_text: str = Form(None),
     instrument_ids: Optional[str] = Form(None),
+    bench_id: Optional[str] = Form(None),
     scope_json: Optional[str] = Form(None),
 ):
     """
@@ -529,6 +548,10 @@ async def run_workflow(
             except Exception:
                 # fallback: treat as single id
                 data["instrument_ids"] = [instrument_ids]
+
+        if bench_id:
+           data["bench_id"] = bench_id
+
 
         
         # payload contains nodes with exact backend "label"
@@ -2570,6 +2593,80 @@ async def validation_test_plan_preview(request: Request):
     plan = out_state.get("test_plan") or {}
     return {"status": "ok", "test_plan": plan}
 
+@app.post("/validation/benches")
+def create_validation_bench(request: Request, payload: BenchCreateIn):
+    user_id = _require_user_id(request)  # your helper enforces auth :contentReference[oaicite:1]{index=1}
+
+    if not payload.instrument_ids:
+        raise HTTPException(status_code=400, detail="instrument_ids is required")
+
+    # 1) Create bench
+    bench_row = {
+        "org_id": payload.org_id,
+        "name": payload.name,
+        "location": payload.location,
+        "status": "offline",
+        "metadata": {
+            **(payload.metadata or {}),
+            "owner_user_id": user_id,  # MVP ownership (since instruments are user_id-based)
+        },
+    }
+    bench_res = supabase.table("validation_benches").insert(bench_row).execute()
+    bench = (bench_res.data or [None])[0]
+    if not bench:
+        raise HTTPException(status_code=500, detail="Failed to create bench")
+
+    bench_id = bench["id"]
+
+    # 2) Save bench connections (schematic/connectivity intent)
+    supabase.table("validation_bench_connections").insert({
+        "bench_id": bench_id,
+        "schematic": payload.schematic or {},
+    }).execute()
+
+    # 3) Fetch instruments (must belong to this user)
+    inst_res = (
+        supabase.table("validation_instruments")
+        .select("*")
+        .in_("id", payload.instrument_ids)
+        .eq("user_id", user_id)
+        .execute()
+    )
+    instruments = inst_res.data or []
+    if len(instruments) != len(payload.instrument_ids):
+        raise HTTPException(status_code=403, detail="One or more instruments not owned by user")
+
+    # 4) Create bench ↔ instrument mappings
+    # Optional: store role as instrument_type ("psu" / "dmm" / "scope")
+    map_rows = []
+    for inst in instruments:
+        map_rows.append({
+            "bench_id": bench_id,
+            "instrument_id": inst["id"],
+            "role": inst.get("instrument_type"),
+        })
+    supabase.table("validation_bench_instruments").insert(map_rows).execute()
+
+    # 5) Derive bench capabilities (simple MVP: one row per instrument_type)
+    caps_by_type: Dict[str, Any] = {}
+    for inst in instruments:
+        t = inst.get("instrument_type") or "unknown"
+        caps_by_type.setdefault(t, {"count": 0, "instruments": []})
+        caps_by_type[t]["count"] += 1
+        caps_by_type[t]["instruments"].append({
+            "id": inst["id"],
+            "nickname": inst.get("nickname"),
+            "vendor": inst.get("vendor"),
+            "model": inst.get("model"),
+            "resource_string": inst.get("resource_string"),
+            "capabilities": inst.get("capabilities") or {},
+        })
+
+    cap_rows = [{"bench_id": bench_id, "capability": k, "details": v} for k, v in caps_by_type.items()]
+    if cap_rows:
+        supabase.table("validation_bench_capabilities").insert(cap_rows).execute()
+
+    return {"ok": True, "bench_id": bench_id}
 
 
 

@@ -395,6 +395,29 @@ AGENT_CAPABILITIES = {
         "tags": ["validation", "scope", "selection", "filter", "test-plan"],
     },
 
+    "Validation Connectivity Intent Agent": {
+        "domain": "validation",
+        "inputs": ["workflow_id", "test_plan OR scoped_test_plan"],
+        "outputs": ["validation/connectivity_intent.json"],
+        "description": "Phase-1: Generates logical connectivity intent (bench template) from test plan. No physical resource strings; reusable across labs.",
+        "tags": ["validation", "phase-1", "handoff", "connectivity", "bench-template", "wiring"],
+    },
+
+    "Validation Wiring Instructions Agent": {
+        "domain": "validation",
+        "inputs": ["workflow_id", "connectivity_intent"],
+        "outputs": ["validation/wiring_instructions.md"],
+        "description": "Phase-1: Generates human-readable lab wiring instructions from connectivity intent (lab never logs into ChipLoop).",
+        "tags": ["validation", "phase-1", "handoff", "wiring", "instructions", "lab"],
+    },
+
+    "Validation Preflight Agent": {
+        "domain": "validation",
+        "inputs": ["workflow_id", "user_id", "bench_setup", "test_plan OR scoped_test_plan (recommended)"],
+        "outputs": ["validation/preflight_report.json", "validation/preflight_summary.md"],
+        "description": "Phase-2a: Safe bench readiness checks (coverage + resource string sanity + optional *IDN?); no DUT stimulus. Supports stub or pyvisa mode.",
+        "tags": ["validation", "preflight", "bench", "readiness", "scpi", "pyvisa", "stub"],
+    },
 }
 
 
