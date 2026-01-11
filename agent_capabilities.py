@@ -418,6 +418,15 @@ AGENT_CAPABILITIES = {
         "description": "Phase-2a: Safe bench readiness checks (coverage + resource string sanity + optional *IDN?); no DUT stimulus. Supports stub or pyvisa mode.",
         "tags": ["validation", "preflight", "bench", "readiness", "scpi", "pyvisa", "stub"],
     },
+
+    "Validation Bench Create Agent": {
+        "domain": "validation",
+        "inputs": ["workflow_id", "user_id", "bench_name", "instrument_ids"],
+        "outputs": ["validation/bench_create_report.json", "validation/bench_create_summary.md"],
+        "description": "Creates a new validation bench and maps selected instruments to it. Outputs a creation report and summary.",
+        "tags": ["validation", "bench", "create", "instruments", "mapping"],
+    }
+    
 }
 
 
