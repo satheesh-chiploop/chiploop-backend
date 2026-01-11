@@ -30,6 +30,8 @@ def run_agent(state: dict) -> dict:
     workflow_id = state.get("workflow_id")
     user_id = state.get("user_id")
     instrument_ids = state.get("instrument_ids")  # optional list[uuid]
+    bench_id = state.get("bench_id")  # optional uuid
+
 
         # ✅ Normalize instrument_ids: it may arrive as a JSON string like '["uuid"]'
     if isinstance(instrument_ids, str):
@@ -55,34 +57,74 @@ def run_agent(state: dict) -> dict:
     print("[DEBUG][ValidationInstrumentSetup] Fetching instruments from Supabase...")
 
     instruments = []
-    if instrument_ids:
-        instruments = (
-            supabase.table("validation_instruments")
-            .select("*")
-            .in_("id", instrument_ids)
-            .eq("user_id", user_id)
+
+    # 1) If bench_id is provided, resolve instruments from bench mappings (bench-driven)
+    if bench_id:
+        print("[DEBUG][ValidationInstrumentSetup] bench_id:", bench_id)
+        mapping_rows = (
+            supabase.table("validation_bench_instruments")
+            .select("instrument_id,role")
+            .eq("bench_id", bench_id)
             .execute()
             .data
             or []
         )
+
+        mapped_ids = [r.get("instrument_id") for r in mapping_rows if r.get("instrument_id")]
+        print("[DEBUG][ValidationInstrumentSetup] mapped instrument_ids:", mapped_ids)
+
+        if mapped_ids:
+            instruments = (
+                supabase.table("validation_instruments")
+                .select("*")
+                .in_("id", mapped_ids)
+                .eq("user_id", user_id)
+                .execute()
+                .data
+                or []
+            )
+
+        # attach bench role onto each instrument (optional but useful downstream)
+            role_by_id = {r.get("instrument_id"): r.get("role") for r in mapping_rows}
+            for inst in instruments:
+                inst["_bench_role"] = role_by_id.get(inst.get("id"))
+
+        else:
+            print("[DEBUG][ValidationInstrumentSetup] ⚠️ No rows in validation_bench_instruments for this bench_id")
+
+    # 2) If explicit instrument_ids were provided (non-bench path), use them
+    elif instrument_ids:
+        instruments = (
+            supabase.table("validation_instruments")
+             .select("*")
+             .in_("id", instrument_ids)
+             .eq("user_id", user_id)
+             .execute()
+             .data
+             or []
+        )
+
+    # 3) Fallback: default instruments (WF-1 / demo-friendly)
     else:
         instruments = (
             supabase.table("validation_instruments")
-            .select("*")
-            .eq("user_id", user_id)
-            .eq("is_default", True)
-            .execute()
-            .data
-            or []
+             .select("*")
+             .eq("user_id", user_id)
+             .eq("is_default", True)
+             .execute()
+             .data
+             or []
         )
-    print(
-        "[DEBUG][ValidationInstrumentSetup] instruments fetched:",
-        len(instruments),
-    )
+    
+        print(
+           "[DEBUG][ValidationInstrumentSetup] instruments fetched:",
+           len(instruments),
+        )
 
     bench_setup = {
         "workflow_id": workflow_id,
         "user_id": user_id,
+        "bench_id": bench_id,
         "timestamp": datetime.datetime.utcnow().isoformat(),
         "instruments": [
             {
