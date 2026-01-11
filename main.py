@@ -695,8 +695,17 @@ def execute_workflow_background(
         #      append_log_workflow(workflow_id, "🧩 Added System Workflow Agent as final validation step.")
 
         # Merge with dynamic/custom agents
+
+
+
         agent_map = dict(loop_map)
         agent_map.update(AGENT_REGISTRY)
+
+        def _norm_label(s: str) -> str:
+          return (s or "").strip()
+
+        agent_map_norm = { _norm_label(k): v for k, v in agent_map.items() }
+
                 # 🔗 Shared state across all agents in this workflow
         shared_state = {
             "workflow_id": workflow_id,
@@ -728,7 +737,7 @@ def execute_workflow_background(
         time.sleep(0.2)
 
         nodes = data.get("nodes", []) or []
-        missing = [n["label"] for n in nodes if n["label"] not in agent_map]
+        missing = [n["label"] for n in nodes if n["label"] not in agent_map_norm]
         if missing:
           append_log_workflow(workflow_id, f"⚠️ Missing agent implementations: {', '.join(missing)}")
         for node in nodes:
@@ -781,7 +790,7 @@ def execute_workflow_background(
                 return  # external runner will pick up
 
             # Resolve function
-            fn = agent_map.get(step)
+            fn = agent_map_norm.get(step)
             if not fn:
                 msg = f"❌ No agent implementation found for: {step}"
                 append_log_workflow(workflow_id, msg)
