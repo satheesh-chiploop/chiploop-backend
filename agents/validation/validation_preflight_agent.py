@@ -198,7 +198,7 @@ def run_agent(state: dict) -> dict:
         return state
 
     agent_name = "Validation Preflight Agent"
-    mode = stub
+    mode = "stub"
 
     report: Dict[str, Any] = {
         "workflow_id": workflow_id,
