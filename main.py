@@ -730,7 +730,11 @@ def execute_workflow_background(
         # ✅ ADD THIS
         instrument_ids = (data or {}).get("instrument_ids")
         if instrument_ids:
-            shared_state["instrument_ids"] = instrument_ids         
+            shared_state["instrument_ids"] = instrument_ids  
+        bench_id = (data or {}).get("bench_id")
+        if bench_id:
+            shared_state["bench_id"] = bench_id
+
 
         append_log_workflow(workflow_id, "⚡ Executing workflow agents ...")
         append_log_run(run_id, "⚡ Executing workflow agents ...")
