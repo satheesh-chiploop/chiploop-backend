@@ -515,8 +515,8 @@ async def run_workflow(
     file: UploadFile = File(None),
     spec_text: str = Form(None),
     instrument_ids: Optional[str] = Form(None),
-    bench_id: Optional[str] = Form(None),
     scope_json: Optional[str] = Form(None),
+    bench_id: Optional[str] = Form(None),
 ):
     """
     Starts a workflow run:
@@ -532,6 +532,10 @@ async def run_workflow(
         now = datetime.utcnow().isoformat()
 
         data = json.loads(workflow)
+
+        # ✅ Guard: if frontend accidentally sends "null" or non-dict, fail cleanly
+        if not isinstance(data, dict):
+            raise HTTPException(status_code=400, detail="Invalid workflow payload (expected JSON object).")
 
         # ✅ attach instrument IDs into workflow payload so agents can read it
 
