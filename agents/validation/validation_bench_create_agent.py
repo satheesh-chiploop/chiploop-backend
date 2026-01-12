@@ -91,8 +91,19 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
         "bench_name": bench_name,
         "location": bench_location,
         "instrument_count": len(mappings),
+        "instrument_ids": instrument_ids,
         "created_at": datetime.utcnow().isoformat(),
     }
+
+    md = "\n".join([
+        "# Bench Created",
+        "",
+        f"- Bench name: **{bench_name}**",
+        f"- Bench id: `{bench_id}`",
+        f"- Location: {bench_location or '(empty)'}",
+        f"- Instruments: {len(mappings)} selected",
+        "",
+    ])
 
     agent_name = "Validation Bench Create Agent"
 
@@ -109,12 +120,12 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
         agent_name=agent_name,
         subdir="validation",
         filename="bench_create_summary.md",
-        content=md_summary_string,
+        content=md,
     )
-
 
     state["bench_id"] = bench_id
     state["bench_create_report"] = report
-
-
+    state["status"] = f"✅ Bench created: {bench_name} ({bench_id})"
     return state
+
+    
