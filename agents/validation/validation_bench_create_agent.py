@@ -5,6 +5,7 @@ from typing import Dict, Any
 from supabase import create_client
 import os
 import json
+from utils.artifact_utils import save_text_artifact_and_record
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
@@ -93,7 +94,27 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
         "created_at": datetime.utcnow().isoformat(),
     }
 
+    agent_name = "Validation Bench Create Agent"
+
+    save_text_artifact_and_record(
+        workflow_id=workflow_id,
+        agent_name=agent_name,
+        subdir="validation",
+        filename="bench_create_report.json",
+        content=json.dumps(report, indent=2),
+    )
+
+    save_text_artifact_and_record(
+        workflow_id=workflow_id,
+        agent_name=agent_name,
+        subdir="validation",
+        filename="bench_create_summary.md",
+        content=md_summary_string,
+    )
+
+
     state["bench_id"] = bench_id
     state["bench_create_report"] = report
+
 
     return state
