@@ -523,7 +523,10 @@ async def run_workflow(
     instrument_ids: Optional[str] = Form(None),
     scope_json: Optional[str] = Form(None),
     bench_id: Optional[str] = Form(None),
+    bench_name: Optional[str] = Form(None),
+    bench_location: Optional[str] = Form(None),
 ):
+
     """
     Starts a workflow run:
       - Reads loop_type from payload
@@ -561,6 +564,13 @@ async def run_workflow(
 
         if bench_id:
            data["bench_id"] = bench_id
+
+        if bench_name:
+           data["bench_name"] = bench_name
+
+        if bench_location:
+           data["bench_location"] = bench_location
+
 
 
         
@@ -737,6 +747,15 @@ def execute_workflow_background(
         bench_id = (data or {}).get("bench_id")
         if bench_id:
             shared_state["bench_id"] = bench_id
+
+        bench_name = (data or {}).get("bench_name")
+        if bench_name:
+            shared_state["bench_name"] = bench_name
+
+        bench_location = (data or {}).get("bench_location")
+        if bench_location:
+            shared_state["bench_location"] = bench_location
+
 
 
         append_log_workflow(workflow_id, "⚡ Executing workflow agents ...")
