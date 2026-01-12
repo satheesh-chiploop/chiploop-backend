@@ -11,12 +11,7 @@ SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 
 supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 
-
-def run_agent(
-    workflow_id: str,
-    user_id: str,
-    state: Dict[str, Any],
-) -> Dict[str, Any]:
+def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     """
     Creates a validation bench and maps instruments to it.
     Required in state:
@@ -25,7 +20,8 @@ def run_agent(
     Optional:
       - bench_location
     """
-
+    workflow_id = state.get("workflow_id")
+    user_id = state.get("user_id")
     bench_name = state.get("bench_name")
     bench_location = state.get("bench_location", "")
     instrument_ids = state.get("instrument_ids", [])
