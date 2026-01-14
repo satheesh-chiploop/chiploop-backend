@@ -99,7 +99,7 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
         "# Bench Created",
         "",
         f"- Bench name: **{bench_name}**",
-        f"- Bench id: `{bench_id}`",
+        f"- Bench id: {bench_id}",
         f"- Location: {bench_location or '(empty)'}",
         f"- Instruments: {len(mappings)} selected",
         "",

@@ -318,6 +318,7 @@ from agents.validation.validation_connectivity_intent_agent import run_agent as 
 from agents.validation.validation_wiring_instructions_agent import run_agent as validation_wiring_instructions_agent
 from agents.validation.validation_preflight_agent import run_agent as validation_preflight_agent
 from agents.validation.validation_bench_create_agent import run_agent as validation_bench_create_agent
+from agents.validation.validation_test_plan_load_agent  import run_agent as validation_test_plan_load_agent
 
 #  VALIDATION FUNCTIONS
 # ==========================================================
@@ -333,6 +334,7 @@ VALIDATION_AGENT_FUNCTIONS: Dict[str, Any] = {
     "Validation Execution Orchestrator Agent": validation_execution_orchestrator_agent,
     "Validation Bench Create Agent": validation_bench_create_agent,
     "Validation Preflight Agent": validation_preflight_agent,
+    "Validation Test Plan Load Agent": validation_test_plan_load_agent,
     # "Measurement Logger Agent": validation_logger_agent,
     "Validation Analytics Agent": validation_analytics_agent,
     # "Validation Debug Agent": validation_debug_agent,
@@ -389,6 +391,7 @@ SYSTEM_AGENT_FUNCTIONS: Dict[str,Any] = {
     "Validation Preflight Agent": validation_preflight_agent,
     "Validation Analytics Agent": validation_analytics_agent,
     "Validation Bench Create Agent": validation_bench_create_agent,
+    "Validation Test Plan Load Agent": validation_test_plan_load_agent,
     "System Workflow Agent": system_workflow_agent,  
     "System CoSim Integration Agent": system_cosim_integration_agent,
     "System ISS Bridge Agent": system_iss_bridge_agent,  

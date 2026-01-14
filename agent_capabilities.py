@@ -426,6 +426,14 @@ AGENT_CAPABILITIES = {
         "description": "Creates a new validation bench and maps selected instruments to it. Outputs a creation report and summary.",
         "tags": ["validation", "bench", "create", "instruments", "mapping"],
     }
+
+    "Validation Test Plan Load Agent": {
+        "domain": "validation",
+        "inputs": ["workflow_id", "user_id", "test_plan_id"],
+        "outputs": ["validation/test_plan_loaded.json", "validation/test_plan_loaded_summary.md"],
+        "description": "Loads a previously saved validation test plan from the database using test_plan_id and makes it available as state['test_plan'] for execution workflows (no datasheet/spec needed).",
+        "tags": ["validation", "test-plan", "load", "db", "reuse", "execution"],
+    },
     
 }
 
