@@ -425,7 +425,7 @@ AGENT_CAPABILITIES = {
         "outputs": ["validation/bench_create_report.json", "validation/bench_create_summary.md"],
         "description": "Creates a new validation bench and maps selected instruments to it. Outputs a creation report and summary.",
         "tags": ["validation", "bench", "create", "instruments", "mapping"],
-    }
+    },
 
     "Validation Test Plan Load Agent": {
         "domain": "validation",
