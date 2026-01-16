@@ -124,7 +124,8 @@ Rules:
     elif not user_id:
         save_error = "Missing user_id in state (required to save test plan)."
     else:
-        plan_name = _derive_plan_name(plan, goal)
+        desired_name = (state.get("test_plan_name") or "").strip()
+        plan_name = desired_name or _derive_plan_name(plan, goal)
         row = {
             "user_id": user_id,
             "name": plan_name,
@@ -137,15 +138,13 @@ Rules:
         }
 
         try:
-            inserted = (
-                supabase.table("validation_test_plans")
-                .insert(row)
-                .select("id")
-                .execute()
-                .data
-            )
+
+            resp = supabase.table("validation_test_plans").insert(row).execute()
+            inserted = resp.data or []
+
             if inserted and isinstance(inserted, list) and inserted[0].get("id"):
                 test_plan_id = inserted[0]["id"]
+            
         except Exception as e:
             save_error = f"{type(e).__name__}: {e}"
 

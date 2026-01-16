@@ -528,6 +528,7 @@ async def run_workflow(
     bench_id: Optional[str] = Form(None),
     bench_name: Optional[str] = Form(None),
     bench_location: Optional[str] = Form(None),
+    test_plan_name: Optional[str] = Form(None),
 ):
 
     """
@@ -573,6 +574,9 @@ async def run_workflow(
 
         if bench_location:
            data["bench_location"] = bench_location
+
+        if test_plan_name:
+           data["test_plan_name"] = test_plan_name
 
 
 
@@ -759,6 +763,9 @@ def execute_workflow_background(
         if bench_location:
             shared_state["bench_location"] = bench_location
 
+        test_plan_name = (data or {}).get("test_plan_name")
+        if test_plan_name:
+            shared_state["test_plan_name"] = test_plan_name
 
 
         append_log_workflow(workflow_id, "⚡ Executing workflow agents ...")
