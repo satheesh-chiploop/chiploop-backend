@@ -529,6 +529,7 @@ async def run_workflow(
     bench_name: Optional[str] = Form(None),
     bench_location: Optional[str] = Form(None),
     test_plan_name: Optional[str] = Form(None),
+    preview_test_plan_json: Optional[str] = Form(None),
 ):
 
     """
@@ -652,6 +653,7 @@ async def run_workflow(
             upload_path,
             artifact_dir,
             scope_json,
+            preview_test_plan_json,
         )
 
         return JSONResponse({"workflow_id": workflow_id, "run_id": run_id, "loop_type": loop_type, "status": "queued"})
@@ -674,6 +676,7 @@ def execute_workflow_background(
     upload_path: Optional[str],
     artifact_dir: str,
     scope_json=None,
+    preview_test_plan_json: Optional[str] = None,
 ):
     """
     Executes the workflow with loop-aware agent resolution and dual logging (workflows + runs).
@@ -767,6 +770,15 @@ def execute_workflow_background(
         if test_plan_name:
             shared_state["test_plan_name"] = test_plan_name
 
+        # ✅ Preview plan override (WF1): if provided, treat as authoritative test_plan
+        if preview_test_plan_json:
+            try:
+                shared_state["test_plan"] = json.loads(preview_test_plan_json)
+                shared_state["test_plan_source"] = "preview_override"
+            except Exception:
+                # if preview JSON is invalid, ignore and fall back to generating
+                pass
+
 
         append_log_workflow(workflow_id, "⚡ Executing workflow agents ...")
         append_log_run(run_id, "⚡ Executing workflow agents ...")
@@ -780,6 +792,12 @@ def execute_workflow_background(
             label = (node or {}).get("label", "")
             step = label or "agent"
             msg = f"⚙️ Running {step} ..."
+
+             # ✅ WF1: if preview provided, do NOT regenerate test plan (prevents renaming mismatch)
+            if step == "Validation Test Plan Agent" and isinstance(shared_state.get("test_plan"), dict) and shared_state["test_plan"].get("tests"):
+                append_log_workflow(workflow_id, "⏭️ Skipped Validation Test Plan Agent (using preview_test_plan_json override).")
+                append_log_run(run_id, "⏭️ Skipped Validation Test Plan Agent (using preview_test_plan_json override).")
+                continue
             # ------------------------------------------------------
             # 🔍 DEBUG: PRINT LOOP TYPE + FOUND NODE
             # ------------------------------------------------------
