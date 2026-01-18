@@ -97,20 +97,25 @@ def _extract_signal_value(test_result: Dict[str, Any], signal: str) -> Optional[
 
 
 def _detect_stub_mode(results: Dict[str, Any]) -> bool:
-    """
-    Heuristic: treat as stub if results advertise mode=stub anywhere commonly used.
-    """
     if not isinstance(results, dict):
         return False
+
+    # ✅ NEW: results.json in your pipeline uses "executor": "stub"
+    ex = results.get("executor")
+    if isinstance(ex, str) and ex.strip().lower() == "stub":
+        return True
+
     for key in ["mode", "execution_mode", "run_mode"]:
         v = results.get(key)
         if isinstance(v, str) and v.strip().lower() == "stub":
             return True
+
     meta = results.get("meta") or results.get("metadata") or {}
     if isinstance(meta, dict):
         v = meta.get("mode") or meta.get("execution_mode") or meta.get("run_mode")
         if isinstance(v, str) and v.strip().lower() == "stub":
             return True
+
     return False
 
 
