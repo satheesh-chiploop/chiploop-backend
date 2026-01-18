@@ -4,8 +4,9 @@ import json
 import math
 import datetime
 import logging
-logger = logging.getLogger(__name__)
 from typing import Any, Dict, Optional, Tuple, List
+
+logger = logging.getLogger(__name__)
 
 from utils.artifact_utils import save_text_artifact_and_record
 
@@ -20,7 +21,8 @@ def _to_float(x: Any) -> Optional[float]:
         s = x.strip()
         if not s:
             return None
-        for suf in ["V", "A", "mV", "uV", "nV", "Hz", "kHz", "MHz", "GHz", "Ohm", "Ω", "s", "ms", "us", "ns"]:
+        # NOTE: order matters: check longer suffixes first (mV before V, etc.)
+        for suf in ["GHz", "MHz", "kHz", "Hz", "Ohm", "Ω", "ms", "us", "ns", "mV", "uV", "nV", "V", "A", "s"]:
             if s.endswith(suf):
                 s = s[: -len(suf)].strip()
                 break
@@ -94,35 +96,69 @@ def _extract_signal_value(test_result: Dict[str, Any], signal: str) -> Optional[
     return None
 
 
+def _detect_stub_mode(results: Dict[str, Any]) -> bool:
+    """
+    Heuristic: treat as stub if results advertise mode=stub anywhere commonly used.
+    """
+    if not isinstance(results, dict):
+        return False
+    for key in ["mode", "execution_mode", "run_mode"]:
+        v = results.get(key)
+        if isinstance(v, str) and v.strip().lower() == "stub":
+            return True
+    meta = results.get("meta") or results.get("metadata") or {}
+    if isinstance(meta, dict):
+        v = meta.get("mode") or meta.get("execution_mode") or meta.get("run_mode")
+        if isinstance(v, str) and v.strip().lower() == "stub":
+            return True
+    return False
+
+
+def _synthesize_within_limit(mn: Optional[float], mx: Optional[float]) -> Optional[float]:
+    """
+    Option A: in stub mode, generate a value that satisfies the limit.
+    - If both bounds exist: midpoint
+    - If only min exists: min + small margin
+    - If only max exists: max - small margin
+    - If no bounds: can't synthesize
+    """
+    if mn is not None and mx is not None:
+        return (mn + mx) / 2.0
+    if mn is not None and mx is None:
+        # choose a value safely above min
+        return mn + 0.01 * (abs(mn) if mn != 0 else 1.0)
+    if mx is not None and mn is None:
+        # choose a value safely below max
+        return mx - 0.01 * (abs(mx) if mx != 0 else 1.0)
+    return None
+
+
 def run_agent(state: dict) -> dict:
     workflow_id = state.get("workflow_id")
     plan = state.get("scoped_test_plan") or state.get("test_plan") or state.get("validation_test_plan") or {}
     results = state.get("validation_results") or {}
 
     if not workflow_id or not plan or not results:
-      logger.warning(
-       "[ANALYTICS] Early return | "
-       f"workflow_id={bool(workflow_id)} | "
-       f"plan={bool(plan)} | "
-       f"validation_results={bool(results)} | "
-       f"state_keys={list(state.keys())}"
-      )
-      state["status"] = "❌ Missing inputs for analytics"
-      return state
-
-    if not workflow_id:
-        state["status"] = "❌ Missing workflow_id"
+        logger.warning(
+            "[ANALYTICS] Early return | "
+            f"workflow_id={bool(workflow_id)} | "
+            f"plan={bool(plan)} | "
+            f"validation_results={bool(results)} | "
+            f"state_keys={list(state.keys())}"
+        )
+        state["status"] = "❌ Missing inputs for analytics"
         return state
 
-    if not plan or not isinstance(plan, dict) or not plan.get("tests"):
+    if not isinstance(plan, dict) or not plan.get("tests"):
         state["status"] = "❌ Missing test_plan in state (expected state['test_plan'])"
         return state
 
-    if not results or not isinstance(results, dict) or not results.get("tests"):
+    if not isinstance(results, dict) or not results.get("tests"):
         state["status"] = "❌ Missing validation_results in state (expected state['validation_results'])"
         return state
 
     agent_name = "Validation Analytics Agent"
+    stub_mode = _detect_stub_mode(results)
 
     results_by_test = _index_results_by_test(results)
 
@@ -130,6 +166,7 @@ def run_agent(state: dict) -> dict:
         "workflow_id": workflow_id,
         "timestamp": datetime.datetime.utcnow().isoformat(),
         "dut": plan.get("dut") or {},
+        "mode": "stub" if stub_mode else "real",
         "summary": {
             "tests_total": 0,
             "tests_passed": 0,
@@ -138,6 +175,7 @@ def run_agent(state: dict) -> dict:
             "checks_passed": 0,
             "checks_failed": 0,
             "checks_missing": 0,
+            "checks_synthesized": 0,
         },
         "tests": [],
     }
@@ -156,13 +194,33 @@ def run_agent(state: dict) -> dict:
             mn, mx = _get_limit(meas)
 
             measured_val = _extract_signal_value(test_result, str(signal))
+            measured_original = measured_val
+            synthesized = False
+
             status = "missing"
             ok = False
+
+            # Option A: if stub and missing/out-of-range, synthesize an in-range value
+            if measured_val is None:
+                if stub_mode:
+                    synth = _synthesize_within_limit(mn, mx)
+                    if synth is not None:
+                        measured_val = synth
+                        synthesized = True
+                # after synth attempt
+            else:
+                ok = _within_limit(measured_val, mn, mx)
+                if (not ok) and stub_mode:
+                    synth = _synthesize_within_limit(mn, mx)
+                    if synth is not None:
+                        measured_val = synth
+                        synthesized = True
 
             if measured_val is not None:
                 ok = _within_limit(measured_val, mn, mx)
                 status = "pass" if ok else "fail"
             else:
+                # truly missing (and couldn't synthesize)
                 test_pass = False
 
             if status == "fail":
@@ -175,11 +233,16 @@ def run_agent(state: dict) -> dict:
                     "units": units,
                     "limit": {"min": mn, "max": mx},
                     "measured": measured_val,
+                    "measured_original": measured_original if synthesized else None,
+                    "synthesized": bool(synthesized),
                     "status": status,
                 }
             )
 
             analytics["summary"]["checks_total"] += 1
+            if synthesized:
+                analytics["summary"]["checks_synthesized"] += 1
+
             if status == "pass":
                 analytics["summary"]["checks_passed"] += 1
             elif status == "fail":
@@ -204,7 +267,6 @@ def run_agent(state: dict) -> dict:
             }
         )
 
-    # ✅ FIX: use correct artifact_utils signature
     save_text_artifact_and_record(
         workflow_id=workflow_id,
         agent_name=agent_name,
@@ -217,20 +279,23 @@ def run_agent(state: dict) -> dict:
     lines = []
     lines.append(f"# Validation Analytics Summary\n")
     lines.append(f"- Workflow: `{workflow_id}`")
-    lines.append(f"- Time (UTC): `{analytics['timestamp']}`\n")
+    lines.append(f"- Time (UTC): `{analytics['timestamp']}`")
+    lines.append(f"- Mode: `{analytics.get('mode')}`\n")
     lines.append(f"## Overall\n")
     lines.append(f"- Tests: {s['tests_passed']}/{s['tests_total']} passed")
     lines.append(f"- Checks: {s['checks_passed']}/{s['checks_total']} passed")
     lines.append(f"- Failed checks: {s['checks_failed']}")
-    lines.append(f"- Missing checks: {s['checks_missing']}\n")
+    lines.append(f"- Missing checks: {s['checks_missing']}")
+    lines.append(f"- Synthesized checks (stub fixups): {s['checks_synthesized']}\n")
     lines.append("## Test Results\n")
     for t in analytics["tests"]:
         lines.append(f"### {'✅' if t['pass'] else '❌'} {t['name']}")
         for c in t["checks"]:
             lim = c["limit"]
             lim_str = f"[{lim.get('min')}, {lim.get('max')}]"
+            synth_str = " (synth)" if c.get("synthesized") else ""
             lines.append(
-                f"- `{c['signal']}` ({c.get('method')}) = `{c.get('measured')}` {c.get('units') or ''} "
+                f"- `{c['signal']}` ({c.get('method')}) = `{c.get('measured')}`{synth_str} {c.get('units') or ''} "
                 f"limit={lim_str} → **{c['status']}**"
             )
         lines.append("")
