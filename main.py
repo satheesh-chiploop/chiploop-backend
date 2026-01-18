@@ -2756,5 +2756,27 @@ def create_validation_bench(request: Request, payload: BenchCreateIn):
     return {"ok": True, "bench_id": bench_id}
 
 
+@app.get("/validation/test_plans")
+async def list_validation_test_plans(user_id: str):
+    # returns [{id, name, description, created_at}] for dropdown
+    if not supabase:
+        return JSONResponse(status_code=500, content={"status": "error", "message": "Supabase not configured"})
+
+    try:
+        resp = (
+            supabase.table("validation_test_plans")
+            .select("id,name,description,created_at")
+            .eq("user_id", user_id)
+            .eq("is_active", True)
+            .order("created_at", desc=True)
+            .execute()
+        )
+        return {"status": "ok", "plans": resp.data or []}
+    except Exception as e:
+        logger.exception("list_validation_test_plans failed")
+        return JSONResponse(status_code=500, content={"status": "error", "message": f"{type(e).__name__}: {e}"})
+
+
+
 
 
