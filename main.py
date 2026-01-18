@@ -787,7 +787,7 @@ def execute_workflow_background(
         # ✅ If preview override present, save it to validation_test_plans (without regenerating)
         if isinstance(shared_state.get("test_plan"), dict) and shared_state["test_plan"].get("tests"):
             try:
-                from validation_test_plan_agent import save_plan_to_supabase
+                from agents.validation.validation_test_plan_agent import save_plan_to_supabase
                 save_plan_to_supabase(shared_state, shared_state["test_plan"])
             except Exception as e:
                 append_log_run(run_id, f"⚠️ Failed to save preview test plan to table: {type(e).__name__}: {e}")
@@ -2671,6 +2671,7 @@ async def validation_test_plan_preview(request: Request):
         "workflow_id": workflow_id,
         "datasheet_text": datasheet_text,
         "goal": goal,
+        "preview_only": True,
     }
     out_state = validation_test_plan_agent(state)
 

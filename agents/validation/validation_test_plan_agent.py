@@ -42,12 +42,18 @@ def _derive_plan_name(plan: dict, goal: str) -> str:
     return f"Validation Plan {datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC"
 
 def save_plan_to_supabase(state: dict, plan: dict) -> dict:
+    preview_only = bool(state.get("preview_only"))  # ✅ FIX: define locally
+
     user_id = state.get("user_id")
     workflow_id = state.get("workflow_id")
     goal = (state.get("goal") or "Create a validation test plan").strip()
 
     test_plan_id = None
     save_error = None
+
+    # ✅ In preview mode, do NOT write to Supabase or artifacts
+    if preview_only:
+        return state
 
     if not supabase:
         save_error = "Supabase client not configured (missing SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY)."
@@ -93,7 +99,9 @@ def save_plan_to_supabase(state: dict, plan: dict) -> dict:
         filename="test_plan_save_summary.json",
         content=json.dumps(summary, indent=2),
     )
+
     return state
+
 
 
 
@@ -107,6 +115,7 @@ def run_agent(state: dict) -> dict:
     user_id = state.get("user_id")
     datasheet_text = (state.get("datasheet_text") or state.get("spec") or "").strip()
     goal = (state.get("goal") or "Create a validation test plan").strip()
+    preview_only = bool(state.get("preview_only"))
 
     if not workflow_id or not datasheet_text:
         state["status"] = "❌ Missing workflow_id or datasheet_text"
@@ -161,14 +170,17 @@ Rules:
 
     plan = _safe_json_load(out)
 
+    state["test_plan"] = plan 
+
     # Save artifact (existing behavior)
-    save_text_artifact_and_record(
+    if not preview_only:
+      save_text_artifact_and_record(
         workflow_id=workflow_id,
         agent_name="Validation Test Plan Agent",
         subdir="validation",
         filename="test_plan.json",
         content=json.dumps(plan, indent=2),
-    )
+      )
 
     state = save_plan_to_supabase(state, plan)
 
