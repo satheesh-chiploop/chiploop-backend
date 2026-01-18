@@ -117,11 +117,12 @@ def run_agent(state: dict) -> dict:
         state["status"] = "❌ Missing workflow_id or test_sequence"
         logger.warning(
           "[EXECUTION ORCH] Early return | "
-          f"has_test_sequence={bool(test_sequence)} | "
+          f"has_test_sequence={bool(seq)} | "
           f"has_workflow_id={bool(workflow_id)} | "
           f"state_keys={list(state.keys())}"
         )
         return state
+
 
     agent_name = "Validation Execution Orchestrator Agent"
 

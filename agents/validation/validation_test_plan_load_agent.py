@@ -43,96 +43,125 @@ def _require_str(state: Dict[str, Any], key: str) -> Optional[str]:
     return None
 
 
-def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
-    agent_name = "Validation Test Plan Load Agent"
+def run_agent(state: dict) -> dict:
+    """
+    Validation Test Plan Load Agent
 
-    workflow_id = _require_str(state, "workflow_id")
-    user_id = _require_str(state, "user_id")
-    test_plan_id = _require_str(state, "test_plan_id")
+    Supports loading a test plan by:
+      - state["test_plan_id"]  (preferred, exact)
+      - state["test_plan_name"] (UX-friendly, resolved per-user; errors on duplicates)
 
-    if not workflow_id:
-        state["status"] = "❌ Missing workflow_id"
+    Outputs:
+      - state["test_plan"]      : dict (plan_json)
+      - state["test_plan_id"]   : str (resolved id if name used)
+      - state["test_plan_meta"] : dict (id, name, description, etc.)
+      - state["status"]         : "✅ ..." or "❌ ..."
+    """
+    logger = state.get("logger")
+    if logger is None:
+        import logging
+        logger = logging.getLogger(__name__)
+
+    def _s(v):
+        return (v or "").strip() if isinstance(v, str) else v
+
+    user_id = _s(state.get("user_id"))
+    workflow_id = _s(state.get("workflow_id"))
+    test_plan_id = _s(state.get("test_plan_id"))
+    test_plan_name = _s(state.get("test_plan_name"))
+
+    if not supabase:
+        state["status"] = "❌ Supabase client not configured"
         return state
+
     if not user_id:
         state["status"] = "❌ Missing user_id"
         return state
-    if not test_plan_id:
-        state["status"] = "❌ Missing test_plan_id"
+
+    if not test_plan_id and not test_plan_name:
+        state["status"] = "❌ Missing test_plan_id or test_plan_name"
         return state
 
-    # Fetch plan row
-    rows = (
-        supabase.table("validation_test_plans")
-        .select("id,user_id,name,description,plan_json,tags,is_active,created_at,updated_at,source_workflow_id,source_artifact_path")
-        .eq("id", test_plan_id)
-        .eq("user_id", user_id)
-        .limit(1)
-        .execute()
-        .data
-    )
+    try:
+        base_q = (
+            supabase.table("validation_test_plans")
+            .select(
+                "id,user_id,name,description,plan_json,tags,is_active,created_at,updated_at,"
+                "source_workflow_id,source_artifact_path"
+            )
+            .eq("user_id", user_id)
+            .eq("is_active", True)
+        )
 
-    if not rows:
-        state["status"] = f"❌ Test plan not found for user: {test_plan_id}"
+        # ---- Path A: load by ID (exact) ----
+        if test_plan_id:
+            rows = base_q.eq("id", test_plan_id).limit(1).execute().data or []
+            if not rows:
+                state["status"] = f"❌ Test plan not found for user by id: {test_plan_id}"
+                return state
+            row = rows[0]
+
+        # ---- Path B: load by NAME (UX friendly) ----
+        else:
+            rows = (
+                base_q.eq("name", test_plan_name)
+                .order("created_at", desc=True)
+                .execute()
+                .data
+                or []
+            )
+            if not rows:
+                state["status"] = f"❌ Test plan not found for user by name: {test_plan_name}"
+                return state
+
+            # If you prefer "pick latest", you can delete this duplicate check and use rows[0].
+            if len(rows) > 1:
+                example_ids = [r.get("id") for r in rows[:5]]
+                state["status"] = (
+                    f"❌ Multiple active test plans found with name '{test_plan_name}'. "
+                    f"Use test_plan_id instead. Example IDs: {example_ids}"
+                )
+                return state
+
+            row = rows[0]
+            test_plan_id = row.get("id")
+            state["test_plan_id"] = test_plan_id  # resolved id
+
+        plan = row.get("plan_json") or {}
+        if not isinstance(plan, dict) or not plan:
+            state["status"] = "❌ Loaded test plan is empty or invalid plan_json"
+            return state
+
+        # Populate state outputs
+        state["test_plan"] = plan
+        state["test_plan_meta"] = {
+            "id": row.get("id"),
+            "name": row.get("name"),
+            "description": row.get("description"),
+            "tags": row.get("tags"),
+            "source_workflow_id": row.get("source_workflow_id"),
+            "source_artifact_path": row.get("source_artifact_path"),
+            "created_at": row.get("created_at"),
+            "updated_at": row.get("updated_at"),
+        }
+
+        # Optional: lightweight artifact for traceability (only if workflow_id exists)
+        if workflow_id:
+            try:
+                save_text_artifact_and_record(
+                    workflow_id=workflow_id,
+                    agent_name="Validation Test Plan Load Agent",
+                    subdir="validation",
+                    filename="test_plan_loaded_meta.json",
+                    content=json.dumps(state["test_plan_meta"], indent=2),
+                )
+            except Exception as e:
+                logger.warning(f"[TEST PLAN LOAD] Could not write meta artifact: {type(e).__name__}: {e}")
+
+        state["status"] = "✅ Validation Test Plan loaded"
         return state
 
-    row = rows[0]
-    if not row.get("is_active", True):
-        state["status"] = f"❌ Test plan is inactive: {test_plan_id}"
+    except Exception as e:
+        logger.exception("Validation Test Plan Load Agent failed")
+        state["status"] = f"❌ Validation Test Plan Load Agent failed: {type(e).__name__}: {e}"
         return state
-
-    plan = row.get("plan_json") or {}
-    if not isinstance(plan, dict) or not plan:
-        state["status"] = f"❌ Test plan JSON is empty/invalid: {test_plan_id}"
-        return state
-
-    # Update state for downstream agents
-    state["test_plan"] = plan
-    state["test_plan_meta"] = {
-        "id": row.get("id"),
-        "name": row.get("name"),
-        "description": row.get("description"),
-        "tags": row.get("tags") or [],
-        "created_at": row.get("created_at"),
-        "updated_at": row.get("updated_at"),
-        "source_workflow_id": row.get("source_workflow_id"),
-        "source_artifact_path": row.get("source_artifact_path"),
-    }
-
-    # Artifacts
-    save_text_artifact_and_record(
-        workflow_id=workflow_id,
-        agent_name=agent_name,
-        subdir="validation",
-        filename="test_plan_loaded.json",
-        content=json.dumps(
-            {
-                "test_plan_id": test_plan_id,
-                "meta": state["test_plan_meta"],
-                "test_plan": plan,
-            },
-            indent=2,
-        ),
-    )
-
-    md_lines = [
-        "# Test Plan Loaded",
-        "",
-        f"- Test plan id: `{test_plan_id}`",
-        f"- Name: **{row.get('name') or '(unnamed)'}**",
-        f"- Active: `{row.get('is_active', True)}`",
-        f"- Tags: {', '.join(row.get('tags') or []) or '(none)'}",
-        f"- Created: `{row.get('created_at')}`",
-        "",
-        "This plan is now available in `state['test_plan']` for downstream execution.",
-        "",
-    ]
-    save_text_artifact_and_record(
-        workflow_id=workflow_id,
-        agent_name=agent_name,
-        subdir="validation",
-        filename="test_plan_loaded_summary.md",
-        content="\n".join(md_lines),
-    )
-
-    state["status"] = f"✅ Loaded test plan: {row.get('name') or test_plan_id}"
-    return state
