@@ -41,6 +41,61 @@ def _derive_plan_name(plan: dict, goal: str) -> str:
         return goal.strip()[:120]
     return f"Validation Plan {datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC"
 
+def save_plan_to_supabase(state: dict, plan: dict) -> dict:
+    user_id = state.get("user_id")
+    workflow_id = state.get("workflow_id")
+    goal = (state.get("goal") or "Create a validation test plan").strip()
+
+    test_plan_id = None
+    save_error = None
+
+    if not supabase:
+        save_error = "Supabase client not configured (missing SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY)."
+    elif not user_id:
+        save_error = "Missing user_id in state (required to save test plan)."
+    else:
+        desired_name = (state.get("test_plan_name") or "").strip()
+        plan_name = desired_name or _derive_plan_name(plan, goal)
+        row = {
+            "user_id": user_id,
+            "name": plan_name,
+            "description": (plan.get("dut", {}) or {}).get("notes") if isinstance(plan.get("dut"), dict) else None,
+            "plan_json": plan,
+            "source_workflow_id": workflow_id,
+            "source_artifact_path": "validation/test_plan.json",
+            "tags": [],
+            "is_active": True,
+        }
+        try:
+            resp = supabase.table("validation_test_plans").insert(row).execute()
+            inserted = resp.data or []
+            if inserted and isinstance(inserted, list) and inserted[0].get("id"):
+                test_plan_id = inserted[0]["id"]
+        except Exception as e:
+            save_error = f"{type(e).__name__}: {e}"
+
+    if test_plan_id:
+        state["test_plan_id"] = test_plan_id
+    if save_error:
+        state["test_plan_save_error"] = save_error
+
+    summary = {
+        "saved_to_table": bool(test_plan_id),
+        "test_plan_id": test_plan_id,
+        "user_id": user_id,
+        "source_workflow_id": workflow_id,
+        "save_error": save_error,
+    }
+    save_text_artifact_and_record(
+        workflow_id=workflow_id,
+        agent_name="Validation Test Plan Agent",
+        subdir="validation",
+        filename="test_plan_save_summary.json",
+        content=json.dumps(summary, indent=2),
+    )
+    return state
+
+
 
 def run_agent(state: dict) -> dict:
     """
@@ -115,64 +170,6 @@ Rules:
         content=json.dumps(plan, indent=2),
     )
 
-    # ✅ NEW: Save to Supabase for later retrieval by test_plan_id
-    test_plan_id = None
-    save_error = None
-
-    if not supabase:
-        save_error = "Supabase client not configured (missing SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY)."
-    elif not user_id:
-        save_error = "Missing user_id in state (required to save test plan)."
-    else:
-        desired_name = (state.get("test_plan_name") or "").strip()
-        plan_name = desired_name or _derive_plan_name(plan, goal)
-        row = {
-            "user_id": user_id,
-            "name": plan_name,
-            "description": (plan.get("dut", {}) or {}).get("notes") if isinstance(plan.get("dut"), dict) else None,
-            "plan_json": plan,
-            "source_workflow_id": workflow_id,
-            "source_artifact_path": "validation/test_plan.json",
-            "tags": [],  # you can fill from aggregation if desired
-            "is_active": True,
-        }
-
-        try:
-
-            resp = supabase.table("validation_test_plans").insert(row).execute()
-            inserted = resp.data or []
-
-            if inserted and isinstance(inserted, list) and inserted[0].get("id"):
-                test_plan_id = inserted[0]["id"]
-            
-        except Exception as e:
-            save_error = f"{type(e).__name__}: {e}"
-
-    # Populate state
-    state["test_plan"] = plan
-    if test_plan_id:
-        state["test_plan_id"] = test_plan_id
-        state["status"] = f"✅ Validation test plan created and saved (test_plan_id={test_plan_id})"
-    else:
-        # Still successful for artifact-based flows, but warn saving failed
-        state["status"] = "✅ Validation test plan created (not saved to table)"
-        if save_error:
-            state["test_plan_save_error"] = save_error
-
-    # Optional: record a small summary artifact (helps UX)
-    summary = {
-        "saved_to_table": bool(test_plan_id),
-        "test_plan_id": test_plan_id,
-        "user_id": user_id,
-        "source_workflow_id": workflow_id,
-        "save_error": save_error,
-    }
-    save_text_artifact_and_record(
-        workflow_id=workflow_id,
-        agent_name="Validation Test Plan Agent",
-        subdir="validation",
-        filename="test_plan_save_summary.json",
-        content=json.dumps(summary, indent=2),
-    )
+    state = save_plan_to_supabase(state, plan)
 
     return state

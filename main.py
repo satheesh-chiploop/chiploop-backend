@@ -778,6 +778,14 @@ def execute_workflow_background(
             except Exception:
                 # if preview JSON is invalid, ignore and fall back to generating
                 pass
+        # ✅ If preview override present, save it to validation_test_plans (without regenerating)
+        if isinstance(shared_state.get("test_plan"), dict) and shared_state["test_plan"].get("tests"):
+            try:
+                from validation_test_plan_agent import save_plan_to_supabase
+                save_plan_to_supabase(shared_state, shared_state["test_plan"])
+            except Exception as e:
+                append_log_run(run_id, f"⚠️ Failed to save preview test plan to table: {type(e).__name__}: {e}")
+                append_log_workflow(workflow_id, f"⚠️ Failed to save preview test plan to table: {type(e).__name__}: {e}")
 
 
         append_log_workflow(workflow_id, "⚡ Executing workflow agents ...")
