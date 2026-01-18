@@ -766,9 +766,15 @@ def execute_workflow_background(
         if bench_location:
             shared_state["bench_location"] = bench_location
 
-        test_plan_name = (data or {}).get("test_plan_name")
-        if test_plan_name:
-            shared_state["test_plan_name"] = test_plan_name
+
+        # Prefer form field (WF1 sends it as Form), fallback to workflow JSON
+        if test_plan_name and test_plan_name.strip():
+            shared_state["test_plan_name"] = test_plan_name.strip()
+        else:
+            tp = (data or {}).get("test_plan_name")
+            if tp:
+                shared_state["test_plan_name"] = str(tp).strip()
+
 
         # ✅ Preview plan override (WF1): if provided, treat as authoritative test_plan
         if preview_test_plan_json:
