@@ -443,6 +443,17 @@ AGENT_CAPABILITIES = {
         "tags": ["validation", "bench", "schematic", "wiring", "mapping"],
     },
 
+    "Validation Bench Schematic Load + Mapping Agent": {
+        "domain": "validation",
+        "inputs": ["workflow_id", "user_id", "bench_id", "bench_setup"],
+        "outputs": [
+           "validation/bench_schematic_loaded.json",
+           "validation/execution_mapping.json",
+           "validation/execution_mapping_summary.md",
+        ],
+        "description": "Loads bench schematic from validation_bench_connections and reconciles it with runtime bench_setup to generate execution_mapping.json for WF4.",
+        "tags": ["validation", "bench", "schematic", "mapping", "execution"],
+    },
     
 }
 
