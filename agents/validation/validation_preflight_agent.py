@@ -28,6 +28,21 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 from utils.artifact_utils import save_text_artifact_and_record
 
+# --- Supabase (read-only) for schematic presence check ---
+try:
+    from supabase import create_client, Client  # supabase-py v2
+except Exception:
+    create_client = None
+    Client = None
+
+SUPABASE_URL = os.environ.get("SUPABASE_URL") or os.environ.get("NEXT_PUBLIC_SUPABASE_URL")
+SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
+
+supabase = None
+if create_client and SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY:
+    supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+# --------------------------------------------------------
+
 logger = logging.getLogger(__name__)
 
 
@@ -232,6 +247,48 @@ def run_agent(state: dict) -> dict:
         )
     else:
         add_check("bench_setup_present", "pass", "bench_setup present.")
+
+    # --- Schematic presence check (bench tangible) ---
+    if not bench_id:
+        add_check("bench_schematic_present", "warn", "No bench_id provided; cannot verify bench schematic.")
+    elif not supabase:
+        add_check("bench_schematic_present", "warn", "Supabase client not available; cannot verify bench schematic.")
+    else:
+        rows = (
+            supabase.table("validation_bench_connections")
+            .select("schematic,updated_at")
+            .eq("bench_id", bench_id)
+            .order("updated_at", desc=True)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+
+        if not rows:
+            add_check(
+                "bench_schematic_present",
+                "fail",
+                "No bench schematic found in validation_bench_connections. Run 'Validation Bench Schematic Agent' after bench creation.",
+                {"bench_id": bench_id},
+            )
+        else:
+            schematic = rows[0].get("schematic") or {}
+            if not isinstance(schematic, dict) or schematic == {}:
+                add_check(
+                    "bench_schematic_present",
+                    "warn",
+                    "Bench schematic exists but is empty ({}). Proceeding, but WF4 mapping may be limited.",
+                    {"bench_id": bench_id, "updated_at": rows[0].get("updated_at")},
+                )
+            else:
+                add_check(
+                    "bench_schematic_present",
+                    "pass",
+                    "Bench schematic present.",
+                    {"bench_id": bench_id, "updated_at": rows[0].get("updated_at")},
+                )
+    # -----------------------------------------------
 
     # Basic: each instrument has required fields
     for inst in (bench_setup or {}).get("instruments", []) or []:
