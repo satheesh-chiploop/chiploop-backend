@@ -434,6 +434,15 @@ AGENT_CAPABILITIES = {
         "description": "Loads a previously saved validation test plan from the database using test_plan_id and makes it available as state['test_plan'] for execution workflows (no datasheet/spec needed).",
         "tags": ["validation", "test-plan", "load", "db", "reuse", "execution"],
     },
+
+    "Validation Bench Schematic Agent": {
+        "domain": "validation",
+        "inputs": ["workflow_id", "user_id", "bench_id"],
+        "outputs": ["validation/bench_schematic.json", "validation/bench_schematic_summary.md"],
+        "description": "Generates bench_schematic.json (instruments + basic rail/probe templates) and persists it to validation_bench_connections.schematic for preflight/run mapping.",
+        "tags": ["validation", "bench", "schematic", "wiring", "mapping"],
+    },
+
     
 }
 
