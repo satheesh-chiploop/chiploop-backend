@@ -886,6 +886,23 @@ def execute_workflow_background(
                     # 🧠 Merge new keys (spec_json, spec_file, etc.) back into shared_state
                     shared_state.update(result)
 
+                    # after shared_state.update(result)
+                    if loop_type == "validation" and step == "Validation Analytics Agent":
+                        from services.validation.validation_memory_service import compute_and_store_validation_memory
+                        try:
+                           append_log_run(run_id, "🧠 Validation Memory: ingesting facts + LLM interpretations ...")
+                           append_log_workflow(workflow_id, "🧠 Validation Memory: ingesting facts + LLM interpretations ...")
+
+                           import asyncio
+                           asyncio.run(compute_and_store_validation_memory(shared_state, supabase))
+
+                           append_log_run(run_id, "✅ Validation Memory updated.")
+                           append_log_workflow(workflow_id, "✅ Validation Memory updated.")
+                        except Exception as e:
+                           append_log_run(run_id, f"⚠️ Validation Memory failed: {type(e).__name__}: {e}")
+                           append_log_workflow(workflow_id, f"⚠️ Validation Memory failed: {type(e).__name__}: {e}")
+
+
                     label_safe = step.replace(" ", "_")
                     out_path = None
                     if result.get("artifact") is not None:
