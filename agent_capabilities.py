@@ -454,6 +454,70 @@ AGENT_CAPABILITIES = {
         "description": "Loads bench schematic from validation_bench_connections and reconciles it with runtime bench_setup to generate execution_mapping.json for WF4.",
         "tags": ["validation", "bench", "schematic", "mapping", "execution"],
     },
+
+    "Validation Pattern Detection Agent": {
+        "domain": "validation",
+        "inputs": ["workflow_id", "bench_id", "test_plan_id", "pattern_window_days(optional)"],
+        "outputs": [
+            "validation/patterns.json",
+            "validation/patterns_summary.md",
+        ],
+        "description": "Analyzes historical validation runs (facts + interpretations) for a given bench_id + test_plan_id and detects recurring clusters, flaky tests, and correlations. Writes patterns artifacts only; does not mutate WF4 execution artifacts.",
+        "tags": ["validation", "cognition", "patterns", "flaky", "correlation", "insights"],
+    },
+
+    "Validation Test Evolution Agent": {
+        "domain": "validation",
+        "inputs": ["workflow_id", "user_id(optional)", "bench_id", "test_plan_id"],
+        "outputs": [
+            "validation/evolution_status.md",
+            "validation/proposed_test_plan.json",
+            "validation/evolution_diff.md",
+            "validation/evolution_rationale.md",
+        ],
+        "description": "Cognition (Phase 3): Proposes a versioned evolution of the existing test plan based on actionable failures/flakiness for the SAME bench_id + test_plan_id. HARD no-op if no actionable failure evidence. Proposal only; no auto-mutation.",
+        "tags": ["validation", "cognition", "evolution", "proposal", "no-op-if-pass", "guardrails"],
+    },
+
+    "Validation Apply Proposal Agent": {
+        "domain": "validation",
+        "inputs": ["workflow_id", "user_id", "base_test_plan_id(or test_plan_id)", "proposal_artifact_path(or proposed_test_plan_json)", "proposal_kind(optional)"],
+        "outputs": ["validation/apply_status.md"],
+        "description": "Applies a proposed test plan (from evolution or coverage proposal) by inserting vNext into validation_test_plans, deactivating previous active plan(s) for that user+name, and activating the new version. Deterministic; no LLM.",
+        "tags": ["validation", "cognition", "apply", "versioning", "activation", "loop-closure"],
+    },
+
+    "Validation Evolution Proposal Agent": {
+        "domain": "validation",
+        "inputs": ["workflow_id", "user_id", "bench_id", "test_plan_name"],
+        "outputs": [
+          "validation/evolution_status.md",
+          "validation/evolution_no_action.md",
+          "validation/proposed_test_plan.json",
+          "validation/evolution_plan_diff.md",
+          "validation/evolution_rationale.md",
+        ],
+        "description": "WF7: Failure-driven diagnostic proposal. Hard no-op if no actionable failures found.",
+        "tags": ["validation", "cognition", "evolution", "proposal"],
+    },
+
+    "Validation Coverage Proposal Agent": {
+        "domain": "validation",
+        "inputs": ["workflow_id", "user_id", "bench_id", "test_plan_name"],
+        "outputs": [
+          "validation/coverage_map.json",
+          "validation/coverage_gaps.json",
+          "validation/coverage_summary.md",
+          "validation/coverage_no_action.md",
+          "validation/proposed_test_plan_from_coverage.json",
+          "validation/coverage_plan_diff.md",
+          "validation/coverage_plan_rationale.md",
+        ],
+        "description": "WF8: Coverage intelligence + proposal. Computes gaps from recent run facts and proposes coverage tests.",
+        "tags": ["validation", "cognition", "coverage", "proposal"],
+    },
+
+
     
 }
 

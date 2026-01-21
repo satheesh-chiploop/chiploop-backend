@@ -321,6 +321,12 @@ from agents.validation.validation_bench_create_agent import run_agent as validat
 from agents.validation.validation_test_plan_load_agent  import run_agent as validation_test_plan_load_agent
 from agents.validation.validation_bench_schematic_agent import run_agent as validation_bench_schematic_agent
 from agents.validation.validation_bench_schematic_load_mapping_agent import run_agent as validation_bench_schematic_load_mapping_agent
+from agents.validation.validation_pattern_detection_agent import run_agent as validation_pattern_detection_agent
+from agents.validation.validation_apply_proposal_agent import run_agent as validation_apply_proposal_agent
+from agents.validation.validation_evolution_proposal_agent import run_agent as validation_evolution_proposal_agent
+from agents.validation.validation_coverage_proposal_agent import run_agent as validation_coverage_proposal_agent
+
+
 
 #  VALIDATION FUNCTIONS
 # ==========================================================
@@ -339,6 +345,11 @@ VALIDATION_AGENT_FUNCTIONS: Dict[str, Any] = {
     "Validation Test Plan Load Agent": validation_test_plan_load_agent,
     "Validation Bench Schematic Agent": validation_bench_schematic_agent,
     "Validation Bench Schematic Load + Mapping Agent": validation_bench_schematic_load_mapping_agent,
+    "Validation Pattern Detection Agent": validation_pattern_detection_agent,
+    "Validation Apply Proposal Agent": validation_apply_proposal_agent,
+    "Validation Evolution Proposal Agent": validation_evolution_proposal_agent,
+    "Validation Coverage Proposal Agent": validation_coverage_proposal_agent,
+
     # "Measurement Logger Agent": validation_logger_agent,
     "Validation Analytics Agent": validation_analytics_agent,
     # "Validation Debug Agent": validation_debug_agent,
@@ -398,6 +409,10 @@ SYSTEM_AGENT_FUNCTIONS: Dict[str,Any] = {
     "Validation Test Plan Load Agent": validation_test_plan_load_agent,
     "Validation Bench Schematic Agent": validation_bench_schematic_agent,
     "Validation Bench Schematic Load + Mapping Agent": validation_bench_schematic_load_mapping_agent,
+    "Validation Pattern Detection Agent": validation_pattern_detection_agent,
+    "Validation Apply Proposal Agent": validation_apply_proposal_agent,
+    "Validation Evolution Proposal Agent": validation_evolution_proposal_agent,
+    "Validation Coverage Proposal Agent": validation_coverage_proposal_agent,
     "System Workflow Agent": system_workflow_agent,  
     "System CoSim Integration Agent": system_cosim_integration_agent,
     "System ISS Bridge Agent": system_iss_bridge_agent,  
@@ -741,6 +756,8 @@ def execute_workflow_background(
             "run_id": run_id,
             "artifact_dir": artifact_dir,
         }
+        # ✅ inject supabase once (so WF5 services can query history)
+        shared_state["supabase_client"] = supabase
         if user_id:
             shared_state["user_id"] = user_id
         if upload_path:
