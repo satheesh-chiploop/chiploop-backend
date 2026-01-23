@@ -133,7 +133,7 @@ async def compute_and_store_validation_patterns(
     # --------------------------------------------------
     # normal path
     # --------------------------------------------------
-    from services.validation_pattern_detection_service import (
+    from services.validation.validation_pattern_detection_service import (
         _get_fact_window,
         _get_interpretations_for_fact_ids,
         _detect_recurring_clusters,
