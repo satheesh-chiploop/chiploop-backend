@@ -6,12 +6,12 @@ import json
 import datetime
 import difflib
 import asyncio
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
 from utils.artifact_utils import save_text_artifact_and_record
 from utils.llm_utils import run_llm_fallback
 
-from services.validation_plan_resolver import load_active_plan_by_name
+from services.validation.validation_plan_resolver import load_active_plan_by_name
 
 PROMPT_VERSION = "wf7_v1"
 MIN_CONFIDENCE = float(os.getenv("EVOLVE_MIN_CONFIDENCE", "0.5"))
@@ -31,7 +31,12 @@ def _diff_text(old: str, new: str) -> str:
     old_lines = old.splitlines(keepends=True)
     new_lines = new.splitlines(keepends=True)
     return "".join(
-        difflib.unified_diff(old_lines, new_lines, fromfile="current_test_plan.json", tofile="proposed_test_plan.json")
+        difflib.unified_diff(
+            old_lines,
+            new_lines,
+            fromfile="current_test_plan.json",
+            tofile="proposed_test_plan.json",
+        )
     )
 
 
@@ -42,9 +47,7 @@ async def _call_llm(prompt: str) -> str:
     return str(out)
 
 
-def _get_actionable_failures_from_memory(
-    supabase, bench_id: str, plan_id: str
-) -> List[Dict[str, Any]]:
+def _get_actionable_failures_from_memory(supabase, bench_id: str, plan_id: str) -> List[Dict[str, Any]]:
     """
     Uses validation_memory as the primary trigger.
     Actionable = recurring (fail_count>=MIN_FAIL_COUNT) OR flaky (fail_count>=1 & pass_count>=1),
@@ -130,18 +133,57 @@ async def compute_and_store_evolution_proposal(state: Dict[str, Any], supabase) 
 
     workflow_id = state.get("workflow_id")
     user_id = state.get("user_id")
-    bench_id = state.get("bench_id")
-    test_plan_name = (state.get("test_plan_name") or "").strip()
+    bench_id = state.get("bench_id") or state.get("validation_bench_id")
+    test_plan_name = (
+        state.get("test_plan_name")
+        or state.get("validation_test_plan_name")
+        or state.get("test_plan")
+        or ""
+    ).strip()
 
-    if not workflow_id or not user_id or not bench_id or not test_plan_name:
-        state["status"] = "❌ WF7 missing workflow_id/user_id/bench_id/test_plan_name"
+    # ✅ If workflow_id exists, always produce an artifact explaining what’s missing
+    if not workflow_id:
+        state["status"] = "❌ WF7 missing workflow_id"
         return state
+
+    missing = []
+    if not user_id:
+        missing.append("user_id")
+    if not bench_id:
+        missing.append("bench_id")
+    if not test_plan_name:
+        missing.append("test_plan_name")
+
+    if missing:
+        msg = f"❌ WF7 missing required field(s): {', '.join(missing)}"
+        save_text_artifact_and_record(
+            workflow_id,
+            "Validation Evolution Proposal Agent",
+            "validation",
+            "evolution_error.md",
+            "## Evolution Proposal (Error)\n\n"
+            f"- Time: `{now}`\n"
+            f"- Missing: `{', '.join(missing)}`\n\n"
+            "Fix:\n"
+            "- Ensure the UI sends bench_id + test_plan_name, and backend injects user_id.\n",
+        )
+        state["status"] = msg
+        return state
+
+    # ✅ Normalize into one key so downstream has one contract
+    state["bench_id"] = str(bench_id)
+    state["test_plan_name"] = test_plan_name
 
     plan_row = load_active_plan_by_name(supabase, str(user_id), test_plan_name)
     if not plan_row:
         msg = f"❌ No active test plan found for user_id={user_id} name='{test_plan_name}'"
-        save_text_artifact_and_record(workflow_id, "Validation Evolution Proposal Agent", "validation", "evolution_no_action.md",
-                                      f"## Evolution Proposal\n\n- Time: `{now}`\n\n{msg}\n")
+        save_text_artifact_and_record(
+            workflow_id,
+            "Validation Evolution Proposal Agent",
+            "validation",
+            "evolution_no_action.md",
+            f"## Evolution Proposal\n\n- Time: `{now}`\n\n{msg}\n",
+        )
         state["status"] = msg
         return state
 
@@ -224,6 +266,7 @@ If no changes are needed, return proposed_plan identical to current and changes=
         parsed = json.loads(raw)
     except Exception:
         import re
+
         m = re.search(r"\{.*\}", raw, re.S)
         if m:
             parsed = json.loads(m.group(0))
@@ -234,7 +277,6 @@ If no changes are needed, return proposed_plan identical to current and changes=
     proposed_plan = parsed.get("proposed_plan")
     changes = parsed.get("changes") or []
     rationale_md = str(parsed.get("rationale_md") or "").strip()
-    risk_notes = parsed.get("risk_notes") or []
 
     proposed_plan = _apply_guardrails(current_plan, proposed_plan)
 
@@ -251,7 +293,13 @@ If no changes are needed, return proposed_plan identical to current and changes=
         f"- Actionable failures: `{len(actionable)}`\n\n"
     )
     status += "✅ No changes proposed.\n" if is_identical else "✅ Proposal generated.\n"
-    save_text_artifact_and_record(workflow_id, "Validation Evolution Proposal Agent", "validation", "evolution_status.md", status)
+    save_text_artifact_and_record(
+        workflow_id,
+        "Validation Evolution Proposal Agent",
+        "validation",
+        "evolution_status.md",
+        status,
+    )
 
     if is_identical:
         state["status"] = "✅ WF7 completed (no changes proposed)"
@@ -259,7 +307,13 @@ If no changes are needed, return proposed_plan identical to current and changes=
         return state
 
     # Proposal artifacts
-    save_text_artifact_and_record(workflow_id, "Validation Evolution Proposal Agent", "validation", "proposed_test_plan.json", new_txt)
+    save_text_artifact_and_record(
+        workflow_id,
+        "Validation Evolution Proposal Agent",
+        "validation",
+        "proposed_test_plan.json",
+        new_txt,
+    )
     save_text_artifact_and_record(
         workflow_id,
         "Validation Evolution Proposal Agent",
@@ -269,7 +323,13 @@ If no changes are needed, return proposed_plan identical to current and changes=
     )
     if not rationale_md:
         rationale_md = "### Rationale\n\nProposal generated from repeated/flaky failure evidence.\n"
-    save_text_artifact_and_record(workflow_id, "Validation Evolution Proposal Agent", "validation", "evolution_rationale.md", rationale_md)
+    save_text_artifact_and_record(
+        workflow_id,
+        "Validation Evolution Proposal Agent",
+        "validation",
+        "evolution_rationale.md",
+        rationale_md,
+    )
 
     # Put minimal fields back into state for WF9 Apply
     state["status"] = "✅ WF7 proposal generated"
