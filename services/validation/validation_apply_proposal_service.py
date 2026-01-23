@@ -63,6 +63,28 @@ def _load_plan_row_by_id(supabase, plan_id: str) -> Optional[Dict[str, Any]]:
         return None
 
 
+def _load_active_plan_row_by_name(supabase, user_id: str, plan_name: str) -> Optional[Dict[str, Any]]:
+    """
+    MVP: resolve base plan id using user_id + test_plan_name.
+    Picks the most recently created active plan.
+    """
+    try:
+        resp = (
+            supabase.table("validation_test_plans")
+            .select("*")
+            .eq("user_id", str(user_id))
+            .eq("name", str(plan_name))
+            .eq("is_active", True)
+            .order("created_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+        rows = resp.data or []
+        return rows[0] if rows else None
+    except Exception:
+        return None
+
+
 def _download_json_artifact(supabase, storage_key: str) -> Dict[str, Any]:
     """
     storage_key must be a key in ARTIFACT_BUCKET, e.g.
@@ -113,7 +135,7 @@ def _validate_plan_schema(plan_json: Dict[str, Any]) -> None:
     Keep MVP validation minimal & strict:
     - must be dict
     - must contain 'dut' and 'tests'
-    - tests must be list (can be empty? no: must have at least 1)
+    - tests must be list and non-empty
     """
     if not isinstance(plan_json, dict):
         raise ValueError("plan_json is not an object")
@@ -127,34 +149,52 @@ def _validate_plan_schema(plan_json: Dict[str, Any]) -> None:
 def apply_test_plan_proposal(state: Dict[str, Any], supabase) -> Dict[str, Any]:
     """
     WF9 service (deterministic):
-    - loads base plan row
-    - loads proposed plan (from artifact or state)
-    - stamps metadata: version/parent/status/origin
-    - inserts new plan row
-    - deactivates previous active plans with same name (for this user)
-    - activates new plan
-    - writes apply_status.md artifact
+    - resolve base plan row (by id OR by user_id+test_plan_name)
+    - load proposed plan (from artifact or state)
+    - stamp metadata: version/parent/status/origin
+    - deactivate previous active plans with same name (for this user)
+    - insert new plan row as active
+    - write apply_status.md artifact
     """
     now = _utc_iso()
 
     workflow_id = state.get("workflow_id")
     user_id = state.get("user_id")
     base_plan_id = state.get("base_test_plan_id") or state.get("test_plan_id")
+    test_plan_name = (
+        state.get("test_plan_name")
+        or state.get("validation_test_plan_name")
+        or state.get("test_plan")
+        or ""
+    ).strip()
     proposal_kind = (state.get("proposal_kind") or state.get("origin") or "proposal").strip().lower()
 
     if not workflow_id:
         state["status"] = "❌ Apply Proposal: missing workflow_id"
         return state
     if not user_id:
-        state["status"] = "❌ Apply Proposal: missing user_id"
-        return state
-    if not base_plan_id:
-        state["status"] = "❌ Apply Proposal: missing base_test_plan_id (or test_plan_id)"
+        msg = "❌ Apply Proposal: missing user_id"
+        save_text_artifact_and_record(workflow_id, "Validation Apply Proposal Agent", "validation", "apply_status.md",
+                                      f"## Apply Proposal\n\n- Time: `{now}`\n\n{msg}\n")
+        state["status"] = msg
         return state
 
-    base_row = _load_plan_row_by_id(supabase, str(base_plan_id))
+    # ✅ MVP: allow resolving base plan by name
+    base_row = None
+    if base_plan_id:
+        base_row = _load_plan_row_by_id(supabase, str(base_plan_id))
+    else:
+        if not test_plan_name:
+            msg = "❌ Apply Proposal: missing base_test_plan_id AND test_plan_name"
+            save_text_artifact_and_record(workflow_id, "Validation Apply Proposal Agent", "validation", "apply_status.md",
+                                          f"## Apply Proposal\n\n- Time: `{now}`\n\n{msg}\n")
+            state["status"] = msg
+            return state
+        base_row = _load_active_plan_row_by_name(supabase, str(user_id), test_plan_name)
+        base_plan_id = (base_row or {}).get("id")
+
     if not base_row:
-        msg = f"❌ Apply Proposal: base plan not found: {base_plan_id}"
+        msg = f"❌ Apply Proposal: base plan not found (id={base_plan_id} name='{test_plan_name}')"
         save_text_artifact_and_record(workflow_id, "Validation Apply Proposal Agent", "validation", "apply_status.md",
                                       f"## Apply Proposal\n\n- Time: `{now}`\n\n{msg}\n")
         state["status"] = msg
@@ -190,7 +230,7 @@ def apply_test_plan_proposal(state: Dict[str, Any], supabase) -> Dict[str, Any]:
 
     _set_metadata(proposed_plan, new_md)
 
-    # Deactivate other active plans of same name for this user (MVP behavior)
+    # Deactivate other active plans of same name for this user
     try:
         (
             supabase.table("validation_test_plans")
@@ -201,7 +241,6 @@ def apply_test_plan_proposal(state: Dict[str, Any], supabase) -> Dict[str, Any]:
             .execute()
         )
     except Exception:
-        # still proceed; activation will be set on new row
         pass
 
     # Insert new plan row
@@ -227,7 +266,6 @@ def apply_test_plan_proposal(state: Dict[str, Any], supabase) -> Dict[str, Any]:
         state["status"] = msg
         return state
 
-    # Write status artifact
     content = (
         "## Apply Proposal\n\n"
         f"- Time: `{now}`\n"
@@ -242,10 +280,9 @@ def apply_test_plan_proposal(state: Dict[str, Any], supabase) -> Dict[str, Any]:
     )
     save_text_artifact_and_record(workflow_id, "Validation Apply Proposal Agent", "validation", "apply_status.md", content)
 
-    # Return fields so UI can rerun WF4
     state["status"] = "✅ Apply Proposal: success"
     state["applied_plan_id"] = new_plan_id
     state["applied_plan_version"] = new_version
     state["applied_plan_name"] = base_name
-    state["execution_mode"] = state.get("execution_mode") or "delta"  # default after apply
+    state["execution_mode"] = state.get("execution_mode") or "delta"
     return state
