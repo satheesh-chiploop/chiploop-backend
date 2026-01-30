@@ -508,6 +508,94 @@ def _require_user_id(request: Request) -> str:
         raise HTTPException(status_code=401, detail="Unauthorized")
     return user_id
 
+from typing import Tuple
+
+def _load_workflow_def_by_name(name: str, user_id: Optional[str]) -> Dict[str, Any]:
+    """
+    Loads workflow template from public.workflows by exact name.
+    Prefer user-owned workflow if present; fallback to prebuilt.
+    Returns dict: {"nodes": [...], "edges": [...]}
+    """
+    q = supabase.table("workflows").select(
+        "id,name,definitions,nodes,edges,loop_type,is_prebuilt,user_id"
+    ).eq("name", name)
+
+    # Prefer user-owned
+    if user_id:
+        r = q.eq("user_id", user_id).limit(1).execute()
+        if r.data:
+            row = r.data[0]
+            defn = row.get("definitions") or {}
+            return {
+                "nodes": (defn.get("nodes") if isinstance(defn, dict) else None) or row.get("nodes") or [],
+                "edges": (defn.get("edges") if isinstance(defn, dict) else None) or row.get("edges") or [],
+            }
+
+    # Fallback to prebuilt
+    r2 = q.eq("is_prebuilt", True).limit(1).execute()
+    if r2.data:
+        row = r2.data[0]
+        defn = row.get("definitions") or {}
+        return {
+            "nodes": (defn.get("nodes") if isinstance(defn, dict) else None) or row.get("nodes") or [],
+            "edges": (defn.get("edges") if isinstance(defn, dict) else None) or row.get("edges") or [],
+        }
+
+    raise HTTPException(status_code=404, detail=f"Workflow template not found: {name}")
+
+
+def _toposort_nodes(defn: Dict[str, Any]) -> List[Dict[str, Any]]:
+    nodes = defn.get("nodes") or []
+    edges = defn.get("edges") or []
+    if not nodes or not edges:
+        return nodes
+
+    by_id = {n.get("id"): n for n in nodes if n.get("id")}
+    indeg = {nid: 0 for nid in by_id.keys()}
+    out = {nid: [] for nid in by_id.keys()}
+
+    for e in edges:
+        s = e.get("source")
+        t = e.get("target")
+        if s in out and t in indeg:
+            out[s].append(t)
+            indeg[t] += 1
+
+    queue = [nid for nid, d in indeg.items() if d == 0]
+    ordered = []
+
+    while queue:
+        nid = queue.pop(0)
+        ordered.append(by_id[nid])
+        for t in out.get(nid, []):
+            indeg[t] -= 1
+            if indeg[t] == 0:
+                queue.append(t)
+
+    # cycle-safe: append leftovers
+    ordered_ids = {n.get("id") for n in ordered}
+    for nid, n in by_id.items():
+        if nid not in ordered_ids:
+            ordered.append(n)
+
+    return ordered
+
+
+def _definition_to_executor_nodes(defn: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """
+    Converts Studio workflow nodes -> executor nodes: [{"label": "<backendLabel>"}]
+    """
+    ordered = _toposort_nodes(defn)
+    out = []
+    for n in ordered:
+        data = (n or {}).get("data") or {}
+        label = (data.get("backendLabel") or data.get("uiLabel") or n.get("type") or "").strip()
+        if label:
+            out.append({"label": label})
+    return out
+
+
+
 
 
 
@@ -536,6 +624,86 @@ def stats():
         "workflows": wf.count if hasattr(wf, "count") else None,
         "runs": run.count if hasattr(run, "count") else None,
     }
+
+def _run_nodes_with_shared_state(
+    workflow_id: str,
+    run_id: str,
+    loop_type: str,
+    nodes: List[Dict[str, Any]],
+    shared_state: Dict[str, Any],
+):
+    # use the same map logic as your normal executor
+    if loop_type == "system":
+        loop_map = {}
+        loop_map.update(DIGITAL_AGENT_FUNCTIONS)
+        loop_map.update(ANALOG_AGENT_FUNCTIONS)
+        loop_map.update(EMBEDDED_AGENT_FUNCTIONS)
+        loop_map.update(VALIDATION_AGENT_FUNCTIONS)
+        loop_map.update(SYSTEM_AGENT_FUNCTIONS)
+    else:
+        # IMPORTANT: use loop-specific maps (validation needs VALIDATION_AGENT_FUNCTIONS)
+        loop_map = {
+            "digital": DIGITAL_AGENT_FUNCTIONS,
+            "analog": ANALOG_AGENT_FUNCTIONS,
+            "embedded": EMBEDDED_AGENT_FUNCTIONS,
+            "validation": VALIDATION_AGENT_FUNCTIONS,
+            "system": SYSTEM_AGENT_FUNCTIONS,
+        }.get(loop_type, DIGITAL_AGENT_FUNCTIONS)
+
+    agent_map = dict(loop_map)
+    agent_map.update(AGENT_REGISTRY)
+
+    def _norm(s: str) -> str:
+        return (s or "").strip()
+
+    agent_map_norm = {_norm(k): v for k, v in agent_map.items()}
+
+    for node in (nodes or []):
+        label = (node or {}).get("label") or ""
+        label = label.strip()
+        if not label:
+            continue
+
+        append_log_workflow(workflow_id, f"⚙️ Running {label}")
+        append_log_run(run_id, f"⚙️ Running {label}")
+
+        fn = agent_map_norm.get(label)
+        if not fn:
+            append_log_workflow(workflow_id, f"❌ No agent implementation found for: {label}")
+            append_log_run(run_id, f"❌ No agent implementation found for: {label}")
+            continue
+
+        try:
+            result = fn(shared_state)
+            if isinstance(result, dict):
+                shared_state.update(result)
+
+            append_log_workflow(workflow_id, f"✅ {label} done")
+            append_log_run(run_id, f"✅ {label} done")
+
+        except Exception as e:
+            append_log_workflow(workflow_id, f"❌ {label} failed: {type(e).__name__}: {e}")
+            append_log_run(run_id, f"❌ {label} failed: {type(e).__name__}: {e}")
+            # continue (do not crash whole app run)
+def _has_bench_schematic(bench_id: str) -> bool:
+    try:
+        rows = (
+            supabase.table("validation_bench_connections")
+            .select("schematic,updated_at")
+            .eq("bench_id", bench_id)
+            .order("updated_at", desc=True)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        if not rows:
+            return False
+        sch = rows[0].get("schematic") or {}
+        return isinstance(sch, dict) and sch != {}
+    except Exception:
+        return False
+
 
 @app.post("/run_workflow")
 async def run_workflow(
@@ -973,6 +1141,176 @@ def execute_workflow_background(
         append_log_workflow(workflow_id, err, status="failed", phase="error")
         append_log_run(run_id, err, status="failed")
         time.sleep(0.2)
+
+
+
+class ValidationRunAppIn(BaseModel):
+    bench_id: Optional[str] = None
+    create_new_bench: Optional[bool] = False
+    bench_name: Optional[str] = None
+    bench_location: Optional[str] = None
+    instrument_ids: Optional[List[str]] = None
+
+    # prefer test_plan_id in UI; allow name for MVP
+    test_plan_id: Optional[str] = None
+    test_plan_name: Optional[str] = None
+
+    spec_text: Optional[str] = None
+    scope: Optional[Dict[str, Any]] = None
+    toggles: Optional[Dict[str, bool]] = None  # {"apply": false, ...}
+
+
+def execute_validation_run_app_background(
+    workflow_id: str,
+    run_id: str,
+    user_id: str,
+    artifact_dir: str,
+    payload: Dict[str, Any],
+):
+    try:
+        os.makedirs(artifact_dir, exist_ok=True)
+
+        shared_state = {
+            "workflow_id": workflow_id,
+            "run_id": run_id,
+            "artifact_dir": artifact_dir,
+            "supabase_client": supabase,
+            "user_id": user_id,
+        }
+
+        # Inject app payload fields into shared_state (agents expect these)
+        for k, v in (payload or {}).items():
+            if v is not None:
+                shared_state[k] = v
+
+        bench_id = payload.get("bench_id")
+        create_new = bool(payload.get("create_new_bench"))
+        toggles = payload.get("toggles") or {}
+        do_apply = bool(toggles.get("apply", False))
+
+        skipped_create_bench = False
+
+        # --- Fixed WF sequence using YOUR exact names ---
+        steps: List[Tuple[str, str, bool]] = [
+            ("Generate Lab Handoff", "Validation_Generate_Lab_Handoff", True),
+            ("Create Bench", "Validation_Create_Bench", (create_new or not bench_id)),
+            ("Preflight Bench", "Validation_Preflight_Bench", True),
+            ("Hardware Test Run", "Validation_Hardware_Test_Run", True),
+            ("Pattern Detection", "Validation_Pattern_Detection", True),
+            ("Coverage Proposal", "Validation_Coverage_Proposal", True),
+            ("Evolution Proposal", "Validation_Evolution_Proposal", True),
+            ("Apply Proposal", "Validation_Apply_Proposal", do_apply),
+        ]
+
+        for phase_label, wf_name, should_run in steps:
+            if not should_run:
+                append_log_workflow(workflow_id, f"⏭️ Skipped: {phase_label}", phase=phase_label)
+                append_log_run(run_id, f"⏭️ Skipped: {phase_label}")
+                if wf_name == "Validation_Create_Bench":
+                    skipped_create_bench = True
+                continue
+
+            # If we skipped Create Bench and user selected existing bench, ensure schematic exists BEFORE preflight
+            if phase_label == "Preflight Bench" and bench_id and skipped_create_bench:
+                if not _has_bench_schematic(bench_id):
+                    append_log_workflow(workflow_id, "🧩 Missing schematic for selected bench → generating schematic now")
+                    append_log_run(run_id, "🧩 Missing schematic for selected bench → generating schematic now")
+                    # run schematic agent directly
+                    shared_state["bench_id"] = bench_id
+                    fn = VALIDATION_AGENT_FUNCTIONS.get("Validation Bench Schematic Agent")
+                    if fn:
+                        out = fn(shared_state)
+                        if isinstance(out, dict):
+                            shared_state.update(out)
+                    else:
+                        append_log_workflow(workflow_id, "⚠️ Schematic agent not found in VALIDATION_AGENT_FUNCTIONS")
+                        append_log_run(run_id, "⚠️ Schematic agent not found in VALIDATION_AGENT_FUNCTIONS")
+
+            append_log_workflow(workflow_id, f"▶️ Phase: {phase_label}", phase=phase_label)
+            append_log_run(run_id, f"▶️ Phase: {phase_label}")
+
+            defn = _load_workflow_def_by_name(wf_name, user_id=user_id)
+            nodes = _definition_to_executor_nodes(defn)
+
+            _run_nodes_with_shared_state(
+                workflow_id=workflow_id,
+                run_id=run_id,
+                loop_type="validation",
+                nodes=nodes,
+                shared_state=shared_state,
+            )
+
+            # If Create Bench created a bench_id, carry it forward
+            if phase_label == "Create Bench" and shared_state.get("bench_id"):
+                bench_id = shared_state["bench_id"]
+
+            append_log_workflow(workflow_id, f"✅ Phase done: {phase_label}")
+            append_log_run(run_id, f"✅ Phase done: {phase_label}")
+
+        append_log_workflow(workflow_id, "🎉 Validation Run App complete", status="completed", phase="done")
+        append_log_run(run_id, "🎉 Validation Run App complete", status="completed")
+
+    except Exception as e:
+        err = f"❌ Validation Run App crashed: {type(e).__name__}: {e}\n{traceback.format_exc()}"
+        append_log_workflow(workflow_id, err, status="failed", phase="error")
+        append_log_run(run_id, err, status="failed")
+
+
+@app.post("/apps/validation/run")
+async def apps_validation_run(request: Request, background_tasks: BackgroundTasks, payload: ValidationRunAppIn):
+    user_id = _require_user_id(request)
+
+    workflow_id = str(uuid.uuid4())
+    run_id = str(uuid.uuid4())
+    now = datetime.utcnow().isoformat()
+
+    # Parent workflow row (single job)
+    supabase.table("workflows").insert({
+        "id": workflow_id,
+        "user_id": user_id,
+        "name": "App: Validation Run",
+        "status": "running",
+        "phase": "queued",
+        "logs": "🚀 App run queued.",
+        "created_at": now,
+        "updated_at": now,
+        "artifacts": {},
+        "loop_type": "validation",
+        "definitions": {"app_intent": "validation_run", "payload": payload.dict()},
+    }).execute()
+
+    # Run row
+    user_folder = str(user_id or "anonymous")
+    artifact_dir = os.path.join("artifacts", user_folder, workflow_id, run_id)
+    os.makedirs(artifact_dir, exist_ok=True)
+
+    supabase.table("runs").insert({
+        "id": run_id,
+        "user_id": user_id,
+        "workflow_id": workflow_id,
+        "loop_type": "validation",
+        "status": "running",
+        "logs": "🚀 App run started.",
+        "artifacts_path": artifact_dir,
+        "created_at": now
+    }).execute()
+
+    append_log_workflow(workflow_id, "🚀 Starting Validation Run App", phase="start")
+    append_log_run(run_id, "🚀 Starting Validation Run App")
+
+    background_tasks.add_task(
+        execute_validation_run_app_background,
+        workflow_id,
+        run_id,
+        user_id,
+        artifact_dir,
+        payload.dict(),
+    )
+
+    return {"ok": True, "workflow_id": workflow_id, "run_id": run_id}
+
+
+
 from fastapi import Body
 from fastapi.responses import FileResponse
 from pathlib import Path
@@ -2796,17 +3134,29 @@ def create_validation_bench(request: Request, payload: BenchCreateIn):
     return {"ok": True, "bench_id": bench_id}
 
 
+from typing import Optional
+from fastapi import Request
+
+from typing import Optional
+from fastapi import Request
+
 @app.get("/validation/test_plans")
-async def list_validation_test_plans(user_id: str):
-    # returns [{id, name, description, created_at}] for dropdown
+async def list_validation_test_plans(request: Request, user_id: Optional[str] = None):
+    """
+    Backward compatible:
+      - Studio can call: /validation/test_plans?user_id=...
+      - Apps call:       /validation/test_plans  (no user_id; derived from auth)
+    """
     if not supabase:
         return JSONResponse(status_code=500, content={"status": "error", "message": "Supabase not configured"})
 
     try:
+        effective_user_id = user_id or _require_user_id(request)
+
         resp = (
             supabase.table("validation_test_plans")
             .select("id,name,description,created_at")
-            .eq("user_id", user_id)
+            .eq("user_id", effective_user_id)
             .eq("is_active", True)
             .order("created_at", desc=True)
             .execute()
@@ -2815,6 +3165,36 @@ async def list_validation_test_plans(user_id: str):
     except Exception as e:
         logger.exception("list_validation_test_plans failed")
         return JSONResponse(status_code=500, content={"status": "error", "message": f"{type(e).__name__}: {e}"})
+
+
+@app.get("/validation/benches")
+async def list_validation_benches(request: Request):
+    """
+    Return benches owned by the current user.
+    Ownership is stored in validation_benches.metadata.owner_user_id (MVP pattern).
+    """
+    user_id = _require_user_id(request)
+
+    try:
+        res = (
+            supabase.table("validation_benches")
+            .select("id,name,location,status,metadata,created_at,updated_at")
+            .order("created_at", desc=True)
+            .execute()
+        )
+
+        benches = []
+        for b in (res.data or []):
+            owner = (b.get("metadata") or {}).get("owner_user_id")
+            if owner == user_id:
+                benches.append(b)
+
+        return {"ok": True, "benches": benches}
+
+    except Exception as e:
+        logger.exception("list_validation_benches failed")
+        return JSONResponse(status_code=500, content={"ok": False, "message": f"{type(e).__name__}: {e}"})
+
 
 
 
