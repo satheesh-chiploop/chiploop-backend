@@ -3171,21 +3171,26 @@ async def list_validation_test_plans(request: Request, user_id: Optional[str] = 
 async def list_validation_benches(request: Request):
     """
     Return benches owned by the current user.
-    Ownership is stored in validation_benches.metadata.owner_user_id (MVP pattern).
+    For MVP, ownership is stored inside metadata.
+    We support BOTH keys:
+      - metadata.owner_user_id  (older expectation)
+      - metadata.created_by     (what create agent currently writes)
     """
     user_id = _require_user_id(request)
 
     try:
         res = (
             supabase.table("validation_benches")
-            .select("id,name,location,status,metadata,created_at,updated_at")
+            # ✅ match your real table columns (no updated_at)
+            .select("id,org_id,name,location,status,metadata,created_at")
             .order("created_at", desc=True)
             .execute()
         )
 
         benches = []
         for b in (res.data or []):
-            owner = (b.get("metadata") or {}).get("owner_user_id")
+            md = b.get("metadata") or {}
+            owner = md.get("owner_user_id") or md.get("created_by")
             if owner == user_id:
                 benches.append(b)
 
@@ -3193,8 +3198,10 @@ async def list_validation_benches(request: Request):
 
     except Exception as e:
         logger.exception("list_validation_benches failed")
-        return JSONResponse(status_code=500, content={"ok": False, "message": f"{type(e).__name__}: {e}"})
-
+        return JSONResponse(
+            status_code=500,
+            content={"ok": False, "message": f"{type(e).__name__}: {e}"},
+        )
 
 
 
