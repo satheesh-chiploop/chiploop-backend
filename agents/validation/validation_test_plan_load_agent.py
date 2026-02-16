@@ -185,8 +185,12 @@ def run_agent(state: dict) -> dict:
                     filename="test_plan_loaded_summary.md",
                     content=summary_md,
                 )
+            except Exception as e:
+                logger.warning(f"[TEST PLAN LOAD] Could not write artifacts: {type(e).__name__}: {e}")
 
-            
+        state["status"] = "✅ Validation Test Plan loaded"
+        return state
+        
         except Exception as e:
             logger.exception("Validation Test Plan Load Agent failed")
             state["status"] = f"❌ Validation Test Plan Load Agent failed: {type(e).__name__}: {e}"
