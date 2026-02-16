@@ -146,8 +146,20 @@ def run_agent(state: dict) -> dict:
         }
 
         # Optional: lightweight artifact for traceability (only if workflow_id exists)
+
+        # Optional: artifacts for traceability (only if workflow_id exists)
         if workflow_id:
             try:
+                # 1) Save the loaded plan itself (so ZIP always contains the plan used in this run)
+                save_text_artifact_and_record(
+                    workflow_id=workflow_id,
+                    agent_name="Validation Test Plan Load Agent",
+                    subdir="validation",
+                    filename="test_plan_loaded.json",
+                    content=json.dumps(plan, indent=2),
+                )
+
+                # 2) Save metadata (already doing)
                 save_text_artifact_and_record(
                     workflow_id=workflow_id,
                     agent_name="Validation Test Plan Load Agent",
@@ -155,12 +167,28 @@ def run_agent(state: dict) -> dict:
                     filename="test_plan_loaded_meta.json",
                     content=json.dumps(state["test_plan_meta"], indent=2),
                 )
-            except Exception as e:
-                logger.warning(f"[TEST PLAN LOAD] Could not write meta artifact: {type(e).__name__}: {e}")
 
-        state["status"] = "✅ Validation Test Plan loaded"
-        return state
+                # 3) Tiny human-readable summary (optional but useful when debugging runs)
+                summary_md = f"""# Test Plan Loaded
 
+        - **id**: {state["test_plan_meta"].get("id")}
+        - **name**: {state["test_plan_meta"].get("name")}
+        - **active**: {row.get("is_active")}
+        - **tests**: {len(plan.get("tests", []) or [])}
+        - **source_workflow_id**: {state["test_plan_meta"].get("source_workflow_id")}
+        - **source_artifact_path**: {state["test_plan_meta"].get("source_artifact_path")}
+        """
+                save_text_artifact_and_record(
+                    workflow_id=workflow_id,
+                    agent_name="Validation Test Plan Load Agent",
+                    subdir="validation",
+                    filename="test_plan_loaded_summary.md",
+                    content=summary_md,
+                )
+
+    except Exception as e:
+        logger.warning(f"[TEST PLAN LOAD] Could not write artifacts: {type(e).__name__}: {e}")
+        
     except Exception as e:
         logger.exception("Validation Test Plan Load Agent failed")
         state["status"] = f"❌ Validation Test Plan Load Agent failed: {type(e).__name__}: {e}"
