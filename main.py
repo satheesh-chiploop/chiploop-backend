@@ -31,6 +31,7 @@ from utils.notion_utils import append_to_notion, get_or_create_notion_page
 from fastapi import WebSocket
 import asyncio
 from planner.auto_fill_missing import auto_fill_missing_fields
+from utils.artifact_utils import save_text_artifact_and_record
 
 
 import logging
@@ -1155,7 +1156,12 @@ class ValidationRunAppIn(BaseModel):
     test_plan_id: Optional[str] = None
     test_plan_name: Optional[str] = None
 
+    # ✅ NEW: what frontend sends when generating a new test plan
+    datasheet_text: Optional[str] = None
+
+    # keep existing field for compatibility
     spec_text: Optional[str] = None
+
     scope: Optional[Dict[str, Any]] = None
     toggles: Optional[Dict[str, bool]] = None  # {"apply": false, ...}
 
@@ -1182,6 +1188,13 @@ def execute_validation_run_app_background(
         for k, v in (payload or {}).items():
             if v is not None:
                 shared_state[k] = v
+
+        # ✅ Normalize datasheet/spec for agents
+        # Many agents look for state["spec"] or state["datasheet_text"]
+        ds = shared_state.get("datasheet_text") or shared_state.get("spec_text")
+        if ds:
+            shared_state["datasheet_text"] = ds
+            shared_state["spec"] = ds
 
         bench_id = payload.get("bench_id")
         create_new = bool(payload.get("create_new_bench"))
