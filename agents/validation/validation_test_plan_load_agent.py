@@ -190,8 +190,8 @@ def run_agent(state: dict) -> dict:
 
         state["status"] = "✅ Validation Test Plan loaded"
         return state
-        
-        except Exception as e:
-            logger.exception("Validation Test Plan Load Agent failed")
-            state["status"] = f"❌ Validation Test Plan Load Agent failed: {type(e).__name__}: {e}"
-            return state
+
+    except Exception as e:
+        logger.exception("Validation Test Plan Load Agent failed")
+        state["status"] = f"❌ Validation Test Plan Load Agent failed: {type(e).__name__}: {e}"
+        return state
