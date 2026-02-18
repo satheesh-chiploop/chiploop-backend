@@ -116,50 +116,7 @@ def append_artifact_record(
         )
 
 
-def append_artifact_record(
-    workflow_id: str,
-    agent_name: str,
-    key: str,
-    storage_path: str,
-) -> None:
-    """
-    Append/merge a single artifact entry into workflows.artifacts.
 
-    Final JSON shape (example):
-
-    {
-      "Digital Spec Agent": {
-        "spec_json": "backend/workflows/<id>/digital/spec.json"
-      },
-      "Digital RTL Agent": {
-        "rtl_log": "artifacts/anonymous/workflows/<id>/rtl/rtl_agent_compile.log"
-      }
-    }
-
-    The frontend expects each leaf value (like storage_path) to be a STRING
-    so that createSignedUrl(path) works without 'e.replace is not a function' errors.
-    """
-    try:
-        artifacts = _safe_get_artifacts(workflow_id)
-
-        agent_entry = artifacts.get(agent_name)
-        if not isinstance(agent_entry, dict):
-            agent_entry = {}
-
-        # Store exactly the string path that Supabase Storage uses
-        agent_entry[key] = storage_path
-        artifacts[agent_name] = agent_entry
-
-        supabase.table("workflows").update({"artifacts": artifacts}).eq("id", workflow_id).execute()
-        logger.info(
-            f"artifact_utils: Updated artifacts for workflow={workflow_id}, "
-            f"agent={agent_name}, key={key}, path={storage_path}"
-        )
-    except Exception as exc:
-        logger.exception(
-            f"artifact_utils: Failed to append artifact record for workflow={workflow_id}, "
-            f"agent={agent_name}, key={key}: {exc}"
-        )
 
 
 def save_text_artifact_and_record(

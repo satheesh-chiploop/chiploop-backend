@@ -519,7 +519,9 @@ def append_log_run(run_id: str, line: str, status: Optional[str] = None,
         new_logs = (current + ("\n" if current else "") + line).strip()
         new_logs = _truncate_tail(new_logs, MAX_LOG_CHARS)
 
-        update = {"logs": new_logs, "updated_at": datetime.utcnow().isoformat()}
+
+        update = {"logs": new_logs}
+    
         if status:
             update["status"] = status
         if artifacts_path is not None:
