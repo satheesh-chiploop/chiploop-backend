@@ -79,9 +79,11 @@ def append_artifact_record(
         # Store exactly the string path that Supabase Storage uses
         agent_entry[key] = storage_path
         artifacts[agent_name] = agent_entry
-        MAX_ARTIFACTS_JSON_CHARS = 500000
+        MAX_ARTIFACTS_JSON_CHARS = 7500
         # Best-effort: keep the DB artifacts index small. Storage is source of truth.
-        payload_len = len(json.dumps(artifacts, ensure_ascii=False))
+        payload = json.dumps(artifacts, ensure_ascii=False, separators=(",", ":"))
+        payload_len = len(payload)
+      
         if payload_len > MAX_ARTIFACTS_JSON_CHARS:
             # Fall back to a compact pointer + the current artifact only.
             logger.warning(
