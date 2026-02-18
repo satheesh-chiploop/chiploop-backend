@@ -2780,67 +2780,170 @@ def _normalize_storage_path(p: str) -> str:
     return p
 
 
+#@app.get("/workflow/{workflow_id}/download_zip")
+#def download_workflow_zip(workflow_id: str):
+#    # 1) Load artifacts JSON
+#   row = (
+#       supabase.table("workflows")
+#        .select("artifacts")
+#        .eq("id", workflow_id)
+#        .single()
+#       .execute()
+#    )
+
+#    artifacts = (row.data or {}).get("artifacts") or {}
+#    if not artifacts:
+#        raise HTTPException(status_code=404, detail="No artifacts found for this workflow.")
+
+#   # 2) Collect storage paths
+#    raw_paths = list(_iter_leaf_strings(artifacts))
+#    storage_paths = []
+#    seen = set()
+#   for p in raw_paths:
+#        sp = _normalize_storage_path(p)
+#        # ignore obvious non-storage values
+#        if not sp or sp.endswith(".txt") is False and "backend/workflows/" not in sp and "/" not in sp:
+#           # (keep this loose; you can tighten later)
+#            pass
+#       if sp not in seen:
+#            storage_paths.append(sp)
+#            seen.add(sp)
+
+#    if not storage_paths:
+#        raise HTTPException(status_code=404, detail="No downloadable storage paths found in artifacts JSON.")
+
+#    # 3) Build ZIP in-memory
+#    buf = io.BytesIO()
+#    with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+#        for sp in storage_paths:
+#            try:
+#                res = supabase.storage.from_(ARTIFACT_BUCKET).download(sp)
+#                # supabase-py returns bytes
+#                if not res:
+#                    continue
+
+#                # Put in zip with a friendly name
+#                # Example: backend/workflows/<id>/spec/top_module.v -> spec/top_module.v
+#                arcname = sp
+#                needle = f"backend/workflows/{workflow_id}/"
+#                if needle in sp:
+#                    arcname = sp.split(needle, 1)[1]
+#                zf.writestr(arcname, res)
+#            except Exception as e:
+#                # Don’t fail whole zip; include an error file instead
+#                zf.writestr(f"errors/{sp.replace('/', '_')}.error.txt", f"Failed to download {sp}\n{e}\n")
+
+#    buf.seek(0)
+
+#    filename = f"workflow_{workflow_id}_artifacts.zip"
+#    return StreamingResponse(
+#        buf,
+#        media_type="application/zip",
+#        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+#    )
+
 @app.get("/workflow/{workflow_id}/download_zip")
-def download_workflow_zip(workflow_id: str):
-    # 1) Load artifacts JSON
-    row = (
-        supabase.table("workflows")
-        .select("artifacts")
-        .eq("id", workflow_id)
-        .single()
-        .execute()
-    )
+def download_workflow_zip(workflow_id: str, full: bool = False):
+    """
+    Default (full=False): existing Studio behavior (zip from workflows.artifacts JSON)
+    If full=True: zip by listing ALL objects in Storage under backend/workflows/<workflow_id>/
+                  (works even if workflows.artifacts is incomplete due to payload limits)
+    """
 
-    artifacts = (row.data or {}).get("artifacts") or {}
-    if not artifacts:
-        raise HTTPException(status_code=404, detail="No artifacts found for this workflow.")
+    prefix = f"backend/workflows/{workflow_id}/"
 
-    # 2) Collect storage paths
-    raw_paths = list(_iter_leaf_strings(artifacts))
-    storage_paths = []
-    seen = set()
-    for p in raw_paths:
-        sp = _normalize_storage_path(p)
-        # ignore obvious non-storage values
-        if not sp or sp.endswith(".txt") is False and "backend/workflows/" not in sp and "/" not in sp:
-            # (keep this loose; you can tighten later)
-            pass
-        if sp not in seen:
-            storage_paths.append(sp)
-            seen.add(sp)
+    def _list_all_files_recursive(path_prefix: str):
+        """
+        Recursively list all files under a storage prefix.
+        supabase.storage.list(path) returns entries; folders typically have no mimetype.
+        """
+        out = []
+        entries = supabase.storage.from_(ARTIFACT_BUCKET).list(path_prefix) or []
+        for e in entries:
+            name = e.get("name")
+            if not name:
+                continue
 
-    if not storage_paths:
-        raise HTTPException(status_code=404, detail="No downloadable storage paths found in artifacts JSON.")
+            full_path = f"{path_prefix}{name}"
 
-    # 3) Build ZIP in-memory
+            meta = (e.get("metadata") or {})
+            mimetype = meta.get("mimetype")
+
+            if mimetype:
+                # It's a file
+                out.append(full_path)
+            else:
+                # It's a folder
+                out.extend(_list_all_files_recursive(full_path + "/"))
+        return out
+
+    # --------------------------
+    # 1) Decide storage paths
+    # --------------------------
+    if full:
+        storage_paths = _list_all_files_recursive(prefix)
+        if not storage_paths:
+            raise HTTPException(status_code=404, detail="No artifacts found in storage for this workflow.")
+    else:
+        # Existing behavior: use artifacts JSON
+        row = (
+            supabase.table("workflows")
+            .select("artifacts")
+            .eq("id", workflow_id)
+            .single()
+            .execute()
+        )
+
+        artifacts = (row.data or {}).get("artifacts") or {}
+        if not artifacts:
+            raise HTTPException(status_code=404, detail="No artifacts found for this workflow.")
+
+        raw_paths = list(_iter_leaf_strings(artifacts))
+        storage_paths = []
+        seen = set()
+        for p in raw_paths:
+            sp = _normalize_storage_path(p)
+            if not sp:
+                continue
+            if sp not in seen:
+                storage_paths.append(sp)
+                seen.add(sp)
+
+        if not storage_paths:
+            raise HTTPException(status_code=404, detail="No downloadable storage paths found in artifacts JSON.")
+
+    # --------------------------
+    # 2) Build ZIP in-memory
+    # --------------------------
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         for sp in storage_paths:
             try:
                 res = supabase.storage.from_(ARTIFACT_BUCKET).download(sp)
-                # supabase-py returns bytes
                 if not res:
                     continue
 
-                # Put in zip with a friendly name
-                # Example: backend/workflows/<id>/spec/top_module.v -> spec/top_module.v
+                # Put in zip with a friendly name relative to workflow folder if possible
                 arcname = sp
-                needle = f"backend/workflows/{workflow_id}/"
-                if needle in sp:
-                    arcname = sp.split(needle, 1)[1]
+                if sp.startswith(prefix):
+                    arcname = sp[len(prefix):]
+
                 zf.writestr(arcname, res)
             except Exception as e:
-                # Don’t fail whole zip; include an error file instead
-                zf.writestr(f"errors/{sp.replace('/', '_')}.error.txt", f"Failed to download {sp}\n{e}\n")
+                zf.writestr(
+                    f"errors/{sp.replace('/', '_')}.error.txt",
+                    f"Failed to download {sp}\n{e}\n"
+                )
 
     buf.seek(0)
 
-    filename = f"workflow_{workflow_id}_artifacts.zip"
+    filename = f"workflow_{workflow_id}_artifacts.zip" if not full else f"workflow_{workflow_id}_artifacts_full.zip"
     return StreamingResponse(
         buf,
         media_type="application/zip",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
 
 @app.post("/validation/instruments/register")
 async def validation_register_instrument(payload: InstrumentRegisterIn, request: Request):
