@@ -38,6 +38,18 @@ import logging
 logger = logging.getLogger("chiploop")
 logging.basicConfig(level=logging.INFO)
 
+# Soft limits to avoid PostgREST "payload string too long" on logs/artifacts fields.
+MAX_LOG_CHARS = 500000  # ~200KB
+MAX_WORKFLOW_ARTIFACTS_JSON_CHARS = 500000
+
+def _truncate_tail(s: str, max_chars: int) -> str:
+    if not s:
+        return ""
+    if len(s) <= max_chars:
+        return s
+    # Keep the tail so the newest context stays visible.
+    return "[TRUNCATED]\n" + s[-max_chars:]
+
 # ---------------- Supabase client ----------------
 try:
     from supabase import create_client, Client  # supabase-py v2
@@ -454,35 +466,65 @@ load_custom_agents()
 # ---------- Logging Helpers (ID-based) ----------
 # ==========================================================
 
+
 def append_log_workflow(workflow_id: str, line: str, status: Optional[str] = None,
                         phase: Optional[str] = None, artifacts: Optional[dict] = None):
     """
     Append a line to workflows.logs by workflow ID, and optionally update status/phase/artifacts.
+
+    Note: workflows.logs and workflows.artifacts are best-effort UI conveniences.
+    For long runs, they can hit PostgREST payload limits; we truncate/skip to keep the run alive.
     """
     try:
         row = supabase.table("workflows").select("logs").eq("id", workflow_id).single().execute()
         current = (row.data or {}).get("logs") or ""
         new_logs = (current + ("\n" if current else "") + line).strip()
+        new_logs = _truncate_tail(new_logs, MAX_LOG_CHARS)
+
         update = {"logs": new_logs, "updated_at": datetime.utcnow().isoformat()}
-        if status: update["status"] = status
-        if phase:  update["phase"] = phase
-        if artifacts is not None: update["artifacts"] = artifacts
+        if status:
+            update["status"] = status
+        if phase:
+            update["phase"] = phase
+
+        # Avoid pushing huge artifacts JSON through this path.
+        if artifacts is not None:
+            try:
+                if len(json.dumps(artifacts, ensure_ascii=False)) <= MAX_WORKFLOW_ARTIFACTS_JSON_CHARS:
+                    update["artifacts"] = artifacts
+                else:
+                    logger.warning(
+                        f"⚠️ append_log_workflow skipping artifacts update (too large) workflow={workflow_id}"
+                    )
+            except Exception:
+                logger.warning(
+                    f"⚠️ append_log_workflow skipping artifacts update (serialization error) workflow={workflow_id}"
+                )
+
         supabase.table("workflows").update(update).eq("id", workflow_id).execute()
     except Exception as e:
         logger.warning(f"⚠️ append_log_workflow failed: {e}")
+
 
 def append_log_run(run_id: str, line: str, status: Optional[str] = None,
                    artifacts_path: Optional[str] = None):
     """
     Append a line to runs.logs by run ID, and optionally update status and artifacts_path.
+
+    Note: runs.logs can grow large on long runs; we truncate to avoid PostgREST payload limits.
     """
     try:
         row = supabase.table("runs").select("logs").eq("id", run_id).single().execute()
         current = (row.data or {}).get("logs") or ""
         new_logs = (current + ("\n" if current else "") + line).strip()
-        update = {"logs": new_logs}
-        if status: update["status"] = status
-        if artifacts_path is not None: update["artifacts_path"] = artifacts_path
+        new_logs = _truncate_tail(new_logs, MAX_LOG_CHARS)
+
+        update = {"logs": new_logs, "updated_at": datetime.utcnow().isoformat()}
+        if status:
+            update["status"] = status
+        if artifacts_path is not None:
+            update["artifacts_path"] = artifacts_path
+
         supabase.table("runs").update(update).eq("id", run_id).execute()
     except Exception as e:
         logger.warning(f"⚠️ append_log_run failed: {e}")

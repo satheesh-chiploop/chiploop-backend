@@ -57,6 +57,64 @@ def _safe_get_artifacts(workflow_id: str) -> Dict[str, Any]:
     logger.warning("artifact_utils: artifacts column has unexpected type; resetting.")
     return {}
 
+def append_artifact_record(
+    workflow_id: str,
+    agent_name: str,
+    key: str,
+    storage_path: str,
+) -> None:
+    """
+    Append/merge a single artifact entry into workflows.artifacts.
+
+    Note: Storage is the source of truth. This DB field is a best-effort index and is
+    allowed to compact/overflow to avoid PostgREST payload limits.
+    """
+    try:
+        artifacts = _safe_get_artifacts(workflow_id)
+
+        agent_entry = artifacts.get(agent_name)
+        if not isinstance(agent_entry, dict):
+            agent_entry = {}
+
+        # Store exactly the string path that Supabase Storage uses
+        agent_entry[key] = storage_path
+        artifacts[agent_name] = agent_entry
+        MAX_ARTIFACTS_JSON_CHARS = 500000
+        # Best-effort: keep the DB artifacts index small. Storage is source of truth.
+        payload_len = len(json.dumps(artifacts, ensure_ascii=False))
+        if payload_len > MAX_ARTIFACTS_JSON_CHARS:
+            # Fall back to a compact pointer + the current artifact only.
+            logger.warning(
+                f"artifact_utils: artifacts index too large ({payload_len} chars). "
+                f"Compacting for workflow={workflow_id}."
+            )
+            artifacts = {
+                "__mode": "prefix",
+                "__prefix": f"backend/workflows/{workflow_id}/",
+                agent_name: {key: storage_path},
+            }
+
+        try:
+            supabase.table("workflows").update({"artifacts": artifacts}).eq("id", workflow_id).execute()
+            logger.info(
+                f"artifact_utils: Updated artifacts for workflow={workflow_id}, "
+                f"agent={agent_name}, key={key}, path={storage_path}"
+            )
+        except Exception as e:
+            # If DB update fails (often due to payload size), don't fail the run —
+            # the artifact is already uploaded to Storage.
+            logger.error(
+                f"artifact_utils: Failed to append artifact record for workflow={workflow_id}, "
+                f"agent={agent_name}, key={key}: {e}"
+            )
+            return
+
+    except Exception as exc:
+        logger.exception(
+            f"artifact_utils: Failed to append artifact record for workflow={workflow_id}, "
+            f"agent={agent_name}, key={key}: {exc}"
+        )
+
 
 def append_artifact_record(
     workflow_id: str,
