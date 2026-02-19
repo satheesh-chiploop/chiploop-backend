@@ -97,7 +97,7 @@ def append_artifact_record(
             }
 
         try:
-            supabase.table("workflows").update({"artifacts": artifacts}).select("id").eq("id", workflow_id).execute()
+            supabase.table("workflows").update({"artifacts": artifacts}).eq("id", workflow_id).execute()
             logger.info(
                 f"artifact_utils: Updated artifacts for workflow={workflow_id}, "
                 f"agent={agent_name}, key={key}, path={storage_path}"
