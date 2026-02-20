@@ -226,6 +226,24 @@ AGENT_CAPABILITIES = {
         "requires": [],
     },
 
+    "Digital Smoke Preflight Agent": {
+        "domain": "digital",
+        "inputs": ["*.v", "*.sv", "*.vh", "*.svh", "*_spec.json"],
+        "outputs": ["vv/smoke/smoke_preflight.json"],
+        "description": "Normalizes RTL inputs for Smoke, infers top module, and writes a stable smoke_preflight.json manifest.",
+        "requires": [],
+    },
+
+    "Digital Smoke Executive Summary Agent": {
+        "domain": "digital",
+        "inputs": ["rtl_agent_compile.log", "vv/tb/sim_control_generation_report.json", "vv/smoke/smoke_preflight.json"],
+        "outputs": ["vv/smoke/SMOKE_SUMMARY.md", "vv/smoke/smoke_summary.json"],
+        "description": "Creates one-page Smoke PASS/FAIL summary + next steps using compile + sim control outputs.",
+        "requires": [],
+    },
+
+
+
 
     # -------------------------
     # ANALOG
