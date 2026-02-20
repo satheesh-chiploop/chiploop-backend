@@ -1208,6 +1208,8 @@ class ValidationRunAppIn(BaseModel):
     toggles: Optional[Dict[str, bool]] = None  # {"apply": false, ...}
 
 
+
+
 def execute_validation_run_app_background(
     workflow_id: str,
     run_id: str,
@@ -1363,6 +1365,221 @@ async def apps_validation_run(request: Request, background_tasks: BackgroundTask
     )
 
     return {"ok": True, "workflow_id": workflow_id, "run_id": run_id}
+
+
+
+# ==========================================================
+# ✅ DIGITAL APPS (Arch2RTL / DQA / Verify) — same pattern as Validation Run App
+# ==========================================================
+
+class DigitalArch2RTLAppIn(BaseModel):
+    project_name: Optional[str] = None
+    top_module: Optional[str] = None
+    design_language: Optional[str] = None  # "SV/Verilog" etc
+
+    spec_text: Optional[str] = None
+    interfaces: Optional[Any] = None  # keep flexible for now
+
+    throughput_latency_targets: Optional[str] = None
+    clocks: Optional[Any] = None
+    resets: Optional[Any] = None
+    power_priority: Optional[str] = None
+
+    toggles: Optional[Dict[str, bool]] = None  # {"gen_regmap":true, "gen_upf_lite":false, "gen_packaging":true}
+
+
+class DigitalDQAAppIn(BaseModel):
+    # RTL source options
+    rtl_source_mode: Optional[str] = None  # "from_arch2rtl" | "paste" | "repo_path"
+    from_workflow_id: Optional[str] = None
+    repo_path: Optional[str] = None
+    pasted_rtl_files: Optional[Any] = None  # [{path, content}]
+
+    clocks: Optional[Any] = None
+    resets: Optional[Any] = None
+
+    lint_profile: Optional[str] = "medium"
+    cdc_profile: Optional[str] = "default"
+    target: Optional[str] = "asic"
+    toggles: Optional[Dict[str, bool]] = None  # {"enable_autofix":false}
+
+
+class DigitalVerifyAppIn(BaseModel):
+    rtl_source_mode: Optional[str] = None
+    from_workflow_id: Optional[str] = None
+    repo_path: Optional[str] = None
+    pasted_rtl_files: Optional[Any] = None
+
+    test_intent: Optional[str] = None
+    interfaces: Optional[Any] = None
+    random_vs_directed: Optional[str] = None
+    coverage_targets: Optional[str] = None
+    simulator_type: Optional[str] = None
+    seed_count: Optional[int] = None
+
+    toggles: Optional[Dict[str, bool]] = None  # {"enable_formal":false, "enable_golden_model":false}
+
+
+def execute_digital_app_background(
+    workflow_id: str,
+    run_id: str,
+    user_id: str,
+    artifact_dir: str,
+    app_name: str,
+    template_workflow_name: str,
+    payload: Dict[str, Any],
+):
+    try:
+        os.makedirs(artifact_dir, exist_ok=True)
+
+        shared_state = {
+            "workflow_id": workflow_id,
+            "run_id": run_id,
+            "artifact_dir": artifact_dir,
+            "supabase_client": supabase,
+            "user_id": user_id,
+            # IMPORTANT: give agents a canonical storage prefix for robust ZIP (?full=1)
+            "artifact_prefix": f"backend/workflows/{workflow_id}/digital/{app_name}/{run_id}/",
+            "app_name": app_name,
+            "loop_type": "digital",
+        }
+
+        # Inject payload fields into shared_state
+        for k, v in (payload or {}).items():
+            if v is not None:
+                shared_state[k] = v
+
+        # Normalize spec fields (Arch2RTL agents often expect state["spec"])
+        if shared_state.get("spec_text"):
+            shared_state["spec"] = shared_state["spec_text"]
+
+        append_log_workflow(workflow_id, f"🚀 Starting Digital App: {app_name}", phase="start")
+        append_log_run(run_id, f"🚀 Starting Digital App: {app_name}")
+
+        append_log_workflow(workflow_id, f"▶️ Loading Studio workflow: {template_workflow_name}", phase="load")
+        append_log_run(run_id, f"▶️ Loading Studio workflow: {template_workflow_name}")
+
+        # Load Studio prebuilt workflow and convert to executor nodes
+        defn = _load_workflow_def_by_name(template_workflow_name, user_id=user_id)
+        nodes = _definition_to_executor_nodes(defn)
+
+        # Run nodes (loop_type="digital" so it uses DIGITAL_AGENT_FUNCTIONS)
+        _run_nodes_with_shared_state(
+            workflow_id=workflow_id,
+            run_id=run_id,
+            loop_type="digital",
+            nodes=nodes,
+            shared_state=shared_state,
+        )
+
+        append_log_workflow(workflow_id, f"🎉 Digital App complete: {app_name}", status="completed", phase="done")
+        append_log_run(run_id, f"🎉 Digital App complete: {app_name}", status="completed")
+
+    except Exception as e:
+        err = f"❌ Digital App crashed ({app_name}): {type(e).__name__}: {e}\n{traceback.format_exc()}"
+        append_log_workflow(workflow_id, err, status="failed", phase="error")
+        append_log_run(run_id, err, status="failed")
+
+
+def _create_app_workflow_and_run(user_id: str, app_title: str, loop_type: str):
+    workflow_id = str(uuid.uuid4())
+    run_id = str(uuid.uuid4())
+    now = datetime.utcnow().isoformat()
+
+    supabase.table("workflows").insert({
+        "id": workflow_id,
+        "user_id": user_id,
+        "name": app_title,
+        "status": "running",
+        "phase": "queued",
+        "logs": "🚀 App run queued.",
+        "created_at": now,
+        "updated_at": now,
+        "artifacts": {},
+        "loop_type": loop_type,
+        "definitions": {"app_intent": app_title},
+    }).execute()
+
+    user_folder = str(user_id or "anonymous")
+    artifact_dir = os.path.join("artifacts", user_folder, workflow_id, run_id, "digital")
+    os.makedirs(artifact_dir, exist_ok=True)
+
+    supabase.table("runs").insert({
+        "id": run_id,
+        "user_id": user_id,
+        "workflow_id": workflow_id,
+        "loop_type": loop_type,
+        "status": "running",
+        "logs": "🚀 App run started.",
+        "artifacts_path": artifact_dir,
+        "created_at": now
+    }).execute()
+
+    return workflow_id, run_id, artifact_dir
+
+
+@app.post("/apps/arch2rtl/run")
+async def apps_arch2rtl_run(request: Request, background_tasks: BackgroundTasks, payload: DigitalArch2RTLAppIn):
+    user_id = _require_user_id(request)
+    workflow_id, run_id, base_dir = _create_app_workflow_and_run(user_id, "App: Arch2RTL", "digital")
+    artifact_dir = os.path.join(base_dir, "arch2rtl")
+    os.makedirs(artifact_dir, exist_ok=True)
+
+    background_tasks.add_task(
+        execute_digital_app_background,
+        workflow_id,
+        run_id,
+        user_id,
+        artifact_dir,
+        "arch2rtl",
+        "Digital_Arch2RTL",
+        payload.dict(),
+    )
+
+    return {"ok": True, "workflow_id": workflow_id, "run_id": run_id}
+
+
+@app.post("/apps/dqa/run")
+async def apps_dqa_run(request: Request, background_tasks: BackgroundTasks, payload: DigitalDQAAppIn):
+    user_id = _require_user_id(request)
+    workflow_id, run_id, base_dir = _create_app_workflow_and_run(user_id, "App: DQA", "digital")
+    artifact_dir = os.path.join(base_dir, "dqa")
+    os.makedirs(artifact_dir, exist_ok=True)
+
+    background_tasks.add_task(
+        execute_digital_app_background,
+        workflow_id,
+        run_id,
+        user_id,
+        artifact_dir,
+        "dqa",
+        "Digital_DQA",
+        payload.dict(),
+    )
+
+    return {"ok": True, "workflow_id": workflow_id, "run_id": run_id}
+
+
+@app.post("/apps/verify/run")
+async def apps_verify_run(request: Request, background_tasks: BackgroundTasks, payload: DigitalVerifyAppIn):
+    user_id = _require_user_id(request)
+    workflow_id, run_id, base_dir = _create_app_workflow_and_run(user_id, "App: Verify", "digital")
+    artifact_dir = os.path.join(base_dir, "verify")
+    os.makedirs(artifact_dir, exist_ok=True)
+
+    background_tasks.add_task(
+        execute_digital_app_background,
+        workflow_id,
+        run_id,
+        user_id,
+        artifact_dir,
+        "verify",
+        "Digital_Verify",
+        payload.dict(),
+    )
+
+    return {"ok": True, "workflow_id": workflow_id, "run_id": run_id}
+
 
 
 
