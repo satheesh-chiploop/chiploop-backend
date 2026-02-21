@@ -259,6 +259,10 @@ from agents.digital.digital_power_intent_upf_agent import run_agent as digital_p
 from agents.digital.digital_synthesis_readiness_agent import run_agent as digital_synthesis_readiness_agent
 from agents.digital.digital_smoke_preflight_agent import run_agent as digital_smoke_preflight_agent
 from agents.digital.digital_smoke_exec_summary_agent import run_agent as digital_smoke_exec_summary_agent
+from agents.digital.digital_rtl_signature_agent import run_agent as digital_rtl_signature_agent
+from agents.digital.digital_integration_intent_agent import run_agent as digital_integration_intent_agent
+from agents.digital.digital_top_assembly_agent import run_agent as digital_top_assembly_agent
+
 
 
 DIGITAL_AGENT_FUNCTIONS: Dict[str, Any] = {
@@ -293,6 +297,9 @@ DIGITAL_AGENT_FUNCTIONS: Dict[str, Any] = {
     "Digital IP Packaging & Handoff Agent": digital_ip_packaging_handoff_agent,
     "Digital Smoke Preflight Agent": digital_smoke_preflight_agent,
     "Digital Smoke Executive Summary Agent": digital_smoke_exec_summary_agent,
+    "Digital RTL Signature Agent": digital_rtl_signature_agent,
+    "Digital Integration Intent Agent": digital_integration_intent_agent,
+    "Digital Top Assembly Agent": digital_top_assembly_agent,
 }
 
 # ==========================================================
@@ -407,6 +414,9 @@ SYSTEM_AGENT_FUNCTIONS: Dict[str,Any] = {
     "Digital IP Packaging & Handoff Agent": digital_ip_packaging_handoff_agent, 
     "Digital Smoke Preflight Agent": digital_smoke_preflight_agent,
     "Digital Smoke Executive Summary Agent": digital_smoke_exec_summary_agent,
+    "Digital RTL Signature Agent": digital_rtl_signature_agent,
+    "Digital Integration Intent Agent": digital_integration_intent_agent,
+    "Digital Top Assembly Agent": digital_top_assembly_agent,
     "Analog Spec Agent": analog_spec_agent,
     "Analog Netlist Agent": analog_netlist_agent,
     "Analog Sim Agent": analog_sim_agent,
@@ -1426,6 +1436,42 @@ class DigitalVerifyAppIn(BaseModel):
     toggles: Optional[Dict[str, bool]] = None  # {"enable_formal":false, "enable_golden_model":false}
 
 
+
+class DigitalSmokeAppIn(BaseModel):
+    # RTL source (same spirit as DQA/Verify)
+    rtl_source_mode: Optional[str] = None  # "from_arch2rtl" | "paste" | "repo_path"
+    from_workflow_id: Optional[str] = None
+    repo_path: Optional[str] = None
+    pasted_rtl_files: Optional[Any] = None  # [{path, content}]
+
+    # Smoke knobs (small)
+    simulator_type: Optional[str] = None     # e.g. "verilator" / "iverilog" / "vcs"
+    time_budget: Optional[str] = "fast"      # "fast" | "medium"
+    seed_count: Optional[int] = None         # optional override
+    enable_waveform: Optional[bool] = False
+
+    # optional freeform notes
+    notes: Optional[str] = None
+
+
+class DigitalIntegrateAppIn(BaseModel):
+    # RTL source (same spirit as DQA/Verify/Smoke)
+    rtl_source_mode: Optional[str] = None  # "from_arch2rtl" | "paste" | "repo_path"
+    from_workflow_id: Optional[str] = None
+    repo_path: Optional[str] = None
+    pasted_rtl_files: Optional[Any] = None  # [{path, content}]
+
+    # Integrate knobs (Model 2: text -> intent -> top.sv)
+    top_name: str
+    integration_description: str
+
+    # Optional extras
+    enable_packaging: Optional[bool] = True
+    notes: Optional[str] = None
+
+
+
+
 def execute_digital_app_background(
     workflow_id: str,
     run_id: str,
@@ -1586,6 +1632,69 @@ async def apps_verify_run(request: Request, background_tasks: BackgroundTasks, p
 
     return {"ok": True, "workflow_id": workflow_id, "run_id": run_id}
 
+@app.post("/apps/smoke/run")
+async def apps_smoke_run(request: Request, background_tasks: BackgroundTasks, payload: DigitalSmokeAppIn):
+    user_id = _require_user_id(request)
+
+    # Reuse same helper used by other apps (Arch2RTL/DQA/Verify)
+    workflow_id, run_id, base_dir = _create_app_workflow_and_run(user_id, "App: Smoke", "digital")
+
+    artifact_dir = os.path.join(base_dir, "smoke")
+    os.makedirs(artifact_dir, exist_ok=True)
+
+    # Auto defaults (keep Smoke fast)
+    data = payload.dict() if payload else {}
+    if not data.get("seed_count"):
+        tb = (data.get("time_budget") or "fast").lower()
+        data["seed_count"] = 5 if tb == "fast" else 20
+
+    # Normalize simulator key for downstream agents (some use sim_type/simulator)
+    if data.get("simulator_type") and not data.get("simulator"):
+        data["simulator"] = data["simulator_type"]
+    if data.get("simulator_type") and not data.get("sim_type"):
+        data["sim_type"] = data["simulator_type"]
+
+    background_tasks.add_task(
+        execute_digital_app_background,
+        workflow_id,
+        run_id,
+        user_id,
+        artifact_dir,
+        "smoke",             # app_name
+        "Digital_Smoke",      # Studio workflow template name
+        data,
+    )
+
+    return {"ok": True, "workflow_id": workflow_id, "run_id": run_id}
+
+
+@app.post("/apps/integrate/run")
+async def apps_integrate_run(request: Request, background_tasks: BackgroundTasks, payload: DigitalIntegrateAppIn):
+    user_id = _require_user_id(request)
+
+    workflow_id, run_id, base_dir = _create_app_workflow_and_run(user_id, "App: Integrate", "digital")
+
+    artifact_dir = os.path.join(base_dir, "integrate")
+    os.makedirs(artifact_dir, exist_ok=True)
+
+    data = payload.dict() if payload else {}
+
+    # Normalize keys expected by Integrate agents / workflow
+    # Model 2 uses integration_description (free text) and top_module
+    data["top_module"] = data.get("top_name")
+
+    background_tasks.add_task(
+        execute_digital_app_background,
+        workflow_id,
+        run_id,
+        user_id,
+        artifact_dir,
+        "integrate",          # app_name
+        "Digital_Integrate",  # Studio workflow template name
+        data,
+    )
+
+    return {"ok": True, "workflow_id": workflow_id, "run_id": run_id}
 
 
 

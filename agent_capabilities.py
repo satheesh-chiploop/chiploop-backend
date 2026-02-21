@@ -242,8 +242,29 @@ AGENT_CAPABILITIES = {
         "requires": [],
     },
 
+    "Digital RTL Signature Agent": {
+        "domain": "digital",
+        "inputs": ["*.v", "*.sv", "*.vh", "*.svh"],
+        "outputs": ["integrate/rtl_signatures.json"],
+        "description": "Scans RTL sources and extracts module/port signatures into a stable rtl_signatures.json for downstream integration planning.",
+        "requires": [],
+    },
 
+    "Digital Integration Intent Agent": {
+        "domain": "digital",
+        "inputs": ["integrate/rtl_signatures.json", "integration_description", "top_module(optional)"],
+        "outputs": ["integrate/integration_intent.json"],
+        "description": "Transforms user integration description into structured integration_intent.json (instances, connections, tieoffs) using RTL signatures.",
+        "requires": [],
+    },
 
+    "Digital Top Assembly Agent": {
+        "domain": "digital",
+        "inputs": ["integrate/integration_intent.json", "integrate/rtl_signatures.json", "top_module"],
+        "outputs": ["integrate/*.sv", "integrate/top_assembly_report.md"],
+        "description": "Generates top-level assembly RTL (top_module.sv) and a short assembly report from the integration intent.",
+        "requires": [],
+    },
 
     # -------------------------
     # ANALOG
