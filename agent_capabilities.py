@@ -269,18 +269,74 @@ AGENT_CAPABILITIES = {
     # -------------------------
     # ANALOG
     # -------------------------
-    "Analog Spec Agent": {
+    # -------------------------
+    # ANALOG (NEW, FRESH)
+    # -------------------------
+    "Analog Spec Builder Agent": {
         "domain": "analog",
-        "inputs": [],
-        "outputs": ["analog_spec.json"],
-        "description": "Creates an analog block spec JSON (interfaces, performance targets, constraints).",
+        "inputs": ["datasheet_text", "goal", "scope"],
+        "outputs": ["analog/spec.json", "analog/spec_summary.md"],
+        "description": "Extracts a structured analog block spec (ports, modes, targets, corners, validation intent).",
     },
-
-    "Analog Netlist Agent": {
+    "Analog Netlist Scaffold Agent": {
         "domain": "analog",
-        "inputs": ["analog_spec.json"],
-        "outputs": ["analog_netlist.cir", "analog_netlist_agent.log"],
-        "description": "Generates a baseline SPICE netlist scaffold from an analog spec.",
+        "inputs": ["analog/spec.json"],
+        "outputs": ["analog/netlist.sp", "analog/netlist_summary.md"],
+        "description": "Generates a SPICE netlist scaffold aligned to spec pins and block intent.",
+    },
+    "Analog Simulation Plan Agent": {
+        "domain": "analog",
+        "inputs": ["analog/spec.json", "analog/netlist.sp"],
+        "outputs": ["analog/sim_plan.json", "analog/run_deck.sp"],
+        "description": "Creates sweeps/corners/metrics plan and an example run deck template.",
+    },
+    "Analog Behavioral Model Agent": {
+        "domain": "analog",
+        "inputs": ["analog/spec.json"],
+        "outputs": ["analog/model.sv", "analog/model.va", "analog/model_params.json", "analog/model_notes.md"],
+        "description": "Creates RNM SystemVerilog or Verilog-A behavioral model template + tuning params.",
+    },
+    "Analog Behavioral Testbench Agent": {
+        "domain": "analog",
+        "inputs": ["analog/spec.json", "analog/model.sv"],
+        "outputs": ["analog/tb.sv"],
+        "description": "Generates SystemVerilog testbench stimuli for the behavioral model.",
+    },
+    "Analog Behavioral Assertions Agent": {
+        "domain": "analog",
+        "inputs": ["analog/spec.json", "analog/model.sv"],
+        "outputs": ["analog/sva.sv"],
+        "description": "Generates SV assertions/checkers for enable sequencing, limits, settling windows, etc.",
+    },
+    "Analog Behavioral Coverage Agent": {
+        "domain": "analog",
+        "inputs": ["analog/spec.json"],
+        "outputs": ["analog/coverage_plan.json", "analog/validation_summary.md"],
+        "description": "Defines scenario/corner/sweep coverage intent for analog validation.",
+    },
+    "Analog Correlation Agent": {
+        "domain": "analog",
+        "inputs": ["analog/spec.json", "analog/sim_plan.json", "analog/model.sv"],
+        "outputs": ["analog/metrics_compare.json", "analog/delta_summary.json", "analog/correlation_report.md"],
+        "description": "Defines metric correlation between behavioral and netlist (stimulus-matched correlation).",
+    },
+    "Analog Iteration Proposal Agent": {
+        "domain": "analog",
+        "inputs": ["analog/delta_summary.json", "analog/model.sv"],
+        "outputs": ["analog/iteration_patch.diff", "analog/iteration_rationale.md", "analog/next_run_plan.json"],
+        "description": "Proposes tuning/code patches and re-run plan based on correlation deltas.",
+    },
+    "Analog Abstract Views Agent": {
+        "domain": "analog",
+        "inputs": ["analog/spec.json"],
+        "outputs": ["analog/abstracts/macro.lef", "analog/abstracts/macro_stub.lib", "analog/abstracts/integration_notes.md"],
+        "description": "Generates LEF + LIB stub + integration notes for physical/timing handoff.",
+    },
+    "Analog Executive Summary Agent": {
+        "domain": "analog",
+        "inputs": ["*"],
+        "outputs": ["analog/executive_summary.md"],
+        "description": "Creates an executive-style summary for the analog workflow/app.",
     },
 
     # -------------------------

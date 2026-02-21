@@ -302,19 +302,34 @@ DIGITAL_AGENT_FUNCTIONS: Dict[str, Any] = {
     "Digital Top Assembly Agent": digital_top_assembly_agent,
 }
 
+
 # ==========================================================
-# ✅ ANALOG AGENTS
+# ✅ ANALOG AGENTS (NEW)
 # ==========================================================
-from agents.analog.analog_spec_agent import run_agent as analog_spec_agent
-from agents.analog.analog_netlist_agent import run_agent as analog_netlist_agent
-from agents.analog.analog_sim_agent import run_agent as analog_sim_agent
-from agents.analog.analog_result_agent import run_agent as analog_result_agent
+from agents.analog.analog_spec_builder_agent import run_agent as analog_spec_builder_agent
+from agents.analog.analog_netlist_scaffold_agent import run_agent as analog_netlist_scaffold_agent
+from agents.analog.analog_sim_plan_agent import run_agent as analog_sim_plan_agent
+from agents.analog.analog_behavioral_model_agent import run_agent as analog_behavioral_model_agent
+from agents.analog.analog_behavioral_tb_agent import run_agent as analog_behavioral_tb_agent
+from agents.analog.analog_behavioral_sva_agent import run_agent as analog_behavioral_sva_agent
+from agents.analog.analog_behavioral_coverage_agent import run_agent as analog_behavioral_coverage_agent
+from agents.analog.analog_correlation_agent import run_agent as analog_correlation_agent
+from agents.analog.analog_iteration_agent import run_agent as analog_iteration_agent
+from agents.analog.analog_abstract_views_agent import run_agent as analog_abstract_views_agent
+from agents.analog.analog_exec_summary_agent import run_agent as analog_exec_summary_agent
 
 ANALOG_AGENT_FUNCTIONS: Dict[str, Any] = {
-    "Analog Spec Agent": analog_spec_agent,
-    "Analog Netlist Agent": analog_netlist_agent,
-    "Analog Sim Agent": analog_sim_agent,
-    "Analog Result Agent": analog_result_agent,
+    "Analog Spec Builder Agent": analog_spec_builder_agent,
+    "Analog Netlist Scaffold Agent": analog_netlist_scaffold_agent,
+    "Analog Simulation Plan Agent": analog_sim_plan_agent,
+    "Analog Behavioral Model Agent": analog_behavioral_model_agent,
+    "Analog Behavioral Testbench Agent": analog_behavioral_tb_agent,
+    "Analog Behavioral Assertions Agent": analog_behavioral_sva_agent,
+    "Analog Behavioral Coverage Agent": analog_behavioral_coverage_agent,
+    "Analog Correlation Agent": analog_correlation_agent,
+    "Analog Iteration Proposal Agent": analog_iteration_agent,
+    "Analog Abstract Views Agent": analog_abstract_views_agent,
+    "Analog Executive Summary Agent": analog_exec_summary_agent,
 }
 
 # ==========================================================
@@ -417,10 +432,17 @@ SYSTEM_AGENT_FUNCTIONS: Dict[str,Any] = {
     "Digital RTL Signature Agent": digital_rtl_signature_agent,
     "Digital Integration Intent Agent": digital_integration_intent_agent,
     "Digital Top Assembly Agent": digital_top_assembly_agent,
-    "Analog Spec Agent": analog_spec_agent,
-    "Analog Netlist Agent": analog_netlist_agent,
-    "Analog Sim Agent": analog_sim_agent,
-    "Analog Result Agent": analog_result_agent,
+    "Analog Spec Builder Agent": analog_spec_builder_agent,
+    "Analog Netlist Scaffold Agent": analog_netlist_scaffold_agent,
+    "Analog Simulation Plan Agent": analog_sim_plan_agent,
+    "Analog Behavioral Model Agent": analog_behavioral_model_agent,
+    "Analog Behavioral Testbench Agent": analog_behavioral_tb_agent,
+    "Analog Behavioral Assertions Agent": analog_behavioral_sva_agent,
+    "Analog Behavioral Coverage Agent": analog_behavioral_coverage_agent,
+    "Analog Correlation Agent": analog_correlation_agent,
+    "Analog Iteration Proposal Agent": analog_iteration_agent,
+    "Analog Abstract Views Agent": analog_abstract_views_agent,
+    "Analog Executive Summary Agent": analog_exec_summary_agent,
     "Embedded Spec Agent": embedded_spec_agent,
     "Embedded Code Agent": embedded_code_agent,
     "Embedded Sim Agent": embedded_sim_agent,
@@ -3898,7 +3920,150 @@ async def list_validation_benches(request: Request):
             status_code=500,
             content={"ok": False, "message": f"{type(e).__name__}: {e}"},
         )
+# ==========================================================
+# ✅ ANALOG APPS — same pattern as Validation Run App
+# ==========================================================
 
+class AnalogAppIn(BaseModel):
+    datasheet_text: str
+    goal: Optional[str] = None
+    scope: Optional[Dict[str, Any]] = None
+    toggles: Optional[Dict[str, bool]] = None
+    model_style: Optional[str] = None  # "sv_rnm" | "verilog_a"
+    from_workflow_id: Optional[str] = None
+
+def execute_analog_app_background(
+    workflow_id: str,
+    run_id: str,
+    user_id: str,
+    artifact_dir: str,
+    template_workflow_name: str,
+    payload: Dict[str, Any],
+):
+    try:
+        os.makedirs(artifact_dir, exist_ok=True)
+
+        shared_state = {
+            "workflow_id": workflow_id,
+            "run_id": run_id,
+            "artifact_dir": artifact_dir,
+            "supabase_client": supabase,
+            "user_id": user_id,
+        }
+        for k, v in (payload or {}).items():
+            if v is not None:
+                shared_state[k] = v
+
+        # Normalize: allow either datasheet_text or spec/spec_text
+        ds = (shared_state.get("datasheet_text") or shared_state.get("spec_text") or shared_state.get("spec") or "").strip()
+        if ds:
+            shared_state["datasheet_text"] = ds
+            shared_state["spec"] = ds
+
+        append_log_workflow(workflow_id, f"▶️ Phase: {template_workflow_name}", phase="start")
+        append_log_run(run_id, f"▶️ Phase: {template_workflow_name}")
+
+        defn = _load_workflow_def_by_name(template_workflow_name, user_id=user_id)
+        nodes = _definition_to_executor_nodes(defn)
+
+        _run_nodes_with_shared_state(
+            workflow_id=workflow_id,
+            run_id=run_id,
+            loop_type="analog",
+            nodes=nodes,
+            shared_state=shared_state,
+        )
+
+        append_log_workflow(workflow_id, "🎉 Analog App complete", status="completed", phase="done")
+        append_log_run(run_id, "🎉 Analog App complete", status="completed")
+
+    except Exception as e:
+        err = f"❌ Analog App crashed: {type(e).__name__}: {e}\n{traceback.format_exc()}"
+        append_log_workflow(workflow_id, err, status="failed", phase="error")
+        append_log_run(run_id, err, status="failed")
+
+def _start_analog_app(background_tasks: BackgroundTasks, request: Request, payload: AnalogAppIn, app_name: str, template_workflow_name: str):
+    user_id = _require_user_id(request)
+
+    workflow_id = str(uuid.uuid4())
+    run_id = str(uuid.uuid4())
+    now = datetime.utcnow().isoformat()
+
+    supabase.table("workflows").insert({
+        "id": workflow_id,
+        "user_id": user_id,
+        "name": app_name,
+        "status": "running",
+        "phase": "queued",
+        "logs": "🚀 App run queued.",
+        "created_at": now,
+        "updated_at": now,
+        "artifacts": {},
+        "loop_type": "analog",
+        "definitions": {"app_intent": template_workflow_name, "payload": payload.dict()},
+    }).execute()
+
+    user_folder = str(user_id or "anonymous")
+    artifact_dir = os.path.join("artifacts", user_folder, workflow_id, run_id)
+    os.makedirs(artifact_dir, exist_ok=True)
+
+    supabase.table("runs").insert({
+        "id": run_id,
+        "user_id": user_id,
+        "workflow_id": workflow_id,
+        "loop_type": "analog",
+        "status": "running",
+        "logs": "🚀 App run started.",
+        "artifacts_path": artifact_dir,
+        "created_at": now
+    }).execute()
+
+    append_log_workflow(workflow_id, f"🚀 Starting {app_name}", phase="start")
+    append_log_run(run_id, f"🚀 Starting {app_name}")
+
+    background_tasks.add_task(
+        execute_analog_app_background,
+        workflow_id,
+        run_id,
+        user_id,
+        artifact_dir,
+        template_workflow_name,
+        payload.dict(),
+    )
+
+    return {"ok": True, "workflow_id": workflow_id, "run_id": run_id}
+
+@app.post("/apps/analog/spec/run")
+async def apps_analog_spec(request: Request, background_tasks: BackgroundTasks, payload: AnalogAppIn):
+    return _start_analog_app(background_tasks, request, payload, "App: Analog Spec", "Analog_SpecBuilder")
+
+@app.post("/apps/analog/netlist/run")
+async def apps_analog_netlist(request: Request, background_tasks: BackgroundTasks, payload: AnalogAppIn):
+    return _start_analog_app(background_tasks, request, payload, "App: Analog Netlist", "Analog_NetlistScaffold")
+
+@app.post("/apps/analog/model/run")
+async def apps_analog_model(request: Request, background_tasks: BackgroundTasks, payload: AnalogAppIn):
+    return _start_analog_app(background_tasks, request, payload, "App: Analog Behavioral Model", "Analog_BehavioralModel")
+
+@app.post("/apps/analog/validate-model/run")
+async def apps_analog_validate_model(request: Request, background_tasks: BackgroundTasks, payload: AnalogAppIn):
+    return _start_analog_app(background_tasks, request, payload, "App: Analog Model Validation", "Analog_ModelValidation")
+
+@app.post("/apps/analog/correlate/run")
+async def apps_analog_correlate(request: Request, background_tasks: BackgroundTasks, payload: AnalogAppIn):
+    return _start_analog_app(background_tasks, request, payload, "App: Analog Correlate", "Analog_Correlation")
+
+@app.post("/apps/analog/iterate/run")
+async def apps_analog_iterate(request: Request, background_tasks: BackgroundTasks, payload: AnalogAppIn):
+    return _start_analog_app(background_tasks, request, payload, "App: Analog Iterate", "Analog_Iterate")
+
+@app.post("/apps/analog/abstracts/run")
+async def apps_analog_abstracts(request: Request, background_tasks: BackgroundTasks, payload: AnalogAppIn):
+    return _start_analog_app(background_tasks, request, payload, "App: Analog Abstract Views", "Analog_Abstracts")
+
+@app.post("/apps/analog/run")
+async def apps_analog_run(request: Request, background_tasks: BackgroundTasks, payload: AnalogAppIn):
+    return _start_analog_app(background_tasks, request, payload, "App: Analog Run", "Analog_Run")
 
 
 
