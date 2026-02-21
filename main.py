@@ -1469,8 +1469,87 @@ class DigitalIntegrateAppIn(BaseModel):
     enable_packaging: Optional[bool] = True
     notes: Optional[str] = None
 
+class ValidationPlanCoverageAppIn(BaseModel):
+    datasheet_text: str
+    goal: Optional[str] = None
+    scope_filters: Optional[Dict[str, Any]] = None
+    enable_scope: Optional[bool] = False
+    enable_coverage: Optional[bool] = True
 
+class BenchSetupAppIn(BaseModel):
+    bench_name: str
+    instruments: List[Dict[str, Any]] = Field(default_factory=list)  # UI sends richer objects
+    instrument_ids: Optional[List[str]] = None  # allow direct selection too
+    enable_schematic: Optional[bool] = True
+    enable_preflight: Optional[bool] = False
+    bench_location: Optional[str] = None
 
+class PreflightAppIn(BaseModel):
+    bench_ref: str
+    quick_mode: Optional[bool] = True
+
+class ValidationInsightsAppIn(BaseModel):
+    lookback_runs: int = 10
+    tags: Optional[List[str]] = None
+    enable_evolution: Optional[bool] = True
+    enable_coverage: Optional[bool] = True
+
+def execute_validation_app_background(
+    workflow_id: str,
+    run_id: str,
+    user_id: str,
+    artifact_dir: str,
+    app_name: str,                 # "validation-plan" | "bench-setup" | "preflight" | "validation-insights"
+    studio_template: str,          # "Validation_PlanCoverage" | ...
+    payload: Dict[str, Any],
+):
+    try:
+        os.makedirs(artifact_dir, exist_ok=True)
+
+        shared_state = {
+            "workflow_id": workflow_id,
+            "run_id": run_id,
+            "artifact_dir": artifact_dir,
+            "supabase_client": supabase,
+            "user_id": user_id,
+        }
+
+        # Inject payload -> shared_state
+        for k, v in (payload or {}).items():
+            if v is not None:
+                shared_state[k] = v
+
+        # Normalize datasheet/spec text for plan apps
+        ds = shared_state.get("datasheet_text") or shared_state.get("spec_text")
+        if ds:
+            shared_state["datasheet_text"] = ds
+            shared_state["spec"] = ds
+
+        append_log_workflow(workflow_id, f"🚀 Starting Validation App: {app_name}", phase="start")
+        append_log_run(run_id, f"🚀 Starting Validation App: {app_name}")
+
+        # Load Studio template, execute nodes
+        defn = _load_workflow_def_by_name(studio_template, user_id=user_id)
+        nodes = _definition_to_executor_nodes(defn)
+
+        append_log_workflow(workflow_id, f"▶️ Template: {studio_template}", phase="running")
+        append_log_run(run_id, f"▶️ Template: {studio_template}")
+
+        _run_nodes_with_shared_state(
+            workflow_id=workflow_id,
+            run_id=run_id,
+            loop_type="validation",
+            nodes=nodes,
+            shared_state=shared_state,
+        )
+
+        append_log_workflow(workflow_id, f"🎉 Validation App complete: {app_name}", status="completed", phase="done")
+        append_log_run(run_id, f"🎉 Validation App complete: {app_name}", status="completed")
+
+    except Exception as e:
+        err = f"❌ Validation App crashed ({app_name}): {type(e).__name__}: {e}\n{traceback.format_exc()}"
+        append_log_workflow(workflow_id, err, status="failed", phase="error")
+        append_log_run(run_id, err, status="failed")
 
 def execute_digital_app_background(
     workflow_id: str,
@@ -1694,6 +1773,73 @@ async def apps_integrate_run(request: Request, background_tasks: BackgroundTasks
         data,
     )
 
+    return {"ok": True, "workflow_id": workflow_id, "run_id": run_id}
+
+@app.post("/apps/validation-plan/run")
+async def apps_validation_plan_run(request: Request, background_tasks: BackgroundTasks, payload: ValidationPlanCoverageAppIn):
+    user_id = _require_user_id(request)
+    workflow_id, run_id, base_dir = _create_app_workflow_and_run(user_id, "App: Validation Plan & Coverage", "validation")
+    artifact_dir = os.path.join(base_dir, "validation-plan")
+    os.makedirs(artifact_dir, exist_ok=True)
+
+    background_tasks.add_task(
+        execute_validation_app_background,
+        workflow_id, run_id, user_id, artifact_dir,
+        "validation-plan",
+        "Validation_PlanCoverage",
+        payload.dict(),
+    )
+    return {"ok": True, "workflow_id": workflow_id, "run_id": run_id}
+
+
+@app.post("/apps/bench-setup/run")
+async def apps_bench_setup_run(request: Request, background_tasks: BackgroundTasks, payload: BenchSetupAppIn):
+    user_id = _require_user_id(request)
+    workflow_id, run_id, base_dir = _create_app_workflow_and_run(user_id, "App: Bench Setup", "validation")
+    artifact_dir = os.path.join(base_dir, "bench-setup")
+    os.makedirs(artifact_dir, exist_ok=True)
+
+    background_tasks.add_task(
+        execute_validation_app_background,
+        workflow_id, run_id, user_id, artifact_dir,
+        "bench-setup",
+        "Validation_BenchSetup",
+        payload.dict(),
+    )
+    return {"ok": True, "workflow_id": workflow_id, "run_id": run_id}
+
+
+@app.post("/apps/preflight/run")
+async def apps_preflight_run(request: Request, background_tasks: BackgroundTasks, payload: PreflightAppIn):
+    user_id = _require_user_id(request)
+    workflow_id, run_id, base_dir = _create_app_workflow_and_run(user_id, "App: Preflight", "validation")
+    artifact_dir = os.path.join(base_dir, "preflight")
+    os.makedirs(artifact_dir, exist_ok=True)
+
+    background_tasks.add_task(
+        execute_validation_app_background,
+        workflow_id, run_id, user_id, artifact_dir,
+        "preflight",
+        "Validation_Preflight",
+        payload.dict(),
+    )
+    return {"ok": True, "workflow_id": workflow_id, "run_id": run_id}
+
+
+@app.post("/apps/validation-insights/run")
+async def apps_validation_insights_run(request: Request, background_tasks: BackgroundTasks, payload: ValidationInsightsAppIn):
+    user_id = _require_user_id(request)
+    workflow_id, run_id, base_dir = _create_app_workflow_and_run(user_id, "App: Validation Insights", "validation")
+    artifact_dir = os.path.join(base_dir, "validation-insights")
+    os.makedirs(artifact_dir, exist_ok=True)
+
+    background_tasks.add_task(
+        execute_validation_app_background,
+        workflow_id, run_id, user_id, artifact_dir,
+        "validation-insights",
+        "Validation_Insights",
+        payload.dict(),
+    )
     return {"ok": True, "workflow_id": workflow_id, "run_id": run_id}
 
 
