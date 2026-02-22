@@ -372,6 +372,140 @@ AGENT_CAPABILITIES = {
         "description": "Generates a short demo-ready summary report based on telemetry.",
     },
 
+        # ✅ Embedded Firmware Loop Agents (v2)
+    "Embedded Firmware Register Extract Agent": {
+        "domain": "embedded",
+        "inputs": ["spec_text", "toolchain", "toggles"],
+        "outputs": ["firmware/register_map.json"],
+        "description": "Extract registers/CSRs from spec/regmap sources and produce a normalized register map.",
+    },
+    "Embedded Rust Register Layer Generator Agent": {
+        "domain": "embedded",
+        "inputs": ["spec_text", "toolchain", "toggles"],
+        "outputs": ["firmware/hal/registers.rs"],
+        "description": "Generate Rust HAL register abstractions from register map.",
+    },
+    "Embedded Register Validation Agent": {
+        "domain": "embedded",
+        "inputs": ["spec_text", "toolchain", "toggles"],
+        "outputs": ["firmware/hal/register_validation.md"],
+        "description": "Validate register map consistency and HAL correctness.",
+    },
+    "Embedded Rust Driver Scaffold Agent": {
+        "domain": "embedded",
+        "inputs": ["spec_text", "toolchain", "toggles"],
+        "outputs": ["firmware/drivers/driver_scaffold.rs"],
+        "description": "Generate driver scaffold, init, basic read/write APIs.",
+    },
+    "Embedded Interrupt Mapping Agent": {
+        "domain": "embedded",
+        "inputs": ["spec_text", "toolchain", "toggles"],
+        "outputs": ["firmware/isr/interrupts.rs"],
+        "description": "Create interrupt vector mapping and ISR stubs.",
+    },
+    "Embedded DMA Integration Agent": {
+        "domain": "embedded",
+        "inputs": ["spec_text", "toolchain", "toggles"],
+        "outputs": ["firmware/dma/dma.rs"],
+        "description": "Integrate DMA channels, descriptors, and ISR hooks.",
+    },
+    "Embedded Boot Dependency Planner Agent": {
+        "domain": "embedded",
+        "inputs": ["spec_text", "toolchain", "toggles"],
+        "outputs": ["firmware/boot/boot_sequence.md"],
+        "description": "Plan boot sequencing dependencies (clocks, resets, power domains).",
+    },
+    "Embedded Clock And PLL Configuration Agent": {
+        "domain": "embedded",
+        "inputs": ["spec_text", "toolchain", "toggles"],
+        "outputs": ["firmware/boot/pll_config.rs"],
+        "description": "Generate clock tree + PLL configuration code and notes.",
+    },
+    "Embedded Reset Sequencing Agent": {
+        "domain": "embedded",
+        "inputs": ["spec_text", "toolchain", "toggles"],
+        "outputs": ["firmware/boot/reset_sequence.rs"],
+        "description": "Generate reset sequencing logic and ordering.",
+    },
+    "Embedded Power Mode Configuration Agent": {
+        "domain": "embedded",
+        "inputs": ["spec_text", "toolchain", "toggles"],
+        "outputs": ["firmware/power_profiles/power_modes.md"],
+        "description": "Generate power mode table and transition APIs.",
+    },
+    "Embedded Boot Timing Validation Agent": {
+        "domain": "embedded",
+        "inputs": ["spec_text", "toolchain", "toggles"],
+        "outputs": ["firmware/boot/boot_timing_validation.md"],
+        "description": "Validate timing constraints and ordering assumptions.",
+    },
+    "Embedded Register Dump Utility Agent": {
+        "domain": "embedded",
+        "inputs": ["spec_text", "toolchain", "toggles"],
+        "outputs": ["firmware/diagnostics/register_dump.rs"],
+        "description": "Create register dump utility and formatting.",
+    },
+    "Embedded Built In Self Test Agent": {
+        "domain": "embedded",
+        "inputs": ["spec_text", "toolchain", "toggles"],
+        "outputs": ["firmware/diagnostics/bist.rs"],
+        "description": "Create BIST hooks and test routines.",
+    },
+    "Embedded Stress Test Generator Agent": {
+        "domain": "embedded",
+        "inputs": ["spec_text", "toolchain", "toggles"],
+        "outputs": ["firmware/diagnostics/stress_tests.rs"],
+        "description": "Create stress tests for clocks/IRQs/DMA/memory.",
+    },
+    "Embedded Firmware Integration Contract Agent": {
+        "domain": "embedded",
+        "inputs": ["spec_text", "toolchain", "toggles"],
+        "outputs": ["firmware/integration_contract.md"],
+        "description": "Generate integration contract: APIs, expected behaviors, interrupts, DMA, power.",
+    },
+    "Embedded Firmware Executive Summary Agent": {
+        "domain": "embedded",
+        "inputs": ["spec_text", "toolchain", "toggles"],
+        "outputs": ["firmware/executive_summary.md"],
+        "description": "Generate exec summary of produced firmware deliverables.",
+    },
+    "Embedded ELF Build Agent": {
+        "domain": "embedded",
+        "inputs": ["spec_text", "toolchain", "toggles"],
+        "outputs": ["firmware/build/build_instructions.md"],
+        "description": "Generate Cargo build instructions and ELF build steps.",
+    },
+    "Embedded Verilator Build Agent": {
+        "domain": "embedded",
+        "inputs": ["spec_text", "toolchain", "toggles"],
+        "outputs": ["firmware/validate/verilator_build.md"],
+        "description": "Generate Verilator build instructions and flags.",
+    },
+    "Embedded Cocotb Harness Agent": {
+        "domain": "embedded",
+        "inputs": ["spec_text", "toolchain", "toggles"],
+        "outputs": ["firmware/validate/cocotb_harness.py"],
+        "description": "Generate cocotb harness scaffold for firmware/RTL cosim.",
+    },
+    "Embedded Co Sim Runner Agent": {
+        "domain": "embedded",
+        "inputs": ["spec_text", "toolchain", "toggles"],
+        "outputs": ["firmware/validate/cosim_run.md"],
+        "description": "Generate cosim runner steps and expected artifacts.",
+    },
+    "Embedded Coverage Collector Agent": {
+        "domain": "embedded",
+        "inputs": ["spec_text", "toolchain", "toggles"],
+        "outputs": ["firmware/validate/coverage.md"],
+        "description": "Collect FW and RTL coverage report steps and summaries.",
+    },
+    "Embedded Validation Report Agent": {
+        "domain": "embedded",
+        "inputs": ["spec_text", "toolchain", "toggles"],
+        "outputs": ["firmware/validate/validation_report.md"],
+        "description": "Generate validation report from cosim logs/coverage.",
+    },
+
     # -------------------------
     # SYSTEM
     # -------------------------

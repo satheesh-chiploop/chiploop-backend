@@ -339,12 +339,57 @@ from agents.embedded.embedded_spec_agent import run_agent as embedded_spec_agent
 from agents.embedded.embedded_code_agent import run_agent as embedded_code_agent
 from agents.embedded.embedded_sim_agent import run_agent as embedded_sim_agent
 from agents.embedded.embedded_result_agent import run_agent as embedded_result_agent
+from agents.embedded.embedded_firmware_register_extract_agent import run_agent as embedded_firmware_register_extract_agent_run
+from agents.embedded.embedded_rust_register_layer_generator_agent import run_agent as embedded_rust_register_layer_generator_agent_run
+from agents.embedded.embedded_register_validation_agent import run_agent as embedded_register_validation_agent_run
+from agents.embedded.embedded_rust_driver_scaffold_agent import run_agent as embedded_rust_driver_scaffold_agent_run
+from agents.embedded.embedded_interrupt_mapping_agent import run_agent as embedded_interrupt_mapping_agent_run
+from agents.embedded.embedded_dma_integration_agent import run_agent as embedded_dma_integration_agent_run
+from agents.embedded.embedded_boot_dependency_planner_agent import run_agent as embedded_boot_dependency_planner_agent_run
+from agents.embedded.embedded_clock_and_pll_configuration_agent import run_agent as embedded_clock_and_pll_configuration_agent_run
+from agents.embedded.embedded_reset_sequencing_agent import run_agent as embedded_reset_sequencing_agent_run
+from agents.embedded.embedded_power_mode_configuration_agent import run_agent as embedded_power_mode_configuration_agent_run
+from agents.embedded.embedded_boot_timing_validation_agent import run_agent as embedded_boot_timing_validation_agent_run
+from agents.embedded.embedded_register_dump_utility_agent import run_agent as embedded_register_dump_utility_agent_run
+from agents.embedded.embedded_built_in_self_test_agent import run_agent as embedded_built_in_self_test_agent_run
+from agents.embedded.embedded_stress_test_generator_agent import run_agent as embedded_stress_test_generator_agent_run
+from agents.embedded.embedded_firmware_integration_contract_agent import run_agent as embedded_firmware_integration_contract_agent_run
+from agents.embedded.embedded_firmware_executive_summary_agent import run_agent as embedded_firmware_executive_summary_agent_run
+from agents.embedded.embedded_elf_build_agent import run_agent as embedded_elf_build_agent_run
+from agents.embedded.embedded_verilator_build_agent import run_agent as embedded_verilator_build_agent_run
+from agents.embedded.embedded_cocotb_harness_agent import run_agent as embedded_cocotb_harness_agent_run
+from agents.embedded.embedded_co_sim_runner_agent import run_agent as embedded_co_sim_runner_agent_run
+from agents.embedded.embedded_coverage_collector_agent import run_agent as embedded_coverage_collector_agent_run
+from agents.embedded.embedded_validation_report_agent import run_agent as embedded_validation_report_agent_run
+
 
 EMBEDDED_AGENT_FUNCTIONS: Dict[str, Any] = {
     "Embedded Spec Agent": embedded_spec_agent,
     "Embedded Code Agent": embedded_code_agent,
     "Embedded Sim Agent": embedded_sim_agent,
     "Embedded Result Agent": embedded_result_agent,
+    "Embedded Firmware Register Extract Agent": embedded_firmware_register_extract_agent_run,
+    "Embedded Rust Register Layer Generator Agent": embedded_rust_register_layer_generator_agent_run,
+    "Embedded Register Validation Agent": embedded_register_validation_agent_run,
+    "Embedded Rust Driver Scaffold Agent": embedded_rust_driver_scaffold_agent_run,
+    "Embedded Interrupt Mapping Agent": embedded_interrupt_mapping_agent_run,
+    "Embedded DMA Integration Agent": embedded_dma_integration_agent_run,
+    "Embedded Boot Dependency Planner Agent": embedded_boot_dependency_planner_agent_run,
+    "Embedded Clock And PLL Configuration Agent": embedded_clock_and_pll_configuration_agent_run,
+    "Embedded Reset Sequencing Agent": embedded_reset_sequencing_agent_run,
+    "Embedded Power Mode Configuration Agent": embedded_power_mode_configuration_agent_run,
+    "Embedded Boot Timing Validation Agent": embedded_boot_timing_validation_agent_run,
+    "Embedded Register Dump Utility Agent": embedded_register_dump_utility_agent_run,
+    "Embedded Built In Self Test Agent": embedded_built_in_self_test_agent_run,
+    "Embedded Stress Test Generator Agent": embedded_stress_test_generator_agent_run,
+    "Embedded Firmware Integration Contract Agent": embedded_firmware_integration_contract_agent_run,
+    "Embedded Firmware Executive Summary Agent": embedded_firmware_executive_summary_agent_run,
+    "Embedded ELF Build Agent": embedded_elf_build_agent_run,
+    "Embedded Verilator Build Agent": embedded_verilator_build_agent_run,
+    "Embedded Cocotb Harness Agent": embedded_cocotb_harness_agent_run,
+    "Embedded Co Sim Runner Agent": embedded_co_sim_runner_agent_run,
+    "Embedded Coverage Collector Agent": embedded_coverage_collector_agent_run,
+    "Embedded Validation Report Agent": embedded_validation_report_agent_run,
 }
 
 from agents.validation.validation_instrument_setup_agent import run_agent as validation_instrument_setup_agent
@@ -447,6 +492,28 @@ SYSTEM_AGENT_FUNCTIONS: Dict[str,Any] = {
     "Embedded Code Agent": embedded_code_agent,
     "Embedded Sim Agent": embedded_sim_agent,
     "Embedded Result Agent": embedded_result_agent, 
+    "Embedded Firmware Register Extract Agent": embedded_firmware_register_extract_agent_run,
+    "Embedded Rust Register Layer Generator Agent": embedded_rust_register_layer_generator_agent_run,
+    "Embedded Register Validation Agent": embedded_register_validation_agent_run,
+    "Embedded Rust Driver Scaffold Agent": embedded_rust_driver_scaffold_agent_run,
+    "Embedded Interrupt Mapping Agent": embedded_interrupt_mapping_agent_run,
+    "Embedded DMA Integration Agent": embedded_dma_integration_agent_run,
+    "Embedded Boot Dependency Planner Agent": embedded_boot_dependency_planner_agent_run,
+    "Embedded Clock And PLL Configuration Agent": embedded_clock_and_pll_configuration_agent_run,
+    "Embedded Reset Sequencing Agent": embedded_reset_sequencing_agent_run,
+    "Embedded Power Mode Configuration Agent": embedded_power_mode_configuration_agent_run,
+    "Embedded Boot Timing Validation Agent": embedded_boot_timing_validation_agent_run,
+    "Embedded Register Dump Utility Agent": embedded_register_dump_utility_agent_run,
+    "Embedded Built In Self Test Agent": embedded_built_in_self_test_agent_run,
+    "Embedded Stress Test Generator Agent": embedded_stress_test_generator_agent_run,
+    "Embedded Firmware Integration Contract Agent": embedded_firmware_integration_contract_agent_run,
+    "Embedded Firmware Executive Summary Agent": embedded_firmware_executive_summary_agent_run,
+    "Embedded ELF Build Agent": embedded_elf_build_agent_run,
+    "Embedded Verilator Build Agent": embedded_verilator_build_agent_run,
+    "Embedded Cocotb Harness Agent": embedded_cocotb_harness_agent_run,
+    "Embedded Co Sim Runner Agent": embedded_co_sim_runner_agent_run,
+    "Embedded Coverage Collector Agent": embedded_coverage_collector_agent_run,
+    "Embedded Validation Report Agent": embedded_validation_report_agent_run,
     "Validation Instrument Setup Agent": validation_instrument_setup_agent,
     "Validation Test Plan Agent": validation_test_plan_agent,
     "Validation Connectivity Intent Agent": validation_connectivity_intent_agent,
@@ -4064,6 +4131,166 @@ async def apps_analog_abstracts(request: Request, background_tasks: BackgroundTa
 @app.post("/apps/analog/run")
 async def apps_analog_run(request: Request, background_tasks: BackgroundTasks, payload: AnalogAppIn):
     return _start_analog_app(background_tasks, request, payload, "App: Analog Run", "Analog_Run")
+
+
+# ==========================================================
+# ✅ EMBEDDED APPS — same pattern as Analog Apps
+# ==========================================================
+
+class EmbeddedAppIn(BaseModel):
+    spec_text: str
+    goal: Optional[str] = None
+    toolchain: Dict[str, str] = Field(default_factory=dict)
+    toggles: Optional[Dict[str, bool]] = None
+    from_workflow_id: Optional[str] = None
+
+
+def execute_embedded_app_background(
+    workflow_id: str,
+    run_id: str,
+    user_id: str,
+    artifact_dir: str,
+    template_workflow_name: str,
+    payload: Dict[str, Any],
+):
+    try:
+        os.makedirs(artifact_dir, exist_ok=True)
+
+        shared_state = {
+            "workflow_id": workflow_id,
+            "run_id": run_id,
+            "artifact_dir": artifact_dir,
+            "supabase_client": supabase,
+            "user_id": user_id,
+        }
+
+        # Inject payload -> shared_state
+        for k, v in (payload or {}).items():
+            if v is not None:
+                shared_state[k] = v
+
+        # Normalize: allow spec_text/spec/datasheet_text to converge
+        spec = (shared_state.get("spec_text") or shared_state.get("spec") or shared_state.get("datasheet_text") or "").strip()
+        if spec:
+            shared_state["spec_text"] = spec
+            shared_state["spec"] = spec
+
+        # Ensure toolchain dict exists even if UI sends nothing
+        if not isinstance(shared_state.get("toolchain"), dict):
+            shared_state["toolchain"] = {}
+
+        append_log_workflow(workflow_id, f"▶️ Phase: {template_workflow_name}", phase="start")
+        append_log_run(run_id, f"▶️ Phase: {template_workflow_name}")
+
+        defn = _load_workflow_def_by_name(template_workflow_name, user_id=user_id)
+        nodes = _definition_to_executor_nodes(defn)
+
+        _run_nodes_with_shared_state(
+            workflow_id=workflow_id,
+            run_id=run_id,
+            loop_type="embedded",
+            nodes=nodes,
+            shared_state=shared_state,
+        )
+
+        append_log_workflow(workflow_id, "🎉 Embedded App complete", status="completed", phase="done")
+        append_log_run(run_id, "🎉 Embedded App complete", status="completed")
+
+    except Exception as e:
+        err = f"❌ Embedded App crashed: {type(e).__name__}: {e}\n{traceback.format_exc()}"
+        append_log_workflow(workflow_id, err, status="failed", phase="error")
+        append_log_run(run_id, err, status="failed")
+
+
+def _start_embedded_app(
+    background_tasks: BackgroundTasks,
+    request: Request,
+    payload: EmbeddedAppIn,
+    app_name: str,
+    template_workflow_name: str,
+):
+    user_id = _require_user_id(request)
+
+    workflow_id = str(uuid.uuid4())
+    run_id = str(uuid.uuid4())
+    now = datetime.utcnow().isoformat()
+
+    # Parent workflow row (single job)
+    supabase.table("workflows").insert({
+        "id": workflow_id,
+        "user_id": user_id,
+        "name": app_name,
+        "status": "running",
+        "phase": "queued",
+        "logs": "🚀 App run queued.",
+        "created_at": now,
+        "updated_at": now,
+        "artifacts": {},
+        "loop_type": "embedded",
+        "definitions": {"app_intent": template_workflow_name, "payload": payload.dict()},
+    }).execute()
+
+    # Run row
+    user_folder = str(user_id or "anonymous")
+    artifact_dir = os.path.join("artifacts", user_folder, workflow_id, run_id)
+    os.makedirs(artifact_dir, exist_ok=True)
+
+    supabase.table("runs").insert({
+        "id": run_id,
+        "user_id": user_id,
+        "workflow_id": workflow_id,
+        "loop_type": "embedded",
+        "status": "running",
+        "logs": "🚀 App run started.",
+        "artifacts_path": artifact_dir,
+        "created_at": now
+    }).execute()
+
+    append_log_workflow(workflow_id, f"🚀 Starting {app_name}", phase="start")
+    append_log_run(run_id, f"🚀 Starting {app_name}")
+
+    background_tasks.add_task(
+        execute_embedded_app_background,
+        workflow_id,
+        run_id,
+        user_id,
+        artifact_dir,
+        template_workflow_name,
+        payload.dict(),
+    )
+
+    return {"ok": True, "workflow_id": workflow_id, "run_id": run_id}
+
+
+# ---------------- Embedded app endpoints ----------------
+
+@app.post("/apps/embedded/hal/run")
+async def apps_embedded_hal(request: Request, background_tasks: BackgroundTasks, payload: EmbeddedAppIn):
+    return _start_embedded_app(background_tasks, request, payload, "App: Embedded HAL", "Embedded_HAL")
+
+@app.post("/apps/embedded/driver/run")
+async def apps_embedded_driver(request: Request, background_tasks: BackgroundTasks, payload: EmbeddedAppIn):
+    return _start_embedded_app(background_tasks, request, payload, "App: Embedded Driver", "Embedded_Driver")
+
+@app.post("/apps/embedded/boot/run")
+async def apps_embedded_boot(request: Request, background_tasks: BackgroundTasks, payload: EmbeddedAppIn):
+    return _start_embedded_app(background_tasks, request, payload, "App: Embedded Boot", "Embedded_Boot")
+
+@app.post("/apps/embedded/diagnostics/run")
+async def apps_embedded_diagnostics(request: Request, background_tasks: BackgroundTasks, payload: EmbeddedAppIn):
+    return _start_embedded_app(background_tasks, request, payload, "App: Embedded Diagnostics", "Embedded_Diagnostics")
+
+@app.post("/apps/embedded/log-analyzer/run")
+async def apps_embedded_log_analyzer(request: Request, background_tasks: BackgroundTasks, payload: EmbeddedAppIn):
+    return _start_embedded_app(background_tasks, request, payload, "App: Embedded Log Analyzer", "Embedded_LogAnalyzer")
+
+@app.post("/apps/embedded/validate/run")
+async def apps_embedded_validate(request: Request, background_tasks: BackgroundTasks, payload: EmbeddedAppIn):
+    return _start_embedded_app(background_tasks, request, payload, "App: Embedded Validate", "Embedded_Validate")
+
+@app.post("/apps/embedded/run")
+async def apps_embedded_run(request: Request, background_tasks: BackgroundTasks, payload: EmbeddedAppIn):
+    return _start_embedded_app(background_tasks, request, payload, "App: Embedded Run", "Embedded_Run")
 
 
 
