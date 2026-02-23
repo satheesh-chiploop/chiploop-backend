@@ -44,8 +44,47 @@ def ensure_workflow_dir(state: dict) -> str:
     state["workflow_dir"] = workflow_dir
     return workflow_dir
 
+def _infer_agent_name(state: dict) -> str:
+    # Try a few common keys that your executor may set.
+    return (
+        state.get("current_agent")
+        or state.get("agent_name")
+        or state.get("step")
+        or "Embedded Agent"
+    )
+
 def write_artifact(state: dict, rel_path: str, content: str, key: str | None = None) -> str:
-    # rel_path is stored under workflow_dir via artifact_utils
-    key = key or os.path.basename(rel_path)
-    save_text_artifact_and_record(state, rel_path, content, key=key)
+    """
+    Record artifacts the same way as Validation agents so:
+    - workflows.artifacts gets updated
+    - /download_zip works
+    """
+    workflow_id = state.get("workflow_id")
+    if not workflow_id:
+        raise RuntimeError("Missing workflow_id in state (required for artifact recording).")
+
+    # rel_path examples: "firmware/register_map.json", "firmware/hal/lib.rs"
+    # We'll store under subdir="firmware" and filename="register_map.json" etc.
+    parts = rel_path.split("/", 1)
+    if len(parts) == 1:
+        subdir = "firmware"
+        filename = parts[0]
+    else:
+        subdir = parts[0]
+        filename = parts[1]  # keep nested path under subdir if your artifact_utils supports it
+
+    agent_name = _infer_agent_name(state)
+
+    # If artifact_utils expects a flat filename, keep only basename:
+    # filename = os.path.basename(filename)
+
+    save_text_artifact_and_record(
+        workflow_id=workflow_id,
+        agent_name=agent_name,
+        subdir=subdir,
+        filename=filename,
+        content=content,
+    )
     return rel_path
+
+
