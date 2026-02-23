@@ -12,7 +12,7 @@ def get_embedded_model() -> str:
         os.getenv("CHIPLOOP_EMBEDDED_MODEL")
         or os.getenv("CHIPLOOP_FIRMWARE_MODEL")
         or os.getenv("CHIPLOOP_DEFAULT_MODEL")
-        or "gpt-4o-mini"
+        or "@chiploop/gpt-4o-mini"
     )
 
 def llm_chat(prompt: str, system: str = "") -> str:
@@ -27,6 +27,7 @@ def llm_chat(prompt: str, system: str = "") -> str:
         resp = client_portkey.chat.completions.create(
             model=model,
             messages=messages,
+            stream=False,
         )
         return (resp.choices[0].message.content or "").strip()
 
