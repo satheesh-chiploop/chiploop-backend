@@ -20,12 +20,12 @@ def _collect_known_artifacts(state: dict) -> list[str]:
     paths = []
 
     for v in embedded.values():
-    if isinstance(v, str) and v.strip():
-        paths.append(v.strip())
-    elif isinstance(v, (list, tuple)):
-        for p in v:
-            if isinstance(p, str) and p.strip():
-                paths.append(p.strip())
+        if isinstance(v, str) and v.strip():
+            paths.append(v.strip())
+        elif isinstance(v, (list, tuple)):
+            for p in v:
+                if isinstance(p, str) and p.strip():
+                   paths.append(p.strip())
 
     # de-dup preserve order
     seen = set()
