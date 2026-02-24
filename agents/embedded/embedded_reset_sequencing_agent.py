@@ -40,9 +40,10 @@ OUTPUT PATH:
 - {OUTPUT_MD}
 """
     out_md = llm_chat(prompt_md, system="You are a senior embedded firmware engineer. Be specific and deterministic.").strip()
+    out_md = strip_outer_markdown_fences(out_md)
     if not out_md:
         out_md = "ERROR: LLM returned empty output."
-        out_md = strip_outer_markdown_fences(out_md)
+
     write_artifact(state, OUTPUT_MD, out_md, key=OUTPUT_MD.split("/")[-1])
 
     # 2) Implementation skeleton (rs) - raw Rust only
