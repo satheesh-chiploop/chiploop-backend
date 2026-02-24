@@ -1265,8 +1265,15 @@ def execute_workflow_background(
                     # ✅ Merge legacy fields into existing per-file artifacts (do NOT replace)
                     existing.update({k: v for k, v in legacy.items() if v is not None})
                     artifacts[step] = existing    
-                    
-                    supabase.table("workflows").update({"artifacts": artifacts}).eq("id", workflow_id).select("id").execute()
+                    try:
+                        payload = json.dumps(artifacts, ensure_ascii=False, separators=(",", ":"))
+                        if len(payload) <= 7000:
+                            supabase.table("workflows").update({"artifacts": artifacts}).eq("id", workflow_id).select("id").execute()
+                        else:
+                            logger.warning(f"⚠️ Skipping workflows.artifacts update (payload too long) workflow={workflow_id}")
+                    except Exception as e:
+                            logger.warning(f"⚠️ Skipping workflows.artifacts update (error) workflow={workflow_id}: {e}")
+              
 
                 msg = f"✅ {step} done"
                 logger.info(msg)
