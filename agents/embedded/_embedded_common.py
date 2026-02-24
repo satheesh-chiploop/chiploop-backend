@@ -87,4 +87,28 @@ def write_artifact(state: dict, rel_path: str, content: str, key: str | None = N
     )
     return rel_path
 
+# --- add near the bottom of _embedded_common.py ---
+
+def strip_markdown_fences_for_code(content: str) -> str:
+    """
+    If LLM returns ```rust ... ``` or ``` ... ``` for code artifacts,
+    strip fences and return raw code only.
+    """
+    if not content:
+        return content
+
+    s = content.strip()
+
+    # common pattern: ```rust\n...\n```
+    if s.startswith("```"):
+        lines = s.splitlines()
+        # drop first fence line
+        lines = lines[1:]
+        # drop trailing fence if present
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        return "\n".join(lines).strip()
+
+    return content
+
 
