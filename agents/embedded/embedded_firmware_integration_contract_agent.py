@@ -1,5 +1,12 @@
 import json
-from ._embedded_common import ensure_workflow_dir, llm_chat, write_artifact
+
+
+from ._embedded_common import (
+    ensure_workflow_dir,
+    llm_chat,
+    write_artifact,
+    strip_outer_markdown_fences,
+)
 
 AGENT_NAME = "Embedded Firmware Integration Contract Agent"
 PHASE = "contract"
@@ -13,6 +20,8 @@ def _is_boot_workflow(state: dict) -> bool:
         str(state.get("app_slug") or ""),
     ]).lower()
     return "boot" in s and "run" not in s  # boot wf, not the full run
+
+
 
 def run_agent(state: dict) -> dict:
     print(f"\n🚀 Running {AGENT_NAME}...")
@@ -64,7 +73,7 @@ OUTPUT PATH:
     out = llm_chat(prompt, system="You are a staff firmware lead. Be specific. No filler. No hallucinated subsystems.").strip()
     if not out:
         out = "ERROR: LLM returned empty output."
-
+    out = strip_outer_markdown_fences(out)
     write_artifact(state, OUTPUT_PATH, out, key=OUTPUT_PATH.split("/")[-1])
 
     embedded = state.setdefault("embedded", {})

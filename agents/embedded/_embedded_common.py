@@ -111,4 +111,24 @@ def strip_markdown_fences_for_code(content: str) -> str:
 
     return content
 
+def strip_outer_markdown_fences(content: str) -> str:
+    """
+    If markdown artifact is wrapped entirely inside ```markdown ... ``` or ``` ... ```
+    remove the outer fence only.
+    """
+    if not content:
+        return content
+
+    s = content.strip()
+    if s.startswith("```"):
+        lines = s.splitlines()
+        # drop first fence
+        lines = lines[1:]
+        # drop trailing fence if present
+        if lines and lines[-1].strip().startswith("```"):
+            lines = lines[:-1]
+        return "\n".join(lines).strip()
+
+    return content
+
 

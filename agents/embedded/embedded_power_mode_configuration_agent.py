@@ -1,6 +1,11 @@
 import json
-from ._embedded_common import ensure_workflow_dir, llm_chat, write_artifact
 
+from ._embedded_common import (
+    ensure_workflow_dir,
+    llm_chat,
+    write_artifact,
+    strip_outer_markdown_fences,
+)
 AGENT_NAME = "Embedded Power Mode Configuration Agent"
 PHASE = "power_modes"
 OUTPUT_PATH = "firmware/power/power_modes.md"
@@ -39,7 +44,7 @@ OUTPUT PATH:
     out = llm_chat(prompt, system="You are a senior embedded firmware engineer. Be concrete and deterministic.").strip()
     if not out:
         out = "ERROR: LLM returned empty output."
-
+    out = strip_outer_markdown_fences(out)
     write_artifact(state, OUTPUT_PATH, out, key=OUTPUT_PATH.split("/")[-1])
 
     embedded = state.setdefault("embedded", {})
