@@ -39,8 +39,9 @@ logger = logging.getLogger("chiploop")
 logging.basicConfig(level=logging.INFO)
 
 # Soft limits to avoid PostgREST "payload string too long" on logs/artifacts fields.
-MAX_LOG_CHARS = 7500  # ~200KB
+MAX_LOG_CHARS = 1500  # ~200KB
 MAX_WORKFLOW_ARTIFACTS_JSON_CHARS = 200000
+ENABLE_LEGACY_WORKFLOW_ARTIFACTS_INDEX = False
 
 def _truncate_tail(s: str, max_chars: int) -> str:
     if not s:
@@ -1247,32 +1248,32 @@ def execute_workflow_background(
                             f.write(str(result.get("artifact") or ""))
 
                     
+                    if ENABLE_LEGACY_WORKFLOW_ARTIFACTS_INDEX:
+                        # Persist artifacts metadata on workflow row
+                        row = supabase.table("workflows").select("artifacts").eq("id", workflow_id).single().execute()
+                        artifacts = (row.data or {}).get("artifacts") or {}
 
-                    # Persist artifacts metadata on workflow row
-                    row = supabase.table("workflows").select("artifacts").eq("id", workflow_id).single().execute()
-                    artifacts = (row.data or {}).get("artifacts") or {}
+                        existing = artifacts.get(step) or {}
+                        if not isinstance(existing, dict):
+                            existing = {}
+                        legacy = {
+                            "artifact": (f"/{out_path}" if out_path else None),
+                        #    "local_artifact_log": result.get("artifact_log"),
+                        #    "log": result.get("log"),
+                        #    "code": result.get("code"),
+                        }
 
-                    existing = artifacts.get(step) or {}
-                    if not isinstance(existing, dict):
-                        existing = {}
-                    legacy = {
-                        "artifact": (f"/{out_path}" if out_path else None),
-                    #    "local_artifact_log": result.get("artifact_log"),
-                    #    "log": result.get("log"),
-                    #    "code": result.get("code"),
-                    }
-
-                    # ✅ Merge legacy fields into existing per-file artifacts (do NOT replace)
-                    existing.update({k: v for k, v in legacy.items() if v is not None})
-                    artifacts[step] = existing    
-                    try:
-                        payload = json.dumps(artifacts, ensure_ascii=False, separators=(",", ":"))
-                        if len(payload) <= 7000:
-                            supabase.table("workflows").update({"artifacts": artifacts}).eq("id", workflow_id).execute()
-                        else:
-                            logger.warning(f"⚠️ Skipping workflows.artifacts update (payload too long) workflow={workflow_id}")
-                    except Exception as e:
-                            logger.warning(f"⚠️ Skipping workflows.artifacts update (error) workflow={workflow_id}: {e}")
+                        # ✅ Merge legacy fields into existing per-file artifacts (do NOT replace)
+                        existing.update({k: v for k, v in legacy.items() if v is not None})
+                        artifacts[step] = existing    
+                        try:
+                            payload = json.dumps(artifacts, ensure_ascii=False, separators=(",", ":"))
+                            if len(payload) <= 7000:
+                                supabase.table("workflows").update({"artifacts": artifacts}).eq("id", workflow_id).execute()
+                            else:
+                                logger.warning(f"⚠️ Skipping workflows.artifacts update (payload too long) workflow={workflow_id}")
+                        except Exception as e:
+                                logger.warning(f"⚠️ Skipping workflows.artifacts update (error) workflow={workflow_id}: {e}")
               
 
                 msg = f"✅ {step} done"
