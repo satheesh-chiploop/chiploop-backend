@@ -1,5 +1,5 @@
 import json
-from ._embedded_common import ensure_workflow_dir, llm_chat, write_artifact
+from ._embedded_common import ensure_workflow_dir, llm_chat, write_artifact,strip_outer_markdown_fences
 
 AGENT_NAME = "Embedded Firmware Register Extract Agent"
 PHASE = "register_extract"
@@ -29,15 +29,18 @@ TOGGLES:
 TASK:
 Extract registers/CSRs from spec/regmap sources and produce a normalized register map.
 OUTPUT REQUIREMENTS:
+- Output MUST be VALID JSON ONLY (no markdown fences, no prose).
+- If information is missing, add "__assumptions": ["...","..."] inside the JSON.
+- Write to: firmware/register_map.json
 - Write the primary output to match this path: firmware/register_map.json
 - Keep it implementation-ready and consistent with Rust + Cargo + Verilator + Cocotb assumptions.
-- If information is missing, make reasonable assumptions and clearly list them inside the artifact.
+
 """
 
-    out = llm_chat(prompt, system="You are a senior embedded firmware engineer for silicon bring-up and RTL co-simulation. Produce concise, production-quality outputs. Avoid markdown code fences unless explicitly asked.")
+    out = llm_chat(prompt, system="You are a senior firmware engineer. Output valid JSON only. No markdown fences.")
     if not out:
         out = "ERROR: LLM returned empty output."
-
+    out = strip_outer_markdown_fences(out)
     write_artifact(state, OUTPUT_PATH, out, key=OUTPUT_PATH.split("/")[-1])
 
     # lightweight state update for downstream agents

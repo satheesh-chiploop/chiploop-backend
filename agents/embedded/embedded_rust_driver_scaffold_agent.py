@@ -1,5 +1,5 @@
 import json
-from ._embedded_common import ensure_workflow_dir, llm_chat, write_artifact
+from ._embedded_common import ensure_workflow_dir, llm_chat, write_artifact, strip_markdown_fences_for_code
 
 AGENT_NAME = "Embedded Rust Driver Scaffold Agent"
 PHASE = "driver_scaffold"
@@ -28,16 +28,18 @@ TOGGLES:
 
 TASK:
 Generate driver scaffold, init, basic read/write APIs.
+
 OUTPUT REQUIREMENTS:
-- Write the primary output to match this path: firmware/drivers/driver_scaffold.rs
+- Output MUST be RAW RUST ONLY (no markdown fences, no prose).
+- Put assumptions as Rust comments at top (// ASSUMPTION: ...).
 - Keep it implementation-ready and consistent with Rust + Cargo + Verilator + Cocotb assumptions.
-- If information is missing, make reasonable assumptions and clearly list them inside the artifact.
+- Write to: firmware/drivers/driver_scaffold.rs
 """
 
-    out = llm_chat(prompt, system="You are a senior embedded firmware engineer for silicon bring-up and RTL co-simulation. Produce concise, production-quality outputs. Avoid markdown code fences unless explicitly asked.")
+    out = llm_chat(prompt, system="You are a senior embedded Rust engineer. Produce compile-ready Rust only. Never use markdown code fences.")
     if not out:
         out = "ERROR: LLM returned empty output."
-
+    out = strip_markdown_fences_for_code(out)
     write_artifact(state, OUTPUT_PATH, out, key=OUTPUT_PATH.split("/")[-1])
 
     # lightweight state update for downstream agents

@@ -1,5 +1,5 @@
 import json
-from ._embedded_common import ensure_workflow_dir, llm_chat, write_artifact
+from ._embedded_common import ensure_workflow_dir, llm_chat, write_artifact, strip_markdown_fences_for_code
 
 AGENT_NAME = "Embedded Cocotb Harness Agent"
 PHASE = "cocotb_harness"
@@ -27,16 +27,22 @@ TOGGLES:
 {json.dumps(toggles, indent=2)}
 
 TASK:
-Generate cocotb harness scaffold for firmware/RTL cosim.
-OUTPUT REQUIREMENTS:
-- Write the primary output to match this path: firmware/validate/cocotb_harness.py
+Generate a cocotb harness scaffold.
+
+HARD OUTPUT RULES (IMPORTANT):
+- Output MUST be RAW PYTHON ONLY (no markdown fences, no headings, no prose outside code).
+- Put assumptions as Python comments at the top (starting with # ASSUMPTION: ...).
 - Keep it implementation-ready and consistent with Rust + Cargo + Verilator + Cocotb assumptions.
-- If information is missing, make reasonable assumptions and clearly list them inside the artifact.
+- Do not include triple-backticks anywhere.
+
+OUTPUT PATH:
+- firmware/validate/cocotb_harness.py
 """
 
-    out = llm_chat(prompt, system="You are a senior embedded firmware engineer for silicon bring-up and RTL co-simulation. Produce concise, production-quality outputs. Avoid markdown code fences unless explicitly asked.")
+    out = llm_chat(prompt, system="You are a senior verification engineer. Produce runnable Python only. Never use markdown code fences.")
     if not out:
         out = "ERROR: LLM returned empty output."
+    out = strip_markdown_fences_for_code(out)
 
     write_artifact(state, OUTPUT_PATH, out, key=OUTPUT_PATH.split("/")[-1])
 
