@@ -53,6 +53,24 @@ STRICT RUNTIME RULES:
   dut.rst_n
 unless explicitly provided in spec.
 - Do not invent additional DUT signals.
+- Test must explicitly terminate using:
+  raise cocotb.result.TestSuccess()
+  or watchdog failure.
+
+Use ONLY modern cocotb async API.
+
+Mandatory structure:
+
+import cocotb
+from cocotb.clock import Clock
+from cocotb.triggers import RisingEdge, Timer
+
+@cocotb.test()
+async def firmware_test(dut):
+
+Simulation MUST terminate using:
+raise cocotb.result.TestSuccess()
+or timeout failure.
 
 HARD OUTPUT RULES (IMPORTANT):
 - Output MUST be RAW PYTHON ONLY (no markdown fences, no headings, no prose outside code).

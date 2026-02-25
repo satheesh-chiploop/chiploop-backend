@@ -50,6 +50,11 @@ OUTPUT REQUIREMENTS:
 - build_instructions.md MUST be plain markdown (no outer ``` fences).
 - If information is missing, add assumptions ONLY as markdown comments at top:
   <!-- ASSUMPTION: ... -->
+panic.rs must contain the ONLY panic_handler.
+main.rs must NOT define panic_handler.
+main.rs must include: mod panic;
+- Cargo.toml MUST NOT contain [build] section.
+- Target configuration must be generated in: .cargo/config.toml
 
 OUTPUTS (generate ALL using the format below):
 Return multiple files in this exact format:

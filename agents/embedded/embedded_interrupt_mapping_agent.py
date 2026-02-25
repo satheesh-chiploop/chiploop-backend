@@ -30,16 +30,34 @@ TASK:
 Create interrupt vector mapping and ISR stubs.
 MANDATORY:
 - Include VECTOR_TABLE definition
+ 
   VECTOR_TABLE entries must have consistent type signature: unsafe extern "C" fn()
   VECTOR_TABLE must include:
   #[link_section = ".vector_table"]
   #[no_mangle]
+  Vector table MUST follow embedded production layout:
+
+pub static VECTOR_TABLE: [usize; N]
+
+Rules:
+- Entry 0 = initial stack pointer
+- Remaining entries = ISR handlers cast as usize
+- Example:
+Reset_Handler as usize
+ 
 - Provide DefaultHandler
 - Provide weak ISR handlers
 - Must compile in no_std firmware environment
 - Provide a Reset_Handler symbol (even as a stub) OR clearly reference firmware/src/lib.rs entry symbol
 - VECTOR_TABLE entries must have consistent type signature: unsafe extern "C" fn()
 - Do not reference undefined symbols
+This file is a Rust MODULE.
+
+DO NOT generate:
+#![no_std]
+#![allow(...)]
+#![feature(...)]
+
 
 OUTPUT REQUIREMENTS:
 - Write the primary output to match this path: firmware/isr/interrupts.rs
