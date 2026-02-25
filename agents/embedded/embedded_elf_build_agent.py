@@ -38,6 +38,10 @@ MANDATORY ADDITIONS:
 - Add firmware boot test example
 - Add ELF preload placeholder function
 - Import RisingEdge and Timer
+MANDATORY:
+- reference linker script
+- include cargo config example
+- assume no_std environment
 OUTPUT REQUIREMENTS:
 - Write the primary output to match this path: firmware/build/build_instructions.md
 - Keep it implementation-ready and consistent with Rust + Cargo + Verilator + Cocotb assumptions.
