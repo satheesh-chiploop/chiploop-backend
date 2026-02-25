@@ -29,6 +29,12 @@ TOGGLES:
 TASK:
 Generate a cocotb harness scaffold.
 
+MANDATORY CONTENT:
+- Create a clock using cocotb.clock.Clock
+- Apply reset sequencing
+- Include at least one example test coroutine
+- Include placeholder for ELF preload or firmware stimulus
+
 HARD OUTPUT RULES (IMPORTANT):
 - Output MUST be RAW PYTHON ONLY (no markdown fences, no headings, no prose outside code).
 - Put assumptions as Python comments at the top (starting with # ASSUMPTION: ...).

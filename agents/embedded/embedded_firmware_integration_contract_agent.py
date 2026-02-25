@@ -71,10 +71,11 @@ HARD OUTPUT RULES:
 - Output MUST be markdown.
 - Must include:
   1) Contract overview (5-8 bullets)
-  2) Interfaces (tables where appropriate)
-  3) Ownership boundaries (FW vs System/Host vs Validation) as a small table
-  4) Assumptions (bullets)
-  5) Validation hooks (how to test contract compliance)
+  2) Contract version + compatibility policy
+  3) Interfaces (tables where appropriate)
+  4) Ownership boundaries (FW vs System/Host vs Validation) as a small table
+  5) Assumptions (bullets)
+  6) Validation hooks (how to test contract compliance)
   - For BOOT-ONLY mode, include a single table named "Boot Contract Interfaces" with rows for:
   ResetCause, ClockConfig, BootLog, ReadySignal, BootFailurePolicy
 - Do not add sections for Interrupts/DMA unless explicitly requested in USER SPEC
