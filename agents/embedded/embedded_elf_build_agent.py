@@ -32,6 +32,12 @@ TASK:
 
 
 Generate Cargo build instructions and ELF build steps.
+MANDATORY ADDITIONS:
+- Add simulator assumptions comment block
+- Add watchdog timeout protection
+- Add firmware boot test example
+- Add ELF preload placeholder function
+- Import RisingEdge and Timer
 OUTPUT REQUIREMENTS:
 - Write the primary output to match this path: firmware/build/build_instructions.md
 - Keep it implementation-ready and consistent with Rust + Cargo + Verilator + Cocotb assumptions.
@@ -42,7 +48,7 @@ Also generate:
 - firmware/build/memory.x
 """
 
-    out = llm_chat(prompt, system="You are a senior embedded firmware engineer. Output plain markdown only. Never use markdown code fences.")
+    out = llm_chat(prompt, system="You are a senior embedded firmware engineer. Never use markdown code fences.")
     if not out:
         out = "ERROR: LLM returned empty output."
     out = strip_markdown_fences_for_code(out)
