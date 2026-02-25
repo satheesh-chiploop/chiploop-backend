@@ -478,7 +478,7 @@ AGENT_CAPABILITIES = {
         "firmware/build/Cargo.toml",
         "firmware/build/.cargo/config.toml",
         "firmware/build/memory.x",
-        "firmware/src/lib.rs",
+        "firmware/src/main.rs",
         "firmware/src/panic.rs",
         ],
         "description": "Generate Cargo build instructions and ELF build steps.",

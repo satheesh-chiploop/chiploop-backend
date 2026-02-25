@@ -30,6 +30,10 @@ TASK:
 Create interrupt vector mapping and ISR stubs.
 MANDATORY:
 - Include VECTOR_TABLE definition
+  VECTOR_TABLE entries must have consistent type signature: unsafe extern "C" fn()
+  VECTOR_TABLE must include:
+  #[link_section = ".vector_table"]
+  #[no_mangle]
 - Provide DefaultHandler
 - Provide weak ISR handlers
 - Must compile in no_std firmware environment

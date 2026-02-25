@@ -12,7 +12,7 @@ OUTPUT_PATH = "firmware/build/build_instructions.md"
 OUTPUT_CARGO_TOML = "firmware/build/Cargo.toml"
 OUTPUT_CARGO_CFG  = "firmware/build/.cargo/config.toml"
 OUTPUT_MEMORY_X   = "firmware/build/memory.x"
-OUTPUT_LIB_RS     = "firmware/src/lib.rs"
+OUTPUT_LIB_RS     = "firmware/src/main.rs"
 OUTPUT_PANIC_RS   = "firmware/src/panic.rs"
 
 
@@ -66,7 +66,7 @@ FILE: firmware/build/.cargo/config.toml
 FILE: firmware/build/memory.x
 <content>
 
-FILE: firmware/src/lib.rs
+FILE: firmware/src/main.rs
 <content>
 
 FILE: firmware/src/panic.rs

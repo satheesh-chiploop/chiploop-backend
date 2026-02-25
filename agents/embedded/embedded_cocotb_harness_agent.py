@@ -44,6 +44,15 @@ CORRECTNESS REQUIREMENTS:
 - Do not call .read() on DUT signals
 - Use dut.<sig>.value.integer when reading numeric values
 
+STRICT RUNTIME RULES:
+- Must include @cocotb.test()
+- Clock must start using:
+  cocotb.start_soon(Clock(...).start())
+- Assume signals:
+  dut.clk
+  dut.rst_n
+unless explicitly provided in spec.
+- Do not invent additional DUT signals.
 
 HARD OUTPUT RULES (IMPORTANT):
 - Output MUST be RAW PYTHON ONLY (no markdown fences, no headings, no prose outside code).
