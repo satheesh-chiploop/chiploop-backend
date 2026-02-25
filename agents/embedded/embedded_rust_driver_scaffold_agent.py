@@ -31,15 +31,25 @@ Generate driver scaffold, init, basic read/write APIs.
 
 OUTPUT REQUIREMENTS:
 - Output MUST be RAW RUST ONLY (no markdown fences, no prose).
-- Put assumptions as Rust comments at top (// ASSUMPTION: ...).
-- Keep it implementation-ready and consistent with Rust + Cargo + Verilator + Cocotb assumptions.
+- This file is a Rust MODULE, not crate root.
+- DO NOT generate crate attributes:
+  - NO #![no_std]
+  - NO #![allow(...)]
+  - NO #![feature(...)]
+- Assume crate configuration exists in lib.rs or main.rs.
+- Put assumptions only as Rust comments:
+  // ASSUMPTION: ...
+- Code must compile when included via:
+  mod driver_scaffold;
 - Write to: firmware/drivers/driver_scaffold.rs
+
 """
 
     out = llm_chat(prompt, system="You are a senior embedded Rust engineer. Produce compile-ready Rust only. Never use markdown code fences.")
     if not out:
         out = "ERROR: LLM returned empty output."
     out = strip_markdown_fences_for_code(out)
+    out = out.replace("#![no_std]", "// no_std configured at crate root")
     write_artifact(state, OUTPUT_PATH, out, key=OUTPUT_PATH.split("/")[-1])
 
     # lightweight state update for downstream agents

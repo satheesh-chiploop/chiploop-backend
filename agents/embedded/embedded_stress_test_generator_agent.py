@@ -28,17 +28,30 @@ TOGGLES:
 
 TASK:
 Create stress tests for clocks/IRQs/DMA/memory.
+TASK:
+Create stress tests for clocks/IRQs/DMA/memory.
+
 OUTPUT REQUIREMENTS:
-- Write the primary output to match this path: firmware/diagnostics/stress_tests.rs
-- Keep it implementation-ready and consistent with Rust + Cargo + Verilator + Cocotb assumptions.
-- If information is missing, assumptions only as // ASSUMPTION: ... at top. No prose.
+- Output MUST be RAW RUST ONLY.
+- This file is a Rust MODULE (not crate root).
+- DO NOT emit crate attributes:
+  - NO #![no_std]
+  - NO #![feature(...)]
+  - NO crate-level configuration.
+- Compatible with inclusion via:
+  mod stress_tests;
+- Assumptions allowed only as:
+  // ASSUMPTION: ...
+- Write output to:
+  firmware/diagnostics/stress_tests.rs
+
 """
 
     out = llm_chat(prompt, system="You are a senior embedded firmware engineer. Output MUST be raw, compile-ready Rust only. NEVER include markdown fences.")
     if not out:
         out = "ERROR: LLM returned empty output."
     out = strip_markdown_fences_for_code(out)
-
+    out = out.replace("#![no_std]", "// no_std configured at crate root")
     write_artifact(state, OUTPUT_PATH, out, key=OUTPUT_PATH.split("/")[-1])
 
     # lightweight state update for downstream agents
