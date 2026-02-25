@@ -1,5 +1,5 @@
 import json
-from ._embedded_common import ensure_workflow_dir, llm_chat, write_artifact
+from ._embedded_common import ensure_workflow_dir, llm_chat, write_artifact, strip_markdown_fences_for_code
 
 AGENT_NAME = "Embedded ELF Build Agent"
 PHASE = "elf_build"
@@ -37,7 +37,7 @@ OUTPUT REQUIREMENTS:
     out = llm_chat(prompt, system="You are a senior embedded firmware engineer for silicon bring-up and RTL co-simulation. Produce concise, production-quality outputs. Avoid markdown code fences unless explicitly asked.")
     if not out:
         out = "ERROR: LLM returned empty output."
-
+    out = strip_markdown_fences_for_code(out)
     write_artifact(state, OUTPUT_PATH, out, key=OUTPUT_PATH.split("/")[-1])
 
     # lightweight state update for downstream agents
