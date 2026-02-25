@@ -33,6 +33,10 @@ MANDATORY:
 - Provide DefaultHandler
 - Provide weak ISR handlers
 - Must compile in no_std firmware environment
+- Provide a Reset_Handler symbol (even as a stub) OR clearly reference firmware/src/lib.rs entry symbol
+- VECTOR_TABLE entries must have consistent type signature: unsafe extern "C" fn()
+- Do not reference undefined symbols
+
 OUTPUT REQUIREMENTS:
 - Write the primary output to match this path: firmware/isr/interrupts.rs
 - Keep it implementation-ready and consistent with Rust + Cargo + Verilator + Cocotb assumptions.

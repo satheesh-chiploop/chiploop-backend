@@ -34,12 +34,16 @@ MANDATORY CONTENT:
 - Apply reset sequencing
 - Include at least one example test coroutine
 - Include placeholder for ELF preload or firmware stimulus
+- Include a watchdog timeout (fail test if boot never completes)
+- Must import: Clock, RisingEdge, Timer
 
 CORRECTNESS REQUIREMENTS:
 - Use dut.signal.value = X syntax
 - Use cocotb.clock.Clock for clock generation
 - Never use <= operator
 - Do not call .read() on DUT signals
+- Use dut.<sig>.value.integer when reading numeric values
+
 
 HARD OUTPUT RULES (IMPORTANT):
 - Output MUST be RAW PYTHON ONLY (no markdown fences, no headings, no prose outside code).

@@ -28,10 +28,19 @@ TOGGLES:
 
 TASK:
 Create BIST hooks and test routines.
+
 OUTPUT REQUIREMENTS:
 - Write the primary output to match this path: firmware/diagnostics/bist.rs
-- Keep it implementation-ready and consistent with Rust + Cargo + Verilator + Cocotb assumptions.
-- If information is missing, assumptions only as // ASSUMPTION: ... at top. No prose.
+- Output MUST be raw, compile-ready Rust MODULE code only (no markdown fences, no prose).
+- This file is a Rust MODULE (not crate root). DO NOT emit crate attributes:
+  - NO #![no_std]
+  - NO #![no_main]
+  - NO #![feature(...)]
+- Do not define a main() or panic_handler in this module.
+- Provide functions (e.g., pub fn run_bist(...) -> Result<...>) that can be called from firmware/src/lib.rs.
+- If information is missing, assumptions only as Rust comments at top:
+  // ASSUMPTION: ...
+
 """
 
     out = llm_chat(prompt, system="You are a senior embedded firmware engineer. Output MUST be raw, compile-ready Rust only. NEVER include markdown fences.")

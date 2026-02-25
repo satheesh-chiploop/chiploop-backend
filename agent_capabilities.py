@@ -469,10 +469,18 @@ AGENT_CAPABILITIES = {
         "outputs": ["firmware/executive_summary.md"],
         "description": "Generate exec summary of produced firmware deliverables.",
     },
+    
     "Embedded ELF Build Agent": {
         "domain": "embedded",
         "inputs": ["spec_text", "toolchain", "toggles"],
-        "outputs": ["firmware/build/build_instructions.md"],
+        "outputs": [
+        "firmware/build/build_instructions.md",
+        "firmware/build/Cargo.toml",
+        "firmware/build/.cargo/config.toml",
+        "firmware/build/memory.x",
+        "firmware/src/lib.rs",
+        "firmware/src/panic.rs",
+        ],
         "description": "Generate Cargo build instructions and ELF build steps.",
     },
     "Embedded Verilator Build Agent": {
