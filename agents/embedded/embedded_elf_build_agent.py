@@ -133,6 +133,43 @@ FILE: firmware/src/panic.rs
                 content = content.rstrip() + "\n\n    loop {}\n"
                 files[OUTPUT_LIB_RS] = content
 
+        # --- Hardening: sanitize Cargo.toml (keep Embedded_Run stable) ---
+    if OUTPUT_CARGO_TOML in files:
+        ct = files[OUTPUT_CARGO_TOML]
+
+        # 1) Remove any [build] section (belongs in .cargo/config.toml)
+        lines = ct.splitlines()
+        out_lines = []
+        in_build = False
+        for ln in lines:
+            s = ln.strip()
+            if s.startswith("[build]"):
+                in_build = True
+                continue
+            # end build section at next table header
+            if in_build and s.startswith("[") and s.endswith("]") and not s.startswith("[build]"):
+                in_build = False
+            if not in_build:
+                out_lines.append(ln)
+        ct = "\n".join(out_lines).strip() + "\n"
+
+        # 2) Remove fake dependency no_std (attribute, not a crate)
+        ct = ct.replace('no_std = "0.1.0"\n', "")
+        ct = ct.replace('no_std = "0.1"\n', "")
+
+        # 3) Ensure package name is valid (no <BIN_NAME>)
+        # If model used placeholder, default to a safe name.
+        ct_lines = ct.splitlines()
+        new_ct_lines = []
+        for ln in ct_lines:
+            if ln.strip().startswith("name") and ("<" in ln or ">" in ln):
+                new_ct_lines.append('name = "firmware_app"')
+            else:
+                new_ct_lines.append(ln)
+        ct = "\n".join(new_ct_lines).strip() + "\n"
+
+        files[OUTPUT_CARGO_TOML] = ct
+
     required = [
         OUTPUT_PATH,
         OUTPUT_CARGO_TOML,

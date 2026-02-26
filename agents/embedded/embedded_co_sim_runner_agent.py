@@ -64,6 +64,15 @@ OUTPUT REQUIREMENTS:
         out = "ERROR: LLM returned empty output."
     out = strip_markdown_fences_for_code(out)
 
+        # Ensure bash script has a safe header if it was generated
+    if OUTPUT_SCRIPT in files:
+        script = files[OUTPUT_SCRIPT]
+        if "set -euo pipefail" not in script:
+            script = "#!/usr/bin/env bash\nset -euo pipefail\n\n" + script
+        elif not script.startswith("#!"):
+            script = "#!/usr/bin/env bash\n" + script
+        files[OUTPUT_SCRIPT] = script
+
     # Parse FILE: blocks
     files = {}
     current = None

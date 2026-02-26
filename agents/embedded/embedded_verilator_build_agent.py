@@ -1,5 +1,5 @@
 import json
-from ._embedded_common import ensure_workflow_dir, llm_chat, write_artifact
+from ._embedded_common import ensure_workflow_dir, llm_chat, write_artifact, strip_markdown_fences_for_code
 
 AGENT_NAME = "Embedded Verilator Build Agent"
 PHASE = "verilator_build"
@@ -53,8 +53,15 @@ OUTPUT REQUIREMENTS:
 """
    
     out = llm_chat(prompt, system="You are a senior RTL verification engineer. Output must use only documented Verilator CLI options. Do not invent flags.")
+    out = (out or "").strip()
     if not out:
         out = "ERROR: LLM returned empty output."
+
+    # Remove markdown fences if model adds them
+    out = strip_markdown_fences_for_code(out)
+
+    # Normalize common flag typo
+    out = out.replace("-top-module", "--top-module")
 
     write_artifact(state, OUTPUT_PATH, out, key=OUTPUT_PATH.split("/")[-1])
 

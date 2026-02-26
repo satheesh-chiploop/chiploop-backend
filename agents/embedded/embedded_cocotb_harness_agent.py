@@ -51,6 +51,10 @@ STRICT RUNTIME RULES:
 - Assume ONLY the following signals exist by default:
   dut.clk
   dut.rst_n
+- Any access beyond dut.clk and dut.rst_n MUST be guarded with hasattr(dut, "<sig>").
+- Do NOT use hierarchical signal access (no dut.A.B). If needed, mark as:
+  # REQUIRED_SIGNAL: A_B   (flattened)
+  and only access dut.A_B after hasattr(dut, "A_B") is true.
 
 - If additional DUT signals are required (e.g., BOOT_DONE, IRQ, APB signals):
   - Declare them as placeholders using:
@@ -99,6 +103,20 @@ OUTPUT PATH:
     if not out:
         out = "ERROR: LLM returned empty output."
     out = strip_markdown_fences_for_code(out)
+
+        # Safety: block hierarchical dut access (dut.A.B) which breaks on most DUTs
+    sanitized = []
+    for line in out.splitlines():
+        if "dut." in line and ".value" in line:
+            # If line contains dut.<x>.<y>, comment it out
+            # (Very lightweight: detect two dots after dut.)
+            after = line.split("dut.", 1)[-1]
+            if after.count(".") >= 2:
+                sanitized.append("# NOTE: removed hierarchical DUT access (requires explicit signal mapping):")
+                sanitized.append("# " + line)
+                continue
+        sanitized.append(line)
+    out = "\n".join(sanitized) + "\n"
 
     write_artifact(state, OUTPUT_PATH, out, key=OUTPUT_PATH.split("/")[-1])
 
