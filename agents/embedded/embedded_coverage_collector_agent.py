@@ -1,5 +1,5 @@
 import json
-from ._embedded_common import ensure_workflow_dir, llm_chat, write_artifact
+from ._embedded_common import ensure_workflow_dir, llm_chat, write_artifact, strip_markdown_fences_for_code
 
 AGENT_NAME = "Embedded Coverage Collector Agent"
 PHASE = "coverage"
@@ -50,6 +50,9 @@ OUTPUT REQUIREMENTS:
   - where report files land
   - assumptions at top:
     <!-- ASSUMPTION: ... -->
+  - IMPORTANT: Verilator coverage flags are version-dependent.
+    Use placeholders like <VERILATOR_COVERAGE_FLAGS> and list common options as examples,
+    but instruct the user to confirm with: verilator --help
 
 - coverage_rtl.md must include:
   - verilator coverage method (if supported) OR explicit limitation
@@ -66,6 +69,8 @@ OUTPUT REQUIREMENTS:
     out = (out or "").strip()
     if not out:
        out = "ERROR: LLM returned empty output."
+
+    out = strip_markdown_fences_for_code(out)
 
     # Parse FILE: blocks
     files = {}
