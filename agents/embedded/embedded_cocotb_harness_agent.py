@@ -53,6 +53,8 @@ STRICT RUNTIME RULES:
   dut.rst_n
 unless explicitly provided in spec.
 - Do not invent additional DUT signals.
+- Any helper coroutine/function MUST accept dut as an argument (no free-variable dut).
+- Do not use cocotb.coroutine, yield-based coroutines, or cocotb.utils.
 - Test must explicitly terminate using:
   raise cocotb.result.TestSuccess()
   or watchdog failure.

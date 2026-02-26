@@ -48,6 +48,10 @@ MANDATORY:
 
 OUTPUT REQUIREMENTS:
 - build_instructions.md MUST be plain markdown (no outer ``` fences).
+- build_instructions.md MUST include:
+  1) exact cargo command(s) to build an ELF (including --release and --target)
+  2) expected ELF output path (target/<triple>/release/<name>.elf OR clearly stated)
+  3) how to confirm the ELF exists (ls/path check)
 - If information is missing, add assumptions ONLY as markdown comments at top:
   <!-- ASSUMPTION: ... -->
 panic.rs must contain the ONLY panic_handler.

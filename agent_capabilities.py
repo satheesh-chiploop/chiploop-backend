@@ -498,13 +498,20 @@ AGENT_CAPABILITIES = {
     "Embedded Co Sim Runner Agent": {
         "domain": "embedded",
         "inputs": ["spec_text", "toolchain", "toggles"],
-        "outputs": ["firmware/validate/cosim_run.md"],
+        "outputs": [
+        "firmware/validate/cosim_run.md",
+        "firmware/validate/run_cosim.sh",
+        ],
         "description": "Generate cosim runner steps and expected artifacts.",
     },
     "Embedded Coverage Collector Agent": {
         "domain": "embedded",
         "inputs": ["spec_text", "toolchain", "toggles"],
-        "outputs": ["firmware/validate/coverage.md"],
+        "outputs": [
+        "firmware/validate/coverage.md",
+        "firmware/validate/coverage_fw.md",
+        "firmware/validate/coverage_rtl.md",
+        ],
         "description": "Collect FW and RTL coverage report steps and summaries.",
     },
     "Embedded Validation Report Agent": {
