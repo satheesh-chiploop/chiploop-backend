@@ -42,9 +42,15 @@ OUTPUT REQUIREMENTS:
 
 - run_cosim.sh must be runnable bash:
   - set -euo pipefail
-  - build verilator (or call verilator_cmd.sh if present)
-  - run cocotb (pytest -q ...)
+  - DO NOT hardcode RTL paths like ./rtl or specific filenames unless provided in USER SPEC/TOOLCHAIN.
+  - Use placeholders and environment overrides:
+    RTL_TOP=${RTL_TOP:-<RTL_TOP>}
+    RTL_DIR=${RTL_DIR:-<RTL_DIR>}
+    FILELIST=${FILELIST:-<FILELIST>}
+  - Prefer calling commands described in firmware/validate/verilator_build.md when present.
+  - run cocotb via pytest (pytest -q ...)
   - write outputs under firmware/validate/
+
 - Assumptions MUST be listed as markdown comments at the top of cosim_run.md:
   <!-- ASSUMPTION: ... -->
 

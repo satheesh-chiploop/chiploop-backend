@@ -29,7 +29,7 @@ TOGGLES:
 {json.dumps(toggles, indent=2)}
 
 TASK:
-TASK:
+
 Generate FW and RTL coverage collection steps AND a concise coverage summary with numbers.
 
 OUTPUT REQUIREMENTS:
@@ -42,9 +42,14 @@ OUTPUT REQUIREMENTS:
   FW line % | FW function % | RTL line % | RTL toggle % | Notes
 
 - coverage_fw.md must include:
-  - tool method (llvm-cov OR gcov) based on assumptions
-  - exact commands
+  - a generic FW coverage strategy with selectable methods:
+    Method A: Rust (cargo-llvm-cov) if Rust toolchain supports it
+    Method B: GCC/gcov if firmware is C/C++
+    Method C: "Not supported in v1" with clear reason + what to enable later
+  - exact command templates (use placeholders like <TARGET_TRIPLE>, <BIN_NAME>)
   - where report files land
+  - assumptions at top:
+    <!-- ASSUMPTION: ... -->
 
 - coverage_rtl.md must include:
   - verilator coverage method (if supported) OR explicit limitation

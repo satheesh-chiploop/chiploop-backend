@@ -41,16 +41,22 @@ TOGGLES:
 TASK:
 Generate a minimal, buildable embedded Rust workspace + build steps for producing an ELF.
 
+
 MANDATORY:
 - Assume a no_std firmware workspace (crate attributes belong ONLY in crate root).
 - Include linker script reference (memory.x) and cargo target config example.
-- Provide build instructions for at least one common target triple (e.g., riscv32imac-unknown-none-elf OR thumbv7em-none-eabihf).
+- DO NOT hardcode a CPU family (no "riscv", no "cortex", no "thumb") unless explicitly present in USER SPEC or TOOLCHAIN.
+- If TOOLCHAIN includes a target triple (e.g., toolchain["target_triple"]), use it.
+  Otherwise use a placeholder: <TARGET_TRIPLE>.
+- Build instructions must work generically by parameterizing the target triple and output name.
 
 OUTPUT REQUIREMENTS:
 - build_instructions.md MUST be plain markdown (no outer ``` fences).
 - build_instructions.md MUST include:
   1) exact cargo command(s) to build an ELF (including --release and --target)
-  2) expected ELF output path (target/<triple>/release/<name>.elf OR clearly stated)
+  2) expected build artifact path:
+   - default cargo output: target/<TARGET_TRIPLE>/release/<BIN_NAME>
+   - optional: a post-step that copies/renames to <BIN_NAME>.elf (explicit command)
   3) how to confirm the ELF exists (ls/path check)
 - If information is missing, add assumptions ONLY as markdown comments at top:
   <!-- ASSUMPTION: ... -->
