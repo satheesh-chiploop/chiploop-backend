@@ -101,6 +101,10 @@ FILE: firmware/src/panic.rs
     if current:
         files[current] = "\n".join(buf).strip() + "\n"
 
+    # After writing main.rs
+    if "mod panic;" not in files.get(OUTPUT_LIB_RS, ""):
+        files[OUTPUT_LIB_RS] = "mod panic;\n" + files[OUTPUT_LIB_RS]
+
     required = [
         OUTPUT_PATH,
         OUTPUT_CARGO_TOML,
