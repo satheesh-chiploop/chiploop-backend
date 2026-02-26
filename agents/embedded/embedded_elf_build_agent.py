@@ -112,6 +112,11 @@ FILE: firmware/src/panic.rs
         content = content.replace("#![no_main]", "")
         files[OUTPUT_PANIC_RS] = content
 
+    # Ensure main.rs has crate-level attrs
+    if OUTPUT_LIB_RS in files:
+        if "#![no_std]" not in files[OUTPUT_LIB_RS]:
+           files[OUTPUT_LIB_RS] = "#![no_std]\n#![no_main]\n" + files[OUTPUT_LIB_RS]
+
     required = [
         OUTPUT_PATH,
         OUTPUT_CARGO_TOML,
