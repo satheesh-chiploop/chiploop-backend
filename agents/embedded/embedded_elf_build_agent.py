@@ -126,6 +126,12 @@ FILE: firmware/src/panic.rs
     if OUTPUT_LIB_RS in files:
         if "#![no_std]" not in files[OUTPUT_LIB_RS]:
            files[OUTPUT_LIB_RS] = "#![no_std]\n#![no_main]\n" + files[OUTPUT_LIB_RS]
+    if OUTPUT_LIB_RS in files:
+        content = files[OUTPUT_LIB_RS]
+        if "fn main" in content and "-> !" in content:
+            if "loop {" not in content:
+                content = content.rstrip() + "\n\n    loop {}\n"
+                files[OUTPUT_LIB_RS] = content
 
     required = [
         OUTPUT_PATH,

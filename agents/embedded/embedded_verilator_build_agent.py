@@ -37,12 +37,22 @@ OUTPUT REQUIREMENTS:
   1) Inputs expected (placeholders ok): <RTL_TOP>, <RTL_FILELIST or RTL_DIR>, optional <INCLUDE_DIRS>, optional <DEFINES>
   2) A concrete Verilator command line template using those placeholders
   3) Build output location (obj_dir) and expected binary name
-  4) Notes on DPI/VPI flags needed for Cocotb (verilator --cc/--exe or --binary + cocotb config)
+  4) Use only documented Verilator flags:
+   - -cc
+   - --exe
+   - -I<dir>
+   - -D<define>
+   - --trace (optional)
+   - --build
+
+   DO NOT invent flags.
+   DO NOT reference non-existent options (e.g., --with-cocotb).
+   Cocotb integration should be described generically via pytest or cocotb makefile flow.
 - If information is missing, list assumptions at top as:
   <!-- ASSUMPTION: ... -->
 """
-
-    out = llm_chat(prompt, system="You are a senior embedded firmware engineer for silicon bring-up and RTL co-simulation. Produce concise, production-quality outputs. Avoid markdown code fences unless explicitly asked.")
+   
+    out = llm_chat(prompt, system="You are a senior RTL verification engineer. Output must use only documented Verilator CLI options. Do not invent flags.")
     if not out:
         out = "ERROR: LLM returned empty output."
 

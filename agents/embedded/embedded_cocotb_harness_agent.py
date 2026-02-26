@@ -48,11 +48,22 @@ STRICT RUNTIME RULES:
 - Must include @cocotb.test()
 - Clock must start using:
   cocotb.start_soon(Clock(...).start())
-- Assume signals:
+- Assume ONLY the following signals exist by default:
   dut.clk
   dut.rst_n
-unless explicitly provided in spec.
-- Do not invent additional DUT signals.
+
+- If additional DUT signals are required (e.g., BOOT_DONE, IRQ, APB signals):
+  - Declare them as placeholders using:
+    # REQUIRED_SIGNAL: <signal_name>
+  - Do NOT directly reference them in executable logic unless explicitly present in USER SPEC.
+
+- If USER SPEC does not define specific DUT signals:
+  - Generate a minimal harness that:
+    - toggles clock
+    - applies reset
+    - waits fixed cycles
+    - terminates cleanly
+  - Do NOT reference non-existent DUT signals.
 - Any helper coroutine/function MUST accept dut as an argument (no free-variable dut).
 - Do not use cocotb.coroutine, yield-based coroutines, or cocotb.utils.
 - Test must explicitly terminate using:
