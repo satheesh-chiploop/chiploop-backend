@@ -105,6 +105,13 @@ FILE: firmware/src/panic.rs
     if "mod panic;" not in files.get(OUTPUT_LIB_RS, ""):
         files[OUTPUT_LIB_RS] = "mod panic;\n" + files[OUTPUT_LIB_RS]
 
+    # Ensure panic.rs does not contain crate-level attributes
+    if OUTPUT_PANIC_RS in files:
+        content = files[OUTPUT_PANIC_RS]
+        content = content.replace("#![no_std]", "")
+        content = content.replace("#![no_main]", "")
+        files[OUTPUT_PANIC_RS] = content
+
     required = [
         OUTPUT_PATH,
         OUTPUT_CARGO_TOML,
