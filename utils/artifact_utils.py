@@ -66,9 +66,19 @@ def append_artifact_record(
     """
     Append/merge a single artifact entry into workflows.artifacts.
 
-    Note: Storage is the source of truth. This DB field is a best-effort index and is
-    allowed to compact/overflow to avoid PostgREST payload limits.
+    Storage is the source of truth.
+    workflows.artifacts is a best-effort index and may be VARCHAR-limited on early schemas.
+    We keep payload very small and retry with ultra-minimal payload on 22023.
     """
+    def _payload_len(obj: Dict[str, Any]) -> int:
+        try:
+            return len(json.dumps(obj, ensure_ascii=False, separators=(",", ":")))
+        except Exception:
+            return 10**9
+
+    # Keep this conservative. Many early schemas use VARCHAR(1000) for artifacts.
+    MAX_ARTIFACTS_JSON_CHARS = int(os.getenv("MAX_ARTIFACTS_JSON_CHARS", "850"))
+
     try:
         artifacts = _safe_get_artifacts(workflow_id)
 
@@ -76,50 +86,72 @@ def append_artifact_record(
         if not isinstance(agent_entry, dict):
             agent_entry = {}
 
-        # Store exactly the string path that Supabase Storage uses
         agent_entry[key] = storage_path
         artifacts[agent_name] = agent_entry
-        MAX_ARTIFACTS_JSON_CHARS = 7500
-        # Best-effort: keep the DB artifacts index small. Storage is source of truth.
-        payload = json.dumps(artifacts, ensure_ascii=False, separators=(",", ":"))
-        payload_len = len(payload)
-      
-        if payload_len > MAX_ARTIFACTS_JSON_CHARS:
-            # Fall back to a compact pointer + the current artifact only.
-            logger.warning(
-                f"artifact_utils: artifacts index too large ({payload_len} chars). "
-                f"Compacting for workflow={workflow_id}."
-            )
+
+        # 1) Compact if too large
+        if _payload_len(artifacts) > MAX_ARTIFACTS_JSON_CHARS:
             artifacts = {
                 "__mode": "prefix",
                 "__prefix": f"backend/workflows/{workflow_id}/",
                 agent_name: {key: storage_path},
             }
 
+        # 2) If still too large, ultra-minimal
+        if _payload_len(artifacts) > MAX_ARTIFACTS_JSON_CHARS:
+            artifacts = {
+                "__mode": "overflow",
+                "__prefix": f"backend/workflows/{workflow_id}/",
+                "last": {agent_name: {key: storage_path}},
+            }
+
+        # 3) Try update
         try:
             supabase.table("workflows").update({"artifacts": artifacts}).eq("id", workflow_id).execute()
             logger.info(
                 f"artifact_utils: Updated artifacts for workflow={workflow_id}, "
                 f"agent={agent_name}, key={key}, path={storage_path}"
             )
+            return
+
         except Exception as e:
-            # If DB update fails (often due to payload size), don't fail the run —
-            # the artifact is already uploaded to Storage.
-            logger.error(
+            # If DB update fails due to payload size, retry with ultra-minimal payload once.
+            msg = str(e)
+            if "payload string too long" in msg or "22023" in msg:
+                try:
+                    minimal = {
+                        "__mode": "overflow",
+                        "__prefix": f"backend/workflows/{workflow_id}/",
+                        "last": {agent_name: {key: storage_path}},
+                    }
+                    supabase.table("workflows").update({"artifacts": minimal}).eq("id", workflow_id).execute()
+                    logger.warning(
+                        f"artifact_utils: Artifacts payload too long; wrote minimal index for workflow={workflow_id}, "
+                        f"agent={agent_name}, key={key}"
+                    )
+                    return
+                except Exception:
+                    # Final fallback: skip DB index update. Storage already has the artifact.
+                    logger.warning(
+                        f"artifact_utils: Skipping artifacts DB index update (VARCHAR limit) "
+                        f"workflow={workflow_id}, agent={agent_name}, key={key}"
+                    )
+                    return
+
+            # Non-payload errors: log and move on
+            logger.warning(
                 f"artifact_utils: Failed to append artifact record for workflow={workflow_id}, "
                 f"agent={agent_name}, key={key}: {e}"
             )
             return
 
     except Exception as exc:
-        logger.exception(
+        # Never crash the run due to DB indexing
+        logger.warning(
             f"artifact_utils: Failed to append artifact record for workflow={workflow_id}, "
             f"agent={agent_name}, key={key}: {exc}"
         )
-
-
-
-
+        return
 
 def save_text_artifact_and_record(
     workflow_id: str,

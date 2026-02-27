@@ -40,7 +40,7 @@ logging.basicConfig(level=logging.INFO)
 
 # Soft limits to avoid PostgREST "payload string too long" on logs/artifacts fields.
 MAX_LOG_CHARS = 850  # ~200KB
-MAX_WORKFLOW_ARTIFACTS_JSON_CHARS = 5000
+MAX_WORKFLOW_ARTIFACTS_JSON_CHARS = 850
 ENABLE_LEGACY_WORKFLOW_ARTIFACTS_INDEX = False
 MAX_LOG_LINE_CHARS = 400
 
