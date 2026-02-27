@@ -118,6 +118,33 @@ OUTPUT PATH:
         sanitized.append(line)
     out = "\n".join(sanitized) + "\n"
 
+    # Safety: prevent NameError from removed signal reads
+    safe_lines = []
+    defined_vars = set()
+
+    for line in out.splitlines():
+        stripped = line.strip()
+
+        # Track simple assignments like var =
+        if "=" in stripped and not stripped.startswith("#"):
+            lhs = stripped.split("=", 1)[0].strip()
+            if lhs.isidentifier():
+                defined_vars.add(lhs)
+
+        # If printing undefined variable, guard it
+        if stripped.startswith("print("):
+            for token in stripped.replace("(", " ").replace(")", " ").split():
+                if token.isidentifier() and token not in defined_vars and token not in ("dut",):
+                    safe_lines.append("# NOTE: removed unsafe print referencing undefined var")
+                    safe_lines.append("# " + line)
+                    break
+            else:
+                safe_lines.append(line)
+        else:
+            safe_lines.append(line)
+
+    out = "\n".join(safe_lines) + "\n"
+
     write_artifact(state, OUTPUT_PATH, out, key=OUTPUT_PATH.split("/")[-1])
 
     # lightweight state update for downstream agents

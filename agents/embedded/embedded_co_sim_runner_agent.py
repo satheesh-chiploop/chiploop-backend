@@ -64,19 +64,11 @@ OUTPUT REQUIREMENTS:
         out = "ERROR: LLM returned empty output."
     out = strip_markdown_fences_for_code(out)
 
-        # Ensure bash script has a safe header if it was generated
-    if OUTPUT_SCRIPT in files:
-        script = files[OUTPUT_SCRIPT]
-        if "set -euo pipefail" not in script:
-            script = "#!/usr/bin/env bash\nset -euo pipefail\n\n" + script
-        elif not script.startswith("#!"):
-            script = "#!/usr/bin/env bash\n" + script
-        files[OUTPUT_SCRIPT] = script
-
     # Parse FILE: blocks
     files = {}
     current = None
     buf = []
+
     for line in out.splitlines():
         if line.startswith("FILE: "):
             if current:
@@ -85,9 +77,21 @@ OUTPUT REQUIREMENTS:
             buf = []
         else:
             buf.append(line)
+
     if current:
         files[current] = "\n".join(buf).strip() + "\n"
 
+    # Ensure bash script has a safe header if it was generated
+    if OUTPUT_SCRIPT in files:
+        script = files[OUTPUT_SCRIPT]
+        if not script.startswith("#!"):
+            script = "#!/usr/bin/env bash\nset -euo pipefail\n\n" + script
+        elif "set -euo pipefail" not in script:
+            script = script.replace("#!/usr/bin/env bash",
+                                "#!/usr/bin/env bash\nset -euo pipefail")
+        files[OUTPUT_SCRIPT] = script
+
+  
     # Always write cosim_run.md (backward compatible)
     md = files.get(OUTPUT_PATH, out)
     write_artifact(state, OUTPUT_PATH, md, key=OUTPUT_PATH.split("/")[-1])

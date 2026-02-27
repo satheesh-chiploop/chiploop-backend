@@ -60,6 +60,9 @@ OUTPUT REQUIREMENTS:
     # Remove markdown fences if model adds them
     out = strip_markdown_fences_for_code(out)
 
+    # Prevent accidental leftover triple backticks
+    out = out.replace("```", "")
+
     # Normalize common flag typo
     out = out.replace("-top-module", "--top-module")
 
