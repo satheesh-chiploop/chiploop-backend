@@ -39,8 +39,8 @@ logger = logging.getLogger("chiploop")
 logging.basicConfig(level=logging.INFO)
 
 # Soft limits to avoid PostgREST "payload string too long" on logs/artifacts fields.
-MAX_LOG_CHARS = 1500  # ~200KB
-MAX_WORKFLOW_ARTIFACTS_JSON_CHARS = 200000
+MAX_LOG_CHARS = 150  # ~200KB
+MAX_WORKFLOW_ARTIFACTS_JSON_CHARS = 200
 ENABLE_LEGACY_WORKFLOW_ARTIFACTS_INDEX = False
 
 def _truncate_tail(s: str, max_chars: int) -> str:

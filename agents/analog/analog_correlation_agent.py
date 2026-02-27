@@ -13,6 +13,12 @@ def run_agent(state: dict) -> dict:
     sim_metrics = state.get("analog_sim_metrics") or {}
     beh_metrics = state.get("analog_behavioral_metrics") or {}
 
+    # Ensure metrics dict structure to avoid downstream crashes
+    if not isinstance(sim_metrics, dict):
+        sim_metrics = {}
+    if not isinstance(beh_metrics, dict):
+        beh_metrics = {}
+
     if not workflow_id or not isinstance(spec, dict) or not spec:
         state["status"] = "❌ Missing workflow_id or analog_spec"
         return state

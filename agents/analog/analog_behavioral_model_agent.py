@@ -49,7 +49,17 @@ Rules:
     if not isinstance(obj, dict):
         obj = {}
 
+    
     code = (obj.get("code") or "").strip()
+
+    # 🔒 HARDENING: enforce pure SV RNM and deterministic module name
+    invalid_tokens = ["electrical", "discipline", "analog begin", "V(", "`include \"disciplines"]
+    if any(tok in code for tok in invalid_tokens):
+        code = ""  # force fallback
+
+    # Ensure deterministic module name
+    if "module model" not in code:
+        code = ""  # force fallback
     params = obj.get("parameters") or {}
     notes = obj.get("notes") or []
 

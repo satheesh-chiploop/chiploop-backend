@@ -46,45 +46,36 @@ def _deck_header() -> str:
 
 
 def _extract_metrics_py() -> str:
-    return textwrap.dedent(
-        r"""\
-        #!/usr/bin/env python3
-        import argparse
-        import json
-        import os
+    return """#!/usr/bin/env python3
+import argparse
+import json
+import os
 
-        def main():
-            ap = argparse.ArgumentParser()
-            ap.add_argument("--raw_dir", required=True)
-            ap.add_argument("--out", required=True)
-            args = ap.parse_args()
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--raw_dir", required=True)
+    ap.add_argument("--out", required=True)
+    args = ap.parse_args()
 
-            # Stub extractor: compile-ready placeholder.
-            # Extend later once you standardize simulator outputs (log, raw, psf, etc).
-            metrics = {
-                "source": "sim",
-                "confidence": "low",
-                "notes": [
-                    "Metric extraction stub. Extend with real parsing once simulator log/wave formats are finalized."
-                ],
-                "metrics": {},
-                "found_logs": []
-            }
+    metrics = {
+        "source": "sim",
+        "confidence": "low",
+        "notes": ["Metric extraction stub. Extend once simulator parsing is finalized."],
+        "metrics": {},
+        "found_logs": []
+    }
 
-            for root, _, files in os.walk(args.raw_dir):
-                for f in files:
-                    if f.endswith(".log"):
-                        metrics["found_logs"].append(os.path.join(root, f))
+    for root, _, files in os.walk(args.raw_dir):
+        for f in files:
+            if f.endswith(".log"):
+                metrics["found_logs"].append(os.path.join(root, f))
 
-            with open(args.out, "w", encoding="utf-8") as fp:
-                json.dump(metrics, fp, indent=2)
-            return 0
+    with open(args.out, "w", encoding="utf-8") as fp:
+        json.dump(metrics, fp, indent=2)
 
-        if __name__ == "__main__":
-            raise SystemExit(main())
-        """
-    )
-
+if __name__ == "__main__":
+    main()
+"""
 
 def run_agent(state: dict) -> dict:
     agent_name = "Analog Simulation Plan Agent"

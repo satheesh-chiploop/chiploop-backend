@@ -78,6 +78,11 @@ Rules:
 
     if not lef:
         lef = _fallback_lef(spec)
+
+    # Ensure minimal valid LEF header exists
+    if "MACRO" not in lef or "END LIBRARY" not in lef:
+        lef = _fallback_lef(spec)
+        
     if not notes:
         notes = "# Integration Notes\n\n(TBD)\n"
 
