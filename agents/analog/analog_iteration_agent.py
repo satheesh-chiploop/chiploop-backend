@@ -9,9 +9,11 @@ def run_agent(state: dict) -> dict:
     preview_only = bool(state.get("preview_only"))
 
     # Prefer new correlation delta summary if present
-    delta = state.get("analog_delta_summary") or {}
-    if not isinstance(delta, dict) or not delta:
-        delta = state.get("analog_delta_summary") or {}
+    delta = state.get("analog_delta_summary")
+    if not isinstance(delta, dict):
+        delta = {}
+
+
 
     if not workflow_id:
         state["status"] = "❌ Missing workflow_id"

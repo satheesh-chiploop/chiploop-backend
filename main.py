@@ -39,9 +39,10 @@ logger = logging.getLogger("chiploop")
 logging.basicConfig(level=logging.INFO)
 
 # Soft limits to avoid PostgREST "payload string too long" on logs/artifacts fields.
-MAX_LOG_CHARS = 150  # ~200KB
-MAX_WORKFLOW_ARTIFACTS_JSON_CHARS = 200
+MAX_LOG_CHARS = 850  # ~200KB
+MAX_WORKFLOW_ARTIFACTS_JSON_CHARS = 5000
 ENABLE_LEGACY_WORKFLOW_ARTIFACTS_INDEX = False
+MAX_LOG_LINE_CHARS = 400
 
 def _truncate_tail(s: str, max_chars: int) -> str:
     if not s:
@@ -572,19 +573,27 @@ load_custom_agents()
 # ---------- Logging Helpers (ID-based) ----------
 # ==========================================================
 
-
-def append_log_workflow(workflow_id: str, line: str, status: Optional[str] = None,
-                        phase: Optional[str] = None, artifacts: Optional[dict] = None):
+def append_log_workflow(
+    workflow_id: str,
+    line: str,
+    status: Optional[str] = None,
+    phase: Optional[str] = None,
+    artifacts: Optional[dict] = None,
+):
     """
     Append a line to workflows.logs by workflow ID, and optionally update status/phase/artifacts.
 
-    Note: workflows.logs and workflows.artifacts are best-effort UI conveniences.
-    For long runs, they can hit PostgREST payload limits; we truncate/skip to keep the run alive.
+    workflows.logs is best-effort UI convenience and may be VARCHAR-limited.
+    Keep it compact; never let logging kill a run.
     """
     try:
+        # 1) Truncate the incoming line first (prevents single huge log entries)
+        safe_line = _truncate_tail(str(line or ""), MAX_LOG_LINE_CHARS)
+
+        # 2) Load current logs and append
         row = supabase.table("workflows").select("logs").eq("id", workflow_id).single().execute()
         current = (row.data or {}).get("logs") or ""
-        new_logs = (current + ("\n" if current else "") + line).strip()
+        new_logs = (current + ("\n" if current else "") + safe_line).strip()
         new_logs = _truncate_tail(new_logs, MAX_LOG_CHARS)
 
         update = {"logs": new_logs, "updated_at": datetime.utcnow().isoformat()}
@@ -593,10 +602,11 @@ def append_log_workflow(workflow_id: str, line: str, status: Optional[str] = Non
         if phase:
             update["phase"] = phase
 
-        # Avoid pushing huge artifacts JSON through this path.
+        # 3) Avoid pushing large artifacts JSON through this path
         if artifacts is not None:
             try:
-                if len(json.dumps(artifacts, ensure_ascii=False)) <= MAX_WORKFLOW_ARTIFACTS_JSON_CHARS:
+                payload = json.dumps(artifacts, ensure_ascii=False, separators=(",", ":"))
+                if len(payload) <= MAX_WORKFLOW_ARTIFACTS_JSON_CHARS:
                     update["artifacts"] = artifacts
                 else:
                     logger.warning(
@@ -607,9 +617,20 @@ def append_log_workflow(workflow_id: str, line: str, status: Optional[str] = Non
                     f"⚠️ append_log_workflow skipping artifacts update (serialization error) workflow={workflow_id}"
                 )
 
+        # 4) Write
         supabase.table("workflows").update(update).eq("id", workflow_id).execute()
+
     except Exception as e:
-        logger.warning(f"⚠️ append_log_workflow failed: {e}")
+        # Last resort: retry with ultra-small logs (never crash run due to logging)
+        try:
+            fallback = {"logs": _truncate_tail(str(line or ""), 200), "updated_at": datetime.utcnow().isoformat()}
+            if status:
+                fallback["status"] = status
+            if phase:
+                fallback["phase"] = phase
+            supabase.table("workflows").update(fallback).eq("id", workflow_id).execute()
+        except Exception:
+            logger.warning(f"⚠️ append_log_workflow failed: {e}")
 
 
 def append_log_run(run_id: str, line: str, status: Optional[str] = None,
