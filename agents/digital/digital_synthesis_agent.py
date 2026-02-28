@@ -80,11 +80,17 @@ def run_agent(state: dict) -> dict:
             rtl_files = [single]
 
     if not rtl_files:
+        # Prefer refactored RTL if present
+        rtl_files = sorted(glob.glob(os.path.join(workflow_dir, "digital", "rtl_refactored", "*.v")))
+
+    if not rtl_files:
         # fallback: any .v under workflow_dir
         rtl_files = sorted(glob.glob(os.path.join(workflow_dir, "*.v")))
 
     if not rtl_files:
         raise FileNotFoundError(f"No RTL found for synthesis in {workflow_dir}")
+
+
 
     # ---------- Spec JSON (optional) ----------
     spec = {}
@@ -113,13 +119,18 @@ def run_agent(state: dict) -> dict:
 
     # Pick top module name best-effort:
     # - If your spec later contains block.name or top_module, use it.
+
     top_module = (
-        (spec.get("top_module") if isinstance(spec, dict) else None)
+        (spec.get("design_name") if isinstance(spec, dict) else None)
+        or (spec.get("name") if isinstance(spec, dict) else None)
+        or (((spec.get("hierarchy") or {}).get("top_module") or {}).get("name") if isinstance(spec, dict) else None)
+        or (spec.get("top_module") if isinstance(spec, dict) else None)
         or ((spec.get("block") or {}).get("name") if isinstance(spec.get("block"), dict) else None)
         or state.get("top_module")
         or "top"
     )
     top_module = str(top_module).strip() or "top"
+
 
     # ---------- SDC ----------
     sdc_path = os.path.join(constraints_dir, "top.sdc")
@@ -197,7 +208,8 @@ echo "Done. Inspect /work/runs/{run_tag} or latest run folder under /work/runs/"
     # ---------- Execute synthesis (best-effort) ----------
     # This is the first production step; we run it now and capture logs.
     exec_log_path = os.path.join(logs_dir, "openlane_synth.log")
-    rc, out = _run(["bash", "-lc", f"{run_sh_path}"], cwd=stage_dir)
+
+    rc, out = _run(["bash", "./run.sh"], cwd=stage_dir)
     _write_local(exec_log_path, out)
 
     # ---------- Collect best-effort outputs ----------
@@ -218,8 +230,25 @@ echo "Done. Inspect /work/runs/{run_tag} or latest run folder under /work/runs/"
                 metrics_json = mj
 
             # synthesis step folders often contain gate-level netlists
+
+
+            # synthesis step folders often contain gate-level netlists
             netlist_candidates = glob.glob(os.path.join(latest, "*yosys-synthesis", "*.v")) + \
                                  glob.glob(os.path.join(latest, "*yosys-synthesis", "outputs", "*.v"))
+
+            # ---------- Persist primary synthesized netlist (stable path) ----------
+            stable_netlist_path = None
+            if netlist_candidates:
+                try:
+                    # pick the first candidate deterministically
+                    primary = netlist_candidates[0]
+                    netlist_dir = os.path.join(stage_dir, "netlist")
+                    _ensure_dir(netlist_dir)
+                    stable_netlist_path = os.path.join(netlist_dir, f"{top_module}_synth.v")
+                    shutil.copy2(primary, stable_netlist_path)
+                except Exception as e:
+                    print(f"⚠️ Failed to persist netlist: {e}")
+                    stable_netlist_path = None
 
     summary = {
         "workflow_id": workflow_id,
@@ -242,6 +271,7 @@ echo "Done. Inspect /work/runs/{run_tag} or latest run folder under /work/runs/"
             "run_sh": run_sh_path,
             "exec_log": exec_log_path,
             "metrics_json": metrics_json,
+            "netlist": stable_netlist_path,
             "netlist_candidates": netlist_candidates[:10],
         }
     }
@@ -280,6 +310,16 @@ echo "Done. Inspect /work/runs/{run_tag} or latest run folder under /work/runs/"
         save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "synth/logs/openlane_synth.log", out)
         save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "synth/synth_summary.json", json.dumps(summary, indent=2))
         save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "synth/synth_summary.md", md)
+        # Upload synthesized netlist (gate-level) if present
+        if stable_netlist_path and os.path.exists(stable_netlist_path):
+            with open(stable_netlist_path, "r", encoding="utf-8") as f:
+                save_text_artifact_and_record(
+                   workflow_id,
+                   AGENT_NAME,
+                   "digital",
+                   f"synth/netlist/{top_module}_synth.v",
+                   f.read()
+                )
         print("✅ Uploaded synthesis artifacts to Supabase.")
     except Exception as e:
         print(f"⚠️ Synthesis artifact upload failed: {e}")
@@ -291,6 +331,7 @@ echo "Done. Inspect /work/runs/{run_tag} or latest run folder under /work/runs/"
         "summary_json": summary_json_path,
         "summary_md": summary_md_path,
         "metrics_json": metrics_json,
+        "netlist": stable_netlist_path,
         "netlist_candidates": netlist_candidates[:10],
         "status": summary["status"],
     }
