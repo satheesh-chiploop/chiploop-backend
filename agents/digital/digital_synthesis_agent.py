@@ -172,7 +172,7 @@ set_clock_uncertainty 0.2 [get_clocks {clk_name}]
     # ---------- Docker run.sh (rerunnable contract) ----------
     # Host PDK root: your real path is backend/pdk (you already created it)
     # We keep it configurable.
-    default_pdk_host = os.getenv("CHIPLOOP_PDK_ROOT_HOST") or os.path.abspath(os.path.join("backend", "pdk"))
+    default_pdk_host = os.getenv("CHIPLOOP_PDK_ROOT_HOST") or /root/chiploop-backend/backend/pdk
     pdk_variant = state.get("pdk_variant") or DEFAULT_PDK_VARIANT
     openlane_image = state.get("openlane_image") or DEFAULT_OPENLANE_IMAGE
 
