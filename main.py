@@ -264,7 +264,9 @@ from agents.digital.digital_smoke_exec_summary_agent import run_agent as digital
 from agents.digital.digital_rtl_signature_agent import run_agent as digital_rtl_signature_agent
 from agents.digital.digital_integration_intent_agent import run_agent as digital_integration_intent_agent
 from agents.digital.digital_top_assembly_agent import run_agent as digital_top_assembly_agent
-
+from agents.digital.digital_implementation_setup_agent import run_agent as digital_implementation_setup_agent
+from agents.digital.digital_foundry_profile_agent import run_agent as digital_foundry_profile_agent
+from agents.digital.digital_synthesis_agent import run_agent as digital_synthesis_agent
 
 
 DIGITAL_AGENT_FUNCTIONS: Dict[str, Any] = {
@@ -302,6 +304,9 @@ DIGITAL_AGENT_FUNCTIONS: Dict[str, Any] = {
     "Digital RTL Signature Agent": digital_rtl_signature_agent,
     "Digital Integration Intent Agent": digital_integration_intent_agent,
     "Digital Top Assembly Agent": digital_top_assembly_agent,
+    "Digital Implementation Setup Agent": digital_implementation_setup_agent,
+    "Digital Foundry Profile Agent": digital_foundry_profile_agent,
+    "Digital Synthesis Agent": digital_synthesis_agent,
 }
 
 
@@ -479,8 +484,11 @@ SYSTEM_AGENT_FUNCTIONS: Dict[str,Any] = {
     "Digital RTL Signature Agent": digital_rtl_signature_agent,
     "Digital Integration Intent Agent": digital_integration_intent_agent,
     "Digital Top Assembly Agent": digital_top_assembly_agent,
+    "Digital Implementation Setup Agent": digital_implementation_setup_agent,
+    "Digital Foundry Profile Agent": digital_foundry_profile_agent,
+    "Digital Synthesis Agent": digital_synthesis_agent,
     "Analog Spec Builder Agent": analog_spec_builder_agent,
-    "Analog Netlist Scaffold Agent": analog_netlist_scaffold_agent,
+    "Analog Netlist Scaffold Agent": analog_netlist_scaffold_agent, 
     "Analog Simulation Plan Agent": analog_sim_plan_agent,
     "Analog Behavioral Model Agent": analog_behavioral_model_agent,
     "Analog Behavioral Testbench Agent": analog_behavioral_tb_agent,

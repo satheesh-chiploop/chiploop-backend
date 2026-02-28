@@ -266,6 +266,43 @@ AGENT_CAPABILITIES = {
         "requires": [],
     },
 
+    "Digital Foundry Profile Agent": {
+        "domain": "digital",
+        "inputs": ["workflow_id"],
+        "outputs": [
+           "digital/foundry/foundry_profile.json",
+           "digital/foundry/foundry_profile.log"
+        ],
+        "description": "Creates a portable foundry profile (PDK name, PDK_ROOT, corner intent) and validates PDK presence."
+    },
+
+    "Digital Implementation Setup Agent": {
+        "domain": "digital",
+        "inputs": ["digital/foundry/foundry_profile.json", "*_spec.json", "*.v", "*.sv"],
+        "outputs": [
+           "digital/foundry/constraints/base.sdc",
+           "digital/foundry/corners/corners.json",
+           "digital/foundry/openlane/config.json",
+           "digital/foundry/setup/implementation_setup.log"
+        ],
+        "description": "Generates implementation collateral (constraints + corners + OpenLane2 config) using the foundry profile. No P&R stages yet."
+    },
+
+    "Digital Synthesis Agent": {
+        "domain": "digital",
+        "inputs": ["workflow_id", "workflow_dir", "artifact OR artifact_list", "spec_json(optional)", "pdk_variant(optional)"],
+        "outputs": [
+           "digital/synth/config.json",
+           "digital/synth/constraints/top.sdc",
+           "digital/synth/run.sh",
+           "digital/synth/logs/openlane_synth.log",
+           "digital/synth/synth_summary.json",
+           "digital/synth/synth_summary.md"
+        ],
+        "description": "Runs OpenLane2 synthesis (Yosys.Synthesis) inside Docker, generates deterministic rerunnable scripts + minimal constraints, and uploads key artifacts to Supabase.",
+        "tags": ["digital", "openlane2", "synthesis", "yosys", "docker", "sky130"],
+    },
+
     # -------------------------
     # ANALOG
     # -------------------------
