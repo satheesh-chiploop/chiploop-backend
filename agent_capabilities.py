@@ -298,6 +298,7 @@ AGENT_CAPABILITIES = {
            "digital/synth/logs/openlane_synth.log",
            "digital/synth/synth_summary.json",
            "digital/synth/synth_summary.md"
+           "digital/synth/netlist/<TOP>_synth.v"
         ],
         "description": "Runs OpenLane2 synthesis (Yosys.Synthesis) inside Docker, generates deterministic rerunnable scripts + minimal constraints, and uploads key artifacts to Supabase.",
         "tags": ["digital", "openlane2", "synthesis", "yosys", "docker", "sky130"],
