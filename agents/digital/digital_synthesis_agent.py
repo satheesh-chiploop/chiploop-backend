@@ -152,21 +152,20 @@ set_clock_uncertainty 0.2 [get_clocks {clk_name}]
     verilog_sources = [f"rtl/{os.path.basename(p)}" for p in copied]
 
     config = {
-        "meta": {
-            "name": top_module,
-            "generated_by": AGENT_NAME,
-            "generated_at": datetime.utcnow().isoformat() + "Z",
-            "workflow_id": workflow_id,
-        },
-        # The most important bits:
         "DESIGN_NAME": top_module,
         "VERILOG_FILES": verilog_sources,
         "CLOCK_PORT": clk_name,
         "CLOCK_PERIOD": clk_period_ns,
-        "SYNTH_STRATEGY": "AREA 0",   # conservative default (can tune later)
+        "SYNTH_STRATEGY": "AREA 0",
         "PNR_SDC_FILE": "constraints/top.sdc",
+
+        # ChipLoop provenance (OpenLane ignores unknown top-level keys)
+        "CHIPLOOP_WORKFLOW_ID": workflow_id,
+        "CHIPLOOP_GENERATED_BY": AGENT_NAME,
+        "CHIPLOOP_GENERATED_AT": datetime.utcnow().isoformat() + "Z",
     }
 
+    
     _write_local(config_path, json.dumps(config, indent=2))
 
     # ---------- Docker run.sh (rerunnable contract) ----------
