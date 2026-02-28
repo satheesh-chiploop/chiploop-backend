@@ -197,7 +197,10 @@ docker run --rm \\
   -e PDK={pdk_variant} \\
   -e OPENLANE_NUM_CORES={DEFAULT_NUM_CORES} \\
   "{openlane_image}" \\
-  bash -lc 'cd /work && openlane --pdk {pdk_variant} --flow Classic --to Yosys.Synthesis config.json'
+  bash -lc 'set -e; echo "PDK listing:"; ls -la /pdk | head -n 50; \
+  test -f /pdk/sky130A/libs.tech/openlane/config.tcl; \
+  cd /work && openlane --pdk {pdk_variant} --flow Classic --to Yosys.Synthesis config.json'
+
 
 echo
 echo "Done. Inspect /work/runs/{run_tag} or latest run folder under /work/runs/"
