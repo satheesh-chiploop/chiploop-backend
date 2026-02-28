@@ -50,7 +50,7 @@ AGENT_CAPABILITIES = {
     "Digital Clock & Reset Architecture Agent": {
         "domain": "digital",
         "inputs": ["*_spec.json", "digital_architecture.json"],
-        "outputs": ["clock_reset_architecture.json", "clock_reset_architecture_agent.log"],
+        "outputs": ["clock_reset_architecture.json", "clock_reset_architecture_agent.log","digital/constraints/top.sdc"],
         "description": "Defines clock/reset intent: clock domains, reset strategies, and CDC-aware intent (no implementation).",
     },
 
