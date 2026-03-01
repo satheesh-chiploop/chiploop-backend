@@ -267,7 +267,22 @@ from agents.digital.digital_top_assembly_agent import run_agent as digital_top_a
 from agents.digital.digital_implementation_setup_agent import run_agent as digital_implementation_setup_agent
 from agents.digital.digital_foundry_profile_agent import run_agent as digital_foundry_profile_agent
 from agents.digital.digital_synthesis_agent import run_agent as digital_synthesis_agent
-
+from agents.digital.digital_foundry_profile_agent import run_agent as digital_foundry_profile_agent
+from agents.digital.digital_implementation_setup_agent import run_agent as digital_implementation_setup_agent
+from agents.digital.digital_synthesis_agent import run_agent as digital_synthesis_agent
+from agents.digital.digital_sta_preplace_agent import run_agent as digital_sta_preplace_agent
+from agents.digital.digital_floorplan_agent import run_agent as digital_floorplan_agent
+from agents.digital.digital_placement_agent import run_agent as digital_placement_agent
+from agents.digital.digital_sta_postplace_agent import run_agent as digital_sta_postplace_agent
+from agents.digital.digital_cts_agent import run_agent as digital_cts_agent
+from agents.digital.digital_sta_postcts_agent import run_agent as digital_sta_postcts_agent
+from agents.digital.digital_route_agent import run_agent as digital_route_agent
+from agents.digital.digital_sta_postroute_agent import run_agent as digital_sta_postroute_agent
+from agents.digital.digital_fill_agent import run_agent as digital_fill_agent
+from agents.digital.digital_drc_agent import run_agent as digital_drc_agent
+from agents.digital.digital_lvs_agent import run_agent as digital_lvs_agent
+from agents.digital.digital_tapeout_agent import run_agent as digital_tapeout_agent
+from agents.digital.digital_executive_summary_agent import run_agent as digital_executive_summary_agent
 
 DIGITAL_AGENT_FUNCTIONS: Dict[str, Any] = {
     "Digital Spec Agent": digital_spec_agent,
@@ -304,9 +319,22 @@ DIGITAL_AGENT_FUNCTIONS: Dict[str, Any] = {
     "Digital RTL Signature Agent": digital_rtl_signature_agent,
     "Digital Integration Intent Agent": digital_integration_intent_agent,
     "Digital Top Assembly Agent": digital_top_assembly_agent,
-    "Digital Implementation Setup Agent": digital_implementation_setup_agent,
     "Digital Foundry Profile Agent": digital_foundry_profile_agent,
+    "Digital Implementation Setup Agent": digital_implementation_setup_agent,
     "Digital Synthesis Agent": digital_synthesis_agent,
+    "Digital STA PrePlace Agent": digital_sta_preplace_agent,
+    "Digital Floorplan Agent": digital_floorplan_agent,
+    "Digital Placement Agent": digital_placement_agent,
+    "Digital STA PostPlace Agent": digital_sta_postplace_agent,
+    "Digital CTS Agent": digital_cts_agent,
+    "Digital STA PostCTS Agent": digital_sta_postcts_agent,
+    "Digital Route Agent": digital_route_agent,
+    "Digital STA PostRoute Agent": digital_sta_postroute_agent,
+    "Digital Fill Agent": digital_fill_agent,
+    "Digital DRC Agent": digital_drc_agent,
+    "Digital LVS Agent": digital_lvs_agent,
+    "Digital Tapeout Agent": digital_tapeout_agent,
+    "Digital Executive Summary Agent": digital_executive_summary_agent,
 }
 
 
@@ -484,9 +512,22 @@ SYSTEM_AGENT_FUNCTIONS: Dict[str,Any] = {
     "Digital RTL Signature Agent": digital_rtl_signature_agent,
     "Digital Integration Intent Agent": digital_integration_intent_agent,
     "Digital Top Assembly Agent": digital_top_assembly_agent,
-    "Digital Implementation Setup Agent": digital_implementation_setup_agent,
     "Digital Foundry Profile Agent": digital_foundry_profile_agent,
+    "Digital Implementation Setup Agent": digital_implementation_setup_agent,
     "Digital Synthesis Agent": digital_synthesis_agent,
+    "Digital STA PrePlace Agent": digital_sta_preplace_agent,
+    "Digital Floorplan Agent": digital_floorplan_agent,
+    "Digital Placement Agent": digital_placement_agent,
+    "Digital STA PostPlace Agent": digital_sta_postplace_agent,
+    "Digital CTS Agent": digital_cts_agent,
+    "Digital STA PostCTS Agent": digital_sta_postcts_agent,
+    "Digital Route Agent": digital_route_agent,
+    "Digital STA PostRoute Agent": digital_sta_postroute_agent,
+    "Digital Fill Agent": digital_fill_agent,
+    "Digital DRC Agent": digital_drc_agent,
+    "Digital LVS Agent": digital_lvs_agent,
+    "Digital Tapeout Agent": digital_tapeout_agent,
+    "Digital Executive Summary Agent": digital_executive_summary_agent,
     "Analog Spec Builder Agent": analog_spec_builder_agent,
     "Analog Netlist Scaffold Agent": analog_netlist_scaffold_agent, 
     "Analog Simulation Plan Agent": analog_sim_plan_agent,

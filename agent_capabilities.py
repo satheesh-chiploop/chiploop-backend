@@ -290,18 +290,302 @@ AGENT_CAPABILITIES = {
 
     "Digital Synthesis Agent": {
         "domain": "digital",
-        "inputs": ["workflow_id", "workflow_dir", "artifact OR artifact_list", "spec_json(optional)", "pdk_variant(optional)"],
-        "outputs": [
-           "digital/synth/config.json",
-           "digital/synth/constraints/top.sdc",
-           "digital/synth/run.sh",
-           "digital/synth/logs/openlane_synth.log",
-           "digital/synth/synth_summary.json",
-           "digital/synth/synth_summary.md"
-           "digital/synth/netlist/<TOP>_synth.v"
+        "description": (
+            "Runs OpenLane2 Yosys synthesis in Docker. Consumes single-source SDC from "
+            "digital/constraints/top.sdc (does not regenerate constraints). Exports "
+            "stable netlist + metrics.json for downstream stages."
+        ),
+        "requires": ["docker"],
+        "inputs": [
+            "spec/*_spec.json",
+            "spec/*.v",
+            "spec/*.sv",
+            "digital/rtl_refactored/*.v",
+            "digital/constraints/top.sdc",
+            "digital/foundry/openlane/config.json"
         ],
-        "description": "Runs OpenLane2 synthesis (Yosys.Synthesis) inside Docker, generates deterministic rerunnable scripts + minimal constraints, and uploads key artifacts to Supabase.",
-        "tags": ["digital", "openlane2", "synthesis", "yosys", "docker", "sky130"],
+        "outputs": [
+            "digital/synth/config.json",
+            "digital/synth/constraints/top.sdc",
+            "digital/synth/run.sh",
+            "digital/synth/logs/openlane_synth.log",
+            "digital/synth/synth_summary.json",
+            "digital/synth/synth_summary.md",
+            "digital/synth/netlist/*_synth.v",
+            "digital/synth/metrics.json"
+        ],
+    }
+
+    "Digital STA PrePlace Agent": {
+        "domain": "digital",
+        "description": (
+            "Runs OpenLane2 STA pre-PnR using synthesized netlist + single-source SDC. "
+            "Exports stable metrics.json for regression and executive summary parsing."
+        ),
+        "requires": ["docker"],
+        "inputs": [
+            "digital/constraints/top.sdc",
+            "digital/synth/netlist/*_synth.v",
+            "digital/foundry/openlane/config.json"
+        ],
+        "outputs": [
+            "digital/sta_preplace/config.json",
+            "digital/sta_preplace/constraints/top.sdc",
+            "digital/sta_preplace/run.sh",
+            "digital/sta_preplace/logs/openlane_sta_preplace.log",
+            "digital/sta_preplace/metrics.json",
+            "digital/sta_preplace/sta_summary.json",
+            "digital/sta_preplace/sta_summary.md"
+        ],
+    },
+
+    "Digital Floorplan Agent": {
+        "domain": "digital",
+        "description": (
+            "Runs OpenLane2 floorplan stage (OpenROAD.Floorplan). Consumes single-source "
+            "SDC and exports primary DEF + metrics.json."
+        ),
+        "requires": ["docker"],
+        "inputs": [
+            "digital/constraints/top.sdc",
+            "digital/foundry/openlane/config.json",
+            "digital/synth/config.json"
+        ],
+        "outputs": [
+            "digital/floorplan/config.json",
+            "digital/floorplan/constraints/top.sdc",
+            "digital/floorplan/run.sh",
+            "digital/floorplan/logs/openlane_floorplan.log",
+            "digital/floorplan/metrics.json",
+            "digital/floorplan/primary.def",
+            "digital/floorplan/floorplan_summary.json",
+            "digital/floorplan/floorplan_summary.md"
+        ],
+    },
+
+    "Digital Placement Agent": {
+        "domain": "digital",
+        "description": (
+            "Runs OpenLane2 placement stage (OpenROAD.DetailedPlacement). Consumes single-source "
+            "SDC and exports placed DEF + metrics.json."
+        ),
+        "requires": ["docker"],
+        "inputs": [
+            "digital/constraints/top.sdc",
+            "digital/foundry/openlane/config.json",
+            "digital/synth/config.json"
+        ],
+        "outputs": [
+            "digital/place/config.json",
+            "digital/place/constraints/top.sdc",
+            "digital/place/run.sh",
+            "digital/place/logs/openlane_place.log",
+            "digital/place/metrics.json",
+            "digital/place/primary.def",
+            "digital/place/place_summary.json",
+            "digital/place/place_summary.md"
+        ],
+    },
+
+    "Digital STA PostPlace Agent": {
+        "domain": "digital",
+        "description": (
+            "Runs OpenLane2 STA after placement (mid-PnR). Consumes single-source SDC and "
+            "exports stable metrics.json."
+        ),
+        "requires": ["docker"],
+        "inputs": [
+            "digital/constraints/top.sdc",
+            "digital/place/primary.def",
+            "digital/foundry/openlane/config.json"
+        ],
+        "outputs": [
+            "digital/sta_postplace/config.json",
+            "digital/sta_postplace/constraints/top.sdc",
+            "digital/sta_postplace/run.sh",
+            "digital/sta_postplace/logs/openlane_sta_postplace.log",
+            "digital/sta_postplace/metrics.json",
+            "digital/sta_postplace/sta_summary.json",
+            "digital/sta_postplace/sta_summary.md"
+        ],
+    },
+
+    "Digital CTS Agent": {
+        "domain": "digital",
+        "description": "Runs OpenLane2 OpenROAD.CTS. Consumes single-source SDC and exports primary DEF + metrics.json.",
+        "requires": ["docker"],
+        "inputs": [
+            "digital/constraints/top.sdc",
+            "digital/place/primary.def",
+            "digital/foundry/openlane/config.json",
+            "digital/synth/netlist/*_synth.v"
+        ],
+        "outputs": [
+            "digital/cts/config.json",
+            "digital/cts/constraints/top.sdc",
+            "digital/cts/run.sh",
+            "digital/cts/logs/openlane_cts.log",
+            "digital/cts/metrics.json",
+            "digital/cts/primary.def",
+            "digital/cts/cts_summary.json",
+            "digital/cts/cts_summary.md"
+        ],
+    },
+
+    "Digital STA PostCTS Agent": {
+        "domain": "digital",
+        "description": "Runs OpenLane2 STA after CTS (uses OpenROAD.STAMidPNR). Exports metrics.json.",
+        "requires": ["docker"],
+        "inputs": [
+            "digital/constraints/top.sdc",
+            "digital/cts/primary.def",
+            "digital/foundry/openlane/config.json"
+        ],
+        "outputs": [
+            "digital/sta_postcts/config.json",
+            "digital/sta_postcts/constraints/top.sdc",
+            "digital/sta_postcts/run.sh",
+            "digital/sta_postcts/logs/openlane_sta_postcts.log",
+            "digital/sta_postcts/metrics.json",
+            "digital/sta_postcts/sta_summary.json",
+            "digital/sta_postcts/sta_summary.md"
+        ],
+    },
+
+    "Digital Route Agent": {
+        "domain": "digital",
+        "description": "Runs OpenLane2 OpenROAD.DetailedRouting. Exports routed DEF + metrics.json.",
+        "requires": ["docker"],
+        "inputs": [
+            "digital/constraints/top.sdc",
+            "digital/cts/primary.def",
+            "digital/foundry/openlane/config.json"
+        ],
+        "outputs": [
+            "digital/route/config.json",
+            "digital/route/constraints/top.sdc",
+            "digital/route/run.sh",
+            "digital/route/logs/openlane_route.log",
+            "digital/route/metrics.json",
+            "digital/route/primary.def",
+            "digital/route/route_summary.json",
+            "digital/route/route_summary.md"
+        ],
+    },
+
+    "Digital STA PostRoute Agent": {
+        "domain": "digital",
+        "description": "Runs OpenLane2 signoff STA (OpenROAD.STAPostPNR). Exports metrics.json.",
+        "requires": ["docker"],
+        "inputs": [
+            "digital/constraints/top.sdc",
+            "digital/route/primary.def",
+            "digital/foundry/openlane/config.json"
+        ],
+        "outputs": [
+            "digital/sta_postroute/config.json",
+            "digital/sta_postroute/constraints/top.sdc",
+            "digital/sta_postroute/run.sh",
+            "digital/sta_postroute/logs/openlane_sta_postroute.log",
+            "digital/sta_postroute/metrics.json",
+            "digital/sta_postroute/sta_summary.json",
+            "digital/sta_postroute/sta_summary.md"
+        ],
+    },
+
+    "Digital Fill Agent": {
+        "domain": "digital",
+        "description": "Runs OpenLane2 OpenROAD.FillInsertion. Exports DEF + metrics.json.",
+        "requires": ["docker"],
+        "inputs": [
+            "digital/constraints/top.sdc",
+            "digital/route/primary.def",
+            "digital/foundry/openlane/config.json"
+        ],
+        "outputs": [
+            "digital/fill/config.json",
+            "digital/fill/constraints/top.sdc",
+            "digital/fill/run.sh",
+            "digital/fill/logs/openlane_fill.log",
+            "digital/fill/metrics.json",
+            "digital/fill/primary.def",
+            "digital/fill/fill_summary.json",
+            "digital/fill/fill_summary.md"
+        ],
+    },
+
+    "Digital DRC Agent": {
+        "domain": "digital",
+        "description": "Runs OpenLane2 DRC (KLayout.DRC by default). Exports metrics.json + drc log summary.",
+        "requires": ["docker"],
+        "inputs": [
+            "digital/fill/primary.def",
+            "digital/foundry/openlane/config.json"
+        ],
+        "outputs": [
+            "digital/drc/config.json",
+            "digital/drc/run.sh",
+            "digital/drc/logs/openlane_drc.log",
+            "digital/drc/metrics.json",
+            "digital/drc/drc_summary.json",
+            "digital/drc/drc_summary.md"
+        ],
+    },
+
+    "Digital LVS Agent": {
+        "domain": "digital",
+        "description": "Runs OpenLane2 LVS (Netgen.LVS). Exports metrics.json + lvs log summary.",
+        "requires": ["docker"],
+        "inputs": [
+            "digital/fill/primary.def",
+            "digital/foundry/openlane/config.json",
+            "digital/synth/netlist/*_synth.v"
+        ],
+        "outputs": [
+            "digital/lvs/config.json",
+            "digital/lvs/run.sh",
+            "digital/lvs/logs/openlane_lvs.log",
+            "digital/lvs/metrics.json",
+            "digital/lvs/lvs_summary.json",
+            "digital/lvs/lvs_summary.md"
+        ],
+    },
+
+    "Digital Tapeout Agent": {
+        "domain": "digital",
+        "description": "Runs OpenLane2 streamout to GDS (KLayout.StreamOut + Magic.StreamOut + optional KLayout.XOR). Exports GDS paths + metrics.json.",
+        "requires": ["docker"],
+        "inputs": [
+            "digital/fill/primary.def",
+            "digital/foundry/openlane/config.json"
+        ],
+        "outputs": [
+            "digital/tapeout/config.json",
+            "digital/tapeout/run.sh",
+            "digital/tapeout/logs/openlane_tapeout.log",
+            "digital/tapeout/metrics.json",
+            "digital/tapeout/gds/klayout.gds",
+            "digital/tapeout/gds/magic.gds",
+            "digital/tapeout/tapeout_summary.json",
+            "digital/tapeout/tapeout_summary.md"
+        ],
+    },
+
+    "Digital Executive Summary Agent": {
+        "domain": "digital",
+        "description": "Parses stage metrics.json and produces executive_summary.md/json. No fake precision.",
+        "requires": [],
+        "inputs": [
+            "digital/synth/metrics.json",
+            "digital/sta_postroute/metrics.json",
+            "digital/drc/metrics.json",
+            "digital/lvs/metrics.json",
+            "digital/tapeout/metrics.json"
+        ],
+        "outputs": [
+            "digital/executive_summary.json",
+            "digital/executive_summary.md"
+        ],
     },
 
     # -------------------------
