@@ -314,7 +314,7 @@ AGENT_CAPABILITIES = {
             "digital/synth/netlist/*_synth.v",
             "digital/synth/metrics.json"
         ],
-    }
+    },
 
     "Digital STA PrePlace Agent": {
         "domain": "digital",
