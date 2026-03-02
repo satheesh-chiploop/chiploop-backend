@@ -132,18 +132,23 @@ def run_agent(state: dict) -> dict:
 
 
     # ... after copying stage_netlist ...
+    inferred = None
     if (not top_module) or (top_module.strip() == "") or (top_module.strip() == "top"):
         inferred = _infer_top_from_netlist(stage_netlist)
     if inferred:
         top_module = inferred
 
+    stage_netlists = sorted(glob.glob(os.path.join(netlist_dir, "*.v")))
+    if not stage_netlists:
+        raise RuntimeError(f"No .v files under {netlist_dir} after copy")
+
     config = {
-       "DESIGN_NAME": top_module,
-       "VERILOG_FILES": "netlist/*.v",
-       "PNR_SDC_FILE": "constraints/top.sdc",
+        "DESIGN_NAME": top_module,
+        "VERILOG_FILES": [f"netlist/{os.path.basename(p)}" for p in stage_netlists],
+        "PNR_SDC_FILE": "constraints/top.sdc",
     }
 
-
+ 
     config_path = os.path.join(stage_dir, "config.json")
     _write_text(config_path, json.dumps(config, indent=2))
 

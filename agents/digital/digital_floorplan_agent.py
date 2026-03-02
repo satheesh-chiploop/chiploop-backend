@@ -127,7 +127,13 @@ def run_agent(state: dict) -> dict:
     for nl in synth_netlists:
        shutil.copy2(nl, os.path.join(netlist_dir, os.path.basename(nl)))
 
-    cfg["VERILOG_FILES"] = "netlist/*.v"
+    stage_netlists = sorted(glob.glob(os.path.join(netlist_dir, "*.v")))
+    if not stage_netlists:
+       raise RuntimeError(f"No netlists copied into {netlist_dir}")
+
+    cfg["VERILOG_FILES"] = [f"netlist/{os.path.basename(p)}" for p in stage_netlists]
+
+ 
 
     # Optional but recommended: align DESIGN_NAME with spec if present
     spec_dir = os.path.join(workflow_dir, "spec")
