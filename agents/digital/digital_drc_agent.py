@@ -60,7 +60,7 @@ docker run --rm \\
   -e PDK={pdk} \\
   -e PDK_ROOT=/pdk \\
   {image} \\
-  bash -lc 'set -e; cd /work && openlane --flow Classic --tag {run_tag} --to KLayout.DRC config.json'
+  bash -lc 'set -e; cd /work && openlane --flow Classic --run-tag {run_tag} --to KLayout.DRC config.json'
 """
     _write(os.path.join(stage_dir,"run.sh"), run_sh)
     os.chmod(os.path.join(stage_dir,"run.sh"), 0o755)

@@ -133,12 +133,24 @@ def run_agent(state: dict) -> dict:
 
 
     # ---------- SDC (single source of truth) ----------
+
     upstream_sdc = os.path.join(workflow_dir, "digital", "constraints", "top.sdc")
     if not os.path.exists(upstream_sdc):
-        raise RuntimeError(
-            "Missing upstream SDC: digital/constraints/top.sdc. "
-            "Clock/Reset agent must generate it in Arch2RTL."
-        )
+        # DO NOT raise — write summaries/logs so the stage is debuggable
+        msg = "Missing upstream SDC: digital/constraints/top.sdc (Clock/Reset agent must generate it)."
+        exec_log_path = os.path.join(logs_dir, "openlane_synth.log")
+        _write_local(exec_log_path, msg + "\n")
+
+        summary = {"status": "failed", "return_code": 2, "error": msg}
+        _write_local(os.path.join(stage_dir, "synth_summary.json"), json.dumps(summary, indent=2))
+        _write_local(os.path.join(stage_dir, "synth_summary.md"), f"# Digital Synthesis Summary\n\n- **Status**: failed\n- **Reason**: {msg}\n")
+
+        # Minimal metrics.json to satisfy contract
+        _write_local(os.path.join(stage_dir, "metrics.json"), json.dumps({"status": "failed", "reason": msg}, indent=2))
+
+        state["status"] = f"{AGENT_NAME}: failed (missing SDC)"
+        return state
+    
 
     sdc_path = os.path.join(constraints_dir, "top.sdc")
     shutil.copy2(upstream_sdc, sdc_path)
@@ -163,6 +175,7 @@ def run_agent(state: dict) -> dict:
         "CLOCK_PORT": clk_name,
         "CLOCK_PERIOD": clk_period_ns,
         "SYNTH_STRATEGY": "AREA 0",
+        "SYNTH_SDC_FILE": "constraints/top.sdc",
         "PNR_SDC_FILE": "constraints/top.sdc",
 
         # ChipLoop provenance (OpenLane ignores unknown top-level keys)
@@ -204,7 +217,7 @@ docker run --rm \\
   "{openlane_image}" \\
   bash -lc 'set -e; echo "PDK listing:"; ls -la /pdk | head -n 50; \
   test -f /pdk/sky130A/libs.tech/openlane/config.tcl; \
-  cd /work && openlane --pdk {pdk_variant} --flow Classic --to Yosys.Synthesis config.json'
+  cd /work && openlane --pdk {pdk_variant} --run-tag {run_tag} --flow Classic --to Yosys.Synthesis config.json'
 
 
 echo

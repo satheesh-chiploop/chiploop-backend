@@ -145,7 +145,7 @@ docker run --rm \\
   -e PDK={pdk_variant} \\
   -e PDK_ROOT=/pdk \\
   {openlane_image} \\
-  bash -lc 'set -e; echo "PDK listing:"; ls -la /pdk | head -n 50; cd /work && openlane --flow Classic --tag {run_tag} --to OpenROAD.STAPrePNR config.json'
+  bash -lc 'set -e; echo "PDK listing:"; ls -la /pdk | head -n 50; cd /work && openlane --flow Classic --run-tag {run_tag} --to OpenROAD.STAPrePNR config.json'
 """
     run_sh_path = os.path.join(stage_dir, "run.sh")
     _write_text(run_sh_path, run_sh)

@@ -77,7 +77,7 @@ docker run --rm \\
   -e PDK={pdk} \\
   -e PDK_ROOT=/pdk \\
   {image} \\
-  bash -lc 'set -e; cd /work && openlane --flow Classic --tag {run_tag} --to KLayout.StreamOut config.json'
+  bash -lc 'set -e; cd /work && openlane --flow Classic --run-tag {run_tag} --to KLayout.StreamOut config.json'
 
 docker run --rm \\
   -v "{pdk_root_host}":/pdk \\
@@ -85,7 +85,7 @@ docker run --rm \\
   -e PDK={pdk} \\
   -e PDK_ROOT=/pdk \\
   {image} \\
-  bash -lc 'set -e; cd /work && openlane --flow Classic --tag {run_tag} --to Magic.StreamOut config.json || true'
+  bash -lc 'set -e; cd /work && openlane --flow Classic --run-tag {run_tag} --to Magic.StreamOut config.json || true'
 
 docker run --rm \\
   -v "{pdk_root_host}":/pdk \\
@@ -93,7 +93,7 @@ docker run --rm \\
   -e PDK={pdk} \\
   -e PDK_ROOT=/pdk \\
   {image} \\
-  bash -lc 'set -e; cd /work && openlane --flow Classic --tag {run_tag} --to KLayout.XOR config.json || true'
+  bash -lc 'set -e; cd /work && openlane --flow Classic --run-tag {run_tag} --to KLayout.XOR config.json || true'
 """
     _write(os.path.join(stage_dir,"run.sh"), run_sh)
     os.chmod(os.path.join(stage_dir,"run.sh"), 0o755)

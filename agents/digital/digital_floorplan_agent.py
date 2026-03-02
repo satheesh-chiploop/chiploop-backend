@@ -106,6 +106,7 @@ def run_agent(state: dict) -> dict:
 
     cfg = _read_json(base_cfg_path)
     # Force SDC reference to stage-local copy
+    cfg["SYNTH_SDC_FILE"] = "constraints/top.sdc"
     cfg["PNR_SDC_FILE"] = "constraints/top.sdc"
 
     config_path = os.path.join(stage_dir, "config.json")
@@ -133,7 +134,7 @@ docker run --rm \\
   -e PDK={pdk_variant} \\
   -e PDK_ROOT=/pdk \\
   {openlane_image} \\
-  bash -lc 'set -e; echo "PDK listing:"; ls -la /pdk | head -n 50; cd /work && openlane --flow Classic --tag {run_tag} --to OpenROAD.Floorplan config.json'
+  bash -lc 'set -e; echo "PDK listing:"; ls -la /pdk | head -n 50; cd /work && openlane --flow Classic --run-tag {run_tag} --to OpenROAD.Floorplan config.json'
 """
     run_sh_path = os.path.join(stage_dir, "run.sh")
     _write_text(run_sh_path, run_sh)

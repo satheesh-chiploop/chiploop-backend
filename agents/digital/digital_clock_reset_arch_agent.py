@@ -238,7 +238,7 @@ def run_agent(state: dict) -> dict:
     arch = _default_clock_reset_arch(spec)
     arch = _maybe_llm_refine(spec, arch, log_path)
 
-        # ---------- SDC generation (50% IO delay rule) ----------
+    # ---------- SDC generation (50% IO delay rule) ----------
     ports = _extract_ports(spec)
     clk = _pick_primary_clock(arch)
     clk_name = str(clk.get("name") or "clk")
@@ -283,10 +283,21 @@ def run_agent(state: dict) -> dict:
     sdc_text = "\n".join(sdc_lines)
 
     # Upload SDC as a first-class artifact
+
+    # --- write local SSOT SDC (required for downstream agents) ---
+    constraints_dir = os.path.join(workflow_dir, "digital", "constraints")
+    os.makedirs(constraints_dir, exist_ok=True)
+    local_sdc_path = os.path.join(constraints_dir, "top.sdc")
+    with open(local_sdc_path, "w", encoding="utf-8") as f:
+       f.write(sdc_text)
+
+    # --- upload as artifact (optional, but keep) ---
     save_text_artifact_and_record(workflow_id, agent_name, "digital/constraints", "top.sdc", sdc_text)
 
     # Put pointer into state for downstream (synth/sta)
-    state["sdc_path"] = os.path.join(workflow_dir, "digital", "constraints", "top.sdc")
+    state["sdc_path"] = local_sdc_path
+    state["digital_sdc_path"] = local_sdc_path  # optional: clearer key
+    
 
     arch_json = json.dumps(arch, indent=2)
 

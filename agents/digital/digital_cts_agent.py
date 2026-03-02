@@ -72,6 +72,7 @@ def run_agent(state: dict) -> dict:
         raise RuntimeError("Missing config: digital/foundry/openlane/config.json or digital/synth/config.json")
 
     cfg = _read_json(base_cfg_path)
+    cfg["SYNTH_SDC_FILE"] = "constraints/top.sdc"
     cfg["PNR_SDC_FILE"] = "constraints/top.sdc"
     config_path = os.path.join(stage_dir, "config.json")
     _write(config_path, json.dumps(cfg, indent=2))
@@ -90,7 +91,7 @@ docker run --rm \\
   -e PDK={pdk_variant} \\
   -e PDK_ROOT=/pdk \\
   {image} \\
-  bash -lc 'set -e; cd /work && openlane --flow Classic --tag {run_tag} --to OpenROAD.CTS config.json'
+  bash -lc 'set -e; cd /work && openlane --flow Classic --run-tag {run_tag} --to OpenROAD.CTS config.json'
 """
     run_sh_path = os.path.join(stage_dir, "run.sh")
     _write(run_sh_path, run_sh); os.chmod(run_sh_path, 0o755)
