@@ -105,6 +105,11 @@ def run_agent(state: dict) -> dict:
         raise RuntimeError("Missing OpenLane config. Expected digital/foundry/openlane/config.json or digital/synth/config.json")
 
     cfg = _read_json(base_cfg_path)
+
+    # Remove host-only / unknown keys (OpenLane2 rejects/ warns)
+    cfg.pop("PDK_ROOT", None)
+    cfg.pop("OPENLANE_NUM_CORES", None)
+    cfg.pop("NOTE", None)
     # Force SDC reference to stage-local copy
     cfg["SYNTH_SDC_FILE"] = "constraints/top.sdc"
     cfg["PNR_SDC_FILE"] = "constraints/top.sdc"
