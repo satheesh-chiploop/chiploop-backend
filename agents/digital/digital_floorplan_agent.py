@@ -3,6 +3,8 @@ import json
 import glob
 import shutil
 import subprocess
+import re
+
 from datetime import datetime
 
 from utils.artifact_utils import save_text_artifact_and_record
@@ -73,6 +75,14 @@ def _copy_primary_def(latest: str | None, stage_dir: str) -> str | None:
     shutil.copy2(candidates[-1], dst)
     return dst
 
+def _infer_top_from_netlist(netlist_path: str) -> str | None:
+    try:
+        txt = open(netlist_path, "r", encoding="utf-8", errors="ignore").read()
+    except Exception:
+        return None
+    m = re.search(r'^\s*module\s+([A-Za-z_][A-Za-z0-9_$]*)\s*\(', txt, flags=re.MULTILINE)
+    return m.group(1) if m else None
+
 
 def run_agent(state: dict) -> dict:
     print(f"\n🏁 Running {AGENT_NAME}...")
@@ -133,16 +143,30 @@ def run_agent(state: dict) -> dict:
 
     cfg["VERILOG_FILES"] = [f"netlist/{os.path.basename(p)}" for p in stage_netlists]
 
- 
-
-    # Optional but recommended: align DESIGN_NAME with spec if present
     spec_dir = os.path.join(workflow_dir, "spec")
     spec_jsons = sorted(glob.glob(os.path.join(spec_dir, "*_spec.json")))
     spec = _read_json(spec_jsons[0]) if spec_jsons else {}
+
     top_module = (
-       spec.get("design_name") or spec.get("top_module") or state.get("design_name") or cfg.get("DESIGN_NAME") or "top"
+        spec.get("design_name")
+        or spec.get("top_module")
+        or state.get("design_name")
+        or cfg.get("DESIGN_NAME")
+        or "top"
     )
-    cfg["DESIGN_NAME"] = str(top_module).strip() or "top"
+    top_module = str(top_module).strip() or "top"
+
+    # If still defaulting to 'top', infer from the synthesized netlist in this stage
+    inferred = None
+    if top_module == "top":
+        stage_netlists = sorted(glob.glob(os.path.join(netlist_dir, "*.v")))
+        inferred = _infer_top_from_netlist(stage_netlists[0]) if stage_netlists else None
+    if inferred:
+        top_module = inferred
+
+    cfg["DESIGN_NAME"] = top_module
+
+   
 
     config_path = os.path.join(stage_dir, "config.json")
     _write_text(config_path, json.dumps(cfg, indent=2))

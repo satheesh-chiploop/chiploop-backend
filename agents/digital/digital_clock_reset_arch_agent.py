@@ -271,11 +271,13 @@ def run_agent(state: dict) -> dict:
     else:
         sdc_lines.append("set __RST_PORTS [list]")
 
-    sdc_lines.append("set __IN_PORTS  [remove_from_collection [all_inputs]  [add_to_collection $__CLK_PORTS $__RST_PORTS]]")
+    sdc_lines.append("set __IN_PORTS  [all_inputs]")
     sdc_lines.append("set __OUT_PORTS [all_outputs]")
     sdc_lines.append("")
     sdc_lines.append(f"set_input_delay  {io_delay_ns:.3f} -clock {clk_name} $__IN_PORTS")
     sdc_lines.append(f"set_output_delay {io_delay_ns:.3f} -clock {clk_name} $__OUT_PORTS")
+    sdc_lines.append(f"set_input_delay  0 -clock {clk_name} $__CLK_PORTS")
+    sdc_lines.append(f"set_input_delay  0 -clock {clk_name} $__RST_PORTS")
     sdc_lines.append("")
     sdc_lines.append(f"set_clock_uncertainty {0.05*period_ns:.3f} [get_clocks {clk_name}]")
     sdc_lines.append("")
