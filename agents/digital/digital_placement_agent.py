@@ -3,6 +3,7 @@ import json
 import glob
 import shutil
 import subprocess
+import re
 
 from utils.artifact_utils import save_text_artifact_and_record
 
@@ -72,6 +73,14 @@ def _copy_primary_def(latest: str | None, stage_dir: str) -> str | None:
     shutil.copy2(candidates[-1], dst)
     return dst
 
+def _infer_top_from_netlist(netlist_path: str) -> str | None:
+    try:
+        txt = open(netlist_path, "r", encoding="utf-8", errors="ignore").read()
+    except Exception:
+        return None
+    m = re.search(r'^\s*module\s+([A-Za-z_][A-Za-z0-9_$]*)\s*\(', txt, flags=re.MULTILINE)
+    return m.group(1) if m else None
+
 
 def run_agent(state: dict) -> dict:
     print(f"\n🏁 Running {AGENT_NAME}...")
@@ -82,11 +91,21 @@ def run_agent(state: dict) -> dict:
     stage_dir = os.path.join(workflow_dir, "digital", "place")
     logs_dir = os.path.join(stage_dir, "logs")
     constraints_dir = os.path.join(stage_dir, "constraints")
+    netlist_dir = os.path.join(stage_dir, "netlist")
 
     _ensure_dir(stage_dir)
     _ensure_dir(logs_dir)
     _ensure_dir(constraints_dir)
+    _ensure_dir(netlist_dir)
 
+    synth_netlists = sorted(glob.glob(os.path.join(workflow_dir, "digital", "synth", "netlist", "*.v")))
+    if not synth_netlists:
+        synth_netlists = sorted(glob.glob(os.path.join(workflow_dir, "digital", "synth", "**", "*.v"), recursive=True))
+    if not synth_netlists:
+        raise RuntimeError("No synthesized netlist found. Expected digital/synth/netlist/*.v")
+
+    for nl in synth_netlists:
+        shutil.copy2(nl, os.path.join(netlist_dir, os.path.basename(nl)))
     # Single source-of-truth SDC
     upstream_sdc = os.path.join(workflow_dir, "digital", "constraints", "top.sdc")
     if not os.path.exists(upstream_sdc):
@@ -103,9 +122,27 @@ def run_agent(state: dict) -> dict:
     if not os.path.exists(base_cfg_path):
         raise RuntimeError("Missing OpenLane config. Expected digital/foundry/openlane/config.json or digital/synth/config.json")
 
+
     cfg = _read_json(base_cfg_path)
-    cfg["SYNTH_SDC_FILE"] = "constraints/top.sdc"
+
+    # PnR stages: avoid SYNTH_SDC_FILE (OpenLane2 warns unknown key)
+    cfg.pop("SYNTH_SDC_FILE", None)
+
+    # Stage-local SSOT SDC
     cfg["PNR_SDC_FILE"] = "constraints/top.sdc"
+
+    # Explicit netlist list (avoid netlist/*.v glob validation failures)
+    stage_netlists = sorted(glob.glob(os.path.join(netlist_dir, "*.v")))
+    if not stage_netlists:
+        raise RuntimeError(f"No .v files present under {netlist_dir}")
+    cfg["VERILOG_FILES"] = [f"netlist/{os.path.basename(p)}" for p in stage_netlists]
+
+    inferred = None
+    if str(cfg.get("DESIGN_NAME","")).strip() in ["", "top"]:
+        inferred = _infer_top_from_netlist(stage_netlists[0])
+    if inferred:
+        cfg["DESIGN_NAME"] = inferred
+
 
     config_path = os.path.join(stage_dir, "config.json")
     _write_text(config_path, json.dumps(cfg, indent=2))

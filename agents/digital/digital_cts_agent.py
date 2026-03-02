@@ -55,6 +55,17 @@ def run_agent(state: dict) -> dict:
     logs_dir = os.path.join(stage_dir, "logs")
     cons_dir = os.path.join(stage_dir, "constraints")
     _ensure(stage_dir); _ensure(logs_dir); _ensure(cons_dir)
+    netlist_dir = os.path.join(stage_dir, "netlist")
+    _ensure(netlist_dir)
+
+    synth_netlists = sorted(glob.glob(os.path.join(workflow_dir, "digital", "synth", "netlist", "*.v")))
+    if not synth_netlists:
+        synth_netlists = sorted(glob.glob(os.path.join(workflow_dir, "digital", "synth", "**", "*.v"), recursive=True))
+    if not synth_netlists:
+        raise RuntimeError("No synthesized netlist found. Expected digital/synth/netlist/*.v")
+
+    for nl in synth_netlists:
+        shutil.copy2(nl, os.path.join(netlist_dir, os.path.basename(nl)))
 
     # SDC: single source
     upstream_sdc = os.path.join(workflow_dir, "digital", "constraints", "top.sdc")
@@ -72,8 +83,14 @@ def run_agent(state: dict) -> dict:
         raise RuntimeError("Missing config: digital/foundry/openlane/config.json or digital/synth/config.json")
 
     cfg = _read_json(base_cfg_path)
-    cfg["SYNTH_SDC_FILE"] = "constraints/top.sdc"
+    cfg.pop("SYNTH_SDC_FILE", None)
     cfg["PNR_SDC_FILE"] = "constraints/top.sdc"
+
+    stage_netlists = sorted(glob.glob(os.path.join(netlist_dir, "*.v")))
+    if not stage_netlists:
+        raise RuntimeError(f"No .v files present under {netlist_dir}")
+    cfg["VERILOG_FILES"] = [f"netlist/{os.path.basename(p)}" for p in stage_netlists]
+    
     config_path = os.path.join(stage_dir, "config.json")
     _write(config_path, json.dumps(cfg, indent=2))
 
