@@ -113,11 +113,18 @@ def run_agent(state: dict) -> dict:
     # Copy netlist into stage dir (stable contract)
     stage_netlist = os.path.join(netlist_dir, os.path.basename(synth_netlists[0]))
     shutil.copy2(synth_netlists[0], stage_netlist)
+    # Robust check (prevents confusing OpenLane error)
+    if not os.path.exists(stage_netlist):
+        raise RuntimeError(f"Netlist copy failed, missing: {stage_netlist}")
+
+    # Also confirm glob will match in container
+    if not glob.glob(os.path.join(netlist_dir, "*.v")):
+        raise RuntimeError(f"No .v files under {netlist_dir} after copy")
 
     # OpenLane config for STA: use netlist + SDC
     config = {
         "DESIGN_NAME": top_module,
-        "VERILOG_FILES": "netlist/*.v",
+        "VERILOG_FILES": [f"netlist/{os.path.basename(stage_netlist)}"],
         "PNR_SDC_FILE": "constraints/top.sdc",
     }
     config_path = os.path.join(stage_dir, "config.json")
