@@ -104,18 +104,44 @@ def run_agent(state: dict) -> dict:
     if not os.path.exists(base_cfg_path):
         raise RuntimeError("Missing OpenLane config. Expected digital/foundry/openlane/config.json or digital/synth/config.json")
 
+
+    # Add near the top with other dirs
+    netlist_dir = os.path.join(stage_dir, "netlist")
+    _ensure_dir(netlist_dir)
+
     cfg = _read_json(base_cfg_path)
 
-    # Remove host-only / unknown keys (OpenLane2 rejects/ warns)
-    cfg.pop("PDK_ROOT", None)
-    cfg.pop("OPENLANE_NUM_CORES", None)
-    cfg.pop("NOTE", None)
-    # Force SDC reference to stage-local copy
-    cfg["SYNTH_SDC_FILE"] = "constraints/top.sdc"
+    # 1) Do NOT set SYNTH_SDC_FILE here (OpenLane2 warns unknown in your logs)
+    cfg.pop("SYNTH_SDC_FILE", None)
+
+    # 2) Always stage-local SSOT SDC
     cfg["PNR_SDC_FILE"] = "constraints/top.sdc"
+
+    # 3) Ensure netlist exists locally (so VERILOG_FILES resolves inside /work mount)
+    synth_netlists = sorted(glob.glob(os.path.join(workflow_dir, "digital", "synth", "netlist", "*.v")))
+    if not synth_netlists:
+        synth_netlists = sorted(glob.glob(os.path.join(workflow_dir, "digital", "synth", "**", "*.v"), recursive=True))
+    if not synth_netlists:
+        raise RuntimeError("No synthesized netlist found. Expected digital/synth/netlist/*.v")
+
+    for nl in synth_netlists:
+       shutil.copy2(nl, os.path.join(netlist_dir, os.path.basename(nl)))
+
+    cfg["VERILOG_FILES"] = "netlist/*.v"
+
+    # Optional but recommended: align DESIGN_NAME with spec if present
+    spec_dir = os.path.join(workflow_dir, "spec")
+    spec_jsons = sorted(glob.glob(os.path.join(spec_dir, "*_spec.json")))
+    spec = _read_json(spec_jsons[0]) if spec_jsons else {}
+    top_module = (
+       spec.get("design_name") or spec.get("top_module") or state.get("design_name") or cfg.get("DESIGN_NAME") or "top"
+    )
+    cfg["DESIGN_NAME"] = str(top_module).strip() or "top"
 
     config_path = os.path.join(stage_dir, "config.json")
     _write_text(config_path, json.dumps(cfg, indent=2))
+
+ 
 
     # ---- Docker/run.sh ----
     pdk_variant = state.get("pdk_variant") or DEFAULT_PDK_VARIANT

@@ -3,6 +3,7 @@ import json
 import glob
 import shutil
 import subprocess
+import re
 from datetime import datetime
 
 from utils.artifact_utils import save_text_artifact_and_record
@@ -70,6 +71,14 @@ def _best_effort_top_module(spec: dict) -> str:
     )
     return str(tm).strip() or "top"
 
+def _infer_top_from_netlist(netlist_path: str) -> str | None:
+    try:
+        txt = open(netlist_path, "r", encoding="utf-8", errors="ignore").read()
+    except Exception:
+        return None
+    m = re.search(r'^\s*module\s+([A-Za-z_][A-Za-z0-9_$]*)\s*\(', txt, flags=re.MULTILINE)
+    return m.group(1) if m else None
+
 
 def run_agent(state: dict) -> dict:
     print(f"\n🏁 Running {AGENT_NAME}...")
@@ -121,12 +130,20 @@ def run_agent(state: dict) -> dict:
     if not glob.glob(os.path.join(netlist_dir, "*.v")):
         raise RuntimeError(f"No .v files under {netlist_dir} after copy")
 
-    # OpenLane config for STA: use netlist + SDC
+
+    # ... after copying stage_netlist ...
+    if (not top_module) or (top_module.strip() == "") or (top_module.strip() == "top"):
+        inferred = _infer_top_from_netlist(stage_netlist)
+    if inferred:
+        top_module = inferred
+
     config = {
-        "DESIGN_NAME": top_module,
-        "VERILOG_FILES": [f"netlist/{os.path.basename(stage_netlist)}"],
-        "PNR_SDC_FILE": "constraints/top.sdc",
+       "DESIGN_NAME": top_module,
+       "VERILOG_FILES": "netlist/*.v",
+       "PNR_SDC_FILE": "constraints/top.sdc",
     }
+
+
     config_path = os.path.join(stage_dir, "config.json")
     _write_text(config_path, json.dumps(config, indent=2))
 
