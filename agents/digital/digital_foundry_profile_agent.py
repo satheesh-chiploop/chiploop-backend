@@ -9,6 +9,7 @@ AGENT_NAME = "Digital Foundry Profile Agent"
 def run_agent(state: dict) -> dict:
     workflow_id = state.get("workflow_id", "default")
     workflow_dir = state.get("workflow_dir", f"backend/workflows/{workflow_id}")
+    workflow_dir = os.path.abspath(workflow_dir)
     os.makedirs(workflow_dir, exist_ok=True)
 
     # Host-side defaults (your real install)

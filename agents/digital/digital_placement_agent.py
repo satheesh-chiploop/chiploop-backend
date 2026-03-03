@@ -87,6 +87,7 @@ def run_agent(state: dict) -> dict:
 
     workflow_id = state.get("workflow_id", "default")
     workflow_dir = state.get("workflow_dir") or f"backend/workflows/{workflow_id}"
+    workflow_dir = os.path.abspath(workflow_dir)
 
     stage_dir = os.path.join(workflow_dir, "digital", "place")
     logs_dir = os.path.join(stage_dir, "logs")
@@ -161,6 +162,7 @@ def run_agent(state: dict) -> dict:
     state["digital_run_tag"] = run_tag
 
     run_work_dir = state.get("digital_run_work_dir") or os.path.join(workflow_dir, "digital", "run_work")
+    run_work_dir = os.path.abspath(run_work_dir)
     _ensure_dir(run_work_dir)
     state["digital_run_work_dir"] = run_work_dir
 

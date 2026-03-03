@@ -13,6 +13,7 @@ def _read_json(path: str) -> dict:
 def run_agent(state: dict) -> dict:
     workflow_id = state.get("workflow_id", "default")
     workflow_dir = state.get("workflow_dir", f"backend/workflows/{workflow_id}")
+    workflow_dir = os.path.abspath(workflow_dir)
     os.makedirs(workflow_dir, exist_ok=True)
 
     digital_root = os.path.join(workflow_dir, "digital", "foundry")
