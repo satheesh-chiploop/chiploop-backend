@@ -67,9 +67,30 @@ def run_agent(state: dict) -> dict:
     base_cfg=impl_cfg if os.path.exists(impl_cfg) else synth_cfg
     if not os.path.exists(base_cfg): raise RuntimeError("Missing config.json (foundry/openlane or synth).")
 
-    cfg=_read_json(base_cfg)
-    cfg["PNR_SDC_FILE"]="inputs/constraints/top.sdc"
+
+
+    cfg = _read_json(base_cfg)
+    cfg.pop("SYNTH_SDC_FILE", None)
+    cfg["PNR_SDC_FILE"] = "inputs/constraints/top.sdc"
     _write(os.path.join(stage_dir,"config.json"), json.dumps(cfg, indent=2))
+
+    # Explicit netlist list from shared inputs (Option A)
+    inputs_netlist_dir = os.path.join(run_work_dir, "inputs", "netlist")
+    stage_netlists = sorted(glob.glob(os.path.join(inputs_netlist_dir, "*.v")))
+    if not stage_netlists:
+        raise RuntimeError("Route: missing run_work/inputs/netlist/*.v (synth/floorplan should populate it).")
+        
+    cfg["VERILOG_FILES"] = [f"inputs/netlist/{os.path.basename(p)}" for p in stage_netlists]
+
+    # Match Placement behavior: fix DESIGN_NAME if base config says "top"
+    inferred = None
+    if str(cfg.get("DESIGN_NAME", "")).strip() in ["", "top"]:
+        inferred = _infer_top_from_netlist(stage_netlists[0])
+    if inferred:
+        cfg["DESIGN_NAME"] = inferred
+        state["design_name"] = inferred
+
+    
 
     pdk=state.get("pdk_variant") or DEFAULT_PDK_VARIANT
     image=state.get("openlane_image") or DEFAULT_OPENLANE_IMAGE
@@ -101,7 +122,7 @@ set -euo pipefail
 export OPENLANE_NUM_CORES={DEFAULT_NUM_CORES}
 docker run --rm \\
   -v "{pdk_root_host}":/pdk \\
-  -v "$(run_work_dir)":/work \\
+  -v "{run_work_dir}":/work \\
   -e PDK={pdk} \\
   -e PDK_ROOT=/pdk \\
   {image} \\
