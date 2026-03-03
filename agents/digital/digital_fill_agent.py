@@ -122,7 +122,7 @@ def run_agent(state: dict) -> dict:
     _ensure(work_stage_dir)
     _write(os.path.join(work_stage_dir, "config.json"), json.dumps(cfg, indent=2))
 
-run_sh=f"""#!/usr/bin/env bash
+    run_sh=f"""#!/usr/bin/env bash
 set -euo pipefail
 export OPENLANE_NUM_CORES={DEFAULT_NUM_CORES}
 docker run --rm \\
