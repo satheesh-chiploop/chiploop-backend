@@ -1,4 +1,4 @@
-import os, json, glob, shutil, subprocess
+import os, json, glob, shutil, subprocess, re
 from utils.artifact_utils import save_text_artifact_and_record
 
 AGENT_NAME="Digital Route Agent"
@@ -37,6 +37,14 @@ def _copy_def(latest, stage_dir):
     cands.sort(key=lambda p: os.path.getsize(p))
     shutil.copy2(cands[-1], dst)
     return dst
+
+def _infer_top_from_netlist(netlist_path: str) -> str | None:
+    try:
+        txt = open(netlist_path, "r", encoding="utf-8", errors="ignore").read()
+    except Exception:
+        return None
+    m = re.search(r'^\s*module\s+([A-Za-z_][A-Za-z0-9_$]*)\s*\(', txt, flags=re.MULTILINE)
+    return m.group(1) if m else None
 
 def run_agent(state: dict) -> dict:
 

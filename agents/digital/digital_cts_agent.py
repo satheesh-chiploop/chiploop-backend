@@ -48,7 +48,6 @@ def _copy_def(latest, stage_dir):
     return dst
 
 
-
 def _infer_top_from_netlist(netlist_path: str) -> str | None:
     try:
         txt = open(netlist_path, "r", encoding="utf-8", errors="ignore").read()
@@ -102,7 +101,13 @@ def run_agent(state: dict) -> dict:
         raise RuntimeError(f"No .v files present under {netlist_dir}")
     cfg["VERILOG_FILES"] = [f"inputs/netlist/{os.path.basename(p)}" for p in stage_netlists]
 
-
+    # Match Placement behavior: fix DESIGN_NAME if base config says "top"
+    inferred = None
+    if str(cfg.get("DESIGN_NAME", "")).strip() in ["", "top"]:
+       inferred = _infer_top_from_netlist(stage_netlists[0])
+    if inferred:
+       cfg["DESIGN_NAME"] = inferred
+       state["design_name"] = inferred  # propagate downstream
 
     config_path = os.path.join(stage_dir, "config.json")
     _write(config_path, json.dumps(cfg, indent=2))
