@@ -185,11 +185,15 @@ def run_agent(state: dict) -> dict:
     # -------------------------------------------------------
     # Shared OpenLane run workspace + run tag (generic)
     # -------------------------------------------------------
+
+    # -------------------------------------------------------
+    # Shared OpenLane run workspace + run tag (generic)
+    # MUST be defined BEFORE using work_stage_dir
+    # -------------------------------------------------------
     explicit = state.get("run_tag") or state.get("digital_run_tag")
     wf_name = state.get("workflow_name") or state.get("workflow_type") or state.get("flow_name") or "digital"
-    flow_run_tag = explicit or f"{wf_name}_{workflow_id}"
-    state["digital_run_tag"] = flow_run_tag
-    run_tag = flow_run_tag
+    run_tag = explicit or f"{wf_name}_{workflow_id}"
+    state["digital_run_tag"] = run_tag
 
     run_work_dir = state.get("digital_run_work_dir") or os.path.join(workflow_dir, "digital", "run_work")
     _ensure_dir(run_work_dir)
@@ -198,7 +202,15 @@ def run_agent(state: dict) -> dict:
     work_stage_dir = os.path.join(run_work_dir, "floorplan")
     _ensure_dir(work_stage_dir)
 
-    # Now it is safe to copy constraints/netlists into work_stage_dir
+    # Now safe to write execution config into shared workspace
+    exec_config_path = os.path.join(work_stage_dir, "config.json")
+    _write_text(exec_config_path, json.dumps(cfg, indent=2))
+
+    # Also keep a copy in stage_dir for contract/debug
+    config_path = os.path.join(stage_dir, "config.json")
+    _write_text(config_path, json.dumps(cfg, indent=2))
+
+      # Now it is safe to copy constraints/netlists into work_stage_dir
     work_constraints_dir = os.path.join(work_stage_dir, "constraints")
     _ensure_dir(work_constraints_dir)
     shutil.copy2(stage_sdc, os.path.join(work_constraints_dir, "top.sdc"))

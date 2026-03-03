@@ -144,23 +144,21 @@ def run_agent(state: dict) -> dict:
         cfg["DESIGN_NAME"] = inferred
 
 
-    config_path = os.path.join(stage_dir, "config.json")
-    _write_text(config_path, json.dumps(cfg, indent=2))
-
-    exec_config_path = os.path.join(work_stage_dir, "config.json")
-    _write_text(exec_config_path, json.dumps(cfg, indent=2))
-
+    
 
     # ---- Docker/run.sh ----
     pdk_variant = state.get("pdk_variant") or DEFAULT_PDK_VARIANT
     openlane_image = state.get("openlane_image") or DEFAULT_OPENLANE_IMAGE
     pdk_root_host = os.getenv("CHIPLOOP_PDK_ROOT_HOST") or "/root/chiploop-backend/backend/pdk"
 
+    # -------------------------------------------------------
+    # Shared OpenLane run workspace + run tag (generic)
+    # MUST be defined BEFORE using work_stage_dir
+    # -------------------------------------------------------
     explicit = state.get("run_tag") or state.get("digital_run_tag")
     wf_name = state.get("workflow_name") or state.get("workflow_type") or state.get("flow_name") or "digital"
-    flow_run_tag = explicit or f"{wf_name}_{workflow_id}"
-    state["digital_run_tag"] = flow_run_tag
-    run_tag = flow_run_tag
+    run_tag = explicit or f"{wf_name}_{workflow_id}"
+    state["digital_run_tag"] = run_tag
 
     run_work_dir = state.get("digital_run_work_dir") or os.path.join(workflow_dir, "digital", "run_work")
     _ensure_dir(run_work_dir)
@@ -168,6 +166,13 @@ def run_agent(state: dict) -> dict:
 
     work_stage_dir = os.path.join(run_work_dir, "place")
     _ensure_dir(work_stage_dir)
+
+    # Write configs (contract + exec)
+    config_path = os.path.join(stage_dir, "config.json")
+    _write_text(config_path, json.dumps(cfg, indent=2))
+
+    exec_config_path = os.path.join(work_stage_dir, "config.json")
+    _write_text(exec_config_path, json.dumps(cfg, indent=2))
 
     work_constraints_dir = os.path.join(work_stage_dir, "constraints")
     _ensure_dir(work_constraints_dir)
