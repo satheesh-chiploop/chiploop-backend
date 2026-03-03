@@ -71,15 +71,22 @@ def run_agent(state: dict) -> dict:
 
     cfg = _read_json(base_cfg)
     cfg.pop("SYNTH_SDC_FILE", None)
+
+    # --- Shared run_work_dir must be defined BEFORE using it ---
+    run_work_dir = state.get("digital_run_work_dir") or os.path.join(workflow_dir, "digital", "run_work")
+    run_work_dir = os.path.abspath(run_work_dir)
+    _ensure(run_work_dir)
+    state["digital_run_work_dir"] = run_work_dir
+
+    # Option A: point SDC to shared inputs
     cfg["PNR_SDC_FILE"] = "inputs/constraints/top.sdc"
-    _write(os.path.join(stage_dir,"config.json"), json.dumps(cfg, indent=2))
 
     # Explicit netlist list from shared inputs (Option A)
     inputs_netlist_dir = os.path.join(run_work_dir, "inputs", "netlist")
     stage_netlists = sorted(glob.glob(os.path.join(inputs_netlist_dir, "*.v")))
     if not stage_netlists:
         raise RuntimeError("Route: missing run_work/inputs/netlist/*.v (synth/floorplan should populate it).")
-        
+
     cfg["VERILOG_FILES"] = [f"inputs/netlist/{os.path.basename(p)}" for p in stage_netlists]
 
     # Match Placement behavior: fix DESIGN_NAME if base config says "top"
@@ -90,6 +97,8 @@ def run_agent(state: dict) -> dict:
         cfg["DESIGN_NAME"] = inferred
         state["design_name"] = inferred
 
+    # Write stage contract config (optional but fine)
+    _write(os.path.join(stage_dir, "config.json"), json.dumps(cfg, indent=2))
     
 
     pdk=state.get("pdk_variant") or DEFAULT_PDK_VARIANT
@@ -103,11 +112,7 @@ def run_agent(state: dict) -> dict:
     run_tag = explicit or f"{wf_name}_{workflow_id}"
     state["digital_run_tag"] = run_tag
 
-    run_work_dir = state.get("digital_run_work_dir") or os.path.join(workflow_dir, "digital", "run_work")
-    run_work_dir = os.path.abspath(run_work_dir)
-    _ensure(run_work_dir)
-    state["digital_run_work_dir"] = run_work_dir
-    
+        
     work_stage_dir = os.path.join(run_work_dir, "route")
     _ensure(work_stage_dir)
     _write(os.path.join(work_stage_dir, "config.json"), json.dumps(cfg, indent=2))
