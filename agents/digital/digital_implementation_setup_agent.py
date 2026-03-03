@@ -84,7 +84,7 @@ create_clock -name {clk_name} -period {period_ns:.3f} [get_ports {clk_name}]
         "CLOCK_PORT": clk_name,
         "CLOCK_PERIOD": period_ns,
         # SSOT SDC: stage agents copy digital/constraints/top.sdc -> constraints/top.sdc
-        "PNR_SDC_FILE": "constraints/top.sdc",
+        "PNR_SDC_FILE": "inputs/constraints/top.sdc",
         # Make config loadable for PnR stages; stages will create netlist/ and copy netlists
     }
  
