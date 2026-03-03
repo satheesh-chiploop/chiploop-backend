@@ -130,13 +130,13 @@ def run_agent(state: dict) -> dict:
     cfg.pop("SYNTH_SDC_FILE", None)
 
     # Stage-local SSOT SDC
-    cfg["PNR_SDC_FILE"] = "constraints/top.sdc"
+    cfg["PNR_SDC_FILE"] = "inputs/constraints/top.sdc"
 
     # Explicit netlist list (avoid netlist/*.v glob validation failures)
     stage_netlists = sorted(glob.glob(os.path.join(netlist_dir, "*.v")))
     if not stage_netlists:
         raise RuntimeError(f"No .v files present under {netlist_dir}")
-    cfg["VERILOG_FILES"] = [f"netlist/{os.path.basename(p)}" for p in stage_netlists]
+    cfg["VERILOG_FILES"] = [f"inputs/netlist/{os.path.basename(p)}" for p in stage_netlists]
 
     inferred = None
     if str(cfg.get("DESIGN_NAME","")).strip() in ["", "top"]:
@@ -176,15 +176,16 @@ def run_agent(state: dict) -> dict:
     exec_config_path = os.path.join(work_stage_dir, "config.json")
     _write_text(exec_config_path, json.dumps(cfg, indent=2))
 
-    work_constraints_dir = os.path.join(work_stage_dir, "constraints")
-    _ensure_dir(work_constraints_dir)
-    shutil.copy2(stage_sdc, os.path.join(work_constraints_dir, "top.sdc"))
+    inputs_dir = os.path.join(run_work_dir, "inputs")
+    inputs_constraints_dir = os.path.join(inputs_dir, "constraints")
+    inputs_netlist_dir = os.path.join(inputs_dir, "netlist")
+    _ensure_dir(inputs_constraints_dir)
+    _ensure_dir(inputs_netlist_dir)
 
-    work_netlist_dir = os.path.join(work_stage_dir, "netlist")
-    _ensure_dir(work_netlist_dir)
+    shutil.copy2(stage_sdc, os.path.join(inputs_constraints_dir, "top.sdc"))
+
     for p in stage_netlists:
-        shutil.copy2(os.path.join(netlist_dir, os.path.basename(p)),
-                     os.path.join(work_netlist_dir, os.path.basename(p)))
+        shutil.copy2(p, os.path.join(inputs_netlist_dir, os.path.basename(p)))
 
 
     run_sh = f"""#!/usr/bin/env bash
