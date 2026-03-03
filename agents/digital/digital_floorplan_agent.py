@@ -167,14 +167,6 @@ def run_agent(state: dict) -> dict:
 
     cfg["DESIGN_NAME"] = top_module
 
-    # Write execution config into shared workspace
-    exec_config_path = os.path.join(work_stage_dir, "config.json")
-    _write_text(exec_config_path, json.dumps(cfg, indent=2))
-
-    # Also keep a copy in stage_dir for your artifact contract/debugging
-    config_path = os.path.join(stage_dir, "config.json")
-    _write_text(config_path, json.dumps(cfg, indent=2))
-
  
 
     # ---- Docker/run.sh ----

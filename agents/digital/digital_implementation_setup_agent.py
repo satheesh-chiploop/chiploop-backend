@@ -85,7 +85,6 @@ create_clock -name {clk_name} -period {period_ns:.3f} [get_ports {clk_name}]
         # SSOT SDC: stage agents copy digital/constraints/top.sdc -> constraints/top.sdc
         "PNR_SDC_FILE": "constraints/top.sdc",
         # Make config loadable for PnR stages; stages will create netlist/ and copy netlists
-        "VERILOG_FILES": "netlist/*.v",
     }
  
 
@@ -99,7 +98,7 @@ create_clock -name {clk_name} -period {period_ns:.3f} [get_ports {clk_name}]
         f"workflow_id={workflow_id}",
         f"workflow_dir={os.path.abspath(workflow_dir)}",
         f"pdk={openlane_cfg['PDK']}",
-        f"pdk_root={openlane_cfg['PDK_ROOT']}",
+        f"pdk_root={openlane_cfg['pdk_root']}",
         f"base_sdc={base_sdc_path}",
         f"corners={corners_path}",
         f"openlane_cfg={cfg_path}",
@@ -117,8 +116,8 @@ create_clock -name {clk_name} -period {period_ns:.3f} [get_ports {clk_name}]
     save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital/foundry/setup", "implementation_setup.log", setup_log)
 
     # SSOT enforced for actual runs
-    openlane_cfg["SYNTH_SDC_FILE"] = "digital/constraints/top.sdc"
-    openlane_cfg["PNR_SDC_FILE"]   = "digital/constraints/top.sdc"   # safe for all PnR stages
+    #openlane_cfg["SYNTH_SDC_FILE"] = "digital/constraints/top.sdc"
+    #openlane_cfg["PNR_SDC_FILE"]   = "digital/constraints/top.sdc"   # safe for all PnR stages
 
     state.setdefault("digital", {})
     state["digital"]["constraints_sdc"] = "digital/constraints/top.sdc"

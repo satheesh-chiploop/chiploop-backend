@@ -12,7 +12,7 @@ def run_agent(state: dict) -> dict:
     os.makedirs(workflow_dir, exist_ok=True)
 
     # Host-side defaults (your real install)
-    pdk_root_host = os.getenv("CHIPLOOP_PDK_ROOT", "backend/pdk")
+    pdk_root_host = os.getenv("CHIPLOOP_PDK_ROOT_HOST", "backend/pdk")
     pdk_root_host_abs = os.path.abspath(pdk_root_host)
 
     # Allow override later via UI scope_json, but keep deterministic defaults now
@@ -73,6 +73,8 @@ def run_agent(state: dict) -> dict:
     state.setdefault("digital", {})
     state["digital"]["foundry_profile"] = "digital/foundry/foundry_profile.json"
     state["digital"]["pdk_ok"] = bool(pdk_ok)
+    state["pdk_root_host"] = pdk_root_host_abs
+    state["pdk_variant"] = pdk
     state["status"] = "✅ Foundry profile generated" if pdk_ok else "⚠️ Foundry profile generated but PDK not found on host"
 
     return state
