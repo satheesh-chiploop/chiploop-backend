@@ -17,8 +17,8 @@ def _write(p,s):
 def _run(cmd,cwd):
     p=subprocess.Popen(cmd,cwd=cwd,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True)
     out,_=p.communicate(); return p.returncode,out
-def _latest_run(stage_dir):
-    runs=os.path.join(stage_dir,"runs")
+def _latest_run(run_work_dir):
+    runs=os.path.join(run_work_dir,"runs")
     if not os.path.isdir(runs): return None
     ds=[os.path.join(runs,d) for d in os.listdir(runs) if os.path.isdir(os.path.join(runs,d))]
     if not ds: return None
@@ -39,9 +39,11 @@ def _copy_def(latest, stage_dir):
     return dst
 
 def run_agent(state: dict) -> dict:
+
     workflow_id=state.get("workflow_id","default")
-    workflow_dir=state.get("workflow_dir") or f"backend/workflows/{workflow_id}"
-    stage_dir=os.path.join(workflow_dir,"digital","route")
+    workflow_dir = state.get("workflow_dir") or f"backend/workflows/{workflow_id}"
+    workflow_dir = os.path.abspath(workflow_dir)
+    stage_dir = os.path.join(workflow_dir, "digital", "route")
     logs_dir=os.path.join(stage_dir,"logs")
     cons_dir=os.path.join(stage_dir,"constraints")
     _ensure(stage_dir); _ensure(logs_dir); _ensure(cons_dir)
@@ -58,24 +60,44 @@ def run_agent(state: dict) -> dict:
     if not os.path.exists(base_cfg): raise RuntimeError("Missing config.json (foundry/openlane or synth).")
 
     cfg=_read_json(base_cfg)
-    cfg["PNR_SDC_FILE"]="constraints/top.sdc"
+    cfg["PNR_SDC_FILE"]="input/constraints/top.sdc"
     _write(os.path.join(stage_dir,"config.json"), json.dumps(cfg, indent=2))
 
     pdk=state.get("pdk_variant") or DEFAULT_PDK_VARIANT
     image=state.get("openlane_image") or DEFAULT_OPENLANE_IMAGE
-    pdk_root_host=os.getenv("CHIPLOOP_PDK_ROOT_HOST") or "/root/chiploop-backend/backend/pdk"
-    run_tag=f"route_{workflow_id}"
+    pdk_root_host = state.get("pdk_root_host") or os.getenv("CHIPLOOP_PDK_ROOT_HOST") or "backend/pdk"
+    pdk_root_host = os.path.abspath(pdk_root_host)
+    state["pdk_root_host"] = pdk_root_host
+
+    explicit = state.get("run_tag") or state.get("digital_run_tag")
+    wf_name = state.get("workflow_name") or state.get("workflow_type") or state.get("flow_name") or "digital"
+    run_tag = explicit or f"{wf_name}_{workflow_id}"
+    state["digital_run_tag"] = run_tag
+
+    run_work_dir = state.get("digital_run_work_dir") or os.path.join(workflow_dir, "digital", "run_work")
+    run_work_dir = os.path.abspath(run_work_dir)
+    _ensure(run_work_dir)
+    state["digital_run_work_dir"] = run_work_dir
+    
+    work_stage_dir = os.path.join(run_work_dir, "route")
+    _ensure(work_stage_dir)
+    _write(os.path.join(work_stage_dir, "config.json"), json.dumps(cfg, indent=2))
+
+    inputs_dir = os.path.join(run_work_dir, "inputs")
+    inputs_constraints_dir = os.path.join(inputs_dir, "constraints")
+    _ensure(inputs_constraints_dir)
+    shutil.copy2(stage_sdc, os.path.join(inputs_constraints_dir, "top.sdc"))
 
     run_sh=f"""#!/usr/bin/env bash
 set -euo pipefail
 export OPENLANE_NUM_CORES={DEFAULT_NUM_CORES}
 docker run --rm \\
   -v "{pdk_root_host}":/pdk \\
-  -v "$(pwd)":/work \\
+  -v "$(run_work_dir)":/work \\
   -e PDK={pdk} \\
   -e PDK_ROOT=/pdk \\
   {image} \\
-  bash -lc 'set -e; cd /work && openlane --flow Classic --run-tag {run_tag} --to OpenROAD.DetailedRouting config.json'
+  bash -lc 'set -e; cd /work && openlane --flow Classic --run-tag {run_tag} --to OpenROAD.DetailedRouting route/config.json'
 """
     _write(os.path.join(stage_dir,"run.sh"), run_sh)
     os.chmod(os.path.join(stage_dir,"run.sh"), 0o755)
@@ -83,7 +105,7 @@ docker run --rm \\
     rc,out=_run(["bash","-lc","./run.sh"], cwd=stage_dir)
     _write(os.path.join(logs_dir,"openlane_route.log"), out)
 
-    latest=_latest_run(stage_dir)
+    latest=_latest_run(run_work_dir)
     metrics=_copy_metrics(latest, stage_dir)
     primary_def=_copy_def(latest, stage_dir)
 

@@ -95,12 +95,12 @@ def run_agent(state: dict) -> dict:
 
     cfg = _read_json(base_cfg_path)
     cfg.pop("SYNTH_SDC_FILE", None)
-    cfg["PNR_SDC_FILE"] = "constraints/top.sdc"
+    cfg["PNR_SDC_FILE"] = "input/constraints/top.sdc"
 
     stage_netlists = sorted(glob.glob(os.path.join(netlist_dir, "*.v")))
     if not stage_netlists:
         raise RuntimeError(f"No .v files present under {netlist_dir}")
-    cfg["VERILOG_FILES"] = [f"netlist/{os.path.basename(p)}" for p in stage_netlists]
+    cfg["VERILOG_FILES"] = [f"input/netlist/{os.path.basename(p)}" for p in stage_netlists]
 
 
 
@@ -111,7 +111,12 @@ def run_agent(state: dict) -> dict:
 
     pdk_variant = state.get("pdk_variant") or DEFAULT_PDK_VARIANT
     image = state.get("openlane_image") or DEFAULT_OPENLANE_IMAGE
-    pdk_root_host = os.getenv("CHIPLOOP_PDK_ROOT_HOST") or "/root/chiploop-backend/backend/pdk"
+
+    pdk_root_host = state.get("pdk_root_host") or os.getenv("CHIPLOOP_PDK_ROOT_HOST") or "backend/pdk"
+    pdk_root_host = os.path.abspath(pdk_root_host)
+    state["pdk_root_host"] = pdk_root_host
+
+
     explicit = state.get("run_tag") or state.get("digital_run_tag")
     wf_name = state.get("workflow_name") or state.get("workflow_type") or state.get("flow_name") or "digital"
     flow_run_tag = explicit or f"{wf_name}_{workflow_id}"
@@ -129,15 +134,16 @@ def run_agent(state: dict) -> dict:
     exec_config_path = os.path.join(work_stage_dir, "config.json")
     _write(exec_config_path, json.dumps(cfg, indent=2))
 
-    work_constraints_dir = os.path.join(work_stage_dir, "constraints")
-    _ensure(work_constraints_dir)
-    shutil.copy2(stage_sdc, os.path.join(work_constraints_dir, "top.sdc"))
+    # Option A: shared inputs under /work/inputs
+    inputs_dir = os.path.join(run_work_dir, "inputs")
+    inputs_constraints_dir = os.path.join(inputs_dir, "constraints")
+    inputs_netlist_dir = os.path.join(inputs_dir, "netlist")
+    _ensure(inputs_constraints_dir)
+    _ensure(inputs_netlist_dir)
 
-    work_netlist_dir = os.path.join(work_stage_dir, "netlist")
-    _ensure(work_netlist_dir)
+    shutil.copy2(stage_sdc, os.path.join(inputs_constraints_dir, "top.sdc"))
     for p in stage_netlists:
-        shutil.copy2(os.path.join(netlist_dir, os.path.basename(p)),
-                     os.path.join(work_netlist_dir, os.path.basename(p)))
+        shutil.copy2(p, os.path.join(inputs_netlist_dir, os.path.basename(p)))
 
     run_sh = f"""#!/usr/bin/env bash
 set -euo pipefail
