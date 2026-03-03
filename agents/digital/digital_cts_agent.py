@@ -95,12 +95,12 @@ def run_agent(state: dict) -> dict:
 
     cfg = _read_json(base_cfg_path)
     cfg.pop("SYNTH_SDC_FILE", None)
-    cfg["PNR_SDC_FILE"] = "input/constraints/top.sdc"
+    cfg["PNR_SDC_FILE"] = "inputs/constraints/top.sdc"
 
     stage_netlists = sorted(glob.glob(os.path.join(netlist_dir, "*.v")))
     if not stage_netlists:
         raise RuntimeError(f"No .v files present under {netlist_dir}")
-    cfg["VERILOG_FILES"] = [f"input/netlist/{os.path.basename(p)}" for p in stage_netlists]
+    cfg["VERILOG_FILES"] = [f"inputs/netlist/{os.path.basename(p)}" for p in stage_netlists]
 
 
 

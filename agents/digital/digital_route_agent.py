@@ -60,7 +60,7 @@ def run_agent(state: dict) -> dict:
     if not os.path.exists(base_cfg): raise RuntimeError("Missing config.json (foundry/openlane or synth).")
 
     cfg=_read_json(base_cfg)
-    cfg["PNR_SDC_FILE"]="input/constraints/top.sdc"
+    cfg["PNR_SDC_FILE"]="inputs/constraints/top.sdc"
     _write(os.path.join(stage_dir,"config.json"), json.dumps(cfg, indent=2))
 
     pdk=state.get("pdk_variant") or DEFAULT_PDK_VARIANT
