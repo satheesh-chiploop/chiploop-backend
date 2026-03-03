@@ -147,11 +147,37 @@ def run_agent(state: dict) -> dict:
     config_path = os.path.join(stage_dir, "config.json")
     _write_text(config_path, json.dumps(cfg, indent=2))
 
+    exec_config_path = os.path.join(work_stage_dir, "config.json")
+    _write_text(exec_config_path, json.dumps(cfg, indent=2))
+
+    work_constraints_dir = os.path.join(work_stage_dir, "constraints")
+    _ensure_dir(work_constraints_dir)
+    shutil.copy2(stage_sdc, os.path.join(work_constraints_dir, "top.sdc"))
+
+    work_netlist_dir = os.path.join(work_stage_dir, "netlist")
+    _ensure_dir(work_netlist_dir)
+    for p in stage_netlists:
+        shutil.copy2(os.path.join(netlist_dir, os.path.basename(p)),
+                     os.path.join(work_netlist_dir, os.path.basename(p)))
+
     # ---- Docker/run.sh ----
     pdk_variant = state.get("pdk_variant") or DEFAULT_PDK_VARIANT
     openlane_image = state.get("openlane_image") or DEFAULT_OPENLANE_IMAGE
     pdk_root_host = os.getenv("CHIPLOOP_PDK_ROOT_HOST") or "/root/chiploop-backend/backend/pdk"
-    run_tag = f"place_{workflow_id}"
+
+    explicit = state.get("run_tag") or state.get("digital_run_tag")
+    wf_name = state.get("workflow_name") or state.get("workflow_type") or state.get("flow_name") or "digital"
+    flow_run_tag = explicit or f"{wf_name}_{workflow_id}"
+    state["digital_run_tag"] = flow_run_tag
+    run_tag = flow_run_tag
+
+    run_work_dir = state.get("digital_run_work_dir") or os.path.join(workflow_dir, "digital", "run_work")
+    _ensure_dir(run_work_dir)
+    state["digital_run_work_dir"] = run_work_dir
+
+    work_stage_dir = os.path.join(run_work_dir, "place")
+    _ensure_dir(work_stage_dir)
+
 
     run_sh = f"""#!/usr/bin/env bash
 set -euo pipefail
@@ -163,13 +189,15 @@ echo "WORKDIR=/work"
 
 export OPENLANE_NUM_CORES={DEFAULT_NUM_CORES}
 
-docker run --rm \\
-  -v "{pdk_root_host}":/pdk \\
-  -v "$(pwd)":/work \\
-  -e PDK={pdk_variant} \\
-  -e PDK_ROOT=/pdk \\
-  {openlane_image} \\
-  bash -lc 'set -e; echo "PDK listing:"; ls -la /pdk | head -n 50; cd /work && openlane --flow Classic --run-tag {run_tag} --to OpenROAD.DetailedPlacement config.json'
+docker run --rm \
+  -v "{pdk_root_host}":/pdk \
+  -v "{run_work_dir}":/work \
+  -e PDK={pdk_variant} \
+  -e PDK_ROOT=/pdk \
+  {openlane_image} \
+  bash -lc 'set -e; cd /work && openlane --flow Classic --run-tag {run_tag} --to OpenROAD.DetailedPlacement place/config.json'
+
+
 """
     run_sh_path = os.path.join(stage_dir, "run.sh")
     _write_text(run_sh_path, run_sh)

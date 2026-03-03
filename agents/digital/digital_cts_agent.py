@@ -1,4 +1,4 @@
-import os, json, glob, shutil, subprocess
+import os, json, glob, shutil, subprocess, re
 from utils.artifact_utils import save_text_artifact_and_record
 
 AGENT_NAME = "Digital CTS Agent"
@@ -47,6 +47,16 @@ def _copy_def(latest, stage_dir):
     shutil.copy2(cands[-1], dst)
     return dst
 
+
+
+def _infer_top_from_netlist(netlist_path: str) -> str | None:
+    try:
+        txt = open(netlist_path, "r", encoding="utf-8", errors="ignore").read()
+    except Exception:
+        return None
+    m = re.search(r'^\s*module\s+([A-Za-z_][A-Za-z0-9_$]*)\s*\(', txt, flags=re.MULTILINE)
+    return m.group(1) if m else None
+
 def run_agent(state: dict) -> dict:
     workflow_id = state.get("workflow_id","default")
     workflow_dir = state.get("workflow_dir") or f"backend/workflows/{workflow_id}"
@@ -90,25 +100,53 @@ def run_agent(state: dict) -> dict:
     if not stage_netlists:
         raise RuntimeError(f"No .v files present under {netlist_dir}")
     cfg["VERILOG_FILES"] = [f"netlist/{os.path.basename(p)}" for p in stage_netlists]
-    
+
+
+
     config_path = os.path.join(stage_dir, "config.json")
     _write(config_path, json.dumps(cfg, indent=2))
+
+    exec_config_path = os.path.join(work_stage_dir, "config.json")
+    _write(exec_config_path, json.dumps(cfg, indent=2))
+
+    work_constraints_dir = os.path.join(work_stage_dir, "constraints")
+    _ensure(work_constraints_dir)
+    shutil.copy2(stage_sdc, os.path.join(work_constraints_dir, "top.sdc"))
+
+    work_netlist_dir = os.path.join(work_stage_dir, "netlist")
+    _ensure(work_netlist_dir)
+    for p in stage_netlists:
+        shutil.copy2(os.path.join(netlist_dir, os.path.basename(p)),
+                     os.path.join(work_netlist_dir, os.path.basename(p)))
 
     pdk_variant = state.get("pdk_variant") or DEFAULT_PDK_VARIANT
     image = state.get("openlane_image") or DEFAULT_OPENLANE_IMAGE
     pdk_root_host = os.getenv("CHIPLOOP_PDK_ROOT_HOST") or "/root/chiploop-backend/backend/pdk"
-    run_tag = f"cts_{workflow_id}"
+    explicit = state.get("run_tag") or state.get("digital_run_tag")
+    wf_name = state.get("workflow_name") or state.get("workflow_type") or state.get("flow_name") or "digital"
+    flow_run_tag = explicit or f"{wf_name}_{workflow_id}"
+    state["digital_run_tag"] = flow_run_tag
+    run_tag = flow_run_tag
+
+    run_work_dir = state.get("digital_run_work_dir") or os.path.join(workflow_dir, "digital", "run_work")
+    _ensure(run_work_dir)
+    state["digital_run_work_dir"] = run_work_dir
+
+    work_stage_dir = os.path.join(run_work_dir, "cts")
+    _ensure(work_stage_dir)
 
     run_sh = f"""#!/usr/bin/env bash
 set -euo pipefail
 export OPENLANE_NUM_CORES={DEFAULT_NUM_CORES}
-docker run --rm \\
-  -v "{pdk_root_host}":/pdk \\
-  -v "$(pwd)":/work \\
-  -e PDK={pdk_variant} \\
-  -e PDK_ROOT=/pdk \\
-  {image} \\
-  bash -lc 'set -e; cd /work && openlane --flow Classic --run-tag {run_tag} --to OpenROAD.CTS config.json'
+
+docker run --rm \
+  -v "{pdk_root_host}":/pdk \
+  -v "{run_work_dir}":/work \
+  -e PDK={pdk_variant} \
+  -e PDK_ROOT=/pdk \
+  {image} \
+  bash -lc 'set -e; cd /work && openlane --flow Classic --run-tag {run_tag} --to OpenROAD.CTS cts/config.json'
+
 """
     run_sh_path = os.path.join(stage_dir, "run.sh")
     _write(run_sh_path, run_sh); os.chmod(run_sh_path, 0o755)

@@ -131,7 +131,7 @@ def run_agent(state: dict) -> dict:
     )
     top_module = str(top_module).strip() or "top"
 
-
+    state["design_name"] = top_module
     # ---------- SDC (single source of truth) ----------
 
     upstream_sdc = os.path.join(workflow_dir, "digital", "constraints", "top.sdc")
@@ -196,7 +196,11 @@ def run_agent(state: dict) -> dict:
 
     # Runs folder inside stage_dir
     # OpenLane2 will create a "runs/<tag>" directory under CWD by default.
-    run_tag = f"synth_{workflow_id}"
+    explicit = state.get("run_tag") or state.get("digital_run_tag")
+    wf_name = state.get("workflow_name") or "digital"
+    run_tag = explicit or f"{wf_name}_{workflow_id}"
+    state["digital_run_tag"] = run_tag
+
 
     run_sh_path = os.path.join(stage_dir, "run.sh")
     run_sh = f"""#!/usr/bin/env bash

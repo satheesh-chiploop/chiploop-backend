@@ -143,6 +143,17 @@ def run_agent(state: dict) -> dict:
 
     cfg["VERILOG_FILES"] = [f"netlist/{os.path.basename(p)}" for p in stage_netlists]
 
+    # ---- Copy inputs into shared workspace for execution ----
+    work_constraints_dir = os.path.join(work_stage_dir, "constraints")
+    _ensure_dir(work_constraints_dir)
+    shutil.copy2(stage_sdc, os.path.join(work_constraints_dir, "top.sdc"))
+
+    work_netlist_dir = os.path.join(work_stage_dir, "netlist")
+    _ensure_dir(work_netlist_dir)
+    for p in stage_netlists:
+        shutil.copy2(os.path.join(netlist_dir, os.path.basename(p)),
+                     os.path.join(work_netlist_dir, os.path.basename(p)))
+
     spec_dir = os.path.join(workflow_dir, "spec")
     spec_jsons = sorted(glob.glob(os.path.join(spec_dir, "*_spec.json")))
     spec = _read_json(spec_jsons[0]) if spec_jsons else {}
@@ -166,8 +177,11 @@ def run_agent(state: dict) -> dict:
 
     cfg["DESIGN_NAME"] = top_module
 
-   
+    # Write execution config into shared workspace
+    exec_config_path = os.path.join(work_stage_dir, "config.json")
+    _write_text(exec_config_path, json.dumps(cfg, indent=2))
 
+    # Also keep a copy in stage_dir for your artifact contract/debugging
     config_path = os.path.join(stage_dir, "config.json")
     _write_text(config_path, json.dumps(cfg, indent=2))
 
@@ -177,7 +191,23 @@ def run_agent(state: dict) -> dict:
     pdk_variant = state.get("pdk_variant") or DEFAULT_PDK_VARIANT
     openlane_image = state.get("openlane_image") or DEFAULT_OPENLANE_IMAGE
     pdk_root_host = os.getenv("CHIPLOOP_PDK_ROOT_HOST") or "/root/chiploop-backend/backend/pdk"
-    run_tag = f"floorplan_{workflow_id}"
+
+    # -------------------------------------------------------
+    # Shared OpenLane run workspace + run tag (generic)
+    # -------------------------------------------------------
+    explicit = state.get("run_tag") or state.get("digital_run_tag")
+    wf_name = state.get("workflow_name") or state.get("workflow_type") or state.get("flow_name") or "digital"
+    flow_run_tag = explicit or f"{wf_name}_{workflow_id}"
+    state["digital_run_tag"] = flow_run_tag
+    run_tag = flow_run_tag
+
+    run_work_dir = state.get("digital_run_work_dir") or os.path.join(workflow_dir, "digital", "run_work")
+    _ensure_dir(run_work_dir)
+    state["digital_run_work_dir"] = run_work_dir
+
+    work_stage_dir = os.path.join(run_work_dir, "floorplan")
+    _ensure_dir(work_stage_dir)
+
 
     run_sh = f"""#!/usr/bin/env bash
 set -euo pipefail
@@ -189,13 +219,15 @@ echo "WORKDIR=/work"
 
 export OPENLANE_NUM_CORES={DEFAULT_NUM_CORES}
 
-docker run --rm \\
-  -v "{pdk_root_host}":/pdk \\
-  -v "$(pwd)":/work \\
-  -e PDK={pdk_variant} \\
-  -e PDK_ROOT=/pdk \\
-  {openlane_image} \\
-  bash -lc 'set -e; echo "PDK listing:"; ls -la /pdk | head -n 50; cd /work && openlane --flow Classic --run-tag {run_tag} --to OpenROAD.Floorplan config.json'
+docker run --rm \
+  -v "{pdk_root_host}":/pdk \
+  -v "{run_work_dir}":/work \
+  -e PDK={pdk_variant} \
+  -e PDK_ROOT=/pdk \
+  {openlane_image} \
+  bash -lc 'set -e; cd /work && openlane --flow Classic --run-tag {run_tag} --to OpenROAD.Floorplan floorplan/config.json'
+
+
 """
     run_sh_path = os.path.join(stage_dir, "run.sh")
     _write_text(run_sh_path, run_sh)
