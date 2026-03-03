@@ -22,8 +22,8 @@ def _run(cmd, cwd):
     out, _ = p.communicate()
     return p.returncode, out
 
-def _latest_run(stage_dir):
-    runs = os.path.join(stage_dir, "runs")
+def _latest_run(run_work_dir):
+    runs = os.path.join(run_work_dir, "runs")
     if not os.path.isdir(runs): return None
     ds = [os.path.join(runs, d) for d in os.listdir(runs) if os.path.isdir(os.path.join(runs, d))]
     if not ds: return None
@@ -106,18 +106,7 @@ def run_agent(state: dict) -> dict:
     config_path = os.path.join(stage_dir, "config.json")
     _write(config_path, json.dumps(cfg, indent=2))
 
-    exec_config_path = os.path.join(work_stage_dir, "config.json")
-    _write(exec_config_path, json.dumps(cfg, indent=2))
 
-    work_constraints_dir = os.path.join(work_stage_dir, "constraints")
-    _ensure(work_constraints_dir)
-    shutil.copy2(stage_sdc, os.path.join(work_constraints_dir, "top.sdc"))
-
-    work_netlist_dir = os.path.join(work_stage_dir, "netlist")
-    _ensure(work_netlist_dir)
-    for p in stage_netlists:
-        shutil.copy2(os.path.join(netlist_dir, os.path.basename(p)),
-                     os.path.join(work_netlist_dir, os.path.basename(p)))
 
     pdk_variant = state.get("pdk_variant") or DEFAULT_PDK_VARIANT
     image = state.get("openlane_image") or DEFAULT_OPENLANE_IMAGE
@@ -134,6 +123,19 @@ def run_agent(state: dict) -> dict:
 
     work_stage_dir = os.path.join(run_work_dir, "cts")
     _ensure(work_stage_dir)
+
+    exec_config_path = os.path.join(work_stage_dir, "config.json")
+    _write(exec_config_path, json.dumps(cfg, indent=2))
+
+    work_constraints_dir = os.path.join(work_stage_dir, "constraints")
+    _ensure(work_constraints_dir)
+    shutil.copy2(stage_sdc, os.path.join(work_constraints_dir, "top.sdc"))
+
+    work_netlist_dir = os.path.join(work_stage_dir, "netlist")
+    _ensure(work_netlist_dir)
+    for p in stage_netlists:
+        shutil.copy2(os.path.join(netlist_dir, os.path.basename(p)),
+                     os.path.join(work_netlist_dir, os.path.basename(p)))
 
     run_sh = f"""#!/usr/bin/env bash
 set -euo pipefail
@@ -155,7 +157,7 @@ docker run --rm \
     log_path = os.path.join(logs_dir, "openlane_cts.log")
     _write(log_path, out)
 
-    latest = _latest_run(stage_dir)
+    latest = _latest_run(run_work_dir)
     metrics = _copy_metrics(latest, stage_dir)
     primary_def = _copy_def(latest, stage_dir)
 

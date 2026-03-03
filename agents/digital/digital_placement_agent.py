@@ -38,8 +38,8 @@ def _run(cmd: list[str], cwd: str) -> tuple[int, str]:
     return p.returncode, out
 
 
-def _latest_run_dir(stage_dir: str) -> str | None:
-    runs_dir = os.path.join(stage_dir, "runs")
+def _latest_run_dir(run_work_dir: str) -> str | None:
+    runs_dir = os.path.join(run_work_dir, "runs")
     if not os.path.isdir(runs_dir):
         return None
     dirs = [os.path.join(runs_dir, d) for d in os.listdir(runs_dir) if os.path.isdir(os.path.join(runs_dir, d))]
@@ -150,15 +150,6 @@ def run_agent(state: dict) -> dict:
     exec_config_path = os.path.join(work_stage_dir, "config.json")
     _write_text(exec_config_path, json.dumps(cfg, indent=2))
 
-    work_constraints_dir = os.path.join(work_stage_dir, "constraints")
-    _ensure_dir(work_constraints_dir)
-    shutil.copy2(stage_sdc, os.path.join(work_constraints_dir, "top.sdc"))
-
-    work_netlist_dir = os.path.join(work_stage_dir, "netlist")
-    _ensure_dir(work_netlist_dir)
-    for p in stage_netlists:
-        shutil.copy2(os.path.join(netlist_dir, os.path.basename(p)),
-                     os.path.join(work_netlist_dir, os.path.basename(p)))
 
     # ---- Docker/run.sh ----
     pdk_variant = state.get("pdk_variant") or DEFAULT_PDK_VARIANT
@@ -177,6 +168,16 @@ def run_agent(state: dict) -> dict:
 
     work_stage_dir = os.path.join(run_work_dir, "place")
     _ensure_dir(work_stage_dir)
+
+    work_constraints_dir = os.path.join(work_stage_dir, "constraints")
+    _ensure_dir(work_constraints_dir)
+    shutil.copy2(stage_sdc, os.path.join(work_constraints_dir, "top.sdc"))
+
+    work_netlist_dir = os.path.join(work_stage_dir, "netlist")
+    _ensure_dir(work_netlist_dir)
+    for p in stage_netlists:
+        shutil.copy2(os.path.join(netlist_dir, os.path.basename(p)),
+                     os.path.join(work_netlist_dir, os.path.basename(p)))
 
 
     run_sh = f"""#!/usr/bin/env bash
@@ -207,7 +208,7 @@ docker run --rm \
     log_path = os.path.join(logs_dir, "openlane_place.log")
     _write_text(log_path, out)
 
-    latest = _latest_run_dir(stage_dir)
+    latest = _latest_run_dir(run_work_dir)
     metrics_path = _copy_metrics(latest, stage_dir)
     def_path = _copy_primary_def(latest, stage_dir)
 
