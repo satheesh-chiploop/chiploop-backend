@@ -1571,6 +1571,58 @@ class DigitalArch2RTLAppIn(BaseModel):
     toggles: Optional[Dict[str, bool]] = None  # {"gen_regmap":true, "gen_upf_lite":false, "gen_packaging":true}
 
 
+class DigitalRTLSourceIn(BaseModel):
+    """
+    Used by apps that can START from existing RTL (skip Arch2RTL).
+    """
+    rtl_source_mode: Optional[str] = None  # "from_arch2rtl" | "paste" | "repo_path"
+    from_workflow_id: Optional[str] = None
+    repo_path: Optional[str] = None
+    pasted_rtl_files: Optional[Any] = None  # [{path, content}]
+
+
+class DigitalArch2SynthesisAppIn(DigitalArch2RTLAppIn, DigitalRTLSourceIn):
+    """
+    Arch2Synthesis = Arch2RTL + optional RTL source + synthesis knobs + stage control
+    """
+    # synthesis knobs
+    foundry: Optional[str] = None          # e.g., "sky130"
+    pdk: Optional[str] = None              # e.g., "sky130A"
+    toolchain: Optional[str] = None        # e.g., "openlane2"
+    target_frequency_mhz: Optional[float] = None
+    constraints_sdc: Optional[str] = None
+
+    # stage control
+    start_stage: Optional[str] = "arch2rtl"   # "arch2rtl" | "synth"
+    stop_stage: Optional[str] = "synth"
+
+
+class DigitalArch2TapeoutAppIn(DigitalArch2RTLAppIn, DigitalRTLSourceIn):
+    """
+    Arch2Tapeout = Arch2RTL + optional RTL source + synthesis + impl knobs + stage control
+    Supports:
+      - arch2rtl -> tapeout
+      - synth -> tapeout (RTL provided)
+      - floorplan -> tapeout (future: if you later add netlist/source hooks)
+    """
+    # foundry/tool knobs
+    foundry: Optional[str] = None
+    pdk: Optional[str] = None
+    toolchain: Optional[str] = None
+    target_frequency_mhz: Optional[float] = None
+    constraints_sdc: Optional[str] = None
+
+    # implementation knobs
+    effort: Optional[str] = "balanced"     # "fast" | "balanced" | "signoff"
+    run_fill: Optional[bool] = True
+    run_drc: Optional[bool] = True
+    run_lvs: Optional[bool] = True
+
+    # stage control (lets users do synth->gds or floorplan->gds later)
+    start_stage: Optional[str] = "arch2rtl"   # "arch2rtl" | "synth" | "floorplan"
+    stop_stage: Optional[str] = "tapeout"
+
+
 class DigitalDQAAppIn(BaseModel):
     # RTL source options
     rtl_source_mode: Optional[str] = None  # "from_arch2rtl" | "paste" | "repo_path"
@@ -1831,6 +1883,47 @@ async def apps_arch2rtl_run(request: Request, background_tasks: BackgroundTasks,
         artifact_dir,
         "arch2rtl",
         "Digital_Arch2RTL",
+        payload.dict(),
+    )
+
+    return {"ok": True, "workflow_id": workflow_id, "run_id": run_id}
+
+@app.post("/apps/arch2synthesis/run")
+async def apps_arch2synthesis_run(request: Request, background_tasks: BackgroundTasks, payload: DigitalArch2SynthesisAppIn):
+    user_id = _require_user_id(request)
+    workflow_id, run_id, base_dir = _create_app_workflow_and_run(user_id, "App: Arch2Synthesis", "digital")
+    artifact_dir = os.path.join(base_dir, "arch2synthesis")
+    os.makedirs(artifact_dir, exist_ok=True)
+
+    background_tasks.add_task(
+        execute_digital_app_background,
+        workflow_id,
+        run_id,
+        user_id,
+        artifact_dir,
+        "arch2synthesis",
+        "Digital_Arch2Synthesis",
+        payload.dict(),
+    )
+
+    return {"ok": True, "workflow_id": workflow_id, "run_id": run_id}
+
+
+@app.post("/apps/arch2tapeout/run")
+async def apps_arch2tapeout_run(request: Request, background_tasks: BackgroundTasks, payload: DigitalArch2TapeoutAppIn):
+    user_id = _require_user_id(request)
+    workflow_id, run_id, base_dir = _create_app_workflow_and_run(user_id, "App: Arch2Tapeout", "digital")
+    artifact_dir = os.path.join(base_dir, "arch2tapeout")
+    os.makedirs(artifact_dir, exist_ok=True)
+
+    background_tasks.add_task(
+        execute_digital_app_background,
+        workflow_id,
+        run_id,
+        user_id,
+        artifact_dir,
+        "arch2tapeout",
+        "Digital_Arch2Tapeout",
         payload.dict(),
     )
 
