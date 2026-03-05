@@ -476,6 +476,8 @@ VALIDATION_AGENT_FUNCTIONS: Dict[str, Any] = {
 from agents.system.system_workflow_agent import run_agent as system_workflow_agent
 from agents.system.system_cosim_integration_agent import run_agent as system_cosim_integration_agent
 from agents.system.system_iss_bridge_agent import run_agent as system_iss_bridge_agent
+from agents.system.system_integration_intent_agent import run_agent as system_integration_intent
+from agents.system.system_top_assembly_agent import run_agent as system_top_assembly
 
 SYSTEM_AGENT_FUNCTIONS: Dict[str,Any] = {
     "Digital Spec Agent": digital_spec_agent,
@@ -585,6 +587,8 @@ SYSTEM_AGENT_FUNCTIONS: Dict[str,Any] = {
     "System Workflow Agent": system_workflow_agent,  
     "System CoSim Integration Agent": system_cosim_integration_agent,
     "System ISS Bridge Agent": system_iss_bridge_agent,  
+    "System Integration Intent Agent": system_integration_intent,
+    "System Top Assembly Agent": system_top_assembly,
 }
 
 
@@ -1548,6 +1552,16 @@ async def apps_validation_run(request: Request, background_tasks: BackgroundTask
     )
 
     return {"ok": True, "workflow_id": workflow_id, "run_id": run_id}
+
+
+# ======================================================================
+#  SYSTEM APPS ( System_End2End, System_PD, System_Firmware, System_Sim)
+# ======================================================================
+
+class SystemAppIn(BaseModel):
+    digital_spec: Dict[str, Any]
+    analog_spec: Dict[str, Any]
+    soc_integration_spec: Dict[str, Any]
 
 
 
@@ -4433,6 +4447,58 @@ def _start_embedded_app(
     return {"ok": True, "workflow_id": workflow_id, "run_id": run_id}
 
 
+def _start_system_app(background_tasks, request, payload, app_name, template_workflow_name):
+    user_id = _require_user_id(request)
+
+    workflow_id, run_id, base_dir = _create_app_workflow_and_run(
+        user_id,
+        app_name,
+        "system"
+    )
+
+    artifact_dir = os.path.join(base_dir, "system")
+    os.makedirs(artifact_dir, exist_ok=True)
+
+    append_log_workflow(workflow_id, f"🚀 Starting {app_name}", phase="start")
+    append_log_run(run_id, f"🚀 Starting {app_name}")
+
+    background_tasks.add_task(
+        execute_system_app_background,
+        workflow_id,
+        run_id,
+        user_id,
+        artifact_dir,
+        template_workflow_name,
+        payload.dict(),
+    )
+
+    return {"ok": True, "workflow_id": workflow_id, "run_id": run_id}
+
+def execute_system_app_background(
+    workflow_id,
+    run_id,
+    user_id,
+    artifact_dir,
+    template_workflow_name,
+    payload
+):
+    try:
+
+        append_log_run(run_id, f"Running workflow {template_workflow_name}")
+
+        run_workflow_template(
+            template_workflow_name,
+            workflow_id,
+            run_id,
+            user_id,
+            artifact_dir,
+            payload
+        )
+
+        append_log_run(run_id, "✅ System workflow completed")
+
+    except Exception as e:
+        append_log_run(run_id, f"❌ System workflow failed: {e}")
 # ---------------- Embedded app endpoints ----------------
 
 @app.post("/apps/embedded/hal/run")
@@ -4464,5 +4530,64 @@ async def apps_embedded_run(request: Request, background_tasks: BackgroundTasks,
     return _start_embedded_app(background_tasks, request, payload, "App: Embedded Run", "Embedded_Run")
 
 
+# ---------------- System App endpoints ----------------
 
+@app.post("/apps/system/end2end/run")
+async def apps_system_end2end(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    payload: SystemAppIn
+):
+    return _start_system_app(
+        background_tasks,
+        request,
+        payload,
+        "App: System End2End",
+        "System_End2End"
+    )
+
+
+@app.post("/apps/system/sim/run")
+async def apps_system_sim(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    payload: SystemAppIn
+):
+    return _start_system_app(
+        background_tasks,
+        request,
+        payload,
+        "App: System Simulation",
+        "System_Sim"
+    )
+
+
+@app.post("/apps/system/pd/run")
+async def apps_system_pd(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    payload: SystemAppIn
+):
+    return _start_system_app(
+        background_tasks,
+        request,
+        payload,
+        "App: System PD",
+        "System_PD"
+    )
+
+
+@app.post("/apps/system/firmware/run")
+async def apps_system_firmware(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    payload: SystemAppIn
+):
+    return _start_system_app(
+        background_tasks,
+        request,
+        payload,
+        "App: System Firmware",
+        "System_Firmware"
+    )
 

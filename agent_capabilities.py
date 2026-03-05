@@ -1015,6 +1015,29 @@ AGENT_CAPABILITIES = {
         "description": "Generates scaffolding for an ISS<->RTL bridge (MMIO/IRQ contract + Verilator harness skeleton + run notes).",
     },
 
+    "System Integration Intent Agent": {
+        "description": "Generates SoC integration manifest describing how digital subsystem and analog blocks connect at system level.",
+        "inputs": [
+            "system_integration_description",
+            "digital_rtl_signatures",
+            "analog_rtl_signatures"
+        ],
+        "outputs": [
+            "system/integrate/system_integration_intent.json"
+        ]
+    },
+
+    "System Top Assembly Agent": {
+        "description": "Generates SoC top modules for simulation and physical design using integration manifest.",
+        "inputs": [
+            "system_integration_intent"
+        ],
+        "outputs": [
+            "system/integrate/soc_top_sim.sv",
+            "system/integrate/soc_top_phys.sv"
+        ]
+    },
+
     # -------------------------
     # Extended / optional digital flow agents
     # -------------------------
