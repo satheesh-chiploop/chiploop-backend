@@ -25,7 +25,15 @@ def run_agent(state: dict) -> dict:
     workflow_dir = state.get("workflow_dir", f"backend/workflows/{workflow_id}")
     os.makedirs(workflow_dir, exist_ok=True)
 
-    user_prompt = state.get("spec", "").strip()
+    user_prompt = (
+        state.get("spec")
+        or state.get("digital_spec")
+        or state.get("digital_spec_text")
+        or state.get("soc_spec")
+        or state.get("system_spec")
+        or state.get("description")
+        or ""
+    ).strip()
     if not user_prompt:
         state["status"] = "❌ No spec provided"
         return state
@@ -364,6 +372,7 @@ for all modules, enclosed using these exact delimiters: for each module , user t
         "workflow_dir": workflow_dir,
         "workflow_id": workflow_id,
     })
+    state["digital_spec_json"] = spec_json_path
 
     print(f"✅ Completed Spec Agent for workflow {workflow_id}")
     return state
