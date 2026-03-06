@@ -1558,12 +1558,13 @@ async def apps_validation_run(request: Request, background_tasks: BackgroundTask
 #  SYSTEM APPS ( System_End2End, System_PD, System_Firmware, System_Sim)
 # ======================================================================
 
+
+
 class SystemAppIn(BaseModel):
-    digital_spec: Dict[str, Any]
-    analog_spec: Dict[str, Any]
-    soc_integration_spec: Dict[str, Any]
-
-
+    project_name: Optional[str] = None
+    digital_spec_text: str
+    analog_spec_text: str
+    soc_integration_spec_text: str
 
 # ==========================================================
 # ✅ DIGITAL APPS (Arch2RTL / DQA / Verify) — same pattern as Validation Run App
