@@ -125,7 +125,8 @@ def run_agent(state: dict) -> dict:
         "note": "This agent provides intent-level CDC screening. It is not a replacement for signoff CDC tools."
     }
 
-    save_text_artifact_and_record(workflow_id, agent_name, "digital", "cdc_analysis_report.json", json.dumps(report, indent=2))
+    save_text_artifact_and_record(workflow_id, agent_name, "digital", "cdc_findings.json", json.dumps(report, indent=2))
+    save_text_artifact_and_record(workflow_id, agent_name, "digital", "cdc_report.md", json.dumps(report, indent=2))
     save_text_artifact_and_record(workflow_id, agent_name, "digital", "digital_cdc_analysis_agent.log",
                                   open(log_path, "r", encoding="utf-8").read())
 

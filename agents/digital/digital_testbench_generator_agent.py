@@ -318,7 +318,16 @@ def run_agent(state: dict) -> dict:
     with open(log_path, "w", encoding="utf-8") as f:
         f.write("Testbench Generator Agent Log\n")
 
-    spec_path = state.get("spec_json") or os.path.join(workflow_dir, "digital", "spec.json")
+
+    spec_path = state.get("spec_json")
+
+    if not spec_path:
+       for root, _, files in os.walk(workflow_dir):
+            for fn in files:
+                if fn.endswith("_spec.json"):
+                    spec_path = os.path.join(root, fn)
+                    break
+                    
     spec = _safe_read_json(spec_path)
     rtl_files = state.get("rtl_files") or _collect_rtl_files(workflow_dir)
     top = _pick_top_module(spec, rtl_files, state.get("top_module"))

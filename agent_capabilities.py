@@ -46,12 +46,16 @@ AGENT_CAPABILITIES = {
         "outputs": ["regmap.json", "regmap.md", "digital_register_map_agent.log"],
         "description": "Generates CSR/register map definitions: address map, fields, access types (RW/RO/WO), reset values, and side effects.",
     },
-
+    
     "Digital Clock & Reset Architecture Agent": {
         "domain": "digital",
         "inputs": ["*_spec.json", "digital_architecture.json"],
-        "outputs": ["clock_reset_architecture.json", "clock_reset_architecture_agent.log","digital/constraints/top.sdc"],
-        "description": "Defines clock/reset intent: clock domains, reset strategies, and CDC-aware intent (no implementation).",
+        "outputs": [
+            "clock_reset_arch_intent.json",
+            "digital_clock_reset_arch_agent.log",
+            "digital/constraints/top.sdc"
+        ],
+        "description": "Defines clock/reset intent: clock domains, reset strategies, CDC-aware intent, and generates top.sdc for downstream digital implementation flow.",
     },
 
     "Digital RTL Agent": {
@@ -74,17 +78,19 @@ AGENT_CAPABILITIES = {
 
     "Digital CDC Analysis Agent": {
         "domain": "digital",
-        "inputs": ["*_spec.json", "*.v", "*.sv", "clock_reset_architecture.json"],
-        "outputs": ["cdc_report.md", "cdc_findings.json", "cdc_analysis_agent.log"],
-        "description": "Analyzes clock-domain crossings and flags required synchronizers/handshakes (intent-level, not tool-specific implementation).",
+        "inputs": ["*_spec.json", "*.v", "*.sv", "clock_reset_arch_intent.json"],
+        "outputs": ["cdc_report.md", "cdc_findings.json", "digital_cdc_analysis_agent.log"],
+        "description": "Analyzes clock-domain crossings and flags required synchronizers/handshakes using clock/reset intent when available.",
     },
 
     "Digital Reset Integrity Agent": {
         "domain": "digital",
-        "inputs": ["*_spec.json", "*.v", "*.sv", "clock_reset_architecture.json"],
-        "outputs": ["reset_integrity_report.md", "reset_integrity_findings.json", "reset_integrity_agent.log"],
+        "inputs": ["*_spec.json", "*.v", "*.sv", "clock_reset_arch_intent.json"],
+        "outputs": ["reset_integrity_report.md", "reset_integrity_findings.json", "digital_reset_integrity_agent.log"],
         "description": "Checks reset safety: async/sync usage patterns, deassertion concerns, reset-domain interactions, and common pitfalls.",
     },
+
+ 
 
     "Digital RTL Refactoring Agent": {
         "domain": "digital",
@@ -105,16 +111,23 @@ AGENT_CAPABILITIES = {
     # -------------------------
     "Digital Testbench Generator Agent": {
         "domain": "digital",
-        "inputs": ["*_spec.json", "*.v", "*.sv", "digital_architecture.json", "digital_microarchitecture.json", "regmap.json", "clock_reset_architecture.json"],
-        # Generated/uploaded by the agent into vv/tb (filenames are stable except test_<top>.py)
+        "inputs": [
+            "*_spec.json",
+            "*.v",
+            "*.sv",
+            "digital_architecture.json",
+            "digital_microarchitecture.json",
+            "regmap.json",
+            "clock_reset_arch_intent.json"
+        ],
         "outputs": [
             "vv/tb/test_*.py",
             "vv/tb/Makefile",
             "vv/tb/README.md",
             "vv/tb/tb_generation_report.json",
-            "testbench_generator_agent.log",
+            "vv/testbench_generator_agent.log",
         ],
-        "description": "Generates Cocotb testbench skeletons (directed + constrained-random stub) and a Verilator-friendly Makefile using spec-derived clocks/resets/ports.",
+        "description": "Generates Cocotb testbench skeletons and a Verilator-friendly Makefile using auto-discovered spec, RTL, clocks, and resets.",
         "requires": ["cocotb", "verilator"],
     },
 
@@ -1016,16 +1029,29 @@ AGENT_CAPABILITIES = {
     },
 
     "System Integration Intent Agent": {
-        "description": "Generates SoC integration manifest describing how digital subsystem and analog blocks connect at system level.",
+        "domain": "system",
         "inputs": [
-            "system_integration_description",
-            "digital_rtl_signatures",
-            "analog_rtl_signatures"
+           "system_integration_description",
+           "soc_integration_description",
+           "integration_description",
+           "digital_rtl_signatures",
+           "rtl_signatures",
+           "integrate/rtl_signatures.json",
+           "analog_rtl_signatures",
+           "analog_signatures",
+           "analog_behavioral_module(optional)",
+           "analog_macro_module(optional)",
+           "top_module(optional)",
+           "soc_top_name(optional)"
         ],
         "outputs": [
-            "system/integrate/system_integration_intent.json"
-        ]
+           "system/integrate/system_integration_intent.json",
+           "system/integrate/system_integration_intent_raw.txt"
+        ],
+        "description": "Generates a strict SoC integration manifest for top assembly. Supports state-provided or artifact-discovered RTL signatures and sim/phys analog module overrides."
     },
+
+ 
 
     "System Top Assembly Agent": {
         "description": "Generates SoC top modules for simulation and physical design using integration manifest.",

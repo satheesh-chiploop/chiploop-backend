@@ -116,7 +116,19 @@ def run_agent(state: dict) -> dict:
 
     # Signatures (best-effort)
     # digital/analog signature agents may store differently; accept multiple keys.
+
     digital_sigs = state.get("digital_rtl_signatures") or state.get("rtl_signatures") or {}
+
+    if not digital_sigs:
+        for root, _, files in os.walk(workflow_dir):
+            if "rtl_signatures.json" in files:
+                p = os.path.join(root, "rtl_signatures.json")
+                try:
+                    with open(p, "r", encoding="utf-8") as f:
+                       digital_sigs = json.load(f)
+                except Exception:
+                    pass
+                    
     analog_sigs = state.get("analog_rtl_signatures") or state.get("analog_signatures") or {}
 
     # Optional hints from upstream analog agents

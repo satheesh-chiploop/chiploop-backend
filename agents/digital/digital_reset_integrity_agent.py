@@ -102,9 +102,17 @@ def run_agent(state: dict) -> dict:
         "note": "Heuristic scan only; use signoff reset/CDC checks in enterprise flows when available."
     }
 
-    save_text_artifact_and_record(workflow_id, agent_name, "digital", "reset_integrity_report.json", json.dumps(report, indent=2))
+    save_text_artifact_and_record(workflow_id, agent_name, "digital", "reset_integrity_findings.json", json.dumps(report, indent=2))
+
+    save_text_artifact_and_record(
+        workflow_id,
+        agent_name,
+        "digital",
+        "reset_integrity_report.md",
+        json.dumps(report, indent=2),
+    )
     save_text_artifact_and_record(workflow_id, agent_name, "digital", "digital_reset_integrity_agent.log",
                                   open(log_path, "r", encoding="utf-8").read())
 
-    state["reset_integrity_report_path"] = os.path.join(workflow_dir, "digital", "reset_integrity_report.json")
+    state["reset_integrity_report_path"] = os.path.join(workflow_dir, "digital", "reset_integrity_findings.json")
     return state
