@@ -164,3 +164,33 @@ When replacing the implementation:
 3. Only modify content between `.SUBCKT` and `.ENDS`
 
 ## Example Integration
+.SUBCKT {block} {pin_list}
+
+XCORE ... analog_core
+
+.ENDS {block}
+
+
+"""
+
+
+
+
+    readme_path = os.path.join(netlist_dir, "README.md")
+
+    with open(readme_path, "w") as f:
+        f.write(readme)
+
+    save_text_artifact_and_record(
+        workflow_id,
+        "Analog Netlist Scaffold Agent",
+        "analog/netlist",
+        filename,
+        netlist,
+    )
+
+    state["analog_netlist"] = path
+
+    print("✅ Netlist scaffold generated")
+
+    return state
