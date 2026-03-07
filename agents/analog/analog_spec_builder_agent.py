@@ -54,6 +54,13 @@ Datasheet:
 
     block = spec.get("block_name", "analog_block")
 
+
+    
+    # 🔧 Canonical naming rule
+    # behavioral model module name must always be <block>_model
+    spec["block_name"] = block
+    spec["module_name"] = f"{block}_model"
+
     spec_path = os.path.join(spec_dir, "spec_normalized.json")
 
     with open(spec_path, "w") as f:

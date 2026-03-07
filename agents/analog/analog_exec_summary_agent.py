@@ -43,8 +43,30 @@ def run_agent(state: dict) -> dict:
     spec = state.get("analog_spec") or {}
     req = _get_requirements(state)
 
+
+
     sim_metrics = state.get("analog_sim_metrics") or {}
     beh_metrics = state.get("analog_behavioral_metrics") or {}
+
+    workflow_dir = state.get("workflow_dir", f"backend/workflows/{workflow_id}")
+
+    if not sim_metrics:
+        metrics_path = os.path.join(workflow_dir, "analog", "sim", "results", "metrics.json")
+        if os.path.exists(metrics_path):
+            try:
+                with open(metrics_path) as f:
+                    sim_metrics = json.load(f)
+            except Exception:
+                sim_metrics = {}
+
+    if not beh_metrics:
+        beh_metrics_path = os.path.join(workflow_dir, "analog", "behavioral", "metrics.json")
+        if os.path.exists(beh_metrics_path):
+            try:
+                with open(beh_metrics_path) as f:
+                    beh_metrics = json.load(f)
+            except Exception:
+                beh_metrics = {}
 
     delta = state.get("analog_delta_summary") or {}
     deltas = state.get("analog_deltas") or []
