@@ -63,16 +63,31 @@ def run_agent(state: dict) -> dict:
     lines.append(f"- Block: {block_name}")
     lines.append(f"- Module: {module_name}")
 
-    model_present = bool(state.get("analog_model_path")) or True
-    tb_present = bool(state.get("analog_tb_path")) or True
+    workflow_dir = state.get("workflow_dir", f"backend/workflows/{workflow_id}")
+
+    model_present = os.path.exists(os.path.join(workflow_dir, "analog", "model.sv"))
+    tb_present = any([
+        os.path.exists(os.path.join(workflow_dir, "analog", "behavioral", f"tb_{block_name}_behavioral.sv")),
+        os.path.exists(os.path.join(workflow_dir, "analog", "tb.sv")),
+    ])
+    netlist_present = any([
+        os.path.exists(os.path.join(workflow_dir, "analog", "netlist", f"{block_name}_top.sp")),
+        os.path.exists(os.path.join(workflow_dir, "analog", "netlist.sp")),
+    ])
+    sim_plan_present = os.path.exists(os.path.join(workflow_dir, "analog", "sim", "sim_plan.json"))
+    corr_present = os.path.exists(os.path.join(workflow_dir, "analog", "correlation", "delta_summary.json"))
+    abstract_present = os.path.exists(os.path.join(workflow_dir, "analog", "abstract", "macro.lef"))
+
     lines.append("")
     lines.append("## Artifact Presence")
     lines.append(f"- Behavioral model: {'present' if model_present else 'missing'}")
     lines.append(f"- Behavioral testbench: {'present' if tb_present else 'missing'}")
-    lines.append("- Netlist scaffold: analog/netlist/")
-    lines.append("- Simulation plan: analog/sim/")
-    lines.append("- Correlation: analog/correlation/")
-    lines.append("- Abstract views: analog/abstract/")
+    lines.append(f"- Netlist scaffold: {'present' if netlist_present else 'missing'}")
+    lines.append(f"- Simulation plan: {'present' if sim_plan_present else 'missing'}")
+    lines.append(f"- Correlation: {'present' if corr_present else 'missing'}")
+    lines.append(f"- Abstract views: {'present' if abstract_present else 'missing'}")
+    lines.append("")
+    
 
     # Compliance table
     lines.append("## Spec Compliance Table")

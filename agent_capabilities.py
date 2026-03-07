@@ -633,6 +633,8 @@ AGENT_CAPABILITIES = {
         "description": "Creates a spec-driven SPICE interface scaffold using the normalized analog spec. No block-type assumptions are hardcoded.",
     },
 
+
+
     "Analog Behavioral Model Agent": {
         "domain": "analog",
         "inputs": ["analog/spec/spec_normalized.json", "analog/spec.json"],
@@ -663,42 +665,22 @@ AGENT_CAPABILITIES = {
             "analog/netlist/<block_name>_top.sp",
         ],
         "outputs": [
-            # legacy
             "analog/sim_plan.json",
             "analog/run_deck.sp",
-
-            # new canonical scaffold
             "analog/sim/sim_plan.json",
             "analog/sim/env.sh",
             "analog/sim/run_all.sh",
-
             "analog/sim/ngspice/run_all.sh",
-            "analog/sim/ngspice/decks/dc_op.sp",
-            "analog/sim/ngspice/decks/dc_sweep_vin.sp",
-            "analog/sim/ngspice/decks/ac_loopgain.sp",
-            "analog/sim/ngspice/decks/ac_psrr.sp",
-            "analog/sim/ngspice/decks/tran_loadstep.sp",
-
+            "analog/sim/ngspice/decks/*.sp",
             "analog/sim/spectre/run_all.sh",
-            "analog/sim/spectre/decks/dc_op.sp",
-            "analog/sim/spectre/decks/dc_sweep_vin.sp",
-            "analog/sim/spectre/decks/ac_loopgain.sp",
-            "analog/sim/spectre/decks/ac_psrr.sp",
-            "analog/sim/spectre/decks/tran_loadstep.sp",
-
+            "analog/sim/spectre/decks/*.sp",
             "analog/sim/hspice/run_all.sh",
-            "analog/sim/hspice/decks/dc_op.sp",
-            "analog/sim/hspice/decks/dc_sweep_vin.sp",
-            "analog/sim/hspice/decks/ac_loopgain.sp",
-            "analog/sim/hspice/decks/ac_psrr.sp",
-            "analog/sim/hspice/decks/tran_loadstep.sp",
-
+            "analog/sim/hspice/decks/*.sp",
             "analog/sim/parse/extract_metrics.py",
             "analog/sim/results/metrics.json",
         ],
-        "description": "Creates sweeps/corners/metrics plan AND runnable multi-simulator scaffold (ngspice/spectre/hspice) with bash runners + deck templates + metrics extraction stub.",
+        "description": "Creates a spec-driven multi-simulator analog simulation plan, runnable deck scaffold, and stub metrics extraction without hardcoded block-type assumptions.",
     },
-
 
 
     "Analog Behavioral Assertions Agent": {

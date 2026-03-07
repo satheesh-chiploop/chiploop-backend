@@ -1,19 +1,38 @@
+
+
+import os
 import json
 from utils.artifact_utils import save_text_artifact_and_record
 from agents.analog._analog_llm import llm_text, safe_json_load
+
+
+def _load_json_if_exists(path: str):
+    if path and os.path.exists(path):
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return {}
 
 
 def run_agent(state: dict) -> dict:
     agent_name = "Analog Correlation Agent"
     workflow_id = state.get("workflow_id")
     preview_only = bool(state.get("preview_only"))
+    workflow_dir = state.get("workflow_dir", f"backend/workflows/{workflow_id}") if workflow_id else None
 
-    spec = state.get("analog_spec") or {}
-    sim_plan = state.get("analog_sim_plan") or {}
-    sim_metrics = state.get("analog_sim_metrics") or {}
+    spec = state.get("analog_spec") or (
+        _load_json_if_exists(os.path.join(workflow_dir, "analog", "spec", "spec_normalized.json"))
+        if workflow_dir else {}
+    )
+    sim_plan = state.get("analog_sim_plan") or (
+        _load_json_if_exists(os.path.join(workflow_dir, "analog", "sim", "sim_plan.json"))
+        if workflow_dir else {}
+    )
+    sim_metrics = state.get("analog_sim_metrics") or (
+        _load_json_if_exists(os.path.join(workflow_dir, "analog", "sim", "results", "metrics.json"))
+        if workflow_dir else {}
+    )
     beh_metrics = state.get("analog_behavioral_metrics") or {}
 
-    # Ensure metrics dict structure to avoid downstream crashes
     if not isinstance(sim_metrics, dict):
         sim_metrics = {}
     if not isinstance(beh_metrics, dict):
@@ -22,6 +41,8 @@ def run_agent(state: dict) -> dict:
     if not workflow_id or not isinstance(spec, dict) or not spec:
         state["status"] = "❌ Missing workflow_id or analog_spec"
         return state
+
+
 
     prompt = f"""
 You are correlating a behavioral model vs SPICE netlist.
@@ -34,8 +55,8 @@ Given spec + sim plan + (optional) metrics, produce:
 Return ONLY JSON:
 {{
   "correlation_plan_md": "# Correlation Plan\\n...",
-  "metrics_compare": [{"metric":"metric_name","method":"dc|ac|tran|event","tolerance_pct":5}],
-  "deltas": [{"metric":"metric_name","beh":null,"spice":null,"delta":null,"status":"NA"}],
+  "metrics_compare": [{{"metric":"metric_name","method":"dc|ac|tran|event","tolerance_pct":5}}],
+  "deltas": [{{"metric":"metric_name","beh":null,"spice":null,"delta":null,"status":"NA"}}],
   "delta_summary": {{"overall":"unknown","top_risks":["..."]}},
   "report_md": "# Correlation Report\\n..."
 }}
@@ -84,5 +105,8 @@ Rules:
         save_text_artifact_and_record(workflow_id, agent_name, "analog", "metrics_compare.json", json.dumps(metrics_compare, indent=2))
         save_text_artifact_and_record(workflow_id, agent_name, "analog", "delta_summary.json", json.dumps(delta_summary, indent=2))
         save_text_artifact_and_record(workflow_id, agent_name, "analog", "correlation_report.md", report_md)
+
+    state["analog_correlation_plan_path"] = "analog/correlation/correlation_plan.md"
+    state["analog_delta_summary_path"] = "analog/correlation/delta_summary.json"
 
     return state
