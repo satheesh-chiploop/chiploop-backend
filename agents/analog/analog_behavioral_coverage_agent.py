@@ -49,9 +49,10 @@ def run_agent(state: dict) -> dict:
 You are defining coverage for analog behavioral validation.
 
 Coverage here means:
-- scenario coverage (modes, enable/disable, load_step, fault)
+- scenario coverage (mode changes, trigger/response, enable/disable, fault/error cases when applicable)
 - corner coverage (vdd/temp/process) using PDK-agnostic naming
-- sweep coverage classes (dc/ac/tran)
+- sweep coverage classes (dc/ac/tran) only as justified by the spec
+
 
 Return ONLY JSON:
 {{

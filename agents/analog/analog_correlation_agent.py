@@ -34,8 +34,8 @@ Given spec + sim plan + (optional) metrics, produce:
 Return ONLY JSON:
 {{
   "correlation_plan_md": "# Correlation Plan\\n...",
-  "metrics_compare": [{{"metric":"psrr_db_1khz","method":"ac","tolerance_pct":5}}],
-  "deltas": [{{"metric":"psrr_db_1khz","beh":null,"spice":null,"delta":null,"status":"NA"}}],
+  "metrics_compare": [{"metric":"metric_name","method":"dc|ac|tran|event","tolerance_pct":5}],
+  "deltas": [{"metric":"metric_name","beh":null,"spice":null,"delta":null,"status":"NA"}],
   "delta_summary": {{"overall":"unknown","top_risks":["..."]}},
   "report_md": "# Correlation Report\\n..."
 }}

@@ -86,15 +86,16 @@ Rules:
     if not notes:
         notes = "# Integration Notes\n\n(TBD)\n"
 
-    if not preview_only:
-        # Canonical scaffold path
+        if not preview_only:
         save_text_artifact_and_record(workflow_id, agent_name, "analog/abstract", "macro.lef", lef)
         save_text_artifact_and_record(workflow_id, agent_name, "analog/abstract", "macro_stub.lib", lib_stub or "")
         save_text_artifact_and_record(workflow_id, agent_name, "analog/abstract", "integration_notes.md", notes)
 
-        # Legacy mirror for compatibility
-        save_text_artifact_and_record(workflow_id, agent_name, "analog/abstracts", "macro.lef", lef)
-        save_text_artifact_and_record(workflow_id, agent_name, "analog/abstracts", "macro_stub.lib", lib_stub or "")
-        save_text_artifact_and_record(workflow_id, agent_name, "analog/abstracts", "integration_notes.md", notes)
+    state["analog_abstract_dir"] = "analog/abstract"
+    state["analog_macro_lef"] = "analog/abstract/macro.lef"
+    state["analog_macro_lib"] = "analog/abstract/macro_stub.lib"
+    state["analog_integration_notes"] = "analog/abstract/integration_notes.md"
+
+    return state
 
     return state

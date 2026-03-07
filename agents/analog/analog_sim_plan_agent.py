@@ -1,5 +1,4 @@
 import json
-import textwrap
 from utils.artifact_utils import save_text_artifact_and_record
 from agents.analog._analog_llm import llm_text, safe_json_load
 
@@ -8,24 +7,25 @@ def _bash_header() -> str:
     return "#!/usr/bin/env bash\nset -euo pipefail\n"
 
 
-def _flavor_run_all_script() -> str:
-    """
-    Generic runner used for ngspice/spectre/hspice folders.
-    Uses SIM_FLAVOR + SPICE_BIN and runs the deck templates in a best-effort way.
-    """
+def _flavor_run_all_script(deck_names) -> str:
+    deck_loop = "\n".join(
+        [f'for d in {" ".join(deck_names)}; do'] +
+        [
+            '  if [[ -f "${DECK_DIR}/${d}" ]]; then',
+            '    echo "  -> ${d}"',
+            '    "${SPICE_BIN}" -b "${DECK_DIR}/${d}" > "${OUT_DIR}/${d}.log" 2>&1 || true',
+            '  fi',
+            'done',
+        ]
+    )
     return _bash_header() + (
         'source "$(dirname "$0")/../env.sh"\n'
         'DECK_DIR="$(cd "$(dirname "$0")" && pwd)/decks"\n'
         'OUT_DIR="${ANALOG_ROOT}/sim/results/raw/${SIM_FLAVOR}"\n'
         'mkdir -p "${OUT_DIR}"\n'
         '\n'
-        'echo "[analog] Running ${SIM_FLAVOR} deck templates (placeholders; best-effort)..." \n'
-        'for d in dc_op.sp dc_sweep_vin.sp ac_loopgain.sp ac_psrr.sp tran_loadstep.sp; do\n'
-        '  if [[ -f "${DECK_DIR}/${d}" ]]; then\n'
-        '    echo "  -> ${d}"\n'
-        '    "${SPICE_BIN}" -b "${DECK_DIR}/${d}" > "${OUT_DIR}/${d}.log" 2>&1 || true\n'
-        '  fi\n'
-        'done\n'
+        'echo "[analog] Running ${SIM_FLAVOR} deck templates (best-effort)..." \n'
+        f'{deck_loop}\n'
         '\n'
         'python3 "${ANALOG_ROOT}/sim/parse/extract_metrics.py" '
         '--raw_dir "${ANALOG_ROOT}/sim/results/raw" '
@@ -33,14 +33,11 @@ def _flavor_run_all_script() -> str:
     )
 
 
-def _deck_header() -> str:
-    # NOTE: SPICE doesn't expand ${} by default; this is a template.
-    # The runner does not substitute variables; users can adjust includes as needed.
+def _deck_header(netlist_name: str) -> str:
     return (
         "* PDK-agnostic deck template\n"
-        '* Netlist include (edit if needed):\n'
-        '.include "../../netlist/ldo_top.sp"\n'
-        '* Models include is expected inside ldo_top.sp: .include "models/models.placeholder.inc"\n'
+        "* Netlist include (edit if needed):\n"
+        f'.include "../../netlist/{netlist_name}"\n'
         "\n"
     )
 
@@ -77,54 +74,41 @@ if __name__ == "__main__":
     main()
 """
 
+
 def run_agent(state: dict) -> dict:
     agent_name = "Analog Simulation Plan Agent"
-    workflow_id = state.get("workflow_id")
+    workflow_id = state.get("workflow_id", "default")
     preview_only = bool(state.get("preview_only"))
 
     spec = state.get("analog_spec") or {}
-    netlist = state.get("analog_netlist") or ""
-    if not workflow_id or not isinstance(spec, dict) or not spec:
-        state["status"] = "❌ Missing workflow_id or analog_spec"
+    if not isinstance(spec, dict) or not spec:
+        state["status"] = "❌ Missing analog_spec"
         return state
+
+    block_name = spec.get("block_name", "analog_block")
+    netlist_name = f"{block_name}_top.sp"
+    ports = spec.get("ports") or []
+    port_names = {p.get("name") for p in ports if isinstance(p, dict)}
 
     prompt = f"""
 You are an analog verification engineer.
 
-Given:
-SPEC JSON:
+Given SPEC JSON:
 {json.dumps(spec, indent=2)}
-
-NETLIST (may be scaffold):
-{netlist[:4000]}
 
 Return ONLY valid JSON (no markdown) with schema:
 {{
   "sweeps": {{
-    "dc": [
-      {{"name":"dc_vin_sweep","source":"VIN","start":null,"stop":null,"step":null}},
-      {{"name":"dc_load_sweep","source":"ILOAD","start":null,"stop":null,"step":null}}
-    ],
-    "ac": [
-      {{"name":"ac_loopgain","start_hz":10,"stop_hz":1e6,"points_per_dec":20}},
-      {{"name":"ac_psrr","start_hz":10,"stop_hz":1e6,"points_per_dec":20}}
-    ],
-    "tran": [
-      {{"name":"tran_loadstep","tstop_s":0.002,"tstep_s":1e-6,"stimulus":"enable+load_step"}}
-    ]
+    "dc": [],
+    "ac": [],
+    "tran": []
   }},
   "corners": {{
-    "vdd": {spec.get("corners",{}).get("vdd",[])},
-    "temp_c": {spec.get("corners",{}).get("temp_c",[])},
-    "process": {spec.get("corners",{}).get("process",[])}
+    "vdd": [3.0, 3.3, 3.6],
+    "temp_c": [-40, 25, 125],
+    "process": ["typical", "fast", "slow"]
   }},
-  "metrics": [
-    {{"name":"vout_v","method":"steady_state","signal":"VOUT","units":"V"}},
-    {{"name":"dropout_v","method":"dropout","signal":"VOUT","units":"V"}},
-    {{"name":"psrr_db_1khz","method":"psrr","signal":"VOUT","units":"dB"}},
-    {{"name":"phase_margin_deg","method":"loopgain","signal":"VOUT","units":"deg"}},
-    {{"name":"settling_time_s","method":"settling","signal":"VOUT","units":"s"}}
-  ],
+  "metrics": [],
   "tolerances": {{
     "default_pct": 5.0,
     "default_abs": null
@@ -133,18 +117,60 @@ Return ONLY valid JSON (no markdown) with schema:
 }}
 
 Rules:
+- Make the plan spec-driven, not LDO-driven.
+- If ADC-style ports exist, include conversion-oriented transient scenarios.
+- If regulator-style ports exist, include enable/power-good or output-settle scenarios.
+- Avoid hardcoding loopgain/PSRR unless clearly justified by the spec.
 - Keep it PDK-agnostic and simulator-agnostic.
-- Do NOT claim silicon-grade precision. Keep templates and placeholders.
+- Do NOT claim silicon-grade precision.
 """
 
     out = llm_text(prompt)
     plan = safe_json_load(out)
+
     if not isinstance(plan, dict) or not plan:
-        plan = {"sweeps": {}, "corners": {}, "metrics": [], "tolerances": {"default_pct": 5.0, "default_abs": None}, "notes": ["plan parse failed; using empty plan"]}
+        # Safe fallback plan
+        plan = {
+            "sweeps": {
+                "dc": [],
+                "ac": [],
+                "tran": []
+            },
+            "corners": {
+                "vdd": [3.0, 3.3, 3.6],
+                "temp_c": [-40, 25, 125],
+                "process": ["typical", "fast", "slow"]
+            },
+            "metrics": [],
+            "tolerances": {"default_pct": 5.0, "default_abs": None},
+            "notes": ["Fallback spec-driven plan used because LLM output was unavailable or invalid."]
+        }
+
+        if {"adc_clk", "adc_start", "adc_done", "adc_data"} & port_names:
+            plan["sweeps"]["tran"].append({
+                "name": "tran_adc_conversion",
+                "tstop_s": 10e-6,
+                "tstep_s": 10e-9,
+                "stimulus": "adc_start_pulse"
+            })
+            plan["metrics"].extend([
+                {"name": "adc_done_latency_s", "method": "latency", "signal": "adc_done", "units": "s"},
+                {"name": "adc_data_valid", "method": "event_data_valid", "signal": "adc_data", "units": "bool"},
+            ])
+
+        if {"ldo_enable", "power_good"} & port_names:
+            plan["sweeps"]["tran"].append({
+                "name": "tran_ldo_enable",
+                "tstop_s": 50e-6,
+                "tstep_s": 100e-9,
+                "stimulus": "ldo_enable_toggle"
+            })
+            plan["metrics"].extend([
+                {"name": "power_good_delay_s", "method": "latency", "signal": "power_good", "units": "s"},
+            ])
 
     state["analog_sim_plan"] = plan
 
-    # Scripts
     env_sh = _bash_header() + (
         'export SIM_FLAVOR="${SIM_FLAVOR:-ngspice}"\n'
         'export SPICE_BIN="${SPICE_BIN:-ngspice}"\n'
@@ -161,54 +187,44 @@ Rules:
         'exec "${ANALOG_ROOT}/sim/${FLAVOR}/run_all.sh"\n'
     )
 
-    # Deck templates (placeholders)
-    dc_op = _deck_header() + ".op\n.end\n"
-    dc_sweep_vin = _deck_header() + (
-        "* VIN sweep placeholder (edit values per spec)\n"
-        "* VVIN VIN 0 1.5\n"
-        ".dc VVIN 1.3 2.0 0.05\n"
-        ".end\n"
-    )
-    ac_loopgain = _deck_header() + (
-        "* Loopgain placeholder: implement loop-break method per simulator\n"
-        ".ac dec 20 10 1e6\n"
-        ".end\n"
-    )
-    ac_psrr = _deck_header() + (
-        "* PSRR placeholder: inject small-signal ripple on VIN\n"
-        ".ac dec 20 10 1e6\n"
-        ".end\n"
-    )
-    tran_loadstep = _deck_header() + (
-        "* Load step placeholder: implement ILOAD step on VOUT\n"
-        ".tran 1u 2m\n"
-        ".end\n"
-    )
+    deck_names = ["dc_op.sp"]
+    dc_decks = []
+    ac_decks = []
+    tran_decks = []
 
-    # Legacy stub run deck
-    legacy_deck = ".include netlist.sp\n* TODO: use analog/sim/<flavor>/decks/*.sp\n.end\n"
+    for item in plan.get("sweeps", {}).get("dc", []):
+        nm = item.get("name", "dc_generic")
+        fname = f"{nm}.sp"
+        deck_names.append(fname)
+        dc_decks.append((fname, _deck_header(netlist_name) + f"* DC deck: {nm}\n.op\n.end\n"))
+
+    for item in plan.get("sweeps", {}).get("ac", []):
+        nm = item.get("name", "ac_generic")
+        fname = f"{nm}.sp"
+        deck_names.append(fname)
+        ac_decks.append((fname, _deck_header(netlist_name) + f"* AC deck: {nm}\n.ac dec 20 10 1e6\n.end\n"))
+
+    for item in plan.get("sweeps", {}).get("tran", []):
+        nm = item.get("name", "tran_generic")
+        fname = f"{nm}.sp"
+        deck_names.append(fname)
+        tran_decks.append((fname, _deck_header(netlist_name) + f"* TRAN deck: {nm}\n.tran 1n 10u\n.end\n"))
 
     if not preview_only:
-        # Legacy outputs
         save_text_artifact_and_record(workflow_id, agent_name, "analog", "sim_plan.json", json.dumps(plan, indent=2))
-        save_text_artifact_and_record(workflow_id, agent_name, "analog", "run_deck.sp", legacy_deck)
+        save_text_artifact_and_record(workflow_id, agent_name, "analog", "run_deck.sp", _deck_header(netlist_name) + ".op\n.end\n")
 
-        # New scaffold outputs
         save_text_artifact_and_record(workflow_id, agent_name, "analog", "sim/sim_plan.json", json.dumps(plan, indent=2))
         save_text_artifact_and_record(workflow_id, agent_name, "analog", "sim/env.sh", env_sh)
         save_text_artifact_and_record(workflow_id, agent_name, "analog", "sim/run_all.sh", run_all_sh)
 
         for flavor in ("ngspice", "spectre", "hspice"):
-            save_text_artifact_and_record(workflow_id, agent_name, "analog", f"sim/{flavor}/run_all.sh", _flavor_run_all_script())
-            save_text_artifact_and_record(workflow_id, agent_name, "analog", f"sim/{flavor}/decks/dc_op.sp", dc_op)
-            save_text_artifact_and_record(workflow_id, agent_name, "analog", f"sim/{flavor}/decks/dc_sweep_vin.sp", dc_sweep_vin)
-            save_text_artifact_and_record(workflow_id, agent_name, "analog", f"sim/{flavor}/decks/ac_loopgain.sp", ac_loopgain)
-            save_text_artifact_and_record(workflow_id, agent_name, "analog", f"sim/{flavor}/decks/ac_psrr.sp", ac_psrr)
-            save_text_artifact_and_record(workflow_id, agent_name, "analog", f"sim/{flavor}/decks/tran_loadstep.sp", tran_loadstep)
+            save_text_artifact_and_record(workflow_id, agent_name, "analog", f"sim/{flavor}/run_all.sh", _flavor_run_all_script(deck_names))
+            save_text_artifact_and_record(workflow_id, agent_name, "analog", f"sim/{flavor}/decks/dc_op.sp", _deck_header(netlist_name) + ".op\n.end\n")
+            for fname, text in dc_decks + ac_decks + tran_decks:
+                save_text_artifact_and_record(workflow_id, agent_name, "analog", f"sim/{flavor}/decks/{fname}", text)
 
         save_text_artifact_and_record(workflow_id, agent_name, "analog", "sim/parse/extract_metrics.py", _extract_metrics_py())
-
-        # Provide an initial metrics.json placeholder so downstream summary/correlation doesn't crash
         metrics_stub = {
             "source": "sim",
             "confidence": "low",

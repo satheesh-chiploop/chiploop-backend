@@ -626,11 +626,9 @@ AGENT_CAPABILITIES = {
         "domain": "analog",
         "inputs": ["analog/spec/spec_normalized.json", "analog/spec.json"],
         "outputs": [
-            "analog/netlist/<block_name>_top.sp",
-            "analog/netlist/models/models.placeholder.inc",
-            "analog/netlist/README.md",
-            "analog/netlist.sp",
-            "analog/netlist_summary.md",
+           "analog/netlist/<block_name>_top.sp",
+           "analog/netlist.sp",
+           "analog/netlist_summary.md",
         ],
         "description": "Creates a spec-driven SPICE interface scaffold using the normalized analog spec. No block-type assumptions are hardcoded.",
     },
@@ -659,9 +657,10 @@ AGENT_CAPABILITIES = {
     "Analog Simulation Plan Agent": {
         "domain": "analog",
         "inputs": [
+            "analog/spec/spec_normalized.json",
             "analog/spec.json",
-            "analog/netlist.sp",          # legacy
-            "analog/netlist/ldo_top.sp",  # canonical
+            "analog/netlist.sp",
+            "analog/netlist/<block_name>_top.sp",
         ],
         "outputs": [
             # legacy
@@ -782,25 +781,21 @@ AGENT_CAPABILITIES = {
         "domain": "analog",
         "inputs": ["analog/spec.json"],
         "outputs": [
-            # canonical
             "analog/abstract/macro.lef",
             "analog/abstract/macro_stub.lib",
             "analog/abstract/integration_notes.md",
-
-            # legacy mirror (your current agent wrote abstracts/...) :contentReference[oaicite:2]{index=2}
-            "analog/abstracts/macro.lef",
-            "analog/abstracts/macro_stub.lib",
-            "analog/abstracts/integration_notes.md",
         ],
         "description": "Generates LEF + LIB stub + integration notes for physical/timing handoff (canonical abstract/ plus legacy abstracts/ mirror).",
     },
 
     "Analog Executive Summary Agent": {
         "domain": "analog",
-        "inputs": ["*"],
+        "inputs": ["analog/spec/spec_normalized.json", "analog/sim/results/metrics.json", "analog/correlation/delta_summary.json", "*"],
         "outputs": ["analog/executive_summary.md"],
-        "description": "Creates exec-style summary with spec compliance table, risks, artifact paths, and run instructions.",
+        "description": "Creates an artifact-aware executive summary with block/module identity, compliance table, correlation risks, and artifact readiness for Analog_Run and System_Sim.",
     },
+
+    
     # -------------------------
     # EMBEDDED
     # -------------------------

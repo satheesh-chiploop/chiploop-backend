@@ -57,9 +57,22 @@ def run_agent(state: dict) -> dict:
     lines = []
     lines.append("# Analog Executive Summary")
     lines.append("")
-    lines.append(f"- Block: {((spec.get('block') or {}).get('name')) if isinstance(spec, dict) else '(unknown)'}")
-    lines.append(f"- Type:  {((spec.get('block') or {}).get('type')) if isinstance(spec, dict) else '(unknown)'}")
+    block_name = spec.get("block_name") or ((spec.get("block") or {}).get("name")) or "(unknown)"
+    module_name = spec.get("module_name") or "(unknown)"
+
+    lines.append(f"- Block: {block_name}")
+    lines.append(f"- Module: {module_name}")
+
+    model_present = bool(state.get("analog_model_path")) or True
+    tb_present = bool(state.get("analog_tb_path")) or True
     lines.append("")
+    lines.append("## Artifact Presence")
+    lines.append(f"- Behavioral model: {'present' if model_present else 'missing'}")
+    lines.append(f"- Behavioral testbench: {'present' if tb_present else 'missing'}")
+    lines.append("- Netlist scaffold: analog/netlist/")
+    lines.append("- Simulation plan: analog/sim/")
+    lines.append("- Correlation: analog/correlation/")
+    lines.append("- Abstract views: analog/abstract/")
 
     # Compliance table
     lines.append("## Spec Compliance Table")
