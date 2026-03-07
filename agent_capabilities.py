@@ -609,38 +609,51 @@ AGENT_CAPABILITIES = {
     # -------------------------
         # -------------------------
     # ANALOG (Production Scaffold)
-    # -------------------------
     "Analog Spec Builder Agent": {
         "domain": "analog",
-        "inputs": ["datasheet_text", "goal", "scope"],
+        "inputs": ["datasheet_text", "analog_datasheet", "spec", "spec_text", "goal"],
         "outputs": [
-            # legacy (keep)
             "analog/spec.json",
             "analog/spec_summary.md",
-
-            # new canonical scaffold
-            "analog/spec/spec_source.md",
             "analog/spec/spec_normalized.json",
             "analog/spec/requirements.json",
             "analog/spec/assumptions.md",
         ],
-        "description": "Extracts structured analog block spec + normalized requirements bundle (PDK-agnostic; avoids invented metrics).",
+        "description": "Normalizes a free-text analog datasheet into a structured spec JSON for downstream analog generators. This is the only analog agent that interprets free-text directly.",
     },
 
     "Analog Netlist Scaffold Agent": {
         "domain": "analog",
-        "inputs": ["analog/spec.json"],
+        "inputs": ["analog/spec/spec_normalized.json", "analog/spec.json"],
         "outputs": [
-            # legacy
-            "analog/netlist.sp",
-            "analog/netlist_summary.md",
-
-            # new canonical scaffold
-            "analog/netlist/ldo_top.sp",
+            "analog/netlist/<block_name>_top.sp",
             "analog/netlist/models/models.placeholder.inc",
             "analog/netlist/README.md",
+            "analog/netlist.sp",
+            "analog/netlist_summary.md",
         ],
-        "description": "Generates a PDK-agnostic SPICE netlist scaffold aligned to spec pins and intent, plus model placeholder include + README.",
+        "description": "Creates a spec-driven SPICE interface scaffold using the normalized analog spec. No block-type assumptions are hardcoded.",
+    },
+
+    "Analog Behavioral Model Agent": {
+        "domain": "analog",
+        "inputs": ["analog/spec/spec_normalized.json", "analog/spec.json"],
+        "outputs": [
+            "analog/model.sv",
+            "analog/model_params.json",
+            "analog/model_notes.md",
+        ],
+        "description": "Creates a deterministic behavioral SystemVerilog scaffold from the normalized analog spec, including ports and behavioral contract notes.",
+    },
+
+    "Analog Behavioral Testbench Agent": {
+        "domain": "analog",
+        "inputs": ["analog/spec/spec_normalized.json", "analog/spec.json", "analog/model.sv"],
+        "outputs": [
+            "analog/behavioral/tb_<block_name>_behavioral.sv",
+            "analog/tb.sv",
+        ],
+        "description": "Creates a spec-driven behavioral testbench from the normalized analog spec and generated model. Signal declarations and instance port maps are derived from the spec.",
     },
 
     "Analog Simulation Plan Agent": {
@@ -687,29 +700,7 @@ AGENT_CAPABILITIES = {
         "description": "Creates sweeps/corners/metrics plan AND runnable multi-simulator scaffold (ngspice/spectre/hspice) with bash runners + deck templates + metrics extraction stub.",
     },
 
-    "Analog Behavioral Model Agent": {
-        "domain": "analog",
-        "inputs": ["analog/spec.json"],
-        "outputs": [
-            # deterministic output (production)
-            "analog/model.sv",
-            "analog/model_params.json",
-            "analog/model_notes.md",
-        ],
-        "description": "Creates deterministic RNM SystemVerilog behavioral model template + tuning params + limitations notes (no Verilog-A output in production scaffold).",
-    },
 
-    "Analog Behavioral Testbench Agent": {
-        "domain": "analog",
-        "inputs": ["analog/spec.json", "analog/model.sv"],
-        "outputs": [
-            # canonical
-            "analog/behavioral/tb_ldo_behavioral.sv",
-            # legacy
-            "analog/tb.sv",
-        ],
-        "description": "Generates RNM SystemVerilog testbench stimuli for the behavioral model (canonical behavioral folder + legacy compatibility).",
-    },
 
     "Analog Behavioral Assertions Agent": {
         "domain": "analog",
