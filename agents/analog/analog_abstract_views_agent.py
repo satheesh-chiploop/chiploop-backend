@@ -86,7 +86,7 @@ Rules:
     if not notes:
         notes = "# Integration Notes\n\n(TBD)\n"
 
-        if not preview_only:
+    if not preview_only:
         save_text_artifact_and_record(workflow_id, agent_name, "analog/abstract", "macro.lef", lef)
         save_text_artifact_and_record(workflow_id, agent_name, "analog/abstract", "macro_stub.lib", lib_stub or "")
         save_text_artifact_and_record(workflow_id, agent_name, "analog/abstract", "integration_notes.md", notes)
@@ -96,6 +96,6 @@ Rules:
     state["analog_macro_lib"] = "analog/abstract/macro_stub.lib"
     state["analog_integration_notes"] = "analog/abstract/integration_notes.md"
 
-    return state
+
 
     return state
