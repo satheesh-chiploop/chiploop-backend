@@ -18,10 +18,14 @@ def run_agent(state: dict) -> dict:
     datasheet = (
         state.get("datasheet_text")
         or state.get("analog_datasheet")
-        or state.get("spec")
+        or state.get("analog_spec_text")
         or state.get("spec_text")
+        or state.get("spec")
+        or state.get("description")
         or ""
     ).strip()
+
+  
 
     if not datasheet:
         raise ValueError("Analog datasheet not provided")

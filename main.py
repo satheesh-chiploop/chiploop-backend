@@ -1158,6 +1158,37 @@ def execute_workflow_background(
         if spec_text:
             shared_state["spec"] = spec_text
 
+        if spec_text:
+            shared_state["spec_text"] = spec_text
+            shared_state["spec"] = spec_text
+
+        # NEW: also inject workflow/app payload fields into shared_state
+        payload = {}
+        if isinstance(data, dict):
+            payload = data.get("payload") or {}
+            definitions = data.get("definitions") or {}
+            if not payload and isinstance(definitions, dict):
+                payload = definitions.get("payload") or {}
+ 
+        if isinstance(payload, dict):
+            for k, v in payload.items():
+                if v is not None:
+                   shared_state[k] = v
+
+        # NEW: normalize analog/digital/system spec fields
+        normalized_spec = (
+            shared_state.get("datasheet_text")
+            or shared_state.get("analog_datasheet")
+            or shared_state.get("spec_text")
+            or shared_state.get("spec")
+            or ""
+        ).strip()
+
+        if normalized_spec:
+            shared_state["datasheet_text"] = normalized_spec
+            shared_state["spec_text"] = normalized_spec
+            shared_state["spec"] = normalized_spec
+
         append_log_workflow(workflow_id, f"[DEBUG] loop_type={loop_type}")
         append_log_workflow(workflow_id, f"[DEBUG] top-level spec_text={bool(spec_text)}")
         append_log_workflow(workflow_id, f"[DEBUG] shared_state keys={list(shared_state.keys())}")
