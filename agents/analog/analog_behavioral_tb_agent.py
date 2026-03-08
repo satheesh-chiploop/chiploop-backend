@@ -17,23 +17,30 @@ def run_agent(state: dict) -> dict:
 
 
     block = spec.get("block_name", "analog_block")
+    module_name = spec.get("module_name") or f"{block}_model"
 
     prompt = f"""
-Generate a SystemVerilog testbench for module {block}_model.
+Generate a SystemVerilog TESTBENCH ONLY for module {module_name}.
 
 Use this spec:
 
 {spec}
 
 Rules:
-
-- Instantiate {block}_model
-- Declare signals for all ports
-- Drive simple stimulus
-- End simulation after short time
+- Output only one testbench module
+- Do NOT define or redeclare module {module_name}
+- Do NOT generate the DUT RTL
+- Instantiate {module_name} as dut
+- Declare signals for all DUT ports
+- Drive simple generic stimulus only on DUT inputs
+- Do not drive DUT outputs
+- End simulation after a short time
 """
 
     tb = llm_text(prompt)
+
+    if f"module {module_name}" in tb:
+        raise RuntimeError(f"Generated TB incorrectly redefined DUT module {module_name}")
 
     tb_dir = os.path.join(workflow_dir, "analog", "behavioral")
     os.makedirs(tb_dir, exist_ok=True)

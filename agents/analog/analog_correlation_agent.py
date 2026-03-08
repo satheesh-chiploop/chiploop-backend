@@ -101,10 +101,8 @@ Rules:
         save_text_artifact_and_record(workflow_id, agent_name, "analog", "correlation/delta_summary.json", json.dumps(delta_summary, indent=2))
         save_text_artifact_and_record(workflow_id, agent_name, "analog", "correlation/correlation_report.md", report_md)
 
-        # Legacy compatibility
-        save_text_artifact_and_record(workflow_id, agent_name, "analog", "metrics_compare.json", json.dumps(metrics_compare, indent=2))
-        save_text_artifact_and_record(workflow_id, agent_name, "analog", "delta_summary.json", json.dumps(delta_summary, indent=2))
-        save_text_artifact_and_record(workflow_id, agent_name, "analog", "correlation_report.md", report_md)
+
+        
 
     state["analog_correlation_plan_path"] = "analog/correlation/correlation_plan.md"
     state["analog_delta_summary_path"] = "analog/correlation/delta_summary.json"

@@ -202,7 +202,8 @@ def run_one(testcase: str, seed: int) -> dict:
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--tests", nargs="+", default=["smoke_test"])
+    DEFAULT_TESTS = {json.dumps(default_tests, indent=2)}
+    ap.add_argument("--tests", nargs="+", default=DEFAULT_TESTS)
     ap.add_argument("--seeds", nargs="+", type=int, default=[1])
     ap.add_argument("--out", default="reports/regression_summary.json")
     args = ap.parse_args()
@@ -251,8 +252,13 @@ def run_agent(state: dict) -> dict:
     tb_root = os.path.join(workflow_dir, "vv", "tb")
     os.makedirs(tb_root, exist_ok=True)
 
-    runner_py = _gen_regression_runner(top)
+    default_tests = state.get("vv_testcases") or ["smoke_test", "constrained_random_sanity"]
+    state["vv_testcases"] = default_tests
+    state["testcases"] = default_tests
+
+    runner_py = _gen_regression_runner(top, default_tests)
     _write_file(os.path.join(tb_root, "run_regression.py"), runner_py)
+
 
     readme = """# Simulation Control
 

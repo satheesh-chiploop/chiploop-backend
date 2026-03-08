@@ -117,9 +117,22 @@ def run_agent(state: dict) -> dict:
         os.path.exists(os.path.join(workflow_dir, "analog", "netlist", f"{block_name}_top.sp")),
         os.path.exists(os.path.join(workflow_dir, "analog", "netlist.sp")),
     ])
-    sim_plan_present = os.path.exists(os.path.join(workflow_dir, "analog", "sim", "sim_plan.json"))
-    corr_present = os.path.exists(os.path.join(workflow_dir, "analog", "correlation", "delta_summary.json"))
-    abstract_present = os.path.exists(os.path.join(workflow_dir, "analog", "abstract", "macro.lef"))
+
+    sim_plan_present = (
+        os.path.exists(os.path.join(workflow_dir, "analog", "sim", "sim_plan.json"))
+        or os.path.exists(os.path.join(workflow_dir, "analog", "sim_plan.json"))
+    )
+
+    corr_present = (
+       os.path.exists(os.path.join(workflow_dir, "analog", "correlation", "delta_summary.json"))
+       or os.path.exists(os.path.join(workflow_dir, "analog", "delta_summary.json"))
+    )
+
+    abstract_present = (
+       os.path.exists(os.path.join(workflow_dir, "analog", "abstract", "macro.lef"))
+       or os.path.exists(os.path.join(workflow_dir, "analog", "abstract", "macro_stub.lib"))
+    )
+
 
     lines.append("")
     lines.append("## Artifact Presence")

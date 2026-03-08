@@ -129,14 +129,14 @@ def run_agent(state: dict) -> dict:
     save_text_artifact_and_record(
         workflow_id,
         agent_name,
-        "system/integrate",
+        "system/integration",
         f"{top_sim}.sv",
         sim_code,
     )
     save_text_artifact_and_record(
         workflow_id,
         agent_name,
-        "system/integrate",
+        "system/integration",
         f"{top_phys}.sv",
         phys_code,
     )
@@ -144,8 +144,9 @@ def run_agent(state: dict) -> dict:
     # Update state for downstream consumers
     state["soc_top_sim_module"] = top_sim
     state["soc_top_phys_module"] = top_phys
-    state["soc_top_sim_path"] = f"system/integrate/{top_sim}.sv"
-    state["soc_top_phys_path"] = f"system/integrate/{top_phys}.sv"
+
+    state["soc_top_sim_path"] = f"system/integration/{top_sim}.sv"
+    state["soc_top_phys_path"] = f"system/integration/{top_phys}.sv"
 
     state["status"] = f"✅ Generated SoC tops: {top_sim}.sv and {top_phys}.sv"
     return state

@@ -319,14 +319,33 @@ def run_agent(state: dict) -> dict:
         f.write("Testbench Generator Agent Log\n")
 
 
-    spec_path = state.get("spec_json")
+    spec_path = (
+        state.get("spec_json")
+        or state.get("digital_spec_json")
+    )
 
     if not spec_path:
-       for root, _, files in os.walk(workflow_dir):
+        preferred = []
+        fallback = []
+
+        for root, _, files in os.walk(workflow_dir):
             for fn in files:
-                if fn.endswith("_spec.json"):
-                    spec_path = os.path.join(root, fn)
-                    break
+                if not fn.endswith(".json"):
+                    continue
+                if not fn.endswith("_spec.json") and "spec" not in fn.lower():
+                    continue
+
+                path = os.path.join(root, fn)
+                norm = path.replace("\\", "/").lower()
+
+                if "/digital/" in norm:
+                    preferred.append(path)
+                elif "/analog/" in norm:
+                    continue
+                else:
+                    fallback.append(path)
+
+        spec_path = preferred[0] if preferred else (fallback[0] if fallback else None)
                     
     spec = _safe_read_json(spec_path)
     rtl_files = state.get("rtl_files") or _collect_rtl_files(workflow_dir)
@@ -398,4 +417,5 @@ NUM_ITERS=200 RANDOM_SEED=7 make TESTCASE=constrained_random_sanity
 
     state.setdefault("vv", {})
     state["vv"]["testbench"] = report
+    state["vv_testcases"] = ["smoke_test", "constrained_random_sanity"]
     return state
