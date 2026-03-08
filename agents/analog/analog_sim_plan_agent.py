@@ -231,8 +231,14 @@ Rules:
             "notes": ["Initial stub metrics; generated before any real simulator parsing"],
             "metrics": {},
         }
-        save_text_artifact_and_record(workflow_id, agent_name, "analog", "sim/results/metrics.json", json.dumps(metrics_stub, indent=2))
-
+        save_text_artifact_and_record(
+            workflow_id,
+            agent_name,
+            "analog",
+            "sim/results/metrics.json",
+            json.dumps(metrics_stub, indent=2)
+        )
+        state["analog_sim_metrics"] = metrics_stub
     state["analog_sim_plan"] = plan
     state["analog_sim_plan_path"] = "analog/sim/sim_plan.json"
     state["analog_sim_metrics_path"] = "analog/sim/results/metrics.json"

@@ -68,8 +68,28 @@ def run_agent(state: dict) -> dict:
             except Exception:
                 beh_metrics = {}
 
+
+
     delta = state.get("analog_delta_summary") or {}
     deltas = state.get("analog_deltas") or []
+
+    if not delta:
+        delta_path = os.path.join(workflow_dir, "analog", "correlation", "delta_summary.json")
+        if os.path.exists(delta_path):
+            try:
+                with open(delta_path) as f:
+                   delta = json.load(f)
+            except Exception:
+                delta = {}
+
+    if not deltas:
+        deltas_path = os.path.join(workflow_dir, "analog", "correlation", "deltas.json")
+        if os.path.exists(deltas_path):
+            try:
+                with open(deltas_path) as f:
+                    deltas = json.load(f)
+            except Exception:
+                deltas = []
 
     open_q = (spec.get("open_questions") or []) if isinstance(spec, dict) else []
     assumptions = (spec.get("assumptions") or []) if isinstance(spec, dict) else []

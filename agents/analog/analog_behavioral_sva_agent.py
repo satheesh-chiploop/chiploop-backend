@@ -2,37 +2,30 @@ import json
 from utils.artifact_utils import save_text_artifact_and_record
 from agents.analog._analog_llm import llm_text
 
-
 def _fallback_sva() -> str:
-    # Minimal compile-friendly assertion scaffold
     return """\
 package analog_checks;
 
-  // Placeholder parameters (tune per spec/requirements)
-  parameter real VOUT_MIN = 0.0;
-  parameter real VOUT_MAX = 5.0;
-  parameter int  SETTLE_CYCLES = 200;
+  // Generic placeholder parameters (tune per spec/requirements)
+  parameter int MAX_LATENCY_CYCLES = 200;
 
 endpackage
 
-module analog_assertions #(parameter real VOUT_MIN = analog_checks::VOUT_MIN,
-                           parameter real VOUT_MAX = analog_checks::VOUT_MAX)
-(
+module analog_assertions (
   input logic clk,
-  input logic rst_n,
-  input logic en,
-  input real  vout
+  input logic rst_n
 );
 
-  // Example placeholder property: when enabled, vout should be within bounds after some time.
-  // This is a structural placeholder; real RNM checkers may need different sampling strategy.
-  property p_vout_in_range;
+  // Generic placeholder assertion scaffold.
+  // Add signal-specific RNM assertions based on normalized spec and requirements.
+
+  property p_placeholder_after_reset;
     @(posedge clk) disable iff (!rst_n)
-      en |-> (vout >= VOUT_MIN && vout <= VOUT_MAX);
+      1'b1 |-> 1'b1;
   endproperty
 
-  a_vout_in_range: assert property (p_vout_in_range)
-    else $error("[SVA] VOUT out of range: %f", vout);
+  a_placeholder_after_reset: assert property (p_placeholder_after_reset)
+    else $error("[SVA] Placeholder assertion failed");
 
 endmodule
 """
@@ -63,10 +56,12 @@ SPEC:
 {json.dumps(spec, indent=2)[:4000]}
 
 Create checks for:
-- enable sequencing (EN low => VOUT ~0 or safe state)
-- when enabled, VOUT stays within min/max if specified
-- settling time window placeholder (parameterized)
-- monotonic response placeholder for DC sweep
+- reset / initialization safety
+- enable or trigger sequencing if such signals exist in spec
+- output validity / range checks if numeric bounds are present
+- latency / settling placeholder if requirements specify timing
+- generic monotonic or stability placeholders only when justified by spec
+
 
 Return ONLY code (no markdown). Keep it modular as a package + module.
 If numeric bounds are missing, use placeholders and clearly comment "TBD".
