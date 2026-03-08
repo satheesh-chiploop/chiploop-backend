@@ -1,6 +1,23 @@
 import os
+import re
 from utils.artifact_utils import save_text_artifact_and_record
 from agents.analog._analog_llm import llm_text
+
+
+def _strip_dut_module_if_present(tb: str, module_name: str) -> str:
+    """
+    Remove an accidentally generated DUT module definition while preserving
+    the actual testbench module if present.
+    """
+    if not tb:
+        return tb
+
+    pattern = rf"module\s+{re.escape(module_name)}\b.*?endmodule"
+    cleaned = re.sub(pattern, "", tb, flags=re.DOTALL | re.IGNORECASE)
+
+    # Remove accidental markdown fences too
+    cleaned = cleaned.replace("```systemverilog", "").replace("```sv", "").replace("```", "")
+    return cleaned.strip()
 
 
 def run_agent(state: dict) -> dict:
@@ -36,11 +53,14 @@ Rules:
 - Do not drive DUT outputs
 - End simulation after a short time
 """
-
+    
     tb = llm_text(prompt)
+    tb = _strip_dut_module_if_present(tb, module_name)
 
-    if f"module {module_name}" in tb:
-        raise RuntimeError(f"Generated TB incorrectly redefined DUT module {module_name}")
+    if not tb or "endmodule" not in tb or " dut " not in tb:
+        raise RuntimeError(f"Generated TB is invalid or missing DUT instantiation for {module_name}")
+
+
 
     tb_dir = os.path.join(workflow_dir, "analog", "behavioral")
     os.makedirs(tb_dir, exist_ok=True)
