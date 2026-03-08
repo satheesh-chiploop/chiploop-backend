@@ -26,6 +26,12 @@ def run_agent(state: dict) -> dict:
     if not datasheet:
         raise ValueError("Analog datasheet not provided")
 
+    print(f"[DEBUG] analog state keys = {list(state.keys())}")
+    print(f"[DEBUG] datasheet_text present = {bool(state.get('datasheet_text'))}")
+    print(f"[DEBUG] analog_datasheet present = {bool(state.get('analog_datasheet'))}")
+    print(f"[DEBUG] spec present = {bool(state.get('spec'))}")
+    print(f"[DEBUG] spec_text present = {bool(state.get('spec_text'))}")
+
     prompt = f"""
 You are an analog design architect.
 
