@@ -1158,7 +1158,13 @@ def execute_workflow_background(
         if spec_text:
             shared_state["spec"] = spec_text
 
-
+        append_log_workflow(workflow_id, f"[DEBUG] loop_type={loop_type}")
+        append_log_workflow(workflow_id, f"[DEBUG] top-level spec_text={bool(spec_text)}")
+        append_log_workflow(workflow_id, f"[DEBUG] shared_state keys={list(shared_state.keys())}")
+        append_log_workflow(
+           workflow_id,
+           f"[DEBUG] spec preview={(shared_state.get('spec') or shared_state.get('spec_text') or shared_state.get('datasheet_text') or '')[:120]}"
+        )
 
         if scope_json:
           try:
