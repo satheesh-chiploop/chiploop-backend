@@ -418,4 +418,5 @@ NUM_ITERS=200 RANDOM_SEED=7 make TESTCASE=constrained_random_sanity
     state.setdefault("vv", {})
     state["vv"]["testbench"] = report
     state["vv_testcases"] = ["smoke_test", "constrained_random_sanity"]
+    state["top_module"] = top
     return state

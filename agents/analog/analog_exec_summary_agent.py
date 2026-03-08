@@ -101,7 +101,13 @@ def run_agent(state: dict) -> dict:
     lines.append("# Analog Executive Summary")
     lines.append("")
     block_name = spec.get("block_name") or ((spec.get("block") or {}).get("name")) or "(unknown)"
-    module_name = spec.get("module_name") or "(unknown)"
+    module_name = (
+        spec.get("module_name")
+        or f"{block_name}_model"
+        if block_name and block_name != "(unknown)"
+        else "(unknown)"
+    )
+
 
     lines.append(f"- Block: {block_name}")
     lines.append(f"- Module: {module_name}")

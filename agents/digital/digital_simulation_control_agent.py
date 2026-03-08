@@ -174,6 +174,7 @@ def _record_text(workflow_id: str, agent_name: str, subdir: str, filename: str, 
         )
     except Exception:
         return None
+
 def _gen_regression_runner(top: str) -> str:
     return f'''"""Regression runner for Cocotb + Verilator."""
 
@@ -202,8 +203,7 @@ def run_one(testcase: str, seed: int) -> dict:
 
 def main():
     ap = argparse.ArgumentParser()
-    DEFAULT_TESTS = {json.dumps(default_tests, indent=2)}
-    ap.add_argument("--tests", nargs="+", default=DEFAULT_TESTS)
+    ap.add_argument("--tests", nargs="+", default=["smoke_test"])
     ap.add_argument("--seeds", nargs="+", type=int, default=[1])
     ap.add_argument("--out", default="reports/regression_summary.json")
     args = ap.parse_args()
@@ -231,6 +231,7 @@ def main():
 if __name__ == "__main__":
     main()
 '''
+
 
 def run_agent(state: dict) -> dict:
     agent_name = "Simulation Control Agent"
