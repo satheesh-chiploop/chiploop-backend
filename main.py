@@ -1207,54 +1207,74 @@ def execute_workflow_background(
                 shared_state[k] = v
 
 
-        # NEW: explicitly normalize common system integration description aliases
+                # ---------------------------------------------------------
+        # Domain-specific canonical input normalization
+        # Keep three separate source-of-truth channels:
+        #   - digital_spec_text
+        #   - analog_spec_text
+        #   - system_integration_description
+        # ---------------------------------------------------------
+        digital_text = (
+            shared_state.get("digital_spec_text")
+            or (data.get("digital_spec_text") if isinstance(data, dict) else None)
+            or ""
+        ).strip()
+
+        analog_text = (
+            shared_state.get("analog_spec_text")
+            or shared_state.get("analog_datasheet")
+            or shared_state.get("datasheet_text")
+            or (data.get("analog_spec_text") if isinstance(data, dict) else None)
+            or ""
+        ).strip()
+
         system_desc = (
             shared_state.get("system_integration_description")
             or shared_state.get("soc_integration_description")
             or shared_state.get("integration_description")
+            or shared_state.get("soc_integration_spec_text")
             or shared_state.get("soc_integration_spec")
             or shared_state.get("soc_spec")
             or shared_state.get("system_spec")
-            or shared_state.get("datasheet_text")
-            or shared_state.get("spec_text")
-            or shared_state.get("spec")
-            or shared_state.get("description")
             or (data.get("system_integration_description") if isinstance(data, dict) else None)
             or (data.get("soc_integration_description") if isinstance(data, dict) else None)
             or (data.get("integration_description") if isinstance(data, dict) else None)
+            or (data.get("soc_integration_spec_text") if isinstance(data, dict) else None)
+            or (data.get("soc_integration_spec") if isinstance(data, dict) else None)
             or (data.get("soc_spec") if isinstance(data, dict) else None)
             or (data.get("system_spec") if isinstance(data, dict) else None)
             or ""
         ).strip()
-        
+
+        if digital_text:
+            shared_state["digital_spec_text"] = digital_text
+            # optional digital compatibility aliases
+            shared_state["digital_spec"] = digital_text
+
+        if analog_text:
+            shared_state["analog_spec_text"] = analog_text
+            shared_state["datasheet_text"] = analog_text
+            shared_state["analog_datasheet"] = analog_text
 
         if system_desc:
-           shared_state["system_integration_description"] = system_desc
-           shared_state["soc_integration_description"] = system_desc
-           shared_state["integration_description"] = system_desc
+            shared_state["system_integration_description"] = system_desc
+            shared_state["soc_integration_description"] = system_desc
+            shared_state["integration_description"] = system_desc
+            shared_state["soc_integration_spec_text"] = system_desc
 
-        # NEW: normalize analog/digital/system spec fields
-        normalized_spec = (
-            shared_state.get("datasheet_text")
-            or shared_state.get("analog_datasheet")
-            or shared_state.get("spec_text")
-            or shared_state.get("spec")
-            or ""
-        ).strip()
+        # IMPORTANT:
+        # Do NOT globally write shared_state["spec"] or ["spec_text"] here.
+        # Those generic aliases are what create cross-domain contamination.
 
-        if normalized_spec:
-            shared_state["datasheet_text"] = normalized_spec
-            shared_state["spec_text"] = normalized_spec
-            shared_state["spec"] = normalized_spec
-
-        append_log_workflow(workflow_id, f"[DEBUG] loop_type={loop_type}")
-        append_log_workflow(workflow_id, f"[DEBUG] top-level spec_text={bool(spec_text)}")
-        append_log_workflow(workflow_id, f"[DEBUG] shared_state keys={list(shared_state.keys())}")
         append_log_workflow(
-           workflow_id,
-           f"[DEBUG] spec preview={(shared_state.get('spec') or shared_state.get('spec_text') or shared_state.get('datasheet_text') or '')[:120]}"
+            workflow_id,
+            f"[DEBUG] normalized inputs: "
+            f"digital={bool(digital_text)} len={len(digital_text)}, "
+            f"analog={bool(analog_text)} len={len(analog_text)}, "
+            f"soc={bool(system_desc)} len={len(system_desc)}"
         )
 
+        
         if scope_json:
           try:
             shared_state["scope"] = json.loads(scope_json)
@@ -4570,6 +4590,7 @@ def _start_system_app(background_tasks, request, payload, app_name, template_wor
 
     return {"ok": True, "workflow_id": workflow_id, "run_id": run_id}
 
+
 def execute_system_app_background(
     workflow_id,
     run_id,
@@ -4589,10 +4610,82 @@ def execute_system_app_background(
             "user_id": user_id,
         }
 
-        # Inject app payload into shared_state (same style as other app executors)
+        # ---------------------------------------------------------
+        # 1) Raw payload passthrough
+        # ---------------------------------------------------------
         for k, v in (payload or {}).items():
             if v is not None:
                 shared_state[k] = v
+
+        # ---------------------------------------------------------
+        # 2) Canonical domain-specific normalization
+        #    Keep these three as the source of truth.
+        # ---------------------------------------------------------
+        digital_text = (
+            shared_state.get("digital_spec_text")
+            or shared_state.get("digital_spec")
+            or ""
+        ).strip()
+
+        analog_text = (
+            shared_state.get("analog_spec_text")
+            or shared_state.get("analog_spec")
+            or shared_state.get("analog_datasheet")
+            or ""
+        ).strip()
+
+        soc_text = (
+            shared_state.get("soc_integration_spec_text")
+            or shared_state.get("system_integration_description")
+            or shared_state.get("soc_integration_description")
+            or shared_state.get("integration_description")
+            or shared_state.get("soc_integration_spec")
+            or shared_state.get("soc_spec")
+            or shared_state.get("system_spec")
+            or ""
+        ).strip()
+
+        # Canonical fields
+        if digital_text:
+            shared_state["digital_spec_text"] = digital_text
+
+        if analog_text:
+            shared_state["analog_spec_text"] = analog_text
+
+        if soc_text:
+            shared_state["system_integration_description"] = soc_text
+            shared_state["soc_integration_description"] = soc_text
+            shared_state["integration_description"] = soc_text
+            shared_state["soc_integration_spec_text"] = soc_text
+
+        # ---------------------------------------------------------
+        # 3) Compatibility aliases for existing agents
+        #    IMPORTANT: only derive aliases from the correct domain.
+        # ---------------------------------------------------------
+        if digital_text:
+            shared_state["digital_spec"] = digital_text
+
+        if analog_text:
+            shared_state["datasheet_text"] = analog_text
+            shared_state["analog_datasheet"] = analog_text
+
+        # Do NOT set shared_state["spec"] / ["spec_text"] globally here,
+        # because that causes cross-domain contamination.
+
+        append_log_workflow(
+            workflow_id,
+            f"[DEBUG] SystemApp normalized inputs: "
+            f"digital={bool(digital_text)} len={len(digital_text)}, "
+            f"analog={bool(analog_text)} len={len(analog_text)}, "
+            f"soc={bool(soc_text)} len={len(soc_text)}"
+        )
+        append_log_run(
+            run_id,
+            f"[DEBUG] SystemApp normalized inputs: "
+            f"digital={bool(digital_text)} len={len(digital_text)}, "
+            f"analog={bool(analog_text)} len={len(analog_text)}, "
+            f"soc={bool(soc_text)} len={len(soc_text)}"
+        )
 
         append_log_workflow(workflow_id, f"🚀 Starting System App: {template_workflow_name}", phase="start")
         append_log_run(run_id, f"🚀 Starting System App: {template_workflow_name}")
@@ -4620,6 +4713,8 @@ def execute_system_app_background(
         err = f"❌ System App crashed ({template_workflow_name}): {type(e).__name__}: {e}\n{traceback.format_exc()}"
         append_log_workflow(workflow_id, err, status="failed", phase="error")
         append_log_run(run_id, err, status="failed")
+
+
 # ---------------- Embedded app endpoints ----------------
 
 @app.post("/apps/embedded/hal/run")
