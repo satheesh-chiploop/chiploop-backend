@@ -118,10 +118,20 @@ def run_agent(state: dict) -> dict:
         or ""
     ).strip()
 
+
     if not integration_description:
-       state["status"] = "❌ No system_integration_description provided."
-       return state
-   
+        try:
+            save_text_artifact_and_record(
+                workflow_id=workflow_id,
+                agent_name=agent_name,
+                subdir="system/integration",
+                filename="intent_agent_state_keys.txt",
+                content="\n".join(sorted(state.keys())),
+            )
+        except Exception:
+            pass
+        state["status"] = "❌ No system_integration_description provided."
+        return state
 
     # Top module base name (we will produce *_sim and *_phys)
     top_base = (state.get("top_module") or state.get("soc_top_name") or "soc_top").strip()

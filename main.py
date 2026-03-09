@@ -1083,6 +1083,30 @@ async def run_workflow(
 # ---------- Background executor ----------
 # ==========================================================
 
+def _extract_node_data_fields(obj: dict) -> dict:
+    out = {}
+    if not isinstance(obj, dict):
+        return out
+
+    nodes = obj.get("nodes") or []
+    if not nodes and isinstance(obj.get("definitions"), dict):
+        nodes = obj["definitions"].get("nodes") or []
+
+    for n in nodes:
+        data_block = (n or {}).get("data") or {}
+        if not isinstance(data_block, dict):
+            continue
+
+        for k, v in data_block.items():
+            if v is None:
+                continue
+            if isinstance(v, str) and v.strip():
+                out.setdefault(k, v.strip())
+            elif isinstance(v, (dict, list)) and v:
+                out.setdefault(k, v)
+
+    return out
+
 def execute_workflow_background(
     workflow_id: str,
     run_id: str,
@@ -1175,6 +1199,12 @@ def execute_workflow_background(
             for k, v in payload.items():
                 if v is not None:
                    shared_state[k] = v
+
+        # NEW: also lift node.data fields from workflow definitions / Studio canvas
+        node_fields = _extract_node_data_fields(data)
+        for k, v in node_fields.items():
+            if k not in shared_state and v is not None:
+                shared_state[k] = v
 
 
         # NEW: explicitly normalize common system integration description aliases
