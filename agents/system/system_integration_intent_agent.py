@@ -104,12 +104,24 @@ def run_agent(state: dict) -> dict:
     os.makedirs(workflow_dir, exist_ok=True)
 
     # Inputs (accept a few common keys to reduce friction)
+
     integration_description = (
         state.get("system_integration_description")
         or state.get("soc_integration_description")
         or state.get("integration_description")
+        or state.get("soc_spec")
+        or state.get("system_spec")
+        or state.get("datasheet_text")
+        or state.get("spec_text")
+        or state.get("spec")
+        or state.get("description")
         or ""
     ).strip()
+
+    if not integration_description:
+       state["status"] = "❌ No system_integration_description provided."
+       return state
+   
 
     # Top module base name (we will produce *_sim and *_phys)
     top_base = (state.get("top_module") or state.get("soc_top_name") or "soc_top").strip()

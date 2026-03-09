@@ -1182,11 +1182,21 @@ def execute_workflow_background(
             shared_state.get("system_integration_description")
             or shared_state.get("soc_integration_description")
             or shared_state.get("integration_description")
+            or shared_state.get("soc_integration_spec")
+            or shared_state.get("soc_spec")
+            or shared_state.get("system_spec")
+            or shared_state.get("datasheet_text")
+            or shared_state.get("spec_text")
+            or shared_state.get("spec")
+            or shared_state.get("description")
             or (data.get("system_integration_description") if isinstance(data, dict) else None)
             or (data.get("soc_integration_description") if isinstance(data, dict) else None)
             or (data.get("integration_description") if isinstance(data, dict) else None)
+            or (data.get("soc_spec") if isinstance(data, dict) else None)
+            or (data.get("system_spec") if isinstance(data, dict) else None)
             or ""
         ).strip()
+        
 
         if system_desc:
            shared_state["system_integration_description"] = system_desc
