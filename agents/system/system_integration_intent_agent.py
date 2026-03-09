@@ -59,41 +59,60 @@ def _parse_ep(ep: str):
 
 
 def _port_dir_from_sigs(sig_db: dict, module_name: str, port_name: str):
-    if not isinstance(sig_db, dict):
+    if not isinstance(sig_db, dict) or not module_name or not port_name:
         return None
 
-    # common shapes
+    # shape 1: { "<module>": { "ports": [...] } }
     if module_name in sig_db and isinstance(sig_db[module_name], dict):
         ports = sig_db[module_name].get("ports") or sig_db[module_name].get("interface") or []
         for p in ports:
             if isinstance(p, dict) and p.get("name") == port_name:
-                return str(p.get("direction") or p.get("dir") or "").lower()
+                d = str(p.get("direction") or p.get("dir") or "").lower().strip()
+                return d or None
 
+    # shape 2: { "modules": { "<module>": { "ports": [...] } } }
     mods = sig_db.get("modules")
     if isinstance(mods, dict) and module_name in mods and isinstance(mods[module_name], dict):
         ports = mods[module_name].get("ports") or mods[module_name].get("interface") or []
         for p in ports:
             if isinstance(p, dict) and p.get("name") == port_name:
-                return str(p.get("direction") or p.get("dir") or "").lower()
+                d = str(p.get("direction") or p.get("dir") or "").lower().strip()
+                return d or None
 
     return None
 
 
-def _instance_to_module(intent: dict):
-    out = {}
-    for inst in intent.get("instances", []):
-        if isinstance(inst, dict) and inst.get("name") and inst.get("module"):
-            out[inst["name"]] = inst["module"]
-    return out
+def _resolve_port_dir(inst_name: str, port_name: str, inst2mod: dict, digital_sigs: dict, analog_sigs: dict):
+    if inst_name == "top":
+        return "top"
+    mod = inst2mod.get(inst_name)
+    if not mod:
+        return None
+    return (
+        _port_dir_from_sigs(digital_sigs, mod, port_name)
+        or _port_dir_from_sigs(analog_sigs, mod, port_name)
+    )
 
 
 def _sanitize_connections(intent: dict, digital_sigs: dict, analog_sigs: dict):
+    """
+    Keep only plausible connections:
+      - instance(output) -> instance(input)
+      - top -> instance(input)
+      - instance(output) -> top
+    Drop:
+      - instance(input) -> top
+      - top -> instance(output)
+      - input->input, output->output when known
+    If direction cannot be determined, keep the edge rather than over-prune.
+    """
     inst2mod = _instance_to_module(intent)
     cleaned = []
 
     for c in intent.get("connections", []):
         if not isinstance(c, dict):
             continue
+
         src = c.get("from")
         dst = c.get("to")
         if not src or not dst:
@@ -104,28 +123,45 @@ def _sanitize_connections(intent: dict, digital_sigs: dict, analog_sigs: dict):
         if not si or not sp or not di or not dp:
             continue
 
-        # top.* is always allowed
-        if si == "top" or di == "top":
-            cleaned.append(c)
-            continue
+        sdir = _resolve_port_dir(si, sp, inst2mod, digital_sigs, analog_sigs)
+        ddir = _resolve_port_dir(di, dp, inst2mod, digital_sigs, analog_sigs)
 
-        smod = inst2mod.get(si)
-        dmod = inst2mod.get(di)
-
-        sdir = _port_dir_from_sigs(digital_sigs, smod, sp) or _port_dir_from_sigs(analog_sigs, smod, sp)
-        ddir = _port_dir_from_sigs(digital_sigs, dmod, dp) or _port_dir_from_sigs(analog_sigs, dmod, dp)
-
-        # accept only output -> input when both dirs known
-        if sdir and ddir:
-            if sdir == "output" and ddir == "input":
+        # Case 1: top -> instance(input) is valid
+        if si == "top" and di != "top":
+            if ddir is None or ddir == "input" or ddir == "inout":
                 cleaned.append(c)
             continue
 
-        # if directions unknown, keep it
+        # Case 2: instance(output) -> top is valid
+        if si != "top" and di == "top":
+            if sdir is None or sdir == "output" or sdir == "inout":
+                cleaned.append(c)
+            continue
+
+        # Case 3: top -> top is meaningless
+        if si == "top" and di == "top":
+            continue
+
+        # Case 4: instance -> instance
+        if sdir and ddir:
+            if sdir in ("output", "inout") and ddir in ("input", "inout"):
+                cleaned.append(c)
+            continue
+
+        # If one or both directions are unknown, keep it for now.
         cleaned.append(c)
 
     intent["connections"] = cleaned
     return intent
+
+
+def _instance_to_module(intent: dict):
+    out = {}
+    for inst in intent.get("instances", []):
+        if isinstance(inst, dict) and inst.get("name") and inst.get("module"):
+            out[inst["name"]] = inst["module"]
+    return out
+
 
 
 
@@ -307,6 +343,15 @@ Now output JSON only.
         if not isinstance(intent, dict):
             intent = {}
         intent = _sanitize_connections(intent, digital_sigs, analog_sigs)
+
+        # If LLM produced only invalid connections, keep intent but mark it clearly.
+        if not intent.get("connections") and not intent.get("tieoffs"):
+            intent.setdefault("notes", [])
+            if isinstance(intent["notes"], list):
+                intent["notes"].append(
+                    "All candidate connections were removed by direction validation; review integration description and RTL signatures."
+                )
+                
     except Exception as e:
         # Save raw output for debugging
         try:

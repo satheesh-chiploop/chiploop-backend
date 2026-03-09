@@ -177,13 +177,13 @@ def _looks_pass(run: Dict[str, Any]) -> bool:
     combo = ((run.get("stdout") or "") + "\n" + (run.get("stderr") or "")).lower()
     if "traceback" in combo:
         return False
+    if "assertionerror" in combo:
+        return False
     if "failed" in combo and "0 failed" not in combo:
         return False
-    if "error" in combo and "%warning" not in combo and "0 error" not in combo:
-        # keep simple; nonzero returncode already catches most real errors
-        pass
+    if "error" in combo and "0 error" not in combo and "%warning" not in combo:
+        return False
     return True
-
 
 def run_agent(state: dict) -> dict:
     agent_name = "System Simulation Execution Agent"
@@ -219,6 +219,36 @@ def run_agent(state: dict) -> dict:
 
     verilator_present = bool(_which("verilator"))
     cocotb_present = bool(_which("cocotb-config"))
+
+    if not verilator_present:
+        state["status"] = "❌ 'verilator' not found on PATH."
+        return state
+
+    if not cocotb_present:
+        # Persist a clean preflight artifact instead of letting every make run fail noisily.
+        preflight = {
+            "type": "system_sim_execution_preflight",
+            "version": "1.0",
+            "generated_at": _now(),
+            "top_module": top,
+            "tools_detected": {
+                "make": bool(_which("make")),
+                "verilator": verilator_present,
+                "cocotb": cocotb_present,
+            },
+            "status": "failed_preflight",
+            "reason": "cocotb-config not found on PATH",
+            "hint": "Install/activate cocotb in the same backend runtime where System_SIM executes.",
+        }
+        txt = json.dumps(preflight, indent=2)
+        _write(os.path.join(out_root, "system_sim_execution.json"), txt)
+        _record(workflow_id, agent_name, "system/sim", "system_sim_execution.json", txt)
+
+        state.setdefault("system_sim", {})
+        state["system_sim"]["execution"] = preflight
+        state["system_sim_execution"] = preflight
+        state["status"] = "❌ System simulation preflight failed: cocotb-config not found"
+        return state
 
     env_base = os.environ.copy()
     env_base["TOPLEVEL"] = top
@@ -266,14 +296,26 @@ def run_agent(state: dict) -> dict:
             _write(os.path.join(logs_root, log_name), log_text)
 
             result["assertion_failures"] = _count_assertion_failures(log_text)
+            result["log_path"] = f"system/sim/logs/{log_name}"
             runs.append(result)
+
+    
 
     all_waveforms_after = set(_find_waveforms(workflow_dir))
     new_waveforms = sorted(list(all_waveforms_after - all_waveforms_before))
     if not new_waveforms:
         new_waveforms = sorted(list(all_waveforms_after))
 
-    coverage_candidates = _find_coverage_candidates(workflow_dir)
+    any_pass = any(r.get("pass") for r in runs)
+    coverage_candidates = _find_coverage_candidates(workflow_dir) if any_pass else {
+        "json": [],
+        "md": [],
+        "dat": [],
+        "logs": [],
+    }
+    tests_passed = sum(1 for r in runs if r.get("pass"))
+    tests_failed = sum(1 for r in runs if not r.get("pass"))
+    any_pass = tests_passed > 0
 
     summary = {
         "type": "system_sim_execution",
@@ -281,6 +323,7 @@ def run_agent(state: dict) -> dict:
         "generated_at": _now(),
         "top_module": top,
         "simulator": "verilator",
+        "status": "passed" if tests_failed == 0 else ("partial" if any_pass else "failed"),
         "tools_detected": {
             "make": bool(_which("make")),
             "verilator": verilator_present,
@@ -293,17 +336,22 @@ def run_agent(state: dict) -> dict:
         },
         "runs": runs,
         "tests_run": len(runs),
-        "tests_passed": sum(1 for r in runs if r.get("pass")),
-        "tests_failed": sum(1 for r in runs if not r.get("pass")),
+        "tests_passed": tests_passed,
+        "tests_failed": tests_failed,
         "total_runtime_sec": round(sum(float(r.get("runtime_sec") or 0.0) for r in runs), 3),
         "waveforms": [os.path.relpath(p, workflow_dir).replace("\\", "/") for p in new_waveforms],
         "coverage_candidates": {
             k: [os.path.relpath(p, workflow_dir).replace("\\", "/") for p in v]
             for k, v in coverage_candidates.items()
-        },
+        } if any_pass else {},
         "assertions_total": total_assertions,
         "assertion_failures_total": sum(int(r.get("assertion_failures") or 0) for r in runs),
+        "notes": [] if any_pass else [
+            "No simulation run passed; coverage candidates intentionally suppressed."
+        ],
     }
+
+    
 
     # Persist summary
     exec_json = json.dumps(summary, indent=2)

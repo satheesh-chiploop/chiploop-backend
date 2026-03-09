@@ -105,6 +105,9 @@ def _assemble_top(top_module: str, intent: dict, variant: str) -> str:
             continue
         if inst in port_map and base:
             port_map[inst][base] = str(val)
+    # Track destinations to prevent silent double-drives
+    driven_instance_ports = set()
+    driven_top_ports = set()
 
     # connections
     for idx, c in enumerate(connections):
@@ -124,6 +127,11 @@ def _assemble_top(top_module: str, intent: dict, variant: str) -> str:
 
         # Case 1: top -> instance
         if si == "top" and di != "top":
+            dst_key = (di, dp)
+            if dst_key in driven_instance_ports:
+                continue
+            driven_instance_ports.add(dst_key)
+
             top_ports[sp] = {"dir": _top_dir_for_endpoint(True), "range": sr}
             if di in port_map:
                 port_map[di][dp] = sp
@@ -131,6 +139,10 @@ def _assemble_top(top_module: str, intent: dict, variant: str) -> str:
 
         # Case 2: instance -> top
         if si != "top" and di == "top":
+            if dp in driven_top_ports:
+                continue
+            driven_top_ports.add(dp)
+
             top_ports[dp] = {"dir": _top_dir_for_endpoint(False), "range": dr}
             if si in port_map:
                 port_map[si][sp] = dp
@@ -141,12 +153,18 @@ def _assemble_top(top_module: str, intent: dict, variant: str) -> str:
             continue
 
         # Case 4: instance -> instance
+        dst_key = (di, dp)
+        if dst_key in driven_instance_ports:
+            continue
+        driven_instance_ports.add(dst_key)
+
         w = _wire_name(idx, src, dst)
         wire_meta[w] = width
         if si in port_map:
             port_map[si][sp] = w
         if di in port_map:
             port_map[di][dp] = w
+    
 
     for w, rng in wire_meta.items():
         if rng:
@@ -181,8 +199,9 @@ def _assemble_top(top_module: str, intent: dict, variant: str) -> str:
         lines.extend(wire_decls)
         lines.append("")
 
-    # instances
-    for inst in instances:
+
+    # instances (sorted for deterministic output)
+    for inst in sorted(instances, key=lambda x: x.get("name", "")):
         name = inst.get("name")
         module = inst.get("module")
         if not name or not module:
