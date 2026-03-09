@@ -57,9 +57,13 @@ Rules:
     tb = llm_text(prompt)
     tb = _strip_dut_module_if_present(tb, module_name)
 
-    if not tb or "endmodule" not in tb or " dut " not in tb:
+    tb_lower = tb.lower()
+    if (
+        not tb
+        or "endmodule" not in tb_lower
+        or f"{module_name.lower()} dut" not in tb_lower
+    ):
         raise RuntimeError(f"Generated TB is invalid or missing DUT instantiation for {module_name}")
-
 
 
     tb_dir = os.path.join(workflow_dir, "analog", "behavioral")

@@ -121,6 +121,16 @@ def run_agent(state: dict) -> dict:
     top_sim = (top_cfg.get("sim_module") or f"{top_base}_sim").strip()
     top_phys = (top_cfg.get("phys_module") or f"{top_base}_phys").strip()
 
+    instances = top_intent.get("instances", []) if isinstance(top_intent, dict) else []
+    connections = top_intent.get("connections", []) if isinstance(top_intent, dict) else []
+    tieoffs = top_intent.get("tieoffs", []) if isinstance(top_intent, dict) else []
+
+    if not instances:
+        raise ValueError("system_integration_intent missing instances. Refusing to generate stub SoC top.")
+
+    if not connections and not tieoffs:
+        raise ValueError("system_integration_intent has no connections/tieoffs. Refusing to generate stub SoC top.")
+
     # Generate tops
     sim_code = _assemble_top(top_sim, top_intent, variant="sim")
     phys_code = _assemble_top(top_phys, top_intent, variant="phys")

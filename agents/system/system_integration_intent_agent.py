@@ -144,34 +144,46 @@ def run_agent(state: dict) -> dict:
     # Strict JSON schema for downstream assembly.
     # Includes variant module overrides so we can generate sim/phys tops.
     # -----------------------------------------------------------------
+    digital_module = (
+        state.get("digital_top_module")
+        or state.get("digital_module_name")
+        or "digital_block"
+    ).strip()
+
+    analog_phys_module = (
+        analog_macro_module
+        or state.get("analog_top_module")
+        or state.get("analog_module_name")
+        or "analog_block"
+    ).strip()
+
+    analog_sim_module = (
+       analog_behavioral_module
+       or analog_phys_module
+    ).strip()
+
     schema = {
         "top": {
-            "base_name": "soc_top",
-            "sim_module": "soc_top_sim",
-            "phys_module": "soc_top_phys",
-            "notes": "Single power domain. Option-A: SRAM/ROM inferred inside digital_subsystem. SoC integrates only digital_subsystem + adc."
+            "base_name": top_base,
+            "sim_module": f"{top_base}_sim",
+            "phys_module": f"{top_base}_phys",
+            "notes": "Generic system integration manifest for digital + analog assembly."
         },
         "instances": [
-            {"name": "u_digital", "module": "digital_subsystem"},
-            {"name": "u_adc", "module": "adc_macro"}
+            {"name": "u_digital", "module": digital_module},
+            {"name": "u_analog", "module": analog_phys_module}
         ],
-        "connections": [
-            {"from": "u_digital.adc_start", "to": "u_adc.adc_start"},
-            {"from": "u_adc.adc_done", "to": "u_digital.adc_done"},
-            {"from": "u_adc.adc_data", "to": "u_digital.adc_data"}
-        ],
-        "tieoffs": [
-            {"signal": "u_adc.test_mode", "value": "1'b0"}
-        ],
+        "connections": [],
+        "tieoffs": [],
         "variants": {
             "sim": {
                 "module_overrides": {
-                    "u_adc": "adc_behavioral"
+                    "u_analog": analog_sim_module
                 }
             },
             "phys": {
                 "module_overrides": {
-                    "u_adc": "adc_macro"
+                    "u_analog": analog_phys_module
                 }
             }
         }
@@ -206,14 +218,13 @@ ANALOG RTL SIGNATURES (modules + ports, if available):
 ---
 You are a professional SoC integration engineer.
 
-CONTEXT / CONSTRAINTS (Iteration-1):
-- Integrate ONLY TWO blocks at the SoC top: digital_subsystem and ADC.
-- SRAM + Boot ROM are inside the digital_subsystem as inferred logic (Option A).
-- Single clock/reset and single power domain (keep it simple).
-- Generate an integration manifest that allows generating TWO tops:
-  - *_sim: uses ADC behavioral model
-  - *_phys: uses ADC macro stub (for PD)
-- Prefer keeping the same port names across sim/phys. If module names differ, use variants.module_overrides.
+CONTEXT / CONSTRAINTS:
+- Generate a generic system integration manifest for the blocks described in the provided signatures and integration description.
+- Prefer a minimal top with the fewest required instances and explicit point-to-point connections.
+- Keep sim/phys top port intent consistent. If analog sim/phys module names differ, use variants.module_overrides.
+- Reuse identical port names across blocks whenever appropriate.
+- Do not assume ADC-specific names unless they are present in the input signatures/description.
+
 
 🔒 IMPORTANT OUTPUT FORMAT RULES
 - DO NOT use markdown code fences (no ```json, no ```).
@@ -253,20 +264,35 @@ Now output JSON only.
         state["status"] = f"❌ Failed to parse system integration intent JSON: {e}"
         return state
 
-    # Normalize top naming
-    if isinstance(intent, dict):
-        intent.setdefault("top", {})
-        if isinstance(intent["top"], dict):
-            intent["top"].setdefault("base_name", top_base)
-            intent["top"].setdefault("sim_module", f"{top_base}_sim")
-            intent["top"].setdefault("phys_module", f"{top_base}_phys")
+    if not isinstance(intent, dict):
+        intent = {}
+
+    intent.setdefault("top", {})
+    intent.setdefault("instances", [])
+    intent.setdefault("connections", [])
+    intent.setdefault("tieoffs", [])
+    intent.setdefault("variants", {})
+
+    if isinstance(intent["top"], dict):
+        intent["top"].setdefault("base_name", top_base)
+        intent["top"].setdefault("sim_module", f"{top_base}_sim")
+        intent["top"].setdefault("phys_module", f"{top_base}_phys")
+
+    # Generic fallback if LLM under-specifies the manifest
+    if not intent["instances"]:
+        intent["instances"] = schema["instances"]
+
+    if "sim" not in intent["variants"]:
+        intent["variants"]["sim"] = schema["variants"]["sim"]
+    if "phys" not in intent["variants"]:
+        intent["variants"]["phys"] = schema["variants"]["phys"]
 
     # Persist artifact
     try:
         save_text_artifact_and_record(
             workflow_id=workflow_id,
             agent_name=agent_name,
-            subdir="system/integrate",
+            subdir="system/integration",
             filename="system_integration_intent.json",
             content=json.dumps(intent, indent=2),
         )

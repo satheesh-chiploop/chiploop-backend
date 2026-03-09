@@ -59,12 +59,13 @@ def _collect_rtl_files(workflow_dir: str) -> List[str]:
     rtl.sort()
     return rtl
 
+
 def _pick_top_module(spec: Dict[str, Any], rtl_files: List[str], state_top: Optional[str]) -> str:
-    if state_top:
-        return state_top
     top = (spec.get("top_module") or {}).get("name")
     if isinstance(top, str) and top.strip():
         return top.strip()
+    if state_top:
+        return state_top
     mod_re = re.compile(r"^\s*module\s+([a-zA-Z_][a-zA-Z0-9_$]*)\b")
     for f in rtl_files:
         try:
@@ -209,7 +210,13 @@ def _gen_cocotb_test(spec: Dict[str, Any], top: str, clocks: List[str], resets: 
 
     init_block = "\n".join(init_lines) if init_lines else "    # No extra input ports found to init."
 
-    port_names = [p.get("name") for p in ports if p.get("name")]
+  
+
+    port_names = [
+        p.get("name")
+        for p in ports
+        if p.get("name") and str(p.get("direction", "")).lower() in ("input", "inout")
+    ]
 
     return f'''"""Auto-generated Cocotb testbench skeleton for: {top}
 

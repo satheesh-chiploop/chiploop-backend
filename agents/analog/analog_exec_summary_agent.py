@@ -1,6 +1,7 @@
 from utils.artifact_utils import save_text_artifact_and_record
 import os
 import json
+import glob
 
 def _fmt(v):
     return "NA" if v is None else str(v)
@@ -101,13 +102,11 @@ def run_agent(state: dict) -> dict:
     lines.append("# Analog Executive Summary")
     lines.append("")
     block_name = spec.get("block_name") or ((spec.get("block") or {}).get("name")) or "(unknown)"
-    module_name = (
-        spec.get("module_name")
-        or f"{block_name}_model"
-        if block_name and block_name != "(unknown)"
-        else "(unknown)"
-    )
 
+    module_name = spec.get("module_name") or (
+        f"{block_name}_model" if block_name and block_name != "(unknown)" else "(unknown)"
+    )
+    
 
     lines.append(f"- Block: {block_name}")
     lines.append(f"- Module: {module_name}")
@@ -134,9 +133,10 @@ def run_agent(state: dict) -> dict:
        or os.path.exists(os.path.join(workflow_dir, "analog", "delta_summary.json"))
     )
 
-    abstract_present = (
-       os.path.exists(os.path.join(workflow_dir, "analog", "abstract", "macro.lef"))
-       or os.path.exists(os.path.join(workflow_dir, "analog", "abstract", "macro_stub.lib"))
+
+    abstract_present = bool(
+       glob.glob(os.path.join(workflow_dir, "analog", "abstract", "*.lef")) or
+       glob.glob(os.path.join(workflow_dir, "analog", "abstract", "*.lib"))
     )
 
 
