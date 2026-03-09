@@ -18,6 +18,27 @@ def _now() -> str:
 def _which(binname: str) -> Optional[str]:
     return shutil.which(binname)
 
+def _python_has_module(module_name: str) -> bool:
+    try:
+        p = subprocess.run(
+            ["python3", "-c", f"import {module_name}"],
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+        return p.returncode == 0
+    except Exception:
+        return False
+
+
+def _has_cocotb_runtime() -> bool:
+    # Accept either cocotb-config on PATH or importable cocotb + cocotb_tools.config
+    if _which("cocotb-config"):
+        return True
+    if _python_has_module("cocotb") and _python_has_module("cocotb_tools.config"):
+        return True
+    return False
+
 
 def _write(path: str, content: str) -> None:
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -218,7 +239,7 @@ def run_agent(state: dict) -> dict:
     os.makedirs(logs_root, exist_ok=True)
 
     verilator_present = bool(_which("verilator"))
-    cocotb_present = bool(_which("cocotb-config"))
+    cocotb_present = _has_cocotb_runtime()
 
     if not verilator_present:
         state["status"] = "❌ 'verilator' not found on PATH."
@@ -234,10 +255,13 @@ def run_agent(state: dict) -> dict:
             "tools_detected": {
                 "make": bool(_which("make")),
                 "verilator": verilator_present,
-                "cocotb": cocotb_present,
+                "cocotb_config": bool(_which("cocotb-config")),
+                "python_cocotb": _python_has_module("cocotb"),
+                "python_cocotb_tools_config": _python_has_module("cocotb_tools.config"),
+                "cocotb_runtime": cocotb_present,
             },
             "status": "failed_preflight",
-            "reason": "cocotb-config not found on PATH",
+            "reason": "Neither cocotb-config nor importable cocotb/cocotb_tools.config was found",
             "hint": "Install/activate cocotb in the same backend runtime where System_SIM executes.",
         }
         txt = json.dumps(preflight, indent=2)
@@ -247,7 +271,7 @@ def run_agent(state: dict) -> dict:
         state.setdefault("system_sim", {})
         state["system_sim"]["execution"] = preflight
         state["system_sim_execution"] = preflight
-        state["status"] = "❌ System simulation preflight failed: cocotb-config not found"
+        state["status"] = "❌ System simulation preflight failed: cocotb runtime not found"
         return state
 
     env_base = os.environ.copy()
@@ -327,7 +351,10 @@ def run_agent(state: dict) -> dict:
         "tools_detected": {
             "make": bool(_which("make")),
             "verilator": verilator_present,
-            "cocotb": cocotb_present,
+            "cocotb_config": bool(_which("cocotb-config")),
+            "python_cocotb": _python_has_module("cocotb"),
+            "python_cocotb_tools_config": _python_has_module("cocotb_tools.config"),
+            "cocotb_runtime": cocotb_present,
         },
         "matrix": {
             "testcases": testcases,
