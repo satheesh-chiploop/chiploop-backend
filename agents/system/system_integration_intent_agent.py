@@ -255,7 +255,7 @@ Now output JSON only.
             save_text_artifact_and_record(
                 workflow_id=workflow_id,
                 agent_name=agent_name,
-                subdir="system/integrate",
+                subdir="system/integration",
                 filename="system_integration_intent_raw.txt",
                 content=raw,
             )
