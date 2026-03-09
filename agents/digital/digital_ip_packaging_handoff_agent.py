@@ -107,37 +107,43 @@ def _gather_deliverables(workflow_dir: str) -> Dict[str, List[str]]:
     }
     buckets["rtl"] = _collect_rtl_files(workflow_dir)
 
-    roots = [
-        ("spec", os.path.join(workflow_dir, "digital")),
-        ("arch", os.path.join(workflow_dir, "digital")),
-        ("verification", os.path.join(workflow_dir, "vv")),
-        ("constraints", os.path.join(workflow_dir, "constraints")),
-        ("power_intent", os.path.join(workflow_dir, "signoff")),
-        ("reports", os.path.join(workflow_dir, "signoff")),
-        ("reports", os.path.join("artifact")),
-    ]
-    for key, root in roots:
-        if not os.path.exists(root):
-            continue
-        for r, _, files in os.walk(root):
-            for fn in files:
-                p = os.path.join(r, fn)
-                low = fn.lower()
-                if key in ("spec","arch") and low.endswith((".json",".md")):
-                    buckets[key].append(p)
-                elif key == "constraints" and low.endswith((".sdc",".xdc",".tcl")):
-                    buckets[key].append(p)
-                elif key == "power_intent" and low.endswith(".upf"):
-                    buckets[key].append(p)
-                elif key == "verification" and low.endswith((".py",".md",".sby",".sv",".json",".yml",".yaml")):
-                    buckets[key].append(p)
-                elif key == "reports" and low.endswith((".md",".json",".log",".txt")):
-                    buckets[key].append(p)
-
-    for r, _, files in os.walk(workflow_dir):
+    for root, _, files in os.walk(workflow_dir):
         for fn in files:
-            if fn.lower() in ("regmap.json","regmap.md"):
-                buckets["regmap"].append(os.path.join(r, fn))
+            p = os.path.join(root, fn)
+            norm = p.replace("\\", "/").lower()
+
+            if fn.lower() in ("regmap.json", "regmap.md"):
+                buckets["regmap"].append(p)
+                continue
+
+            if norm.endswith((".sdc", ".xdc", ".tcl")) and "/constraints/" in norm:
+                buckets["constraints"].append(p)
+                continue
+
+            if norm.endswith(".upf"):
+                buckets["power_intent"].append(p)
+                continue
+
+            if "/vv/" in norm and norm.endswith((".py", ".md", ".sby", ".sv", ".json", ".yml", ".yaml")):
+                buckets["verification"].append(p)
+                continue
+
+            if norm.endswith((".md", ".json")):
+                base = os.path.basename(norm)
+                if "microarch" in base:
+                    buckets["microarch"].append(p)
+                elif "arch" in base:
+                    buckets["arch"].append(p)
+                elif "spec" in base:
+                    buckets["spec"].append(p)
+                elif "/signoff/" in norm or "/handoff/" in norm:
+                    buckets["reports"].append(p)
+                elif "/digital/" in norm or "/system/" in norm or "/analog/" in norm:
+                    buckets["other"].append(p)
+                continue
+
+            if norm.endswith((".log", ".txt")) and ("/signoff/" in norm or "/artifact/" in norm or "/handoff/" in norm):
+                buckets["reports"].append(p)
 
     for k in buckets:
         buckets[k] = sorted(list(dict.fromkeys(buckets[k])))

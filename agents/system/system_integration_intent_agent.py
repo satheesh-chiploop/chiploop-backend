@@ -51,6 +51,82 @@ def _clean_llm_output_to_json_text(raw: str) -> str:
 
     return raw.strip()
 
+def _parse_ep(ep: str):
+    if not ep or "." not in ep:
+        return None, None
+    inst, port = ep.split(".", 1)
+    return inst.strip(), port.split("[", 1)[0].strip()
+
+
+def _port_dir_from_sigs(sig_db: dict, module_name: str, port_name: str):
+    if not isinstance(sig_db, dict):
+        return None
+
+    # common shapes
+    if module_name in sig_db and isinstance(sig_db[module_name], dict):
+        ports = sig_db[module_name].get("ports") or sig_db[module_name].get("interface") or []
+        for p in ports:
+            if isinstance(p, dict) and p.get("name") == port_name:
+                return str(p.get("direction") or p.get("dir") or "").lower()
+
+    mods = sig_db.get("modules")
+    if isinstance(mods, dict) and module_name in mods and isinstance(mods[module_name], dict):
+        ports = mods[module_name].get("ports") or mods[module_name].get("interface") or []
+        for p in ports:
+            if isinstance(p, dict) and p.get("name") == port_name:
+                return str(p.get("direction") or p.get("dir") or "").lower()
+
+    return None
+
+
+def _instance_to_module(intent: dict):
+    out = {}
+    for inst in intent.get("instances", []):
+        if isinstance(inst, dict) and inst.get("name") and inst.get("module"):
+            out[inst["name"]] = inst["module"]
+    return out
+
+
+def _sanitize_connections(intent: dict, digital_sigs: dict, analog_sigs: dict):
+    inst2mod = _instance_to_module(intent)
+    cleaned = []
+
+    for c in intent.get("connections", []):
+        if not isinstance(c, dict):
+            continue
+        src = c.get("from")
+        dst = c.get("to")
+        if not src or not dst:
+            continue
+
+        si, sp = _parse_ep(src)
+        di, dp = _parse_ep(dst)
+        if not si or not sp or not di or not dp:
+            continue
+
+        # top.* is always allowed
+        if si == "top" or di == "top":
+            cleaned.append(c)
+            continue
+
+        smod = inst2mod.get(si)
+        dmod = inst2mod.get(di)
+
+        sdir = _port_dir_from_sigs(digital_sigs, smod, sp) or _port_dir_from_sigs(analog_sigs, smod, sp)
+        ddir = _port_dir_from_sigs(digital_sigs, dmod, dp) or _port_dir_from_sigs(analog_sigs, dmod, dp)
+
+        # accept only output -> input when both dirs known
+        if sdir and ddir:
+            if sdir == "output" and ddir == "input":
+                cleaned.append(c)
+            continue
+
+        # if directions unknown, keep it
+        cleaned.append(c)
+
+    intent["connections"] = cleaned
+    return intent
+
 
 
 def run_agent(state: dict) -> dict:
@@ -67,11 +143,10 @@ def run_agent(state: dict) -> dict:
         state.get("system_integration_description")
         or state.get("soc_integration_description")
         or state.get("integration_description")
+        or state.get("soc_integration_spec_text")
+        or state.get("soc_integration_spec")
         or state.get("soc_spec")
         or state.get("system_spec")
-        or state.get("datasheet_text")
-        or state.get("spec_text")
-        or state.get("spec")
         or state.get("description")
         or ""
     ).strip()
@@ -228,7 +303,10 @@ Now output JSON only.
         return state
 
     try:
-        intent = json.loads(cleaned)
+        intent = safe_json_load(cleaned) if cleaned else {}
+        if not isinstance(intent, dict):
+            intent = {}
+        intent = _sanitize_connections(intent, digital_sigs, analog_sigs)
     except Exception as e:
         # Save raw output for debugging
         try:

@@ -356,7 +356,13 @@ def run_agent(state: dict) -> dict:
                     
     spec = _safe_read_json(spec_path)
     rtl_files = state.get("rtl_files") or _collect_rtl_files(workflow_dir)
-    top = _pick_top_module(spec, rtl_files, state.get("top_module"))
+    # Prefer assembled SoC sim top when present
+    top = (
+        state.get("soc_top_sim_module")
+        or state.get("soc_top_name")
+        or _pick_top_module(spec, rtl_files, state.get("top_module"))
+    )
+ 
 
     ports = _ports_from_spec(spec)
     clocks, resets = _infer_clocks_resets(spec, ports)
@@ -375,7 +381,7 @@ TOPLEVEL_LANG ?= verilog
 TOPLEVEL      ?= {top}
 MODULE        ?= test_{top}
 
-VERILOG_SOURCES += $(shell find ../.. -name '*.v' -o -name '*.sv')
+VERILOG_SOURCES += $(shell find ../.. -name '*.v' -o -name '*.sv' | sort | uniq)
 
 SIM ?= verilator
 EXTRA_ARGS += --trace --trace-structs

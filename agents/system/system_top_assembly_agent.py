@@ -1,18 +1,21 @@
 import json
+import re
 from utils.artifact_utils import save_text_artifact_and_record
 
 # ---------------------------------------------------------------------
 # System Loop: Top Assembly Agent
 # - Reads system_integration_intent.json from state and generates:
-#   * <top>_sim.sv  (ADC behavioral model via variants.sim.module_overrides)
-#   * <top>_phys.sv (ADC macro stub via variants.phys.module_overrides)
-# - Designed to avoid touching digital_top_assembly_agent.py.
+#   * <top>_sim.sv
+#   * <top>_phys.sv
+# - Converts top.* endpoints into real top ports
+# - Sanitizes bus endpoints and wire names
 # ---------------------------------------------------------------------
 
 
 def _parse_endpoint(ep: str):
     """
     "u_inst.port" -> ("u_inst", "port")
+    "top.DATA[9:0]" -> ("top", "DATA[9:0]")
     """
     if not ep or "." not in ep:
         return None, None
@@ -20,20 +23,65 @@ def _parse_endpoint(ep: str):
     return inst.strip(), port.strip()
 
 
+def _split_port_and_range(port: str):
+    """
+    "adc_data[9:0]" -> ("adc_data", "[9:0]")
+    "clk" -> ("clk", "")
+    """
+    if not port:
+        return "", ""
+    m = re.match(r"^([a-zA-Z_][a-zA-Z0-9_$]*)(\[[^\]]+\])?$", port.strip())
+    if not m:
+        cleaned = re.sub(r"[^a-zA-Z0-9_$]", "_", port.strip())
+        return cleaned, ""
+    return m.group(1), (m.group(2) or "")
+
+
+def _sanitize_name(name: str) -> str:
+    s = re.sub(r"[^a-zA-Z0-9_$]", "_", name)
+    s = re.sub(r"_+", "_", s).strip("_")
+    if not s:
+        s = "sig"
+    if s[0].isdigit():
+        s = f"n_{s}"
+    return s
+
+
 def _wire_name(i: int, src: str, dst: str) -> str:
-    # stable-ish wire naming
-    src_s = src.replace(".", "_").replace("[", "_").replace("]", "_")
-    dst_s = dst.replace(".", "_").replace("[", "_").replace("]", "_")
-    return f"w_{i}_{src_s}__{dst_s}"
+    src_inst, src_port = _parse_endpoint(src)
+    dst_inst, dst_port = _parse_endpoint(dst)
+    src_base, _ = _split_port_and_range(src_port or "")
+    dst_base, _ = _split_port_and_range(dst_port or "")
+    return _sanitize_name(f"w_{i}_{src_inst}_{src_base}__{dst_inst}_{dst_base}")
+
+
+def _merge_range(a: str, b: str) -> str:
+    return a or b or ""
+
+
+def _top_dir_for_endpoint(is_source: bool) -> str:
+    # If top is source of connection, it is an input to top-level module.
+    # If top is destination of connection, it is an output from top-level module.
+    return "input" if is_source else "output"
+
+
+def _normalize_tieoff_entry(t: dict):
+    """
+    Support both:
+      {"signal":"u_a.port","value":"1'b0"}
+      {"instance":"u_a","port":"enable","value":"1'b0"}
+    """
+    sig = t.get("signal")
+    if sig:
+        inst, port = _parse_endpoint(sig)
+        return inst, port, t.get("value")
+
+    inst = t.get("instance")
+    port = t.get("port")
+    return inst, port, t.get("value")
 
 
 def _assemble_top(top_module: str, intent: dict, variant: str) -> str:
-    """
-    Build a simple SystemVerilog top with:
-    - logic wires inferred from connections
-    - named port maps for connected + tieoff ports
-    - module overrides applied per intent['variants'][variant]['module_overrides']
-    """
     instances = intent.get("instances", [])
     connections = intent.get("connections", [])
     tieoffs = intent.get("tieoffs", [])
@@ -41,40 +89,91 @@ def _assemble_top(top_module: str, intent: dict, variant: str) -> str:
     variants = intent.get("variants", {}) or {}
     module_overrides = (variants.get(variant, {}) or {}).get("module_overrides", {}) or {}
 
-    # Build per-instance port map
     port_map = {inst["name"]: {} for inst in instances if "name" in inst}
-
-    # Apply tieoffs: "u_adc.test_mode" => value
-    for t in tieoffs:
-        sig = t.get("signal")
-        val = t.get("value")
-        if not sig or val is None:
-            continue
-        inst, port = _parse_endpoint(sig)
-        if inst in port_map and port:
-            port_map[inst][port] = val  # direct literal tieoff
-
-    # Apply connections: create wires and map both endpoints to same wire
+    top_ports = {}   # name -> {"dir": "...", "range": "..."}
+    wire_meta = {}   # wire_name -> range
     wire_decls = []
+
+    # tieoffs
+    for t in tieoffs:
+        inst, port, val = _normalize_tieoff_entry(t)
+        if not inst or not port or val is None:
+            continue
+        base, rng = _split_port_and_range(port)
+        if inst == "top":
+            # top-level tieoff does not make sense; skip
+            continue
+        if inst in port_map and base:
+            port_map[inst][base] = str(val)
+
+    # connections
     for idx, c in enumerate(connections):
         src = c.get("from")
         dst = c.get("to")
         if not src or not dst:
             continue
-        si, sp = _parse_endpoint(src)
-        di, dp = _parse_endpoint(dst)
-        if not (si and sp and di and dp):
+
+        si, sp_raw = _parse_endpoint(src)
+        di, dp_raw = _parse_endpoint(dst)
+        if not (si and sp_raw and di and dp_raw):
             continue
 
+        sp, sr = _split_port_and_range(sp_raw)
+        dp, dr = _split_port_and_range(dp_raw)
+        width = _merge_range(sr, dr)
+
+        # Case 1: top -> instance
+        if si == "top" and di != "top":
+            top_ports[sp] = {"dir": _top_dir_for_endpoint(True), "range": sr}
+            if di in port_map:
+                port_map[di][dp] = sp
+            continue
+
+        # Case 2: instance -> top
+        if si != "top" and di == "top":
+            top_ports[dp] = {"dir": _top_dir_for_endpoint(False), "range": dr}
+            if si in port_map:
+                port_map[si][sp] = dp
+            continue
+
+        # Case 3: top -> top, ignore
+        if si == "top" and di == "top":
+            continue
+
+        # Case 4: instance -> instance
         w = _wire_name(idx, src, dst)
-        wire_decls.append(f"  logic {w};")
+        wire_meta[w] = width
         if si in port_map:
             port_map[si][sp] = w
         if di in port_map:
             port_map[di][dp] = w
 
+    for w, rng in wire_meta.items():
+        if rng:
+            wire_decls.append(f"  logic {rng} {w};")
+        else:
+            wire_decls.append(f"  logic {w};")
+
+    # module header
     lines = []
-    lines.append(f"module {top_module} ();")
+    port_items = []
+    for pname in sorted(top_ports.keys()):
+        meta = top_ports[pname]
+        d = meta["dir"]
+        r = meta["range"]
+        if r:
+            port_items.append(f"  {d} logic {r} {pname}")
+        else:
+            port_items.append(f"  {d} logic {pname}")
+
+    if port_items:
+        lines.append(f"module {top_module} (")
+        for i, item in enumerate(port_items):
+            comma = "," if i < len(port_items) - 1 else ""
+            lines.append(f"{item}{comma}")
+        lines.append(");")
+    else:
+        lines.append(f"module {top_module} ();")
     lines.append("")
 
     if wire_decls:
@@ -82,20 +181,18 @@ def _assemble_top(top_module: str, intent: dict, variant: str) -> str:
         lines.extend(wire_decls)
         lines.append("")
 
-    # Instances
+    # instances
     for inst in instances:
         name = inst.get("name")
         module = inst.get("module")
         if not name or not module:
             continue
 
-        # Apply module override for this variant (e.g., u_adc -> adc_behavioral in sim)
         module = module_overrides.get(name, module)
-
         pm = port_map.get(name, {})
+
         if pm:
             lines.append(f"  {module} {name} (")
-            # stable order: literal tieoffs first? just sort keys
             keys = sorted(pm.keys())
             for k_i, port in enumerate(keys):
                 rhs = pm[port]
@@ -104,7 +201,6 @@ def _assemble_top(top_module: str, intent: dict, variant: str) -> str:
             lines.append("  );")
         else:
             lines.append(f"  {module} {name} ();")
-
         lines.append("")
 
     lines.append("endmodule")
@@ -114,7 +210,6 @@ def _assemble_top(top_module: str, intent: dict, variant: str) -> str:
 def run_agent(state: dict) -> dict:
     agent_name = "System Top Assembly Agent"
     workflow_id = state.get("workflow_id")
-
 
     top_intent = state.get("system_integration_intent") or {}
     print("DEBUG top assembly file:", __file__)
@@ -133,45 +228,26 @@ def run_agent(state: dict) -> dict:
 
     if not instances:
         save_text_artifact_and_record(
-           workflow_id,
-           agent_name,
-           "system/integration",
-           "top_assembly_bad_intent.json",
-           json.dumps(top_intent, indent=2),
+            workflow_id,
+            agent_name,
+            "system/integration",
+            "top_assembly_bad_intent.json",
+            json.dumps(top_intent, indent=2),
         )
         raise ValueError("system_integration_intent missing instances. Refusing to generate stub SoC top.")
-
-  
 
     if not connections and not tieoffs:
         raise ValueError("system_integration_intent has no connections/tieoffs. Refusing to generate stub SoC top.")
 
-    # Generate tops
     sim_code = _assemble_top(top_sim, top_intent, variant="sim")
     phys_code = _assemble_top(top_phys, top_intent, variant="phys")
 
-    # Persist artifacts
-    save_text_artifact_and_record(
-        workflow_id,
-        agent_name,
-        "system/integration",
-        f"{top_sim}.sv",
-        sim_code,
-    )
-    save_text_artifact_and_record(
-        workflow_id,
-        agent_name,
-        "system/integration",
-        f"{top_phys}.sv",
-        phys_code,
-    )
+    save_text_artifact_and_record(workflow_id, agent_name, "system/integration", f"{top_sim}.sv", sim_code)
+    save_text_artifact_and_record(workflow_id, agent_name, "system/integration", f"{top_phys}.sv", phys_code)
 
-    # Update state for downstream consumers
     state["soc_top_sim_module"] = top_sim
     state["soc_top_phys_module"] = top_phys
-
     state["soc_top_sim_path"] = f"system/integration/{top_sim}.sv"
     state["soc_top_phys_path"] = f"system/integration/{top_phys}.sv"
-
     state["status"] = f"✅ Generated SoC tops: {top_sim}.sv and {top_phys}.sv"
     return state

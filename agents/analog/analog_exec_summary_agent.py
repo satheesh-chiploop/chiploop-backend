@@ -97,7 +97,8 @@ def run_agent(state: dict) -> dict:
 
     sim_vals = (sim_metrics.get("metrics") or {}) if isinstance(sim_metrics, dict) else {}
     beh_vals = (beh_metrics.get("metrics") or {}) if isinstance(beh_metrics, dict) else {}
-
+    sim_conf = sim_metrics.get("confidence") if isinstance(sim_metrics, dict) else None
+    beh_conf = beh_metrics.get("confidence") if isinstance(beh_metrics, dict) else None
     lines = []
     lines.append("# Analog Executive Summary")
     lines.append("")
@@ -148,6 +149,12 @@ def run_agent(state: dict) -> dict:
     lines.append(f"- Simulation plan: {'present' if sim_plan_present else 'missing'}")
     lines.append(f"- Correlation: {'present' if corr_present else 'missing'}")
     lines.append(f"- Abstract views: {'present' if abstract_present else 'missing'}")
+    lines.append("")
+
+
+    lines.append("## Metrics Confidence")
+    lines.append(f"- Simulation metrics confidence: {_fmt(sim_conf)}")
+    lines.append(f"- Behavioral metrics confidence: {_fmt(beh_conf)}")
     lines.append("")
     
 
