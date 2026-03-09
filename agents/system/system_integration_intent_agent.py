@@ -7,7 +7,8 @@ from typing import Dict
 from portkey_ai import Portkey
 from openai import OpenAI
 from utils.artifact_utils import save_text_artifact_and_record
-from utils.llm_utils import run_llm_fallback
+from agents.analog._analog_llm import llm_text, safe_json_load
+
 
 # ---------------------------------------------------------------------
 # System Loop: Integration Intent Agent
@@ -49,25 +50,6 @@ def _clean_llm_output_to_json_text(raw: str) -> str:
         return raw[first_arr:last_arr + 1].strip()
 
     return raw.strip()
-
-def _llm_generate(prompt: str, timeout_s: int = 600) -> str:
-    """
-    Use shared backend LLM utility for consistency across agents.
-    Keeps the same function name/signature so rest of file remains unchanged.
-    """
-    try:
-        return asyncio.run(run_llm_fallback(prompt)) or ""
-    except RuntimeError:
-        # In case an event loop is already active
-        loop = asyncio.new_event_loop()
-        try:
-            return loop.run_until_complete(run_llm_fallback(prompt)) or ""
-        finally:
-            loop.close()
-    except Exception as e:
-        return f"{{\"error\":\"LLM generation failed: {e}\"}}"
-
-
 
 
 
@@ -238,7 +220,7 @@ TARGET JSON SCHEMA EXAMPLE:
 Now output JSON only.
 """.strip()
 
-    raw = _llm_generate(prompt)
+    raw = llm_text(prompt)
     cleaned = _clean_llm_output_to_json_text(raw)
 
     if not cleaned:
