@@ -7,6 +7,7 @@ from typing import Dict
 from portkey_ai import Portkey
 from openai import OpenAI
 from utils.artifact_utils import save_text_artifact_and_record
+from utils.llm_utils import run_llm_fallback
 
 # ---------------------------------------------------------------------
 # System Loop: Integration Intent Agent
@@ -49,50 +50,25 @@ def _clean_llm_output_to_json_text(raw: str) -> str:
 
     return raw.strip()
 
-
 def _llm_generate(prompt: str, timeout_s: int = 600) -> str:
     """
-    Matches existing repo style:
-    - If USE_LOCAL_OLLAMA: call ollama
-    - Else: Portkey streaming, fallback to ollama
+    Use shared backend LLM utility for consistency across agents.
+    Keeps the same function name/signature so rest of file remains unchanged.
     """
-    out = ""
-
     try:
-        if USE_LOCAL_OLLAMA:
-            payload = {"model": "llama3", "prompt": prompt}
-            r = requests.post(OLLAMA_URL, json=payload, timeout=timeout_s)
-            r.raise_for_status()
-            data = r.json()
-            out = data.get("response", "") or ""
-        else:
-            if client_portkey is None:
-                raise RuntimeError("PORTKEY_API_KEY not set and USE_LOCAL_OLLAMA=false")
-
-            # Portkey passthrough to OpenAI
-            completion = client_portkey.chat.completions.create(
-                model="gpt-4.1-mini",
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.2,
-                stream=True,
-                timeout=timeout_s,
-            )
-            for chunk in completion:
-                delta = getattr(chunk.choices[0].delta, "content", None)
-                if delta:
-                    out += delta
-    except Exception as e:
-        # Fallback to ollama if possible
+        return asyncio.run(run_llm_fallback(prompt)) or ""
+    except RuntimeError:
+        # In case an event loop is already active
+        loop = asyncio.new_event_loop()
         try:
-            payload = {"model": "llama3", "prompt": prompt}
-            r = requests.post(OLLAMA_URL, json=payload, timeout=timeout_s)
-            r.raise_for_status()
-            data = r.json()
-            out = data.get("response", "") or out
-        except Exception:
-            out = out or f"{{\"error\":\"LLM generation failed: {e}\"}}"
+            return loop.run_until_complete(run_llm_fallback(prompt)) or ""
+        finally:
+            loop.close()
+    except Exception as e:
+        return f"{{\"error\":\"LLM generation failed: {e}\"}}"
 
-    return out
+
+
 
 
 def run_agent(state: dict) -> dict:
