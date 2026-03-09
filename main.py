@@ -4673,6 +4673,14 @@ def execute_system_app_background(
             shared_state["datasheet_text"] = analog_text
             shared_state["analog_datasheet"] = analog_text
 
+
+            # ---------------------------------------------------------
+        # Demo defaults for System_SIM execution / coverage agents
+        # ---------------------------------------------------------
+        shared_state.setdefault("system_sim_testcases", ["smoke_test", "constrained_random_sanity"])
+        shared_state.setdefault("system_sim_seeds", [1, 2])
+        shared_state.setdefault("system_sim_num_iters", 25)
+
         # Do NOT set shared_state["spec"] / ["spec_text"] globally here,
         # because that causes cross-domain contamination.
 
