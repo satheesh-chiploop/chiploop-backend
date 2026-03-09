@@ -902,6 +902,9 @@ def _run_nodes_with_shared_state(
             result = fn(shared_state)
             if isinstance(result, dict):
                 shared_state.update(result)
+                result_status = str(result.get("status", ""))
+                if result_status.startswith("❌"):
+                    raise RuntimeError(result_status)
 
             append_log_workflow(workflow_id, f"✅ {label} done")
             append_log_run(run_id, f"✅ {label} done")
@@ -1155,8 +1158,6 @@ def execute_workflow_background(
             shared_state["user_id"] = user_id
         if upload_path:
             shared_state["uploaded_file"] = upload_path
-        if spec_text:
-            shared_state["spec"] = spec_text
 
         if spec_text:
             shared_state["spec_text"] = spec_text
@@ -1174,6 +1175,23 @@ def execute_workflow_background(
             for k, v in payload.items():
                 if v is not None:
                    shared_state[k] = v
+
+
+        # NEW: explicitly normalize common system integration description aliases
+        system_desc = (
+            shared_state.get("system_integration_description")
+            or shared_state.get("soc_integration_description")
+            or shared_state.get("integration_description")
+            or (data.get("system_integration_description") if isinstance(data, dict) else None)
+            or (data.get("soc_integration_description") if isinstance(data, dict) else None)
+            or (data.get("integration_description") if isinstance(data, dict) else None)
+            or ""
+        ).strip()
+
+        if system_desc:
+           shared_state["system_integration_description"] = system_desc
+           shared_state["soc_integration_description"] = system_desc
+           shared_state["integration_description"] = system_desc
 
         # NEW: normalize analog/digital/system spec fields
         normalized_spec = (

@@ -114,7 +114,13 @@ def _assemble_top(top_module: str, intent: dict, variant: str) -> str:
 def run_agent(state: dict) -> dict:
     agent_name = "System Top Assembly Agent"
     workflow_id = state.get("workflow_id")
+
+
     top_intent = state.get("system_integration_intent") or {}
+    print("DEBUG top assembly file:", __file__)
+    print("DEBUG incoming top_intent type:", type(top_intent).__name__)
+    print("DEBUG incoming top_intent:", json.dumps(top_intent, indent=2) if isinstance(top_intent, dict) else top_intent)
+
     top_cfg = top_intent.get("top", {}) if isinstance(top_intent, dict) else {}
 
     top_base = (top_cfg.get("base_name") or state.get("soc_top_name") or state.get("top_module") or "soc_top").strip()
@@ -126,7 +132,16 @@ def run_agent(state: dict) -> dict:
     tieoffs = top_intent.get("tieoffs", []) if isinstance(top_intent, dict) else []
 
     if not instances:
+        save_text_artifact_and_record(
+           workflow_id,
+           agent_name,
+           "system/integration",
+           "top_assembly_bad_intent.json",
+           json.dumps(top_intent, indent=2),
+        )
         raise ValueError("system_integration_intent missing instances. Refusing to generate stub SoC top.")
+
+  
 
     if not connections and not tieoffs:
         raise ValueError("system_integration_intent has no connections/tieoffs. Refusing to generate stub SoC top.")

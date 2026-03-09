@@ -298,7 +298,12 @@ Now output JSON only.
         )
     except Exception as e:
         print(f"⚠️ Failed to upload system integration intent artifact: {e}")
-
+    print("DEBUG intent agent file:", __file__)
+    print("DEBUG intent keys:", list(intent.keys()))
+    print("DEBUG intent instances:", intent.get("instances"))
+    print("DEBUG intent connections:", intent.get("connections"))
+    print("DEBUG intent tieoffs:", intent.get("tieoffs"))
     state["system_integration_intent"] = intent
+
     state["status"] = "✅ System integration intent generated"
     return state
