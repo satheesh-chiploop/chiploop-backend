@@ -478,6 +478,8 @@ from agents.system.system_cosim_integration_agent import run_agent as system_cos
 from agents.system.system_iss_bridge_agent import run_agent as system_iss_bridge_agent
 from agents.system.system_integration_intent_agent import run_agent as system_integration_intent
 from agents.system.system_top_assembly_agent import run_agent as system_top_assembly
+from agents.system.system_sim_execution_agent import run_agent as system_sim_execution_agent
+from agents.system.system_sim_coverage_summary_agent import run_agent as system_sim_coverage_summary_agent
 
 SYSTEM_AGENT_FUNCTIONS: Dict[str,Any] = {
     "Digital Spec Agent": digital_spec_agent,
@@ -589,6 +591,8 @@ SYSTEM_AGENT_FUNCTIONS: Dict[str,Any] = {
     "System ISS Bridge Agent": system_iss_bridge_agent,  
     "System Integration Intent Agent": system_integration_intent,
     "System Top Assembly Agent": system_top_assembly,
+    "System Simulation Execution Agent": system_sim_execution_agent,
+    "System Simulation Coverage Summary Agent": system_sim_coverage_summary_agent,
 }
 
 

@@ -1032,6 +1032,43 @@ AGENT_CAPABILITIES = {
         ]
     },
 
+    "System Simulation Execution Agent": {
+        "domain": "system",
+        "inputs": [
+            "system/integrate/soc_top_sim.sv",
+            "vv/tb/Makefile",
+            "vv/tb/test_*.py",
+            "vv/tb/coverage_model.py(optional)",
+            "vv/tb/run_regression.py(optional)",
+            "*.v",
+            "*.sv"
+        ],
+        "outputs": [
+            "system/sim/system_sim_execution.json",
+            "system/sim/system_sim_execution.md",
+            "system/sim/logs/*.log"
+        ],
+        "description": "Runs demo System_SIM execution for 2 testcases × 2 seeds using generated Cocotb/Verilator collateral; captures pass/fail, runtime, waveforms, and raw coverage candidates.",
+        "requires": ["make", "verilator", "cocotb"],
+    },
+
+    "System Simulation Coverage Summary Agent": {
+        "domain": "system",
+        "inputs": [
+            "system/sim/system_sim_execution.json",
+            "vv/tb/coverage_model.py(optional)",
+            "vv/tb/COVERAGE.md(optional)",
+            "assertions.sv(optional)",
+            "*.log(optional)"
+        ],
+        "outputs": [
+            "system/sim/system_sim_dashboard.json",
+            "system/sim/system_sim_dashboard.md"
+        ],
+        "description": "Parses System_SIM execution artifacts and publishes demo-friendly functional/code/assertion coverage plus run summary for UI display.",
+        "requires": [],
+    },
+
     # -------------------------
     # Extended / optional digital flow agents
     # -------------------------
