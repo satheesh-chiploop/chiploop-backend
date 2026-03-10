@@ -27,20 +27,20 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 from utils.artifact_utils import save_text_artifact_and_record
-
+"""Auto-generated lightweight functional coverage model for ChipLoop demo."""
 
 class CoverageModel:
     def __init__(self):
-        self.total_bins = 6
         self.hit_bins = set()
+        self.total_bins = 8
         self.started = False
+        self.stopped = False
 
     def start(self, dut=None):
         self.started = True
-        # Demo bins: keep simple and deterministic
         self.hit_bins.add("start_called")
 
-        # Best-effort DUT-based bins
+        # Demo-friendly DUT presence bins
         if dut is not None:
             for sig in ["clk", "rst_n", "reset", "enable", "valid", "ready", "vin", "vdd"]:
                 if hasattr(dut, sig):
@@ -51,41 +51,44 @@ class CoverageModel:
             self.hit_bins.add(str(name))
 
     def stop(self):
+        self.stopped = True
         self.hit_bins.add("stop_called")
 
     def summary(self):
         hit = len(self.hit_bins)
-        total = max(int(self.total_bins), hit, 1)
+        total = max(self.total_bins, hit, 1)
         pct = round(100.0 * hit / total, 2)
         return {
             "functional_coverage_pct": pct,
             "bins_hit": hit,
             "total_bins": total,
+            "hit_bins": sorted(list(self.hit_bins)),
         }
 
     def write_reports(self, out_dir="."):
         os.makedirs(out_dir, exist_ok=True)
-        s = self.summary()
+        summary = self.summary()
 
         json_path = os.path.join(out_dir, "functional_coverage_summary.json")
         md_path = os.path.join(out_dir, "COVERAGE.md")
 
         with open(json_path, "w", encoding="utf-8") as f:
-            json.dump(s, f, indent=2)
+            json.dump(summary, f, indent=2)
 
-        md = []
-        md.append("# Functional Coverage Summary")
-        md.append("")
-        md.append(f"- Functional coverage: {s['functional_coverage_pct']}%")
-        md.append(f"- Bins hit: {s['bins_hit']}")
-        md.append(f"- Total bins: {s['total_bins']}")
-        md.append("")
-        md.append("## Hit bins")
-        for b in sorted(self.hit_bins):
-            md.append(f"- {b}")
+        lines = []
+        lines.append("# Functional Coverage Summary")
+        lines.append("")
+        lines.append(f"- Functional coverage: {summary['functional_coverage_pct']}%")
+        lines.append(f"- Bins hit: {summary['bins_hit']}")
+        lines.append(f"- Total bins: {summary['total_bins']}")
+        lines.append("")
+        lines.append("## Hit bins")
+        for b in summary["hit_bins"]:
+            lines.append(f"- {b}")
 
         with open(md_path, "w", encoding="utf-8") as f:
-            f.write("\n".join(md) + "\n")
+            f.write("\n".join(lines) + "\n")
+
 
 
 def _now() -> str:
@@ -348,7 +351,6 @@ Optional dependency:
     artifacts["coverage_model_py"] = _record_text(workflow_id, agent_name, "vv/tb", "coverage_model.py", cov_py)
     artifacts["coverage_readme"] = _record_text(workflow_id, agent_name, "vv/tb", "COVERAGE.md", readme)
     artifacts["log"] = _record_text(workflow_id, agent_name, "vv", "functional_coverage_agent.log", open(log_path, "r", encoding="utf-8").read())
-
     report = {
         "type": "functional_coverage_generation",
         "version": "1.0",
@@ -357,11 +359,13 @@ Optional dependency:
             "vv/tb/coverage_model.py",
             "vv/tb/COVERAGE.md",
             "vv/tb/functional_coverage_summary.json",
+            "vv/tb/coverage_generation_report.json",
         ],
         "notes": [
             "CoverageModel.write_reports() emits functional_coverage_summary.json for downstream System_SIM parsing."
         ],
     }
+    
 
     rep_txt = json.dumps(report, indent=2)
     _write_file(os.path.join(tb_root, "coverage_generation_report.json"), rep_txt)

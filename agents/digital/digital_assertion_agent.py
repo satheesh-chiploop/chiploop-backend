@@ -42,24 +42,48 @@ def _find_rtl_files(workflow_dir: str) -> List[str]:
     out.sort()
     return out
 
-
 def _pick_rtl_file(state: dict, workflow_dir: str) -> Optional[str]:
-    # Prefer explicit path from state if present
+    # 1) Prefer assembled SoC sim top for System_SIM
+    soc_top_sim_path = state.get("soc_top_sim_path")
+    if isinstance(soc_top_sim_path, str):
+        cand = soc_top_sim_path
+        if not os.path.isabs(cand):
+            cand = os.path.join(workflow_dir, cand)
+        if os.path.exists(cand):
+            return cand
+
+    # 2) Explicit path if present
     explicit = state.get("rtl_file")
     if explicit and os.path.exists(explicit):
         return explicit
 
+    # 3) rtl_files list from state
     rtl_files = state.get("rtl_files")
     if isinstance(rtl_files, list):
         for p in rtl_files:
             if isinstance(p, str) and os.path.exists(p):
                 return p
 
+    # 4) Prefer system/integration tops if discovered
     discovered = _find_rtl_files(workflow_dir)
-    if discovered:
-        return discovered[0]
+    preferred = []
+    fallback = []
+
+    for p in discovered:
+        norm = p.replace("\\", "/").lower()
+        if "/system/integration/" in norm and norm.endswith(".sv"):
+            preferred.append(p)
+        else:
+            fallback.append(p)
+
+    if preferred:
+        return preferred[0]
+    if fallback:
+        return fallback[0]
 
     return None
+
+
 
 
 def _pick_top_module_name(state: dict, rtl_text: str) -> str:
