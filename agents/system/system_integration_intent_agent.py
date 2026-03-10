@@ -132,11 +132,15 @@ def _sanitize_connections(intent: dict, digital_sigs: dict, analog_sigs: dict):
                 cleaned.append(c)
             continue
 
+        
+
         # Case 2: instance(output) -> top is valid
+
         if si != "top" and di == "top":
-            if sdir is None or sdir == "output" or sdir == "inout":
+            if sdir in ("output", "inout"):
                 cleaned.append(c)
             continue
+        
 
         # Case 3: top -> top is meaningless
         if si == "top" and di == "top":
@@ -162,8 +166,24 @@ def _instance_to_module(intent: dict):
             out[inst["name"]] = inst["module"]
     return out
 
+def _pick_primary_module_name(sig_db: dict, fallback: str) -> str:
+    if not isinstance(sig_db, dict):
+        return fallback
 
+        # direct module dict shape
+    for k, v in sig_db.items():
+        if isinstance(v, dict) and ("ports" in v or "interface" in v):
+            return str(k).strip()
 
+        # nested modules shape
+    mods = sig_db.get("modules")
+    if isinstance(mods, dict) and mods:
+        first = next(iter(mods.keys()))
+        return str(first).strip()
+
+    return fallback
+
+  
 
 def run_agent(state: dict) -> dict:
     agent_name = "System Integration Intent Agent"
@@ -238,15 +258,16 @@ def run_agent(state: dict) -> dict:
     digital_module = (
         state.get("digital_top_module")
         or state.get("digital_module_name")
-        or "digital_block"
+        or _pick_primary_module_name(digital_sigs, "digital_block")
     ).strip()
 
     analog_phys_module = (
         analog_macro_module
         or state.get("analog_top_module")
         or state.get("analog_module_name")
-        or "analog_block"
+        or _pick_primary_module_name(analog_sigs, "analog_block")
     ).strip()
+
 
     analog_sim_module = (
        analog_behavioral_module
@@ -288,7 +309,8 @@ def run_agent(state: dict) -> dict:
 ANALOG MODULE NAME HINTS:
 - analog_behavioral_module: {analog_behavioral_module or "(not provided)"}
 - analog_macro_module: {analog_macro_module or "(not provided)"}
-Use these in variants.module_overrides for instance 'u_adc' if applicable.
+Use these in variants.module_overrides for instance 'u_analog' if applicable
+
 """.strip()
 
     prompt = f"""

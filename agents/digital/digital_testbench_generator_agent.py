@@ -392,22 +392,34 @@ MODULE        ?= test_{top}
 
 PYTHON_BIN    ?= {python_exe}
 
-VERILOG_SOURCES += $(shell find ../.. -name '*.v' -o -name '*.sv' | sort | uniq)
+# Keep source search scoped to relevant RTL trees
+VERILOG_SOURCES += $(shell find ../../digital ../../system ../../analog -name '*.v' -o -name '*.sv' 2>/dev/null | sort | uniq)
 
 SIM ?= verilator
 EXTRA_ARGS += --trace --trace-structs
 
+# Prefer cocotb-config if available.
 COCOTB_MAKEFILES := $(shell cocotb-config --makefiles 2>/dev/null)
+
+# Fallback: ask python for the actual cocotb makefiles dir.
 ifeq ($(strip $(COCOTB_MAKEFILES)),)
-COCOTB_MAKEFILES := $(shell $(PYTHON_BIN) -c "import os; import cocotb_tools.config as c; print(os.path.dirname(c.__file__))" 2>/dev/null)
+COCOTB_MAKEFILES := $(shell $(PYTHON_BIN) - <<'PY'
+import sys
+try:
+    import cocotb_tools.config as c
+    print(c.lib_name("makefiles"))
+except Exception:
+    pass
+PY
+)
 endif
+
 ifeq ($(strip $(COCOTB_MAKEFILES)),)
-$(error Neither cocotb-config nor python import of cocotb_tools.config is available. Please install/activate cocotb in this runtime before running make)
+$(error Neither cocotb-config nor python resolution of cocotb makefiles is available. Please install/activate cocotb in this runtime before running make)
 endif
 
 include $(COCOTB_MAKEFILES)/Makefile.sim
 """
-
 
     _write_file(os.path.join(tb_root, "Makefile"), makefile)
 

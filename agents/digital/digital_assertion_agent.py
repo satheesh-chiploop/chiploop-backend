@@ -65,16 +65,22 @@ def _pick_rtl_file(state: dict, workflow_dir: str) -> Optional[str]:
                 return p
 
     # 4) Prefer system/integration tops if discovered
+
+        # 4) Prefer assembled system tops if discovered
     discovered = _find_rtl_files(workflow_dir)
     preferred = []
     fallback = []
 
     for p in discovered:
         norm = p.replace("\\", "/").lower()
-        if "/system/integration/" in norm and norm.endswith(".sv"):
+        if (
+            ("/system/integration/" in norm or "/system/integrate/" in norm)
+            and norm.endswith(".sv")
+        ):
             preferred.append(p)
         else:
             fallback.append(p)
+    
 
     if preferred:
         return preferred[0]
