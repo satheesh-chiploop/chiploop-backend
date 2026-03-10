@@ -278,9 +278,17 @@ def run_agent(state: dict) -> dict:
         state["status"] = "❌ Missing system_sim_execution.json. Run System Simulation Execution Agent first."
         return state
 
+
     func_cov = _functional_coverage(workflow_dir)
-    code_cov = _code_coverage(workflow_dir)
     asrt_cov = _assertion_coverage(workflow_dir, execution)
+
+    if execution.get("tests_passed", 0) > 0:
+        code_cov = _code_coverage(workflow_dir)
+    else:
+        code_cov = {
+           "code_coverage_pct": None,
+           "source": None,
+        }
 
     dashboard = {
         "type": "system_sim_dashboard",

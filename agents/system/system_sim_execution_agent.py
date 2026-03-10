@@ -165,10 +165,10 @@ def _find_coverage_candidates(search_root: str) -> Dict[str, List[str]]:
 def _count_assertions(workflow_dir: str) -> int:
     total = 0
     for pat in [
-        os.path.join(workflow_dir, "**", "assertions.sv"),
-        os.path.join(workflow_dir, "**", "*.sva"),
-        os.path.join(workflow_dir, "**", "*assert*.sv"),
+        os.path.join(workflow_dir, "vv", "**", "*.sva"),
+        os.path.join(workflow_dir, "vv", "**", "assertions.sv"),
     ]:
+   
         for p in glob.glob(pat, recursive=True):
             try:
                 txt = open(p, "r", encoding="utf-8", errors="ignore").read()
