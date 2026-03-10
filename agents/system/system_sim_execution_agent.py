@@ -5,6 +5,7 @@ import glob
 import time
 import shutil
 import subprocess
+import sys
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -18,10 +19,12 @@ def _now() -> str:
 def _which(binname: str) -> Optional[str]:
     return shutil.which(binname)
 
+
+
 def _python_has_module(module_name: str) -> bool:
     try:
         p = subprocess.run(
-            ["python3", "-c", f"import {module_name}"],
+            [sys.executable, "-c", f"import {module_name}"],
             capture_output=True,
             text=True,
             timeout=20,

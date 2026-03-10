@@ -21,6 +21,8 @@ import re
 import json
 import shutil
 import subprocess
+import sys
+python_exe = sys.executable
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -388,15 +390,16 @@ TOPLEVEL_LANG ?= verilog
 TOPLEVEL      ?= {top}
 MODULE        ?= test_{top}
 
+PYTHON_BIN    ?= {python_exe}
+
 VERILOG_SOURCES += $(shell find ../.. -name '*.v' -o -name '*.sv' | sort | uniq)
 
 SIM ?= verilator
 EXTRA_ARGS += --trace --trace-structs
 
-# Prefer cocotb-config if available; otherwise fall back to python import.
 COCOTB_MAKEFILES := $(shell cocotb-config --makefiles 2>/dev/null)
 ifeq ($(strip $(COCOTB_MAKEFILES)),)
-COCOTB_MAKEFILES := $(shell python3 -c "import os; import cocotb_tools.config as c; print(os.path.dirname(c.__file__))" 2>/dev/null)
+COCOTB_MAKEFILES := $(shell $(PYTHON_BIN) -c "import os; import cocotb_tools.config as c; print(os.path.dirname(c.__file__))" 2>/dev/null)
 endif
 ifeq ($(strip $(COCOTB_MAKEFILES)),)
 $(error Neither cocotb-config nor python import of cocotb_tools.config is available. Please install/activate cocotb in this runtime before running make)
@@ -404,6 +407,8 @@ endif
 
 include $(COCOTB_MAKEFILES)/Makefile.sim
 """
+
+
     _write_file(os.path.join(tb_root, "Makefile"), makefile)
 
     readme = f"""# ChipLoop V&V: Cocotb + Verilator
