@@ -1013,8 +1013,8 @@ AGENT_CAPABILITIES = {
            "soc_top_name(optional)"
         ],
         "outputs": [
-           "system/integrate/system_integration_intent.json",
-           "system/integrate/system_integration_intent_raw.txt"
+           "system/integration/system_integration_intent.json",
+           "system/integration/system_integration_intent_raw.txt"
         ],
         "description": "Generates a strict SoC integration manifest for top assembly. Supports state-provided or artifact-discovered RTL signatures and sim/phys analog module overrides."
     },
@@ -1027,15 +1027,15 @@ AGENT_CAPABILITIES = {
             "system_integration_intent"
         ],
         "outputs": [
-            "system/integrate/soc_top_sim.sv",
-            "system/integrate/soc_top_phys.sv"
+            "system/integration/soc_top_sim.sv",
+            "system/integration/soc_top_phys.sv"
         ]
     },
 
     "System Simulation Execution Agent": {
         "domain": "system",
         "inputs": [
-            "system/integrate/soc_top_sim.sv",
+            "system/integration/soc_top_sim.sv",
             "vv/tb/Makefile",
             "vv/tb/test_*.py",
             "vv/tb/coverage_model.py(optional)",
@@ -1066,6 +1066,54 @@ AGENT_CAPABILITIES = {
             "system/sim/system_sim_dashboard.md"
         ],
         "description": "Parses System_SIM execution artifacts and publishes demo-friendly functional/code/assertion coverage plus run summary for UI display.",
+        "requires": [],
+    },
+
+
+        "System Firmware CoSim Execution Agent": {
+        "domain": "system",
+        "inputs": [
+            "system/integration/soc_top_sim.sv",
+            "system/cosim/axi_lite_regs.sv(optional)",
+            "system/cosim/ip_mmio.h(optional)",
+            "firmware/validate/cocotb_harness.py(optional)",
+            "firmware/validate/run_cosim.sh(optional)",
+            "firmware/build/firmware.elf(optional)",
+            "vv/tb/Makefile(optional)",
+            "vv/tb/test_*.py(optional)",
+            "vv/tb/coverage_model.py(optional)",
+            "assertions.sv(optional)",
+            "*.v",
+            "*.sv"
+        ],
+        "outputs": [
+            "system/firmware/cosim/system_firmware_execution.json",
+            "system/firmware/cosim/system_firmware_execution.md",
+            "system/firmware/cosim/system_firmware_dashboard.json",
+            "system/firmware/cosim/logs/*.log",
+            "system/firmware/cosim/waves/*.vcd"
+        ],
+        "description": "Runs firmware-aware RTL/SoC co-simulation using assembled SoC top, generated firmware collateral, cocotb/verilator harness, and optional assertions/coverage; captures pass/fail, runtime, logs, and waveforms.",
+        "requires": ["make", "verilator", "cocotb"],
+    },
+
+    "System Firmware Coverage Summary Agent": {
+        "domain": "system",
+        "inputs": [
+            "system/firmware/cosim/system_firmware_execution.json",
+            "system/firmware/cosim/system_firmware_dashboard.json(optional)",
+            "firmware/validate/coverage.md(optional)",
+            "firmware/validate/coverage_fw.md(optional)",
+            "firmware/validate/coverage_rtl.md(optional)",
+            "validation/validation_report.md(optional)",
+            "assertions.sv(optional)",
+            "*.log(optional)"
+        ],
+        "outputs": [
+            "system/firmware/coverage/system_firmware_coverage_summary.json",
+            "system/firmware/coverage/system_firmware_coverage_summary.md"
+        ],
+        "description": "Parses firmware co-simulation execution artifacts and publishes demo-friendly firmware/RTL/assertion coverage summary plus overall run health for UI display.",
         "requires": [],
     },
 

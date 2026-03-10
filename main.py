@@ -480,6 +480,8 @@ from agents.system.system_integration_intent_agent import run_agent as system_in
 from agents.system.system_top_assembly_agent import run_agent as system_top_assembly
 from agents.system.system_sim_execution_agent import run_agent as system_sim_execution_agent
 from agents.system.system_sim_coverage_summary_agent import run_agent as system_sim_coverage_summary_agent
+from agents.system.system_firmware_cosim_execution_agent import run_agent as system_firmware_cosim_execution_agent
+from agents.system.system_firmware_coverage_summary_agent import run_agent as system_firmware_coverage_summary_agent
 
 SYSTEM_AGENT_FUNCTIONS: Dict[str,Any] = {
     "Digital Spec Agent": digital_spec_agent,
@@ -593,6 +595,8 @@ SYSTEM_AGENT_FUNCTIONS: Dict[str,Any] = {
     "System Top Assembly Agent": system_top_assembly,
     "System Simulation Execution Agent": system_sim_execution_agent,
     "System Simulation Coverage Summary Agent": system_sim_coverage_summary_agent,
+    "System Firmware CoSim Execution Agent": system_firmware_cosim_execution_agent,
+    "System Firmware Coverage Summary Agent": system_firmware_coverage_summary_agent,
 }
 
 
