@@ -149,7 +149,7 @@ FILE: firmware/validate/test_firmware_smoke.py
 
 """
 
-        out = llm_chat(
+    out = llm_chat(
         prompt,
         system="You are a senior verification engineer. Output ONLY the requested files. Never use markdown code fences."
     )
