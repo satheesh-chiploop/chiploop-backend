@@ -77,6 +77,7 @@ OUTPUT REQUIREMENTS:
     if not out:
         out = "ERROR: LLM returned empty output."
     out = strip_markdown_fences_for_code(out)
+    out = out.replace("pub mod driver_scaffold {", "")
     out = out.replace("#![no_std]", "// no_std configured at crate root")
     write_artifact(state, OUTPUT_PATH, out, key=OUTPUT_PATH.split("/")[-1])
 

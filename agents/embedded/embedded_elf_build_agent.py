@@ -149,15 +149,18 @@ FILE: firmware/src/panic.rs
         files[OUTPUT_PANIC_RS] = content
 
     # Ensure main.rs has crate-level attrs
-    if OUTPUT_LIB_RS in files:
-        if "#![no_std]" not in files[OUTPUT_LIB_RS]:
-           files[OUTPUT_LIB_RS] = "#![no_std]\n#![no_main]\n" + files[OUTPUT_LIB_RS]
+
     if OUTPUT_LIB_RS in files:
         content = files[OUTPUT_LIB_RS]
-        if "fn main" in content and "-> !" in content:
-            if "loop {" not in content:
-                content = content.rstrip() + "\n\n    loop {}\n"
-                files[OUTPUT_LIB_RS] = content
+
+        if "#![no_std]" not in content:
+            content = "#![no_std]\n" + content
+
+        if "#![no_main]" not in content:
+            content = "#![no_main]\n" + content
+
+        files[OUTPUT_LIB_RS] = content
+    
 
         # --- Hardening: sanitize Cargo.toml (keep Embedded_Run stable) ---
     if OUTPUT_CARGO_TOML in files:

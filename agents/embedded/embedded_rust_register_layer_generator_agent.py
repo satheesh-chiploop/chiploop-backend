@@ -30,7 +30,7 @@ def run_agent(state: dict) -> dict:
     regmap_path = os.path.join(workflow_dir, "firmware/register_map.json")
     regmap = _safe_load_json(regmap_path)
 
-    regmap_json = json.dumps(regmap, indent=2) if regmap else "(not available)"
+    regmap_json = json.dumps(regmap, indent=2)[:12000] if regmap else "(not available)"
 
     prompt = f"""USER SPEC:
 {spec_text}

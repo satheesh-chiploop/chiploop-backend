@@ -21,8 +21,11 @@ def run_agent(state: dict) -> dict:
     workflow_dir = state.get("workflow_dir") or ""
 
     cosim_summary = _safe_read(os.path.join(workflow_dir, "system/firmware/cosim/system_firmware_execution.json"))
-    coverage_summary = _safe_read(os.path.join(workflow_dir, "system/firmware/coverage/system_firmware_coverage_summary.json"))
-
+    coverage_summary = (
+       _safe_read(os.path.join(workflow_dir, "system/firmware/coverage/system_firmware_coverage_summary.json"))
+       or _safe_read(os.path.join(workflow_dir, "coverage/coverage_summary.json"))
+    )
+   
     spec_text = (state.get("spec_text") or state.get("spec") or "").strip()
     goal = (state.get("goal") or "").strip()
     toolchain = state.get("toolchain") or {}
