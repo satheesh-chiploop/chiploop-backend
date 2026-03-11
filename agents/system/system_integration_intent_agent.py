@@ -2,6 +2,8 @@ import os
 import json
 import datetime
 import requests
+import re
+from collections import defaultdict
 from typing import Dict
 
 from portkey_ai import Portkey
@@ -23,6 +25,150 @@ PORTKEY_API_KEY = os.getenv("PORTKEY_API_KEY")
 client_portkey = Portkey(api_key=PORTKEY_API_KEY) if PORTKEY_API_KEY else None
 client_openai = OpenAI()
 
+def _collect_ports_for_module(sig_db: dict, module_name: str):
+    if not isinstance(sig_db, dict) or not module_name:
+        return []
+
+    if module_name in sig_db and isinstance(sig_db[module_name], dict):
+        return sig_db[module_name].get("ports") or sig_db[module_name].get("interface") or []
+
+    mods = sig_db.get("modules")
+    if isinstance(mods, dict) and module_name in mods and isinstance(mods[module_name], dict):
+        return mods[module_name].get("ports") or mods[module_name].get("interface") or []
+
+    return []
+
+
+def _normalize_port_name(name: str) -> str:
+    if not name:
+        return ""
+    n = str(name).strip().lower()
+    n = n.split("[", 1)[0]
+    n = re.sub(r"^(i_|o_|io_|in_|out_)", "", n)
+    n = re.sub(r"[^a-z0-9]+", "", n)
+    return n
+
+
+def _port_width(port: dict):
+    if not isinstance(port, dict):
+        return None
+    for k in ("width", "bits", "size"):
+        v = port.get(k)
+        if isinstance(v, int):
+            return v
+    msb = port.get("msb")
+    lsb = port.get("lsb")
+    if isinstance(msb, int) and isinstance(lsb, int):
+        return abs(msb - lsb) + 1
+    return None
+
+
+def _classify_top_port(norm_name: str):
+    if norm_name in {"clk", "clock", "sysclk", "coreclk", "pclk", "aclk"}:
+        return "clock"
+    if norm_name in {"rst", "reset", "rstn", "resetn", "aresetn", "presetn"}:
+        return "reset"
+    if norm_name in {"vdd", "vss", "gnd", "vcc", "vin", "vref", "avdd", "dvdd", "avss", "dvss"}:
+        return "power"
+    return None
+
+
+def _get_instance_ports(intent: dict, inst_name: str, digital_sigs: dict, analog_sigs: dict):
+    inst2mod = _instance_to_module(intent)
+    mod = inst2mod.get(inst_name)
+    if not mod:
+        return []
+    return _collect_ports_for_module(digital_sigs, mod) or _collect_ports_for_module(analog_sigs, mod)
+
+
+def _build_generic_fallback_connections(intent: dict, digital_sigs: dict, analog_sigs: dict):
+    """
+    Backward-compatible generic fallback:
+    - only runs if sanitize removed all connections
+    - only adds safe, direction-aware, unambiguous connections
+    - no design-specific hardcoding
+    """
+    inst2mod = _instance_to_module(intent)
+    instances = list(inst2mod.keys())
+    if not instances:
+        return []
+
+    connections = []
+    seen = set()
+
+    def add_conn(src: str, dst: str):
+        key = (src, dst)
+        if key in seen:
+            return
+        seen.add(key)
+        connections.append({"from": src, "to": dst})
+
+    inst_ports = {}
+    for inst in instances:
+        inst_ports[inst] = _get_instance_ports(intent, inst, digital_sigs, analog_sigs)
+
+    # 1) top infrastructure fanout for obvious shared ports
+    top_candidates = set()
+    for inst, ports in inst_ports.items():
+        for p in ports:
+            if not isinstance(p, dict):
+                continue
+            pname = str(p.get("name") or "").split("[", 1)[0].strip()
+            pdir = str(p.get("direction") or p.get("dir") or "").lower().strip()
+            cls = _classify_top_port(_normalize_port_name(pname))
+            if cls and pdir in ("input", "inout"):
+                top_candidates.add(pname)
+
+    for top_port in sorted(top_candidates):
+        for inst, ports in inst_ports.items():
+            for p in ports:
+                if not isinstance(p, dict):
+                    continue
+                pname = str(p.get("name") or "").split("[", 1)[0].strip()
+                pdir = str(p.get("direction") or p.get("dir") or "").lower().strip()
+                if pname == top_port and pdir in ("input", "inout"):
+                    add_conn(f"top.{top_port}", f"{inst}.{pname}")
+
+    # 2) peer-to-peer exact/normalized-name matching
+    producers = defaultdict(list)
+    consumers = defaultdict(list)
+
+    for inst, ports in inst_ports.items():
+        for p in ports:
+            if not isinstance(p, dict):
+                continue
+            pname = str(p.get("name") or "").split("[", 1)[0].strip()
+            norm = _normalize_port_name(pname)
+            pdir = str(p.get("direction") or p.get("dir") or "").lower().strip()
+            width = _port_width(p)
+            item = {"inst": inst, "port": pname, "norm": norm, "width": width}
+
+            if pdir in ("output", "inout"):
+                producers[norm].append(item)
+            if pdir in ("input", "inout"):
+                consumers[norm].append(item)
+
+    for norm_name, srcs in producers.items():
+        dsts = consumers.get(norm_name, [])
+        if not dsts:
+            continue
+
+        for s in srcs:
+            compatible = []
+            for d in dsts:
+                if s["inst"] == d["inst"]:
+                    continue
+                if s["width"] is not None and d["width"] is not None and s["width"] != d["width"]:
+                    continue
+                compatible.append(d)
+
+            exact = [d for d in compatible if d["port"] == s["port"]]
+            chosen = exact if len(exact) == 1 else compatible if len(compatible) == 1 else []
+
+            for d in chosen:
+                add_conn(f'{s["inst"]}.{s["port"]}', f'{d["inst"]}.{d["port"]}')
+
+    return connections
 
 def _now() -> str:
     return datetime.datetime.now().isoformat()
@@ -361,18 +507,33 @@ Now output JSON only.
         return state
 
     try:
+
         intent = safe_json_load(cleaned) if cleaned else {}
         if not isinstance(intent, dict):
             intent = {}
+
         intent = _sanitize_connections(intent, digital_sigs, analog_sigs)
 
-        # If LLM produced only invalid connections, keep intent but mark it clearly.
+        # Backward-compatible generic recovery:
+        # only infer connections if sanitize removed everything.
         if not intent.get("connections") and not intent.get("tieoffs"):
-            intent.setdefault("notes", [])
-            if isinstance(intent["notes"], list):
-                intent["notes"].append(
-                    "All candidate connections were removed by direction validation; review integration description and RTL signatures."
-                )
+            fallback_connections = _build_generic_fallback_connections(intent, digital_sigs, analog_sigs)
+            if fallback_connections:
+                intent["connections"] = fallback_connections
+                intent.setdefault("notes", [])
+                if isinstance(intent["notes"], list):
+                    intent["notes"].append(
+                        "Applied generic fallback connections after direction validation removed all candidate edges."
+                    )
+            else:
+                intent.setdefault("notes", [])
+                if isinstance(intent["notes"], list):
+                    intent["notes"].append(
+                        "All candidate connections were removed by direction validation and no unambiguous generic fallback connections could be inferred."
+                    )
+
+        
+        
                 
     except Exception as e:
         # Save raw output for debugging

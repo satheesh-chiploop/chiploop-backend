@@ -1,13 +1,31 @@
 import json
+import os
 from ._embedded_common import ensure_workflow_dir, llm_chat, write_artifact, strip_markdown_fences_for_code
 
 AGENT_NAME = "Embedded Rust Driver Scaffold Agent"
 PHASE = "driver_scaffold"
 OUTPUT_PATH = "firmware/drivers/driver_scaffold.rs"
 
+def _safe_read(path):
+    try:
+        if path and os.path.isfile(path):
+            with open(path, "r", encoding="utf-8") as f:
+                return f.read()
+    except Exception:
+        pass
+    return ""
+
 def run_agent(state: dict) -> dict:
     print(f"\n🚀 Running {AGENT_NAME}...")
     ensure_workflow_dir(state)
+
+    workflow_dir = state.get("workflow_dir") or ""
+
+    regmap_path = os.path.join(workflow_dir, "firmware/register_map.json")
+    hal_path = os.path.join(workflow_dir, "firmware/hal/registers.rs")
+
+    regmap = _safe_read(regmap_path)
+    hal_code = _safe_read(hal_path)
 
     spec_text = (state.get("spec_text") or state.get("spec") or "").strip()
     goal = (state.get("goal") or "").strip()
@@ -20,14 +38,24 @@ def run_agent(state: dict) -> dict:
 GOAL:
 {goal}
 
-TOOLCHAIN (for future extensibility):
+REGISTER MAP:
+{regmap if regmap else "(not available)"}
+
+HAL REGISTER LAYER:
+{hal_code if hal_code else "(not available)"}
+
+TOOLCHAIN:
 {json.dumps(toolchain, indent=2)}
 
 TOGGLES:
 {json.dumps(toggles, indent=2)}
 
 TASK:
-Generate driver scaffold, init, basic read/write APIs.
+Generate a Rust driver scaffold.
+
+RULES:
+- Prefer REGISTER MAP + HAL layer when available.
+- Fall back to USER SPEC if artifacts are missing.
 
 OUTPUT REQUIREMENTS:
 - Output MUST be RAW RUST ONLY (no markdown fences, no prose).

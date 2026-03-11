@@ -1,5 +1,6 @@
 import json
 from ._embedded_common import ensure_workflow_dir, llm_chat, write_artifact, strip_markdown_fences_for_code
+import os
 
 
 AGENT_NAME = "Embedded ELF Build Agent"
@@ -15,10 +16,24 @@ OUTPUT_MEMORY_X   = "firmware/build/memory.x"
 OUTPUT_LIB_RS     = "firmware/src/main.rs"
 OUTPUT_PANIC_RS   = "firmware/src/panic.rs"
 
+def _safe_read(path):
+    try:
+        if path and os.path.isfile(path):
+            with open(path, "r", encoding="utf-8") as f:
+                return f.read()
+    except Exception:
+        pass
+    return ""
 
 def run_agent(state: dict) -> dict:
     print(f"\n🚀 Running {AGENT_NAME}...")
     ensure_workflow_dir(state)
+
+    workflow_dir = state.get("workflow_dir") or ""
+
+    regmap_text = _safe_read(os.path.join(workflow_dir, "firmware/register_map.json"))
+    hal_text = _safe_read(os.path.join(workflow_dir, "firmware/hal/registers.rs"))
+    driver_text = _safe_read(os.path.join(workflow_dir, "firmware/drivers/driver_scaffold.rs"))
 
     spec_text = (state.get("spec_text") or state.get("spec") or "").strip()
     goal = (state.get("goal") or "").strip()
@@ -31,18 +46,27 @@ def run_agent(state: dict) -> dict:
 GOAL:
 {goal}
 
+REGISTER MAP (preferred if available):
+{regmap_text if regmap_text else "(not available)"}
+
+HAL REGISTER LAYER (preferred if available):
+{hal_text if hal_text else "(not available)"}
+
+DRIVER LAYER (preferred if available):
+{driver_text if driver_text else "(not available)"}
+
 TOOLCHAIN (for future extensibility):
 {json.dumps(toolchain, indent=2)}
 
 TOGGLES:
 {json.dumps(toggles, indent=2)}
 
-
 TASK:
 Generate a minimal, buildable embedded Rust workspace + build steps for producing an ELF.
 
-
 MANDATORY:
+- Prefer REGISTER MAP / HAL / DRIVER artifacts when they are available.
+- Fall back to USER SPEC when those artifacts are not available.
 - Assume a no_std firmware workspace (crate attributes belong ONLY in crate root).
 - Include linker script reference (memory.x) and cargo target config example.
 - DO NOT hardcode a CPU family (no "riscv", no "cortex", no "thumb") unless explicitly present in USER SPEC or TOOLCHAIN.
@@ -87,6 +111,8 @@ FILE: firmware/src/main.rs
 FILE: firmware/src/panic.rs
 <content>
 """
+
+ 
     out = llm_chat(
         prompt,
         system="You are a senior embedded firmware engineer. Output ONLY the requested files. Never use markdown fences. No filler."

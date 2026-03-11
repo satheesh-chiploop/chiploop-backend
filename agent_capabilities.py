@@ -812,30 +812,87 @@ AGENT_CAPABILITIES = {
     },
 
         # ✅ Embedded Firmware Loop Agents (v2)
+
     "Embedded Firmware Register Extract Agent": {
         "domain": "embedded",
-        "inputs": ["spec_text", "toolchain", "toggles"],
+        "inputs": [
+            "digital/digital_regmap.json(optional)",
+            "digital/regmap.json(optional)",
+            "digital/register_map.json(optional)",
+            "regmap.json(optional)",
+            "system/integration/system_integration_intent.json(optional)",
+            "spec_text(optional)",
+            "toolchain(optional)",
+            "toggles(optional)"
+        ],
         "outputs": ["firmware/register_map.json"],
-        "description": "Extract registers/CSRs from spec/regmap sources and produce a normalized register map.",
+        "description": "Normalizes upstream register artifacts into a firmware-friendly register map; falls back to spec-driven extraction for standalone Embedded_Run and other individual loop runs.",
     },
+
     "Embedded Rust Register Layer Generator Agent": {
         "domain": "embedded",
-        "inputs": ["spec_text", "toolchain", "toggles"],
+        "inputs": [
+            "firmware/register_map.json(optional)",
+            "spec_text(optional)",
+            "toolchain(optional)",
+            "toggles(optional)"
+        ],
         "outputs": ["firmware/hal/registers.rs"],
-        "description": "Generate Rust HAL register abstractions from register map.",
+        "description": "Generates Rust HAL register abstractions from firmware/register_map.json when available, with standalone spec-driven fallback preserved.",
     },
+
     "Embedded Register Validation Agent": {
         "domain": "embedded",
-        "inputs": ["spec_text", "toolchain", "toggles"],
+        "inputs": [
+            "firmware/register_map.json(optional)",
+            "firmware/hal/registers.rs(optional)",
+            "spec_text(optional)",
+            "toolchain(optional)",
+            "toggles(optional)"
+        ],
         "outputs": ["firmware/hal/register_validation.md"],
-        "description": "Validate register map consistency and HAL correctness.",
+        "description": "Validates register-map and HAL consistency using generated artifacts when present, while remaining compatible with standalone Embedded_Run.",
     },
+
     "Embedded Rust Driver Scaffold Agent": {
         "domain": "embedded",
-        "inputs": ["spec_text", "toolchain", "toggles"],
+        "inputs": [
+            "firmware/register_map.json(optional)",
+            "firmware/hal/registers.rs(optional)",
+            "spec_text(optional)",
+            "toolchain(optional)",
+            "toggles(optional)"
+        ],
         "outputs": ["firmware/drivers/driver_scaffold.rs"],
-        "description": "Generate driver scaffold, init, basic read/write APIs.",
+        "description": "Generates a Rust driver scaffold from normalized register/HAL artifacts when present, while preserving standalone spec-driven behavior.",
     },
+
+    "Embedded ELF Build Agent": {
+        "domain": "embedded",
+        "inputs": [
+            "firmware/register_map.json(optional)",
+            "firmware/hal/registers.rs(optional)",
+            "firmware/drivers/driver_scaffold.rs(optional)",
+            "firmware/src/main.rs(optional)",
+            "spec_text(optional)",
+            "toolchain(optional)",
+            "toggles(optional)",
+            "system/integration/soc_top_sim.sv(optional)"
+        ],
+        "outputs": [
+            "firmware/build/build_instructions.md",
+            "firmware/build/Cargo.toml",
+            "firmware/build/.cargo/config.toml",
+            "firmware/build/memory.x",
+            "firmware/src/main.rs",
+            "firmware/src/panic.rs",
+            "firmware/build/firmware.elf(optional)"
+        ],
+        "description": "Builds firmware ELF collateral when downstream firmware sources are available, while preserving standalone Embedded_Run behavior through spec/toolchain/toggle fallback inputs.",
+    },
+
+     
+    
     "Embedded Interrupt Mapping Agent": {
         "domain": "embedded",
         "inputs": ["spec_text", "toolchain", "toggles"],
@@ -909,19 +966,6 @@ AGENT_CAPABILITIES = {
         "description": "Generate exec summary of produced firmware deliverables.",
     },
     
-    "Embedded ELF Build Agent": {
-        "domain": "embedded",
-        "inputs": ["spec_text", "toolchain", "toggles"],
-        "outputs": [
-        "firmware/build/build_instructions.md",
-        "firmware/build/Cargo.toml",
-        "firmware/build/.cargo/config.toml",
-        "firmware/build/memory.x",
-        "firmware/src/main.rs",
-        "firmware/src/panic.rs",
-        ],
-        "description": "Generate Cargo build instructions and ELF build steps.",
-    },
     "Embedded Verilator Build Agent": {
         "domain": "embedded",
         "inputs": ["spec_text", "toolchain", "toggles"],
