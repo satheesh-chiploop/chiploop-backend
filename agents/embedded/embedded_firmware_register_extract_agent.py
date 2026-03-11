@@ -64,8 +64,18 @@ def _normalize_registers_from_any_shape(obj: dict) -> dict:
         or obj.get("name")
         or "firmware_block"
     )
+    if "regmap" in obj and isinstance(obj["regmap"], dict):
+        obj = obj["regmap"]
+    elif "register_map" in obj and isinstance(obj["register_map"], dict):
+        obj = obj["register_map"]
 
-    regs_in = obj.get("registers") or obj.get("regs") or []
+    regs_in = (
+        obj.get("registers")
+        or obj.get("regs")
+        or obj.get("csr_registers")
+        or obj.get("register_map")
+        or []
+    )
     if isinstance(regs_in, dict):
         tmp = []
         for k, v in regs_in.items():
@@ -139,6 +149,34 @@ def run_agent(state: dict) -> dict:
             "mode": "artifact_first_normalization",
             "path": regmap_path,
         }
+
+        # Hard guard: if we found an upstream regmap artifact but still extracted
+        # no concrete registers, do not silently continue with a weak map.
+        regs = normalized.get("registers") or []
+        if not isinstance(regs, list):
+            regs = []
+
+        if not regs:
+            debug_payload = {
+               "regmap_path": regmap_path,
+               "upstream_regmap_preview": upstream_regmap,
+               "normalized_result": normalized,
+               "error": "Upstream digital regmap was found, but no concrete registers were extracted."
+            }
+
+            write_artifact(
+               state,
+               "firmware/register_map_debug.json",
+               json.dumps(debug_payload, indent=2),
+               key="register_map_debug.json"
+            )
+
+            state["status"] = f"❌ {AGENT_NAME} found upstream regmap but extracted zero registers"
+            state["firmware_register_map_path"] = "firmware/register_map_debug.json"
+            embedded = state.setdefault("embedded", {})
+            embedded[PHASE] = "firmware/register_map_debug.json"
+            return state
+
         out = json.dumps(normalized, indent=2)
         write_artifact(state, OUTPUT_PATH, out, key=OUTPUT_PATH.split("/")[-1])
 
@@ -148,6 +186,8 @@ def run_agent(state: dict) -> dict:
         embedded[PHASE] = OUTPUT_PATH
         state["status"] = f"✅ {AGENT_NAME} normalized upstream register map"
         return state
+
+    
 
     # Backward-compatible fallback for Embedded_Run and standalone flows.
     prompt = f"""USER SPEC:
