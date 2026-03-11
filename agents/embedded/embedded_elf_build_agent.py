@@ -150,6 +150,7 @@ FILE: firmware/src/panic.rs
 
     # Ensure main.rs has crate-level attrs
 
+    # Ensure main.rs has sane embedded crate-level attrs and entrypoint
     if OUTPUT_LIB_RS in files:
         content = files[OUTPUT_LIB_RS]
 
@@ -159,10 +160,23 @@ FILE: firmware/src/panic.rs
         if "#![no_main]" not in content:
             content = "#![no_main]\n" + content
 
-        files[OUTPUT_LIB_RS] = content
-    
+        # Normalize desktop-style entrypoints into a simple embedded start symbol.
+        content = content.replace("fn main() -> !", 'pub extern "C" fn _start() -> !')
+        content = content.replace("fn main()", 'pub extern "C" fn _start() -> !')
 
-        # --- Hardening: sanitize Cargo.toml (keep Embedded_Run stable) ---
+        if "#[no_mangle]" not in content and 'pub extern "C" fn _start() -> !' in content:
+            content = content.replace(
+               'pub extern "C" fn _start() -> !',
+               '#[no_mangle]\npub extern "C" fn _start() -> !'
+            )
+
+        # Ensure the entrypoint never falls through
+        if 'pub extern "C" fn _start() -> !' in content and "loop {" not in content:
+            content = content.rstrip() + "\n\nloop {}\n"
+
+        files[OUTPUT_LIB_RS] = content
+
+    # --- Hardening: sanitize Cargo.toml (keep Embedded_Run stable) ---
     if OUTPUT_CARGO_TOML in files:
         ct = files[OUTPUT_CARGO_TOML]
 

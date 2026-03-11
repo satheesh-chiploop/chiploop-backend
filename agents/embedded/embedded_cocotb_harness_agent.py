@@ -1,13 +1,30 @@
 import json
+import os
+
 from ._embedded_common import ensure_workflow_dir, llm_chat, write_artifact, strip_markdown_fences_for_code
 
 AGENT_NAME = "Embedded Cocotb Harness Agent"
 PHASE = "cocotb_harness"
 OUTPUT_PATH = "firmware/validate/cocotb_harness.py"
 
+def _safe_read(path):
+    try:
+        if path and os.path.isfile(path):
+            with open(path, "r", encoding="utf-8") as f:
+                return f.read()
+    except Exception:
+        pass
+    return ""
+
 def run_agent(state: dict) -> dict:
     print(f"\n🚀 Running {AGENT_NAME}...")
     ensure_workflow_dir(state)
+
+    workflow_dir = state.get("workflow_dir") or ""
+
+    soc_top_text = _safe_read(os.path.join(workflow_dir, "system/integration/soc_top_sim.sv"))
+    regmap_text = _safe_read(os.path.join(workflow_dir, "firmware/register_map.json"))
+    driver_text = _safe_read(os.path.join(workflow_dir, "firmware/drivers/driver_scaffold.rs"))
 
     spec_text = (state.get("spec_text") or state.get("spec") or "").strip()
     goal = (state.get("goal") or "").strip()
@@ -20,21 +37,37 @@ def run_agent(state: dict) -> dict:
 GOAL:
 {goal}
 
-TOOLCHAIN (for future extensibility):
+SOC TOP RTL (preferred if available):
+{soc_top_text if soc_top_text else "(not available)"}
+
+FIRMWARE REGISTER MAP (preferred if available):
+{regmap_text if regmap_text else "(not available)"}
+
+DRIVER LAYER (preferred if available):
+{driver_text if driver_text else "(not available)"}
+
+TOOLCHAIN:
 {json.dumps(toolchain, indent=2)}
 
 TOGGLES:
 {json.dumps(toggles, indent=2)}
 
 TASK:
-Generate a cocotb harness scaffold.
+Generate Cocotb harness collateral for firmware-aware co-simulation.
+
+RULES:
+- Prefer SOC TOP RTL + REGISTER MAP + DRIVER artifacts when available.
+- Fall back to USER SPEC if artifacts are unavailable.
+- Generate a Makefile and at least one concrete test_*.py.
+- The harness should target the actual top module when it can be inferred from SOC TOP RTL.
+
 
 MANDATORY CONTENT:
 - Create a clock using cocotb.clock.Clock
 - Apply reset sequencing
 - Include at least one example test coroutine
 - Include placeholder for ELF preload or firmware stimulus
-- Include a watchdog timeout (fail test if boot never completes)
+- Include a watchdog timeout to fail if expected progress never occurs
 - Must import: Clock, RisingEdge, Timer
 
 CORRECTNESS REQUIREMENTS:
@@ -42,7 +75,7 @@ CORRECTNESS REQUIREMENTS:
 - Use cocotb.clock.Clock for clock generation
 - Never use <= operator
 - Do not call .read() on DUT signals
-- Use dut.<sig>.value.integer when reading numeric values
+- Use int(dut.<sig>.value) or dut.<sig>.value.integer when reading numeric values
 
 STRICT RUNTIME RULES:
 - Must include @cocotb.test()
@@ -51,32 +84,35 @@ STRICT RUNTIME RULES:
 - Assume ONLY the following signals exist by default:
   dut.clk
   dut.rst_n
-- Any access beyond dut.clk and dut.rst_n MUST be guarded with hasattr(dut, "<sig>").
-- Do NOT use hierarchical signal access (no dut.A.B). If needed, mark as:
-  # REQUIRED_SIGNAL: A_B   (flattened)
-  and only access dut.A_B after hasattr(dut, "A_B") is true.
+- Any access beyond dut.clk and dut.rst_n MUST be guarded with hasattr(dut, "<sig>")
+- Do NOT use hierarchical signal access (no dut.A.B)
+- If a flattened signal is needed, declare it as:
+  # REQUIRED_SIGNAL: <signal_name>
+  and only access dut.<signal_name> after hasattr(dut, "<signal_name>") is true
 
-- If additional DUT signals are required (e.g., BOOT_DONE, IRQ, APB signals):
-  - Declare them as placeholders using:
-    # REQUIRED_SIGNAL: <signal_name>
-  - Do NOT directly reference them in executable logic unless explicitly present in USER SPEC.
+ARTIFACT-AWARE RULES:
+- Prefer generated SoC top/module intent if available
+- Prefer firmware/register-map/runtime artifacts if available
+- If concrete DUT signals are not clearly available, generate a minimal safe smoke harness using only:
+  - clock generation
+  - reset sequencing
+  - fixed-cycle wait
+  - clean termination
+- Do NOT reference non-existent DUT signals
 
-- If USER SPEC does not define specific DUT signals:
-  - Generate a minimal harness that:
-    - toggles clock
-    - applies reset
-    - waits fixed cycles
-    - terminates cleanly
-  - Do NOT reference non-existent DUT signals.
-- Any helper coroutine/function MUST accept dut as an argument (no free-variable dut).
-- Do not use cocotb.coroutine, yield-based coroutines, or cocotb.utils.
-- Test must explicitly terminate using:
-  raise cocotb.result.TestSuccess()
-  or watchdog failure.
+FIRMWARE-AWARE RULES:
+- If USER SPEC or generated artifacts clearly define firmware/MMIO/boot/status signals,
+  you may include guarded placeholders for them
+- Include placeholder comments for ELF preload / firmware stimulus even if not executable yet
+- Any helper coroutine/function MUST accept dut as an argument
 
-Use ONLY modern cocotb async API.
+API RULES:
+- Use only modern cocotb async API
+- Do not use cocotb.coroutine
+- Do not use yield-based coroutines
+- Do not use cocotb.utils
 
-Mandatory structure:
+MANDATORY STRUCTURE:
 
 import cocotb
 from cocotb.clock import Clock
@@ -85,19 +121,24 @@ from cocotb.triggers import RisingEdge, Timer
 @cocotb.test()
 async def firmware_test(dut):
 
-Simulation MUST terminate using:
-raise cocotb.result.TestSuccess()
-or timeout failure.
+TERMINATION RULES:
+- Test must terminate cleanly with normal async return on success
+- Fail on watchdog timeout or explicit assertion failure
 
-HARD OUTPUT RULES (IMPORTANT):
-- Output MUST be RAW PYTHON ONLY (no markdown fences, no headings, no prose outside code).
-- Put assumptions as Python comments at the top (starting with # ASSUMPTION: ...).
-- Keep it implementation-ready and consistent with Rust + Cargo + Verilator + Cocotb assumptions.
-- Do not include triple-backticks anywhere.
+HARD OUTPUT RULES:
+- Output MUST be RAW PYTHON ONLY
+- No markdown fences
+- No headings
+- No prose outside code
+- Put assumptions as Python comments at the top:
+  # ASSUMPTION: ...
+- Keep it implementation-ready and consistent with Rust + Cargo + Verilator + Cocotb assumptions
 
 OUTPUT PATH:
 - firmware/validate/cocotb_harness.py
 """
+
+
 
     out = llm_chat(prompt, system="You are a senior verification engineer. Produce runnable Python only. Never use markdown code fences.")
     if not out:

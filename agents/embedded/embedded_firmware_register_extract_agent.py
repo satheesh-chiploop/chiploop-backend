@@ -40,6 +40,10 @@ def _normalize_registers_from_any_shape(obj: dict) -> dict:
             "__assumptions": ["Upstream register source was missing or invalid."]
         }
 
+    # Common nested shape: { "regmap": { ... } }
+    if "regmap" in obj and isinstance(obj["regmap"], dict):
+        obj = obj["regmap"]
+
     base_address = (
         obj.get("base_address")
         or obj.get("base_addr")
@@ -48,8 +52,18 @@ def _normalize_registers_from_any_shape(obj: dict) -> dict:
         or "0x00000000"
     )
 
-    block_name = obj.get("block_name") or obj.get("module_name") or obj.get("name") or "firmware_block"
-    module_name = obj.get("module_name") or obj.get("block_name") or obj.get("name") or "firmware_block"
+    block_name = (
+        obj.get("block_name")
+        or obj.get("module_name")
+        or obj.get("name")
+        or "firmware_block"
+    )
+    module_name = (
+        obj.get("module_name")
+        or obj.get("block_name")
+        or obj.get("name")
+        or "firmware_block"
+    )
 
     regs_in = obj.get("registers") or obj.get("regs") or []
     if isinstance(regs_in, dict):
@@ -66,14 +80,25 @@ def _normalize_registers_from_any_shape(obj: dict) -> dict:
         for r in regs_in:
             if not isinstance(r, dict):
                 continue
+
+            fields = r.get("fields") or r.get("bitfields") or []
+            if isinstance(fields, dict):
+                ftmp = []
+                for fk, fv in fields.items():
+                    if isinstance(fv, dict):
+                        fitem = dict(fv)
+                        fitem.setdefault("name", fk)
+                        ftmp.append(fitem)
+                fields = ftmp
+
             regs_out.append({
                 "name": r.get("name") or r.get("reg_name") or "UNNAMED",
                 "offset": r.get("offset") or r.get("addr_offset") or "0x00",
                 "address": r.get("address"),
                 "access": r.get("access") or r.get("sw") or r.get("mode") or "RW",
                 "reset": r.get("reset") or r.get("reset_value") or "0x00000000",
-                "description": r.get("description") or "",
-                "fields": r.get("fields") or [],
+                "description": r.get("description") or r.get("desc") or "",
+                "fields": fields,
             })
 
     out = {
@@ -86,7 +111,6 @@ def _normalize_registers_from_any_shape(obj: dict) -> dict:
     if not regs_out:
         out["__assumptions"] = ["No concrete registers were found in the upstream source."]
     return out
-
 
 def run_agent(state: dict) -> dict:
     print(f"\n🚀 Running {AGENT_NAME}...")
