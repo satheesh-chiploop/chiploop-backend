@@ -25,6 +25,91 @@ PORTKEY_API_KEY = os.getenv("PORTKEY_API_KEY")
 client_portkey = Portkey(api_key=PORTKEY_API_KEY) if PORTKEY_API_KEY else None
 client_openai = OpenAI()
 
+def _normalize_dir_token(d: str):
+    d = str(d or "").lower().strip()
+    if d in ("in", "input"):
+        return "input"
+    if d in ("out", "output"):
+        return "output"
+    if d in ("inout", "io"):
+        return "inout"
+    return None
+
+
+def _parse_simple_module_ports_from_rtl_text(text: str):
+    """
+    Very lightweight RTL parser:
+    - extracts first module name
+    - extracts header-style ports like:
+        input clk,
+        output logic adc_done,
+        input [9:0] adc_data
+    This is intentionally simple and generic.
+    """
+    if not text:
+        return None, []
+
+    m = re.search(r"\bmodule\s+([A-Za-z_]\w*)\s*\((.*?)\)\s*;", text, re.S)
+    if not m:
+        return None, []
+
+    module_name = m.group(1).strip()
+    header = m.group(2)
+
+    ports = []
+    for raw in header.split(","):
+        line = " ".join(raw.replace("\n", " ").split()).strip()
+        if not line:
+            continue
+
+        dm = re.match(
+            r"^(input|output|inout)\s+"
+            r"(?:(?:wire|reg|logic|signed)\s+)*"
+            r"(?:\[[^\]]+\]\s+)?"
+            r"([A-Za-z_]\w*)$",
+            line,
+            re.I,
+        )
+        if dm:
+            ports.append({
+                "name": dm.group(2).strip(),
+                "direction": _normalize_dir_token(dm.group(1)),
+            })
+
+    return module_name, ports
+
+
+def _load_rtl_text_if_exists(path: str):
+    try:
+        if path and os.path.isfile(path):
+            with open(path, "r", encoding="utf-8") as f:
+                return f.read()
+    except Exception:
+        pass
+    return ""
+
+
+def _discover_signature_from_workflow_dir(workflow_dir: str, rel_candidates):
+    """
+    Build a minimal signature DB from real RTL text if JSON signatures are missing.
+    Returns shape:
+      { "<module_name>": { "ports": [ ... ] } }
+    """
+    for rel in rel_candidates:
+        p = os.path.join(workflow_dir, rel)
+        text = _load_rtl_text_if_exists(p)
+        if not text:
+            continue
+
+        mod, ports = _parse_simple_module_ports_from_rtl_text(text)
+        if mod and ports:
+            return {
+                mod: {
+                    "ports": ports
+                }
+            }
+    return {}
+
 def _collect_ports_for_module(sig_db: dict, module_name: str):
     if not isinstance(sig_db, dict) or not module_name:
         return []
@@ -62,14 +147,19 @@ def _port_width(port: dict):
         return abs(msb - lsb) + 1
     return None
 
-
 def _classify_top_port(norm_name: str):
-    if norm_name in {"clk", "clock", "sysclk", "coreclk", "pclk", "aclk"}:
+    if not norm_name:
+        return None
+
+    if "clk" in norm_name or "clock" in norm_name:
         return "clock"
-    if norm_name in {"rst", "reset", "rstn", "resetn", "aresetn", "presetn"}:
+
+    if "rst" in norm_name or "reset" in norm_name:
         return "reset"
+
     if norm_name in {"vdd", "vss", "gnd", "vcc", "vin", "vref", "avdd", "dvdd", "avss", "dvss"}:
         return "power"
+
     return None
 
 
@@ -213,8 +303,9 @@ def _port_dir_from_sigs(sig_db: dict, module_name: str, port_name: str):
         ports = sig_db[module_name].get("ports") or sig_db[module_name].get("interface") or []
         for p in ports:
             if isinstance(p, dict) and p.get("name") == port_name:
-                d = str(p.get("direction") or p.get("dir") or "").lower().strip()
-                return d or None
+                d = _normalize_dir_token(p.get("direction") or p.get("dir") or "")
+                return d
+
 
     # shape 2: { "modules": { "<module>": { "ports": [...] } } }
     mods = sig_db.get("modules")
@@ -382,11 +473,34 @@ def run_agent(state: dict) -> dict:
                 p = os.path.join(root, "rtl_signatures.json")
                 try:
                     with open(p, "r", encoding="utf-8") as f:
-                       digital_sigs = json.load(f)
+                        digital_sigs = json.load(f)
+                        break
                 except Exception:
                     pass
-                    
+
+    # Generic RTL fallback if signature JSON is absent
+    if not digital_sigs:
+        digital_sigs = _discover_signature_from_workflow_dir(
+            workflow_dir,
+            [
+                "digital/rtl_refactored/refactored_sensor_controller.v",
+                "digital/rtl_refactored/refactored_top.v",
+                "digital/rtl/top.sv",
+                "digital/top.sv",
+            ],
+        )
+
     analog_sigs = state.get("analog_rtl_signatures") or state.get("analog_signatures") or {}
+
+    if not analog_sigs:
+        analog_sigs = _discover_signature_from_workflow_dir(
+            workflow_dir,
+            [
+                "analog/model.sv",
+                "analog/behavioral/model.sv",
+                "analog/top.sv",
+            ],
+        )
 
     # Optional hints from upstream analog agents
     # If your analog behavioral model and macro stub use different module names, provide them here.
@@ -573,6 +687,27 @@ Now output JSON only.
     if "phys" not in intent["variants"]:
         intent["variants"]["phys"] = schema["variants"]["phys"]
 
+
+    if not intent.get("connections") and not intent.get("tieoffs"):
+        try:
+            save_text_artifact_and_record(
+                workflow_id=workflow_id,
+                agent_name=agent_name,
+                subdir="system/integration",
+                filename="system_integration_intent_debug.json",
+                content=json.dumps({
+                    "digital_sigs": digital_sigs,
+                    "analog_sigs": analog_sigs,
+                    "intent_after_sanitize": intent,
+                }, indent=2),
+            )
+        except Exception:
+            pass
+
+        state["status"] = "❌ System integration intent has no connections/tieoffs after sanitize + generic fallback."
+        state["system_integration_intent"] = intent
+        return state
+
     # Persist artifact
     try:
         save_text_artifact_and_record(
@@ -584,6 +719,8 @@ Now output JSON only.
         )
     except Exception as e:
         print(f"⚠️ Failed to upload system integration intent artifact: {e}")
+
+    
     print("DEBUG intent agent file:", __file__)
     print("DEBUG intent keys:", list(intent.keys()))
     print("DEBUG intent instances:", intent.get("instances"))
