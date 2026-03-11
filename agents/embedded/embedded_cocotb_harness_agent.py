@@ -16,6 +16,18 @@ def _safe_read(path):
         pass
     return ""
 
+def _infer_topmodule_from_sv(sv_text: str, fallback: str = "soc_top_sim") -> str:
+    if not sv_text:
+        return fallback
+    for line in sv_text.splitlines():
+        s = line.strip()
+        if s.startswith("module "):
+            rest = s[len("module "):].strip()
+            name = rest.split("(")[0].split("#")[0].strip()
+            if name:
+                return name
+    return fallback
+
 def run_agent(state: dict) -> dict:
     print(f"\n🚀 Running {AGENT_NAME}...")
     ensure_workflow_dir(state)
@@ -219,15 +231,32 @@ FILE: firmware/validate/test_firmware_smoke.py
 
             files[py_path] = "\n".join(safe_lines) + "\n"
 
-    # Synthesize missing runtime artifacts if the model omitted them
+    inferred_top = _infer_topmodule_from_sv(soc_top_text, fallback="soc_top_sim")
+
+    soc_top_relpath = "system/integration/soc_top_sim.sv"
+    if soc_top_text:
+        # Prefer actual known generated files
+        for candidate in [
+            "system/integration/sensor_hub_soc_sim.sv",
+            "system/integration/soc_top_sim.sv",
+        ]:
+            if os.path.isfile(os.path.join(workflow_dir, candidate)):
+                soc_top_relpath = candidate
+                break
+
     if "firmware/validate/Makefile" not in files:
-        files["firmware/validate/Makefile"] = """TOPLEVEL_LANG = verilog
-SIM ?= verilator
-TOPLEVEL = soc_top_sim
+        files["firmware/validate/Makefile"] = f"""TOPLEVEL_LANG = verilog
+VERILOG_SOURCES = ../../{soc_top_relpath}
+TOPLEVEL = {inferred_top}
 MODULE = test_firmware_smoke
+SIM = verilator
 
 include $(shell cocotb-config --makefiles)/Makefile.sim
 """
+
+
+
+ 
 
     if "firmware/validate/test_firmware_smoke.py" not in files:
         files["firmware/validate/test_firmware_smoke.py"] = """import cocotb
@@ -256,58 +285,5 @@ async def firmware_test(dut):
 
     return state
 
-    out = llm_chat(prompt, system="You are a senior verification engineer. Produce runnable Python only. Never use markdown code fences.")
-    if not out:
-        out = "ERROR: LLM returned empty output."
-    out = strip_markdown_fences_for_code(out)
-
-        # Safety: block hierarchical dut access (dut.A.B) which breaks on most DUTs
-    sanitized = []
-    for line in out.splitlines():
-        if "dut." in line and ".value" in line:
-            # If line contains dut.<x>.<y>, comment it out
-            # (Very lightweight: detect two dots after dut.)
-            after = line.split("dut.", 1)[-1]
-            if after.count(".") >= 2:
-                sanitized.append("# NOTE: removed hierarchical DUT access (requires explicit signal mapping):")
-                sanitized.append("# " + line)
-                continue
-        sanitized.append(line)
-    out = "\n".join(sanitized) + "\n"
-
-    # Safety: prevent NameError from removed signal reads
-    safe_lines = []
-    defined_vars = set()
-
-    for line in out.splitlines():
-        stripped = line.strip()
-
-        # Track simple assignments like var =
-        if "=" in stripped and not stripped.startswith("#"):
-            lhs = stripped.split("=", 1)[0].strip()
-            if lhs.isidentifier():
-                defined_vars.add(lhs)
-
-        # If printing undefined variable, guard it
-        if stripped.startswith("print("):
-            for token in stripped.replace("(", " ").replace(")", " ").split():
-                if token.isidentifier() and token not in defined_vars and token not in ("dut",):
-                    safe_lines.append("# NOTE: removed unsafe print referencing undefined var")
-                    safe_lines.append("# " + line)
-                    break
-            else:
-                safe_lines.append(line)
-        else:
-            safe_lines.append(line)
-
-    out = "\n".join(safe_lines) + "\n"
-
-    write_artifact(state, OUTPUT_PATH, out, key=OUTPUT_PATH.split("/")[-1])
-
-    # lightweight state update for downstream agents
-    embedded = state.setdefault("embedded", {})
-    embedded[PHASE] = OUTPUT_PATH
-
-    return state
-
+   
     

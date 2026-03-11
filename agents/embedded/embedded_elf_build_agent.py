@@ -153,40 +153,65 @@ FILE: firmware/src/panic.rs
     # Ensure main.rs has sane embedded crate-level attrs and entrypoint
 
     if OUTPUT_LIB_RS in files:
-        content = files[OUTPUT_LIB_RS].strip()
+        content = (files[OUTPUT_LIB_RS] or "").strip()
+    else:
+        content = ""
 
-        if "#![no_std]" not in content:
-            content = "#![no_std]\n" + content
-        if "#![no_main]" not in content:
-            content = "#![no_main]\n" + content
+    suspicious = (
+        not content
+        or 'pub extern "C" pub extern "C"' in content
+        or 'fn main(' in content
+        or '_start' not in content
+    )
 
-        # Normalize common entrypoint shapes
-        content = content.replace("fn main() -> !", 'pub extern "C" fn _start() -> !')
-        content = content.replace("fn main()", 'pub extern "C" fn _start() -> !')
+    if suspicious:
+        files[OUTPUT_LIB_RS] = """#![no_std]
+#![no_main]
 
-        if 'pub extern "C" fn _start() -> !' in content and "#[no_mangle]" not in content:
-            content = content.replace(
-                'pub extern "C" fn _start() -> !',
-                '#[no_mangle]\npub extern "C" fn _start() -> !'
+mod panic;
+
+#[no_mangle]
+pub extern "C" fn _start() -> ! {
+    loop {}
+}
+"""
+    else:
+        # Minimal cleanup only if content already looks sane
+        lines = [ln for ln in content.splitlines() if ln.strip()]
+
+        cleaned = "\n".join(lines)
+
+        if "#![no_std]" not in cleaned:
+            cleaned = "#![no_std]\n" + cleaned
+        if "#![no_main]" not in cleaned:
+            cleaned = "#![no_main]\n" + cleaned
+        if "mod panic;" not in cleaned:
+            cleaned = cleaned.replace("#![no_main]\n", "#![no_main]\n\nmod panic;\n", 1)
+
+        cleaned = cleaned.replace('pub extern "C" pub extern "C"', 'pub extern "C"')
+
+        if "#[no_mangle]" not in cleaned and 'pub extern "C" fn _start()' in cleaned:
+            cleaned = cleaned.replace(
+                'pub extern "C" fn _start()',
+                '#[no_mangle]\npub extern "C" fn _start()',
+                1
             )
 
-        # Ensure _start has a body and cannot fall through
-        if 'pub extern "C" fn _start() -> !' in content:
-            if "{\n" not in content and "{\r\n" not in content:
-                content = content.replace(
-                    '#[no_mangle]\npub extern "C" fn _start() -> !',
-                    '#[no_mangle]\npub extern "C" fn _start() -> ! {\n    loop {}\n}'
-                )
-            elif "loop {" not in content:
-                content = content.rstrip()
-                if content.endswith("}"):
-                    content = content[:-1].rstrip() + "\n    loop {}\n}"
-                else:
-                    content += "\n\nloop {}\n"
+        if "loop {}" not in cleaned:
+            cleaned = """#![no_std]
+#![no_main]
 
-        files[OUTPUT_LIB_RS] = content.strip() + "\n"
+mod panic;
+
+#[no_mangle]
+pub extern "C" fn _start() -> ! {
+    loop {}
+}
+"""
+
+        files[OUTPUT_LIB_RS] = cleaned.strip() + "\n"
+
     
-
     # --- Hardening: sanitize Cargo.toml (keep Embedded_Run stable) ---
     if OUTPUT_CARGO_TOML in files:
         ct = files[OUTPUT_CARGO_TOML]
@@ -262,5 +287,9 @@ target = "{target_triple}"
     # lightweight state update for downstream agents
     embedded = state.setdefault("embedded", {})
     embedded[PHASE] = OUTPUT_PATH
+
+    target_triple = toolchain.get("target_triple", "<TARGET_TRIPLE>")
+    state["firmware_elf_path"] = f"firmware/build/target/{target_triple}/release/firmware_app"
+    state["firmware_expected_elf_path"] = state["firmware_elf_path"]
 
     return state

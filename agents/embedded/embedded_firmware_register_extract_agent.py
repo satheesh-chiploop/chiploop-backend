@@ -144,31 +144,88 @@ def run_agent(state: dict) -> dict:
     upstream_regmap = _safe_load_json(regmap_path)
 
     if isinstance(upstream_regmap, dict):
+        # PASS-THROUGH FIRST:
+        # If upstream already contains a concrete register list/dict, preserve it exactly.
+        passthrough = dict(upstream_regmap)
+
+        candidate_regs = None
+
+        if isinstance(passthrough.get("registers"), list):
+            candidate_regs = passthrough["registers"]
+        elif isinstance(passthrough.get("regs"), list):
+            candidate_regs = passthrough["regs"]
+            passthrough["registers"] = candidate_regs
+        elif isinstance(passthrough.get("csr_registers"), list):
+            candidate_regs = passthrough["csr_registers"]
+            passthrough["registers"] = candidate_regs
+        elif isinstance(passthrough.get("register_map"), dict):
+            # Convert dict keyed by register name -> list, preserving names exactly
+            candidate_regs = []
+            for reg_name, reg_body in passthrough["register_map"].items():
+                if isinstance(reg_body, dict):
+                    item = dict(reg_body)
+                    item.setdefault("name", reg_name)
+                    candidate_regs.append(item)
+            passthrough["registers"] = candidate_regs
+
+        regs = passthrough.get("registers") or []
+        if isinstance(regs, list) and regs:
+            passthrough["__source"] = {
+                "mode": "artifact_passthrough",
+                "path": regmap_path,
+            }
+
+            # Preserve common top-level metadata if missing
+            passthrough.setdefault(
+                "block_name",
+                passthrough.get("module_name") or passthrough.get("name") or "firmware_block"
+            )
+            passthrough.setdefault(
+                "module_name",
+                passthrough.get("block_name") or passthrough.get("name") or "firmware_block"
+            )
+            passthrough.setdefault(
+                "base_address",
+                passthrough.get("base_addr")
+                or passthrough.get("mmio_base")
+                or passthrough.get("base")
+                or "0x00000000"
+            )
+
+            out = json.dumps(passthrough, indent=2)
+            write_artifact(state, OUTPUT_PATH, out, key=OUTPUT_PATH.split("/")[-1])
+
+            state["firmware_register_map"] = passthrough
+            state["firmware_register_map_path"] = OUTPUT_PATH
+            embedded = state.setdefault("embedded", {})
+            embedded[PHASE] = OUTPUT_PATH
+            state["status"] = f"✅ {AGENT_NAME} preserved upstream register map"
+            return state
+
+        # FALL BACK TO NORMALIZATION ONLY IF PASS-THROUGH SHAPE WAS NOT USABLE
         normalized = _normalize_registers_from_any_shape(upstream_regmap)
         normalized["__source"] = {
             "mode": "artifact_first_normalization",
             "path": regmap_path,
         }
 
-        # Hard guard: if we found an upstream regmap artifact but still extracted
-        # no concrete registers, do not silently continue with a weak map.
         regs = normalized.get("registers") or []
         if not isinstance(regs, list):
             regs = []
 
         if not regs:
             debug_payload = {
-               "regmap_path": regmap_path,
-               "upstream_regmap_preview": upstream_regmap,
-               "normalized_result": normalized,
-               "error": "Upstream digital regmap was found, but no concrete registers were extracted."
+                "regmap_path": regmap_path,
+                "upstream_regmap_preview": upstream_regmap,
+                "normalized_result": normalized,
+                "error": "Upstream digital regmap was found, but no concrete registers were extracted."
             }
 
             write_artifact(
-               state,
-               "firmware/register_map_debug.json",
-               json.dumps(debug_payload, indent=2),
-               key="register_map_debug.json"
+                state,
+                "firmware/register_map_debug.json",
+                json.dumps(debug_payload, indent=2),
+                key="register_map_debug.json"
             )
 
             state["status"] = f"❌ {AGENT_NAME} found upstream regmap but extracted zero registers"
@@ -187,6 +244,7 @@ def run_agent(state: dict) -> dict:
         state["status"] = f"✅ {AGENT_NAME} normalized upstream register map"
         return state
 
+    
     
 
     # Backward-compatible fallback for Embedded_Run and standalone flows.
