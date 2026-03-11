@@ -77,8 +77,21 @@ OUTPUT REQUIREMENTS:
     if not out:
         out = "ERROR: LLM returned empty output."
     out = strip_markdown_fences_for_code(out)
-    out = out.replace("pub mod driver_scaffold {", "")
     out = out.replace("#![no_std]", "// no_std configured at crate root")
+
+    # Safely unwrap a top-level `pub mod driver_scaffold { ... }` wrapper if present
+    lines = out.splitlines()
+    if lines and lines[0].strip().startswith("pub mod driver_scaffold"):
+        # Drop first line and final trailing brace if it exists
+        body = lines[1:]
+        while body and not body[-1].strip():
+            body.pop()
+        if body and body[-1].strip() == "}":
+            body.pop()
+        out = "\n".join(body).strip() + "\n"
+    else:
+        out = out.strip() + "\n"
+
     write_artifact(state, OUTPUT_PATH, out, key=OUTPUT_PATH.split("/")[-1])
 
     # lightweight state update for downstream agents

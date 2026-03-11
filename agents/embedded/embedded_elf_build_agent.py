@@ -151,30 +151,41 @@ FILE: firmware/src/panic.rs
     # Ensure main.rs has crate-level attrs
 
     # Ensure main.rs has sane embedded crate-level attrs and entrypoint
+
     if OUTPUT_LIB_RS in files:
-        content = files[OUTPUT_LIB_RS]
+        content = files[OUTPUT_LIB_RS].strip()
 
         if "#![no_std]" not in content:
             content = "#![no_std]\n" + content
-
         if "#![no_main]" not in content:
             content = "#![no_main]\n" + content
 
-        # Normalize desktop-style entrypoints into a simple embedded start symbol.
+        # Normalize common entrypoint shapes
         content = content.replace("fn main() -> !", 'pub extern "C" fn _start() -> !')
         content = content.replace("fn main()", 'pub extern "C" fn _start() -> !')
 
-        if "#[no_mangle]" not in content and 'pub extern "C" fn _start() -> !' in content:
+        if 'pub extern "C" fn _start() -> !' in content and "#[no_mangle]" not in content:
             content = content.replace(
-               'pub extern "C" fn _start() -> !',
-               '#[no_mangle]\npub extern "C" fn _start() -> !'
+                'pub extern "C" fn _start() -> !',
+                '#[no_mangle]\npub extern "C" fn _start() -> !'
             )
 
-        # Ensure the entrypoint never falls through
-        if 'pub extern "C" fn _start() -> !' in content and "loop {" not in content:
-            content = content.rstrip() + "\n\nloop {}\n"
+        # Ensure _start has a body and cannot fall through
+        if 'pub extern "C" fn _start() -> !' in content:
+            if "{\n" not in content and "{\r\n" not in content:
+                content = content.replace(
+                    '#[no_mangle]\npub extern "C" fn _start() -> !',
+                    '#[no_mangle]\npub extern "C" fn _start() -> ! {\n    loop {}\n}'
+                )
+            elif "loop {" not in content:
+                content = content.rstrip()
+                if content.endswith("}"):
+                    content = content[:-1].rstrip() + "\n    loop {}\n}"
+                else:
+                    content += "\n\nloop {}\n"
 
-        files[OUTPUT_LIB_RS] = content
+        files[OUTPUT_LIB_RS] = content.strip() + "\n"
+    
 
     # --- Hardening: sanitize Cargo.toml (keep Embedded_Run stable) ---
     if OUTPUT_CARGO_TOML in files:
@@ -211,6 +222,24 @@ FILE: firmware/src/panic.rs
                 new_ct_lines.append(ln)
         ct = "\n".join(new_ct_lines).strip() + "\n"
 
+        files[OUTPUT_CARGO_TOML] = ct
+
+    # Synthesize a safe default .cargo/config.toml if the model omitted it
+    if OUTPUT_CARGO_CFG not in files:
+        target_triple = toolchain.get("target_triple", "<TARGET_TRIPLE>")
+        files[OUTPUT_CARGO_CFG] = f"""[build]
+target = "{target_triple}"
+"""
+
+    # Clean suspicious unstable/no_std patterns from config and Cargo
+    if OUTPUT_CARGO_CFG in files:
+        cfg = files[OUTPUT_CARGO_CFG]
+        cfg = cfg.replace('[unstable]\nfeatures = ["no_std"]\n', "")
+        files[OUTPUT_CARGO_CFG] = cfg
+
+    if OUTPUT_CARGO_TOML in files:
+        ct = files[OUTPUT_CARGO_TOML]
+        ct = ct.replace('[unstable]\nfeatures = ["no_std"]\n', "")
         files[OUTPUT_CARGO_TOML] = ct
 
     required = [

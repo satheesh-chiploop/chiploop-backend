@@ -135,7 +135,18 @@ HARD OUTPUT RULES:
 - Keep it implementation-ready and consistent with Rust + Cargo + Verilator + Cocotb assumptions
 
 OUTPUT PATH:
-- firmware/validate/cocotb_harness.py
+OUTPUTS (generate ALL using the format below):
+Return multiple files in this exact format:
+
+FILE: firmware/validate/cocotb_harness.py
+<content>
+
+FILE: firmware/validate/Makefile
+<content>
+
+FILE: firmware/validate/test_firmware_smoke.py
+<content>
+
 """
 
 
@@ -191,5 +202,110 @@ OUTPUT PATH:
     # lightweight state update for downstream agents
     embedded = state.setdefault("embedded", {})
     embedded[PHASE] = OUTPUT_PATH
+
+    return state
+
+    out = llm_chat(
+        prompt,
+        system="You are a senior verification engineer. Output ONLY the requested files. Never use markdown code fences."
+    )
+    if not out:
+        out = "ERROR: LLM returned empty output."
+    out = strip_markdown_fences_for_code(out)
+
+    # Parse FILE: blocks
+    files = {}
+    current = None
+    buf = []
+    for line in out.splitlines():
+        if line.startswith("FILE: "):
+            if current:
+                files[current] = "\n".join(buf).strip() + "\n"
+            current = line.replace("FILE: ", "").strip()
+            buf = []
+        else:
+            buf.append(line)
+    if current:
+        files[current] = "\n".join(buf).strip() + "\n"
+
+    # Fallback: if model returned just raw python, keep backward-compatible behavior
+    if not files:
+        files = {
+            "firmware/validate/cocotb_harness.py": out.strip() + "\n"
+        }
+
+    # Safety-sanitize only the python files
+    for py_path in ("firmware/validate/cocotb_harness.py", "firmware/validate/test_firmware_smoke.py"):
+        if py_path in files:
+            py = files[py_path]
+
+            sanitized = []
+            for line in py.splitlines():
+                if "dut." in line and ".value" in line:
+                    after = line.split("dut.", 1)[-1]
+                    if after.count(".") >= 2:
+                        sanitized.append("# NOTE: removed hierarchical DUT access (requires explicit signal mapping):")
+                        sanitized.append("# " + line)
+                        continue
+                sanitized.append(line)
+            py = "\n".join(sanitized) + "\n"
+
+            safe_lines = []
+            defined_vars = set()
+            for line in py.splitlines():
+                stripped = line.strip()
+
+                if "=" in stripped and not stripped.startswith("#"):
+                    lhs = stripped.split("=", 1)[0].strip()
+                    if lhs.isidentifier():
+                        defined_vars.add(lhs)
+
+                if stripped.startswith("print("):
+                    for token in stripped.replace("(", " ").replace(")", " ").split():
+                        if token.isidentifier() and token not in defined_vars and token not in ("dut",):
+                            safe_lines.append("# NOTE: removed unsafe print referencing undefined var")
+                            safe_lines.append("# " + line)
+                            break
+                    else:
+                        safe_lines.append(line)
+                else:
+                    safe_lines.append(line)
+
+            files[py_path] = "\n".join(safe_lines) + "\n"
+
+    # Synthesize missing runtime artifacts if the model omitted them
+    if "firmware/validate/Makefile" not in files:
+        files["firmware/validate/Makefile"] = """TOPLEVEL_LANG = verilog
+SIM ?= verilator
+TOPLEVEL = soc_top_sim
+MODULE = test_firmware_smoke
+
+include $(shell cocotb-config --makefiles)/Makefile.sim
+"""
+
+    if "firmware/validate/test_firmware_smoke.py" not in files:
+        files["firmware/validate/test_firmware_smoke.py"] = """import cocotb
+from cocotb.clock import Clock
+from cocotb.triggers import RisingEdge, Timer
+
+@cocotb.test()
+async def firmware_test(dut):
+    cocotb.start_soon(Clock(dut.clk, 10, units="ns").start())
+    dut.rst_n.value = 0
+    for _ in range(5):
+        await RisingEdge(dut.clk)
+    dut.rst_n.value = 1
+    for _ in range(10):
+        await RisingEdge(dut.clk)
+    await Timer(1, units="us")
+"""
+
+    for p, content in files.items():
+        write_artifact(state, p, content, key=p.split("/")[-1])
+
+    embedded = state.setdefault("embedded", {})
+    embedded[PHASE] = "firmware/validate/cocotb_harness.py"
+    state["embedded_cocotb_makefile_path"] = "firmware/validate/Makefile"
+    state["embedded_cocotb_test_paths"] = ["firmware/validate/test_firmware_smoke.py"]
 
     return state

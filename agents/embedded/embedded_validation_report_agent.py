@@ -59,7 +59,10 @@ RULES:
 OUTPUT REQUIREMENTS:
 - Write the primary output to match this path: firmware/validate/validation_report.md
 - Keep it implementation-ready and consistent with Rust + Cargo + Verilator + Cocotb assumptions.
-- If information is missing, make reasonable assumptions and clearly list them inside the artifact.
+- If execution summary indicates blocked or missing inputs, report that explicitly.
+- Do NOT invent successful execution.
+- Do NOT invent coverage percentages.
+- If data is unavailable, say "unavailable" or "blocked" instead of assuming values.
 """
 
  
