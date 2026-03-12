@@ -141,6 +141,15 @@ def run_agent(state: dict) -> dict:
         "regmap.json",
     ]
 
+    candidate_probe = []
+    for rel in candidate_paths:
+        abs_path = os.path.join(workflow_dir, rel) if workflow_dir else rel
+        candidate_probe.append({
+            "rel": rel,
+            "abs": abs_path,
+            "exists": os.path.isfile(abs_path),
+        })
+
     # 1) Try normal workflow_dir-relative lookup
     regmap_path = _find_first_existing(workflow_dir, candidate_paths) if workflow_dir else ""
 
@@ -180,9 +189,11 @@ def run_agent(state: dict) -> dict:
                 break
 
     upstream_regmap = _safe_load_json(regmap_path)
+
     debug_info = {
         "workflow_dir": workflow_dir,
         "candidate_paths": candidate_paths,
+        "candidate_probe": candidate_probe,
         "state_digital_regmap_path": state.get("digital_regmap_path"),
         "state_digital_register_map_path": state.get("digital_register_map_path"),
         "state_digital_block": state.get("digital"),
@@ -192,6 +203,7 @@ def run_agent(state: dict) -> dict:
         "normalization_taken": False,
         "candidate_regs_count": 0,
     }
+    
     
     def _write_debug(extra: dict):
         payload = {
