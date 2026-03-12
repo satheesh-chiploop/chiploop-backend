@@ -134,23 +134,65 @@ def run_agent(state: dict) -> dict:
 
     # Artifact-first for System_Firmware / System_End2End,
     # but preserve standalone Embedded_Run by falling back to spec-only LLM flow.
-    candidate_paths = [
+        candidate_paths = [
         "digital/digital_regmap.json",
         "digital/regmap.json",
         "digital/register_map.json",
         "regmap.json",
     ]
+
+    # 1) Try normal workflow_dir-relative lookup
     regmap_path = _find_first_existing(workflow_dir, candidate_paths) if workflow_dir else ""
+
+    # 2) Fall back to state-declared artifact paths if filesystem lookup fails
+    if not regmap_path:
+        state_candidates = [
+            state.get("digital_regmap_path"),
+            state.get("digital_register_map_path"),
+        ]
+
+        digital_state = state.get("digital") or {}
+        state_candidates.extend([
+            digital_state.get("regmap_path"),
+            digital_state.get("digital_regmap_path"),
+            digital_state.get("register_map_path"),
+        ])
+
+        for cand in state_candidates:
+            if not cand:
+                continue
+
+            # absolute path
+            if os.path.isabs(cand) and os.path.isfile(cand):
+                regmap_path = cand
+                break
+
+            # relative to workflow_dir
+            if workflow_dir:
+                joined = os.path.join(workflow_dir, cand)
+                if os.path.isfile(joined):
+                    regmap_path = joined
+                    break
+
+            # already relative artifact path like digital/digital_regmap.json
+            if os.path.isfile(cand):
+                regmap_path = cand
+                break
+
     upstream_regmap = _safe_load_json(regmap_path)
     debug_info = {
         "workflow_dir": workflow_dir,
         "candidate_paths": candidate_paths,
+        "state_digital_regmap_path": state.get("digital_regmap_path"),
+        "state_digital_register_map_path": state.get("digital_register_map_path"),
+        "state_digital_block": state.get("digital"),
         "selected_regmap_path": regmap_path,
         "upstream_regmap_type": type(upstream_regmap).__name__,
         "passthrough_taken": False,
         "normalization_taken": False,
         "candidate_regs_count": 0,
     }
+    
     def _write_debug(extra: dict):
         payload = {
             **debug_info,
