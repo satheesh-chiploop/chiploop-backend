@@ -2,6 +2,10 @@ import json
 import os
 import re
 import datetime
+
+import subprocess
+import shutil
+import time
 from typing import Any, Dict, List, Optional
 
 from utils.artifact_utils import save_text_artifact_and_record
@@ -420,6 +424,65 @@ def _markdown_report(summary: Dict[str, Any]) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
+
+def _run_cocotb_simulation(workflow_dir, makefile_path, test_module):
+    """
+    Execute cocotb simulation using make.
+    Returns runtime summary.
+    """
+
+    make_abs = os.path.join(workflow_dir, makefile_path)
+
+    if not os.path.isfile(make_abs):
+        return {
+            "attempted": False,
+            "reason": "Makefile not found",
+        }
+
+    make_bin = shutil.which("make")
+    if not make_bin:
+        return {
+            "attempted": False,
+            "reason": "make not available",
+        }
+
+    start = time.time()
+
+    try:
+        proc = subprocess.run(
+            [
+                make_bin,
+                "-f",
+                make_abs,
+                f"MODULE={test_module}",
+            ],
+            cwd=workflow_dir,
+            capture_output=True,
+            text=True,
+            timeout=600,
+        )
+
+        runtime = time.time() - start
+
+        success = proc.returncode == 0
+
+        return {
+            "attempted": True,
+            "success": success,
+            "runtime_seconds": runtime,
+            "stdout": proc.stdout[-5000:],
+            "stderr": proc.stderr[-5000:],
+        }
+
+    except Exception as e:
+        return {
+            "attempted": True,
+            "success": False,
+            "runtime_seconds": None,
+            "stderr": str(e),
+        }
+
+
 def run_agent(state: dict) -> dict:
     agent_name = "System Firmware CoSim Execution Agent"
     workflow_id = state.get("workflow_id")
@@ -473,17 +536,43 @@ def run_agent(state: dict) -> dict:
     }
 
     runtime_requested = bool(state.get("execute_cosim") or state.get("run_cosim"))
-    runtime_capable = False  # future hook for actual verilator/cocotb invocation
+ 
+
+    runtime_capable = bool(
+        makefile_path
+        and firmware_elf_path
+        and soc_top_exists
+        and test_paths
+    )
+
+    sim_result = None
 
     if readiness["status"] != "ready":
         execution_mode = "artifact_readiness_only"
         overall_status = "blocked_missing_inputs"
+
     elif runtime_requested and runtime_capable:
+
         execution_mode = "runtime_execution"
-        overall_status = "execution_not_implemented"
+
+        test_module = os.path.basename(test_paths[0]).replace(".py", "")
+
+        sim_result = _run_cocotb_simulation(
+           workflow_dir,
+           makefile_path,
+           test_module,
+        )
+
+        if sim_result.get("success"):
+           overall_status = "simulation_passed"
+        else:
+           overall_status = "simulation_failed"
+
     else:
         execution_mode = "artifact_readiness_only"
         overall_status = "ready_for_execution"
+
+    
 
     test_matrix = _default_test_matrix(test_paths)
 
@@ -506,19 +595,21 @@ def run_agent(state: dict) -> dict:
         },
         "test_matrix": test_matrix,
         "results": {
-            "attempted": False,
-            "executed_test_count": 0,
-            "passed_test_count": 0,
-            "failed_test_count": 0,
-            "runtime_seconds_total": None,
+            "attempted": bool(sim_result),
+            "executed_test_count": 1 if sim_result else 0,
+            "passed_test_count": 1 if sim_result and sim_result.get("success") else 0,
+            "failed_test_count": 1 if sim_result and not sim_result.get("success") else 0,
+            "runtime_seconds_total": sim_result.get("runtime_seconds") if sim_result else None,
             "waveform_paths": [],
             "log_paths": [
                 "system/firmware/cosim/logs/system_firmware_execution.log"
             ],
             "runtime_requested": runtime_requested,
             "runtime_capable": runtime_capable,
+            "stdout_tail": sim_result.get("stdout") if sim_result else "",
+            "stderr_tail": sim_result.get("stderr") if sim_result else "",
         },
-        
+      
         "notes": _build_notes(readiness, optional_inputs),
     }
 

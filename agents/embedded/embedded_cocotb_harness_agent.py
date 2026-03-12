@@ -389,7 +389,7 @@ async def firmware_test(dut):
     embedded = state.setdefault("embedded", {})
     embedded[PHASE] = "firmware/validate/cocotb_harness.py"
 
-    
+
     state["embedded_cocotb_makefile_path"] = "firmware/validate/Makefile"
     state["embedded_cocotb_test_paths"] = ["firmware/validate/test_firmware_smoke.py"]
 
@@ -404,6 +404,7 @@ async def firmware_test(dut):
         existing_rtl = state.get("rtl_inputs") or []
         if not isinstance(existing_rtl, list):
             existing_rtl = [existing_rtl] if existing_rtl else []
+
         merged_rtl = []
         for p in existing_rtl + [soc_top_relpath]:
             if isinstance(p, str) and p.strip() and p not in merged_rtl:
@@ -413,9 +414,24 @@ async def firmware_test(dut):
     state["cocotb_bundle_ready"] = soc_top_exists
     state["cocotb_soc_top_exists"] = soc_top_exists
 
+    # Production runtime contract for downstream execution agent
+    state["cosim_logs_dir"] = "system/firmware/cosim/logs"
+    state["cosim_waves_dir"] = "system/firmware/cosim/waves"
+    state["cosim_results_dir"] = "system/firmware/cosim/results"
+
+    inferred_test_module = "test_firmware_smoke"
+    state["cocotb_test_module"] = inferred_test_module
+    state["cosim_make_cmd"] = "make"
+    state["cosim_make_args"] = [
+        "-f",
+        "firmware/validate/Makefile",
+        f"MODULE={inferred_test_module}",
+    ]
+
     return state
 
-
+    
+    
 
    
     

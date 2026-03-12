@@ -290,16 +290,38 @@ target = "{resolved_target_triple}"
     embedded = state.setdefault("embedded", {})
     embedded[PHASE] = OUTPUT_PATH
 
+    
+
     resolved_target_triple = (
         toolchain.get("target_triple")
         or state.get("target_triple")
-        or "unknown-target"
-    )
+        or ""
+    ).strip()
+
     bin_name = (
         toolchain.get("bin_name")
         or state.get("firmware_bin_name")
         or "firmware_app"
-    )
+    ).strip()
+
+    if not resolved_target_triple:
+        state["firmware_elf_path"] = ""
+        state["firmware_expected_elf_path"] = ""
+        state["elf_path"] = ""
+        state["embedded_elf_path"] = ""
+        state["firmware_elf_exists"] = False
+
+        build_block = state.setdefault("firmware_build", {})
+        build_block["target_triple"] = ""
+        build_block["bin_name"] = bin_name
+        build_block["elf_path"] = ""
+        build_block["elf_exists"] = False
+        build_block["build_attempted"] = False
+        build_block["build_succeeded"] = False
+        build_block["build_stdout"] = ""
+        build_block["build_stderr"] = "Missing concrete target_triple; refusing to publish placeholder ELF."
+        build_block["build_instructions_path"] = OUTPUT_PATH
+        return state
 
     # Hard-normalize config.toml so it cannot keep unresolved placeholders
     cfg_rel = OUTPUT_CARGO_CFG
@@ -309,8 +331,9 @@ target = "{resolved_target_triple}"
         with open(cfg_abs, "w", encoding="utf-8") as f:
             f.write(f'[build]\ntarget = "{resolved_target_triple}"\n')
 
-    # Cargo's real output path is under the workspace root, not under firmware/build/target
-    elf_relpath = f"firmware/build/target/{resolved_target_triple}/release/{bin_name}"
+    # Canonical artifact path we want downstream to consume
+    elf_relpath = f"firmware/build/target/{resolved_target_triple}/release/{bin_name}.elf"
+
     cargo_workspace_dir = os.path.join(workflow_dir, "firmware", "build")
     cargo_target_abs = os.path.join(cargo_workspace_dir, "target", resolved_target_triple, "release", bin_name)
 
@@ -349,7 +372,9 @@ target = "{resolved_target_triple}"
         except Exception as e:
             build_stderr = str(e)
 
-    # If Cargo built a real binary, copy it to the canonical artifact path expected by downstream agents
+  
+
+    # If Cargo built a real binary, copy it to the canonical ELF artifact path expected downstream
     elf_abs = os.path.join(workflow_dir, elf_relpath)
     if build_succeeded:
         try:
@@ -358,6 +383,7 @@ target = "{resolved_target_triple}"
             shutil.copy2(cargo_target_abs, elf_abs)
         except Exception as e:
             build_stderr = (build_stderr + "\n" + str(e)).strip()
+            build_succeeded = False
 
     elf_exists = os.path.isfile(elf_abs)
 
