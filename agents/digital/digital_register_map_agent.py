@@ -144,10 +144,23 @@ Output schema:
     except Exception as e:
         print(f"⚠️ Failed to upload regmap artifacts: {e}")
 
+        # Publish both artifact path and parsed object into state for downstream agents.
+    rel_regmap_path = "digital/digital_regmap.json"
+
+    digital = state.setdefault("digital", {})
+    digital["regmap"] = regmap
+    digital["digital_regmap"] = regmap
+    digital["digital_regmap_path"] = rel_regmap_path
+    digital["register_map_path"] = rel_regmap_path
+
     state.update({
         "status": "✅ Digital register map generated.",
+        "digital_regmap": regmap,
+        "digital_regmap_path": rel_regmap_path,
+        "digital_register_map_path": rel_regmap_path,
         "digital_regmap_json": out_path,
         "workflow_id": workflow_id,
         "workflow_dir": workflow_dir,
     })
+    
     return state
