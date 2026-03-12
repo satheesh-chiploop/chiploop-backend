@@ -434,6 +434,21 @@ def run_agent(state: dict) -> dict:
     assertions_path = _find_assertions_path(state)
     rtl_inputs = _find_verilog_inputs(state, soc_top_sim_path)
 
+    workflow_dir = state.get("workflow_dir") or ""
+
+    soc_top_exists = False
+    if soc_top_sim_path:
+        soc_top_abs = os.path.join(workflow_dir, soc_top_sim_path)
+        soc_top_exists = os.path.isfile(soc_top_abs)
+
+    rtl_existing = []
+    for p in rtl_inputs:
+        abs_p = os.path.join(workflow_dir, p)
+        if os.path.isfile(abs_p):
+            rtl_existing.append(p)
+
+    rtl_inputs = rtl_existing
+
     elf_exists = False
     if firmware_elf_path:
         workflow_dir = state.get("workflow_dir") or ""
@@ -441,7 +456,7 @@ def run_agent(state: dict) -> dict:
         elf_exists = os.path.isfile(elf_abs)
 
     required = {
-        "soc_top_sim_path": soc_top_sim_path,
+        "soc_top_sim_path": soc_top_sim_path if soc_top_exists else "",
         "firmware_elf_path": firmware_elf_path if elf_exists else "",
         "makefile_path": makefile_path,
         "test_paths": test_paths,
@@ -479,12 +494,13 @@ def run_agent(state: dict) -> dict:
         "overall_status": overall_status,
         "readiness": readiness,
         "inputs": {
-            "soc_top_sim_path": soc_top_sim_path,
+            "soc_top_sim_path": soc_top_sim_path if soc_top_exists else "",
             "firmware_elf_path": firmware_elf_path,
             "makefile_path": makefile_path,
             "firmware_elf_exists":elf_exists,
             "test_paths": test_paths,
             "coverage_model_path": coverage_model_path,
+            "soc_top_sim_exists": soc_top_exists,
             "assertions_path": assertions_path,
             "rtl_inputs": rtl_inputs,
         },
