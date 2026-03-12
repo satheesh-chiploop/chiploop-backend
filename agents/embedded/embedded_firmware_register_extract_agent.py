@@ -134,7 +134,7 @@ def run_agent(state: dict) -> dict:
 
     # Artifact-first for System_Firmware / System_End2End,
     # but preserve standalone Embedded_Run by falling back to spec-only LLM flow.
-        candidate_paths = [
+    candidate_paths = [
         "digital/digital_regmap.json",
         "digital/regmap.json",
         "digital/register_map.json",
