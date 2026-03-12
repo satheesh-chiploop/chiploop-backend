@@ -268,5 +268,12 @@ def run_agent(state: dict) -> dict:
     state["soc_top_phys_module"] = top_phys
     state["soc_top_sim_path"] = f"system/integration/{top_sim}.sv"
     state["soc_top_phys_path"] = f"system/integration/{top_phys}.sv"
+    # NEW — publish RTL inputs for downstream execution
+    state["rtl_inputs"] = [state["soc_top_sim_path"]]
+
+    system_block = state.setdefault("system", {})
+    system_block["rtl_inputs"] = state["rtl_inputs"]
+    system_block["soc_top_sim_path"] = state["soc_top_sim_path"]
+
     state["status"] = f"✅ Generated SoC tops: {top_sim}.sv and {top_phys}.sv"
     return state
