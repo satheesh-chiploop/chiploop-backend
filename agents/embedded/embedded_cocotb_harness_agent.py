@@ -57,9 +57,12 @@ def run_agent(state: dict) -> dict:
             if discovered:
                 soc_top_relpath = discovered
 
-    soc_top_text = _safe_read(os.path.join(workflow_dir, soc_top_relpath))
+    soc_top_abs = os.path.join(workflow_dir, soc_top_relpath) if workflow_dir else soc_top_relpath
+    soc_top_text = _safe_read(soc_top_abs)
     regmap_text = _safe_read(os.path.join(workflow_dir, "firmware/register_map.json"))
     driver_text = _safe_read(os.path.join(workflow_dir, "firmware/drivers/driver_scaffold.rs"))
+
+    soc_top_exists = bool(soc_top_abs and os.path.isfile(soc_top_abs))
 
     spec_text = (state.get("spec_text") or state.get("spec") or "").strip()
     goal = (state.get("goal") or "").strip()
@@ -260,10 +263,14 @@ FILE: firmware/validate/test_firmware_smoke.py
 
     # Always harden / normalize Makefile because LLM output may exist but be wrong.
 
-    # Resolve Verilog source path relative to Makefile location
+        # Resolve Verilog source path relative to Makefile location
     verilog_path = f"../../{soc_top_relpath}".replace("//", "/")
 
-    files["firmware/validate/Makefile"] = f"""TOPLEVEL_LANG = verilog
+    if not soc_top_exists:
+        # Keep the bundle truthful: emit a diagnostic Makefile comment if RTL is missing
+        files["firmware/validate/Makefile"] = f"""# WARNING: SoC top RTL not found when harness was generated
+# EXPECTED_RTL = {verilog_path}
+TOPLEVEL_LANG = verilog
 VERILOG_SOURCES = {verilog_path}
 TOPLEVEL = {inferred_top}
 MODULE = test_firmware_smoke
@@ -271,7 +278,17 @@ SIM = verilator
 
 include $(shell cocotb-config --makefiles)/Makefile.sim
 """
- 
+    else:
+        files["firmware/validate/Makefile"] = f"""TOPLEVEL_LANG = verilog
+VERILOG_SOURCES = {verilog_path}
+TOPLEVEL = {inferred_top}
+MODULE = test_firmware_smoke
+SIM = verilator
+
+include $(shell cocotb-config --makefiles)/Makefile.sim
+"""
+
+
 
     def _is_weak_python(py: str) -> bool:
         py = py or ""
@@ -372,15 +389,29 @@ async def firmware_test(dut):
     embedded = state.setdefault("embedded", {})
     embedded[PHASE] = "firmware/validate/cocotb_harness.py"
 
+    
     state["embedded_cocotb_makefile_path"] = "firmware/validate/Makefile"
     state["embedded_cocotb_test_paths"] = ["firmware/validate/test_firmware_smoke.py"]
 
-    # General downstream keys
     state["makefile_path"] = "firmware/validate/Makefile"
     state["test_paths"] = ["firmware/validate/test_firmware_smoke.py"]
     state["cocotb_makefile_path"] = "firmware/validate/Makefile"
     state["cocotb_test_paths"] = ["firmware/validate/test_firmware_smoke.py"]
-    state["soc_top_sim_path"] = soc_top_relpath
+
+    if soc_top_exists:
+        state["soc_top_sim_path"] = soc_top_relpath
+
+        existing_rtl = state.get("rtl_inputs") or []
+        if not isinstance(existing_rtl, list):
+            existing_rtl = [existing_rtl] if existing_rtl else []
+        merged_rtl = []
+        for p in existing_rtl + [soc_top_relpath]:
+            if isinstance(p, str) and p.strip() and p not in merged_rtl:
+                merged_rtl.append(p)
+        state["rtl_inputs"] = merged_rtl
+
+    state["cocotb_bundle_ready"] = soc_top_exists
+    state["cocotb_soc_top_exists"] = soc_top_exists
 
     return state
 

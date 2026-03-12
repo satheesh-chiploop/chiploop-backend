@@ -285,11 +285,7 @@ target = "{resolved_target_triple}"
         for p in required:
             write_artifact(state, p, files[p], key=p.split("/")[-1])
     else:
-        # fallback: at least write build instructions
         write_artifact(state, OUTPUT_PATH, out, key=OUTPUT_PATH.split("/")[-1])
-
-
-    # lightweight state update for downstream agents
 
     embedded = state.setdefault("embedded", {})
     embedded[PHASE] = OUTPUT_PATH
@@ -305,25 +301,84 @@ target = "{resolved_target_triple}"
         or "firmware_app"
     )
 
+    # Hard-normalize config.toml so it cannot keep unresolved placeholders
+    cfg_rel = OUTPUT_CARGO_CFG
+    cfg_abs = os.path.join(workflow_dir, cfg_rel)
+    if workflow_dir:
+        os.makedirs(os.path.dirname(cfg_abs), exist_ok=True)
+        with open(cfg_abs, "w", encoding="utf-8") as f:
+            f.write(f'[build]\ntarget = "{resolved_target_triple}"\n')
+
+    # Cargo's real output path is under the workspace root, not under firmware/build/target
     elf_relpath = f"firmware/build/target/{resolved_target_triple}/release/{bin_name}"
+    cargo_workspace_dir = os.path.join(workflow_dir, "firmware", "build")
+    cargo_target_abs = os.path.join(cargo_workspace_dir, "target", resolved_target_triple, "release", bin_name)
+
+    build_attempted = False
+    build_succeeded = False
+    build_stdout = ""
+    build_stderr = ""
+
+    cargo_toml_abs = os.path.join(workflow_dir, OUTPUT_CARGO_TOML)
+
+    # Guarded real build attempt
+    cargo_path = None
+    for cand in ("cargo", "/root/.cargo/bin/cargo", os.path.expanduser("~/.cargo/bin/cargo")):
+        if os.path.isfile(cand) or cand == "cargo":
+            cargo_path = cand
+            break
+
+    if workflow_dir and os.path.isfile(cargo_toml_abs):
+        try:
+            import shutil
+            import subprocess
+
+            resolved_cargo = shutil.which(cargo_path) if cargo_path == "cargo" else cargo_path
+            if resolved_cargo:
+                build_attempted = True
+                proc = subprocess.run(
+                    [resolved_cargo, "build", "--release", "--target", resolved_target_triple],
+                    cwd=cargo_workspace_dir,
+                    capture_output=True,
+                    text=True,
+                    timeout=180,
+                )
+                build_stdout = proc.stdout or ""
+                build_stderr = proc.stderr or ""
+                build_succeeded = (proc.returncode == 0 and os.path.isfile(cargo_target_abs))
+        except Exception as e:
+            build_stderr = str(e)
+
+    # If Cargo built a real binary, copy it to the canonical artifact path expected by downstream agents
+    elf_abs = os.path.join(workflow_dir, elf_relpath)
+    if build_succeeded:
+        try:
+            os.makedirs(os.path.dirname(elf_abs), exist_ok=True)
+            import shutil
+            shutil.copy2(cargo_target_abs, elf_abs)
+        except Exception as e:
+            build_stderr = (build_stderr + "\n" + str(e)).strip()
+
+    elf_exists = os.path.isfile(elf_abs)
 
     state["firmware_elf_path"] = elf_relpath
     state["firmware_expected_elf_path"] = elf_relpath
     state["elf_path"] = elf_relpath
     state["embedded_elf_path"] = elf_relpath
-
-    # Determine if ELF actually exists
-    elf_abs = os.path.join(workflow_dir, elf_relpath)
-    state["firmware_elf_exists"] = os.path.isfile(elf_abs)
+    state["firmware_elf_exists"] = elf_exists
 
     build_block = state.setdefault("firmware_build", {})
     build_block["target_triple"] = resolved_target_triple
     build_block["bin_name"] = bin_name
     build_block["elf_path"] = elf_relpath
-    build_block["elf_exists"] = state["firmware_elf_exists"]
+    build_block["elf_exists"] = elf_exists
+    build_block["build_attempted"] = build_attempted
+    build_block["build_succeeded"] = build_succeeded
+    build_block["cargo_target_abs"] = cargo_target_abs
+    build_block["build_stdout"] = build_stdout[-4000:]
+    build_block["build_stderr"] = build_stderr[-4000:]
     build_block["build_instructions_path"] = OUTPUT_PATH
 
-
-
     return state
+
     
