@@ -36,15 +36,26 @@ def run_agent(state: dict) -> dict:
 
    
 
-    soc_top_relpath = "system/integration/soc_top_sim.sv"
-    for candidate in [
-        "system/integration/sensor_hub_soc_sim.sv",
-        "system/integration/soc_top_sim.sv",
-    ]:
-        full = os.path.join(workflow_dir, candidate)
-        if os.path.isfile(full):
-            soc_top_relpath = candidate
-            break
+    
+
+    soc_top_relpath = (
+        state.get("soc_top_sim_path")
+        or state.get("system_top_sim_path")
+        or "system/integration/soc_top_sim.sv"
+    )
+
+    if workflow_dir:
+        preferred = os.path.join(workflow_dir, soc_top_relpath)
+        if not os.path.isfile(preferred):
+            discovered = ""
+            integ_dir = os.path.join(workflow_dir, "system", "integration")
+            if os.path.isdir(integ_dir):
+                for name in sorted(os.listdir(integ_dir)):
+                    if name.endswith("_sim.sv"):
+                        discovered = f"system/integration/{name}"
+                        break
+            if discovered:
+                soc_top_relpath = discovered
 
     soc_top_text = _safe_read(os.path.join(workflow_dir, soc_top_relpath))
     regmap_text = _safe_read(os.path.join(workflow_dir, "firmware/register_map.json"))
@@ -351,10 +362,22 @@ async def firmware_test(dut):
     for p, content in files.items():
         write_artifact(state, p, content, key=p.split("/")[-1])
 
+
+
     embedded = state.setdefault("embedded", {})
     embedded[PHASE] = "firmware/validate/cocotb_harness.py"
+
     state["embedded_cocotb_makefile_path"] = "firmware/validate/Makefile"
     state["embedded_cocotb_test_paths"] = ["firmware/validate/test_firmware_smoke.py"]
+
+    # General downstream keys
+    state["makefile_path"] = "firmware/validate/Makefile"
+    state["test_paths"] = ["firmware/validate/test_firmware_smoke.py"]
+    state["cocotb_makefile_path"] = "firmware/validate/Makefile"
+    state["cocotb_test_paths"] = ["firmware/validate/test_firmware_smoke.py"]
+    state["soc_top_sim_path"] = soc_top_relpath
+
+    return state
 
     return state
 

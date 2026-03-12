@@ -290,6 +290,7 @@ target = "{resolved_target_triple}"
 
 
     # lightweight state update for downstream agents
+
     embedded = state.setdefault("embedded", {})
     embedded[PHASE] = OUTPUT_PATH
 
@@ -298,10 +299,26 @@ target = "{resolved_target_triple}"
         or state.get("target_triple")
         or "unknown-target"
     )
+    bin_name = (
+        toolchain.get("bin_name")
+        or state.get("firmware_bin_name")
+        or "firmware_app"
+    )
 
-    state["firmware_elf_path"] = f"firmware/build/target/{resolved_target_triple}/release/firmware_app"
-    state["firmware_expected_elf_path"] = state["firmware_elf_path"]
+    elf_relpath = f"firmware/build/target/{resolved_target_triple}/release/{bin_name}"
 
- 
+    state["firmware_elf_path"] = elf_relpath
+    state["firmware_expected_elf_path"] = elf_relpath
+    state["elf_path"] = elf_relpath
+    state["embedded_elf_path"] = elf_relpath
+    state["target_triple"] = resolved_target_triple
+    state["firmware_bin_name"] = bin_name
+
+    build_block = state.setdefault("firmware_build", {})
+    build_block["target_triple"] = resolved_target_triple
+    build_block["bin_name"] = bin_name
+    build_block["elf_path"] = elf_relpath
+    build_block["build_instructions_path"] = OUTPUT_PATH
 
     return state
+    

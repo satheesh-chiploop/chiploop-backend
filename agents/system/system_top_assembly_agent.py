@@ -268,12 +268,24 @@ def run_agent(state: dict) -> dict:
     state["soc_top_phys_module"] = top_phys
     state["soc_top_sim_path"] = f"system/integration/{top_sim}.sv"
     state["soc_top_phys_path"] = f"system/integration/{top_phys}.sv"
-    # NEW — publish RTL inputs for downstream execution
-    state["rtl_inputs"] = [state["soc_top_sim_path"]]
+
+    existing_rtl = state.get("rtl_inputs") or state.get("system_rtl_files") or []
+    if not isinstance(existing_rtl, list):
+        existing_rtl = [existing_rtl] if existing_rtl else []
+
+    merged_rtl = []
+    for p in existing_rtl + [state["soc_top_sim_path"]]:
+        if isinstance(p, str) and p.strip() and p not in merged_rtl:
+            merged_rtl.append(p)
+
+    state["rtl_inputs"] = merged_rtl
+    state["system_rtl_files"] = merged_rtl
 
     system_block = state.setdefault("system", {})
-    system_block["rtl_inputs"] = state["rtl_inputs"]
+    system_block["rtl_inputs"] = merged_rtl
     system_block["soc_top_sim_path"] = state["soc_top_sim_path"]
+    system_block["soc_top_phys_path"] = state["soc_top_phys_path"]
 
+    
     state["status"] = f"✅ Generated SoC tops: {top_sim}.sv and {top_phys}.sv"
     return state

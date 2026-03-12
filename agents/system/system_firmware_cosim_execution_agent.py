@@ -449,8 +449,18 @@ def run_agent(state: dict) -> dict:
         "elf": firmware_elf_path,
     }
 
-    execution_mode = "artifact_readiness_only"
-    overall_status = "ready_for_execution" if readiness["status"] == "ready" else "blocked_missing_inputs"
+    runtime_requested = bool(state.get("execute_cosim") or state.get("run_cosim"))
+    runtime_capable = False  # future hook for actual verilator/cocotb invocation
+
+    if readiness["status"] != "ready":
+        execution_mode = "artifact_readiness_only"
+        overall_status = "blocked_missing_inputs"
+    elif runtime_requested and runtime_capable:
+        execution_mode = "runtime_execution"
+        overall_status = "execution_not_implemented"
+    else:
+        execution_mode = "artifact_readiness_only"
+        overall_status = "ready_for_execution"
 
     test_matrix = _default_test_matrix(test_paths)
 
@@ -480,7 +490,10 @@ def run_agent(state: dict) -> dict:
             "log_paths": [
                 "system/firmware/cosim/logs/system_firmware_execution.log"
             ],
+            "runtime_requested": runtime_requested,
+            "runtime_capable": runtime_capable,
         },
+        
         "notes": _build_notes(readiness, optional_inputs),
     }
 

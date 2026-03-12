@@ -94,8 +94,21 @@ OUTPUT REQUIREMENTS:
 
     write_artifact(state, OUTPUT_PATH, out, key=OUTPUT_PATH.split("/")[-1])
 
-    # lightweight state update for downstream agents
     embedded = state.setdefault("embedded", {})
     embedded[PHASE] = OUTPUT_PATH
 
+    state["driver_scaffold_path"] = OUTPUT_PATH
+    state["firmware_driver_path"] = OUTPUT_PATH
+
+    firmware_block = state.setdefault("firmware", {})
+    firmware_block["driver_scaffold_path"] = OUTPUT_PATH
+
+    # Publish simple provenance hints for downstream summary/build agents
+    state["driver_scaffold_inputs"] = {
+        "used_regmap": bool(regmap),
+        "used_hal": bool(hal_code),
+        "used_spec": bool(spec_text),
+    }
+
+    return state
     return state
