@@ -482,7 +482,7 @@ def run_agent(state: dict) -> dict:
             "soc_top_sim_path": soc_top_sim_path,
             "firmware_elf_path": firmware_elf_path,
             "makefile_path": makefile_path,
-            "firmware_elf_exists" = elf_exists,
+            "firmware_elf_exists":elf_exists,
             "test_paths": test_paths,
             "coverage_model_path": coverage_model_path,
             "assertions_path": assertions_path,
