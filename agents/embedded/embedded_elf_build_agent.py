@@ -311,14 +311,19 @@ target = "{resolved_target_triple}"
     state["firmware_expected_elf_path"] = elf_relpath
     state["elf_path"] = elf_relpath
     state["embedded_elf_path"] = elf_relpath
-    state["target_triple"] = resolved_target_triple
-    state["firmware_bin_name"] = bin_name
+
+    # Determine if ELF actually exists
+    elf_abs = os.path.join(workflow_dir, elf_relpath)
+    state["firmware_elf_exists"] = os.path.isfile(elf_abs)
 
     build_block = state.setdefault("firmware_build", {})
     build_block["target_triple"] = resolved_target_triple
     build_block["bin_name"] = bin_name
     build_block["elf_path"] = elf_relpath
+    build_block["elf_exists"] = state["firmware_elf_exists"]
     build_block["build_instructions_path"] = OUTPUT_PATH
+
+
 
     return state
     

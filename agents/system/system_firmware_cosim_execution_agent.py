@@ -434,13 +434,21 @@ def run_agent(state: dict) -> dict:
     assertions_path = _find_assertions_path(state)
     rtl_inputs = _find_verilog_inputs(state, soc_top_sim_path)
 
+    elf_exists = False
+    if firmware_elf_path:
+        workflow_dir = state.get("workflow_dir") or ""
+        elf_abs = os.path.join(workflow_dir, firmware_elf_path)
+        elf_exists = os.path.isfile(elf_abs)
+
     required = {
         "soc_top_sim_path": soc_top_sim_path,
-        "firmware_elf_path": firmware_elf_path,
+        "firmware_elf_path": firmware_elf_path if elf_exists else "",
         "makefile_path": makefile_path,
         "test_paths": test_paths,
         "rtl_inputs": rtl_inputs,
     }
+
+    
     readiness = _readiness(required)
 
     optional_inputs = {
@@ -474,6 +482,7 @@ def run_agent(state: dict) -> dict:
             "soc_top_sim_path": soc_top_sim_path,
             "firmware_elf_path": firmware_elf_path,
             "makefile_path": makefile_path,
+            "firmware_elf_exists" = elf_exists,
             "test_paths": test_paths,
             "coverage_model_path": coverage_model_path,
             "assertions_path": assertions_path,

@@ -259,14 +259,19 @@ FILE: firmware/validate/test_firmware_smoke.py
 
 
     # Always harden / normalize Makefile because LLM output may exist but be wrong.
+
+    # Resolve Verilog source path relative to Makefile location
+    verilog_path = f"../../{soc_top_relpath}".replace("//", "/")
+
     files["firmware/validate/Makefile"] = f"""TOPLEVEL_LANG = verilog
-VERILOG_SOURCES = ../../{soc_top_relpath}
+VERILOG_SOURCES = {verilog_path}
 TOPLEVEL = {inferred_top}
 MODULE = test_firmware_smoke
 SIM = verilator
 
 include $(shell cocotb-config --makefiles)/Makefile.sim
 """
+ 
 
     def _is_weak_python(py: str) -> bool:
         py = py or ""
@@ -379,7 +384,7 @@ async def firmware_test(dut):
 
     return state
 
-    return state
+
 
    
     
