@@ -145,57 +145,85 @@ def run_agent(state: dict) -> dict:
 
     if isinstance(upstream_regmap, dict):
         # PASS-THROUGH FIRST:
-        # If upstream already contains a concrete register list/dict, preserve it exactly.
+        # Preserve the upstream artifact as faithfully as possible.
         passthrough = dict(upstream_regmap)
+
+        # Peel one level of common wrappers without losing original naming.
+        source_obj = passthrough
+        if isinstance(source_obj.get("regmap"), dict):
+            source_obj = source_obj["regmap"]
+        elif isinstance(source_obj.get("register_map"), dict):
+            rm = source_obj["register_map"]
+            # If register_map itself contains a concrete registers list, use that object
+            if isinstance(rm.get("registers"), list):
+                source_obj = rm
 
         candidate_regs = None
 
-        if isinstance(passthrough.get("registers"), list):
-            candidate_regs = passthrough["registers"]
-        elif isinstance(passthrough.get("regs"), list):
-            candidate_regs = passthrough["regs"]
-            passthrough["registers"] = candidate_regs
-        elif isinstance(passthrough.get("csr_registers"), list):
-            candidate_regs = passthrough["csr_registers"]
-            passthrough["registers"] = candidate_regs
-        elif isinstance(passthrough.get("register_map"), dict):
-            # Convert dict keyed by register name -> list, preserving names exactly
-            candidate_regs = []
-            for reg_name, reg_body in passthrough["register_map"].items():
+        if isinstance(source_obj.get("registers"), list):
+            candidate_regs = source_obj["registers"]
+        elif isinstance(source_obj.get("regs"), list):
+            candidate_regs = source_obj["regs"]
+        elif isinstance(source_obj.get("csr_registers"), list):
+            candidate_regs = source_obj["csr_registers"]
+        elif isinstance(source_obj.get("register_map"), dict):
+            # Shape: {"register_map": {"CONTROL": {...}, "STATUS": {...}}}
+            tmp = []
+            for reg_name, reg_body in source_obj["register_map"].items():
                 if isinstance(reg_body, dict):
                     item = dict(reg_body)
                     item.setdefault("name", reg_name)
-                    candidate_regs.append(item)
-            passthrough["registers"] = candidate_regs
+                    tmp.append(item)
+            if tmp:
+                candidate_regs = tmp
+        elif isinstance(source_obj, dict):
+            # Last-resort artifact-preserving shape:
+            # top-level dict keyed by register name -> register body
+            tmp = []
+            for reg_name, reg_body in source_obj.items():
+                if isinstance(reg_body, dict) and (
+                    "offset" in reg_body or
+                    "addr_offset" in reg_body or
+                    "fields" in reg_body or
+                    "bitfields" in reg_body or
+                    "reset" in reg_body or
+                    "reset_value" in reg_body
+                ):
+                    item = dict(reg_body)
+                    item.setdefault("name", reg_name)
+                    tmp.append(item)
+            if tmp:
+                candidate_regs = tmp
 
-        regs = passthrough.get("registers") or []
-        if isinstance(regs, list) and regs:
-            passthrough["__source"] = {
+        if isinstance(candidate_regs, list) and candidate_regs:
+            passthrough_out = dict(source_obj)
+            passthrough_out["registers"] = candidate_regs
+            passthrough_out["__source"] = {
                 "mode": "artifact_passthrough",
                 "path": regmap_path,
             }
 
-            # Preserve common top-level metadata if missing
-            passthrough.setdefault(
+            passthrough_out.setdefault(
                 "block_name",
-                passthrough.get("module_name") or passthrough.get("name") or "firmware_block"
+                source_obj.get("block_name") or source_obj.get("module_name") or source_obj.get("name") or "firmware_block"
             )
-            passthrough.setdefault(
+            passthrough_out.setdefault(
                 "module_name",
-                passthrough.get("block_name") or passthrough.get("name") or "firmware_block"
+                source_obj.get("module_name") or source_obj.get("block_name") or source_obj.get("name") or "firmware_block"
             )
-            passthrough.setdefault(
+            passthrough_out.setdefault(
                 "base_address",
-                passthrough.get("base_addr")
-                or passthrough.get("mmio_base")
-                or passthrough.get("base")
+                source_obj.get("base_address")
+                or source_obj.get("base_addr")
+                or source_obj.get("mmio_base")
+                or source_obj.get("base")
                 or "0x00000000"
             )
 
-            out = json.dumps(passthrough, indent=2)
+            out = json.dumps(passthrough_out, indent=2)
             write_artifact(state, OUTPUT_PATH, out, key=OUTPUT_PATH.split("/")[-1])
 
-            state["firmware_register_map"] = passthrough
+            state["firmware_register_map"] = passthrough_out
             state["firmware_register_map_path"] = OUTPUT_PATH
             embedded = state.setdefault("embedded", {})
             embedded[PHASE] = OUTPUT_PATH

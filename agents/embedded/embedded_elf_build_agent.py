@@ -250,10 +250,15 @@ pub extern "C" fn _start() -> ! {
         files[OUTPUT_CARGO_TOML] = ct
 
     # Synthesize a safe default .cargo/config.toml if the model omitted it
+    resolved_target_triple = (
+        toolchain.get("target_triple")
+        or state.get("target_triple")
+        or "unknown-target"
+    )
+
     if OUTPUT_CARGO_CFG not in files:
-        target_triple = toolchain.get("target_triple", "<TARGET_TRIPLE>")
         files[OUTPUT_CARGO_CFG] = f"""[build]
-target = "{target_triple}"
+target = "{resolved_target_triple}"
 """
 
     # Clean suspicious unstable/no_std patterns from config and Cargo
@@ -288,8 +293,15 @@ target = "{target_triple}"
     embedded = state.setdefault("embedded", {})
     embedded[PHASE] = OUTPUT_PATH
 
-    target_triple = toolchain.get("target_triple", "<TARGET_TRIPLE>")
-    state["firmware_elf_path"] = f"firmware/build/target/{target_triple}/release/firmware_app"
+    resolved_target_triple = (
+        toolchain.get("target_triple")
+        or state.get("target_triple")
+        or "unknown-target"
+    )
+
+    state["firmware_elf_path"] = f"firmware/build/target/{resolved_target_triple}/release/firmware_app"
     state["firmware_expected_elf_path"] = state["firmware_elf_path"]
+
+ 
 
     return state

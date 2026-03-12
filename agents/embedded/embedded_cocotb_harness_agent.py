@@ -34,7 +34,19 @@ def run_agent(state: dict) -> dict:
 
     workflow_dir = state.get("workflow_dir") or ""
 
-    soc_top_text = _safe_read(os.path.join(workflow_dir, "system/integration/soc_top_sim.sv"))
+   
+
+    soc_top_relpath = "system/integration/soc_top_sim.sv"
+    for candidate in [
+        "system/integration/sensor_hub_soc_sim.sv",
+        "system/integration/soc_top_sim.sv",
+    ]:
+        full = os.path.join(workflow_dir, candidate)
+        if os.path.isfile(full):
+            soc_top_relpath = candidate
+            break
+
+    soc_top_text = _safe_read(os.path.join(workflow_dir, soc_top_relpath))
     regmap_text = _safe_read(os.path.join(workflow_dir, "firmware/register_map.json"))
     driver_text = _safe_read(os.path.join(workflow_dir, "firmware/drivers/driver_scaffold.rs"))
 
@@ -233,19 +245,8 @@ FILE: firmware/validate/test_firmware_smoke.py
 
     inferred_top = _infer_topmodule_from_sv(soc_top_text, fallback="soc_top_sim")
 
-    soc_top_relpath = "system/integration/soc_top_sim.sv"
-    if soc_top_text:
-        # Prefer actual known generated files
-        for candidate in [
-            "system/integration/sensor_hub_soc_sim.sv",
-            "system/integration/soc_top_sim.sv",
-        ]:
-            if os.path.isfile(os.path.join(workflow_dir, candidate)):
-                soc_top_relpath = candidate
-                break
-
-    if "firmware/validate/Makefile" not in files:
-        files["firmware/validate/Makefile"] = f"""TOPLEVEL_LANG = verilog
+    # Always harden / normalize Makefile because LLM output may exist but be wrong.
+    files["firmware/validate/Makefile"] = f"""TOPLEVEL_LANG = verilog
 VERILOG_SOURCES = ../../{soc_top_relpath}
 TOPLEVEL = {inferred_top}
 MODULE = test_firmware_smoke
