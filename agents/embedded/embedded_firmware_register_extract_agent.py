@@ -142,6 +142,15 @@ def run_agent(state: dict) -> dict:
     ]
     regmap_path = _find_first_existing(workflow_dir, candidate_paths) if workflow_dir else ""
     upstream_regmap = _safe_load_json(regmap_path)
+    debug_info = {
+        "workflow_dir": workflow_dir,
+        "candidate_paths": candidate_paths,
+        "selected_regmap_path": regmap_path,
+        "upstream_regmap_type": type(upstream_regmap).__name__,
+        "passthrough_taken": False,
+        "normalization_taken": False,
+        "candidate_regs_count": 0,
+    }
 
     if isinstance(upstream_regmap, dict):
         # PASS-THROUGH FIRST:
@@ -195,7 +204,13 @@ def run_agent(state: dict) -> dict:
             if tmp:
                 candidate_regs = tmp
 
+
+                if isinstance(candidate_regs, list):
+            debug_info["candidate_regs_count"] = len(candidate_regs)
+
         if isinstance(candidate_regs, list) and candidate_regs:
+            debug_info["passthrough_taken"] = True
+
             passthrough_out = dict(source_obj)
             passthrough_out["registers"] = candidate_regs
             passthrough_out["__source"] = {
@@ -220,6 +235,19 @@ def run_agent(state: dict) -> dict:
                 or "0x00000000"
             )
 
+            write_artifact(
+                state,
+                "firmware/register_map_debug.json",
+                json.dumps({
+                    **debug_info,
+                    "mode": "artifact_passthrough",
+                    "register_names_preview": [
+                        r.get("name") for r in candidate_regs[:10] if isinstance(r, dict)
+                    ],
+                }, indent=2),
+                key="register_map_debug.json"
+            )
+
             out = json.dumps(passthrough_out, indent=2)
             write_artifact(state, OUTPUT_PATH, out, key=OUTPUT_PATH.split("/")[-1])
 
@@ -230,7 +258,11 @@ def run_agent(state: dict) -> dict:
             state["status"] = f"✅ {AGENT_NAME} preserved upstream register map"
             return state
 
+        
+
         # FALL BACK TO NORMALIZATION ONLY IF PASS-THROUGH SHAPE WAS NOT USABLE
+        debug_info["normalization_taken"] = True
+
         normalized = _normalize_registers_from_any_shape(upstream_regmap)
         normalized["__source"] = {
             "mode": "artifact_first_normalization",
@@ -241,9 +273,11 @@ def run_agent(state: dict) -> dict:
         if not isinstance(regs, list):
             regs = []
 
+        debug_info["candidate_regs_count"] = len(regs)
+
         if not regs:
             debug_payload = {
-                "regmap_path": regmap_path,
+                **debug_info,
                 "upstream_regmap_preview": upstream_regmap,
                 "normalized_result": normalized,
                 "error": "Upstream digital regmap was found, but no concrete registers were extracted."
@@ -262,6 +296,19 @@ def run_agent(state: dict) -> dict:
             embedded[PHASE] = "firmware/register_map_debug.json"
             return state
 
+        write_artifact(
+            state,
+            "firmware/register_map_debug.json",
+            json.dumps({
+                **debug_info,
+                "mode": "artifact_first_normalization",
+                "register_names_preview": [
+                    r.get("name") for r in regs[:10] if isinstance(r, dict)
+                ],
+            }, indent=2),
+            key="register_map_debug.json"
+        )
+
         out = json.dumps(normalized, indent=2)
         write_artifact(state, OUTPUT_PATH, out, key=OUTPUT_PATH.split("/")[-1])
 
@@ -271,7 +318,6 @@ def run_agent(state: dict) -> dict:
         embedded[PHASE] = OUTPUT_PATH
         state["status"] = f"✅ {AGENT_NAME} normalized upstream register map"
         return state
-
     
     
 
