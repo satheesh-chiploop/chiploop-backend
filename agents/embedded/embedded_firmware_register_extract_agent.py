@@ -151,6 +151,24 @@ def run_agent(state: dict) -> dict:
         "normalization_taken": False,
         "candidate_regs_count": 0,
     }
+    def _write_debug(extra: dict):
+        payload = {
+            **debug_info,
+            **extra,
+        }
+        write_artifact(
+            state,
+            "firmware/register_map_debug.json",
+            json.dumps(payload, indent=2),
+            key="register_map_debug.json"
+        )
+
+    if not isinstance(upstream_regmap, dict):
+        _write_debug({
+            "mode": "llm_fallback_no_upstream_regmap",
+            "reason": "upstream_regmap was not a dict; artifact-first path was skipped",
+            "selected_regmap_path_exists": bool(regmap_path),
+        })
 
     if isinstance(upstream_regmap, dict):
         # PASS-THROUGH FIRST:
@@ -362,10 +380,19 @@ OUTPUT REQUIREMENTS:
     out = strip_outer_markdown_fences(out)
     write_artifact(state, OUTPUT_PATH, out, key=OUTPUT_PATH.split("/")[-1])
 
+    parsed = None
     try:
-        state["firmware_register_map"] = json.loads(out)
+        parsed = json.loads(out)
+        state["firmware_register_map"] = parsed
     except Exception:
         pass
+
+    _write_debug({
+        "mode": "llm_fallback_completed",
+        "reason": "artifact-first path did not run or did not return",
+        "llm_output_parsed": isinstance(parsed, dict),
+        "llm_output_preview": parsed if isinstance(parsed, dict) else out[:500],
+    })
 
     state["firmware_register_map_path"] = OUTPUT_PATH
     embedded = state.setdefault("embedded", {})
