@@ -205,7 +205,7 @@ def run_agent(state: dict) -> dict:
                 candidate_regs = tmp
 
 
-                if isinstance(candidate_regs, list):
+        if isinstance(candidate_regs, list):
             debug_info["candidate_regs_count"] = len(candidate_regs)
 
         if isinstance(candidate_regs, list) and candidate_regs:
