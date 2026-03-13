@@ -366,7 +366,7 @@ target = "{resolved_target_triple}"
             cargo_path = cand
             break
 
-    if workflow_dir and os.path.isfile(cargo_workspace_dir):
+    if workflow_dir and os.path.isdir(cargo_workspace_dir):
         try:
             import shutil
             import subprocess
