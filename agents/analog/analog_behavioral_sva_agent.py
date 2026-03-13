@@ -19,10 +19,10 @@ module analog_assertions (
   // Generic placeholder assertion scaffold.
   // Add signal-specific RNM assertions based on normalized spec and requirements.
 
-  property p_placeholder_after_reset;
-    @(posedge clk) disable iff (!rst_n)
-      1'b1 |-> 1'b1;
-  endproperty
+    property p_output_not_unknown;
+        @(posedge clk) disable iff (!rst_n)
+            !$isunknown(output_signal);
+    endproperty
 
   a_placeholder_after_reset: assert property (p_placeholder_after_reset)
     else $error("[SVA] Placeholder assertion failed");
@@ -43,6 +43,14 @@ def run_agent(state: dict) -> dict:
         state["status"] = "❌ Missing workflow_id or analog_spec"
         return state
 
+    workflow_dir = state.get("workflow_dir","")
+    model_path = os.path.join(workflow_dir,"analog/model.sv")
+
+    model_text = ""
+        if os.path.exists(model_path):
+            with open(model_path) as f:
+                model_text = f.read()[:4000]
+
     prompt = f"""
 You are a mixed-signal verification engineer.
 
@@ -54,6 +62,9 @@ REQUIREMENTS (may be empty):
 
 SPEC:
 {json.dumps(spec, indent=2)[:4000]}
+
+RNM MODEL:
+{model_text}
 
 Create checks for:
 - reset / initialization safety

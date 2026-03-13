@@ -30,6 +30,19 @@ def run_agent(state: dict) -> dict:
     regmap_path = os.path.join(workflow_dir, "firmware/register_map.json")
     regmap = _safe_load_json(regmap_path)
 
+    # --- Validate register map structure ---
+    if regmap and "registers" not in regmap:
+        state["status"] = "❌ register_map.json missing 'registers' field"
+        return state
+
+    if regmap:
+        for r in regmap.get("registers", []):
+            if "name" not in r or "offset" not in r:
+                state["status"] = f"❌ malformed register entry: {r}"
+                return state
+
+
+
     regmap_json = json.dumps(regmap, indent=2)[:12000] if regmap else "(not available)"
 
     prompt = f"""USER SPEC:

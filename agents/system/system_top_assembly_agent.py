@@ -129,7 +129,10 @@ def _assemble_top(top_module: str, intent: dict, variant: str) -> str:
         if si == "top" and di != "top":
             dst_key = (di, dp)
             if dst_key in driven_instance_ports:
-                continue
+                raise ValueError(
+                    f"Multiple drivers detected for {di}.{dp} during top assembly."
+                )
+            
             driven_instance_ports.add(dst_key)
 
             top_ports[sp] = {"dir": _top_dir_for_endpoint(True), "range": sr}
@@ -151,6 +154,12 @@ def _assemble_top(top_module: str, intent: dict, variant: str) -> str:
         # Case 3: top -> top, ignore
         if si == "top" and di == "top":
             continue
+
+        if pname in top_ports:
+            if top_ports[pname]["dir"] != new_dir:
+                raise ValueError(
+                    f"Conflicting directions inferred for top port '{pname}'"
+                )
 
         # Case 4: instance -> instance
         dst_key = (di, dp)

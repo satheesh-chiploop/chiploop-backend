@@ -628,6 +628,37 @@ Now output JSON only.
 
         intent = _sanitize_connections(intent, digital_sigs, analog_sigs)
 
+        # --- NEW: validate ports actually exist ---
+        inst2mod = _instance_to_module(intent)
+
+        valid_connections = []
+
+        for c in intent.get("connections", []):
+            src = c.get("from")
+            dst = c.get("to")
+
+            si, sp = _parse_ep(src)
+            di, dp = _parse_ep(dst)
+
+            if not si or not sp or not di or not dp:
+                continue
+
+            if si != "top":
+                mod = inst2mod.get(si)
+                ports = _collect_ports_for_module(digital_sigs, mod) or _collect_ports_for_module(analog_sigs, mod)
+                if sp not in [p.get("name") for p in ports if isinstance(p, dict)]:
+                    continue
+
+            if di != "top":
+                mod = inst2mod.get(di)
+                ports = _collect_ports_for_module(digital_sigs, mod) or _collect_ports_for_module(analog_sigs, mod)
+                if dp not in [p.get("name") for p in ports if isinstance(p, dict)]:
+                    continue
+
+            valid_connections.append(c)
+
+        intent["connections"] = valid_connections
+
         # Backward-compatible generic recovery:
         # only infer connections if sanitize removed everything.
         if not intent.get("connections") and not intent.get("tieoffs"):

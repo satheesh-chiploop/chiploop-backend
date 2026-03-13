@@ -103,7 +103,13 @@ def run_agent(state: dict) -> dict:
         verilog_text = f.read()
 
 
-    ports = re.findall(r"(?:input|output|inout)\s+(?:wire|reg|logic)?\s*(?:\[[^\]]+\]\s*)?(\w+)", verilog_text)
+ 
+    port_pattern = re.compile(
+        r'\b(input|output|inout)\s+(?:wire|reg|logic|signed)?\s*(?:\[[^\]]+\]\s*)?([A-Za-z_]\w*)',
+        re.I
+    )
+
+    ports = [m.group(2) for m in port_pattern.finditer(verilog_text)]
     port_names = ports
 
     print(f"🔍 Extracted ports: {port_names}")
@@ -160,7 +166,9 @@ If multiple modules are present, ensure consistent signal naming,
 no duplicate clk/reset declarations, and correct submodule instantiations.
 Summarize key issues clearly.
 Make sure below rules are followed
-Generate synthesizable Verilog-2005 code for this specification.
+Review the RTL and report problems only.
+Do not generate code.
+Return a short list of issues.
 Output must start with 'module' and end with 'endmodule'.
 Do NOT include markdown code fences or explanations.
 Ensure all ports are declared inside parentheses in the module declaration. 
@@ -168,7 +176,7 @@ Avoid duplicate declarations of signals like clk, reset, or common ports.
 Each signal is declared only once across all modules.
 Do not repeat `clk`, `reset`, or any input/output in submodules if already declared in the top module.
 Avoid declaring loop indices (like i) globally.
-Generate clean synthesizable Verilog with consistent indentation
+
 Do NOT include undefined macros like `sv`, `enable`, or custom defines.
 End every statement with a semicolon and close with `endmodule` only once.
 Provide only compilable Verilog/SystemVerilog code — no explanations or comments outside the code.

@@ -76,7 +76,7 @@ Output schema:
     "throughput":"string"
   }},
   "control": {{
-    "f sms":[
+    "fsms":[
       {{"name":"fsm_name", "states":["IDLE","..."], "transitions":["..."], "notes":"..."}}
     ],
     "arbitration":[

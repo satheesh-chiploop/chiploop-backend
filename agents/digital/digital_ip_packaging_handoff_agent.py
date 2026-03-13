@@ -111,8 +111,7 @@ def _gather_deliverables(workflow_dir: str) -> Dict[str, List[str]]:
         for fn in files:
             p = os.path.join(root, fn)
             norm = p.replace("\\", "/").lower()
-
-            if fn.lower() in ("regmap.json", "regmap.md"):
+            if "regmap" in fn.lower() or "register_map" in fn.lower():
                 buckets["regmap"].append(p)
                 continue
 
@@ -246,7 +245,13 @@ def run_agent(state: dict) -> dict:
     spec_path = state.get("spec_json") or os.path.join(workflow_dir, "digital", "spec.json")
     spec = _read_json(spec_path)
     rtl_files = state.get("rtl_files") or _collect_rtl_files(workflow_dir)
-    top = _pick_top(spec, rtl_files, state.get("top_module"))
+    top = (
+        state.get("soc_top_sim_module")
+        or state.get("top_module")
+    )
+
+    top = _pick_top(spec, rtl_files, top)
+    
 
     buckets = _gather_deliverables(workflow_dir)
     pkg_dir, zip_path = _package(workflow_dir, top, buckets)

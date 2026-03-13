@@ -14,6 +14,14 @@ def run_agent(state: dict) -> dict:
     toolchain = state.get("toolchain") or {}
     toggles = state.get("toggles") or {}
 
+    workflow_dir = state.get("workflow_dir") or ""
+    regmap_path = os.path.join(workflow_dir, "firmware/register_map.json")
+
+    regmap = ""
+    if os.path.exists(regmap_path):
+        with open(regmap_path) as f:
+          regmap = f.read()
+
     prompt = f"""USER SPEC:
 {spec_text}
 
@@ -26,8 +34,12 @@ TOOLCHAIN (for future extensibility):
 TOGGLES:
 {json.dumps(toggles, indent=2)}
 
+REGISTER MAP:
+{regmap}
+
 TASK:
 Create BIST hooks and test routines.
+
 
 OUTPUT REQUIREMENTS:
 - Write the primary output to match this path: firmware/diagnostics/bist.rs
@@ -37,6 +49,8 @@ OUTPUT REQUIREMENTS:
   - NO #![no_main]
   - NO #![feature(...)]
 - Do not define a main() or panic_handler in this module.
+  Do not use Vec or heap allocations.
+  Use fixed arrays or stack buffers only.
 - Provide functions (e.g., pub fn run_bist(...) -> Result<...>) that can be called from firmware/src/lib.rs.
 - If information is missing, assumptions only as Rust comments at top:
   // ASSUMPTION: ...

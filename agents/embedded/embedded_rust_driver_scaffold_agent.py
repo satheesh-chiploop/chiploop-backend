@@ -1,5 +1,6 @@
 import json
 import os
+import re
 from ._embedded_common import ensure_workflow_dir, llm_chat, write_artifact, strip_markdown_fences_for_code
 
 AGENT_NAME = "Embedded Rust Driver Scaffold Agent"
@@ -56,6 +57,10 @@ Generate a Rust driver scaffold.
 RULES:
 - Prefer REGISTER MAP + HAL layer when available.
 - Fall back to USER SPEC if artifacts are missing.
+MANDATORY:
+- Every register referenced must exist in REGISTER MAP.
+- Do NOT invent registers.
+- Use offsets from REGISTER MAP exactly.
 
 OUTPUT REQUIREMENTS:
 - Output MUST be RAW RUST ONLY (no markdown fences, no prose).
@@ -81,7 +86,7 @@ OUTPUT REQUIREMENTS:
 
     # Safely unwrap a top-level `pub mod driver_scaffold { ... }` wrapper if present
     lines = out.splitlines()
-    if lines and lines[0].strip().startswith("pub mod driver_scaffold"):
+    if lines and re.match(r"pub\s+mod\s+driver_scaffold", lines[0].strip()):
         # Drop first line and final trailing brace if it exists
         body = lines[1:]
         while body and not body[-1].strip():

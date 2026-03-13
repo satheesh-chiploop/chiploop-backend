@@ -123,11 +123,20 @@ Output schema:
         arch = json.loads(llm_output.strip())
     except Exception as e:
         parse_err = str(e)
-        arch = {
-            "error": "LLM JSON parse failed",
-            "parse_error": parse_err,
-            "raw": llm_output.strip(),
-        }
+        state["status"] = f"❌ Digital architecture JSON parse failed: {parse_err}"
+
+        save_text_artifact_and_record(
+            workflow_id=workflow_id,
+            agent_name=agent_name,
+            subdir="digital",
+            filename="digital_architecture_llm_error.txt",
+            content=llm_output,
+        )
+
+        return state
+
+        
+        
 
     # Save JSON file
     out_path = os.path.join(workflow_dir, "digital_architecture.json")
