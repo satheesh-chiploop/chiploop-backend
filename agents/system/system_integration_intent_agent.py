@@ -287,7 +287,7 @@ def _build_generic_fallback_connections(intent: dict, digital_sigs: dict, analog
         dsts = dedup
 
         for s in srcs:
-        compatible = []
+            compatible = []
         for d in dsts:
             if s["inst"] == d["inst"]:
                 continue
