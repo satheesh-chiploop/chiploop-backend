@@ -1,4 +1,5 @@
 import json
+import os
 from ._embedded_common import ensure_workflow_dir, llm_chat, write_artifact, strip_markdown_fences_for_code
 
 AGENT_NAME = "Embedded DMA Integration Agent"
