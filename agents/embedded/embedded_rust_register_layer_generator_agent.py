@@ -27,8 +27,19 @@ def run_agent(state: dict) -> dict:
 
     workflow_dir = state.get("workflow_dir") or ""
 
-    regmap_path = os.path.join(workflow_dir, "firmware/register_map.json")
-    regmap = _safe_load_json(regmap_path)
+
+
+
+    regmap = (
+        state.get("firmware_register_map")
+        or (state.get("firmware") or {}).get("register_map")
+    )
+
+    if not regmap:
+        regmap_path = state.get("firmware_register_map_path") or OUTPUT_PATH.replace("hal/registers.rs", "register_map.json")
+        if regmap_path and not os.path.isabs(regmap_path):
+           regmap_path = os.path.join(workflow_dir, regmap_path)
+           regmap = _safe_load_json(regmap_path)
 
     # --- Validate register map structure ---
     if regmap and "registers" not in regmap and "blocks" not in regmap:
@@ -100,5 +111,13 @@ RULES:
     # lightweight state update for downstream agents
     embedded = state.setdefault("embedded", {})
     embedded[PHASE] = OUTPUT_PATH
+
+    state["firmware_hal_code"] = out
+    state["firmware_hal_path"] = OUTPUT_PATH
+
+    firmware_block = state.setdefault("firmware", {})
+    firmware_block["hal_code"] = out
+    firmware_block["hal_path"] = OUTPUT_PATH
+
 
     return state

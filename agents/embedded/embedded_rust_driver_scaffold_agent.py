@@ -29,6 +29,31 @@ def run_agent(state: dict) -> dict:
     hal_code = _safe_read(hal_path)
 
 
+
+    regmap_obj = (
+        state.get("firmware_register_map")
+        or (state.get("firmware") or {}).get("register_map")
+    )
+    hal_code = (
+        state.get("firmware_hal_code")
+        or (state.get("firmware") or {}).get("hal_code")
+    )
+
+    if regmap_obj:
+        regmap = json.dumps(regmap_obj, indent=2)
+    else:
+        regmap_path = state.get("firmware_register_map_path") or "firmware/register_map.json"
+        if regmap_path and not os.path.isabs(regmap_path):
+            regmap_path = os.path.join(workflow_dir, regmap_path)
+        regmap = _safe_read(regmap_path)
+
+    if not hal_code:
+        hal_path = state.get("firmware_hal_path") or "firmware/hal/registers.rs"
+        if hal_path and not os.path.isabs(hal_path):
+            hal_path = os.path.join(workflow_dir, hal_path)
+        hal_code = _safe_read(hal_path)
+
+
     if not regmap:
         state["status"] = "❌ firmware/register_map.json missing for driver generation"
         return state

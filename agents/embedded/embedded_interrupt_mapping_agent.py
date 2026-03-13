@@ -14,6 +14,17 @@ def run_agent(state: dict) -> dict:
     toolchain = state.get("toolchain") or {}
     toggles = state.get("toggles") or {}
 
+    regmap_obj = (
+        state.get("firmware_register_map")
+        or (state.get("firmware") or {}).get("register_map")
+    )
+
+    if not regmap_obj:
+        state["status"] = "❌ firmware register map missing in state for interrupt generation"
+        return state
+
+    regmap_json = json.dumps(regmap_obj, indent=2)
+
     prompt = f"""USER SPEC:
 {spec_text}
 
@@ -25,6 +36,9 @@ TOOLCHAIN (for future extensibility):
 
 TOGGLES:
 {json.dumps(toggles, indent=2)}
+
+REGISTER MAP:
+{regmap_json}
 
 TASK:
 Create interrupt vector mapping and ISR stubs.
@@ -48,6 +62,7 @@ Rules:
 - Do NOT use C attributes such as __attribute__((weak))
 - Do NOT use external stack pointer symbols
 - Always generate a Reset_Handler stub
+- Must compile in no_std firmware environment
 - Other ISR stubs must call DefaultHandler by default
 - VECTOR_TABLE must be declared exactly as:
   #[link_section = ".vector_table"]
