@@ -47,9 +47,9 @@ def run_agent(state: dict) -> dict:
     model_path = os.path.join(workflow_dir,"analog/model.sv")
 
     model_text = ""
-        if os.path.exists(model_path):
-            with open(model_path) as f:
-                model_text = f.read()[:4000]
+    if os.path.exists(model_path):
+        with open(model_path) as f:
+            model_text = f.read()[:4000]
 
     prompt = f"""
 You are a mixed-signal verification engineer.
