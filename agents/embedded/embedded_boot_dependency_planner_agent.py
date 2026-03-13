@@ -71,5 +71,17 @@ OUTPUT REQUIREMENTS:
     boot_block["target_triple"] = target_triple
     boot_block["bin_name"] = bin_name
 
+    write_artifact(
+        state,
+        "firmware/debug/boot_toolchain_debug.json",
+        json.dumps({
+           "agent": AGENT_NAME,
+           "target_triple": state.get("target_triple"),
+           "firmware_bin_name": state.get("firmware_bin_name"),
+           "toolchain": state.get("toolchain"),
+        }, indent=2),
+        key="boot_toolchain_debug.json",
+    )
+
     return state
     

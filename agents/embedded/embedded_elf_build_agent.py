@@ -40,6 +40,18 @@ def run_agent(state: dict) -> dict:
     toolchain = state.get("toolchain") or {}
     toggles = state.get("toggles") or {}
 
+    write_artifact(
+        state,
+        "firmware/debug/elf_toolchain_debug.json",
+        json.dumps({
+            "agent": AGENT_NAME,
+            "state_target_triple": state.get("target_triple"),
+            "state_firmware_bin_name": state.get("firmware_bin_name"),
+            "toolchain": state.get("toolchain"),
+        }, indent=2),
+        key="elf_toolchain_debug.json",
+    )
+
     prompt = f"""USER SPEC:
 {spec_text}
 
