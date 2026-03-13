@@ -258,11 +258,11 @@ Now output only valid SystemVerilog assertion code.
     rtl_signals = set(re.findall(r"\b([a-zA-Z_][a-zA-Z0-9_]*)\b", rtl_text))
 
     filtered_lines = []
-        for line in assertions_code.splitlines():
-            sigs = re.findall(r"\b([a-zA-Z_][a-zA-Z0-9_]*)\b", line)
-            if any(s not in rtl_signals for s in sigs if s not in {"assert","property","disable","iff","posedge"}):
-                continue
-            filtered_lines.append(line)
+    for line in assertions_code.splitlines():
+        sigs = re.findall(r"\b([a-zA-Z_][a-zA-Z0-9_]*)\b", line)
+        if any(s not in rtl_signals for s in sigs if s not in {"assert","property","disable","iff","posedge"}):
+            continue
+        filtered_lines.append(line)
 
     assertions_code = "\n".join(filtered_lines)
 
