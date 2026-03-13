@@ -241,14 +241,14 @@ def _build_generic_fallback_connections(intent: dict, digital_sigs: dict, analog
     # --- semantic matching ---
 
     semantic_alias = {
-        "start": ["enable", "start", "trigger", "go", "req", "kick"],
+        "start": ["start", "enable", "trigger", "go", "req", "kick"],
         "data": ["data", "result", "value", "sample", "payload"],
         "valid": ["valid", "done", "ready", "ack"],
         "status": ["status", "state", "flag"],
         "irq": ["irq", "intr", "interrupt"],
     }
 
-
+    
     def _semantic_group(name: str) -> str:
         n = str(name or "").lower()
         for g, aliases in semantic_alias.items():
@@ -295,11 +295,11 @@ def _build_generic_fallback_connections(intent: dict, digital_sigs: dict, analog
                    continue
                 compatible.append(d)
 
-        exact = [d for d in compatible if d["port"] == s["port"]]
-        chosen = exact if len(exact) == 1 else compatible if len(compatible) == 1 else []
+            exact = [d for d in compatible if d["port"] == s["port"]]
+            chosen = exact if len(exact) == 1 else compatible if len(compatible) == 1 else []
 
-        for d in chosen:
-            add_conn(f'{s["inst"]}.{s["port"]}', f'{d["inst"]}.{d["port"]}')
+            for d in chosen:
+                add_conn(f'{s["inst"]}.{s["port"]}', f'{d["inst"]}.{d["port"]}')
 
     
     return connections

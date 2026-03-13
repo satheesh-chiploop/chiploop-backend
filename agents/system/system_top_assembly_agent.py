@@ -192,8 +192,9 @@ def _assemble_top(top_module: str, intent: dict, variant: str) -> str:
         # Case 4: instance -> instance
         dst_key = (di, dp)
         if dst_key in driven_instance_ports:
-            continue
+            raise ValueError(f"Multiple drivers detected for {di}.{dp} during top assembly.")
         driven_instance_ports.add(dst_key)
+   
 
         w = _wire_name(idx, src, dst)
         wire_meta[w] = width

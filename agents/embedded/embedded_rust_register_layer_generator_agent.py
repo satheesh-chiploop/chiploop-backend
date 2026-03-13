@@ -44,8 +44,18 @@ def run_agent(state: dict) -> dict:
 
 
 
-    regmap_json = json.dumps(regmap, indent=2)[:12000] if regmap else "(not available)"
+    flat_registers = []
 
+    if regmap:
+        if "registers" in regmap and isinstance(regmap["registers"], list):
+            flat_registers = regmap["registers"]
+        elif "blocks" in regmap and isinstance(regmap["blocks"], list):
+            for blk in regmap["blocks"]:
+                if isinstance(blk, dict):
+                    flat_registers.extend(blk.get("registers", []))
+
+    normalized_regmap = {"registers": flat_registers} if flat_registers else regmap
+    regmap_json = json.dumps(normalized_regmap, indent=2)[:12000] if regmap else "(not available)"
 
 
     prompt = f"""USER SPEC:
@@ -73,6 +83,9 @@ RULES:
 - Every register type and constant must come directly from REGISTER MAP when REGISTER MAP is present.
 - Do NOT invent generic registers like Config, Control, Status, Data unless they exist in REGISTER MAP with those exact names.
 - Preserve exact register names from REGISTER MAP in generated Rust identifiers as much as possible.
+- Emit one Rust constant or type per register in REGISTER MAP.
+- Use the exact register names from REGISTER MAP.
+- Do not collapse multiple registers into generic placeholders.
 - Emit base address + per-register offsets/constants if REGISTER MAP is present.
 
 """

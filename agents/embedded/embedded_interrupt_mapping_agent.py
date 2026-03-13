@@ -44,11 +44,15 @@ Rules:
 - Entry 0 must be Reset_Handler
 - Remaining entries must be ISR handler function pointers
 - Do NOT cast handlers to usize
-
-- Provide DefaultHandler
-- Provide weak ISR handlers
-- Must compile in no_std firmware environment
-- Always generate a Reset_Handler stub.
+- Provide exactly one DefaultHandler function
+- Do NOT use C attributes such as __attribute__((weak))
+- Do NOT use external stack pointer symbols
+- Always generate a Reset_Handler stub
+- Other ISR stubs must call DefaultHandler by default
+- VECTOR_TABLE must be declared exactly as:
+  #[link_section = ".vector_table"]
+  #[no_mangle]
+  pub static VECTOR_TABLE: [unsafe extern "C" fn(); 32]
 - VECTOR_TABLE entries must have consistent type signature: unsafe extern "C" fn()
 - Do not reference undefined symbols
 - Do NOT reference external stack pointer symbols such as STACK_POINTER or _stack_start

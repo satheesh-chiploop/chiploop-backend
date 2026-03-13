@@ -28,6 +28,15 @@ def run_agent(state: dict) -> dict:
     regmap = _safe_read(regmap_path)
     hal_code = _safe_read(hal_path)
 
+
+    if not regmap:
+        state["status"] = "❌ firmware/register_map.json missing for driver generation"
+        return state
+
+    if not hal_code:
+        state["status"] = "❌ firmware/hal/registers.rs missing for driver generation"
+        return state
+
     spec_text = (state.get("spec_text") or state.get("spec") or "").strip()
     goal = (state.get("goal") or "").strip()
     toolchain = state.get("toolchain") or {}
@@ -66,6 +75,9 @@ MANDATORY:
 - Do NOT generate placeholder symbols like RegisterType1, RegisterType2, OFFSET_REG1, OFFSET_REG2.
 - Do NOT claim REGISTER MAP or HAL is unavailable when their contents are provided in the prompt.
 - Generate only a thin driver scaffold around the actual HAL/register names.
+- The output must import and use the generated HAL items directly.
+- Do not redefine register structs, offsets, or bitfields already present in HAL.
+
 
 
 OUTPUT REQUIREMENTS:
