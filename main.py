@@ -1410,9 +1410,9 @@ def execute_workflow_background(
             try:
 
                 # Execute agent function; start from shared_state snapshot
-                state = dict(shared_state)  # shallow copy
 
-                result = fn(state)  # your agents accept a dict 'state'
+
+                result = fn(shared_state)  # your agents accept a dict 'state'
 
                 # Save artifacts if provided
                 if isinstance(result, dict):
