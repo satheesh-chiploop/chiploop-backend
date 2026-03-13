@@ -227,6 +227,9 @@ pub extern "C" fn _start() -> ! {
     # --- Hardening: sanitize Cargo.toml (keep Embedded_Run stable) ---
     if OUTPUT_CARGO_TOML in files:
         ct = files[OUTPUT_CARGO_TOML]
+        # Remove Rust crate attributes accidentally emitted into TOML
+        ct = ct.replace("#![no_std]\n", "")
+        ct = ct.replace("#![no_main]\n", "")
 
         # 1) Remove any [build] section (belongs in .cargo/config.toml)
         lines = ct.splitlines()
@@ -363,7 +366,7 @@ target = "{resolved_target_triple}"
             cargo_path = cand
             break
 
-    if workflow_dir and os.path.isfile(cargo_toml_abs):
+    if workflow_dir and os.path.isfile(cargo_workspace_dir):
         try:
             import shutil
             import subprocess
