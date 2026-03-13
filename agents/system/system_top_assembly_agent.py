@@ -125,8 +125,9 @@ def _assemble_top(top_module: str, intent: dict, variant: str) -> str:
         dp, dr = _split_port_and_range(dp_raw)
 
         if sr and dr and sr != dr:
-           raise ValueError(f"Width mismatch between {src} ({sr}) and {dst} ({dr})"
-         )
+            raise ValueError(
+                f"Width mismatch between {src} ({sr}) and {dst} ({dr})"
+            )
 
 
         width = _merge_range(sr, dr)

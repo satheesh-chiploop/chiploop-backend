@@ -280,20 +280,20 @@ def _build_generic_fallback_connections(intent: dict, digital_sigs: dict, analog
         seen_d = set()
         for d in candidate_dsts:
             key = (d["inst"], d["port"])
-        if key in seen_d:
-            continue
-        seen_d.add(key)
-        dedup.append(d)
+            if key in seen_d:
+                continue
+            seen_d.add(key)
+            dedup.append(d)
         dsts = dedup
 
         for s in srcs:
             compatible = []
-        for d in dsts:
-            if s["inst"] == d["inst"]:
-                continue
-            if s["width"] is not None and d["width"] is not None and s["width"] != d["width"]:
-                continue
-            compatible.append(d)
+            for d in dsts:
+                if s["inst"] == d["inst"]:
+                   continue
+                if s["width"] is not None and d["width"] is not None and s["width"] != d["width"]:
+                   continue
+                compatible.append(d)
 
         exact = [d for d in compatible if d["port"] == s["port"]]
         chosen = exact if len(exact) == 1 else compatible if len(compatible) == 1 else []
