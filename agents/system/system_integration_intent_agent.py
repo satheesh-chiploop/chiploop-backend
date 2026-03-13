@@ -273,7 +273,7 @@ def _build_generic_fallback_connections(intent: dict, digital_sigs: dict, analog
                     candidate_dsts.extend(c_dsts)
 
         if not candidate_dsts:
-        continue
+            continue
 
         # de-dup candidate destinations
         dedup = []
