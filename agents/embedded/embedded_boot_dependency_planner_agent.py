@@ -37,11 +37,39 @@ OUTPUT REQUIREMENTS:
     out = llm_chat(prompt, system="You are a senior embedded firmware engineer for silicon bring-up and RTL co-simulation. Produce concise, production-quality outputs. NEVER include markdown fences.")
     if not out:
         out = "ERROR: LLM returned empty output."
+
     out = strip_markdown_fences_for_code(out)
     write_artifact(state, OUTPUT_PATH, out, key=OUTPUT_PATH.split("/")[-1])
 
-    # lightweight state update for downstream agents
     embedded = state.setdefault("embedded", {})
     embedded[PHASE] = OUTPUT_PATH
 
+    # Canonical firmware toolchain defaults for downstream build/sim agents.
+    toolchain = state.setdefault("toolchain", {})
+
+    # Only set defaults if upstream did not already provide them.
+    target_triple = (
+        toolchain.get("target_triple")
+        or state.get("target_triple")
+        or "x86_64-unknown-linux-gnu"
+    )
+    bin_name = (
+        toolchain.get("bin_name")
+        or state.get("firmware_bin_name")
+        or "firmware_app"
+    )
+
+    toolchain["target_triple"] = target_triple
+    toolchain["bin_name"] = bin_name
+
+    state["target_triple"] = target_triple
+    state["firmware_bin_name"] = bin_name
+
+    # Helpful boot/runtime hints for downstream agents
+    boot_block = state.setdefault("firmware_boot", {})
+    boot_block["boot_sequence_path"] = OUTPUT_PATH
+    boot_block["target_triple"] = target_triple
+    boot_block["bin_name"] = bin_name
+
     return state
+    
