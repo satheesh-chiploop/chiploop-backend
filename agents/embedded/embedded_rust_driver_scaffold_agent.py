@@ -57,12 +57,16 @@ Generate a Rust driver scaffold.
 RULES:
 - Prefer REGISTER MAP + HAL layer when available.
 - Fall back to USER SPEC if artifacts are missing.
+
 MANDATORY:
 - Every register referenced must exist in REGISTER MAP.
 - Do NOT invent registers.
 - Use offsets from REGISTER MAP exactly.
-- Use HAL register types if available.
-- Do not recreate register structs manually if HAL exists.
+- If HAL REGISTER LAYER is present, use its exported register types/constants/functions instead of redefining them.
+- Do NOT generate placeholder symbols like RegisterType1, RegisterType2, OFFSET_REG1, OFFSET_REG2.
+- Do NOT claim REGISTER MAP or HAL is unavailable when their contents are provided in the prompt.
+- Generate only a thin driver scaffold around the actual HAL/register names.
+
 
 OUTPUT REQUIREMENTS:
 - Output MUST be RAW RUST ONLY (no markdown fences, no prose).

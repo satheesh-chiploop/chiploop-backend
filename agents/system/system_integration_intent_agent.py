@@ -239,60 +239,67 @@ def _build_generic_fallback_connections(intent: dict, digital_sigs: dict, analog
                 consumers[norm].append(item)
 
     # --- semantic matching ---
+
     semantic_alias = {
-        "start": ["enable", "start", "trigger"],
-        "data": ["data", "result", "value"],
-        "valid": ["valid", "done", "ready"],
+        "start": ["enable", "start", "trigger", "go", "req", "kick"],
+        "data": ["data", "result", "value", "sample", "payload"],
+        "valid": ["valid", "done", "ready", "ack"],
+        "status": ["status", "state", "flag"],
+        "irq": ["irq", "intr", "interrupt"],
     }
 
-    def _semantic_group(name):
+
+    def _semantic_group(name: str) -> str:
+        n = str(name or "").lower()
         for g, aliases in semantic_alias.items():
-            if any(a in name for a in aliases):
-               return g
-            return name
+            if any(a in n for a in aliases):
+                return g
+        return n
+
 
     for norm_name, srcs in producers.items():
         candidate_dsts = []
-
         # first try exact normalized-name consumers
-        candidate_dsts.extend(consumers.get(norm_name, []))
-
-        # then try semantic-group consumers
-        s_group = _semantic_group(norm_name)
-        for c_norm, c_dsts in consumers.items():
-            if c_norm == norm_name:
-                continue
-            if _semantic_group(c_norm) == s_group:
-                candidate_dsts.extend(c_dsts)
+        exact_dsts = consumers.get(norm_name, [])
+        if exact_dsts:
+            candidate_dsts.extend(exact_dsts)
+        else:
+            # only fall back to semantic grouping when exact matching found nothing
+            s_group = _semantic_group(norm_name)
+            for c_norm, c_dsts in consumers.items():
+                if c_norm == norm_name:
+                    continue
+                if _semantic_group(c_norm) == s_group:
+                    candidate_dsts.extend(c_dsts)
 
         if not candidate_dsts:
-            continue
+        continue
 
         # de-dup candidate destinations
         dedup = []
         seen_d = set()
         for d in candidate_dsts:
             key = (d["inst"], d["port"])
-            if key in seen_d:
-                continue
-            seen_d.add(key)
-            dedup.append(d)
+        if key in seen_d:
+            continue
+        seen_d.add(key)
+        dedup.append(d)
         dsts = dedup
 
         for s in srcs:
-            compatible = []
-            for d in dsts:
-                if s["inst"] == d["inst"]:
-                    continue
-                if s["width"] is not None and d["width"] is not None and s["width"] != d["width"]:
-                    continue
-                compatible.append(d)
+        compatible = []
+        for d in dsts:
+            if s["inst"] == d["inst"]:
+                continue
+            if s["width"] is not None and d["width"] is not None and s["width"] != d["width"]:
+                continue
+            compatible.append(d)
 
-            exact = [d for d in compatible if d["port"] == s["port"]]
-            chosen = exact if len(exact) == 1 else compatible if len(compatible) == 1 else []
+        exact = [d for d in compatible if d["port"] == s["port"]]
+        chosen = exact if len(exact) == 1 else compatible if len(compatible) == 1 else []
 
-            for d in chosen:
-                add_conn(f'{s["inst"]}.{s["port"]}', f'{d["inst"]}.{d["port"]}')
+        for d in chosen:
+            add_conn(f'{s["inst"]}.{s["port"]}', f'{d["inst"]}.{d["port"]}')
 
     
     return connections

@@ -123,6 +123,12 @@ def _assemble_top(top_module: str, intent: dict, variant: str) -> str:
 
         sp, sr = _split_port_and_range(sp_raw)
         dp, dr = _split_port_and_range(dp_raw)
+
+        if sr and dr and sr != dr:
+           raise ValueError(f"Width mismatch between {src} ({sr}) and {dst} ({dr})"
+         )
+
+
         width = _merge_range(sr, dr)
 
         # Case 1: top -> instance
@@ -135,15 +141,24 @@ def _assemble_top(top_module: str, intent: dict, variant: str) -> str:
             
             driven_instance_ports.add(dst_key)
 
-            top_ports[sp] = {"dir": _top_dir_for_endpoint(True), "range": sr}
+
+
+            new_dir = _top_dir_for_endpoint(True)
+
+            if sp in top_ports and top_ports[sp]["dir"] != new_dir:
+                raise ValueError(f"Conflicting directions inferred for top port '{sp}'")
+
+            top_ports[sp] = {"dir": new_dir, "range": sr}
+
             if di in port_map:
                 port_map[di][dp] = sp
             continue
 
         # Case 2: instance -> top
         if si != "top" and di == "top":
+            
             if dp in driven_top_ports:
-                continue
+                raise ValueError(f"Multiple drivers detected for top port '{dp}'")
             driven_top_ports.add(dp)
 
             top_ports[dp] = {"dir": _top_dir_for_endpoint(False), "range": dr}
@@ -187,7 +202,9 @@ def _assemble_top(top_module: str, intent: dict, variant: str) -> str:
             port_map[di][dp] = w
     
 
-    for w, rng in wire_meta.items():
+
+    for w in sorted(wire_meta.keys()):
+        rng = wire_meta[w]
         if rng:
             wire_decls.append(f"  logic {rng} {w};")
         else:

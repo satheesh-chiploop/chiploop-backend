@@ -37,21 +37,23 @@ MANDATORY:
   #[no_mangle]
   Vector table MUST follow embedded production layout:
 
-
 pub static VECTOR_TABLE: [unsafe extern "C" fn(); 32]
 Use vector table size 32 unless spec explicitly defines interrupt count.
+
 Rules:
-- Entry 0 = initial stack pointer
-- Remaining entries = ISR handlers cast as usize
+- Entry 0 must be Reset_Handler
+- Remaining entries must be ISR handler function pointers
+- Do NOT cast handlers to usize
 
-
- 
 - Provide DefaultHandler
 - Provide weak ISR handlers
 - Must compile in no_std firmware environment
 - Always generate a Reset_Handler stub.
 - VECTOR_TABLE entries must have consistent type signature: unsafe extern "C" fn()
 - Do not reference undefined symbols
+- Do NOT reference external stack pointer symbols such as STACK_POINTER or _stack_start
+- The vector table must use Reset_Handler as entry 0
+
 This file is a Rust MODULE.
 
 DO NOT generate:

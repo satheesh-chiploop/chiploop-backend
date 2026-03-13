@@ -68,6 +68,11 @@ RULES:
 - Prefer REGISTER MAP if available.
 - Fall back to USER SPEC if register map is missing.
 - Output compile-ready Rust module only.
+- Every register type and constant must come directly from REGISTER MAP when REGISTER MAP is present.
+- Do NOT invent generic registers like Config, Control, Status, Data unless they exist in REGISTER MAP with those exact names.
+- Preserve exact register names from REGISTER MAP in generated Rust identifiers as much as possible.
+- Emit base address + per-register offsets/constants if REGISTER MAP is present.
+
 """
 
 
