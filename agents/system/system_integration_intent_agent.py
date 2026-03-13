@@ -238,10 +238,46 @@ def _build_generic_fallback_connections(intent: dict, digital_sigs: dict, analog
             if pdir in ("input", "inout"):
                 consumers[norm].append(item)
 
+    # --- semantic matching ---
+    semantic_alias = {
+        "start": ["enable", "start", "trigger"],
+        "data": ["data", "result", "value"],
+        "valid": ["valid", "done", "ready"],
+    }
+
+    def _semantic_group(name):
+        for g, aliases in semantic_alias.items():
+           if any(a in name for a in aliases):
+               return g
+          return name
+
     for norm_name, srcs in producers.items():
-        dsts = consumers.get(norm_name, [])
-        if not dsts:
+        candidate_dsts = []
+
+        # first try exact normalized-name consumers
+        candidate_dsts.extend(consumers.get(norm_name, []))
+
+        # then try semantic-group consumers
+        s_group = _semantic_group(norm_name)
+        for c_norm, c_dsts in consumers.items():
+            if c_norm == norm_name:
+                continue
+            if _semantic_group(c_norm) == s_group:
+                candidate_dsts.extend(c_dsts)
+
+        if not candidate_dsts:
             continue
+
+        # de-dup candidate destinations
+        dedup = []
+        seen_d = set()
+        for d in candidate_dsts:
+            key = (d["inst"], d["port"])
+            if key in seen_d:
+                continue
+            seen_d.add(key)
+            dedup.append(d)
+        dsts = dedup
 
         for s in srcs:
             compatible = []
@@ -258,6 +294,7 @@ def _build_generic_fallback_connections(intent: dict, digital_sigs: dict, analog
             for d in chosen:
                 add_conn(f'{s["inst"]}.{s["port"]}', f'{d["inst"]}.{d["port"]}')
 
+    
     return connections
 
 def _now() -> str:

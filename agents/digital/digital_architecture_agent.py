@@ -1,6 +1,7 @@
 import os
 import json
 import datetime
+import re
 from portkey_ai import Portkey
 from openai import OpenAI
 
@@ -120,7 +121,15 @@ Output schema:
     arch = None
     parse_err = None
     try:
-        arch = json.loads(llm_output.strip())
+        import re
+
+        json_match = re.search(r"\{.*\}", llm_output, re.S)
+        if not json_match:
+            state["status"] = "❌ Digital architecture JSON not found in LLM output"
+            return state
+
+        arch = json.loads(json_match.group(0))
+
     except Exception as e:
         parse_err = str(e)
         state["status"] = f"❌ Digital architecture JSON parse failed: {parse_err}"

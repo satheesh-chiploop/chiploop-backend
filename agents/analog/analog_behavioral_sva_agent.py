@@ -1,4 +1,5 @@
 import json
+import os
 from utils.artifact_utils import save_text_artifact_and_record
 from agents.analog._analog_llm import llm_text
 
@@ -24,7 +25,7 @@ module analog_assertions (
             !$isunknown(output_signal);
     endproperty
 
-  a_placeholder_after_reset: assert property (p_placeholder_after_reset)
+    a_output_not_unknown: assert property (p_output_not_unknown);
     else $error("[SVA] Placeholder assertion failed");
 
 endmodule

@@ -61,6 +61,8 @@ MANDATORY:
 - Every register referenced must exist in REGISTER MAP.
 - Do NOT invent registers.
 - Use offsets from REGISTER MAP exactly.
+- Use HAL register types if available.
+- Do not recreate register structs manually if HAL exists.
 
 OUTPUT REQUIREMENTS:
 - Output MUST be RAW RUST ONLY (no markdown fences, no prose).

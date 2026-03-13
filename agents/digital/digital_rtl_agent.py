@@ -73,7 +73,9 @@ def run_agent(state: dict) -> dict:
     try:
         # 🔧 Hierarchical compilation: include all modules
         v_files = [os.path.join(workflow_dir, f) for f in os.listdir(workflow_dir) if f.endswith(".v")]
-        compile_cmd = ["/usr/bin/iverilog", "-o", "rtl_check.out"] + v_files
+        iverilog = os.getenv("IVERILOG_BIN", "iverilog")
+        compile_cmd = [iverilog, "-o", "rtl_check.out"] + v_files
+
         print(f"🧩 Running hierarchical compile on {len(v_files)} RTL files: {[os.path.basename(f) for f in v_files]}")
 
         result = subprocess.run(
@@ -169,7 +171,9 @@ Make sure below rules are followed
 Review the RTL and report problems only.
 Do not generate code.
 Return a short list of issues.
-Output must start with 'module' and end with 'endmodule'.
+Review the RTL and report problems onlya
+Do NOT generate or modify RTL code.
+Return a bullet list of issues
 Do NOT include markdown code fences or explanations.
 Ensure all ports are declared inside parentheses in the module declaration. 
 Avoid duplicate declarations of signals like clk, reset, or common ports.

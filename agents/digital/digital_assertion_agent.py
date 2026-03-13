@@ -260,7 +260,12 @@ Now output only valid SystemVerilog assertion code.
     filtered_lines = []
     for line in assertions_code.splitlines():
         sigs = re.findall(r"\b([a-zA-Z_][a-zA-Z0-9_]*)\b", line)
-        if any(s not in rtl_signals for s in sigs if s not in {"assert","property","disable","iff","posedge"}):
+        allowed = {
+            "assert","property","disable","iff","posedge","cover",
+            "$isunknown","default","clocking","endclocking"
+        }
+
+        if any(s not in rtl_signals and s not in allowed for s in sigs):
             continue
         filtered_lines.append(line)
 

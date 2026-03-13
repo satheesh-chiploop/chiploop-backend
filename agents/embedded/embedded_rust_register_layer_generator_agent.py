@@ -31,9 +31,10 @@ def run_agent(state: dict) -> dict:
     regmap = _safe_load_json(regmap_path)
 
     # --- Validate register map structure ---
-    if regmap and "registers" not in regmap:
-        state["status"] = "❌ register_map.json missing 'registers' field"
+    if regmap and "registers" not in regmap and "blocks" not in regmap:
+        state["status"] = "❌ register_map.json missing registers"
         return state
+
 
     if regmap:
         for r in regmap.get("registers", []):

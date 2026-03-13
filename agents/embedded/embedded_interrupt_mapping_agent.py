@@ -37,13 +37,14 @@ MANDATORY:
   #[no_mangle]
   Vector table MUST follow embedded production layout:
 
-pub static VECTOR_TABLE: [usize; 32]
+
+pub static VECTOR_TABLE: [unsafe extern "C" fn(); 32]
 Use vector table size 32 unless spec explicitly defines interrupt count.
 Rules:
 - Entry 0 = initial stack pointer
 - Remaining entries = ISR handlers cast as usize
-- Example:
-Reset_Handler as usize
+
+
  
 - Provide DefaultHandler
 - Provide weak ISR handlers

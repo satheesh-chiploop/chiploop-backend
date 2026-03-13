@@ -155,11 +155,23 @@ def _assemble_top(top_module: str, intent: dict, variant: str) -> str:
         if si == "top" and di == "top":
             continue
 
-        if pname in top_ports:
+        # detect conflicting top port directions
+        if si == "top":
+            pname = sp
+            new_dir = _top_dir_for_endpoint(True)
+        elif di == "top":
+            pname = dp
+            new_dir = _top_dir_for_endpoint(False)
+        else:
+            pname = None
+
+        if pname and pname in top_ports:
             if top_ports[pname]["dir"] != new_dir:
                 raise ValueError(
                     f"Conflicting directions inferred for top port '{pname}'"
                 )
+
+
 
         # Case 4: instance -> instance
         dst_key = (di, dp)
