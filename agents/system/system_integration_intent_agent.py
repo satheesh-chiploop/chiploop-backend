@@ -247,9 +247,9 @@ def _build_generic_fallback_connections(intent: dict, digital_sigs: dict, analog
 
     def _semantic_group(name):
         for g, aliases in semantic_alias.items():
-           if any(a in name for a in aliases):
+            if any(a in name for a in aliases):
                return g
-          return name
+            return name
 
     for norm_name, srcs in producers.items():
         candidate_dsts = []
