@@ -37,9 +37,7 @@ def run_agent(state: dict) -> dict:
         state["status"] = "❌ firmware HAL missing in state for register validation"
         return state
 
-    if not driver_code:
-        state["status"] = "❌ firmware driver missing in state for register validation"
-        return state
+    driver_present = bool(driver_code)
 
     regmap_json = json.dumps(regmap_obj, indent=2)
 
@@ -55,8 +53,9 @@ REGISTER MAP:
 HAL REGISTER LAYER:
 {hal_code}
 
+
 DRIVER SCAFFOLD:
-{driver_code}
+{driver_code if driver_code else "(not available yet)"}
 
 TOOLCHAIN (for future extensibility):
 {json.dumps(toolchain, indent=2)}
@@ -65,7 +64,12 @@ TOGGLES:
 {json.dumps(toggles, indent=2)}
 
 TASK:
-Validate register map consistency, HAL correctness, and driver consistency.
+
+TASK:
+Validate register map consistency and HAL correctness.
+If DRIVER SCAFFOLD is present, also validate driver consistency against HAL/register map.
+If DRIVER SCAFFOLD is missing, explicitly note that driver validation was skipped.
+
 
 OUTPUT REQUIREMENTS:
 - Write the primary output to match this path: firmware/hal/register_validation.md
