@@ -110,6 +110,33 @@ def _discover_signature_from_workflow_dir(workflow_dir: str, rel_candidates):
             }
     return {}
 
+def _discover_signatures_under(workflow_dir: str, subdir_name: str):
+    """
+    Scan an entire subtree (e.g. digital/ or analog/) and build:
+      { "<module_name>": { "ports": [ ... ] } }
+    """
+    sigs = {}
+
+    root_dir = os.path.join(workflow_dir, subdir_name)
+    if not os.path.isdir(root_dir):
+        return sigs
+
+    for root, _, files in os.walk(root_dir):
+        for fn in files:
+            if not fn.lower().endswith((".v", ".sv")):
+                continue
+
+            p = os.path.join(root, fn)
+            text = _load_rtl_text_if_exists(p)
+            if not text:
+                continue
+
+            mod, ports = _parse_simple_module_ports_from_rtl_text(text)
+            if mod and ports:
+                sigs[mod] = {"ports": ports}
+
+    return sigs
+
 def _collect_ports_for_module(sig_db: dict, module_name: str):
     if not isinstance(sig_db, dict) or not module_name:
         return []
@@ -626,28 +653,16 @@ def run_agent(state: dict) -> dict:
                     pass
 
     # Generic RTL fallback if signature JSON is absent
+
+    # Broad subtree scan fallback if signature JSON is absent
     if not digital_sigs:
-        digital_sigs = _discover_signature_from_workflow_dir(
-            workflow_dir,
-            [
-                "digital/rtl_refactored/refactored_sensor_controller.v",
-                "digital/rtl_refactored/refactored_top.v",
-                "digital/rtl/top.sv",
-                "digital/top.sv",
-            ],
-        )
+        digital_sigs = _discover_signatures_under(workflow_dir, "digital")
 
     analog_sigs = state.get("analog_rtl_signatures") or state.get("analog_signatures") or {}
 
     if not analog_sigs:
-        analog_sigs = _discover_signature_from_workflow_dir(
-            workflow_dir,
-            [
-                "analog/model.sv",
-                "analog/behavioral/model.sv",
-                "analog/top.sv",
-            ],
-        )
+        analog_sigs = _discover_signatures_under(workflow_dir, "analog")
+    
 
     # Optional hints from upstream analog agents
     # If your analog behavioral model and macro stub use different module names, provide them here.

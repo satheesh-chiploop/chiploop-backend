@@ -97,9 +97,10 @@ MANDATORY:
 - Assume a no_std firmware workspace (crate attributes belong ONLY in crate root).
 - Include linker script reference (memory.x) and cargo target config example.
 - DO NOT hardcode a CPU family (no "riscv", no "cortex", no "thumb") unless explicitly present in USER SPEC or TOOLCHAIN.
-- If TOOLCHAIN includes a target triple (e.g., toolchain["target_triple"]), use it.
-  Otherwise use a placeholder: <TARGET_TRIPLE>.
-- Build instructions must work generically by parameterizing the target triple and output name.
+- TOOLCHAIN target triple is required and must be used exactly.
+- Do NOT emit <TARGET_TRIPLE> or <BIN_NAME> placeholders.
+- Use the resolved target triple and bin name exactly in all generated files.
+
 
 OUTPUT REQUIREMENTS:
 - build_instructions.md MUST be plain markdown (no outer ``` fences).

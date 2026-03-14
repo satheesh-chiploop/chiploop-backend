@@ -1,5 +1,6 @@
 import json
 import re
+import os
 from utils.artifact_utils import save_text_artifact_and_record
 
 # ---------------------------------------------------------------------
@@ -301,13 +302,36 @@ def run_agent(state: dict) -> dict:
     sim_code = _assemble_top(top_sim, top_intent, variant="sim")
     phys_code = _assemble_top(top_phys, top_intent, variant="phys")
 
+    sim_rel = f"system/integration/{top_sim}.sv"
+    phys_rel = f"system/integration/{top_phys}.sv"
+
+    # 1) Write local files for downstream agents (especially cocotb)
+    workflow_dir = state.get("workflow_dir") or ""
+    if workflow_dir:
+        sim_abs = os.path.join(workflow_dir, sim_rel)
+        phys_abs = os.path.join(workflow_dir, phys_rel)
+
+        os.makedirs(os.path.dirname(sim_abs), exist_ok=True)
+        os.makedirs(os.path.dirname(phys_abs), exist_ok=True)
+
+        with open(sim_abs, "w", encoding="utf-8") as f:
+            f.write(sim_code)
+
+        with open(phys_abs, "w", encoding="utf-8") as f:
+            f.write(phys_code)
+
+    # 2) Upload artifacts
     save_text_artifact_and_record(workflow_id, agent_name, "system/integration", f"{top_sim}.sv", sim_code)
     save_text_artifact_and_record(workflow_id, agent_name, "system/integration", f"{top_phys}.sv", phys_code)
 
     state["soc_top_sim_module"] = top_sim
     state["soc_top_phys_module"] = top_phys
-    state["soc_top_sim_path"] = f"system/integration/{top_sim}.sv"
-    state["soc_top_phys_path"] = f"system/integration/{top_phys}.sv"
+    state["soc_top_sim_path"] = sim_rel
+    state["soc_top_phys_path"] = phys_rel
+    state["system_top_sim_path"] = sim_rel
+    state["system_top_phys_path"] = phys_rel
+
+
 
     existing_rtl = state.get("rtl_inputs") or state.get("system_rtl_files") or []
     if not isinstance(existing_rtl, list):
