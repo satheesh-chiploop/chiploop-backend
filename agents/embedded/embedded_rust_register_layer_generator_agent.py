@@ -39,8 +39,8 @@ def run_agent(state: dict) -> dict:
     if not regmap:
         regmap_path = state.get("firmware_register_map_path") or OUTPUT_PATH.replace("hal/registers.rs", "register_map.json")
         if regmap_path and not os.path.isabs(regmap_path):
-           regmap_path = os.path.join(workflow_dir, regmap_path)
-           regmap = _safe_load_json(regmap_path)
+            regmap_path = os.path.join(workflow_dir, regmap_path)
+            regmap = _safe_load_json(regmap_path)
 
     # --- Validate register map structure ---
     if regmap and "registers" not in regmap and "blocks" not in regmap:
@@ -108,7 +108,7 @@ RULES:
 
 
 """
-    out = llm_chat(...)
+    out = llm_chat(prompt)
     if not out:
         out = "ERROR: LLM returned empty output."
     out = strip_markdown_fences_for_code(out)
@@ -152,6 +152,7 @@ RULES:
     firmware_block = state.setdefault("firmware", {})
     firmware_block["hal_code"] = out
     firmware_block["hal_path"] = OUTPUT_PATH
+    state["status"] = f"✅ {AGENT_NAME} done"
 
 
     return state
