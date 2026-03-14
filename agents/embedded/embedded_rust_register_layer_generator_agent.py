@@ -110,8 +110,14 @@ RULES:
 """
     out = llm_chat(prompt)
     if not out:
-        out = "ERROR: LLM returned empty output."
+        state["status"] = "❌ HAL generator LLM returned empty output"
+        return state
+
     out = strip_markdown_fences_for_code(out)
+
+    out = out.replace("#![no_std]", "")
+    out = out.replace("#![no_main]", "")
+    out = out.strip() + "\n"
 
     # Normalize common bad wrappers so this file is directly crate::hal::registers
     lines = out.splitlines()

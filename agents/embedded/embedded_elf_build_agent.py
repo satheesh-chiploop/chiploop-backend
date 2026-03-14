@@ -332,10 +332,23 @@ target = "{resolved_target_triple}"
 # Build Instructions
 
 ## Build ELF
-```bash
+
 cargo build --release --target {resolved_target_triple}
 
+## Expected Cargo Output
+
+target/{resolved_target_triple}/release/{resolved_bin_name}
+
+## Optional Canonical ELF Copy
+
+mkdir -p firmware/build/target/{resolved_target_triple}/release
+cp target/{resolved_target_triple}/release/{resolved_bin_name} firmware/build/target/{resolved_target_triple}/release/{resolved_bin_name}.elf
+
+## Validate ELF Exists
+
+ls firmware/build/target/{resolved_target_triple}/release/{resolved_bin_name}.elf
 """
+
 
     required = [
         OUTPUT_PATH,
@@ -458,6 +471,11 @@ cargo build --release --target {resolved_target_triple}
     state["embedded_elf_path"] = elf_relpath
     state["firmware_elf_exists"] = elf_exists
 
+    if not elf_exists:
+        state["status"] = f"❌ ELF not produced at canonical path: {elf_relpath}"
+        return state
+
+    
     build_block = state.setdefault("firmware_build", {})
     build_block["target_triple"] = resolved_target_triple
     build_block["bin_name"] = bin_name

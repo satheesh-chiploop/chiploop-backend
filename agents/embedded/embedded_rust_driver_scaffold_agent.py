@@ -172,5 +172,7 @@ OUTPUT REQUIREMENTS:
         "used_spec": bool(spec_text),
     }
 
+    state["status"] = f"✅ {AGENT_NAME} done"
+
     return state
 
