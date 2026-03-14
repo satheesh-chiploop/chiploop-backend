@@ -31,9 +31,24 @@ def run_agent(state: dict) -> dict:
 
     workflow_dir = state.get("workflow_dir") or ""
 
-    regmap_text = _safe_read(os.path.join(workflow_dir, "firmware/register_map.json"))
-    hal_text = _safe_read(os.path.join(workflow_dir, "firmware/hal/registers.rs"))
-    driver_text = _safe_read(os.path.join(workflow_dir, "firmware/drivers/driver_scaffold.rs"))
+
+
+    regmap_obj = (
+        state.get("firmware_register_map")
+        or (state.get("firmware") or {}).get("register_map")
+    )
+
+    hal_text = (
+        state.get("firmware_hal_code")
+        or (state.get("firmware") or {}).get("hal_code")
+    )
+
+    driver_text = (
+        state.get("firmware_driver_code")
+        or (state.get("firmware") or {}).get("driver_code")
+    )
+
+    regmap_text = json.dumps(regmap_obj, indent=2) if regmap_obj else _safe_read(os.path.join(workflow_dir, "firmware/register_map.json"))
 
     spec_text = (state.get("spec_text") or state.get("spec") or "").strip()
     goal = (state.get("goal") or "").strip()

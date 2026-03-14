@@ -59,8 +59,26 @@ def run_agent(state: dict) -> dict:
 
     soc_top_abs = os.path.join(workflow_dir, soc_top_relpath) if workflow_dir else soc_top_relpath
     soc_top_text = _safe_read(soc_top_abs)
-    regmap_text = _safe_read(os.path.join(workflow_dir, "firmware/register_map.json"))
-    driver_text = _safe_read(os.path.join(workflow_dir, "firmware/drivers/driver_scaffold.rs"))
+
+    regmap_obj = (
+        state.get("firmware_register_map")
+        or (state.get("firmware") or {}).get("register_map")
+    )
+
+    if regmap_obj:
+        regmap_text = json.dumps(regmap_obj, indent=2)
+    else:
+        regmap_text = _safe_read(os.path.join(workflow_dir, "firmware/register_map.json"))
+
+    driver_text = (
+        state.get("firmware_driver_code")
+        or (state.get("firmware") or {}).get("driver_code")
+    )
+
+    if not driver_text:
+        driver_text = _safe_read(os.path.join(workflow_dir, "firmware/drivers/driver_scaffold.rs"))
+
+
 
     soc_top_exists = bool(soc_top_abs and os.path.isfile(soc_top_abs))
 

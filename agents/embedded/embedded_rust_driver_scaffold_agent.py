@@ -55,11 +55,11 @@ def run_agent(state: dict) -> dict:
 
 
     if not regmap:
-        state["status"] = "❌ firmware/register_map.json missing for driver generation"
+        state["status"] = "❌ firmware register map missing in state for driver generation""
         return state
 
     if not hal_code:
-        state["status"] = "❌ firmware/hal/registers.rs missing for driver generation"
+        state["status"] = "❌ firmware HAL missing in state for driver generation"
         return state
 
     spec_text = (state.get("spec_text") or state.get("spec") or "").strip()
@@ -147,9 +147,11 @@ OUTPUT REQUIREMENTS:
 
     state["driver_scaffold_path"] = OUTPUT_PATH
     state["firmware_driver_path"] = OUTPUT_PATH
+    state["firmware_driver_code"] = out
 
     firmware_block = state.setdefault("firmware", {})
     firmware_block["driver_scaffold_path"] = OUTPUT_PATH
+    firmware_block["driver_code"] = out
 
     # Publish simple provenance hints for downstream summary/build agents
     state["driver_scaffold_inputs"] = {

@@ -339,6 +339,11 @@ def run_agent(state: dict) -> dict:
 
             state["firmware_register_map"] = passthrough_out
             state["firmware_register_map_path"] = OUTPUT_PATH
+
+            firmware_block = state.setdefault("firmware", {})
+            firmware_block["register_map"] = passthrough_out
+            firmware_block["register_map_path"] = OUTPUT_PATH
+
             embedded = state.setdefault("embedded", {})
             embedded[PHASE] = OUTPUT_PATH
             state["status"] = f"✅ {AGENT_NAME} preserved upstream register map"
@@ -400,6 +405,9 @@ def run_agent(state: dict) -> dict:
 
         state["firmware_register_map"] = normalized
         state["firmware_register_map_path"] = OUTPUT_PATH
+        firmware_block = state.setdefault("firmware", {})
+        firmware_block["register_map"] = normalized
+        firmware_block["register_map_path"] = OUTPUT_PATH
         embedded = state.setdefault("embedded", {})
         embedded[PHASE] = OUTPUT_PATH
         state["status"] = f"✅ {AGENT_NAME} normalized upstream register map"
@@ -463,10 +471,17 @@ OUTPUT REQUIREMENTS:
     })
 
     state["firmware_register_map_path"] = OUTPUT_PATH
+
+    firmware_block = state.setdefault("firmware", {})
+    if isinstance(parsed, dict):
+        firmware_block["register_map"] = parsed
+    firmware_block["register_map_path"] = OUTPUT_PATH
+
     embedded = state.setdefault("embedded", {})
     embedded[PHASE] = OUTPUT_PATH
     state["status"] = f"✅ {AGENT_NAME} done"
     return state
+
 
 
 

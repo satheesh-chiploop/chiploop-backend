@@ -1,4 +1,5 @@
 import json
+import os
 from ._embedded_common import ensure_workflow_dir, llm_chat, write_artifact, strip_markdown_fences_for_code
 
 AGENT_NAME = "Embedded Built In Self Test Agent"
@@ -15,12 +16,20 @@ def run_agent(state: dict) -> dict:
     toggles = state.get("toggles") or {}
 
     workflow_dir = state.get("workflow_dir") or ""
-    regmap_path = os.path.join(workflow_dir, "firmware/register_map.json")
 
-    regmap = ""
-    if os.path.exists(regmap_path):
-        with open(regmap_path) as f:
-          regmap = f.read()
+    regmap_obj = (
+        state.get("firmware_register_map")
+        or (state.get("firmware") or {}).get("register_map")
+    )
+
+    if regmap_obj:
+        regmap = json.dumps(regmap_obj, indent=2)
+    else:
+        regmap_path = os.path.join(workflow_dir, "firmware/register_map.json")
+        regmap = ""
+        if os.path.exists(regmap_path):
+            with open(regmap_path) as f:
+                regmap = f.read()
 
     prompt = f"""USER SPEC:
 {spec_text}
