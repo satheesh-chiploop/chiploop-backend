@@ -290,7 +290,7 @@ FILE: firmware/validate/test_firmware_smoke.py
         state["status"] = f"❌ SoC top RTL not found for cocotb harness generation: {soc_top_relpath}"
         return state
 
-files["firmware/validate/Makefile"] = f"""TOPLEVEL_LANG = verilog
+        files["firmware/validate/Makefile"] = f"""TOPLEVEL_LANG = verilog
 VERILOG_SOURCES = {verilog_path}
 TOPLEVEL = {inferred_top}
 MODULE = test_firmware_smoke
