@@ -1,5 +1,6 @@
 import json
 import os
+import re
 from ._embedded_common import ensure_workflow_dir, llm_chat, write_artifact,strip_markdown_fences_for_code
 
 AGENT_NAME = "Embedded Rust Register Layer Generator Agent"
@@ -94,18 +95,51 @@ RULES:
 - Every register type and constant must come directly from REGISTER MAP when REGISTER MAP is present.
 - Do NOT invent generic registers like Config, Control, Status, Data unless they exist in REGISTER MAP with those exact names.
 - Preserve exact register names from REGISTER MAP in generated Rust identifiers as much as possible.
-- Emit one Rust constant or type per register in REGISTER MAP.
-- Use the exact register names from REGISTER MAP.
+- Emit one Rust constant or register abstraction per register in REGISTER MAP.
+- Use exact register names from REGISTER MAP.
 - Do not collapse multiple registers into generic placeholders.
 - Emit base address + per-register offsets/constants if REGISTER MAP is present.
+- This file itself is the `crate::hal::registers` module.
+- Do NOT wrap the output in `mod sensor_controller { ... }`
+- Do NOT wrap the output in `pub mod registers { ... }`
+- Export items directly at module scope.
+- Define exactly one `RegisterBlock`.
+- Define exactly one `register_block()` accessor.
+
 
 """
-
-
-    out = llm_chat(prompt, system="You are a senior embedded firmware engineer for silicon bring-up and RTL co-simulation. Produce concise, production-quality outputs.Output MUST be compile-ready Rust module code only.Never include markdown fences or explanations.Do NOT emit crate attributes like #![no_std].")
+    out = llm_chat(...)
     if not out:
         out = "ERROR: LLM returned empty output."
     out = strip_markdown_fences_for_code(out)
+
+    # Normalize common bad wrappers so this file is directly crate::hal::registers
+    lines = out.splitlines()
+
+    # Strip `pub mod registers { ... }` wrapper
+    if lines and lines[0].strip().startswith("pub mod registers"):
+        body = lines[1:]
+        while body and not body[-1].strip():
+            body.pop()
+        if body and body[-1].strip() == "}":
+            body.pop()
+        out = "\n".join(body).strip() + "\n"
+        lines = out.splitlines()
+
+    # Strip `mod sensor_controller { ... }` or similar top wrapper
+    if lines and re.match(r"(pub\s+)?mod\s+[A-Za-z_]\w*\s*\{?", lines[0].strip()):
+        body = lines[1:]
+        while body and not body[-1].strip():
+            body.pop()
+        if body and body[-1].strip() == "}":
+            body.pop()
+        out = "\n".join(body).strip() + "\n"
+
+    # Fail fast if the HAL shape is still too weak
+    if "RegisterBlock" not in out or "register_block" not in out:
+        state["status"] = "❌ HAL generation produced invalid module shape"
+        return state
+
     write_artifact(state, OUTPUT_PATH, out, key=OUTPUT_PATH.split("/")[-1])
 
     # lightweight state update for downstream agents

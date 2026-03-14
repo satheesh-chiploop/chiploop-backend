@@ -11,7 +11,7 @@ def run_agent(state: dict) -> dict:
 
     spec_text = (state.get("spec_text") or state.get("spec") or "").strip()
     goal = (state.get("goal") or "").strip()
-    oolchain = state.get("toolchain") or {}
+    toolchain = state.get("toolchain") or {}
     toggles = state.get("toggles") or {}
 
     regmap_obj = (

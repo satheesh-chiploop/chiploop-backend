@@ -67,6 +67,22 @@ def run_agent(state: dict) -> dict:
         key="elf_toolchain_debug.json",
     )
 
+    resolved_target_triple = (
+        toolchain.get("target_triple")
+        or state.get("target_triple")
+        or ""
+    ).strip()
+
+    bin_name = (
+        toolchain.get("bin_name")
+        or state.get("firmware_bin_name")
+        or "firmware_app"
+    ).strip()
+
+    if not resolved_target_triple:
+        state["status"] = "❌ target_triple missing in state for ELF build generation"
+        return state
+
     prompt = f"""USER SPEC:
 {spec_text}
 
@@ -302,6 +318,24 @@ target = "{resolved_target_triple}"
         ct = files[OUTPUT_CARGO_TOML]
         ct = ct.replace('[unstable]\nfeatures = ["no_std"]\n', "")
         files[OUTPUT_CARGO_TOML] = ct
+
+    # --- NEW: deterministically overwrite build instructions ---
+    resolved_bin_name = (
+        toolchain.get("bin_name")
+        or state.get("firmware_bin_name")
+        or "firmware_app"
+    ).strip()
+
+    files[OUTPUT_PATH] = f"""<!-- ASSUMPTION: Build executed inside the ChipLoop Docker image -->
+<!-- ASSUMPTION: Cargo, target toolchain, and required simulation tools are already installed -->
+
+# Build Instructions
+
+## Build ELF
+```bash
+cargo build --release --target {resolved_target_triple}
+
+"""
 
     required = [
         OUTPUT_PATH,

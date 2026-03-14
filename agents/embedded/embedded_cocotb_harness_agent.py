@@ -70,13 +70,15 @@ def run_agent(state: dict) -> dict:
     else:
         regmap_text = _safe_read(os.path.join(workflow_dir, "firmware/register_map.json"))
 
+
     driver_text = (
         state.get("firmware_driver_code")
         or (state.get("firmware") or {}).get("driver_code")
     )
 
     if not driver_text:
-        driver_text = _safe_read(os.path.join(workflow_dir, "firmware/drivers/driver_scaffold.rs"))
+        state["status"] = "❌ firmware driver missing in state for cocotb harness generation"
+        return state
 
 
 
@@ -285,10 +287,10 @@ FILE: firmware/validate/test_firmware_smoke.py
     verilog_path = f"../../{soc_top_relpath}".replace("//", "/")
 
     if not soc_top_exists:
-        # Keep the bundle truthful: emit a diagnostic Makefile comment if RTL is missing
-        files["firmware/validate/Makefile"] = f"""# WARNING: SoC top RTL not found when harness was generated
-# EXPECTED_RTL = {verilog_path}
-TOPLEVEL_LANG = verilog
+        state["status"] = f"❌ SoC top RTL not found for cocotb harness generation: {soc_top_relpath}"
+        return state
+
+files["firmware/validate/Makefile"] = f"""TOPLEVEL_LANG = verilog
 VERILOG_SOURCES = {verilog_path}
 TOPLEVEL = {inferred_top}
 MODULE = test_firmware_smoke

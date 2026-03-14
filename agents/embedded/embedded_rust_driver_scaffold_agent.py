@@ -100,14 +100,12 @@ MANDATORY:
 - Do NOT generate placeholder symbols like RegisterType1, RegisterType2, OFFSET_REG1, OFFSET_REG2.
 - Do NOT claim REGISTER MAP or HAL is unavailable when their contents are provided in the prompt.
 - Generate only a thin driver scaffold around the actual HAL/register names.
-- The output must import and use the generated HAL items directly.
-- Do not redefine register structs, offsets, or bitfields already present in HAL.
 - Do NOT wrap the output in `mod driver_scaffold { ... }`
 - The file must contain module contents only.
 - Use `use crate::hal::registers::*;` as the import style.
+- When using `use crate::hal::registers::*;`, call imported HAL items directly.
+- Do NOT prefix HAL calls with `registers::`
 - Define exactly one public driver struct named `SensorControllerDriver`.
-
-
 
 OUTPUT REQUIREMENTS:
 - Output MUST be RAW RUST ONLY (no markdown fences, no prose).
@@ -147,6 +145,12 @@ OUTPUT REQUIREMENTS:
         out = "\n".join(body).strip() + "\n"
     else:
         out = out.strip() + "\n"
+
+
+    # Normalize HAL usage: wildcard import should not be combined with `registers::...`
+    if "use crate::hal::registers::*;" in out:
+        out = out.replace("registers::register_block()", "register_block()")
+        out = out.replace("registers::RegisterBlock", "RegisterBlock")
 
     write_artifact(state, OUTPUT_PATH, out, key=OUTPUT_PATH.split("/")[-1])
 
