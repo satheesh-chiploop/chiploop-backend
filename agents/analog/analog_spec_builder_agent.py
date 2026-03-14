@@ -87,6 +87,17 @@ Datasheet:
     state["analog_spec"] = spec
     state["analog_block_name"] = block
 
+    # Publish canonical analog module signature for downstream integration
+    analog_signature = {
+        spec["module_name"]: {
+            "ports": spec.get("ports", [])
+        }
+    }
+
+    state["analog_module_signature"] = analog_signature
+    state["analog_signatures"] = analog_signature
+    state["analog_rtl_signatures"] = analog_signature
+
     print(f"✅ Analog spec generated for {block}")
 
     return state

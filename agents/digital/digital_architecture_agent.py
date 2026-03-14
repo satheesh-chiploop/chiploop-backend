@@ -171,10 +171,53 @@ Output schema:
     except Exception as e:
         print(f"⚠️ Failed to upload architecture artifacts: {e}")
 
+    # Build canonical digital module signature for downstream integration
+    design_name = arch.get("design_name") or "digital_block"
+
+    ports = []
+
+    interfaces = arch.get("interfaces", {}) or {}
+
+    for clk in interfaces.get("clocks", []) or []:
+        if isinstance(clk, dict) and clk.get("name"):
+            ports.append({
+            "name": clk["name"],
+            "direction": "input",
+            "width": 1,
+            })
+
+    for rst in interfaces.get("resets", []) or []:
+        if isinstance(rst, dict) and rst.get("name"):
+            ports.append({
+                "name": rst["name"],
+                "direction": "input",
+                "width": 1,
+            })
+
+    for p in interfaces.get("external_ports", []) or []:
+        if isinstance(p, dict) and p.get("name"):
+            ports.append({
+                "name": p["name"],
+                "direction": p.get("dir") or p.get("direction") or "input",
+                "width": int(p.get("width", 1) or 1),
+            })
+
+    digital_signature = {
+        design_name: {
+            "ports": ports
+        }
+    }
+
     state.update({
         "status": "✅ Digital architecture generated.",
         "digital_architecture_json": out_path,
         "workflow_id": workflow_id,
         "workflow_dir": workflow_dir,
+        "digital_module_signature": digital_signature,
+        "digital_rtl_signatures": digital_signature,
+        "rtl_signatures": digital_signature,
     })
+
     return state
+
+    

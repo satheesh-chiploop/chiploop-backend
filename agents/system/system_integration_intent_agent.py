@@ -200,11 +200,20 @@ def _get_instance_ports(intent: dict, inst_name: str, digital_sigs: dict, analog
 
 def _build_deterministic_rescue_connections(intent: dict, digital_sigs: dict, analog_sigs: dict):
     inst2mod = _instance_to_module(intent)
-    if "u_digital" not in inst2mod or "u_analog" not in inst2mod:
+
+    instances = list(inst2mod.keys())
+    if len(instances) < 2:
         return [], []
 
-    d_ports = _get_instance_ports(intent, "u_digital", digital_sigs, analog_sigs) or []
-    a_ports = _get_instance_ports(intent, "u_analog", digital_sigs, analog_sigs) or []
+    # assume first two instances are digital + analog
+    inst_a = instances[0]
+    inst_b = instances[1]
+    inst2mod = _instance_to_module(intent)
+
+
+
+    d_ports = _get_instance_ports(intent, inst_a, digital_sigs, analog_sigs)
+    a_ports = _get_instance_ports(intent, inst_b, digital_sigs, analog_sigs)
 
     connections = []
     seen = set()
@@ -639,7 +648,14 @@ def run_agent(state: dict) -> dict:
     # Signatures (best-effort)
     # digital/analog signature agents may store differently; accept multiple keys.
 
-    digital_sigs = state.get("digital_rtl_signatures") or state.get("rtl_signatures") or {}
+    digital_sigs = (
+        state.get("digital_module_signature")
+        or state.get("digital_rtl_signatures")
+        or state.get("rtl_signatures")
+        or {}
+    )
+
+    
 
     if not digital_sigs:
         for root, _, files in os.walk(workflow_dir):
@@ -658,7 +674,12 @@ def run_agent(state: dict) -> dict:
     if not digital_sigs:
         digital_sigs = _discover_signatures_under(workflow_dir, "digital")
 
-    analog_sigs = state.get("analog_rtl_signatures") or state.get("analog_signatures") or {}
+    analog_sigs = (
+        state.get("analog_module_signature")
+        or state.get("analog_rtl_signatures")
+        or state.get("analog_signatures")
+        or {}
+    )
 
     if not analog_sigs:
         analog_sigs = _discover_signatures_under(workflow_dir, "analog")
@@ -876,8 +897,13 @@ Now output JSON only.
         intent["top"].setdefault("phys_module", f"{top_base}_phys")
 
     # Generic fallback if LLM under-specifies the manifest
+
+
     if not intent["instances"]:
-        intent["instances"] = schema["instances"]
+        intent["instances"] = [
+            {"name": "u_digital", "module": digital_module},
+            {"name": "u_analog", "module": analog_phys_module},
+        ]
 
     if "sim" not in intent["variants"]:
         intent["variants"]["sim"] = schema["variants"]["sim"]
