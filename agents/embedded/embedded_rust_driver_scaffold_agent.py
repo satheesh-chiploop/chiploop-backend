@@ -102,6 +102,10 @@ MANDATORY:
 - Generate only a thin driver scaffold around the actual HAL/register names.
 - The output must import and use the generated HAL items directly.
 - Do not redefine register structs, offsets, or bitfields already present in HAL.
+- Do NOT wrap the output in `mod driver_scaffold { ... }`
+- The file must contain module contents only.
+- Use `use crate::hal::registers::*;` as the import style.
+- Define exactly one public driver struct named `SensorControllerDriver`.
 
 
 
@@ -117,6 +121,10 @@ OUTPUT REQUIREMENTS:
   // ASSUMPTION: ...
 - Code must compile when included via:
   mod driver_scaffold;
+- Do NOT wrap the output in `mod driver_scaffold { ... }`
+- The file must contain module contents only
+- Use `use crate::hal::registers::*;` as the import style
+- Define exactly one public driver struct named `SensorControllerDriver`
 - Write to: firmware/drivers/driver_scaffold.rs
 
 """

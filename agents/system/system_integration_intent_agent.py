@@ -171,6 +171,109 @@ def _get_instance_ports(intent: dict, inst_name: str, digital_sigs: dict, analog
     return _collect_ports_for_module(digital_sigs, mod) or _collect_ports_for_module(analog_sigs, mod)
 
 
+def _build_deterministic_rescue_connections(intent: dict, digital_sigs: dict, analog_sigs: dict):
+    inst2mod = _instance_to_module(intent)
+    if "u_digital" not in inst2mod or "u_analog" not in inst2mod:
+        return [], []
+
+    d_ports = _get_instance_ports(intent, "u_digital", digital_sigs, analog_sigs) or []
+    a_ports = _get_instance_ports(intent, "u_analog", digital_sigs, analog_sigs) or []
+
+    connections = []
+    seen = set()
+    exposed_top_ports = set()
+    driven_inputs = set()
+
+    def add_conn(src: str, dst: str):
+        key = (src, dst)
+        if key in seen:
+            return
+        seen.add(key)
+        connections.append({"from": src, "to": dst})
+
+    def pname(p):
+        return str(p.get("name") or "").split("[", 1)[0].strip()
+
+    def pdir(p):
+        return str(p.get("direction") or p.get("dir") or "").lower().strip()
+
+    def pnorm(p):
+        return _normalize_port_name(pname(p))
+
+    def pwidth(p):
+        return _port_width(p)
+
+    # 1) Top fanout for infra ports
+    for ports, inst in ((d_ports, "u_digital"), (a_ports, "u_analog")):
+        for p in ports:
+            if not isinstance(p, dict):
+                continue
+            name = pname(p)
+            direction = pdir(p)
+            if direction not in ("input", "inout"):
+                continue
+            if _classify_top_port(pnorm(p)):
+                add_conn(f"top.{name}", f"{inst}.{name}")
+                driven_inputs.add((inst, name))
+                exposed_top_ports.add(name)
+
+    # 2) Deterministic digital -> analog wiring
+    a_inputs = [p for p in a_ports if isinstance(p, dict) and pdir(p) in ("input", "inout")]
+    d_outputs = [p for p in d_ports if isinstance(p, dict) and pdir(p) in ("output", "inout")]
+    d_inputs  = [p for p in d_ports if isinstance(p, dict) and pdir(p) in ("input", "inout")]
+    a_outputs = [p for p in a_ports if isinstance(p, dict) and pdir(p) in ("output", "inout")]
+
+    def match_pairs(src_inst, src_ports, dst_inst, dst_ports):
+        for sp in src_ports:
+            sname = pname(sp)
+            snorm = pnorm(sp)
+            sw = pwidth(sp)
+
+            candidates = []
+            for dp in dst_ports:
+                dname = pname(dp)
+                dnorm = pnorm(dp)
+                dw = pwidth(dp)
+
+                if sw is not None and dw is not None and sw != dw:
+                    continue
+
+                exact = (snorm == dnorm)
+                semantic = (_semantic_group(snorm) == _semantic_group(dnorm))
+                if exact or semantic:
+                    candidates.append(dp)
+
+            if len(candidates) == 1:
+                dp = candidates[0]
+                dname = pname(dp)
+                if (dst_inst, dname) not in driven_inputs:
+                    add_conn(f"{src_inst}.{sname}", f"{dst_inst}.{dname}")
+                    driven_inputs.add((dst_inst, dname))
+
+    match_pairs("u_digital", d_outputs, "u_analog", a_inputs)
+    match_pairs("u_analog", a_outputs, "u_digital", d_inputs)
+
+    # 3) Expose remaining digital inputs to top
+    for p in d_inputs:
+        name = pname(p)
+        if _classify_top_port(pnorm(p)):
+            continue
+        if ("u_digital", name) not in driven_inputs:
+            add_conn(f"top.{name}", f"u_digital.{name}")
+            driven_inputs.add(("u_digital", name))
+            exposed_top_ports.add(name)
+
+    # 4) Expose digital outputs to top
+    for p in d_outputs:
+        name = pname(p)
+        if _classify_top_port(pnorm(p)):
+            continue
+        add_conn(f"u_digital.{name}", f"top.{name}")
+        exposed_top_ports.add(name)
+
+    return connections, sorted(exposed_top_ports)
+
+
 def _build_generic_fallback_connections(intent: dict, digital_sigs: dict, analog_sigs: dict):
     """
     Backward-compatible generic fallback:
@@ -705,23 +808,27 @@ Now output JSON only.
 
         # Backward-compatible generic recovery:
         # only infer connections if sanitize removed everything.
-        if not intent.get("connections") and not intent.get("tieoffs"):
-            fallback_connections = _build_generic_fallback_connections(intent, digital_sigs, analog_sigs)
-            if fallback_connections:
-                intent["connections"] = fallback_connections
+
+        if len(intent.get("connections", [])) < 3 and not intent.get("tieoffs"):
+            rescue_connections, rescue_top_ports = _build_deterministic_rescue_connections(intent, digital_sigs, analog_sigs)
+            if rescue_connections:
+                intent["connections"] = rescue_connections
                 intent.setdefault("notes", [])
                 if isinstance(intent["notes"], list):
                     intent["notes"].append(
-                        "Applied generic fallback connections after direction validation removed all candidate edges."
+                        "Applied deterministic rescue connections to guarantee demo-integrated SoC top."
                     )
             else:
-                intent.setdefault("notes", [])
-                if isinstance(intent["notes"], list):
-                    intent["notes"].append(
-                        "All candidate connections were removed by direction validation and no unambiguous generic fallback connections could be inferred."
-                    )
-
-        
+                fallback_connections = _build_generic_fallback_connections(intent, digital_sigs, analog_sigs)
+                if fallback_connections:
+                    intent["connections"] = fallback_connections
+                    intent.setdefault("notes", [])
+                    if isinstance(intent["notes"], list):
+                        intent["notes"].append(
+                            "Applied generic fallback connections after deterministic rescue found no valid mapping."
+                        )
+      
+                
         
                 
     except Exception as e:
