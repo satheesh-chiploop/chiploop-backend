@@ -88,6 +88,84 @@ def _load_rtl_text_if_exists(path: str):
         pass
     return ""
 
+def _normalize_connection_entries(intent: dict, digital_sigs: dict, analog_sigs: dict):
+    """
+    Convert mixed connection styles into canonical point-to-point edges:
+      {"from": "...", "to": "..."}
+    Supports:
+      1) existing point-to-point entries
+      2) net-style entries:
+         {"net":"clk","ports":["top.clk","u_digital.clk","u_analog.clk"]}
+    """
+    if not isinstance(intent, dict):
+        return intent
+
+    inst2mod = _instance_to_module(intent)
+    normalized = []
+    seen = set()
+
+    def add_edge(src: str, dst: str):
+        key = (src, dst)
+        if key in seen:
+            return
+        seen.add(key)
+        normalized.append({"from": src, "to": dst})
+
+    for c in intent.get("connections", []):
+        if not isinstance(c, dict):
+            continue
+
+        # Case 1: already point-to-point
+        src = c.get("from")
+        dst = c.get("to")
+        if src and dst:
+            add_edge(src, dst)
+            continue
+
+        # Case 2: net-style multi-port connection
+        ports = c.get("ports")
+        if not isinstance(ports, list) or len(ports) < 2:
+            continue
+
+        parsed = []
+        for ep in ports:
+            inst, port = _parse_ep(ep)
+            if inst and port:
+                parsed.append((ep, inst, port))
+
+        if len(parsed) < 2:
+            continue
+
+        tops = [ep for ep, inst, port in parsed if inst == "top"]
+        non_tops = [(ep, inst, port) for ep, inst, port in parsed if inst != "top"]
+
+        # top -> instance(input/inout)
+        for top_ep in tops:
+            for ep, inst, port in non_tops:
+                ddir = _resolve_port_dir(inst, port, inst2mod, digital_sigs, analog_sigs)
+                if ddir in ("input", "inout", None):
+                    add_edge(top_ep, ep)
+
+        # instance(output/inout) -> top
+        for ep, inst, port in non_tops:
+            sdir = _resolve_port_dir(inst, port, inst2mod, digital_sigs, analog_sigs)
+            if sdir in ("output", "inout"):
+                for top_ep in tops:
+                    add_edge(ep, top_ep)
+
+        # instance -> instance
+        for src_ep, src_inst, src_port in non_tops:
+            sdir = _resolve_port_dir(src_inst, src_port, inst2mod, digital_sigs, analog_sigs)
+            for dst_ep, dst_inst, dst_port in non_tops:
+                if src_ep == dst_ep or src_inst == dst_inst:
+                    continue
+                ddir = _resolve_port_dir(dst_inst, dst_port, inst2mod, digital_sigs, analog_sigs)
+                if sdir in ("output", "inout") and ddir in ("input", "inout", None):
+                    add_edge(src_ep, dst_ep)
+
+    intent["connections"] = normalized
+    return intent
+
 
 def _discover_signature_from_workflow_dir(workflow_dir: str, rel_candidates):
     """
@@ -240,7 +318,7 @@ def _build_deterministic_rescue_connections(intent: dict, digital_sigs: dict, an
         return _port_width(p)
 
     # 1) Top fanout for infra ports
-    for ports, inst in ((d_ports, "u_digital"), (a_ports, "u_analog")):
+    for ports, inst in ((d_ports, inst_a), (a_ports, inst_b)):
         for p in ports:
             if not isinstance(p, dict):
                 continue
@@ -286,17 +364,17 @@ def _build_deterministic_rescue_connections(intent: dict, digital_sigs: dict, an
                     add_conn(f"{src_inst}.{sname}", f"{dst_inst}.{dname}")
                     driven_inputs.add((dst_inst, dname))
 
-    match_pairs("u_digital", d_outputs, "u_analog", a_inputs)
-    match_pairs("u_analog", a_outputs, "u_digital", d_inputs)
+    match_pairs(inst_a, d_outputs, inst_b, a_inputs)
+    match_pairs(inst_b, a_outputs, inst_a, d_inputs)
 
     # 3) Expose remaining digital inputs to top
     for p in d_inputs:
         name = pname(p)
         if _classify_top_port(pnorm(p)):
             continue
-        if ("u_digital", name) not in driven_inputs:
-            add_conn(f"top.{name}", f"u_digital.{name}")
-            driven_inputs.add(("u_digital", name))
+        if (inst_a, name) not in driven_inputs:
+            add_conn(f"top.{name}", f"{inst_a}.{name}")
+            driven_inputs.add((inst_a, name))
             exposed_top_ports.add(name)
 
     # 4) Expose digital outputs to top
@@ -304,7 +382,7 @@ def _build_deterministic_rescue_connections(intent: dict, digital_sigs: dict, an
         name = pname(p)
         if _classify_top_port(pnorm(p)):
             continue
-        add_conn(f"u_digital.{name}", f"top.{name}")
+        add_conn(f"{inst_a}.{name}", f"top.{name}")
         exposed_top_ports.add(name)
 
     return connections, sorted(exposed_top_ports)
@@ -683,6 +761,26 @@ def run_agent(state: dict) -> dict:
 
     if not analog_sigs:
         analog_sigs = _discover_signatures_under(workflow_dir, "analog")
+
+    if not digital_sigs or not analog_sigs:
+        try:
+            save_text_artifact_and_record(
+                workflow_id=workflow_id,
+                agent_name=agent_name,
+                subdir="system/integration",
+                filename="system_integration_intent_debug.json",
+                content=json.dumps({
+                    "reason": "signature discovery failed",
+                    "digital_sigs": digital_sigs,
+                    "analog_sigs": analog_sigs,
+                    "workflow_dir": workflow_dir,
+                }, indent=2),
+            )
+        except Exception:
+            pass
+
+        state["status"] = "❌ Signature discovery failed for system integration"
+        return state
     
 
     # Optional hints from upstream analog agents
@@ -809,9 +907,36 @@ Now output JSON only.
         if not isinstance(intent, dict):
             intent = {}
 
+        # Seed defaults early so normalization/rescue always has structure to work with
+        intent.setdefault("top", {})
+        intent.setdefault("instances", [])
+        intent.setdefault("connections", [])
+        intent.setdefault("tieoffs", [])
+        intent.setdefault("variants", {})
+
+        if isinstance(intent["top"], dict):
+            intent["top"].setdefault("base_name", top_base)
+            intent["top"].setdefault("sim_module", f"{top_base}_sim")
+            intent["top"].setdefault("phys_module", f"{top_base}_phys")
+
+        if not intent["instances"]:
+            intent["instances"] = [
+                {"name": "u_digital", "module": digital_module},
+                {"name": "u_analog", "module": analog_phys_module},
+            ]
+
+        if "sim" not in intent["variants"]:
+            intent["variants"]["sim"] = schema["variants"]["sim"]
+        if "phys" not in intent["variants"]:
+            intent["variants"]["phys"] = schema["variants"]["phys"]
+
+        # NEW: convert net-style connections into canonical from/to edges
+        intent = _normalize_connection_entries(intent, digital_sigs, analog_sigs)
+
+        # Then sanitize canonical edges
         intent = _sanitize_connections(intent, digital_sigs, analog_sigs)
 
-        # --- NEW: validate ports actually exist ---
+        # --- validate ports actually exist ---
         inst2mod = _instance_to_module(intent)
 
         valid_connections = []
@@ -884,31 +1009,6 @@ Now output JSON only.
 
     if not isinstance(intent, dict):
         intent = {}
-
-    intent.setdefault("top", {})
-    intent.setdefault("instances", [])
-    intent.setdefault("connections", [])
-    intent.setdefault("tieoffs", [])
-    intent.setdefault("variants", {})
-
-    if isinstance(intent["top"], dict):
-        intent["top"].setdefault("base_name", top_base)
-        intent["top"].setdefault("sim_module", f"{top_base}_sim")
-        intent["top"].setdefault("phys_module", f"{top_base}_phys")
-
-    # Generic fallback if LLM under-specifies the manifest
-
-
-    if not intent["instances"]:
-        intent["instances"] = [
-            {"name": "u_digital", "module": digital_module},
-            {"name": "u_analog", "module": analog_phys_module},
-        ]
-
-    if "sim" not in intent["variants"]:
-        intent["variants"]["sim"] = schema["variants"]["sim"]
-    if "phys" not in intent["variants"]:
-        intent["variants"]["phys"] = schema["variants"]["phys"]
 
 
     if not intent.get("connections") and not intent.get("tieoffs"):
