@@ -55,7 +55,7 @@ def run_agent(state: dict) -> dict:
 
 
     if not regmap:
-        state["status"] = "❌ firmware register map missing in state for driver generation""
+        state["status"] = "❌ firmware register map missing in state for driver generation"
         return state
 
     if not hal_code:
