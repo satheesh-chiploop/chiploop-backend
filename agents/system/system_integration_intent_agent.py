@@ -192,7 +192,7 @@ def _normalize_connection_entries(intent: dict, digital_sigs: dict, analog_sigs:
                             continue
                         ddir = _resolve_port_dir(dst_inst, dst_port, inst2mod, digital_sigs, analog_sigs)
                         if sdir in ("output", "inout") and ddir in ("input", "inout", None):
-                    a       dd_edge(src_ep, dst_ep)
+                            add_edge(src_ep, dst_ep)
                 continue
 
         parsed = []
