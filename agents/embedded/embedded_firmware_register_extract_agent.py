@@ -172,14 +172,6 @@ def run_agent(state: dict) -> dict:
     if upstream_regmap is None:
         regmap_path = _find_first_existing(workflow_dir, candidate_paths) if workflow_dir else ""
 
-    if isinstance(upstream_regmap, dict) and upstream_regmap.get("error"):
-        _write_debug({
-            "mode": "reject_invalid_upstream_regmap",
-            "reason": upstream_regmap.get("error"),
-            "upstream_regmap_preview": upstream_regmap,
-        })
-    state["status"] = f"❌ upstream digital regmap invalid: {upstream_regmap.get('error')}"
-    return state
 
     # 2) Fall back to state-declared artifact paths if filesystem lookup fails
     if upstream_regmap is None and not regmap_path:
@@ -239,6 +231,16 @@ def run_agent(state: dict) -> dict:
             json.dumps(payload, indent=2),
             key="register_map_debug.json"
         )
+
+    if isinstance(upstream_regmap, dict) and upstream_regmap.get("error"):
+        _write_debug({
+            "mode": "reject_invalid_upstream_regmap",
+            "reason": upstream_regmap.get("error"),
+            "upstream_regmap_preview": upstream_regmap,
+        })
+        
+        state["status"] = f"❌ upstream digital regmap invalid: {upstream_regmap.get('error')}"
+        return state
 
     if not isinstance(upstream_regmap, dict):
         _write_debug({
@@ -470,23 +472,25 @@ OUTPUT REQUIREMENTS:
         state["status"] = "❌ Register extract LLM returned empty output"
         return state
 
-    parsed = json.loads(out)
-    state["firmware_register_map"] = parsed
-
-    if isinstance(parsed, dict) and not parsed.get("registers"):
-        state["status"] = "❌ Register extract produced zero registers"
-        return state
-
-
     out = strip_outer_markdown_fences(out)
-    write_artifact(state, OUTPUT_PATH, out, key=OUTPUT_PATH.split("/")[-1])
 
     parsed = None
     try:
         parsed = json.loads(out)
-        state["firmware_register_map"] = parsed
     except Exception:
-        pass
+        state["status"] = "❌ Register extract LLM returned invalid JSON"
+        return state
+
+    state["firmware_register_map"] = parsed
+
+    if not parsed.get("registers"):
+        state["status"] = "❌ Register extract produced zero registers"
+        return state
+
+
+
+    write_artifact(state, OUTPUT_PATH, out, key=OUTPUT_PATH.split("/")[-1])
+
 
     _write_debug({
         "mode": "llm_fallback_completed",

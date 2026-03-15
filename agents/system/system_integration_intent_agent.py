@@ -123,9 +123,77 @@ def _normalize_connection_entries(intent: dict, digital_sigs: dict, analog_sigs:
             continue
 
         # Case 2: net-style multi-port connection
+        # Case 2: net-style multi-port connection using "ports"
         ports = c.get("ports")
-        if not isinstance(ports, list) or len(ports) < 2:
-            continue
+        if isinstance(ports, list) and len(ports) >= 2:
+            parsed = []
+            for ep in ports:
+                inst, port = _parse_ep(ep)
+                if inst and port:
+                    parsed.append((ep, inst, port))
+
+            if len(parsed) >= 2:
+                tops = [ep for ep, inst, port in parsed if inst == "top"]
+                non_tops = [(ep, inst, port) for ep, inst, port in parsed if inst != "top"]
+
+                for top_ep in tops:
+                    for ep, inst, port in non_tops:
+                        ddir = _resolve_port_dir(inst, port, inst2mod, digital_sigs, analog_sigs)
+                        if ddir in ("input", "inout", None):
+                            add_edge(top_ep, ep)
+
+                for ep, inst, port in non_tops:
+                    sdir = _resolve_port_dir(inst, port, inst2mod, digital_sigs, analog_sigs)
+                    if sdir in ("output", "inout"):
+                        for top_ep in tops:
+                            add_edge(ep, top_ep)
+
+                for src_ep, src_inst, src_port in non_tops:
+                    sdir = _resolve_port_dir(src_inst, src_port, inst2mod, digital_sigs, analog_sigs)
+                    for dst_ep, dst_inst, dst_port in non_tops:
+                        if src_ep == dst_ep or src_inst == dst_inst:
+                            continue
+                        ddir = _resolve_port_dir(dst_inst, dst_port, inst2mod, digital_sigs, analog_sigs)
+                        if sdir in ("output", "inout") and ddir in ("input", "inout", None):
+                            add_edge(src_ep, dst_ep)
+                continue
+
+        # Case 3: net-style connection using "endpoints"
+        endpoints = c.get("endpoints")
+        if isinstance(endpoints, list) and len(endpoints) >= 2:
+            tops = []
+            non_tops = []
+
+            for ep in endpoints:
+                if not isinstance(ep, dict):
+                    continue
+                if ep.get("top_port"):
+                    tops.append(f'top.{ep["top_port"]}')
+                elif ep.get("instance") and ep.get("port"):
+                    non_tops.append((f'{ep["instance"]}.{ep["port"]}', ep["instance"], ep["port"]))
+
+            if tops or non_tops:
+                for top_ep in tops:
+                    for full_ep, inst, port in non_tops:
+                        ddir = _resolve_port_dir(inst, port, inst2mod, digital_sigs, analog_sigs)
+                        if ddir in ("input", "inout", None):
+                            add_edge(top_ep, full_ep)
+
+                for full_ep, inst, port in non_tops:
+                    sdir = _resolve_port_dir(inst, port, inst2mod, digital_sigs, analog_sigs)
+                    if sdir in ("output", "inout"):
+                        for top_ep in tops:
+                            add_edge(full_ep, top_ep)
+
+                for src_ep, src_inst, src_port in non_tops:
+                    sdir = _resolve_port_dir(src_inst, src_port, inst2mod, digital_sigs, analog_sigs)
+                    for dst_ep, dst_inst, dst_port in non_tops:
+                        if src_ep == dst_ep or src_inst == dst_inst:
+                            continue
+                        ddir = _resolve_port_dir(dst_inst, dst_port, inst2mod, digital_sigs, analog_sigs)
+                        if sdir in ("output", "inout") and ddir in ("input", "inout", None):
+                    a       dd_edge(src_ep, dst_ep)
+                continue
 
         parsed = []
         for ep in ports:
