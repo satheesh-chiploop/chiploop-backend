@@ -172,6 +172,15 @@ def run_agent(state: dict) -> dict:
     if upstream_regmap is None:
         regmap_path = _find_first_existing(workflow_dir, candidate_paths) if workflow_dir else ""
 
+    if isinstance(upstream_regmap, dict) and upstream_regmap.get("error"):
+        _write_debug({
+            "mode": "reject_invalid_upstream_regmap",
+            "reason": upstream_regmap.get("error"),
+            "upstream_regmap_preview": upstream_regmap,
+        })
+    state["status"] = f"❌ upstream digital regmap invalid: {upstream_regmap.get('error')}"
+    return state
+
     # 2) Fall back to state-declared artifact paths if filesystem lookup fails
     if upstream_regmap is None and not regmap_path:
         state_candidates = [
@@ -291,7 +300,20 @@ def run_agent(state: dict) -> dict:
                 candidate_regs = tmp
 
 
+
+        valid_candidate_regs = []
         if isinstance(candidate_regs, list):
+            for r in candidate_regs:
+                if not isinstance(r, dict):
+                    continue
+                if not r.get("name"):
+                    continue
+                if "offset" not in r and "addr_offset" not in r and "address" not in r:
+                    continue
+                valid_candidate_regs.append(r)
+
+        if valid_candidate_regs:
+            candidate_regs = valid_candidate_regs
             debug_info["candidate_regs_count"] = len(candidate_regs)
 
         if isinstance(candidate_regs, list) and candidate_regs:
@@ -445,13 +467,16 @@ OUTPUT REQUIREMENTS:
     )
 
     if not out:
-        out = json.dumps({
-            "block_name": "firmware_block",
-            "module_name": "firmware_block",
-            "base_address": "0x00000000",
-            "registers": [],
-            "__assumptions": ["LLM returned empty output; produced a safe empty normalized register map."]
-        }, indent=2)
+        state["status"] = "❌ Register extract LLM returned empty output"
+        return state
+
+    parsed = json.loads(out)
+    state["firmware_register_map"] = parsed
+
+    if isinstance(parsed, dict) and not parsed.get("registers"):
+        state["status"] = "❌ Register extract produced zero registers"
+        return state
+
 
     out = strip_outer_markdown_fences(out)
     write_artifact(state, OUTPUT_PATH, out, key=OUTPUT_PATH.split("/")[-1])

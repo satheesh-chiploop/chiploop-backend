@@ -67,6 +67,11 @@ def run_agent(state: dict) -> dict:
                     flat_registers.extend(blk.get("registers", []))
 
     normalized_regmap = {"registers": flat_registers} if flat_registers else regmap
+  
+    if regmap and not flat_registers:
+        state["status"] = "❌ HAL generation received regmap with zero concrete registers"
+        return state
+
     regmap_json = json.dumps(normalized_regmap, indent=2)[:12000] if regmap else "(not available)"
 
 
@@ -141,10 +146,25 @@ RULES:
             body.pop()
         out = "\n".join(body).strip() + "\n"
 
+
+    bad_markers = [
+        "Certainly!",
+        "Below is an example",
+        "Make sure to substitute",
+        "Here is",
+        "```",
+    ]
+
+    if any(m in out for m in bad_markers):
+        state["status"] = "❌ HAL generation returned explanatory/prose output instead of pure module code"
+        return state
+
     # Fail fast if the HAL shape is still too weak
     if "RegisterBlock" not in out or "register_block" not in out:
         state["status"] = "❌ HAL generation produced invalid module shape"
         return state
+
+    
 
     write_artifact(state, OUTPUT_PATH, out, key=OUTPUT_PATH.split("/")[-1])
 

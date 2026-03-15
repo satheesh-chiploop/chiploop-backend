@@ -126,12 +126,25 @@ OUTPUT REQUIREMENTS:
 - Write to: firmware/drivers/driver_scaffold.rs
 
 """
-
     out = llm_chat(prompt, system="You are a senior embedded Rust engineer. Produce compile-ready Rust only. Never use markdown code fences.")
     if not out:
-        out = "ERROR: LLM returned empty output."
+        state["status"] = "❌ Driver scaffold LLM returned empty output"
+        return state
+
     out = strip_markdown_fences_for_code(out)
     out = out.replace("#![no_std]", "// no_std configured at crate root")
+
+    bad_markers = [
+        "Certainly!",
+        "Below is an example",
+        "Make sure to substitute",
+        "Here is",
+        "```",
+    ]
+
+    if any(m in out for m in bad_markers):
+        state["status"] = "❌ Driver scaffold returned explanatory/prose output instead of pure module code"
+        return state
 
     # Safely unwrap a top-level `pub mod driver_scaffold { ... }` wrapper if present
     lines = out.splitlines()
