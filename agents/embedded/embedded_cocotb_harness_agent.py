@@ -75,12 +75,18 @@ def _extract_defined_modules_from_file(path: str):
     if not txt:
         return out
 
+    # strip comments first so commented module lines do not confuse ownership resolution
+    txt = re.sub(r"//.*?$", "", txt, flags=re.MULTILINE)
+    txt = re.sub(r"/\*.*?\*/", "", txt, flags=re.DOTALL)
+
     for m in re.finditer(r"\bmodule\s+([a-zA-Z_][a-zA-Z0-9_$]*)\b", txt):
         mod = m.group(1)
         if mod not in out:
             out.append(mod)
 
     return out
+
+
 
 
 def _is_allowed_impl_file(rel_path: str) -> bool:

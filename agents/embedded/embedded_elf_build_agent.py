@@ -92,8 +92,21 @@ def run_agent(state: dict) -> dict:
         or "firmware_app"
     ).strip()
 
+
     if not resolved_target_triple:
         state["status"] = "❌ target_triple missing in state for ELF build generation"
+        _write_build_result(state, {
+            "agent": AGENT_NAME,
+            "target_triple": "",
+            "bin_name": bin_name,
+            "cargo_workspace_dir": os.path.join(workflow_dir, "firmware", "build"),
+            "canonical_elf_relpath": "",
+            "build_attempted": False,
+            "build_succeeded": False,
+            "elf_exists": False,
+            "stdout_tail": "",
+            "stderr_tail": "Missing target_triple in state/toolchain.",
+        })
         return state
 
     prompt = f"""USER SPEC:
@@ -452,10 +465,15 @@ ls firmware/build/target/{resolved_target_triple}/release/{resolved_bin_name}.el
         os.path.join(workflow_dir, "firmware", "build", "Cargo.toml"),
         os.path.join(workflow_dir, "firmware", "build", ".cargo", "config.toml"),
     ]
+
     missing_required = [p for p in required_srcs if not os.path.isfile(p)]
+    missing_required_rel = [
+        os.path.relpath(p, workflow_dir).replace("\\", "/")
+        for p in missing_required
+    ] if workflow_dir else missing_required
     if missing_required:
         build_block = state.setdefault("firmware_build", {})
-        build_block["missing_required_files"] = missing_required
+        build_block["missing_required_files"] = missing_required_rel
         state["firmware_elf_exists"] = False
         state["status"] = "⚠️ ELF build blocked: required firmware build files missing"
 
