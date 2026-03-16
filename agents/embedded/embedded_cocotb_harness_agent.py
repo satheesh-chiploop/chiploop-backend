@@ -141,7 +141,12 @@ def _index_module_definitions(workflow_dir: str):
 
             defined = _extract_defined_modules_from_file(abs_path)
             for mod in defined:
-                module_to_files.setdefault(mod, []).append(rel_path)
+
+                lst = module_to_files.setdefault(mod, [])
+                if rel_path not in lst:
+                    lst.append(rel_path)
+  
+                
 
     return module_to_files
 

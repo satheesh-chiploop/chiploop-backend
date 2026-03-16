@@ -372,7 +372,14 @@ def _assemble_top(top_module: str, intent: dict, variant: str, module_port_db: d
             keys = sorted(pm.keys())
             for k_i, port in enumerate(keys):
                 rhs = pm[port]
-                lines.append(f"    .{port}({rhs}){',' if k_i < len(keys)-1 else ''}")
+                # ensure emitted port name matches real RTL interface
+                real_port = _resolve_real_instance_port(
+                    module_port_db,
+                    module,
+                    port
+                )
+
+                lines.append(f"    .{real_port}({rhs}){',' if k_i < len(keys)-1 else ''}")
             lines.append("  );")
         else:
             lines.append(f"  {module} {name} ();")
