@@ -356,8 +356,25 @@ def _get_instance_ports(intent: dict, inst_name: str, digital_sigs: dict, analog
         return []
     return _collect_ports_for_module(digital_sigs, mod) or _collect_ports_for_module(analog_sigs, mod)
 
+SEMANTIC_ALIAS = {
+    "start": ["start", "enable", "trigger", "go", "req", "kick"],
+    "data": ["data", "result", "value", "sample", "payload"],
+    "valid": ["valid", "done", "ready", "ack"],
+    "status": ["status", "state", "flag"],
+    "irq": ["irq", "intr", "interrupt"],
+}
+
+def _semantic_group(name: str) -> str:
+    n = str(name or "").lower()
+    for group, aliases in SEMANTIC_ALIAS.items():
+        if any(alias in n for alias in aliases):
+            return group
+    return n
+
 
 def _build_deterministic_rescue_connections(intent: dict, digital_sigs: dict, analog_sigs: dict):
+
+
     inst2mod = _instance_to_module(intent)
 
     instances = list(inst2mod.keys())
@@ -536,25 +553,7 @@ def _build_generic_fallback_connections(intent: dict, digital_sigs: dict, analog
             if pdir in ("input", "inout"):
                 consumers[norm].append(item)
 
-    # --- semantic matching ---
-
-    semantic_alias = {
-        "start": ["start", "enable", "trigger", "go", "req", "kick"],
-        "data": ["data", "result", "value", "sample", "payload"],
-        "valid": ["valid", "done", "ready", "ack"],
-        "status": ["status", "state", "flag"],
-        "irq": ["irq", "intr", "interrupt"],
-    }
-
-    
-    def _semantic_group(name: str) -> str:
-        n = str(name or "").lower()
-        for g, aliases in semantic_alias.items():
-            if any(a in n for a in aliases):
-                return g
-        return n
-
-
+   
     for norm_name, srcs in producers.items():
         candidate_dsts = []
         # first try exact normalized-name consumers
