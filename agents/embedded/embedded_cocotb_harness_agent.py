@@ -444,23 +444,12 @@ async def firmware_test(dut):
         await RisingEdge(dut.clk)
     await Timer(1, units="us")
 """
-    if (
-        "firmware/validate/test_firmware_smoke.py" not in files
-        or _is_weak_python(files.get("firmware/validate/test_firmware_smoke.py", ""))
-    ):
-        files["firmware/validate/test_firmware_smoke.py"] = safe_smoke_test
-
-    if (
-        "firmware/validate/cocotb_harness.py" not in files
-        or _is_weak_python(files.get("firmware/validate/cocotb_harness.py", ""))
-    ):
-        files["firmware/validate/cocotb_harness.py"] = safe_harness
-
+    
     top_has_clk = _top_has_signal(soc_top_text, "clk")
-top_has_rst_n = _top_has_signal(soc_top_text, "rst_n")
-top_has_reset_n = _top_has_signal(soc_top_text, "reset_n")
+    top_has_rst_n = _top_has_signal(soc_top_text, "rst_n")
+    top_has_reset_n = _top_has_signal(soc_top_text, "reset_n")
 
-minimal_no_port_test = """import cocotb
+    minimal_no_port_test = """import cocotb
 from cocotb.triggers import Timer
 
 # ASSUMPTION: Generated top does not expose standard clk/rst_n ports.
