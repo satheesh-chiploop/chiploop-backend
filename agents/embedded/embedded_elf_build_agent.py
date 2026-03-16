@@ -294,6 +294,9 @@ pub extern "C" fn _start() -> ! {
                 new_ct_lines.append(ln)
         ct = "\n".join(new_ct_lines).strip() + "\n"
 
+        if '[[bin]]' not in ct and f'name = "{bin_name}"' not in ct:
+            ct += f'\n[[bin]]\nname = "{bin_name}"\npath = "../src/main.rs"\n'
+
         files[OUTPUT_CARGO_TOML] = ct
 
     # Synthesize a safe default .cargo/config.toml if the model omitted it
@@ -471,10 +474,27 @@ ls firmware/build/target/{resolved_target_triple}/release/{resolved_bin_name}.el
     state["embedded_elf_path"] = elf_relpath
     state["firmware_elf_exists"] = elf_exists
 
-
     if not elf_exists:
+        state["firmware_elf_path"] = elf_relpath
+        state["firmware_expected_elf_path"] = elf_relpath
+        state["elf_path"] = elf_relpath
+        state["embedded_elf_path"] = elf_relpath
         state["firmware_elf_exists"] = False
-        state["status"] = f"⚠️ ELF build skipped or failed: {elf_relpath}"
+
+        build_block = state.setdefault("firmware_build", {})
+        build_block["target_triple"] = resolved_target_triple
+        build_block["bin_name"] = bin_name
+        build_block["elf_path"] = elf_relpath
+        build_block["elf_exists"] = False
+        build_block["build_attempted"] = build_attempted
+        build_block["build_succeeded"] = build_succeeded
+        build_block["cargo_target_abs"] = cargo_target_abs
+        build_block["build_stdout"] = build_stdout[-4000:]
+        build_block["build_stderr"] = build_stderr[-4000:]
+        build_block["build_instructions_path"] = OUTPUT_PATH
+
+        state["status"] = f"⚠️ ELF not produced at canonical path: {elf_relpath}"
+
 
     build_block = state.setdefault("firmware_build", {})
     build_block["target_triple"] = resolved_target_triple

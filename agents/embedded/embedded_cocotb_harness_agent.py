@@ -1,11 +1,18 @@
 import json
 import os
+import re
 
 from ._embedded_common import ensure_workflow_dir, llm_chat, write_artifact, strip_markdown_fences_for_code
 
 AGENT_NAME = "Embedded Cocotb Harness Agent"
 PHASE = "cocotb_harness"
 OUTPUT_PATH = "firmware/validate/cocotb_harness.py"
+
+
+def _top_has_signal(sv_text: str, sig: str) -> bool:
+    if not sv_text or not sig:
+        return False
+    return re.search(rf"\b{re.escape(sig)}\b", sv_text) is not None
 
 def _safe_read(path):
     try:
@@ -117,6 +124,10 @@ def run_agent(state: dict) -> dict:
 
 
     soc_top_exists = bool(soc_top_abs and os.path.isfile(soc_top_abs))
+
+    if not soc_top_exists:
+        state["status"] = f"❌ SoC top RTL not found for cocotb harness generation: {soc_top_relpath}"
+        return state
 
     spec_text = (state.get("spec_text") or state.get("spec") or "").strip()
     goal = (state.get("goal") or "").strip()
@@ -339,7 +350,7 @@ include $(shell cocotb-config --makefiles)/Makefile.sim
 
             files[py_path] = "\n".join(safe_lines) + "\n"
 
-    inferred_top = _infer_topmodule_from_sv(soc_top_text, fallback="soc_top_sim")
+    # inferred_top = _infer_topmodule_from_sv(soc_top_text, fallback="soc_top_sim")
 
 
 
@@ -347,12 +358,8 @@ include $(shell cocotb-config --makefiles)/Makefile.sim
 
     # Always harden / normalize Makefile because LLM output may exist but be wrong.
 
-        # Resolve Verilog source path relative to Makefile location
-    verilog_path = f"../../{soc_top_relpath}".replace("//", "/")
-
-    if not soc_top_exists:
-        state["status"] = f"❌ SoC top RTL not found for cocotb harness generation: {soc_top_relpath}"
-        return state
+    # Resolve Verilog source path relative to Makefile location
+    #verilog_path = f"../../{soc_top_relpath}".replace("//", "/")
 
  
 

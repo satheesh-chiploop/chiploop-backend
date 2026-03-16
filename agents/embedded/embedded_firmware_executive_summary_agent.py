@@ -47,6 +47,13 @@ def run_agent(state: dict) -> dict:
     produced = _collect_known_artifacts(state)
     produced_block = "\n".join(f"- {p}" for p in produced) if produced else "- (none recorded in state['embedded'])"
 
+    execution = state.get("system_firmware_execution") or {}
+    coverage = state.get("system_firmware_coverage_summary") or {}
+
+    execution_status = execution.get("overall_status", "unavailable")
+    execution_readiness = (execution.get("readiness") or {}).get("status", "unavailable")
+    coverage_available = ((coverage.get("coverage_metrics") or {}).get("coverage_available"))
+
     prompt = f"""USER SPEC:
 {spec_text}
 
@@ -74,6 +81,19 @@ HARD OUTPUT RULES (IMPORTANT):
 
 OUTPUT PATH:
 - firmware/executive_summary.md
+
+EXECUTION STATUS:
+- overall_status: {execution_status}
+- readiness: {execution_readiness}
+
+COVERAGE STATUS:
+- coverage_available: {coverage_available}
+
+IMPORTANT TRUTH RULES:
+- If execution was blocked, say so explicitly.
+- Do NOT imply simulation passed unless overall_status == "simulation_passed".
+- Do NOT imply coverage exists unless coverage_available is true.
+
 """
 
     out = llm_chat(

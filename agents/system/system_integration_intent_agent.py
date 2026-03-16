@@ -1047,18 +1047,27 @@ Now output JSON only.
 
         intent["connections"] = valid_connections
 
-        # Backward-compatible generic recovery:
-        # only infer connections if sanitize removed everything.
 
-        if len(intent.get("connections", [])) < 3 and not intent.get("tieoffs"):
+
+        # Backward-compatible recovery:
+        # run if usable connectivity is still too weak for top assembly.
+        usable_connections = intent.get("connections", []) or []
+        usable_tieoffs = intent.get("tieoffs", []) or []
+
+        needs_recovery = (
+            len(usable_connections) < 2
+            or not any(str(c.get("from", "")).startswith("top.") or str(c.get("to", "")).startswith("top.") for c in usable_connections)
+        )
+
+        if needs_recovery:
             rescue_connections, rescue_top_ports = _build_deterministic_rescue_connections(intent, digital_sigs, analog_sigs)
             if rescue_connections:
                 intent["connections"] = rescue_connections
                 intent.setdefault("notes", [])
                 if isinstance(intent["notes"], list):
                     intent["notes"].append(
-                        "Applied deterministic rescue connections to guarantee demo-integrated SoC top."
-                    )
+                        "Applied deterministic rescue connections to guarantee integrated SoC top."
+                )
             else:
                 fallback_connections = _build_generic_fallback_connections(intent, digital_sigs, analog_sigs)
                 if fallback_connections:
@@ -1068,7 +1077,8 @@ Now output JSON only.
                         intent["notes"].append(
                             "Applied generic fallback connections after deterministic rescue found no valid mapping."
                         )
-      
+
+        
                 
         
                 

@@ -354,7 +354,7 @@ def _build_notes(readiness: Dict[str, Any], optional_inputs: Dict[str, Any]) -> 
     else:
         notes.append("No digital assertions collateral detected; assertion coverage should remain unavailable, not fabricated.")
 
-    if optional_inputs.get("elf"):
+    if optional_inputs.get("elf_exists"):
         notes.append("Firmware ELF was detected for firmware-aware co-simulation.")
     else:
         notes.append("Firmware ELF was not detected; this run should be treated as not executable, not as a passing simulation.")
@@ -489,6 +489,11 @@ def run_agent(state: dict) -> dict:
 
     print("\n⚙️ Running System Firmware CoSim Execution Agent")
 
+    workflow_dir = state.get("workflow_dir")
+    if not workflow_dir:
+        state["status"] = "❌ workflow_dir missing for cosim execution"
+        return state
+
     soc_top_sim_path = _find_soc_top_path(state)
     firmware_elf_path = _find_elf_path(state)
     makefile_path = _find_makefile_path(state)
@@ -537,7 +542,7 @@ def run_agent(state: dict) -> dict:
     optional_inputs = {
         "coverage_model": coverage_model_path,
         "assertions": assertions_path,
-        "elf": firmware_elf_path,
+        "elf": elf_exists,
     }
 
     runtime_requested = bool(state.get("execute_cosim") or state.get("run_cosim"))
