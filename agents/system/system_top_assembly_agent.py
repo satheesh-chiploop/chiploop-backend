@@ -113,8 +113,122 @@ def _normalize_tieoff_entry(t: dict):
     port = t.get("port")
     return inst, port, t.get("value")
 
+def _collect_module_files(workflow_dir: str):
+    rels = []
+    if not workflow_dir or not os.path.isdir(workflow_dir):
+        return rels
 
-def _assemble_top(top_module: str, intent: dict, variant: str) -> str:
+    candidate_roots = [
+        os.path.join(workflow_dir, "digital"),
+        os.path.join(workflow_dir, "analog"),
+        os.path.join(workflow_dir, "system"),
+        os.path.join(workflow_dir, "rtl"),
+    ]
+    for root in candidate_roots:
+        if not os.path.isdir(root):
+            continue
+        for walk_root, _, files in os.walk(root):
+            for name in sorted(files):
+                if name.endswith(".sv") or name.endswith(".v"):
+                    rels.append(os.path.join(walk_root, name).replace("\\", "/"))
+    return rels
+
+
+def _strip_sv_comments(text: str) -> str:
+    text = re.sub(r"//.*?$", "", text, flags=re.MULTILINE)
+    text = re.sub(r"/\*.*?\*/", "", text, flags=re.DOTALL)
+    return text
+
+
+def _extract_module_ports_from_text(sv_text: str):
+    out = {}
+    if not sv_text:
+        return out
+
+    text = _strip_sv_comments(sv_text)
+
+    # ANSI style: module m(input clk, output logic done, input [7:0] data);
+    ansi_pat = re.compile(
+        r"module\s+([a-zA-Z_][a-zA-Z0-9_$]*)\s*(?:#\s*\(.*?\))?\s*\((.*?)\)\s*;",
+        re.DOTALL,
+    )
+    for m in ansi_pat.finditer(text):
+        mod = m.group(1)
+        body = m.group(2)
+        ports = {}
+        for decl in re.finditer(
+            r"\b(input|output|inout)\b\s*(?:wire|logic|reg\s*)?(?:signed\s*)?(\[[^\]]+\])?\s*([^;,\)]+)",
+            body,
+            flags=re.DOTALL,
+        ):
+            direction = decl.group(1)
+            rng = (decl.group(2) or "").strip()
+            names_blob = decl.group(3)
+            for raw_name in names_blob.split(","):
+                nm = raw_name.strip()
+                nm = re.sub(r"\s*=.*$", "", nm).strip()
+                nm = re.sub(r"\[[^\]]+\]$", "", nm).strip()
+                if re.fullmatch(r"[a-zA-Z_][a-zA-Z0-9_$]*", nm):
+                    ports[nm] = {"dir": direction, "range": rng}
+        if ports:
+            out[mod] = ports
+
+    return out
+
+
+def _load_module_port_db(workflow_dir: str):
+    db = {}
+    for abs_path in _collect_module_files(workflow_dir):
+        try:
+            with open(abs_path, "r", encoding="utf-8") as f:
+                parsed = _extract_module_ports_from_text(f.read())
+            for mod, ports in parsed.items():
+                db[mod] = ports
+        except Exception:
+            pass
+    return db
+
+
+def _port_alias_candidates(port: str):
+    p = (port or "").strip()
+    if not p:
+        return []
+    out = [p]
+    family = {
+        "rst_n": ["reset_n", "resetn", "rstn", "aresetn"],
+        "reset_n": ["rst_n", "resetn", "rstn", "aresetn"],
+        "rst": ["reset"],
+        "reset": ["rst"],
+    }
+    out.extend(family.get(p, []))
+    # reverse lookup
+    for k, vals in family.items():
+        if p in vals and k not in out:
+            out.append(k)
+    dedup = []
+    for x in out:
+        if x not in dedup:
+            dedup.append(x)
+    return dedup
+
+
+def _resolve_real_instance_port(module_port_db: dict, module_name: str, requested_port: str):
+    ports = module_port_db.get(module_name) or {}
+    if requested_port in ports:
+        return requested_port
+    for cand in _port_alias_candidates(requested_port):
+        if cand in ports:
+            return cand
+    return requested_port
+
+
+def _range_for_instance_port(module_port_db: dict, module_name: str, port_name: str):
+    ports = module_port_db.get(module_name) or {}
+    meta = ports.get(port_name) or {}
+    return (meta.get("range") or "").strip()
+
+
+def _assemble_top(top_module: str, intent: dict, variant: str, module_port_db: dict) -> str:
     instances = intent.get("instances", [])
     connections = intent.get("connections", [])
     tieoffs = intent.get("tieoffs", [])
@@ -122,30 +236,33 @@ def _assemble_top(top_module: str, intent: dict, variant: str) -> str:
     variants = intent.get("variants", {}) or {}
     module_overrides = (variants.get(variant, {}) or {}).get("module_overrides", {}) or {}
 
+    instance_module = {}
+    for inst in instances:
+        name = inst.get("name")
+        mod = inst.get("module")
+        if name and mod:
+            instance_module[name] = module_overrides.get(name, mod)
+
     port_map = {inst["name"]: {} for inst in instances if "name" in inst}
-    top_ports = {}   # name -> {"dir": "...", "range": "..."}
-    wire_meta = {}   # wire_name -> range
+    top_ports = {}
+    wire_meta = {}
     wire_decls = []
 
-    # tieoffs
+    driven_instance_ports = set()
+    driven_top_ports = set()
 
     # tieoffs
     for t in tieoffs:
         inst, port, val = _normalize_tieoff_entry(t)
-        if not inst or not port or val is None:
+        if not inst or not port or val is None or inst == "top":
             continue
 
         base, rng = _split_port_and_range(port)
+        real_port = _resolve_real_instance_port(module_port_db, instance_module.get(inst, ""), base)
+        real_rng = _range_for_instance_port(module_port_db, instance_module.get(inst, ""), real_port) or rng
 
-        if inst == "top":
-            continue
-
-        if inst in port_map and base:
-            port_map[inst][base] = _normalize_sv_literal(str(val), rng)
-    
-    # Track destinations to prevent silent double-drives
-    driven_instance_ports = set()
-    driven_top_ports = set()
+        if inst in port_map and real_port:
+            port_map[inst][real_port] = _normalize_sv_literal(str(val), real_rng)
 
     # connections
     for idx, c in enumerate(connections):
@@ -159,142 +276,103 @@ def _assemble_top(top_module: str, intent: dict, variant: str) -> str:
         if not (si and sp_raw and di and dp_raw):
             continue
 
-        sp, sr = _split_port_and_range(sp_raw)
-        dp, dr = _split_port_and_range(dp_raw)
+        sp_req, sr = _split_port_and_range(sp_raw)
+        dp_req, dr = _split_port_and_range(dp_raw)
 
-        if sr and dr and sr != dr:
-            raise ValueError(
-                f"Width mismatch between {src} ({sr}) and {dst} ({dr})"
-            )
+        sp = sp_req if si == "top" else _resolve_real_instance_port(module_port_db, instance_module.get(si, ""), sp_req)
+        dp = dp_req if di == "top" else _resolve_real_instance_port(module_port_db, instance_module.get(di, ""), dp_req)
 
+        sr_real = sr if si == "top" else (_range_for_instance_port(module_port_db, instance_module.get(si, ""), sp) or sr)
+        dr_real = dr if di == "top" else (_range_for_instance_port(module_port_db, instance_module.get(di, ""), dp) or dr)
 
-        width = _merge_range(sr, dr)
+        if sr_real and dr_real and sr_real != dr_real:
+            raise ValueError(f"Width mismatch between {si}.{sp} ({sr_real}) and {di}.{dp} ({dr_real})")
 
-        # Case 1: top -> instance
+        width = _merge_range(sr_real, dr_real)
+
         if si == "top" and di != "top":
             dst_key = (di, dp)
             if dst_key in driven_instance_ports:
-                raise ValueError(
-                    f"Multiple drivers detected for {di}.{dp} during top assembly."
-                )
-            
+                raise ValueError(f"Multiple drivers detected for {di}.{dp} during top assembly.")
             driven_instance_ports.add(dst_key)
 
-
-
             new_dir = _top_dir_for_endpoint(True)
-
             if sp in top_ports and top_ports[sp]["dir"] != new_dir:
                 raise ValueError(f"Conflicting directions inferred for top port '{sp}'")
-
-            top_ports[sp] = {"dir": new_dir, "range": sr}
+            top_ports[sp] = {"dir": new_dir, "range": sr_real}
 
             if di in port_map:
                 port_map[di][dp] = sp
             continue
 
-        # Case 2: instance -> top
         if si != "top" and di == "top":
-            
             if dp in driven_top_ports:
                 raise ValueError(f"Multiple drivers detected for top port '{dp}'")
             driven_top_ports.add(dp)
 
-            top_ports[dp] = {"dir": _top_dir_for_endpoint(False), "range": dr}
+            top_ports[dp] = {"dir": _top_dir_for_endpoint(False), "range": dr_real}
             if si in port_map:
                 port_map[si][sp] = dp
             continue
 
-        # Case 3: top -> top, ignore
         if si == "top" and di == "top":
             continue
 
-        # detect conflicting top port directions
-        if si == "top":
-            pname = sp
-            new_dir = _top_dir_for_endpoint(True)
-        elif di == "top":
-            pname = dp
-            new_dir = _top_dir_for_endpoint(False)
-        else:
-            pname = None
-
-        if pname and pname in top_ports:
-            if top_ports[pname]["dir"] != new_dir:
-                raise ValueError(
-                    f"Conflicting directions inferred for top port '{pname}'"
-                )
-
-
-
-        # Case 4: instance -> instance
         dst_key = (di, dp)
         if dst_key in driven_instance_ports:
             raise ValueError(f"Multiple drivers detected for {di}.{dp} during top assembly.")
         driven_instance_ports.add(dst_key)
-   
 
-        w = _wire_name(idx, src, dst)
+        w = _wire_name(idx, f"{si}.{sp}", f"{di}.{dp}")
         wire_meta[w] = width
         if si in port_map:
             port_map[si][sp] = w
         if di in port_map:
             port_map[di][dp] = w
-    
-
 
     for w in sorted(wire_meta.keys()):
         rng = wire_meta[w]
-        if rng:
-            wire_decls.append(f"  logic {rng} {w};")
-        else:
-            wire_decls.append(f"  logic {w};")
+        wire_decls.append(f"  logic {rng} {w};" if rng else f"  logic {w};")
 
-    # module header
     lines = []
     port_items = []
     for pname in sorted(top_ports.keys()):
         meta = top_ports[pname]
         d = meta["dir"]
         r = meta["range"]
-        if r:
-            port_items.append(f"  {d} logic {r} {pname}")
-        else:
-            port_items.append(f"  {d} logic {pname}")
+        port_items.append(f"  {d} logic {r} {pname}" if r else f"  {d} logic {pname}")
 
     if port_items:
         lines.append(f"module {top_module} (")
         for i, item in enumerate(port_items):
-            comma = "," if i < len(port_items) - 1 else ""
-            lines.append(f"{item}{comma}")
+            lines.append(f"{item}{',' if i < len(port_items)-1 else ''}")
         lines.append(");")
     else:
         lines.append(f"module {top_module} ();")
     lines.append("")
+
+    if variant == "phys":
+        lines.append("  // NOTE: physical top may still use behavioral analog override if no physical macro wrapper was supplied.")
+        lines.append("")
 
     if wire_decls:
         lines.append("  // Auto-generated interconnect wires")
         lines.extend(wire_decls)
         lines.append("")
 
-
-    # instances (sorted for deterministic output)
     for inst in sorted(instances, key=lambda x: x.get("name", "")):
         name = inst.get("name")
-        module = inst.get("module")
+        module = instance_module.get(name, inst.get("module"))
         if not name or not module:
             continue
 
-        module = module_overrides.get(name, module)
         pm = port_map.get(name, {})
-
         if pm:
             lines.append(f"  {module} {name} (")
             keys = sorted(pm.keys())
             for k_i, port in enumerate(keys):
                 rhs = pm[port]
-                comma = "," if k_i < len(keys) - 1 else ""
-                lines.append(f"    .{port}({rhs}){comma}")
+                lines.append(f"    .{port}({rhs}){',' if k_i < len(keys)-1 else ''}")
             lines.append("  );")
         else:
             lines.append(f"  {module} {name} ();")
@@ -302,6 +380,8 @@ def _assemble_top(top_module: str, intent: dict, variant: str) -> str:
 
     lines.append("endmodule")
     return "\n".join(lines)
+
+
 
 
 def run_agent(state: dict) -> dict:
@@ -327,6 +407,10 @@ def run_agent(state: dict) -> dict:
     top_base = (top_cfg.get("base_name") or state.get("soc_top_name") or state.get("top_module") or "soc_top").strip()
     top_sim = (top_cfg.get("sim_module") or f"{top_base}_sim").strip()
     top_phys = (top_cfg.get("phys_module") or f"{top_base}_phys").strip()
+
+
+    # NEW: build module port database for alias resolution
+    module_port_db = _load_module_port_db(workflow_dir) if workflow_dir else {}
 
     instances = top_intent.get("instances", []) if isinstance(top_intent, dict) else []
     connections = top_intent.get("connections", []) if isinstance(top_intent, dict) else []
@@ -383,8 +467,10 @@ def run_agent(state: dict) -> dict:
             "system_integration_intent has no usable top-level or inter-instance connectivity. Refusing to generate trivial SoC top."
         )
 
-    sim_code = _assemble_top(top_sim, top_intent, variant="sim")
-    phys_code = _assemble_top(top_phys, top_intent, variant="phys")
+
+
+    sim_code = _assemble_top(top_sim, top_intent, variant="sim", module_port_db=module_port_db)
+    phys_code = _assemble_top(top_phys, top_intent, variant="phys", module_port_db=module_port_db)
 
     variants = top_intent.get("variants", {}) if isinstance(top_intent, dict) else {}
     sim_overrides = ((variants.get("sim") or {}).get("module_overrides") or {})

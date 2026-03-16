@@ -35,40 +35,140 @@ def _infer_topmodule_from_sv(sv_text: str, fallback: str = "soc_top_sim") -> str
                 return name
     return fallback
 
-def _collect_sv_files(root_dir: str):
+def _extract_instantiated_modules_from_top(sv_text: str):
+    """
+    Parse lines like:
+      sensor_controller u_digital (
+      analog_frontend_model u_analog (
+    Returns module names in appearance order, deduped.
+    """
+    mods = []
+    if not sv_text:
+        return mods
+
+    for line in sv_text.splitlines():
+        s = line.strip()
+        if not s or s.startswith("//"):
+            continue
+
+        m = re.match(r"^([a-zA-Z_][a-zA-Z0-9_$]*)\s+([a-zA-Z_][a-zA-Z0-9_$]*)\s*\($", s)
+        if not m:
+            continue
+
+        module_name = m.group(1)
+        instance_name = m.group(2)
+
+        # Only treat actual instance lines as closure inputs
+        if instance_name.startswith("u_"):
+            if module_name not in mods:
+                mods.append(module_name)
+
+    return mods
+
+
+def _extract_defined_modules_from_file(path: str):
+    """
+    Return all module names defined in one SV/V file.
+    """
     out = []
-    if not root_dir or not os.path.isdir(root_dir):
+    txt = _safe_read(path)
+    if not txt:
         return out
 
-    for root, _, files in os.walk(root_dir):
-        for name in sorted(files):
-            if (name.endswith(".sv") or name.endswith(".v")) and not name.endswith("_phys.sv"):
-                out.append(os.path.join(root, name).replace("\\", "/"))
+    for m in re.finditer(r"\bmodule\s+([a-zA-Z_][a-zA-Z0-9_$]*)\b", txt):
+        mod = m.group(1)
+        if mod not in out:
+            out.append(mod)
+
     return out
 
-def _build_verilog_sources_list(workflow_dir: str, soc_top_relpath: str):
-    rels = []
+
+def _index_module_definitions(workflow_dir: str):
+    """
+    Build:
+      module_name -> [relpaths defining it]
+    No guessing, no scoring.
+    """
+    module_to_files = {}
+
+    if not workflow_dir or not os.path.isdir(workflow_dir):
+        return module_to_files
+
+    for root, _, files in os.walk(workflow_dir):
+        for name in sorted(files):
+            if not (name.endswith(".sv") or name.endswith(".v")):
+                continue
+            if name.endswith("_phys.sv"):
+                continue
+
+            abs_path = os.path.join(root, name)
+            rel_path = os.path.relpath(abs_path, workflow_dir).replace("\\", "/")
+
+            defined = _extract_defined_modules_from_file(abs_path)
+            for mod in defined:
+                module_to_files.setdefault(mod, []).append(rel_path)
+
+    return module_to_files
+
+
+def _resolve_required_verilog_sources(workflow_dir: str, soc_top_relpath: str, soc_top_text: str, state: dict):
+    """
+    Deterministic RTL closure:
+      1. include soc_top_sim.sv first
+      2. parse instantiated module names from top
+      3. locate exact defining file for each module
+      4. fail if none or multiple definitions exist
+    """
+    ordered = []
+    debug = {
+        "soc_top_relpath": soc_top_relpath,
+        "instantiated_modules": [],
+        "resolved_modules": {},
+        "missing_modules": [],
+        "ambiguous_modules": {},
+    }
 
     if soc_top_relpath:
-        rels.append(soc_top_relpath.replace("\\", "/"))
+        ordered.append(soc_top_relpath.replace("\\", "/"))
 
-    candidate_roots = [
-        os.path.join(workflow_dir, "digital"),
-        os.path.join(workflow_dir, "analog"),
-        os.path.join(workflow_dir, "spec"),
-        os.path.join(workflow_dir, "rtl"),
-        os.path.join(workflow_dir, "system"),
-    ]
+    required_modules = _extract_instantiated_modules_from_top(soc_top_text)
+    debug["instantiated_modules"] = list(required_modules)
 
-    for root in candidate_roots:
-        for p in _collect_sv_files(root):
-            rel = os.path.relpath(p, workflow_dir).replace("\\", "/")
-            if rel not in rels:
-                rels.append(rel)
+    module_to_files = _index_module_definitions(workflow_dir)
 
-    return rels
+    for mod in required_modules:
+        candidates = module_to_files.get(mod, [])
 
+        if len(candidates) == 1:
+            rel = candidates[0]
+            debug["resolved_modules"][mod] = rel
+            if rel not in ordered:
+                ordered.append(rel)
+        elif len(candidates) == 0:
+            debug["missing_modules"].append(mod)
+        else:
+            debug["ambiguous_modules"][mod] = candidates
 
+    write_artifact(
+        state,
+        "firmware/debug/cocotb_rtl_resolution.json",
+        json.dumps(debug, indent=2),
+        key="cocotb_rtl_resolution.json",
+    )
+
+    if debug["missing_modules"]:
+        raise RuntimeError(
+            "❌ Missing RTL definition files for instantiated modules: "
+            + ", ".join(debug["missing_modules"])
+        )
+
+    if debug["ambiguous_modules"]:
+        raise RuntimeError(
+            "❌ Ambiguous RTL definition files for instantiated modules: "
+            + ", ".join(sorted(debug["ambiguous_modules"].keys()))
+        )
+
+    return ordered
 
 def run_agent(state: dict) -> dict:
     print(f"\n🚀 Running {AGENT_NAME}...")
@@ -288,7 +388,14 @@ FILE: firmware/validate/test_firmware_smoke.py
 
  
 
-    verilog_sources = _build_verilog_sources_list(workflow_dir, soc_top_relpath)
+
+
+    verilog_sources = _resolve_required_verilog_sources(
+        workflow_dir=workflow_dir,
+        soc_top_relpath=soc_top_relpath,
+        soc_top_text=soc_top_text,
+        state=state,
+    )
 
     if "firmware/validate/Makefile" not in files:
         files["firmware/validate/Makefile"] = ""
@@ -311,17 +418,7 @@ include $(shell cocotb-config --makefiles)/Makefile.sim
 
     files["firmware/validate/Makefile"] = deterministic_makefile
 
-    ordered_sources = []
-    for p in [soc_top_relpath] + verilog_sources:
-        if p and p not in ordered_sources:
-            ordered_sources.append(p)
-
-    state["rtl_inputs"] = ordered_sources
-    state["system_rtl_files"] = ordered_sources
-    system_block = state.setdefault("system", {})
-    system_block["rtl_inputs"] = ordered_sources
-
-
+    
 
     # Safety-sanitize only the python files
     for py_path in ("firmware/validate/cocotb_harness.py", "firmware/validate/test_firmware_smoke.py"):
@@ -515,19 +612,21 @@ async def firmware_test(dut):
     state["cocotb_makefile_path"] = "firmware/validate/Makefile"
     state["cocotb_test_paths"] = ["firmware/validate/test_firmware_smoke.py"]
 
-    if soc_top_exists:
-        state["soc_top_sim_path"] = soc_top_relpath
 
-        existing_rtl = state.get("rtl_inputs") or []
-        if not isinstance(existing_rtl, list):
-            existing_rtl = [existing_rtl] if existing_rtl else []
+    final_rtl_inputs = []
+    for p in verilog_sources:
+        if isinstance(p, str) and p.strip() and p not in final_rtl_inputs:
+            final_rtl_inputs.append(p)
 
-        merged_rtl = []
-        for p in existing_rtl + [soc_top_relpath]:
-            if isinstance(p, str) and p.strip() and p not in merged_rtl:
-                merged_rtl.append(p)
-        state["rtl_inputs"] = merged_rtl
+    state["soc_top_sim_path"] = soc_top_relpath
+    state["rtl_inputs"] = final_rtl_inputs
+    state["system_rtl_files"] = final_rtl_inputs
 
+    system_block = state.setdefault("system", {})
+    system_block["rtl_inputs"] = final_rtl_inputs
+    system_block["soc_top_sim_path"] = soc_top_relpath
+
+    
     state["cocotb_bundle_ready"] = soc_top_exists
     state["cocotb_soc_top_exists"] = soc_top_exists
 

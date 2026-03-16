@@ -72,74 +72,33 @@ def run_agent(state: dict) -> dict:
 - Missing values are reported as unavailable rather than inferred.
 """
    
-    spec_text = (state.get("spec_text") or state.get("spec") or "").strip()
-    goal = (state.get("goal") or "").strip()
-    toolchain = state.get("toolchain") or {}
-    toggles = state.get("toggles") or {}
-   
-    spec_text = (state.get("spec_text") or state.get("spec") or "").strip()
-    goal = (state.get("goal") or "").strip()
-    toolchain = state.get("toolchain") or {}
-    toggles = state.get("toggles") or {}
-
-    prompt = f"""USER SPEC:
-{spec_text}
-
-GOAL:
-{goal}
-
-COSIM EXECUTION SUMMARY:
-{cosim_summary if cosim_summary else "(not available)"}
-
-COVERAGE SUMMARY:
-{coverage_summary if coverage_summary else "(not available)"}
-
-TOOLCHAIN:
-{json.dumps(toolchain, indent=2)}
-
-TOGGLES:
-{json.dumps(toggles, indent=2)}
-
-TASK:
-Generate validation report from cosim logs and coverage.
-
-RULES:
-- Prefer COSIM + COVERAGE artifacts when available.
-- Fall back to USER SPEC if artifacts are missing.
-
-OUTPUT REQUIREMENTS:
-- Write the primary output to match this path: firmware/validate/validation_report.md
-- Keep it implementation-ready and consistent with Rust + Cargo + Verilator + Cocotb assumptions.
-- If execution summary indicates blocked or missing inputs, report that explicitly.
-- Do NOT invent successful execution.
-- Do NOT invent coverage percentages.
-- If data is unavailable, say "unavailable" or "blocked" instead of assuming values.
-"""
-    out = deterministic_report
+     out = deterministic_report
 
     if not cosim_summary and not coverage_summary:
         out = """# Validation Report
 
-- Co-simulation summary: unavailable
-- Coverage summary: unavailable
-- Validation status: blocked
+- Co-simulation overall status: unavailable
+- Readiness status: unavailable
+- Execution attempted: unavailable
+- Executed tests: unavailable
+- Passed tests: unavailable
+- Failed tests: unavailable
+
+## Coverage
+- Functional coverage: unavailable
+- RTL coverage: unavailable
+- Assertion coverage: unavailable
+- Coverage available: unavailable
 
 ## Notes
 - Required downstream execution artifacts were not found.
 """
-    elif not out.strip():
-        out = f"""# Validation Report
-
-- Co-simulation summary: {"available" if cosim_summary else "unavailable"}
-- Coverage summary: {"available" if coverage_summary else "unavailable"}
-- Validation status: generated
-
-## Notes
-- Report was generated from available downstream artifacts.
-- Missing data is reported as unavailable rather than assumed.
-"""
 
     write_artifact(state, OUTPUT_PATH, out, key=OUTPUT_PATH.split("/")[-1])
+
+    state["validation_report_path"] = OUTPUT_PATH
+    state["firmware_validation_report_path"] = OUTPUT_PATH
+    state["validation_report_generated"] = True
 
     # lightweight state update for downstream agents
     embedded = state.setdefault("embedded", {})

@@ -16,6 +16,15 @@ OUTPUT_MEMORY_X   = "firmware/build/memory.x"
 OUTPUT_LIB_RS     = "firmware/src/main.rs"
 OUTPUT_PANIC_RS   = "firmware/src/panic.rs"
 
+
+def _write_build_result(state, payload: dict):
+    write_artifact(
+        state,
+        "firmware/debug/elf_build_result.json",
+        json.dumps(payload, indent=2),
+        key="elf_build_result.json",
+    )
+
 def _safe_read(path):
     try:
         if path and os.path.isfile(path):
@@ -41,12 +50,16 @@ def run_agent(state: dict) -> dict:
     hal_text = (
         state.get("firmware_hal_code")
         or (state.get("firmware") or {}).get("hal_code")
+        or _safe_read(os.path.join(workflow_dir, "firmware/hal/registers.rs"))
     )
 
     driver_text = (
         state.get("firmware_driver_code")
         or (state.get("firmware") or {}).get("driver_code")
+        or _safe_read(os.path.join(workflow_dir, "firmware/drivers/driver_scaffold.rs"))
     )
+
+
 
     regmap_text = json.dumps(regmap_obj, indent=2) if regmap_obj else _safe_read(os.path.join(workflow_dir, "firmware/register_map.json"))
 
@@ -445,6 +458,19 @@ ls firmware/build/target/{resolved_target_triple}/release/{resolved_bin_name}.el
         build_block["missing_required_files"] = missing_required
         state["firmware_elf_exists"] = False
         state["status"] = "⚠️ ELF build blocked: required firmware build files missing"
+
+        write_build_result(state, {
+            "agent": AGENT_NAME,
+            "target_triple": resolved_target_triple,
+            "bin_name": bin_name,
+            "cargo_workspace_dir": cargo_workspace_dir,
+            "canonical_elf_relpath": f"firmware/build/target/{resolved_target_triple}/release/{bin_name}.elf",
+            "build_attempted": False,
+            "build_succeeded": False,
+            "missing_required_files": missing_required,
+            "stdout_tail": "",
+            "stderr_tail": "Required firmware build files missing before cargo build.",
+        })
         return state
     cargo_target_abs = os.path.join(cargo_workspace_dir, "target", resolved_target_triple, "release", bin_name)
 
@@ -522,6 +548,19 @@ ls firmware/build/target/{resolved_target_triple}/release/{resolved_bin_name}.el
         build_block["build_stderr"] = build_stderr[-4000:]
         build_block["build_instructions_path"] = OUTPUT_PATH
         state["status"] = f"⚠️ ELF not produced at canonical path: {elf_relpath}"
+        _write_build_result(state, {
+            "agent": AGENT_NAME,
+            "target_triple": resolved_target_triple,
+            "bin_name": bin_name,
+            "cargo_workspace_dir": cargo_workspace_dir,
+            "cargo_target_abs": cargo_target_abs,
+            "canonical_elf_relpath": elf_relpath,
+            "build_attempted": build_attempted,
+            "build_succeeded": build_succeeded,
+            "elf_exists": False,
+            "stdout_tail": build_stdout[-4000:],
+            "stderr_tail": build_stderr[-4000:],
+        })
         return state
 
 
@@ -536,6 +575,20 @@ ls firmware/build/target/{resolved_target_triple}/release/{resolved_bin_name}.el
     build_block["build_stdout"] = build_stdout[-4000:]
     build_block["build_stderr"] = build_stderr[-4000:]
     build_block["build_instructions_path"] = OUTPUT_PATH
+
+    _write_build_result(state, {
+        "agent": AGENT_NAME,
+        "target_triple": resolved_target_triple,
+        "bin_name": bin_name,
+        "cargo_workspace_dir": cargo_workspace_dir,
+        "cargo_target_abs": cargo_target_abs,
+        "canonical_elf_relpath": elf_relpath,
+        "build_attempted": build_attempted,
+        "build_succeeded": build_succeeded,
+        "elf_exists": elf_exists,
+        "stdout_tail": build_stdout[-4000:],
+        "stderr_tail": build_stderr[-4000:],
+    })
 
     return state
 
