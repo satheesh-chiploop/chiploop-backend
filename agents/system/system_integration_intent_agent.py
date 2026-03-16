@@ -165,12 +165,24 @@ def _normalize_connection_entries(intent: dict, digital_sigs: dict, analog_sigs:
             non_tops = []
 
             for ep in endpoints:
-                if not isinstance(ep, dict):
+
+                # Case A — string endpoint: "u_inst.port"
+                if isinstance(ep, str):
+                    inst, port = _parse_ep(ep)
+                    if inst == "top":
+                        tops.append(ep)
+                    elif inst and port:
+                        non_tops.append((ep, inst, port))
                     continue
-                if ep.get("top_port"):
-                    tops.append(f'top.{ep["top_port"]}')
-                elif ep.get("instance") and ep.get("port"):
-                    non_tops.append((f'{ep["instance"]}.{ep["port"]}', ep["instance"], ep["port"]))
+
+                # Case B — dict endpoint
+                if isinstance(ep, dict):
+                    if ep.get("top_port"):
+                        tops.append(f'top.{ep["top_port"]}')
+                    elif ep.get("instance") and ep.get("port"):
+                        non_tops.append(
+                            (f'{ep["instance"]}.{ep["port"]}', ep["instance"], ep["port"])
+                        )
 
             if tops or non_tops:
                 for top_ep in tops:
@@ -196,6 +208,7 @@ def _normalize_connection_entries(intent: dict, digital_sigs: dict, analog_sigs:
                 continue
 
         parsed = []
+        ports = c.get("ports") or []
         for ep in ports:
             inst, port = _parse_ep(ep)
             if inst and port:

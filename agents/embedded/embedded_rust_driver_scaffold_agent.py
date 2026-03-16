@@ -165,6 +165,13 @@ OUTPUT REQUIREMENTS:
         out = out.replace("registers::register_block()", "register_block()")
         out = out.replace("registers::RegisterBlock", "RegisterBlock")
 
+    # Normalize MMIO register access patterns
+    out = re.sub(
+        r"let\s+(\w+)\s*=\s*register_block\.(\w+)\s*;",
+        r"let \1 = &register_block.\2;",
+        out,
+    )
+
     write_artifact(state, OUTPUT_PATH, out, key=OUTPUT_PATH.split("/")[-1])
 
     embedded = state.setdefault("embedded", {})
