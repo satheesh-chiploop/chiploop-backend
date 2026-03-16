@@ -83,11 +83,48 @@ def _extract_defined_modules_from_file(path: str):
     return out
 
 
+def _is_allowed_impl_file(rel_path: str) -> bool:
+    rel = rel_path.replace("\\", "/")
+
+    allowed_prefixes = (
+        "digital/rtl_refactored/",
+        "digital/rtl/",
+        "analog/",
+        "system/integration/",
+    )
+    if not rel.startswith(allowed_prefixes):
+        return False
+
+    banned_substrings = [
+        "/spec/",
+        "hierarchy_compile",
+        "/firmware/",
+        "/handoff/",
+        "/signoff/",
+        "/validate/",
+        "/coverage",
+        "/assert",
+        "/assertions",
+        "/sva",
+        "/tb_",
+    ]
+    banned_suffixes = [
+        "_tb.sv",
+        "_tb.v",
+    ]
+
+    if any(x in rel for x in banned_substrings):
+        return False
+    if any(rel.endswith(x) for x in banned_suffixes):
+        return False
+
+    return rel.endswith(".sv") or rel.endswith(".v")
+
 def _index_module_definitions(workflow_dir: str):
     """
     Build:
       module_name -> [relpaths defining it]
-    No guessing, no scoring.
+    Only implementation RTL is indexed.
     """
     module_to_files = {}
 
@@ -96,19 +133,18 @@ def _index_module_definitions(workflow_dir: str):
 
     for root, _, files in os.walk(workflow_dir):
         for name in sorted(files):
-            if not (name.endswith(".sv") or name.endswith(".v")):
-                continue
-            if name.endswith("_phys.sv"):
-                continue
-
             abs_path = os.path.join(root, name)
             rel_path = os.path.relpath(abs_path, workflow_dir).replace("\\", "/")
+
+            if not _is_allowed_impl_file(rel_path):
+                continue
 
             defined = _extract_defined_modules_from_file(abs_path)
             for mod in defined:
                 module_to_files.setdefault(mod, []).append(rel_path)
 
     return module_to_files
+
 
 
 def _resolve_required_verilog_sources(workflow_dir: str, soc_top_relpath: str, soc_top_text: str, state: dict):

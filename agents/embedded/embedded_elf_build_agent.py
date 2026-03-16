@@ -459,7 +459,7 @@ ls firmware/build/target/{resolved_target_triple}/release/{resolved_bin_name}.el
         state["firmware_elf_exists"] = False
         state["status"] = "⚠️ ELF build blocked: required firmware build files missing"
 
-        write_build_result(state, {
+        _write_build_result(state, {
             "agent": AGENT_NAME,
             "target_triple": resolved_target_triple,
             "bin_name": bin_name,
