@@ -309,8 +309,10 @@ pub extern "C" fn _start() -> ! {
                 new_ct_lines.append(ln)
         ct = "\n".join(new_ct_lines).strip() + "\n"
 
-        if '[[bin]]' not in ct and f'name = "{bin_name}"' not in ct:
+        if '[[bin]]' not in ct:
             ct += f'\n[[bin]]\nname = "{bin_name}"\npath = "../src/main.rs"\n'
+
+
 
         files[OUTPUT_CARGO_TOML] = ct
 

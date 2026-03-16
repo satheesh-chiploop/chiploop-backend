@@ -42,7 +42,7 @@ def _collect_sv_files(root_dir: str):
 
     for root, _, files in os.walk(root_dir):
         for name in sorted(files):
-            if name.endswith(".sv") or name.endswith(".v"):
+            if (name.endswith(".sv") or name.endswith(".v")) and not name.endswith("_phys.sv"):
                 out.append(os.path.join(root, name).replace("\\", "/"))
     return out
 

@@ -389,6 +389,10 @@ def _semantic_group(name: str) -> str:
 def _build_deterministic_rescue_connections(intent: dict, digital_sigs: dict, analog_sigs: dict):
 
 
+     
+    inst2mod = _instance_to_module(intent)
+
+
     instances = list(inst2mod.keys())
     if len(instances) < 2:
         return [], []
@@ -401,8 +405,6 @@ def _build_deterministic_rescue_connections(intent: dict, digital_sigs: dict, an
 
 
     
-    inst2mod = _instance_to_module(intent)
-
 
 
     d_ports = _get_instance_ports(intent, inst_a, digital_sigs, analog_sigs)
