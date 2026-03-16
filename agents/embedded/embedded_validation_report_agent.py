@@ -72,7 +72,7 @@ def run_agent(state: dict) -> dict:
 - Missing values are reported as unavailable rather than inferred.
 """
    
-     out = deterministic_report
+    out = deterministic_report
 
     if not cosim_summary and not coverage_summary:
         out = """# Validation Report
