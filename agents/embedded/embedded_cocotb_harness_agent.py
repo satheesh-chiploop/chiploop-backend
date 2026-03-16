@@ -28,6 +28,40 @@ def _infer_topmodule_from_sv(sv_text: str, fallback: str = "soc_top_sim") -> str
                 return name
     return fallback
 
+def _collect_sv_files(root_dir: str):
+    out = []
+    if not root_dir or not os.path.isdir(root_dir):
+        return out
+
+    for root, _, files in os.walk(root_dir):
+        for name in sorted(files):
+            if name.endswith(".sv") or name.endswith(".v"):
+                out.append(os.path.join(root, name).replace("\\", "/"))
+    return out
+
+
+def _build_verilog_sources_list(workflow_dir: str, soc_top_relpath: str):
+    rels = []
+
+    if soc_top_relpath:
+        rels.append(soc_top_relpath.replace("\\", "/"))
+
+    # Digital RTL
+    dig_root = os.path.join(workflow_dir, "digital")
+    for p in _collect_sv_files(dig_root):
+        rel = os.path.relpath(p, workflow_dir).replace("\\", "/")
+        if rel not in rels:
+            rels.append(rel)
+
+    # Analog behavioral/model RTL for sim
+    ana_root = os.path.join(workflow_dir, "analog")
+    for p in _collect_sv_files(ana_root):
+        rel = os.path.relpath(p, workflow_dir).replace("\\", "/")
+        if rel not in rels:
+            rels.append(rel)
+
+    return rels
+
 def run_agent(state: dict) -> dict:
     print(f"\n🚀 Running {AGENT_NAME}...")
     ensure_workflow_dir(state)
@@ -236,6 +270,34 @@ FILE: firmware/validate/test_firmware_smoke.py
             "firmware/validate/cocotb_harness.py": out.strip() + "\n"
         }
 
+    verilog_sources = _build_verilog_sources_list(workflow_dir, soc_top_relpath)
+
+    if "firmware/validate/Makefile" not in files:
+        files["firmware/validate/Makefile"] = ""
+
+    topmodule = _infer_topmodule_from_sv(soc_top_text, fallback="soc_top_sim")
+
+    verilog_sources_str = " \\\n\t".join(verilog_sources) if verilog_sources else soc_top_relpath
+
+    deterministic_makefile = f"""TOPLEVEL_LANG = verilog
+TOPLEVEL = {topmodule}
+MODULE = test_firmware_smoke
+
+VERILOG_SOURCES = \\
+\t{verilog_sources_str}
+
+SIM ?= verilator
+
+include $(shell cocotb-config --makefiles)/Makefile.sim
+"""
+
+    files["firmware/validate/Makefile"] = deterministic_makefile
+
+    state["rtl_inputs"] = verilog_sources
+    state["system_rtl_files"] = verilog_sources
+    system_block = state.setdefault("system", {})
+    system_block["rtl_inputs"] = verilog_sources
+
     # Safety-sanitize only the python files
     for py_path in ("firmware/validate/cocotb_harness.py", "firmware/validate/test_firmware_smoke.py"):
         if py_path in files:
@@ -281,6 +343,8 @@ FILE: firmware/validate/test_firmware_smoke.py
 
 
 
+
+
     # Always harden / normalize Makefile because LLM output may exist but be wrong.
 
         # Resolve Verilog source path relative to Makefile location
@@ -290,24 +354,7 @@ FILE: firmware/validate/test_firmware_smoke.py
         state["status"] = f"❌ SoC top RTL not found for cocotb harness generation: {soc_top_relpath}"
         return state
 
-        files["firmware/validate/Makefile"] = f"""TOPLEVEL_LANG = verilog
-VERILOG_SOURCES = {verilog_path}
-TOPLEVEL = {inferred_top}
-MODULE = test_firmware_smoke
-SIM = verilator
-
-include $(shell cocotb-config --makefiles)/Makefile.sim
-"""
-    else:
-        files["firmware/validate/Makefile"] = f"""TOPLEVEL_LANG = verilog
-VERILOG_SOURCES = {verilog_path}
-TOPLEVEL = {inferred_top}
-MODULE = test_firmware_smoke
-SIM = verilator
-
-include $(shell cocotb-config --makefiles)/Makefile.sim
-"""
-
+ 
 
 
     def _is_weak_python(py: str) -> bool:

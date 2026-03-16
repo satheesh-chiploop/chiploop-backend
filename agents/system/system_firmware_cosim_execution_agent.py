@@ -497,7 +497,12 @@ def run_agent(state: dict) -> dict:
     assertions_path = _find_assertions_path(state)
     rtl_inputs = _find_verilog_inputs(state, soc_top_sim_path)
 
-    workflow_dir = state.get("workflow_dir") or ""
+
+
+    workflow_dir = state.get("workflow_dir")
+    if not workflow_dir:
+        state["status"] = "❌ workflow_dir missing for cosim execution"
+        return state
 
     soc_top_exists = False
     if soc_top_sim_path:

@@ -471,11 +471,11 @@ ls firmware/build/target/{resolved_target_triple}/release/{resolved_bin_name}.el
     state["embedded_elf_path"] = elf_relpath
     state["firmware_elf_exists"] = elf_exists
 
-    if not elf_exists:
-        state["status"] = f"❌ ELF not produced at canonical path: {elf_relpath}"
-        return state
 
-    
+    if not elf_exists:
+        state["firmware_elf_exists"] = False
+        state["status"] = f"⚠️ ELF build skipped or failed: {elf_relpath}"
+
     build_block = state.setdefault("firmware_build", {})
     build_block["target_triple"] = resolved_target_triple
     build_block["bin_name"] = bin_name

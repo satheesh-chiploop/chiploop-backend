@@ -23,6 +23,38 @@ def _parse_endpoint(ep: str):
     inst, port = ep.split(".", 1)
     return inst.strip(), port.strip()
 
+def _normalize_sv_literal(val: str, port_range: str = "") -> str:
+    s = str(val).strip()
+
+    # Already looks like a legal SV literal
+    if "'" in s:
+        return s
+
+    # Hex style: 0x1234 -> 32'h1234, or sized by port range when obvious
+    if re.fullmatch(r"0[xX][0-9a-fA-F]+", s):
+        hex_digits = s[2:]
+        if port_range:
+            m = re.fullmatch(r"\[(\d+):(\d+)\]", port_range.strip())
+            if m:
+                msb = int(m.group(1))
+                lsb = int(m.group(2))
+                width = abs(msb - lsb) + 1
+                return f"{width}'h{hex_digits}"
+        return f"32'h{hex_digits}"
+
+    # Binary/decimal convenience
+    if s in ("0", "1"):
+        if port_range:
+            m = re.fullmatch(r"\[(\d+):(\d+)\]", port_range.strip())
+            if m:
+                msb = int(m.group(1))
+                lsb = int(m.group(2))
+                width = abs(msb - lsb) + 1
+                return f"{width}'d{s}"
+        return f"1'b{s}"
+
+    return s
+
 
 def _split_port_and_range(port: str):
     """
@@ -96,16 +128,21 @@ def _assemble_top(top_module: str, intent: dict, variant: str) -> str:
     wire_decls = []
 
     # tieoffs
+
+    # tieoffs
     for t in tieoffs:
         inst, port, val = _normalize_tieoff_entry(t)
         if not inst or not port or val is None:
             continue
+
         base, rng = _split_port_and_range(port)
+
         if inst == "top":
-            # top-level tieoff does not make sense; skip
             continue
+
         if inst in port_map and base:
-            port_map[inst][base] = str(val)
+            port_map[inst][base] = _normalize_sv_literal(str(val), rng)
+    
     # Track destinations to prevent silent double-drives
     driven_instance_ports = set()
     driven_top_ports = set()
