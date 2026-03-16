@@ -336,8 +336,43 @@ def run_agent(state: dict) -> dict:
     if not connections and not tieoffs:
         raise ValueError("system_integration_intent has no connections/tieoffs. Refusing to generate stub SoC top.")
 
+    top_edges = [
+        c for c in connections
+        if isinstance(c, dict) and (
+            str(c.get("from", "")).startswith("top.") or
+            str(c.get("to", "")).startswith("top.")
+        )
+    ]
+
+    inst_to_inst_edges = [
+        c for c in connections
+        if isinstance(c, dict)
+        and not str(c.get("from", "")).startswith("top.")
+        and not str(c.get("to", "")).startswith("top.")
+    ]
+
+    if not top_edges and not inst_to_inst_edges:
+        save_text_artifact_and_record(
+            workflow_id,
+            agent_name,
+            "system/integration",
+            "top_assembly_bad_intent.json",
+            json.dumps(top_intent, indent=2),
+        )
+        raise ValueError(
+            "system_integration_intent has no usable top-level or inter-instance connectivity. Refusing to generate trivial SoC top."
+        )
+
     sim_code = _assemble_top(top_sim, top_intent, variant="sim")
     phys_code = _assemble_top(top_phys, top_intent, variant="phys")
+
+    variants = top_intent.get("variants", {}) if isinstance(top_intent, dict) else {}
+    sim_overrides = ((variants.get("sim") or {}).get("module_overrides") or {})
+    phys_overrides = ((variants.get("phys") or {}).get("module_overrides") or {})
+
+    if "u_analog" in sim_overrides and "u_analog" in phys_overrides:
+        if sim_overrides["u_analog"] == phys_overrides["u_analog"]:
+            print("⚠️ WARNING: sim and phys analog overrides are identical; physical top may still be behavioral.")
 
     sim_rel = f"system/integration/{top_sim}.sv"
     phys_rel = f"system/integration/{top_phys}.sv"

@@ -283,6 +283,21 @@ pub extern "C" fn _start() -> ! {
         ct = ct.replace('no_std = "0.1.0"\n', "")
         ct = ct.replace('no_std = "0.1"\n', "")
 
+        # 2b) Remove bogus [no-std] table and fake core dependency
+        lines = ct.splitlines()
+        cleaned_lines = []
+        in_no_std = False
+        for ln in lines:
+            s = ln.strip()
+            if s == "[no-std]":
+                in_no_std = True
+                continue
+            if in_no_std and s.startswith("[") and s.endswith("]") and s != "[no-std]":
+                in_no_std = False
+            if not in_no_std and 'core = "0.0.0"' not in s and 'core="0.0.0"' not in s:
+                cleaned_lines.append(ln)
+        ct = "\n".join(cleaned_lines).strip() + "\n"
+
         # 3) Ensure package name is valid (no <BIN_NAME>)
         # If model used placeholder, default to a safe name.
         ct_lines = ct.splitlines()
@@ -480,7 +495,6 @@ ls firmware/build/target/{resolved_target_triple}/release/{resolved_bin_name}.el
         state["elf_path"] = elf_relpath
         state["embedded_elf_path"] = elf_relpath
         state["firmware_elf_exists"] = False
-
         build_block = state.setdefault("firmware_build", {})
         build_block["target_triple"] = resolved_target_triple
         build_block["bin_name"] = bin_name
@@ -492,8 +506,8 @@ ls firmware/build/target/{resolved_target_triple}/release/{resolved_bin_name}.el
         build_block["build_stdout"] = build_stdout[-4000:]
         build_block["build_stderr"] = build_stderr[-4000:]
         build_block["build_instructions_path"] = OUTPUT_PATH
-
         state["status"] = f"⚠️ ELF not produced at canonical path: {elf_relpath}"
+        return state
 
 
     build_block = state.setdefault("firmware_build", {})

@@ -64,8 +64,10 @@ OUTPUT REQUIREMENTS:
 - Do NOT invent coverage percentages.
 - If data is unavailable, say "unavailable" or "blocked" instead of assuming values.
 """
-
-    out = llm_chat(prompt, ...)
+    out = llm_chat(
+        prompt,
+        system="You are a verification lead writing a factual validation report. Do not invent execution success or coverage."
+    )
     if not out:
         out = ""
 

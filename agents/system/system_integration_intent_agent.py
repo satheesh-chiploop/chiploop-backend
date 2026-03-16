@@ -348,6 +348,20 @@ def _classify_top_port(norm_name: str):
 
     return None
 
+def _canonical_top_port_name(port_name: str) -> str:
+    n = _normalize_port_name(port_name)
+
+    if "clk" in n or "clock" in n:
+        return "clk"
+
+    # normalize reset-family names
+    if "rstn" in n or "resetn" in n or n in {"rst_n", "reset_n"}:
+        return "rst_n"
+    if "rst" in n or "reset" in n:
+        return "rst"
+
+    return str(port_name).split("[", 1)[0].strip()
+
 
 def _get_instance_ports(intent: dict, inst_name: str, digital_sigs: dict, analog_sigs: dict):
     inst2mod = _instance_to_module(intent)
@@ -375,15 +389,18 @@ def _semantic_group(name: str) -> str:
 def _build_deterministic_rescue_connections(intent: dict, digital_sigs: dict, analog_sigs: dict):
 
 
-    inst2mod = _instance_to_module(intent)
-
     instances = list(inst2mod.keys())
     if len(instances) < 2:
         return [], []
 
-    # assume first two instances are digital + analog
-    inst_a = instances[0]
-    inst_b = instances[1]
+    inst_a = "u_digital" if "u_digital" in inst2mod else instances[0]
+    inst_b = "u_analog" if "u_analog" in inst2mod else next(
+        (x for x in instances if x != inst_a),
+        instances[1]
+    )
+
+
+    
     inst2mod = _instance_to_module(intent)
 
 
@@ -425,7 +442,8 @@ def _build_deterministic_rescue_connections(intent: dict, digital_sigs: dict, an
             if direction not in ("input", "inout"):
                 continue
             if _classify_top_port(pnorm(p)):
-                add_conn(f"top.{name}", f"{inst}.{name}")
+                top_name = _canonical_top_port_name(name)
+                add_conn(f"top.{top_name}", f"{inst}.{name}")
                 driven_inputs.add((inst, name))
                 exposed_top_ports.add(name)
 
@@ -471,7 +489,8 @@ def _build_deterministic_rescue_connections(intent: dict, digital_sigs: dict, an
         if _classify_top_port(pnorm(p)):
             continue
         if (inst_a, name) not in driven_inputs:
-            add_conn(f"top.{name}", f"{inst_a}.{name}")
+            top_name = _canonical_top_port_name(name)
+            add_conn(f"top.{top_name}", f"{inst_a}.{name}")
             driven_inputs.add((inst_a, name))
             exposed_top_ports.add(name)
 
@@ -480,7 +499,8 @@ def _build_deterministic_rescue_connections(intent: dict, digital_sigs: dict, an
         name = pname(p)
         if _classify_top_port(pnorm(p)):
             continue
-        add_conn(f"{inst_a}.{name}", f"top.{name}")
+        top_name = _canonical_top_port_name(name)
+        add_conn(f"top.{top_name}", f"{inst_a}.{name}")
         exposed_top_ports.add(name)
 
     return connections, sorted(exposed_top_ports)
@@ -522,7 +542,7 @@ def _build_generic_fallback_connections(intent: dict, digital_sigs: dict, analog
             pdir = str(p.get("direction") or p.get("dir") or "").lower().strip()
             cls = _classify_top_port(_normalize_port_name(pname))
             if cls and pdir in ("input", "inout"):
-                top_candidates.add(pname)
+                top_candidates.add(_canonical_top_port_name(pname))
 
     for top_port in sorted(top_candidates):
         for inst, ports in inst_ports.items():
@@ -531,8 +551,10 @@ def _build_generic_fallback_connections(intent: dict, digital_sigs: dict, analog
                     continue
                 pname = str(p.get("name") or "").split("[", 1)[0].strip()
                 pdir = str(p.get("direction") or p.get("dir") or "").lower().strip()
-                if pname == top_port and pdir in ("input", "inout"):
+                canonical_top = _canonical_top_port_name(pname)
+                if top_port == canonical_top and pdir in ("input", "inout"):
                     add_conn(f"top.{top_port}", f"{inst}.{pname}")
+
 
     # 2) peer-to-peer exact/normalized-name matching
     producers = defaultdict(list)
@@ -884,6 +906,15 @@ def run_agent(state: dict) -> dict:
 
     analog_phys_module = (
         analog_macro_module
+        or state.get("analog_phys_module")
+        or state.get("analog_macro_name")
+        or state.get("analog_top_module")
+        or state.get("analog_module_name")
+        or _pick_primary_module_name(analog_sigs, "analog_block")
+    ).strip()
+
+    analog_phys_module = (
+        analog_macro_module
         or state.get("analog_top_module")
         or state.get("analog_module_name")
         or _pick_primary_module_name(analog_sigs, "analog_block")
@@ -894,6 +925,9 @@ def run_agent(state: dict) -> dict:
        analog_behavioral_module
        or analog_phys_module
     ).strip()
+
+    if analog_sim_module == analog_phys_module and analog_macro_module:
+        analog_phys_module = analog_macro_module
 
     schema = {
         "top": {
