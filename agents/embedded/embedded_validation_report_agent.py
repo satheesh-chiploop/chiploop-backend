@@ -20,11 +20,62 @@ def run_agent(state: dict) -> dict:
 
     workflow_dir = state.get("workflow_dir") or ""
 
+
+
+
     cosim_summary = _safe_read(os.path.join(workflow_dir, "system/firmware/cosim/system_firmware_execution.json"))
     coverage_summary = (
        _safe_read(os.path.join(workflow_dir, "system/firmware/coverage/system_firmware_coverage_summary.json"))
        or _safe_read(os.path.join(workflow_dir, "coverage/coverage_summary.json"))
     )
+
+    try:
+        cosim_obj = json.loads(cosim_summary) if cosim_summary else {}
+    except Exception:
+        cosim_obj = {}
+
+    try:
+        coverage_obj = json.loads(coverage_summary) if coverage_summary else {}
+    except Exception:
+        coverage_obj = {}
+
+    execution_status = (cosim_obj.get("overall_status") or "unavailable") if isinstance(cosim_obj, dict) else "unavailable"
+    readiness_status = (((cosim_obj.get("readiness") or {}).get("status")) if isinstance(cosim_obj, dict) else None) or "unavailable"
+    attempted = (((cosim_obj.get("results") or {}).get("attempted")) if isinstance(cosim_obj, dict) else None)
+    executed = (((cosim_obj.get("results") or {}).get("executed_test_count")) if isinstance(cosim_obj, dict) else None)
+    passed = (((cosim_obj.get("results") or {}).get("passed_test_count")) if isinstance(cosim_obj, dict) else None)
+    failed = (((cosim_obj.get("results") or {}).get("failed_test_count")) if isinstance(cosim_obj, dict) else None)
+
+    cov_metrics = (coverage_obj.get("coverage_metrics") or {}) if isinstance(coverage_obj, dict) else {}
+    functional_cov = cov_metrics.get("functional_coverage_pct")
+    rtl_cov = cov_metrics.get("rtl_coverage_pct")
+    assertion_cov = cov_metrics.get("assertion_coverage_pct")
+    coverage_available = cov_metrics.get("coverage_available")
+
+    deterministic_report = f"""# Validation Report
+
+- Co-simulation overall status: {execution_status}
+- Readiness status: {readiness_status}
+- Execution attempted: {attempted if attempted is not None else "unavailable"}
+- Executed tests: {executed if executed is not None else "unavailable"}
+- Passed tests: {passed if passed is not None else "unavailable"}
+- Failed tests: {failed if failed is not None else "unavailable"}
+
+## Coverage
+- Functional coverage: {functional_cov if functional_cov is not None else "unavailable"}
+- RTL coverage: {rtl_cov if rtl_cov is not None else "unavailable"}
+- Assertion coverage: {assertion_cov if assertion_cov is not None else "unavailable"}
+- Coverage available: {coverage_available if coverage_available is not None else "unavailable"}
+
+## Notes
+- This report is generated directly from downstream execution and coverage artifacts.
+- Missing values are reported as unavailable rather than inferred.
+"""
+   
+    spec_text = (state.get("spec_text") or state.get("spec") or "").strip()
+    goal = (state.get("goal") or "").strip()
+    toolchain = state.get("toolchain") or {}
+    toggles = state.get("toggles") or {}
    
     spec_text = (state.get("spec_text") or state.get("spec") or "").strip()
     goal = (state.get("goal") or "").strip()
@@ -64,12 +115,7 @@ OUTPUT REQUIREMENTS:
 - Do NOT invent coverage percentages.
 - If data is unavailable, say "unavailable" or "blocked" instead of assuming values.
 """
-    out = llm_chat(
-        prompt,
-        system="You are a verification lead writing a factual validation report. Do not invent execution success or coverage."
-    )
-    if not out:
-        out = ""
+    out = deterministic_report
 
     if not cosim_summary and not coverage_summary:
         out = """# Validation Report

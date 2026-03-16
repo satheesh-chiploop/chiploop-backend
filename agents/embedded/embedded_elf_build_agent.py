@@ -320,7 +320,7 @@ pub extern "C" fn _start() -> ! {
     resolved_target_triple = (
         toolchain.get("target_triple")
         or state.get("target_triple")
-        or "unknown-target"
+        or ""
     )
 
     if OUTPUT_CARGO_CFG not in files:
@@ -433,6 +433,19 @@ ls firmware/build/target/{resolved_target_triple}/release/{resolved_bin_name}.el
     elf_relpath = f"firmware/build/target/{resolved_target_triple}/release/{bin_name}.elf"
 
     cargo_workspace_dir = os.path.join(workflow_dir, "firmware", "build")
+    required_srcs = [
+        os.path.join(workflow_dir, "firmware", "src", "main.rs"),
+        os.path.join(workflow_dir, "firmware", "src", "panic.rs"),
+        os.path.join(workflow_dir, "firmware", "build", "Cargo.toml"),
+        os.path.join(workflow_dir, "firmware", "build", ".cargo", "config.toml"),
+    ]
+    missing_required = [p for p in required_srcs if not os.path.isfile(p)]
+    if missing_required:
+        build_block = state.setdefault("firmware_build", {})
+        build_block["missing_required_files"] = missing_required
+        state["firmware_elf_exists"] = False
+        state["status"] = "⚠️ ELF build blocked: required firmware build files missing"
+        return state
     cargo_target_abs = os.path.join(cargo_workspace_dir, "target", resolved_target_triple, "release", bin_name)
 
     build_attempted = False

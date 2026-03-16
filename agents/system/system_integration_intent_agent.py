@@ -79,6 +79,54 @@ def _parse_simple_module_ports_from_rtl_text(text: str):
     return module_name, ports
 
 
+def _extract_connection_candidates_from_text(raw: str):
+    out = []
+    if not raw:
+        return out
+
+    text = raw.replace("\r\n", "\n")
+
+    pair_pat = re.compile(
+        r'(?is)(?:^|\n)\s*[-*]?\s*(?:from|src|source)\s*:\s*(.+?)\s*'
+        r'(?:\n\s*(?:to|dst|dest|destination)\s*:\s*(.+?))(?=\n\s*(?:-|[*]|\w+\s*:)|\Z)'
+    )
+    for m in pair_pat.finditer(text):
+        src = _coerce_endpoint_token(m.group(1).strip().strip('"').strip("'"))
+        dst = _coerce_endpoint_token(m.group(2).strip().strip('"').strip("'"))
+        if src and dst:
+            out.append({"from": src, "to": dst})
+
+    list_pat = re.compile(r'(?is)(?:^|\n)\s*[-*]?\s*(endpoints|ports)\s*:\s*\[(.*?)\]')
+    for m in list_pat.finditer(text):
+        key = m.group(1).strip()
+        items = [s.strip().strip('"').strip("'") for s in m.group(2).split(",") if s.strip()]
+        if len(items) >= 2:
+            out.append({key: items})
+
+    return out
+
+
+def _fallback_intent_from_raw_text(raw: str, top_base: str, digital_module: str, analog_phys_module: str, schema: dict):
+    return {
+        "top": {
+            "base_name": top_base,
+            "sim_module": f"{top_base}_sim",
+            "phys_module": f"{top_base}_phys",
+        },
+        "instances": [
+            {"name": "u_digital", "module": digital_module},
+            {"name": "u_analog", "module": analog_phys_module},
+        ],
+        "connections": _extract_connection_candidates_from_text(raw),
+        "tieoffs": [],
+        "variants": {
+            "sim": schema["variants"]["sim"],
+            "phys": schema["variants"]["phys"],
+        },
+        "notes": ["Recovered integration intent from raw text fallback parser."],
+    }
+
+
 def _load_rtl_text_if_exists(path: str):
     try:
         if path and os.path.isfile(path):
@@ -115,22 +163,43 @@ def _normalize_connection_entries(intent: dict, digital_sigs: dict, analog_sigs:
         if not isinstance(c, dict):
             continue
 
-        # Case 1: already point-to-point
-        src = c.get("from")
-        dst = c.get("to")
+       
+        # Case 1: point-to-point, including alias keys and dict endpoint objects
+        src = c.get("from") or c.get("src") or c.get("source")
+        dst = c.get("to") or c.get("dst") or c.get("dest") or c.get("destination")
+
         if src and dst:
-            add_edge(src, dst)
-            continue
+            src_ep = _coerce_endpoint_token(src)
+            dst_ep = _coerce_endpoint_token(dst)
+            if src_ep and dst_ep:
+                add_edge(src_ep, dst_ep)
+                continue
+
+        # Case 1b: source + sinks
+        src_many = c.get("source") or c.get("src") or c.get("from")
+        sinks = c.get("sinks") or c.get("dests") or c.get("destinations")
+        if src_many and isinstance(sinks, list):
+            src_ep = _coerce_endpoint_token(src_many)
+            if src_ep:
+                for s in sinks:
+                    dst_ep = _coerce_endpoint_token(s)
+                    if dst_ep:
+                        add_edge(src_ep, dst_ep)
+                continue
+     
 
         # Case 2: net-style multi-port connection
         # Case 2: net-style multi-port connection using "ports"
+
         ports = c.get("ports")
         if isinstance(ports, list) and len(ports) >= 2:
             parsed = []
             for ep in ports:
-                inst, port = _parse_ep(ep)
+                ep_str = _coerce_endpoint_token(ep)
+                inst, port = _parse_ep(ep_str) if ep_str else (None, None)
                 if inst and port:
-                    parsed.append((ep, inst, port))
+                    parsed.append((ep_str, inst, port))
+
 
             if len(parsed) >= 2:
                 tops = [ep for ep, inst, port in parsed if inst == "top"]
@@ -658,6 +727,49 @@ def _parse_ep(ep: str):
     inst, port = ep.split(".", 1)
     return inst.strip(), port.split("[", 1)[0].strip()
 
+def _parse_ep(ep: str):
+    if not ep or "." not in ep:
+        return None, None
+    inst, port = ep.split(".", 1)
+    return inst.strip(), port.split("[", 1)[0].strip()
+
+
+def _coerce_endpoint_token(ep):
+    """
+    Accept:
+      "u_digital.clk"
+      {"instance":"u_digital","port":"clk"}
+      {"top":"clk"}
+      {"top_port":"clk"}
+      {"module":"top","port":"clk"}
+      {"inst":"u_digital","name":"clk"}
+    Return:
+      canonical "inst.port" string or None
+    """
+    if isinstance(ep, str):
+        ep = ep.strip()
+        return ep if "." in ep else None
+
+    if not isinstance(ep, dict):
+        return None
+
+    if ep.get("top_port"):
+        return f'top.{str(ep["top_port"]).strip()}'
+
+    if ep.get("top"):
+        return f'top.{str(ep["top"]).strip()}'
+
+    inst = ep.get("instance") or ep.get("inst") or ep.get("module")
+    port = ep.get("port") or ep.get("name") or ep.get("signal")
+
+    if inst and str(inst).strip().lower() == "top" and port:
+        return f'top.{str(port).strip()}'
+
+    if inst and port:
+        return f'{str(inst).strip()}.{str(port).strip()}'
+
+    return None
+
 
 def _port_dir_from_sigs(sig_db: dict, module_name: str, port_name: str):
     if not isinstance(sig_db, dict) or not module_name or not port_name:
@@ -1019,9 +1131,23 @@ Now output JSON only.
 
     try:
 
-        intent = safe_json_load(cleaned) if cleaned else {}
-        if not isinstance(intent, dict):
+        intent = {}
+        parse_error = None
+
+        try:
+            intent = safe_json_load(cleaned) if cleaned else {}
+        except Exception as pe:
+            parse_error = pe
             intent = {}
+
+        if not isinstance(intent, dict) or not intent:
+            intent = _fallback_intent_from_raw_text(
+                raw=raw,
+                top_base=top_base,
+                digital_module=digital_module,
+                analog_phys_module=analog_phys_module,
+                schema=schema,
+            )
 
         # Seed defaults early so normalization/rescue always has structure to work with
         intent.setdefault("top", {})
@@ -1156,6 +1282,13 @@ Now output JSON only.
         state["status"] = "❌ System integration intent has no connections/tieoffs after sanitize + generic fallback."
         state["system_integration_intent"] = intent
         return state
+
+    intent_json = json.dumps(intent, indent=2)
+
+    local_intent_abs = os.path.join(workflow_dir, "system", "integration", "system_integration_intent.json")
+    os.makedirs(os.path.dirname(local_intent_abs), exist_ok=True)
+    with open(local_intent_abs, "w", encoding="utf-8") as f:
+        f.write(intent_json)
 
     # Persist artifact
     try:

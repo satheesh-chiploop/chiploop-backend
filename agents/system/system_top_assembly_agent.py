@@ -309,6 +309,15 @@ def run_agent(state: dict) -> dict:
     workflow_id = state.get("workflow_id")
 
     top_intent = state.get("system_integration_intent") or {}
+    workflow_dir = state.get("workflow_dir") or ""
+    if not top_intent and workflow_dir:
+        intent_abs = os.path.join(workflow_dir, "system", "integration", "system_integration_intent.json")
+        if os.path.isfile(intent_abs):
+            try:
+                with open(intent_abs, "r", encoding="utf-8") as f:
+                    top_intent = json.load(f)
+            except Exception:
+                top_intent = {}
     print("DEBUG top assembly file:", __file__)
     print("DEBUG incoming top_intent type:", type(top_intent).__name__)
     print("DEBUG incoming top_intent:", json.dumps(top_intent, indent=2) if isinstance(top_intent, dict) else top_intent)
@@ -334,7 +343,18 @@ def run_agent(state: dict) -> dict:
         raise ValueError("system_integration_intent missing instances. Refusing to generate stub SoC top.")
 
     if not connections and not tieoffs:
+        save_text_artifact_and_record(
+            workflow_id,
+            agent_name,
+            "system/integration",
+            "top_assembly_bad_intent.json",
+            json.dumps({
+                "reason": "no_connections_or_tieoffs",
+                "intent": top_intent,
+            }, indent=2),
+        )
         raise ValueError("system_integration_intent has no connections/tieoffs. Refusing to generate stub SoC top.")
+
 
     top_edges = [
         c for c in connections
