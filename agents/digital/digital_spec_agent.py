@@ -233,6 +233,19 @@ Minimum expectation:
 - interrupt modules must contain logic that derives irq from status inputs
 
 A module with only ports and comments is invalid. Regenerate until all modules contain real logic.
+
+PLACEHOLDER RTL IS FORBIDDEN
+
+Do not use placeholder expressions or comment-based pseudo-code inside assignments or conditions.
+The following are invalid and must never appear in the output:
+- reg <= /* ... */;
+- wire = /* ... */;
+- if (/* ... */)
+- case (/* ... */)
+- comments used in place of executable logic
+
+If exact protocol behavior is not specified, implement the simplest deterministic synthesizable behavior instead.
+Use constants, simple counters, simple state bits, or pass-through logic rather than placeholders.
 """.strip()
     # -----------------------------------------------------------------
     # 2️⃣ LLM Call
