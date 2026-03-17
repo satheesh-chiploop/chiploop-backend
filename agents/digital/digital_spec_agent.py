@@ -182,187 +182,208 @@ Supported JSON forms:
   "rtl_output_file": "module_name.v"
 }}
 
-JSON RULES
-- Every module must include name, ports, functionality, rtl_output_file.
+STRICT OUTPUT RULES
+
+- Output valid JSON first, then Verilog.
+- No markdown fences.
+- No explanations before, between, or after outputs.
+- JSON must parse with json.loads().
+- Verilog must be synthesizable Verilog-2005.
+
+---
+
+JSON REQUIREMENTS
+
+- Every module must include: name, ports, functionality, rtl_output_file.
 - hierarchy.top_module must be an object, never a string.
-- rtl_output_file must exactly match the emitted filename.
-- JSON must reflect the emitted RTL exactly.
+- rtl_output_file must exactly match emitted filenames.
+- JSON must exactly reflect emitted RTL (no mismatch).
 
-2) VERILOG CODE
+---
 
-Emit one named block per file using these exact markers:
+RTL GENERATION RULES
 
----BEGIN <filename>.v---
-<verilog code>
----END <filename>.v---
+- Preserve the structure defined in the user spec.
+- If hierarchical, maintain hierarchy.
+- Do not invent unnecessary modules.
+- Keep logic simple, deterministic, and synthesizable.
+- Prefer correctness and clarity over complexity.
 
-Example:
----BEGIN digital_subsystem.v---
-module digital_subsystem(...);
-...
-endmodule
----END digital_subsystem.v---
+---
 
-RTL QUALITY RULES
-- Preserve the user spec structure.
-- If the spec is hierarchical, keep the hierarchy.
-- Do not invent extra top-level modules not implied by the spec.
-- Keep logic minimal and deterministic.
-- Prefer simple synthesizable logic over protocol-complete complexity unless explicitly requested.
+NO PLACEHOLDERS (STRICT)
 
-RTL IMPLEMENTATION QUALITY RULES
+The following are strictly forbidden anywhere in RTL:
 
-Generate real synthesizable logic for every module.
-Do not generate empty shells, stubs, TODOs, or placeholder comments such as:
 - "logic goes here"
 - "implement later"
 - "placeholder"
+- TODO comments
+- comment-based expressions inside logic:
+  - reg <= /* ... */;
+  - if (/* ... */)
+  - case (/* ... */)
+  - assign x = /* ... */
 
-Every module must:
-- contain executable RTL logic
-- drive all outputs
-- declare all internal signals it uses
-- avoid undeclared identifiers
-- compile cleanly
+If behavior is unspecified:
+→ implement the simplest valid deterministic logic.
 
-For leaf modules, implement the simplest valid behavior consistent with the spec.
-
-Minimum expectation:
-- register/control modules must contain actual read/write or state-holding logic
-- control modules must contain sequential and/or combinational logic that drives outputs
-- interrupt modules must contain logic that derives irq from status inputs
-
-A module with only ports and comments is invalid. Regenerate until all modules contain real logic.
-
-PLACEHOLDER RTL IS FORBIDDEN
-
-Do not use placeholder expressions or comment-based pseudo-code inside assignments or conditions.
-The following are invalid and must never appear in the output:
-- reg <= /* ... */;
-- wire = /* ... */;
-- if (/* ... */)
-- case (/* ... */)
-- assign x = /* ... */;
-- comments used in place of executable logic
-
-All submodule instantiations must be syntactically complete and correctly closed with matching parentheses.
-
-If exact protocol behavior is not specified, implement the simplest deterministic synthesizable behavior instead.
-Use constants, simple counters, simple state bits, or pass-through logic rather than placeholders.
-
-
-MODULE INTERFACE CONSISTENCY RULES
-
-Each module must be self-contained.
-
-A module may ONLY reference signals that are:
-- declared in its port list, or
-- declared internally within the module.
-
-It is INVALID to reference signals that are not declared as ports or internal signals.
-
-If a module requires data from another module, it must be passed explicitly through ports.
-
-Do not invent or rename ports between modules. Port names must remain consistent between module definitions and instantiations.
 ---
 
-PORT ↔ RTL CONSISTENCY RULES
+MODULE IMPLEMENTATION RULES
 
-The module body must strictly match the declared port list.
+Every module must:
 
-- Every signal used in assignments, conditions, or expressions must be declared.
-- Do not use undeclared identifiers.
-- Do not assume access to signals from parent or sibling modules.
+- contain real executable RTL (not just structure)
+- drive all outputs
+- declare all internal signals used
+- avoid undeclared identifiers
+- compile independently
 
-If a signal appears in RTL but is not declared in ports or internal declarations, the output is INVALID.
+Leaf modules:
+- must include actual logic (registers, combinational logic, etc.)
+- must not be empty shells
+
+---
+
+MODULE INTERFACE RULES (CRITICAL)
+
+Each module must be fully self-contained.
+
+A module may ONLY use signals that are:
+- declared in its port list, OR
+- declared internally
+
+STRICT:
+- No access to parent-level signals
+- No access to sibling module signals
+- No implicit/global signals
+
+If a signal is used in RTL:
+→ it MUST exist in the module port list or internal declarations
+
+Otherwise the output is INVALID.
+
+---
+
+PORT ↔ RTL CONSISTENCY
+
+- Every signal used in RTL must be declared
+- No undeclared identifiers allowed
+- No mismatch between port list and RTL usage
+
+If a signal appears in logic but is not declared:
+→ regenerate output
+
+---
+
+INTER-MODULE CONSISTENCY RULES (ELABORATION CRITICAL)
+
+The full design must be globally consistent.
+
+For every module instantiation:
+
+- Port names must match exactly
+- Number of ports must match
+- Directions must match
+- Widths must match
+
+STRICT:
+
+- No missing ports in instantiation
+- No extra ports in instantiation
+- No renamed ports across modules
+
+---
+
+SIGNAL CONNECTION RULES
+
+- All inter-module signals must be explicitly declared
+- All inputs must be driven
+- All outputs must be connected or intentionally unused
+
+NO DANGLING SIGNALS:
+- no floating inputs
+- no unconnected required ports
+
+---
+
+WIDTH CONSISTENCY RULES
+
+- Signal widths must match across connections
+- No implicit truncation or extension
+- If needed, explicitly slice or extend signals
 
 ---
 
 OUTPUT OWNERSHIP RULES
 
-Each output signal must be driven by exactly ONE module.
+Each signal must have exactly ONE driver.
 
-- Do not have multiple modules driving the same signal.
-- Do not duplicate ownership of outputs across modules.
-
-Each module should only drive outputs defined in its own port list.
-
----
-
-MODULE COMPLETENESS RULE
-
-Each module must be logically complete and independently valid.
-
-- Must compile on its own (with its port list satisfied)
-- Must not depend on hidden/global signals
-- Must not rely on external undeclared context
-
-NO IMPLICIT DEPENDENCIES
-
-Do not assume any global or shared signals across modules.
-
-All inter-module communication must occur ONLY through explicit port connections.
-
-
-
-INTER-MODULE CONSISTENCY RULES
-
-The generated design must be globally consistent across all modules.
-
-- Every module instantiation must exactly match the module definition:
-  - Same port names
-  - Same number of ports
-  - Matching directions
-  - Matching widths
-
-- All ports declared in a module must be connected during instantiation,
-  unless explicitly unused.
-
-- Do not leave ports unconnected or partially connected.
-
-- Signal widths must match across connections:
-  - Do not connect mismatched bus widths
-  - If needed, explicitly slice or extend signals
-
-- All inter-module signals must be explicitly declared and connected.
-
-- No dangling wires:
-  - Every signal used must be declared and driven
-  - Every input must be driven
-  - Every output must be consumed or intentionally unused
-
-- The full design must elaborate successfully when all modules are compiled together.
+- No multiple drivers
+- No duplicated output ownership
+- A module only drives signals declared in its own output ports
 
 ---
 
 TOP-LEVEL INTEGRATION RULES
 
-The top module must:
-- declare all interconnecting signals between submodules
-- connect submodules using consistent signal names
-- not rely on implicit or undeclared signals
+Top module must:
+
+- declare all interconnecting signals
+- connect all submodules explicitly
+- use consistent signal naming
+- not rely on implicit connections
 
 ---
 
-SELF-CHECK 
+NO IMPLICIT DEPENDENCIES
+
+- No global/shared signals
+- No hidden dependencies
+- All communication must be through explicit ports
+
+---
+
+SYNTACTIC COMPLETENESS RULE
+
+- All module instantiations must be syntactically complete
+- All parentheses must be properly closed
+- All port connections must be valid
+
+---
+
+FINAL ELABORATION REQUIREMENT
+
+The generated RTL must:
+
+- compile successfully
+- elaborate successfully across all modules
+- have no:
+  - undeclared signals
+  - missing ports
+  - mismatched connections
+  - width mismatches
+  - unconnected required ports
+
+---
+
+SELF-CHECK BEFORE OUTPUT (MANDATORY)
 
 Before producing final output, verify:
 
-- Every module instantiation matches its definition
-- No missing ports in instantiations
-- No extra ports in instantiations
-- No width mismatches
-- No undeclared signals
-- No unconnected required ports
+1. Every module uses only declared signals
+2. Every port in every module is valid and used correctly
+3. Every instantiation matches its module definition
+4. No missing or extra ports
+5. No width mismatches
+6. No dangling or floating signals
+7. Each output is driven exactly once
+8. Entire design can compile and elaborate cleanly
 
-- Verify that every signal used in each module is declared.
-- Verify that all module instantiations match port definitions.
-- Verify that no module references undeclared signals.
-- Verify that each output is driven exactly once.
-
-If any violation exists, correct it before producing the final answer.
-
-If any issue exists, fix it before output.
+If ANY violation exists:
+→ fix it before producing output
+→ do NOT emit invalid RTL
 """.strip()
     # -----------------------------------------------------------------
     # 2️⃣ LLM Call
