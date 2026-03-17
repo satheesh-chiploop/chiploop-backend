@@ -14,7 +14,73 @@ PORTKEY_API_KEY = os.getenv("PORTKEY_API_KEY")
 client_portkey = Portkey(api_key=PORTKEY_API_KEY)
 client_openai = OpenAI()
 
+def _normalize_spec_json(spec_json: dict) -> dict:
+    """
+    Accepts either:
+      1) flat single-module JSON
+      2) hierarchical JSON
+    Returns canonical hierarchical form:
+    {
+      "design_name": "...",
+      "hierarchy": {
+        "top_module": {...},
+        "modules": [...]
+      }
+    }
+    """
+    if not isinstance(spec_json, dict):
+        raise ValueError("Spec JSON must be a dictionary.")
 
+    # Already hierarchical
+    if isinstance(spec_json.get("hierarchy"), dict):
+        hier = spec_json["hierarchy"]
+        top = hier.get("top_module")
+        modules = hier.get("modules", [])
+
+        if not isinstance(top, dict):
+            raise ValueError("hierarchy.top_module must be an object.")
+        if not top.get("name"):
+            raise ValueError("hierarchy.top_module.name is required.")
+        if not top.get("rtl_output_file"):
+            raise ValueError("hierarchy.top_module.rtl_output_file is required.")
+        if not isinstance(modules, list):
+            raise ValueError("hierarchy.modules must be a list.")
+
+        return {
+            "design_name": spec_json.get("design_name") or top["name"],
+            "hierarchy": {
+                "top_module": top,
+                "modules": modules,
+            },
+        }
+
+    # Flat single-module form
+    if spec_json.get("name") and spec_json.get("rtl_output_file"):
+        flat = spec_json
+        return {
+            "design_name": flat["name"],
+            "hierarchy": {
+                "top_module": flat,
+                "modules": [],
+            },
+        }
+
+    raise ValueError("Spec JSON must be either flat or hierarchical.")
+
+
+def _collect_expected_rtl_files(spec_json: dict) -> set:
+    hier = spec_json["hierarchy"]
+    expected = set()
+
+    top = hier.get("top_module", {})
+    if top.get("rtl_output_file"):
+        expected.add(top["rtl_output_file"])
+
+    for m in hier.get("modules", []):
+        if isinstance(m, dict) and m.get("rtl_output_file"):
+            expected.add(m["rtl_output_file"])
+
+    return expected
 # ---------------------------------------------------------------------
 # Core Agent
 # ---------------------------------------------------------------------
@@ -42,90 +108,107 @@ def run_agent(state: dict) -> dict:
     # 1️⃣ Build LLM Prompt  (User first, then structured format)
     # -----------------------------------------------------------------
     prompt = f"""
-USER DESIGN REQUEST:
+USER DIGITAL SPECIFICATION:
 {user_prompt}
 
 ---
 
 You are a professional ASIC RTL design engineer.
 
-🔒 IMPORTANT OUTPUT FORMAT RULES
-- DO NOT use markdown code fences (no ```json, no ```verilog).
-- DO NOT include comments inside JSON (no //, no #, no text after commas).
-- DO NOT include explanations, headers, or extra text.
-- ONLY produce raw JSON followed immediately by the Verilog code markers.
-- JSON must be 100% valid (parseable by json.loads in Python).
-- JSON must be the **first output**, and Verilog must start only after JSON ends.
+The user specification above is the source of truth.
+Do NOT override it with your own architecture unless the spec is missing details.
+When details are missing, choose the simplest synthesizable implementation consistent with the user spec.
 
----
+STRICT OUTPUT RULES
+- Output valid JSON first, then Verilog.
+- No markdown fences.
+- No explanations before, between, or after outputs.
+- JSON must parse with json.loads().
+- Verilog must be synthesizable Verilog-2005.
+- Do not emit placeholder modules.
+- Do not emit empty modules.
+- Do not reference undeclared signals.
+- All instantiated ports must be declared and connected.
+- All outputs must be driven.
 
 Generate two outputs in this strict order:
 
-1️⃣ **JSON SPECIFICATION**
+1) JSON SPECIFICATION
 
-   Output a JSON object describing all modules and hierarchy. Use this schema:
+Supported JSON forms:
 
-   - Hierarchical (multiple modules):
-     {{
-       "design_name": "top_module_name",
-       "hierarchy": {{
-         "modules": [
-           {{
-             "name": "sub_module_a",
-             "description": "Purpose of submodule.",
-             "ports": [
-                {{"name": "a", "direction": "input", "width": 8}},
-                {{"name": "b", "direction": "input", "width": 8}},
-                {{"name": "y", "direction": "output", "width": 8}}
-             ],
-             "functionality": "Logic description.",
-             "rtl_output_file": "sub_module_a.v"
-           }}
-         ],
-         "top_module": {{
-           "name": "top_module_name",
-           "description": "Describe top-level integration.",
-           "ports": [
-             {{"name": "clk", "direction": "input", "width": 1}},
-             {{"name": "reset_n", "direction": "input", "width": 1, "active_low": true}},
-             {{"name": "result", "direction": "output", "width": 8}}
-           ],
-           "functionality": "Describe how submodules are connected.",
-           "rtl_output_file": "top_module_name.v"
-         }}
-       }}
-     }}
+- Hierarchical (multiple modules):
+{{
+  "design_name": "top_module_name",
+  "hierarchy": {{
+    "top_module": {{
+      "name": "top_module_name",
+      "description": "Describe top-level integration.",
+      "ports": [
+        {{"name": "clk", "direction": "input", "width": 1}},
+        {{"name": "reset_n", "direction": "input", "width": 1, "active_low": true}},
+        {{"name": "result", "direction": "output", "width": 8}}
+      ],
+      "functionality": "Describe how submodules are connected.",
+      "rtl_output_file": "top_module_name.v"
+    }},
+    "modules": [
+      {{
+        "name": "sub_module_a",
+        "description": "Purpose of submodule.",
+        "ports": [
+          {{"name": "a", "direction": "input", "width": 8}},
+          {{"name": "b", "direction": "input", "width": 8}},
+          {{"name": "y", "direction": "output", "width": 8}}
+        ],
+        "functionality": "Logic description.",
+        "rtl_output_file": "sub_module_a.v"
+      }}
+    ]
+  }}
+}}
 
-   - Flat (single module):
-     {{
-       "name": "module_name",
-       "description": "Explain purpose.",
-       "ports": [
-         {{"name": "clk", "direction": "input", "width": 1, "type": "wire"}},
-         {{"name": "reset_n", "direction": "input", "width": 1, "active_low": true}},
-         {{"name": "enable", "direction": "input", "width": 1}},
-         {{"name": "count", "direction": "output", "width": 4, "type": "reg"}}
-       ],
-       "functionality": "Describe logic.",
-       "rtl_output_file": "module_name.v"
-     }}
+- Flat (single module):
+{{
+  "name": "module_name",
+  "description": "Explain purpose.",
+  "ports": [
+    {{"name": "clk", "direction": "input", "width": 1, "type": "wire"}},
+    {{"name": "reset_n", "direction": "input", "width": 1, "active_low": true}},
+    {{"name": "enable", "direction": "input", "width": 1}},
+    {{"name": "count", "direction": "output", "width": 4, "type": "reg"}}
+  ],
+  "functionality": "Describe logic.",
+  "rtl_output_file": "module_name.v"
+}}
 
----
-
-2️⃣ **VERILOG CODE**
-Immediately after the JSON, output the complete synthesizable Verilog-2005 implementation
-for all modules, enclosed using these exact delimiters: for each module , user these markers as below
-
----BEGIN VERILOG---
-<module Verilog code here>
----END VERILOG---
-
-🧠 Guidelines:
-- JSON first, Verilog second.
-- Do NOT wrap JSON or Verilog in triple backticks or markdown blocks.
+JSON RULES
 - Every module must include name, ports, functionality, rtl_output_file.
-- Use clean, compact JSON (no comments, no ```json).
-- Each module must appear in its own BEGIN/END block delimiters
+- hierarchy.top_module must be an object, never a string.
+- rtl_output_file must exactly match the emitted filename.
+- JSON must reflect the emitted RTL exactly.
+
+2) VERILOG CODE
+
+Emit one named block per file using these exact markers:
+
+---BEGIN <filename>.v---
+<verilog code>
+---END <filename>.v---
+
+Example:
+---BEGIN digital_subsystem.v---
+module digital_subsystem(...);
+...
+endmodule
+---END digital_subsystem.v---
+
+RTL QUALITY RULES
+- Preserve the user spec structure.
+- If the spec is hierarchical, keep the hierarchy.
+- Do not invent extra top-level modules not implied by the spec.
+- Keep logic minimal and deterministic.
+- Prefer simple synthesizable logic over protocol-complete complexity unless explicitly requested.
 """.strip()
     # -----------------------------------------------------------------
     # 2️⃣ LLM Call
@@ -157,74 +240,63 @@ for all modules, enclosed using these exact delimiters: for each module , user t
     # -----------------------------------------------------------------
     spec_part = llm_output.split("---BEGIN", 1)[0].strip()
     try:
-        spec_json = json.loads(spec_part)
-        print("✅ JSON parsed successfully.")
+        parsed_json = json.loads(spec_part)
+        spec_json = _normalize_spec_json(parsed_json)
+        print("✅ JSON parsed and normalized successfully.")
     except Exception as e:
-        print(f"⚠️ JSON parse failed: {e}")
-        spec_json = {"description": "LLM JSON parse failed", "raw": spec_part}
+        state["status"] = f"❌ JSON parse/normalize failed: {e}"
+        raise ValueError(f"LLM JSON parse/normalize failed: {e}")
 
-    # -----------------------------------------------------------------
-    # 5️⃣ Extract Verilog
-    # -----------------------------------------------------------------
-    # ① Capture named module blocks if present
+    hier = spec_json["hierarchy"]
+    top_obj = hier["top_module"]
+    module_name = spec_json.get("design_name") or top_obj["name"]
+    top_rtl_file = top_obj["rtl_output_file"]
+    expected_rtl_files = _collect_expected_rtl_files(spec_json)
+
+
     verilog_blocks = re.findall(
-        r"---BEGIN\s+([\w\-.]+)---(.*?)---END\s+\1---",
+        r"---BEGIN\s+([A-Za-z_][\w\-]*\.v)---(.*?)---END\s+\1---",
         llm_output,
         re.DOTALL,
     )
     verilog_map = {fname.strip(): code.strip() for fname, code in verilog_blocks}
 
-    # ② If only generic VERILOG blocks exist, capture *all* of them
-    if (not verilog_map) or (list(verilog_map.keys()) == ["VERILOG"]):
-        generic_blocks = re.findall(
-            r"---BEGIN\s+VERILOG---(.*?)---END\s+VERILOG---",
-            llm_output,
-            re.DOTALL,
+    if not verilog_map:
+        state["status"] = "❌ No named Verilog file blocks found in LLM output."
+        raise ValueError(
+            "Expected named Verilog blocks: "
+            "---BEGIN <filename>.v--- ... ---END <filename>.v---"
         )
-        if generic_blocks:
-            print(f"🧩 Found {len(generic_blocks)} generic VERILOG block(s).")
-            verilog_map = {}
-            for i, block in enumerate(generic_blocks, 1):
-                m = re.search(r"module\s+(\w+)", block)
-                if m:
-                    fname = f"{m.group(1)}.v"
-                else:
-                    fname = f"auto_module_{i}.v"
-                verilog_map[fname] = block.strip()
-        else:
-            print("⚠️ No VERILOG markers found at all.")
 
-    # -----------------------------------------------------------------
-    # 6️⃣ Auto-Flatten for simple cases
-    # -----------------------------------------------------------------
-    if "hierarchy" in spec_json and isinstance(spec_json["hierarchy"], dict):
-        h = spec_json["hierarchy"]
-        modules = h.get("modules", [])
-        top = h.get("top_module")
+    all_modules = []
+    verilog_file = None
 
-        if isinstance(top, str):
-            print("🔧 Flattening string top_module → single-module spec.")
-            spec_json = {
-                "name": spec_json.get("design_name", "auto_module"),
-                "description": top,
-                "rtl_output_file": f"{spec_json.get('design_name', 'auto_module')}.v",
-            }
-        elif not modules and isinstance(top, dict):
-            print("🔧 Flattening single top_module hierarchy.")
-            spec_json = top
-        elif len(modules) == 1:
-            print("🔧 Flattening single sub-module hierarchy.")
-            spec_json = modules[0]
+    print(f"🧱 Writing {len(verilog_map)} Verilog module(s).")
+    for fname, code in verilog_map.items():
+        fpath = os.path.join(workflow_dir, fname)
+        with open(fpath, "w", encoding="utf-8") as vf:
+            vf.write(code)
+        print(f"✅ Wrote {len(code)} chars to {fname}")
+        all_modules.append(fpath)
 
-    # -----------------------------------------------------------------
-    # 7️⃣ Determine module name
-    # -----------------------------------------------------------------
-    module_name = (
-        spec_json.get("name")
-        or spec_json.get("module_name")
-        or spec_json.get("design_name")
-        or "auto_module"
-    )
+        if fname == top_rtl_file:
+            verilog_file = fpath
+
+    actual_rtl_files = set(os.path.basename(p) for p in all_modules)
+    missing_files = sorted(expected_rtl_files - actual_rtl_files)
+    extra_files = sorted(actual_rtl_files - expected_rtl_files)
+
+    if missing_files:
+        raise ValueError(f"LLM failed to emit declared RTL files: {missing_files}")
+
+    if extra_files:
+        print(f"⚠️ Extra RTL files emitted by LLM: {extra_files}")
+
+    if not verilog_file:
+        raise ValueError(
+            f"Top RTL file '{top_rtl_file}' declared in JSON was not emitted by the LLM."
+        )
+
 
     # -----------------------------------------------------------------
     # 8️⃣ Save spec JSON
@@ -234,35 +306,7 @@ for all modules, enclosed using these exact delimiters: for each module , user t
         json.dump(spec_json, sf, indent=2)
     print(f"✅ Saved structured spec JSON → {spec_json_path}")
 
-    # -----------------------------------------------------------------
-    # 9️⃣ Write Verilog file(s)
-    # -----------------------------------------------------------------
-
-    all_modules = []
-    if verilog_map:
-        print(f"🧱 Writing {len(verilog_map)} Verilog module(s).")
-        verilog_file = None  # track top separately
-        for fname, code in verilog_map.items():
-            fpath = os.path.join(workflow_dir, fname)
-            with open(fpath, "w", encoding="utf-8") as vf:
-              vf.write(code)
-            print(f"✅ Wrote {len(code)} chars to {fname}")
-            all_modules.append(fpath)
-        # Identify top module file automatically
-            if "top" in fname.lower() or "system" in fname.lower():
-              verilog_file = fpath
-    # fallback if no top identified
-        if not verilog_file:
-            verilog_file = all_modules[-1]
-
-    else:
-        print("⚠️ No Verilog found, writing empty stub.")
-        verilog_file = os.path.join(workflow_dir, f"{module_name}.v")
-        open(verilog_file, "w").close()
-        all_modules.append(verilog_file)
-
-
-    # -----------------------------------------------------------------
+        # -----------------------------------------------------------------
     # 🔟 Syntax check
     # -----------------------------------------------------------------
     log_path = os.path.join(workflow_dir, "spec_agent_compile.log")
@@ -270,7 +314,8 @@ for all modules, enclosed using these exact delimiters: for each module , user t
 
     try:
         # include all generated .v files for hierarchical designs
-        compile_cmd = ["/usr/bin/iverilog", "-o", "temp.out"] + all_modules
+        iverilog = os.getenv("IVERILOG_BIN", "/usr/bin/iverilog")
+        compile_cmd = [iverilog, "-o", "temp.out"] + all_modules
         print(f"🧩 Running syntax check: {' '.join(os.path.basename(f) for f in compile_cmd[3:])}")
 
         subprocess.run(
