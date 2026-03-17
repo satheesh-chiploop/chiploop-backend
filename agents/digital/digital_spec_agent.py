@@ -242,7 +242,10 @@ The following are invalid and must never appear in the output:
 - wire = /* ... */;
 - if (/* ... */)
 - case (/* ... */)
+- assign x = /* ... */;
 - comments used in place of executable logic
+
+All submodule instantiations must be syntactically complete and correctly closed with matching parentheses.
 
 If exact protocol behavior is not specified, implement the simplest deterministic synthesizable behavior instead.
 Use constants, simple counters, simple state bits, or pass-through logic rather than placeholders.
