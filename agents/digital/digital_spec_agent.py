@@ -209,6 +209,30 @@ RTL QUALITY RULES
 - Do not invent extra top-level modules not implied by the spec.
 - Keep logic minimal and deterministic.
 - Prefer simple synthesizable logic over protocol-complete complexity unless explicitly requested.
+
+RTL IMPLEMENTATION QUALITY RULES
+
+Generate real synthesizable logic for every module.
+Do not generate empty shells, stubs, TODOs, or placeholder comments such as:
+- "logic goes here"
+- "implement later"
+- "placeholder"
+
+Every module must:
+- contain executable RTL logic
+- drive all outputs
+- declare all internal signals it uses
+- avoid undeclared identifiers
+- compile cleanly
+
+For leaf modules, implement the simplest valid behavior consistent with the spec.
+
+Minimum expectation:
+- register/control modules must contain actual read/write or state-holding logic
+- control modules must contain sequential and/or combinational logic that drives outputs
+- interrupt modules must contain logic that derives irq from status inputs
+
+A module with only ports and comments is invalid. Regenerate until all modules contain real logic.
 """.strip()
     # -----------------------------------------------------------------
     # 2️⃣ LLM Call
