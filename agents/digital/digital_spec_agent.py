@@ -249,6 +249,68 @@ All submodule instantiations must be syntactically complete and correctly closed
 
 If exact protocol behavior is not specified, implement the simplest deterministic synthesizable behavior instead.
 Use constants, simple counters, simple state bits, or pass-through logic rather than placeholders.
+
+
+MODULE INTERFACE CONSISTENCY RULES
+
+Each module must be self-contained.
+
+A module may ONLY reference signals that are:
+- declared in its port list, or
+- declared internally within the module.
+
+It is INVALID to reference signals that are not declared as ports or internal signals.
+
+If a module requires data from another module, it must be passed explicitly through ports.
+
+---
+
+PORT ↔ RTL CONSISTENCY RULES
+
+The module body must strictly match the declared port list.
+
+- Every signal used in assignments, conditions, or expressions must be declared.
+- Do not use undeclared identifiers.
+- Do not assume access to signals from parent or sibling modules.
+
+If a signal appears in RTL but is not declared in ports or internal declarations, the output is INVALID.
+
+---
+
+OUTPUT OWNERSHIP RULES
+
+Each output signal must be driven by exactly ONE module.
+
+- Do not have multiple modules driving the same signal.
+- Do not duplicate ownership of outputs across modules.
+
+Each module should only drive outputs defined in its own port list.
+
+---
+
+MODULE COMPLETENESS RULE
+
+Each module must be logically complete and independently valid.
+
+- Must compile on its own (with its port list satisfied)
+- Must not depend on hidden/global signals
+- Must not rely on external undeclared context
+
+NO IMPLICIT DEPENDENCIES
+
+Do not assume any global or shared signals across modules.
+
+All inter-module communication must occur ONLY through explicit port connections.
+
+SELF-CHECK BEFORE OUTPUT
+
+Before finalizing the output:
+- Verify that every signal used in each module is declared.
+- Verify that all module instantiations match port definitions.
+- Verify that no module references undeclared signals.
+- Verify that each output is driven exactly once.
+
+If any violation exists, correct it before producing the final answer.
 """.strip()
     # -----------------------------------------------------------------
     # 2️⃣ LLM Call
