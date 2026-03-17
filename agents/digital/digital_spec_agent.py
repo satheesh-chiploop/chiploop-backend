@@ -263,6 +263,7 @@ It is INVALID to reference signals that are not declared as ports or internal si
 
 If a module requires data from another module, it must be passed explicitly through ports.
 
+Do not invent or rename ports between modules. Port names must remain consistent between module definitions and instantiations.
 ---
 
 PORT ↔ RTL CONSISTENCY RULES
@@ -302,15 +303,66 @@ Do not assume any global or shared signals across modules.
 
 All inter-module communication must occur ONLY through explicit port connections.
 
-SELF-CHECK BEFORE OUTPUT
 
-Before finalizing the output:
+
+INTER-MODULE CONSISTENCY RULES
+
+The generated design must be globally consistent across all modules.
+
+- Every module instantiation must exactly match the module definition:
+  - Same port names
+  - Same number of ports
+  - Matching directions
+  - Matching widths
+
+- All ports declared in a module must be connected during instantiation,
+  unless explicitly unused.
+
+- Do not leave ports unconnected or partially connected.
+
+- Signal widths must match across connections:
+  - Do not connect mismatched bus widths
+  - If needed, explicitly slice or extend signals
+
+- All inter-module signals must be explicitly declared and connected.
+
+- No dangling wires:
+  - Every signal used must be declared and driven
+  - Every input must be driven
+  - Every output must be consumed or intentionally unused
+
+- The full design must elaborate successfully when all modules are compiled together.
+
+---
+
+TOP-LEVEL INTEGRATION RULES
+
+The top module must:
+- declare all interconnecting signals between submodules
+- connect submodules using consistent signal names
+- not rely on implicit or undeclared signals
+
+---
+
+SELF-CHECK 
+
+Before producing final output, verify:
+
+- Every module instantiation matches its definition
+- No missing ports in instantiations
+- No extra ports in instantiations
+- No width mismatches
+- No undeclared signals
+- No unconnected required ports
+
 - Verify that every signal used in each module is declared.
 - Verify that all module instantiations match port definitions.
 - Verify that no module references undeclared signals.
 - Verify that each output is driven exactly once.
 
 If any violation exists, correct it before producing the final answer.
+
+If any issue exists, fix it before output.
 """.strip()
     # -----------------------------------------------------------------
     # 2️⃣ LLM Call
