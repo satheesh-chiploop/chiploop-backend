@@ -470,14 +470,14 @@ def run_agent(state: dict) -> dict:
 
     entry_log = os.path.join(rtl_dir, "rtl_agent_entry.json")
     with open(entry_log, "w", encoding="utf-8") as ef:
-    json.dump({
-        "workflow_id": workflow_id,
-        "workflow_dir": workflow_dir,
-        "digital_spec_json": state.get("digital_spec_json"),
-        "spec_json": state.get("spec_json"),
-        "digital_spec_json_exists": isinstance(state.get("digital_spec_json"), str) and os.path.exists(state.get("digital_spec_json", "")),
-        "spec_json_exists": isinstance(state.get("spec_json"), str) and os.path.exists(state.get("spec_json", "")),
-    }, ef, indent=2)
+        json.dump({
+            "workflow_id": workflow_id,
+            "workflow_dir": workflow_dir,
+            "digital_spec_json": state.get("digital_spec_json"),
+            "spec_json": state.get("spec_json"),
+            "digital_spec_json_exists": isinstance(state.get("digital_spec_json"), str) and os.path.exists(state.get("digital_spec_json", "")),
+            "spec_json_exists": isinstance(state.get("spec_json"), str) and os.path.exists(state.get("spec_json", "")),
+        }, ef, indent=2)
 
     spec_path = None
     spec_obj = _load_json_if_path(state.get("digital_spec_json"))
