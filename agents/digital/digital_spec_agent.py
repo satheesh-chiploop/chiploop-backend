@@ -256,7 +256,7 @@ def _validate_spec_contract(spec_json: dict, mode: str) -> None:
 def _write_text(path: str, content: str) -> None:
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
-        f.write(content
+        f.write(content)
 
 
 def run_agent(state: dict) -> dict:
