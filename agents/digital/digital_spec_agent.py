@@ -253,6 +253,11 @@ def _validate_spec_contract(spec_json: dict, mode: str) -> None:
 
     _validate_hierarchical_endpoint_coverage(spec_json)
 
+def _write_text(path: str, content: str) -> None:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(content
+
 
 def run_agent(state: dict) -> dict:
     print("\n🚀 Running Digital Spec Agent (contract-only mode)...")
@@ -265,6 +270,24 @@ def run_agent(state: dict) -> dict:
     spec_dir = os.path.join(workflow_dir, "spec")
     os.makedirs(spec_dir, exist_ok=True)
 
+    entry_path = os.path.join(spec_dir, "spec_agent_entry.json")
+    entry_payload = {
+        "workflow_id": workflow_id,
+        "workflow_dir": workflow_dir,
+        "spec_dir": spec_dir,
+        "state_keys": sorted(list(state.keys())),
+        "input_candidates": {
+            "spec": state.get("spec"),
+            "digital_spec": state.get("digital_spec"),
+            "digital_spec_text": state.get("digital_spec_text"),
+            "soc_spec": state.get("soc_spec"),
+            "system_spec": state.get("system_spec"),
+            "description": state.get("description"),
+        },
+    }
+    with open(entry_path, "w", encoding="utf-8") as ef:
+        json.dump(entry_payload, ef, indent=2, default=str)
+
     user_prompt = (
         state.get("spec")
         or state.get("digital_spec")
@@ -275,8 +298,26 @@ def run_agent(state: dict) -> dict:
         or ""
     ).strip()
 
+    input_snapshot = os.path.join(spec_dir, "spec_agent_input.txt")
+    _write_text(input_snapshot, user_prompt if user_prompt else "<EMPTY>")
+
+
     if not user_prompt:
-        state["status"] = "❌ No spec provided"
+        log_path = os.path.join(spec_dir, "spec_agent_contract.log")
+        summary_path = os.path.join(spec_dir, "spec_agent_summary.txt")
+
+        _write_text(log_path, "Digital Spec Agent aborted: no spec provided.\n")
+        _write_text(summary_path, "❌ Digital Spec Agent failed.\n\nReason: no spec provided.\n")
+
+        state.update({
+            "status": "❌ No spec provided",
+            "artifact": None,
+            "artifact_list": [],
+            "artifact_log": log_path,
+            "workflow_dir": workflow_dir,
+            "workflow_id": workflow_id,
+            "issues": ["No spec provided"],
+        })
         return state
 
     prompt = f"""
@@ -457,8 +498,23 @@ Return JSON only.
         )
         llm_output = completion.choices[0].message.content or ""
     except Exception as e:
-        state["status"] = f"❌ LLM generation failed: {e}"
-        return state
+            log_path = os.path.join(spec_dir, "spec_agent_contract.log")
+            summary_path = os.path.join(spec_dir, "spec_agent_summary.txt")
+
+            _write_text(log_path, f"Digital Spec Agent LLM failure:\n{e}\n")
+            _write_text(summary_path, f"❌ Digital Spec Agent failed.\n\nLLM generation failed: {e}\n")
+
+            state.update({
+                "status": f"❌ LLM generation failed: {e}",
+                "artifact": None,
+                "artifact_list": [],
+                "artifact_log": log_path,
+                "workflow_dir": workflow_dir,
+                "workflow_id": workflow_id,
+                "issues": [f"LLM generation failed: {e}"],
+            })
+
+            return state
 
     raw_output_path = os.path.join(spec_dir, "llm_raw_output.txt")
     with open(raw_output_path, "w", encoding="utf-8") as rf:
