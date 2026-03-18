@@ -76,7 +76,7 @@ def _validate_port(port: dict, where: str) -> None:
         raise ValueError(f"{where}.width must be integer >= 1.")
 
 
-def _validate_module(mod: dict, where: str) -> None:
+def _validate_module(mod: dict, where: str, require_non_empty_ports: bool = False) -> None:
     if not isinstance(mod, dict):
         raise ValueError(f"{where} must be an object.")
     if not mod.get("name"):
@@ -87,6 +87,8 @@ def _validate_module(mod: dict, where: str) -> None:
     ports = mod.get("ports")
     if not isinstance(ports, list):
         raise ValueError(f"{where}.ports must be a list.")
+    if require_non_empty_ports and not ports:
+        raise ValueError(f"{where}.ports must be non-empty for hierarchical mode.")
     for i, p in enumerate(ports):
         _validate_port(p, f"{where}.ports[{i}]")
 
@@ -147,9 +149,70 @@ def _validate_ownership(item: dict, where: str) -> None:
         raise ValueError(f"{where}.owner is required.")
 
 
+def _collect_module_port_names(spec_json: dict):
+    hier = spec_json["hierarchy"]
+    mods = [hier["top_module"]] + list(hier.get("modules", []))
+    out = {}
+    for m in mods:
+        out[m["name"]] = {p["name"] for p in m.get("ports", [])}
+    return out
+
+
+def _validate_hierarchical_endpoint_coverage(spec_json: dict) -> None:
+    """
+    Minimal but important structural check:
+    every endpoint referenced in connectivity must exist in module port lists.
+    """
+    module_ports = _collect_module_port_names(spec_json)
+    top_name = spec_json["hierarchy"]["top_module"]["name"]
+    top_ports = module_ports[top_name]
+
+    for i, c in enumerate(spec_json.get("top_level_connections", [])):
+        tp = c["top_port"]
+        if tp not in top_ports:
+            raise ValueError(f"top_level_connections[{i}].top_port '{tp}' is not present in top module ports.")
+        for dst in c.get("connected_to", []):
+            if "." not in dst:
+                raise ValueError(f"top_level_connections[{i}] target '{dst}' is invalid. Expected module.port")
+            mod, port = dst.split(".", 1)
+            if mod not in module_ports:
+                raise ValueError(f"top_level_connections[{i}] target module '{mod}' does not exist.")
+            if port not in module_ports[mod]:
+                raise ValueError(f"top_level_connections[{i}] target port '{mod}.{port}' is not present in module ports.")
+
+    for i, s in enumerate(spec_json.get("inter_module_signals", [])):
+        src = s["source"]
+        if "." not in src:
+            raise ValueError(f"inter_module_signals[{i}].source '{src}' is invalid. Expected module.port")
+        smod, sport = src.split(".", 1)
+        if smod not in module_ports:
+            raise ValueError(f"inter_module_signals[{i}] source module '{smod}' does not exist.")
+        if sport not in module_ports[smod]:
+            raise ValueError(f"inter_module_signals[{i}] source port '{smod}.{sport}' is not present in module ports.")
+
+        for dst in s.get("destinations", []):
+            if "." not in dst:
+                raise ValueError(f"inter_module_signals[{i}] destination '{dst}' is invalid. Expected module.port")
+            dmod, dport = dst.split(".", 1)
+            if dmod not in module_ports:
+                raise ValueError(f"inter_module_signals[{i}] destination module '{dmod}' does not exist.")
+            if dport not in module_ports[dmod]:
+                raise ValueError(f"inter_module_signals[{i}] destination port '{dmod}.{dport}' is not present in module ports.")
+
+    for i, o in enumerate(spec_json.get("signal_ownership", [])):
+        owner = o["owner"]
+        if "." not in owner:
+            raise ValueError(f"signal_ownership[{i}].owner '{owner}' is invalid. Expected module.port")
+        omod, oport = owner.split(".", 1)
+        if omod not in module_ports:
+            raise ValueError(f"signal_ownership[{i}] owner module '{omod}' does not exist.")
+        if oport not in module_ports[omod]:
+            raise ValueError(f"signal_ownership[{i}] owner port '{omod}.{oport}' is not present in module ports.")
+
+
 def _validate_spec_contract(spec_json: dict, mode: str) -> None:
     if mode == "flat":
-        _validate_module(spec_json, "spec")
+        _validate_module(spec_json, "spec", require_non_empty_ports=False)
         return
 
     hier = spec_json["hierarchy"]
@@ -168,7 +231,7 @@ def _validate_spec_contract(spec_json: dict, mode: str) -> None:
             raise ValueError(f"Duplicate rtl_output_file detected: {rtl_file}")
         seen_mods.add(name)
         seen_files.add(rtl_file)
-        _validate_module(mod, where)
+        _validate_module(mod, where, require_non_empty_ports=True)
 
     check_unique(top, "hierarchy.top_module")
     for idx, mod in enumerate(modules):
@@ -191,6 +254,8 @@ def _validate_spec_contract(spec_json: dict, mode: str) -> None:
         _validate_inter_signal(s, f"inter_module_signals[{i}]")
     for i, o in enumerate(own):
         _validate_ownership(o, f"signal_ownership[{i}]")
+
+    _validate_hierarchical_endpoint_coverage(spec_json)
 
 
 def run_agent(state: dict) -> dict:
@@ -331,21 +396,21 @@ VALID FORM B — Hierarchical multi-module form:
   ],
   "inter_module_signals": [
     {{
-      "name": "cfg_enable",
+      "name": "internal_signal_name",
       "width": 1,
-      "source": "register_map.cfg_enable",
-      "destinations": ["control_fsm.cfg_enable"],
+      "source": "producer_module.producer_port",
+      "destinations": ["consumer_module.consumer_port"],
       "description": "Internal signal connection."
     }}
   ],
   "signal_ownership": [
     {{
-      "signal": "cfg_enable",
-      "owner": "register_map.cfg_enable"
+      "signal": "internal_signal_name",
+      "owner": "producer_module.producer_port"
     }},
     {{
-      "signal": "irq",
-      "owner": "interrupt_ctrl.irq"
+      "signal": "top_output_signal",
+      "owner": "owning_module.output_port"
     }}
   ],
   "register_contract": {{
@@ -372,6 +437,12 @@ RULES
 - top_level_connections must describe how top-level ports connect to submodule ports.
 - inter_module_signals must describe how submodules connect to each other.
 - signal_ownership must identify the only legal driver of each internally-driven or externally-driven signal.
+- PORT COMPLETENESS RULE FOR HIERARCHICAL DESIGNS:
+  1. Do NOT leave hierarchical submodule ports empty.
+  2. Every endpoint referenced in top_level_connections must exist as a real port in the referenced module.
+  3. Every source and destination referenced in inter_module_signals must exist as a real port in the referenced module.
+  4. Every owner referenced in signal_ownership must exist as a real port in the referenced module.
+  5. Use the connectivity endpoints to derive complete submodule port lists.
 - If the user spec is incomplete, choose the simplest valid architecture ONCE and encode it here.
 - This JSON becomes the source of truth for downstream agents.
 

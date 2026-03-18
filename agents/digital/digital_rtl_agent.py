@@ -120,6 +120,145 @@ def _extract_module_ports(verilog_text: str) -> Dict[str, List[str]]:
     return out
 
 
+def _normalize_signal_token(name: str) -> str:
+    """
+    Normalize 'dac_code[11:0]' -> 'dac_code'
+    """
+    if not isinstance(name, str):
+        return ""
+    return re.sub(r"\[[^\]]+\]", "", name).strip()
+
+
+def _split_endpoint(endpoint: str):
+    if "." not in endpoint:
+        raise ValueError(f"Invalid endpoint format: {endpoint}")
+    mod, port = endpoint.split(".", 1)
+    return mod.strip(), _normalize_signal_token(port.strip())
+
+
+def _port_dir_map(module_ports):
+    return {p["name"]: p.get("direction") for p in module_ports}
+
+
+def _build_connectivity_contract(spec_json: dict, mode: str) -> dict:
+    if mode != "hierarchical":
+        return {
+            "mode": mode,
+            "modules": {},
+            "top_module": _top_module_name(spec_json, mode),
+            "top_ports": [],
+            "top_level_connections": [],
+            "internal_signals": [],
+            "ownership": [],
+        }
+
+    top = spec_json["hierarchy"]["top_module"]
+    modules = [top] + list(spec_json["hierarchy"].get("modules", []))
+
+    module_map = {}
+    for m in modules:
+        module_map[m["name"]] = {
+            "name": m["name"],
+            "ports": m.get("ports", [])
+        }
+
+    top_ports = [p["name"] for p in top.get("ports", [])]
+
+    internal_signals = []
+    for sig in spec_json.get("inter_module_signals", []):
+        src_mod, src_port = _split_endpoint(sig["source"])
+        dsts = []
+        for d in sig.get("destinations", []):
+            dm, dp = _split_endpoint(d)
+            dsts.append({"module": dm, "port": dp})
+
+        internal_signals.append({
+            "name": _normalize_signal_token(sig["name"]),
+            "width": sig["width"],
+            "source": {"module": src_mod, "port": src_port},
+            "destinations": dsts,
+            "description": sig.get("description", "")
+        })
+
+    top_conns = []
+    for c in spec_json.get("top_level_connections", []):
+        dsts = []
+        for d in c.get("connected_to", []):
+            dm, dp = _split_endpoint(d)
+            dsts.append({"module": dm, "port": dp})
+        top_conns.append({
+            "top_port": _normalize_signal_token(c["top_port"]),
+            "connected_to": dsts,
+            "description": c.get("description", "")
+        })
+
+    ownership = []
+    for o in spec_json.get("signal_ownership", []):
+        om, op = _split_endpoint(o["owner"])
+        ownership.append({
+            "signal": _normalize_signal_token(o["signal"]),
+            "owner": {"module": om, "port": op}
+        })
+
+    return {
+        "mode": "hierarchical",
+        "modules": module_map,
+        "top_module": top["name"],
+        "top_ports": top_ports,
+        "top_level_connections": top_conns,
+        "internal_signals": internal_signals,
+        "ownership": ownership,
+    }
+
+
+def _validate_connectivity_contract(spec_json: dict, mode: str) -> List[str]:
+    issues = []
+    if mode != "hierarchical":
+        return issues
+
+    contract = _build_connectivity_contract(spec_json, mode)
+    modules = contract["modules"]
+    top_module = spec_json["hierarchy"]["top_module"]
+    top_port_names = {p["name"] for p in top_module.get("ports", [])}
+
+    for mname, m in modules.items():
+        if not m["ports"]:
+            issues.append(f"❌ Module '{mname}' has empty ports in hierarchical spec.")
+
+    for c in contract["top_level_connections"]:
+        if c["top_port"] not in top_port_names:
+            issues.append(f"❌ top_level_connections references unknown top port '{c['top_port']}'.")
+        for dst in c["connected_to"]:
+            if dst["module"] not in modules:
+                issues.append(f"❌ top_level_connections target module '{dst['module']}' does not exist.")
+                continue
+            dirs = _port_dir_map(modules[dst["module"]]["ports"])
+            if dst["port"] not in dirs:
+                issues.append(f"❌ top_level_connections target port '{dst['module']}.{dst['port']}' does not exist.")
+
+    for sig in contract["internal_signals"]:
+        sm = sig["source"]["module"]
+        sp = sig["source"]["port"]
+        if sm not in modules:
+            issues.append(f"❌ inter_module_signals source module '{sm}' does not exist.")
+        else:
+            dirs = _port_dir_map(modules[sm]["ports"])
+            if sp not in dirs:
+                issues.append(f"❌ inter_module_signals source port '{sm}.{sp}' does not exist.")
+
+        for dst in sig["destinations"]:
+            dm = dst["module"]
+            dp = dst["port"]
+            if dm not in modules:
+                issues.append(f"❌ inter_module_signals destination module '{dm}' does not exist.")
+            else:
+                dirs = _port_dir_map(modules[dm]["ports"])
+                if dp not in dirs:
+                    issues.append(f"❌ inter_module_signals destination port '{dm}.{dp}' does not exist.")
+
+    return issues
+
+
 def _validate_spec_vs_rtl(spec_json: dict, mode: str, verilog_map: Dict[str, str]) -> Tuple[List[str], List[str], List[str]]:
     issues = []
     clock_ports = []
@@ -168,35 +307,32 @@ def _validate_spec_vs_rtl(spec_json: dict, mode: str, verilog_map: Dict[str, str
                 reset_ports.append(pname)
 
     full_text = "\n".join(verilog_map.values())
-    spec_text = json.dumps(spec_json)
 
-    # Existing useful cfg checks
-    for req in ["cfg_enable", "cfg_adc_start", "cfg_dac_enable", "cfg_dac_code"]:
-        if req in spec_text and req not in full_text:
-            issues.append(f"❌ Expected {req} signal usage not found in RTL.")
-
-    # New checks from explicit top-level and inter-module contracts
     if mode == "hierarchical":
-        for c in spec_json.get("top_level_connections", []):
-            tp = c.get("top_port")
+        contract = _build_connectivity_contract(spec_json, mode)
+
+        for c in contract["top_level_connections"]:
+            tp = c["top_port"]
             if tp and tp not in full_text:
                 issues.append(f"⚠ Top-level connection signal '{tp}' not clearly visible in RTL text.")
 
-        for s in spec_json.get("inter_module_signals", []):
-            sig_name = s.get("name")
+        for s in contract["internal_signals"]:
+            sig_name = s["name"]
             if sig_name and sig_name not in full_text:
                 issues.append(f"❌ Inter-module signal '{sig_name}' not found in RTL.")
 
-        for o in spec_json.get("signal_ownership", []):
-            sig = o.get("signal")
-            owner = o.get("owner")
-            if sig and owner and sig not in full_text:
+        for o in contract["ownership"]:
+            sig = o["signal"]
+            owner = f"{o['owner']['module']}.{o['owner']['port']}"
+            if sig and sig not in full_text:
                 issues.append(f"⚠ Owned signal '{sig}' from '{owner}' not found in RTL.")
 
     return issues, sorted(set(clock_ports)), sorted(set(reset_ports))
 
 
 def _build_generation_prompt(spec_json: dict, mode: str, regmap_obj: Optional[dict], clock_reset_obj: Optional[dict], power_intent_obj: Optional[dict]) -> str:
+    connectivity_contract = _build_connectivity_contract(spec_json, mode)
+
     return f"""
 You are a senior ASIC RTL engineer.
 
@@ -226,6 +362,9 @@ SPEC MODE:
 DIGITAL_SPEC_JSON:
 {json.dumps(spec_json, indent=2)}
 
+DERIVED_INTERFACE_CONTRACT:
+{json.dumps(connectivity_contract, indent=2)}
+
 DIGITAL_REGMAP_JSON:
 {json.dumps(regmap_obj, indent=2) if regmap_obj is not None else "null"}
 
@@ -247,21 +386,17 @@ IMPLEMENTATION RULES
 - No empty shells.
 - Drive all outputs.
 - Use DIGITAL_SPEC_JSON module functionality, responsibilities, must_drive, must_receive, must_not_drive, reset_behavior, and behavior_rules as hard requirements.
-- Use top_level_connections as hard requirements for how top ports connect into submodules.
-- Use inter_module_signals as hard requirements for internal wiring between submodules.
-- Use signal_ownership as hard requirements for legal drivers of signals.
+- Use DERIVED_INTERFACE_CONTRACT as the exact wiring contract.
+- For each top-level connection, connect the declared top port to the listed module ports.
+- For each internal signal, create exactly one internal wire of the declared width.
+- Drive that wire only from the declared source endpoint.
+- Consume that wire only at the declared destination endpoints.
+- Respect ownership exactly; do not invent alternate drivers or alternate buses.
+- Do not collapse multiple declared signals into a grouped convenience bus unless the spec explicitly defines that bus.
 - If there is a register map, implement real stored writable registers where required.
 - Implement STATUS and INT_STATUS from explicit field semantics if regmap provides them.
 - If a wider value is split across byte registers, store and reconstruct it faithfully.
-- If a module is the sole owner of an output or signal, no other module may drive it.
 - Prefer the simplest deterministic smoke-test implementation consistent with the contract.
-- If there is a control interface like cfg_* in the spec/regmap contract, it must actually be wired between modules and used to drive outputs.
-- In the hierarchical top module:
-  1. instantiate all required submodules,
-  2. create internal wires matching inter_module_signals,
-  3. connect top-level ports according to top_level_connections,
-  4. connect internal source/destination pairs according to inter_module_signals,
-  5. expose top outputs only from their declared owners.
 - Entire design must compile together cleanly.
 
 SELF-CHECK BEFORE OUTPUT
@@ -271,11 +406,10 @@ SELF-CHECK BEFORE OUTPUT
 4. No missing or extra ports.
 5. No undeclared signals.
 6. No width mismatches.
-7. Internal control/status signal contracts are actually wired.
-8. Stored registers are not faked by directly echoing bus write data on reads.
-9. top_level_connections are reflected in the top RTL.
-10. inter_module_signals are reflected as actual internal wires and connections.
-11. signal_ownership is respected, with one legal driver per owned signal.
+7. top_level_connections are reflected in the top RTL.
+8. inter_module_signals are reflected as actual internal wires and connections.
+9. signal_ownership is respected, with one legal driver per owned signal.
+10. Stored registers are not faked by directly echoing bus write data on reads.
 """.strip()
 
 
@@ -293,6 +427,38 @@ def run_agent(state: dict) -> dict:
         return state
 
     spec_json, mode = _normalize_spec_json(spec_obj)
+
+    # Minimal new pre-check: fail fast on bad connectivity contract
+    pre_issues = _validate_connectivity_contract(spec_json, mode)
+    if pre_issues:
+        log_path = os.path.join(workflow_dir, "rtl_agent_compile.log")
+        with open(log_path, "w", encoding="utf-8") as logf:
+            logf.write("RTL generation aborted due to invalid connectivity contract in digital_spec_json.\n")
+            for i in pre_issues:
+                logf.write(f"- {i}\n")
+
+        summary_file = os.path.join(workflow_dir, "rtl_agent_summary.txt")
+        with open(summary_file, "w", encoding="utf-8") as sf:
+            sf.write("⚠ RTL generation completed with issues.\n\n")
+            sf.write(f"Spec mode: {mode}\n")
+            sf.write("Compile skipped due to invalid connectivity contract.\n\n")
+            sf.write("Issues:\n")
+            for i in pre_issues:
+                sf.write(f" - {i}\n")
+
+        state.update({
+            "status": "⚠ RTL generation completed with issues.",
+            "artifact": None,
+            "artifact_list": [],
+            "artifact_log": log_path,
+            "port_list": [],
+            "clock_ports": [],
+            "reset_ports": [],
+            "issues": pre_issues,
+            "workflow_id": workflow_id,
+            "workflow_dir": workflow_dir,
+        })
+        return state
 
     regmap_obj = (
         _load_json_if_path(state.get("digital_regmap_json"))
@@ -344,7 +510,7 @@ def run_agent(state: dict) -> dict:
     top_rtl_path = os.path.join(workflow_dir, top_rtl_file)
 
     log_path = os.path.join(workflow_dir, "rtl_agent_compile.log")
-    compile_status = "✅ Verilog syntax check passed."
+    compile_status = "Compile not run yet."
 
     if not os.path.exists(top_rtl_path):
         issues.append(f"❌ Top RTL file missing after generation: {top_rtl_file}")
@@ -363,6 +529,7 @@ def run_agent(state: dict) -> dict:
                 text=True
             )
 
+            compile_status = "✅ Verilog syntax check passed."
             with open(log_path, "w", encoding="utf-8") as logf:
                 logf.write(f"RTL Compile Log — {datetime.datetime.now()}\n\n")
                 logf.write("Compile status: PASS\n")
@@ -382,6 +549,7 @@ def run_agent(state: dict) -> dict:
                 logf.write(err)
             issues.append(f"❌ Compile/elaboration failed: {err}")
     else:
+        compile_status = "⚠ Compile skipped due to contract validation issues."
         with open(log_path, "w", encoding="utf-8") as logf:
             logf.write(f"RTL Compile Log — {datetime.datetime.now()}\n\n")
             logf.write("Compile skipped due to earlier contract validation issues.\n")
