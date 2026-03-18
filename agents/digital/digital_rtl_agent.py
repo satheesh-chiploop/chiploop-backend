@@ -542,6 +542,32 @@ def run_agent(state: dict) -> dict:
 
     issues, clock_ports, reset_ports = _validate_spec_vs_rtl(spec_json, mode, verilog_map)
 
+    # Minimal forbidden-syntax scan to catch accidental SystemVerilog output
+    forbidden_sv_patterns = [
+        r"\btypedef\b",
+        r"\benum\b",
+        r"\blogic\b",
+        r"\balways_comb\b",
+        r"\balways_ff\b",
+        r"\bstruct\b",
+        r"\bunion\b",
+    ]
+    full_text = "\n".join(verilog_map.values())
+    for pat in forbidden_sv_patterns:
+        if re.search(pat, full_text):
+            issues.append(f"❌ Forbidden SystemVerilog construct found in RTL: pattern '{pat}'")
+
+    suspicious_grouped_buses = [
+        "reg_bus_signals",
+        "reg_bus",
+        "ctrl_bus",
+        "status_bus",
+    ]
+    spec_text = json.dumps(spec_json)
+    for name in suspicious_grouped_buses:
+        if name in full_text and name not in spec_text:
+            issues.append(f"❌ Invented grouped bus '{name}' found in RTL but not declared in spec.")
+
     top_rtl_file = _top_rtl_file(spec_json, mode)
     top_rtl_path = os.path.join(rtl_dir, top_rtl_file)
 
@@ -552,6 +578,26 @@ def run_agent(state: dict) -> dict:
         issues.append(f"❌ Top RTL file missing after generation: {top_rtl_file}")
     if not artifact_list:
         issues.append("❌ No RTL files materialized to disk.")
+
+    # Heuristic check: top module should not procedurally drive owned outputs from child modules
+    if mode == "hierarchical":
+        top_file = _top_rtl_file(spec_json, mode)
+        top_code = verilog_map.get(top_file, "")
+        owned_top_signals = []
+        top_name = _top_module_name(spec_json, mode)
+
+        for o in spec_json.get("signal_ownership", []):
+            sig = _normalize_signal_token(o.get("signal", ""))
+            owner = o.get("owner", "")
+            if owner and "." in owner:
+                omod, _ = owner.split(".", 1)
+                if omod != top_name:
+                    owned_top_signals.append(sig)
+
+        if re.search(r"\balways\b", top_code):
+            for sig in set(owned_top_signals):
+                if re.search(rf"\b{re.escape(sig)}\s*<=", top_code) or re.search(rf"\b{re.escape(sig)}\s*=", top_code):
+                    issues.append(f"❌ Top module appears to procedurally drive child-owned signal '{sig}'.")
 
     if not issues:
         try:
