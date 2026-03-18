@@ -31,6 +31,7 @@ def _normalize_spec_json(spec_json: dict) -> Tuple[dict, str]:
         hier = spec_json["hierarchy"]
         top = hier.get("top_module")
         modules = hier.get("modules", [])
+
         if not isinstance(top, dict):
             raise ValueError("hierarchy.top_module must be an object.")
         if not top.get("name"):
@@ -39,14 +40,18 @@ def _normalize_spec_json(spec_json: dict) -> Tuple[dict, str]:
             raise ValueError("hierarchy.top_module.rtl_output_file is required.")
         if not isinstance(modules, list):
             raise ValueError("hierarchy.modules must be a list.")
+
         return {
             "design_name": spec_json.get("design_name") or top["name"],
             "hierarchy": {
                 "top_module": top,
                 "modules": modules,
             },
+            "operating_constraints": spec_json.get("operating_constraints", {}),
+            "top_level_connections": spec_json.get("top_level_connections", []),
             "inter_module_signals": spec_json.get("inter_module_signals", []),
             "signal_ownership": spec_json.get("signal_ownership", []),
+            "register_contract": spec_json.get("register_contract", {}),
         }, "hierarchical"
 
     if spec_json.get("name") and spec_json.get("rtl_output_file"):
@@ -55,6 +60,13 @@ def _normalize_spec_json(spec_json: dict) -> Tuple[dict, str]:
             "description": spec_json.get("description", ""),
             "ports": spec_json.get("ports", []),
             "functionality": spec_json.get("functionality", ""),
+            "responsibilities": spec_json.get("responsibilities", []),
+            "must_drive": spec_json.get("must_drive", []),
+            "must_receive": spec_json.get("must_receive", []),
+            "must_not_drive": spec_json.get("must_not_drive", []),
+            "reset_behavior": spec_json.get("reset_behavior", ""),
+            "behavior_rules": spec_json.get("behavior_rules", []),
+            "operating_constraints": spec_json.get("operating_constraints", {}),
             "rtl_output_file": spec_json["rtl_output_file"],
         }, "flat"
 
@@ -64,8 +76,7 @@ def _normalize_spec_json(spec_json: dict) -> Tuple[dict, str]:
 def _collect_expected_modules(spec_json: dict, mode: str) -> List[dict]:
     if mode == "flat":
         return [spec_json]
-    hier = spec_json["hierarchy"]
-    return [hier["top_module"]] + list(hier.get("modules", []))
+    return [spec_json["hierarchy"]["top_module"]] + list(spec_json["hierarchy"].get("modules", []))
 
 
 def _collect_expected_rtl_files(spec_json: dict, mode: str) -> List[str]:
@@ -73,15 +84,11 @@ def _collect_expected_rtl_files(spec_json: dict, mode: str) -> List[str]:
 
 
 def _top_module_name(spec_json: dict, mode: str) -> str:
-    if mode == "flat":
-        return spec_json["name"]
-    return spec_json["hierarchy"]["top_module"]["name"]
+    return spec_json["name"] if mode == "flat" else spec_json["hierarchy"]["top_module"]["name"]
 
 
 def _top_rtl_file(spec_json: dict, mode: str) -> str:
-    if mode == "flat":
-        return spec_json["rtl_output_file"]
-    return spec_json["hierarchy"]["top_module"]["rtl_output_file"]
+    return spec_json["rtl_output_file"] if mode == "flat" else spec_json["hierarchy"]["top_module"]["rtl_output_file"]
 
 
 def _parse_named_verilog_blocks(llm_output: str) -> Dict[str, str]:
@@ -160,6 +167,32 @@ def _validate_spec_vs_rtl(spec_json: dict, mode: str, verilog_map: Dict[str, str
             if re.search(r"rst|reset", pname, re.IGNORECASE):
                 reset_ports.append(pname)
 
+    full_text = "\n".join(verilog_map.values())
+    spec_text = json.dumps(spec_json)
+
+    # Existing useful cfg checks
+    for req in ["cfg_enable", "cfg_adc_start", "cfg_dac_enable", "cfg_dac_code"]:
+        if req in spec_text and req not in full_text:
+            issues.append(f"❌ Expected {req} signal usage not found in RTL.")
+
+    # New checks from explicit top-level and inter-module contracts
+    if mode == "hierarchical":
+        for c in spec_json.get("top_level_connections", []):
+            tp = c.get("top_port")
+            if tp and tp not in full_text:
+                issues.append(f"⚠ Top-level connection signal '{tp}' not clearly visible in RTL text.")
+
+        for s in spec_json.get("inter_module_signals", []):
+            sig_name = s.get("name")
+            if sig_name and sig_name not in full_text:
+                issues.append(f"❌ Inter-module signal '{sig_name}' not found in RTL.")
+
+        for o in spec_json.get("signal_ownership", []):
+            sig = o.get("signal")
+            owner = o.get("owner")
+            if sig and owner and sig not in full_text:
+                issues.append(f"⚠ Owned signal '{sig}' from '{owner}' not found in RTL.")
+
     return issues, sorted(set(clock_ports)), sorted(set(reset_ports))
 
 
@@ -213,9 +246,22 @@ IMPLEMENTATION RULES
 - No TODOs.
 - No empty shells.
 - Drive all outputs.
-- If behavior is underspecified, choose the simplest deterministic logic consistent with the functionality text.
-- If there is a register map, use it only to shape CSR-visible behavior; do not invent new architecture.
-- If there is clock/reset intent, use it only for reset polarity / clock behavior; do not change interfaces.
+- Use DIGITAL_SPEC_JSON module functionality, responsibilities, must_drive, must_receive, must_not_drive, reset_behavior, and behavior_rules as hard requirements.
+- Use top_level_connections as hard requirements for how top ports connect into submodules.
+- Use inter_module_signals as hard requirements for internal wiring between submodules.
+- Use signal_ownership as hard requirements for legal drivers of signals.
+- If there is a register map, implement real stored writable registers where required.
+- Implement STATUS and INT_STATUS from explicit field semantics if regmap provides them.
+- If a wider value is split across byte registers, store and reconstruct it faithfully.
+- If a module is the sole owner of an output or signal, no other module may drive it.
+- Prefer the simplest deterministic smoke-test implementation consistent with the contract.
+- If there is a control interface like cfg_* in the spec/regmap contract, it must actually be wired between modules and used to drive outputs.
+- In the hierarchical top module:
+  1. instantiate all required submodules,
+  2. create internal wires matching inter_module_signals,
+  3. connect top-level ports according to top_level_connections,
+  4. connect internal source/destination pairs according to inter_module_signals,
+  5. expose top outputs only from their declared owners.
 - Entire design must compile together cleanly.
 
 SELF-CHECK BEFORE OUTPUT
@@ -225,6 +271,11 @@ SELF-CHECK BEFORE OUTPUT
 4. No missing or extra ports.
 5. No undeclared signals.
 6. No width mismatches.
+7. Internal control/status signal contracts are actually wired.
+8. Stored registers are not faked by directly echoing bus write data on reads.
+9. top_level_connections are reflected in the top RTL.
+10. inter_module_signals are reflected as actual internal wires and connections.
+11. signal_ownership is respected, with one legal driver per owned signal.
 """.strip()
 
 
@@ -273,7 +324,6 @@ def run_agent(state: dict) -> dict:
 
     verilog_map = _parse_named_verilog_blocks(llm_output)
     if not verilog_map:
-        state["status"] = "❌ No named RTL file blocks found."
         raise ValueError("Expected named Verilog blocks in RTL agent output.")
 
     expected_files = _collect_expected_rtl_files(spec_json, mode)
@@ -298,7 +348,6 @@ def run_agent(state: dict) -> dict:
 
     if not os.path.exists(top_rtl_path):
         issues.append(f"❌ Top RTL file missing after generation: {top_rtl_file}")
-
     if not artifact_list:
         issues.append("❌ No RTL files materialized to disk.")
 

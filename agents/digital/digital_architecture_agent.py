@@ -2,9 +2,7 @@ import os
 import json
 from portkey_ai import Portkey
 from openai import OpenAI
-
 from utils.artifact_utils import save_text_artifact_and_record
-
 
 PORTKEY_API_KEY = os.getenv("PORTKEY_API_KEY")
 client_portkey = Portkey(api_key=PORTKEY_API_KEY)
@@ -66,23 +64,6 @@ def _normalize_spec(spec_obj: dict):
     raise ValueError("Unsupported spec JSON format")
 
 
-def _port_role_guess(pname: str, direction: str) -> str:
-    lname = (pname or "").lower()
-    if "clk" in lname or "clock" in lname:
-        return "Primary clock input."
-    if "rst" in lname or "reset" in lname:
-        return "Reset input."
-    if "valid" in lname:
-        return "Handshake valid signal."
-    if "ready" in lname:
-        return "Handshake ready signal."
-    if direction == "input":
-        return "External input."
-    if direction == "output":
-        return "External output."
-    return "External interface signal."
-
-
 def run_agent(state: dict) -> dict:
     print("\n🏗️ Running Digital Architecture Agent...")
 
@@ -102,11 +83,7 @@ def run_agent(state: dict) -> dict:
         state["status"] = "❌ Missing digital spec JSON for architecture generation."
         return state
 
-    try:
-        spec = _normalize_spec(spec_obj)
-    except Exception as e:
-        state["status"] = f"❌ Invalid digital spec JSON: {e}"
-        return state
+    spec = _normalize_spec(spec_obj)
 
     prompt = f"""
 You are a senior digital hardware architect.
@@ -123,6 +100,8 @@ CRITICAL RULES
 - Do NOT change filenames.
 - Do NOT become a second source of truth.
 - This output is descriptive only.
+- Preserve detailed module responsibilities from the spec.
+- Preserve explicit interface summaries derived from inter-module contracts.
 
 INPUTS
 USER_REQUEST:
@@ -145,14 +124,14 @@ If spec mode is flat, output:
   "design_summary": {{
     "purpose": "...",
     "operating_model": "...",
-    "external_interfaces": [
-      {{"name":"clk","role":"Primary clock input."}}
-    ]
+    "external_interfaces": []
   }},
   "module_architecture": {{
     "name": "...",
     "role": "...",
-    "responsibilities": []
+    "responsibilities": [],
+    "interface_notes": [],
+    "ownership_notes": []
   }},
   "data_flow_summary": [],
   "clock_reset_summary": {{
@@ -180,13 +159,16 @@ If spec mode is hierarchical, output:
     {{
       "name": "...",
       "role": "...",
-      "responsibilities": []
+      "responsibilities": [],
+      "interface_notes": [],
+      "ownership_notes": []
     }}
   ],
   "interface_summary": [
     {{
       "from": "...",
       "to": "...",
+      "signals": [],
       "intent": "..."
     }}
   ],
@@ -237,7 +219,6 @@ Return JSON only.
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(arch, f, indent=2)
 
-    # Canonical signature is derived ONLY from digital_spec_json, never from arch output.
     ports = []
     for p in spec["top_ports"]:
         if isinstance(p, dict) and p.get("name"):
@@ -247,11 +228,7 @@ Return JSON only.
                 "width": int(p.get("width", 1) or 1),
             })
 
-    digital_signature = {
-        spec["top_module"]: {
-            "ports": ports
-        }
-    }
+    digital_signature = {spec["top_module"]: {"ports": ports}}
 
     try:
         with open(raw_path, "r", encoding="utf-8") as f:
@@ -283,7 +260,6 @@ Return JSON only.
         "digital_rtl_signatures": digital_signature,
         "rtl_signatures": digital_signature,
     })
-
     return state
 
     

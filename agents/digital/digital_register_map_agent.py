@@ -75,10 +75,10 @@ USER_REQUEST:
 DIGITAL_SPEC_JSON:
 {_safe_dump(spec_obj)}
 
-ARCHITECTURE_JSON (optional):
+ARCHITECTURE_JSON:
 {_safe_dump(arch_obj)}
 
-MICROARCH_JSON (optional):
+MICROARCH_JSON:
 {_safe_dump(micro_obj)}
 
 OUTPUT RULES
@@ -92,28 +92,43 @@ Generate a firmware-visible register map only if it is compatible with DIGITAL_S
 Do NOT invent new hierarchy.
 Do NOT invent incompatible top/module ports.
 Do NOT force AXI/APB if not implied by the spec.
-If the spec does not clearly define a CSR interface, keep the output minimal and state assumptions clearly.
+If the spec clearly implies an I2C/custom byte-register interface, prefer a custom 8-bit register bus description.
+If a value wider than the data bus must be exposed, split it across multiple byte registers.
+Define field-level semantics explicitly.
 
 OUTPUT SCHEMA
 {{
   "derived_from_spec_only": true,
   "spec_mode": "{spec_mode}",
   "regmap": {{
-    "bus":"axi_lite|apb|custom|abstract|minimal",
-    "base_address":"0x40000000",
-    "addr_width": 32,
-    "data_width": 32,
-    "registers":[]
+    "bus": "custom|i2c|abstract|minimal|axi_lite|apb",
+    "base_address": "0x00",
+    "addr_width": 8,
+    "data_width": 8,
+    "registers": [
+      {{
+        "name": "CONTROL",
+        "offset": "0x01",
+        "access": "RW",
+        "description": "Control register",
+        "fields": [
+          {{"name": "ENABLE", "lsb": 0, "msb": 0, "access": "RW", "reset": 0, "description": "..."}}
+        ]
+      }}
+    ]
   }},
   "interrupts": {{
-    "sources":[]
+    "sources": [
+      {{"name": "ADC_DONE_IRQ", "description": "..."}},
+      {{"name": "FAULT_IRQ", "description": "..."}}
+    ]
   }},
   "software_driver_intent": {{
-    "init_sequence":[],
-    "polling_sequence":[],
-    "irq_sequence":[]
+    "init_sequence": [],
+    "polling_sequence": [],
+    "irq_sequence": []
   }},
-  "consistency_notes":[
+  "consistency_notes": [
     "All assumptions remain compatible with DIGITAL_SPEC_JSON."
   ]
 }}
@@ -184,5 +199,4 @@ OUTPUT SCHEMA
         "workflow_id": workflow_id,
         "workflow_dir": workflow_dir,
     })
-
-    return state
+    return state 

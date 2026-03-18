@@ -2,9 +2,7 @@ import os
 import json
 from portkey_ai import Portkey
 from openai import OpenAI
-
 from utils.artifact_utils import save_text_artifact_and_record
-
 
 PORTKEY_API_KEY = os.getenv("PORTKEY_API_KEY")
 client_portkey = Portkey(api_key=PORTKEY_API_KEY)
@@ -80,11 +78,7 @@ def run_agent(state: dict) -> dict:
         state["status"] = "❌ Missing digital spec JSON for microarchitecture generation."
         return state
 
-    try:
-        spec = _normalize_spec(spec_obj)
-    except Exception as e:
-        state["status"] = f"❌ Invalid digital spec JSON: {e}"
-        return state
+    spec = _normalize_spec(spec_obj)
 
     prompt = f"""
 You are a senior RTL/microarchitecture designer.
@@ -101,6 +95,8 @@ CRITICAL RULES
 - Do NOT invent hidden interfaces.
 - Do NOT change filenames.
 - This output is descriptive only.
+- Do NOT invent complex FSMs unless clearly implied by the spec.
+- Prefer the simplest implementation intent consistent with the spec.
 
 INPUTS
 USER_REQUEST:
@@ -130,7 +126,7 @@ If DIGITAL_SPEC_JSON is flat, output:
     "output_strategy": "..."
   }},
   "fsm_intent": {{
-    "present": true,
+    "present": false,
     "description": "...",
     "states": []
   }},
@@ -141,6 +137,7 @@ If DIGITAL_SPEC_JSON is flat, output:
   }},
   "sequencing_notes": [],
   "timing_notes": [],
+  "ownership_notes": [],
   "consistency_notes": [
     "Microarchitecture is descriptive only.",
     "Interfaces remain exactly as defined in digital_spec_json."
@@ -152,7 +149,16 @@ If DIGITAL_SPEC_JSON is hierarchical, output:
   "spec_mode": "hierarchical",
   "derived_from_spec_only": true,
   "top_module": "...",
-  "module_microarchitecture": [],
+  "module_microarchitecture": [
+    {{
+      "name": "...",
+      "implementation_style": "...",
+      "control_strategy": "...",
+      "state_strategy": "...",
+      "output_strategy": "...",
+      "ownership_notes": []
+    }}
+  ],
   "fsm_intent": [],
   "datapath_intent": [],
   "sequencing_notes": [],
@@ -225,5 +231,4 @@ Return JSON only.
         "workflow_id": workflow_id,
         "workflow_dir": workflow_dir,
     })
-
     return state
