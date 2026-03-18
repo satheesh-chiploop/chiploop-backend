@@ -445,6 +445,16 @@ SELF-CHECK BEFORE OUTPUT
 
 """.strip()
 
+def _find_fallback_spec_json(workflow_dir: str):
+    spec_dir = os.path.join(workflow_dir, "spec")
+    if not os.path.isdir(spec_dir):
+        return None
+    cands = []
+    for fn in os.listdir(spec_dir):
+        if fn.endswith("_spec.json"):
+            cands.append(os.path.join(spec_dir, fn))
+    cands.sort()
+    return cands[0] if cands else None
 
 def run_agent(state: dict) -> dict:
     agent_name = "Digital RTL Agent"
@@ -458,9 +468,44 @@ def run_agent(state: dict) -> dict:
     rtl_dir = os.path.join(workflow_dir, "rtl")
     os.makedirs(rtl_dir, exist_ok=True)
 
-    spec_obj = _load_json_if_path(state.get("digital_spec_json")) or _load_json_if_path(state.get("spec_json"))
+    entry_log = os.path.join(rtl_dir, "rtl_agent_entry.json")
+    with open(entry_log, "w", encoding="utf-8") as ef:
+    json.dump({
+        "workflow_id": workflow_id,
+        "workflow_dir": workflow_dir,
+        "digital_spec_json": state.get("digital_spec_json"),
+        "spec_json": state.get("spec_json"),
+        "digital_spec_json_exists": isinstance(state.get("digital_spec_json"), str) and os.path.exists(state.get("digital_spec_json", "")),
+        "spec_json_exists": isinstance(state.get("spec_json"), str) and os.path.exists(state.get("spec_json", "")),
+    }, ef, indent=2)
+
+    spec_path = None
+    spec_obj = _load_json_if_path(state.get("digital_spec_json"))
+    if spec_obj is None:
+        spec_obj = _load_json_if_path(state.get("spec_json"))
+    if spec_obj is None:
+        spec_path = _find_fallback_spec_json(workflow_dir)
+        spec_obj = _load_json_if_path(spec_path)
+
     if not spec_obj:
-        state["status"] = "❌ Missing digital spec JSON for RTL generation."
+        log_path = os.path.join(rtl_dir, "rtl_agent_compile.log")
+        summary_file = os.path.join(rtl_dir, "rtl_agent_summary.txt")
+        with open(log_path, "w", encoding="utf-8") as lf:
+            lf.write("RTL agent could not locate spec JSON.\n")
+            lf.write(f"digital_spec_json={state.get('digital_spec_json')}\n")
+            lf.write(f"spec_json={state.get('spec_json')}\n")
+            lf.write(f"fallback_spec_json={spec_path}\n")
+        with open(summary_file, "w", encoding="utf-8") as sf:
+            sf.write("❌ RTL generation aborted: missing spec JSON.\n")
+        state.update({
+            "status": "❌ Missing digital spec JSON for RTL generation.",
+            "artifact": None,
+            "artifact_list": [],
+            "artifact_log": log_path,
+            "issues": ["Missing digital spec JSON for RTL generation."],
+            "workflow_id": workflow_id,
+            "workflow_dir": workflow_dir,
+        })
         return state
 
     spec_json, mode = _normalize_spec_json(spec_obj)
