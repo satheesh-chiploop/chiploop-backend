@@ -1,37 +1,42 @@
 import os
-import re
 import json
-import subprocess
-import datetime
 from utils.artifact_utils import save_text_artifact_and_record
 from portkey_ai import Portkey
 from openai import OpenAI
 
-# ---------------------------------------------------------------------
-# Setup
-# ---------------------------------------------------------------------
 PORTKEY_API_KEY = os.getenv("PORTKEY_API_KEY")
 client_portkey = Portkey(api_key=PORTKEY_API_KEY)
 client_openai = OpenAI()
 
+
 def _normalize_spec_json(spec_json: dict) -> dict:
     """
-    Accepts either:
-      1) flat single-module JSON
-      2) hierarchical JSON
-    Returns canonical hierarchical form:
-    {
-      "design_name": "...",
-      "hierarchy": {
-        "top_module": {...},
-        "modules": [...]
-      }
-    }
+    Supports BOTH:
+    1) Flat single-module form:
+       {
+         "name": "...",
+         "ports": [...],
+         "functionality": "...",
+         "rtl_output_file": "x.v"
+       }
+
+    2) Hierarchical form:
+       {
+         "design_name": "...",
+         "hierarchy": {
+           "top_module": {...},
+           "modules": [...]
+         }
+       }
+
+    Returns:
+    - normalized JSON
+    - mode: "flat" or "hierarchical"
     """
     if not isinstance(spec_json, dict):
         raise ValueError("Spec JSON must be a dictionary.")
 
-    # Already hierarchical
+    # Hierarchical form
     if isinstance(spec_json.get("hierarchy"), dict):
         hier = spec_json["hierarchy"]
         top = hier.get("top_module")
@@ -46,46 +51,89 @@ def _normalize_spec_json(spec_json: dict) -> dict:
         if not isinstance(modules, list):
             raise ValueError("hierarchy.modules must be a list.")
 
-        return {
+        norm = {
             "design_name": spec_json.get("design_name") or top["name"],
             "hierarchy": {
                 "top_module": top,
                 "modules": modules,
             },
+            "inter_module_signals": spec_json.get("inter_module_signals", []),
+            "signal_ownership": spec_json.get("signal_ownership", []),
         }
+        return norm, "hierarchical"
 
     # Flat single-module form
     if spec_json.get("name") and spec_json.get("rtl_output_file"):
-        flat = spec_json
-        return {
-            "design_name": flat["name"],
-            "hierarchy": {
-                "top_module": flat,
-                "modules": [],
-            },
+        norm = {
+            "name": spec_json["name"],
+            "description": spec_json.get("description", ""),
+            "ports": spec_json.get("ports", []),
+            "functionality": spec_json.get("functionality", ""),
+            "rtl_output_file": spec_json["rtl_output_file"],
         }
+        return norm, "flat"
 
-    raise ValueError("Spec JSON must be either flat or hierarchical.")
+    raise ValueError("Spec JSON must be either flat single-module form or hierarchical form.")
 
 
-def _collect_expected_rtl_files(spec_json: dict) -> set:
+def _validate_port(port: dict, where: str) -> None:
+    if not isinstance(port, dict):
+        raise ValueError(f"{where} must be an object.")
+    if not port.get("name"):
+        raise ValueError(f"{where}.name is required.")
+    if port.get("direction") not in ("input", "output", "inout"):
+        raise ValueError(f"{where}.direction must be input/output/inout.")
+    width = port.get("width", 1)
+    if not isinstance(width, int) or width < 1:
+        raise ValueError(f"{where}.width must be integer >= 1.")
+
+
+def _validate_module(mod: dict, where: str) -> None:
+    if not isinstance(mod, dict):
+        raise ValueError(f"{where} must be an object.")
+    if not mod.get("name"):
+        raise ValueError(f"{where}.name is required.")
+    if not mod.get("rtl_output_file"):
+        raise ValueError(f"{where}.rtl_output_file is required.")
+    ports = mod.get("ports")
+    if not isinstance(ports, list):
+        raise ValueError(f"{where}.ports must be a list.")
+    for i, p in enumerate(ports):
+        _validate_port(p, f"{where}.ports[{i}]")
+
+
+def _validate_spec_contract(spec_json: dict, mode: str) -> None:
+    if mode == "flat":
+        _validate_module(spec_json, "spec")
+        return
+
     hier = spec_json["hierarchy"]
-    expected = set()
+    top = hier["top_module"]
+    modules = hier.get("modules", [])
 
-    top = hier.get("top_module", {})
-    if top.get("rtl_output_file"):
-        expected.add(top["rtl_output_file"])
+    _validate_module(top, "hierarchy.top_module")
 
-    for m in hier.get("modules", []):
-        if isinstance(m, dict) and m.get("rtl_output_file"):
-            expected.add(m["rtl_output_file"])
+    seen_mods = set()
+    seen_files = set()
 
-    return expected
-# ---------------------------------------------------------------------
-# Core Agent
-# ---------------------------------------------------------------------
+    def check_unique(mod: dict, where: str):
+        name = mod["name"]
+        rtl_file = mod["rtl_output_file"]
+        if name in seen_mods:
+            raise ValueError(f"Duplicate module name detected: {name}")
+        if rtl_file in seen_files:
+            raise ValueError(f"Duplicate rtl_output_file detected: {rtl_file}")
+        seen_mods.add(name)
+        seen_files.add(rtl_file)
+        _validate_module(mod, where)
+
+    check_unique(top, "hierarchy.top_module")
+    for idx, mod in enumerate(modules):
+        check_unique(mod, f"hierarchy.modules[{idx}]")
+
+
 def run_agent(state: dict) -> dict:
-    print("\n🚀 Running Digital Spec Agent (final stable build)...")
+    print("\n🚀 Running Digital Spec Agent (contract-only mode)...")
 
     workflow_id = state.get("workflow_id", "default")
     workflow_dir = state.get("workflow_dir", f"backend/workflows/{workflow_id}")
@@ -100,75 +148,32 @@ def run_agent(state: dict) -> dict:
         or state.get("description")
         or ""
     ).strip()
+
     if not user_prompt:
         state["status"] = "❌ No spec provided"
         return state
 
-    # -----------------------------------------------------------------
-    # 1️⃣ Build LLM Prompt  (User first, then structured format)
-    # -----------------------------------------------------------------
     prompt = f"""
 USER DIGITAL SPECIFICATION:
 {user_prompt}
 
----
+You are a professional ASIC digital architect.
 
-You are a professional ASIC RTL design engineer.
-
-The user specification above is the source of truth.
-Do NOT override it with your own architecture unless the spec is missing details.
-When details are missing, choose the simplest synthesizable implementation consistent with the user spec.
+Your task is to generate ONLY the authoritative digital design contract as JSON.
+Do NOT generate RTL.
+Do NOT generate Verilog.
+Do NOT include markdown.
+Do NOT include prose before or after JSON.
 
 STRICT OUTPUT RULES
-- Output valid JSON first, then Verilog.
+- Output ONLY one raw JSON object.
 - No markdown fences.
-- No explanations before, between, or after outputs.
 - JSON must parse with json.loads().
-- Verilog must be synthesizable Verilog-2005.
-- Do not emit placeholder modules.
-- Do not emit empty modules.
-- Do not reference undeclared signals.
-- All instantiated ports must be declared and connected.
-- All outputs must be driven.
 
-Generate two outputs in this strict order:
+IMPORTANT
+You may output EITHER of these two valid forms.
 
-1) JSON SPECIFICATION
-
-Supported JSON forms:
-
-- Hierarchical (multiple modules):
-{{
-  "design_name": "top_module_name",
-  "hierarchy": {{
-    "top_module": {{
-      "name": "top_module_name",
-      "description": "Describe top-level integration.",
-      "ports": [
-        {{"name": "clk", "direction": "input", "width": 1}},
-        {{"name": "reset_n", "direction": "input", "width": 1, "active_low": true}},
-        {{"name": "result", "direction": "output", "width": 8}}
-      ],
-      "functionality": "Describe how submodules are connected.",
-      "rtl_output_file": "top_module_name.v"
-    }},
-    "modules": [
-      {{
-        "name": "sub_module_a",
-        "description": "Purpose of submodule.",
-        "ports": [
-          {{"name": "a", "direction": "input", "width": 8}},
-          {{"name": "b", "direction": "input", "width": 8}},
-          {{"name": "y", "direction": "output", "width": 8}}
-        ],
-        "functionality": "Logic description.",
-        "rtl_output_file": "sub_module_a.v"
-      }}
-    ]
-  }}
-}}
-
-- Flat (single module):
+VALID FORM A — Flat single-module form:
 {{
   "name": "module_name",
   "description": "Explain purpose.",
@@ -182,212 +187,66 @@ Supported JSON forms:
   "rtl_output_file": "module_name.v"
 }}
 
-STRICT OUTPUT RULES
-
-- Output valid JSON first, then Verilog.
-- No markdown fences.
-- No explanations before, between, or after outputs.
-- JSON must parse with json.loads().
-- Verilog must be synthesizable Verilog-2005.
-
----
-
-JSON REQUIREMENTS
-
-- Every module must include: name, ports, functionality, rtl_output_file.
-- hierarchy.top_module must be an object, never a string.
-- rtl_output_file must exactly match emitted filenames.
-- JSON must exactly reflect emitted RTL (no mismatch).
-
----
-
-RTL GENERATION RULES
-
-- Preserve the structure defined in the user spec.
-- If hierarchical, maintain hierarchy.
-- Do not invent unnecessary modules.
-- Keep logic simple, deterministic, and synthesizable.
-- Prefer correctness and clarity over complexity.
-
----
-
-NO PLACEHOLDERS (STRICT)
-
-The following are strictly forbidden anywhere in RTL:
-
-- "logic goes here"
-- "implement later"
-- "placeholder"
-- TODO comments
-- comment-based expressions inside logic:
-  - reg <= /* ... */;
-  - if (/* ... */)
-  - case (/* ... */)
-  - assign x = /* ... */
-
-If behavior is unspecified:
-→ implement the simplest valid deterministic logic.
-
----
-
-MODULE IMPLEMENTATION RULES
-
-Every module must:
-
-- contain real executable RTL (not just structure)
-- drive all outputs
-- declare all internal signals used
-- avoid undeclared identifiers
-- compile independently
-
-Leaf modules:
-- must include actual logic (registers, combinational logic, etc.)
-- must not be empty shells
-
----
-
-MODULE INTERFACE RULES (CRITICAL)
-
-Each module must be fully self-contained.
-
-A module may ONLY use signals that are:
-- declared in its port list, OR
-- declared internally
-
-STRICT:
-- No access to parent-level signals
-- No access to sibling module signals
-- No implicit/global signals
-
-If a signal is used in RTL:
-→ it MUST exist in the module port list or internal declarations
-
-Otherwise the output is INVALID.
-
----
-
-PORT ↔ RTL CONSISTENCY
-
-- Every signal used in RTL must be declared
-- No undeclared identifiers allowed
-- No mismatch between port list and RTL usage
-
-If a signal appears in logic but is not declared:
-→ regenerate output
-
----
-
-INTER-MODULE CONSISTENCY RULES (ELABORATION CRITICAL)
-
-The full design must be globally consistent.
-
-For every module instantiation:
-
-- Port names must match exactly
-- Number of ports must match
-- Directions must match
-- Widths must match
-
-STRICT:
-
-- No missing ports in instantiation
-- No extra ports in instantiation
-- No renamed ports across modules
-
----
-
-SIGNAL CONNECTION RULES
-
-- All inter-module signals must be explicitly declared
-- All inputs must be driven
-- All outputs must be connected or intentionally unused
-
-NO DANGLING SIGNALS:
-- no floating inputs
-- no unconnected required ports
-
----
-
-WIDTH CONSISTENCY RULES
-
-- Signal widths must match across connections
-- No implicit truncation or extension
-- If needed, explicitly slice or extend signals
-
----
-
-OUTPUT OWNERSHIP RULES
-
-Each signal must have exactly ONE driver.
-
-- No multiple drivers
-- No duplicated output ownership
-- A module only drives signals declared in its own output ports
-
----
-
-TOP-LEVEL INTEGRATION RULES
-
-Top module must:
-
-- declare all interconnecting signals
-- connect all submodules explicitly
-- use consistent signal naming
-- not rely on implicit connections
-
----
-
-NO IMPLICIT DEPENDENCIES
-
-- No global/shared signals
-- No hidden dependencies
-- All communication must be through explicit ports
-
----
-
-SYNTACTIC COMPLETENESS RULE
-
-- All module instantiations must be syntactically complete
-- All parentheses must be properly closed
-- All port connections must be valid
-
----
-
-FINAL ELABORATION REQUIREMENT
-
-The generated RTL must:
-
-- compile successfully
-- elaborate successfully across all modules
-- have no:
-  - undeclared signals
-  - missing ports
-  - mismatched connections
-  - width mismatches
-  - unconnected required ports
-
----
-
-SELF-CHECK BEFORE OUTPUT (MANDATORY)
-
-Before producing final output, verify:
-
-1. Every module uses only declared signals
-2. Every port in every module is valid and used correctly
-3. Every instantiation matches its module definition
-4. No missing or extra ports
-5. No width mismatches
-6. No dangling or floating signals
-7. Each output is driven exactly once
-8. Entire design can compile and elaborate cleanly
-
-If ANY violation exists:
-→ fix it before producing output
-→ do NOT emit invalid RTL
+VALID FORM B — Hierarchical multi-module form:
+{{
+  "design_name": "top_module_name",
+  "hierarchy": {{
+    "top_module": {{
+      "name": "top_module_name",
+      "description": "Describe top-level integration.",
+      "ports": [
+        {{"name": "clk", "direction": "input", "width": 1}},
+        {{"name": "reset_n", "direction": "input", "width": 1, "active_low": true}},
+        {{"name": "result", "direction": "output", "width": 8}}
+      ],
+      "functionality": "Describe top-level behavior and integration.",
+      "rtl_output_file": "top_module_name.v"
+    }},
+    "modules": [
+      {{
+        "name": "sub_module_a",
+        "description": "Purpose of submodule.",
+        "ports": [
+          {{"name": "a", "direction": "input", "width": 8}},
+          {{"name": "b", "direction": "input", "width": 8}},
+          {{"name": "y", "direction": "output", "width": 8}}
+        ],
+        "functionality": "Logic role of submodule.",
+        "rtl_output_file": "sub_module_a.v"
+      }}
+    ]
+  }},
+  "inter_module_signals": [
+    {{
+      "name": "sig_a_to_b",
+      "width": 8,
+      "source": "sub_module_a.y",
+      "destinations": ["sub_module_b.a"]
+    }}
+  ],
+  "signal_ownership": [
+    {{
+      "signal": "result",
+      "owner": "top_module_name.result"
+    }}
+  ]
+}}
+
+RULES
+- If the design is truly just one module, output the flat single-module form.
+- If the design has internal hierarchy, output the hierarchical form.
+- Define exact module names.
+- Define exact ports.
+- Define exact rtl_output_file names.
+- Every port must include name, direction, width.
+- direction must be input/output/inout.
+- width must be integer >= 1.
+- If the user spec is incomplete, choose the simplest valid architecture ONCE and encode it here.
+- This JSON becomes the source of truth for downstream agents.
+
+Return JSON only.
 """.strip()
-    # -----------------------------------------------------------------
-    # 2️⃣ LLM Call
-    # -----------------------------------------------------------------
+
     try:
         print("🌐 Calling LLM via Portkey...")
         completion = client_portkey.chat.completions.create(
@@ -402,199 +261,85 @@ If ANY violation exists:
         state["status"] = f"❌ LLM generation failed: {e}"
         return state
 
-    # -----------------------------------------------------------------
-    # 3️⃣ Save Raw Output
-    # -----------------------------------------------------------------
     raw_output_path = os.path.join(workflow_dir, "llm_raw_output.txt")
     with open(raw_output_path, "w", encoding="utf-8") as rf:
         rf.write(llm_output)
-    print(f"📄 Saved raw LLM output to {raw_output_path}")
 
-    # -----------------------------------------------------------------
-    # 4️⃣ Extract JSON
-    # -----------------------------------------------------------------
-    spec_part = llm_output.split("---BEGIN", 1)[0].strip()
     try:
-        parsed_json = json.loads(spec_part)
-        spec_json = _normalize_spec_json(parsed_json)
-        print("✅ JSON parsed and normalized successfully.")
+        parsed_json = json.loads(llm_output.strip())
+        spec_json, mode = _normalize_spec_json(parsed_json)
+        _validate_spec_contract(spec_json, mode)
+        print(f"✅ Spec JSON parsed and validated successfully. mode={mode}")
     except Exception as e:
         state["status"] = f"❌ JSON parse/normalize failed: {e}"
         raise ValueError(f"LLM JSON parse/normalize failed: {e}")
 
-    hier = spec_json["hierarchy"]
-    top_obj = hier["top_module"]
-    module_name = spec_json.get("design_name") or top_obj["name"]
-    top_rtl_file = top_obj["rtl_output_file"]
-    expected_rtl_files = _collect_expected_rtl_files(spec_json)
+    if mode == "flat":
+        module_name = spec_json["name"]
+    else:
+        module_name = spec_json["hierarchy"]["top_module"]["name"]
 
-
-    verilog_blocks = re.findall(
-        r"---BEGIN\s+([A-Za-z_][\w\-]*\.v)---(.*?)---END\s+\1---",
-        llm_output,
-        re.DOTALL,
-    )
-    verilog_map = {fname.strip(): code.strip() for fname, code in verilog_blocks}
-
-    if not verilog_map:
-        state["status"] = "❌ No named Verilog file blocks found in LLM output."
-        raise ValueError(
-            "Expected named Verilog blocks: "
-            "---BEGIN <filename>.v--- ... ---END <filename>.v---"
-        )
-
-    all_modules = []
-    verilog_file = None
-
-    print(f"🧱 Writing {len(verilog_map)} Verilog module(s).")
-    for fname, code in verilog_map.items():
-        fpath = os.path.join(workflow_dir, fname)
-        with open(fpath, "w", encoding="utf-8") as vf:
-            vf.write(code)
-        print(f"✅ Wrote {len(code)} chars to {fname}")
-        all_modules.append(fpath)
-
-        if fname == top_rtl_file:
-            verilog_file = fpath
-
-    actual_rtl_files = set(os.path.basename(p) for p in all_modules)
-    missing_files = sorted(expected_rtl_files - actual_rtl_files)
-    extra_files = sorted(actual_rtl_files - expected_rtl_files)
-
-    if missing_files:
-        raise ValueError(f"LLM failed to emit declared RTL files: {missing_files}")
-
-    if extra_files:
-        print(f"⚠️ Extra RTL files emitted by LLM: {extra_files}")
-
-    if not verilog_file:
-        raise ValueError(
-            f"Top RTL file '{top_rtl_file}' declared in JSON was not emitted by the LLM."
-        )
-
-
-    # -----------------------------------------------------------------
-    # 8️⃣ Save spec JSON
-    # -----------------------------------------------------------------
     spec_json_path = os.path.join(workflow_dir, f"{module_name}_spec.json")
     with open(spec_json_path, "w", encoding="utf-8") as sf:
         json.dump(spec_json, sf, indent=2)
-    print(f"✅ Saved structured spec JSON → {spec_json_path}")
 
-        # -----------------------------------------------------------------
-    # 🔟 Syntax check
-    # -----------------------------------------------------------------
-    log_path = os.path.join(workflow_dir, "spec_agent_compile.log")
-    compile_status = "✅ Generated successfully."
+    log_path = os.path.join(workflow_dir, "spec_agent_contract.log")
+    with open(log_path, "w", encoding="utf-8") as lf:
+        lf.write("Digital Spec Agent completed successfully.\n")
+        lf.write("Mode: contract-only\n")
+        lf.write(f"Spec mode: {mode}\n")
+        lf.write(f"Spec JSON: {spec_json_path}\n")
+        if mode == "flat":
+            lf.write(f"Module: {spec_json['name']}\n")
+            lf.write(f"RTL file: {spec_json['rtl_output_file']}\n")
+        else:
+            top_obj = spec_json["hierarchy"]["top_module"]
+            lf.write(f"Top module: {top_obj['name']}\n")
+            lf.write(f"Top RTL file: {top_obj['rtl_output_file']}\n")
+            lf.write(f"Submodule count: {len(spec_json['hierarchy'].get('modules', []))}\n")
 
-    try:
-        # include all generated .v files for hierarchical designs
-        iverilog = os.getenv("IVERILOG_BIN", "/usr/bin/iverilog")
-        compile_cmd = [iverilog, "-o", "temp.out"] + all_modules
-        print(f"🧩 Running syntax check: {' '.join(os.path.basename(f) for f in compile_cmd[3:])}")
-
-        subprocess.run(
-            compile_cmd,
-            check=True,
-            capture_output=True,
-            text=True
-        )
-
-        with open(log_path, "w") as lf:
-            lf.write("Verilog syntax check passed.\n")
-
-    except subprocess.CalledProcessError as e:
-        compile_status = "⚠️ RTL generated but syntax check failed."
-        with open(log_path, "w") as lf:
-            lf.write(e.stderr or e.stdout or "")
-        print("⚠️ Verilog syntax check failed.")
-    # -----------------------------------------------------------------
-    # 11️⃣ Record artifacts
-    # -----------------------------------------------------------------
-    # -----------------------------------------------------------------
-    # 11️⃣ Upload artifacts to Supabase Storage + record JSON
-    # -----------------------------------------------------------------
     try:
         agent_name = "Digital Spec Agent"
 
-        # 11.1 LLM raw output
-        try:
-            with open(raw_output_path, "r", encoding="utf-8") as f:
-                raw_content = f.read()
+        with open(raw_output_path, "r", encoding="utf-8") as f:
             save_text_artifact_and_record(
                 workflow_id=workflow_id,
                 agent_name=agent_name,
                 subdir="spec",
                 filename="llm_raw_output.txt",
-                content=raw_content,
+                content=f.read(),
             )
-        except Exception as e:
-            print(f"⚠️ Failed to upload raw LLM output artifact: {e}")
 
-        # 11.2 Spec JSON
-        try:
-            with open(spec_json_path, "r", encoding="utf-8") as f:
-                spec_content = f.read()
+        with open(spec_json_path, "r", encoding="utf-8") as f:
             save_text_artifact_and_record(
                 workflow_id=workflow_id,
                 agent_name=agent_name,
                 subdir="spec",
                 filename=os.path.basename(spec_json_path),
-                content=spec_content,
+                content=f.read(),
             )
-        except Exception as e:
-            print(f"⚠️ Failed to upload spec JSON artifact: {e}")
 
-        # 11.3 Compile log
-        try:
-            with open(log_path, "r", encoding="utf-8") as f:
-                log_content = f.read()
+        with open(log_path, "r", encoding="utf-8") as f:
             save_text_artifact_and_record(
                 workflow_id=workflow_id,
                 agent_name=agent_name,
                 subdir="spec",
-                filename="spec_agent_compile.log",
-                content=log_content,
+                filename="spec_agent_contract.log",
+                content=f.read(),
             )
-        except Exception as e:
-            print(f"⚠️ Failed to upload spec agent compile log artifact: {e}")
-
-        # 11.4 Verilog modules (each .v file)
-        for fpath in all_modules:
-            try:
-                with open(fpath, "r", encoding="utf-8") as f:
-                    v_content = f.read()
-                save_text_artifact_and_record(
-                    workflow_id=workflow_id,
-                    agent_name=agent_name,
-                    subdir="spec",
-                    filename=os.path.basename(fpath),
-                    content=v_content,
-                )
-            except Exception as e:
-                print(f"⚠️ Failed to upload Verilog artifact {fpath}: {e}")
-
-        print("🧩 Spec Agent artifacts uploaded successfully.")
-
     except Exception as e:
         print(f"⚠️ Spec Agent artifact upload failed: {e}")
 
-
-    # -----------------------------------------------------------------
-    # 12️⃣ Finalize state
-    # -----------------------------------------------------------------
     state.update({
-        "status": compile_status,
-        "artifact": verilog_file,
-        "artifact_list": all_modules,
+        "status": "✅ Digital spec contract generated.",
+        "artifact": spec_json_path,
+        "artifact_list": [spec_json_path],
         "artifact_log": log_path,
         "spec_json": spec_json_path,
+        "digital_spec_json": spec_json_path,
         "workflow_dir": workflow_dir,
         "workflow_id": workflow_id,
     })
-    state["digital_spec_json"] = spec_json_path
 
-    print(f"✅ Completed Spec Agent for workflow {workflow_id}")
     return state
-
 

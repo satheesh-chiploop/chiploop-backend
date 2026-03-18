@@ -2,30 +2,37 @@ import os
 import json
 from portkey_ai import Portkey
 from openai import OpenAI
-
 from utils.artifact_utils import save_text_artifact_and_record
-
 
 PORTKEY_API_KEY = os.getenv("PORTKEY_API_KEY")
 client_portkey = Portkey(api_key=PORTKEY_API_KEY)
 client_openai = OpenAI()
 
 
-def _read_json_if_exists(path: str):
-    if isinstance(path, str) and path and os.path.exists(path):
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            return None
+def _read_json_if_exists(v):
+    if isinstance(v, dict):
+        return v
+    if isinstance(v, str) and v.endswith(".json") and os.path.exists(v):
+        with open(v, "r", encoding="utf-8") as f:
+            return json.load(f)
     return None
 
 
-def _safe_dump(obj) -> str:
+def _safe_dump(obj):
     try:
         return json.dumps(obj, indent=2)
     except Exception:
-        return str(obj)
+        return "null"
+
+
+def _detect_spec_mode(spec_obj: dict) -> str:
+    if not isinstance(spec_obj, dict):
+        return "unknown"
+    if isinstance(spec_obj.get("hierarchy"), dict):
+        return "hierarchical"
+    if spec_obj.get("name") and spec_obj.get("rtl_output_file"):
+        return "flat"
+    return "unknown"
 
 
 def run_agent(state: dict) -> dict:
@@ -37,67 +44,78 @@ def run_agent(state: dict) -> dict:
     os.makedirs(workflow_dir, exist_ok=True)
 
     user_prompt = (state.get("spec", "") or "").strip()
-    spec_obj = _read_json_if_exists(state.get("spec_json"))
+
+    spec_obj = (
+        _read_json_if_exists(state.get("digital_spec_json"))
+        or _read_json_if_exists(state.get("spec_json"))
+    )
     arch_obj = _read_json_if_exists(state.get("digital_architecture_json"))
     micro_obj = _read_json_if_exists(state.get("digital_microarchitecture_json"))
 
-    prompt = f"""
-You are a senior SoC register/CSR architect.
+    if not spec_obj:
+        state["status"] = "❌ Missing digital spec JSON for register map generation."
+        return state
 
-INPUTS:
-- USER_REQUEST (may be empty): {user_prompt}
-- SPEC_JSON (may be null):
+    spec_mode = _detect_spec_mode(spec_obj)
+
+    prompt = f"""
+You are a senior SoC register architect.
+
+DIGITAL_SPEC_JSON is the primary source of truth.
+ARCHITECTURE_JSON and MICROARCH_JSON are descriptive only.
+If they conflict with DIGITAL_SPEC_JSON, DIGITAL_SPEC_JSON wins.
+
+SPEC MODE:
+{spec_mode}
+
+INPUTS
+USER_REQUEST:
+{user_prompt}
+
+DIGITAL_SPEC_JSON:
 {_safe_dump(spec_obj)}
-- ARCHITECTURE_JSON (may be null):
+
+ARCHITECTURE_JSON (optional):
 {_safe_dump(arch_obj)}
-- MICROARCH_JSON (may be null):
+
+MICROARCH_JSON (optional):
 {_safe_dump(micro_obj)}
 
-OUTPUT RULES (CRITICAL):
-- DO NOT use markdown.
-- Output ONLY a single raw JSON object. No extra text.
-- JSON must be valid (parseable by json.loads).
-- No comments in JSON.
+OUTPUT RULES
+- Output ONLY one raw JSON object.
+- No markdown.
+- No prose.
+- No comments.
 
-TASK:
-Create an industry-standard register map suitable for an AXI-Lite/APB-style CSR block.
-Keep it generic: define typical ID/VERSION, CONTROL, STATUS, INTR_STATUS, INTR_MASK,
-and a small set of feature registers relevant to the described IP (but avoid random custom flags).
+TASK
+Generate a firmware-visible register map only if it is compatible with DIGITAL_SPEC_JSON.
+Do NOT invent new hierarchy.
+Do NOT invent incompatible top/module ports.
+Do NOT force AXI/APB if not implied by the spec.
+If the spec does not clearly define a CSR interface, keep the output minimal and state assumptions clearly.
 
-Output schema:
+OUTPUT SCHEMA
 {{
+  "derived_from_spec_only": true,
+  "spec_mode": "{spec_mode}",
   "regmap": {{
-    "bus":"axi_lite|apb|custom",
+    "bus":"axi_lite|apb|custom|abstract|minimal",
     "base_address":"0x40000000",
     "addr_width": 32,
     "data_width": 32,
-    "registers":[
-      {{
-        "name":"ID",
-        "offset":"0x000",
-        "access":"RO",
-        "reset":"0x00000000",
-        "desc":"...",
-        "fields":[
-          {{"name":"value","lsb":0,"msb":31,"access":"RO","reset":0,"desc":"..."}}
-        ]
-      }}
-    ]
+    "registers":[]
   }},
-  "access_policy_notes":[
-    "RW fields are synchronous to clk",
-    "RO fields are status snapshots",
-    "W1C for interrupt status where appropriate"
-  ],
   "interrupts": {{
-    "sources":[{{"name":"event0","desc":"...","sticky":true}}],
-    "register_convention":"INTR_STATUS (W1C), INTR_MASK (RW), INTR_PENDING (RO optional)"
+    "sources":[]
   }},
   "software_driver_intent": {{
-    "init_sequence":["..."],
-    "polling_sequence":["..."],
-    "irq_sequence":["..."]
-  }}
+    "init_sequence":[],
+    "polling_sequence":[],
+    "irq_sequence":[]
+  }},
+  "consistency_notes":[
+    "All assumptions remain compatible with DIGITAL_SPEC_JSON."
+  ]
 }}
 """.strip()
 
@@ -116,35 +134,39 @@ Output schema:
     with open(raw_path, "w", encoding="utf-8") as f:
         f.write(llm_output)
 
-    regmap = None
     try:
         regmap = json.loads(llm_output.strip())
     except Exception as e:
-        regmap = {"error": "LLM JSON parse failed", "parse_error": str(e), "raw": llm_output.strip()}
+        regmap = {
+            "error": "LLM JSON parse failed",
+            "parse_error": str(e),
+            "raw": llm_output.strip()
+        }
 
     out_path = os.path.join(workflow_dir, "digital_regmap.json")
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(regmap, f, indent=2)
 
     try:
-        save_text_artifact_and_record(
-            workflow_id=workflow_id,
-            agent_name=agent_name,
-            subdir="digital",
-            filename="digital_regmap_raw_output.txt",
-            content=open(raw_path, "r", encoding="utf-8").read(),
-        )
-        save_text_artifact_and_record(
-            workflow_id=workflow_id,
-            agent_name=agent_name,
-            subdir="digital",
-            filename="digital_regmap.json",
-            content=open(out_path, "r", encoding="utf-8").read(),
-        )
+        with open(raw_path, "r", encoding="utf-8") as f:
+            save_text_artifact_and_record(
+                workflow_id=workflow_id,
+                agent_name=agent_name,
+                subdir="digital",
+                filename="digital_regmap_raw_output.txt",
+                content=f.read(),
+            )
+        with open(out_path, "r", encoding="utf-8") as f:
+            save_text_artifact_and_record(
+                workflow_id=workflow_id,
+                agent_name=agent_name,
+                subdir="digital",
+                filename="digital_regmap.json",
+                content=f.read(),
+            )
     except Exception as e:
         print(f"⚠️ Failed to upload regmap artifacts: {e}")
 
-        # Publish both artifact path and parsed object into state for downstream agents.
     rel_regmap_path = "digital/digital_regmap.json"
 
     digital = state.setdefault("digital", {})
@@ -162,5 +184,5 @@ Output schema:
         "workflow_id": workflow_id,
         "workflow_dir": workflow_dir,
     })
-    
+
     return state

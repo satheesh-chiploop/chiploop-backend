@@ -11,10 +11,12 @@ client_portkey = Portkey(api_key=PORTKEY_API_KEY)
 client_openai = OpenAI()
 
 
-def _read_json_if_exists(path: str):
-    if isinstance(path, str) and path and os.path.exists(path):
+def _read_json_if_exists(v):
+    if isinstance(v, dict):
+        return v
+    if isinstance(v, str) and v and os.path.exists(v):
         try:
-            with open(path, "r", encoding="utf-8") as f:
+            with open(v, "r", encoding="utf-8") as f:
                 return json.load(f)
         except Exception:
             return None
@@ -28,6 +30,36 @@ def _safe_dump(obj) -> str:
         return str(obj)
 
 
+def _normalize_spec(spec_obj: dict):
+    if not isinstance(spec_obj, dict):
+        raise ValueError("digital spec must be a JSON object")
+
+    if isinstance(spec_obj.get("hierarchy"), dict):
+        hier = spec_obj["hierarchy"]
+        top = hier.get("top_module")
+        modules = hier.get("modules", [])
+        if not isinstance(top, dict) or not top.get("name"):
+            raise ValueError("hierarchy.top_module.name missing")
+        if not isinstance(modules, list):
+            raise ValueError("hierarchy.modules must be a list")
+        return {
+            "spec_mode": "hierarchical",
+            "top_module": top["name"],
+            "modules": [top] + modules,
+            "raw": spec_obj,
+        }
+
+    if spec_obj.get("name") and spec_obj.get("rtl_output_file"):
+        return {
+            "spec_mode": "flat",
+            "top_module": spec_obj["name"],
+            "modules": [spec_obj],
+            "raw": spec_obj,
+        }
+
+    raise ValueError("Unsupported spec JSON format")
+
+
 def run_agent(state: dict) -> dict:
     print("\n🧩 Running Digital Microarchitecture Agent...")
 
@@ -37,71 +69,101 @@ def run_agent(state: dict) -> dict:
     os.makedirs(workflow_dir, exist_ok=True)
 
     user_prompt = (state.get("spec", "") or "").strip()
-    spec_obj = _read_json_if_exists(state.get("spec_json"))
+
+    spec_obj = (
+        _read_json_if_exists(state.get("digital_spec_json"))
+        or _read_json_if_exists(state.get("spec_json"))
+    )
     arch_obj = _read_json_if_exists(state.get("digital_architecture_json"))
 
-    prompt = f"""
-You are a senior micro-architecture designer for synthesizable digital IP.
+    if not spec_obj:
+        state["status"] = "❌ Missing digital spec JSON for microarchitecture generation."
+        return state
 
-INPUTS:
-- USER_REQUEST (may be empty): {user_prompt}
-- SPEC_JSON (may be null):
+    try:
+        spec = _normalize_spec(spec_obj)
+    except Exception as e:
+        state["status"] = f"❌ Invalid digital spec JSON: {e}"
+        return state
+
+    prompt = f"""
+You are a senior RTL/microarchitecture designer.
+
+DIGITAL_SPEC_JSON is the single source of truth.
+ARCHITECTURE_JSON is descriptive only.
+Your task is to describe implementation intent only.
+
+CRITICAL RULES
+- Do NOT redefine architecture.
+- Do NOT rename modules.
+- Do NOT rename ports.
+- Do NOT invent new modules.
+- Do NOT invent hidden interfaces.
+- Do NOT change filenames.
+- This output is descriptive only.
+
+INPUTS
+USER_REQUEST:
+{user_prompt}
+
+DIGITAL_SPEC_JSON:
 {_safe_dump(spec_obj)}
-- ARCHITECTURE_JSON (may be null):
+
+ARCHITECTURE_JSON:
 {_safe_dump(arch_obj)}
 
-OUTPUT RULES (CRITICAL):
-- DO NOT use markdown.
-- Output ONLY a single raw JSON object. No extra text.
-- JSON must be valid (parseable by json.loads).
-- No comments in JSON.
+OUTPUT RULES
+- Output ONLY a single raw JSON object.
+- No markdown.
+- No prose before or after JSON.
+- No comments.
 
-TASK:
-Produce a concrete micro-architecture plan: pipelines/FSMs/queues/arbitration,
-timing/latency/throughput expectations, and implementation-ready design intent.
-
-Output schema:
+If DIGITAL_SPEC_JSON is flat, output:
 {{
-  "design_name":"string",
-  "microarchitecture_summary":"string",
-  "clocking_intent": {{
-    "clock_domains":[{{"domain":"...", "clk":"...", "notes":"..."}}],
-    "reset_intent":"..."
+  "spec_mode": "flat",
+  "derived_from_spec_only": true,
+  "module_name": "...",
+  "microarchitecture_summary": {{
+    "implementation_style": "...",
+    "control_strategy": "...",
+    "state_strategy": "...",
+    "output_strategy": "..."
   }},
-  "pipeline": {{
-    "stages":[
-      {{"name":"S0", "purpose":"...", "latency_cycles":1, "key_ops":["..."], "inputs":["..."], "outputs":["..."]}}
-    ],
-    "total_latency_cycles":"string",
-    "throughput":"string"
+  "fsm_intent": {{
+    "present": true,
+    "description": "...",
+    "states": []
   }},
-  "control": {{
-    "fsms":[
-      {{"name":"fsm_name", "states":["IDLE","..."], "transitions":["..."], "notes":"..."}}
-    ],
-    "arbitration":[
-      {{"name":"arb_name", "policy":"rr|fixed|priority", "requesters":["..."], "grants":["..."]}}
-    ]
+  "datapath_intent": {{
+    "inputs": [],
+    "internal_storage": [],
+    "output_mapping": []
   }},
-  "storage": {{
-    "registers":["..."],
-    "fifos":[{{"name":"fifo0","depth":4,"width":32,"notes":"..."}}],
-    "memories":[{{"name":"mem0","type":"sram|ram|rom","depth":256,"width":32,"notes":"..."}}]
-  }},
-  "interfaces_intent": {{
-    "internal_signals":["..."],
-    "handshakes":[{{"name":"ready/valid", "signals":["..."], "notes":"..."}}]
-  }},
-  "timing_notes":[
-    "CDC considerations (intent only, no implementation)",
-    "critical paths likely to watch"
-  ],
-  "verification_targets": {{
-    "corner_cases":["..."],
-    "assertions":["..."],
-    "coverage_points":["..."]
-  }}
+  "sequencing_notes": [],
+  "timing_notes": [],
+  "consistency_notes": [
+    "Microarchitecture is descriptive only.",
+    "Interfaces remain exactly as defined in digital_spec_json."
+  ]
 }}
+
+If DIGITAL_SPEC_JSON is hierarchical, output:
+{{
+  "spec_mode": "hierarchical",
+  "derived_from_spec_only": true,
+  "top_module": "...",
+  "module_microarchitecture": [],
+  "fsm_intent": [],
+  "datapath_intent": [],
+  "sequencing_notes": [],
+  "timing_notes": [],
+  "consistency_notes": [
+    "Microarchitecture is descriptive only.",
+    "No hierarchy, ports, or filenames may differ from digital_spec_json."
+  ]
+}}
+
+Return JSON only.
 """.strip()
 
     try:
@@ -119,38 +181,49 @@ Output schema:
     with open(raw_path, "w", encoding="utf-8") as f:
         f.write(llm_output)
 
-    micro = None
     try:
         micro = json.loads(llm_output.strip())
     except Exception as e:
-        micro = {"error": "LLM JSON parse failed", "parse_error": str(e), "raw": llm_output.strip()}
+        state["status"] = f"❌ Microarchitecture JSON parse failed: {e}"
+        save_text_artifact_and_record(
+            workflow_id=workflow_id,
+            agent_name=agent_name,
+            subdir="digital",
+            filename="digital_microarchitecture_llm_error.txt",
+            content=llm_output,
+        )
+        return state
 
     out_path = os.path.join(workflow_dir, "digital_microarchitecture.json")
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(micro, f, indent=2)
 
     try:
-        save_text_artifact_and_record(
-            workflow_id=workflow_id,
-            agent_name=agent_name,
-            subdir="digital",
-            filename="digital_microarchitecture_raw_output.txt",
-            content=open(raw_path, "r", encoding="utf-8").read(),
-        )
-        save_text_artifact_and_record(
-            workflow_id=workflow_id,
-            agent_name=agent_name,
-            subdir="digital",
-            filename="digital_microarchitecture.json",
-            content=open(out_path, "r", encoding="utf-8").read(),
-        )
+        with open(raw_path, "r", encoding="utf-8") as f:
+            save_text_artifact_and_record(
+                workflow_id=workflow_id,
+                agent_name=agent_name,
+                subdir="digital",
+                filename="digital_microarchitecture_raw_output.txt",
+                content=f.read(),
+            )
+        with open(out_path, "r", encoding="utf-8") as f:
+            save_text_artifact_and_record(
+                workflow_id=workflow_id,
+                agent_name=agent_name,
+                subdir="digital",
+                filename="digital_microarchitecture.json",
+                content=f.read(),
+            )
     except Exception as e:
         print(f"⚠️ Failed to upload microarchitecture artifacts: {e}")
 
     state.update({
         "status": "✅ Digital microarchitecture generated.",
         "digital_microarchitecture_json": out_path,
+        "digital_microarchitecture_path": out_path,
         "workflow_id": workflow_id,
         "workflow_dir": workflow_dir,
     })
+
     return state

@@ -3,328 +3,410 @@ import re
 import json
 import datetime
 import subprocess
-import requests
+from typing import Dict, List, Tuple, Optional
+
 from portkey_ai import Portkey
 from openai import OpenAI
 from utils.artifact_utils import save_text_artifact_and_record
 
-OLLAMA_URL = "http://127.0.0.1:11434/api/generate"
-USE_LOCAL_OLLAMA = os.getenv("USE_LOCAL_OLLAMA", "false").lower() == "true"
 PORTKEY_API_KEY = os.getenv("PORTKEY_API_KEY")
-client_portkey = Portkey(
-    api_key=PORTKEY_API_KEY
-)
+client_portkey = Portkey(api_key=PORTKEY_API_KEY)
 client_openai = OpenAI()
 
+
+def _load_json_if_path(v):
+    if isinstance(v, dict):
+        return v
+    if isinstance(v, str) and v.endswith(".json") and os.path.exists(v):
+        with open(v, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return None
+
+
+def _normalize_spec_json(spec_json: dict) -> Tuple[dict, str]:
+    if not isinstance(spec_json, dict):
+        raise ValueError("Spec JSON must be a dictionary.")
+
+    if isinstance(spec_json.get("hierarchy"), dict):
+        hier = spec_json["hierarchy"]
+        top = hier.get("top_module")
+        modules = hier.get("modules", [])
+        if not isinstance(top, dict):
+            raise ValueError("hierarchy.top_module must be an object.")
+        if not top.get("name"):
+            raise ValueError("hierarchy.top_module.name is required.")
+        if not top.get("rtl_output_file"):
+            raise ValueError("hierarchy.top_module.rtl_output_file is required.")
+        if not isinstance(modules, list):
+            raise ValueError("hierarchy.modules must be a list.")
+        return {
+            "design_name": spec_json.get("design_name") or top["name"],
+            "hierarchy": {
+                "top_module": top,
+                "modules": modules,
+            },
+            "inter_module_signals": spec_json.get("inter_module_signals", []),
+            "signal_ownership": spec_json.get("signal_ownership", []),
+        }, "hierarchical"
+
+    if spec_json.get("name") and spec_json.get("rtl_output_file"):
+        return {
+            "name": spec_json["name"],
+            "description": spec_json.get("description", ""),
+            "ports": spec_json.get("ports", []),
+            "functionality": spec_json.get("functionality", ""),
+            "rtl_output_file": spec_json["rtl_output_file"],
+        }, "flat"
+
+    raise ValueError("Spec JSON must be either flat or hierarchical.")
+
+
+def _collect_expected_modules(spec_json: dict, mode: str) -> List[dict]:
+    if mode == "flat":
+        return [spec_json]
+    hier = spec_json["hierarchy"]
+    return [hier["top_module"]] + list(hier.get("modules", []))
+
+
+def _collect_expected_rtl_files(spec_json: dict, mode: str) -> List[str]:
+    return [m["rtl_output_file"] for m in _collect_expected_modules(spec_json, mode)]
+
+
+def _top_module_name(spec_json: dict, mode: str) -> str:
+    if mode == "flat":
+        return spec_json["name"]
+    return spec_json["hierarchy"]["top_module"]["name"]
+
+
+def _top_rtl_file(spec_json: dict, mode: str) -> str:
+    if mode == "flat":
+        return spec_json["rtl_output_file"]
+    return spec_json["hierarchy"]["top_module"]["rtl_output_file"]
+
+
+def _parse_named_verilog_blocks(llm_output: str) -> Dict[str, str]:
+    blocks = re.findall(
+        r"---BEGIN\s+([A-Za-z_][\w\-]*\.v)---(.*?)---END\s+\1---",
+        llm_output,
+        re.DOTALL,
+    )
+    return {fname.strip(): code.strip() for fname, code in blocks}
+
+
+def _extract_module_ports(verilog_text: str) -> Dict[str, List[str]]:
+    out = {}
+    mod_pat = re.compile(r"\bmodule\s+([A-Za-z_]\w*)\s*\((.*?)\)\s*;", re.DOTALL)
+    for m in mod_pat.finditer(verilog_text):
+        mod_name = m.group(1)
+        raw_ports = m.group(2)
+        port_names = []
+        for p in raw_ports.split(","):
+            token = p.strip()
+            token = re.sub(r"\binput\b|\boutput\b|\binout\b|\bwire\b|\breg\b|\blogic\b|\bsigned\b", "", token)
+            token = re.sub(r"\[[^\]]+\]", "", token)
+            token = token.strip()
+            if token:
+                parts = token.split()
+                if parts:
+                    port_names.append(parts[-1].strip())
+        out[mod_name] = port_names
+    return out
+
+
+def _validate_spec_vs_rtl(spec_json: dict, mode: str, verilog_map: Dict[str, str]) -> Tuple[List[str], List[str], List[str]]:
+    issues = []
+    clock_ports = []
+    reset_ports = []
+
+    expected_modules = _collect_expected_modules(spec_json, mode)
+    expected_files = set(_collect_expected_rtl_files(spec_json, mode))
+    actual_files = set(verilog_map.keys())
+
+    missing_files = sorted(expected_files - actual_files)
+    extra_files = sorted(actual_files - expected_files)
+
+    if missing_files:
+        issues.append(f"❌ Missing expected RTL files: {missing_files}")
+    if extra_files:
+        issues.append(f"⚠ Extra RTL files emitted: {extra_files}")
+
+    for mod in expected_modules:
+        mod_name = mod["name"]
+        rtl_file = mod["rtl_output_file"]
+        spec_ports = [p["name"] for p in mod.get("ports", [])]
+
+        code = verilog_map.get(rtl_file)
+        if not code:
+            continue
+
+        extracted = _extract_module_ports(code)
+        if mod_name not in extracted:
+            issues.append(f"❌ Module '{mod_name}' not found in file '{rtl_file}'.")
+            continue
+
+        rtl_ports = extracted[mod_name]
+        missing_ports = [p for p in spec_ports if p not in rtl_ports]
+        extra_ports2 = [p for p in rtl_ports if p not in spec_ports]
+
+        if missing_ports:
+            issues.append(f"❌ Module '{mod_name}' missing ports vs spec: {missing_ports}")
+        if extra_ports2:
+            issues.append(f"❌ Module '{mod_name}' has extra ports vs spec: {extra_ports2}")
+
+        for p in mod.get("ports", []):
+            pname = p["name"]
+            if re.search(r"clk|clock", pname, re.IGNORECASE):
+                clock_ports.append(pname)
+            if re.search(r"rst|reset", pname, re.IGNORECASE):
+                reset_ports.append(pname)
+
+    return issues, sorted(set(clock_ports)), sorted(set(reset_ports))
+
+
+def _build_generation_prompt(spec_json: dict, mode: str, regmap_obj: Optional[dict], clock_reset_obj: Optional[dict], power_intent_obj: Optional[dict]) -> str:
+    return f"""
+You are a senior ASIC RTL engineer.
+
+The input DIGITAL_SPEC_JSON is the single source of truth.
+You must implement it exactly.
+Do NOT redesign architecture.
+Do NOT rename modules.
+Do NOT rename ports.
+Do NOT change rtl_output_file names.
+Do NOT add extra modules.
+Do NOT drop required modules.
+Do NOT add extra ports.
+Do NOT omit required ports.
+
+STRICT OUTPUT RULES
+- Output ONLY named Verilog file blocks.
+- No markdown fences.
+- No explanations.
+- Use this exact format:
+---BEGIN file_name.v---
+<verilog here>
+---END file_name.v---
+
+SPEC MODE:
+{mode}
+
+DIGITAL_SPEC_JSON:
+{json.dumps(spec_json, indent=2)}
+
+DIGITAL_REGMAP_JSON:
+{json.dumps(regmap_obj, indent=2) if regmap_obj is not None else "null"}
+
+CLOCK_RESET_ARCH_JSON:
+{json.dumps(clock_reset_obj, indent=2) if clock_reset_obj is not None else "null"}
+
+POWER_INTENT_JSON:
+{json.dumps(power_intent_obj, indent=2) if power_intent_obj is not None else "null"}
+
+IMPLEMENTATION RULES
+- Generate synthesizable Verilog-2005.
+- If SPEC MODE is flat, generate exactly one module file only.
+- If SPEC MODE is hierarchical, generate every required module file from spec.
+- Each file must contain the module declared in its rtl_output_file mapping.
+- All module headers must exactly match the spec contract.
+- Use only declared signals.
+- No undeclared identifiers.
+- No TODOs.
+- No empty shells.
+- Drive all outputs.
+- If behavior is underspecified, choose the simplest deterministic logic consistent with the functionality text.
+- If there is a register map, use it only to shape CSR-visible behavior; do not invent new architecture.
+- If there is clock/reset intent, use it only for reset polarity / clock behavior; do not change interfaces.
+- Entire design must compile together cleanly.
+
+SELF-CHECK BEFORE OUTPUT
+1. Every expected file is emitted exactly once.
+2. Every module name matches spec.
+3. Every port list matches spec exactly.
+4. No missing or extra ports.
+5. No undeclared signals.
+6. No width mismatches.
+""".strip()
+
+
 def run_agent(state: dict) -> dict:
-
     agent_name = "Digital RTL Agent"
-    print("\n🧠 Running RTL Agent (Spec-Aware Validation)...")
+    print("\n🧠 Running RTL Agent (implementation mode)...")
 
-    # --- Added: Multi-user workflow isolation ---
     workflow_id = state.get("workflow_id", "default")
     workflow_dir = state.get("workflow_dir", f"backend/workflows/{workflow_id}")
     os.makedirs(workflow_dir, exist_ok=True)
-    # --------------------------------------------
-    artifact_list = state.get("artifact_list", [])
-    if artifact_list:
-        print(f"🧩 Hierarchical design detected with {len(artifact_list)} modules.")
-        merged_path = os.path.join(workflow_dir, "hierarchy_compile.v")
-        with open(merged_path, "w") as merged:
-            for fpath in artifact_list:
-                if not os.path.exists(fpath):
-                    print(f"⚠️ Missing module file: {fpath}")
-                    continue
-                with open(fpath, "r") as src:
-                    merged.write(f"// === {os.path.basename(fpath)} ===\n")
-                    merged.write(src.read() + "\n\n")
-        rtl_file = merged_path
-    else:
-        rtl_file = state.get("artifact")
-        if not rtl_file or not os.path.exists(rtl_file):
-            v_files = [f for f in os.listdir(workflow_dir) if f.endswith(".v")]
-            if not v_files:
-                raise FileNotFoundError(f"No RTL (.v) file found in {workflow_dir}")
-            rtl_file = os.path.join(workflow_dir, v_files[0])
 
-
-    print(f"✅ Using RTL file: {rtl_file}")
-    # Detect the JSON spec file dynamically
-    spec_file = state.get("spec_json")
-    if not spec_file or not os.path.exists(spec_file):
-        json_candidates = [f for f in os.listdir(workflow_dir) if f.endswith("_spec.json")]
-        if not json_candidates:
-          raise FileNotFoundError(f"No spec JSON file found in {workflow_dir}")
-        spec_file = os.path.join(workflow_dir, json_candidates[0])
-        
-
-    if not os.path.exists(rtl_file):
-        state["status"] = f"❌ RTL file '{rtl_file}' not found."
-        return state
-    if not spec_file or not os.path.exists(spec_file):
-        state["status"] = "⚠ Spec JSON not found — limited validation mode."
-        spec = {}
-    else:
-        with open(spec_file, "r") as f:
-            spec = json.load(f)
-
-    # --- Step 1: Basic Verilog Syntax Lint via Icarus ---
-    log_path = os.path.join(workflow_dir, "rtl_agent_compile.log")
-    try:
-        # 🔧 Hierarchical compilation: include all modules
-        v_files = [os.path.join(workflow_dir, f) for f in os.listdir(workflow_dir) if f.endswith(".v")]
-        iverilog = os.getenv("IVERILOG_BIN", "iverilog")
-        compile_cmd = [iverilog, "-o", "rtl_check.out"] + v_files
-
-        print(f"🧩 Running hierarchical compile on {len(v_files)} RTL files: {[os.path.basename(f) for f in v_files]}")
-
-        result = subprocess.run(
-           compile_cmd,
-           check=True,
-           capture_output=True,
-           text=True
-        )
-
-        compile_status = "✅ Verilog syntax check passed."
-    except subprocess.CalledProcessError as e:
-        compile_status = "⚠ Verilog syntax check failed."
-        error_log = (e.stderr or e.stdout or "").strip()
-        with open(log_path, "w") as logf:
-            logf.write(error_log)
-        state.update({
-            "status": compile_status,
-            "error_log": error_log,
-            "artifact_log": log_path,
-            "workflow_id": workflow_id,
-            "workflow_dir": workflow_dir
-        })
+    spec_obj = _load_json_if_path(state.get("digital_spec_json")) or _load_json_if_path(state.get("spec_json"))
+    if not spec_obj:
+        state["status"] = "❌ Missing digital spec JSON for RTL generation."
         return state
 
-    # --- Step 2: Extract RTL ports from Verilog ---
-    with open(rtl_file, "r") as f:
-        verilog_text = f.read()
+    spec_json, mode = _normalize_spec_json(spec_obj)
 
-
- 
-    port_pattern = re.compile(
-        r'\b(input|output|inout)\s+(?:wire|reg|logic|signed)?\s*(?:\[[^\]]+\]\s*)?([A-Za-z_]\w*)',
-        re.I
+    regmap_obj = (
+        _load_json_if_path(state.get("digital_regmap_json"))
+        or _load_json_if_path(state.get("digital_regmap"))
     )
 
-    ports = [m.group(2) for m in port_pattern.finditer(verilog_text)]
-    port_names = ports
+    clock_reset_obj = _load_json_if_path(state.get("clock_reset_arch_path"))
 
-    print(f"🔍 Extracted ports: {port_names}")
+    power_intent_obj = None
+    if isinstance(state.get("signoff", {}).get("power_intent"), dict):
+        power_intent_obj = state["signoff"]["power_intent"]
 
-    clocks_detected = [p for p in port_names if re.search(r"clk|clock", p, re.IGNORECASE)]
-    resets_detected = [p for p in port_names if re.search(r"rst|reset", p, re.IGNORECASE)]
+    prompt = _build_generation_prompt(spec_json, mode, regmap_obj, clock_reset_obj, power_intent_obj)
 
-    if "io" not in spec and "ports" in spec and isinstance(spec["ports"], list):
-        ins = []
-        outs = []
-        for p in spec["ports"]:
-            try:
-                nm = p.get("name")
-                if not nm: continue
-                if p.get("direction") == "input":
-                    width = int(p.get("width", 1))
-                    ins.append(nm if width == 1 else f"{nm}[{width-1}:0]")
-                elif p.get("direction") == "output":
-                    width = int(p.get("width", 1))
-                    outs.append(nm if width == 1 else f"{nm}[{width-1}:0]")
-            except Exception:
-                continue
-        spec["io"] = {"inputs": ins, "outputs": outs}
-
-    # --- Step 3: Validate with spec.json ---
-    issues = []
-    if "clock" in spec:
-        for clk in spec["clock"]:
-            name = clk["name"]
-            if name not in port_names:
-                issues.append(f"❌ Clock '{name}' missing in RTL ports.")
-    if "reset" in spec:
-        for rst in spec["reset"]:
-            name = rst["name"]
-            if name not in port_names:
-                issues.append(f"❌ Reset '{name}' missing in RTL ports.")
-    if "io" in spec:
-        for pin in spec["io"].get("inputs", []):
-            pin_name = re.split(r"\[", pin)[0]
-            if pin_name not in port_names:
-                issues.append(f"⚠ Input '{pin}' not found in RTL.")
-        for pin in spec["io"].get("outputs", []):
-            pin_name = re.split(r"\[", pin)[0]
-            if pin_name not in port_names:
-                issues.append(f"⚠ Output '{pin}' not found in RTL.")
-
-    # --- Step 4: Optional LLM-based linting ---
-    lint_feedback = ""
     try:
-        lint_prompt = f"""
-You are a senior RTL reviewer.
-Analyze the following Verilog hierarchy for logic or style issues.
-If multiple modules are present, ensure consistent signal naming,
-no duplicate clk/reset declarations, and correct submodule instantiations.
-Summarize key issues clearly.
-Make sure below rules are followed
-Review the RTL and report problems only.
-Do not generate code.
-Return a short list of issues.
-Review the RTL and report problems onlya
-Do NOT generate or modify RTL code.
-Return a bullet list of issues
-Do NOT include markdown code fences or explanations.
-Ensure all ports are declared inside parentheses in the module declaration. 
-Avoid duplicate declarations of signals like clk, reset, or common ports.
-Each signal is declared only once across all modules.
-Do not repeat `clk`, `reset`, or any input/output in submodules if already declared in the top module.
-Avoid declaring loop indices (like i) globally.
-
-Do NOT include undefined macros like `sv`, `enable`, or custom defines.
-End every statement with a semicolon and close with `endmodule` only once.
-Provide only compilable Verilog/SystemVerilog code — no explanations or comments outside the code.
-Include all input/output declarations explicitly
-- Use lowercase signal names.
-- Declare all ports explicitly.
-- For multiple clocks, create independent always blocks.
-- For control or arithmetic designs, infer appropriate logic cleanly.
-{verilog_text[:3000]}
-"""
-        if USE_LOCAL_OLLAMA:
-            payload = {"model": "llama3", "prompt": lint_prompt}
-            r = requests.post(OLLAMA_URL, json=payload, timeout=60)
-            lint_feedback = r.text.strip()
-        else:
-            response = client_portkey.chat.completions.create(
-                model="@chiploop/gpt-4o-mini",
-                messages=[{"role": "user", "content": lint_prompt}],
-            )
-            lint_feedback = response.choices[0].message.get("content", "")  
+        completion = client_portkey.chat.completions.create(
+            model="@chiploop/gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            stream=False,
+        )
+        llm_output = completion.choices[0].message.content or ""
     except Exception as e:
-        lint_feedback = f"(Skipped LLM lint due to {e})"
+        state["status"] = f"❌ RTL generation failed: {e}"
+        return state
 
-    # --- Step 5: Log Summary ---
-    with open(log_path, "w") as logf:
-        logf.write(f"RTL Validation Log — {datetime.datetime.now()}\n\n")
-        logf.write(f"{compile_status}\n\n")
-        if issues:
-            logf.write("Spec mismatches:\n")
-            logf.writelines(f"- {i}\n" for i in issues)
-        else:
-            logf.write("✅ All spec ports found in RTL.\n")
-        logf.write("\n🔍 LLM Review Summary:\n")
-        logf.write(lint_feedback)
+    raw_output_path = os.path.join(workflow_dir, "rtl_llm_raw_output.txt")
+    with open(raw_output_path, "w", encoding="utf-8") as f:
+        f.write(llm_output)
 
-    # --- Step 6: Update state ---
-    overall_status = "⚠ RTL validation completed with mismatches." if issues else "✅ RTL validated successfully."
+    verilog_map = _parse_named_verilog_blocks(llm_output)
+    if not verilog_map:
+        state["status"] = "❌ No named RTL file blocks found."
+        raise ValueError("Expected named Verilog blocks in RTL agent output.")
 
-    state.update({
-        "status": overall_status,
-        "artifact_log": log_path,
-        "lint_feedback": lint_feedback,
-        "port_list": port_names,
-        "clock_ports": clocks_detected,
-        "reset_ports": resets_detected,
-        "issues": issues,
-        "workflow_id": workflow_id,
-        "workflow_dir": workflow_dir
-    })
-    # --- 📦 Upload artifacts to Supabase Storage ---
+    expected_files = _collect_expected_rtl_files(spec_json, mode)
+    artifact_list = []
 
-    # --- 📦 Upload artifacts to Supabase Storage ---
-    try:
-        user_id = state.get("user_id", "anonymous")  # kept if you still need it later
-        workflow_id = state.get("workflow_id", "default")
+    for fname in expected_files:
+        code = verilog_map.get(fname)
+        if not code:
+            continue
+        fpath = os.path.join(workflow_dir, fname)
+        with open(fpath, "w", encoding="utf-8") as vf:
+            vf.write(code + "\n")
+        artifact_list.append(fpath)
 
+    issues, clock_ports, reset_ports = _validate_spec_vs_rtl(spec_json, mode, verilog_map)
 
-        # 1) RTL compile log
+    top_rtl_file = _top_rtl_file(spec_json, mode)
+    top_rtl_path = os.path.join(workflow_dir, top_rtl_file)
+
+    log_path = os.path.join(workflow_dir, "rtl_agent_compile.log")
+    compile_status = "✅ Verilog syntax check passed."
+
+    if not os.path.exists(top_rtl_path):
+        issues.append(f"❌ Top RTL file missing after generation: {top_rtl_file}")
+
+    if not artifact_list:
+        issues.append("❌ No RTL files materialized to disk.")
+
+    if not issues:
         try:
-            with open(log_path, "r") as lf:
-                log_content = lf.read()
+            iverilog = os.getenv("IVERILOG_BIN", "iverilog")
+            compile_cmd = [iverilog, "-o", os.path.join(workflow_dir, "rtl_check.out")] + artifact_list
+
+            result = subprocess.run(
+                compile_cmd,
+                check=True,
+                capture_output=True,
+                text=True
+            )
+
+            with open(log_path, "w", encoding="utf-8") as logf:
+                logf.write(f"RTL Compile Log — {datetime.datetime.now()}\n\n")
+                logf.write("Compile status: PASS\n")
+                if result.stdout:
+                    logf.write("\nSTDOUT:\n")
+                    logf.write(result.stdout)
+                if result.stderr:
+                    logf.write("\nSTDERR:\n")
+                    logf.write(result.stderr)
+
+        except subprocess.CalledProcessError as e:
+            compile_status = "⚠ Verilog syntax check failed."
+            err = (e.stderr or e.stdout or "").strip()
+            with open(log_path, "w", encoding="utf-8") as logf:
+                logf.write(f"RTL Compile Log — {datetime.datetime.now()}\n\n")
+                logf.write("Compile status: FAIL\n\n")
+                logf.write(err)
+            issues.append(f"❌ Compile/elaboration failed: {err}")
+    else:
+        with open(log_path, "w", encoding="utf-8") as logf:
+            logf.write(f"RTL Compile Log — {datetime.datetime.now()}\n\n")
+            logf.write("Compile skipped due to earlier contract validation issues.\n")
+            for i in issues:
+                logf.write(f"- {i}\n")
+
+    summary_file = os.path.join(workflow_dir, "rtl_agent_summary.txt")
+    overall_status = "✅ RTL generated and validated successfully." if not issues else "⚠ RTL generation completed with issues."
+    with open(summary_file, "w", encoding="utf-8") as sf:
+        sf.write(f"{overall_status}\n\n")
+        sf.write(f"Spec mode: {mode}\n")
+        sf.write(f"Top module: {_top_module_name(spec_json, mode)}\n")
+        sf.write(f"{compile_status}\n\n")
+        sf.write(f"Generated files: {[os.path.basename(x) for x in artifact_list]}\n")
+        sf.write(f"Clock ports: {clock_ports}\n")
+        sf.write(f"Reset ports: {reset_ports}\n")
+        sf.write("Issues:\n")
+        if issues:
+            for i in issues:
+                sf.write(f" - {i}\n")
+        else:
+            sf.write(" - None\n")
+
+    try:
+        with open(log_path, "r", encoding="utf-8") as lf:
             save_text_artifact_and_record(
                 workflow_id=workflow_id,
                 agent_name=agent_name,
                 subdir="rtl",
                 filename="rtl_agent_compile.log",
-                content=log_content,
+                content=lf.read(),
             )
-        except Exception as e:
-            print(f"⚠️ Failed to upload RTL log artifact: {e}")
 
-        # 2) Lint feedback
-        lint_file = os.path.join(workflow_dir, "rtl_agent_lint_feedback.txt")
-        try:
-            with open(lint_file, "w") as lf:
-                lf.write(lint_feedback or "")
-            with open(lint_file, "r") as lf:
-                lint_content = lf.read()
-            save_text_artifact_and_record(
-                workflow_id=workflow_id,
-                agent_name=agent_name,
-                subdir="rtl",
-                filename="rtl_agent_lint_feedback.txt",
-                content=lint_content,
-            )
-        except Exception as e:
-            print(f"⚠️ Failed to upload RTL lint feedback artifact: {e}")
-
-        # 3) Validation summary
-        summary_file = os.path.join(workflow_dir, "rtl_agent_summary.txt")
-        try:
-            with open(summary_file, "w") as sf:
-                sf.write(
-                    f"{overall_status}\n\n"
-                    f"Ports: {port_names}\n"
-                    f"Clocks: {clocks_detected}\n"
-                    f"Resets: {resets_detected}\n"
-                    "Issues:\n"
-                )
-                for i in issues:
-                    sf.write(f" - {i}\n")
-
-            with open(summary_file, "r") as sf:
-                summary_content = sf.read()
+        with open(summary_file, "r", encoding="utf-8") as sf:
             save_text_artifact_and_record(
                 workflow_id=workflow_id,
                 agent_name=agent_name,
                 subdir="rtl",
                 filename="rtl_agent_summary.txt",
-                content=summary_content,
+                content=sf.read(),
             )
-        except Exception as e:
-            print(f"⚠️ Failed to upload RTL summary artifact: {e}")
 
-        print("🧩 RTL Agent artifacts uploaded successfully.")
+        with open(raw_output_path, "r", encoding="utf-8") as rf:
+            save_text_artifact_and_record(
+                workflow_id=workflow_id,
+                agent_name=agent_name,
+                subdir="rtl",
+                filename="rtl_llm_raw_output.txt",
+                content=rf.read(),
+            )
 
-    except Exception as e:
-        print(f"⚠️ RTL Agent artifact upload failed: {e}")
-
-    if artifact_list:
-        for f in artifact_list:
-            try:
-                with open(f, "r") as vf:
-                   v_content = vf.read()
+        for fpath in artifact_list:
+            with open(fpath, "r", encoding="utf-8") as vf:
                 save_text_artifact_and_record(
                     workflow_id=workflow_id,
                     agent_name=agent_name,
                     subdir="rtl",
-                    filename=os.path.basename(f),
-                    content=v_content,
+                    filename=os.path.basename(fpath),
+                    content=vf.read(),
                 )
-            except Exception as e:
-                print(f"⚠️ Failed to upload RTL module artifact {f}: {e}")
-    
+    except Exception as e:
+        print(f"⚠️ RTL Agent artifact upload failed: {e}")
+
+    state.update({
+        "status": overall_status,
+        "artifact": top_rtl_path if os.path.exists(top_rtl_path) else (artifact_list[0] if artifact_list else None),
+        "artifact_list": artifact_list,
+        "artifact_log": log_path,
+        "port_list": sorted(set(clock_ports + reset_ports)),
+        "clock_ports": clock_ports,
+        "reset_ports": reset_ports,
+        "issues": issues,
+        "workflow_id": workflow_id,
+        "workflow_dir": workflow_dir,
+    })
 
     return state
-
-
-# --- Local Test Example ---
-if __name__ == "__main__":
-    state = {
-        "artifact": "uart_tx.v",
-        "spec_json": "uart_tx_spec.json",
-        "workflow_id": "test_run_1"
-    }
-    result = run_agent(state)
-    print(json.dumps(result, indent=2))

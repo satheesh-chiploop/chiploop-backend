@@ -4,7 +4,7 @@ ChipLoop Open-Source Signoff / Handoff Agents
 Design goals:
 - deterministic outputs
 - derive intent from prior artifacts (`digital_spec_json`, RTL outputs, architecture) rather than hardcoding
-- best-effort integration with open-source tools (Yosys/OpenROAD/Verilator/etc.)
+- best-effort integration with open-source tools
 - always produce: (1) human report (MD) and (2) machine findings (JSON)
 """
 
@@ -13,7 +13,7 @@ import re
 import json
 import shutil
 import hashlib
-import subprocess
+import zipfile
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -23,29 +23,24 @@ from utils.artifact_utils import save_text_artifact_and_record
 def _now() -> str:
     return datetime.now().isoformat()
 
+
 def _write(path: str, content: str) -> None:
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         f.write(content)
 
-def _read_json(path: str) -> Dict[str, Any]:
+
+def _read_json(v) -> Dict[str, Any]:
     try:
-        if path and os.path.exists(path):
-            with open(path, "r", encoding="utf-8") as f:
+        if isinstance(v, dict):
+            return v
+        if isinstance(v, str) and os.path.exists(v):
+            with open(v, "r", encoding="utf-8") as f:
                 return json.load(f)
     except Exception:
         pass
     return {}
 
-def _which(binname: str) -> Optional[str]:
-    return shutil.which(binname)
-
-def _run(cmd: List[str], cwd: Optional[str]=None, timeout: int=300) -> Dict[str, Any]:
-    try:
-        p = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout)
-        return {"cmd": cmd, "returncode": p.returncode, "stdout": p.stdout or "", "stderr": p.stderr or ""}
-    except Exception as e:
-        return {"cmd": cmd, "returncode": -1, "stdout": "", "stderr": str(e)}
 
 def _record(workflow_id: str, agent_name: str, subdir: str, filename: str, content: str) -> Optional[str]:
     try:
@@ -59,39 +54,54 @@ def _record(workflow_id: str, agent_name: str, subdir: str, filename: str, conte
     except Exception:
         return None
 
-def _collect_rtl_files(workflow_dir: str) -> List[str]:
-    exts = (".v", ".sv", ".vh", ".svh")
+
+def _collect_rtl_files(workflow_dir: str, state: dict) -> List[str]:
     out: List[str] = []
+
+    artifact_list = state.get("artifact_list") or []
+    if isinstance(artifact_list, list):
+        for p in artifact_list:
+            if isinstance(p, str) and os.path.exists(p) and p.lower().endswith((".v", ".sv", ".vh", ".svh")):
+                out.append(p)
+
     for root, _, files in os.walk(workflow_dir):
         for fn in files:
-            if fn.lower().endswith(exts):
+            if fn.lower().endswith((".v", ".sv", ".vh", ".svh")):
                 out.append(os.path.join(root, fn))
-    out.sort()
-    return out
 
-def _pick_top(spec: Dict[str, Any], rtl_files: List[str], state_top: Optional[str]) -> str:
+    return sorted(list(dict.fromkeys(out)))
+
+
+def _normalize_spec(spec: Dict[str, Any]) -> Tuple[Dict[str, Any], str]:
+    if isinstance(spec.get("hierarchy"), dict):
+        hier = spec["hierarchy"]
+        top = hier.get("top_module")
+        modules = hier.get("modules", [])
+        if isinstance(top, dict) and top.get("name"):
+            return {
+                "top_module": top["name"],
+                "modules": [top] + modules,
+                "raw": spec,
+            }, "hierarchical"
+
+    if spec.get("name") and spec.get("rtl_output_file"):
+        return {
+            "top_module": spec["name"],
+            "modules": [spec],
+            "raw": spec,
+        }, "flat"
+
+    return {"top_module": "top", "modules": [], "raw": spec}, "unknown"
+
+
+def _pick_top(spec: Dict[str, Any], state_top: Optional[str]) -> str:
+    norm, _ = _normalize_spec(spec)
     if state_top:
         return state_top
-    top = (spec.get("top_module") or {}).get("name")
-    if isinstance(top, str) and top.strip():
-        return top.strip()
-    mod_re = re.compile(r"^\s*module\s+([a-zA-Z_][a-zA-Z0-9_$]*)\b")
-    for f in rtl_files:
-        try:
-            with open(f, "r", encoding="utf-8", errors="ignore") as fh:
-                for line in fh:
-                    m = mod_re.match(line)
-                    if m:
-                        return m.group(1)
-        except Exception:
-            continue
+    if norm.get("top_module"):
+        return norm["top_module"]
     return "top"
 
-# ----------------------------
-# IP Packaging & Handoff Agent
-# ----------------------------
-
-import zipfile
 
 def _sha256_file(path: str) -> str:
     h = hashlib.sha256()
@@ -100,53 +110,99 @@ def _sha256_file(path: str) -> str:
             h.update(chunk)
     return h.hexdigest()
 
-def _gather_deliverables(workflow_dir: str) -> Dict[str, List[str]]:
+
+def _gather_deliverables(workflow_dir: str, state: dict) -> Dict[str, List[str]]:
     buckets: Dict[str, List[str]] = {
-        "rtl": [], "spec": [], "arch": [], "microarch": [], "regmap": [],
-        "constraints": [], "power_intent": [], "verification": [], "reports": [], "other": []
+        "rtl": [],
+        "spec": [],
+        "arch": [],
+        "microarch": [],
+        "regmap": [],
+        "constraints": [],
+        "power_intent": [],
+        "verification": [],
+        "reports": [],
+        "other": [],
     }
-    buckets["rtl"] = _collect_rtl_files(workflow_dir)
+
+    buckets["rtl"] = _collect_rtl_files(workflow_dir, state)
+
+    known_paths = [
+        state.get("digital_spec_json"),
+        state.get("spec_json"),
+        state.get("digital_architecture_json"),
+        state.get("digital_architecture_path"),
+        state.get("digital_microarchitecture_json"),
+        state.get("digital_microarchitecture_path"),
+        state.get("digital_regmap_json"),
+        state.get("clock_reset_arch_path"),
+        state.get("digital_sdc_path"),
+        state.get("sdc_path"),
+        state.get("rtl_refactor_plan_path"),
+    ]
+
+    for p in known_paths:
+        if isinstance(p, str) and os.path.exists(p):
+            norm = p.replace("\\", "/").lower()
+            if "spec" in os.path.basename(norm):
+                buckets["spec"].append(p)
+            elif "microarch" in os.path.basename(norm):
+                buckets["microarch"].append(p)
+            elif "architecture" in os.path.basename(norm) or "arch" in os.path.basename(norm):
+                buckets["arch"].append(p)
+            elif "regmap" in os.path.basename(norm) or "register_map" in os.path.basename(norm):
+                buckets["regmap"].append(p)
+            elif norm.endswith(".sdc"):
+                buckets["constraints"].append(p)
+            else:
+                buckets["other"].append(p)
 
     for root, _, files in os.walk(workflow_dir):
         for fn in files:
             p = os.path.join(root, fn)
             norm = p.replace("\\", "/").lower()
-            if "regmap" in fn.lower() or "register_map" in fn.lower():
-                buckets["regmap"].append(p)
+            base = os.path.basename(norm)
+
+            if p in buckets["rtl"]:
                 continue
 
-            if norm.endswith((".sdc", ".xdc", ".tcl")) and "/constraints/" in norm:
-                buckets["constraints"].append(p)
+            if "regmap" in base or "register_map" in base:
+                buckets["regmap"].append(p)
                 continue
 
             if norm.endswith(".upf"):
                 buckets["power_intent"].append(p)
                 continue
 
-            if "/vv/" in norm and norm.endswith((".py", ".md", ".sby", ".sv", ".json", ".yml", ".yaml")):
+            if norm.endswith(".sdc") or (norm.endswith((".xdc", ".tcl")) and "/constraints/" in norm):
+                buckets["constraints"].append(p)
+                continue
+
+            if "/verification/" in norm or "/vv/" in norm:
                 buckets["verification"].append(p)
                 continue
 
-            if norm.endswith((".md", ".json")):
-                base = os.path.basename(norm)
+            if base.endswith(".json") or base.endswith(".md"):
                 if "microarch" in base:
                     buckets["microarch"].append(p)
-                elif "arch" in base:
+                elif "architecture" in base or "arch" in base:
                     buckets["arch"].append(p)
                 elif "spec" in base:
                     buckets["spec"].append(p)
-                elif "/signoff/" in norm or "/handoff/" in norm:
+                elif "/handoff/" in norm or "/signoff/" in norm:
                     buckets["reports"].append(p)
-                elif "/digital/" in norm or "/system/" in norm or "/analog/" in norm:
+                else:
                     buckets["other"].append(p)
                 continue
 
-            if norm.endswith((".log", ".txt")) and ("/signoff/" in norm or "/artifact/" in norm or "/handoff/" in norm):
-                buckets["reports"].append(p)
+            if base.endswith(".log") or base.endswith(".txt"):
+                if "/handoff/" in norm or "/artifact/" in norm or "/signoff/" in norm:
+                    buckets["reports"].append(p)
 
     for k in buckets:
         buckets[k] = sorted(list(dict.fromkeys(buckets[k])))
     return buckets
+
 
 def _package(workflow_dir: str, top: str, buckets: Dict[str, List[str]]) -> Tuple[str, str]:
     pkg_root = os.path.join(workflow_dir, "handoff")
@@ -183,9 +239,13 @@ def _package(workflow_dir: str, top: str, buckets: Dict[str, List[str]]) -> Tupl
     for root, _, files in os.walk(pkg_dir):
         for fn in files:
             p = os.path.join(root, fn)
-            rel = os.path.relpath(p, pkg_dir).replace("\\","/")
+            rel = os.path.relpath(p, pkg_dir).replace("\\", "/")
             try:
-                manifest_files.append({"path": rel, "sha256": _sha256_file(p), "bytes": os.path.getsize(p)})
+                manifest_files.append({
+                    "path": rel,
+                    "sha256": _sha256_file(p),
+                    "bytes": os.path.getsize(p),
+                })
             except Exception:
                 pass
     manifest_files.sort(key=lambda x: x["path"])
@@ -195,7 +255,6 @@ def _package(workflow_dir: str, top: str, buckets: Dict[str, List[str]]) -> Tupl
         "version": "1.0",
         "top_module": top,
         "generated_at": _now(),
-        "layout": layout,
         "file_count": len(manifest_files),
         "files": manifest_files,
     }
@@ -208,17 +267,18 @@ Package: `{top}_ip_package`
 ## Must-have
 - [ ] RTL (`rtl/`)
 - [ ] Spec (`docs/spec/`)
-- [ ] Architecture (`docs/arch/`, `docs/microarch/`)
+- [ ] Architecture (`docs/arch/`)
+- [ ] Microarchitecture (`docs/microarch/`)
 - [ ] Register map (`docs/regmap/`)
-- [ ] Constraints (`constraints/`) — add SDC/XDC if applicable
-- [ ] Power intent (`power/`) — UPF if multi-power
+- [ ] Constraints (`constraints/`)
+- [ ] Power intent (`power/`)
 - [ ] Verification collateral (`verification/`)
 - [ ] Reports (`reports/`)
 
 ## Integration notes to include
 - clock/reset requirements
-- bus protocol expectations
-- interrupt behavior
+- register/software expectations
+- interface assumptions
 - known limitations / TODOs
 """
     _write(os.path.join(pkg_dir, "DELIVERABLES.md"), checklist)
@@ -228,10 +288,11 @@ Package: `{top}_ip_package`
         for root, _, files in os.walk(pkg_dir):
             for fn in files:
                 p = os.path.join(root, fn)
-                arc = os.path.relpath(p, pkg_root).replace("\\","/")
+                arc = os.path.relpath(p, pkg_root).replace("\\", "/")
                 z.write(p, arcname=arc)
 
     return pkg_dir, zip_path
+
 
 def run_agent(state: dict) -> dict:
     agent_name = "IP Packaging & Handoff Agent"
@@ -240,20 +301,15 @@ def run_agent(state: dict) -> dict:
     workflow_id = state.get("workflow_id", "default")
     workflow_dir = state.get("workflow_dir", f"backend/workflows/{workflow_id}")
     os.makedirs(workflow_dir, exist_ok=True)
-    os.makedirs("artifact", exist_ok=True)
 
-    spec_path = state.get("spec_json") or os.path.join(workflow_dir, "digital", "spec.json")
-    spec = _read_json(spec_path)
-    rtl_files = state.get("rtl_files") or _collect_rtl_files(workflow_dir)
+    spec = _read_json(state.get("digital_spec_json")) or _read_json(state.get("spec_json"))
     top = (
         state.get("soc_top_sim_module")
         or state.get("top_module")
     )
+    top = _pick_top(spec, top)
 
-    top = _pick_top(spec, rtl_files, top)
-    
-
-    buckets = _gather_deliverables(workflow_dir)
+    buckets = _gather_deliverables(workflow_dir, state)
     pkg_dir, zip_path = _package(workflow_dir, top, buckets)
 
     report = {
@@ -265,19 +321,23 @@ def run_agent(state: dict) -> dict:
         "bucket_counts": {k: len(v) for k, v in buckets.items()},
     }
 
-    md = ["# IP Packaging & Handoff Report\n",
-          f"- Top: `{top}`",
-          f"- Package: `{pkg_dir}`",
-          f"- Zip: `{zip_path}`\n",
-          "## Bucket counts"]
+    md = [
+        "# IP Packaging & Handoff Report\n",
+        f"- Top: `{top}`",
+        f"- Package: `{pkg_dir}`",
+        f"- Zip: `{zip_path}`\n",
+        "## Bucket counts"
+    ]
     for k, v in report["bucket_counts"].items():
         md.append(f"- **{k}**: {v}")
     report_md = "\n".join(md) + "\n"
 
     out_root = os.path.join(workflow_dir, "handoff")
     os.makedirs(out_root, exist_ok=True)
-    _write(os.path.join(out_root, "ip_packaging_report.md"), report_md)
-    _write(os.path.join(out_root, "ip_packaging_report.json"), json.dumps(report, indent=2))
+    md_path = os.path.join(out_root, "ip_packaging_report.md")
+    json_path = os.path.join(out_root, "ip_packaging_report.json")
+    _write(md_path, report_md)
+    _write(json_path, json.dumps(report, indent=2))
 
     artifacts = {}
     artifacts["report_md"] = _record(workflow_id, agent_name, "handoff", "ip_packaging_report.md", report_md)
@@ -287,6 +347,7 @@ def run_agent(state: dict) -> dict:
     if os.path.exists(man_path):
         with open(man_path, "r", encoding="utf-8", errors="ignore") as f:
             artifacts["manifest"] = _record(workflow_id, agent_name, "handoff", "MANIFEST.json", f.read())
+
     deliv_path = os.path.join(pkg_dir, "DELIVERABLES.md")
     if os.path.exists(deliv_path):
         with open(deliv_path, "r", encoding="utf-8", errors="ignore") as f:
@@ -295,4 +356,5 @@ def run_agent(state: dict) -> dict:
     report["artifacts"] = artifacts
     state.setdefault("handoff", {})
     state["handoff"]["ip_packaging"] = report
+    state["status"] = "✅ IP packaging and handoff completed."
     return state
