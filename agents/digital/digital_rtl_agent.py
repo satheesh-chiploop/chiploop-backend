@@ -372,7 +372,30 @@ POWER_INTENT_JSON:
 {json.dumps(power_intent_obj, indent=2) if power_intent_obj is not None else "null"}
 
 IMPLEMENTATION RULES
-- Generate synthesizable Verilog-2005.
+
+- Generate synthesizable Verilog-2005 only.
+- Do NOT use SystemVerilog constructs.
+- Forbidden constructs include:
+  - typedef
+  - enum
+  - logic
+  - always_comb
+  - always_ff
+  - struct
+  - union
+  - packed arrays
+  - unpacked array ports
+  - unique case
+  - priority case
+- Use only Verilog-2005 constructs such as:
+  - module
+  - input/output/inout
+  - wire
+  - reg
+  - localparam
+  - assign
+  - always @(*)
+  - always @(posedge clk or negedge rst_n)
 - If SPEC MODE is flat, generate exactly one module file only.
 - If SPEC MODE is hierarchical, generate every required module file from spec.
 - Each file must contain the module declared in its rtl_output_file mapping.
@@ -389,11 +412,20 @@ IMPLEMENTATION RULES
 - Drive that wire only from the declared source endpoint.
 - Consume that wire only at the declared destination endpoints.
 - Respect ownership exactly; do not invent alternate drivers or alternate buses.
+- If a top-level output is owned by a submodule according to signal_ownership, the top module must expose it only through structural wiring/port connections.
+- The top module must NOT procedurally assign or reset a top-level output that is owned by a submodule.
+- Do NOT add top-level always blocks that drive outputs already driven by child modules.
 - Do not collapse multiple declared signals into a grouped convenience bus unless the spec explicitly defines that bus.
+- If multiple scalar/vector signals are declared separately in module ports, connect them separately by name.
+- Do NOT invent aggregate ports such as reg_bus, reg_bus_signals, ctrl_bus, status_bus, or similar unless explicitly present in DIGITAL_SPEC_JSON.
 - If there is a register map, implement real stored writable registers where required.
 - Implement STATUS and INT_STATUS from explicit field semantics if regmap provides them.
-- If a wider value is split across byte registers, store and reconstruct it faithfully.
+- If a wider value is split across multiple narrower registers, reconstruct it to the exact declared signal width only.
+- Example rule: if a 12-bit signal uses one low byte and one high nibble, reconstruct as {high_reg[3:0], low_reg[7:0]}, not as a 16-bit concatenation.
+- Never assign a concatenation wider than the declared destination signal width.
 - Prefer the simplest deterministic smoke-test implementation consistent with the contract.
+- If any module uses an FSM, implement states using Verilog-2005 localparam constants and reg state registers.
+- Do NOT use typedef enum or any SystemVerilog FSM syntax.
 - Entire design must compile together cleanly.
 
 SELF-CHECK BEFORE OUTPUT
@@ -407,6 +439,10 @@ SELF-CHECK BEFORE OUTPUT
 8. inter_module_signals are reflected as actual internal wires and connections.
 9. signal_ownership is respected, with one legal driver per owned signal.
 10. Stored registers are not faked by directly echoing bus write data on reads.
+11. No SystemVerilog syntax is used.
+12. No top-level always block drives an output owned by a child module.
+13. FSMs use localparam + reg state encoding only.
+
 """.strip()
 
 
