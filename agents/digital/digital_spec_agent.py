@@ -159,10 +159,6 @@ def _collect_module_port_names(spec_json: dict):
 
 
 def _validate_hierarchical_endpoint_coverage(spec_json: dict) -> None:
-    """
-    Minimal but important structural check:
-    every endpoint referenced in connectivity must exist in module port lists.
-    """
     module_ports = _collect_module_port_names(spec_json)
     top_name = spec_json["hierarchy"]["top_module"]["name"]
     top_ports = module_ports[top_name]
@@ -264,6 +260,10 @@ def run_agent(state: dict) -> dict:
     workflow_id = state.get("workflow_id", "default")
     workflow_dir = state.get("workflow_dir", f"backend/workflows/{workflow_id}")
     os.makedirs(workflow_dir, exist_ok=True)
+
+    # Restore local directory structure
+    spec_dir = os.path.join(workflow_dir, "spec")
+    os.makedirs(spec_dir, exist_ok=True)
 
     user_prompt = (
         state.get("spec")
@@ -460,7 +460,7 @@ Return JSON only.
         state["status"] = f"❌ LLM generation failed: {e}"
         return state
 
-    raw_output_path = os.path.join(workflow_dir, "llm_raw_output.txt")
+    raw_output_path = os.path.join(spec_dir, "llm_raw_output.txt")
     with open(raw_output_path, "w", encoding="utf-8") as rf:
         rf.write(llm_output)
 
@@ -474,11 +474,11 @@ Return JSON only.
 
     module_name = spec_json["name"] if mode == "flat" else spec_json["hierarchy"]["top_module"]["name"]
 
-    spec_json_path = os.path.join(workflow_dir, f"{module_name}_spec.json")
+    spec_json_path = os.path.join(spec_dir, f"{module_name}_spec.json")
     with open(spec_json_path, "w", encoding="utf-8") as sf:
         json.dump(spec_json, sf, indent=2)
 
-    log_path = os.path.join(workflow_dir, "spec_agent_contract.log")
+    log_path = os.path.join(spec_dir, "spec_agent_contract.log")
     with open(log_path, "w", encoding="utf-8") as lf:
         lf.write("Digital Spec Agent completed successfully.\n")
         lf.write("Mode: contract-only\n")

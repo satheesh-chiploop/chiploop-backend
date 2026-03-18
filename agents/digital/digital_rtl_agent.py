@@ -121,9 +121,6 @@ def _extract_module_ports(verilog_text: str) -> Dict[str, List[str]]:
 
 
 def _normalize_signal_token(name: str) -> str:
-    """
-    Normalize 'dac_code[11:0]' -> 'dac_code'
-    """
     if not isinstance(name, str):
         return ""
     return re.sub(r"\[[^\]]+\]", "", name).strip()
@@ -421,6 +418,10 @@ def run_agent(state: dict) -> dict:
     workflow_dir = state.get("workflow_dir", f"backend/workflows/{workflow_id}")
     os.makedirs(workflow_dir, exist_ok=True)
 
+    # Restore local directory structure
+    rtl_dir = os.path.join(workflow_dir, "rtl")
+    os.makedirs(rtl_dir, exist_ok=True)
+
     spec_obj = _load_json_if_path(state.get("digital_spec_json")) or _load_json_if_path(state.get("spec_json"))
     if not spec_obj:
         state["status"] = "❌ Missing digital spec JSON for RTL generation."
@@ -428,16 +429,15 @@ def run_agent(state: dict) -> dict:
 
     spec_json, mode = _normalize_spec_json(spec_obj)
 
-    # Minimal new pre-check: fail fast on bad connectivity contract
     pre_issues = _validate_connectivity_contract(spec_json, mode)
     if pre_issues:
-        log_path = os.path.join(workflow_dir, "rtl_agent_compile.log")
+        log_path = os.path.join(rtl_dir, "rtl_agent_compile.log")
         with open(log_path, "w", encoding="utf-8") as logf:
             logf.write("RTL generation aborted due to invalid connectivity contract in digital_spec_json.\n")
             for i in pre_issues:
                 logf.write(f"- {i}\n")
 
-        summary_file = os.path.join(workflow_dir, "rtl_agent_summary.txt")
+        summary_file = os.path.join(rtl_dir, "rtl_agent_summary.txt")
         with open(summary_file, "w", encoding="utf-8") as sf:
             sf.write("⚠ RTL generation completed with issues.\n\n")
             sf.write(f"Spec mode: {mode}\n")
@@ -484,7 +484,7 @@ def run_agent(state: dict) -> dict:
         state["status"] = f"❌ RTL generation failed: {e}"
         return state
 
-    raw_output_path = os.path.join(workflow_dir, "rtl_llm_raw_output.txt")
+    raw_output_path = os.path.join(rtl_dir, "rtl_llm_raw_output.txt")
     with open(raw_output_path, "w", encoding="utf-8") as f:
         f.write(llm_output)
 
@@ -499,7 +499,7 @@ def run_agent(state: dict) -> dict:
         code = verilog_map.get(fname)
         if not code:
             continue
-        fpath = os.path.join(workflow_dir, fname)
+        fpath = os.path.join(rtl_dir, fname)
         with open(fpath, "w", encoding="utf-8") as vf:
             vf.write(code + "\n")
         artifact_list.append(fpath)
@@ -507,9 +507,9 @@ def run_agent(state: dict) -> dict:
     issues, clock_ports, reset_ports = _validate_spec_vs_rtl(spec_json, mode, verilog_map)
 
     top_rtl_file = _top_rtl_file(spec_json, mode)
-    top_rtl_path = os.path.join(workflow_dir, top_rtl_file)
+    top_rtl_path = os.path.join(rtl_dir, top_rtl_file)
 
-    log_path = os.path.join(workflow_dir, "rtl_agent_compile.log")
+    log_path = os.path.join(rtl_dir, "rtl_agent_compile.log")
     compile_status = "Compile not run yet."
 
     if not os.path.exists(top_rtl_path):
@@ -520,7 +520,7 @@ def run_agent(state: dict) -> dict:
     if not issues:
         try:
             iverilog = os.getenv("IVERILOG_BIN", "iverilog")
-            compile_cmd = [iverilog, "-o", os.path.join(workflow_dir, "rtl_check.out")] + artifact_list
+            compile_cmd = [iverilog, "-o", os.path.join(rtl_dir, "rtl_check.out")] + artifact_list
 
             result = subprocess.run(
                 compile_cmd,
@@ -556,7 +556,7 @@ def run_agent(state: dict) -> dict:
             for i in issues:
                 logf.write(f"- {i}\n")
 
-    summary_file = os.path.join(workflow_dir, "rtl_agent_summary.txt")
+    summary_file = os.path.join(rtl_dir, "rtl_agent_summary.txt")
     overall_status = "✅ RTL generated and validated successfully." if not issues else "⚠ RTL generation completed with issues."
     with open(summary_file, "w", encoding="utf-8") as sf:
         sf.write(f"{overall_status}\n\n")
