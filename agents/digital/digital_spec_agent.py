@@ -582,6 +582,17 @@ STRICT SIGNAL OWNERSHIP RULES:
 5. For top-level externally-driven outputs, signal_ownership[].signal may be the top-level output signal name, but owner must still be the exact producing module.port.
 6. Do NOT assign ownership to abstract interfaces, grouped buses, bundles, or bare modules.
 
+STRICT CLOCK/RESET PROPAGATION RULES:
+1. If a clock or reset signal appears in top_level_connections, then every referenced destination endpoint MUST be declared as a real port in that destination module.
+2. If top_level_connections includes endpoints like "some_module.clk", "some_module.rst_n", "some_module.reset_n", or "some_module.reset", then that exact port name MUST appear in some_module.ports[].
+3. Do NOT connect top-level clock/reset signals to a submodule unless that submodule explicitly declares the matching clock/reset port.
+4. If a submodule participates in synchronous logic, sampled logic, register interfaces, control sequencing, state machines, or synchronized data paths, include an explicit clock port and reset port for that submodule unless the user spec clearly says otherwise.
+5. For hierarchical designs, clock/reset connectivity and module port lists must be mutually consistent:
+   - every referenced clock/reset connection must have a corresponding module port
+   - every declared module clock/reset port that is intended to be driven from the top should appear in top_level_connections
+6. Use consistent reset naming across ports and connections. Do not mix rst_n, reset_n, rst, and reset unless the user spec explicitly requires different names.
+7. Before finalizing JSON, verify that every destination referenced by a top-level reset or clock connection exists verbatim in the destination module port list.
+
 HIERARCHICAL CONNECTIVITY EXAMPLES:
 VALID:
 - {{"name":"reg_wr_en","width":1,"source":"i2c_slave.reg_wr_en","destinations":["register_map.reg_wr_en"],"description":"Register write enable."}}
@@ -598,6 +609,18 @@ INVALID:
 - {{"signal":"register_bus","owner":"i2c_slave"}}
 - {{"top_port":"irq","connected_to":["interrupt_controller"],"description":"Bare module endpoint is invalid"}}
 
+VALID CLOCK/RESET EXAMPLE:
+top_level_connections:
+- {"top_port":"clk","connected_to":["i2c_slave.clk","register_map.clk","analog_if_logic.clk"],"description":"Top clock fanout."}
+- {"top_port":"rst_n","connected_to":["i2c_slave.rst_n","register_map.rst_n","analog_if_logic.rst_n"],"description":"Top active-low reset fanout."}
+Then the following ports MUST exist:
+- i2c_slave.ports includes "clk" and "rst_n"
+- register_map.ports includes "clk" and "rst_n"
+- analog_if_logic.ports includes "clk" and "rst_n"
+
+INVALID CLOCK/RESET EXAMPLE:
+- {"top_port":"rst_n","connected_to":["analog_if_logic.rst_n"],"description":"Invalid if analog_if_logic.ports does not include rst_n"}
+
 
 FINAL SELF-CHECK BEFORE OUTPUT:
 Before emitting the JSON, verify ALL of the following:
@@ -609,6 +632,8 @@ Before emitting the JSON, verify ALL of the following:
 6. No grouped or placeholder signal names are used.
 7. signal_ownership aligns with explicit real signals.
 8. The JSON is complete and parseable with json.loads().
+9. Every top-level clock/reset connection is mirrored by an exact matching port in the referenced submodule.
+10. No top_level_connections entry may reference module.port unless that exact port string is present in that module's ports[] list.
 
 If the user spec is incomplete, choose the simplest valid architecture ONCE and encode it here.
 This JSON becomes the source of truth for downstream agents.
