@@ -554,6 +554,18 @@ def run_agent(state: dict) -> dict:
 
     prompt = _build_generation_prompt(spec_json, mode, regmap_obj, clock_reset_obj, power_intent_obj)
 
+    preflight_path = os.path.join(rtl_dir, "rtl_agent_preflight.json")
+    with open(preflight_path, "w", encoding="utf-8") as pf:
+        json.dump({
+            "mode": mode,
+            "top_module": _top_module_name(spec_json, mode),
+            "expected_files": _collect_expected_rtl_files(spec_json, mode),
+            "has_regmap": regmap_obj is not None,
+            "has_clock_reset": clock_reset_obj is not None,
+            "has_power_intent": power_intent_obj is not None,
+            "prompt_chars": len(prompt),
+        }, pf, indent=2)
+
     try:
         completion = client_portkey.chat.completions.create(
             model="@chiploop/gpt-4o-mini",
@@ -562,8 +574,34 @@ def run_agent(state: dict) -> dict:
         )
         llm_output = completion.choices[0].message.content or ""
     except Exception as e:
-        state["status"] = f"❌ RTL generation failed: {e}"
+        log_path = os.path.join(rtl_dir, "rtl_agent_compile.log")
+        summary_file = os.path.join(rtl_dir, "rtl_agent_summary.txt")
+        error_file = os.path.join(rtl_dir, "rtl_agent_exception.txt")
+
+        with open(error_file, "w", encoding="utf-8") as ef:
+            ef.write(f"RTL generation exception:\n{repr(e)}\n")
+
+        with open(log_path, "w", encoding="utf-8") as lf:
+            lf.write("RTL agent failed before RTL materialization.\n")
+            lf.write(f"Exception type: {type(e).__name__}\n")
+            lf.write(f"Exception: {e}\n")
+
+        with open(summary_file, "w", encoding="utf-8") as sf:
+            sf.write("❌ RTL generation failed before raw output was written.\n")
+            sf.write(f"Exception type: {type(e).__name__}\n")
+            sf.write(f"Exception: {e}\n")
+
+        state.update({
+            "status": f"❌ RTL generation failed: {e}",
+            "artifact": None,
+            "artifact_list": [],
+            "artifact_log": log_path,
+            "issues": [f"RTL generation failed: {e}"],
+            "workflow_id": workflow_id,
+            "workflow_dir": workflow_dir,
+        })
         return state
+
 
     raw_output_path = os.path.join(rtl_dir, "rtl_llm_raw_output.txt")
     with open(raw_output_path, "w", encoding="utf-8") as f:
