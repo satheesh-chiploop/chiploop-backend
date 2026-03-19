@@ -300,7 +300,113 @@ def _upload_spec_debug_artifacts(workflow_id, agent_name, spec_dir):
                 filename=fn,
                 path=os.path.join(spec_dir, fn),
             )
+def _find_module_obj(spec_json: dict, module_name: str):
+    hier = spec_json["hierarchy"]
+    if hier["top_module"]["name"] == module_name:
+        return hier["top_module"]
+    for m in hier.get("modules", []):
+        if m["name"] == module_name:
+            return m
+    return None
 
+
+def _infer_direction_from_usage(module_name: str, port_name: str, spec_json: dict) -> str:
+    # default conservative choice
+    direction = "input"
+
+    for sig in spec_json.get("inter_module_signals", []):
+        src = sig.get("source", "")
+        if "." in src:
+            smod, sport = src.split(".", 1)
+            if smod == module_name and sport == port_name:
+                return "output"
+        for dst in sig.get("destinations", []):
+            if "." in dst:
+                dmod, dport = dst.split(".", 1)
+                if dmod == module_name and dport == port_name:
+                    direction = "input"
+
+    for conn in spec_json.get("top_level_connections", []):
+        top_port = conn.get("top_port")
+        for dst in conn.get("connected_to", []):
+            if "." in dst:
+                dmod, dport = dst.split(".", 1)
+                if dmod == module_name and dport == port_name:
+                    direction = "input"
+
+    for own in spec_json.get("signal_ownership", []):
+        owner = own.get("owner", "")
+        if "." in owner:
+            omod, oport = owner.split(".", 1)
+            if omod == module_name and oport == port_name:
+                return "output"
+
+    return direction
+
+
+def _infer_width_from_usage(module_name: str, port_name: str, spec_json: dict) -> int:
+    for sig in spec_json.get("inter_module_signals", []):
+        width = sig.get("width")
+        src = sig.get("source", "")
+        if "." in src:
+            smod, sport = src.split(".", 1)
+            if smod == module_name and sport == port_name and isinstance(width, int) and width >= 1:
+                return width
+        for dst in sig.get("destinations", []):
+            if "." in dst:
+                dmod, dport = dst.split(".", 1)
+                if dmod == module_name and dport == port_name and isinstance(width, int) and width >= 1:
+                    return width
+    return 1
+
+
+def _ensure_hierarchical_port_closure(spec_json: dict) -> dict:
+    hier = spec_json["hierarchy"]
+    mods = [hier["top_module"]] + list(hier.get("modules", []))
+
+    port_maps = {}
+    for m in mods:
+        port_maps[m["name"]] = {p["name"]: p for p in m.get("ports", [])}
+
+    referenced = []
+
+    for conn in spec_json.get("top_level_connections", []):
+        for dst in conn.get("connected_to", []):
+            if "." in dst:
+                referenced.append(dst)
+
+    for sig in spec_json.get("inter_module_signals", []):
+        src = sig.get("source", "")
+        if "." in src:
+            referenced.append(src)
+        for dst in sig.get("destinations", []):
+            if "." in dst:
+                referenced.append(dst)
+
+    for own in spec_json.get("signal_ownership", []):
+        owner = own.get("owner", "")
+        if "." in owner:
+            referenced.append(owner)
+
+    for ep in referenced:
+        mod_name, port_name = ep.split(".", 1)
+        mod = _find_module_obj(spec_json, mod_name)
+        if mod is None:
+            continue
+
+        existing = port_maps[mod_name]
+        if port_name not in existing:
+            existing[port_name] = {
+                "name": port_name,
+                "direction": _infer_direction_from_usage(mod_name, port_name, spec_json),
+                "width": _infer_width_from_usage(mod_name, port_name, spec_json),
+            }
+
+    for m in mods:
+        pmap = port_maps[m["name"]]
+        m["ports"] = list(pmap.values())
+
+    return spec_json
 
 def run_agent(state: dict) -> dict:
     print("\n🚀 Running Digital Spec Agent (contract-only mode)...")
@@ -702,6 +808,8 @@ Return JSON only.
     try:
         parsed_json = json.loads(llm_output.strip())
         spec_json, mode = _normalize_spec_json(parsed_json)
+        if mode == "hierarchical":
+            spec_json = _ensure_hierarchical_port_closure(spec_json)
         _validate_spec_contract(spec_json, mode)
 
     except Exception as e:
