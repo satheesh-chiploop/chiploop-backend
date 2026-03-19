@@ -487,6 +487,39 @@ IMPLEMENTATION RULES
   cfg_* ← reg_wdata[x:y]
 - If contract is missing, do NOT guess mapping.
   Use constant-safe default instead of inventing semantic meaning.
+  - Distinguish raw external signals from derived internal signals.
+- If an inter-module signal is owned by a child module according to signal_ownership, the top module MUST NOT recreate, shortcut, alias, or directly assign that signal from a top-level input or any other source.
+- The top module may only connect child-owned internal signals structurally through wires and port connections.
+
+- Example:
+  If adc_done_sync is owned by analog_if_logic.adc_done_sync, then the top module must connect:
+    analog_if_logic.adc_done_sync -> internal wire adc_done_sync
+  and then consume that wire in downstream modules.
+  The top module MUST NOT do:
+    assign adc_done_sync = adc_done;
+    assign adc_done_sync = ana_done;
+    assign adc_done_sync = any_top_input;
+
+- The same rule applies to synchronized, decoded, filtered, qualified, or derived signals such as:
+  *_sync
+  *_status
+  *_irq
+  *_valid
+  *_ready
+  *_fault
+  *_done
+
+- If a signal name appears in inter_module_signals and signal_ownership, then:
+  1. create exactly one internal wire of that name
+  2. connect the declared owner port to that wire
+  3. connect that wire to the declared consumer ports
+  4. do not add any extra assign or procedural driver for that signal
+DERIVED SIGNAL OWNERSHIP RULE:
+If a submodule produces synchronized, decoded, filtered, qualified, or derived versions of top-level inputs (for example *_sync, *_status, *_irq, *_valid, *_ready, *_fault, *_done), then those derived outputs must appear explicitly in:
+- module ports
+- inter_module_signals
+- signal_ownership
+and must be owned by the producing submodule, not by the top module.
 
 SELF-CHECK BEFORE OUTPUT
 1. Every expected file is emitted exactly once.
@@ -507,6 +540,13 @@ SELF-CHECK BEFORE OUTPUT
 14. No comments or placeholder text may appear inside executable expressions.
 15. No assignment may contain /* ... */ on the RHS.
 16. If protocol details are unknown, emit a minimal deterministic compile-safe implementation, not pseudo-code.
+17. For every inter-module signal owned by a child module:
+    - the top module contains exactly one wire of that signal name
+    - the wire is driven only by the declared owner child port
+    - the wire is consumed only by the declared destination ports
+    - there is no assign statement or always block in the top module that re-drives or aliases that signal
+
+18. Never connect a *_sync signal directly from a raw top-level input unless the spec explicitly declares that raw input as the owner.
 
 """.strip()
 
