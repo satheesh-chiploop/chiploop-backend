@@ -456,6 +456,37 @@ def _find_fallback_spec_json(workflow_dir: str):
     cands.sort()
     return cands[0] if cands else None
 
+def _record_text_artifact_safe(workflow_id, agent_name, subdir, filename, path):
+    try:
+        if os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as f:
+                save_text_artifact_and_record(
+                    workflow_id=workflow_id,
+                    agent_name=agent_name,
+                    subdir=subdir,
+                    filename=filename,
+                    content=f.read(),
+                )
+    except Exception as e:
+        print(f"⚠️ Failed to upload artifact {filename}: {e}")
+
+def _upload_rtl_debug_artifacts(workflow_id, agent_name, rtl_dir):
+    for fname in [
+        "rtl_agent_entry.json",
+        "rtl_agent_preflight.json",
+        "rtl_agent_compile.log",
+        "rtl_agent_summary.txt",
+        "rtl_agent_exception.txt",
+        "rtl_llm_raw_output.txt",
+    ]:
+        _record_text_artifact_safe(
+            workflow_id=workflow_id,
+            agent_name=agent_name,
+            subdir="rtl",
+            filename=fname,
+            path=os.path.join(rtl_dir, fname),
+        )
+
 def run_agent(state: dict) -> dict:
     agent_name = "Digital RTL Agent"
     print("\n🧠 Running RTL Agent (implementation mode)...")
@@ -506,6 +537,7 @@ def run_agent(state: dict) -> dict:
             "workflow_id": workflow_id,
             "workflow_dir": workflow_dir,
         })
+        _upload_rtl_debug_artifacts(workflow_id, agent_name, rtl_dir)
         return state
 
     spec_json, mode = _normalize_spec_json(spec_obj)
@@ -539,6 +571,7 @@ def run_agent(state: dict) -> dict:
             "workflow_id": workflow_id,
             "workflow_dir": workflow_dir,
         })
+        _upload_rtl_debug_artifacts(workflow_id, agent_name, rtl_dir)
         return state
 
     regmap_obj = (
@@ -600,6 +633,7 @@ def run_agent(state: dict) -> dict:
             "workflow_id": workflow_id,
             "workflow_dir": workflow_dir,
         })
+        _upload_rtl_debug_artifacts(workflow_id, agent_name, rtl_dir)
         return state
 
 
