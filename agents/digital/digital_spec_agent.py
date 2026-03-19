@@ -550,30 +550,64 @@ STRICT CONNECTIVITY FORMAT RULES:
 7. If one module communicates multiple control/data/status signals to another module, list each signal separately in inter_module_signals with the exact producer port and consumer port.
 8. Every inter-module signal name must represent a real explicit signal, not a conceptual bundle.
 
+STRICT INTER-MODULE SIGNAL OBJECT RULES:
+1. Every object in inter_module_signals MUST include ALL of these fields:
+   - name
+   - width
+   - source
+   - destinations
+   - description
+2. inter_module_signals[].width is mandatory for EVERY entry.
+3. inter_module_signals[].width must be an integer >= 1.
+4. Never omit width, even for single-bit signals. Use width: 1 explicitly.
+5. width must match the real width of the connected producer and consumer ports.
+6. The signal name should match the actual transferred signal, not an abstract interface name.
+
+STRICT TOP-LEVEL CONNECTION RULES:
+1. Every object in top_level_connections MUST include:
+   - top_port
+   - connected_to
+   - description
+2. top_port must be the exact top-level port name.
+3. Every connected_to entry must be exactly "module.port".
+4. Do NOT connect a top-level port to a bare module name.
+
+STRICT SIGNAL OWNERSHIP RULES:
+1. Every object in signal_ownership MUST include:
+   - signal
+   - owner
+2. signal_ownership[].owner must be exactly "module.port".
+3. signal_ownership[].signal must refer to a real explicit signal name.
+4. For internal inter-module signals, signal_ownership[].signal should match an entry from inter_module_signals[].name.
+5. For top-level externally-driven outputs, signal_ownership[].signal may be the top-level output signal name, but owner must still be the exact producing module.port.
+6. Do NOT assign ownership to abstract interfaces, grouped buses, bundles, or bare modules.
+
 HIERARCHICAL CONNECTIVITY EXAMPLES:
 VALID:
-- source: "i2c_slave.reg_wr_en"
-  destinations: ["register_map.reg_wr_en"]
-- source: "i2c_slave.reg_rd_en"
-  destinations: ["register_map.reg_rd_en"]
-- source: "i2c_slave.reg_addr"
-  destinations: ["register_map.reg_addr"]
-- source: "i2c_slave.reg_wdata"
-  destinations: ["register_map.reg_wdata"]
-- source: "register_map.reg_rdata"
-  destinations: ["i2c_slave.reg_rdata"]
+- {"name":"reg_wr_en","width":1,"source":"i2c_slave.reg_wr_en","destinations":["register_map.reg_wr_en"],"description":"Register write enable."}
+- {"name":"reg_rd_en","width":1,"source":"i2c_slave.reg_rd_en","destinations":["register_map.reg_rd_en"],"description":"Register read enable."}
+- {"name":"reg_addr","width":8,"source":"i2c_slave.reg_addr","destinations":["register_map.reg_addr"],"description":"Register address bus."}
+- {"name":"reg_wdata","width":8,"source":"i2c_slave.reg_wdata","destinations":["register_map.reg_wdata"],"description":"Register write data bus."}
+- {"name":"reg_rdata","width":8,"source":"register_map.reg_rdata","destinations":["i2c_slave.reg_rdata"],"description":"Register read data bus."}
+- {"signal":"reg_wr_en","owner":"i2c_slave.reg_wr_en"}
+- {"signal":"reg_rdata","owner":"register_map.reg_rdata"}
 
 INVALID:
-- source: "i2c_slave"
-  destinations: ["register_map"]
-- name: "reg_bus_signals"
-  source: "i2c_slave"
-  destinations: ["register_map"]
+- {"name":"reg_wr_en","source":"i2c_slave.reg_wr_en","destinations":["register_map.reg_wr_en"],"description":"Missing width"}
+- {"name":"reg_bus_signals","width":8,"source":"i2c_slave","destinations":["register_map"],"description":"Grouped abstract interface"}
+- {"signal":"register_bus","owner":"i2c_slave"}
+- {"top_port":"irq","connected_to":["interrupt_controller"],"description":"Bare module endpoint is invalid"}
 
-OWNERSHIP RULES:
-1. signal_ownership must identify the single legal producer for each internal signal and each top-level externally driven output.
-2. The owner must be the exact producing endpoint in module.port form.
-3. Do NOT assign ownership to abstract interfaces, grouped buses, or bare modules.
+FINAL SELF-CHECK BEFORE OUTPUT:
+Before emitting the JSON, verify ALL of the following:
+1. Hierarchical submodule ports are non-empty.
+2. Every referenced endpoint exists as a real declared port.
+3. Every inter_module_signals entry has name, width, source, destinations, description.
+4. Every inter_module_signals width is an integer >= 1.
+5. Every source/destination/owner endpoint uses exact module.port format.
+6. No grouped or placeholder signal names are used.
+7. signal_ownership aligns with explicit real signals.
+8. The JSON is complete and parseable with json.loads().
 
 If the user spec is incomplete, choose the simplest valid architecture ONCE and encode it here.
 This JSON becomes the source of truth for downstream agents.
