@@ -563,6 +563,15 @@ STRICT INTER-MODULE SIGNAL OBJECT RULES:
 5. width must match the real width of the connected producer and consumer ports.
 6. The signal name should match the actual transferred signal, not an abstract interface name.
 
+STRICT ENDPOINT TOKEN RULES:
+1. Every inter_module_signals[].source must be exactly "module.port" with no bit-slice suffix.
+2. Every inter_module_signals[].destinations[] entry must be exactly "module.port" with no bit-slice suffix.
+3. Do NOT use endpoints like module.port[11:0] or module.port[0].
+4. Width belongs in the width field, not in the endpoint token.
+5. Example:
+   VALID: "source": "analog_if_logic.adc_data_sync", "width": 12
+   INVALID: "source": "analog_if_logic.adc_data_sync[11:0]"
+
 STRICT TOP-LEVEL CONNECTION RULES:
 1. Every object in top_level_connections MUST include:
    - top_port
@@ -581,6 +590,21 @@ STRICT SIGNAL OWNERSHIP RULES:
 4. For internal inter-module signals, signal_ownership[].signal should match an entry from inter_module_signals[].name.
 5. For top-level externally-driven outputs, signal_ownership[].signal may be the top-level output signal name, but owner must still be the exact producing module.port.
 6. Do NOT assign ownership to abstract interfaces, grouped buses, bundles, or bare modules.
+
+STRICT PORT CLOSURE RULES:
+1. Every signal referenced anywhere as module.port MUST exist as a real port in that module's ports[] list.
+2. If a signal appears in inter_module_signals as source "module.port", then that exact port name MUST be declared in module.ports[].
+3. If a signal appears in inter_module_signals as destination "module.port", then that exact port name MUST be declared in module.ports[].
+4. If a signal appears in signal_ownership as owner "module.port", then that exact port name MUST be declared in module.ports[].
+5. If a signal appears in top_level_connections as "module.port", then that exact port name MUST be declared in module.ports[].
+6. If a module lists a signal in must_drive, that signal must either:
+   - be declared as an output/inout port in that module, or
+   - be explicitly described as purely internal and therefore MUST NOT appear in inter_module_signals, top_level_connections, or signal_ownership.
+7. If a module lists a signal in must_receive, that signal must either:
+   - be declared as an input/inout port in that module, or
+   - be explicitly described as purely internal and therefore MUST NOT appear in inter_module_signals, top_level_connections, or signal_ownership.
+8. For hierarchical designs, any signal exchanged between two modules MUST be represented as real ports on both modules.
+9. Do NOT mention a signal in must_drive/must_receive and then omit it from ports[] if that signal is used for module-to-module connectivity.
 
 STRICT CLOCK/RESET PROPAGATION RULES:
 1. If a clock or reset signal appears in top_level_connections, then every referenced destination endpoint MUST be declared as a real port in that destination module.
@@ -634,6 +658,9 @@ Before emitting the JSON, verify ALL of the following:
 8. The JSON is complete and parseable with json.loads().
 9. Every top-level clock/reset connection is mirrored by an exact matching port in the referenced submodule.
 10. No top_level_connections entry may reference module.port unless that exact port string is present in that module's ports[] list.
+11. Every signal named in must_drive or must_receive that participates in module-to-module connectivity is declared in that module's ports[] list.
+12. No inter_module_signals endpoint contains bit slicing such as [11:0]; width is expressed only by the width field.
+13. For every inter_module_signals entry, both producer and consumer modules declare the referenced port names exactly.
 
 If the user spec is incomplete, choose the simplest valid architecture ONCE and encode it here.
 This JSON becomes the source of truth for downstream agents.
