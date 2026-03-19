@@ -581,7 +581,7 @@ def run_agent(state: dict) -> dict:
     except Exception as e:
         return _fail_and_upload("Spec JSON normalization failed.", e)
 
-    pre_issues = _validate_hierarchical_endpoint_coverage(spec_json, mode)
+    pre_issues = _validate_connectivity_contract(spec_json, mode)
     if pre_issues:
         log_path = os.path.join(rtl_dir, "rtl_agent_compile.log")
         summary_file = os.path.join(rtl_dir, "rtl_agent_summary.txt")
