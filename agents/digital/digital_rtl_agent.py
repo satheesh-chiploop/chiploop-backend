@@ -3,6 +3,8 @@ import re
 import json
 import datetime
 import subprocess
+import logging
+logger = logging.getLogger("chiploop")
 from typing import Dict, List, Tuple, Optional
 
 from portkey_ai import Portkey
@@ -492,6 +494,11 @@ def run_agent(state: dict) -> dict:
     agent_name = "Digital RTL Agent"
     print("\n🧠 Running RTL Agent (implementation mode).")
 
+    def _stage(msg: str):
+        logger.info(f"[RTL DEBUG] {msg}")
+
+    _stage("entered_run_agent")
+
     workflow_id = state.get("workflow_id", "default")
     workflow_dir = state.get("workflow_dir", f"backend/workflows/{workflow_id}")
     os.makedirs(workflow_dir, exist_ok=True)
@@ -552,11 +559,14 @@ def run_agent(state: dict) -> dict:
         }, ef, indent=2)
 
     spec_path = None
+    _stage("loading_spec")
     spec_obj = _load_json_if_path(state.get("digital_spec_json"))
+    _stage(f"spec_loaded: {spec_obj is not None}")
     if spec_obj is None:
         spec_obj = _load_json_if_path(state.get("spec_json"))
     if spec_obj is None:
         spec_path = _find_fallback_spec_json(workflow_dir)
+        _stage("checking_fallback_spec")
         spec_obj = _load_json_if_path(spec_path)
 
     if not spec_obj:
@@ -582,11 +592,14 @@ def run_agent(state: dict) -> dict:
         return state
 
     try:
+        _stage("normalizing_spec")
         spec_json, mode = _normalize_spec_json(spec_obj)
+        _stage(f"normalized_spec: mode={mode}")
     except Exception as e:
         return _fail_and_upload("Spec JSON normalization failed.", e)
-
+    _stage("validating_connectivity")
     pre_issues = _validate_connectivity_contract(spec_json, mode)
+    _stage(f"connectivity_valid: {not pre_issues}")
     if pre_issues:
         log_path = os.path.join(rtl_dir, "rtl_agent_compile.log")
         summary_file = os.path.join(rtl_dir, "rtl_agent_summary.txt")
@@ -614,18 +627,40 @@ def run_agent(state: dict) -> dict:
         _upload_rtl_debug_artifacts(workflow_id, agent_name, rtl_dir)
         return state
 
+    _stage("loading_regmap")
+
     regmap_obj = (
         _load_json_if_path(state.get("digital_regmap_json"))
         or _load_json_if_path(state.get("digital_regmap"))
     )
+    _stage(f"regmap_loaded: {regmap_obj is not None}")
+
+    _stage("loading_clock_reset")
 
     clock_reset_obj = _load_json_if_path(state.get("clock_reset_arch_path"))
 
-    power_intent_obj = None
-    if isinstance(state.get("signoff", {}).get("power_intent"), dict):
-        power_intent_obj = state["signoff"]["power_intent"]
+    _stage(f"clock_reset_loaded: {clock_reset_obj is not None}")
 
+    _stage("loading_power_intent")
+
+    power_intent_obj = None
+    signoff_obj = state.get("signoff")
+
+    _stage(f"signoff_type: {type(signoff_obj)}")
+
+    if isinstance(signoff_obj, dict):
+        pi = signoff_obj.get("power_intent")
+        _stage(f"power_intent_type: {type(pi)}")
+        if isinstance(pi, dict):
+            power_intent_obj = pi
+
+    _stage(f"power_intent_loaded: {power_intent_obj is not None}")
+
+    _stage("building_prompt")
     prompt = _build_generation_prompt(spec_json, mode, regmap_obj, clock_reset_obj, power_intent_obj)
+    _stage(f"prompt_length: {len(prompt)}")
+
+    _stage("writing_preflight")
 
     preflight_path = os.path.join(rtl_dir, "rtl_agent_preflight.json")
     with open(preflight_path, "w", encoding="utf-8") as pf:
@@ -638,6 +673,9 @@ def run_agent(state: dict) -> dict:
             "has_power_intent": power_intent_obj is not None,
             "prompt_chars": len(prompt),
         }, pf, indent=2)
+    _stage("preflight_written")
+
+    _stage("starting_llm_call")
 
     try:
         completion = client_portkey.chat.completions.create(
