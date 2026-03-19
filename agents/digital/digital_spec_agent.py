@@ -584,19 +584,20 @@ STRICT SIGNAL OWNERSHIP RULES:
 
 HIERARCHICAL CONNECTIVITY EXAMPLES:
 VALID:
-- {"name":"reg_wr_en","width":1,"source":"i2c_slave.reg_wr_en","destinations":["register_map.reg_wr_en"],"description":"Register write enable."}
-- {"name":"reg_rd_en","width":1,"source":"i2c_slave.reg_rd_en","destinations":["register_map.reg_rd_en"],"description":"Register read enable."}
-- {"name":"reg_addr","width":8,"source":"i2c_slave.reg_addr","destinations":["register_map.reg_addr"],"description":"Register address bus."}
-- {"name":"reg_wdata","width":8,"source":"i2c_slave.reg_wdata","destinations":["register_map.reg_wdata"],"description":"Register write data bus."}
-- {"name":"reg_rdata","width":8,"source":"register_map.reg_rdata","destinations":["i2c_slave.reg_rdata"],"description":"Register read data bus."}
-- {"signal":"reg_wr_en","owner":"i2c_slave.reg_wr_en"}
-- {"signal":"reg_rdata","owner":"register_map.reg_rdata"}
+- {{"name":"reg_wr_en","width":1,"source":"i2c_slave.reg_wr_en","destinations":["register_map.reg_wr_en"],"description":"Register write enable."}}
+- {{"name":"reg_rd_en","width":1,"source":"i2c_slave.reg_rd_en","destinations":["register_map.reg_rd_en"],"description":"Register read enable."}}
+- {{"name":"reg_addr","width":8,"source":"i2c_slave.reg_addr","destinations":["register_map.reg_addr"],"description":"Register address bus."}}
+- {{"name":"reg_wdata","width":8,"source":"i2c_slave.reg_wdata","destinations":["register_map.reg_wdata"],"description":"Register write data bus."}}
+- {{"name":"reg_rdata","width":8,"source":"register_map.reg_rdata","destinations":["i2c_slave.reg_rdata"],"description":"Register read data bus."}}
+- {{"signal":"reg_wr_en","owner":"i2c_slave.reg_wr_en"}}
+- {{"signal":"reg_rdata","owner":"register_map.reg_rdata"}}
 
 INVALID:
-- {"name":"reg_wr_en","source":"i2c_slave.reg_wr_en","destinations":["register_map.reg_wr_en"],"description":"Missing width"}
-- {"name":"reg_bus_signals","width":8,"source":"i2c_slave","destinations":["register_map"],"description":"Grouped abstract interface"}
-- {"signal":"register_bus","owner":"i2c_slave"}
-- {"top_port":"irq","connected_to":["interrupt_controller"],"description":"Bare module endpoint is invalid"}
+- {{"name":"reg_wr_en","source":"i2c_slave.reg_wr_en","destinations":["register_map.reg_wr_en"],"description":"Missing width"}}
+- {{"name":"reg_bus_signals","width":8,"source":"i2c_slave","destinations":["register_map"],"description":"Grouped abstract interface"}}
+- {{"signal":"register_bus","owner":"i2c_slave"}}
+- {{"top_port":"irq","connected_to":["interrupt_controller"],"description":"Bare module endpoint is invalid"}}
+
 
 FINAL SELF-CHECK BEFORE OUTPUT:
 Before emitting the JSON, verify ALL of the following:
