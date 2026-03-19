@@ -715,6 +715,68 @@ STRICT PORT CLOSURE RULES:
 8. For hierarchical designs, any signal exchanged between two modules MUST be represented as real ports on both modules.
 9. Do NOT mention a signal in must_drive/must_receive and then omit it from ports[] if that signal is used for module-to-module connectivity.
 
+SEMANTIC SIGNAL RESOLUTION RULES (CRITICAL)
+
+1. Distinguish between:
+   - Transport signals (e.g., reg_wdata, reg_addr, reg_wr_en)
+   - Semantic signals (e.g., cfg_enable, start, mode, threshold, dac_code, irq)
+
+2. If ANY module consumes semantic signals (cfg_*, enable, start, mode, data, etc.):
+   THEN those signals MUST have an explicit producer in inter_module_signals.
+
+3. Do NOT assume semantic signals can be derived later from transport buses.
+
+   ❌ INVALID:
+   control_fsm.cfg_enable exists
+   but no inter_module_signals defines who produces cfg_enable
+
+4. If a module (e.g., register_map, decoder, controller) is responsible for decoding transport data:
+   THEN it MUST expose semantic outputs explicitly as ports.
+
+   Example:
+   register_map MUST include:
+   - cfg_enable
+   - cfg_adc_start
+   - cfg_dac_enable
+   - cfg_dac_code
+
+5. Every semantic signal must follow FULL CONTRACT CLOSURE:
+
+   For each signal S:
+   - Declared in inter_module_signals
+   - Exists as source module.port
+   - Exists as destination module.port
+   - Appears in signal_ownership
+   - Appears in module.ports[]
+
+6. Multi-register or encoded signals must be represented as FINAL semantic signals:
+
+   Example:
+   If DAC code is 12-bit split across registers:
+   - Represent ONLY:
+     register_map.cfg_dac_code (width=12)
+
+   Do NOT expose:
+   - raw reg_wdata bits
+   - partial slices
+   - implicit packing
+
+7. NEVER connect semantic inputs directly from raw transport buses unless explicitly defined.
+
+   ❌ INVALID:
+   control_fsm.cfg_dac_code ← register_map.reg_wdata
+
+8. If semantic signal exists in must_receive or must_drive:
+   it MUST be implemented as a real port AND connected via inter_module_signals.
+
+9. Avoid "hidden derivation":
+   Every signal consumed by a module must be traceable through:
+
+   producer → inter_module_signals → consumer
+
+10. If unsure, prefer explicit semantic signals over implicit bus reuse.
+
+
 STRICT CLOCK/RESET PROPAGATION RULES:
 1. If a clock or reset signal appears in top_level_connections, then every referenced destination endpoint MUST be declared as a real port in that destination module.
 2. If top_level_connections includes endpoints like "some_module.clk", "some_module.rst_n", "some_module.reset_n", or "some_module.reset", then that exact port name MUST appear in some_module.ports[].
@@ -770,6 +832,10 @@ Before emitting the JSON, verify ALL of the following:
 11. Every signal named in must_drive or must_receive that participates in module-to-module connectivity is declared in that module's ports[] list.
 12. No inter_module_signals endpoint contains bit slicing such as [11:0]; width is expressed only by the width field.
 13. For every inter_module_signals entry, both producer and consumer modules declare the referenced port names exactly.
+14. For every module input port that is NOT a top-level connection:
+    there must exist exactly one inter_module_signals entry that drives it.
+15. No module input port may remain "unexplained" (i.e., not connected via contract).
+16. No semantic signal (cfg_*, enable, mode, data, etc.) may be sourced from a transport bus unless explicitly defined in inter_module_signals.
 
 If the user spec is incomplete, choose the simplest valid architecture ONCE and encode it here.
 This JSON becomes the source of truth for downstream agents.

@@ -480,6 +480,13 @@ IMPLEMENTATION RULES
 - Every assignment RHS must be a legal Verilog expression.
 - If protocol behavior is underspecified, generate the simplest deterministic legal stub logic instead of placeholders.
 - For smoke-test RTL, it is acceptable to drive outputs to constant-safe defaults or simple 
+- Do NOT derive semantic configuration or control signals from raw bus signals unless explicitly defined in DIGITAL_SPEC_JSON.
+- If a module input is named cfg_*, enable, start, mode, threshold, data, etc.,
+  it MUST be driven from an explicitly declared inter_module signal source.
+- Forbidden example:
+  cfg_* ← reg_wdata[x:y]
+- If contract is missing, do NOT guess mapping.
+  Use constant-safe default instead of inventing semantic meaning.
 
 SELF-CHECK BEFORE OUTPUT
 1. Every expected file is emitted exactly once.
