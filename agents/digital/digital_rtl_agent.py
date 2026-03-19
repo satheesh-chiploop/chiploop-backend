@@ -14,6 +14,12 @@ from utils.artifact_utils import save_text_artifact_and_record
 PORTKEY_API_KEY = os.getenv("PORTKEY_API_KEY")
 
 
+def _strip_verilog_comments(text: str) -> str:
+    text = re.sub(r"//.*?$", "", text, flags=re.MULTILINE)
+    text = re.sub(r"/\*.*?\*/", "", text, flags=re.DOTALL)
+    return text
+
+
 def _safe_json(obj):
     try:
         return json.dumps(obj, indent=2, default=str)
@@ -334,6 +340,8 @@ def _validate_spec_vs_rtl(spec_json: dict, mode: str, verilog_map: Dict[str, str
     return issues, sorted(set(clock_ports)), sorted(set(reset_ports))
 
 
+
+
 def _build_generation_prompt(spec_json: dict, mode: str, regmap_obj: Optional[dict], clock_reset_obj: Optional[dict], power_intent_obj: Optional[dict]) -> str:
     connectivity_contract = _build_connectivity_contract(spec_json, mode)
 
@@ -460,6 +468,18 @@ IMPLEMENTATION RULES
   - a declared wire
   - a declared port
   - a literal/concatenation/slice of declared signals
+- Output must be fully compile-ready Verilog-2005 with no placeholders.
+- NEVER emit pseudo-code, TODOs, comments, or template text in place of expressions.
+- Forbidden examples:
+  - /* condition */
+  - /* address */
+  - /* data */
+  - TODO
+  - implement here
+  - fill in later
+- Every assignment RHS must be a legal Verilog expression.
+- If protocol behavior is underspecified, generate the simplest deterministic legal stub logic instead of placeholders.
+- For smoke-test RTL, it is acceptable to drive outputs to constant-safe defaults or simple 
 
 SELF-CHECK BEFORE OUTPUT
 1. Every expected file is emitted exactly once.
@@ -477,6 +497,9 @@ SELF-CHECK BEFORE OUTPUT
 13. FSMs use localparam + reg state encoding only.
 14. For every case item in a register read-data mux, the right-hand-side expression must use only declared identifiers.
 15. RO registers described in DIGITAL_REGMAP_JSON must map to declared status/input signals or explicitly declared shadow regs; never use undeclared symbolic register names from the regmap.
+14. No comments or placeholder text may appear inside executable expressions.
+15. No assignment may contain /* ... */ on the RHS.
+16. If protocol details are unknown, emit a minimal deterministic compile-safe implementation, not pseudo-code.
 
 """.strip()
 
@@ -787,10 +810,17 @@ def run_agent(state: dict) -> dict:
             r"\bstruct\b",
             r"\bunion\b",
         ]
+        
         full_text = "\n".join(verilog_map.values())
+        scan_text = _strip_verilog_comments(full_text)
+
         for pat in forbidden_sv_patterns:
-            if re.search(pat, full_text):
-                issues.append(f"❌ Forbidden SystemVerilog construct found in RTL: pattern '{pat}'")
+            if pat == r"\blogic\b":
+                if re.search(r"\blogic\s+(\[[^\]]+\]\s+)?[A-Za-z_]\w*", scan_text):
+                    issues.append(f"❌ Forbidden SystemVerilog construct found in RTL: pattern '{pat}'")
+            else:
+                if re.search(pat, scan_text):
+                    issues.append(f"❌ Forbidden SystemVerilog construct found in RTL: pattern '{pat}'")
 
         suspicious_grouped_buses = [
             "reg_bus_signals",
