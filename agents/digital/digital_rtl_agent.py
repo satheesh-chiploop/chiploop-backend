@@ -447,6 +447,19 @@ IMPLEMENTATION RULES
 - Every child module must be self-contained and may only use:
   - its own ports
   - its own local regs/wires/params
+- Distinguish RW storage registers from RO view registers.
+- RW registers must be backed by explicit stored regs when written by software.
+- RO registers must NOT invent undeclared storage elements just because the regmap gives them names.
+- If a RO register represents fields from an input/status signal, implement readback directly from the corresponding declared input port or from an explicitly declared shadow/status reg.
+- Example: if the regmap contains ADC_DATA_L and ADC_DATA_H and the module has input adc_data_sync[11:0], then:
+  - ADC_DATA_L readback must come from adc_data_sync[7:0]
+  - ADC_DATA_H readback must come from the upper nibble packed into 8 bits, e.g. {{4'b0000, adc_data_sync[11:8]}}
+- Do NOT reference symbolic register names such as ADC_DATA_L or ADC_DATA_H in RTL unless you explicitly declared them as reg/wire objects in that module.
+- Every identifier used in a read-data mux must be either:
+  - a declared reg
+  - a declared wire
+  - a declared port
+  - a literal/concatenation/slice of declared signals
 
 SELF-CHECK BEFORE OUTPUT
 1. Every expected file is emitted exactly once.
@@ -462,6 +475,8 @@ SELF-CHECK BEFORE OUTPUT
 11. No SystemVerilog syntax is used.
 12. No top-level always block drives an output owned by a child module.
 13. FSMs use localparam + reg state encoding only.
+14. For every case item in a register read-data mux, the right-hand-side expression must use only declared identifiers.
+15. RO registers described in DIGITAL_REGMAP_JSON must map to declared status/input signals or explicitly declared shadow regs; never use undeclared symbolic register names from the regmap.
 
 """.strip()
 
