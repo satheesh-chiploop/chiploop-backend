@@ -14,6 +14,11 @@ from utils.artifact_utils import save_text_artifact_and_record
 PORTKEY_API_KEY = os.getenv("PORTKEY_API_KEY")
 
 
+def _safe_json(obj):
+    try:
+        return json.dumps(obj, indent=2, default=str)
+    except Exception:
+        return json.dumps(str(obj), indent=2)
 
 
 def _load_json_if_path(v):
@@ -359,19 +364,19 @@ SPEC MODE:
 {mode}
 
 DIGITAL_SPEC_JSON:
-{json.dumps(spec_json, indent=2)}
+{_safe_json(spec_json)}
 
 DERIVED_INTERFACE_CONTRACT:
-{json.dumps(connectivity_contract, indent=2)}
+{_safe_json(connectivity_contract)}
 
 DIGITAL_REGMAP_JSON:
-{json.dumps(regmap_obj, indent=2) if regmap_obj is not None else "null"}
+{_safe_json(regmap_obj) if regmap_obj is not None else "null"}
 
 CLOCK_RESET_ARCH_JSON:
-{json.dumps(clock_reset_obj, indent=2) if clock_reset_obj is not None else "null"}
+{_safe_json(clock_reset_obj) if clock_reset_obj is not None else "null"}
 
 POWER_INTENT_JSON:
-{json.dumps(power_intent_obj, indent=2) if power_intent_obj is not None else "null"}
+{_safe_json(power_intent_obj) if power_intent_obj is not None else "null"}
 
 IMPLEMENTATION RULES
 
@@ -656,10 +661,16 @@ def run_agent(state: dict) -> dict:
 
     _stage(f"power_intent_loaded: {power_intent_obj is not None}")
 
+
     _stage("building_prompt")
-    prompt = _build_generation_prompt(spec_json, mode, regmap_obj, clock_reset_obj, power_intent_obj)
+    try:
+        prompt = _build_generation_prompt(spec_json, mode, regmap_obj, clock_reset_obj, power_intent_obj)
+    except Exception as e:
+        logger.exception("[RTL DEBUG] prompt build failed")
+        return _fail_and_upload("RTL prompt build failed.", e)
     _stage(f"prompt_length: {len(prompt)}")
 
+    
     _stage("writing_preflight")
 
     preflight_path = os.path.join(rtl_dir, "rtl_agent_preflight.json")
