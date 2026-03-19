@@ -487,6 +487,41 @@ def _upload_rtl_debug_artifacts(workflow_id, agent_name, rtl_dir):
             path=os.path.join(rtl_dir, fname),
         )
 
+def _fail_and_upload(msg: str, exc: Exception = None):
+    log_path = os.path.join(rtl_dir, "rtl_agent_compile.log")
+    summary_file = os.path.join(rtl_dir, "rtl_agent_summary.txt")
+    error_file = os.path.join(rtl_dir, "rtl_agent_exception.txt")
+
+    with open(log_path, "w", encoding="utf-8") as lf:
+        lf.write(msg + "\n")
+        if exc is not None:
+            lf.write(f"Exception type: {type(exc).__name__}\n")
+            lf.write(f"Exception: {exc}\n")
+
+    with open(summary_file, "w", encoding="utf-8") as sf:
+        sf.write("❌ RTL generation failed.\n\n")
+        sf.write(msg + "\n")
+        if exc is not None:
+            sf.write(f"Exception type: {type(exc).__name__}\n")
+            sf.write(f"Exception: {exc}\n")
+
+    if exc is not None:
+        with open(error_file, "w", encoding="utf-8") as ef:
+            ef.write(repr(exc) + "\n")
+
+    _upload_rtl_debug_artifacts(workflow_id, agent_name, rtl_dir)
+
+    state.update({
+        "status": f"❌ RTL generation failed: {msg}",
+        "artifact": None,
+        "artifact_list": [],
+        "artifact_log": log_path,
+        "issues": [msg] + ([str(exc)] if exc is not None else []),
+        "workflow_id": workflow_id,
+        "workflow_dir": workflow_dir,
+    })
+    return state
+
 def run_agent(state: dict) -> dict:
     agent_name = "Digital RTL Agent"
     print("\n🧠 Running RTL Agent (implementation mode)...")
