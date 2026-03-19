@@ -428,7 +428,7 @@ IMPLEMENTATION RULES
 - If there is a register map, implement real stored writable registers where required.
 - Implement STATUS and INT_STATUS from explicit field semantics if regmap provides them.
 - If a wider value is split across multiple narrower registers, reconstruct it to the exact declared signal width only.
-- Example rule: if a 12-bit signal uses one low byte and one high nibble, reconstruct as {high_reg[3:0], low_reg[7:0]}, not as a 16-bit concatenation.
+- Example rule: if a 12-bit signal uses one low byte and one high nibble, reconstruct as {{high_reg[3:0], low_reg[7:0]}}, not as a 16-bit concatenation.
 - Never assign a concatenation wider than the declared destination signal width.
 - Prefer the simplest deterministic smoke-test implementation consistent with the contract.
 - If any module uses an FSM, implement states using Verilog-2005 localparam constants and reg state registers.
