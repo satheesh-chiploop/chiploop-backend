@@ -500,11 +500,6 @@ def run_agent(state: dict) -> dict:
     rtl_dir = os.path.join(workflow_dir, "rtl")
     os.makedirs(rtl_dir, exist_ok=True)
 
-    try:
-        client_portkey = Portkey(api_key=PORTKEY_API_KEY)
-    except Exception as e:
-        return _fail_and_upload("Failed to initialize Portkey client.", e)
-
     def _fail_and_upload(msg: str, exc: Exception = None) -> dict:
         log_path = os.path.join(rtl_dir, "rtl_agent_compile.log")
         summary_file = os.path.join(rtl_dir, "rtl_agent_summary.txt")
@@ -539,6 +534,11 @@ def run_agent(state: dict) -> dict:
             "workflow_dir": workflow_dir,
         })
         return state
+
+    try:
+        client_portkey = Portkey(api_key=PORTKEY_API_KEY)
+    except Exception as e:
+        return _fail_and_upload("Failed to initialize Portkey client.", e)
 
     entry_log = os.path.join(rtl_dir, "rtl_agent_entry.json")
     with open(entry_log, "w", encoding="utf-8") as ef:
