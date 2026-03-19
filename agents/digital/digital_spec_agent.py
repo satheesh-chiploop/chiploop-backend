@@ -2,11 +2,11 @@ import os
 import json
 from utils.artifact_utils import save_text_artifact_and_record
 from portkey_ai import Portkey
-from openai import OpenAI
+
 
 PORTKEY_API_KEY = os.getenv("PORTKEY_API_KEY")
-client_portkey = Portkey(api_key=PORTKEY_API_KEY)
-client_openai = OpenAI()
+
+
 
 
 def _normalize_spec_json(spec_json: dict):
@@ -419,6 +419,9 @@ def run_agent(state: dict) -> dict:
     # Restore local directory structure
     spec_dir = os.path.join(workflow_dir, "spec")
     os.makedirs(spec_dir, exist_ok=True)
+
+    client_portkey = Portkey(api_key=PORTKEY_API_KEY)
+
 
     entry_path = os.path.join(spec_dir, "spec_agent_entry.json")
     entry_payload = {

@@ -6,12 +6,12 @@ import subprocess
 from typing import Dict, List, Tuple, Optional
 
 from portkey_ai import Portkey
-from openai import OpenAI
+
 from utils.artifact_utils import save_text_artifact_and_record
 
 PORTKEY_API_KEY = os.getenv("PORTKEY_API_KEY")
-client_portkey = Portkey(api_key=PORTKEY_API_KEY)
-client_openai = OpenAI()
+
+
 
 
 def _load_json_if_path(v):
@@ -499,6 +499,11 @@ def run_agent(state: dict) -> dict:
     # Restore local directory structure
     rtl_dir = os.path.join(workflow_dir, "rtl")
     os.makedirs(rtl_dir, exist_ok=True)
+
+    try:
+        client_portkey = Portkey(api_key=PORTKEY_API_KEY)
+    except Exception as e:
+        return _fail_and_upload("Failed to initialize Portkey client.", e)
 
     def _fail_and_upload(msg: str, exc: Exception = None) -> dict:
         log_path = os.path.join(rtl_dir, "rtl_agent_compile.log")
