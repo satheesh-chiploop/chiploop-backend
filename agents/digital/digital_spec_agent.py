@@ -611,15 +611,15 @@ INVALID:
 
 VALID CLOCK/RESET EXAMPLE:
 top_level_connections:
-- {"top_port":"clk","connected_to":["i2c_slave.clk","register_map.clk","analog_if_logic.clk"],"description":"Top clock fanout."}
-- {"top_port":"rst_n","connected_to":["i2c_slave.rst_n","register_map.rst_n","analog_if_logic.rst_n"],"description":"Top active-low reset fanout."}
+- {{"top_port":"clk","connected_to":["i2c_slave.clk","register_map.clk","analog_if_logic.clk"],"description":"Top clock fanout."}}
+- {{"top_port":"rst_n","connected_to":["i2c_slave.rst_n","register_map.rst_n","analog_if_logic.rst_n"],"description":"Top active-low reset fanout."}}
 Then the following ports MUST exist:
 - i2c_slave.ports includes "clk" and "rst_n"
 - register_map.ports includes "clk" and "rst_n"
 - analog_if_logic.ports includes "clk" and "rst_n"
 
 INVALID CLOCK/RESET EXAMPLE:
-- {"top_port":"rst_n","connected_to":["analog_if_logic.rst_n"],"description":"Invalid if analog_if_logic.ports does not include rst_n"}
+- {{"top_port":"rst_n","connected_to":["analog_if_logic.rst_n"],"description":"Invalid if analog_if_logic.ports does not include rst_n"}}
 
 
 FINAL SELF-CHECK BEFORE OUTPUT:
