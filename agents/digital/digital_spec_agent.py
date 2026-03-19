@@ -304,6 +304,7 @@ def _upload_spec_debug_artifacts(workflow_id, agent_name, spec_dir):
 
 def run_agent(state: dict) -> dict:
     print("\n🚀 Running Digital Spec Agent (contract-only mode)...")
+    agent_name = "Digital Spec Agent"
 
     workflow_id = state.get("workflow_id", "default")
     workflow_dir = state.get("workflow_dir", f"backend/workflows/{workflow_id}")
@@ -522,14 +523,60 @@ RULES
 - top_level_connections must describe how top-level ports connect to submodule ports.
 - inter_module_signals must describe how submodules connect to each other.
 - signal_ownership must identify the only legal driver of each internally-driven or externally-driven signal.
-- PORT COMPLETENESS RULE FOR HIERARCHICAL DESIGNS:
-  1. Do NOT leave hierarchical submodule ports empty.
-  2. Every endpoint referenced in top_level_connections must exist as a real port in the referenced module.
-  3. Every source and destination referenced in inter_module_signals must exist as a real port in the referenced module.
-  4. Every owner referenced in signal_ownership must exist as a real port in the referenced module.
-  5. Use the connectivity endpoints to derive complete submodule port lists.
-- If the user spec is incomplete, choose the simplest valid architecture ONCE and encode it here.
-- This JSON becomes the source of truth for downstream agents.
+
+PORT COMPLETENESS AND ENDPOINT RULES FOR HIERARCHICAL DESIGNS:
+1. Do NOT leave hierarchical submodule ports empty.
+2. Every endpoint referenced in top_level_connections must exist as a real port in the referenced module.
+3. Every source and destination referenced in inter_module_signals must exist as a real port in the referenced module.
+4. Every owner referenced in signal_ownership must exist as a real port in the referenced module.
+5. Use the connectivity endpoints to derive complete submodule port lists.
+
+STRICT CONNECTIVITY FORMAT RULES:
+1. In hierarchical mode, every inter_module_signals[].source MUST be exactly "module.port".
+2. In hierarchical mode, every inter_module_signals[].destinations[] entry MUST be exactly "module.port".
+3. In hierarchical mode, every signal_ownership[].owner MUST be exactly "module.port".
+4. Never use a bare module name as an endpoint. Examples of INVALID endpoints: "i2c_slave", "register_map".
+5. Never use grouped, abstract, bundled, or placeholder connectivity names such as:
+   - reg_bus_signals
+   - adc_status_signals
+   - irq_signals
+   - control_bus
+   - data_bus
+   - status_bus
+   - internal_bus
+   - grouped_signals
+   If a bus really exists, it must be represented as a real module port with an exact port name and width.
+6. Do NOT summarize an interface as one grouped connection. Instead, expand it into explicit signal-level entries, one per real signal.
+7. If one module communicates multiple control/data/status signals to another module, list each signal separately in inter_module_signals with the exact producer port and consumer port.
+8. Every inter-module signal name must represent a real explicit signal, not a conceptual bundle.
+
+HIERARCHICAL CONNECTIVITY EXAMPLES:
+VALID:
+- source: "i2c_slave.reg_wr_en"
+  destinations: ["register_map.reg_wr_en"]
+- source: "i2c_slave.reg_rd_en"
+  destinations: ["register_map.reg_rd_en"]
+- source: "i2c_slave.reg_addr"
+  destinations: ["register_map.reg_addr"]
+- source: "i2c_slave.reg_wdata"
+  destinations: ["register_map.reg_wdata"]
+- source: "register_map.reg_rdata"
+  destinations: ["i2c_slave.reg_rdata"]
+
+INVALID:
+- source: "i2c_slave"
+  destinations: ["register_map"]
+- name: "reg_bus_signals"
+  source: "i2c_slave"
+  destinations: ["register_map"]
+
+OWNERSHIP RULES:
+1. signal_ownership must identify the single legal producer for each internal signal and each top-level externally driven output.
+2. The owner must be the exact producing endpoint in module.port form.
+3. Do NOT assign ownership to abstract interfaces, grouped buses, or bare modules.
+
+If the user spec is incomplete, choose the simplest valid architecture ONCE and encode it here.
+This JSON becomes the source of truth for downstream agents.
 
 Return JSON only.
 """.strip()
