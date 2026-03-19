@@ -258,6 +258,49 @@ def _write_text(path: str, content: str) -> None:
     with open(path, "w", encoding="utf-8") as f:
         f.write(content)
 
+def _record_text_artifact_safe(workflow_id, agent_name, subdir, filename, path):
+    try:
+        if os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as f:
+                save_text_artifact_and_record(
+                    workflow_id=workflow_id,
+                    agent_name=agent_name,
+                    subdir=subdir,
+                    filename=filename,
+                    content=f.read(),
+                )
+    except Exception as e:
+        print(f"⚠️ Failed to upload artifact {filename}: {e}")
+
+
+def _upload_spec_debug_artifacts(workflow_id, agent_name, spec_dir):
+    for fname in [
+        "spec_agent_entry.json",
+        "spec_agent_input.txt",
+        "spec_agent_summary.txt",
+        "spec_agent_contract.log",
+        "llm_raw_output.txt",
+        "spec_agent_exception.txt",
+    ]:
+        _record_text_artifact_safe(
+            workflow_id=workflow_id,
+            agent_name=agent_name,
+            subdir="spec",
+            filename=fname,
+            path=os.path.join(spec_dir, fname),
+        )
+
+    # upload generated spec json too, if present
+    for fn in os.listdir(spec_dir):
+        if fn.endswith("_spec.json"):
+            _record_text_artifact_safe(
+                workflow_id=workflow_id,
+                agent_name=agent_name,
+                subdir="spec",
+                filename=fn,
+                path=os.path.join(spec_dir, fn),
+            )
+
 
 def run_agent(state: dict) -> dict:
     print("\n🚀 Running Digital Spec Agent (contract-only mode)...")
@@ -318,6 +361,7 @@ def run_agent(state: dict) -> dict:
             "workflow_id": workflow_id,
             "issues": ["No spec provided"],
         })
+        _upload_spec_debug_artifacts(workflow_id, agent_name, spec_dir)
         return state
 
     prompt = f"""
@@ -513,6 +557,7 @@ Return JSON only.
                 "workflow_id": workflow_id,
                 "issues": [f"LLM generation failed: {e}"],
             })
+            _upload_spec_debug_artifacts(workflow_id, agent_name, spec_dir)
 
             return state
 
@@ -524,9 +569,29 @@ Return JSON only.
         parsed_json = json.loads(llm_output.strip())
         spec_json, mode = _normalize_spec_json(parsed_json)
         _validate_spec_contract(spec_json, mode)
+
     except Exception as e:
-        state["status"] = f"❌ JSON parse/normalize failed: {e}"
-        raise ValueError(f"LLM JSON parse/normalize failed: {e}")
+        log_path = os.path.join(spec_dir, "spec_agent_contract.log")
+        summary_path = os.path.join(spec_dir, "spec_agent_summary.txt")
+        exc_path = os.path.join(spec_dir, "spec_agent_exception.txt")
+
+        _write_text(log_path, f"Digital Spec Agent parse/normalize failure:\n{e}\n")
+        _write_text(summary_path, f"❌ Digital Spec Agent failed.\n\nJSON parse/normalize failed: {e}\n")
+        _write_text(exc_path, repr(e))
+
+        state.update({
+            "status": f"❌ JSON parse/normalize failed: {e}",
+            "artifact": None,
+            "artifact_list": [],
+            "artifact_log": log_path,
+            "workflow_dir": workflow_dir,
+            "workflow_id": workflow_id,
+            "issues": [f"JSON parse/normalize failed: {e}"],
+        })
+
+        agent_name = "Digital Spec Agent"
+        _upload_spec_debug_artifacts(workflow_id, agent_name, spec_dir)
+        return state
 
     module_name = spec_json["name"] if mode == "flat" else spec_json["hierarchy"]["top_module"]["name"]
 
@@ -580,4 +645,5 @@ Return JSON only.
         "workflow_dir": workflow_dir,
         "workflow_id": workflow_id,
     })
+    _upload_spec_debug_artifacts(workflow_id, agent_name, spec_dir)
     return state
