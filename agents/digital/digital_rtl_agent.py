@@ -429,11 +429,24 @@ IMPLEMENTATION RULES
 - Implement STATUS and INT_STATUS from explicit field semantics if regmap provides them.
 - If a wider value is split across multiple narrower registers, reconstruct it to the exact declared signal width only.
 - Example rule: if a 12-bit signal uses one low byte and one high nibble, reconstruct as {{high_reg[3:0], low_reg[7:0]}}, not as a 16-bit concatenation.
+- When reconstructing a wider signal from register bytes, the concatenation width must exactly match the declared destination width.
+- If cfg_dac_code is [11:0], reconstruct only 12 bits, for example:
+  {{dac_code_h[3:0], dac_code_l[7:0]}}
+- Never concatenate two full 8-bit registers into a 12-bit destination.
 - Never assign a concatenation wider than the declared destination signal width.
 - Prefer the simplest deterministic smoke-test implementation consistent with the contract.
 - If any module uses an FSM, implement states using Verilog-2005 localparam constants and reg state registers.
 - Do NOT use typedef enum or any SystemVerilog FSM syntax.
 - Entire design must compile together cleanly.
+- A module must NEVER reference another module instance by hierarchical name.
+- Forbidden examples inside child RTL:
+  - interrupt_ctrl.irq
+  - u_interrupt_ctrl.irq
+  - digital_subsystem.some_wire
+- If a register block needs interrupt status, that status must arrive through an explicit declared input port from the top-level wiring contract.
+- Every child module must be self-contained and may only use:
+  - its own ports
+  - its own local regs/wires/params
 
 SELF-CHECK BEFORE OUTPUT
 1. Every expected file is emitted exactly once.
