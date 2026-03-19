@@ -487,44 +487,10 @@ def _upload_rtl_debug_artifacts(workflow_id, agent_name, rtl_dir):
             path=os.path.join(rtl_dir, fname),
         )
 
-def _fail_and_upload(msg: str, exc: Exception = None):
-    log_path = os.path.join(rtl_dir, "rtl_agent_compile.log")
-    summary_file = os.path.join(rtl_dir, "rtl_agent_summary.txt")
-    error_file = os.path.join(rtl_dir, "rtl_agent_exception.txt")
-
-    with open(log_path, "w", encoding="utf-8") as lf:
-        lf.write(msg + "\n")
-        if exc is not None:
-            lf.write(f"Exception type: {type(exc).__name__}\n")
-            lf.write(f"Exception: {exc}\n")
-
-    with open(summary_file, "w", encoding="utf-8") as sf:
-        sf.write("❌ RTL generation failed.\n\n")
-        sf.write(msg + "\n")
-        if exc is not None:
-            sf.write(f"Exception type: {type(exc).__name__}\n")
-            sf.write(f"Exception: {exc}\n")
-
-    if exc is not None:
-        with open(error_file, "w", encoding="utf-8") as ef:
-            ef.write(repr(exc) + "\n")
-
-    _upload_rtl_debug_artifacts(workflow_id, agent_name, rtl_dir)
-
-    state.update({
-        "status": f"❌ RTL generation failed: {msg}",
-        "artifact": None,
-        "artifact_list": [],
-        "artifact_log": log_path,
-        "issues": [msg] + ([str(exc)] if exc is not None else []),
-        "workflow_id": workflow_id,
-        "workflow_dir": workflow_dir,
-    })
-    return state
 
 def run_agent(state: dict) -> dict:
     agent_name = "Digital RTL Agent"
-    print("\n🧠 Running RTL Agent (implementation mode)...")
+    print("\n🧠 Running RTL Agent (implementation mode).")
 
     workflow_id = state.get("workflow_id", "default")
     workflow_dir = state.get("workflow_dir", f"backend/workflows/{workflow_id}")
@@ -533,6 +499,41 @@ def run_agent(state: dict) -> dict:
     # Restore local directory structure
     rtl_dir = os.path.join(workflow_dir, "rtl")
     os.makedirs(rtl_dir, exist_ok=True)
+
+    def _fail_and_upload(msg: str, exc: Exception = None) -> dict:
+        log_path = os.path.join(rtl_dir, "rtl_agent_compile.log")
+        summary_file = os.path.join(rtl_dir, "rtl_agent_summary.txt")
+        error_file = os.path.join(rtl_dir, "rtl_agent_exception.txt")
+
+        with open(log_path, "w", encoding="utf-8") as lf:
+            lf.write(msg + "\n")
+            if exc is not None:
+                lf.write(f"Exception type: {type(exc).__name__}\n")
+                lf.write(f"Exception: {exc}\n")
+
+        with open(summary_file, "w", encoding="utf-8") as sf:
+            sf.write("❌ RTL generation failed.\n\n")
+            sf.write(msg + "\n")
+            if exc is not None:
+                sf.write(f"Exception type: {type(exc).__name__}\n")
+                sf.write(f"Exception: {exc}\n")
+
+        if exc is not None:
+            with open(error_file, "w", encoding="utf-8") as ef:
+                ef.write(repr(exc) + "\n")
+
+        _upload_rtl_debug_artifacts(workflow_id, agent_name, rtl_dir)
+
+        state.update({
+            "status": f"❌ RTL generation failed: {msg}",
+            "artifact": None,
+            "artifact_list": [],
+            "artifact_log": log_path,
+            "issues": [msg] + ([str(exc)] if exc is not None else []),
+            "workflow_id": workflow_id,
+            "workflow_dir": workflow_dir,
+        })
+        return state
 
     entry_log = os.path.join(rtl_dir, "rtl_agent_entry.json")
     with open(entry_log, "w", encoding="utf-8") as ef:
@@ -575,27 +576,26 @@ def run_agent(state: dict) -> dict:
         _upload_rtl_debug_artifacts(workflow_id, agent_name, rtl_dir)
         return state
 
-    spec_json, mode = _normalize_spec_json(spec_obj)
+    try:
+        spec_json, mode = _normalize_spec_json(spec_obj)
+    except Exception as e:
+        return _fail_and_upload("Spec JSON normalization failed.", e)
 
-    pre_issues = _validate_connectivity_contract(spec_json, mode)
+    pre_issues = _validate_hierarchical_endpoint_coverage(spec_json, mode)
     if pre_issues:
         log_path = os.path.join(rtl_dir, "rtl_agent_compile.log")
-        with open(log_path, "w", encoding="utf-8") as logf:
-            logf.write("RTL generation aborted due to invalid connectivity contract in digital_spec_json.\n")
-            for i in pre_issues:
-                logf.write(f"- {i}\n")
-
         summary_file = os.path.join(rtl_dir, "rtl_agent_summary.txt")
+        with open(log_path, "w", encoding="utf-8") as lf:
+            lf.write("RTL agent aborted due to spec connectivity contract violations:\n")
+            for issue in pre_issues:
+                lf.write(f"{issue}\n")
         with open(summary_file, "w", encoding="utf-8") as sf:
-            sf.write("⚠ RTL generation completed with issues.\n\n")
-            sf.write(f"Spec mode: {mode}\n")
-            sf.write("Compile skipped due to invalid connectivity contract.\n\n")
-            sf.write("Issues:\n")
-            for i in pre_issues:
-                sf.write(f" - {i}\n")
+            sf.write("❌ RTL generation aborted due to invalid spec connectivity contract.\n\n")
+            for issue in pre_issues:
+                sf.write(f"{issue}\n")
 
         state.update({
-            "status": "⚠ RTL generation completed with issues.",
+            "status": "❌ Invalid spec connectivity contract for RTL generation.",
             "artifact": None,
             "artifact_list": [],
             "artifact_log": log_path,
@@ -671,198 +671,151 @@ def run_agent(state: dict) -> dict:
         _upload_rtl_debug_artifacts(workflow_id, agent_name, rtl_dir)
         return state
 
-
-    raw_output_path = os.path.join(rtl_dir, "rtl_llm_raw_output.txt")
-    with open(raw_output_path, "w", encoding="utf-8") as f:
-        f.write(llm_output)
-
-    verilog_map = _parse_named_verilog_blocks(llm_output)
-
-    verilog_map = _parse_named_verilog_blocks(llm_output)
-    if not verilog_map:
-        return _fail_and_upload(
-            "LLM output did not contain any named Verilog file blocks in the required format."
-        )
- 
-
-    expected_files = _collect_expected_rtl_files(spec_json, mode)
-    artifact_list = []
-
-    for fname in expected_files:
-        code = verilog_map.get(fname)
-        if not code:
-            continue
-        fpath = os.path.join(rtl_dir, fname)
-        with open(fpath, "w", encoding="utf-8") as vf:
-            vf.write(code + "\n")
-        artifact_list.append(fpath)
-
-    issues, clock_ports, reset_ports = _validate_spec_vs_rtl(spec_json, mode, verilog_map)
-
-    # Minimal forbidden-syntax scan to catch accidental SystemVerilog output
-    forbidden_sv_patterns = [
-        r"\btypedef\b",
-        r"\benum\b",
-        r"\blogic\b",
-        r"\balways_comb\b",
-        r"\balways_ff\b",
-        r"\bstruct\b",
-        r"\bunion\b",
-    ]
-    full_text = "\n".join(verilog_map.values())
-    for pat in forbidden_sv_patterns:
-        if re.search(pat, full_text):
-            issues.append(f"❌ Forbidden SystemVerilog construct found in RTL: pattern '{pat}'")
-
-    suspicious_grouped_buses = [
-        "reg_bus_signals",
-        "reg_bus",
-        "ctrl_bus",
-        "status_bus",
-    ]
-    spec_text = json.dumps(spec_json)
-    for name in suspicious_grouped_buses:
-        if name in full_text and name not in spec_text:
-            issues.append(f"❌ Invented grouped bus '{name}' found in RTL but not declared in spec.")
-
-    top_rtl_file = _top_rtl_file(spec_json, mode)
-    top_rtl_path = os.path.join(rtl_dir, top_rtl_file)
-
-    log_path = os.path.join(rtl_dir, "rtl_agent_compile.log")
-    compile_status = "Compile not run yet."
-
-    if not os.path.exists(top_rtl_path):
-        issues.append(f"❌ Top RTL file missing after generation: {top_rtl_file}")
-    if not artifact_list:
-        issues.append("❌ No RTL files materialized to disk.")
-
-    # Heuristic check: top module should not procedurally drive owned outputs from child modules
-    if mode == "hierarchical":
-        top_file = _top_rtl_file(spec_json, mode)
-        top_code = verilog_map.get(top_file, "")
-        owned_top_signals = []
-        top_name = _top_module_name(spec_json, mode)
-
-        for o in spec_json.get("signal_ownership", []):
-            sig = _normalize_signal_token(o.get("signal", ""))
-            owner = o.get("owner", "")
-            if owner and "." in owner:
-                omod, _ = owner.split(".", 1)
-                if omod != top_name:
-                    owned_top_signals.append(sig)
-
-        if re.search(r"\balways\b", top_code):
-            for sig in set(owned_top_signals):
-                if re.search(rf"\b{re.escape(sig)}\s*<=", top_code) or re.search(rf"\b{re.escape(sig)}\s*=", top_code):
-                    issues.append(f"❌ Top module appears to procedurally drive child-owned signal '{sig}'.")
-
-    if not issues:
-        try:
-            iverilog = os.getenv("IVERILOG_BIN", "iverilog")
-            compile_cmd = [iverilog, "-o", os.path.join(rtl_dir, "rtl_check.out")] + artifact_list
-
-            result = subprocess.run(
-                compile_cmd,
-                check=True,
-                capture_output=True,
-                text=True
-            )
-
-            compile_status = "✅ Verilog syntax check passed."
-            with open(log_path, "w", encoding="utf-8") as logf:
-                logf.write(f"RTL Compile Log — {datetime.datetime.now()}\n\n")
-                logf.write("Compile status: PASS\n")
-                if result.stdout:
-                    logf.write("\nSTDOUT:\n")
-                    logf.write(result.stdout)
-                if result.stderr:
-                    logf.write("\nSTDERR:\n")
-                    logf.write(result.stderr)
-
-        except subprocess.CalledProcessError as e:
-            compile_status = "⚠ Verilog syntax check failed."
-            err = (e.stderr or e.stdout or "").strip()
-            with open(log_path, "w", encoding="utf-8") as logf:
-                logf.write(f"RTL Compile Log — {datetime.datetime.now()}\n\n")
-                logf.write("Compile status: FAIL\n\n")
-                logf.write(err)
-            issues.append(f"❌ Compile/elaboration failed: {err}")
-    else:
-        compile_status = "⚠ Compile skipped due to contract validation issues."
-        with open(log_path, "w", encoding="utf-8") as logf:
-            logf.write(f"RTL Compile Log — {datetime.datetime.now()}\n\n")
-            logf.write("Compile skipped due to earlier contract validation issues.\n")
-            for i in issues:
-                logf.write(f"- {i}\n")
-
-    summary_file = os.path.join(rtl_dir, "rtl_agent_summary.txt")
-    overall_status = "✅ RTL generated and validated successfully." if not issues else "⚠ RTL generation completed with issues."
-    with open(summary_file, "w", encoding="utf-8") as sf:
-        sf.write(f"{overall_status}\n\n")
-        sf.write(f"Spec mode: {mode}\n")
-        sf.write(f"Top module: {_top_module_name(spec_json, mode)}\n")
-        sf.write(f"{compile_status}\n\n")
-        sf.write(f"Generated files: {[os.path.basename(x) for x in artifact_list]}\n")
-        sf.write(f"Clock ports: {clock_ports}\n")
-        sf.write(f"Reset ports: {reset_ports}\n")
-        sf.write("Issues:\n")
-        if issues:
-            for i in issues:
-                sf.write(f" - {i}\n")
-        else:
-            sf.write(" - None\n")
-
     try:
-        with open(log_path, "r", encoding="utf-8") as lf:
-            save_text_artifact_and_record(
-                workflow_id=workflow_id,
-                agent_name=agent_name,
-                subdir="rtl",
-                filename="rtl_agent_compile.log",
-                content=lf.read(),
+        raw_output_path = os.path.join(rtl_dir, "rtl_llm_raw_output.txt")
+        with open(raw_output_path, "w", encoding="utf-8") as f:
+            f.write(llm_output)
+
+        verilog_map = _parse_named_verilog_blocks(llm_output)
+        if not verilog_map:
+            return _fail_and_upload(
+                "LLM output did not contain any named Verilog file blocks in the required format."
             )
 
-        with open(summary_file, "r", encoding="utf-8") as sf:
-            save_text_artifact_and_record(
-                workflow_id=workflow_id,
-                agent_name=agent_name,
-                subdir="rtl",
-                filename="rtl_agent_summary.txt",
-                content=sf.read(),
-            )
+        expected_files = _collect_expected_rtl_files(spec_json, mode)
+        artifact_list = []
 
-        with open(raw_output_path, "r", encoding="utf-8") as rf:
-            save_text_artifact_and_record(
-                workflow_id=workflow_id,
-                agent_name=agent_name,
-                subdir="rtl",
-                filename="rtl_llm_raw_output.txt",
-                content=rf.read(),
-            )
+        for fname in expected_files:
+            code = verilog_map.get(fname)
+            if not code:
+                continue
+            fpath = os.path.join(rtl_dir, fname)
+            with open(fpath, "w", encoding="utf-8") as vf:
+                vf.write(code + "\n")
+            artifact_list.append(fpath)
 
-        for fpath in artifact_list:
-            with open(fpath, "r", encoding="utf-8") as vf:
-                save_text_artifact_and_record(
-                    workflow_id=workflow_id,
-                    agent_name=agent_name,
-                    subdir="rtl",
-                    filename=os.path.basename(fpath),
-                    content=vf.read(),
-                )
+        issues, clock_ports, reset_ports = _validate_spec_vs_rtl(spec_json, mode, verilog_map)
+
+        forbidden_sv_patterns = [
+            r"\btypedef\b",
+            r"\benum\b",
+            r"\blogic\b",
+            r"\balways_comb\b",
+            r"\balways_ff\b",
+            r"\bstruct\b",
+            r"\bunion\b",
+        ]
+        full_text = "\n".join(verilog_map.values())
+        for pat in forbidden_sv_patterns:
+            if re.search(pat, full_text):
+                issues.append(f"❌ Forbidden SystemVerilog construct found in RTL: pattern '{pat}'")
+
+        suspicious_grouped_buses = [
+            "reg_bus_signals",
+            "reg_bus",
+            "ctrl_bus",
+            "status_bus",
+        ]
+        spec_text = json.dumps(spec_json)
+        for name in suspicious_grouped_buses:
+            if name in full_text and name not in spec_text:
+                issues.append(f"❌ Invented grouped bus '{name}' found in RTL but not declared in spec.")
+
+        top_rtl_file = _top_rtl_file(spec_json, mode)
+        top_rtl_path = os.path.join(rtl_dir, top_rtl_file)
+
+        log_path = os.path.join(rtl_dir, "rtl_agent_compile.log")
+        compile_status = "Compile not run yet."
+
+        if not os.path.exists(top_rtl_path):
+            issues.append(f"❌ Top RTL file missing after generation: {top_rtl_file}")
+        if not artifact_list:
+            issues.append("❌ No RTL files materialized to disk.")
+
+        if mode == "hierarchical":
+            top_file = _top_rtl_file(spec_json, mode)
+            top_code = verilog_map.get(top_file, "")
+            owned_top_signals = []
+            top_name = _top_module_name(spec_json, mode)
+
+            for o in spec_json.get("signal_ownership", []):
+                sig = _normalize_signal_token(o.get("signal", ""))
+                owner = o.get("owner", "")
+                if owner and "." in owner:
+                    omod, _ = owner.split(".", 1)
+                    if omod != top_name:
+                        owned_top_signals.append(sig)
+
+            if re.search(r"\balways\b", top_code):
+                for sig in set(owned_top_signals):
+                    if re.search(rf"\b{re.escape(sig)}\s*<=", top_code) or re.search(rf"\b{re.escape(sig)}\s*=", top_code):
+                        issues.append(f"❌ Top module appears to procedurally drive child-owned signal '{sig}'.")
+
+        compile_cmd = ["iverilog", "-g2005", "-o", os.path.join(rtl_dir, "rtl_out")] + artifact_list
+        try:
+            cp = subprocess.run(compile_cmd, capture_output=True, text=True, check=False)
+            compile_status = (cp.stdout or "") + "\n" + (cp.stderr or "")
+            if cp.returncode != 0:
+                issues.append("❌ Icarus Verilog compile failed.")
+        except Exception as e:
+            compile_status = f"Compile invocation failed: {e}"
+            issues.append(f"❌ Compile invocation failed: {e}")
+
+        with open(log_path, "w", encoding="utf-8") as logf:
+            logf.write(compile_status.strip() + "\n")
+            if issues:
+                logf.write("\nIssues:\n")
+                for issue in issues:
+                    logf.write(f"{issue}\n")
+
+        summary_file = os.path.join(rtl_dir, "rtl_agent_summary.txt")
+        with open(summary_file, "w", encoding="utf-8") as sf:
+            sf.write("RTL Agent Summary\n")
+            sf.write("=================\n")
+            sf.write(f"Mode: {mode}\n")
+            sf.write(f"Top module: {_top_module_name(spec_json, mode)}\n")
+            sf.write(f"Expected files: {expected_files}\n")
+            sf.write(f"Materialized files: {[os.path.basename(p) for p in artifact_list]}\n")
+            sf.write(f"Clock ports: {sorted(set(clock_ports))}\n")
+            sf.write(f"Reset ports: {sorted(set(reset_ports))}\n")
+            sf.write(f"Issue count: {len(issues)}\n")
+            if issues:
+                sf.write("\nIssues:\n")
+                for issue in issues:
+                    sf.write(f"- {issue}\n")
+
+        for path in artifact_list:
+            try:
+                with open(path, "r", encoding="utf-8") as vf:
+                    save_text_artifact_and_record(
+                        workflow_id=workflow_id,
+                        agent_name=agent_name,
+                        subdir="rtl",
+                        filename=os.path.basename(path),
+                        content=vf.read(),
+                    )
+            except Exception as e:
+                print(f"⚠️ Failed to upload RTL artifact {path}: {e}")
+
+        _upload_rtl_debug_artifacts(workflow_id, agent_name, rtl_dir)
+
+        state.update({
+            "rtl_output_dir": rtl_dir,
+            "rtl_files": artifact_list,
+            "artifact": rtl_dir,
+            "artifact_list": artifact_list,
+            "artifact_log": log_path,
+            "port_list": sorted(set(clock_ports + reset_ports)),
+            "clock_ports": sorted(set(clock_ports)),
+            "reset_ports": sorted(set(reset_ports)),
+            "issues": issues,
+            "status": "✅ RTL generation complete" if not issues else "⚠ RTL generation completed with issues",
+            "digital_rtl_generated": True,
+            "digital_rtl_dir": rtl_dir,
+            "workflow_id": workflow_id,
+            "workflow_dir": workflow_dir,
+        })
+        return state
+
     except Exception as e:
-        print(f"⚠️ RTL Agent artifact upload failed: {e}")
-
-    state.update({
-        "status": overall_status,
-        "artifact": top_rtl_path if os.path.exists(top_rtl_path) else (artifact_list[0] if artifact_list else None),
-        "artifact_list": artifact_list,
-        "artifact_log": log_path,
-        "port_list": sorted(set(clock_ports + reset_ports)),
-        "clock_ports": clock_ports,
-        "reset_ports": reset_ports,
-        "issues": issues,
-        "workflow_id": workflow_id,
-        "workflow_dir": workflow_dir,
-    })
-
-    return state
+        return _fail_and_upload("Unhandled RTL agent exception after LLM generation.", e)
