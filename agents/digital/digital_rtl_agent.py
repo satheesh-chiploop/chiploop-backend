@@ -642,8 +642,13 @@ def run_agent(state: dict) -> dict:
         f.write(llm_output)
 
     verilog_map = _parse_named_verilog_blocks(llm_output)
+
+    verilog_map = _parse_named_verilog_blocks(llm_output)
     if not verilog_map:
-        raise ValueError("Expected named Verilog blocks in RTL agent output.")
+        return _fail_and_upload(
+            "LLM output did not contain any named Verilog file blocks in the required format."
+        )
+ 
 
     expected_files = _collect_expected_rtl_files(spec_json, mode)
     artifact_list = []
