@@ -101,6 +101,8 @@ def _bus_pin_names(name: str, width: int) -> list:
 
 
 def _fallback_lef(spec: dict) -> str:
+
+  
     module_name = _get_module_name(spec)
     ports = _get_ports(spec)
 
@@ -294,30 +296,42 @@ def run_agent(state: dict) -> dict:
     logger.info(f"[{agent_name}] spec keys={list(spec.keys())}")
     logger.info(f"[{agent_name}] module_name={module_name}")
     logger.info(f"[{agent_name}] num_ports={len(ports)}")
+
+    module_name = spec.get("module_name") or spec.get("block_name") or "analog_macro"
+    ports = spec.get("ports", [])
+
     prompt = f"""
 You are creating integration abstracts for an analog macro.
 
 Using this spec:
 {json.dumps(spec, indent=2)}
 
-Return ONLY JSON:
+Return ONLY valid JSON with exactly these keys:
 {{
-  "lef": "VERSION 5.8 ;\\nMACRO ...",
-  "lib_stub": "library(...) {{ ... }}",
-  "integration_notes_md": "# Integration Notes\\n..."
+  "lef": "...",
+  "lib_stub": "...",
+  "integration_notes_md": "..."
 }}
 
-Rules:
-- Macro name in LEF and LIB cell name must be exactly: {module_name}
-- LEF should be minimal: MACRO, SIZE placeholder, PINs for supplies/digital/analog pins
-- Use generic M1 only; no tech-specific layers
-- Generate a Liberty stub only if there is at least one clock-like port
-- For Liberty timing:
-  - setup = 20% of clock period
-  - hold = 20% of clock period
-  - clk->q delay LUT value = 40% of clock period
-- Use a simple 1x1 LUT style
-- Return ONLY valid JSON
+Strict rules:
+- Do NOT return any extra keys
+- Do NOT split content across continuation fields
+- Entire LEF must be contained in "lef"
+- Entire LIB must be contained in "lib_stub"
+- Macro name in LEF must be exactly: {module_name}
+- LEF must include:
+  - VERSION 5.8 ;
+  - BUSBITCHARS "[]" ;
+  - DIVIDERCHAR "/" ;
+  - MACRO {module_name}
+  - one PIN block for every port in spec
+  - END {module_name}
+  - END LIBRARY
+- Use only generic M1 rectangles
+- Keep SIZE placeholder legal
+- Pin names must exactly match spec ports
+- DIRECTION must match spec ports
+- No prose outside JSON
 """
     logger.info(f"[{agent_name}] calling LLM for abstract views...")
     out = llm_text(prompt)
@@ -339,6 +353,25 @@ Rules:
     lib_stub = (obj.get("lib_stub") or "").strip() if isinstance(obj, dict) else ""
     notes = (obj.get("integration_notes_md") or "").strip() if isinstance(obj, dict) else ""
 
+    raw_debug_path = os.path.join(workflow_dir, "analog", "abstract", f"{module_name}_abstract_llm_raw.txt")
+    json_debug_path = os.path.join(workflow_dir, "analog", "abstract", f"{module_name}_abstract_llm_json.json")
+    lef_debug_path = os.path.join(workflow_dir, "analog", "abstract", f"{module_name}_llm_lef_raw.lef")
+
+    os.makedirs(os.path.dirname(raw_debug_path), exist_ok=True)
+
+    with open(raw_debug_path, "w", encoding="utf-8") as f:
+        f.write(out or "")
+
+    with open(json_debug_path, "w", encoding="utf-8") as f:
+        json.dump(obj if isinstance(obj, dict) else {"raw_text": out}, f, indent=2)
+
+    with open(lef_debug_path, "w", encoding="utf-8") as f:
+        f.write((obj.get("lef") or "") if isinstance(obj, dict) else "")
+
+    logger.info(f"[{agent_name}] raw LLM text saved: {raw_debug_path}")
+    logger.info(f"[{agent_name}] parsed JSON saved: {json_debug_path}")
+    logger.info(f"[{agent_name}] raw LEF field saved: {lef_debug_path}")
+
     if not lef:
         logger.warning(f"[{agent_name}] LEF missing from LLM → using fallback")
         lef = _fallback_lef(spec)
@@ -346,6 +379,7 @@ Rules:
     if "MACRO" not in lef or f"MACRO {module_name}" not in lef or "END LIBRARY" not in lef:
         logger.warning(f"[{agent_name}] LEF invalid → regenerating fallback")
         lef = _fallback_lef(spec)
+        logger.warning(f"[{agent_name}] LEF invalid → regenerating fallback -> Lef generated")
 
     if not lib_stub:
         logger.warning(f"[{agent_name}] LIB missing → building stub")
