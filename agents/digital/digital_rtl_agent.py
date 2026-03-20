@@ -520,6 +520,33 @@ If a submodule produces synchronized, decoded, filtered, qualified, or derived v
 - inter_module_signals
 - signal_ownership
 and must be owned by the producing submodule, not by the top module.
+- If multiple semantic outputs are decoded from one writable register (for example cfg_enable, cfg_adc_start, cfg_dac_enable), the backing register MUST be declared as a vector wide enough to hold all referenced bits.
+- Never declare a backing register as a scalar if any code reads indexed bits from it.
+- Examples:
+  - If RTL uses control_reg[0], control_reg[1], or control_reg[2], then control_reg must be declared at least as reg [2:0] control_reg;
+  - If the register is software-visible as an 8-bit register, prefer reg [7:0] control_reg;
+
+- Any signal used with bit selection [N] or part selection [M:N] MUST be declared as a vector of sufficient width.
+- Never emit code that indexes into a scalar reg or wire.
+
+- For register-backed semantic config outputs:
+  - cfg_enable may be driven from control_reg[0]
+  - cfg_adc_start may be driven from control_reg[1]
+  - cfg_dac_enable may be driven from control_reg[2]
+  only if control_reg is declared with sufficient width.
+
+- When reconstructing a wider configuration value from byte registers, the concatenation width MUST exactly equal the destination width.
+- Example:
+  - if cfg_dac_code is [11:0]
+  - and dac_code_l is [7:0]
+  - and dac_code_h is [7:0] but only lower nibble is valid
+  - then cfg_dac_code must be {{dac_code_h[3:0], dac_code_l[7:0]}}
+- Never assign {{dac_code_h, dac_code_l}} to a 12-bit destination.
+ Example:
+  If software writes an 8-bit CONTROL register and RTL decodes bits [0], [1], and [2], declare:
+    reg [7:0] control_reg;
+  not:
+    reg control_reg;
 
 SELF-CHECK BEFORE OUTPUT
 1. Every expected file is emitted exactly once.
@@ -547,6 +574,10 @@ SELF-CHECK BEFORE OUTPUT
     - there is no assign statement or always block in the top module that re-drives or aliases that signal
 
 18. Never connect a *_sync signal directly from a raw top-level input unless the spec explicitly declares that raw input as the owner.
+19. Every signal used with bit indexing or slicing must be declared as a vector of sufficient width; never index into a scalar.
+20. Any backing register used to decode multiple semantic outputs must be declared wide enough for all referenced bit positions.
+21. For every assignment, LHS width and RHS width must match exactly after slicing/concatenation.
+22. If cfg_* outputs are derived from a writable control register, the control register declaration and bit usage must be mutually consistent.
 
 """.strip()
 
