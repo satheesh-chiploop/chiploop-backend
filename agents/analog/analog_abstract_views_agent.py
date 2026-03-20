@@ -1,4 +1,5 @@
 import json
+import os
 from utils.artifact_utils import save_text_artifact_and_record
 from agents.analog._analog_llm import llm_text, safe_json_load
 import logging
@@ -279,6 +280,7 @@ def _build_lib_stub(spec: dict) -> str:
 def run_agent(state: dict) -> dict:
     agent_name = "Analog Abstract Views Agent"
     workflow_id = state.get("workflow_id")
+    workflow_dir = state.get("workflow_dir", ".")
     preview_only = bool(state.get("preview_only"))
 
     spec = state.get("analog_spec") or {}
@@ -376,11 +378,23 @@ Strict rules:
         logger.warning(f"[{agent_name}] LEF missing from LLM → using fallback")
         lef = _fallback_lef(spec)
 
-    if "MACRO" not in lef or f"MACRO {module_name}" not in lef or "END LIBRARY" not in lef:
-        logger.warning(f"[{agent_name}] LEF invalid → regenerating fallback")
-        lef = _fallback_lef(spec)
-        logger.warning(f"[{agent_name}] LEF invalid → regenerating fallback -> Lef generated")
+    lef_issues = []
+    if "MACRO" not in lef:
+        lef_issues.append("missing MACRO")
+    if f"MACRO {module_name}" not in lef:
+        lef_issues.append(f"missing exact macro name MACRO {module_name}")
+    if f"END {module_name}" not in lef:
+        lef_issues.append(f"missing END {module_name}")
+    if "END LIBRARY" not in lef:
+        lef_issues.append("missing END LIBRARY")
 
+    if lef_issues:
+        logger.warning(f"[{agent_name}] LEF invalid: {lef_issues} → regenerating fallback")
+        logger.info(f"[{agent_name}] rejected LLM LEF preview:\n{lef[:1000]}")
+        lef = _fallback_lef(spec)
+        logger.info(f"[{agent_name}] fallback LEF generated, size={len(lef)}")
+
+    
     if not lib_stub:
         logger.warning(f"[{agent_name}] LIB missing → building stub")
         lib_stub = _build_lib_stub(spec)
@@ -399,7 +413,9 @@ Strict rules:
 - clk_to_q_ns: {round(period_ns * 0.40, 3)}
 - note: Module-scoped analog abstract view artifact set
 """
-
+    logger.info(f"[{agent_name}] final LEF size={len(lef)}")
+    logger.info(f"[{agent_name}] final LIB size={len(lib_stub)}")
+    logger.info(f"[{agent_name}] final notes size={len(notes)}")
     if not preview_only:
         logger.info(f"[{agent_name}] saving artifacts...")
         save_text_artifact_and_record(workflow_id, agent_name, "analog/abstract", lef_filename, lef)
