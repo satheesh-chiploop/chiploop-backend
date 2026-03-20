@@ -88,7 +88,7 @@ def run_agent(state: dict) -> dict:
     pdk_path = os.path.join(pdk_root_host_abs, pdk)
     pdk_ok = os.path.exists(pdk_path)
 
-        logger.info(f"🏁 Running {AGENT_NAME}")
+    logger.info(f"🏁 Running {AGENT_NAME}")
     logger.info(f"workflow_id={workflow_id}")
 
     spec_json_path = _resolve_spec_json_path(state, workflow_dir)
