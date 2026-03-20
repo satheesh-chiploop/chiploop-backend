@@ -1,7 +1,8 @@
 import json
 from utils.artifact_utils import save_text_artifact_and_record
 from agents.analog._analog_llm import llm_text, safe_json_load
-
+import logging
+logger = logging.getLogger("chiploop")
 
 def _get_module_name(spec: dict) -> str:
     return (
@@ -284,8 +285,15 @@ def run_agent(state: dict) -> dict:
         return state
 
 
-        module_name = _get_module_name(spec)
+    module_name = _get_module_name(spec)
+    ports = _get_ports(spec)
 
+    logger.info(f"[{agent_name}] START")
+    logger.info(f"[{agent_name}] workflow_id={workflow_id}")
+    logger.info(f"[{agent_name}] preview_only={preview_only}")
+    logger.info(f"[{agent_name}] spec keys={list(spec.keys())}")
+    logger.info(f"[{agent_name}] module_name={module_name}")
+    logger.info(f"[{agent_name}] num_ports={len(ports)}")
     prompt = f"""
 You are creating integration abstracts for an analog macro.
 
@@ -311,11 +319,18 @@ Rules:
 - Use a simple 1x1 LUT style
 - Return ONLY valid JSON
 """
-
+    logger.info(f"[{agent_name}] calling LLM for abstract views...")
     out = llm_text(prompt)
+    logger.info(f"[{agent_name}] raw LLM output length={len(out) if out else 0}")
     obj = safe_json_load(out)
 
+    if not isinstance(obj, dict):
+      logger.warning(f"[{agent_name}] LLM output not valid JSON → using fallbacks")
+    else:
+      logger.info(f"[{agent_name}] LLM JSON keys={list(obj.keys())}")
+
     module_name = _get_module_name(spec)
+    ports = _get_ports(spec)
     lef_filename = f"{module_name}.lef"
     lib_filename = f"{module_name}.lib"
     notes_filename = f"{module_name}_notes.md"
@@ -325,15 +340,19 @@ Rules:
     notes = (obj.get("integration_notes_md") or "").strip() if isinstance(obj, dict) else ""
 
     if not lef:
+        logger.warning(f"[{agent_name}] LEF missing from LLM → using fallback")
         lef = _fallback_lef(spec)
 
     if "MACRO" not in lef or f"MACRO {module_name}" not in lef or "END LIBRARY" not in lef:
+        logger.warning(f"[{agent_name}] LEF invalid → regenerating fallback")
         lef = _fallback_lef(spec)
 
     if not lib_stub:
+        logger.warning(f"[{agent_name}] LIB missing → building stub")
         lib_stub = _build_lib_stub(spec)
 
     if not notes:
+        logger.warning(f"[{agent_name}] notes missing → generating default")
         period_ns = _get_clock_period_ns(spec)
         notes = f"""# Integration Notes
 
@@ -348,9 +367,14 @@ Rules:
 """
 
     if not preview_only:
+        logger.info(f"[{agent_name}] saving artifacts...")
         save_text_artifact_and_record(workflow_id, agent_name, "analog/abstract", lef_filename, lef)
         save_text_artifact_and_record(workflow_id, agent_name, "analog/abstract", lib_filename, lib_stub or "")
         save_text_artifact_and_record(workflow_id, agent_name, "analog/abstract", notes_filename, notes)
+        logger.info(f"[{agent_name}] saved:")
+        logger.info(f"  - {lef_filename}")
+        logger.info(f"  - {lib_filename}")
+        logger.info(f"  - {notes_filename}")
 
     state["analog_abstract_dir"] = "analog/abstract"
     state["analog_macro_module"] = module_name
