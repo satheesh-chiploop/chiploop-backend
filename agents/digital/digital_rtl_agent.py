@@ -548,6 +548,24 @@ and must be owned by the producing submodule, not by the top module.
   not:
     reg control_reg;
 
+- Protocol-facing modules (such as i2c_slave, spi_slave, uart_rx, uart_tx, bus_adapter, decoder, bridge, handshake controllers, or similar) must still be fully compile-ready Verilog-2005.
+- If the protocol behavior is not fully specified, DO NOT emit protocol pseudo-code, comment placeholders, or template conditions.
+- In particular, NEVER emit executable constructs such as:
+  if (/* ... */)
+  while (/* ... */)
+  case (/* ... */)
+  assign x = /* ... */;
+- For underspecified protocol modules, generate the simplest deterministic legal smoke-test stub that compiles cleanly.
+- Acceptable fallback behavior for an underspecified protocol slave:
+  - hold outputs at reset-safe defaults
+  - deassert reg_wr_en and reg_rd_en by default
+  - hold reg_addr and reg_wdata at zero unless a fully defined legal condition is available
+  - keep state transitions driven only by legal constants or declared signals
+- If you cannot justify a real transaction condition from the spec, use a compile-safe constant-false condition such as:
+  if (1'b0) begin
+  rather than any placeholder text.
+- Every if/else/case condition must be a legal Verilog expression using only literals, declared signals, parameters, or valid operators.
+
 SELF-CHECK BEFORE OUTPUT
 1. Every expected file is emitted exactly once.
 2. Every module name matches spec.
@@ -578,6 +596,16 @@ SELF-CHECK BEFORE OUTPUT
 20. Any backing register used to decode multiple semantic outputs must be declared wide enough for all referenced bit positions.
 21. For every assignment, LHS width and RHS width must match exactly after slicing/concatenation.
 22. If cfg_* outputs are derived from a writable control register, the control register declaration and bit usage must be mutually consistent.
+23. No executable statement may contain comment text as an expression or condition.
+24. Every if, case, while, and ternary condition must be a legal Verilog expression.
+25. For underspecified protocol modules, emit a compile-safe stub, not protocol pseudo-code.
+26. Search generated RTL for forbidden placeholder patterns before output:
+    - if (/*
+    - case (/*
+    - = /* 
+    - TODO
+    - implement here
+    - some condition
 
 """.strip()
 
