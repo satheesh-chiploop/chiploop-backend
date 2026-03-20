@@ -1,9 +1,14 @@
+
 import os
 import json
 import glob
 import shutil
 import subprocess
+import logging
 from datetime import datetime
+
+logger = logging.getLogger("chiploop")
+
 
 from utils.artifact_utils import save_text_artifact_and_record
 
@@ -12,6 +17,31 @@ AGENT_NAME = "Digital Synthesis Agent"
 DEFAULT_PDK_VARIANT = os.getenv("CHIPLOOP_PDK_VARIANT", "sky130A")
 DEFAULT_OPENLANE_IMAGE = os.getenv("CHIPLOOP_OPENLANE_IMAGE", "ghcr.io/efabless/openlane2:2.4.0.dev1")
 DEFAULT_NUM_CORES = int(os.getenv("OPENLANE_NUM_CORES", "2"))
+
+def _resolve_spec_json(state: dict, workflow_dir: str) -> str | None:
+    for cand in [
+        (state.get("digital") or {}).get("spec_json"),
+        state.get("digital_spec_json"),
+        state.get("spec_json"),
+    ]:
+        if cand and os.path.exists(cand):
+            return cand
+
+    files = sorted(glob.glob(os.path.join(workflow_dir, "spec", "*_spec.json")))
+    return files[0] if files else None
+
+def _resolve_sdc_from_state(state: dict, workflow_dir: str) -> str | None:
+    digital = state.get("digital") or {}
+    for cand in [
+        digital.get("constraints_sdc"),
+        os.path.join(workflow_dir, "digital", "impl_setup", "constraints", "top.sdc"),
+        os.path.join(workflow_dir, "digital", "constraints", "top.sdc"),
+    ]:
+        if cand and os.path.exists(cand):
+            return cand
+    return None
+
+
 
 def _ensure_dir(p: str) -> None:
     os.makedirs(p, exist_ok=True)
@@ -62,6 +92,31 @@ def _run(cmd: list[str], cwd: str | None = None) -> tuple[int, str]:
     p = subprocess.run(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     return p.returncode, p.stdout
 
+def _resolve_rtl_files_from_state(state: dict, workflow_dir: str) -> list[str]:
+    digital = state.get("digital") or {}
+
+    if isinstance(digital.get("rtl_files"), list):
+        xs = [p for p in digital["rtl_files"] if p and os.path.exists(p)]
+        if xs:
+            return xs
+
+    fl = digital.get("impl_filelist")
+    if fl and os.path.exists(fl):
+        xs = []
+        with open(fl, "r", encoding="utf-8") as f:
+            for line in f:
+                p = line.strip()
+                if p and os.path.exists(p):
+                    xs.append(p)
+        if xs:
+            return xs
+
+    xs = sorted(glob.glob(os.path.join(workflow_dir, "digital", "rtl_refactored", "*.v")))
+    if xs:
+        return xs
+
+    return []
+
 def run_agent(state: dict) -> dict:
     print(f"\n🏁 Running {AGENT_NAME}...")
 
@@ -69,34 +124,33 @@ def run_agent(state: dict) -> dict:
     workflow_dir = state.get("workflow_dir") or f"backend/workflows/{workflow_id}"
     _ensure_dir(workflow_dir)
 
-    # ---------- Locate RTL ----------
-    rtl_files = []
-    artifact_list = state.get("artifact_list") or []
-    if isinstance(artifact_list, list) and artifact_list:
-        rtl_files = [p for p in artifact_list if p and os.path.exists(p)]
-    else:
+    logger.info(f"🏁 Running {AGENT_NAME}.")
+    rtl_files = _resolve_rtl_files_from_state(state, workflow_dir)
+
+    if not rtl_files:
+        artifact_list = state.get("artifact_list") or []
+        if isinstance(artifact_list, list) and artifact_list:
+            rtl_files = [p for p in artifact_list if p and os.path.exists(p)]
+
+    if not rtl_files:
         single = state.get("artifact")
         if single and os.path.exists(single):
             rtl_files = [single]
 
     if not rtl_files:
-        # Prefer refactored RTL if present
-        rtl_files = sorted(glob.glob(os.path.join(workflow_dir, "digital", "rtl_refactored", "*.v")))
-
-    if not rtl_files:
-        # fallback: any .v under workflow_dir
-        rtl_files = sorted(glob.glob(os.path.join(workflow_dir, "*.v")))
-
-    if not rtl_files:
         raise FileNotFoundError(f"No RTL found for synthesis in {workflow_dir}")
 
+    logger.info(f"{AGENT_NAME}: rtl_count={len(rtl_files)}")
 
 
     # ---------- Spec JSON (optional) ----------
+
     spec = {}
-    spec_json = state.get("spec_json")
+    spec_json = _resolve_spec_json(state, workflow_dir)
     if spec_json and os.path.exists(spec_json):
         spec = _read_json(spec_json)
+
+    logger.info(f"{AGENT_NAME}: spec_json={spec_json}")
 
     clk_name, clk_period_ns = _pick_clock(spec)
 
@@ -121,35 +175,41 @@ def run_agent(state: dict) -> dict:
     # - If your spec later contains block.name or top_module, use it.
 
     top_module = (
-        (spec.get("design_name") if isinstance(spec, dict) else None)
-        or (spec.get("name") if isinstance(spec, dict) else None)
+        (state.get("digital") or {}).get("top_module")
+        or (spec.get("design_name") if isinstance(spec, dict) else None)
         or (((spec.get("hierarchy") or {}).get("top_module") or {}).get("name") if isinstance(spec, dict) else None)
         or (spec.get("top_module") if isinstance(spec, dict) else None)
+        or (spec.get("name") if isinstance(spec, dict) else None)
         or ((spec.get("block") or {}).get("name") if isinstance(spec.get("block"), dict) else None)
         or state.get("top_module")
         or "top"
     )
-    top_module = str(top_module).strip() or "top"
+    top_module = str(top_module).strip()
+    logger.info(f"{AGENT_NAME}: top_module={top_module}")
+
 
     state["design_name"] = top_module
     # ---------- SDC (single source of truth) ----------
 
-    upstream_sdc = os.path.join(workflow_dir, "digital", "constraints", "top.sdc")
-    if not os.path.exists(upstream_sdc):
-        # DO NOT raise — write summaries/logs so the stage is debuggable
-        msg = "Missing upstream SDC: digital/constraints/top.sdc (Clock/Reset agent must generate it)."
+    upstream_sdc = _resolve_sdc_from_state(state, workflow_dir)
+    if not upstream_sdc:
+        msg = "Missing upstream SDC: no canonical constraints_sdc found in state or impl_setup."
         exec_log_path = os.path.join(logs_dir, "openlane_synth.log")
         _write_local(exec_log_path, msg + "\n")
+        _write_local(os.path.join(stage_dir, "synth_input_resolution.log"), msg + "\n")
 
         summary = {"status": "failed", "return_code": 2, "error": msg}
         _write_local(os.path.join(stage_dir, "synth_summary.json"), json.dumps(summary, indent=2))
         _write_local(os.path.join(stage_dir, "synth_summary.md"), f"# Digital Synthesis Summary\n\n- **Status**: failed\n- **Reason**: {msg}\n")
-
-        # Minimal metrics.json to satisfy contract
         _write_local(os.path.join(stage_dir, "metrics.json"), json.dumps({"status": "failed", "reason": msg}, indent=2))
 
+        logger.error(f"{AGENT_NAME}: {msg}")
         state["status"] = f"{AGENT_NAME}: failed (missing SDC)"
         return state
+
+    logger.info(f"{AGENT_NAME}: using upstream_sdc={upstream_sdc}")
+
+    
     
 
     sdc_path = os.path.join(constraints_dir, "top.sdc")
@@ -158,7 +218,18 @@ def run_agent(state: dict) -> dict:
     with open(sdc_path, "r", encoding="utf-8") as f:
        sdc_text = f.read()
 
-
+    input_log = "\n".join([
+        f"[{datetime.utcnow().isoformat()}Z] {AGENT_NAME}",
+        f"workflow_id={workflow_id}",
+        f"workflow_dir={os.path.abspath(workflow_dir)}",
+        f"spec_json={spec_json}",
+        f"top_module={top_module}",
+        f"rtl_count={len(rtl_files)}",
+        f"upstream_sdc={upstream_sdc}",
+        f"pdk_variant={state.get('pdk_variant') or DEFAULT_PDK_VARIANT}",
+    ]) + "\n"
+    input_log_path = os.path.join(stage_dir, "synth_input_resolution.log")
+    _write_local(input_log_path, input_log)
   
 
     # ---------- OpenLane2 config.json ----------
@@ -345,6 +416,7 @@ echo "Done. Inspect /work/runs/{run_tag} or latest run folder under /work/runs/"
         save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "synth/logs/openlane_synth.log", out)
         save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "synth/synth_summary.json", json.dumps(summary, indent=2))
         save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "synth/synth_summary.md", md)
+        save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "synth/synth_input_resolution.log", input_log)
         # Upload synthesized netlist (gate-level) if present
         if stable_netlist_path and os.path.exists(stable_netlist_path):
             with open(stable_netlist_path, "r", encoding="utf-8") as f:
@@ -371,6 +443,7 @@ echo "Done. Inspect /work/runs/{run_tag} or latest run folder under /work/runs/"
         print(f"⚠️ Synthesis artifact upload failed: {e}")
 
     # ---------- Update state for downstream workflow ----------
+
     digital = state.setdefault("digital", {})
     digital["synth"] = {
         "stage_dir": stage_dir,
@@ -380,6 +453,10 @@ echo "Done. Inspect /work/runs/{run_tag} or latest run folder under /work/runs/"
         "netlist": stable_netlist_path,
         "netlist_candidates": netlist_candidates[:10],
         "status": summary["status"],
+        "input_resolution_log": input_log_path,
+        "constraints_sdc": upstream_sdc,
+        "rtl_files": rtl_files,
+        "top_module": top_module,
     }
 
     state["status"] = f"{AGENT_NAME}: {summary['status']}"
