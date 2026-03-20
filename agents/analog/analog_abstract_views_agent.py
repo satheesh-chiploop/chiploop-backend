@@ -194,6 +194,19 @@ def _build_lib_stub(spec: dict) -> str:
         "",
     ]
 
+    lines.extend([
+        "    pg_pin (VDD) {",
+        "      pg_type : primary_power ;",
+        "      voltage_name : VDD ;",
+        "    }",
+        "",
+        "    pg_pin (VSS) {",
+        "      pg_type : primary_ground ;",
+        "      voltage_name : VSS ;",
+        "    }",
+        "",
+    ])
+
     for p in ports:
         pname = p.get("name", "sig")
         pdir = _lib_direction(p.get("direction", "input"))
@@ -333,6 +346,21 @@ Strict rules:
 - Keep SIZE placeholder legal
 - Pin names must exactly match spec ports
 - DIRECTION must match spec ports
+- Entire LIB must be contained in "lib_stub"
+- LIB cell name must be exactly: {module_name}
+- LIB must include pg_pin blocks for VDD and VSS
+- LIB must include pin entries for every signal port in spec
+- Treat the first clock-like pin as the related clock
+- For every input pin except clock/reset:
+  - setup = 10% of clock period
+  - hold = 10% of clock period
+  - use timing_type : setup_rising and hold_rising
+- For every output pin:
+  - related_pin must be the clock pin
+  - clk->q delay LUT value = 30% of clock period
+  - include cell_rise / cell_fall
+- Do not return descriptive placeholder timing only
+- Return a Liberty stub that is structurally timing-usable
 - No prose outside JSON
 """
     logger.info(f"[{agent_name}] calling LLM for abstract views...")
@@ -398,6 +426,27 @@ Strict rules:
     if not lib_stub:
         logger.warning(f"[{agent_name}] LIB missing → building stub")
         lib_stub = _build_lib_stub(spec)
+
+    lib_issues = []
+    if "cell (" not in lib_stub:
+        lib_issues.append("missing cell block")
+    if "pg_pin (" not in lib_stub:
+        lib_issues.append("missing pg_pin")
+    if "related_pin" not in lib_stub:
+        lib_issues.append("missing related_pin")
+    if "setup_rising" not in lib_stub:
+        lib_issues.append("missing setup_rising")
+    if "hold_rising" not in lib_stub:
+        lib_issues.append("missing hold_rising")
+    if "cell_rise" not in lib_stub:
+        lib_issues.append("missing cell_rise")
+    if "cell_fall" not in lib_stub:
+        lib_issues.append("missing cell_fall")
+
+    if lib_issues:
+        logger.warning(f"[{agent_name}] LIB invalid: {lib_issues} → regenerating deterministic LIB stub")
+        logger.info(f"[{agent_name}] rejected LLM LIB preview:\n{lib_stub[:1200]}")
+        lib_stub = _build_lib_stub(spec)    
 
     if not notes:
         logger.warning(f"[{agent_name}] notes missing → generating default")
