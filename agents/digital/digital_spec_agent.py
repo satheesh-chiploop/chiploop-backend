@@ -2,9 +2,13 @@ import os
 import json
 from utils.artifact_utils import save_text_artifact_and_record
 from portkey_ai import Portkey
+import logging
 
 
 PORTKEY_API_KEY = os.getenv("PORTKEY_API_KEY")
+
+
+logger = logging.getLogger("chiploop")
 
 
 
@@ -272,7 +276,6 @@ def _record_text_artifact_safe(workflow_id, agent_name, subdir, filename, path):
     except Exception as e:
         print(f"⚠️ Failed to upload artifact {filename}: {e}")
 
-
 def _upload_spec_debug_artifacts(workflow_id, agent_name, spec_dir):
     for fname in [
         "spec_agent_entry.json",
@@ -281,6 +284,11 @@ def _upload_spec_debug_artifacts(workflow_id, agent_name, spec_dir):
         "spec_agent_contract.log",
         "llm_raw_output.txt",
         "spec_agent_exception.txt",
+        "spec_agent_contract_pass2.log",
+        "llm_raw_output_pass2.txt",
+        "spec_agent_exception_pass2.txt",
+        "spec_agent_normalized.json",
+        "spec_agent_normalized_pass2.json",
     ]:
         _record_text_artifact_safe(
             workflow_id=workflow_id,
@@ -290,7 +298,6 @@ def _upload_spec_debug_artifacts(workflow_id, agent_name, spec_dir):
             path=os.path.join(spec_dir, fname),
         )
 
-    # upload generated spec json too, if present
     for fn in os.listdir(spec_dir):
         if fn.endswith("_spec.json"):
             _record_text_artifact_safe(
@@ -300,6 +307,8 @@ def _upload_spec_debug_artifacts(workflow_id, agent_name, spec_dir):
                 filename=fn,
                 path=os.path.join(spec_dir, fn),
             )
+
+
 def _find_module_obj(spec_json: dict, module_name: str):
     hier = spec_json["hierarchy"]
     if hier["top_module"]["name"] == module_name:
@@ -407,6 +416,65 @@ def _ensure_hierarchical_port_closure(spec_json: dict) -> dict:
         m["ports"] = list(pmap.values())
 
     return spec_json
+
+def _build_repair_prompt(base_prompt: str, previous_json_text: str, failure_log_text: str) -> str:
+    return f"""
+{base_prompt}
+
+==============================
+REPAIR MODE (SECOND PASS)
+==============================
+
+Your previous JSON did not pass contract validation.
+
+You MUST preserve the same architecture unless a structural change is strictly required to fix the validation errors.
+
+PREVIOUS JSON:
+{previous_json_text}
+
+VALIDATION FAILURE LOG:
+{failure_log_text}
+
+REPAIR RULES:
+- Do NOT redesign the architecture unless required to resolve the errors
+- Preserve module names, hierarchy, ports, and intent as much as possible
+- Fix only structural inconsistencies needed for contract closure
+- Return ONE full corrected JSON object only
+- Do NOT return partial edits
+- Do NOT return explanations
+""".strip()
+
+
+def _compile_spec_contract(llm_output: str, spec_dir: str, suffix: str = ""):
+    logger.info(f"🔍 Digital Spec Agent compile start suffix='{suffix or 'pass1'}'")
+    raw_name = f"llm_raw_output{suffix}.txt"
+    raw_output_path = os.path.join(spec_dir, raw_name)
+    with open(raw_output_path, "w", encoding="utf-8") as rf:
+        rf.write(llm_output)
+
+    parsed_json = json.loads(llm_output.strip())
+    logger.info(f"🔍 Digital Spec Agent JSON parsed suffix='{suffix or 'pass1'}'")
+    spec_json, mode = _normalize_spec_json(parsed_json)
+    logger.info(f"🔍 Digital Spec Agent normalized mode={mode} suffix='{suffix or 'pass1'}'")
+    if mode == "hierarchical":
+        spec_json = _ensure_hierarchical_port_closure(spec_json)
+        logger.info(f"🔍 Digital Spec Agent hierarchical port closure done suffix='{suffix or 'pass1'}'")
+
+   
+    normalized_name = "spec_agent_normalized.json" if not suffix else f"spec_agent_normalized{suffix}.json"
+    normalized_path = os.path.join(spec_dir, normalized_name)
+    with open(normalized_path, "w", encoding="utf-8") as nf:
+        json.dump(spec_json, nf, indent=2)
+
+    _validate_spec_contract(spec_json, mode)
+    logger.info(f"✅ Digital Spec Agent contract compile passed suffix='{suffix or 'pass1'}'")
+    return spec_json, mode, raw_output_path, normalized_path
+
+
+def _write_contract_failure_log(spec_dir: str, filename: str, err: Exception) -> str:
+    log_path = os.path.join(spec_dir, filename)
+    _write_text(log_path, f"Digital Spec Agent parse/normalize failure:\n{err}\n")
+    return log_path
 
 def run_agent(state: dict) -> dict:
     print("\n🚀 Running Digital Spec Agent (contract-only mode)...")
@@ -870,51 +938,115 @@ Return JSON only.
 
             return state
 
-    raw_output_path = os.path.join(spec_dir, "llm_raw_output.txt")
-    with open(raw_output_path, "w", encoding="utf-8") as rf:
-        rf.write(llm_output)
+    pass1_error = None
+    pass2_error = None
 
     try:
-        parsed_json = json.loads(llm_output.strip())
-        spec_json, mode = _normalize_spec_json(parsed_json)
-        if mode == "hierarchical":
-            spec_json = _ensure_hierarchical_port_closure(spec_json)
-        _validate_spec_contract(spec_json, mode)
-
+        spec_json, mode, raw_output_path, normalized_path = _compile_spec_contract(
+            llm_output=llm_output,
+            spec_dir=spec_dir,
+            suffix="",
+        )
     except Exception as e:
+        pass1_error = e
+
+        # Keep pass1 logs/artifacts exactly as today
         log_path = os.path.join(spec_dir, "spec_agent_contract.log")
         summary_path = os.path.join(spec_dir, "spec_agent_summary.txt")
         exc_path = os.path.join(spec_dir, "spec_agent_exception.txt")
 
         _write_text(log_path, f"Digital Spec Agent parse/normalize failure:\n{e}\n")
-        _write_text(summary_path, f"❌ Digital Spec Agent failed.\n\nJSON parse/normalize failed: {e}\n")
+        _write_text(summary_path, f"❌ Digital Spec Agent failed.\n\nPass1 JSON parse/normalize failed: {e}\n")
         _write_text(exc_path, repr(e))
 
-        state.update({
-            "status": f"❌ JSON parse/normalize failed: {e}",
-            "artifact": None,
-            "artifact_list": [],
-            "artifact_log": log_path,
-            "workflow_dir": workflow_dir,
-            "workflow_id": workflow_id,
-            "issues": [f"JSON parse/normalize failed: {e}"],
-        })
+        # Pass2 only if pass1 compile failed
+        repair_prompt = _build_repair_prompt(
+            base_prompt=prompt,
+            previous_json_text=llm_output,
+            failure_log_text=str(e),
+        )
 
-        agent_name = "Digital Spec Agent"
-        _upload_spec_debug_artifacts(workflow_id, agent_name, spec_dir)
-        return state
+        try:
+            logger.warning(f"❌ Digital Spec Agent pass1 contract compile failed: {e}")
+            logger.info("🔁 Digital Spec Agent invoking pass2 repair flow")
+            completion_pass2 = client_portkey.chat.completions.create(
+                model="@chiploop/gpt-4o-mini",
+                messages=[{"role": "user", "content": repair_prompt}],
+                stream=False,
+            )
+            llm_output_pass2 = completion_pass2.choices[0].message.content or ""
+            logger.info(f"🧠 Digital Spec Agent pass2 LLM output size: {len(llm_output_pass2)} chars")
+        except Exception as e2:
+            logger.error(f"❌ Digital Spec Agent pass2 contract compile failed: {e2}")
+            pass2_error = e2
+            pass2_log_path = os.path.join(spec_dir, "spec_agent_contract_pass2.log")
+            pass2_exc_path = os.path.join(spec_dir, "spec_agent_exception_pass2.txt")
+
+            _write_text(pass2_log_path, f"Digital Spec Agent PASS2 LLM failure:\n{e2}\n")
+            _write_text(pass2_exc_path, repr(e2))
+
+            state.update({
+                "status": f"❌ Pass1 failed and Pass2 LLM generation failed: {e2}",
+                "artifact": None,
+                "artifact_list": [],
+                "artifact_log": log_path,
+                "workflow_dir": workflow_dir,
+                "workflow_id": workflow_id,
+                "issues": [
+                    f"Pass1 JSON parse/normalize failed: {pass1_error}",
+                    f"Pass2 LLM generation failed: {pass2_error}",
+                ],
+            })
+
+            _upload_spec_debug_artifacts(workflow_id, agent_name, spec_dir)
+            return state
+
+        try:
+            spec_json, mode, raw_output_path_pass2, normalized_path_pass2 = _compile_spec_contract(
+                llm_output=llm_output_pass2,
+                spec_dir=spec_dir,
+                suffix="_pass2",
+            )
+            raw_output_path = raw_output_path_pass2
+            
+        except Exception as e2:
+            pass2_error = e2
+            pass2_log_path = os.path.join(spec_dir, "spec_agent_contract_pass2.log")
+            pass2_exc_path = os.path.join(spec_dir, "spec_agent_exception_pass2.txt")
+
+            _write_text(pass2_log_path, f"Digital Spec Agent parse/normalize failure:\n{e2}\n")
+            _write_text(pass2_exc_path, repr(e2))
+
+            state.update({
+                "status": f"❌ JSON parse/normalize failed after pass2: {e2}",
+                "artifact": None,
+                "artifact_list": [],
+                "artifact_log": log_path,
+                "workflow_dir": workflow_dir,
+                "workflow_id": workflow_id,
+                "issues": [
+                    f"Pass1 JSON parse/normalize failed: {pass1_error}",
+                    f"Pass2 JSON parse/normalize failed: {pass2_error}",
+                ],
+            })
+
+            _upload_spec_debug_artifacts(workflow_id, agent_name, spec_dir)
+            return state
 
     module_name = spec_json["name"] if mode == "flat" else spec_json["hierarchy"]["top_module"]["name"]
 
     spec_json_path = os.path.join(spec_dir, f"{module_name}_spec.json")
     with open(spec_json_path, "w", encoding="utf-8") as sf:
         json.dump(spec_json, sf, indent=2)
+    logger.info(f"🎉 Digital Spec Agent succeeded via {'pass2' if pass1_error else 'pass1'}")
+    logger.info(f"📦 Digital Spec Agent spec JSON saved: {spec_json_path}")
 
     log_path = os.path.join(spec_dir, "spec_agent_contract.log")
     with open(log_path, "w", encoding="utf-8") as lf:
         lf.write("Digital Spec Agent completed successfully.\n")
         lf.write("Mode: contract-only\n")
         lf.write(f"Spec mode: {mode}\n")
+        lf.write(f"Resolved via: {'pass2' if pass1_error else 'pass1'}\n")
         lf.write(f"Spec JSON: {spec_json_path}\n")
 
     try:
