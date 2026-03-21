@@ -57,6 +57,80 @@ def _copy_metrics(latest: str | None, stage_dir: str) -> str | None:
         return dst
     return None
 
+def _resolve_sdc_from_state(state: dict, workflow_dir: str) -> str | None:
+    digital = state.get("digital") or {}
+
+    cand = digital.get("constraints_sdc")
+    if cand and os.path.exists(cand):
+        logger.info(f"{AGENT_NAME}: selected SDC from state.digital -> {cand}")
+        return cand
+
+    impl_candidates = sorted(glob.glob(os.path.join(workflow_dir, "digital", "impl_setup", "constraints", "*.sdc")))
+    for cand in impl_candidates:
+        if os.path.exists(cand):
+            logger.info(f"{AGENT_NAME}: selected SDC from impl_setup -> {cand}")
+            return cand
+
+    synth_candidates = sorted(glob.glob(os.path.join(workflow_dir, "digital", "synth", "constraints", "*.sdc")))
+    for cand in synth_candidates:
+        if os.path.exists(cand):
+            logger.info(f"{AGENT_NAME}: selected SDC from synth -> {cand}")
+            return cand
+
+    legacy = sorted(glob.glob(os.path.join(workflow_dir, "digital", "constraints", "*.sdc")))
+    for cand in legacy:
+        if os.path.exists(cand):
+            logger.info(f"{AGENT_NAME}: selected legacy SDC -> {cand}")
+            return cand
+
+    logger.warning(f"{AGENT_NAME}: no upstream SDC found")
+    return None
+
+
+def _resolve_config_from_state(state: dict, workflow_dir: str) -> str | None:
+    digital = state.get("digital") or {}
+
+    cand = digital.get("openlane_config")
+    if cand and os.path.exists(cand):
+        logger.info(f"{AGENT_NAME}: selected config from state.digital -> {cand}")
+        return cand
+
+    for cand in [
+        os.path.join(workflow_dir, "digital", "impl_setup", "openlane", "config.json"),
+        os.path.join(workflow_dir, "digital", "synth", "config.json"),
+        os.path.join(workflow_dir, "digital", "foundry", "openlane", "config.json"),
+    ]:
+        if os.path.exists(cand):
+            logger.info(f"{AGENT_NAME}: selected config fallback -> {cand}")
+            return cand
+
+    logger.warning(f"{AGENT_NAME}: no OpenLane config found")
+    return None
+
+def _resolve_netlists_from_state(state: dict, workflow_dir: str) -> list[str]:
+    digital = state.get("digital") or {}
+    synth = digital.get("synth") or {}
+
+    xs = synth.get("rtl_files")
+    if isinstance(xs, list):
+        ys = [p for p in xs if p and os.path.exists(p)]
+        if ys:
+            logger.info(f"{AGENT_NAME}: using RTL/netlists from state.digital.synth.rtl_files")
+            return ys
+
+    xs = sorted(glob.glob(os.path.join(workflow_dir, "digital", "synth", "netlist", "*.v")))
+    if xs:
+        logger.info(f"{AGENT_NAME}: using netlists from digital/synth/netlist")
+        return xs
+
+    xs = sorted(glob.glob(os.path.join(workflow_dir, "digital", "synth", "**", "*.v"), recursive=True))
+    if xs:
+        logger.info(f"{AGENT_NAME}: using recursive synth netlist fallback")
+        return xs
+
+    logger.warning(f"{AGENT_NAME}: no synthesized netlists found")
+    return []
+
 def run_agent(state: dict) -> dict:
     workflow_id = state.get("workflow_id", "default")
     workflow_dir = state.get("workflow_dir") or f"backend/workflows/{workflow_id}"
@@ -81,37 +155,44 @@ def run_agent(state: dict) -> dict:
     state["digital_run_tag"] = run_tag
 
     # ---- Base config (implementation setup preferred) ----
-    impl_cfg = os.path.join(workflow_dir, "digital", "foundry", "openlane", "config.json")
-    synth_cfg = os.path.join(workflow_dir, "digital", "synth", "config.json")
-    base_cfg_path = impl_cfg if os.path.exists(impl_cfg) else synth_cfg
-    if not os.path.exists(base_cfg_path):
-        raise RuntimeError("Missing OpenLane config. Expected digital/foundry/openlane/config.json or digital/synth/config.json")
 
+    base_cfg_path = _resolve_config_from_state(state, workflow_dir)
+    if not base_cfg_path:
+        raise RuntimeError("Missing OpenLane config: no config found in state, impl_setup, synth, or foundry.")
+    logger.info(f"{AGENT_NAME}: base_cfg_path={base_cfg_path}")
+ 
     cfg = _read_json(base_cfg_path)
     cfg.pop("SYNTH_SDC_FILE", None)
 
     # ---- SSOT SDC -> run_work/inputs/constraints/top.sdc ----
-    upstream_sdc = os.path.join(workflow_dir, "digital", "constraints", "top.sdc")
-    if not os.path.exists(upstream_sdc):
-        raise RuntimeError("Missing upstream SDC: digital/constraints/top.sdc")
+    upstream_sdc = _resolve_sdc_from_state(state, workflow_dir)
+    if not upstream_sdc:
+        raise RuntimeError("Missing upstream SDC: no constraints_sdc found in state, impl_setup, place, floorplan, synth, or legacy constraints.")
 
-    inputs_dir = os.path.join(run_work_dir, "inputs")
-    inputs_constraints_dir = os.path.join(inputs_dir, "constraints")
-    inputs_netlist_dir = os.path.join(inputs_dir, "netlist")
-    _ensure_dir(inputs_constraints_dir)
-    _ensure_dir(inputs_netlist_dir)
-
-    stage_sdc = os.path.join(inputs_constraints_dir, "top.sdc")
+    sdc_basename = os.path.basename(upstream_sdc)
+    stage_sdc = os.path.join(inputs_constraints_dir, sdc_basename)
     shutil.copy2(upstream_sdc, stage_sdc)
     with open(stage_sdc, "r", encoding="utf-8") as f:
         sdc_text = f.read()
 
-    cfg["PNR_SDC_FILE"] = "inputs/constraints/top.sdc"
+    cfg["PNR_SDC_FILE"] = f"inputs/constraints/{sdc_basename}"
+
+    logger.info(f"{AGENT_NAME}: upstream_sdc={upstream_sdc}")
+    logger.info(f"{AGENT_NAME}: staged_sdc={stage_sdc}")
+
+
 
     # ---- Netlist from run_work/inputs/netlist/*.v (must already exist) ----
     stage_netlists = sorted(glob.glob(os.path.join(inputs_netlist_dir, "*.v")))
     if not stage_netlists:
-        raise RuntimeError("STA preplace: missing run_work/inputs/netlist/*.v (synth must populate it).")
+        upstream_netlists = _resolve_netlists_from_state(state, workflow_dir)
+        for p in upstream_netlists:
+            shutil.copy2(p, os.path.join(inputs_netlist_dir, os.path.basename(p)))
+        stage_netlists = sorted(glob.glob(os.path.join(inputs_netlist_dir, "*.v")))
+
+    if not stage_netlists:
+        raise RuntimeError("STA preplace: missing synthesized netlists in state or digital/synth.")
+    
 
     cfg["VERILOG_FILES"] = [f"inputs/netlist/{os.path.basename(p)}" for p in stage_netlists]
 
@@ -136,6 +217,26 @@ def run_agent(state: dict) -> dict:
     pdk_root_host = state.get("pdk_root_host") or os.getenv("CHIPLOOP_PDK_ROOT_HOST") or "/root/chiploop-backend/backend/pdk"
     pdk_root_host = os.path.abspath(pdk_root_host)
     state["pdk_root_host"] = pdk_root_host
+
+    stage_constraints_dir = os.path.join(stage_dir, "constraints")
+    _ensure_dir(stage_constraints_dir)
+    stage_contract_sdc = os.path.join(stage_constraints_dir, sdc_basename)
+    shutil.copy2(stage_sdc, stage_contract_sdc)
+
+    input_log = "\n".join([
+        f"[{datetime.utcnow().isoformat()}Z] {AGENT_NAME}",
+        f"workflow_id={workflow_id}",
+        f"workflow_dir={workflow_dir}",
+        f"upstream_sdc={upstream_sdc}",
+        f"sdc_basename={sdc_basename}",
+        f"stage_sdc={stage_sdc}",
+        f"base_cfg_path={base_cfg_path}",
+        f"run_work_dir={run_work_dir}",
+        f"run_tag={run_tag}",
+        f"top_module={top_module}",
+        f"netlist_count={len(stage_netlists)}",
+    ]) + "\n"
+    _write_text(os.path.join(logs_dir, "sta_preplace_input_resolution.log"), input_log)
 
     run_sh = f"""#!/usr/bin/env bash
 set -euo pipefail
@@ -184,7 +285,7 @@ docker run --rm \\
     # ---- Upload (best-effort) ----
     try:
         save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", f"{STAGE_NAME}/config.json", json.dumps(cfg, indent=2))
-        save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", f"{STAGE_NAME}/constraints/top.sdc", sdc_text)
+        save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", f"{STAGE_NAME}/constraints/{sdc_basename}", sdc_text)
         save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", f"{STAGE_NAME}/run.sh", run_sh)
         save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", f"{STAGE_NAME}/logs/openlane_sta_preplace.log", out)
         save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", f"{STAGE_NAME}/sta_summary.json", json.dumps(summary, indent=2))
@@ -199,5 +300,10 @@ docker run --rm \\
         "stage_dir": stage_dir,
         "metrics_json": metrics_path,
         "openlane_run_dir": latest,
+        "constraints_sdc": stage_contract_sdc,
+        "openlane_config": os.path.join(stage_dir, "config.json"),
+        "input_resolution_log": os.path.join(logs_dir, "sta_preplace_input_resolution.log"),
     }
+
+
     return state
