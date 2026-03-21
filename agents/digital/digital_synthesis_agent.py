@@ -30,16 +30,33 @@ def _resolve_spec_json(state: dict, workflow_dir: str) -> str | None:
     files = sorted(glob.glob(os.path.join(workflow_dir, "spec", "*_spec.json")))
     return files[0] if files else None
 
+
 def _resolve_sdc_from_state(state: dict, workflow_dir: str) -> str | None:
     digital = state.get("digital") or {}
-    for cand in [
-        digital.get("constraints_sdc"),
-        os.path.join(workflow_dir, "digital", "impl_setup", "constraints", "top.sdc"),
-        os.path.join(workflow_dir, "digital", "constraints", "top.sdc"),
-    ]:
-        if cand and os.path.exists(cand):
+
+    # 1) State is the primary source of truth
+    cand = digital.get("constraints_sdc")
+    if cand and os.path.exists(cand):
+        logger.info(f"{AGENT_NAME}: selected constraints_sdc from state.digital -> {cand}")
+        return cand
+
+    # 2) Fallback to any impl_setup constraint file
+    impl_candidates = sorted(glob.glob(os.path.join(workflow_dir, "digital", "impl_setup", "constraints", "*.sdc")))
+    for cand in impl_candidates:
+        if os.path.exists(cand):
+            logger.info(f"{AGENT_NAME}: selected constraints_sdc from impl_setup glob -> {cand}")
             return cand
+
+    # 3) Legacy fallback
+    legacy_candidates = sorted(glob.glob(os.path.join(workflow_dir, "digital", "constraints", "*.sdc")))
+    for cand in legacy_candidates:
+        if os.path.exists(cand):
+            logger.info(f"{AGENT_NAME}: selected constraints_sdc from legacy digital/constraints -> {cand}")
+            return cand
+
+    logger.warning(f"{AGENT_NAME}: no upstream SDC found in state, impl_setup, or legacy constraints")
     return None
+
 
 
 
@@ -193,7 +210,15 @@ def run_agent(state: dict) -> dict:
 
     upstream_sdc = _resolve_sdc_from_state(state, workflow_dir)
     if not upstream_sdc:
-        msg = "Missing upstream SDC: no canonical constraints_sdc found in state or impl_setup."
+        impl_glob = sorted(glob.glob(os.path.join(workflow_dir, "digital", "impl_setup", "constraints", "*.sdc")))
+        legacy_glob = sorted(glob.glob(os.path.join(workflow_dir, "digital", "constraints", "*.sdc")))
+
+        msg = (
+            "Missing upstream SDC: checked "
+            f"state.digital.constraints_sdc={(state.get('digital') or {}).get('constraints_sdc')}, "
+            f"impl_setup_candidates={impl_glob}, "
+            f"legacy_candidates={legacy_glob}"
+        )
         exec_log_path = os.path.join(logs_dir, "openlane_synth.log")
         _write_local(exec_log_path, msg + "\n")
         _write_local(os.path.join(stage_dir, "synth_input_resolution.log"), msg + "\n")
@@ -209,12 +234,14 @@ def run_agent(state: dict) -> dict:
 
     logger.info(f"{AGENT_NAME}: using upstream_sdc={upstream_sdc}")
 
-    
-    
-
-    sdc_path = os.path.join(constraints_dir, "top.sdc")
+    sdc_basename = os.path.basename(upstream_sdc)
+    sdc_path = os.path.join(constraints_dir, sdc_basename)
     shutil.copy2(upstream_sdc, sdc_path)
 
+    logger.info(f"{AGENT_NAME}: copied SDC into synth stage -> {sdc_path}")
+    logger.info(f"{AGENT_NAME}: synth sdc exists={os.path.exists(sdc_path)}")
+    logger.info(f"{AGENT_NAME}: synth sdc size={os.path.getsize(sdc_path) if os.path.exists(sdc_path) else -1}")
+ 
     with open(sdc_path, "r", encoding="utf-8") as f:
        sdc_text = f.read()
 
@@ -226,8 +253,12 @@ def run_agent(state: dict) -> dict:
         f"top_module={top_module}",
         f"rtl_count={len(rtl_files)}",
         f"upstream_sdc={upstream_sdc}",
+        f"sdc_basename={sdc_basename}",
+        f"synth_sdc_path={sdc_path}",
+        f"state_constraints_sdc={(state.get('digital') or {}).get('constraints_sdc')}",
         f"pdk_variant={state.get('pdk_variant') or DEFAULT_PDK_VARIANT}",
     ]) + "\n"
+
     input_log_path = os.path.join(stage_dir, "synth_input_resolution.log")
     _write_local(input_log_path, input_log)
   
@@ -246,8 +277,8 @@ def run_agent(state: dict) -> dict:
         "CLOCK_PORT": clk_name,
         "CLOCK_PERIOD": clk_period_ns,
         "SYNTH_STRATEGY": "AREA 0",
-        "SYNTH_SDC_FILE": "constraints/top.sdc",
-        "PNR_SDC_FILE": "constraints/top.sdc",
+        "SYNTH_SDC_FILE": f"constraints/{sdc_basename}",
+        "PNR_SDC_FILE": f"constraints/{sdc_basename}",
 
         # ChipLoop provenance (OpenLane ignores unknown top-level keys)
         "CHIPLOOP_WORKFLOW_ID": workflow_id,
@@ -411,7 +442,7 @@ echo "Done. Inspect /work/runs/{run_tag} or latest run folder under /work/runs/"
     # (Option A: store heavy locally, upload key collaterals + summaries)
     try:
         save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "synth/config.json", json.dumps(config, indent=2))
-        save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "synth/constraints/top.sdc", sdc_text)
+        save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", f"synth/constraints/{sdc_basename}",sdc_text)
         save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "synth/run.sh", run_sh)
         save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "synth/logs/openlane_synth.log", out)
         save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "synth/synth_summary.json", json.dumps(summary, indent=2))
@@ -454,10 +485,11 @@ echo "Done. Inspect /work/runs/{run_tag} or latest run folder under /work/runs/"
         "netlist_candidates": netlist_candidates[:10],
         "status": summary["status"],
         "input_resolution_log": input_log_path,
-        "constraints_sdc": upstream_sdc,
+        "constraints_sdc": sdc_path,
+        "upstream_constraints_sdc": upstream_sdc,
         "rtl_files": rtl_files,
         "top_module": top_module,
     }
-
+    
     state["status"] = f"{AGENT_NAME}: {summary['status']}"
     return state

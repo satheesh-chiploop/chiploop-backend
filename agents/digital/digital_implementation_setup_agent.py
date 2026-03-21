@@ -60,19 +60,28 @@ def _resolve_rtl_files(state: dict, workflow_dir: str) -> list[str]:
 
 def _resolve_upstream_sdc(state: dict, workflow_dir: str) -> str | None:
     digital = state.get("digital") or {}
-    for cand in [
+    candidates = [
         digital.get("constraints_sdc"),
         state.get("constraints_sdc"),
         os.path.join(workflow_dir, "digital", "constraints", "top.sdc"),
-    ]:
+    ]
+
+    for cand in candidates:
+        logger.info(f"{AGENT_NAME}: checking sdc candidate={cand}")
         if cand and os.path.exists(cand):
+            logger.info(f"{AGENT_NAME}: selected sdc candidate={cand}")
             return cand
 
-    # fallback: any top-level digital SDC already emitted upstream
-    for cand in sorted(glob.glob(os.path.join(workflow_dir, "digital", "*.sdc"))):
+    extra = sorted(glob.glob(os.path.join(workflow_dir, "digital", "*.sdc")))
+    for cand in extra:
+        logger.info(f"{AGENT_NAME}: checking fallback top-level sdc={cand}")
         if os.path.exists(cand):
+            logger.info(f"{AGENT_NAME}: selected fallback top-level sdc={cand}")
             return cand
+
+    logger.warning(f"{AGENT_NAME}: no upstream SDC found")
     return None
+
 
 def _build_fallback_sdc(clk_name: str, clk_mhz: float, reset_name: str) -> str:
     period_ns = 1000.0 / float(clk_mhz)
@@ -153,6 +162,10 @@ def run_agent(state: dict) -> dict:
         sdc_source = "fallback_generated"
         logger.warning(f"{AGENT_NAME}: upstream SDC missing, generated fallback {canonical_sdc_path}")
 
+    logger.info(f"{AGENT_NAME}: sdc_basename={sdc_basename}")
+    logger.info(f"{AGENT_NAME}: canonical_sdc_exists={os.path.exists(canonical_sdc_path)}")
+    logger.info(f"{AGENT_NAME}: canonical_sdc_size={os.path.getsize(canonical_sdc_path) if os.path.exists(canonical_sdc_path) else -1}")
+
     # --- 3) Corners canonical JSON ---
     corners = profile.get("corners") or []
     corners_json = {
@@ -214,12 +227,16 @@ def run_agent(state: dict) -> dict:
 
     # --- 6) Upload artifacts ---
     save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital/impl_setup", "filelist.f", filelist_text)
-    save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital/impl_setup/constraints", "top.sdc", sdc_text)
+    save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital/impl_setup/constraints", sdc_basename, sdc_text)
     save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital/impl_setup/openlane", "config.json", json.dumps(openlane_cfg, indent=2))
     save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital/impl_setup", "corners.json", json.dumps(corners_json, indent=2))
     save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital/impl_setup", "implementation_setup.log", setup_log)
 
+
     # --- 7) State handoff ---
+    logger.info(f"{AGENT_NAME}: writing state.digital.constraints_sdc={canonical_sdc_path}")
+    logger.info(f"{AGENT_NAME}: writing state.digital.impl_filelist={filelist_path}")
+    logger.info(f"{AGENT_NAME}: writing state.digital.openlane_config={cfg_path}")
     digital = state.setdefault("digital", {})
     digital["spec_json"] = spec_json_path or digital.get("spec_json")
     digital["top_module"] = top_module
