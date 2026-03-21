@@ -639,9 +639,15 @@ def _upload_rtl_debug_artifacts(workflow_id, agent_name, rtl_dir):
         "rtl_agent_entry.json",
         "rtl_agent_preflight.json",
         "rtl_agent_compile.log",
+        "rtl_verilator_lint.log",
         "rtl_agent_summary.txt",
         "rtl_agent_exception.txt",
         "rtl_llm_raw_output.txt",
+        "rtl_agent_compile_pass2.log",
+        "rtl_verilator_lint_pass2.log",
+        "rtl_agent_summary_pass2.txt",
+        "rtl_agent_exception_pass2.txt",
+        "rtl_llm_raw_output_pass2.txt",
     ]:
         _record_text_artifact_safe(
             workflow_id=workflow_id,
@@ -651,6 +657,289 @@ def _upload_rtl_debug_artifacts(workflow_id, agent_name, rtl_dir):
             path=os.path.join(rtl_dir, fname),
         )
 
+def _append_text(path: str, content: str) -> None:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(content)
+
+
+def _build_rtl_repair_prompt(base_prompt: str, previous_llm_output: str, compile_log_text: str, verilator_log_text: str) -> str:
+    return f"""
+{base_prompt}
+
+==============================
+REPAIR MODE (SECOND PASS)
+==============================
+
+Your previous RTL output failed validation and/or compilation.
+
+You MUST preserve the same architecture unless a structural change is strictly required to fix the errors.
+
+PREVIOUS RTL OUTPUT:
+{previous_llm_output}
+
+ICARUS COMPILE LOG:
+{compile_log_text}
+
+VERILATOR LINT LOG:
+{verilator_log_text}
+
+REPAIR RULES:
+- Do NOT redesign the architecture unless required to resolve errors
+- Preserve module names, filenames, ports, and hierarchy as much as possible
+- Fix only compilation, lint, and structural RTL issues
+- Return ONE full corrected response in the same named-file-block format
+- Do NOT return explanations
+- Do NOT return partial edits
+""".strip()
+
+
+def _run_verilator_lint(rtl_dir: str, verilog_files: List[str], top_module: str, suffix: str = "") -> Tuple[bool, str, str]:
+    log_name = "rtl_verilator_lint.log" if not suffix else f"rtl_verilator_lint_{suffix}.log"
+    lint_log_path = os.path.join(rtl_dir, log_name)
+
+    if not verilog_files:
+        msg = "No Verilog files provided to Verilator lint.\n"
+        with open(lint_log_path, "w", encoding="utf-8") as f:
+            f.write(msg)
+        return False, lint_log_path, msg
+
+    cmd = [
+        "verilator",
+        "--lint-only",
+        "-Wall",
+        "--top-module",
+        top_module,
+    ] + verilog_files
+
+    logger.info(f"[RTL DEBUG] running_verilator_lint suffix={suffix or 'pass1'} top={top_module} file_count={len(verilog_files)}")
+    logger.info(f"[RTL DEBUG] verilator_cmd={' '.join(cmd)}")
+
+    try:
+        proc = subprocess.run(
+            cmd,
+            cwd=rtl_dir,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except FileNotFoundError:
+        msg = "Verilator executable not found in PATH.\n"
+        with open(lint_log_path, "w", encoding="utf-8") as f:
+            f.write(msg)
+        logger.error("[RTL DEBUG] verilator_not_found")
+        return False, lint_log_path, msg
+    except Exception as e:
+        msg = f"Verilator execution failed: {e}\n"
+        with open(lint_log_path, "w", encoding="utf-8") as f:
+            f.write(msg)
+        logger.error(f"[RTL DEBUG] verilator_exception: {e}")
+        return False, lint_log_path, msg
+
+    combined = ""
+    if proc.stdout:
+        combined += "=== STDOUT ===\n" + proc.stdout + "\n"
+    if proc.stderr:
+        combined += "=== STDERR ===\n" + proc.stderr + "\n"
+    combined += f"=== RETURN CODE ===\n{proc.returncode}\n"
+
+    with open(lint_log_path, "w", encoding="utf-8") as f:
+        f.write(combined)
+
+    if proc.returncode != 0:
+        logger.error(f"[RTL DEBUG] verilator_failed suffix={suffix or 'pass1'} rc={proc.returncode}")
+        return False, lint_log_path, combined
+
+    logger.info(f"[RTL DEBUG] verilator_passed suffix={suffix or 'pass1'}")
+    return True, lint_log_path, combined
+
+
+def _validate_and_materialize_rtl(
+    llm_output: str,
+    rtl_dir: str,
+    spec_json: dict,
+    mode: str,
+    suffix: str = "",
+) -> dict:
+    raw_name = "rtl_llm_raw_output.txt" if not suffix else f"rtl_llm_raw_output_{suffix}.txt"
+    compile_log_name = "rtl_agent_compile.log" if not suffix else f"rtl_agent_compile_{suffix}.log"
+    summary_name = "rtl_agent_summary.txt" if not suffix else f"rtl_agent_summary_{suffix}.txt"
+
+    raw_output_path = os.path.join(rtl_dir, raw_name)
+    with open(raw_output_path, "w", encoding="utf-8") as f:
+        f.write(llm_output)
+
+    verilog_map = _parse_named_verilog_blocks(llm_output)
+    if not verilog_map:
+        return {
+            "ok": False,
+            "message": "LLM output did not contain any named Verilog file blocks in the required format.",
+            "issues": ["❌ Missing named Verilog file blocks in LLM output."],
+            "compile_log_path": os.path.join(rtl_dir, compile_log_name),
+            "summary_path": os.path.join(rtl_dir, summary_name),
+            "raw_output_path": raw_output_path,
+            "artifact_list": [],
+        }
+
+    expected_files = _collect_expected_rtl_files(spec_json, mode)
+    artifact_list = []
+
+    for fname in expected_files:
+        code = verilog_map.get(fname)
+        if not code:
+            continue
+        fpath = os.path.join(rtl_dir, fname)
+        with open(fpath, "w", encoding="utf-8") as vf:
+            vf.write(code + "\n")
+        artifact_list.append(fpath)
+
+    issues, clock_ports, reset_ports = _validate_spec_vs_rtl(spec_json, mode, verilog_map)
+
+    forbidden_sv_patterns = [
+        r"\btypedef\b",
+        r"\benum\b",
+        r"\blogic\b",
+        r"\balways_comb\b",
+        r"\balways_ff\b",
+        r"\bstruct\b",
+        r"\bunion\b",
+    ]
+
+    full_text = "\n".join(verilog_map.values())
+    scan_text = _strip_verilog_comments(full_text)
+
+    for pat in forbidden_sv_patterns:
+        if pat == r"\blogic\b":
+            if re.search(r"\blogic\s+(\[[^\]]+\]\s+)?[A-Za-z_]\w*", scan_text):
+                issues.append(f"❌ Forbidden SystemVerilog construct found in RTL: pattern '{pat}'")
+        else:
+            if re.search(pat, scan_text):
+                issues.append(f"❌ Forbidden SystemVerilog construct found in RTL: pattern '{pat}'")
+
+    suspicious_grouped_buses = [
+        "reg_bus_signals",
+        "reg_bus",
+        "ctrl_bus",
+        "status_bus",
+    ]
+    spec_text = json.dumps(spec_json)
+    for name in suspicious_grouped_buses:
+        if name in full_text and name not in spec_text:
+            issues.append(f"❌ Invented grouped bus '{name}' found in RTL but not declared in spec.")
+
+    top_rtl_file = _top_rtl_file(spec_json, mode)
+    top_rtl_path = os.path.join(rtl_dir, top_rtl_file)
+
+    compile_log_path = os.path.join(rtl_dir, compile_log_name)
+    compile_status = "Compile not run yet."
+
+    if not os.path.exists(top_rtl_path):
+        issues.append(f"❌ Top RTL file missing after generation: {top_rtl_file}")
+    if not artifact_list:
+        issues.append("❌ No RTL files materialized to disk.")
+
+    if mode == "hierarchical":
+        top_file = _top_rtl_file(spec_json, mode)
+        top_code = verilog_map.get(top_file, "")
+        owned_top_signals = []
+        top_name = _top_module_name(spec_json, mode)
+
+        for o in spec_json.get("signal_ownership", []):
+            sig = _normalize_signal_token(o.get("signal", ""))
+            owner = o.get("owner", "")
+            if owner and "." in owner:
+                omod, _ = owner.split(".", 1)
+                if omod != top_name:
+                    owned_top_signals.append(sig)
+
+        if re.search(r"\balways\b", top_code):
+            for sig in set(owned_top_signals):
+                if re.search(rf"\b{re.escape(sig)}\s*<=", top_code) or re.search(rf"\b{re.escape(sig)}\s*=", top_code):
+                    issues.append(f"❌ Top module appears to procedurally drive child-owned signal '{sig}'.")
+
+    _stage(f"iverilog_compile_start_{suffix or 'pass1'}")
+    compile_cmd = ["iverilog", "-g2005", "-o", os.path.join(rtl_dir, f"rtl_out{('_' + suffix) if suffix else ''}")] + artifact_list
+    try:
+        cp = subprocess.run(compile_cmd, capture_output=True, text=True, check=False)
+        compile_status = (cp.stdout or "") + "\n" + (cp.stderr or "")
+        if cp.returncode != 0:
+            issues.append("❌ Icarus Verilog compile failed.")
+        else:
+            _stage(f"iverilog_compile_passed_{suffix or 'pass1'}")
+    except Exception as e:
+        compile_status = f"Compile invocation failed: {e}"
+        issues.append(f"❌ Compile invocation failed: {e}")
+
+    with open(compile_log_path, "w", encoding="utf-8") as logf:
+        logf.write(compile_status.strip() + "\n")
+        if issues:
+            logf.write("\nIssues:\n")
+            for issue in issues:
+                logf.write(f"{issue}\n")
+
+    verilator_ok = False
+    verilator_log_path = os.path.join(rtl_dir, "rtl_verilator_lint.log" if not suffix else f"rtl_verilator_lint_{suffix}.log")
+    verilator_output = ""
+
+    if "❌ Icarus Verilog compile failed." not in issues and not any("Compile invocation failed" in x for x in issues):
+        _stage(f"running_verilator_lint_{suffix or 'pass1'}")
+        verilator_ok, verilator_log_path, verilator_output = _run_verilator_lint(
+            rtl_dir=rtl_dir,
+            verilog_files=artifact_list,
+            top_module=_top_module_name(spec_json, mode),
+            suffix=suffix,
+        )
+        if not verilator_ok:
+            issues.append("❌ Verilator lint failed.")
+            _append_text(
+                compile_log_path,
+                "\n=== VERILATOR LINT FAILURE ===\n"
+                "See corresponding rtl_verilator_lint log for details.\n"
+            )
+        else:
+            _append_text(
+                compile_log_path,
+                "\n=== VERILATOR LINT ===\n"
+                "PASS: Verilator lint completed successfully.\n"
+            )
+            _stage(f"verilator_lint_passed_{suffix or 'pass1'}")
+    else:
+        with open(verilator_log_path, "w", encoding="utf-8") as vf:
+            vf.write("Skipped Verilator lint because Icarus compile did not pass.\n")
+        verilator_output = "Skipped Verilator lint because Icarus compile did not pass.\n"
+
+    summary_path = os.path.join(rtl_dir, summary_name)
+    with open(summary_path, "w", encoding="utf-8") as sf:
+        sf.write("RTL Agent Summary\n")
+        sf.write("=================\n")
+        sf.write(f"Mode: {mode}\n")
+        sf.write(f"Top module: {_top_module_name(spec_json, mode)}\n")
+        sf.write(f"Expected files: {expected_files}\n")
+        sf.write(f"Materialized files: {[os.path.basename(p) for p in artifact_list]}\n")
+        sf.write(f"Clock ports: {sorted(set(clock_ports))}\n")
+        sf.write(f"Reset ports: {sorted(set(reset_ports))}\n")
+        sf.write(f"Verilator lint: {'PASS' if verilator_ok else 'FAIL'}\n")
+        sf.write(f"Issue count: {len(issues)}\n")
+        if issues:
+            sf.write("\nIssues:\n")
+            for issue in issues:
+                sf.write(f"- {issue}\n")
+
+    return {
+        "ok": len(issues) == 0,
+        "message": "RTL checks passed." if len(issues) == 0 else "RTL checks failed.",
+        "issues": issues,
+        "artifact_list": artifact_list,
+        "clock_ports": sorted(set(clock_ports)),
+        "reset_ports": sorted(set(reset_ports)),
+        "compile_log_path": compile_log_path,
+        "summary_path": summary_path,
+        "raw_output_path": raw_output_path,
+        "verilator_log_path": verilator_log_path,
+        "verilator_output": verilator_output,
+        "llm_output": llm_output,
+        "verilog_map": verilog_map,
+    }
 
 def run_agent(state: dict) -> dict:
     agent_name = "Digital RTL Agent"
@@ -845,6 +1134,7 @@ def run_agent(state: dict) -> dict:
 
     _stage("starting_llm_call")
 
+
     try:
         completion = client_portkey.chat.completions.create(
             model="@chiploop/gpt-4o-mini",
@@ -852,6 +1142,7 @@ def run_agent(state: dict) -> dict:
             stream=False,
         )
         llm_output = completion.choices[0].message.content or ""
+        _stage(f"llm_output_pass1_chars: {len(llm_output)}")
     except Exception as e:
         log_path = os.path.join(rtl_dir, "rtl_agent_compile.log")
         summary_file = os.path.join(rtl_dir, "rtl_agent_summary.txt")
@@ -881,126 +1172,95 @@ def run_agent(state: dict) -> dict:
         })
         _upload_rtl_debug_artifacts(workflow_id, agent_name, rtl_dir)
         return state
-
     try:
-        raw_output_path = os.path.join(rtl_dir, "rtl_llm_raw_output.txt")
-        with open(raw_output_path, "w", encoding="utf-8") as f:
-            f.write(llm_output)
+        _stage("pass1_validate_and_materialize")
+        pass1 = _validate_and_materialize_rtl(
+            llm_output=llm_output,
+            rtl_dir=rtl_dir,
+            spec_json=spec_json,
+            mode=mode,
+            suffix="",
+        )
 
-        verilog_map = _parse_named_verilog_blocks(llm_output)
-        if not verilog_map:
-            return _fail_and_upload(
-                "LLM output did not contain any named Verilog file blocks in the required format."
+        if not pass1["ok"]:
+            _stage("pass1_failed_triggering_pass2")
+            logger.warning(f"[RTL DEBUG] pass1_failed issues={len(pass1['issues'])}")
+
+            compile_log_text = ""
+            if os.path.exists(pass1["compile_log_path"]):
+                with open(pass1["compile_log_path"], "r", encoding="utf-8") as f:
+                    compile_log_text = f.read()
+
+            verilator_log_text = ""
+            if os.path.exists(pass1["verilator_log_path"]):
+                with open(pass1["verilator_log_path"], "r", encoding="utf-8") as f:
+                    verilator_log_text = f.read()
+
+            repair_prompt = _build_rtl_repair_prompt(
+                base_prompt=prompt,
+                previous_llm_output=llm_output,
+                compile_log_text=compile_log_text,
+                verilator_log_text=verilator_log_text,
             )
 
-        expected_files = _collect_expected_rtl_files(spec_json, mode)
-        artifact_list = []
+            _stage("starting_llm_call_pass2")
 
-        for fname in expected_files:
-            code = verilog_map.get(fname)
-            if not code:
-                continue
-            fpath = os.path.join(rtl_dir, fname)
-            with open(fpath, "w", encoding="utf-8") as vf:
-                vf.write(code + "\n")
-            artifact_list.append(fpath)
+            
+            try:
+                completion_pass2 = client_portkey.chat.completions.create(
+                    model="@chiploop/gpt-4o-mini",
+                    messages=[{"role": "user", "content": repair_prompt}],
+                    stream=False,
+                )
+                llm_output_pass2 = completion_pass2.choices[0].message.content or ""
+                _stage(f"llm_output_pass2_chars: {len(llm_output_pass2)}"
+            except Exception as e2:
+                pass2_exc = os.path.join(rtl_dir, "rtl_agent_exception_pass2.txt")
+                pass2_log = os.path.join(rtl_dir, "rtl_agent_compile_pass2.log")
+                pass2_summary = os.path.join(rtl_dir, "rtl_agent_summary_pass2.txt")
 
-        issues, clock_ports, reset_ports = _validate_spec_vs_rtl(spec_json, mode, verilog_map)
+                with open(pass2_exc, "w", encoding="utf-8") as ef:
+                    ef.write(f"RTL pass2 generation exception:\n{repr(e2)}\n")
 
-        forbidden_sv_patterns = [
-            r"\btypedef\b",
-            r"\benum\b",
-            r"\blogic\b",
-            r"\balways_comb\b",
-            r"\balways_ff\b",
-            r"\bstruct\b",
-            r"\bunion\b",
-        ]
-        
-        full_text = "\n".join(verilog_map.values())
-        scan_text = _strip_verilog_comments(full_text)
+                with open(pass2_log, "w", encoding="utf-8") as lf:
+                    lf.write("RTL pass2 failed before RTL materialization.\n")
+                    lf.write(f"Exception type: {type(e2).__name__}\n")
+                    lf.write(f"Exception: {e2}\n")
 
-        for pat in forbidden_sv_patterns:
-            if pat == r"\blogic\b":
-                if re.search(r"\blogic\s+(\[[^\]]+\]\s+)?[A-Za-z_]\w*", scan_text):
-                    issues.append(f"❌ Forbidden SystemVerilog construct found in RTL: pattern '{pat}'")
-            else:
-                if re.search(pat, scan_text):
-                    issues.append(f"❌ Forbidden SystemVerilog construct found in RTL: pattern '{pat}'")
+                with open(pass2_summary, "w", encoding="utf-8") as sf:
+                    sf.write("❌ RTL pass2 generation failed before raw output was written.\n")
+                    sf.write(f"Exception type: {type(e2).__name__}\n")
+                    sf.write(f"Exception: {e2}\n")
 
-        suspicious_grouped_buses = [
-            "reg_bus_signals",
-            "reg_bus",
-            "ctrl_bus",
-            "status_bus",
-        ]
-        spec_text = json.dumps(spec_json)
-        for name in suspicious_grouped_buses:
-            if name in full_text and name not in spec_text:
-                issues.append(f"❌ Invented grouped bus '{name}' found in RTL but not declared in spec.")
+                return _fail_and_upload("Pass1 failed and Pass2 LLM generation failed.", e2)
 
-        top_rtl_file = _top_rtl_file(spec_json, mode)
-        top_rtl_path = os.path.join(rtl_dir, top_rtl_file)
+            _stage("pass2_validate_and_materialize")
+            pass2 = _validate_and_materialize_rtl(
+                llm_output=llm_output_pass2,
+                rtl_dir=rtl_dir,
+                spec_json=spec_json,
+                mode=mode,
+                suffix="pass2",
+            )
 
-        log_path = os.path.join(rtl_dir, "rtl_agent_compile.log")
-        compile_status = "Compile not run yet."
+            final_result = pass2 if pass2["ok"] else pass1
+            final_suffix = "pass2" if pass2["ok"] else "pass1"
 
-        if not os.path.exists(top_rtl_path):
-            issues.append(f"❌ Top RTL file missing after generation: {top_rtl_file}")
-        if not artifact_list:
-            issues.append("❌ No RTL files materialized to disk.")
+            if not pass2["ok"]:
+                return _fail_and_upload(
+                    "RTL failed checks in both pass1 and pass2."
+                )
 
-        if mode == "hierarchical":
-            top_file = _top_rtl_file(spec_json, mode)
-            top_code = verilog_map.get(top_file, "")
-            owned_top_signals = []
-            top_name = _top_module_name(spec_json, mode)
+            _stage("pass2_passed")
+        else:
+            final_result = pass1
+            final_suffix = "pass1"
 
-            for o in spec_json.get("signal_ownership", []):
-                sig = _normalize_signal_token(o.get("signal", ""))
-                owner = o.get("owner", "")
-                if owner and "." in owner:
-                    omod, _ = owner.split(".", 1)
-                    if omod != top_name:
-                        owned_top_signals.append(sig)
-
-            if re.search(r"\balways\b", top_code):
-                for sig in set(owned_top_signals):
-                    if re.search(rf"\b{re.escape(sig)}\s*<=", top_code) or re.search(rf"\b{re.escape(sig)}\s*=", top_code):
-                        issues.append(f"❌ Top module appears to procedurally drive child-owned signal '{sig}'.")
-
-        compile_cmd = ["iverilog", "-g2005", "-o", os.path.join(rtl_dir, "rtl_out")] + artifact_list
-        try:
-            cp = subprocess.run(compile_cmd, capture_output=True, text=True, check=False)
-            compile_status = (cp.stdout or "") + "\n" + (cp.stderr or "")
-            if cp.returncode != 0:
-                issues.append("❌ Icarus Verilog compile failed.")
-        except Exception as e:
-            compile_status = f"Compile invocation failed: {e}"
-            issues.append(f"❌ Compile invocation failed: {e}")
-
-        with open(log_path, "w", encoding="utf-8") as logf:
-            logf.write(compile_status.strip() + "\n")
-            if issues:
-                logf.write("\nIssues:\n")
-                for issue in issues:
-                    logf.write(f"{issue}\n")
-
-        summary_file = os.path.join(rtl_dir, "rtl_agent_summary.txt")
-        with open(summary_file, "w", encoding="utf-8") as sf:
-            sf.write("RTL Agent Summary\n")
-            sf.write("=================\n")
-            sf.write(f"Mode: {mode}\n")
-            sf.write(f"Top module: {_top_module_name(spec_json, mode)}\n")
-            sf.write(f"Expected files: {expected_files}\n")
-            sf.write(f"Materialized files: {[os.path.basename(p) for p in artifact_list]}\n")
-            sf.write(f"Clock ports: {sorted(set(clock_ports))}\n")
-            sf.write(f"Reset ports: {sorted(set(reset_ports))}\n")
-            sf.write(f"Issue count: {len(issues)}\n")
-            if issues:
-                sf.write("\nIssues:\n")
-                for issue in issues:
-                    sf.write(f"- {issue}\n")
+        artifact_list = final_result["artifact_list"]
+        log_path = final_result["compile_log_path"]
+        clock_ports = final_result["clock_ports"]
+        reset_ports = final_result["reset_ports"]
+        issues = final_result["issues"]
 
         for path in artifact_list:
             try:
@@ -1027,7 +1287,7 @@ def run_agent(state: dict) -> dict:
             "clock_ports": sorted(set(clock_ports)),
             "reset_ports": sorted(set(reset_ports)),
             "issues": issues,
-            "status": "✅ RTL generation complete" if not issues else "⚠ RTL generation completed with issues",
+            "status": f"✅ RTL generation complete ({final_suffix})" if not issues else f"⚠ RTL generation completed with issues ({final_suffix})",
             "digital_rtl_generated": True,
             "digital_rtl_dir": rtl_dir,
             "workflow_id": workflow_id,
@@ -1037,3 +1297,6 @@ def run_agent(state: dict) -> dict:
 
     except Exception as e:
         return _fail_and_upload("Unhandled RTL agent exception after LLM generation.", e)
+    
+
+  
