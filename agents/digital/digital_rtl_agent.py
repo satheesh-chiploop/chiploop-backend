@@ -1213,7 +1213,7 @@ def run_agent(state: dict) -> dict:
                     stream=False,
                 )
                 llm_output_pass2 = completion_pass2.choices[0].message.content or ""
-                _stage(f"llm_output_pass2_chars: {len(llm_output_pass2)}"
+                _stage(f"llm_output_pass2_chars: {len(llm_output_pass2)}")
             except Exception as e2:
                 pass2_exc = os.path.join(rtl_dir, "rtl_agent_exception_pass2.txt")
                 pass2_log = os.path.join(rtl_dir, "rtl_agent_compile_pass2.log")
