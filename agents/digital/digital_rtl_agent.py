@@ -13,6 +13,14 @@ from utils.artifact_utils import save_text_artifact_and_record
 
 PORTKEY_API_KEY = os.getenv("PORTKEY_API_KEY")
 
+def _stage(msg: str):
+    """
+    Lightweight stage logger (same pattern as spec agent)
+    """
+    try:
+        logger.info(f"[RTL DEBUG] {msg}")
+    except Exception:
+        print(f"[RTL DEBUG] {msg}")
 
 def _strip_verilog_comments(text: str) -> str:
     text = re.sub(r"//.*?$", "", text, flags=re.MULTILINE)
@@ -945,8 +953,7 @@ def run_agent(state: dict) -> dict:
     agent_name = "Digital RTL Agent"
     print("\n🧠 Running RTL Agent (implementation mode).")
 
-    def _stage(msg: str):
-        logger.info(f"[RTL DEBUG] {msg}")
+
 
     _stage("entered_run_agent")
 
