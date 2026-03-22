@@ -1,4 +1,14 @@
-import os, json, glob, shutil, subprocess, re
+import os
+import json
+import glob
+import shutil
+import subprocess
+import re
+import logging
+from datetime import datetime
+
+logger = logging.getLogger("chiploop")
+
 from utils.artifact_utils import save_text_artifact_and_record
 
 AGENT_NAME="Digital Route Agent"
@@ -6,23 +16,26 @@ DEFAULT_PDK_VARIANT=os.getenv("CHIPLOOP_PDK_VARIANT","sky130A")
 DEFAULT_OPENLANE_IMAGE=os.getenv("CHIPLOOP_OPENLANE_IMAGE","ghcr.io/efabless/openlane2:2.4.0.dev1")
 DEFAULT_NUM_CORES=int(os.getenv("OPENLANE_NUM_CORES","2"))
 
-def _ensure(p): os.makedirs(p, exist_ok=True)
+
 def _read_json(p):
     try:
         with open(p,"r",encoding="utf-8") as f: return json.load(f)
     except Exception: return {}
-def _write(p,s):
-    _ensure(os.path.dirname(p))
-    with open(p,"w",encoding="utf-8") as f: f.write(s)
+
 def _run(cmd,cwd):
     p=subprocess.Popen(cmd,cwd=cwd,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True)
     out,_=p.communicate(); return p.returncode,out
-def _latest_run(run_work_dir):
-    runs=os.path.join(run_work_dir,"runs")
-    if not os.path.isdir(runs): return None
-    ds=[os.path.join(runs,d) for d in os.listdir(runs) if os.path.isdir(os.path.join(runs,d))]
-    if not ds: return None
-    ds.sort(key=lambda x: os.path.getmtime(x)); return ds[-1]
+
+def _latest_run_dir(run_work_dir: str) -> str | None:
+    runs_dir = os.path.join(run_work_dir, "runs")
+    if not os.path.isdir(runs_dir):
+        return None
+    dirs = [os.path.join(runs_dir, d) for d in os.listdir(runs_dir) if os.path.isdir(os.path.join(runs_dir, d))]
+    if not dirs:
+        return None
+    dirs.sort(key=lambda p: os.path.getmtime(p))
+    return dirs[-1]
+
 def _copy_metrics(latest, stage_dir):
     if not latest: return None
     src=os.path.join(latest,"final","metrics.json")
@@ -38,6 +51,14 @@ def _copy_def(latest, stage_dir):
     shutil.copy2(cands[-1], dst)
     return dst
 
+def _ensure_dir(p: str) -> None:
+    os.makedirs(p, exist_ok=True)
+
+def _write_text(path: str, content: str) -> None:
+    _ensure_dir(os.path.dirname(path))
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(content)
+
 def _infer_top_from_netlist(netlist_path: str) -> str | None:
     try:
         txt = open(netlist_path, "r", encoding="utf-8", errors="ignore").read()
@@ -46,46 +67,113 @@ def _infer_top_from_netlist(netlist_path: str) -> str | None:
     m = re.search(r'^\s*module\s+([A-Za-z_][A-Za-z0-9_$]*)\s*\(', txt, flags=re.MULTILINE)
     return m.group(1) if m else None
 
+def _resolve_sdc_from_state(state: dict, workflow_dir: str) -> str | None:
+    digital = state.get("digital") or {}
+
+    cand = digital.get("constraints_sdc")
+    if cand and os.path.exists(cand):
+        logger.info(f"{AGENT_NAME}: selected SDC from state.digital -> {cand}")
+        return cand
+
+    for stage in ["place", "floorplan", "impl_setup", "synth"]:
+        cand_dir = os.path.join(workflow_dir, "digital", stage, "constraints")
+        for cand in sorted(glob.glob(os.path.join(cand_dir, "*.sdc"))):
+            if os.path.exists(cand):
+                logger.info(f"{AGENT_NAME}: selected SDC from {stage} -> {cand}")
+                return cand
+
+    legacy_dir = os.path.join(workflow_dir, "digital", "constraints")
+    for cand in sorted(glob.glob(os.path.join(legacy_dir, "*.sdc"))):
+        if os.path.exists(cand):
+            logger.info(f"{AGENT_NAME}: selected legacy SDC -> {cand}")
+            return cand
+
+    logger.warning(f"{AGENT_NAME}: no upstream SDC found")
+    return None
+
+def _resolve_config_from_state(state: dict, workflow_dir: str) -> str | None:
+    digital = state.get("digital") or {}
+
+    for key in ["openlane_config", "config_json"]:
+        cand = digital.get(key)
+        if cand and os.path.exists(cand):
+            logger.info(f"{AGENT_NAME}: selected config from state.digital[{key}] -> {cand}")
+            return cand
+
+    for cand in [
+        os.path.join(workflow_dir, "digital", "place", "config.json"),
+        os.path.join(workflow_dir, "digital", "impl_setup", "openlane", "config.json"),
+        os.path.join(workflow_dir, "digital", "synth", "config.json"),
+        os.path.join(workflow_dir, "digital", "foundry", "openlane", "config.json"),
+    ]:
+        if os.path.exists(cand):
+            logger.info(f"{AGENT_NAME}: selected config fallback -> {cand}")
+            return cand
+
+    logger.warning(f"{AGENT_NAME}: no OpenLane config found")
+    return None
+
 def run_agent(state: dict) -> dict:
 
     workflow_id=state.get("workflow_id","default")
     workflow_dir = state.get("workflow_dir") or f"backend/workflows/{workflow_id}"
     workflow_dir = os.path.abspath(workflow_dir)
+
     stage_dir = os.path.join(workflow_dir, "digital", "route")
-    logs_dir=os.path.join(stage_dir,"logs")
-    cons_dir=os.path.join(stage_dir,"constraints")
-    _ensure(stage_dir); _ensure(logs_dir); _ensure(cons_dir)
+    logs_dir = os.path.join(stage_dir, "logs")
+    constraints_dir = os.path.join(stage_dir, "constraints")
+    _ensure_dir(stage_dir)
+    _ensure_dir(logs_dir)
+    _ensure_dir(constraints_dir)
 
-    upstream_sdc=os.path.join(workflow_dir,"digital","constraints","top.sdc")
-    if not os.path.exists(upstream_sdc): raise RuntimeError("Missing upstream SDC: digital/constraints/top.sdc")
-    stage_sdc=os.path.join(cons_dir,"top.sdc")
+
+    upstream_sdc = _resolve_sdc_from_state(state, workflow_dir)
+    if not upstream_sdc:
+        raise RuntimeError("Route: missing upstream SDC")
+
+    sdc_basename = os.path.basename(upstream_sdc)
+    stage_sdc = os.path.join(constraints_dir, sdc_basename)
     shutil.copy2(upstream_sdc, stage_sdc)
-    sdc_text=open(stage_sdc,"r",encoding="utf-8").read()
 
-    impl_cfg=os.path.join(workflow_dir,"digital","foundry","openlane","config.json")
-    synth_cfg=os.path.join(workflow_dir,"digital","synth","config.json")
-    base_cfg=impl_cfg if os.path.exists(impl_cfg) else synth_cfg
-    if not os.path.exists(base_cfg): raise RuntimeError("Missing config.json (foundry/openlane or synth).")
+    with open(stage_sdc, "r", encoding="utf-8") as f:
+        sdc_text = f.read()
+
+    logger.info(f"{AGENT_NAME}: upstream_sdc={upstream_sdc}")
+    logger.info(f"{AGENT_NAME}: staged_sdc={stage_sdc}")
 
 
+    base_cfg_path = _resolve_config_from_state(state, workflow_dir)
+    if not base_cfg_path:
+        raise RuntimeError("Route: missing OpenLane config")
 
-    cfg = _read_json(base_cfg)
+    logger.info(f"{AGENT_NAME}: base_cfg_path={base_cfg_path}")
+    cfg = _read_json(base_cfg_path)
+
     cfg.pop("SYNTH_SDC_FILE", None)
 
     # --- Shared run_work_dir must be defined BEFORE using it ---
     run_work_dir = state.get("digital_run_work_dir") or os.path.join(workflow_dir, "digital", "run_work")
     run_work_dir = os.path.abspath(run_work_dir)
-    _ensure(run_work_dir)
+    _ensure_dir(run_work_dir)
     state["digital_run_work_dir"] = run_work_dir
 
     # Option A: point SDC to shared inputs
-    cfg["PNR_SDC_FILE"] = "inputs/constraints/top.sdc"
+    cfg["PNR_SDC_FILE"] = f"inputs/constraints/{sdc_basename}"
+
 
     # Explicit netlist list from shared inputs (Option A)
     inputs_netlist_dir = os.path.join(run_work_dir, "inputs", "netlist")
     stage_netlists = sorted(glob.glob(os.path.join(inputs_netlist_dir, "*.v")))
     if not stage_netlists:
         raise RuntimeError("Route: missing run_work/inputs/netlist/*.v (synth/floorplan should populate it).")
+
+    inputs_dir = os.path.join(run_work_dir, "inputs")
+    inputs_constraints_dir = os.path.join(inputs_dir, "constraints")
+    inputs_netlist_dir = os.path.join(inputs_dir, "netlist")
+
+    _ensure_dir(inputs_constraints_dir)
+    _ensure_dir(inputs_netlist_dir)
+    shutil.copy2(stage_sdc, os.path.join(inputs_constraints_dir, sdc_basename))
 
     cfg["VERILOG_FILES"] = [f"inputs/netlist/{os.path.basename(p)}" for p in stage_netlists]
 
@@ -97,8 +185,14 @@ def run_agent(state: dict) -> dict:
         cfg["DESIGN_NAME"] = inferred
         state["design_name"] = inferred
 
+    top_module = str(cfg.get("DESIGN_NAME", "")).strip() or "top"
+
     # Write stage contract config (optional but fine)
-    _write(os.path.join(stage_dir, "config.json"), json.dumps(cfg, indent=2))
+    _write_text(os.path.join(stage_dir, "config.json"), json.dumps(cfg, indent=2))
+
+    
+    for p in stage_netlists:
+        shutil.copy2(p, os.path.join(inputs_netlist_dir, os.path.basename(p)))
     
 
     pdk=state.get("pdk_variant") or DEFAULT_PDK_VARIANT
@@ -114,45 +208,70 @@ def run_agent(state: dict) -> dict:
 
         
     work_stage_dir = os.path.join(run_work_dir, "route")
-    _ensure(work_stage_dir)
-    _write(os.path.join(work_stage_dir, "config.json"), json.dumps(cfg, indent=2))
+    _ensure_dir(work_stage_dir)
+    _write_text(os.path.join(work_stage_dir, "config.json"), json.dumps(cfg, indent=2))
 
-    inputs_dir = os.path.join(run_work_dir, "inputs")
-    inputs_constraints_dir = os.path.join(inputs_dir, "constraints")
-    _ensure(inputs_constraints_dir)
-    shutil.copy2(stage_sdc, os.path.join(inputs_constraints_dir, "top.sdc"))
 
-    run_sh=f"""#!/usr/bin/env bash
+    input_log = "\n".join([
+        f"[{datetime.utcnow().isoformat()}Z] {AGENT_NAME}",
+        f"workflow_id={workflow_id}",
+        f"workflow_dir={workflow_dir}",
+        f"upstream_sdc={upstream_sdc}",
+        f"sdc_basename={sdc_basename}",
+        f"stage_sdc={stage_sdc}",
+        f"base_cfg_path={base_cfg_path}",
+        f"run_work_dir={run_work_dir}",
+        f"run_tag={run_tag}",
+        f"top_module={top_module}",
+        f"netlist_count={len(stage_netlists)}",
+    ]) + "\n"
+
+    _write_text(os.path.join(logs_dir, "route_input_resolution.log"), input_log)
+
+    run_sh = f"""#!/usr/bin/env bash
 set -euo pipefail
+
+echo "== ChipLoop: {AGENT_NAME} =="
+echo "PDK_VARIANT={pdk}"
+echo "OPENLANE_IMAGE={image}"
+echo "WORKDIR=/work"
+
 export OPENLANE_NUM_CORES={DEFAULT_NUM_CORES}
-docker run --rm \\
-  -v "{pdk_root_host}":/pdk \\
-  -v "{run_work_dir}":/work \\
-  -e PDK={pdk} \\
-  -e PDK_ROOT=/pdk \\
-  {image} \\
+
+docker run --rm \
+  -v "{pdk_root_host}":/pdk \
+  -v "{run_work_dir}":/work \
+  -e PDK={pdk} \
+  -e PDK_ROOT=/pdk \
+  {image} \
   bash -lc 'set -e; cd /work && openlane --flow Classic --run-tag {run_tag} --to OpenROAD.DetailedRouting route/config.json'
 """
-    _write(os.path.join(stage_dir,"run.sh"), run_sh)
+
+
+    _write_text(os.path.join(stage_dir,"run.sh"), run_sh)
     os.chmod(os.path.join(stage_dir,"run.sh"), 0o755)
 
     rc,out=_run(["bash","-lc","./run.sh"], cwd=stage_dir)
-    _write(os.path.join(logs_dir,"openlane_route.log"), out)
+    _write_text(os.path.join(logs_dir,"openlane_route.log"), out)
 
-    latest=_latest_run(run_work_dir)
+    latest=_latest_run_dir(run_work_dir)
     metrics=_copy_metrics(latest, stage_dir)
     primary_def=_copy_def(latest, stage_dir)
 
     summary={"workflow_id":workflow_id,"agent":AGENT_NAME,"status":"ok" if rc==0 else "failed","return_code":rc,
-             "outputs":{"metrics_json":"digital/route/metrics.json" if metrics else None,
-                        "primary_def":"digital/route/primary.def" if primary_def else None,
-                        "log":"digital/route/logs/openlane_route.log","openlane_run_dir":latest}}
-    _write(os.path.join(stage_dir,"route_summary.json"), json.dumps(summary, indent=2))
-    _write(os.path.join(stage_dir,"route_summary.md"), f"# Route\n\n- status: `{summary['status']}` (rc={rc})\n")
+             "outputs": {
+                "sdc": f"digital/route/constraints/{sdc_basename}",
+                "metrics_json": "digital/route/metrics.json" if metrics else None,
+                "primary_def": "digital/route/primary.def" if primary_def else None,
+                "log": "digital/route/logs/openlane_route.log",
+                "openlane_run_dir": latest}}
+    _write_text(os.path.join(stage_dir,"route_summary.json"), json.dumps(summary, indent=2))
+    _write_text(os.path.join(stage_dir,"route_summary.md"), f"# Route\n\n- status: `{summary['status']}` (rc={rc})\n")
 
     try:
         save_text_artifact_and_record(workflow_id,AGENT_NAME,"digital","route/config.json", json.dumps(cfg, indent=2))
-        save_text_artifact_and_record(workflow_id,AGENT_NAME,"digital","route/constraints/top.sdc", sdc_text)
+        save_text_artifact_and_record(..., f"route/constraints/{sdc_basename}", sdc_text)
+        save_text_artifact_and_record(..., "route/logs/route_input_resolution.log", input_log)
         save_text_artifact_and_record(workflow_id,AGENT_NAME,"digital","route/run.sh", run_sh)
         save_text_artifact_and_record(workflow_id,AGENT_NAME,"digital","route/logs/openlane_route.log", out)
         save_text_artifact_and_record(workflow_id,AGENT_NAME,"digital","route/route_summary.json", json.dumps(summary, indent=2))
@@ -163,5 +282,16 @@ docker run --rm \\
     except Exception as e:
         print(f"⚠️ upload failed: {e}")
 
-    state.setdefault("digital",{})["route"]={"status":summary["status"],"stage_dir":stage_dir,"metrics_json":metrics,"primary_def":primary_def}
+    state.setdefault("digital", {})["route"] = {
+        "status": summary["status"],
+        "stage_dir": stage_dir,
+        "metrics_json": metrics,
+        "primary_def": primary_def,
+        "constraints_sdc": stage_sdc,
+        "openlane_config": os.path.join(work_stage_dir, "config.json"),
+        "input_resolution_log": os.path.join(logs_dir, "route_input_resolution.log"),
+        "openlane_run_dir": latest,
+    }
+
+    
     return state

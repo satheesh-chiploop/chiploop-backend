@@ -56,6 +56,23 @@ def _infer_top_from_netlist(netlist_path: str) -> str | None:
     m = re.search(r'^\s*module\s+([A-Za-z_][A-Za-z0-9_$]*)\s*\(', txt, flags=re.MULTILINE)
     return m.group(1) if m else None
 
+def _resolve_sdc_from_state(state: dict, workflow_dir: str) -> str | None:
+    digital = state.get("digital") or {}
+
+    for key in ["constraints_sdc"]:
+        cand = digital.get(key)
+        if cand and os.path.exists(cand):
+            return cand
+
+    for stage in ["sta_postroute", "route", "sta_postcts", "cts",
+                  "place", "floorplan", "impl_setup", "synth"]:
+        d = os.path.join(workflow_dir, "digital", stage, "constraints")
+        for f in sorted(glob.glob(os.path.join(d, "*.sdc"))):
+            return f
+
+    legacy = glob.glob(os.path.join(workflow_dir, "digital", "constraints", "*.sdc"))
+    return legacy[0] if legacy else None
+
 def run_agent(state: dict) -> dict:
     workflow_id = state.get("workflow_id", "default")
     workflow_dir = state.get("workflow_dir") or f"backend/workflows/{workflow_id}"
