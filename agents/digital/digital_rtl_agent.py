@@ -397,6 +397,50 @@ POWER_INTENT_JSON:
 
 IMPLEMENTATION RULES
 
+
+FATAL RTL CORRECTNESS RULES (HIGHEST PRIORITY)
+
+The generated RTL must pass both:
+1. Icarus Verilog compile
+2. fatal Verilator lint
+
+These rules override stylistic preferences.
+
+A. SINGLE ASSIGNMENT STYLE PER SIGNAL
+For every signal, choose exactly one legal driving style:
+- sequential register/state/output: assigned only with nonblocking <= inside one clocked always @(posedge clk or negedge rst_n) block
+- combinational next-state / combinational output: assigned only with blocking = inside one always @(*) block with full defaults
+- structural connection: driven only by assign or module port wiring, not by procedural blocks
+
+Never assign the same signal using both = and <= anywhere in the design.
+Never assign the same signal in both a clocked and combinational block.
+Never procedurally drive a signal that is already structurally driven.
+
+B. OUTPUT / WIRE / REG ROLE DISCIPLINE
+- If a signal is a pure structural connection between modules, keep it as a wire and do not assign it in always blocks.
+- If a module output is driven from sequential logic, declare and drive it as a reg-style procedural output and do not also assign it combinationally.
+- Do not declare a top-level wiring signal and then also reset or assign it procedurally.
+
+C. FSM OUTPUT DISCIPLINE
+For FSM-controlled outputs:
+- either register them in the clocked block using <= only
+- or compute them combinationally in always @(*) with blocking = only and full default assignments
+- do not mix the two styles for the same output
+
+D. MULTI-DRIVER BAN
+Every signal must have exactly one legal driver.
+No signal may be driven by:
+- two always blocks
+- child output plus top assign
+- child output plus top procedural block
+- assign plus procedural block
+
+E. CASE / COMBINATIONAL SAFETY
+Every combinational always @(*) block must:
+- assign defaults at block entry
+- assign every driven signal on all paths
+- include a default branch in every case
+
 - Generate synthesizable Verilog-2005 only.
 - Do NOT use SystemVerilog constructs.
 - Forbidden constructs include:
@@ -794,6 +838,31 @@ Make the MINIMUM NECESSARY change to fix correctness errors.
 - Prefer local fixes over global rewrites
 
 CORRECTNESS REPAIR PRIORITIES (MANDATORY)
+
+TARGETED REPAIR PROCEDURE FOR FATAL LINT / COMPILE ERRORS
+
+1. Read the exact failing signal names from the compile and Verilator logs.
+2. For each failing signal, classify it into exactly one category:
+   - structural wire / child-owned connection
+   - combinational signal
+   - sequential registered signal
+3. Rewrite that signal so it uses exactly one legal driving style:
+   - structural wire -> assign / module port wiring only
+   - combinational signal -> blocking = only in one always @(*)
+   - sequential signal -> nonblocking <= only in one clocked always block
+4. Remove all conflicting assignments to that signal everywhere else.
+5. If a signal is owned by a child module or comes from register decode wiring, do not also reset or procedurally drive it in the parent/top.
+6. If an FSM output currently has both reset-time <= assignments and combinational = assignments, choose one implementation style and rewrite consistently.
+7. If Verilator reports BLKANDNBLK, the repaired RTL is still wrong unless every reported signal has only one assignment style.
+8. If Verilator reports multidriven behavior, the repaired RTL is still wrong unless the duplicate drivers are removed.
+
+REPAIR PRIORITY ORDER
+1. BLKANDNBLK
+2. MULTIDRIVEN / illegal multiple drivers
+3. undeclared or illegal reg/wire usage
+4. incomplete combinational assignments / latch-prone logic
+5. case completeness / default branches
+6. width mismatches
 
 When repairing RTL, fix these classes of issues first:
 
