@@ -4,6 +4,7 @@ import json
 import datetime
 import subprocess
 import logging
+import shutil
 logger = logging.getLogger("chiploop")
 from typing import Dict, List, Tuple, Optional
 
@@ -642,6 +643,9 @@ def _record_text_artifact_safe(workflow_id, agent_name, subdir, filename, path):
     except Exception as e:
         print(f"⚠️ Failed to upload artifact {filename}: {e}")
 
+
+
+
 def _upload_rtl_debug_artifacts(workflow_id, agent_name, rtl_dir):
     for fname in [
         "rtl_agent_entry.json",
@@ -656,6 +660,8 @@ def _upload_rtl_debug_artifacts(workflow_id, agent_name, rtl_dir):
         "rtl_agent_summary_pass2.txt",
         "rtl_agent_exception_pass2.txt",
         "rtl_llm_raw_output_pass2.txt",
+        "rtl_agent_final_status.log",
+        "rtl_agent_final_summary.txt",
     ]:
         _record_text_artifact_safe(
             workflow_id=workflow_id,
@@ -701,7 +707,6 @@ REPAIR RULES:
 - Do NOT return partial edits
 """.strip()
 
-
 def _run_verilator_lint(rtl_dir: str, verilog_files: List[str], top_module: str, suffix: str = "") -> Tuple[bool, str, str]:
     log_name = "rtl_verilator_lint.log" if not suffix else f"rtl_verilator_lint_{suffix}.log"
     lint_log_path = os.path.join(rtl_dir, log_name)
@@ -712,13 +717,22 @@ def _run_verilator_lint(rtl_dir: str, verilog_files: List[str], top_module: str,
             f.write(msg)
         return False, lint_log_path, msg
 
+    # IMPORTANT:
+    # When cwd=rtl_dir, pass only basenames (or absolute paths), not rtl_dir-prefixed relative paths.
+    verilator_inputs = []
+    for vf in verilog_files:
+        if os.path.isabs(vf):
+            verilator_inputs.append(vf)
+        else:
+            verilator_inputs.append(os.path.basename(vf))
+
     cmd = [
         "verilator",
         "--lint-only",
         "-Wall",
         "--top-module",
         top_module,
-    ] + verilog_files
+    ] + verilator_inputs
 
     logger.info(f"[RTL DEBUG] running_verilator_lint suffix={suffix or 'pass1'} top={top_module} file_count={len(verilog_files)}")
     logger.info(f"[RTL DEBUG] verilator_cmd={' '.join(cmd)}")
@@ -731,35 +745,18 @@ def _run_verilator_lint(rtl_dir: str, verilog_files: List[str], top_module: str,
             text=True,
             check=False,
         )
-    except FileNotFoundError:
-        msg = "Verilator executable not found in PATH.\n"
-        with open(lint_log_path, "w", encoding="utf-8") as f:
-            f.write(msg)
-        logger.error("[RTL DEBUG] verilator_not_found")
-        return False, lint_log_path, msg
-    except Exception as e:
-        msg = f"Verilator execution failed: {e}\n"
-        with open(lint_log_path, "w", encoding="utf-8") as f:
-            f.write(msg)
-        logger.error(f"[RTL DEBUG] verilator_exception: {e}")
-        return False, lint_log_path, msg
 
-    combined = ""
-    if proc.stdout:
-        combined += "=== STDOUT ===\n" + proc.stdout + "\n"
-    if proc.stderr:
-        combined += "=== STDERR ===\n" + proc.stderr + "\n"
-    combined += f"=== RETURN CODE ===\n{proc.returncode}\n"
 
-    with open(lint_log_path, "w", encoding="utf-8") as f:
-        f.write(combined)
+ def _promote_rtl_files_to_root(rtl_dir: str, artifact_list: List[str]) -> List[str]:
+        promoted = []
+        os.makedirs(rtl_dir, exist_ok=True)
 
-    if proc.returncode != 0:
-        logger.error(f"[RTL DEBUG] verilator_failed suffix={suffix or 'pass1'} rc={proc.returncode}")
-        return False, lint_log_path, combined
-
-    logger.info(f"[RTL DEBUG] verilator_passed suffix={suffix or 'pass1'}")
-    return True, lint_log_path, combined
+        for src in artifact_list:
+            dst = os.path.join(rtl_dir, os.path.basename(src))
+            if os.path.abspath(src) != os.path.abspath(dst):
+                shutil.copyfile(src, dst)
+            promoted.append(dst)
+        return promoted
 
 
 def _validate_and_materialize_rtl(
@@ -768,6 +765,7 @@ def _validate_and_materialize_rtl(
     spec_json: dict,
     mode: str,
     suffix: str = "",
+    materialize_subdir: str = "",
 ) -> dict:
     raw_name = "rtl_llm_raw_output.txt" if not suffix else f"rtl_llm_raw_output_{suffix}.txt"
     compile_log_name = "rtl_agent_compile.log" if not suffix else f"rtl_agent_compile_{suffix}.log"
@@ -792,14 +790,21 @@ def _validate_and_materialize_rtl(
     expected_files = _collect_expected_rtl_files(spec_json, mode)
     artifact_list = []
 
+    materialize_dir = rtl_dir if not materialize_subdir else os.path.join(rtl_dir, materialize_subdir)
+    os.makedirs(materialize_dir, exist_ok=True)
     for fname in expected_files:
         code = verilog_map.get(fname)
         if not code:
             continue
-        fpath = os.path.join(rtl_dir, fname)
+        fpath = os.path.join(materialize_dir, fname)
         with open(fpath, "w", encoding="utf-8") as vf:
             vf.write(code + "\n")
         artifact_list.append(fpath)
+
+    top_rtl_file = _top_rtl_file(spec_json, mode)
+    top_rtl_path = os.path.join(materialize_dir, top_rtl_file)
+
+ 
 
     issues, clock_ports, reset_ports = _validate_spec_vs_rtl(spec_json, mode, verilog_map)
 
@@ -966,17 +971,18 @@ def run_agent(state: dict) -> dict:
     os.makedirs(rtl_dir, exist_ok=True)
 
     def _fail_and_upload(msg: str, exc: Exception = None) -> dict:
-        log_path = os.path.join(rtl_dir, "rtl_agent_compile.log")
-        summary_file = os.path.join(rtl_dir, "rtl_agent_summary.txt")
+        # Do NOT overwrite pass1/pass2 logs. Preserve them.
+        final_log_path = os.path.join(rtl_dir, "rtl_agent_final_status.log")
+        final_summary_path = os.path.join(rtl_dir, "rtl_agent_final_summary.txt")
         error_file = os.path.join(rtl_dir, "rtl_agent_exception.txt")
 
-        with open(log_path, "w", encoding="utf-8") as lf:
+        with open(final_log_path, "w", encoding="utf-8") as lf:
             lf.write(msg + "\n")
             if exc is not None:
                 lf.write(f"Exception type: {type(exc).__name__}\n")
                 lf.write(f"Exception: {exc}\n")
 
-        with open(summary_file, "w", encoding="utf-8") as sf:
+        with open(final_summary_path, "w", encoding="utf-8") as sf:
             sf.write("❌ RTL generation failed.\n\n")
             sf.write(msg + "\n")
             if exc is not None:
@@ -988,12 +994,14 @@ def run_agent(state: dict) -> dict:
                 ef.write(repr(exc) + "\n")
 
         _upload_rtl_debug_artifacts(workflow_id, agent_name, rtl_dir)
+        _record_text_artifact_safe(workflow_id, agent_name, "rtl", "rtl_agent_final_status.log", final_log_path)
+        _record_text_artifact_safe(workflow_id, agent_name, "rtl", "rtl_agent_final_summary.txt", final_summary_path)
 
         state.update({
             "status": f"❌ RTL generation failed: {msg}",
             "artifact": None,
             "artifact_list": [],
-            "artifact_log": log_path,
+            "artifact_log": final_log_path,
             "issues": [msg] + ([str(exc)] if exc is not None else []),
             "workflow_id": workflow_id,
             "workflow_dir": workflow_dir,
@@ -1181,13 +1189,16 @@ def run_agent(state: dict) -> dict:
         return state
     try:
         _stage("pass1_validate_and_materialize")
+
         pass1 = _validate_and_materialize_rtl(
             llm_output=llm_output,
             rtl_dir=rtl_dir,
             spec_json=spec_json,
             mode=mode,
             suffix="",
+            materialize_subdir="",      # keep pass1 exactly as today
         )
+
 
         if not pass1["ok"]:
             _stage("pass1_failed_triggering_pass2")
@@ -1242,16 +1253,23 @@ def run_agent(state: dict) -> dict:
                 return _fail_and_upload("Pass1 failed and Pass2 LLM generation failed.", e2)
 
             _stage("pass2_validate_and_materialize")
+
             pass2 = _validate_and_materialize_rtl(
                 llm_output=llm_output_pass2,
                 rtl_dir=rtl_dir,
                 spec_json=spec_json,
                 mode=mode,
                 suffix="pass2",
+                materialize_subdir="pass2", # isolate pass2 RTL
             )
 
             final_result = pass2 if pass2["ok"] else pass1
             final_suffix = "pass2" if pass2["ok"] else "pass1"
+
+            if pass2["ok"]:
+                promoted_files = _promote_rtl_files_to_root(rtl_dir, pass2["artifact_list"])
+                final_result["artifact_list"] = promoted_files
+
 
             if not pass2["ok"]:
                 return _fail_and_upload(
