@@ -575,6 +575,44 @@ and must be owned by the producing submodule, not by the top module.
   rather than any placeholder text.
 - Every if/else/case condition must be a legal Verilog expression using only literals, declared signals, parameters, or valid operators.
 
+1. FSM coding rules
+- For every FSM, use a standard 2-process style:
+  a) one sequential always block for state registers:
+     always @(posedge clk or negedge rst_n)
+  b) one combinational always @(*) block for next_state and combinational outputs
+- In every combinational always @(*) block, assign safe default values at the top BEFORE the case statement:
+  - next_state must get a default assignment
+  - every combinational output driven in that block must get a default assignment
+- Every signal assigned in a combinational block must be assigned on all paths.
+- Do NOT generate combinational blocks that leave outputs unassigned in any case/default branch.
+- Do NOT generate latch-prone RTL.
+
+2. Case statement rules
+- Every case statement must include a default branch.
+- Do not leave read/write decode cases incomplete.
+- For register read muxes, provide a deterministic default read value.
+- For write decodes, include a default no-op branch.
+
+3. Width and assignment rules
+- All assignments must be width-correct.
+- Do not assign narrower concatenations into wider registers without explicit zero-extension.
+- Match declared signal widths exactly.
+- Avoid implicit truncation/expansion unless explicitly intended and coded.
+
+4. Register map rules
+- Separate control and status behavior clearly.
+- If status registers pack status bits into a wider register, explicitly zero-pad unused upper bits.
+- Register read data must be assigned deterministically.
+- Avoid incomplete register decode logic.
+
+6. Output requirement
+Before finalizing the RTL, self-check:
+- no latch inference
+- no incomplete combinational assignments
+- default branch exists in every case
+- widths are consistent
+- top/module/port names exactly match the spec JSON
+
 SELF-CHECK BEFORE OUTPUT
 1. Every expected file is emitted exactly once.
 2. Every module name matches spec.
@@ -685,7 +723,7 @@ def _build_rtl_repair_prompt(base_prompt: str, previous_llm_output: str, compile
 REPAIR MODE (SECOND PASS)
 ==============================
 
-Your previous RTL output failed validation and/or compilation.
+Your previous RTL output failed one or more correctness gates.
 
 You MUST preserve the same architecture unless a structural change is strictly required to fix the errors.
 
@@ -695,17 +733,54 @@ PREVIOUS RTL OUTPUT:
 ICARUS COMPILE LOG:
 {compile_log_text}
 
-VERILATOR LINT LOG:
+FATAL VERILATOR LOG (if any):
 {verilator_log_text}
 
 REPAIR RULES:
-- Do NOT redesign the architecture unless required to resolve errors
-- Preserve module names, filenames, ports, and hierarchy as much as possible
-- Fix only compilation, lint, and structural RTL issues
+- Do NOT redesign the architecture unless required to resolve correctness errors
+- Preserve module names, filenames, ports, hierarchy, and wiring intent as much as possible
+- Fix only:
+  - Icarus compile failures
+  - fatal Verilator errors
+  - structural/spec mismatch issues
+- Do NOT spend tokens cleaning non-fatal lint warnings only
 - Return ONE full corrected response in the same named-file-block format
 - Do NOT return explanations
 - Do NOT return partial edits
+
+CORRECTNESS REPAIR PRIORITIES (MANDATORY)
+
+When repairing RTL, fix these classes of issues first:
+
+1. FSM / latch issues
+- Eliminate latch-prone combinational FSM logic.
+- In every combinational FSM block:
+  - assign next_state a default value first
+  - assign every combinational output a default value first
+  - keep assignments complete across all branches
+- Preserve the same FSM architecture and state names unless a change is strictly required.
+
+2. Register map correctness
+- Fix width mismatches by using explicit zero-padding or width-correct assignments.
+- Add missing default branches in register decode case statements.
+- Ensure reg_rdata and similar outputs are assigned deterministically.
+
+3. Structural correctness only
+- Preserve filenames, module names, ports, and hierarchy.
+- Do NOT redesign the architecture to fix non-fatal lint style issues.
+- Fix only correctness blockers:
+  - compile failures
+  - fatal lint/elaboration issues
+  - spec/structure mismatches
+  - latch-prone coding
+  - width/signing mistakes that can break synthesis or behavior
+SELF-CHECK BEFORE RETURNING RTL
+- No latch inference from incomplete combinational assignments
+- Every combinational case has a default branch
+- Every combinationally driven output has a default assignment at block entry
+- Packed status/control register assignments are width-correct
 """.strip()
+
 
 def _run_verilator_lint(rtl_dir: str, verilog_files: List[str], top_module: str, suffix: str = "") -> Tuple[bool, str, str]:
     log_name = "rtl_verilator_lint.log" if not suffix else f"rtl_verilator_lint_{suffix}.log"
@@ -776,6 +851,33 @@ def _run_verilator_lint(rtl_dir: str, verilog_files: List[str], top_module: str,
 
     logger.info(f"[RTL DEBUG] verilator_passed suffix={suffix or 'pass1'}")
     return True, lint_log_path, combined
+
+
+def _classify_verilator_result(verilator_ok: bool, verilator_output: str) -> str:
+    """
+    Returns one of:
+      - "pass"
+      - "warning_only"
+      - "fatal"
+    """
+    if verilator_ok:
+        return "pass"
+
+    text = verilator_output or ""
+
+    fatal_patterns = [
+        "%Error:",
+        "Cannot find file containing module",
+        "syntax error",
+        "Internal Error",
+        "Exiting due to",
+    ]
+
+    for pat in fatal_patterns:
+        if pat in text:
+            return "fatal"
+
+    return "warning_only"
 
 
 def _promote_rtl_files_to_root(rtl_dir: str, artifact_list: List[str]) -> List[str]:
@@ -922,9 +1024,14 @@ def _validate_and_materialize_rtl(
             for issue in issues:
                 logf.write(f"{issue}\n")
 
-    verilator_ok = False
-    verilator_log_path = os.path.join(rtl_dir, "rtl_verilator_lint.log" if not suffix else f"rtl_verilator_lint_{suffix}.log")
+
+        verilator_ok = False
+    verilator_log_path = os.path.join(
+        rtl_dir,
+        "rtl_verilator_lint.log" if not suffix else f"rtl_verilator_lint_{suffix}.log"
+    )
     verilator_output = ""
+    verilator_severity = "not_run"
 
     if "❌ Icarus Verilog compile failed." not in issues and not any("Compile invocation failed" in x for x in issues):
         _stage(f"running_verilator_lint_{suffix or 'pass1'}")
@@ -934,13 +1041,26 @@ def _validate_and_materialize_rtl(
             top_module=_top_module_name(spec_json, mode),
             suffix=suffix,
         )
-        if not verilator_ok:
+
+        verilator_severity = _classify_verilator_result(verilator_ok, verilator_output)
+
+        if verilator_severity == "fatal":
             issues.append("❌ Verilator lint failed.")
             _append_text(
                 compile_log_path,
                 "\n=== VERILATOR LINT FAILURE ===\n"
-                "See corresponding rtl_verilator_lint log for details.\n"
+                "Fatal Verilator issues detected. See corresponding rtl_verilator_lint log for details.\n"
             )
+            _stage(f"verilator_lint_fatal_{suffix or 'pass1'}")
+
+        elif verilator_severity == "warning_only":
+            _append_text(
+                compile_log_path,
+                "\n=== VERILATOR LINT WARNINGS ===\n"
+                "Non-fatal Verilator warnings detected. Pass preserved; no repair loop required.\n"
+            )
+            _stage(f"verilator_lint_warning_only_{suffix or 'pass1'}")
+
         else:
             _append_text(
                 compile_log_path,
@@ -953,6 +1073,8 @@ def _validate_and_materialize_rtl(
             vf.write("Skipped Verilator lint because Icarus compile did not pass.\n")
         verilator_output = "Skipped Verilator lint because Icarus compile did not pass.\n"
 
+
+
     summary_path = os.path.join(rtl_dir, summary_name)
     with open(summary_path, "w", encoding="utf-8") as sf:
         sf.write("RTL Agent Summary\n")
@@ -963,7 +1085,7 @@ def _validate_and_materialize_rtl(
         sf.write(f"Materialized files: {[os.path.basename(p) for p in artifact_list]}\n")
         sf.write(f"Clock ports: {sorted(set(clock_ports))}\n")
         sf.write(f"Reset ports: {sorted(set(reset_ports))}\n")
-        sf.write(f"Verilator lint: {'PASS' if verilator_ok else 'FAIL'}\n")
+        sf.write(f"Verilator lint: {verilator_severity}\n")
         sf.write(f"Issue count: {len(issues)}\n")
         if issues:
             sf.write("\nIssues:\n")
@@ -982,9 +1104,11 @@ def _validate_and_materialize_rtl(
         "raw_output_path": raw_output_path,
         "verilator_log_path": verilator_log_path,
         "verilator_output": verilator_output,
+        "verilator_severity": verilator_severity,
         "llm_output": llm_output,
         "verilog_map": verilog_map,
     }
+
 
 def run_agent(state: dict) -> dict:
     agent_name = "Digital RTL Agent"
@@ -1242,7 +1366,7 @@ def run_agent(state: dict) -> dict:
                     compile_log_text = f.read()
 
             verilator_log_text = ""
-            if os.path.exists(pass1["verilator_log_path"]):
+            if pass1.get("verilator_severity") == "fatal" and os.path.exists(pass1["verilator_log_path"]):
                 with open(pass1["verilator_log_path"], "r", encoding="utf-8") as f:
                     verilator_log_text = f.read()
 
@@ -1252,6 +1376,7 @@ def run_agent(state: dict) -> dict:
                 compile_log_text=compile_log_text,
                 verilator_log_text=verilator_log_text,
             )
+
 
             _stage("starting_llm_call_pass2")
 
