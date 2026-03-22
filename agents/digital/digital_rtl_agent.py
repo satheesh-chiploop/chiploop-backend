@@ -428,7 +428,9 @@ IMPLEMENTATION RULES
 - No undeclared identifiers.
 - No TODOs.
 - No empty shells.
-- Drive all outputs.
+- Every declared output must have exactly one legal driver.
+- In structural top modules, outputs may be exposed through wiring from the owning child module.
+- Do not force procedural driving at the top unless the top module owns the signal.
 - Use DIGITAL_SPEC_JSON module functionality, responsibilities, must_drive, must_receive, must_not_drive, reset_behavior, and behavior_rules as hard requirements.
 - Use DERIVED_INTERFACE_CONTRACT as the exact wiring contract.
 - For each top-level connection, connect the declared top port to the listed module ports.
@@ -499,6 +501,29 @@ IMPLEMENTATION RULES
   - Distinguish raw external signals from derived internal signals.
 - If an inter-module signal is owned by a child module according to signal_ownership, the top module MUST NOT recreate, shortcut, alias, or directly assign that signal from a top-level input or any other source.
 - The top module may only connect child-owned internal signals structurally through wires and port connections.
+
+INTERNAL SIGNAL ROLE SEPARATION RULES (MANDATORY)
+
+- Distinguish:
+  1. externally visible top-level ports
+  2. internal inter-module signals
+  3. decoded control/configuration signals
+  4. status/derived/behavioral outputs
+
+- Do NOT reuse one signal for multiple unrelated roles unless explicitly defined in DIGITAL_SPEC_JSON.
+- A decoded control/config signal must remain a dedicated internal signal unless explicitly defined as a top-level port.
+- A behavioral/status/output signal must not be reused as an unrelated internal control/config signal.
+- If one module produces a signal and another consumes it, connect them through a dedicated internal wire.
+- Never merge signals just because names or widths look similar.
+- Never alias two signals unless the contract explicitly defines them as the same.
+
+DECODED REGISTER SIGNAL WIDTH RULES (MANDATORY)
+
+- If multiple semantic signals are decoded from a register, the register must be wide enough.
+- Do not declare a scalar if indexed bits are used.
+- Bit/part selections must match declared widths.
+- Concatenations must match destination width exactly.
+- Do not rely on implicit truncation/expansion.
 
 - Example:
   If adc_done_sync is owned by analog_if_logic.adc_done_sync, then the top module must connect:
@@ -613,6 +638,13 @@ Before finalizing the RTL, self-check:
 - widths are consistent
 - top/module/port names exactly match the spec JSON
 
+FSM SAFETY RULES
+
+- In every combinational always @(*) block:
+  - assign default values at block entry
+  - assign all outputs on all paths
+- No latch inference is allowed.
+
 SELF-CHECK BEFORE OUTPUT
 1. Every expected file is emitted exactly once.
 2. Every module name matches spec.
@@ -653,6 +685,11 @@ SELF-CHECK BEFORE OUTPUT
     - TODO
     - implement here
     - some condition
+27. No signal is reused for multiple unrelated roles unless explicitly defined.
+28. No top-level port is reused as an unrelated internal signal.
+29. No decoded control signal is aliased onto an unrelated output.
+30. Every signal has exactly one legal driver.
+31. Structural top modules do not convert child outputs into procedural top-level regs unless required.
 
 """.strip()
 
@@ -748,6 +785,14 @@ REPAIR RULES:
 - Do NOT return explanations
 - Do NOT return partial edits
 
+PRIMARY OBJECTIVE:
+Make the MINIMUM NECESSARY change to fix correctness errors.
+
+- Do NOT redesign architecture
+- Do NOT rename modules/ports/files
+- Do NOT rewrite unaffected files
+- Prefer local fixes over global rewrites
+
 CORRECTNESS REPAIR PRIORITIES (MANDATORY)
 
 When repairing RTL, fix these classes of issues first:
@@ -774,11 +819,36 @@ When repairing RTL, fix these classes of issues first:
   - spec/structure mismatches
   - latch-prone coding
   - width/signing mistakes that can break synthesis or behavior
+
+  SIGNAL ROLE / MULTI-DRIVER REPAIR RULES
+
+- If one signal is used for multiple unrelated roles, split it into separate signals.
+- Introduce internal wires instead of reusing top-level ports.
+- If a signal is produced by one module and consumed by another, connect via a dedicated internal wire.
+- Never allow multiple drivers on the same signal.
+- Do NOT fix wiring bugs by converting outputs to reg at top-level.
+
+Fix only:
+- Icarus compile failures
+- fatal Verilator errors
+- structural/spec mismatches
+- latch-prone coding
+- illegal multi-driver issues
+- illegal reg/wire usage
+
+Do NOT spend effort fixing non-fatal lint warnings.
+
 SELF-CHECK BEFORE RETURNING RTL
 - No latch inference from incomplete combinational assignments
 - Every combinational case has a default branch
 - Every combinationally driven output has a default assignment at block entry
 - Packed status/control register assignments are width-correct
+- Minimal changes applied
+- No architecture changes
+- No multi-driver signals
+- No illegal reg/wire connections
+- No latch inference
+- Interfaces unchanged
 """.strip()
 
 
