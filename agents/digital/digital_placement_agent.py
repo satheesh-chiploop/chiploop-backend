@@ -5,6 +5,7 @@ import shutil
 import subprocess
 import re
 import logging
+from datetime import datetime
 logger = logging.getLogger("chiploop")
 
 from utils.artifact_utils import save_text_artifact_and_record
@@ -206,7 +207,7 @@ def run_agent(state: dict) -> dict:
     if inferred:
         cfg["DESIGN_NAME"] = inferred
 
-
+    top_module = str(cfg.get("DESIGN_NAME", "")).strip() or "top"
     
 
     # ---- Docker/run.sh ----
@@ -243,6 +244,9 @@ def run_agent(state: dict) -> dict:
     inputs_netlist_dir = os.path.join(inputs_dir, "netlist")
     _ensure_dir(inputs_constraints_dir)
     _ensure_dir(inputs_netlist_dir)
+
+    shutil.copy2(stage_sdc, os.path.join(inputs_constraints_dir, sdc_basename))
+
 
     cfg["PNR_SDC_FILE"] = f"inputs/constraints/{sdc_basename}"
 
@@ -303,7 +307,7 @@ docker run --rm \
         "status": "ok" if rc == 0 else "failed",
         "return_code": rc,
         "outputs": {
-            "sdc": "digital/place/constraints/top.sdc",
+            "sdc": f"digital/place/constraints/{sdc_basename}",
             "metrics_json": "digital/place/metrics.json" if metrics_path else None,
             "primary_def": "digital/place/primary.def" if def_path else None,
             "log": "digital/place/logs/openlane_place.log",
@@ -337,7 +341,7 @@ docker run --rm \
         "primary_def": def_path,
         "constraints_sdc": stage_sdc,
         "openlane_config": config_path,
-        "input_resolution_log": os.path.join(logs_dir, "place_input_resolution.log"),
+        "input_resolution_log": os.path.join(logs_dir, "placement_input_resolution.log"),
         "openlane_run_dir": latest,
     }
 

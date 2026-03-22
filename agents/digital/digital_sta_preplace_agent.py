@@ -1,5 +1,10 @@
-import os, json, glob, shutil, subprocess, re
+
+
+import os, json, glob, shutil, subprocess, re, logging
+from datetime import datetime
 from utils.artifact_utils import save_text_artifact_and_record
+
+logger = logging.getLogger("chiploop")
 
 AGENT_NAME = "Digital STA PrePlace Agent"
 STAGE_NAME = "sta_preplace"
@@ -148,6 +153,13 @@ def run_agent(state: dict) -> dict:
     _ensure_dir(run_work_dir)
     state["digital_run_work_dir"] = run_work_dir
 
+
+    inputs_dir = os.path.join(run_work_dir, "inputs")
+    inputs_constraints_dir = os.path.join(inputs_dir, "constraints")
+    inputs_netlist_dir = os.path.join(inputs_dir, "netlist")
+    _ensure_dir(inputs_constraints_dir)
+    _ensure_dir(inputs_netlist_dir)
+
     # ---- Shared run tag (same as place/cts/route) ----
     explicit = state.get("run_tag") or state.get("digital_run_tag")
     wf_name = state.get("workflow_name") or state.get("workflow_type") or state.get("flow_name") or "digital"
@@ -202,6 +214,8 @@ def run_agent(state: dict) -> dict:
         if inferred:
             cfg["DESIGN_NAME"] = inferred
             state["design_name"] = inferred
+
+    top_module = str(cfg.get("DESIGN_NAME", "")).strip() or "top"
 
     # Write contract config (visible under digital/sta_preplace/config.json)
     _write_text(os.path.join(stage_dir, "config.json"), json.dumps(cfg, indent=2))

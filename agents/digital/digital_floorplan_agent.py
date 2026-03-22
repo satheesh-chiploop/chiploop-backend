@@ -330,7 +330,7 @@ docker run --rm \
         "status": "ok" if rc == 0 else "failed",
         "return_code": rc,
         "outputs": {
-            "sdc": "digital/floorplan/constraints/top.sdc",
+            "sdc": f"digital/floorplan/constraints/{sdc_basename}",
             "metrics_json": "digital/floorplan/metrics.json" if metrics_path else None,
             "primary_def": "digital/floorplan/primary.def" if def_path else None,
             "log": "digital/floorplan/logs/openlane_floorplan.log",
@@ -344,7 +344,7 @@ docker run --rm \
     # ---- Upload text artifacts (DEF is text; ok to upload for small designs) ----
     try:
         save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "floorplan/config.json", json.dumps(cfg, indent=2))
-        save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "floorplan/constraints/top.sdc", sdc_text)
+        save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "floorplan/constraints/{sdc_basename}", sdc_text)
         save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "floorplan/run.sh", run_sh)
         save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "floorplan/logs/openlane_floorplan.log", out)
         save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "floorplan/floorplan_summary.json", json.dumps(summary, indent=2))

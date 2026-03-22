@@ -56,6 +56,27 @@ def _infer_top_from_netlist(netlist_path: str) -> str | None:
     m = re.search(r'^\s*module\s+([A-Za-z_][A-Za-z0-9_$]*)\s*\(', txt, flags=re.MULTILINE)
     return m.group(1) if m else None
 
+def _resolve_sdc_from_state(state: dict, workflow_dir: str) -> str | None:
+    digital = state.get("digital") or {}
+
+    for key in ["constraints_sdc"]:
+        cand = digital.get(key)
+        if cand and os.path.exists(cand):
+            return cand
+
+    for stage in ["sta_preplace", "place", "floorplan", "impl_setup", "synth"]:
+        cand_dir = os.path.join(workflow_dir, "digital", stage, "constraints")
+        for cand in sorted(glob.glob(os.path.join(cand_dir, "*.sdc"))):
+            if os.path.exists(cand):
+                return cand
+
+    legacy = sorted(glob.glob(os.path.join(workflow_dir, "digital", "constraints", "*.sdc")))
+    for cand in legacy:
+        if os.path.exists(cand):
+            return cand
+
+    return None
+
 def run_agent(state: dict) -> dict:
     workflow_id = state.get("workflow_id", "default")
     workflow_dir = state.get("workflow_dir") or f"backend/workflows/{workflow_id}"
@@ -79,17 +100,21 @@ def run_agent(state: dict) -> dict:
     _ensure(run_work_dir)
     state["digital_run_work_dir"] = run_work_dir
 
-    upstream_sdc = os.path.join(workflow_dir, "digital", "constraints", "top.sdc")
-    if not os.path.exists(upstream_sdc):
-        raise RuntimeError("Missing upstream SDC: digital/constraints/top.sdc")
+
+
+    upstream_sdc = _resolve_sdc_from_state(state, workflow_dir)
+    if not upstream_sdc:
+        raise RuntimeError("Missing upstream SDC: no constraints_sdc found in state or prior digital stages.")
+
+    sdc_basename = os.path.basename(upstream_sdc)
 
     inputs_constraints_dir = os.path.join(run_work_dir, "inputs", "constraints")
     _ensure(inputs_constraints_dir)
-    stage_sdc = os.path.join(inputs_constraints_dir, "top.sdc")
+    stage_sdc = os.path.join(inputs_constraints_dir, sdc_basename)
     shutil.copy2(upstream_sdc, stage_sdc)
     sdc_text = open(stage_sdc, "r", encoding="utf-8").read()
 
-    cfg["PNR_SDC_FILE"] = "inputs/constraints/top.sdc"
+    cfg["PNR_SDC_FILE"] = f"inputs/constraints/{sdc_basename}"
 
     inputs_netlist_dir = os.path.join(run_work_dir, "inputs", "netlist")
     stage_netlists = sorted(glob.glob(os.path.join(inputs_netlist_dir, "*.v")))
@@ -160,17 +185,20 @@ docker run --rm \\
         save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", f"{STAGE_NAME}/config.json", json.dumps(cfg, indent=2))
         save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", f"{STAGE_NAME}/run.sh", run_sh)
         save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", f"{STAGE_NAME}/logs/openlane_sta_postplace.log", out)
-        save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", f"{STAGE_NAME}/constraints/top.sdc", sdc_text)
+        save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", f"{STAGE_NAME}/constraints/{sdc_basename}", sdc_text)
         if metrics and os.path.exists(metrics):
             save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", f"{STAGE_NAME}/metrics.json",
                                           open(metrics, "r", encoding="utf-8").read())
     except Exception as e:
         print(f"⚠️ upload failed: {e}")
 
+   
     state.setdefault("digital", {})[STAGE_NAME] = {
         "status": summary["status"],
         "stage_dir": stage_dir,
         "metrics_json": metrics,
         "openlane_run_dir": latest,
+        "constraints_sdc": stage_sdc,
+        "openlane_config": os.path.join(stage_dir, "config.json"),
     }
     return state
