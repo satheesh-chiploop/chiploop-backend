@@ -1004,18 +1004,29 @@ def _validate_and_materialize_rtl(
                 if re.search(rf"\b{re.escape(sig)}\s*<=", top_code) or re.search(rf"\b{re.escape(sig)}\s*=", top_code):
                     issues.append(f"❌ Top module appears to procedurally drive child-owned signal '{sig}'.")
 
-    _stage(f"iverilog_compile_start_{suffix or 'pass1'}")
-    compile_cmd = ["iverilog", "-g2005", "-o", os.path.join(rtl_dir, f"rtl_out{('_' + suffix) if suffix else ''}")] + artifact_list
+        _stage(f"iverilog_compile_start_{suffix or 'pass1'}")
+    compile_cmd = [
+        "iverilog",
+        "-g2005",
+        "-o",
+        os.path.join(rtl_dir, f"rtl_out{('_' + suffix) if suffix else ''}")
+    ] + artifact_list
+
+    iverilog_failed = False
     try:
         cp = subprocess.run(compile_cmd, capture_output=True, text=True, check=False)
         compile_status = (cp.stdout or "") + "\n" + (cp.stderr or "")
         if cp.returncode != 0:
+            iverilog_failed = True
             issues.append("❌ Icarus Verilog compile failed.")
+            _stage(f"iverilog_compile_failed_{suffix or 'pass1'}")
         else:
             _stage(f"iverilog_compile_passed_{suffix or 'pass1'}")
     except Exception as e:
+        iverilog_failed = True
         compile_status = f"Compile invocation failed: {e}"
         issues.append(f"❌ Compile invocation failed: {e}")
+        _stage(f"iverilog_compile_exception_{suffix or 'pass1'}")
 
     with open(compile_log_path, "w", encoding="utf-8") as logf:
         logf.write(compile_status.strip() + "\n")
@@ -1024,8 +1035,7 @@ def _validate_and_materialize_rtl(
             for issue in issues:
                 logf.write(f"{issue}\n")
 
-
-        verilator_ok = False
+    verilator_ok = False
     verilator_log_path = os.path.join(
         rtl_dir,
         "rtl_verilator_lint.log" if not suffix else f"rtl_verilator_lint_{suffix}.log"
@@ -1033,45 +1043,40 @@ def _validate_and_materialize_rtl(
     verilator_output = ""
     verilator_severity = "not_run"
 
-    if "❌ Icarus Verilog compile failed." not in issues and not any("Compile invocation failed" in x for x in issues):
-        _stage(f"running_verilator_lint_{suffix or 'pass1'}")
-        verilator_ok, verilator_log_path, verilator_output = _run_verilator_lint(
-            rtl_dir=rtl_dir,
-            verilog_files=artifact_list,
-            top_module=_top_module_name(spec_json, mode),
-            suffix=suffix,
+    _stage(f"running_verilator_lint_{suffix or 'pass1'}")
+    verilator_ok, verilator_log_path, verilator_output = _run_verilator_lint(
+        rtl_dir=rtl_dir,
+        verilog_files=artifact_list,
+        top_module=_top_module_name(spec_json, mode),
+        suffix=suffix,
+    )
+
+    verilator_severity = _classify_verilator_result(verilator_ok, verilator_output)
+
+    if verilator_severity == "fatal":
+        issues.append("❌ Verilator lint failed.")
+        _append_text(
+            compile_log_path,
+            "\n=== VERILATOR LINT FAILURE ===\n"
+            "Fatal Verilator issues detected. See corresponding rtl_verilator_lint log for details.\n"
         )
+        _stage(f"verilator_lint_fatal_{suffix or 'pass1'}")
 
-        verilator_severity = _classify_verilator_result(verilator_ok, verilator_output)
+    elif verilator_severity == "warning_only":
+        _append_text(
+            compile_log_path,
+            "\n=== VERILATOR LINT WARNINGS ===\n"
+            "Non-fatal Verilator warnings detected.\n"
+        )
+        _stage(f"verilator_lint_warning_only_{suffix or 'pass1'}")
 
-        if verilator_severity == "fatal":
-            issues.append("❌ Verilator lint failed.")
-            _append_text(
-                compile_log_path,
-                "\n=== VERILATOR LINT FAILURE ===\n"
-                "Fatal Verilator issues detected. See corresponding rtl_verilator_lint log for details.\n"
-            )
-            _stage(f"verilator_lint_fatal_{suffix or 'pass1'}")
-
-        elif verilator_severity == "warning_only":
-            _append_text(
-                compile_log_path,
-                "\n=== VERILATOR LINT WARNINGS ===\n"
-                "Non-fatal Verilator warnings detected. Pass preserved; no repair loop required.\n"
-            )
-            _stage(f"verilator_lint_warning_only_{suffix or 'pass1'}")
-
-        else:
-            _append_text(
-                compile_log_path,
-                "\n=== VERILATOR LINT ===\n"
-                "PASS: Verilator lint completed successfully.\n"
-            )
-            _stage(f"verilator_lint_passed_{suffix or 'pass1'}")
     else:
-        with open(verilator_log_path, "w", encoding="utf-8") as vf:
-            vf.write("Skipped Verilator lint because Icarus compile did not pass.\n")
-        verilator_output = "Skipped Verilator lint because Icarus compile did not pass.\n"
+        _append_text(
+            compile_log_path,
+            "\n=== VERILATOR LINT ===\n"
+            "PASS: Verilator lint completed successfully.\n"
+        )
+        _stage(f"verilator_lint_passed_{suffix or 'pass1'}")
 
 
 
@@ -1085,12 +1090,14 @@ def _validate_and_materialize_rtl(
         sf.write(f"Materialized files: {[os.path.basename(p) for p in artifact_list]}\n")
         sf.write(f"Clock ports: {sorted(set(clock_ports))}\n")
         sf.write(f"Reset ports: {sorted(set(reset_ports))}\n")
+        sf.write(f"Icarus compile: {'fail' if iverilog_failed else 'pass'}\n")
         sf.write(f"Verilator lint: {verilator_severity}\n")
         sf.write(f"Issue count: {len(issues)}\n")
         if issues:
             sf.write("\nIssues:\n")
             for issue in issues:
                 sf.write(f"- {issue}\n")
+
 
     return {
         "ok": len(issues) == 0,
