@@ -747,7 +747,7 @@ def _run_verilator_lint(rtl_dir: str, verilog_files: List[str], top_module: str,
         )
 
 
- def _promote_rtl_files_to_root(rtl_dir: str, artifact_list: List[str]) -> List[str]:
+def _promote_rtl_files_to_root(rtl_dir: str, artifact_list: List[str]) -> List[str]:
         promoted = []
         os.makedirs(rtl_dir, exist_ok=True)
 
