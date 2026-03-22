@@ -39,6 +39,15 @@ def _write_text(path: str, content: str) -> None:
         f.write(content)
 
 def _latest_run_dir(run_work_dir: str) -> str | None:
+    runs_dir = os.path.join(run_work_dir, "runs")
+    if not os.path.isdir(runs_dir):
+        return None
+    dirs = [os.path.join(runs_dir, d) for d in os.listdir(runs_dir) if os.path.isdir(os.path.join(runs_dir, d))]
+    if not dirs:
+        return None
+    dirs.sort(key=lambda p: os.path.getmtime(p))
+    return dirs[-1]
+
 
 def _copy_metrics(latest, stage_dir):
     if not latest: return None
@@ -201,7 +210,7 @@ def run_agent(state: dict) -> dict:
     top_module = str(cfg.get("DESIGN_NAME", "")).strip() or "top"
 
     config_path = os.path.join(stage_dir, "config.json")
-    _write(config_path, json.dumps(cfg, indent=2))
+    _write_text(config_path, json.dumps(cfg, indent=2))
 
 
 
@@ -222,14 +231,14 @@ def run_agent(state: dict) -> dict:
 
     run_work_dir = state.get("digital_run_work_dir") or os.path.join(workflow_dir, "digital", "run_work")
     run_work_dir = os.path.abspath(run_work_dir)
-    _ensure(run_work_dir)
+    _ensure_dir(run_work_dir)
     state["digital_run_work_dir"] = run_work_dir
 
     work_stage_dir = os.path.join(run_work_dir, "cts")
-    _ensure(work_stage_dir)
+    _ensure_dir(work_stage_dir)
 
     exec_config_path = os.path.join(work_stage_dir, "config.json")
-    _write(exec_config_path, json.dumps(cfg, indent=2))
+    _write_text(exec_config_path, json.dumps(cfg, indent=2))
 
     # Option A: shared inputs under /work/inputs
 
@@ -280,15 +289,15 @@ docker run --rm \
 
 
     run_sh_path = os.path.join(stage_dir, "run.sh")
-    _write(run_sh_path, run_sh); os.chmod(run_sh_path, 0o755)
+    _write_text(run_sh_path, run_sh); os.chmod(run_sh_path, 0o755)
 
     rc, out = _run(["bash","-lc","./run.sh"], cwd=stage_dir)
     log_path = os.path.join(logs_dir, "openlane_cts.log")
-    _write(log_path, out)
+    _write_text(log_path, out)
 
-    latest = _latest_run(run_work_dir)
-    metrics = _copy_metrics(latest, stage_dir)
-    primary_def = _copy_def(latest, stage_dir)
+    latest = _latest_run_dir(run_work_dir)
+    metrics_path = _copy_metrics(latest, stage_dir)
+    def_path = _copy_def(latest, stage_dir)
 
     summary = {
         "workflow_id": workflow_id,
@@ -305,8 +314,8 @@ docker run --rm \
     }
 
 
-    _write(os.path.join(stage_dir,"cts_summary.json"), json.dumps(summary, indent=2))
-    _write(os.path.join(stage_dir,"cts_summary.md"), f"# CTS\n\n- status: `{summary['status']}` (rc={rc})\n")
+    _write_text(os.path.join(stage_dir,"cts_summary.json"), json.dumps(summary, indent=2))
+    _write_text(os.path.join(stage_dir,"cts_summary.md"), f"# CTS\n\n- status: `{summary['status']}` (rc={rc})\n")
 
     try:
         save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", f"cts/constraints/{sdc_basename}", sdc_text)
@@ -315,10 +324,10 @@ docker run --rm \
         save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "cts/run.sh", run_sh)
         save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "cts/logs/openlane_cts.log", out)
         save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "cts/cts_summary.json", json.dumps(summary, indent=2))
-        if metrics and os.path.exists(metrics):
-            save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "cts/metrics.json", open(metrics,"r",encoding="utf-8").read())
-        if primary_def and os.path.exists(primary_def):
-            save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "cts/primary.def", open(primary_def,"r",encoding="utf-8",errors="ignore").read())
+        if metrics_path and os.path.exists(metrics_path):
+            save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "cts/metrics.json", open(metrics_path,"r",encoding="utf-8").read())
+        if def_path and os.path.exists(def_path):
+            save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "cts/primary.def", open(def_path,"r",encoding="utf-8",errors="ignore").read())
     except Exception as e:
         print(f"⚠️ upload failed: {e}")
 

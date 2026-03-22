@@ -206,6 +206,7 @@ def run_agent(state: dict) -> dict:
         inferred = _infer_top_from_netlist(stage_netlists[0])
     if inferred:
         cfg["DESIGN_NAME"] = inferred
+        state["design_name"] = inferred
 
     top_module = str(cfg.get("DESIGN_NAME", "")).strip() or "top"
     
@@ -325,6 +326,13 @@ docker run --rm \
         save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "place/run.sh", run_sh)
         save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "place/logs/openlane_place.log", out)
         save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "place/place_summary.json", json.dumps(summary, indent=2))
+        save_text_artifact_and_record(
+            workflow_id,
+            AGENT_NAME,
+            "digital",
+            "place/logs/placement_input_resolution.log",
+            input_log,
+        )
         if metrics_path and os.path.exists(metrics_path):
             with open(metrics_path, "r", encoding="utf-8") as f:
                 save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "place/metrics.json", f.read())
