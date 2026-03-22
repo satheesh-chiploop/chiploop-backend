@@ -717,7 +717,6 @@ def _run_verilator_lint(rtl_dir: str, verilog_files: List[str], top_module: str,
             f.write(msg)
         return False, lint_log_path, msg
 
-    # IMPORTANT:
     # When cwd=rtl_dir, pass only basenames (or absolute paths), not rtl_dir-prefixed relative paths.
     verilator_inputs = []
     for vf in verilog_files:
@@ -734,7 +733,10 @@ def _run_verilator_lint(rtl_dir: str, verilog_files: List[str], top_module: str,
         top_module,
     ] + verilator_inputs
 
-    logger.info(f"[RTL DEBUG] running_verilator_lint suffix={suffix or 'pass1'} top={top_module} file_count={len(verilog_files)}")
+    logger.info(
+        f"[RTL DEBUG] running_verilator_lint suffix={suffix or 'pass1'} "
+        f"top={top_module} file_count={len(verilog_files)}"
+    )
     logger.info(f"[RTL DEBUG] verilator_cmd={' '.join(cmd)}")
 
     try:
@@ -745,19 +747,48 @@ def _run_verilator_lint(rtl_dir: str, verilog_files: List[str], top_module: str,
             text=True,
             check=False,
         )
+    except FileNotFoundError:
+        msg = "Verilator executable not found in PATH.\n"
+        with open(lint_log_path, "w", encoding="utf-8") as f:
+            f.write(msg)
+        logger.error("[RTL DEBUG] verilator_not_found")
+        return False, lint_log_path, msg
+    except Exception as e:
+        msg = f"Verilator execution failed: {e}\n"
+        with open(lint_log_path, "w", encoding="utf-8") as f:
+            f.write(msg)
+        logger.error(f"[RTL DEBUG] verilator_exception: {e}")
+        return False, lint_log_path, msg
+
+    combined = ""
+    if proc.stdout:
+        combined += "=== STDOUT ===\n" + proc.stdout + "\n"
+    if proc.stderr:
+        combined += "=== STDERR ===\n" + proc.stderr + "\n"
+    combined += f"=== RETURN CODE ===\n{proc.returncode}\n"
+
+    with open(lint_log_path, "w", encoding="utf-8") as f:
+        f.write(combined)
+
+    if proc.returncode != 0:
+        logger.error(f"[RTL DEBUG] verilator_failed suffix={suffix or 'pass1'} rc={proc.returncode}")
+        return False, lint_log_path, combined
+
+    logger.info(f"[RTL DEBUG] verilator_passed suffix={suffix or 'pass1'}")
+    return True, lint_log_path, combined
 
 
 def _promote_rtl_files_to_root(rtl_dir: str, artifact_list: List[str]) -> List[str]:
-        promoted = []
-        os.makedirs(rtl_dir, exist_ok=True)
+    promoted = []
+    os.makedirs(rtl_dir, exist_ok=True)
 
-        for src in artifact_list:
-            dst = os.path.join(rtl_dir, os.path.basename(src))
-            if os.path.abspath(src) != os.path.abspath(dst):
-                shutil.copyfile(src, dst)
-            promoted.append(dst)
-        return promoted
+    for src in artifact_list:
+        dst = os.path.join(rtl_dir, os.path.basename(src))
+        if os.path.abspath(src) != os.path.abspath(dst):
+            shutil.copyfile(src, dst)
+        promoted.append(dst)
 
+    return promoted
 
 def _validate_and_materialize_rtl(
     llm_output: str,
@@ -840,8 +871,9 @@ def _validate_and_materialize_rtl(
         if name in full_text and name not in spec_text:
             issues.append(f"❌ Invented grouped bus '{name}' found in RTL but not declared in spec.")
 
+
     top_rtl_file = _top_rtl_file(spec_json, mode)
-    top_rtl_path = os.path.join(rtl_dir, top_rtl_file)
+    top_rtl_path = os.path.join(materialize_dir, top_rtl_file)
 
     compile_log_path = os.path.join(rtl_dir, compile_log_name)
     compile_status = "Compile not run yet."
