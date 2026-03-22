@@ -192,6 +192,9 @@ def run_agent(state: dict) -> dict:
         "CHIPLOOP_SOURCE_SPEC_JSON": spec_json_path,
         "CHIPLOOP_FILELIST": filelist_path,
         "CHIPLOOP_UPSTREAM_SDC_SOURCE": sdc_source,
+        # New conservative physical defaults
+        "FP_CORE_UTIL": 20,
+        "PL_TARGET_DENSITY": 0.25,
     }
 
     cfg_path = os.path.join(openlane_dir, "config.json")

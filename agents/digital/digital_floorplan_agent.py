@@ -344,7 +344,7 @@ docker run --rm \
     # ---- Upload text artifacts (DEF is text; ok to upload for small designs) ----
     try:
         save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "floorplan/config.json", json.dumps(cfg, indent=2))
-        save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "floorplan/constraints/{sdc_basename}", sdc_text)
+        save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", f"floorplan/constraints/{sdc_basename}", sdc_text)
         save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "floorplan/run.sh", run_sh)
         save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "floorplan/logs/openlane_floorplan.log", out)
         save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "floorplan/floorplan_summary.json", json.dumps(summary, indent=2))
