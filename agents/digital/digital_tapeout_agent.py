@@ -1,41 +1,68 @@
-import os, json, glob, shutil, subprocess, re
+import os
+import json
+import glob
+import shutil
+import subprocess
+import re
+import logging
+from datetime import datetime
+
 from utils.artifact_utils import save_text_artifact_and_record
+
+logger = logging.getLogger("chiploop")
 
 AGENT_NAME = "Digital Tapeout Agent"
 DEFAULT_PDK_VARIANT = os.getenv("CHIPLOOP_PDK_VARIANT", "sky130A")
 DEFAULT_OPENLANE_IMAGE = os.getenv("CHIPLOOP_OPENLANE_IMAGE", "ghcr.io/efabless/openlane2:2.4.0.dev1")
 DEFAULT_NUM_CORES = int(os.getenv("OPENLANE_NUM_CORES", "2"))
 
-def _ensure(p): os.makedirs(p, exist_ok=True)
 
-def _read_json(p):
+def _ensure_dir(path: str) -> None:
+    os.makedirs(path, exist_ok=True)
+
+
+def _read_json(path: str) -> dict:
     try:
-        with open(p, "r", encoding="utf-8") as f:
+        with open(path, "r", encoding="utf-8") as f:
             return json.load(f)
     except Exception:
         return {}
 
-def _write(p, s):
-    _ensure(os.path.dirname(p))
-    with open(p, "w", encoding="utf-8") as f:
-        f.write(s)
 
-def _run(cmd, cwd):
-    p = subprocess.Popen(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+def _write_text(path: str, content: str) -> None:
+    _ensure_dir(os.path.dirname(path))
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(content)
+
+
+def _run(cmd: list[str], cwd: str) -> tuple[int, str]:
+    p = subprocess.Popen(
+        cmd,
+        cwd=cwd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
     out, _ = p.communicate()
     return p.returncode, out
 
-def _latest_run(run_work_dir):
-    runs = os.path.join(run_work_dir, "runs")
-    if not os.path.isdir(runs):
-        return None
-    ds = [os.path.join(runs, d) for d in os.listdir(runs) if os.path.isdir(os.path.join(runs, d))]
-    if not ds:
-        return None
-    ds.sort(key=lambda x: os.path.getmtime(x))
-    return ds[-1]
 
-def _copy_metrics(latest, stage_dir):
+def _latest_run_dir(run_work_dir: str) -> str | None:
+    runs_dir = os.path.join(run_work_dir, "runs")
+    if not os.path.isdir(runs_dir):
+        return None
+    dirs = [
+        os.path.join(runs_dir, d)
+        for d in os.listdir(runs_dir)
+        if os.path.isdir(os.path.join(runs_dir, d))
+    ]
+    if not dirs:
+        return None
+    dirs.sort(key=lambda p: os.path.getmtime(p))
+    return dirs[-1]
+
+
+def _copy_metrics(latest: str | None, stage_dir: str) -> str | None:
     if not latest:
         return None
     src = os.path.join(latest, "final", "metrics.json")
@@ -45,25 +72,35 @@ def _copy_metrics(latest, stage_dir):
         return dst
     return None
 
-def _pick_gds(latest):
+
+def _pick_gds(latest: str | None) -> tuple[str | None, str | None]:
     if not latest:
         return (None, None)
-    gds = glob.glob(os.path.join(latest, "**", "*.gds"), recursive=True)
-    if not gds:
+
+    gds_files = glob.glob(os.path.join(latest, "**", "*.gds"), recursive=True)
+    if not gds_files:
         return (None, None)
-    kl = None
-    mg = None
-    for p in gds:
-        lp = p.lower()
-        if "klayout" in lp and kl is None:
-            kl = p
-        if "magic" in lp and mg is None:
-            mg = p
-    if kl is None:
-        kl = gds[0]
-    if mg is None and len(gds) > 1:
-        mg = gds[1]
-    return (kl, mg)
+
+    klayout_gds = None
+    magic_gds = None
+
+    for path in gds_files:
+        lp = path.lower()
+        if "klayout" in lp and klayout_gds is None:
+            klayout_gds = path
+        if "magic" in lp and magic_gds is None:
+            magic_gds = path
+
+    if klayout_gds is None:
+        klayout_gds = gds_files[0]
+    if magic_gds is None and len(gds_files) > 1:
+        for cand in gds_files:
+            if cand != klayout_gds:
+                magic_gds = cand
+                break
+
+    return (klayout_gds, magic_gds)
+
 
 def _infer_top_from_netlist(netlist_path: str) -> str | None:
     try:
@@ -73,124 +110,234 @@ def _infer_top_from_netlist(netlist_path: str) -> str | None:
     m = re.search(r'^\s*module\s+([A-Za-z_][A-Za-z0-9_$]*)\s*\(', txt, flags=re.MULTILINE)
     return m.group(1) if m else None
 
+
+def _resolve_sdc_from_state(state: dict, workflow_dir: str) -> str | None:
+    digital = state.get("digital") or {}
+
+    # Prefer latest explicit digital-level propagated SDC
+    cand = digital.get("constraints_sdc")
+    if cand and os.path.exists(cand):
+        logger.info(f"{AGENT_NAME}: selected SDC from state.digital -> {cand}")
+        return cand
+
+    # Prefer later physical stages first
+    for stage in [
+        "lvs",
+        "drc",
+        "fill",
+        "route",
+        "sta_postroute",
+        "sta_postcts",
+        "cts",
+        "place",
+        "floorplan",
+        "impl_setup",
+        "synth",
+    ]:
+        cands = sorted(glob.glob(os.path.join(workflow_dir, "digital", stage, "constraints", "*.sdc")))
+        for cand in cands:
+            if os.path.exists(cand):
+                logger.info(f"{AGENT_NAME}: selected SDC from {stage} -> {cand}")
+                return cand
+
+    legacy = sorted(glob.glob(os.path.join(workflow_dir, "digital", "constraints", "*.sdc")))
+    for cand in legacy:
+        if os.path.exists(cand):
+            logger.info(f"{AGENT_NAME}: selected legacy SDC -> {cand}")
+            return cand
+
+    logger.warning(f"{AGENT_NAME}: no upstream SDC found")
+    return None
+
+
+def _resolve_config_from_state(state: dict, workflow_dir: str) -> str | None:
+    digital = state.get("digital") or {}
+
+    cand = digital.get("openlane_config")
+    if cand and os.path.exists(cand):
+        logger.info(f"{AGENT_NAME}: selected config from state.digital -> {cand}")
+        return cand
+
+    for cand in [
+        os.path.join(workflow_dir, "digital", "lvs", "config.json"),
+        os.path.join(workflow_dir, "digital", "drc", "config.json"),
+        os.path.join(workflow_dir, "digital", "fill", "config.json"),
+        os.path.join(workflow_dir, "digital", "route", "config.json"),
+        os.path.join(workflow_dir, "digital", "cts", "config.json"),
+        os.path.join(workflow_dir, "digital", "place", "config.json"),
+        os.path.join(workflow_dir, "digital", "impl_setup", "openlane", "config.json"),
+        os.path.join(workflow_dir, "digital", "synth", "config.json"),
+        os.path.join(workflow_dir, "digital", "foundry", "openlane", "config.json"),
+    ]:
+        if os.path.exists(cand):
+            logger.info(f"{AGENT_NAME}: selected config fallback -> {cand}")
+            return cand
+
+    logger.warning(f"{AGENT_NAME}: no OpenLane config found")
+    return None
+
+
 def run_agent(state: dict) -> dict:
+    print(f"\n🏁 Running {AGENT_NAME}...")
+    logger.info(f"🏁 Running {AGENT_NAME}")
+
     workflow_id = state.get("workflow_id", "default")
     workflow_dir = state.get("workflow_dir") or f"backend/workflows/{workflow_id}"
     workflow_dir = os.path.abspath(workflow_dir)
 
     stage_dir = os.path.join(workflow_dir, "digital", "tapeout")
     logs_dir = os.path.join(stage_dir, "logs")
+    constraints_dir = os.path.join(stage_dir, "constraints")
+    netlist_dir = os.path.join(stage_dir, "netlist")
     gds_dir = os.path.join(stage_dir, "gds")
-    _ensure(stage_dir); _ensure(logs_dir); _ensure(gds_dir)
 
-    # Base config (same as your original)
-    impl_cfg = os.path.join(workflow_dir, "digital", "foundry", "openlane", "config.json")
-    synth_cfg = os.path.join(workflow_dir, "digital", "synth", "config.json")
-    base_cfg = impl_cfg if os.path.exists(impl_cfg) else synth_cfg
-    if not os.path.exists(base_cfg):
-        raise RuntimeError("Missing config.json (foundry/openlane or synth).")
+    _ensure_dir(stage_dir)
+    _ensure_dir(logs_dir)
+    _ensure_dir(constraints_dir)
+    _ensure_dir(netlist_dir)
+    _ensure_dir(gds_dir)
 
-    cfg = _read_json(base_cfg)
+    upstream_sdc = _resolve_sdc_from_state(state, workflow_dir)
+    if not upstream_sdc:
+        raise RuntimeError("Missing upstream SDC: no constraints_sdc found in state or prior stages.")
+
+    sdc_basename = os.path.basename(upstream_sdc)
+    stage_sdc = os.path.join(constraints_dir, sdc_basename)
+    shutil.copy2(upstream_sdc, stage_sdc)
+    with open(stage_sdc, "r", encoding="utf-8") as f:
+        sdc_text = f.read()
+
+    base_cfg_path = _resolve_config_from_state(state, workflow_dir)
+    if not base_cfg_path:
+        raise RuntimeError("Missing OpenLane config: no config found in state or prior stages.")
+    logger.info(f"{AGENT_NAME}: base_cfg_path={base_cfg_path}")
+
+    cfg = _read_json(base_cfg_path)
     cfg.pop("SYNTH_SDC_FILE", None)
 
-    # --- Option A shared workdir (/work) ---
     run_work_dir = state.get("digital_run_work_dir") or os.path.join(workflow_dir, "digital", "run_work")
     run_work_dir = os.path.abspath(run_work_dir)
-    _ensure(run_work_dir)
+    _ensure_dir(run_work_dir)
     state["digital_run_work_dir"] = run_work_dir
 
-    # Copy SDC into shared inputs + point config there
-    upstream_sdc = os.path.join(workflow_dir, "digital", "constraints", "top.sdc")
-    if not os.path.exists(upstream_sdc):
-        raise RuntimeError("Missing upstream SDC: digital/constraints/top.sdc")
+    inputs_dir = os.path.join(run_work_dir, "inputs")
+    inputs_constraints_dir = os.path.join(inputs_dir, "constraints")
+    inputs_netlist_dir = os.path.join(inputs_dir, "netlist")
+    _ensure_dir(inputs_constraints_dir)
+    _ensure_dir(inputs_netlist_dir)
 
-    inputs_constraints_dir = os.path.join(run_work_dir, "inputs", "constraints")
-    _ensure(inputs_constraints_dir)
-    stage_sdc = os.path.join(inputs_constraints_dir, "top.sdc")
-    shutil.copy2(upstream_sdc, stage_sdc)
-    sdc_text = open(stage_sdc, "r", encoding="utf-8").read()
-    cfg["PNR_SDC_FILE"] = "inputs/constraints/top.sdc"
+    shutil.copy2(stage_sdc, os.path.join(inputs_constraints_dir, sdc_basename))
+    cfg["PNR_SDC_FILE"] = f"inputs/constraints/{sdc_basename}"
 
-    # Explicit netlist list from shared inputs
-    inputs_netlist_dir = os.path.join(run_work_dir, "inputs", "netlist")
-    stage_netlists = sorted(glob.glob(os.path.join(inputs_netlist_dir, "*.v")))
-    if not stage_netlists:
+    upstream_netlists = sorted(glob.glob(os.path.join(inputs_netlist_dir, "*.v")))
+    if not upstream_netlists:
         raise RuntimeError("Tapeout: missing run_work/inputs/netlist/*.v (synth/floorplan should populate it).")
-    cfg["VERILOG_FILES"] = [f"inputs/netlist/{os.path.basename(p)}" for p in stage_netlists]
 
-    # Fix DESIGN_NAME if base config says "top"
+    for nl in upstream_netlists:
+        shutil.copy2(nl, os.path.join(netlist_dir, os.path.basename(nl)))
+
+    stage_netlists_local = sorted(glob.glob(os.path.join(netlist_dir, "*.v")))
+    cfg["VERILOG_FILES"] = [f"inputs/netlist/{os.path.basename(p)}" for p in stage_netlists_local]
+
+    inferred = None
     if str(cfg.get("DESIGN_NAME", "")).strip() in ["", "top"]:
-        inferred = _infer_top_from_netlist(stage_netlists[0])
-        if inferred:
-            cfg["DESIGN_NAME"] = inferred
-            state["design_name"] = inferred
+        inferred = _infer_top_from_netlist(stage_netlists_local[0])
+    if inferred:
+        cfg["DESIGN_NAME"] = inferred
+        state["design_name"] = inferred
 
-    # Write stage contract config (debug/artifacts)
-    _write(os.path.join(stage_dir, "config.json"), json.dumps(cfg, indent=2))
+    top_module = str(cfg.get("DESIGN_NAME", "")).strip() or "top"
 
-    # Shared run_tag (critical for chaining)
-    explicit = state.get("digital_run_tag") or state.get("run_tag")
+    explicit = state.get("run_tag") or state.get("digital_run_tag")
     wf_name = state.get("workflow_name") or state.get("workflow_type") or state.get("flow_name") or "digital"
     run_tag = explicit or f"{wf_name}_{workflow_id}"
     state["digital_run_tag"] = run_tag
 
-    # PDK + image
-    pdk = state.get("pdk_variant") or DEFAULT_PDK_VARIANT
-    image = state.get("openlane_image") or DEFAULT_OPENLANE_IMAGE
+    pdk_variant = state.get("pdk_variant") or DEFAULT_PDK_VARIANT
+    openlane_image = state.get("openlane_image") or DEFAULT_OPENLANE_IMAGE
 
-    # Host PDK mount path
     pdk_root_host = state.get("pdk_root_host") or os.getenv("CHIPLOOP_PDK_ROOT_HOST") or "backend/pdk"
     pdk_root_host = os.path.abspath(pdk_root_host)
     state["pdk_root_host"] = pdk_root_host
 
-    # Write exec config into shared workdir at /work/tapeout/config.json
-    work_stage_dir = os.path.join(run_work_dir, "tapeout")
-    _ensure(work_stage_dir)
-    _write(os.path.join(work_stage_dir, "config.json"), json.dumps(cfg, indent=2))
+    config_path = os.path.join(stage_dir, "config.json")
+    _write_text(config_path, json.dumps(cfg, indent=2))
 
-    # KLayout.StreamOut then Magic.StreamOut then XOR (best-effort)
+    work_stage_dir = os.path.join(run_work_dir, "tapeout")
+    _ensure_dir(work_stage_dir)
+    exec_config_path = os.path.join(work_stage_dir, "config.json")
+    _write_text(exec_config_path, json.dumps(cfg, indent=2))
+
+    input_log = "\n".join([
+        f"[{datetime.utcnow().isoformat()}Z] {AGENT_NAME}",
+        f"workflow_id={workflow_id}",
+        f"workflow_dir={workflow_dir}",
+        f"upstream_sdc={upstream_sdc}",
+        f"sdc_basename={sdc_basename}",
+        f"stage_sdc={stage_sdc}",
+        f"base_cfg_path={base_cfg_path}",
+        f"run_work_dir={run_work_dir}",
+        f"run_tag={run_tag}",
+        f"top_module={top_module}",
+        f"netlist_count={len(stage_netlists_local)}",
+    ]) + "\n"
+    input_log_path = os.path.join(logs_dir, "tapeout_input_resolution.log")
+    _write_text(input_log_path, input_log)
+
     run_sh = f"""#!/usr/bin/env bash
 set -euo pipefail
+
+echo "== ChipLoop: {AGENT_NAME} =="
+echo "PDK_VARIANT={pdk_variant}"
+echo "OPENLANE_IMAGE={openlane_image}"
+echo "WORKDIR=/work"
+
 export OPENLANE_NUM_CORES={DEFAULT_NUM_CORES}
 
 docker run --rm \\
   -v "{pdk_root_host}":/pdk \\
   -v "{run_work_dir}":/work \\
-  -e PDK={pdk} \\
+  -e PDK={pdk_variant} \\
   -e PDK_ROOT=/pdk \\
-  {image} \\
+  {openlane_image} \\
   bash -lc 'set -e; cd /work && openlane --flow Classic --run-tag {run_tag} --to KLayout.StreamOut tapeout/config.json'
 
 docker run --rm \\
   -v "{pdk_root_host}":/pdk \\
   -v "{run_work_dir}":/work \\
-  -e PDK={pdk} \\
+  -e PDK={pdk_variant} \\
   -e PDK_ROOT=/pdk \\
-  {image} \\
+  {openlane_image} \\
   bash -lc 'set -e; cd /work && openlane --flow Classic --run-tag {run_tag} --to Magic.StreamOut tapeout/config.json || true'
 
 docker run --rm \\
   -v "{pdk_root_host}":/pdk \\
   -v "{run_work_dir}":/work \\
-  -e PDK={pdk} \\
+  -e PDK={pdk_variant} \\
   -e PDK_ROOT=/pdk \\
-  {image} \\
+  {openlane_image} \\
   bash -lc 'set -e; cd /work && openlane --flow Classic --run-tag {run_tag} --to KLayout.XOR tapeout/config.json || true'
 """
-    _write(os.path.join(stage_dir, "run.sh"), run_sh)
-    os.chmod(os.path.join(stage_dir, "run.sh"), 0o755)
+    run_sh_path = os.path.join(stage_dir, "run.sh")
+    _write_text(run_sh_path, run_sh)
+    os.chmod(run_sh_path, 0o755)
 
     rc, out = _run(["bash", "-lc", "./run.sh"], cwd=stage_dir)
-    _write(os.path.join(logs_dir, "openlane_tapeout.log"), out)
 
-    latest = _latest_run(run_work_dir)
-    metrics = _copy_metrics(latest, stage_dir)
+    log_path = os.path.join(logs_dir, "openlane_tapeout.log")
+    _write_text(log_path, out)
+
+    latest = _latest_run_dir(run_work_dir)
+    metrics_path = _copy_metrics(latest, stage_dir)
 
     kl_src, mg_src = _pick_gds(latest)
     kl_dst = os.path.join(gds_dir, "klayout.gds") if kl_src else None
     mg_dst = os.path.join(gds_dir, "magic.gds") if mg_src else None
-    if kl_src: shutil.copy2(kl_src, kl_dst)
-    if mg_src: shutil.copy2(mg_src, mg_dst)
+
+    if kl_src and kl_dst:
+        shutil.copy2(kl_src, kl_dst)
+    if mg_src and mg_dst:
+        shutil.copy2(mg_src, mg_dst)
 
     summary = {
         "workflow_id": workflow_id,
@@ -198,36 +345,61 @@ docker run --rm \\
         "status": "ok" if rc == 0 else "failed",
         "return_code": rc,
         "outputs": {
-            "metrics_json": "digital/tapeout/metrics.json" if metrics else None,
+            "sdc": f"digital/tapeout/constraints/{sdc_basename}",
+            "metrics_json": "digital/tapeout/metrics.json" if metrics_path else None,
             "klayout_gds": "digital/tapeout/gds/klayout.gds" if kl_dst else None,
             "magic_gds": "digital/tapeout/gds/magic.gds" if mg_dst else None,
             "log": "digital/tapeout/logs/openlane_tapeout.log",
+            "input_resolution_log": "digital/tapeout/logs/tapeout_input_resolution.log",
             "openlane_run_dir": latest,
         },
     }
-    _write(os.path.join(stage_dir, "tapeout_summary.json"), json.dumps(summary, indent=2))
-    _write(os.path.join(stage_dir, "tapeout_summary.md"),
-           f"# Tapeout\n\n- status: `{summary['status']}` (rc={rc})\n")
+
+    _write_text(os.path.join(stage_dir, "tapeout_summary.json"), json.dumps(summary, indent=2))
+    _write_text(
+        os.path.join(stage_dir, "tapeout_summary.md"),
+        f"# Tapeout\n\n- status: `{summary['status']}` (rc={rc})\n"
+    )
 
     try:
-        save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "tapeout/config.json", json.dumps(cfg, indent=2))
-        save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "tapeout/run.sh", run_sh)
-        save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "tapeout/logs/openlane_tapeout.log", out)
-        save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "tapeout/tapeout_summary.json", json.dumps(summary, indent=2))
-        save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "tapeout/constraints/top.sdc", sdc_text)
-        if metrics and os.path.exists(metrics):
-            save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "tapeout/metrics.json",
-                                          open(metrics, "r", encoding="utf-8").read())
-        # GDS is binary; leaving local only (paths recorded in summary)
+        save_text_artifact_and_record(
+            workflow_id, AGENT_NAME, "digital", "tapeout/config.json", json.dumps(cfg, indent=2)
+        )
+        save_text_artifact_and_record(
+            workflow_id, AGENT_NAME, "digital", f"tapeout/constraints/{sdc_basename}", sdc_text
+        )
+        save_text_artifact_and_record(
+            workflow_id, AGENT_NAME, "digital", "tapeout/run.sh", run_sh
+        )
+        save_text_artifact_and_record(
+            workflow_id, AGENT_NAME, "digital", "tapeout/logs/openlane_tapeout.log", out
+        )
+        save_text_artifact_and_record(
+            workflow_id, AGENT_NAME, "digital", "tapeout/logs/tapeout_input_resolution.log", input_log
+        )
+        save_text_artifact_and_record(
+            workflow_id, AGENT_NAME, "digital", "tapeout/tapeout_summary.json", json.dumps(summary, indent=2)
+        )
+
+        if metrics_path and os.path.exists(metrics_path):
+            with open(metrics_path, "r", encoding="utf-8") as f:
+                save_text_artifact_and_record(
+                    workflow_id, AGENT_NAME, "digital", "tapeout/metrics.json", f.read()
+                )
+        # GDS is binary; keep local and record path in summary/state
     except Exception as e:
-        print(f"⚠️ upload failed: {e}")
+        print(f"⚠️ {AGENT_NAME} upload failed: {e}")
 
     state.setdefault("digital", {})["tapeout"] = {
         "status": summary["status"],
         "stage_dir": stage_dir,
-        "metrics_json": metrics,
+        "metrics_json": metrics_path,
+        "constraints_sdc": stage_sdc,
+        "openlane_config": config_path,
+        "input_resolution_log": input_log_path,
         "gds_klayout": kl_dst,
         "gds_magic": mg_dst,
         "openlane_run_dir": latest,
     }
+
     return state
