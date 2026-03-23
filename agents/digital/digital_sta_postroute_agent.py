@@ -268,7 +268,7 @@ def run_agent(state: dict) -> dict:
 
     sdc_basename = os.path.basename(upstream_sdc)
 
-        inputs_dir = os.path.join(run_work_dir, "inputs")
+    inputs_dir = os.path.join(run_work_dir, "inputs")
     inputs_constraints_dir = os.path.join(inputs_dir, "constraints")
     _ensure_dir(inputs_constraints_dir)
 
