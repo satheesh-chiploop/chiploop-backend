@@ -134,23 +134,32 @@ def _copy_route_netlist(latest, stage_dir):
     shutil.copy2(src, dst)
     return dst
 
-def _resolve_route_input_netlists(state: dict, workflow_dir: str) -> list[str]:
-    digital = state.get("digital") or {}
-    cts_state = digital.get("cts") or {}
 
+def _resolve_route_input_netlists(state: dict, workflow_dir: str) -> list[str]:
+    """
+    Route should start from the logical synthesized netlist,
+    not from physical/signoff netlists like *.nl.v or *.pnl.v.
+    """
     candidates = []
 
-    # Prefer CTS outputs
-    for key in ["cts_netlist", "netlist"]:
-        cand = cts_state.get(key)
-        if cand and os.path.exists(cand):
-            candidates.append(cand)
+    # Strong preference: synth netlist directory
+    synth_dir = os.path.join(workflow_dir, "digital", "synth", "netlist")
 
-    # Fallback: cts/netlist dir
-    cts_dir = os.path.join(workflow_dir, "digital", "cts", "netlist")
-    candidates += sorted(glob.glob(os.path.join(cts_dir, "*.v")))
+    preferred = sorted(glob.glob(os.path.join(synth_dir, "*_synth.v")))
+    if preferred:
+        return preferred
 
-    return candidates
+    fallback = sorted(glob.glob(os.path.join(synth_dir, "*.v")))
+    fallback = [
+        p for p in fallback
+        if not p.endswith(".nl.v") and not p.endswith(".pnl.v")
+    ]
+    if fallback:
+        return fallback
+
+    raise RuntimeError(
+        "Route: no valid synthesized netlist found under digital/synth/netlist"
+    )
 
 def run_agent(state: dict) -> dict:
 
@@ -251,10 +260,24 @@ def run_agent(state: dict) -> dict:
     # CRITICAL: set VERILOG_FILES explicitly
     # --------------------------------------------------
 
+    stage_netlists = [
+        p for p in stage_netlists
+        if not p.endswith(".nl.v") and not p.endswith(".pnl.v")
+    ]
+
+    if not stage_netlists:
+        raise RuntimeError("Route: no valid logical netlists remain after filtering physical netlists")
+
+    logger.info(
+        f"{AGENT_NAME}: filtered route stage netlists -> "
+        f"{[os.path.basename(p) for p in stage_netlists]}"
+    )
+
     cfg["VERILOG_FILES"] = [
         f"inputs/netlist/{os.path.basename(p)}"
         for p in stage_netlists
     ]
+
 
     # Fix DESIGN_NAME if needed
     inferred = None
@@ -298,7 +321,7 @@ def run_agent(state: dict) -> dict:
         f"run_work_dir={run_work_dir}",
         f"run_tag={run_tag}",
         f"top_module={top_module}",
-        f"verilog_files_mode=explicit_from_cts",
+        f"verilog_files_mode=f"explicit_from_synth_only",
         f"verilog_files={','.join(cfg.get('VERILOG_FILES', []))}",
     ]) + "\n"
 
