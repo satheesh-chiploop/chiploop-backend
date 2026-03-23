@@ -136,6 +136,27 @@ def _resolve_config_from_state(state: dict, workflow_dir: str) -> str | None:
     logger.warning(f"{AGENT_NAME}: no OpenLane config found")
     return None
 
+def _copy_cts_netlist(latest, stage_dir):
+    if not latest:
+        return None
+
+    netlist_dir = os.path.join(stage_dir, "netlist")
+    _ensure_dir(netlist_dir)
+
+    cands = []
+    cands += glob.glob(os.path.join(latest, "final", "nl", "*.nl.v"))
+    cands += glob.glob(os.path.join(latest, "final", "nl", "*.v"))
+    cands += glob.glob(os.path.join(latest, "final", "pnl", "*.pnl.v"))
+    cands += glob.glob(os.path.join(latest, "final", "pnl", "*.v"))
+
+    if not cands:
+        return None
+
+    src = cands[0]
+    dst = os.path.join(netlist_dir, os.path.basename(src))
+    shutil.copy2(src, dst)
+    return dst
+
 def run_agent(state: dict) -> dict:
 
     print(f"\n🏁 Running {AGENT_NAME}...")
@@ -295,9 +316,10 @@ docker run --rm \
     log_path = os.path.join(logs_dir, "openlane_cts.log")
     _write_text(log_path, out)
 
-    latest = _latest_run_dir(run_work_dir)
+    latest = _latest_run_dir(work_stage_dir)
     metrics_path = _copy_metrics(latest, stage_dir)
     def_path = _copy_def(latest, stage_dir)
+    cts_netlist_path = _copy_cts_netlist(latest, stage_dir)
 
     summary = {
         "workflow_id": workflow_id,
@@ -308,8 +330,10 @@ docker run --rm \
             "sdc": f"digital/cts/constraints/{sdc_basename}",
             "metrics_json": "digital/cts/metrics.json" if metrics_path else None,
             "primary_def": "digital/cts/primary.def" if def_path else None,
+            "cts_netlist": f"digital/cts/netlist/{os.path.basename(cts_netlist_path)}" if cts_netlist_path else None,
             "log": "digital/cts/logs/openlane_cts.log",
             "openlane_run_dir": latest,
+
         }
     }
 
@@ -340,6 +364,8 @@ docker run --rm \
         "openlane_config": config_path,
         "input_resolution_log": os.path.join(logs_dir, "cts_input_resolution.log"),
         "openlane_run_dir": latest,
+        "cts_netlist": cts_netlist_path,
+        "netlist": cts_netlist_path,
     }
 
     

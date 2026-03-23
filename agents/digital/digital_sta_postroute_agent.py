@@ -62,6 +62,38 @@ def _copy_metrics(latest, stage_dir):
         return dst
     return None
 
+def _copy_first_matching(patterns: list[str], dst_dir: str) -> str | None:
+    _ensure_dir(dst_dir)
+    for pat in patterns:
+        hits = sorted(glob.glob(pat))
+        if hits:
+            src = hits[0]
+            dst = os.path.join(dst_dir, os.path.basename(src))
+            shutil.copy2(src, dst)
+            return dst
+    return None
+
+def _collect_generated_postroute_outputs(latest_run: str, stage_dir: str) -> tuple[str | None, str | None]:
+    if not latest_run:
+        return None, None
+
+    netlist_dir = os.path.join(stage_dir, "netlist")
+    spef_dir = os.path.join(stage_dir, "spef")
+
+    netlist_path = _copy_first_matching([
+        os.path.join(latest_run, "final", "nl", "*.nl.v"),
+        os.path.join(latest_run, "final", "nl", "*.v"),
+        os.path.join(latest_run, "final", "pnl", "*.pnl.v"),
+        os.path.join(latest_run, "final", "pnl", "*.v"),
+    ], netlist_dir)
+
+    spef_path = _copy_first_matching([
+        os.path.join(latest_run, "final", "spef", "*.spef"),
+        os.path.join(latest_run, "final", "spef", "*.spef.gz"),
+    ], spef_dir)
+
+    return netlist_path, spef_path
+
 def _infer_top_from_netlist(netlist_path: str) -> str | None:
     try:
         txt = open(netlist_path, "r", encoding="utf-8", errors="ignore").read()
@@ -166,7 +198,6 @@ def _resolve_postroute_netlist(state: dict, workflow_dir: str) -> str | None:
     candidates.extend([
         os.path.join(workflow_dir, "digital", "route", "netlist", "digital_subsystem_route.v"),
         os.path.join(workflow_dir, "digital", "route", "netlist", "digital_subsystem.v"),
-        os.path.join(workflow_dir, "digital", "cts", "netlist", "digital_subsystem_cts.v"),
     ])
 
     cand = _first_existing(candidates)
@@ -224,6 +255,7 @@ def run_agent(state: dict) -> dict:
 
 
     cfg.pop("SYNTH_SDC_FILE", None)
+    cfg.pop("SPEF_FILE", None)
 
     run_work_dir = state.get("digital_run_work_dir") or os.path.join(workflow_dir, "digital", "run_work")
     run_work_dir = os.path.abspath(run_work_dir)
@@ -293,8 +325,11 @@ def run_agent(state: dict) -> dict:
         shutil.copy2(postroute_spef, staged_postroute_spef)
 
         cfg["SPEF_FILE"] = f"inputs/spef/{os.path.basename(staged_postroute_spef)}"
+        logger.info(f"{AGENT_NAME}: using existing route SPEF -> {staged_postroute_spef}")
+    else:
+        logger.info(f"{AGENT_NAME}: no incoming route SPEF found; STAPostPNR is expected to generate SPEF")
 
-    
+    _write_text(os.path.join(stage_dir, "config.json"), json.dumps(cfg, indent=2))
 
     explicit = state.get("digital_run_tag") or state.get("run_tag")
     wf_name = state.get("workflow_name") or state.get("workflow_type") or state.get("flow_name") or "digital"
@@ -310,7 +345,6 @@ def run_agent(state: dict) -> dict:
 
     work_stage_dir = os.path.join(run_work_dir, STAGE_NAME)
     _ensure_dir(work_stage_dir)
-    _write_text(os.path.join(work_stage_dir, "config.json"), json.dumps(cfg, indent=2))
 
 
 
@@ -357,8 +391,20 @@ docker run --rm \
     rc, out = _run(["bash", "-lc", "./run.sh"], cwd=stage_dir)
     _write_text(os.path.join(logs_dir, "openlane_sta_postroute.log"), out)
 
+
     latest = _latest_run_dir(run_work_dir)
     metrics_path = _copy_metrics(latest, stage_dir)
+    final_postroute_netlist, final_postroute_spef = _collect_generated_postroute_outputs(latest, stage_dir)
+
+    if final_postroute_netlist:
+        logger.info(f"{AGENT_NAME}: collected generated post-route netlist -> {final_postroute_netlist}")
+    else:
+        logger.warning(f"{AGENT_NAME}: no generated post-route netlist found in final run directory")
+
+    if final_postroute_spef:
+        logger.info(f"{AGENT_NAME}: collected generated post-route SPEF -> {final_postroute_spef}")
+    else:
+        logger.warning(f"{AGENT_NAME}: no generated post-route SPEF found in final run directory")
 
     summary = {
         "workflow_id": workflow_id,
@@ -386,6 +432,32 @@ docker run --rm \
         save_text_artifact_and_record(
             workflow_id, AGENT_NAME, "digital", f"{STAGE_NAME}/logs/sta_postroute_input_resolution.log", input_log
         )
+                if final_postroute_netlist and os.path.exists(final_postroute_netlist):
+            save_text_artifact_and_record(
+                workflow_id,
+                AGENT_NAME,
+                "digital",
+                f"{STAGE_NAME}/netlist/{os.path.basename(final_postroute_netlist)}",
+                open(final_postroute_netlist, "r", encoding="utf-8", errors="ignore").read(),
+            )
+
+        if final_postroute_spef and os.path.exists(final_postroute_spef):
+            if final_postroute_spef.endswith(".gz"):
+                save_text_artifact_and_record(
+                    workflow_id,
+                    AGENT_NAME,
+                    "digital",
+                    f"{STAGE_NAME}/spef/{os.path.basename(final_postroute_spef)}",
+                    f"[binary gzip SPEF stored at {final_postroute_spef}]",
+                )
+            else:
+                save_text_artifact_and_record(
+                    workflow_id,
+                    AGENT_NAME,
+                    "digital",
+                    f"{STAGE_NAME}/spef/{os.path.basename(final_postroute_spef)}",
+                    open(final_postroute_spef, "r", encoding="utf-8", errors="ignore").read(),
+                )
         if metrics_path and os.path.exists(metrics_path):
             save_text_artifact_and_record(
                 workflow_id,
@@ -406,9 +478,9 @@ docker run --rm \
         "openlane_config": os.path.join(work_stage_dir, "config.json"),
         "input_resolution_log": os.path.join(logs_dir, "sta_postroute_input_resolution.log"),
         "openlane_run_dir": latest,
-        "netlist": staged_postroute_netlist,
-        "spef": staged_postroute_spef,
+        "netlist": final_postroute_netlist or staged_postroute_netlist,
+        "spef": final_postroute_spef or staged_postroute_spef,
     }
 
-    
+        
     return state
