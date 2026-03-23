@@ -146,31 +146,24 @@ def _resolve_config_from_state(state: dict, workflow_dir: str) -> str | None:
     return None
 
 def _resolve_postcts_netlist(state: dict, workflow_dir: str) -> str | None:
-    digital = state.get("digital") or {}
-    cts_state = digital.get("cts") or {}
+    """
+    STA post-CTS should use the logical synthesized netlist as VERILOG_FILES,
+    not physical CTS netlists like *.nl.v / *.pnl.v.
+    """
+    synth_dir = os.path.join(workflow_dir, "digital", "synth", "netlist")
 
-    candidates = [
-        cts_state.get("netlist"),
-        cts_state.get("final_netlist"),
-        cts_state.get("cts_netlist"),
+    candidates = []
+    candidates += sorted(glob.glob(os.path.join(synth_dir, "*_synth.v")))
+    candidates += [
+        p for p in sorted(glob.glob(os.path.join(synth_dir, "*.v")))
+        if not p.endswith(".nl.v") and not p.endswith(".pnl.v")
     ]
-
-    latest_run = cts_state.get("openlane_run_dir")
-    picked = _pick_stage_netlist(latest_run) if latest_run else None
-    if picked:
-        candidates.append(picked)
-
-    candidates.extend([
-        os.path.join(workflow_dir, "digital", "cts", "netlist", "digital_subsystem_cts.v"),
-        os.path.join(workflow_dir, "digital", "cts", "netlist", "digital_subsystem.v"),
-        os.path.join(workflow_dir, "digital", "synth", "netlist", "digital_subsystem_synth.v"),
-    ])
 
     cand = _first_existing(candidates)
     if cand:
-        logger.info(f"{AGENT_NAME}: selected post-CTS netlist -> {cand}")
+        logger.info(f"{AGENT_NAME}: selected post-CTS logical netlist -> {cand}")
     else:
-        logger.warning(f"{AGENT_NAME}: no CTS netlist found")
+        logger.warning(f"{AGENT_NAME}: no synthesized netlist found for STA post-CTS")
     return cand
 
 def run_agent(state: dict) -> dict:
@@ -232,6 +225,11 @@ def run_agent(state: dict) -> dict:
     if not postcts_netlist:
         raise RuntimeError("STA postcts: missing CTS netlist output.")
 
+    if postcts_netlist.endswith(".nl.v") or postcts_netlist.endswith(".pnl.v"):
+        raise RuntimeError(
+            f"STA postcts: invalid logical netlist selected for VERILOG_FILES: {postcts_netlist}"
+        )
+
     staged_postcts_netlist = os.path.join(inputs_netlist_dir, os.path.basename(postcts_netlist))
     shutil.copy2(postcts_netlist, staged_postcts_netlist)
 
@@ -277,6 +275,7 @@ def run_agent(state: dict) -> dict:
         f"top_module={top_module}",
         f"resolved_postcts_netlist={postcts_netlist}",
         f"staged_postcts_netlist={staged_postcts_netlist}",
+        f"verilog_files_mode=explicit_from_synth_only",
         f"netlist_count=1",
     ]) + "\n"
     _write_text(os.path.join(logs_dir, "sta_postcts_input_resolution.log"), input_log)
