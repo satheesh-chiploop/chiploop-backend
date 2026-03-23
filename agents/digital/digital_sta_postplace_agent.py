@@ -56,7 +56,23 @@ def _infer_top_from_netlist(netlist_path: str) -> str | None:
     m = re.search(r'^\s*module\s+([A-Za-z_][A-Za-z0-9_$]*)\s*\(', txt, flags=re.MULTILINE)
     return m.group(1) if m else None
 
+def _pick_stage_netlist(latest_run: str) -> str | None:
+    if not latest_run:
+        return None
 
+    patterns = [
+        os.path.join(latest_run, "final", "nl", "*.nl.v"),
+        os.path.join(latest_run, "final", "nl", "*.v"),
+        os.path.join(latest_run, "final", "pnl", "*.pnl.v"),
+        os.path.join(latest_run, "final", "pnl", "*.v"),
+    ]
+
+    for pat in patterns:
+        hits = sorted(glob.glob(pat))
+        if hits:
+            return hits[0]
+
+    return None
 
 def _first_existing(paths: list[str]) -> str | None:
     for p in paths:
@@ -124,18 +140,14 @@ def _resolve_postplace_netlist(state: dict, workflow_dir: str) -> str | None:
     ]
 
     latest_run = place_state.get("openlane_run_dir")
-    if latest_run:
-        candidates.extend([
-            os.path.join(latest_run, "final", "nl", "design__pnr.v"),
-            os.path.join(latest_run, "final", "nl", "design__place.v"),
-            os.path.join(latest_run, "final", "nl", "digital_subsystem.place.v"),
-            os.path.join(latest_run, "final", "nl", "digital_subsystem.v"),
-        ])
+    picked = _pick_stage_netlist(latest_run) if latest_run else None
+    if picked:
+        candidates.append(picked)
 
     candidates.extend([
         os.path.join(workflow_dir, "digital", "place", "netlist", "digital_subsystem_place.v"),
         os.path.join(workflow_dir, "digital", "place", "netlist", "digital_subsystem.v"),
-        os.path.join(workflow_dir, "digital", "synth", "netlist", "digital_subsystem_synth.v"),  # last fallback only
+        os.path.join(workflow_dir, "digital", "synth", "netlist", "digital_subsystem_synth.v"),
     ])
 
     cand = _first_existing(candidates)
@@ -181,6 +193,12 @@ def run_agent(state: dict) -> dict:
 
     inputs_netlist_dir = os.path.join(run_work_dir, "inputs", "netlist")
     _ensure(inputs_netlist_dir)
+
+    for old_v in glob.glob(os.path.join(inputs_netlist_dir, "*.v")):
+        try:
+            os.remove(old_v)
+        except Exception:
+            pass
 
     postplace_netlist = _resolve_postplace_netlist(state, workflow_dir)
     if not postplace_netlist:
@@ -270,6 +288,7 @@ docker run --rm \\
         save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", f"{STAGE_NAME}/run.sh", run_sh)
         save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", f"{STAGE_NAME}/logs/openlane_sta_postplace.log", out)
         save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", f"{STAGE_NAME}/constraints/{sdc_basename}", sdc_text)
+        save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", f"{STAGE_NAME}/logs/sta_postplace_input_resolution.log", input_log)
         if metrics and os.path.exists(metrics):
             save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", f"{STAGE_NAME}/metrics.json",
                                           open(metrics, "r", encoding="utf-8").read())

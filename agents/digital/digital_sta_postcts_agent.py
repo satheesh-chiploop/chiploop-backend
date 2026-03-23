@@ -60,6 +60,25 @@ def _copy_metrics(latest, stage_dir):
         return dst
     return None
 
+def _pick_stage_netlist(latest_run: str) -> str | None:
+    if not latest_run:
+        return None
+
+    patterns = [
+        os.path.join(latest_run, "final", "nl", "*.nl.v"),
+        os.path.join(latest_run, "final", "nl", "*.v"),
+        os.path.join(latest_run, "final", "pnl", "*.pnl.v"),
+        os.path.join(latest_run, "final", "pnl", "*.v"),
+    ]
+
+    for pat in patterns:
+        hits = sorted(glob.glob(pat))
+        if hits:
+            logger.info(f"{AGENT_NAME}: selected stage netlist from run dir -> {hits[0]}")
+            return hits[0]
+
+    return None
+
 def _infer_top_from_netlist(netlist_path: str) -> str | None:
     try:
         txt = open(netlist_path, "r", encoding="utf-8", errors="ignore").read()
@@ -126,7 +145,6 @@ def _resolve_config_from_state(state: dict, workflow_dir: str) -> str | None:
     logger.warning(f"{AGENT_NAME}: no OpenLane config found")
     return None
 
-
 def _resolve_postcts_netlist(state: dict, workflow_dir: str) -> str | None:
     digital = state.get("digital") or {}
     cts_state = digital.get("cts") or {}
@@ -138,17 +156,14 @@ def _resolve_postcts_netlist(state: dict, workflow_dir: str) -> str | None:
     ]
 
     latest_run = cts_state.get("openlane_run_dir")
-    if latest_run:
-        candidates.extend([
-            os.path.join(latest_run, "final", "nl", "design__cts.v"),
-            os.path.join(latest_run, "final", "nl", "digital_subsystem.cts.v"),
-            os.path.join(latest_run, "final", "nl", "digital_subsystem.v"),
-        ])
+    picked = _pick_stage_netlist(latest_run) if latest_run else None
+    if picked:
+        candidates.append(picked)
 
     candidates.extend([
         os.path.join(workflow_dir, "digital", "cts", "netlist", "digital_subsystem_cts.v"),
         os.path.join(workflow_dir, "digital", "cts", "netlist", "digital_subsystem.v"),
-        os.path.join(workflow_dir, "digital", "synth", "netlist", "digital_subsystem_synth.v"),  # last fallback only
+        os.path.join(workflow_dir, "digital", "synth", "netlist", "digital_subsystem_synth.v"),
     ])
 
     cand = _first_existing(candidates)
@@ -206,6 +221,12 @@ def run_agent(state: dict) -> dict:
 
     logger.info(f"{AGENT_NAME}: upstream_sdc={upstream_sdc}")
     logger.info(f"{AGENT_NAME}: staged_sdc={stage_sdc}")
+
+    for old_v in glob.glob(os.path.join(inputs_netlist_dir, "*.v")):
+        try:
+            os.remove(old_v)
+        except Exception:
+            pass
 
     postcts_netlist = _resolve_postcts_netlist(state, workflow_dir)
     if not postcts_netlist:

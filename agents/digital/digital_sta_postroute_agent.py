@@ -100,6 +100,25 @@ def _resolve_sdc_from_state(state: dict, workflow_dir: str) -> str | None:
     logger.warning(f"{AGENT_NAME}: no upstream SDC found")
     return None
 
+def _pick_stage_netlist(latest_run: str) -> str | None:
+    if not latest_run:
+        return None
+
+    patterns = [
+        os.path.join(latest_run, "final", "nl", "*.nl.v"),
+        os.path.join(latest_run, "final", "nl", "*.v"),
+        os.path.join(latest_run, "final", "pnl", "*.pnl.v"),
+        os.path.join(latest_run, "final", "pnl", "*.v"),
+    ]
+
+    for pat in patterns:
+        hits = sorted(glob.glob(pat))
+        if hits:
+            logger.info(f"{AGENT_NAME}: selected stage netlist from run dir -> {hits[0]}")
+            return hits[0]
+
+    return None
+
 
 def _resolve_config_from_state(state: dict, workflow_dir: str) -> str | None:
     digital = state.get("digital") or {}
@@ -140,17 +159,14 @@ def _resolve_postroute_netlist(state: dict, workflow_dir: str) -> str | None:
     ]
 
     latest_run = route_state.get("openlane_run_dir")
-    if latest_run:
-        candidates.extend([
-            os.path.join(latest_run, "final", "nl", "design__route.v"),
-            os.path.join(latest_run, "final", "nl", "digital_subsystem.route.v"),
-            os.path.join(latest_run, "final", "nl", "digital_subsystem.v"),
-        ])
+    picked = _pick_stage_netlist(latest_run) if latest_run else None
+    if picked:
+        candidates.append(picked)
 
     candidates.extend([
         os.path.join(workflow_dir, "digital", "route", "netlist", "digital_subsystem_route.v"),
         os.path.join(workflow_dir, "digital", "route", "netlist", "digital_subsystem.v"),
-        os.path.join(workflow_dir, "digital", "cts", "netlist", "digital_subsystem_cts.v"),  # last fallback only
+        os.path.join(workflow_dir, "digital", "cts", "netlist", "digital_subsystem_cts.v"),
     ])
 
     cand = _first_existing(candidates)
@@ -159,7 +175,6 @@ def _resolve_postroute_netlist(state: dict, workflow_dir: str) -> str | None:
     else:
         logger.warning(f"{AGENT_NAME}: no route netlist found")
     return cand
-
 
 def _resolve_postroute_spef(state: dict, workflow_dir: str) -> str | None:
     digital = state.get("digital") or {}
@@ -172,12 +187,14 @@ def _resolve_postroute_spef(state: dict, workflow_dir: str) -> str | None:
     ]
 
     latest_run = route_state.get("openlane_run_dir")
-    if latest_run:
-        candidates.extend(glob.glob(os.path.join(latest_run, "final", "spef", "*.spef")))
-        candidates.extend(glob.glob(os.path.join(latest_run, "final", "spef", "*.spef.gz")))
 
-    candidates.extend(glob.glob(os.path.join(workflow_dir, "digital", "route", "spef", "*.spef")))
-    candidates.extend(glob.glob(os.path.join(workflow_dir, "digital", "route", "spef", "*.spef.gz")))
+    if latest_run:
+        candidates.extend(sorted(glob.glob(os.path.join(latest_run, "final", "spef", "*.spef"))))
+        candidates.extend(sorted(glob.glob(os.path.join(latest_run, "final", "spef", "*.spef.gz"))))
+
+    candidates.extend(sorted(glob.glob(os.path.join(workflow_dir, "digital", "route", "spef", "*.spef"))))
+    candidates.extend(sorted(glob.glob(os.path.join(workflow_dir, "digital", "route", "spef", "*.spef.gz"))))
+
 
     cand = _first_existing(candidates)
     if cand:
@@ -235,6 +252,12 @@ def run_agent(state: dict) -> dict:
     logger.info(f"{AGENT_NAME}: upstream_sdc={upstream_sdc}")
     logger.info(f"{AGENT_NAME}: staged_sdc={stage_sdc}")
 
+    for old_v in glob.glob(os.path.join(inputs_netlist_dir, "*.v")):
+        try:
+            os.remove(old_v)
+        except Exception:
+            pass
+
     postroute_netlist = _resolve_postroute_netlist(state, workflow_dir)
     if not postroute_netlist:
         raise RuntimeError("STA postroute: missing route netlist output.")
@@ -257,13 +280,21 @@ def run_agent(state: dict) -> dict:
     postroute_spef = _resolve_postroute_spef(state, workflow_dir)
     staged_postroute_spef = None
     if postroute_spef:
-        staged_postroute_spef = os.path.join(run_work_dir, "inputs", "spef", os.path.basename(postroute_spef))
-        _ensure_dir(os.path.dirname(staged_postroute_spef))
+        inputs_spef_dir = os.path.join(run_work_dir, "inputs", "spef")
+        _ensure_dir(inputs_spef_dir)
+
+        for old_spef in glob.glob(os.path.join(inputs_spef_dir, "*")):
+            try:
+                os.remove(old_spef)
+            except Exception:
+                pass
+
+        staged_postroute_spef = os.path.join(inputs_spef_dir, os.path.basename(postroute_spef))
         shutil.copy2(postroute_spef, staged_postroute_spef)
 
-    # Use the same key pattern your other OpenLane/OpenSTA setup expects.
-    # Keep this if your environment already supports parasitic injection this way.
-        cfg["SPEF_FILE"] = [f"inputs/spef/{os.path.basename(staged_postroute_spef)}"]
+        cfg["SPEF_FILE"] = f"inputs/spef/{os.path.basename(staged_postroute_spef)}"
+
+    
 
     explicit = state.get("digital_run_tag") or state.get("run_tag")
     wf_name = state.get("workflow_name") or state.get("workflow_type") or state.get("flow_name") or "digital"

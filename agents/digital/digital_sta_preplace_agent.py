@@ -112,29 +112,7 @@ def _resolve_config_from_state(state: dict, workflow_dir: str) -> str | None:
     logger.warning(f"{AGENT_NAME}: no OpenLane config found")
     return None
 
-def _resolve_netlists_from_state(state: dict, workflow_dir: str) -> list[str]:
-    digital = state.get("digital") or {}
-    synth = digital.get("synth") or {}
 
-    xs = synth.get("rtl_files")
-    if isinstance(xs, list):
-        ys = [p for p in xs if p and os.path.exists(p)]
-        if ys:
-            logger.info(f"{AGENT_NAME}: using RTL/netlists from state.digital.synth.rtl_files")
-            return ys
-
-    xs = sorted(glob.glob(os.path.join(workflow_dir, "digital", "synth", "netlist", "*.v")))
-    if xs:
-        logger.info(f"{AGENT_NAME}: using netlists from digital/synth/netlist")
-        return xs
-
-    xs = sorted(glob.glob(os.path.join(workflow_dir, "digital", "synth", "**", "*.v"), recursive=True))
-    if xs:
-        logger.info(f"{AGENT_NAME}: using recursive synth netlist fallback")
-        return xs
-
-    logger.warning(f"{AGENT_NAME}: no synthesized netlists found")
-    return []
 
 
 def _first_existing(paths: list[str]) -> str | None:
@@ -235,7 +213,11 @@ def run_agent(state: dict) -> dict:
     logger.info(f"{AGENT_NAME}: upstream_sdc={upstream_sdc}")
     logger.info(f"{AGENT_NAME}: staged_sdc={stage_sdc}")
 
-
+    for old_v in glob.glob(os.path.join(inputs_netlist_dir, "*.v")):
+        try:
+            os.remove(old_v)
+        except Exception:
+            pass
 
     preplace_netlist = _resolve_preplace_netlist(state, workflow_dir)
     if not preplace_netlist:
