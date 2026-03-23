@@ -68,14 +68,27 @@ def _infer_top_from_netlist(netlist_path: str) -> str | None:
     m = re.search(r'^\s*module\s+([A-Za-z_][A-Za-z0-9_$]*)\s*\(', txt, flags=re.MULTILINE)
     return m.group(1) if m else None
 
+def _first_existing(paths: list[str]) -> str | None:
+    for p in paths:
+        if p and os.path.exists(p):
+            return p
+    return None
+
+
 def _resolve_sdc_from_state(state: dict, workflow_dir: str) -> str | None:
     digital = state.get("digital") or {}
+    cts_state = digital.get("cts") or {}
 
-    cand = digital.get("constraints_sdc")
-    if cand and os.path.exists(cand):
-        logger.info(f"{AGENT_NAME}: selected SDC from state.digital -> {cand}")
+    # Prefer CTS-owned SDC first
+    cand = _first_existing([
+        cts_state.get("constraints_sdc"),
+        os.path.join(workflow_dir, "digital", "cts", "constraints", "digital_subsystem.sdc"),
+    ])
+    if cand:
+        logger.info(f"{AGENT_NAME}: selected CTS SDC -> {cand}")
         return cand
 
+    # Then safe fallbacks
     for stage in ["cts", "place", "floorplan", "impl_setup", "synth"]:
         cand_dir = os.path.join(workflow_dir, "digital", stage, "constraints")
         for cand in sorted(glob.glob(os.path.join(cand_dir, "*.sdc"))):
@@ -83,27 +96,24 @@ def _resolve_sdc_from_state(state: dict, workflow_dir: str) -> str | None:
                 logger.info(f"{AGENT_NAME}: selected SDC from {stage} -> {cand}")
                 return cand
 
-    legacy_dir = os.path.join(workflow_dir, "digital", "constraints")
-    for cand in sorted(glob.glob(os.path.join(legacy_dir, "*.sdc"))):
-        if os.path.exists(cand):
-            logger.info(f"{AGENT_NAME}: selected legacy SDC -> {cand}")
-            return cand
-
     logger.warning(f"{AGENT_NAME}: no upstream SDC found")
     return None
 
 
 def _resolve_config_from_state(state: dict, workflow_dir: str) -> str | None:
     digital = state.get("digital") or {}
+    cts_state = digital.get("cts") or {}
 
-    for key in ["openlane_config", "config_json"]:
-        cand = digital.get(key)
-        if cand and os.path.exists(cand):
-            logger.info(f"{AGENT_NAME}: selected config from state.digital[{key}] -> {cand}")
-            return cand
+    cand = _first_existing([
+        cts_state.get("openlane_config"),
+        cts_state.get("config_json"),
+        os.path.join(workflow_dir, "digital", "cts", "config.json"),
+    ])
+    if cand:
+        logger.info(f"{AGENT_NAME}: selected CTS config -> {cand}")
+        return cand
 
     for cand in [
-        os.path.join(workflow_dir, "digital", "cts", "config.json"),
         os.path.join(workflow_dir, "digital", "place", "config.json"),
         os.path.join(workflow_dir, "digital", "impl_setup", "openlane", "config.json"),
         os.path.join(workflow_dir, "digital", "synth", "config.json"),
@@ -115,6 +125,38 @@ def _resolve_config_from_state(state: dict, workflow_dir: str) -> str | None:
 
     logger.warning(f"{AGENT_NAME}: no OpenLane config found")
     return None
+
+
+def _resolve_postcts_netlist(state: dict, workflow_dir: str) -> str | None:
+    digital = state.get("digital") or {}
+    cts_state = digital.get("cts") or {}
+
+    candidates = [
+        cts_state.get("netlist"),
+        cts_state.get("final_netlist"),
+        cts_state.get("cts_netlist"),
+    ]
+
+    latest_run = cts_state.get("openlane_run_dir")
+    if latest_run:
+        candidates.extend([
+            os.path.join(latest_run, "final", "nl", "design__cts.v"),
+            os.path.join(latest_run, "final", "nl", "digital_subsystem.cts.v"),
+            os.path.join(latest_run, "final", "nl", "digital_subsystem.v"),
+        ])
+
+    candidates.extend([
+        os.path.join(workflow_dir, "digital", "cts", "netlist", "digital_subsystem_cts.v"),
+        os.path.join(workflow_dir, "digital", "cts", "netlist", "digital_subsystem.v"),
+        os.path.join(workflow_dir, "digital", "synth", "netlist", "digital_subsystem_synth.v"),  # last fallback only
+    ])
+
+    cand = _first_existing(candidates)
+    if cand:
+        logger.info(f"{AGENT_NAME}: selected post-CTS netlist -> {cand}")
+    else:
+        logger.warning(f"{AGENT_NAME}: no CTS netlist found")
+    return cand
 
 def run_agent(state: dict) -> dict:
     print(f"\n🏁 Running {AGENT_NAME}...")
@@ -165,14 +207,17 @@ def run_agent(state: dict) -> dict:
     logger.info(f"{AGENT_NAME}: upstream_sdc={upstream_sdc}")
     logger.info(f"{AGENT_NAME}: staged_sdc={stage_sdc}")
 
-    inputs_netlist_dir = os.path.join(run_work_dir, "inputs", "netlist")
-    stage_netlists = sorted(glob.glob(os.path.join(inputs_netlist_dir, "*.v")))
-    if not stage_netlists:
-        raise RuntimeError("STA postcts: missing run_work/inputs/netlist/*.v.")
-    cfg["VERILOG_FILES"] = [f"inputs/netlist/{os.path.basename(p)}" for p in stage_netlists]
+    postcts_netlist = _resolve_postcts_netlist(state, workflow_dir)
+    if not postcts_netlist:
+        raise RuntimeError("STA postcts: missing CTS netlist output.")
+
+    staged_postcts_netlist = os.path.join(inputs_netlist_dir, os.path.basename(postcts_netlist))
+    shutil.copy2(postcts_netlist, staged_postcts_netlist)
+
+    cfg["VERILOG_FILES"] = [f"inputs/netlist/{os.path.basename(staged_postcts_netlist)}"]
 
     if str(cfg.get("DESIGN_NAME", "")).strip() in ["", "top"]:
-        inferred = _infer_top_from_netlist(stage_netlists[0])
+        inferred = _infer_top_from_netlist(staged_postcts_netlist)
         if inferred:
             cfg["DESIGN_NAME"] = inferred
             state["design_name"] = inferred
@@ -209,7 +254,9 @@ def run_agent(state: dict) -> dict:
         f"run_work_dir={run_work_dir}",
         f"run_tag={run_tag}",
         f"top_module={top_module}",
-        f"netlist_count={len(stage_netlists)}",
+        f"resolved_postcts_netlist={postcts_netlist}",
+        f"staged_postcts_netlist={staged_postcts_netlist}",
+        f"netlist_count=1",
     ]) + "\n"
     _write_text(os.path.join(logs_dir, "sta_postcts_input_resolution.log"), input_log)
 
@@ -288,7 +335,8 @@ docker run --rm \
         "openlane_config": os.path.join(work_stage_dir, "config.json"),
         "input_resolution_log": os.path.join(logs_dir, "sta_postcts_input_resolution.log"),
         "openlane_run_dir": latest,
+        "netlist": staged_postcts_netlist,
     }
 
-    
+        
     return state
