@@ -321,7 +321,7 @@ def run_agent(state: dict) -> dict:
         f"run_work_dir={run_work_dir}",
         f"run_tag={run_tag}",
         f"top_module={top_module}",
-        f"verilog_files_mode=f"explicit_from_synth_only",
+        f"verilog_files_mode=explicit_from_synth_only",
         f"verilog_files={','.join(cfg.get('VERILOG_FILES', []))}",
     ]) + "\n"
 
