@@ -432,7 +432,7 @@ docker run --rm \
         save_text_artifact_and_record(
             workflow_id, AGENT_NAME, "digital", f"{STAGE_NAME}/logs/sta_postroute_input_resolution.log", input_log
         )
-                if final_postroute_netlist and os.path.exists(final_postroute_netlist):
+        if final_postroute_netlist and os.path.exists(final_postroute_netlist):
             save_text_artifact_and_record(
                 workflow_id,
                 AGENT_NAME,
