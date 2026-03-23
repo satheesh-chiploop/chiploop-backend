@@ -165,11 +165,6 @@ def run_agent(state: dict) -> dict:
 
 
     # Explicit netlist list from shared inputs (Option A)
-    inputs_netlist_dir = os.path.join(run_work_dir, "inputs", "netlist")
-    stage_netlists = sorted(glob.glob(os.path.join(inputs_netlist_dir, "*.v")))
-    if not stage_netlists:
-        raise RuntimeError("Route: missing run_work/inputs/netlist/*.v (synth/floorplan should populate it).")
-
     inputs_dir = os.path.join(run_work_dir, "inputs")
     inputs_constraints_dir = os.path.join(inputs_dir, "constraints")
     inputs_netlist_dir = os.path.join(inputs_dir, "netlist")
@@ -178,9 +173,13 @@ def run_agent(state: dict) -> dict:
     _ensure_dir(inputs_netlist_dir)
     shutil.copy2(stage_sdc, os.path.join(inputs_constraints_dir, sdc_basename))
 
-    cfg["VERILOG_FILES"] = [f"inputs/netlist/{os.path.basename(p)}" for p in stage_netlists]
 
     # Match Placement behavior: fix DESIGN_NAME if base config says "top"
+
+    stage_netlists = sorted(glob.glob(os.path.join(inputs_netlist_dir, "*.v")))
+    if not stage_netlists:
+        raise RuntimeError("Route: missing run_work/inputs/netlist/*.v (synth/floorplan should populate it).")
+
     inferred = None
     if str(cfg.get("DESIGN_NAME", "")).strip() in ["", "top"]:
         inferred = _infer_top_from_netlist(stage_netlists[0])
@@ -189,6 +188,19 @@ def run_agent(state: dict) -> dict:
         state["design_name"] = inferred
 
     top_module = str(cfg.get("DESIGN_NAME", "")).strip() or "top"
+
+    # Prefer synthesized top netlist over original RTL top if both exist.
+    synth_top_name = f"{top_module}_synth.v"
+    rtl_top_name = f"{top_module}.v"
+    basenames = [os.path.basename(p) for p in stage_netlists]
+
+    if synth_top_name in basenames and rtl_top_name in basenames:
+        logger.info(
+            f"{AGENT_NAME}: filtering duplicate top definition; keeping {synth_top_name}, removing {rtl_top_name}"
+        )
+        stage_netlists = [p for p in stage_netlists if os.path.basename(p) != rtl_top_name]
+
+    cfg["VERILOG_FILES"] = [f"inputs/netlist/{os.path.basename(p)}" for p in stage_netlists]
 
     # Write stage contract config (optional but fine)
     _write_text(os.path.join(stage_dir, "config.json"), json.dumps(cfg, indent=2))
@@ -211,6 +223,8 @@ def run_agent(state: dict) -> dict:
     _ensure_dir(work_stage_dir)
     _write_text(os.path.join(work_stage_dir, "config.json"), json.dumps(cfg, indent=2))
 
+    staged_netlist_basenames = [os.path.basename(p) for p in stage_netlists]
+    logger.info(f"{AGENT_NAME}: staged_netlists={staged_netlist_basenames}")
 
     input_log = "\n".join([
         f"[{datetime.utcnow().isoformat()}Z] {AGENT_NAME}",
@@ -224,7 +238,11 @@ def run_agent(state: dict) -> dict:
         f"run_tag={run_tag}",
         f"top_module={top_module}",
         f"netlist_count={len(stage_netlists)}",
+        f"netlists={','.join(staged_netlist_basenames)}",
     ]) + "\n"
+
+
+    
 
     _write_text(os.path.join(logs_dir, "route_input_resolution.log"), input_log)
 
@@ -258,18 +276,34 @@ docker run --rm \
     metrics_path =_copy_metrics(latest, stage_dir)
     def_path=_copy_def(latest, stage_dir)
 
-    summary={"workflow_id":workflow_id,"agent":AGENT_NAME,"status":"ok" if rc==0 else "failed","return_code":rc,
-             "outputs": {
-                "sdc": f"digital/route/constraints/{sdc_basename}",
-                "metrics_json": "digital/route/metrics.json" if metrics else None,
-                "primary_def": "digital/route/primary.def" if primary_def else None,
-                "log": "digital/route/logs/openlane_route.log",
-                "openlane_run_dir": latest}}
-    _write_text(os.path.join(stage_dir,"route_summary.json"), json.dumps(summary, indent=2))
-    _write_text(os.path.join(stage_dir,"route_summary.md"), f"# Route\n\n- status: `{summary['status']}` (rc={rc})\n")
+    summary = {
+        "workflow_id": workflow_id,
+        "agent": AGENT_NAME,
+        "status": "ok" if rc == 0 else "failed",
+        "return_code": rc,
+        "outputs": {
+            "sdc": f"digital/route/constraints/{sdc_basename}",
+            "metrics_json": "digital/route/metrics.json" if metrics_path else None,
+            "primary_def": "digital/route/primary.def" if def_path else None,
+            "log": "digital/route/logs/openlane_route.log",
+            "openlane_run_dir": latest,
+        },
+    }
+
+    _write_text(os.path.join(stage_dir, "route_summary.json"), json.dumps(summary, indent=2))
+    _write_text(
+        os.path.join(stage_dir, "route_summary.md"),
+        f"# Route\n\n- status: `{summary['status']}` (rc={rc})\n",
+    )
 
     try:
-        save_text_artifact_and_record(workflow_id,AGENT_NAME,"digital","route/config.json", json.dumps(cfg, indent=2))
+        save_text_artifact_and_record(
+            workflow_id,
+            AGENT_NAME,
+            "digital",
+            "route/config.json",
+            json.dumps(cfg, indent=2),
+        )
         save_text_artifact_and_record(
             workflow_id,
             AGENT_NAME,
@@ -284,15 +318,45 @@ docker run --rm \
             "route/logs/route_input_resolution.log",
             input_log,
         )
-        save_text_artifact_and_record(workflow_id,AGENT_NAME,"digital","route/run.sh", run_sh)
-        save_text_artifact_and_record(workflow_id,AGENT_NAME,"digital","route/logs/openlane_route.log", out)
-        save_text_artifact_and_record(workflow_id,AGENT_NAME,"digital","route/route_summary.json", json.dumps(summary, indent=2))
+        save_text_artifact_and_record(
+            workflow_id,
+            AGENT_NAME,
+            "digital",
+            "route/run.sh",
+            run_sh,
+        )
+        save_text_artifact_and_record(
+            workflow_id,
+            AGENT_NAME,
+            "digital",
+            "route/logs/openlane_route.log",
+            out,
+        )
+        save_text_artifact_and_record(
+            workflow_id,
+            AGENT_NAME,
+            "digital",
+            "route/route_summary.json",
+            json.dumps(summary, indent=2),
+        )
         if metrics_path and os.path.exists(metrics_path):
-            save_text_artifact_and_record(workflow_id,AGENT_NAME,"digital","route/metrics.json", open(metrics_path,"r",encoding="utf-8").read())
+            save_text_artifact_and_record(
+                workflow_id,
+                AGENT_NAME,
+                "digital",
+                "route/metrics.json",
+                open(metrics_path, "r", encoding="utf-8").read(),
+            )
         if def_path and os.path.exists(def_path):
-            save_text_artifact_and_record(workflow_id,AGENT_NAME,"digital","route/primary.def", open(def_path,"r",encoding="utf-8",errors="ignore").read())
+            save_text_artifact_and_record(
+                workflow_id,
+                AGENT_NAME,
+                "digital",
+                "route/primary.def",
+                open(def_path, "r", encoding="utf-8", errors="ignore").read(),
+            )
     except Exception as e:
-        print(f"⚠️ upload failed: {e}")
+        logger.exception(f"{AGENT_NAME}: artifact upload failed: {e}")
 
     state.setdefault("digital", {})["route"] = {
         "status": summary["status"],
@@ -305,5 +369,6 @@ docker run --rm \
         "openlane_run_dir": latest,
     }
 
-    
     return state
+    
+   
