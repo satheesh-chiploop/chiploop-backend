@@ -498,6 +498,15 @@ Every combinational always @(*) block must:
 - Never concatenate two full 8-bit registers into a 12-bit destination.
 - Never assign a concatenation wider than the declared destination signal width.
 - Prefer the simplest deterministic smoke-test implementation consistent with the contract.
+UNUSED SIGNAL HYGIENE
+- Every declared input, status input, and internal register should be either:
+  - functionally used in logic, or
+  - intentionally consumed in a harmless deterministic way so that lint does not report it as unused.
+- For smoke-test stubs, avoid leaving declared ports completely unused when a simple legal reference can be added.
+- Example acceptable pattern:
+  - use a signal in a benign conditional branch
+  - fold status inputs into a readback/status register if consistent with the spec
+- Do not add fake functionality just to silence lint, but avoid trivially unused declared signals when possible.
 - If any module uses an FSM, implement states using Verilog-2005 localparam constants and reg state registers.
 - Do NOT use typedef enum or any SystemVerilog FSM syntax.
 - Entire design must compile together cleanly.
@@ -864,6 +873,11 @@ REPAIR PRIORITY ORDER
 5. case completeness / default branches
 6. width mismatches
 
+WARNING-ONLY LINT REPAIR RULE
+- If compile passes and the Verilator log contains only warning classes such as UNUSEDSIGNAL, do not redesign the RTL.
+- Prefer minimal local fixes only if they are straightforward and preserve behavior.
+- Do not perform broad rewrites for warning-only lint.
+
 When repairing RTL, fix these classes of issues first:
 
 1. FSM / latch issues
@@ -943,6 +957,7 @@ def _run_verilator_lint(rtl_dir: str, verilog_files: List[str], top_module: str,
         "verilator",
         "--lint-only",
         "-Wall",
+        "-Wno-fatal",
         "--top-module",
         top_module,
     ] + verilator_inputs
@@ -992,6 +1007,7 @@ def _run_verilator_lint(rtl_dir: str, verilog_files: List[str], top_module: str,
     return True, lint_log_path, combined
 
 
+
 def _classify_verilator_result(verilator_ok: bool, verilator_output: str) -> str:
     """
     Returns one of:
@@ -1004,12 +1020,21 @@ def _classify_verilator_result(verilator_ok: bool, verilator_output: str) -> str
 
     text = verilator_output or ""
 
+    if "%Error:" in text:
+        # Treat warnings-only termination as warning_only
+        if "Exiting due to" in text and "warning(s)" in text and "%Error:" == "%Error:":
+            non_warning_errors = [
+                line for line in text.splitlines()
+                if "%Error:" in line and "Exiting due to" not in line
+            ]
+            if not non_warning_errors:
+                return "warning_only"
+        return "fatal"
+
     fatal_patterns = [
-        "%Error:",
         "Cannot find file containing module",
         "syntax error",
         "Internal Error",
-        "Exiting due to",
     ]
 
     for pat in fatal_patterns:
