@@ -134,6 +134,24 @@ def _copy_route_netlist(latest, stage_dir):
     shutil.copy2(src, dst)
     return dst
 
+def _resolve_route_input_netlists(state: dict, workflow_dir: str) -> list[str]:
+    digital = state.get("digital") or {}
+    cts_state = digital.get("cts") or {}
+
+    candidates = []
+
+    # Prefer CTS outputs
+    for key in ["cts_netlist", "netlist"]:
+        cand = cts_state.get(key)
+        if cand and os.path.exists(cand):
+            candidates.append(cand)
+
+    # Fallback: cts/netlist dir
+    cts_dir = os.path.join(workflow_dir, "digital", "cts", "netlist")
+    candidates += sorted(glob.glob(os.path.join(cts_dir, "*.v")))
+
+    return candidates
+
 def run_agent(state: dict) -> dict:
 
     print(f"\n🏁 Running {AGENT_NAME}...")
@@ -185,22 +203,68 @@ def run_agent(state: dict) -> dict:
     cfg["PNR_SDC_FILE"] = f"inputs/constraints/{sdc_basename}"
 
 
-        # Option A: resumed stage should only stage constraints, not rebuild VERILOG_FILES
+    # --------------------------------------------------
+    # NETLIST STAGING (FIX — same pattern as CTS)
+    # --------------------------------------------------
+
+    route_netlists = _resolve_route_input_netlists(state, workflow_dir)
+    if not route_netlists:
+        raise RuntimeError("Route: missing CTS netlist output")
+
+    netlist_dir = os.path.join(stage_dir, "netlist")
+    _ensure_dir(netlist_dir)
+
+    # Copy to stage_dir
+    for nl in route_netlists:
+        shutil.copy2(nl, os.path.join(netlist_dir, os.path.basename(nl)))
+
+    stage_netlists = sorted(glob.glob(os.path.join(netlist_dir, "*.v")))
+    if not stage_netlists:
+        raise RuntimeError("Route: no staged netlists found")
+
+    # --------------------------------------------------
+    # SHARED INPUTS (same as CTS)
+    # --------------------------------------------------
+
     inputs_dir = os.path.join(run_work_dir, "inputs")
+    inputs_netlist_dir = os.path.join(inputs_dir, "netlist")
     inputs_constraints_dir = os.path.join(inputs_dir, "constraints")
+
+    _ensure_dir(inputs_netlist_dir)
     _ensure_dir(inputs_constraints_dir)
+
+    # Clean old netlists (IMPORTANT)
+    for old in glob.glob(os.path.join(inputs_netlist_dir, "*.v")):
+        try:
+            os.remove(old)
+        except Exception:
+            pass
+
+    # Copy netlists into shared inputs
+    for nl in stage_netlists:
+        shutil.copy2(nl, os.path.join(inputs_netlist_dir, os.path.basename(nl)))
+
+    # Copy SDC
     shutil.copy2(stage_sdc, os.path.join(inputs_constraints_dir, sdc_basename))
 
-    # For resumed route, keep inherited DESIGN_NAME / VERILOG_FILES lineage from upstream config.
-    # Do not read shared inputs/netlist and do not overwrite VERILOG_FILES here.
+    # --------------------------------------------------
+    # CRITICAL: set VERILOG_FILES explicitly
+    # --------------------------------------------------
 
-    top_module = str(cfg.get("DESIGN_NAME", "")).strip() or state.get("design_name") or "top"
+    cfg["VERILOG_FILES"] = [
+        f"inputs/netlist/{os.path.basename(p)}"
+        for p in stage_netlists
+    ]
+
+    # Fix DESIGN_NAME if needed
+    inferred = None
     if str(cfg.get("DESIGN_NAME", "")).strip() in ["", "top"]:
-        state_design_name = state.get("design_name")
-        if state_design_name:
-            cfg["DESIGN_NAME"] = state_design_name
-            top_module = state_design_name
+        inferred = _infer_top_from_netlist(stage_netlists[0])
+    if inferred:
+        cfg["DESIGN_NAME"] = inferred
+        state["design_name"] = inferred
 
+    top_module = str(cfg.get("DESIGN_NAME", "")).strip() or "top"
     # Write stage contract config
     _write_text(os.path.join(stage_dir, "config.json"), json.dumps(cfg, indent=2))
     
@@ -222,12 +286,7 @@ def run_agent(state: dict) -> dict:
     _write_text(os.path.join(work_stage_dir, "config.json"), json.dumps(cfg, indent=2))
 
 
-    inherited_verilog_files = cfg.get("VERILOG_FILES", [])
-    if isinstance(inherited_verilog_files, str):
-        inherited_verilog_files = [inherited_verilog_files]
-
-    logger.info(f"{AGENT_NAME}: inherited_verilog_files={inherited_verilog_files}")
-
+ 
     input_log = "\n".join([
         f"[{datetime.utcnow().isoformat()}Z] {AGENT_NAME}",
         f"workflow_id={workflow_id}",
@@ -239,8 +298,8 @@ def run_agent(state: dict) -> dict:
         f"run_work_dir={run_work_dir}",
         f"run_tag={run_tag}",
         f"top_module={top_module}",
-        f"verilog_files_mode=inherited_from_base_config",
-        f"verilog_files={','.join(inherited_verilog_files)}",
+        f"verilog_files_mode=explicit_from_cts",
+        f"verilog_files={','.join(cfg.get('VERILOG_FILES', []))}",
     ]) + "\n"
 
     
@@ -374,19 +433,7 @@ docker run --rm \
         "netlist": route_netlist_path,
     }
 
-    state.setdefault("digital", {})["route"] = {
-        "status": summary["status"],
-        "stage_dir": stage_dir,
-        "metrics_json": metrics_path,
-        "primary_def": def_path,
-        "constraints_sdc": stage_sdc,
-        "openlane_config": os.path.join(work_stage_dir, "config.json"),
-        "input_resolution_log": os.path.join(logs_dir, "route_input_resolution.log"),
-        "openlane_run_dir": latest,
-        "route_netlist": route_netlist_path,
-        "netlist": route_netlist_path,
-    }
-
+    
     return state
     
    
