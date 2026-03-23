@@ -268,11 +268,9 @@ def run_agent(state: dict) -> dict:
 
     sdc_basename = os.path.basename(upstream_sdc)
 
-    inputs_dir = os.path.join(run_work_dir, "inputs")
+        inputs_dir = os.path.join(run_work_dir, "inputs")
     inputs_constraints_dir = os.path.join(inputs_dir, "constraints")
-    inputs_netlist_dir = os.path.join(inputs_dir, "netlist")
     _ensure_dir(inputs_constraints_dir)
-    _ensure_dir(inputs_netlist_dir)
 
     stage_sdc = os.path.join(inputs_constraints_dir, sdc_basename)
     shutil.copy2(upstream_sdc, stage_sdc)
@@ -284,30 +282,20 @@ def run_agent(state: dict) -> dict:
     logger.info(f"{AGENT_NAME}: upstream_sdc={upstream_sdc}")
     logger.info(f"{AGENT_NAME}: staged_sdc={stage_sdc}")
 
-    for old_v in glob.glob(os.path.join(inputs_netlist_dir, "*.v")):
-        try:
-            os.remove(old_v)
-        except Exception:
-            pass
+    # Option A: resumed STA post-route should not restage route netlist into inputs/netlist
+    # and should not overwrite VERILOG_FILES. Keep inherited config lineage.
 
     postroute_netlist = _resolve_postroute_netlist(state, workflow_dir)
     if not postroute_netlist:
-        raise RuntimeError("STA postroute: missing route netlist output.")
-
-    staged_postroute_netlist = os.path.join(inputs_netlist_dir, os.path.basename(postroute_netlist))
-    shutil.copy2(postroute_netlist, staged_postroute_netlist)
-
-    cfg["VERILOG_FILES"] = [f"inputs/netlist/{os.path.basename(staged_postroute_netlist)}"]
+        logger.warning(f"{AGENT_NAME}: route netlist artifact not found; continuing with inherited run context")
 
     if str(cfg.get("DESIGN_NAME", "")).strip() in ["", "top"]:
-        inferred = _infer_top_from_netlist(staged_postroute_netlist)
-        if inferred:
-            cfg["DESIGN_NAME"] = inferred
-            state["design_name"] = inferred
+        state_design_name = state.get("design_name")
+        if state_design_name:
+            cfg["DESIGN_NAME"] = state_design_name
 
-    top_module = str(cfg.get("DESIGN_NAME", "")).strip() or "top"
-
-    _write_text(os.path.join(stage_dir, "config.json"), json.dumps(cfg, indent=2))
+    top_module = str(cfg.get("DESIGN_NAME", "")).strip() or state.get("design_name") or "top"
+    staged_postroute_netlist = None
 
     postroute_spef = _resolve_postroute_spef(state, workflow_dir)
     staged_postroute_spef = None
@@ -343,10 +331,17 @@ def run_agent(state: dict) -> dict:
     pdk_root_host = os.path.abspath(pdk_root_host)
     state["pdk_root_host"] = pdk_root_host
 
+
+
     work_stage_dir = os.path.join(run_work_dir, STAGE_NAME)
     _ensure_dir(work_stage_dir)
+    _write_text(os.path.join(work_stage_dir, "config.json"), json.dumps(cfg, indent=2))
 
 
+
+    inherited_verilog_files = cfg.get("VERILOG_FILES", [])
+    if isinstance(inherited_verilog_files, str):
+        inherited_verilog_files = [inherited_verilog_files]
 
     input_log = "\n".join([
         f"[{datetime.utcnow().isoformat()}Z] {AGENT_NAME}",
@@ -359,11 +354,12 @@ def run_agent(state: dict) -> dict:
         f"run_work_dir={run_work_dir}",
         f"run_tag={run_tag}",
         f"top_module={top_module}",
+        f"verilog_files_mode=inherited_from_base_config",
+        f"verilog_files={','.join(inherited_verilog_files)}",
         f"resolved_postroute_netlist={postroute_netlist}",
-        f"staged_postroute_netlist={staged_postroute_netlist}",
+        f"staged_postroute_netlist=None",
         f"resolved_postroute_spef={postroute_spef}",
         f"staged_postroute_spef={staged_postroute_spef}",
-        f"netlist_count=1",
     ]) + "\n"
     _write_text(os.path.join(logs_dir, "sta_postroute_input_resolution.log"), input_log)
 
@@ -392,7 +388,7 @@ docker run --rm \
     _write_text(os.path.join(logs_dir, "openlane_sta_postroute.log"), out)
 
 
-    latest = _latest_run_dir(run_work_dir)
+    latest = _latest_run_dir(work_stage_dir)
     metrics_path = _copy_metrics(latest, stage_dir)
     final_postroute_netlist, final_postroute_spef = _collect_generated_postroute_outputs(latest, stage_dir)
 
@@ -478,9 +474,12 @@ docker run --rm \
         "openlane_config": os.path.join(work_stage_dir, "config.json"),
         "input_resolution_log": os.path.join(logs_dir, "sta_postroute_input_resolution.log"),
         "openlane_run_dir": latest,
-        "netlist": final_postroute_netlist or staged_postroute_netlist,
+        "netlist": final_postroute_netlist or postroute_netlist,
+        "final_netlist": final_postroute_netlist or postroute_netlist,
         "spef": final_postroute_spef or staged_postroute_spef,
+        "final_spef": final_postroute_spef or staged_postroute_spef,
     }
 
+   
         
     return state

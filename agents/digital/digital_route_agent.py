@@ -185,47 +185,24 @@ def run_agent(state: dict) -> dict:
     cfg["PNR_SDC_FILE"] = f"inputs/constraints/{sdc_basename}"
 
 
-    # Explicit netlist list from shared inputs (Option A)
+        # Option A: resumed stage should only stage constraints, not rebuild VERILOG_FILES
     inputs_dir = os.path.join(run_work_dir, "inputs")
     inputs_constraints_dir = os.path.join(inputs_dir, "constraints")
-    inputs_netlist_dir = os.path.join(inputs_dir, "netlist")
-
     _ensure_dir(inputs_constraints_dir)
-    _ensure_dir(inputs_netlist_dir)
     shutil.copy2(stage_sdc, os.path.join(inputs_constraints_dir, sdc_basename))
 
+    # For resumed route, keep inherited DESIGN_NAME / VERILOG_FILES lineage from upstream config.
+    # Do not read shared inputs/netlist and do not overwrite VERILOG_FILES here.
 
-    # Match Placement behavior: fix DESIGN_NAME if base config says "top"
-
-    stage_netlists = sorted(glob.glob(os.path.join(inputs_netlist_dir, "*.v")))
-    if not stage_netlists:
-        raise RuntimeError("Route: missing run_work/inputs/netlist/*.v (synth/floorplan should populate it).")
-
-    inferred = None
+    top_module = str(cfg.get("DESIGN_NAME", "")).strip() or state.get("design_name") or "top"
     if str(cfg.get("DESIGN_NAME", "")).strip() in ["", "top"]:
-        inferred = _infer_top_from_netlist(stage_netlists[0])
-    if inferred:
-        cfg["DESIGN_NAME"] = inferred
-        state["design_name"] = inferred
+        state_design_name = state.get("design_name")
+        if state_design_name:
+            cfg["DESIGN_NAME"] = state_design_name
+            top_module = state_design_name
 
-    top_module = str(cfg.get("DESIGN_NAME", "")).strip() or "top"
-
-    # Prefer synthesized top netlist over original RTL top if both exist.
-    synth_top_name = f"{top_module}_synth.v"
-    rtl_top_name = f"{top_module}.v"
-    basenames = [os.path.basename(p) for p in stage_netlists]
-
-    if synth_top_name in basenames and rtl_top_name in basenames:
-        logger.info(
-            f"{AGENT_NAME}: filtering duplicate top definition; keeping {synth_top_name}, removing {rtl_top_name}"
-        )
-        stage_netlists = [p for p in stage_netlists if os.path.basename(p) != rtl_top_name]
-
-    cfg["VERILOG_FILES"] = [f"inputs/netlist/{os.path.basename(p)}" for p in stage_netlists]
-
-    # Write stage contract config (optional but fine)
+    # Write stage contract config
     _write_text(os.path.join(stage_dir, "config.json"), json.dumps(cfg, indent=2))
-
     
 
     pdk=state.get("pdk_variant") or DEFAULT_PDK_VARIANT
@@ -244,8 +221,12 @@ def run_agent(state: dict) -> dict:
     _ensure_dir(work_stage_dir)
     _write_text(os.path.join(work_stage_dir, "config.json"), json.dumps(cfg, indent=2))
 
-    staged_netlist_basenames = [os.path.basename(p) for p in stage_netlists]
-    logger.info(f"{AGENT_NAME}: staged_netlists={staged_netlist_basenames}")
+
+    inherited_verilog_files = cfg.get("VERILOG_FILES", [])
+    if isinstance(inherited_verilog_files, str):
+        inherited_verilog_files = [inherited_verilog_files]
+
+    logger.info(f"{AGENT_NAME}: inherited_verilog_files={inherited_verilog_files}")
 
     input_log = "\n".join([
         f"[{datetime.utcnow().isoformat()}Z] {AGENT_NAME}",
@@ -258,13 +239,11 @@ def run_agent(state: dict) -> dict:
         f"run_work_dir={run_work_dir}",
         f"run_tag={run_tag}",
         f"top_module={top_module}",
-        f"netlist_count={len(stage_netlists)}",
-        f"netlists={','.join(staged_netlist_basenames)}",
+        f"verilog_files_mode=inherited_from_base_config",
+        f"verilog_files={','.join(inherited_verilog_files)}",
     ]) + "\n"
 
-
     
-
     _write_text(os.path.join(logs_dir, "route_input_resolution.log"), input_log)
 
     run_sh = f"""#!/usr/bin/env bash
@@ -380,6 +359,20 @@ docker run --rm \
             )
     except Exception as e:
         logger.exception(f"{AGENT_NAME}: artifact upload failed: {e}")
+
+    state.setdefault("digital", {})["route"] = {
+        "status": summary["status"],
+        "stage_dir": stage_dir,
+        "metrics_json": metrics_path,
+        "primary_def": def_path,
+        "constraints_sdc": stage_sdc,
+        "openlane_config": os.path.join(work_stage_dir, "config.json"),
+        "input_resolution_log": os.path.join(logs_dir, "route_input_resolution.log"),
+        "openlane_run_dir": latest,
+        "route_netlist": route_netlist_path,
+        "final_netlist": route_netlist_path,
+        "netlist": route_netlist_path,
+    }
 
     state.setdefault("digital", {})["route"] = {
         "status": summary["status"],
