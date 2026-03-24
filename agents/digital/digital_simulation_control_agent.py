@@ -234,11 +234,31 @@ def main():
 if __name__ == "__main__":
     main()
 '''
-
+def _gen_simulation_manifest(
+    top: str,
+    spec_path: str,
+    rtl_files: List[str],
+    default_tests: List[str],
+    tb_root: str,
+) -> Dict[str, Any]:
+    return {
+        "type": "vv_simulation_manifest",
+        "version": "1.0",
+        "top_module": top,
+        "spec_path": spec_path,
+        "rtl_files": rtl_files,
+        "default_tests": default_tests,
+        "runner": os.path.join(tb_root, "run_regression.py"),
+        "makefile": os.path.join(tb_root, "Makefile"),
+        "testcases_json": os.path.join(tb_root, "testcases.json"),
+        "tb_contract_json": os.path.join(tb_root, "tb_contract.json"),
+        "reports_dir": os.path.join(tb_root, "reports"),
+        "simulator": "verilator",
+    }
 
 def run_agent(state: dict) -> dict:
-    agent_name = "Simulation Control Agent"
-    print("\n🎛️ Running Simulation Control Agent...")
+    agent_name = "Digital Simulation Control Agent"
+    print("\n🎛️ Running Digital Simulation Control Agent...")
 
     workflow_id = state.get("workflow_id", "default")
     workflow_dir = state.get("workflow_dir", f"backend/workflows/{workflow_id}")
@@ -263,6 +283,25 @@ def run_agent(state: dict) -> dict:
     runner_py = _gen_regression_runner(top, default_tests)
     _write_file(os.path.join(tb_root, "run_regression.py"), runner_py)
 
+    sim_manifest = _gen_simulation_manifest(
+        top=top,
+        spec_path=spec_path,
+        rtl_files=rtl_files,
+        default_tests=default_tests,
+        tb_root=tb_root,
+    )
+    sim_manifest_txt = json.dumps(sim_manifest, indent=2)
+    sim_manifest_path = os.path.join(tb_root, "simulation_manifest.json")
+    _write_file(sim_manifest_path, sim_manifest_txt)
+
+    artifacts["simulation_manifest"] = _record_text(
+        workflow_id,
+        agent_name,
+        "vv/tb",
+        "simulation_manifest.json",
+        sim_manifest_txt,
+    )
+
 
     readme = """# Simulation Control
 
@@ -286,18 +325,25 @@ python run_regression.py --tests smoke_test constrained_random_sanity --seeds 1 
 
     report = {
         "type": "vv_simulation_control_generation",
-        "version": "1.0",
+        "version": "1.1",
         "top_module": top,
         "spec_path": spec_path,
         "rtl_file_count": len(rtl_files),
-        "tools_detected": {"verilator": bool(_which("verilator")), "make": bool(_which("make"))},
+        "default_tests": default_tests,
+        "simulation_manifest_json": sim_manifest_path,
+        "tools_detected": {
+            "verilator": bool(_which("verilator")),
+            "make": bool(_which("make"))
+        },
         "artifacts": artifacts,
     }
 
+    
     rep_txt = json.dumps(report, indent=2)
     _write_file(os.path.join(tb_root, "sim_control_generation_report.json"), rep_txt)
     artifacts["report"] = _record_text(workflow_id, agent_name, "vv/tb", "sim_control_generation_report.json", rep_txt)
 
     state.setdefault("vv", {})
     state["vv"]["sim_control"] = report
+    state["simulation_manifest_json"] = sim_manifest_path
     return state
