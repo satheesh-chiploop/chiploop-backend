@@ -665,18 +665,7 @@ EXTRA_ARGS    += --trace --trace-structs
 
 include rtl_sources.mk
 
-COCOTB_MAKEFILES := $(shell cocotb-config --makefiles 2>/dev/null)
-
-ifeq ($(strip $(COCOTB_MAKEFILES)),)
-COCOTB_MAKEFILES := $(shell $(PYTHON_BIN) - <<'PY'
-try:
-    import cocotb_tools.config as c
-    print(c.lib_name("makefiles"))
-except Exception:
-    pass
-PY
-)
-endif
+COCOTB_MAKEFILES := $(shell $(PYTHON_BIN) -c "import cocotb_tools.config as c; print(c.lib_name('makefiles'))" 2>/dev/null)
 
 ifeq ($(strip $(COCOTB_MAKEFILES)),)
 $(error Neither cocotb-config nor python resolution of cocotb makefiles is available. Please install/activate cocotb in this runtime before running make)
