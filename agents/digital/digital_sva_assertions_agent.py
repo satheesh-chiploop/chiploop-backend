@@ -1,7 +1,20 @@
-import os
+"""
+ChipLoop Verification & Validation - Digital SVA Assertions Agent
+
+Design goals:
+- spec_json / digital_spec_json is the primary source of truth
+- no hardcoded DUT signal names in the generated scaffold
+- support both digital-only and future system/SoC runs
+- log decisions to backend logger and persistent artifact log
+- generate lightweight, simulation-friendly SVA collateral
+"""
+
 import json
+import logging
+import os
+import re
 from datetime import datetime
-from typing import Any, Dict, Optional, List
+from typing import Any, Dict, List, Optional, Tuple
 
 from utils.artifact_utils import save_text_artifact_and_record
 
@@ -11,77 +24,455 @@ except Exception:
     OpenAI = None
 
 client_openai = OpenAI() if OpenAI else None
+logger = logging.getLogger("chiploop")
 
 
-def _log(log_path: str, msg: str) -> None:
-    print(msg)
-    with open(log_path, "a", encoding="utf-8") as f:
-        f.write(f"[{datetime.now().isoformat()}] {msg}\n")
+def _now() -> str:
+    return datetime.now().isoformat()
 
 
-def _find_spec_json(workflow_dir: str, state: dict) -> Optional[Dict[str, Any]]:
-    if isinstance(state.get("spec_json"), dict):
-        return state["spec_json"]
+def _log(path: str, msg: str, level: str = "info") -> None:
+    if level == "error":
+        logger.error(msg)
+    elif level == "warning":
+        logger.warning(msg)
+    else:
+        logger.info(msg)
 
-    p = state.get("spec_json")
-    if isinstance(p, str) and p.endswith(".json") and os.path.exists(p):
-        return json.load(open(p, "r", encoding="utf-8"))
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(f"[{_now()}] [{level.upper()}] {msg}\n")
+
+
+def _log_kv(path: str, key: str, value: Any, level: str = "info") -> None:
+    try:
+        rendered = json.dumps(value, indent=2, default=str)
+    except Exception:
+        rendered = str(value)
+    _log(path, f"{key}={rendered}", level=level)
+
+
+def _safe_read_json(path: Optional[str]) -> Dict[str, Any]:
+    try:
+        if path and isinstance(path, str) and os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as f:
+                obj = json.load(f)
+                if isinstance(obj, dict):
+                    return obj
+    except Exception:
+        pass
+    return {}
+
+
+def _ensure_dirs(workflow_id: str, workflow_dir: str) -> Tuple[str, str]:
+    os.makedirs(workflow_dir, exist_ok=True)
+    os.makedirs("artifact", exist_ok=True)
+    return workflow_id, workflow_dir
+
+
+def _record_text(
+    workflow_id: str,
+    agent_name: str,
+    subdir: str,
+    filename: str,
+    content: str,
+) -> Optional[str]:
+    try:
+        return save_text_artifact_and_record(
+            workflow_id=workflow_id,
+            agent_name=agent_name,
+            subdir=subdir,
+            filename=filename,
+            content=content,
+        )
+    except Exception:
+        return None
+
+
+def _write_file(path: str, content: str) -> None:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(content)
+
+
+def _collect_rtl_files(workflow_dir: str) -> List[str]:
+    exts = (".v", ".sv", ".vh", ".svh")
+    rtl: List[str] = []
+    for root, _, files in os.walk(workflow_dir):
+        for fn in files:
+            if fn.lower().endswith(exts):
+                rtl.append(os.path.join(root, fn))
+    return sorted({os.path.abspath(p) for p in rtl})
+
+
+def _find_fallback_spec_json(workflow_dir: str) -> Optional[str]:
+    preferred: List[str] = []
+    fallback: List[str] = []
 
     for root, _, files in os.walk(workflow_dir):
         for fn in files:
-            if fn.endswith(".json") and "spec" in fn.lower():
-                try:
-                    return json.load(open(os.path.join(root, fn), "r", encoding="utf-8"))
-                except Exception:
-                    pass
+            if not fn.endswith(".json"):
+                continue
+            if not fn.endswith("_spec.json") and "spec" not in fn.lower():
+                continue
+
+            path = os.path.join(root, fn)
+            norm = path.replace("\\", "/").lower()
+            if "/digital/" in norm:
+                preferred.append(path)
+            elif "/analog/" in norm:
+                continue
+            else:
+                fallback.append(path)
+
+    if preferred:
+        preferred.sort()
+        return preferred[0]
+    if fallback:
+        fallback.sort()
+        return fallback[0]
     return None
 
 
-def _default_sva_module(module_name: str = "chiploop_assertions") -> str:
-    return f"""\
-/*
- * Auto-generated SVA scaffold (generic).
- * Intended for simulation/regression. Customize per interface/protocol.
+def _pick_top_module(spec: Dict[str, Any], rtl_files: List[str], state_top: Optional[str]) -> str:
+    top = (spec.get("top_module") or {}).get("name")
+    if isinstance(top, str) and top.strip():
+        return top.strip()
+
+    hierarchy = spec.get("hierarchy") or {}
+    top2 = hierarchy.get("top_module")
+    if isinstance(top2, dict):
+        nm = top2.get("name")
+        if isinstance(nm, str) and nm.strip():
+            return nm.strip()
+    elif isinstance(top2, str) and top2.strip():
+        return top2.strip()
+
+    if state_top and isinstance(state_top, str) and state_top.strip():
+        return state_top.strip()
+
+    mod_re = re.compile(r"^\s*module\s+([a-zA-Z_][a-zA-Z0-9_$]*)\b")
+    for f in rtl_files:
+        try:
+            with open(f, "r", encoding="utf-8", errors="ignore") as fh:
+                for line in fh:
+                    m = mod_re.match(line)
+                    if m:
+                        return m.group(1)
+        except Exception:
+            continue
+
+    return "top"
+
+
+def _ports_from_spec(spec: Dict[str, Any]) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+
+    tm = spec.get("top_module") or {}
+    ports = tm.get("ports")
+    if isinstance(ports, list) and ports:
+        return [dict(p) for p in ports if isinstance(p, dict) and p.get("name")]
+
+    hierarchy = spec.get("hierarchy") or {}
+    htop = hierarchy.get("top_module")
+    if isinstance(htop, dict):
+        ports = htop.get("ports")
+        if isinstance(ports, list) and ports:
+            return [dict(p) for p in ports if isinstance(p, dict) and p.get("name")]
+
+    ports = spec.get("ports")
+    if isinstance(ports, list) and ports:
+        return [dict(p) for p in ports if isinstance(p, dict) and p.get("name")]
+
+    io = spec.get("io")
+    if isinstance(io, dict):
+        for dkey, direction in [("inputs", "input"), ("outputs", "output"), ("inouts", "inout")]:
+            arr = io.get(dkey)
+            if isinstance(arr, list):
+                for p in arr:
+                    if isinstance(p, dict) and p.get("name"):
+                        q = dict(p)
+                        q.setdefault("direction", direction)
+                        out.append(q)
+
+    return out
+
+
+def _normalize_direction(value: Any) -> str:
+    s = str(value or "").strip().lower()
+    if s in ("input", "in", "i"):
+        return "input"
+    if s in ("output", "out", "o"):
+        return "output"
+    if s in ("inout", "io"):
+        return "inout"
+    return s
+
+
+def _infer_clocks_resets(spec: Dict[str, Any], ports: List[Dict[str, Any]]) -> Tuple[List[str], List[Dict[str, Any]]]:
+    clocks: List[str] = []
+    resets: List[Dict[str, Any]] = []
+
+    clk_spec = spec.get("clocks") or (spec.get("clocking") or {}).get("clocks")
+    if isinstance(clk_spec, list):
+        for c in clk_spec:
+            if isinstance(c, dict) and c.get("name"):
+                clocks.append(str(c["name"]))
+            elif isinstance(c, str):
+                clocks.append(c)
+
+    rst_spec = spec.get("resets") or (spec.get("reset") or {})
+    if isinstance(rst_spec, list):
+        for r in rst_spec:
+            if isinstance(r, dict) and r.get("name"):
+                resets.append(dict(r))
+            elif isinstance(r, str):
+                resets.append({"name": r})
+    elif isinstance(rst_spec, dict) and rst_spec.get("name"):
+        resets.append(dict(rst_spec))
+
+    if not clocks:
+        for p in ports:
+            nm = str(p.get("name", ""))
+            if re.search(r"(?:^|_)(clk|clock)(?:$|_)", nm, re.IGNORECASE):
+                clocks.append(nm)
+
+    if not resets:
+        for p in ports:
+            nm = str(p.get("name", ""))
+            if re.search(r"(?:^|_)(rst|reset)(?:$|_)", nm, re.IGNORECASE):
+                resets.append({"name": nm})
+
+    clocks = [c for c in clocks if isinstance(c, str) and c.strip()]
+    clocks = list(dict.fromkeys(clocks))
+
+    norm_resets: List[Dict[str, Any]] = []
+    seen = set()
+    for r in resets:
+        if isinstance(r, dict) and r.get("name"):
+            nm = str(r["name"])
+            if nm in seen:
+                continue
+            seen.add(nm)
+            norm_resets.append(
+                {
+                    "name": nm,
+                    "active_low": bool(
+                        r.get("active_low", False)
+                        or str(r.get("polarity", "")).lower() in ("active_low", "low", "0")
+                    ),
+                    "async": bool(
+                        str(r.get("type", "")).lower() in ("async", "asynchronous")
+                        or r.get("async", False)
+                    ),
+                }
+            )
+    return clocks, norm_resets
+
+
+def _resolve_sva_mode(state: Dict[str, Any]) -> str:
+    if (
+        state.get("soc_top_sim_module")
+        or state.get("soc_top_name")
+        or state.get("system_integration_intent_json")
+        or state.get("soc_top_sim_path")
+    ):
+        return "system"
+    return "digital"
+
+
+def _resolve_sva_contract(state: Dict[str, Any], workflow_dir: str, log_path: str) -> Dict[str, Any]:
+    mode = _resolve_sva_mode(state)
+
+    spec_path = state.get("spec_json") or state.get("digital_spec_json")
+    spec_source = "state"
+    if not spec_path:
+        spec_path = _find_fallback_spec_json(workflow_dir)
+        spec_source = "fallback_scan"
+
+    spec = _safe_read_json(spec_path)
+
+    rtl_files = state.get("rtl_files")
+    rtl_source = "state.rtl_files"
+    if not isinstance(rtl_files, list) or not rtl_files:
+        rtl_files = _collect_rtl_files(workflow_dir)
+        rtl_source = "fallback_scan"
+
+    rtl_files = [os.path.abspath(p) for p in rtl_files if isinstance(p, str)]
+
+    if mode == "system":
+        top = (
+            state.get("soc_top_sim_module")
+            or state.get("soc_top_name")
+            or _pick_top_module(spec, rtl_files, state.get("top_module"))
+        )
+    else:
+        top = state.get("top_module") or _pick_top_module(spec, rtl_files, state.get("top_module"))
+
+    contract = {
+        "mode": mode,
+        "spec_path": spec_path,
+        "spec_source": spec_source,
+        "rtl_files": rtl_files,
+        "rtl_source": rtl_source,
+        "top_module": top,
+        "soc_mode": bool(mode == "system"),
+    }
+
+    _log_kv(
+        log_path,
+        "resolved_contract",
+        {
+            "mode": contract["mode"],
+            "spec_path": contract["spec_path"],
+            "spec_source": contract["spec_source"],
+            "rtl_source": contract["rtl_source"],
+            "rtl_file_count": len(contract["rtl_files"]),
+            "top_module": contract["top_module"],
+            "soc_mode": contract["soc_mode"],
+        },
+    )
+    return contract
+
+
+def _build_sva_spec(spec: Dict[str, Any], top: str, soc_mode: bool = False) -> Dict[str, Any]:
+    ports = [] if soc_mode else _ports_from_spec(spec)
+    clocks, resets = _infer_clocks_resets(spec, ports)
+
+    port_points: List[Dict[str, Any]] = []
+    for p in ports:
+        name = p.get("name")
+        if not name:
+            continue
+        port_points.append(
+            {
+                "name": str(name),
+                "direction": _normalize_direction(p.get("direction")),
+            }
+        )
+
+    return {
+        "top_module": top,
+        "soc_mode": soc_mode,
+        "clock_names": clocks,
+        "reset_signals": resets,
+        "ports": port_points,
+    }
+
+
+def _default_sva_module(module_name: str, sva_spec: Dict[str, Any]) -> str:
+    clocks = list(sva_spec.get("clock_names", []))
+    resets = list(sva_spec.get("reset_signals", []))
+    ports = list(sva_spec.get("ports", []))
+
+    primary_clock = clocks[0] if clocks else None
+    primary_reset = resets[0]["name"] if resets else None
+    primary_reset_active_low = bool(resets[0].get("active_low", False)) if resets else False
+
+    inputs = [p["name"] for p in ports if p.get("direction") == "input"]
+    outputs = [p["name"] for p in ports if p.get("direction") == "output"]
+
+    module_ports: List[str] = []
+    if primary_clock:
+        module_ports.append(f"  input logic {primary_clock}")
+    if primary_reset:
+        module_ports.append(f"  input logic {primary_reset}")
+    for nm in inputs:
+        if nm not in {primary_clock, primary_reset}:
+            module_ports.append(f"  input logic {nm}")
+    for nm in outputs:
+        if nm not in {primary_clock, primary_reset}:
+            module_ports.append(f"  input logic {nm}")
+
+    if not module_ports:
+        module_ports.append("  input logic dummy_clk")
+
+    clocking_expr = primary_clock if primary_clock else "dummy_clk"
+
+    if primary_reset:
+        disable_iff = f"disable iff ({'!' if primary_reset_active_low else ''}{primary_reset})"
+        reset_known_expr = primary_reset
+    else:
+        disable_iff = ""
+        reset_known_expr = None
+
+    prop_blocks: List[str] = []
+
+    if primary_reset and primary_clock:
+        prop_blocks.append(
+            f"""  property p_reset_known;
+    @(posedge {clocking_expr})
+      !$isunknown({reset_known_expr});
+  endproperty
+
+  a_reset_known: assert property(p_reset_known)
+    else $error("Reset signal has X/Z state.");
+"""
+        )
+
+    for nm in outputs[:12]:
+        if not primary_clock:
+            continue
+        if disable_iff:
+            body = f"""  property p_{nm}_known_after_reset;
+    @(posedge {clocking_expr}) {disable_iff}
+      !$isunknown({nm});
+  endproperty
+
+  a_{nm}_known_after_reset: assert property(p_{nm}_known_after_reset)
+    else $error("Signal {nm} has X/Z after reset release.");
+"""
+        else:
+            body = f"""  property p_{nm}_known;
+    @(posedge {clocking_expr})
+      !$isunknown({nm});
+  endproperty
+
+  a_{nm}_known: assert property(p_{nm}_known)
+    else $error("Signal {nm} has X/Z.");
+"""
+        prop_blocks.append(body)
+
+    if not prop_blocks:
+        prop_blocks.append(
+            """  // No clock/reset/output-derived assertions were generated from spec.
+  // Extend this scaffold using only signals declared in spec_json.
+"""
+        )
+
+    joined_ports = ",\n".join(module_ports)
+
+    return f"""/*
+ * Auto-generated SVA scaffold.
+ * Derived from spec_json / digital_spec_json.
+ * No hardcoded design-specific signal assumptions.
  */
 
 module {module_name} (
-  input logic clk,
-  input logic rst_n
+{joined_ports}
 );
 
-  // ----------------------------
-  // Generic reset sanity checks
-  // ----------------------------
-  property p_no_x_on_reset_release;
-    @(posedge clk) disable iff (!rst_n)
-      !$isunknown(rst_n);
-  endproperty
-
-  a_no_x_on_reset_release: assert property(p_no_x_on_reset_release)
-    else $error("Reset has X/Z around release.");
-
-  // ----------------------------
-  // Generic safety scaffold
-  // (Add protocol properties here)
-  // ----------------------------
-
+{''.join(prop_blocks)}
 endmodule
 """
 
 
-def _maybe_llm_expand(spec: Dict[str, Any], sva: str, log_path: str) -> str:
+def _maybe_llm_expand(spec: Dict[str, Any], sva: str, log_path: str, sva_spec: Dict[str, Any]) -> str:
     if not client_openai:
+        _log(log_path, "LLM expansion unavailable; using deterministic scaffold only.", level="warning")
         return sva
 
     try:
         prompt = (
             "You are a senior RTL verification engineer.\n"
-            "Expand this SVA scaffold using ONLY generic, industry-standard properties.\n"
+            "Expand this SVA scaffold conservatively.\n"
             "Constraints:\n"
-            "- Do NOT invent custom signal names.\n"
-            "- If spec contains interface names/signals, you may reference them only if present verbatim.\n"
-            "- Keep it synthesizable? Not required; SVA for simulation is fine.\n"
-            "- Return SystemVerilog code only.\n\n"
+            "- Use ONLY signal names present verbatim in SVA_SPEC or SPEC_JSON.\n"
+            "- Do NOT invent any signal names, buses, protocols, or interfaces.\n"
+            "- Keep the module name and port list intact.\n"
+            "- Prefer simple reset/X-checking and generic safety properties.\n"
+            "- Return SystemVerilog code only. No markdown.\n\n"
+            f"SVA_SPEC:\n{json.dumps(sva_spec, indent=2)}\n\n"
             f"SPEC_JSON:\n{json.dumps(spec, indent=2)}\n\n"
             f"SVA_CODE:\n{sva}\n"
         )
@@ -91,38 +482,127 @@ def _maybe_llm_expand(spec: Dict[str, Any], sva: str, log_path: str) -> str:
                 {"role": "system", "content": "Return code only. No markdown."},
                 {"role": "user", "content": prompt},
             ],
-            temperature=0.2,
+            temperature=0.1,
         )
-        return resp.choices[0].message.content.strip()
+        out = resp.choices[0].message.content.strip()
+        if out:
+            _log(log_path, "LLM expansion completed.")
+            return out
     except Exception as e:
-        _log(log_path, f"LLM expand skipped/failed: {e}")
-        return sva
+        _log(log_path, f"LLM expansion skipped/failed: {e}", level="warning")
+
+    return sva
 
 
 def run_agent(state: dict) -> dict:
-    agent_name = "Assertions (SVA) Agent"
-    print("\n🧪 Running Assertions (SVA) Agent...")
+    agent_name = "Digital Assertions (SVA) Agent"
 
     workflow_id = state.get("workflow_id", "default")
     workflow_dir = state.get("workflow_dir", f"backend/workflows/{workflow_id}")
-    os.makedirs(workflow_dir, exist_ok=True)
-    os.makedirs("artifact", exist_ok=True)
+    _ensure_dirs(workflow_id, workflow_dir)
 
     log_path = os.path.join("artifact", "digital_sva_assertions_agent.log")
     with open(log_path, "w", encoding="utf-8") as f:
-        f.write("Assertions (SVA) Agent Log\n")
+        f.write("Digital Assertions (SVA) Agent Log\n")
 
-    spec = _find_spec_json(workflow_dir, state)
-    if not spec:
-        _log(log_path, "WARNING: No spec JSON found; generating generic SVA only.")
-        spec = {}
+    _log(log_path, f"Starting {agent_name}...")
 
-    sva = _default_sva_module()
-    sva = _maybe_llm_expand(spec, sva, log_path)
+    contract = _resolve_sva_contract(state, workflow_dir, log_path)
+    mode = contract["mode"]
+    spec_path = contract["spec_path"]
+    rtl_files = contract["rtl_files"]
+    top = contract["top_module"]
+    soc_mode = contract["soc_mode"]
 
-    save_text_artifact_and_record(workflow_id, agent_name, "digital", "chiploop_assertions.sv", sva)
-    save_text_artifact_and_record(workflow_id, agent_name, "digital", "digital_sva_assertions_agent.log",
-                                  open(log_path, "r", encoding="utf-8").read())
+    spec = _safe_read_json(spec_path)
+    ports = [] if soc_mode else _ports_from_spec(spec)
+    clocks, resets = _infer_clocks_resets(spec, ports)
+    sva_spec = _build_sva_spec(spec, top, soc_mode=soc_mode)
 
-    state["sva_assertions_path"] = os.path.join(workflow_dir, "digital", "chiploop_assertions.sv")
+    _log(log_path, f"resolved_mode={mode}")
+    _log(log_path, f"spec_path={spec_path}")
+    _log(log_path, f"top_module={top}")
+    _log(log_path, f"rtl_file_count={len(rtl_files)}")
+    _log_kv(log_path, "clock_candidates", clocks)
+    _log_kv(log_path, "reset_candidates", resets)
+    _log_kv(
+        log_path,
+        "sva_ports",
+        {
+            "port_names": [p["name"] for p in sva_spec["ports"]],
+            "input_count": len([p for p in sva_spec["ports"] if p["direction"] == "input"]),
+            "output_count": len([p for p in sva_spec["ports"] if p["direction"] == "output"]),
+        },
+    )
+
+    out_dir = os.path.join(workflow_dir, "vv", "tb")
+    os.makedirs(out_dir, exist_ok=True)
+
+    module_name = f"{top}_assertions"
+    sva_sv = _default_sva_module(module_name, sva_spec)
+    sva_sv = _maybe_llm_expand(spec, sva_sv, log_path, sva_spec)
+
+    bind_readme = f"""# SVA Usage
+
+Generated:
+- `{module_name}.sv` : assertion module derived from spec
+- `sva_spec.json`    : resolved assertion contract
+- `sva_generation_report.json`
+
+Integration options:
+1. Instantiate `{module_name}` manually in the testbench/DUT wrapper.
+2. Add a project-specific bind file later, using only signals declared in spec.
+
+This agent intentionally avoids inventing bind targets or signal names.
+"""
+
+    sva_spec_txt = json.dumps(sva_spec, indent=2)
+
+    _write_file(os.path.join(out_dir, f"{module_name}.sv"), sva_sv)
+    _write_file(os.path.join(out_dir, "sva_spec.json"), sva_spec_txt)
+    _write_file(os.path.join(out_dir, "SVA_README.md"), bind_readme)
+
+    _log(log_path, f"Generated {module_name}.sv")
+    _log(log_path, "Generated sva_spec.json")
+    _log(log_path, "Generated SVA_README.md")
+
+    artifacts: Dict[str, Any] = {}
+    artifacts["sva_sv"] = _record_text(workflow_id, agent_name, "vv/tb", f"{module_name}.sv", sva_sv)
+    artifacts["sva_spec_json"] = _record_text(workflow_id, agent_name, "vv/tb", "sva_spec.json", sva_spec_txt)
+    artifacts["sva_readme"] = _record_text(workflow_id, agent_name, "vv/tb", "SVA_README.md", bind_readme)
+
+    report = {
+        "type": "digital_sva_generation",
+        "version": "1.1",
+        "mode": mode,
+        "top_module": top,
+        "spec_path": spec_path,
+        "rtl_file_count": len(rtl_files),
+        "clock_names": clocks,
+        "reset_names": [r["name"] for r in resets],
+        "generated_dir": "vv/tb",
+        "sva_module_name": module_name,
+        "assertion_output_signals": [p["name"] for p in sva_spec["ports"] if p["direction"] == "output"][:12],
+        "artifacts": artifacts,
+    }
+
+    rep_txt = json.dumps(report, indent=2)
+    _write_file(os.path.join(out_dir, "sva_generation_report.json"), rep_txt)
+    artifacts["report"] = _record_text(workflow_id, agent_name, "vv/tb", "sva_generation_report.json", rep_txt)
+
+    try:
+        with open(log_path, "r", encoding="utf-8") as f:
+            log_text = f.read()
+    except Exception:
+        log_text = ""
+    artifacts["log"] = _record_text(workflow_id, agent_name, "vv", "digital_sva_assertions_agent.log", log_text)
+
+    state.setdefault("vv", {})
+    state["vv"]["sva"] = report
+    state["vv"]["sva_spec"] = sva_spec
+
+    state["sva_assertions_path"] = os.path.join(out_dir, f"{module_name}.sv")
+    state["sva_spec_json"] = os.path.join(out_dir, "sva_spec.json")
+
+    _log(log_path, f"{agent_name} completed successfully.")
     return state

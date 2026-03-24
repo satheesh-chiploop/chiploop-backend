@@ -283,6 +283,8 @@ from agents.digital.digital_drc_agent import run_agent as digital_drc_agent
 from agents.digital.digital_lvs_agent import run_agent as digital_lvs_agent
 from agents.digital.digital_tapeout_agent import run_agent as digital_tapeout_agent
 from agents.digital.digital_executive_summary_agent import run_agent as digital_executive_summary_agent
+from agents.digital.digital_simulation_execution_agent import run_agent as digital_simulation_execution_agent
+from agents.digital.digital_simulation_summary_coverage_agent import run_agent as digital_simulation_summary_coverage_agent
 
 DIGITAL_AGENT_FUNCTIONS: Dict[str, Any] = {
     "Digital Spec Agent": digital_spec_agent,
@@ -309,6 +311,8 @@ DIGITAL_AGENT_FUNCTIONS: Dict[str, Any] = {
     "Digital Functional Coverage Agent": digital_functional_coverage_agent,
     "Digital Golden Model Comparison Agent": digital_golden_model_comparison_agent,
     "Digital Simulation Control Agent": digital_simulation_control_agent,
+    "Digital Simulation Execution Agent": digital_simulation_execution_agent,
+    "Digital Simulation Summary Coverage Agent": digital_simulation_summary_coverage_agent,
     "Digital Bug Localization Agent": digital_bug_localization_agent,
     "Digital Formal Verification Agent": digital_formal_verification_agent,
     "Digital Synthesis Readiness Agent": digital_synthesis_readiness_agent,
@@ -508,6 +512,8 @@ SYSTEM_AGENT_FUNCTIONS: Dict[str,Any] = {
     "Digital Functional Coverage Agent": digital_functional_coverage_agent,
     "Digital Golden Model Comparison Agent": digital_golden_model_comparison_agent,
     "Digital Simulation Control Agent": digital_simulation_control_agent,
+    "Digital Simulation Execution Agent": digital_simulation_execution_agent,
+    "Digital Simulation Summary Coverage Agent": digital_simulation_summary_coverage_agent,
     "Digital Bug Localization Agent": digital_bug_localization_agent,
     "Digital Formal Verification Agent": digital_formal_verification_agent,   
     "Digital Synthesis Readiness Agent": digital_synthesis_readiness_agent,

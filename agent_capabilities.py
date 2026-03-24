@@ -170,6 +170,47 @@ AGENT_CAPABILITIES = {
         "requires": ["make", "cocotb", "verilator"],
     },
 
+    "Digital Simulation Execution Agent": {
+        "domain": "digital",
+        "inputs": [
+            "vv/tb/simulation_manifest.json(optional)",
+            "vv/tb/Makefile",
+            "vv/tb/test_*.py",
+            "vv/tb/run_regression.py(optional)",
+            "*_spec.json",
+            "*.v",
+            "*.sv"
+        ],
+        "outputs": [
+            "vv/tb/reports/simulation_execution_summary.json",
+            "vv/tb/reports/SIM_EXECUTION.md",
+            "vv/tb/reports/simulation_execution_report.json",
+            "vv/tb/reports/run_logs/*.stdout.log",
+            "vv/tb/reports/run_logs/*.stderr.log",
+            "simulation_execution_agent.log",
+        ],
+        "description": "Consumes simulation manifest and upstream testcase definitions, runs make-based Cocotb/Verilator regressions across tests and seeds, and emits execution summaries plus per-run logs.",
+        "requires": ["make", "cocotb", "verilator"],
+    },
+
+    "Digital Simulation Summary Coverage Agent": {
+        "domain": "digital",
+        "inputs": [
+            "vv/tb/reports/simulation_execution_summary.json",
+            "vv/tb/reports/functional_coverage_summary.json(optional)",
+            "vv/tb/COVERAGE.md(optional)",
+            "*.log(optional)"
+        ],
+        "outputs": [
+            "vv/tb/reports/simulation_summary_coverage.json",
+            "vv/tb/reports/SIM_SUMMARY_COVERAGE.md",
+            "vv/tb/reports/simulation_summary_coverage_report.json",
+            "simulation_summary_coverage_agent.log",
+        ],
+        "description": "Parses simulation execution outputs and functional coverage summaries and publishes a merged dashboard-style summary for UI display.",
+        "requires": [],
+    },
+
     "Digital Bug Localization Agent": {
         "domain": "digital",
         "inputs": ["simulation.log", "vv/tb/run_regression.py", "vv/tb/test_*.py"],
