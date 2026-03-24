@@ -474,12 +474,12 @@ from cocotb.clock import Clock
 from cocotb.triggers import RisingEdge, Timer
 
 try:
-    from tb.scoreboard import Scoreboard
+    from scoreboard import Scoreboard
 except Exception:
     Scoreboard = None
 
 try:
-    from tb.coverage_model import CoverageModel
+    from coverage_model import CoverageModel
 except Exception:
     CoverageModel = None
 
