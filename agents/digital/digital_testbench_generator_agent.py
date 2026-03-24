@@ -687,7 +687,9 @@ EXTRA_ARGS    += --trace --trace-structs
 
 include rtl_sources.mk
 
-
+PYTHON_BIN ?= /root/chiploop-backend/venv/bin/python3
+COCOTB_MAKEFILES := /root/chiploop-backend/venv/lib/python3.13/site-packages/cocotb_tools/makefiles
+include $(COCOTB_MAKEFILES)/Makefile.sim
 COCOTB_MAKEFILES := $(shell $(PYTHON_BIN) -m cocotb_tools.config --makefiles 2>/dev/null)
 
 ifeq ($(strip $(COCOTB_MAKEFILES)),)
