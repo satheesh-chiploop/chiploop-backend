@@ -241,7 +241,7 @@ def _infer_clocks_resets(spec: Dict[str, Any], ports: List[Dict[str, Any]]) -> T
         for p in ports:
             nm = str(p.get("name", ""))
             if re.search(r"(?:^|_)(rst|reset)(?:$|_)", nm, re.IGNORECASE):
-                resets.append({"name": nm})``
+                resets.append({"name": nm})
 
 
     clocks = [c for c in clocks if isinstance(c, str) and c.strip()]
