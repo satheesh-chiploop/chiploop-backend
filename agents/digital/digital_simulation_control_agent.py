@@ -291,7 +291,7 @@ def run_agent(state: dict) -> dict:
     runner_py = _gen_regression_runner(top, default_tests)
     _write_file(os.path.join(tb_root, "run_regression.py"), runner_py)
 
-
+    artifacts: Dict[str, Any] = {}
     sim_manifest = _gen_simulation_manifest(
         top=top,
         spec_path=spec_path,
@@ -328,7 +328,7 @@ python run_regression.py --tests smoke_test constrained_random_sanity --seeds 1 
 """
     _write_file(os.path.join(tb_root, "SIM_CONTROL.md"), readme)
 
-    artifacts: Dict[str, Any] = {}
+
     artifacts["runner_py"] = _record_text(workflow_id, agent_name, "vv/tb", "run_regression.py", runner_py)
     artifacts["sim_readme"] = _record_text(workflow_id, agent_name, "vv/tb", "SIM_CONTROL.md", readme)
     artifacts["log"] = _record_text(workflow_id, agent_name, "vv", "simulation_control_agent.log", open(log_path, "r", encoding="utf-8").read())
@@ -356,4 +356,5 @@ python run_regression.py --tests smoke_test constrained_random_sanity --seeds 1 
     state.setdefault("vv", {})
     state["vv"]["sim_control"] = report
     state["simulation_manifest_json"] = sim_manifest_path
+    state["simulation_runner_py"] = os.path.join(tb_root, "run_regression.py")
     return state

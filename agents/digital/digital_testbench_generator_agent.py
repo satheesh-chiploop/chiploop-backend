@@ -550,14 +550,20 @@ async def smoke_test(dut):
 
     for _ in range(5):
         await _advance_time(dut)
+        if cov:
+            try:
+                cov.sample()
+            except Exception:
+                pass
 
     if cov:
         try:
-            cov.sample()
+            cov.stop()
+            cov.write_reports()
         except Exception:
             pass
-        cov.stop()
-        cov.write_reports()
+
+    
 
     if sb:
         sb.stop()
@@ -575,6 +581,10 @@ async def constrained_random_sanity(dut):
 
     randomizable_inputs = {randomizable_inputs_json}
 
+    cov = CoverageModel() if CoverageModel else None
+    if cov:
+        cov.start(dut)
+
     for _ in range(int(os.getenv("NUM_ITERS", "25"))):
         for p in randomizable_inputs:
             name = p.get("name")
@@ -589,19 +599,20 @@ async def constrained_random_sanity(dut):
 
         await _advance_time(dut)
 
-    try:
-        cov = CoverageModel() if CoverageModel else None
         if cov:
-            cov.start(dut)
-            # reset sequence
-            # settle window
-            for _ in range(5):
-                await RisingEdge(clk)
+            try:
                 cov.sample()
+            except Exception:
+                pass
+
+    if cov:
+        try:
             cov.stop()
             cov.write_reports()
-    except Exception:
-        pass
+        except Exception:
+            pass
+
+    
 '''
     return template.format(
         top=top,
@@ -773,6 +784,8 @@ def run_agent(state: dict) -> dict:
         "generated_testcases_manifest": "vv/tb/testcases.json",
     }
 
+    artifacts: Dict[str, Any] = {}
+
     makefile = _gen_makefile(top)
     rtl_sources_mk = _gen_rtl_sources_mk(tb_root, rtl_files)
     verification_sources_mk = _gen_verification_sources_mk(tb_root, verification_files)
@@ -782,6 +795,7 @@ def run_agent(state: dict) -> dict:
     )
 
     state["tb_verification_sources_mk"] = os.path.join(tb_root, "verification_sources.mk")
+    state["verification_files"] = verification_files
 
     readme = f"""# ChipLoop V&V: Cocotb + Verilator
 
@@ -817,7 +831,7 @@ NUM_ITERS=200 RANDOM_SEED=7 make TESTCASE=constrained_random_sanity
     _log(log_path, "Generated tb_contract.json")
     _log_kv(log_path, "generated_testcases", testcase_manifest["default_tests"])
 
-    artifacts: Dict[str, Any] = {}
+
     artifacts["tb_test_py"] = _record_text(workflow_id, agent_name, "vv/tb", f"test_{top}.py", test_py)
     artifacts["tb_makefile"] = _record_text(workflow_id, agent_name, "vv/tb", "Makefile", makefile)
     artifacts["tb_rtl_sources_mk"] = _record_text(workflow_id, agent_name, "vv/tb", "rtl_sources.mk", rtl_sources_mk)
