@@ -643,6 +643,7 @@ The bind file uses only spec-declared signals and is intended to be compiled wit
 
     state["sva_assertions_path"] = os.path.join(out_dir, f"{module_name}.sv")
     state["sva_spec_json"] = os.path.join(out_dir, "sva_spec.json")
+    state["sva_bind_path"] = os.path.join(out_dir, f"{module_name}_bind.sv")
 
     _log(log_path, f"{agent_name} completed successfully.")
     return state

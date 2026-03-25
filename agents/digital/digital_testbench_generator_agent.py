@@ -282,8 +282,10 @@ def _infer_clocks_resets(spec: Dict[str, Any], ports: List[Dict[str, Any]]) -> T
         if isinstance(r, dict) and r.get("name"):
             rr = {
                 "name": str(r.get("name")),
+                is_name_active_low = bool(re.search(r"(rst_n|reset_n|por_n)", nm, re.IGNORECASE))
                 "active_low": bool(
                     r.get("active_low", False)
+                    or is_name_active_low
                     or str(r.get("polarity", "")).lower() in ("active_low", "low", "0")
                 ),
                 "async": bool(

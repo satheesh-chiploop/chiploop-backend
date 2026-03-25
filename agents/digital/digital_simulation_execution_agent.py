@@ -167,6 +167,20 @@ def run_agent(state: dict) -> dict:
         coverage_json_present = os.path.exists(coverage_json_path)
         coverage_md_present = os.path.exists(coverage_md_path)
 
+        if coverage_json_present:
+            artifacts["functional_coverage_summary"] = _record_text(
+                workflow_id, agent_name, "vv/tb/reports",
+                "functional_coverage_summary.json",
+                open(coverage_json_path).read()
+            )
+
+        if coverage_md_present:
+            artifacts["functional_coverage_summary"] = _record_text(
+                workflow_id, agent_name, "vv/tb/reports",
+                "COVERAGE.md",
+                open(coverage_md_path).read()
+            )
+
         if not coverage_json_present:
             _log(log_path, f"Missing runtime coverage JSON: {coverage_json_path}", level="warning")
         if not coverage_md_present:
