@@ -246,27 +246,23 @@ def _infer_clocks_resets(spec: Dict[str, Any], ports: List[Dict[str, Any]]) -> T
     clocks = [c for c in clocks if isinstance(c, str) and c.strip()]
     clocks = list(dict.fromkeys(clocks))
 
-    norm_resets: List[Dict[str, Any]] = []
-    seen = set()
-    for r in resets:
-        if isinstance(r, dict) and r.get("name"):
-            nm = str(r["name"])
-            if nm in seen:
-                continue
-            seen.add(nm)
-            norm_resets.append(
-                {
-                    "name": nm,
-                    "active_low": bool(
-                        r.get("active_low", False)
-                        or str(r.get("polarity", "")).lower() in ("active_low", "low", "0")
-                    ),
-                    "async": bool(
-                        str(r.get("type", "")).lower() in ("async", "asynchronous")
-                        or r.get("async", False)
-                    ),
-                }
-            )
+    is_name_active_low = bool(re.search(r"(rst_n|reset_n|por_n)", nm, re.IGNORECASE))
+
+    norm_resets.append(
+        {
+            "name": nm,
+            "active_low": bool(
+                r.get("active_low", False)
+                or is_name_active_low
+                or str(r.get("polarity", "")).lower() in ("active_low", "low", "0")
+            ),
+            "async": bool(
+                str(r.get("type", "")).lower() in ("async", "asynchronous")
+                or r.get("async", False)
+            ),
+        }
+    )
+
     return clocks, norm_resets
 
 
@@ -514,6 +510,8 @@ bind {top} {module_name} u_{module_name} (
 def run_agent(state: dict) -> dict:
     agent_name = "Digital Assertions (SVA) Agent"
 
+    artifacts: Dict[str, Any] = {}
+
     workflow_id = state.get("workflow_id", "default")
     workflow_dir = state.get("workflow_dir", f"backend/workflows/{workflow_id}")
     _ensure_dirs(workflow_id, workflow_dir)
@@ -523,6 +521,8 @@ def run_agent(state: dict) -> dict:
         f.write("Digital Assertions (SVA) Agent Log\n")
 
     _log(log_path, f"Starting {agent_name}...")
+
+ 
 
     contract = _resolve_sva_contract(state, workflow_dir, log_path)
     mode = contract["mode"]
@@ -596,7 +596,7 @@ The bind file uses only spec-declared signals and is intended to be compiled wit
     _log(log_path, "Generated sva_spec.json")
     _log(log_path, "Generated SVA_README.md")
 
-    artifacts: Dict[str, Any] = {}
+
     artifacts["sva_sv"] = _record_text(workflow_id, agent_name, "vv/tb", f"{module_name}.sv", sva_sv)
     artifacts["sva_spec_json"] = _record_text(workflow_id, agent_name, "vv/tb", "sva_spec.json", sva_spec_txt)
     artifacts["sva_readme"] = _record_text(workflow_id, agent_name, "vv/tb", "SVA_README.md", bind_readme)
