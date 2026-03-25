@@ -241,29 +241,42 @@ def _infer_clocks_resets(spec: Dict[str, Any], ports: List[Dict[str, Any]]) -> T
         for p in ports:
             nm = str(p.get("name", ""))
             if re.search(r"(?:^|_)(rst|reset)(?:$|_)", nm, re.IGNORECASE):
-                resets.append({"name": nm})
+                resets.append({"name": nm})``
+
 
     clocks = [c for c in clocks if isinstance(c, str) and c.strip()]
     clocks = list(dict.fromkeys(clocks))
 
-    is_name_active_low = bool(re.search(r"(rst_n|reset_n|por_n)", nm, re.IGNORECASE))
+    norm_resets: List[Dict[str, Any]] = []
+    for r in resets:
+        if isinstance(r, dict) and r.get("name"):
+            nm = str(r.get("name"))
+            is_name_active_low = bool(re.search(r"(rst_n|reset_n|por_n)", nm, re.IGNORECASE))
 
-    norm_resets.append(
-        {
-            "name": nm,
-            "active_low": bool(
-                r.get("active_low", False)
-                or is_name_active_low
-                or str(r.get("polarity", "")).lower() in ("active_low", "low", "0")
-            ),
-            "async": bool(
-                str(r.get("type", "")).lower() in ("async", "asynchronous")
-                or r.get("async", False)
-            ),
-        }
-    )
+            rr = {
+                "name": nm,
+                "active_low": bool(
+                    r.get("active_low", False)
+                    or is_name_active_low
+                    or str(r.get("polarity", "")).lower() in ("active_low", "low", "0")
+                ),
+                "async": bool(
+                    str(r.get("type", "")).lower() in ("async", "asynchronous")
+                    or r.get("async", False)
+                ),
+            }
+            norm_resets.append(rr)
 
-    return clocks, norm_resets
+    # remove duplicates
+    uniq_resets: List[Dict[str, Any]] = []
+    seen = set()
+    for rr in norm_resets:
+        if rr["name"] not in seen:
+            seen.add(rr["name"])
+            uniq_resets.append(rr)
+
+    return clocks, uniq_resets
+
 
 
 def _resolve_sva_mode(state: Dict[str, Any]) -> str:

@@ -745,7 +745,8 @@ def run_agent(state: dict) -> dict:
     soc_mode = contract["soc_mode"]
 
     spec = _safe_read_json(spec_path)
-    ports = _ports_from_spec(spec)
+
+    ports = [] if soc_mode else _ports_from_spec(spec)
     clocks, resets = _infer_clocks_resets(spec, ports)
 
     _log(log_path, f"resolved_mode={mode}")
@@ -798,7 +799,7 @@ def run_agent(state: dict) -> dict:
     artifacts["tb_verification_sources_mk"] = _record_text(
         workflow_id, agent_name, "vv/tb", "verification_sources.mk", verification_sources_mk
     )
-
+    _log_kv(log_path, "verification_files", verification_files)
     state["tb_verification_sources_mk"] = os.path.join(tb_root, "verification_sources.mk")
     state["verification_files"] = verification_files
 
