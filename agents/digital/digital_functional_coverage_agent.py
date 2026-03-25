@@ -654,6 +654,10 @@ Reports emitted by CoverageModel:
         "reset_names": [r["name"] for r in resets],
         "generated_dir": "vv/tb",
         "reports_dir": "vv/tb/reports",
+        "runtime_reports_expected": [
+            "vv/tb/reports/functional_coverage_summary.json",
+            "vv/tb/reports/COVERAGE.md",
+        ],
         "coverage_points": {
             "output_points": [p["name"] for p in cov_spec["output_points"]],
             "input_points": [p["name"] for p in cov_spec["input_points"]],
@@ -680,8 +684,12 @@ Reports emitted by CoverageModel:
     state["vv"]["coverage"] = report
     state["vv"]["coverage_spec"] = cov_spec
 
+
+
     state["coverage_model_py"] = os.path.join(tb_root, "coverage_model.py")
     state["coverage_spec_json"] = os.path.join(tb_root, "coverage_spec.json")
+    state["functional_coverage_summary_json"] = os.path.join(reports_dir, "functional_coverage_summary.json")
+    state["functional_coverage_md"] = os.path.join(reports_dir, "COVERAGE.md")
 
     _log(log_path, f"{agent_name} completed successfully.")
     return state

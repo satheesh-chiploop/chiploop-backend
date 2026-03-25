@@ -156,14 +156,35 @@ def run_agent(state: dict) -> dict:
                         "error": str(e),
                     })
 
+
+        coverage_json_path = manifest.get("functional_coverage_summary_json") or os.path.join(
+            reports_dir, "functional_coverage_summary.json"
+        )
+        coverage_md_path = manifest.get("functional_coverage_md") or os.path.join(
+            reports_dir, "COVERAGE.md"
+        )
+
+        coverage_json_present = os.path.exists(coverage_json_path)
+        coverage_md_present = os.path.exists(coverage_md_path)
+
+        if not coverage_json_present:
+            _log(log_path, f"Missing runtime coverage JSON: {coverage_json_path}", level="warning")
+        if not coverage_md_present:
+            _log(log_path, f"Missing runtime coverage markdown: {coverage_md_path}", level="warning")
+
         summary = {
             "type": "simulation_execution_summary",
             "total": len(results),
             "pass": sum(1 for r in results if r.get("pass")),
             "fail": sum(1 for r in results if not r.get("pass")),
+            "coverage_json_present": coverage_json_present,
+            "coverage_md_present": coverage_md_present,
+            "coverage_json_path": coverage_json_path,
+            "coverage_md_path": coverage_md_path,
             "results": results,
         }
 
+        
         summary_txt = json.dumps(summary, indent=2)
 
         md_lines = [
@@ -195,6 +216,7 @@ def run_agent(state: dict) -> dict:
             workflow_id, agent_name, "vv/tb/reports", "SIM_EXECUTION.md", md_txt
         )
 
+
         report = {
             "type": "simulation_execution_report",
             "manifest_path": manifest_path,
@@ -202,6 +224,8 @@ def run_agent(state: dict) -> dict:
             "seeds": seeds,
             "pass": summary["pass"],
             "fail": summary["fail"],
+            "coverage_json_present": summary["coverage_json_present"],
+            "coverage_md_present": summary["coverage_md_present"],
             "artifacts": artifacts,
         }
         rep_txt = json.dumps(report, indent=2)

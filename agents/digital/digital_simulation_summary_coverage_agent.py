@@ -89,16 +89,34 @@ def run_agent(state: dict) -> dict:
         sim_path = state.get("simulation_execution_summary_json") or os.path.join(
             reports_dir, "simulation_execution_summary.json"
         )
-        cov_path = os.path.join(reports_dir, "functional_coverage_summary.json")
+        cov_path = state.get("functional_coverage_summary_json") or os.path.join(
+            reports_dir, "functional_coverage_summary.json"
+        )
 
         _log(log_path, f"simulation_execution_summary_json={sim_path}")
         _log(log_path, f"functional_coverage_summary_json={cov_path}")
 
+        sim_exists = bool(sim_path and os.path.exists(sim_path))
+        cov_exists = bool(cov_path and os.path.exists(cov_path))
+
         sim = _safe_read_json(sim_path)
         cov = _safe_read_json(cov_path)
 
-        _log_kv(log_path, "sim_loaded", bool(sim))
-        _log_kv(log_path, "cov_loaded", bool(cov))
+        sim_loaded = bool(sim)
+        cov_loaded = bool(cov)
+
+        if not cov_exists:
+            coverage_status = "missing"
+        elif cov_exists and not cov_loaded:
+            coverage_status = "invalid"
+        else:
+            coverage_status = "ok"
+
+        _log_kv(log_path, "sim_exists", sim_exists)
+        _log_kv(log_path, "cov_exists", cov_exists)
+        _log_kv(log_path, "sim_loaded", sim_loaded)
+        _log_kv(log_path, "cov_loaded", cov_loaded)
+        _log_kv(log_path, "coverage_status", coverage_status)
 
         summary = {
             "type": "simulation_summary_coverage",
@@ -108,11 +126,14 @@ def run_agent(state: dict) -> dict:
                 "fail": sim.get("fail"),
             },
             "coverage": {
+                "status": coverage_status,
                 "functional_coverage_pct": cov.get("functional_coverage_pct"),
                 "bins_hit": cov.get("bins_hit"),
                 "total_bins": cov.get("total_bins"),
             }
         }
+
+        
 
         summary_txt = json.dumps(summary, indent=2)
 
@@ -122,10 +143,13 @@ def run_agent(state: dict) -> dict:
             f"- Total simulation runs: {summary['simulation']['total']}",
             f"- Simulation pass count: {summary['simulation']['pass']}",
             f"- Simulation fail count: {summary['simulation']['fail']}",
+            f"- Coverage status: {summary['coverage']['status']}",
             f"- Functional coverage %: {summary['coverage']['functional_coverage_pct']}",
             f"- Coverage bins hit: {summary['coverage']['bins_hit']}",
             f"- Coverage total bins: {summary['coverage']['total_bins']}",
         ]
+
+        
         md_txt = "\n".join(md_lines) + "\n"
 
         summary_path = os.path.join(reports_dir, "simulation_summary_coverage.json")

@@ -234,16 +234,19 @@ def main():
 if __name__ == "__main__":
     main()
 '''
+
+
 def _gen_simulation_manifest(
     top: str,
     spec_path: str,
     rtl_files: List[str],
     default_tests: List[str],
     tb_root: str,
+    state: Dict[str, Any],
 ) -> Dict[str, Any]:
     return {
         "type": "vv_simulation_manifest",
-        "version": "1.0",
+        "version": "1.1",
         "top_module": top,
         "spec_path": spec_path,
         "rtl_files": rtl_files,
@@ -254,6 +257,11 @@ def _gen_simulation_manifest(
         "tb_contract_json": os.path.join(tb_root, "tb_contract.json"),
         "reports_dir": os.path.join(tb_root, "reports"),
         "simulator": "verilator",
+        "sva_assertions_path": state.get("sva_assertions_path"),
+        "sva_bind_path": state.get("sva_bind_path"),
+        "coverage_model_py": state.get("coverage_model_py"),
+        "functional_coverage_summary_json": state.get("functional_coverage_summary_json"),
+        "functional_coverage_md": state.get("functional_coverage_md"),
     }
 
 def run_agent(state: dict) -> dict:
@@ -283,12 +291,14 @@ def run_agent(state: dict) -> dict:
     runner_py = _gen_regression_runner(top, default_tests)
     _write_file(os.path.join(tb_root, "run_regression.py"), runner_py)
 
+
     sim_manifest = _gen_simulation_manifest(
         top=top,
         spec_path=spec_path,
         rtl_files=rtl_files,
         default_tests=default_tests,
         tb_root=tb_root,
+        state=state,
     )
     sim_manifest_txt = json.dumps(sim_manifest, indent=2)
     sim_manifest_path = os.path.join(tb_root, "simulation_manifest.json")
