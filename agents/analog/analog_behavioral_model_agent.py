@@ -65,15 +65,34 @@ def _fallback_model(spec: dict, module_name: str) -> str:
 
 endmodule
 """
-def _build_repair_prompt(spec: dict, module_name: str, broken_model: str, failure_text: str) -> str:
+
+def _build_repair_prompt(
+    original_prompt: str,
+    spec: dict,
+    module_name: str,
+    broken_model: str,
+    failure_text: str,
+) -> str:
     return f"""
-Repair the following Verilog-2005 behavioral model.
+{original_prompt}
+
+==============================
+REPAIR MODE (PASS2)
+==============================
+
+Your previous RTL did not pass compile/lint.
 
 Return ONLY corrected Verilog code.
 Do not return markdown.
 Do not return explanations.
 
-SPEC:
+SOURCE OF TRUTH
+- The normalized spec JSON below is the ONLY source of truth.
+- Preserve the interface exactly as defined in the spec JSON.
+- Do NOT derive ports, widths, directions, or module name from the broken RTL.
+- If the broken RTL conflicts with the spec JSON, the spec JSON wins.
+
+NORMALIZED SPEC JSON:
 {json.dumps(spec, indent=2)}
 
 EXPECTED MODULE NAME:
@@ -85,10 +104,14 @@ BROKEN RTL:
 FAILURE LOG:
 {failure_text}
 
-REPAIR RULES
-- Preserve the same module name and port list exactly
+PASS2 REPAIR RULES
+- Preserve the same module name exactly as required by the spec JSON
+- Preserve the same port list exactly as required by the spec JSON
 - Do NOT add extra ports
-- Do NOT change widths or directions
+- Do NOT remove ports
+- Do NOT rename ports
+- Do NOT change widths
+- Do NOT change directions
 - Fix only compile/lint correctness problems
 - Use Verilog-2005 only
 - If a signal is procedurally assigned, it must be declared as reg
@@ -96,12 +119,26 @@ REPAIR RULES
 - Add default assignments in combinational logic
 - Add default case branches where needed
 - Ensure all declared outputs are driven
-- Ensure meaningful declared inputs are used when required by spec
+- Ensure meaningful declared inputs are used when required by the spec JSON
 - Keep behavior deterministic and simple
-- Do NOT redesign the block
+- Do NOT redesign the block unless strictly required to fix compile/lint errors
+- The repaired RTL is still wrong if any reported compile error or fatal lint issue remains
+
+FINAL PASS2 SELF-CHECK
+1. Module name matches spec JSON exactly
+2. Port names match spec JSON exactly
+3. Port directions match spec JSON exactly
+4. Port widths match spec JSON exactly
+5. No extra ports
+6. No missing ports
+7. No SystemVerilog-only syntax
+8. No procedural assignment to wire-style outputs
+9. No multiple drivers
+10. RTL is compile/lint repair-focused only
 
 Return corrected code only.
 """.strip()
+
 
 
 def _run_verilator_lint(model_path: str) -> tuple[int, str]:
