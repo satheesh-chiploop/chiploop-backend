@@ -39,18 +39,123 @@ def run_agent(state: dict) -> dict:
     prompt = f"""
 You are an analog design architect.
 
-Convert the following datasheet into a normalized JSON spec.
+Convert the following analog datasheet into a STRICT normalized JSON contract.
 
 Return JSON only.
+Do not return markdown.
+Do not return explanations.
 
-Fields required:
+REQUIRED TOP-LEVEL FIELDS:
 - block_name
 - module_name
 - description
-- ports [name, direction, width]
-- behavior_summary
+- operating_constraints
+- ports
+- functionality
+- responsibilities
+- must_drive
+- must_receive
+- must_not_drive
+- reset_behavior
+- behavior_rules
 - behavioral_contract
 - deliverables
+
+STRICT FIELD RULES
+
+1. block_name
+- short canonical block identifier
+
+2. module_name
+- exact Verilog module name to be generated downstream
+
+3. description
+- short high-level block description
+
+4. operating_constraints
+Must be an object with:
+- clock_domains: list
+- reset_signals: list
+- fixed_assumptions: list
+
+Each clock_domains item should include when available:
+- name
+- frequency_mhz
+- period_ns
+
+Each reset_signals item should include when available:
+- name
+- active_low
+- async
+
+5. ports
+- must be a list of objects
+- every port object must include:
+  - name
+  - direction
+  - width
+- direction must be exactly one of:
+  - input
+  - output
+  - inout
+- width must be integer >= 1
+- do not invent extra ports unless strictly required by the datasheet
+
+6. functionality
+- full behavioral summary of what the block does
+
+7. responsibilities
+- list of concrete responsibilities of the block
+
+8. must_drive
+- list of signals this block must drive
+
+9. must_receive
+- list of signals this block must consume
+
+10. must_not_drive
+- list of signals this block must never drive
+
+11. reset_behavior
+- textual description of reset behavior
+- must explicitly describe output behavior during reset if reset exists
+
+12. behavior_rules
+- list of concrete behavioral rules
+- include timing, pulse behavior, gating, update rules, determinism rules, and default behavior when relevant
+
+13. behavioral_contract
+Must be a structured object with these generic fields:
+- deterministic_behavior: true/false
+- state_elements: list
+- input_to_output_relations: list
+- event_triggers: list
+- output_update_rules: list
+- error_conditions: list
+- latency_rules: list
+- timing_rules: list
+
+Use empty lists when information is not available.
+Do NOT hardcode domain-specific keys like adc, dac, ldo, pll, sensor, etc.
+Keep this schema generic.
+
+14. deliverables
+- list of expected downstream artifacts, for example:
+  - behavioral_model
+  - abstract_view_notes
+  - params_json
+
+STRICT RULES
+- The JSON must be generic and reusable for any analog behavioral block.
+- Do NOT emit domain-specific schema keys unless they are values inside generic lists/strings.
+- Do NOT use ambiguous words like:
+  - random
+  - optional
+  - stable
+unless the datasheet explicitly requires them.
+- If the datasheet is underspecified, choose the simplest deterministic contract.
+- Preserve exact module naming intent from the datasheet where provided.
+- The contract must be suitable for generating a compile-safe Verilog-2005 behavioral model.
 
 Datasheet:
 {datasheet}
