@@ -51,13 +51,27 @@ def _ensure_dirs(workflow_id: str, workflow_dir: str) -> Tuple[str, str]:
 
 def _collect_rtl_files(workflow_dir: str) -> List[str]:
     exts = (".v", ".sv", ".vh", ".svh")
-    rtl: List[str] = []
-    for root, _, files in os.walk(workflow_dir):
-        for fn in files:
-            if fn.lower().endswith(exts):
-                rtl.append(os.path.join(root, fn))
-    rtl.sort()
-    return rtl
+
+    handoff_dirs = [
+        os.path.join(workflow_dir, "handoff", "digital_subsystem_ip_package", "rtl"),
+        os.path.join(workflow_dir, "handoff", "rtl"),
+    ]
+
+    for d in handoff_dirs:
+        if not os.path.isdir(d):
+            continue
+
+        rtl: List[str] = []
+        for root, _, files in os.walk(d):
+            for fn in files:
+                if fn.lower().endswith(exts):
+                    rtl.append(os.path.abspath(os.path.join(root, fn)))
+
+        rtl = sorted(set(rtl))
+        if rtl:
+            return rtl
+
+    return []
 
 def _pick_top_module(spec: Dict[str, Any], rtl_files: List[str], state_top: Optional[str]) -> str:
     if state_top:
@@ -279,6 +293,9 @@ def run_agent(state: dict) -> dict:
     spec_path = state.get("spec_json") or os.path.join(workflow_dir, "digital", "spec.json")
     spec = _safe_read_json(spec_path)
     rtl_files = state.get("rtl_files") or _collect_rtl_files(workflow_dir)
+    rtl_files = [os.path.abspath(p) for p in rtl_files if isinstance(p, str)]
+    if not rtl_files:
+        raise FileNotFoundError("No handoff RTL files found for simulation control")
     top = _pick_top_module(spec, rtl_files, state.get("top_module"))
 
     tb_root = os.path.join(workflow_dir, "vv", "tb")

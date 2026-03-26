@@ -95,14 +95,30 @@ def _write_file(path: str, content: str) -> None:
         f.write(content)
 
 
+
 def _collect_rtl_files(workflow_dir: str) -> List[str]:
     exts = (".v", ".sv", ".vh", ".svh")
-    rtl: List[str] = []
-    for root, _, files in os.walk(workflow_dir):
-        for fn in files:
-            if fn.lower().endswith(exts):
-                rtl.append(os.path.join(root, fn))
-    return sorted({os.path.abspath(p) for p in rtl})
+
+    handoff_dirs = [
+        os.path.join(workflow_dir, "handoff", "digital_subsystem_ip_package", "rtl"),
+        os.path.join(workflow_dir, "handoff", "rtl"),
+    ]
+
+    for d in handoff_dirs:
+        if not os.path.isdir(d):
+            continue
+
+        rtl: List[str] = []
+        for root, _, files in os.walk(d):
+            for fn in files:
+                if fn.lower().endswith(exts):
+                    rtl.append(os.path.abspath(os.path.join(root, fn)))
+
+        rtl = sorted(set(rtl))
+        if rtl:
+            return rtl
+
+    return []
 
 
 def _find_fallback_spec_json(workflow_dir: str) -> Optional[str]:

@@ -167,6 +167,8 @@ def run_agent(state: dict) -> dict:
         coverage_json_present = os.path.exists(coverage_json_path)
         coverage_md_present = os.path.exists(coverage_md_path)
 
+        artifacts = {}
+
         if coverage_json_present:
             artifacts["functional_coverage_summary"] = _record_text(
                 workflow_id, agent_name, "vv/tb/reports",
@@ -222,7 +224,6 @@ def run_agent(state: dict) -> dict:
         _write_file(summary_path, summary_txt)
         _write_file(md_path, md_txt)
 
-        artifacts = {}
         artifacts["simulation_execution_summary"] = _record_text(
             workflow_id, agent_name, "vv/tb/reports", "simulation_execution_summary.json", summary_txt
         )
