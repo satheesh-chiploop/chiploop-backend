@@ -710,6 +710,8 @@ override SIM := verilator
 EXTRA_ARGS += --trace --trace-structs
 EXTRA_ARGS += -Wno-fatal
 EXTRA_ARGS += -Wno-CASEINCOMPLETE
+EXTRA_ARGS += -Wno-WIDTH
+EXTRA_ARGS += -Wno-UNOPTFLAT
 
 include rtl_sources.mk
 -include verification_sources.mk

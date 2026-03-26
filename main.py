@@ -4799,6 +4799,21 @@ async def apps_system_sim(
         "System_Sim"
     )
 
+@app.post("/apps/system/rtl/run")
+async def apps_system_rtl(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    payload: SystemAppIn
+):
+    return _start_system_app(
+        background_tasks,
+        request,
+        payload,
+        "App: System RTL",
+        "System_RTL"
+    )
+
+
 
 @app.post("/apps/system/pd/run")
 async def apps_system_pd(
