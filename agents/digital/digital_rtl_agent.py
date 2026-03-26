@@ -722,6 +722,7 @@ PROCEDURAL OUTPUT DECLARATION RULES (MANDATORY)
 - If an output is driven only by a continuous assign statement, it may remain a plain output wire-style port.
 - Never procedurally assign to a wire-style output.
 
+
 GOOD:
 output reg [31:0] prdata;
 always @(*) begin
@@ -741,6 +742,22 @@ output [31:0] prdata;
 always @(*) begin
   prdata = 32'h00000000;
 end
+
+BAD:
+output [31:0] prdata;
+wire [31:0] prdata_temp;
+always @(*) begin
+  prdata_temp = 32'h0;
+end
+assign prdata = prdata_temp;
+
+GOOD:
+output [31:0] prdata;
+reg [31:0] prdata_temp;
+always @(*) begin
+  prdata_temp = 32'h0;
+end
+assign prdata = prdata_temp;
 
 INTERNAL SIGNAL ROLE SEPARATION RULES (MANDATORY)
 
@@ -930,6 +947,14 @@ SELF-CHECK BEFORE OUTPUT
 29. No decoded control signal is aliased onto an unrelated output.
 30. Every signal has exactly one legal driver.
 31. Structural top modules do not convert child outputs into procedural top-level regs unless required.
+PROCEDURAL OUTPUT CONSISTENCY SELF-CHECK (MANDATORY)
+
+Before returning RTL, verify this exact rule for every output:
+- if the output appears on the left-hand side inside any always block, it must be declared as output reg in Verilog-2005
+- if the output is declared as plain output, it must not appear on the left-hand side inside any always block
+- never return RTL that would cause:
+  - "is not a valid l-value"
+  - PROCASSWIRE
 
 """.strip()
 
