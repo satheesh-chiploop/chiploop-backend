@@ -312,8 +312,7 @@ SELF-CHECK BEFORE OUTPUT
     notes_path = os.path.join(analog_dir, notes_filename)
     compile_log_path = os.path.join(analog_dir, compile_log_filename)
     compile_summary_path = os.path.join(analog_dir, compile_summary_filename)
-    with open(verilator_log_path, "w", encoding="utf-8") as f:
-        f.write((verilator_log or "").strip() + "\n")
+
 
     model_params = {
         "block_name": block,
@@ -400,14 +399,20 @@ SELF-CHECK BEFORE OUTPUT
     if compile_failed:
         issues.append("❌ Icarus Verilog compile failed for analog behavioral model.")
 
+
+
     if fatal_lint:
         issues.append("❌ Verilator lint reported fatal structural issues for analog behavioral model.")
-        with open(compile_log_path, "w", encoding="utf-8") as f:
-            f.write(compile_status.strip() + "\n")
-            if issues:
-                f.write("\nIssues:\n")
-                for issue in issues:
-                    f.write(f"{issue}\n")
+
+    with open(compile_log_path, "w", encoding="utf-8") as f:
+        f.write((compile_status or "").strip() + "\n")
+        if issues:
+            f.write("\nIssues:\n")
+            for issue in issues:
+                f.write(f"{issue}\n")
+
+    with open(verilator_log_path, "w", encoding="utf-8") as f:
+        f.write((verilator_log or "").strip() + "\n")
 
     compile_summary = {
         "block_name": block,
