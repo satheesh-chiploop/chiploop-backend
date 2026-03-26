@@ -397,7 +397,6 @@ POWER_INTENT_JSON:
 
 IMPLEMENTATION RULES
 
-
 FATAL RTL CORRECTNESS RULES (HIGHEST PRIORITY)
 
 The generated RTL must pass both:
@@ -406,15 +405,108 @@ The generated RTL must pass both:
 
 These rules override stylistic preferences.
 
-A. SINGLE ASSIGNMENT STYLE PER SIGNAL
-For every signal, choose exactly one legal driving style:
-- sequential register/state/output: assigned only with nonblocking <= inside one clocked always @(posedge clk or negedge rst_n) block
-- combinational next-state / combinational output: assigned only with blocking = inside one always @(*) block with full defaults
-- structural connection: driven only by assign or module port wiring, not by procedural blocks
+A. SINGLE LEGAL OWNER PER SIGNAL (MANDATORY)
+Every signal must have exactly one legal owner and exactly one legal driving style.
 
-Never assign the same signal using both = and <= anywhere in the design.
-Never assign the same signal in both a clocked and combinational block.
-Never procedurally drive a signal that is already structurally driven.
+Allowed ownership styles:
+- sequential register/state/output:
+  assigned only with nonblocking <= in exactly one clocked always @(posedge clk or negedge rst_n) block
+- combinational signal/output:
+  assigned only with blocking = in exactly one always @(*) block with full default assignments
+- structural wire:
+  driven only by assign statements or module port connectivity, and never by procedural blocks
+
+Forbidden:
+- assigning the same signal with both = and <=
+- assigning the same signal in both a clocked block and a combinational block
+- assigning the same signal in two different always blocks
+- procedurally driving a signal that is already driven structurally
+- driving a child-owned signal again in the parent/top
+
+If a signal is a child output or an inter-module wire, keep it as structural wiring only.
+If a signal is declared as a stored register/state element, drive it from one clocked block only.
+If a signal is a combinational decode/output, drive it from one always @(*) block only.
+
+B. TOP/HIERARCHY OWNERSHIP DISCIPLINE (MANDATORY)
+In hierarchical designs:
+- the top module must not procedurally assign, reset, or re-drive any signal owned by a child module
+- if signal_ownership says a child owns a signal, the top may only expose it through structural wiring
+- do not convert child outputs into top-level procedural regs unless the spec explicitly requires that
+
+C. FSM / OUTPUT STYLE DISCIPLINE
+For FSM-controlled or decoded outputs, choose exactly one style per signal:
+- registered output in one clocked block only
+OR
+- combinational output in one always @(*) block only
+
+Do not mix reset-time <= assignments with combinational = assignments for the same output.
+
+D. MULTI-DRIVER BAN
+Every signal must have exactly one legal driver.
+No signal may be driven by:
+- two always blocks
+- assign plus always block
+- child output plus top assign
+- child output plus top procedural block
+- two child outputs
+- clocked block plus combinational block
+
+E. COMBINATIONAL SAFETY
+Every combinational always @(*) block must:
+- assign defaults at block entry
+- assign every driven signal on all paths
+- include a default branch in every case
+
+CONCRETE GOOD/BAD EXAMPLES
+
+BAD:
+reg irq;
+always @(posedge clk or negedge rst_n) begin
+  if (!rst_n) irq <= 1'b0;
+  else irq <= done;
+end
+always @(*) begin
+  irq = fault;
+end
+
+GOOD:
+reg irq;
+always @(posedge clk or negedge rst_n) begin
+  if (!rst_n) irq <= 1'b0;
+  else irq <= (done | fault);
+end
+
+BAD:
+wire child_irq;
+assign irq = child_irq;
+always @(*) begin
+  irq = 1'b0;
+end
+
+GOOD:
+wire child_irq;
+assign irq = child_irq;
+
+BAD:
+reg status_reg;
+always @(posedge clk or negedge rst_n) begin
+  if (!rst_n) status_reg <= 8'h00;
+  else if (adc_done) status_reg <= 8'h01;
+end
+always @(posedge clk or negedge rst_n) begin
+  if (!rst_n) status_reg <= 8'h00;
+  else if (ana_fault) status_reg <= 8'h02;
+end
+
+GOOD:
+reg [7:0] status_reg;
+always @(posedge clk or negedge rst_n) begin
+  if (!rst_n) status_reg <= 8'h00;
+  else begin
+    status_reg[0] <= adc_done;
+    status_reg[1] <= ana_fault;
+  end
+end
 
 B. OUTPUT / WIRE / REG ROLE DISCIPLINE
 - If a signal is a pure structural connection between modules, keep it as a wire and do not assign it in always blocks.
@@ -857,13 +949,59 @@ TARGETED REPAIR PROCEDURE FOR FATAL LINT / COMPILE ERRORS
    - sequential registered signal
 3. Rewrite that signal so it uses exactly one legal driving style:
    - structural wire -> assign / module port wiring only
-   - combinational signal -> blocking = only in one always @(*)
-   - sequential signal -> nonblocking <= only in one clocked always block
+   - combinational signal -> blocking = only in exactly one always @(*)
+   - sequential signal -> nonblocking <= only in exactly one clocked always block
 4. Remove all conflicting assignments to that signal everywhere else.
-5. If a signal is owned by a child module or comes from register decode wiring, do not also reset or procedurally drive it in the parent/top.
-6. If an FSM output currently has both reset-time <= assignments and combinational = assignments, choose one implementation style and rewrite consistently.
-7. If Verilator reports BLKANDNBLK, the repaired RTL is still wrong unless every reported signal has only one assignment style.
-8. If Verilator reports multidriven behavior, the repaired RTL is still wrong unless the duplicate drivers are removed.
+5. If a signal is owned by a child module or by explicit signal_ownership, do not also reset, assign, or procedurally drive it in the parent/top.
+6. If Verilator reports BLKANDNBLK, the repair is incomplete unless every reported signal has only one assignment style in the final RTL.
+7. If Verilator reports MULTIDRIVEN or multiple procedural drivers, the repair is incomplete unless all duplicate drivers are removed from the final RTL.
+
+MANDATORY REPAIR OVERRIDE
+If the previous RTL uses an illegal ownership pattern, you MUST rewrite the affected block structure enough to eliminate the illegal drivers.
+Preserving the previous block structure is NOT allowed if it leaves:
+- one signal assigned in multiple always blocks
+- one signal assigned in both clocked and combinational logic
+- one signal driven both structurally and procedurally
+- a child-owned signal driven again in the parent/top
+
+SPECIAL REPAIR RULE FOR HIERARCHICAL TOPS
+In hierarchical mode, if a top-level signal is sourced from a child output or child-owned internal signal:
+- keep that signal as structural wiring only
+- remove any top-level reset assignment, combinational assignment, or extra assign to that same signal
+
+SPECIAL REPAIR RULE FOR REGISTER/STATUS LOGIC
+If multiple clocked blocks update the same stored register or status/output register:
+- merge those updates into one legal clocked always block
+- do not keep separate clocked writers for the same signal
+
+GOOD/BAD REPAIR EXAMPLES
+
+BAD REPAIR:
+always @(posedge clk or negedge rst_n) irq <= done;
+always @(*) irq = fault;
+
+GOOD REPAIR:
+always @(posedge clk or negedge rst_n) begin
+  if (!rst_n) irq <= 1'b0;
+  else irq <= (done | fault);
+end
+
+BAD REPAIR:
+assign irq = child_irq;
+always @(*) irq = masked_irq;
+
+GOOD REPAIR:
+assign irq = child_irq;
+
+BAD REPAIR:
+always @(posedge clk or negedge rst_n) status_reg <= next_status_a;
+always @(posedge clk or negedge rst_n) status_reg <= next_status_b;
+
+GOOD REPAIR:
+always @(posedge clk or negedge rst_n) begin
+  if (!rst_n) status_reg <= RESET_VALUE;
+  else status_reg <= merged_next_status;
+end
 
 REPAIR PRIORITY ORDER
 1. BLKANDNBLK
@@ -878,7 +1016,9 @@ WARNING-ONLY LINT REPAIR RULE
 - Prefer minimal local fixes only if they are straightforward and preserve behavior.
 - Do not perform broad rewrites for warning-only lint.
 
+
 When repairing RTL, fix these classes of issues first:
+
 
 1. FSM / latch issues
 - Eliminate latch-prone combinational FSM logic.
