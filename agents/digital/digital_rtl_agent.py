@@ -715,6 +715,33 @@ always @(*) begin
   endcase
 end
 
+PROCEDURAL OUTPUT DECLARATION RULES (MANDATORY)
+
+- If an output is assigned inside any always @(*) block or any clocked always block, that output must be declared as a reg-style procedural output in Verilog-2005.
+- Do NOT declare an output as a plain wire-style output if it is assigned procedurally.
+- If an output is driven only by a continuous assign statement, it may remain a plain output wire-style port.
+- Never procedurally assign to a wire-style output.
+
+GOOD:
+output reg [31:0] prdata;
+always @(*) begin
+  prdata = 32'h00000000;
+  case (paddr)
+    ...
+    default: prdata = 32'h00000000;
+  endcase
+end
+
+GOOD:
+output [31:0] prdata;
+assign prdata = prdata_mux;
+
+BAD:
+output [31:0] prdata;
+always @(*) begin
+  prdata = 32'h00000000;
+end
+
 INTERNAL SIGNAL ROLE SEPARATION RULES (MANDATORY)
 
 - Distinguish:
@@ -1076,6 +1103,12 @@ always @(posedge clk or negedge rst_n) begin
   if (!rst_n) status_reg <= RESET_VALUE;
   else status_reg <= merged_next_status;
 end
+
+PROCEDURAL OUTPUT REPAIR RULE
+- If compile or lint shows PROCASSWIRE, rewrite the affected signal so that:
+  - either it becomes a reg-style procedural output and remains procedurally assigned
+  - or it is moved to a continuous assign path and is no longer assigned in always blocks
+- The repair is incomplete if a procedurally assigned signal remains declared as a wire-style output.
 
 REPAIR PRIORITY ORDER
 1. BLKANDNBLK
