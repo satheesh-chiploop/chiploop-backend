@@ -647,6 +647,74 @@ UNUSED SIGNAL HYGIENE
 - If an inter-module signal is owned by a child module according to signal_ownership, the top module MUST NOT recreate, shortcut, alias, or directly assign that signal from a top-level input or any other source.
 - The top module may only connect child-owned internal signals structurally through wires and port connections.
 
+DECLARED PORT COMPLETENESS RULES (MANDATORY)
+
+- Every declared output port must be explicitly driven in the final RTL.
+- Every declared input port must be:
+  - used in functional logic, or
+  - reflected in a specified status/readback path, or
+  - intentionally tied into a benign deterministic condition that is consistent with the spec.
+- Do not leave any declared output undriven.
+- Do not leave any declared input completely unused if the spec gives it behavioral meaning.
+
+For flat single-module register-based peripherals:
+- if a control/output signal is listed in the interface, define its exact register or logic source
+- if a status/data input is listed in the interface, define where it is captured or exposed in readback
+- if a readiness/fault/done input is listed, define whether it affects control gating, status bits, or interrupt generation
+
+DECLARED PORT USAGE EXAMPLES
+
+BAD:
+input        ana_ready;
+output reg   dac_enable;
+// ana_ready never used
+// dac_enable never assigned
+
+GOOD:
+input        ana_ready;
+output reg   dac_enable;
+
+always @(*) begin
+  dac_enable = control_reg[2] & ana_ready;
+end
+
+BAD:
+input  [11:0] adc_data;
+input         adc_done;
+reg    [11:0] adc_data_reg;
+
+// adc_data declared but never captured
+
+GOOD:
+input  [11:0] adc_data;
+input         adc_done;
+reg    [11:0] adc_data_reg;
+
+always @(posedge clk or negedge rst_n) begin
+  if (!rst_n)
+    adc_data_reg <= 12'h000;
+  else if (adc_done)
+    adc_data_reg <= adc_data;
+end
+
+BAD:
+always @(*) begin
+  case (paddr)
+    8'h00: prdata = control_reg;
+    8'h04: prdata = status_reg;
+  endcase
+end
+
+GOOD:
+always @(*) begin
+  prdata = 32'h00000000;
+  case (paddr)
+    8'h00: prdata = control_reg;
+    8'h04: prdata = status_reg;
+    default: prdata = 32'h00000000;
+  endcase
+end
+
 INTERNAL SIGNAL ROLE SEPARATION RULES (MANDATORY)
 
 - Distinguish:
@@ -973,6 +1041,12 @@ SPECIAL REPAIR RULE FOR REGISTER/STATUS LOGIC
 If multiple clocked blocks update the same stored register or status/output register:
 - merge those updates into one legal clocked always block
 - do not keep separate clocked writers for the same signal
+
+WARNING CLEANUP RULE FOR DECLARED PORTS
+If Verilator reports:
+- UNDRIVEN on a declared output, the repair is incomplete until that output has an explicit legal driver.
+- UNUSEDSIGNAL on a declared input with behavioral meaning from the spec, the repair is incomplete until that input is functionally consumed or exposed through status/readback.
+- CASEINCOMPLETE, the repair is incomplete until a default branch is present.
 
 GOOD/BAD REPAIR EXAMPLES
 
