@@ -398,17 +398,21 @@ def _default_sva_module(module_name: str, sva_spec: Dict[str, Any]) -> str:
     outputs = [p["name"] for p in ports if p.get("direction") == "output"]
 
     module_ports: List[str] = []
-    if primary_clock:
-        module_ports.append(f"  input logic {primary_clock}")
-    if primary_reset:
-        module_ports.append(f"  input logic {primary_reset}")
-    for nm in inputs:
-        if nm not in {primary_clock, primary_reset}:
-            module_ports.append(f"  input logic {nm}")
-    for nm in outputs:
-        if nm not in {primary_clock, primary_reset}:
-            module_ports.append(f"  input logic {nm}")
 
+    all_ports = set()
+
+    if primary_clock:
+        all_ports.add(primary_clock)
+    if primary_reset:
+        all_ports.add(primary_reset)
+
+    for nm in inputs:
+        all_ports.add(nm)
+    for nm in outputs:
+        all_ports.add(nm)
+
+    module_ports = [f"  input logic {nm}" for nm in sorted(all_ports)]
+    
     if not module_ports:
         module_ports.append("  input logic dummy_clk")
 

@@ -177,7 +177,7 @@ def run_agent(state: dict) -> dict:
             )
 
         if coverage_md_present:
-            artifacts["functional_coverage_summary"] = _record_text(
+            artifacts["functional_coverage_md"] = _record_text(
                 workflow_id, agent_name, "vv/tb/reports",
                 "COVERAGE.md",
                 open(coverage_md_path).read()

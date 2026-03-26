@@ -708,6 +708,8 @@ override export PYTHON_BIN := {python_exe}
 override export PYTHON     := {python_exe}
 override SIM := verilator
 EXTRA_ARGS += --trace --trace-structs
+EXTRA_ARGS += -Wno-fatal
+EXTRA_ARGS += -Wno-CASEINCOMPLETE
 
 include rtl_sources.mk
 -include verification_sources.mk
