@@ -409,7 +409,7 @@ SELF-CHECK BEFORE OUTPUT
     if compile_failed or fatal_lint:
         repair_used = True
         failure_text = f"Icarus:\n{compile_status}\n\nVerilator:\n{verilator_log}"
-        repair_prompt = _build_repair_prompt(spec, module_name, model, failure_text)
+        repair_prompt = _build_repair_prompt(prompt, spec, module_name, model, failure_text)
         repaired_raw = llm_text(repair_prompt)
         repaired_model = _extract_sv_module(repaired_raw)
         repaired_model = _force_module_name(repaired_model, module_name)
