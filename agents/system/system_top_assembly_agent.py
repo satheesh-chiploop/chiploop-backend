@@ -492,29 +492,27 @@ RTL FILELIST:
 CURRENT TOP MODULE CODE:
 ```systemverilog
 {top_code}
+```
 
 IVERILOG LOG:
-
+```text
 {_tail_text(iverilog_log)}
+```
 
 VERILATOR LOG:
-
+```text
 {_tail_text(verilator_log)}
+```
 
 STRICT RULES:
-
-Respect actual port directions.
-
-Do not invent new instances.
-
-Do not rename u_digital or u_analog.
-
-Do not modify leaf module RTL.
-
-Keep only one top module in output.
-
-Return ONLY corrected SystemVerilog code for the top module.
+- Respect actual port directions.
+- Do not invent new instances.
+- Do not rename u_digital or u_analog.
+- Do not modify leaf module RTL.
+- Keep only one top module in output.
+- Return ONLY corrected SystemVerilog code for the top module.
 """
+
 
 def _run_system_top_pass2_repair(
     top_module: str,
