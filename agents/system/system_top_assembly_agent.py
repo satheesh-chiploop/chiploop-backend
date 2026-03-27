@@ -1103,16 +1103,20 @@ def run_agent(state: dict) -> dict:
         )
         return state
 
-    
-
-    state["rtl_inputs"] = merged_rtl
-    state["system_rtl_files"] = merged_rtl
+    # Keep sim RTL as the default "rtl_inputs" because downstream simulation-style
+    # consumers typically expect compilable RTL including the analog behavioral model.
+    state["rtl_inputs"] = sim_abs_list
+    state["system_rtl_files"] = sim_abs_list
 
     system_block = state.setdefault("system", {})
-    system_block["rtl_inputs"] = merged_rtl
+    system_block["rtl_inputs"] = sim_abs_list
+    system_block["rtl_filelist_sim"] = sim_abs_list
+    system_block["rtl_filelist_phys"] = phys_abs_list
+    system_block["lib_filelist_phys"] = phys_lib_abs_list
     system_block["soc_top_sim_path"] = state["soc_top_sim_path"]
     system_block["soc_top_phys_path"] = state["soc_top_phys_path"]
 
-    
     state["status"] = f"✅ Generated SoC tops: {top_sim}.sv and {top_phys}.sv"
     return state
+
+    
