@@ -1,6 +1,7 @@
 import json
 import re
 import os
+import subprocess
 from utils.artifact_utils import save_text_artifact_and_record
 
 # ---------------------------------------------------------------------
@@ -388,7 +389,60 @@ def _assemble_top(top_module: str, intent: dict, variant: str, module_port_db: d
     lines.append("endmodule")
     return "\n".join(lines)
 
+def _abs_existing_rtl_files(workflow_dir: str, rels):
+    out = []
+    for p in rels or []:
+        if not isinstance(p, str) or not p.strip():
+            continue
+        abs_p = p if os.path.isabs(p) else os.path.join(workflow_dir, p)
+        if os.path.isfile(abs_p) and abs_p not in out:
+            out.append(abs_p)
+    return out
 
+
+def _run_iverilog_full_compile(workflow_dir: str, top_module: str, rtl_files):
+    log_path = os.path.join(workflow_dir, "system", "integration", "system_full_compile_iverilog.log")
+    cmd = [
+        "iverilog",
+        "-g2012",
+        "-s", top_module,
+        "-o", os.path.join(workflow_dir, "system", "integration", "soc_top_sim.out"),
+        *rtl_files,
+    ]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, cwd=workflow_dir)
+        text = f"$ {' '.join(cmd)}\n\nSTDOUT:\n{proc.stdout}\n\nSTDERR:\n{proc.stderr}\n"
+        with open(log_path, "w", encoding="utf-8") as f:
+            f.write(text)
+        return proc.returncode == 0, text
+    except Exception as e:
+        text = f"Iverilog invocation failed: {e}"
+        with open(log_path, "w", encoding="utf-8") as f:
+            f.write(text)
+        return False, text
+
+
+def _run_verilator_full_lint(workflow_dir: str, top_module: str, rtl_files):
+    log_path = os.path.join(workflow_dir, "system", "integration", "system_full_compile_verilator.log")
+    cmd = [
+        "verilator",
+        "--lint-only",
+        "--timing",
+        "-Wall",
+        "--top-module", top_module,
+        *rtl_files,
+    ]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, cwd=workflow_dir)
+        text = f"$ {' '.join(cmd)}\n\nSTDOUT:\n{proc.stdout}\n\nSTDERR:\n{proc.stderr}\n"
+        with open(log_path, "w", encoding="utf-8") as f:
+            f.write(text)
+        return proc.returncode == 0, text
+    except Exception as e:
+        text = f"Verilator invocation failed: {e}"
+        with open(log_path, "w", encoding="utf-8") as f:
+            f.write(text)
+        return False, text
 
 
 def run_agent(state: dict) -> dict:
@@ -522,10 +576,55 @@ def run_agent(state: dict) -> dict:
     if not isinstance(existing_rtl, list):
         existing_rtl = [existing_rtl] if existing_rtl else []
 
+    discovered_rtl = []
+    if workflow_dir:
+        discovered_rtl = [
+            p.replace("\\", "/")
+            for p in _collect_module_files(workflow_dir)
+        ]
+
     merged_rtl = []
-    for p in existing_rtl + [state["soc_top_sim_path"]]:
+
+    for p in existing_rtl + discovered_rtl + [state["soc_top_sim_path"]]:
         if isinstance(p, str) and p.strip() and p not in merged_rtl:
             merged_rtl.append(p)
+       
+
+    full_rtl_abs = _abs_existing_rtl_files(workflow_dir, merged_rtl)
+
+    if workflow_dir and full_rtl_abs:
+        ok_iverilog, iverilog_log = _run_iverilog_full_compile(workflow_dir, top_sim, full_rtl_abs)
+        ok_verilator, verilator_log = _run_verilator_full_lint(workflow_dir, top_sim, full_rtl_abs)
+
+        save_text_artifact_and_record(
+            workflow_id, agent_name, "system/integration",
+            "system_full_compile_iverilog.log", iverilog_log
+        )
+        save_text_artifact_and_record(
+            workflow_id, agent_name, "system/integration",
+            "system_full_compile_verilator.log", verilator_log
+        )
+
+        compile_summary = {
+            "top_module": top_sim,
+            "rtl_files": full_rtl_abs,
+            "iverilog_ok": ok_iverilog,
+            "verilator_ok": ok_verilator,
+        }
+        save_text_artifact_and_record(
+            workflow_id, agent_name, "system/integration",
+            "system_full_compile_summary.json", json.dumps(compile_summary, indent=2)
+        )
+
+        state["system_full_compile_ok"] = bool(ok_iverilog and ok_verilator)
+        state["system_full_compile_summary"] = compile_summary
+
+        if not ok_iverilog or not ok_verilator:
+            state["status"] = (
+                f"⚠️ Generated SoC tops: {top_sim}.sv and {top_phys}.sv, "
+                f"but full RTL compile/lint failed"
+            )
+            return state
 
     state["rtl_inputs"] = merged_rtl
     state["system_rtl_files"] = merged_rtl

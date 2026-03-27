@@ -566,12 +566,13 @@ def _build_deterministic_rescue_connections(intent: dict, digital_sigs: dict, an
             exposed_top_ports.add(name)
 
     # 4) Expose digital outputs to top
+
     for p in d_outputs:
         name = pname(p)
         if _classify_top_port(pnorm(p)):
             continue
         top_name = _canonical_top_port_name(name)
-        add_conn(f"top.{top_name}", f"{inst_a}.{name}")
+        add_conn(f"{inst_a}.{name}", f"top.{top_name}")
         exposed_top_ports.add(name)
 
     return connections, sorted(exposed_top_ports)
@@ -1106,6 +1107,16 @@ CONTEXT / CONSTRAINTS:
 - Keep sim/phys top port intent consistent. If analog sim/phys module names differ, use variants.module_overrides.
 - Reuse identical port names across blocks whenever appropriate.
 - Do not assume ADC-specific names unless they are present in the input signatures/description.
+
+STRICT CONNECTIVITY RULES:
+- Respect actual port directions from discovered module signatures.
+- Never connect top.<signal> -> instance.<port> if instance.<port> is an output.
+- Never connect instance.<port> -> top.<signal> if instance.<port> is an input.
+- For instance-to-instance edges, source must be output/inout and destination must be input/inout.
+- Do not create top ports for internal analog status/control unless explicitly required.
+- Prefer digital<->analog direct links when names and behavior align.
+- APB response ports such as prdata/pready/pslverr and irq must be driven from digital to top, not top to digital.
+- Return only strict JSON.
 
 
 🔒 IMPORTANT OUTPUT FORMAT RULES
