@@ -115,6 +115,9 @@ def _normalize_tieoff_entry(t: dict):
     port = t.get("port")
     return inst, port, t.get("value")
 
+
+
+
 def _collect_module_files(workflow_dir: str):
     rels = []
     if not workflow_dir or not os.path.isdir(workflow_dir):
@@ -130,10 +133,21 @@ def _collect_module_files(workflow_dir: str):
             continue
         for walk_root, _, files in os.walk(root):
             for name in sorted(files):
-                if name.endswith(".sv") or name.endswith(".v"):
-                    abs_path = os.path.join(walk_root, name)
-                    rel_path = os.path.relpath(abs_path, workflow_dir)
-                    rels.append(rel_path.replace("\\", "/"))
+                if not (name.endswith(".sv") or name.endswith(".v")):
+                    continue
+
+                abs_path = os.path.join(walk_root, name)
+                rel_path = os.path.relpath(abs_path, workflow_dir).replace("\\", "/")
+
+                # Do not rediscover generated SoC top assembly outputs.
+                if rel_path.startswith("system/integration/") and (
+                    name.endswith("_sim.sv") or
+                    name.endswith("_phys.sv") or
+                    name.startswith("soc_top_")
+                ):
+                    continue
+
+                rels.append(rel_path)
     return rels
 
 def _collect_lib_files(workflow_dir: str):
@@ -430,44 +444,50 @@ def _abs_existing_rtl_files(workflow_dir: str, rels):
 
 def _filter_analog_behavioral_for_phys(rel_paths):
     """
-    Phys compile should exclude analog behavioral model RTL.
-    Keep system top + digital RTL + any physical stub/wrapper RTL if present.
+    Phys compile should exclude analog behavioral RTL.
+    Keep digital RTL, the generated phys top, and only analog stub/wrapper/macro-style RTL
+    when such a physical-facing Verilog view exists.
     """
     out = []
     for p in rel_paths or []:
         norm = str(p).replace("\\", "/").lower()
+        base = os.path.basename(norm)
 
-        # Exclude common behavioral/model file patterns under analog/
-        if norm.startswith("analog/") and (
-            "/behavior" in norm
-            or "_model." in norm
-            or "behavioral" in norm
-            or "abstract" in norm
-        ):
-            continue
+        if norm.startswith("analog/"):
+            # Keep only explicit physical-facing analog views in RTL form.
+            keep_analog = (
+                "_stub." in base or
+                "_wrapper." in base or
+                "blackbox" in base or
+                "_macro." in base or
+                base.startswith("macro_")
+            )
+            if not keep_analog:
+                continue
 
         out.append(p)
     return out
-
 
 def _build_system_filelists(workflow_dir: str, existing_rtl, discovered_rtl, sim_top_rel: str, phys_top_rel: str):
     existing_rtl = existing_rtl or []
     discovered_rtl = discovered_rtl or []
 
-    sim_rel = []
+    base_rel = []
     for p in existing_rtl + discovered_rtl:
-        if isinstance(p, str) and p.strip() and p not in sim_rel:
-            sim_rel.append(p)
-    if sim_top_rel not in sim_rel:
-        sim_rel.append(sim_top_rel)
+        if not isinstance(p, str) or not p.strip():
+            continue
+        norm = p.replace("\\", "/")
+        if norm in (sim_top_rel, phys_top_rel):
+            continue
+        if norm not in base_rel:
+            base_rel.append(norm)
 
-    phys_base = _filter_analog_behavioral_for_phys(existing_rtl + discovered_rtl)
-    phys_rel = []
-    for p in phys_base:
-        if isinstance(p, str) and p.strip() and p not in phys_rel:
-            phys_rel.append(p)
-    if phys_top_rel not in phys_rel:
-        phys_rel.append(phys_top_rel)
+    sim_rel = list(base_rel)
+    sim_rel.append(sim_top_rel)
+
+    phys_base = _filter_analog_behavioral_for_phys(base_rel)
+    phys_rel = list(phys_base)
+    phys_rel.append(phys_top_rel)
 
     sim_abs = _abs_existing_rtl_files(workflow_dir, sim_rel)
     phys_abs = _abs_existing_rtl_files(workflow_dir, phys_rel)
@@ -588,14 +608,13 @@ def _run_pass2_for_top(
         "verilator_log_pass2": verilator_log_2,
     }
 
-
 def _run_iverilog_full_compile(workflow_dir: str, top_module: str, rtl_files):
     log_path = os.path.join(workflow_dir, "system", "integration", "system_full_compile_iverilog.log")
     cmd = [
         "iverilog",
         "-g2012",
         "-s", top_module,
-        "-o", os.path.join(workflow_dir, "system", "integration", "soc_top_sim.out"),
+        "-o", os.path.join(workflow_dir, "system", "integration", f"{top_module}.out"),
         *rtl_files,
     ]
     try:
@@ -609,6 +628,8 @@ def _run_iverilog_full_compile(workflow_dir: str, top_module: str, rtl_files):
         with open(log_path, "w", encoding="utf-8") as f:
             f.write(text)
         return False, text
+
+
 
 
 def _run_verilator_full_lint(workflow_dir: str, top_module: str, rtl_files):
