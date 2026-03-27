@@ -121,10 +121,9 @@ def _collect_module_files(workflow_dir: str):
         return rels
 
     candidate_roots = [
-        os.path.join(workflow_dir, "digital"),
+        os.path.join(workflow_dir, "digital", "rtl_refactored"),
         os.path.join(workflow_dir, "analog"),
         os.path.join(workflow_dir, "system"),
-        os.path.join(workflow_dir, "rtl"),
     ]
     for root in candidate_roots:
         if not os.path.isdir(root):
@@ -132,9 +131,10 @@ def _collect_module_files(workflow_dir: str):
         for walk_root, _, files in os.walk(root):
             for name in sorted(files):
                 if name.endswith(".sv") or name.endswith(".v"):
-                    rels.append(os.path.join(walk_root, name).replace("\\", "/"))
+                    abs_path = os.path.join(walk_root, name)
+                    rel_path = os.path.relpath(abs_path, workflow_dir)
+                    rels.append(rel_path.replace("\\", "/"))
     return rels
-
 
 def _strip_sv_comments(text: str) -> str:
     text = re.sub(r"//.*?$", "", text, flags=re.MULTILINE)
@@ -177,10 +177,10 @@ def _extract_module_ports_from_text(sv_text: str):
 
     return out
 
-
 def _load_module_port_db(workflow_dir: str):
     db = {}
-    for abs_path in _collect_module_files(workflow_dir):
+    for rel_path in _collect_module_files(workflow_dir):
+        abs_path = rel_path if os.path.isabs(rel_path) else os.path.join(workflow_dir, rel_path)
         try:
             with open(abs_path, "r", encoding="utf-8") as f:
                 parsed = _extract_module_ports_from_text(f.read())
@@ -701,6 +701,14 @@ def run_agent(state: dict) -> dict:
             p.replace("\\", "/")
             for p in _collect_module_files(workflow_dir)
         ]
+        save_text_artifact_and_record(
+            workflow_id,
+            agent_name,
+            "system/integration",
+            "system_discovered_rtl.txt",
+            "\n".join(discovered_rtl) if discovered_rtl else "(empty)"
+        )
+    
 
     merged_rtl = []
 
