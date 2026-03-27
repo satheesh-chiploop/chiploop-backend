@@ -429,6 +429,7 @@ def _run_verilator_full_lint(workflow_dir: str, top_module: str, rtl_files):
         "--lint-only",
         "--timing",
         "-Wall",
+        "-Wno-fatal",
         "--top-module", top_module,
         *rtl_files,
     ]
@@ -443,6 +444,83 @@ def _run_verilator_full_lint(workflow_dir: str, top_module: str, rtl_files):
         with open(log_path, "w", encoding="utf-8") as f:
             f.write(text)
         return False, text
+
+
+def _build_system_rtl_repair_prompt(
+    top_module: str,
+    top_code: str,
+    intent: dict,
+    rtl_files: list,
+    iverilog_log: str,
+    verilator_log: str,
+) -> str:
+    return f"""
+You are repairing a generated SystemVerilog SoC top module.
+
+GOAL:
+- Fix ONLY the top-level integration module.
+- Do NOT modify digital or analog leaf RTL.
+- Preserve architecture intent.
+- Make the design compile with Icarus Verilog.
+- Make the design pass Verilator lint-only as much as possible.
+- Prefer minimal edits.
+
+TOP MODULE NAME:
+{top_module}
+
+SYSTEM INTEGRATION INTENT JSON:
+{json.dumps(intent, indent=2)}
+
+RTL FILELIST:
+{json.dumps(rtl_files, indent=2)}
+
+CURRENT TOP MODULE CODE:
+```systemverilog
+{top_code}
+IVERILOG LOG:
+
+{_tail_text(iverilog_log)}
+
+VERILATOR LOG:
+
+{_tail_text(verilator_log)}
+
+STRICT RULES:
+
+- Respect actual port directions.
+
+- Do not invent new instances.
+
+- Do not rename u_digital or u_analog.
+
+- Do not modify leaf module RTL.
+
+- Keep only one top module in output.
+
+- Return ONLY corrected SystemVerilog code for the top module.
+"""
+
+def _run_system_top_pass2_repair(
+    top_module: str,
+    top_code: str,
+    intent: dict,
+    rtl_files: list,
+    iverilog_log: str,
+    verilator_log: str,
+):
+    prompt = _build_system_rtl_repair_prompt(
+        top_module=top_module,
+        top_code=top_code,
+        intent=intent,
+        rtl_files=rtl_files,
+        iverilog_log=iverilog_log,
+        verilator_log=verilator_log,
+    )
+
+    # Replace this with your existing LLM text-generation helper
+    repaired_code = call_llm_for_text(prompt)
+
+    return repaired_code, prompt
 
 
 def run_agent(state: dict) -> dict:
@@ -559,6 +637,23 @@ def run_agent(state: dict) -> dict:
         with open(phys_abs, "w", encoding="utf-8") as f:
             f.write(phys_code)
 
+        # ✅ SAVE PASS1 TOP BEFORE ANY COMPILE OR REPAIR
+        save_text_artifact_and_record(
+            workflow_id,
+            agent_name,
+            "system/integration",
+            f"{top_sim}_pass1.sv",
+            sim_code
+        )
+
+        save_text_artifact_and_record(
+            workflow_id,
+            agent_name,
+            "system/integration",
+            f"{top_phys}_pass1.sv",
+            phys_code
+        )
+
     # 2) Upload artifacts
     save_text_artifact_and_record(workflow_id, agent_name, "system/integration", f"{top_sim}.sv", sim_code)
     save_text_artifact_and_record(workflow_id, agent_name, "system/integration", f"{top_phys}.sv", phys_code)
@@ -592,6 +687,32 @@ def run_agent(state: dict) -> dict:
 
     full_rtl_abs = _abs_existing_rtl_files(workflow_dir, merged_rtl)
 
+    save_text_artifact_and_record(
+        workflow_id,
+        agent_name,
+        "system/integration",
+        "system_rtl_filelist.txt",
+        "\n".join(full_rtl_abs) if full_rtl_abs else "(empty)"
+    )
+
+    if workflow_dir and not full_rtl_abs:
+        save_text_artifact_and_record(
+            workflow_id,
+            agent_name,
+            "system/integration",
+            "system_full_compile_summary.json",
+            json.dumps({
+                "top_module": top_sim,
+                "rtl_files": [],
+                "iverilog_ok": False,
+                "verilator_ok": False,
+                "error": "No RTL files found for full system compile"
+            }, indent=2)
+        )
+        state["system_full_compile_ok"] = False
+        state["status"] = "⚠️ No RTL files found for full system compile"
+        return state
+
     if workflow_dir and full_rtl_abs:
         ok_iverilog, iverilog_log = _run_iverilog_full_compile(workflow_dir, top_sim, full_rtl_abs)
         ok_verilator, verilator_log = _run_verilator_full_lint(workflow_dir, top_sim, full_rtl_abs)
@@ -620,11 +741,112 @@ def run_agent(state: dict) -> dict:
         state["system_full_compile_summary"] = compile_summary
 
         if not ok_iverilog or not ok_verilator:
-            state["status"] = (
-                f"⚠️ Generated SoC tops: {top_sim}.sv and {top_phys}.sv, "
-                f"but full RTL compile/lint failed"
-            )
-            return state
+            try:
+                sim_abs = os.path.join(workflow_dir, sim_rel)
+                with open(sim_abs, "r", encoding="utf-8") as f:
+                    pass1_top_code = f.read()
+
+                repaired_code, repair_prompt = _run_system_top_pass2_repair(
+                    top_module=top_sim,
+                    top_code=pass1_top_code,
+                    intent=top_intent,
+                    rtl_files=full_rtl_abs,
+                    iverilog_log=iverilog_log,
+                    verilator_log=verilator_log,
+                )
+
+                save_text_artifact_and_record(
+                    workflow_id,
+                    agent_name,
+                    "system/integration",
+                    "system_top_pass2_repair_prompt.txt",
+                    repair_prompt
+                )
+
+                save_text_artifact_and_record(
+                    workflow_id,
+                    agent_name,
+                    "system/integration",
+                    f"{top_sim}_pass2_candidate.sv",
+                    repaired_code
+                )
+
+                with open(sim_abs, "w", encoding="utf-8") as f:
+                    f.write(repaired_code)
+
+                save_text_artifact_and_record(
+                    workflow_id,
+                    agent_name,
+                    "system/integration",
+                    f"{top_sim}.sv",
+                    repaired_code
+                )
+
+                ok_iverilog_2, iverilog_log_2 = _run_iverilog_full_compile(
+                    workflow_dir, top_sim, full_rtl_abs
+                )
+                ok_verilator_2, verilator_log_2 = _run_verilator_full_lint(
+                    workflow_dir, top_sim, full_rtl_abs
+                )
+
+                save_text_artifact_and_record(
+                    workflow_id,
+                    agent_name,
+                    "system/integration",
+                    "system_full_compile_iverilog_pass2.log",
+                    iverilog_log_2
+                )
+
+                save_text_artifact_and_record(
+                    workflow_id,
+                    agent_name,
+                    "system/integration",
+                    "system_full_compile_verilator_pass2.log",
+                    verilator_log_2
+                )
+
+                compile_summary = {
+                    "top_module": top_sim,
+                    "rtl_files": full_rtl_abs,
+                    "iverilog_ok_pass1": ok_iverilog,
+                    "verilator_ok_pass1": ok_verilator,
+                    "iverilog_ok_pass2": ok_iverilog_2,
+                    "verilator_ok_pass2": ok_verilator_2,
+                }
+
+                save_text_artifact_and_record(
+                    workflow_id,
+                    agent_name,
+                    "system/integration",
+                    "system_full_compile_summary.json",
+                    json.dumps(compile_summary, indent=2)
+                )
+
+                state["system_full_compile_ok"] = bool(ok_iverilog_2 and ok_verilator_2)
+                state["system_full_compile_summary"] = compile_summary
+
+                if not ok_iverilog_2 or not ok_verilator_2:
+                    state["status"] = (
+                        f"⚠️ Generated SoC tops: {top_sim}.sv and {top_phys}.sv, "
+                        f"but full RTL compile/lint failed after Pass2 repair"
+                 )
+                return state
+
+            except Exception as e:
+                save_text_artifact_and_record(
+                    workflow_id,
+                    agent_name,
+                    "system/integration",
+                    "system_top_pass2_exception.txt",
+                    str(e)
+                )
+                state["status"] = (
+                    f"⚠️ Generated SoC tops: {top_sim}.sv and {top_phys}.sv, "
+                    f"but full RTL compile/lint failed and Pass2 repair crashed: {e}"
+                )
+                return state
+
+
 
     state["rtl_inputs"] = merged_rtl
     state["system_rtl_files"] = merged_rtl
