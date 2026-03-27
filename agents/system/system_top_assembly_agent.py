@@ -3,6 +3,7 @@ import re
 import os
 import subprocess
 from utils.artifact_utils import save_text_artifact_and_record
+from agents.analog._analog_llm import llm_text, safe_json_load
 
 # ---------------------------------------------------------------------
 # System Loop: Top Assembly Agent
@@ -445,6 +446,20 @@ def _run_verilator_full_lint(workflow_dir: str, top_module: str, rtl_files):
             f.write(text)
         return False, text
 
+def _tail_text(s: str, max_chars: int = 12000) -> str:
+    s = s or ""
+    return s[-max_chars:] if len(s) > max_chars else s
+
+def _strip_code_fences(text: str) -> str:
+    text = (text or "").strip()
+    if text.startswith("```"):
+        lines = text.splitlines()
+        if lines and lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        text = "\n".join(lines).strip()
+    return text
 
 def _build_system_rtl_repair_prompt(
     top_module: str,
@@ -477,6 +492,7 @@ RTL FILELIST:
 CURRENT TOP MODULE CODE:
 ```systemverilog
 {top_code}
+
 IVERILOG LOG:
 
 {_tail_text(iverilog_log)}
@@ -487,17 +503,17 @@ VERILATOR LOG:
 
 STRICT RULES:
 
-- Respect actual port directions.
+Respect actual port directions.
 
-- Do not invent new instances.
+Do not invent new instances.
 
-- Do not rename u_digital or u_analog.
+Do not rename u_digital or u_analog.
 
-- Do not modify leaf module RTL.
+Do not modify leaf module RTL.
 
-- Keep only one top module in output.
+Keep only one top module in output.
 
-- Return ONLY corrected SystemVerilog code for the top module.
+Return ONLY corrected SystemVerilog code for the top module.
 """
 
 def _run_system_top_pass2_repair(
@@ -517,10 +533,20 @@ def _run_system_top_pass2_repair(
         verilator_log=verilator_log,
     )
 
-    # Replace this with your existing LLM text-generation helper
-    repaired_code = call_llm_for_text(prompt)
+    repaired_code = llm_text(prompt)
+    repaired_code = _strip_code_fences(repaired_code)
+
+    if not repaired_code.strip():
+        raise RuntimeError("System RTL Pass2 repair returned empty output")
+
+    if f"module {top_module}" not in repaired_code:
+        raise RuntimeError(
+            f"System RTL Pass2 repair did not return expected top module '{top_module}'"
+        )
 
     return repaired_code, prompt
+
+
 
 
 def run_agent(state: dict) -> dict:
@@ -829,8 +855,8 @@ def run_agent(state: dict) -> dict:
                     state["status"] = (
                         f"⚠️ Generated SoC tops: {top_sim}.sv and {top_phys}.sv, "
                         f"but full RTL compile/lint failed after Pass2 repair"
-                 )
-                return state
+                    )
+                    return state
 
             except Exception as e:
                 save_text_artifact_and_record(
