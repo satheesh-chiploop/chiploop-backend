@@ -319,7 +319,7 @@ def _assemble_top(top_module: str, intent: dict, variant: str, module_port_db: d
 
         width = _merge_range(sr_real, dr_real)
 
-                if si == "top" and di != "top":
+        if si == "top" and di != "top":
             dst_key = (di, dp)
             if dst_key in driven_instance_ports:
                 raise ValueError(f"Multiple drivers detected for {di}.{dp} during top assembly.")
