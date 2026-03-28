@@ -1089,7 +1089,7 @@ Use these in variants.module_overrides for instance 'u_analog' if applicable
 """.strip()
 
 
-prompt = f"""
+    prompt = f"""
 SYSTEM / SoC INTEGRATION DESCRIPTION:
 {integration_description}
 
