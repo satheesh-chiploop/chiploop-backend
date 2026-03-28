@@ -391,17 +391,17 @@ def run_agent(state: dict) -> dict:
     coverage_md_present = os.path.exists(coverage_md_path)
 
     ui_results = []
-for r in results:
-    ui_results.append({
-        "test": r.get("testcase"),
-        "seed": r.get("seed"),
-        "status": "PASS" if r.get("pass") else "FAIL",
-        "rc": r.get("returncode"),
-        "runtime_sec": r.get("runtime_sec"),
-        "stdout_tail": r.get("stdout_tail", []),
-        "stderr_tail": r.get("stderr_tail", []),
-        "log_path": r.get("log_path"),
-    })
+    for r in results:
+        ui_results.append({
+            "test": r.get("testcase"),
+            "seed": r.get("seed"),
+            "status": "PASS" if r.get("pass") else "FAIL",
+            "rc": r.get("returncode"),
+            "runtime_sec": r.get("runtime_sec"),
+            "stdout_tail": r.get("stdout_tail", []),
+            "stderr_tail": r.get("stderr_tail", []),
+            "log_path": r.get("log_path"),
+        })
 
     summary = {
         "type": "system_sim_execution",
@@ -546,4 +546,3 @@ for r in results:
     state["status"] = f"✅ System simulation executed: {tests_passed}/{len(results)} runs passed"
     return state
 
-   
