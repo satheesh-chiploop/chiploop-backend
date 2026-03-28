@@ -809,12 +809,13 @@ async def integrated_input_sanity(dut):
         except Exception:
             pass
 '''
-    
+    def _to_python_literal(obj):
+        return repr(obj)
     return (
         template
         .replace("{top}", top)
-        .replace("{control_model_json}", json.dumps(control_model, indent=2))
-        .replace("{scenario_model_json}", json.dumps(scenario_model, indent=2))
+        .replace("{control_model_json}", _to_python_literal(control_model))
+        .replace("{scenario_model_json}", _to_python_literal(scenario_model))
         .replace("{clocks_json}", json.dumps(clocks, indent=2))
         .replace("{clock_start}", clock_start.rstrip())
         .replace("{reset_seq}", reset_seq.rstrip())

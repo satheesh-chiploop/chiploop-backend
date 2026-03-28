@@ -869,7 +869,7 @@ class CoverageModel:
 '''
     return template.format(
         top=top,
-        coverage_spec_json=json.dumps(cov_spec, indent=2),
+        coverage_spec_json=repr(cov_spec),
     )
 
 
