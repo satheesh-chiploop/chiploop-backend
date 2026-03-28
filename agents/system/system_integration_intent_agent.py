@@ -1068,7 +1068,7 @@ def run_agent(state: dict) -> dict:
                     "u_analog": analog_phys_module
                 }
             }
-        }
+        },
         "control_model": {},
         "observable_behaviors": [],
         "test_intent": {},
