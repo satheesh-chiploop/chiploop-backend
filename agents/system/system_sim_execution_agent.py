@@ -210,45 +210,53 @@ def run_agent(state: dict) -> dict:
 
     
 
-    tests = (
-        state.get("system_sim_testcases")
-        or state.get("simulation_testcases")
-        or manifest.get("default_tests")
-        or ["system_smoke_test", "integrated_input_sanity"]
-    )
-
-    if isinstance(tests, list):
-        normalized_tests: List[str] = []
-        for t in tests:
-            if isinstance(t, dict):
-                name = str(t.get("name") or "").strip()
-                if name:
-                    normalized_tests.append(name)
-            elif isinstance(t, str) and t.strip():
-                normalized_tests.append(t.strip())
-        tests = normalized_tests or ["system_smoke_test", "integrated_input_sanity"]
-    else:
-        tests = ["system_smoke_test", "integrated_input_sanity"]
-
     manifest_tests = manifest.get("default_tests") or []
     manifest_tests = [str(x).strip() for x in manifest_tests if str(x).strip()]
 
-    unknown_tests = [t for t in tests if manifest_tests and t not in manifest_tests]
-    if unknown_tests:
-        state["status"] = (
-            f"❌ Requested tests not present in simulation manifest: {unknown_tests}. "
-            f"Allowed tests: {manifest_tests}"
-        )
-        return state
+    # Manifest is the source of truth
+    tests = manifest_tests or ["system_smoke_test", "integrated_input_sanity"]
+
+
+    # Optional user/state override, but only if valid
+    requested_tests = (
+        state.get("system_sim_testcases")
+        or state.get("simulation_testcases")
+        or []
+    )
+
+    normalized_requested: List[str] = []
+    if isinstance(requested_tests, list):
+        for t in requested_tests:
+            if isinstance(t, dict):
+                name = str(t.get("name") or "").strip()
+                if name:
+                    normalized_requested.append(name)
+            elif isinstance(t, str) and t.strip():
+                normalized_requested.append(t.strip())
+
+    # Optional backward compatibility for older orchestration values
+    legacy_test_remap = {
+        "smoke_test": "system_smoke_test",
+        "constrained_random_sanity": "integrated_input_sanity",
+    }
+    normalized_requested = [legacy_test_remap.get(t, t) for t in normalized_requested]
+
+    if normalized_requested and manifest_tests:
+        valid_requested = [t for t in normalized_requested if t in manifest_tests]
+        if valid_requested:
+            tests = valid_requested
 
     _write(
         log_path,
         "System Simulation Execution Agent Log\n"
         + f"manifest_top={manifest.get('top_module')}\n"
         + f"selected_top={top}\n"
-        + f"manifest_default_tests={json.dumps(manifest.get('default_tests') or [], indent=2)}\n"
+        + f"manifest_default_tests={json.dumps(manifest_tests, indent=2)}\n"
+        + f"requested_tests={json.dumps(normalized_requested, indent=2)}\n"
         + f"selected_tests={json.dumps(tests, indent=2)}\n"
     )
+
+
 
     seeds = state.get("system_sim_seeds") or state.get("simulation_seeds") or [1]
     if not isinstance(seeds, list):

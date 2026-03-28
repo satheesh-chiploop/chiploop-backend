@@ -153,6 +153,8 @@ def _normalize_path_list(items: Any) -> List[str]:
 
 
 
+
+
 def _collect_system_rtl_files(workflow_dir: str, state: Dict[str, Any]) -> List[str]:
     candidates: List[str] = []
 
@@ -177,6 +179,8 @@ def _collect_system_rtl_files(workflow_dir: str, state: Dict[str, Any]) -> List[
 
     if candidates:
         return list(dict.fromkeys(candidates))
+
+    return []
 
 
 def _infer_top_module(state: Dict[str, Any], integration: Dict[str, Any], soc_top_sim_path: Optional[str], rtl_files: List[str]) -> str:
@@ -485,4 +489,6 @@ python run_regression.py --tests {' '.join(default_tests)} --seeds 1 2 3 4 5
     state["vv_testcases"] = default_tests
     state["testcases"] = default_tests
     state["top_module"] = top
+    state["system_sim_testcases"] = list(default_tests)
+    state["simulation_testcases"] = list(default_tests)
     return state
