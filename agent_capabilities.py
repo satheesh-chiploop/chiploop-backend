@@ -1240,7 +1240,7 @@ AGENT_CAPABILITIES = {
     },
 
 
-        "System Firmware CoSim Execution Agent": {
+    "System Firmware CoSim Execution Agent": {
         "domain": "system",
         "inputs": [
             "system/integration/soc_top_sim.sv",
@@ -1285,6 +1285,37 @@ AGENT_CAPABILITIES = {
         ],
         "description": "Parses firmware co-simulation execution artifacts and publishes demo-friendly firmware/RTL/assertion coverage summary plus overall run health for UI display.",
         "requires": [],
+    },
+
+    "System Implementation Setup Agent": {
+        "domain": "system",
+        "inputs": [
+            "digital/foundry/foundry_profile.json",
+            "system/integration/*_phys.sv",
+            "system/integration/system_lib_filelist_phys.txt(optional)",
+            "analog/abstract/macro.lef(optional)",
+            "analog/abstract/macro_stub.lib(optional)",
+            "*_spec.json(optional)",
+            "*.sdc(optional)"
+        ],
+        "outputs": [
+            "system/impl_setup/filelist.f",
+            "system/impl_setup/macro_lefs.f",
+            "system/impl_setup/macro_libs.f",
+            "system/impl_setup/macro_gds.f",
+            "system/impl_setup/constraints/*.sdc",
+            "system/impl_setup/corners.json",
+            "system/impl_setup/openlane/config.json",
+            "system/impl_setup/logs/system_implementation_setup_input_resolution.log",
+            "system/impl_setup/system_implementation_setup.log",
+            "system/impl_setup/system_implementation_setup_summary.json"
+        ],
+        "description": (
+            "Prepares System PD inputs for downstream Digital PD by selecting the physical SoC top "
+            "and physical RTL filelist, resolving analog macro LEF/LIB/GDS collateral, generating "
+            "canonical SDC + OpenLane config, and normalizing digital state handoff for synthesis."
+        ),
+        "requires": []
     },
 
     # -------------------------
