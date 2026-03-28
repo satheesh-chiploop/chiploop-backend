@@ -115,9 +115,25 @@ def _record_text(
     except Exception:
         return None
 
-
 def _which(binname: str) -> Optional[str]:
     return shutil.which(binname)
+
+
+def _rel_to_workflow(workflow_dir: str, path: Optional[str]) -> Optional[str]:
+    if not path or not isinstance(path, str):
+        return path
+    try:
+        return os.path.relpath(path, workflow_dir).replace("\\", "/")
+    except Exception:
+        return path.replace("\\", "/")
+
+
+def _rel_list_to_workflow(workflow_dir: str, paths: List[str]) -> List[str]:
+    out: List[str] = []
+    for p in paths or []:
+        if isinstance(p, str) and p.strip():
+            out.append(_rel_to_workflow(workflow_dir, p))
+    return list(dict.fromkeys(out))
 
 
 # -----------------------------------------------------------------------------
@@ -964,16 +980,17 @@ def run_agent(state: dict) -> dict:
         if p and os.path.exists(p)
     ]
 
+
     tb_contract = {
         "type": "vv_tb_contract",
-        "version": "1.0",
+        "version": "1.1",
         "top_module": top,
-        "integration_json_path": integration_json_path,
-        "top_sv_path": top_sv_path,
-        "regmap_json_path": regmap_json_path,
-        "rtl_files": rtl_files,
+        "integration_json_path": _rel_to_workflow(workflow_dir, integration_json_path),
+        "top_sv_path": _rel_to_workflow(workflow_dir, top_sv_path),
+        "regmap_json_path": _rel_to_workflow(workflow_dir, regmap_json_path),
+        "rtl_files": _rel_list_to_workflow(workflow_dir, rtl_files),
         "rtl_source": contract["rtl_source"],
-        "verification_files": verification_files,
+        "verification_files": _rel_list_to_workflow(workflow_dir, verification_files),
         "ports": ports,
         "clock_names": clocks,
         "reset_names": [r["name"] for r in resets],
@@ -1041,14 +1058,18 @@ NUM_ITERS=200 RANDOM_SEED=7 make TESTCASE=integrated_input_sanity
     artifacts["testcases_manifest"] = _record_text(workflow_id, agent_name, "vv/tb", "testcases.json", testcase_manifest_txt)
     artifacts["tb_contract"] = _record_text(workflow_id, agent_name, "vv/tb", "tb_contract.json", tb_contract_txt)
 
+    
+
     report = {
         "type": "vv_system_testbench_generation",
-        "version": "1.0",
+        "version": "1.1",
         "top_module": top,
-        "integration_json_path": integration_json_path,
-        "top_sv_path": top_sv_path,
-        "regmap_json_path": regmap_json_path,
+        "integration_json_path": _rel_to_workflow(workflow_dir, integration_json_path),
+        "top_sv_path": _rel_to_workflow(workflow_dir, top_sv_path),
+        "regmap_json_path": _rel_to_workflow(workflow_dir, regmap_json_path),
         "rtl_file_count": len(rtl_files),
+        "rtl_files": _rel_list_to_workflow(workflow_dir, rtl_files),
+        "verification_files": _rel_list_to_workflow(workflow_dir, verification_files),
         "clocks": clocks,
         "resets": resets,
         "control_model": control_model,

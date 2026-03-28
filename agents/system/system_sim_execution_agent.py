@@ -161,6 +161,7 @@ def _run(cmd: List[str], cwd: Optional[str] = None, env: Optional[Dict[str, str]
             "runtime_sec": dt,
         }
 
+
 def _load_manifest(tb_root: str) -> Dict[str, Any]:
     p = os.path.join(tb_root, "simulation_manifest.json")
     if os.path.exists(p):
@@ -172,6 +173,15 @@ def _load_manifest(tb_root: str) -> Dict[str, Any]:
         except Exception:
             pass
     return {}
+
+
+def _rel_to_workflow(workflow_dir: str, path: Optional[str]) -> Optional[str]:
+    if not path or not isinstance(path, str):
+        return path
+    try:
+        return os.path.relpath(path, workflow_dir).replace("\\", "/")
+    except Exception:
+        return path.replace("\\", "/")
 
 def run_agent(state: dict) -> dict:
     agent_name = "System Simulation Execution Agent"
@@ -322,11 +332,14 @@ def run_agent(state: dict) -> dict:
             ]
 
             run = _run(cmd, cwd=tb_root, env=env, timeout=1800)
+
             run["testcase"] = testcase
             run["seed"] = seed
             run["top_module"] = top
             run["simulator"] = "verilator"
             run["pass"] = _looks_pass(run)
+            run["status"] = "PASS" if run["pass"] else "FAIL"
+ 
 
             stdout_tail = (run.get("stdout") or "").splitlines()[-120:]
             stderr_tail = (run.get("stderr") or "").splitlines()[-120:]
@@ -377,13 +390,33 @@ def run_agent(state: dict) -> dict:
     coverage_json_present = os.path.exists(coverage_json_path)
     coverage_md_present = os.path.exists(coverage_md_path)
 
+    ui_results = []
+for r in results:
+    ui_results.append({
+        "test": r.get("testcase"),
+        "seed": r.get("seed"),
+        "status": "PASS" if r.get("pass") else "FAIL",
+        "rc": r.get("returncode"),
+        "runtime_sec": r.get("runtime_sec"),
+        "stdout_tail": r.get("stdout_tail", []),
+        "stderr_tail": r.get("stderr_tail", []),
+        "log_path": r.get("log_path"),
+    })
+
     summary = {
         "type": "system_sim_execution",
-        "version": "1.1",
+        "version": "1.2",
         "generated_at": _now(),
         "top_module": top,
         "simulator": "verilator",
         "status": "passed" if tests_failed == 0 else ("partial" if any_pass else "failed"),
+
+        # UI-friendly aliases
+        "total_tests": len(results),
+        "passed": tests_passed,
+        "failed": tests_failed,
+        "results": ui_results,
+
         "tools_detected": {
             "make": bool(_which("make")),
             "verilator": verilator_present,
@@ -407,14 +440,16 @@ def run_agent(state: dict) -> dict:
             k: [os.path.relpath(p, workflow_dir).replace("\\", "/") for p in v]
             for k, v in coverage_candidates.items()
         } if any_pass else {},
-        "functional_coverage_summary_json": coverage_json_path,
-        "functional_coverage_md": coverage_md_path,
+        "functional_coverage_summary_json": _rel_to_workflow(workflow_dir, coverage_json_path),
+        "functional_coverage_md": _rel_to_workflow(workflow_dir, coverage_md_path),
         "coverage_json_present": coverage_json_present,
         "coverage_md_present": coverage_md_present,
         "assertions_total": total_assertions,
         "assertion_failures_total": sum(int(r.get("assertion_failures") or 0) for r in results),
         "notes": [] if any_pass else ["No simulation run passed; coverage candidates intentionally suppressed."],
     }
+
+    
 
     exec_json = json.dumps(summary, indent=2)
     md_lines = [
@@ -442,12 +477,26 @@ def run_agent(state: dict) -> dict:
             md_lines.append(f"- `{w}`")
     exec_md = "\n".join(md_lines) + "\n"
 
-    _write(os.path.join(out_root, "system_sim_execution.json"), exec_json)
-    _write(os.path.join(out_root, "system_sim_execution.md"), exec_md)
+
+    system_exec_json_path = os.path.join(out_root, "system_sim_execution.json")
+    summary_alias_json_path = os.path.join(out_root, "simulation_execution_summary.json")
+    system_exec_md_path = os.path.join(out_root, "system_sim_execution.md")
+
+    _write(system_exec_json_path, exec_json)
+    _write(summary_alias_json_path, exec_json)
+    _write(system_exec_md_path, exec_md)
 
     artifacts = {}
-    artifacts["system_sim_execution_json"] = _record(workflow_id, agent_name, "system/sim", "system_sim_execution.json", exec_json)
-    artifacts["system_sim_execution_md"] = _record(workflow_id, agent_name, "system/sim", "system_sim_execution.md", exec_md)
+    artifacts["system_sim_execution_json"] = _record(
+        workflow_id, agent_name, "system/sim", "system_sim_execution.json", exec_json
+    )
+    artifacts["simulation_execution_summary_json"] = _record(
+        workflow_id, agent_name, "system/sim", "simulation_execution_summary.json", exec_json
+    )
+    artifacts["system_sim_execution_md"] = _record(
+        workflow_id, agent_name, "system/sim", "system_sim_execution.md", exec_md
+    )
+
 
     if coverage_json_present:
         try:
@@ -492,6 +541,9 @@ def run_agent(state: dict) -> dict:
     state.setdefault("system_sim", {})
     state["system_sim"]["execution"] = summary
     state["system_sim_execution"] = summary
-    state["simulation_execution_summary_json"] = os.path.join(out_root, "system_sim_execution.json")
+    state["system_sim_execution_json"] = system_exec_json_path
+    state["simulation_execution_summary_json"] = summary_alias_json_path
     state["status"] = f"✅ System simulation executed: {tests_passed}/{len(results)} runs passed"
     return state
+
+   
