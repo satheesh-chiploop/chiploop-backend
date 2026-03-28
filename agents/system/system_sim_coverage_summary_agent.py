@@ -1,24 +1,52 @@
-import os
-import re
+
 import json
-import glob
+import logging
+import os
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Optional
 
 from utils.artifact_utils import save_text_artifact_and_record
 
+logger = logging.getLogger("chiploop")
 
 def _now() -> str:
     return datetime.now().isoformat()
 
+def _log(path: str, msg: str, level: str = "info") -> None:
+    if level == "error":
+        logger.error(msg)
+    elif level == "warning":
+        logger.warning(msg)
+    else:
+        logger.info(msg)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(f"[{_now()}] [{level.upper()}] {msg}\n")
 
-def _write(path: str, content: str) -> None:
+def _log_kv(path: str, key: str, value: Any) -> None:
+    try:
+        rendered = json.dumps(value, indent=2, default=str)
+    except Exception:
+        rendered = str(value)
+    _log(path, f"{key}={rendered}")
+
+def _safe_read_json(path: Optional[str]) -> Dict[str, Any]:
+    try:
+        if path and os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as f:
+                obj = json.load(f)
+                if isinstance(obj, dict):
+                    return obj
+    except Exception:
+        pass
+    return {}
+
+def _write_file(path: str, content: str) -> None:
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         f.write(content)
 
-
-def _record(workflow_id: str, agent_name: str, subdir: str, filename: str, content: str) -> Optional[str]:
+def _record_text(workflow_id: str, agent_name: str, subdir: str, filename: str, content: str):
     try:
         return save_text_artifact_and_record(
             workflow_id=workflow_id,
@@ -30,330 +58,162 @@ def _record(workflow_id: str, agent_name: str, subdir: str, filename: str, conte
     except Exception:
         return None
 
-
-def _safe_read_json(path: str) -> Dict[str, Any]:
-    try:
-        if path and os.path.exists(path):
-            with open(path, "r", encoding="utf-8") as f:
-                obj = json.load(f)
-                return obj if isinstance(obj, dict) else {}
-    except Exception:
-        pass
-    return {}
-
-
-def _find_first(paths: List[str]) -> Optional[str]:
-    for p in paths:
-        if p and os.path.exists(p):
-            return p
-    return None
-
-
-def _extract_pct_from_text(text: str) -> Optional[float]:
-    if not text:
-        return None
-
-    patterns = [
-        r"([0-9]+(?:\.[0-9]+)?)\s*%",
-        r"coverage[^0-9]*([0-9]+(?:\.[0-9]+)?)",
-        r"covered[^0-9]*([0-9]+(?:\.[0-9]+)?)",
-    ]
-    for pat in patterns:
-        m = re.search(pat, text, flags=re.IGNORECASE)
-        if m:
-            try:
-                v = float(m.group(1))
-                if 0.0 <= v <= 100.0:
-                    return v
-            except Exception:
-                pass
-    return None
-
-
-def _extract_hits_total_from_text(text: str) -> Tuple[Optional[int], Optional[int]]:
-    if not text:
-        return None, None
-
-    patterns = [
-        r"bins[_ ]?hit[^0-9]*([0-9]+)[^0-9]+total[_ ]?bins[^0-9]*([0-9]+)",
-        r"covered[^0-9]*([0-9]+)[^0-9]+of[^0-9]+([0-9]+)",
-        r"hits[^0-9]*([0-9]+)[^0-9]+total[^0-9]*([0-9]+)",
-    ]
-    for pat in patterns:
-        m = re.search(pat, text, flags=re.IGNORECASE | re.DOTALL)
-        if m:
-            try:
-                return int(m.group(1)), int(m.group(2))
-            except Exception:
-                pass
-    return None, None
-
-
-def _find_candidate_files(workflow_dir: str) -> Dict[str, List[str]]:
-    pats = {
-        "functional_json": [
-            "**/*functional*coverage*.json",
-            "**/*coverage*summary*.json",
-            "**/*coverage*.json",
-        ],
-        "functional_md": [
-            "**/COVERAGE.md",
-            "**/*coverage*.md",
-        ],
-        "code_logs": [
-            "**/*.log",
-            "**/*.txt",
-        ],
-    }
-
-    out: Dict[str, List[str]] = {}
-    for k, globs_ in pats.items():
-        acc: List[str] = []
-        for pat in globs_:
-            acc.extend(glob.glob(os.path.join(workflow_dir, pat), recursive=True))
-        out[k] = sorted(list(dict.fromkeys([p for p in acc if os.path.isfile(p)])))
-    return out
-
-
-def _functional_coverage(workflow_dir: str) -> Dict[str, Any]:
-    cands = _find_candidate_files(workflow_dir)
-    source = None
-
-    # Prefer JSON if present
-    for p in cands["functional_json"]:
-        obj = _safe_read_json(p)
-        if not obj:
-            continue
-
-        # common shapes
-        if "functional_coverage_pct" in obj:
-            return {
-                "functional_coverage_pct": obj.get("functional_coverage_pct"),
-                "bins_hit": obj.get("bins_hit"),
-                "total_bins": obj.get("total_bins"),
-                "source": p,
-            }
-
-        for key in ["coverage_pct", "coverage", "percent"]:
-            if key in obj:
-                try:
-                    v = float(obj[key])
-                    if 0.0 <= v <= 100.0:
-                        return {
-                            "functional_coverage_pct": v,
-                            "bins_hit": obj.get("bins_hit"),
-                            "total_bins": obj.get("total_bins"),
-                            "source": p,
-                        }
-                except Exception:
-                    pass
-
-        # nested metrics
-        cov = obj.get("coverage") or obj.get("functional_coverage")
-        if isinstance(cov, dict):
-            pct = cov.get("pct") or cov.get("coverage_pct") or cov.get("percent")
-            if pct is not None:
-                try:
-                    return {
-                        "functional_coverage_pct": float(pct),
-                        "bins_hit": cov.get("bins_hit") or cov.get("hit"),
-                        "total_bins": cov.get("total_bins") or cov.get("total"),
-                        "source": p,
-                    }
-                except Exception:
-                    pass
-
-    # Fallback to markdown/text parsing
-    for p in cands["functional_md"]:
-        try:
-            txt = open(p, "r", encoding="utf-8", errors="ignore").read()
-            pct = _extract_pct_from_text(txt)
-            hit, total = _extract_hits_total_from_text(txt)
-            if pct is not None or hit is not None or total is not None:
-                if pct is None and hit is not None and total:
-                    pct = round(100.0 * hit / total, 2)
-                return {
-                    "functional_coverage_pct": pct,
-                    "bins_hit": hit,
-                    "total_bins": total,
-                    "source": p,
-                }
-        except Exception:
-            pass
-
-    return {
-        "functional_coverage_pct": None,
-        "bins_hit": None,
-        "total_bins": None,
-        "source": None,
-    }
-
-
-def _code_coverage(workflow_dir: str) -> Dict[str, Any]:
-    cands = _find_candidate_files(workflow_dir)
-
-    # Best-effort from logs / coverage files
-    for p in cands["code_logs"]:
-        try:
-            txt = open(p, "r", encoding="utf-8", errors="ignore").read()
-        except Exception:
-            continue
-
-        if "coverage" not in txt.lower():
-            continue
-
-        pct = _extract_pct_from_text(txt)
-        if pct is not None:
-            return {
-                "code_coverage_pct": pct,
-                "source": p,
-            }
-
-    # If no explicit percent found but coverage artifacts exist, mark unavailable rather than invent a number
-    dats = glob.glob(os.path.join(workflow_dir, "**", "*.dat"), recursive=True)
-    if dats:
-        return {
-            "code_coverage_pct": None,
-            "source": dats[0],
-        }
-
-    return {
-        "code_coverage_pct": None,
-        "source": None,
-    }
-
-
-def _assertion_coverage(workflow_dir: str, execution: Dict[str, Any]) -> Dict[str, Any]:
-    total = execution.get("assertions_total")
-    failures = execution.get("assertion_failures_total")
-
-    try:
-        total_i = int(total) if total is not None else 0
-    except Exception:
-        total_i = 0
-
-    try:
-        fail_i = int(failures) if failures is not None else 0
-    except Exception:
-        fail_i = 0
-
-    # Demo-friendly best-effort metric:
-    # if assertions were compiled and no failures occurred across runs, mark exercised pass-rate as 100.
-    # If failures occurred, decrement proportionally. This is not full UCIS assertion coverage.
-    if total_i > 0:
-        exercised = max(total_i - min(fail_i, total_i), 0)
-        pct = round(100.0 * exercised / total_i, 2)
-        return {
-            "assertion_coverage_pct": pct,
-            "assertions_total": total_i,
-            "assertion_failures": fail_i,
-            "source": "execution_logs_best_effort",
-            "note": "Demo best-effort metric from assertion compile presence + runtime failures; not full UCIS assertion coverage.",
-        }
-
-    return {
-        "assertion_coverage_pct": None,
-        "assertions_total": 0,
-        "assertion_failures": fail_i,
-        "source": None,
-        "note": "No assertion collateral detected.",
-    }
-
-
 def run_agent(state: dict) -> dict:
     agent_name = "System Simulation Coverage Summary Agent"
-    print("\n📊 Running System Simulation Coverage Summary Agent...")
 
     workflow_id = state.get("workflow_id", "default")
-    workflow_dir = state.get("workflow_dir", f"backend/workflows/{workflow_id}")
-    out_root = os.path.join(workflow_dir, "system", "sim")
-    os.makedirs(out_root, exist_ok=True)
+    workflow_dir = state.get("workflow_dir") or f"backend/workflows/{workflow_id}"
+    reports_dir = os.path.join(workflow_dir, "vv", "tb", "reports")
+    system_sim_dir = os.path.join(workflow_dir, "system", "sim")
+    os.makedirs(reports_dir, exist_ok=True)
+    os.makedirs(system_sim_dir, exist_ok=True)
 
-    exec_json_path = _find_first([
-        os.path.join(out_root, "system_sim_execution.json"),
-    ])
-    execution = _safe_read_json(exec_json_path) if exec_json_path else (state.get("system_sim_execution") or {})
+    log_path = os.path.join("artifact", "system_simulation_summary_coverage_agent.log")
+    with open(log_path, "w", encoding="utf-8") as f:
+        f.write("System Simulation Coverage Summary Agent Log\n")
 
-    if not execution:
-        state["status"] = "❌ Missing system_sim_execution.json. Run System Simulation Execution Agent first."
-        return state
+    _log(log_path, f"Starting {agent_name}...")
 
+    try:
+        sim_path = (
+            state.get("simulation_execution_summary_json")
+            or state.get("system_sim_execution_json")
+            or os.path.join(system_sim_dir, "system_sim_execution.json")
+        )
+        cov_path = (
+            state.get("functional_coverage_summary_json")
+            or os.path.join(reports_dir, "functional_coverage_summary.json")
+        )
 
-    func_cov = _functional_coverage(workflow_dir)
-    asrt_cov = _assertion_coverage(workflow_dir, execution)
+        _log(log_path, f"simulation_execution_summary_json={sim_path}")
+        _log(log_path, f"functional_coverage_summary_json={cov_path}")
 
-    if execution.get("tests_passed", 0) > 0:
-        code_cov = _code_coverage(workflow_dir)
-    else:
-        code_cov = {
-           "code_coverage_pct": None,
-           "source": None,
+        sim_exists = bool(sim_path and os.path.exists(sim_path))
+        cov_exists = bool(cov_path and os.path.exists(cov_path))
+
+        sim = _safe_read_json(sim_path)
+        cov = _safe_read_json(cov_path)
+
+        sim_loaded = bool(sim)
+        cov_loaded = bool(cov)
+
+        if not cov_exists:
+            coverage_status = "missing"
+        elif cov_exists and not cov_loaded:
+            coverage_status = "invalid"
+        else:
+            coverage_status = "ok"
+
+        functional_pct = cov.get("functional_coverage_pct")
+        bins_hit = cov.get("bins_hit")
+        total_bins = cov.get("total_bins")
+        if functional_pct is None and isinstance(cov.get("coverage"), dict):
+            c = cov.get("coverage") or {}
+            functional_pct = c.get("pct") or c.get("coverage_pct") or c.get("percent")
+            bins_hit = bins_hit if bins_hit is not None else c.get("bins_hit") or c.get("hit")
+            total_bins = total_bins if total_bins is not None else c.get("total_bins") or c.get("total")
+
+        summary = {
+            "type": "system_simulation_summary_coverage",
+            "simulation": {
+                "status": sim.get("status"),
+                "top_module": sim.get("top_module"),
+                "total": sim.get("tests_run") if sim.get("tests_run") is not None else sim.get("total"),
+                "pass": sim.get("tests_passed") if sim.get("tests_passed") is not None else sim.get("pass"),
+                "fail": sim.get("tests_failed") if sim.get("tests_failed") is not None else sim.get("fail"),
+                "total_runtime_sec": sim.get("total_runtime_sec"),
+                "assertions_total": sim.get("assertions_total"),
+                "assertion_failures_total": sim.get("assertion_failures_total"),
+            },
+            "coverage": {
+                "status": coverage_status,
+                "functional_coverage_pct": functional_pct,
+                "bins_hit": bins_hit,
+                "total_bins": total_bins,
+                "source_json": cov_path if cov_exists else None,
+            },
+            "waveforms": sim.get("waveforms") or [],
         }
 
-    dashboard = {
-        "type": "system_sim_dashboard",
-        "version": "1.0",
-        "generated_at": _now(),
-        "top_module": execution.get("top_module"),
-        "tests_run": execution.get("tests_run"),
-        "tests_passed": execution.get("tests_passed"),
-        "tests_failed": execution.get("tests_failed"),
-        "total_runtime_sec": execution.get("total_runtime_sec"),
-        "functional_coverage_pct": func_cov.get("functional_coverage_pct"),
-        "functional_bins_hit": func_cov.get("bins_hit"),
-        "functional_total_bins": func_cov.get("total_bins"),
-        "functional_coverage_source": func_cov.get("source"),
-        "code_coverage_pct": code_cov.get("code_coverage_pct"),
-        "code_coverage_source": code_cov.get("source"),
-        "assertion_coverage_pct": asrt_cov.get("assertion_coverage_pct"),
-        "assertions_total": asrt_cov.get("assertions_total"),
-        "assertion_failures": asrt_cov.get("assertion_failures"),
-        "assertion_coverage_source": asrt_cov.get("source"),
-        "assertion_coverage_note": asrt_cov.get("note"),
-        "waveforms": execution.get("waveforms") or [],
-        "run_matrix": execution.get("matrix") or {},
-        "runs": execution.get("runs") or [],
-    }
+        _log_kv(log_path, "sim_exists", sim_exists)
+        _log_kv(log_path, "cov_exists", cov_exists)
+        _log_kv(log_path, "sim_loaded", sim_loaded)
+        _log_kv(log_path, "cov_loaded", cov_loaded)
+        _log_kv(log_path, "coverage_status", coverage_status)
 
-    md = [
-        "# System Simulation Coverage Summary",
-        "",
-        f"- Top: `{dashboard.get('top_module')}`",
-        f"- Tests run: {dashboard.get('tests_run')}",
-        f"- Passed: {dashboard.get('tests_passed')}",
-        f"- Failed: {dashboard.get('tests_failed')}",
-        f"- Functional coverage: {dashboard.get('functional_coverage_pct')}",
-        f"- Code coverage: {dashboard.get('code_coverage_pct')}",
-        f"- Assertion coverage: {dashboard.get('assertion_coverage_pct')}",
-        "",
-        "## Coverage Detail",
-        f"- Functional bins hit: {dashboard.get('functional_bins_hit')}",
-        f"- Functional total bins: {dashboard.get('functional_total_bins')}",
-        f"- Assertions total: {dashboard.get('assertions_total')}",
-        f"- Assertion failures: {dashboard.get('assertion_failures')}",
-        "",
-        "## Notes",
-        f"- Functional source: `{dashboard.get('functional_coverage_source')}`",
-        f"- Code source: `{dashboard.get('code_coverage_source')}`",
-        f"- Assertion source: `{dashboard.get('assertion_coverage_source')}`",
-        f"- Assertion note: {dashboard.get('assertion_coverage_note')}",
-    ]
-    md_txt = "\n".join(md) + "\n"
-    js_txt = json.dumps(dashboard, indent=2)
+        summary_txt = json.dumps(summary, indent=2)
 
-    _write(os.path.join(out_root, "system_sim_dashboard.json"), js_txt)
-    _write(os.path.join(out_root, "system_sim_dashboard.md"), md_txt)
+        md_lines = [
+            "# System Simulation Summary + Coverage",
+            "",
+            f"- Top module: {summary['simulation']['top_module']}",
+            f"- Status: {summary['simulation']['status']}",
+            f"- Total simulation runs: {summary['simulation']['total']}",
+            f"- Simulation pass count: {summary['simulation']['pass']}",
+            f"- Simulation fail count: {summary['simulation']['fail']}",
+            f"- Total runtime (s): {summary['simulation']['total_runtime_sec']}",
+            f"- Coverage status: {summary['coverage']['status']}",
+            f"- Functional coverage %: {summary['coverage']['functional_coverage_pct']}",
+            f"- Coverage bins hit: {summary['coverage']['bins_hit']}",
+            f"- Coverage total bins: {summary['coverage']['total_bins']}",
+            f"- Assertions total: {summary['simulation']['assertions_total']}",
+            f"- Assertion failures: {summary['simulation']['assertion_failures_total']}",
+        ]
+        if summary["waveforms"]:
+            md_lines.extend(["", "## Waveforms"])
+            for w in summary["waveforms"]:
+                md_lines.append(f"- `{w}`")
+        md_txt = "\n".join(md_lines) + "\n"
 
-    _record(workflow_id, agent_name, "system/sim", "system_sim_dashboard.json", js_txt)
-    _record(workflow_id, agent_name, "system/sim", "system_sim_dashboard.md", md_txt)
+        summary_path = os.path.join(system_sim_dir, "system_sim_dashboard.json")
+        md_path = os.path.join(system_sim_dir, "system_sim_dashboard.md")
+        _write_file(summary_path, summary_txt)
+        _write_file(md_path, md_txt)
 
-    state.setdefault("system_sim", {})
-    state["system_sim"]["dashboard"] = dashboard
-    state["system_sim_dashboard"] = dashboard
-    state["status"] = (
-        f"✅ System simulation summary ready: "
-        f"func={dashboard.get('functional_coverage_pct')}, "
-        f"code={dashboard.get('code_coverage_pct')}, "
-        f"assert={dashboard.get('assertion_coverage_pct')}"
-    )
-    return state
+        artifacts = {}
+        artifacts["system_sim_dashboard"] = _record_text(
+            workflow_id, agent_name, "system/sim", "system_sim_dashboard.json", summary_txt
+        )
+        artifacts["system_sim_dashboard_md"] = _record_text(
+            workflow_id, agent_name, "system/sim", "system_sim_dashboard.md", md_txt
+        )
+
+        report = {
+            "type": "system_simulation_summary_coverage_report",
+            "simulation_execution_summary_json": sim_path,
+            "functional_coverage_summary_json": cov_path,
+            "artifacts": artifacts,
+        }
+        rep_txt = json.dumps(report, indent=2)
+        report_path = os.path.join(system_sim_dir, "system_sim_dashboard_report.json")
+        _write_file(report_path, rep_txt)
+
+        artifacts["report"] = _record_text(
+            workflow_id, agent_name, "system/sim", "system_sim_dashboard_report.json", rep_txt
+        )
+
+        try:
+            with open(log_path, "r", encoding="utf-8") as f:
+                log_text = f.read()
+        except Exception:
+            log_text = ""
+        artifacts["log"] = _record_text(
+            workflow_id, agent_name, "vv", "system_simulation_summary_coverage_agent.log", log_text
+        )
+
+        _log(log_path, f"Final summary written: {summary_path}")
+
+        state["final_summary"] = summary_path
+        state["simulation_summary_coverage_json"] = summary_path
+        state["system_sim_dashboard_json"] = summary_path
+        state["system_sim_dashboard_report_json"] = report_path
+        state.setdefault("system_sim", {})
+        state["system_sim"]["dashboard"] = summary
+        state["system_sim_dashboard"] = summary
+
+        _log(log_path, f"{agent_name} completed successfully.")
+        return state
+
+    except Exception as e:
+        _log(log_path, f"{agent_name} failed: {e}", level="error")
+        raise

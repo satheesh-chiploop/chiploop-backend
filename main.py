@@ -486,6 +486,10 @@ from agents.system.system_sim_execution_agent import run_agent as system_sim_exe
 from agents.system.system_sim_coverage_summary_agent import run_agent as system_sim_coverage_summary_agent
 from agents.system.system_firmware_cosim_execution_agent import run_agent as system_firmware_cosim_execution_agent
 from agents.system.system_firmware_coverage_summary_agent import run_agent as system_firmware_coverage_summary_agent
+from agents.system.system_testbench_generator_agent import run_agent as system_testbench_generator_agent
+from agents.system.system_sva_assertions_agent import run_agent as system_sva_assertions_agent
+from agents.system.system_functional_coverage_agent import run_agent as system_functional_coverage_agent
+from agents.system.system_simulation_control_agent import run_agent as system_simulation_control_agent
 
 SYSTEM_AGENT_FUNCTIONS: Dict[str,Any] = {
     "Digital Spec Agent": digital_spec_agent,
@@ -598,7 +602,11 @@ SYSTEM_AGENT_FUNCTIONS: Dict[str,Any] = {
     "System CoSim Integration Agent": system_cosim_integration_agent,
     "System ISS Bridge Agent": system_iss_bridge_agent,  
     "System Integration Intent Agent": system_integration_intent,
-    "System Top Assembly Agent": system_top_assembly,
+    "System Top Assembly Agent": system_top_assembly, 
+    "System Testbench Generator Agent": system_testbench_generator_agent,
+    "System Assertions (SVA) Agent": system_sva_assertions_agent,
+    "System Functional Coverage Agent": system_functional_coverage_agent,
+    "System Simulation Control Agent": system_simulation_control_agent,
     "System Simulation Execution Agent": system_sim_execution_agent,
     "System Simulation Coverage Summary Agent": system_sim_coverage_summary_agent,
     "System Firmware CoSim Execution Agent": system_firmware_cosim_execution_agent,

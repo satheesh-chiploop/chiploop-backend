@@ -1069,6 +1069,11 @@ def run_agent(state: dict) -> dict:
                 }
             }
         }
+        "control_model": {},
+        "observable_behaviors": [],
+        "test_intent": {},
+        "ownership": {},
+        "notes": []
     }
 
     # Provide module name hints if user supplied them
@@ -1083,7 +1088,8 @@ Use these in variants.module_overrides for instance 'u_analog' if applicable
 
 """.strip()
 
-    prompt = f"""
+
+prompt = f"""
 SYSTEM / SoC INTEGRATION DESCRIPTION:
 {integration_description}
 
@@ -1104,34 +1110,83 @@ You are a professional SoC integration engineer.
 CONTEXT / CONSTRAINTS:
 - Generate a generic system integration manifest for the blocks described in the provided signatures and integration description.
 - Prefer a minimal top with the fewest required instances and explicit point-to-point connections.
-- Keep sim/phys top port intent consistent. If analog sim/phys module names differ, use variants.module_overrides.
-- Reuse identical port names across blocks whenever appropriate.
-- Do not assume ADC-specific names unless they are present in the input signatures/description.
+- Keep sim/phys top port intent consistent.
+- Do NOT assume any specific protocol (APB/I2C/etc.) unless explicitly present in inputs.
+- Do NOT hardcode signal names. Everything must be derived from the datasheet and signatures.
 
 STRICT CONNECTIVITY RULES:
 - Respect actual port directions from discovered module signatures.
 - Never connect top.<signal> -> instance.<port> if instance.<port> is an output.
 - Never connect instance.<port> -> top.<signal> if instance.<port> is an input.
 - For instance-to-instance edges, source must be output/inout and destination must be input/inout.
-- Do not create top ports for internal analog status/control unless explicitly required.
-- Prefer digital<->analog direct links when names and behavior align.
-- APB response ports such as prdata/pready/pslverr and irq must be driven from digital to top, not top to digital.
-- Return only strict JSON.
+- Do not invent grouped buses or proxy nets.
 
+---
+
+🧠 SYSTEM-LEVEL SEMANTIC REQUIREMENTS (NEW)
+
+In addition to connectivity, you MUST describe system-level behavior using ONLY information derived from the datasheet:
+
+1) TOP-LEVEL CONTRACT (under "top"):
+   - functionality: What the integrated system does (high-level)
+   - responsibilities: What the top must ensure
+   - must_drive / must_receive / must_not_drive
+   - reset_behavior: How system behaves during reset
+   - behavior_rules: Constraints that must always hold
+
+2) CONTROL MODEL (do NOT hardcode protocol):
+   - Infer how the system is controlled (register-driven, transaction-driven, pin-driven, etc.)
+   - If a register map exists, reference it but DO NOT duplicate it
+
+3) OBSERVABLE BEHAVIORS:
+   - 2–6 behaviors visible at system level
+   - Derived from integration + datasheet
+   - Examples (do NOT copy literally):
+     control → action → response
+     reset → idle → activation
+
+4) TEST INTENT:
+   - smoke_sequences: basic bring-up scenarios derived from design
+   - negative_sequences: illegal/edge cases (reset, invalid ordering)
+   - coverage_focus: what system-level coverage should observe
+
+5) OWNERSHIP:
+   - Identify which instance owns each top-level observable output
+   - Identify which instance drives control-path signals
+
+---
 
 🔒 IMPORTANT OUTPUT FORMAT RULES
-- DO NOT use markdown code fences (no ```json, no ```).
-- DO NOT include explanations or extra text.
-- ONLY output raw JSON.
-- JSON must be 100% valid (parseable by json.loads).
-- Use the schema exactly: top, instances, connections, tieoffs, variants.
-- 'connections' must connect valid ports that exist in the provided signatures whenever possible.
+- DO NOT use markdown code fences
+- DO NOT include explanations
+- ONLY output valid JSON
+- JSON must be parseable by json.loads
+
+- Use EXACT schema keys:
+
+  top,
+  instances,
+  connections,
+  tieoffs,
+  variants,
+  control_model,
+  observable_behaviors,
+  test_intent,
+  ownership,
+  notes
+
+- DO NOT hardcode signal names or protocols
+- ALL behavioral fields must be derived from the provided description/signatures
+
+---
 
 TARGET JSON SCHEMA EXAMPLE:
 {json.dumps(schema, indent=2)}
 
 Now output JSON only.
 """.strip()
+
+
 
     raw = llm_text(prompt)
     cleaned = _clean_llm_output_to_json_text(raw)

@@ -1117,6 +1117,91 @@ AGENT_CAPABILITIES = {
         ]
     },
 
+    "System Testbench Generator Agent": {
+        "domain": "system",
+        "inputs": [
+            "system/integration/system_integration_intent.json",
+            "system/integration/soc_top_sim.sv",
+            "system/integration/system_rtl_filelist_sim.txt",
+            "digital/digital_regmap.json(optional)",
+            "handoff/MANIFEST.json(optional)",
+            "*.v",
+            "*.sv"
+        ],
+        "outputs": [
+            "vv/tb/test_*.py",
+            "vv/tb/Makefile",
+            "vv/tb/README.md",
+            "vv/tb/tb_generation_report.json",
+            "vv/testbench_generator_agent.log"
+        ],
+        "description": "Generates system-level Cocotb testbench collateral from system integration intent, assembled SoC top, system RTL filelist, and optional digital register-map/control metadata. Keeps stimulus generic and derived from system-level intent rather than protocol hardcoding.",
+        "requires": ["cocotb", "verilator"],
+    },
+
+    "System Assertions (SVA) Agent": {
+        "domain": "system",
+        "inputs": [
+            "system/integration/system_integration_intent.json",
+            "system/integration/soc_top_sim.sv",
+            "system/integration/system_rtl_filelist_sim.txt",
+            "digital/digital_regmap.json(optional)",
+            "*.v",
+            "*.sv"
+        ],
+        "outputs": [
+            "assertions.sv",
+            "assertions_readme.md",
+            "sva_agent.log"
+        ],
+        "description": "Generates top-level system assertions aligned to integration intent, ownership, reset behavior, and observable system behavior. Avoids protocol-specific hardcoding and focuses on system boundary correctness.",
+        "requires": [],
+    },
+
+    "System Functional Coverage Agent": {
+        "domain": "system",
+        "inputs": [
+            "system/integration/system_integration_intent.json",
+            "system/integration/soc_top_sim.sv",
+            "system/integration/system_rtl_filelist_sim.txt",
+            "digital/digital_regmap.json(optional)",
+            "*.v",
+            "*.sv"
+        ],
+        "outputs": [
+            "vv/tb/coverage_model.py",
+            "vv/tb/COVERAGE.md",
+            "vv/tb/coverage_generation_report.json",
+            "functional_coverage_agent.log"
+        ],
+        "description": "Generates lightweight system-level functional coverage from integration intent, observable behaviors, ownership rules, and optional software-visible register/control metadata.",
+        "requires": ["cocotb"],
+    },
+
+    "System Simulation Control Agent": {
+        "domain": "system",
+        "inputs": [
+            "system/integration/system_integration_intent.json",
+            "system/integration/soc_top_sim.sv",
+            "system/integration/system_rtl_filelist_sim.txt",
+            "vv/tb/Makefile",
+            "vv/tb/test_*.py",
+            "assertions.sv(optional)",
+            "vv/tb/coverage_model.py(optional)",
+            "*.v",
+            "*.sv"
+        ],
+        "outputs": [
+            "vv/tb/run_regression.py",
+            "vv/tb/SIM_CONTROL.md",
+            "vv/tb/simulation_manifest.json",
+            "vv/tb/sim_control_generation_report.json",
+            "simulation_control_agent.log"
+        ],
+        "description": "Generates system-level regression orchestration and simulation manifest for Cocotb/Verilator runs using assembled SoC top, system RTL filelist, generated testbench collateral, and optional assertions/coverage artifacts.",
+        "requires": ["make", "cocotb", "verilator"],
+    },
+
     "System Simulation Execution Agent": {
         "domain": "system",
         "inputs": [
