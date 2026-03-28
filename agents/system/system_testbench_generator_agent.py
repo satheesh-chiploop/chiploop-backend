@@ -449,15 +449,38 @@ def _resolve_tb_contract(state: Dict[str, Any], workflow_dir: str, log_path: str
     integration = _safe_read_json(integration_json_path)
     top_module = _pick_top_module(integration, state.get("top_module"), top_sv_path)
 
-    rtl_files = state.get("rtl_files")
-    rtl_source = "state.rtl_files"
-    if not isinstance(rtl_files, list) or not rtl_files:
+    filelist_value = state.get("system_rtl_filelist_sim")
+
+    rtl_files: List[str] = []
+    rtl_source = ""
+
+    # 1) Always prefer top-assembly-generated sim filelist
+    if isinstance(filelist_value, list) and filelist_value:
+        rtl_files = [os.path.abspath(p) for p in filelist_value if isinstance(p, str) and p.strip()]
+        rtl_source = "state.system_rtl_filelist_sim"
+    elif isinstance(filelist_value, str) and filelist_value.strip():
+        rtl_files = _collect_rtl_files_from_filelist(filelist_value)
+        rtl_source = "state.system_rtl_filelist_sim"
+
+    # 2) Then fallback to on-disk filelist text
+    if not rtl_files and rtl_filelist_path:
         rtl_files = _collect_rtl_files_from_filelist(rtl_filelist_path)
         rtl_source = "system_rtl_filelist_sim"
+
+    # 3) Only after that consider generic fallback keys
+    if not rtl_files:
+        legacy_rtl = state.get("system_rtl_files") or state.get("rtl_inputs") or state.get("rtl_files") or []
+        if not isinstance(legacy_rtl, list):
+            legacy_rtl = [legacy_rtl] if legacy_rtl else []
+        rtl_files = [os.path.abspath(p) for p in legacy_rtl if isinstance(p, str) and p.strip()]
+        if rtl_files:
+            rtl_source = "legacy_state_rtl"
+
+    # 4) Final fallback: scan
     if not rtl_files:
         rtl_files = _collect_system_rtl_files(workflow_dir)
         rtl_source = "fallback_scan"
-    rtl_files = [os.path.abspath(p) for p in rtl_files if isinstance(p, str)]
+
 
     ports_from_sv = _ports_from_top_sv(top_sv_path, top_module)
     ports_from_intent = _ports_from_integration_json(integration)
@@ -903,6 +926,8 @@ def run_agent(state: dict) -> dict:
     top_sv_path = contract["top_sv_path"]
     regmap_json_path = contract["regmap_json_path"]
     rtl_files = contract["rtl_files"]
+    if not rtl_files:
+        raise FileNotFoundError("Resolved System_Sim RTL filelist is empty")
     top = contract["top_module"]
     ports = contract["ports"]
     clocks = contract["clock_names"]
@@ -1007,6 +1032,7 @@ NUM_ITERS=200 RANDOM_SEED=7 make TESTCASE=integrated_input_sanity
     _log(log_path, "Generated testcases.json")
     _log(log_path, "Generated tb_contract.json")
     _log_kv(log_path, "generated_testcases", testcase_manifest["default_tests"])
+    _log_kv(log_path, "resolved_rtl_files", rtl_files)
 
     artifacts["tb_test_py"] = _record_text(workflow_id, agent_name, "vv/tb", f"test_{top}.py", test_py)
     artifacts["tb_makefile"] = _record_text(workflow_id, agent_name, "vv/tb", "Makefile", makefile)

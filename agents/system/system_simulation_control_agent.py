@@ -151,17 +151,19 @@ def _normalize_path_list(items: Any) -> List[str]:
     return list(dict.fromkeys(out))
 
 
+
+
 def _collect_system_rtl_files(workflow_dir: str, state: Dict[str, Any]) -> List[str]:
     candidates: List[str] = []
-    for key in ("system_rtl_files", "rtl_inputs", "rtl_files"):
-        candidates.extend(_normalize_path_list(state.get(key)))
 
+    # 1) Canonical source: top-assembly-generated sim filelist
     filelist_value = state.get("system_rtl_filelist_sim")
     if isinstance(filelist_value, list):
         candidates.extend(_normalize_path_list(filelist_value))
     elif isinstance(filelist_value, str) and filelist_value.strip():
         candidates.extend(_normalize_path_list(filelist_value))
 
+    # 2) On-disk canonical filelist
     filelist_path = _find_system_rtl_filelist(workflow_dir)
     if filelist_path:
         candidates.extend(_normalize_path_list(filelist_path))
@@ -169,21 +171,12 @@ def _collect_system_rtl_files(workflow_dir: str, state: Dict[str, Any]) -> List[
     if candidates:
         return list(dict.fromkeys(candidates))
 
-    exts = (".v", ".sv", ".vh", ".svh")
-    scan_dirs = [
-        os.path.join(workflow_dir, "digital", "rtl_refactored"),
-        os.path.join(workflow_dir, "analog"),
-        os.path.join(workflow_dir, "system", "integration"),
-    ]
-    out: List[str] = []
-    for d in scan_dirs:
-        if not os.path.isdir(d):
-            continue
-        for root, _, files in os.walk(d):
-            for fn in files:
-                if fn.lower().endswith(exts):
-                    out.append(os.path.abspath(os.path.join(root, fn)))
-    return sorted(set(out))
+    # 3) Legacy fallbacks only after canonical filelist sources
+    for key in ("system_rtl_files", "rtl_inputs", "rtl_files"):
+        candidates.extend(_normalize_path_list(state.get(key)))
+
+    if candidates:
+        return list(dict.fromkeys(candidates))
 
 
 def _infer_top_module(state: Dict[str, Any], integration: Dict[str, Any], soc_top_sim_path: Optional[str], rtl_files: List[str]) -> str:
@@ -372,7 +365,10 @@ def run_agent(state: dict) -> dict:
     os.makedirs(tb_root, exist_ok=True)
 
     testcases_json_path = state.get("tb_testcases_json") or os.path.join(tb_root, "testcases.json")
-    default_tests = state.get("vv_testcases") or _default_tests_from_testcases_json(testcases_json_path)
+
+    default_tests = _default_tests_from_testcases_json(testcases_json_path)
+    if not default_tests:
+        default_tests = state.get("vv_testcases") or ["system_smoke_test", "integrated_input_sanity"]
     if not default_tests:
         default_tests = ["system_smoke_test"]
     default_tests = [str(t) for t in default_tests if str(t).strip()]
@@ -384,6 +380,7 @@ def run_agent(state: dict) -> dict:
     _log(log_path, f"top_module={top}")
     _log(log_path, f"rtl_file_count={len(rtl_files)}")
     _log(log_path, f"default_tests={default_tests}")
+    _log(log_path, f"rtl_files={json.dumps(rtl_files, indent=2)}")
 
     artifacts: Dict[str, Any] = {}
 

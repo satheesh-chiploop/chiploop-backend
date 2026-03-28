@@ -208,12 +208,15 @@ def run_agent(state: dict) -> dict:
         or "soc_top_sim"
     )
 
+    
+
     tests = (
         state.get("system_sim_testcases")
         or state.get("simulation_testcases")
         or manifest.get("default_tests")
-        or ["smoke_test"]
+        or ["system_smoke_test", "integrated_input_sanity"]
     )
+
     if isinstance(tests, list):
         normalized_tests: List[str] = []
         for t in tests:
@@ -223,9 +226,29 @@ def run_agent(state: dict) -> dict:
                     normalized_tests.append(name)
             elif isinstance(t, str) and t.strip():
                 normalized_tests.append(t.strip())
-        tests = normalized_tests or ["smoke_test"]
+        tests = normalized_tests or ["system_smoke_test", "integrated_input_sanity"]
     else:
-        tests = ["smoke_test"]
+        tests = ["system_smoke_test", "integrated_input_sanity"]
+
+    manifest_tests = manifest.get("default_tests") or []
+    manifest_tests = [str(x).strip() for x in manifest_tests if str(x).strip()]
+
+    unknown_tests = [t for t in tests if manifest_tests and t not in manifest_tests]
+    if unknown_tests:
+        state["status"] = (
+            f"❌ Requested tests not present in simulation manifest: {unknown_tests}. "
+            f"Allowed tests: {manifest_tests}"
+        )
+        return state
+
+    _write(
+        log_path,
+        "System Simulation Execution Agent Log\n"
+        + f"manifest_top={manifest.get('top_module')}\n"
+        + f"selected_top={top}\n"
+        + f"manifest_default_tests={json.dumps(manifest.get('default_tests') or [], indent=2)}\n"
+        + f"selected_tests={json.dumps(tests, indent=2)}\n"
+    )
 
     seeds = state.get("system_sim_seeds") or state.get("simulation_seeds") or [1]
     if not isinstance(seeds, list):

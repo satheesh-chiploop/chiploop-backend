@@ -391,15 +391,24 @@ def _resolve_system_sva_contract(state: Dict[str, Any], workflow_dir: str, log_p
         or _find_system_rtl_filelist(workflow_dir)
     )
 
-    rtl_files = state.get("rtl_files")
-    rtl_source = "state.rtl_files"
-    if not isinstance(rtl_files, list) or not rtl_files:
-        if rtl_filelist_path:
-            rtl_files = _collect_rtl_files_from_filelist(rtl_filelist_path)
-            rtl_source = "system_rtl_filelist_sim"
-        if not rtl_files:
-            rtl_files = _collect_system_rtl_files(workflow_dir)
-            rtl_source = "fallback_scan"
+    filelist_value = state.get("system_rtl_filelist_sim")
+    rtl_files = []
+    rtl_source = ""
+
+    if isinstance(filelist_value, list) and filelist_value:
+        rtl_files = [os.path.abspath(p) for p in filelist_value if isinstance(p, str) and p.strip()]
+        rtl_source = "state.system_rtl_filelist_sim"
+    elif isinstance(filelist_value, str) and filelist_value.strip():
+        rtl_files = _collect_rtl_files_from_filelist(filelist_value)
+        rtl_source = "state.system_rtl_filelist_sim"
+
+    if not rtl_files and rtl_filelist_path:
+        rtl_files = _collect_rtl_files_from_filelist(rtl_filelist_path)
+        rtl_source = "system_rtl_filelist_sim"
+
+    if not rtl_files:
+        rtl_files = _collect_system_rtl_files(workflow_dir)
+        rtl_source = "fallback_scan"
 
     rtl_files = [os.path.abspath(p) for p in rtl_files if isinstance(p, str)]
 
