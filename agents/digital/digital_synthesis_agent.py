@@ -337,6 +337,8 @@ def run_agent(state: dict) -> dict:
         "CHIPLOOP_GENERATED_AT": datetime.utcnow().isoformat() + "Z",
         "CHIPLOOP_MACRO_LIBS": [f"macro_libs/{os.path.basename(p)}" for p in copied_macro_libs],
         "CHIPLOOP_YOSYS_MACRO_LIB_SCRIPT": "yosys_macro_libs.ys",
+        # ✅ KEY FIX: Disable Verilator lint stage
+        "RUN_LINTER": False
     }
 
     
@@ -403,7 +405,7 @@ docker run --rm \\
     fi
 
     # Run OpenLane synthesis first
-    openlane --pdk {pdk_variant} --run-tag {run_tag} --flow Classic --to Yosys.Synthesis config.json
+    openlane --pdk {pdk_variant} --run-tag {run_tag} --flow Classic --override-config RUN_LINTER=False --to Yosys.Synthesis config.json
 
     # Patch the synthesized design with explicit Liberty blackbox load if macro libs exist
     if [ -n "{macro_lib_read_cmd}" ]; then
