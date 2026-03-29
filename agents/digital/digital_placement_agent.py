@@ -159,7 +159,7 @@ def _resolve_macro_files_from_workflow(workflow_dir: str, exts: tuple[str, ...])
         out.append(ap)
     return out
 
-def _stage_macro_inputs(state: dict, workflow_dir: str, run_work_dir: str) -> tuple[list[str], list[str], list[str]]:
+def _stage_macro_inputs(state: dict, workflow_dir: str, work_stage_dir: str) -> tuple[list[str], list[str], list[str]]:
     digital = state.get("digital") or {}
 
     macro_lefs = [p for p in (digital.get("macro_lefs") or []) if p and os.path.exists(p)]
@@ -173,7 +173,7 @@ def _stage_macro_inputs(state: dict, workflow_dir: str, run_work_dir: str) -> tu
     if not macro_gds:
         macro_gds = _resolve_macro_files_from_workflow(workflow_dir, (".gds", ".gds.gz"))
 
-    inputs_dir = os.path.join(run_work_dir, "inputs", "macros")
+    inputs_dir = os.path.join(work_stage_dir, "inputs", "macros")
     lef_dir = os.path.join(inputs_dir, "lef")
     lib_dir = os.path.join(inputs_dir, "lib")
     gds_dir = os.path.join(inputs_dir, "gds")
@@ -263,6 +263,9 @@ def run_agent(state: dict) -> dict:
    
     cfg["PNR_SDC_FILE"] = f"inputs/constraints/{sdc_basename}"
 
+    # Skip Verilator lint for macro-backed mixed-signal/system PD reuse
+    cfg["RUN_LINTER"] = False
+
     # Explicit netlist list (avoid netlist/*.v glob validation failures)
     stage_netlists = sorted(glob.glob(os.path.join(netlist_dir, "*.v")))
     if not stage_netlists:
@@ -298,7 +301,13 @@ def run_agent(state: dict) -> dict:
     _ensure_dir(run_work_dir)
     state["digital_run_work_dir"] = run_work_dir
 
-    staged_lefs, staged_libs, staged_gds = _stage_macro_inputs(state, workflow_dir, run_work_dir)
+    
+
+    work_stage_dir = os.path.join(run_work_dir, "place")
+    _ensure_dir(work_stage_dir)
+
+
+    staged_lefs, staged_libs, staged_gds = _stage_macro_inputs(state, workflow_dir, work_stage_dir)
 
     if staged_lefs:
         cfg["EXTRA_LEFS"] = staged_lefs
@@ -310,9 +319,6 @@ def run_agent(state: dict) -> dict:
     logger.info(f"{AGENT_NAME}: staged macro LEFs -> {staged_lefs}")
     logger.info(f"{AGENT_NAME}: staged macro LIBs -> {staged_libs}")
     logger.info(f"{AGENT_NAME}: staged macro GDS -> {staged_gds}")
-
-    work_stage_dir = os.path.join(run_work_dir, "place")
-    _ensure_dir(work_stage_dir)
 
     # Write configs (contract + exec)
     config_path = os.path.join(stage_dir, "config.json")
@@ -370,7 +376,7 @@ docker run --rm \
   -e PDK={pdk_variant} \
   -e PDK_ROOT=/pdk \
   {openlane_image} \
-  bash -lc 'set -e; cd /work && openlane --flow Classic --run-tag {run_tag} --to OpenROAD.DetailedPlacement place/config.json'
+  bash -lc 'set -e; cd /work && openlane --flow Classic --run-tag {run_tag} --override-config RUN_LINTER=False --to OpenROAD.DetailedPlacement place/config.json'
 
 
 """
