@@ -134,6 +134,33 @@ def _resolve_rtl_files_from_state(state: dict, workflow_dir: str) -> list[str]:
 
     return []
 
+def _resolve_macro_libs_from_state(state: dict, workflow_dir: str) -> list[str]:
+    digital = state.get("digital") or {}
+
+    candidates = []
+
+    if isinstance(digital.get("macro_libs"), list):
+        candidates.extend(digital["macro_libs"])
+
+    macro_lib_filelist = digital.get("macro_lib_filelist")
+    if macro_lib_filelist and os.path.exists(macro_lib_filelist):
+        with open(macro_lib_filelist, "r", encoding="utf-8") as f:
+            for line in f:
+                p = line.strip()
+                if p:
+                    candidates.append(p)
+
+    out = []
+    seen = set()
+    for p in candidates:
+        abs_p = p if os.path.isabs(p) else os.path.join(workflow_dir, p)
+        abs_p = os.path.abspath(abs_p)
+        if os.path.exists(abs_p) and abs_p not in seen:
+            seen.add(abs_p)
+            out.append(abs_p)
+
+    return out
+
 def run_agent(state: dict) -> dict:
     print(f"\n🏁 Running {AGENT_NAME}...")
 
@@ -176,9 +203,21 @@ def run_agent(state: dict) -> dict:
     rtl_dir = os.path.join(stage_dir, "rtl")
     constraints_dir = os.path.join(stage_dir, "constraints")
     logs_dir = os.path.join(stage_dir, "logs")
+    macro_lib_dir = os.path.join(stage_dir, "macro_libs")
     _ensure_dir(rtl_dir)
     _ensure_dir(constraints_dir)
     _ensure_dir(logs_dir)
+    _ensure_dir(macro_lib_dir)
+
+    macro_libs = _resolve_macro_libs_from_state(state, workflow_dir)
+    logger.info(f"{AGENT_NAME}: macro_lib_count={len(macro_libs)}")
+
+    copied_macro_libs = []
+    for f in macro_libs:
+        dst = os.path.join(macro_lib_dir, os.path.basename(f))
+        if os.path.abspath(f) != os.path.abspath(dst):
+            shutil.copy2(f, dst)
+        copied_macro_libs.append(dst)
 
     # Copy RTL into deterministic local folder (avoid container path issues)
     copied = []
@@ -245,6 +284,12 @@ def run_agent(state: dict) -> dict:
     with open(sdc_path, "r", encoding="utf-8") as f:
        sdc_text = f.read()
 
+    yosys_pre_path = os.path.join(stage_dir, "yosys_macro_libs.ys")
+    yosys_pre_text = "\n".join(
+        [f"read_liberty -lib macro_libs/{os.path.basename(p)}" for p in copied_macro_libs]
+    ) + ("\n" if copied_macro_libs else "")
+    _write_local(yosys_pre_path, yosys_pre_text)
+
     input_log = "\n".join([
         f"[{datetime.utcnow().isoformat()}Z] {AGENT_NAME}",
         f"workflow_id={workflow_id}",
@@ -257,6 +302,8 @@ def run_agent(state: dict) -> dict:
         f"synth_sdc_path={sdc_path}",
         f"state_constraints_sdc={(state.get('digital') or {}).get('constraints_sdc')}",
         f"pdk_variant={state.get('pdk_variant') or DEFAULT_PDK_VARIANT}",
+        f"macro_lib_count={len(copied_macro_libs)}",
+        f"yosys_macro_lib_script={yosys_pre_path}",
     ]) + "\n"
 
     input_log_path = os.path.join(stage_dir, "synth_input_resolution.log")
@@ -271,6 +318,7 @@ def run_agent(state: dict) -> dict:
     # OpenLane2 supports JSON configs; we keep sources relative inside the mounted /work
     verilog_sources = [f"rtl/{os.path.basename(p)}" for p in copied]
 
+
     config = {
         "DESIGN_NAME": top_module,
         "VERILOG_FILES": verilog_sources,
@@ -284,6 +332,8 @@ def run_agent(state: dict) -> dict:
         "CHIPLOOP_WORKFLOW_ID": workflow_id,
         "CHIPLOOP_GENERATED_BY": AGENT_NAME,
         "CHIPLOOP_GENERATED_AT": datetime.utcnow().isoformat() + "Z",
+        "CHIPLOOP_MACRO_LIBS": [f"macro_libs/{os.path.basename(p)}" for p in copied_macro_libs],
+        "CHIPLOOP_YOSYS_MACRO_LIB_SCRIPT": "yosys_macro_libs.ys",
     }
 
     
@@ -304,7 +354,12 @@ def run_agent(state: dict) -> dict:
     state["digital_run_tag"] = run_tag
 
 
-    run_sh_path = os.path.join(stage_dir, "run.sh")
+    macro_lib_read_cmd = ""
+    if copied_macro_libs:
+        macro_lib_read_cmd = " ".join(
+            [f"read_liberty -lib macro_libs/{os.path.basename(p)};" for p in copied_macro_libs]
+        )
+
     run_sh = f"""#!/usr/bin/env bash
 set -euo pipefail
 
@@ -312,6 +367,7 @@ echo "== ChipLoop: {AGENT_NAME} =="
 echo "PDK_VARIANT={pdk_variant}"
 echo "OPENLANE_IMAGE={openlane_image}"
 echo "WORKDIR=/work"
+echo "MACRO_LIB_COUNT={len(copied_macro_libs)}"
 echo
 
 docker run --rm \\
@@ -321,14 +377,21 @@ docker run --rm \\
   -e PDK={pdk_variant} \\
   -e OPENLANE_NUM_CORES={DEFAULT_NUM_CORES} \\
   "{openlane_image}" \\
-  bash -lc 'set -e; echo "PDK listing:"; ls -la /pdk | head -n 50; \
-  test -f /pdk/sky130A/libs.tech/openlane/config.tcl; \
-  cd /work && openlane --pdk {pdk_variant} --run-tag {run_tag} --flow Classic --to Yosys.Synthesis config.json'
-
+  bash -lc 'set -e; \
+    echo "PDK listing:"; ls -la /pdk | head -n 50; \
+    test -f /pdk/sky130A/libs.tech/openlane/config.tcl; \
+    cd /work; \
+    if [ -n "{macro_lib_read_cmd}" ]; then \
+      echo "Using macro Liberty blackbox libraries:"; ls -la macro_libs || true; \
+    fi; \
+    openlane --pdk {pdk_variant} --run-tag {run_tag} --flow Classic --to Yosys.Synthesis config.json'
 
 echo
 echo "Done. Inspect /work/runs/{run_tag} or latest run folder under /work/runs/"
 """
+
+
+
     _write_local(run_sh_path, run_sh)
     os.chmod(run_sh_path, 0o755)
 

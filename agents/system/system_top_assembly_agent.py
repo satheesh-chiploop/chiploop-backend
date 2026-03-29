@@ -906,7 +906,7 @@ def run_agent(state: dict) -> dict:
         existing_rtl = [existing_rtl] if existing_rtl else []
 
     discovered_rtl = []
-    discovered_libs = []
+
     if workflow_dir:
         discovered_rtl = [
             p.replace("\\", "/")
@@ -920,17 +920,6 @@ def run_agent(state: dict) -> dict:
             "\n".join(discovered_rtl) if discovered_rtl else "(empty)"
         )
 
-        discovered_libs = [
-            p.replace("\\", "/")
-            for p in _collect_lib_files(workflow_dir)
-        ]
-        save_text_artifact_and_record(
-            workflow_id,
-            agent_name,
-            "system/integration",
-            "system_discovered_libs.txt",
-            "\n".join(discovered_libs) if discovered_libs else "(empty)"
-        )
 
     sim_rel_list, sim_abs_list, phys_rel_list, phys_abs_list = _build_system_filelists(
         workflow_dir=workflow_dir,
@@ -940,10 +929,6 @@ def run_agent(state: dict) -> dict:
         phys_top_rel=state["soc_top_phys_path"],
     )
 
-    phys_lib_rel_list, phys_lib_abs_list = _build_system_lib_filelist(
-        workflow_dir=workflow_dir,
-        discovered_libs=discovered_libs,
-    )
 
     save_text_artifact_and_record(
         workflow_id,
@@ -961,6 +946,55 @@ def run_agent(state: dict) -> dict:
         "\n".join(phys_abs_list) if phys_abs_list else "(empty)"
     )
 
+
+    discovered_libs = []
+    state_lib_candidates = []
+
+    analog_macro_lib = state.get("analog_macro_lib")
+    if analog_macro_lib:
+        state_lib_candidates.append(analog_macro_lib)
+
+    system_block = state.get("system") or {}
+    state_lib_candidates.extend(system_block.get("lib_filelist_phys") or [])
+    state_lib_candidates.extend(state.get("system_lib_filelist_phys") or [])
+
+    if workflow_dir:
+        discovered_libs = [
+            p.replace("\\", "/")
+            for p in _collect_lib_files(workflow_dir)
+        ]
+
+    # normalize explicit state lib paths into rel paths when possible
+    explicit_rel_libs = []
+    for p in state_lib_candidates:
+        if not p:
+            continue
+        abs_p = p if os.path.isabs(p) else os.path.join(workflow_dir, p)
+        abs_p = os.path.abspath(abs_p)
+        if os.path.exists(abs_p):
+            try:
+                explicit_rel_libs.append(os.path.relpath(abs_p, workflow_dir).replace("\\", "/"))
+            except Exception:
+                explicit_rel_libs.append(abs_p)
+
+    merged_discovered_libs = []
+    for p in explicit_rel_libs + discovered_libs:
+        if p not in merged_discovered_libs:
+            merged_discovered_libs.append(p)
+
+    save_text_artifact_and_record(
+        workflow_id,
+        agent_name,
+        "system/integration",
+        "system_discovered_libs.txt",
+        "\n".join(merged_discovered_libs) if merged_discovered_libs else "(empty)"
+    )
+
+    phys_lib_rel_list, phys_lib_abs_list = _build_system_lib_filelist(
+        workflow_dir=workflow_dir,
+        discovered_libs=merged_discovered_libs,
+    )
+
     save_text_artifact_and_record(
         workflow_id,
         agent_name,
@@ -970,7 +1004,8 @@ def run_agent(state: dict) -> dict:
     )
 
     state["system_lib_filelist_phys"] = phys_lib_abs_list
-
+    system_block = state.setdefault("system", {})
+    system_block["lib_filelist_phys"] = phys_lib_abs_list
     state["system_rtl_filelist_sim"] = sim_abs_list
     state["system_rtl_filelist_phys"] = phys_abs_list
 

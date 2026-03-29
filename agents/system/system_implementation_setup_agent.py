@@ -547,6 +547,9 @@ def run_agent(state: dict) -> dict:
         digital["macro_lefs"] = copied_lef_abs
         digital["macro_libs"] = copied_lib_abs
         digital["macro_gds"] = copied_gds_abs
+        digital["macro_lef_filelist"] = macro_lef_filelist_path
+        digital["macro_lib_filelist"] = macro_lib_filelist_path
+        digital["macro_gds_filelist"] = macro_gds_filelist_path
 
         digital["impl_setup"] = {
             "status": "ok",
@@ -563,6 +566,9 @@ def run_agent(state: dict) -> dict:
             "macro_lefs": copied_lef_abs,
             "macro_libs": copied_lib_abs,
             "macro_gds": copied_gds_abs,
+            "macro_lef_filelist": macro_lef_filelist_path,
+            "macro_lib_filelist": macro_lib_filelist_path,
+            "macro_gds_filelist": macro_gds_filelist_path,
         }
 
         system = state.setdefault("system", {})

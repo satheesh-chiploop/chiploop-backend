@@ -465,8 +465,29 @@ Strict rules:
     logger.info(f"[{agent_name}] final LEF size={len(lef)}")
     logger.info(f"[{agent_name}] final LIB size={len(lib_stub)}")
     logger.info(f"[{agent_name}] final notes size={len(notes)}")
+    
+    abstract_dir = os.path.join(workflow_dir, "analog", "abstract")
+    os.makedirs(abstract_dir, exist_ok=True)
+
+    lef_abs_path = os.path.join(abstract_dir, lef_filename)
+    lib_abs_path = os.path.join(abstract_dir, lib_filename)
+    notes_abs_path = os.path.join(abstract_dir, notes_filename)
+
+    with open(lef_abs_path, "w", encoding="utf-8") as f:
+        f.write(lef)
+
+    with open(lib_abs_path, "w", encoding="utf-8") as f:
+        f.write(lib_stub or "")
+
+    with open(notes_abs_path, "w", encoding="utf-8") as f:
+        f.write(notes)
+
+    logger.info(f"[{agent_name}] canonical LEF written locally: {lef_abs_path}")
+    logger.info(f"[{agent_name}] canonical LIB written locally: {lib_abs_path}")
+    logger.info(f"[{agent_name}] canonical notes written locally: {notes_abs_path}")
+
     if not preview_only:
-        logger.info(f"[{agent_name}] saving artifacts...")
+        logger.info(f"[{agent_name}] saving artifacts.")
         save_text_artifact_and_record(workflow_id, agent_name, "analog/abstract", lef_filename, lef)
         save_text_artifact_and_record(workflow_id, agent_name, "analog/abstract", lib_filename, lib_stub or "")
         save_text_artifact_and_record(workflow_id, agent_name, "analog/abstract", notes_filename, notes)
@@ -477,9 +498,9 @@ Strict rules:
 
     state["analog_abstract_dir"] = "analog/abstract"
     state["analog_macro_module"] = module_name
-    state["analog_macro_lef"] = f"analog/abstract/{lef_filename}"
-    state["analog_macro_lib"] = f"analog/abstract/{lib_filename}"
-    state["analog_integration_notes"] = f"analog/abstract/{notes_filename}"
+    state["analog_macro_lef"] = lef_abs_path
+    state["analog_macro_lib"] = lib_abs_path
+    state["analog_integration_notes"] = notes_abs_path
 
     
 
