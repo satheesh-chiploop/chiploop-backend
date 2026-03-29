@@ -159,8 +159,7 @@ def _resolve_macro_files_from_workflow(workflow_dir: str, exts: tuple[str, ...])
         seen.add(ap)
         out.append(ap)
     return out
-
-def _stage_macro_inputs(state: dict, workflow_dir: str, run_work_dir: str) -> tuple[list[str], list[str], list[str]]:
+def _stage_macro_inputs(state: dict, workflow_dir: str, work_stage_dir: str) -> tuple[list[str], list[str], list[str]]:
     digital = state.get("digital") or {}
 
     macro_lefs = [p for p in (digital.get("macro_lefs") or []) if p and os.path.exists(p)]
@@ -174,7 +173,7 @@ def _stage_macro_inputs(state: dict, workflow_dir: str, run_work_dir: str) -> tu
     if not macro_gds:
         macro_gds = _resolve_macro_files_from_workflow(workflow_dir, (".gds", ".gds.gz"))
 
-    inputs_dir = os.path.join(run_work_dir, "inputs", "macros")
+    inputs_dir = os.path.join(work_stage_dir, "inputs", "macros")
     lef_dir = os.path.join(inputs_dir, "lef")
     lib_dir = os.path.join(inputs_dir, "lib")
     gds_dir = os.path.join(inputs_dir, "gds")
@@ -330,7 +329,7 @@ def run_agent(state: dict) -> dict:
 
 
 
-    staged_lefs, staged_libs, staged_gds = _stage_macro_inputs(state, workflow_dir, run_work_dir)
+    staged_lefs, staged_libs, staged_gds = _stage_macro_inputs(state, workflow_dir, work_stage_dir)
 
     if staged_lefs:
         cfg["EXTRA_LEFS"] = staged_lefs
