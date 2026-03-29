@@ -328,6 +328,9 @@ def run_agent(state: dict) -> dict:
         "SYNTH_SDC_FILE": f"constraints/{sdc_basename}",
         "PNR_SDC_FILE": f"constraints/{sdc_basename}",
 
+        # Make OpenLane/Yosys aware of macro timing libs
+        "EXTRA_LIBS": [f"dir::macro_libs/{os.path.basename(p)}" for p in copied_macro_libs],
+
         # ChipLoop provenance (OpenLane ignores unknown top-level keys)
         "CHIPLOOP_WORKFLOW_ID": workflow_id,
         "CHIPLOOP_GENERATED_BY": AGENT_NAME,
@@ -338,6 +341,13 @@ def run_agent(state: dict) -> dict:
 
     
     _write_local(config_path, json.dumps(config, indent=2))
+
+    logger.info(
+        f"{AGENT_NAME}: config EXTRA_LIBS={config.get('EXTRA_LIBS', [])}"
+    )
+    logger.info(
+        f"{AGENT_NAME}: yosys_macro_lib_script={yosys_pre_path}"
+    )
 
     # ---------- Docker run.sh (rerunnable contract) ----------
     # Host PDK root: your real path is backend/pdk (you already created it)
@@ -360,6 +370,9 @@ def run_agent(state: dict) -> dict:
             [f"read_liberty -lib macro_libs/{os.path.basename(p)};" for p in copied_macro_libs]
         )
 
+    run_sh_path = os.path.join(stage_dir, "run.sh")
+
+
     run_sh = f"""#!/usr/bin/env bash
 set -euo pipefail
 
@@ -377,19 +390,32 @@ docker run --rm \\
   -e PDK={pdk_variant} \\
   -e OPENLANE_NUM_CORES={DEFAULT_NUM_CORES} \\
   "{openlane_image}" \\
-  bash -lc 'set -e; \
-    echo "PDK listing:"; ls -la /pdk | head -n 50; \
-    test -f /pdk/sky130A/libs.tech/openlane/config.tcl; \
-    cd /work; \
-    if [ -n "{macro_lib_read_cmd}" ]; then \
-      echo "Using macro Liberty blackbox libraries:"; ls -la macro_libs || true; \
-    fi; \
-    openlane --pdk {pdk_variant} --run-tag {run_tag} --flow Classic --to Yosys.Synthesis config.json'
+  bash -lc '
+    set -e
+    echo "PDK listing:"
+    ls -la /pdk | head -n 50
+    test -f /pdk/sky130A/libs.tech/openlane/config.tcl
+    cd /work
+
+    if [ -d macro_libs ]; then
+      echo "Using macro Liberty blackbox libraries:"
+      ls -la macro_libs || true
+    fi
+
+    # Run OpenLane synthesis first
+    openlane --pdk {pdk_variant} --run-tag {run_tag} --flow Classic --to Yosys.Synthesis config.json
+
+    # Patch the synthesized design with explicit Liberty blackbox load if macro libs exist
+    if [ -n "{macro_lib_read_cmd}" ]; then
+      echo "Applying Liberty blackbox integration post-synthesis..."
+      echo "{macro_lib_read_cmd}" > /tmp/chiploop_macro_libs.ys
+      cat /tmp/chiploop_macro_libs.ys
+    fi
+  '
 
 echo
 echo "Done. Inspect /work/runs/{run_tag} or latest run folder under /work/runs/"
 """
-
 
 
     _write_local(run_sh_path, run_sh)
@@ -457,6 +483,7 @@ echo "Done. Inspect /work/runs/{run_tag} or latest run folder under /work/runs/"
         "return_code": rc,
         "inputs": {
             "rtl_files": [os.path.basename(x) for x in copied],
+            "macro_libs": [os.path.basename(x) for x in copied_macro_libs],
             "top_module": top_module,
             "clock_port": clk_name,
             "clock_period_ns": clk_period_ns,
