@@ -134,13 +134,44 @@ def _resolve_config_from_state(state: dict, workflow_dir: str) -> str | None:
 
     logger.warning(f"{AGENT_NAME}: no OpenLane config found")
     return None
+def _resolve_macro_files_from_workflow(workflow_dir: str, exts: tuple[str, ...]) -> list[str]:
+    hits = []
+    for ext in exts:
+        hits.extend(glob.glob(os.path.join(workflow_dir, "**", f"*{ext}"), recursive=True))
 
+    out = []
+    seen = set()
+    for p in sorted(hits):
+        base = os.path.basename(p).lower()
 
-def _stage_macro_inputs(state: dict, run_work_dir: str) -> tuple[list[str], list[str], list[str]]:
+        # reject debug/raw scratch artifacts
+        if base.endswith("_llm_lef_raw.lef"):
+            continue
+        if base.endswith("_raw.lef"):
+            continue
+        if "debug" in base:
+            continue
+
+        ap = os.path.abspath(p)
+        if ap in seen:
+            continue
+        seen.add(ap)
+        out.append(ap)
+    return out
+
+def _stage_macro_inputs(state: dict, workflow_dir: str, run_work_dir: str) -> tuple[list[str], list[str], list[str]]:
     digital = state.get("digital") or {}
+
     macro_lefs = [p for p in (digital.get("macro_lefs") or []) if p and os.path.exists(p)]
     macro_libs = [p for p in (digital.get("macro_libs") or []) if p and os.path.exists(p)]
     macro_gds  = [p for p in (digital.get("macro_gds") or []) if p and os.path.exists(p)]
+
+    if not macro_lefs:
+        macro_lefs = _resolve_macro_files_from_workflow(workflow_dir, (".lef",))
+    if not macro_libs:
+        macro_libs = _resolve_macro_files_from_workflow(workflow_dir, (".lib", ".lib.gz", ".db"))
+    if not macro_gds:
+        macro_gds = _resolve_macro_files_from_workflow(workflow_dir, (".gds", ".gds.gz"))
 
     inputs_dir = os.path.join(run_work_dir, "inputs", "macros")
     lef_dir = os.path.join(inputs_dir, "lef")
@@ -154,17 +185,20 @@ def _stage_macro_inputs(state: dict, run_work_dir: str) -> tuple[list[str], list
 
     for src in macro_lefs:
         dst = os.path.join(lef_dir, os.path.basename(src))
-        shutil.copy2(src, dst)
+        if os.path.abspath(src) != os.path.abspath(dst):
+            shutil.copy2(src, dst)
         staged_lefs.append(f"dir::inputs/macros/lef/{os.path.basename(src)}")
 
     for src in macro_libs:
         dst = os.path.join(lib_dir, os.path.basename(src))
-        shutil.copy2(src, dst)
+        if os.path.abspath(src) != os.path.abspath(dst):
+            shutil.copy2(src, dst)
         staged_libs.append(f"dir::inputs/macros/lib/{os.path.basename(src)}")
 
     for src in macro_gds:
         dst = os.path.join(gds_dir, os.path.basename(src))
-        shutil.copy2(src, dst)
+        if os.path.abspath(src) != os.path.abspath(dst):
+            shutil.copy2(src, dst)
         staged_gds.append(f"dir::inputs/macros/gds/{os.path.basename(src)}")
 
     return staged_lefs, staged_libs, staged_gds
@@ -264,7 +298,7 @@ def run_agent(state: dict) -> dict:
     _ensure_dir(run_work_dir)
     state["digital_run_work_dir"] = run_work_dir
 
-    staged_lefs, staged_libs, staged_gds = _stage_macro_inputs(state, run_work_dir)
+    staged_lefs, staged_libs, staged_gds = _stage_macro_inputs(state, workflow_dir, run_work_dir)
 
     if staged_lefs:
         cfg["EXTRA_LEFS"] = staged_lefs
@@ -272,6 +306,10 @@ def run_agent(state: dict) -> dict:
         cfg["EXTRA_LIBS"] = staged_libs
     if staged_gds:
         cfg["EXTRA_GDS_FILES"] = staged_gds
+
+    logger.info(f"{AGENT_NAME}: staged macro LEFs -> {staged_lefs}")
+    logger.info(f"{AGENT_NAME}: staged macro LIBs -> {staged_libs}")
+    logger.info(f"{AGENT_NAME}: staged macro GDS -> {staged_gds}")
 
     work_stage_dir = os.path.join(run_work_dir, "place")
     _ensure_dir(work_stage_dir)

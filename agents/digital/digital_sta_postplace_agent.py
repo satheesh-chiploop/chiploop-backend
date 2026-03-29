@@ -166,9 +166,9 @@ def _stage_macro_inputs(state: dict, run_work_dir: str):
     lib_dir = os.path.join(inputs_macros_dir, "lib")
     gds_dir = os.path.join(inputs_macros_dir, "gds")
 
-    _ensure_dir(lef_dir)
-    _ensure_dir(lib_dir)
-    _ensure_dir(gds_dir)
+    _ensure(lef_dir)
+    _ensure(lib_dir)
+    _ensure(gds_dir)
 
     staged_lefs = []
     staged_libs = []
