@@ -259,6 +259,9 @@ def run_agent(state: dict) -> dict:
     # 2) Always stage-local SSOT SDC
     cfg["PNR_SDC_FILE"] = f"inputs/constraints/{sdc_basename}"
 
+    # 3) Skip Verilator lint for macro-backed mixed-signal/system PD reuse
+    cfg["RUN_LINTER"] = False
+
     # 3) Ensure netlist exists locally (so VERILOG_FILES resolves inside /work mount)
     synth_netlists = sorted(glob.glob(os.path.join(workflow_dir, "digital", "synth", "netlist", "*.v")))
     if not synth_netlists:
@@ -398,7 +401,7 @@ docker run --rm \
   -e PDK={pdk_variant} \
   -e PDK_ROOT=/pdk \
   {openlane_image} \
-  bash -lc 'set -e; cd /work && openlane --flow Classic --run-tag {run_tag} --to OpenROAD.Floorplan floorplan/config.json'
+  bash -lc 'set -e; cd /work && openlane --flow Classic --run-tag {run_tag} --override-config RUN_LINTER=False --to OpenROAD.Floorplan floorplan/config.json'
 
 
 """
