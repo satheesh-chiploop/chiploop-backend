@@ -324,6 +324,8 @@ This output will be consumed by digital implementation tools.
 The LEF and Liberty must be structurally valid, conservative, and synthesis-safe.
 If the Liberty syntax or structure is wrong, Yosys/OpenLane synthesis will fail.
 
+Think like a compiler and formatter, not like a creative writer.
+
 ==================================================
 INPUT SPEC
 ==================================================
@@ -343,6 +345,10 @@ Return ONLY valid JSON with exactly these 3 keys:
 Do NOT return any extra keys.
 Do NOT wrap the JSON in markdown fences.
 Do NOT include any prose outside the JSON object.
+Do NOT split content across continuation fields.
+Entire LEF must be inside "lef".
+Entire LIB must be inside "lib_stub".
+Entire notes content must be inside "integration_notes_md".
 
 ==================================================
 GLOBAL NAMING RULES — MANDATORY
@@ -350,10 +356,11 @@ GLOBAL NAMING RULES — MANDATORY
 - Macro/module name must be exactly: {module_name}
 - LEF MACRO name must be exactly: {module_name}
 - LIB cell name must be exactly: {module_name}
-- Pin names must exactly match the spec port names after bus expansion
-- Do NOT invent, rename, alias, group, shorten, or simplify any ports
-- Do NOT add helper pins, test pins, scan pins, or internal-only pins
+- Pin names and bus names must exactly match the spec port names
+- Do NOT invent, rename, alias, group, shorten, normalize, or simplify any ports
+- Do NOT add helper pins, debug pins, scan pins, test pins, tieoff pins, or internal-only pins
 - Do NOT omit any spec port
+- Use only names derived directly from the input spec
 
 ==================================================
 LEF RULES — MANDATORY
@@ -380,16 +387,16 @@ The LEF must:
   PIN VSS
     DIRECTION INOUT ;
     USE GROUND ;
-- include exactly one LEF PIN block for every signal pin after bus expansion
+- include exactly one LEF PIN block for every signal pin after scalar expansion
 - use only simple generic M1 rectangles
 - end with:
   END {module_name}
   END LIBRARY
 
 LEF bus rule:
-- Do NOT use a single LEF pin for a whole bus like adc_data[11:0]
-- Expand every bus into scalar pins:
-  adc_data[0], adc_data[1], ..., adc_data[11]
+- LEF should still scalarize buses into physical pins:
+  adc_data[0], adc_data[1], ..., adc_data[N]
+- Do NOT collapse a whole bus into one LEF PIN like adc_data[11:0]
 
 ==================================================
 LIBERTY RULES — MANDATORY
@@ -408,111 +415,10 @@ The LIB must:
   current_unit : "1mA" ;
   capacitive_load_unit(1,pf) ;
   leakage_power_unit : "1nW" ;
+- define required templates before the cell block
 - include pg pins:
   pg_pin (VDD)
   pg_pin (VSS)
-
-==================================================
-PIN STRUCTURE RULES — CRITICAL
-==================================================
-1. EACH SIGNAL PIN MAY APPEAR EXACTLY ONCE
-- One pin() block per signal pin name
-- Never define the same pin twice
-- Never create a second timing-only pin block for the same signal
-
-2. EVERY pin() BLOCK MUST INCLUDE direction
-- Every pin() must include exactly one valid direction:
-  direction : input ;
-  direction : output ;
-  direction : inout ;
-- Never emit a pin() block with timing only and no direction
-
-3. ALL TIMING FOR A PIN MUST STAY INSIDE THAT SAME pin() BLOCK
-- Do not split timing across multiple pin() blocks
-
-4. EXACT PORT COVERAGE
-- Every spec signal port must appear exactly once after bus expansion
-- No missing bits
-- No extra bits
-- No duplicate bits
-
-==================================================
-BUS HANDLING RULES — CRITICAL
-==================================================
-For any port with width > 1:
-- Do NOT emit:
-  pin ( dac_code[11:0] ) {{ ... }}
-- Instead expand scalar bits:
-  pin ( dac_code[0] ) {{ ... }}
-  pin ( dac_code[1] ) {{ ... }}
-  ...
-  pin ( dac_code[11] ) {{ ... }}
-
-Same rule applies to LEF PIN names.
-
-==================================================
-CLOCK RULES — CRITICAL
-==================================================
-- Identify the first clock-like input pin:
-  - prefer a name containing "clk"
-  - otherwise a name ending with "_clock"
-  - otherwise exactly "clock"
-- That one pin is the ONLY clock pin
-- Mark only that pin with:
-  clock : true ;
-- No other pin may have clock : true ;
-- All timing arcs must reference this clock pin using:
-  related_pin : "<clock_name>" ;
-- Never use:
-  related_pin : "" ;
-
-==================================================
-TIMING RULES — CRITICAL
-==================================================
-Use clock period derived from the spec.
-
-Let:
-- setup_ns = 10% of clock period
-- hold_ns = 10% of clock period
-- clk_to_q_ns = 30% of clock period
-
-A) CLOCK PIN
-- clock pin must have direction : input ;
-- clock pin may have:
-  clock : true ;
-- Do not add setup/hold timing blocks to the clock pin
-
-B) RESET PINS
-- reset-like pins are pins whose name contains "rst" or "reset"
-- reset pins must have direction
-- do NOT add setup/hold timing to reset pins unless explicitly required by spec
-
-C) NON-CLOCK INPUT PINS
-For every input pin except clock/reset:
-- add exactly two timing() blocks:
-  1) timing_type : setup_rising ;
-  2) timing_type : hold_rising ;
-- both must use:
-  related_pin : "<clock_name>" ;
-- setup/hold blocks must use:
-  rise_constraint(constraint_template_1x1)
-  fall_constraint(constraint_template_1x1)
-
-D) OUTPUT PINS
-For every output pin:
-- add exactly one timing() block
-- it must use:
-  related_pin : "<clock_name>" ;
-  timing_type : rising_edge ;
-- it must include:
-  cell_rise(delay_template_1x1)
-  cell_fall(delay_template_1x1)
-- do not use setup/hold timing on outputs
-
-E) INOUT PINS
-- keep direction : inout ;
-- be conservative
-- include no complex bidirectional timing unless clearly required by spec
 
 ==================================================
 REQUIRED TEMPLATE DEFINITIONS — MANDATORY
@@ -534,9 +440,165 @@ lu_table_template (constraint_template_1x1) {{
 }}
 
 ==================================================
-POWER PIN RULES
+PIN AND BUS STRUCTURE RULES — CRITICAL
+==================================================
+1. SINGLE-BIT SIGNALS
+- Every width=1 signal must appear exactly once as:
+  pin (<name>) {{ ... }}
+- Never define the same scalar pin twice
+- Never create a timing-only duplicate pin block
+
+2. MULTI-BIT SIGNALS
+- Every width>1 signal must appear exactly once as:
+  bus (<name>) {{ ... }}
+- Every bus must reference a previously defined bus type:
+  bus_type : <type_name> ;
+- Every bus must include exactly one valid direction
+- Do NOT represent a whole multi-bit port as:
+  pin ( foo[11:0] ) {{ ... }}
+
+3. OPTIONAL BUS MEMBERS
+- If you include member pins for a bus, include them consistently and legally
+- Never collapse all members into one fake pin like:
+  pin ( foo[11:0] ) {{ ... }}
+- If member pins are emitted, they must be the individual bits only:
+  pin ( foo[0] ) {{ ... }}
+  pin ( foo[1] ) {{ ... }}
+  ...
+- Never duplicate a bus bit
+- Never omit an intermediate bit
+
+4. EVERY scalar pin() MUST INCLUDE direction
+- Every scalar pin() must include exactly one valid direction:
+  direction : input ;
+  direction : output ;
+  direction : inout ;
+- Never emit a scalar pin() block with timing only and no direction
+
+5. ALL TIMING FOR A SIGNAL MUST STAY INSIDE THE SAME OWNING BLOCK
+- Scalar signal timing stays inside its pin() block
+- Bus timing stays inside its bus() block unless the format explicitly requires per-bit timing
+- Never split one signal's semantics across duplicate blocks
+
+==================================================
+BUS TYPE RULES — CRITICAL
+==================================================
+For every width > 1 port, define a matching Liberty type.
+
+Example form:
+type (adc_data_bus_t) {{
+  base_type : array ;
+  data_type : bit ;
+  bit_width : 12 ;
+  bit_from : 11 ;
+  bit_to : 0 ;
+  downto : true ;
+}}
+
+Then define the bus:
+bus (adc_data) {{
+  bus_type : adc_data_bus_t ;
+  direction : output ;
+  ...
+}}
+
+Rules:
+- Use one type per distinct bus shape when needed
+- bit_width must exactly match the spec width
+- bit_from / bit_to must match the intended numbering
+- Use downto : true ; for descending buses like [11:0]
+- Do not invent widths
+- Do not use bus(...) for width=1 signals
+- Do not use collapsed single-pin bus syntax
+
+==================================================
+CLOCK RULES — CRITICAL
+==================================================
+- Identify the first clock-like input pin:
+  - prefer a name containing "clk"
+  - otherwise a name ending with "_clock"
+  - otherwise exactly "clock"
+- That one signal is the ONLY clock reference
+- If it is width=1, mark only that pin with:
+  clock : true ;
+- No other pin or bus may have clock : true ;
+- All timing arcs must reference this clock signal using:
+  related_pin : "<clock_name>" ;
+- Never use:
+  related_pin : "" ;
+
+==================================================
+TIMING RULES — CRITICAL
+==================================================
+Use clock period derived from the spec.
+
+Let:
+- setup_ns = 10% of clock period
+- hold_ns = 10% of clock period
+- clk_to_q_ns = 30% of clock period
+
+A) CLOCK PIN
+- clock pin must have direction : input ;
+- clock pin may have:
+  clock : true ;
+- do not add setup/hold timing blocks to the clock pin
+- do not add output timing arcs to the clock pin
+
+B) RESET PINS
+- reset-like signals are names containing "rst" or "reset"
+- reset pins must have direction
+- do NOT add setup/hold timing to reset pins unless explicitly required by spec
+
+C) NON-CLOCK INPUT SCALARS
+For every width=1 input except clock/reset:
+- add exactly two timing() blocks:
+  1) timing_type : setup_rising ;
+  2) timing_type : hold_rising ;
+- both must use:
+  related_pin : "<clock_name>" ;
+- setup/hold blocks must use:
+  rise_constraint(constraint_template_1x1)
+  fall_constraint(constraint_template_1x1)
+
+D) NON-CLOCK INPUT BUSES
+For every width>1 input bus except reset buses:
+- put conservative input timing on the bus block
+- use:
+  related_pin : "<clock_name>" ;
+  timing_type : setup_rising ;
+  timing_type : hold_rising ;
+- do not collapse the bus into one fake scalar pin declaration
+
+E) OUTPUT SCALARS
+For every width=1 output:
+- add exactly one timing() block
+- it must use:
+  related_pin : "<clock_name>" ;
+  timing_type : rising_edge ;
+- it must include:
+  cell_rise(delay_template_1x1)
+  cell_fall(delay_template_1x1)
+
+F) OUTPUT BUSES
+For every width>1 output bus:
+- put conservative output timing on the bus block
+- use:
+  related_pin : "<clock_name>" ;
+  timing_type : rising_edge ;
+- include:
+  cell_rise(delay_template_1x1)
+  cell_fall(delay_template_1x1)
+
+G) INOUT SIGNALS
+- keep direction : inout ;
+- be conservative
+- include no complex bidirectional timing unless clearly required by spec
+
+==================================================
+POWER PIN RULES — MANDATORY
 ==================================================
 Always include exactly these in LIB:
+
 pg_pin (VDD) {{
   pg_type : primary_power ;
   voltage_name : VDD ;
@@ -549,177 +611,227 @@ pg_pin (VSS) {{
 
 Do not omit them.
 Do not rename them.
+Do not replace them with ordinary signal pins.
 
 ==================================================
-LIBERTY EXAMPLES — FOLLOW THESE EXACTLY
+CANONICAL GOOD EXAMPLE — FOLLOW THIS STYLE
+==================================================
+This example shows the required Liberty bus style.
+
+library (example_macro_lib) {{
+  delay_model : table_lookup ;
+  time_unit : "1ns" ;
+  voltage_unit : "1V" ;
+  current_unit : "1mA" ;
+  capacitive_load_unit(1,pf) ;
+  leakage_power_unit : "1nW" ;
+
+  lu_table_template (delay_template_1x1) {{
+    variable_1 : input_net_transition ;
+    variable_2 : total_output_net_capacitance ;
+    index_1("0.100");
+    index_2("0.100");
+  }}
+
+  lu_table_template (constraint_template_1x1) {{
+    variable_1 : constrained_pin_transition ;
+    variable_2 : related_pin_transition ;
+    index_1("0.100");
+    index_2("0.100");
+  }}
+
+  type (dac_code_bus_t) {{
+    base_type : array ;
+    data_type : bit ;
+    bit_width : 12 ;
+    bit_from : 11 ;
+    bit_to : 0 ;
+    downto : true ;
+  }}
+
+  type (adc_data_bus_t) {{
+    base_type : array ;
+    data_type : bit ;
+    bit_width : 12 ;
+    bit_from : 11 ;
+    bit_to : 0 ;
+    downto : true ;
+  }}
+
+  cell (example_macro) {{
+    area : 100.0 ;
+
+    pg_pin (VDD) {{
+      pg_type : primary_power ;
+      voltage_name : VDD ;
+    }}
+
+    pg_pin (VSS) {{
+      pg_type : primary_ground ;
+      voltage_name : VSS ;
+    }}
+
+    pin (clk) {{
+      direction : input ;
+      clock : true ;
+    }}
+
+    pin (rst_n) {{
+      direction : input ;
+    }}
+
+    pin (enable) {{
+      direction : input ;
+      timing () {{
+        related_pin : "clk" ;
+        timing_type : setup_rising ;
+        rise_constraint(constraint_template_1x1) {{
+          index_1("0.100");
+          index_2("0.100");
+          values("1.000");
+        }}
+        fall_constraint(constraint_template_1x1) {{
+          index_1("0.100");
+          index_2("0.100");
+          values("1.000");
+        }}
+      }}
+      timing () {{
+        related_pin : "clk" ;
+        timing_type : hold_rising ;
+        rise_constraint(constraint_template_1x1) {{
+          index_1("0.100");
+          index_2("0.100");
+          values("1.000");
+        }}
+        fall_constraint(constraint_template_1x1) {{
+          index_1("0.100");
+          index_2("0.100");
+          values("1.000");
+        }}
+      }}
+    }}
+
+    bus (dac_code) {{
+      bus_type : dac_code_bus_t ;
+      direction : input ;
+      timing () {{
+        related_pin : "clk" ;
+        timing_type : setup_rising ;
+        rise_constraint(constraint_template_1x1) {{
+          index_1("0.100");
+          index_2("0.100");
+          values("1.000");
+        }}
+        fall_constraint(constraint_template_1x1) {{
+          index_1("0.100");
+          index_2("0.100");
+          values("1.000");
+        }}
+      }}
+      timing () {{
+        related_pin : "clk" ;
+        timing_type : hold_rising ;
+        rise_constraint(constraint_template_1x1) {{
+          index_1("0.100");
+          index_2("0.100");
+          values("1.000");
+        }}
+        fall_constraint(constraint_template_1x1) {{
+          index_1("0.100");
+          index_2("0.100");
+          values("1.000");
+        }}
+      }}
+    }}
+
+    bus (adc_data) {{
+      bus_type : adc_data_bus_t ;
+      direction : output ;
+      timing () {{
+        related_pin : "clk" ;
+        timing_type : rising_edge ;
+        cell_rise(delay_template_1x1) {{
+          index_1("0.100");
+          index_2("0.100");
+          values("3.000");
+        }}
+        cell_fall(delay_template_1x1) {{
+          index_1("0.100");
+          index_2("0.100");
+          values("3.000");
+        }}
+      }}
+    }}
+
+    pin (adc_done) {{
+      direction : output ;
+      timing () {{
+        related_pin : "clk" ;
+        timing_type : rising_edge ;
+        cell_rise(delay_template_1x1) {{
+          index_1("0.100");
+          index_2("0.100");
+          values("3.000");
+        }}
+        cell_fall(delay_template_1x1) {{
+          index_1("0.100");
+          index_2("0.100");
+          values("3.000");
+        }}
+      }}
+    }}
+  }}
+}}
+
+==================================================
+BAD EXAMPLES — NEVER DO THESE
 ==================================================
 
-1) ONE pin() BLOCK PER PORT
-Bad:
-pin ( clk ) {{
-  direction : input ;
-  clock : true ;
-}}
-pin ( clk ) {{
-  timing () {{
-    related_pin : "clk" ;
-    timing_type : rising_edge ;
-  }}
-}}
-
-Good:
-pin ( clk ) {{
-  direction : input ;
-  clock : true ;
-}}
-
-Why:
-- Never define the same pin twice.
-- All properties for a pin must live inside one pin() block only.
-
-
-2) NEVER CREATE timing-only pin() BLOCKS
-Bad:
-pin ( adc_done ) {{
-  direction : output ;
-}}
-pin ( adc_done ) {{
-  timing () {{
-    related_pin : "clk" ;
-    timing_type : rising_edge ;
-    cell_rise(delay_template_1x1) {{
-      index_1("0.100");
-      index_2("0.100");
-      values("3.000");
-    }}
-    cell_fall(delay_template_1x1) {{
-      index_1("0.100");
-      index_2("0.100");
-      values("3.000");
-    }}
-  }}
-}}
-
-Good:
-pin ( adc_done ) {{
-  direction : output ;
-  timing () {{
-    related_pin : "clk" ;
-    timing_type : rising_edge ;
-    cell_rise(delay_template_1x1) {{
-      index_1("0.100");
-      index_2("0.100");
-      values("3.000");
-    }}
-    cell_fall(delay_template_1x1) {{
-      index_1("0.100");
-      index_2("0.100");
-      values("3.000");
-    }}
-  }}
-}}
-
-Why:
-- Timing must be inside the same pin() block as the direction.
-
-
-3) EVERY pin() MUST HAVE direction
-Bad:
-pin ( clk ) {{
-  clock : true ;
-}}
-pin ( ready ) {{
-  timing () {{
-    related_pin : "clk" ;
-    timing_type : rising_edge ;
-  }}
-}}
-
-Good:
-pin ( clk ) {{
-  direction : input ;
-  clock : true ;
-}}
-pin ( ready ) {{
-  direction : output ;
-  timing () {{
-    related_pin : "clk" ;
-    timing_type : rising_edge ;
-    cell_rise(delay_template_1x1) {{
-      index_1("0.100");
-      index_2("0.100");
-      values("3.000");
-    }}
-    cell_fall(delay_template_1x1) {{
-      index_1("0.100");
-      index_2("0.100");
-      values("3.000");
-    }}
-  }}
-}}
-
-Why:
-- A pin without direction is invalid for synthesis use.
-
-
-4) DO NOT USE pin(bus[msb:lsb]) FORM
-Bad:
-pin ( dac_code[11:0] ) {{
-  direction : input ;
-}}
+1) WRONG: collapsed whole-bus pin
 pin ( adc_data[11:0] ) {{
   direction : output ;
 }}
 
-Good:
-pin ( dac_code[0] ) {{ direction : input ; }}
-pin ( dac_code[1] ) {{ direction : input ; }}
-pin ( dac_code[2] ) {{ direction : input ; }}
-...
-pin ( dac_code[11] ) {{ direction : input ; }}
+Why bad:
+- a multi-bit bus must be represented with type(...) + bus(...), not a collapsed scalar pin
 
-pin ( adc_data[0] ) {{
-  direction : output ;
+2) WRONG: duplicate scalar pin blocks
+pin ( clk ) {{
+  direction : input ;
+  clock : true ;
+}}
+pin ( clk ) {{
   timing () {{
     related_pin : "clk" ;
     timing_type : rising_edge ;
-    cell_rise(delay_template_1x1) {{
-      index_1("0.100");
-      index_2("0.100");
-      values("3.000");
-    }}
-    cell_fall(delay_template_1x1) {{
-      index_1("0.100");
-      index_2("0.100");
-      values("3.000");
-    }}
   }}
 }}
 
-Why:
-- Expand buses into scalar bit pins.
-- Do not use [11:0] inside a single pin() name.
+Why bad:
+- same pin defined twice
 
+3) WRONG: timing-only pin block
+pin ( ready ) {{
+  timing () {{
+    related_pin : "clk" ;
+    timing_type : rising_edge ;
+  }}
+}}
 
-5) NEVER USE EMPTY related_pin
-Bad:
+Why bad:
+- every pin block must include direction
+
+4) WRONG: empty related_pin
 timing () {{
   related_pin : "" ;
   timing_type : rising_edge ;
 }}
 
-Good:
-timing () {{
-  related_pin : "clk" ;
-  timing_type : rising_edge ;
-}}
+Why bad:
+- related_pin must reference the actual clock pin
 
-Why:
-- related_pin must reference the actual clock pin name.
-
-
-6) ONLY ONE CLOCK PIN
-Bad:
+5) WRONG: more than one clock
 pin ( clk ) {{
   direction : input ;
   clock : true ;
@@ -729,191 +841,25 @@ pin ( sample_clk ) {{
   clock : true ;
 }}
 
-Good:
-pin ( clk ) {{
-  direction : input ;
-  clock : true ;
-}}
-pin ( sample_clk ) {{
-  direction : input ;
-}}
+Why bad:
+- only one signal may be the timing reference clock
 
-Why:
-- Mark only one clock-like pin as clock:true.
-- Use the first clock-like pin as the sole timing reference.
+==================================================
+INTEGRATION NOTES RULES
+==================================================
+The "integration_notes_md" field must be short and factual.
+It should include:
+- module_name
+- lef_file
+- lib_file
+- timing_basis_clock_period_ns
+- setup_constraint_ns
+- hold_constraint_ns
+- clk_to_q_ns
+- a brief note that this is a conservative abstract view artifact set
 
-
-7) INPUT TIMING MUST USE setup_rising / hold_rising
-Bad:
-pin ( enable ) {{
-  direction : input ;
-  timing () {{
-    related_pin : "clk" ;
-    timing_type : rising_edge ;
-  }}
-}}
-
-Good:
-pin ( enable ) {{
-  direction : input ;
-  timing () {{
-    related_pin : "clk" ;
-    timing_type : setup_rising ;
-    rise_constraint(constraint_template_1x1) {{
-      index_1("0.100");
-      index_2("0.100");
-      values("1.000");
-    }}
-    fall_constraint(constraint_template_1x1) {{
-      index_1("0.100");
-      index_2("0.100");
-      values("1.000");
-    }}
-  }}
-  timing () {{
-    related_pin : "clk" ;
-    timing_type : hold_rising ;
-    rise_constraint(constraint_template_1x1) {{
-      index_1("0.100");
-      index_2("0.100");
-      values("1.000");
-    }}
-    fall_constraint(constraint_template_1x1) {{
-      index_1("0.100");
-      index_2("0.100");
-      values("1.000");
-    }}
-  }}
-}}
-
-Why:
-- Non-clock inputs need setup and hold constraints, not output timing style.
-
-
-8) OUTPUT TIMING MUST USE rising_edge + cell_rise/cell_fall
-Bad:
-pin ( adc_done ) {{
-  direction : output ;
-  timing () {{
-    related_pin : "clk" ;
-    timing_type : setup_rising ;
-    rise_constraint(constraint_template_1x1) {{
-      index_1("0.100");
-      index_2("0.100");
-      values("1.000");
-    }}
-  }}
-}}
-
-Good:
-pin ( adc_done ) {{
-  direction : output ;
-  timing () {{
-    related_pin : "clk" ;
-    timing_type : rising_edge ;
-    cell_rise(delay_template_1x1) {{
-      index_1("0.100");
-      index_2("0.100");
-      values("3.000");
-    }}
-    cell_fall(delay_template_1x1) {{
-      index_1("0.100");
-      index_2("0.100");
-      values("3.000");
-    }}
-  }}
-}}
-
-Why:
-- Outputs need clk-to-q style delay arcs, not setup/hold constraints.
-
-
-9) DO NOT OMIT REQUIRED POWER PINS
-Bad:
-cell ( analog_subsystem ) {{
-  area : 100.0 ;
-  pin ( clk ) {{ direction : input ; clock : true ; }}
-}}
-
-Good:
-cell ( analog_subsystem ) {{
-  area : 100.0 ;
-
-  pg_pin (VDD) {{
-    pg_type : primary_power ;
-    voltage_name : VDD ;
-  }}
-
-  pg_pin (VSS) {{
-    pg_type : primary_ground ;
-    voltage_name : VSS ;
-  }}
-
-  pin ( clk ) {{
-    direction : input ;
-    clock : true ;
-  }}
-}}
-
-Why:
-- Always include pg_pin(VDD) and pg_pin(VSS).
-
-
-10) DO NOT INVENT OR RENAME PORTS
-Bad:
-pin ( analog_enable ) {{ direction : input ; }}
-pin ( data_out ) {{ direction : output ; }}
-
-Good:
-If spec says:
-- enable
-- adc_data[0]
-
-Then use exactly:
-pin ( enable ) {{ direction : input ; }}
-pin ( adc_data[0] ) {{ direction : output ; ... }}
-
-Why:
-- Pin names must exactly match the spec.
-- Do not rename, group, alias, or simplify.
-
-
-11) DO NOT SKIP BITS OF A BUS
-Bad:
-pin ( dac_code[0] ) {{ direction : input ; }}
-pin ( dac_code[1] ) {{ direction : input ; }}
-pin ( dac_code[11] ) {{ direction : input ; }}
-
-Good:
-pin ( dac_code[0] ) {{ direction : input ; }}
-pin ( dac_code[1] ) {{ direction : input ; }}
-pin ( dac_code[2] ) {{ direction : input ; }}
-...
-pin ( dac_code[11] ) {{ direction : input ; }}
-
-Why:
-- Every bus bit must be present exactly once.
-
-
-12) DO NOT OUTPUT PROSE OR COMMENTS INSIDE LIBERTY
-Bad:
-library ( analog_subsystem_lib ) {{
-  // This is a simple timing model for synthesis
-  cell ( analog_subsystem ) {{
-    ...
-  }}
-}}
-
-Good:
-library ( analog_subsystem_lib ) {{
-  time_unit : "1ns" ;
-  voltage_unit : "1V" ;
-  ...
-}}
-
-Why:
-- Output only valid Liberty syntax.
-- No prose, no markdown, no explanatory comments.
+Do not include long prose.
+Do not include speculative statements.
 
 ==================================================
 FINAL VALIDITY CHECKLIST — MANDATORY
@@ -923,20 +869,27 @@ Before returning, verify all of the following are true:
 - JSON has exactly 3 keys: lef, lib_stub, integration_notes_md
 - LEF macro name == {module_name}
 - LIB cell name == {module_name}
+- library ({module_name}_lib) exists exactly once
+- cell ({module_name}) exists exactly once
 - pg_pin(VDD) present
 - pg_pin(VSS) present
-- every spec port is present exactly once after bus expansion
-- no duplicate pin names
-- no pin() block is missing direction
+- required templates are defined before the cell block
+- every width=1 spec port is represented exactly once as pin(...)
+- every width>1 spec port is represented exactly once as bus(...)
+- every width>1 spec port has a matching type(...)
+- no duplicate scalar pin names
+- no duplicate bus names
+- no scalar pin() block is missing direction
 - no timing-only duplicate pin block exists
 - exactly one clock pin has clock : true ;
 - no empty related_pin
-- no pin(name[msb:lsb]) syntax
-- non-clock inputs use setup_rising and hold_rising
-- outputs use rising_edge with cell_rise and cell_fall
+- no collapsed pin(name[msb:lsb]) whole-bus syntax
+- non-clock scalar inputs use setup_rising and hold_rising
+- output scalars use rising_edge with cell_rise and cell_fall
+- reset pins do not get accidental setup/hold timing
 - no extra prose outside JSON
 - no comments inside LEF or LIB
-- syntax must be conservative and tool-safe
+- syntax is conservative and tool-safe
 
 If any checklist item fails, regenerate internally and return only a corrected final JSON.
 """
