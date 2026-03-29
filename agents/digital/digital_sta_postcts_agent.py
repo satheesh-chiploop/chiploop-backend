@@ -166,6 +166,39 @@ def _resolve_postcts_netlist(state: dict, workflow_dir: str) -> str | None:
         logger.warning(f"{AGENT_NAME}: no synthesized netlist found for STA post-CTS")
     return cand
 
+def _stage_macro_inputs(state: dict, run_work_dir: str) -> tuple[list[str], list[str], list[str]]:
+    digital = state.get("digital") or {}
+    macro_lefs = [p for p in (digital.get("macro_lefs") or []) if p and os.path.exists(p)]
+    macro_libs = [p for p in (digital.get("macro_libs") or []) if p and os.path.exists(p)]
+    macro_gds  = [p for p in (digital.get("macro_gds") or []) if p and os.path.exists(p)]
+
+    inputs_dir = os.path.join(run_work_dir, "inputs", "macros")
+    lef_dir = os.path.join(inputs_dir, "lef")
+    lib_dir = os.path.join(inputs_dir, "lib")
+    gds_dir = os.path.join(inputs_dir, "gds")
+    _ensure_dir(lef_dir)
+    _ensure_dir(lib_dir)
+    _ensure_dir(gds_dir)
+
+    staged_lefs, staged_libs, staged_gds = [], [], []
+
+    for src in macro_lefs:
+        dst = os.path.join(lef_dir, os.path.basename(src))
+        shutil.copy2(src, dst)
+        staged_lefs.append(f"dir::inputs/macros/lef/{os.path.basename(src)}")
+
+    for src in macro_libs:
+        dst = os.path.join(lib_dir, os.path.basename(src))
+        shutil.copy2(src, dst)
+        staged_libs.append(f"dir::inputs/macros/lib/{os.path.basename(src)}")
+
+    for src in macro_gds:
+        dst = os.path.join(gds_dir, os.path.basename(src))
+        shutil.copy2(src, dst)
+        staged_gds.append(f"dir::inputs/macros/gds/{os.path.basename(src)}")
+
+    return staged_lefs, staged_libs, staged_gds
+
 def run_agent(state: dict) -> dict:
     print(f"\n🏁 Running {AGENT_NAME}...")
     logger.info(f"🏁 Running {AGENT_NAME}")
@@ -192,6 +225,15 @@ def run_agent(state: dict) -> dict:
     run_work_dir = os.path.abspath(run_work_dir)
     _ensure_dir(run_work_dir)
     state["digital_run_work_dir"] = run_work_dir
+
+    staged_lefs, staged_libs, staged_gds = _stage_macro_inputs(state, run_work_dir)
+
+    if staged_lefs:
+        cfg["EXTRA_LEFS"] = staged_lefs
+    if staged_libs:
+        cfg["EXTRA_LIBS"] = staged_libs
+    if staged_gds:
+        cfg["EXTRA_GDS_FILES"] = staged_gds
 
     upstream_sdc = _resolve_sdc_from_state(state, workflow_dir)
     if not upstream_sdc:
@@ -277,6 +319,9 @@ def run_agent(state: dict) -> dict:
         f"staged_postcts_netlist={staged_postcts_netlist}",
         f"verilog_files_mode=explicit_from_synth_only",
         f"netlist_count=1",
+        f"macro_lef_count={len(staged_lefs)}",
+        f"macro_lib_count={len(staged_libs)}",
+        f"macro_gds_count={len(staged_gds)}",
     ]) + "\n"
     _write_text(os.path.join(logs_dir, "sta_postcts_input_resolution.log"), input_log)
 

@@ -222,6 +222,7 @@ def _discover_macro_files(
     return hits
 
 
+
 def _resolve_macro_lefs(state: dict, workflow_dir: str) -> list[str]:
     system = state.get("system") or {}
 
@@ -232,10 +233,25 @@ def _resolve_macro_lefs(state: dict, workflow_dir: str) -> list[str]:
     state_candidates.extend(_normalize_list(system.get("macro_lefs")))
 
     lefs = _discover_macro_files(workflow_dir, state_candidates, (".lef",))
+
+    # Keep only canonical LEFs. Reject debug/raw/generated scratch LEFs.
+    filtered = []
+    for p in lefs:
+        base = os.path.basename(p).lower()
+        if base.endswith("_llm_lef_raw.lef"):
+            continue
+        if base.endswith("_raw.lef"):
+            continue
+        if "debug" in base:
+            continue
+        filtered.append(p)
+
+    lefs = _dedupe_keep_order(filtered)
+
     if lefs:
-        logger.info(f"{AGENT_NAME}: resolved macro LEFs -> {len(lefs)} files")
+        logger.info(f"{AGENT_NAME}: resolved canonical macro LEFs -> {len(lefs)} files")
     else:
-        logger.warning(f"{AGENT_NAME}: no macro LEFs found")
+        logger.warning(f"{AGENT_NAME}: no canonical macro LEFs found")
     return lefs
 
 
@@ -441,6 +457,9 @@ def run_agent(state: dict) -> dict:
             "EXTRA_LEFS": extra_lefs,
             "EXTRA_LIBS": extra_libs,
             "EXTRA_GDS_FILES": extra_gds,
+            "CHIPLOOP_CANONICAL_MACRO_LEFS": copied_lef_abs,
+            "CHIPLOOP_CANONICAL_MACRO_LIBS": copied_lib_abs,
+            "CHIPLOOP_CANONICAL_MACRO_GDS": copied_gds_abs,
             "CHIPLOOP_SOURCE_SPEC_JSON": spec_json_path,
             "CHIPLOOP_FILELIST": filelist_path,
             "CHIPLOOP_MACRO_LEF_FILELIST": macro_lef_filelist_path,

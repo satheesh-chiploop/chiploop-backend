@@ -153,6 +153,44 @@ def _resolve_postplace_netlist(state: dict, workflow_dir: str) -> str | None:
     cand = _first_existing(candidates)
     return cand
 
+
+def _stage_macro_inputs(state: dict, run_work_dir: str):
+    digital = state.get("digital") or {}
+
+    macro_lefs = [p for p in (digital.get("macro_lefs") or []) if p and os.path.exists(p)]
+    macro_libs = [p for p in (digital.get("macro_libs") or []) if p and os.path.exists(p)]
+    macro_gds  = [p for p in (digital.get("macro_gds") or []) if p and os.path.exists(p)]
+
+    inputs_macros_dir = os.path.join(run_work_dir, "inputs", "macros")
+    lef_dir = os.path.join(inputs_macros_dir, "lef")
+    lib_dir = os.path.join(inputs_macros_dir, "lib")
+    gds_dir = os.path.join(inputs_macros_dir, "gds")
+
+    _ensure_dir(lef_dir)
+    _ensure_dir(lib_dir)
+    _ensure_dir(gds_dir)
+
+    staged_lefs = []
+    staged_libs = []
+    staged_gds = []
+
+    for src in macro_lefs:
+        dst = os.path.join(lef_dir, os.path.basename(src))
+        shutil.copy2(src, dst)
+        staged_lefs.append(f"dir::inputs/macros/lef/{os.path.basename(src)}")
+
+    for src in macro_libs:
+        dst = os.path.join(lib_dir, os.path.basename(src))
+        shutil.copy2(src, dst)
+        staged_libs.append(f"dir::inputs/macros/lib/{os.path.basename(src)}")
+
+    for src in macro_gds:
+        dst = os.path.join(gds_dir, os.path.basename(src))
+        shutil.copy2(src, dst)
+        staged_gds.append(f"dir::inputs/macros/gds/{os.path.basename(src)}")
+
+    return staged_lefs, staged_libs, staged_gds
+
 def run_agent(state: dict) -> dict:
     workflow_id = state.get("workflow_id", "default")
     workflow_dir = state.get("workflow_dir") or f"backend/workflows/{workflow_id}"
@@ -174,6 +212,13 @@ def run_agent(state: dict) -> dict:
     run_work_dir = os.path.abspath(run_work_dir)
     _ensure(run_work_dir)
     state["digital_run_work_dir"] = run_work_dir
+
+
+    staged_lefs, staged_libs, staged_gds = _stage_macro_inputs(state, run_work_dir)
+
+    cfg["EXTRA_LEFS"] = staged_lefs
+    cfg["EXTRA_LIBS"] = staged_libs
+    cfg["EXTRA_GDS_FILES"] = staged_gds
 
 
 
@@ -245,6 +290,9 @@ def run_agent(state: dict) -> dict:
         f"resolved_postplace_netlist={postplace_netlist}",
         f"staged_postplace_netlist={staged_postplace_netlist}",
         f"netlist_count=1",
+        f"macro_lef_count={len(staged_lefs)}",
+        f"macro_lib_count={len(staged_libs)}",
+        f"macro_gds_count={len(staged_gds)}",
     ]) + "\n"
     _write(os.path.join(logs_dir, "sta_postplace_input_resolution.log"), input_log)
 
