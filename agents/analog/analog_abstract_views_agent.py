@@ -420,6 +420,23 @@ The LIB must:
   pg_pin (VDD)
   pg_pin (VSS)
 
+  The library must include these library-level threshold attributes exactly once:
+
+input_threshold_pct_rise : 50.0 ;
+input_threshold_pct_fall : 50.0 ;
+output_threshold_pct_rise : 50.0 ;
+output_threshold_pct_fall : 50.0 ;
+slew_lower_threshold_pct_rise : 20.0 ;
+slew_upper_threshold_pct_rise : 80.0 ;
+slew_lower_threshold_pct_fall : 20.0 ;
+slew_upper_threshold_pct_fall : 80.0 ;
+
+For every output timing arc, include all four:
+- cell_rise(delay_template_1x1)
+- cell_fall(delay_template_1x1)
+- rise_transition(delay_template_1x1)
+- fall_transition(delay_template_1x1)
+
 ==================================================
 REQUIRED TEMPLATE DEFINITIONS — MANDATORY
 ==================================================
