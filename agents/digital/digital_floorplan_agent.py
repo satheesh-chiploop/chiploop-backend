@@ -404,12 +404,13 @@ END DESIGN
     cfg["PL_SKIP_INITIAL_PLACEMENT"] = True
 
     # Optional: also force MACROS for debug only
-    cfg["MACROS"] = {
-        macro_inst_name: {
-            "location": [macro_x, macro_y],
-            "orientation": macro_orient
-        }
-    }
+    #cfg["MACROS"] = {
+    #   macro_inst_name: {
+    #        "location": [macro_x, macro_y],
+    #       "orientation": macro_orient
+    #   }
+    #}
+    cfg.pop("MACROS", None)
 
     logger.info(f"{AGENT_NAME}: cfg['MACRO_PLACEMENT_CFG']={cfg.get('MACRO_PLACEMENT_CFG')}")
     logger.info(f"{AGENT_NAME}: cfg['FP_DEF_TEMPLATE']={cfg.get('FP_DEF_TEMPLATE')}")
