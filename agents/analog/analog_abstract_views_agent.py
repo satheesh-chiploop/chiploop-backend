@@ -120,7 +120,7 @@ def _fallback_lef(spec: dict) -> str:
         "  SYMMETRY X Y R90 ;",
         "  SITE unithd ;",
         "",
-        "  PIN VDD",
+        "  PIN VPWR",
         "    DIRECTION INOUT ;",
         "    USE POWER ;",
         "    SHAPE ABUTMENT ;",
@@ -128,9 +128,9 @@ def _fallback_lef(spec: dict) -> str:
         "      LAYER met1 ;",
         "      RECT 0 0 1 1 ;",
         "    END",
-        "  END VDD",
+        "  END VPWR",
         "",
-        "  PIN VSS",
+        "  PIN VGND",
         "    DIRECTION INOUT ;",
         "    USE GROUND ;",
         "    SHAPE ABUTMENT ;",
@@ -138,7 +138,7 @@ def _fallback_lef(spec: dict) -> str:
         "      LAYER met1 ;",
         "      RECT 0 2 1 3 ;",
         "    END",
-        "  END VSS",
+        "  END VGND",
         "",
     ]
 
@@ -198,14 +198,14 @@ def _build_lib_stub(spec: dict) -> str:
     ]
 
     lines.extend([
-        "    pg_pin (VDD) {",
+        "    pg_pin (VPWR) {",
         "      pg_type : primary_power ;",
-        "      voltage_name : VDD ;",
+        "      voltage_name : VPWR ;",
         "    }",
         "",
-        "    pg_pin (VSS) {",
+        "    pg_pin (VGND) {",
         "      pg_type : primary_ground ;",
-        "      voltage_name : VSS ;",
+        "      voltage_name : VGND ;",
         "    }",
         "",
     ])
@@ -408,7 +408,7 @@ Power pins must:
 - be placed on met1
 - use a valid LEF PORT block, exactly in this style:
 
-  PIN VDD
+  PIN VPWR
     DIRECTION INOUT ;
     USE POWER ;
     SHAPE ABUTMENT ;
@@ -416,9 +416,9 @@ Power pins must:
       LAYER met1 ;
       RECT 0 0 1 1 ;
     END
-  END VDD
+  END VPWR
 
-  PIN VSS
+  PIN VGND
     DIRECTION INOUT ;
     USE GROUND ;
     SHAPE ABUTMENT ;
@@ -426,7 +426,7 @@ Power pins must:
       LAYER met1 ;
       RECT 0 2 1 3 ;
     END
-  END VSS
+  END VGND
 
 Signal pins:
 - must use met2
@@ -462,8 +462,8 @@ The LIB must:
   leakage_power_unit : "1nW" ;
 - define required templates before the cell block
 - include pg pins:
-  pg_pin (VDD)
-  pg_pin (VSS)
+  pg_pin (VPWR)
+  pg_pin (VGND)
 
   The library must include these library-level threshold attributes exactly once:
 
@@ -661,14 +661,14 @@ POWER PIN RULES — MANDATORY
 ==================================================
 Always include exactly these in LIB:
 
-pg_pin (VDD) {{
+pg_pin (VPWR) {{
   pg_type : primary_power ;
-  voltage_name : VDD ;
+  voltage_name : VPWR ;
 }}
 
-pg_pin (VSS) {{
+pg_pin (VGND) {{
   pg_type : primary_ground ;
-  voltage_name : VSS ;
+  voltage_name : VGND ;
 }}
 
 Do not omit them.
@@ -723,14 +723,14 @@ library (example_macro_lib) {{
   cell (example_macro) {{
     area : 100.0 ;
 
-    pg_pin (VDD) {{
+    pg_pin (VPWR) {{
       pg_type : primary_power ;
-      voltage_name : VDD ;
+      voltage_name : VPWR ;
     }}
 
-    pg_pin (VSS) {{
+    pg_pin (VGND) {{
       pg_type : primary_ground ;
-      voltage_name : VSS ;
+      voltage_name : VGND ;
     }}
 
     pin (clk) {{
@@ -919,13 +919,13 @@ Why bad:
 - sky130 uses met1/met2 naming, not M1
 
 8) WRONG:
-PIN VDD
+PIN VPWR
   DIRECTION INOUT ;
   USE POWER ;
   SHAPE ABUTMENT ;
   LAYER met1 ;
   RECT 0 0 1 1 ;
-END VDD
+END VPWR
 
 Why bad:
 - LEF geometry must be inside a PORT ... END block
@@ -933,7 +933,7 @@ Why bad:
 
 9) WRONG:
 /* power pins */
-PIN VDD
+PIN VPWR
   DIRECTION INOUT ;
   USE POWER ;
   SHAPE ABUTMENT ;
@@ -941,7 +941,7 @@ PIN VDD
     LAYER met1 ;
     RECT 0 0 1 1 ;
   END
-END VDD
+END VPWR
 
 Why bad:
 - LEF output must not contain comments
@@ -976,8 +976,8 @@ Before returning, verify all of the following are true:
 - LIB cell name == {module_name}
 - library ({module_name}_lib) exists exactly once
 - cell ({module_name}) exists exactly once
-- pg_pin(VDD) present
-- pg_pin(VSS) present
+- pg_pin(VPWR) present
+- pg_pin(VGND) present
 - required templates are defined before the cell block
 - every width=1 spec port is represented exactly once as pin(...)
 - every width>1 spec port is represented exactly once as bus(...)
@@ -994,8 +994,8 @@ Before returning, verify all of the following are true:
 - reset pins do not get accidental setup/hold timing
 - no extra prose outside JSON
 - every LEF PIN uses a PORT ... END block
-- VDD uses USE POWER
-- VSS uses USE GROUND
+- VPWR uses USE POWER
+- VGND uses USE GROUND
 - LEF contains no comment tokens such as /*, */, //, or #
 - LIB contains no comment tokens such as /*, */, //, or #
 - no comments inside LEF or LIB
@@ -1054,8 +1054,8 @@ If any checklist item fails, regenerate internally and return only a corrected f
         f"END {module_name}",
         "END LIBRARY",
         "SITE unithd",
-        "PIN VDD",
-        "PIN VSS",
+        "PIN VPWR",
+        "PIN VGND",
         "USE POWER",
         "USE GROUND",
         "PORT",
@@ -1070,11 +1070,11 @@ If any checklist item fails, regenerate internally and return only a corrected f
         if bad in lef:
             lef_issues.append(f"invalid sky130 token: {bad}")
 
-    if "PIN VSS" in lef and "USE GROUND" not in lef:
-        lef_issues.append("VSS must use USE GROUND")
+    if "PIN VGND" in lef and "USE GROUND" not in lef:
+        lef_issues.append("VGND must use USE GROUND")
 
-    if "PIN VDD" in lef and "USE POWER" not in lef:
-        lef_issues.append("VDD must use USE POWER")
+    if "PIN VPWR" in lef and "USE POWER" not in lef:
+        lef_issues.append("VPWR must use USE POWER")
 
     if lef_issues:
         logger.warning(f"[{agent_name}] LEF invalid: {lef_issues} → regenerating fallback")
