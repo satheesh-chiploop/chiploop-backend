@@ -408,25 +408,28 @@ Power pins must:
 - be placed on met1
 - use a valid LEF PORT block, exactly in this style:
 
-  PIN VPWR
-    DIRECTION INOUT ;
-    USE POWER ;
-    SHAPE ABUTMENT ;
-    PORT
-      LAYER met1 ;
-      RECT 0 0 1 1 ;
-    END
-  END VPWR
+PIN VPWR
+  DIRECTION INOUT ;
+  USE POWER ;
+  SHAPE ABUTMENT ;
+  PORT
+    LAYER met1 ;
+    RECT 0.000 0.000 100.000 0.340 ;
+    RECT 0.000 99.320 100.000 99.660 ;
+  END
+END VPWR
 
-  PIN VGND
-    DIRECTION INOUT ;
-    USE GROUND ;
-    SHAPE ABUTMENT ;
-    PORT
-      LAYER met1 ;
-      RECT 0 2 1 3 ;
-    END
-  END VGND
+PIN VGND
+  DIRECTION INOUT ;
+  USE GROUND ;
+  SHAPE ABUTMENT ;
+  PORT
+    LAYER met1 ;
+    RECT 0.000 0.680 100.000 1.020 ;
+    RECT 0.000 98.640 100.000 98.980 ;
+  END
+END VGND
+
 
 Signal pins:
 - must use met2
