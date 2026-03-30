@@ -348,6 +348,13 @@ Return ONLY valid JSON with exactly these 3 keys:
 Do NOT return any extra keys.
 Do NOT wrap the JSON in markdown fences.
 Do NOT include any prose outside the JSON object.
+Inside LEF and LIB:
+- do NOT include comments
+- do NOT include C-style comments like /* ... */
+- do NOT include // comments
+- do NOT include # comments
+- do NOT include explanatory text, notes, section labels, or annotations
+- output only legal LEF / Liberty syntax
 Do NOT split content across continuation fields.
 Entire LEF must be inside "lef".
 Entire LIB must be inside "lib_stub".
@@ -924,6 +931,22 @@ Why bad:
 - LEF geometry must be inside a PORT ... END block
 - LAYER/RECT cannot appear directly under PIN
 
+9) WRONG:
+/* power pins */
+PIN VDD
+  DIRECTION INOUT ;
+  USE POWER ;
+  SHAPE ABUTMENT ;
+  PORT
+    LAYER met1 ;
+    RECT 0 0 1 1 ;
+  END
+END VDD
+
+Why bad:
+- LEF output must not contain comments
+- tokens like /* and */ can break OpenDB LEF parsing
+
 
 
 ==================================================
@@ -973,8 +996,11 @@ Before returning, verify all of the following are true:
 - every LEF PIN uses a PORT ... END block
 - VDD uses USE POWER
 - VSS uses USE GROUND
+- LEF contains no comment tokens such as /*, */, //, or #
+- LIB contains no comment tokens such as /*, */, //, or #
 - no comments inside LEF or LIB
 - syntax is conservative and tool-safe
+
 
 If any checklist item fails, regenerate internally and return only a corrected final JSON.
 """
