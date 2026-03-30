@@ -381,27 +381,15 @@ def run_agent(state: dict) -> dict:
     macro_cfg = f"{macro_inst_name} {macro_x} {macro_y} {macro_orient}\n"
     _write_text(macro_cfg_path, macro_cfg)
 
-    # 2) stronger DEF-template seed
-    fp_def_template_path = os.path.join(work_stage_dir, "floorplan_macro_template.def")
-    fp_def_template = f"""VERSION 5.8 ;
-DIVIDERCHAR "/" ;
-BUSBITCHARS "[]" ;
-DESIGN {top_module} ;
-UNITS DISTANCE MICRONS 1000 ;
-COMPONENTS 1 ;
-- {macro_inst_name} {macro_master_name} + FIXED ( {macro_x} {macro_y} ) {macro_orient} ;
-END COMPONENTS
-END DESIGN
-"""
-    _write_text(fp_def_template_path, fp_def_template)
+   
 
     logger.info(f"{AGENT_NAME}: macro placement CFG generated -> {macro_cfg_path}")
-    logger.info(f"{AGENT_NAME}: floorplan DEF template generated -> {fp_def_template_path}")
+    
 
     # Force all three for debug
     cfg["MACRO_PLACEMENT_CFG"] = "floorplan/macro_placement.cfg"
-    cfg["FP_DEF_TEMPLATE"] = "floorplan/floorplan_macro_template.def"
     cfg["PL_SKIP_INITIAL_PLACEMENT"] = True
+    cfg.pop("FP_DEF_TEMPLATE", None)
 
     # Optional: also force MACROS for debug only
     #cfg["MACROS"] = {
@@ -514,7 +502,6 @@ docker run --rm \
         save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "floorplan/logs/openlane_floorplan.log", out)
         save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "floorplan/floorplan_summary.json", json.dumps(summary, indent=2))
         save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "floorplan/macro_placement.cfg", macro_cfg)
-        save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "floorplan/floorplan_macro_template.def", fp_def_template)
         if metrics_path and os.path.exists(metrics_path):
             with open(metrics_path, "r", encoding="utf-8") as f:
                 save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "floorplan/metrics.json", f.read())
