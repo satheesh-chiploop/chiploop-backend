@@ -162,7 +162,7 @@ def _fallback_lef(spec: dict) -> str:
                     "",
                 ]
             )
-            rect_y += 2
+            rect_y += 4
 
     lines.extend([f"END {module_name}", "END LIBRARY", ""])
     return "\n".join(lines)
@@ -395,10 +395,33 @@ Never use:
 Power pins must:
 - use SHAPE ABUTMENT
 - be placed on met1
+- use a valid LEF PORT block, exactly in this style:
+
+  PIN VDD
+    DIRECTION INOUT ;
+    USE POWER ;
+    SHAPE ABUTMENT ;
+    PORT
+      LAYER met1 ;
+      RECT 0 0 1 1 ;
+    END
+  END VDD
+
+  PIN VSS
+    DIRECTION INOUT ;
+    USE GROUND ;
+    SHAPE ABUTMENT ;
+    PORT
+      LAYER met1 ;
+      RECT 0 2 1 3 ;
+    END
+  END VSS
 
 Signal pins:
 - must use met2
 - must be simple rectangular shapes
+- must use a valid LEF PORT block
+- never place LAYER/RECT directly under PIN without PORT
   
 - end with:
   END {module_name}
@@ -884,6 +907,21 @@ LAYER M1 ;
 Why bad:
 - sky130 uses met1/met2 naming, not M1
 
+8) WRONG:
+PIN VDD
+  DIRECTION INOUT ;
+  USE POWER ;
+  SHAPE ABUTMENT ;
+  LAYER met1 ;
+  RECT 0 0 1 1 ;
+END VDD
+
+Why bad:
+- LEF geometry must be inside a PORT ... END block
+- LAYER/RECT cannot appear directly under PIN
+
+
+
 ==================================================
 INTEGRATION NOTES RULES
 ==================================================
@@ -928,6 +966,9 @@ Before returning, verify all of the following are true:
 - output scalars use rising_edge with cell_rise and cell_fall
 - reset pins do not get accidental setup/hold timing
 - no extra prose outside JSON
+- every LEF PIN uses a PORT ... END block
+- VDD uses USE POWER
+- VSS uses USE GROUND
 - no comments inside LEF or LIB
 - syntax is conservative and tool-safe
 
@@ -983,9 +1024,12 @@ If any checklist item fails, regenerate internally and return only a corrected f
         f"END {module_name}",
         "END LIBRARY",
         "SITE unithd",
-        "LAYER met1",
         "PIN VDD",
         "PIN VSS",
+        "USE POWER",
+        "USE GROUND",
+        "PORT",
+        "LAYER met1",
     ]
 
     for tok in required_tokens:
@@ -996,6 +1040,11 @@ If any checklist item fails, regenerate internally and return only a corrected f
         if bad in lef:
             lef_issues.append(f"invalid sky130 token: {bad}")
 
+    if "PIN VSS" in lef and "USE GROUND" not in lef:
+        lef_issues.append("VSS must use USE GROUND")
+
+    if "PIN VDD" in lef and "USE POWER" not in lef:
+        lef_issues.append("VDD must use USE POWER")
 
     if lef_issues:
         logger.warning(f"[{agent_name}] LEF invalid: {lef_issues} → regenerating fallback")

@@ -211,10 +211,15 @@ def _generate_macro_placement(macro_master: str, macro_name: str = "u_analog") -
     macro_name   = instance name in the top netlist
     macro_master = LEF macro/master cell name
     """
-    return f"""
+    return f"""VERSION 5.8 ;
+DIVIDERCHAR "/" ;
+BUSBITCHARS "[]" ;
+DESIGN floorplan_macro_template ;
+UNITS DISTANCE MICRONS 1000 ;
 COMPONENTS 1 ;
 - {macro_name} {macro_master} + FIXED ( 100 100 ) N ;
 END COMPONENTS
+END DESIGN
 """
 
 def run_agent(state: dict) -> dict:
@@ -369,7 +374,7 @@ def run_agent(state: dict) -> dict:
     logger.info(f"{AGENT_NAME}: macro placement DEF generated -> {macro_def_path}")
 
     # Add macro placement DEF
-    cfg["FP_DEF_TEMPLATE"] = "macro_placement.def"
+    cfg["FP_DEF_TEMPLATE"] = "floorplan/macro_placement.def"
     cfg["PL_SKIP_INITIAL_PLACEMENT"] = True
 
 
@@ -409,6 +414,9 @@ def run_agent(state: dict) -> dict:
         f"macro_lef_count={len(staged_lefs)}",
         f"macro_lib_count={len(staged_libs)}",
         f"macro_gds_count={len(staged_gds)}",
+        f"macro_master={macro_master}",
+        f"macro_def_path={macro_def_path}",
+        f"fp_def_template={cfg.get('FP_DEF_TEMPLATE')}",
     ]) + "\n"
     _write_text(os.path.join(logs_dir, "floorplan_input_resolution.log"), input_log)
 
@@ -469,6 +477,7 @@ docker run --rm \
         save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "floorplan/run.sh", run_sh)
         save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "floorplan/logs/openlane_floorplan.log", out)
         save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "floorplan/floorplan_summary.json", json.dumps(summary, indent=2))
+        save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "floorplan/macro_placement.def", macro_def)
         if metrics_path and os.path.exists(metrics_path):
             with open(metrics_path, "r", encoding="utf-8") as f:
                 save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "floorplan/metrics.json", f.read())
