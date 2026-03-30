@@ -381,8 +381,12 @@ The LEF must:
   CLASS BLOCK ;
   ORIGIN 0 0 ;
   SIZE 100 BY 100 ;
-  SYMMETRY X Y R90;
+  SYMMETRY X Y R90 ;
   SITE unithd ;
+
+  Important:
+- there must be a space before every semicolon
+- for example, write `R90 ;` and never `R90;`
 
 Use sky130-style routing layer names:
 - met1 for power pins
