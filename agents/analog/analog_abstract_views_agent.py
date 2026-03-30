@@ -125,8 +125,9 @@ def _fallback_lef(spec: dict) -> str:
         "    USE POWER ;",
         "    SHAPE ABUTMENT ;",
         "    PORT",
-        "      LAYER met1 ;",
-        "      RECT 0 0 1 1 ;",
+        "      LAYER met4 ;",
+        "      RECT 0.00 0.00 2.00 100.00 ;",
+        "      RECT 98.00 0.00 100.00 100.00 ;",
         "    END",
         "  END VPWR",
         "",
@@ -135,11 +136,12 @@ def _fallback_lef(spec: dict) -> str:
         "    USE GROUND ;",
         "    SHAPE ABUTMENT ;",
         "    PORT",
-        "      LAYER met1 ;",
-        "      RECT 0 2 1 3 ;",
+        "      LAYER met4 ;",
+        "      RECT 4.00 0.00 6.00 100.00 ;",
+        "      RECT 94.00 0.00 96.00 100.00 ;",
         "    END",
         "  END VGND",
-        "",
+        "",  
     ]
 
     rect_y = 10
@@ -396,7 +398,7 @@ The LEF must:
 - for example, write `R90 ;` and never `R90;`
 
 Use sky130-style routing layer names:
-- met1 for power pins
+- met4 for macro power pins
 - met2 for signal pins
 
 Never use:
@@ -405,17 +407,21 @@ Never use:
 
 Power pins must:
 - use SHAPE ABUTMENT
-- be placed on met1
-- use a valid LEF PORT block, exactly in this style:
+- expose physically usable PG access for macro-level PDN hookup
+- prefer met4 for macro PG pins
+- use a valid LEF PORT block
+- avoid tiny point-contact rectangles and avoid met1-only local rails
+
+Use this style:
 
 PIN VPWR
   DIRECTION INOUT ;
   USE POWER ;
   SHAPE ABUTMENT ;
   PORT
-    LAYER met1 ;
-    RECT 0.000 0.000 100.000 0.340 ;
-    RECT 0.000 99.320 100.000 99.660 ;
+    LAYER met4 ;
+    RECT 0.00 0.00 2.00 100.00 ;
+    RECT 98.00 0.00 100.00 100.00 ;
   END
 END VPWR
 
@@ -424,9 +430,9 @@ PIN VGND
   USE GROUND ;
   SHAPE ABUTMENT ;
   PORT
-    LAYER met1 ;
-    RECT 0.000 0.680 100.000 1.020 ;
-    RECT 0.000 98.640 100.000 98.980 ;
+    LAYER met4 ;
+    RECT 4.00 0.00 6.00 100.00 ;
+    RECT 94.00 0.00 96.00 100.00 ;
   END
 END VGND
 
