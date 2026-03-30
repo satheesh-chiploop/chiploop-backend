@@ -395,8 +395,8 @@ END DESIGN
 """
     _write_text(fp_def_template_path, fp_def_template)
 
-        logger.info(f"{AGENT_NAME}: macro placement CFG generated -> {macro_cfg_path}")
-logger.info(f"{AGENT_NAME}: floorplan DEF template generated -> {fp_def_template_path}")
+    logger.info(f"{AGENT_NAME}: macro placement CFG generated -> {macro_cfg_path}")
+    logger.info(f"{AGENT_NAME}: floorplan DEF template generated -> {fp_def_template_path}")
 
     # Force all three for debug
     cfg["MACRO_PLACEMENT_CFG"] = "floorplan/macro_placement.cfg"
