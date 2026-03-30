@@ -141,6 +141,32 @@ def _resolve_config_from_state(state: dict, workflow_dir: str) -> str | None:
     logger.warning(f"{AGENT_NAME}: no OpenLane config found")
     return None
 
+def _resolve_macro_files_from_workflow(workflow_dir: str, exts: tuple[str, ...]) -> list[str]:
+    hits = []
+    for ext in exts:
+        hits.extend(glob.glob(os.path.join(workflow_dir, "**", f"*{ext}"), recursive=True))
+
+    out = []
+    seen = set()
+    for p in sorted(hits):
+        base = os.path.basename(p).lower()
+
+        # reject debug/raw scratch artifacts
+        if base.endswith("_llm_lef_raw.lef"):
+            continue
+        if base.endswith("_raw.lef"):
+            continue
+        if "debug" in base:
+            continue
+
+        ap = os.path.abspath(p)
+        if ap in seen:
+            continue
+        seen.add(ap)
+        out.append(ap)
+    return out
+
+
 def _stage_macro_inputs(state: dict, workflow_dir: str, work_stage_dir: str) -> tuple[list[str], list[str], list[str]]:
     digital = state.get("digital") or {}
 
