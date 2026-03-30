@@ -203,7 +203,15 @@ def _stage_macro_inputs(state: dict, workflow_dir: str, work_stage_dir: str) -> 
 
     return staged_lefs, staged_libs, staged_gds
 
-
+def _generate_macro_placement(top_module: str, macro_name: str = "u_analog") -> str:
+    """
+    Generate a simple DEF fragment for macro placement.
+    """
+    return f"""
+COMPONENTS 1 ;
+- {macro_name} {top_module} + PLACED ( 100 100 ) N ;
+END COMPONENTS
+"""
 
 def run_agent(state: dict) -> dict:
     print(f"\n🏁 Running {AGENT_NAME}...")
@@ -344,6 +352,19 @@ def run_agent(state: dict) -> dict:
     logger.info(f"{AGENT_NAME}: staged macro LEFs -> {staged_lefs}")
     logger.info(f"{AGENT_NAME}: staged macro LIBs -> {staged_libs}")
     logger.info(f"{AGENT_NAME}: staged macro GDS -> {staged_gds}")
+
+    macro_def_path = os.path.join(work_stage_dir, "macro_placement.def")
+
+    macro_def = _generate_macro_placement(top_module)
+
+    _write_text(macro_def_path, macro_def)
+
+    logger.info(f"{AGENT_NAME}: macro placement DEF generated -> {macro_def_path}")
+
+    # Add macro placement DEF
+    cfg["FP_DEF_TEMPLATE"] = "macro_placement.def"
+    cfg["PL_SKIP_INITIAL_PLACEMENT"] = True
+    shutil.copy2(macro_def_path, os.path.join(work_stage_dir, "macro_placement.def"))
 
     # Now safe to write execution config into shared workspace
     exec_config_path = os.path.join(work_stage_dir, "config.json")

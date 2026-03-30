@@ -113,17 +113,19 @@ def _fallback_lef(spec: dict) -> str:
         'DIVIDERCHAR "/" ;',
         "",
         f"MACRO {module_name}",
+        f"  FOREIGN {module_name} ;",
         "  CLASS BLOCK ;",
         "  ORIGIN 0 0 ;",
-        "  SIZE 100 BY 100 ;",
-        "  SYMMETRY X Y ;",
-        "  SITE CoreSite ;",
+        "  SIZE 100.00 BY 100.00 ;",
+        "  SYMMETRY X Y R90 ;",
+        "  SITE unithd ;",
         "",
         "  PIN VDD",
         "    DIRECTION INOUT ;",
         "    USE POWER ;",
+        "    SHAPE ABUTMENT ;",
         "    PORT",
-        "      LAYER M1 ;",
+        "      LAYER met1 ;",
         "      RECT 0 0 1 1 ;",
         "    END",
         "  END VDD",
@@ -131,8 +133,9 @@ def _fallback_lef(spec: dict) -> str:
         "  PIN VSS",
         "    DIRECTION INOUT ;",
         "    USE GROUND ;",
+        "    SHAPE ABUTMENT ;",
         "    PORT",
-        "      LAYER M1 ;",
+        "      LAYER met1 ;",
         "      RECT 0 2 1 3 ;",
         "    END",
         "  END VSS",
@@ -152,8 +155,8 @@ def _fallback_lef(spec: dict) -> str:
                     f"    DIRECTION {pdir} ;",
                     "    USE SIGNAL ;",
                     "    PORT",
-                    "      LAYER M1 ;",
-                    f"      RECT 0 {rect_y} 1 {rect_y + 1} ;",
+                    "      LAYER met2 ;",
+                    f"      RECT 0.00 {rect_y:.2f} 2.00 {rect_y + 1.5:.2f} ;",
                     "    END",
                     f"  END {bit_name}",
                     "",
@@ -378,17 +381,25 @@ The LEF must:
   CLASS BLOCK ;
   ORIGIN 0 0 ;
   SIZE 100 BY 100 ;
-  SYMMETRY X Y ;
-  SITE CoreSite ;
-- contain pg/supply pins:
-  PIN VDD
-    DIRECTION INOUT ;
-    USE POWER ;
-  PIN VSS
-    DIRECTION INOUT ;
-    USE GROUND ;
-- include exactly one LEF PIN block for every signal pin after scalar expansion
-- use only simple generic M1 rectangles
+  SYMMETRY X Y R90;
+  SITE unithd ;
+
+Use sky130-style routing layer names:
+- met1 for power pins
+- met2 for signal pins
+
+Never use:
+- M1, M2, Metal1, Metal2
+- SITE CoreSite
+
+Power pins must:
+- use SHAPE ABUTMENT
+- be placed on met1
+
+Signal pins:
+- must use met2
+- must be simple rectangular shapes
+  
 - end with:
   END {module_name}
   END LIBRARY
@@ -861,6 +872,18 @@ pin ( sample_clk ) {{
 Why bad:
 - only one signal may be the timing reference clock
 
+6) WRONG:
+SITE CoreSite ;
+
+Why bad:
+- not a valid sky130 site
+
+7) WRONG:
+LAYER M1 ;
+
+Why bad:
+- sky130 uses met1/met2 naming, not M1
+
 ==================================================
 INTEGRATION NOTES RULES
 ==================================================
@@ -954,14 +977,25 @@ If any checklist item fails, regenerate internally and return only a corrected f
         lef = _fallback_lef(spec)
 
     lef_issues = []
-    if "MACRO" not in lef:
-        lef_issues.append("missing MACRO")
-    if f"MACRO {module_name}" not in lef:
-        lef_issues.append(f"missing exact macro name MACRO {module_name}")
-    if f"END {module_name}" not in lef:
-        lef_issues.append(f"missing END {module_name}")
-    if "END LIBRARY" not in lef:
-        lef_issues.append("missing END LIBRARY")
+
+    required_tokens = [
+        f"MACRO {module_name}",
+        f"END {module_name}",
+        "END LIBRARY",
+        "SITE unithd",
+        "LAYER met1",
+        "PIN VDD",
+        "PIN VSS",
+    ]
+
+    for tok in required_tokens:
+        if tok not in lef:
+            lef_issues.append(f"missing {tok}")
+
+    for bad in ["LAYER M1", "LAYER M2", "SITE CoreSite"]:
+        if bad in lef:
+            lef_issues.append(f"invalid sky130 token: {bad}")
+
 
     if lef_issues:
         logger.warning(f"[{agent_name}] LEF invalid: {lef_issues} → regenerating fallback")
