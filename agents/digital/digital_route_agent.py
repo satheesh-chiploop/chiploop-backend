@@ -69,13 +69,19 @@ def _infer_top_from_netlist(netlist_path: str) -> str | None:
 
 def _resolve_sdc_from_state(state: dict, workflow_dir: str) -> str | None:
     digital = state.get("digital") or {}
+    cts_state = digital.get("cts") or {}
+
+    cand = cts_state.get("constraints_sdc")
+    if cand and os.path.exists(cand):
+        logger.info(f"{AGENT_NAME}: selected SDC from state.digital.cts -> {cand}")
+        return cand
 
     cand = digital.get("constraints_sdc")
     if cand and os.path.exists(cand):
         logger.info(f"{AGENT_NAME}: selected SDC from state.digital -> {cand}")
         return cand
 
-    for stage in ["place", "floorplan", "impl_setup", "synth"]:
+    for stage in ["cts", "place", "floorplan", "impl_setup", "synth"]:
         cand_dir = os.path.join(workflow_dir, "digital", stage, "constraints")
         for cand in sorted(glob.glob(os.path.join(cand_dir, "*.sdc"))):
             if os.path.exists(cand):
@@ -93,15 +99,26 @@ def _resolve_sdc_from_state(state: dict, workflow_dir: str) -> str | None:
 
 def _resolve_config_from_state(state: dict, workflow_dir: str) -> str | None:
     digital = state.get("digital") or {}
+    cts_state = digital.get("cts") or {}
 
+    # 1) Prefer CTS-owned config first
+    cand = cts_state.get("openlane_config")
+    if cand and os.path.exists(cand):
+        logger.info(f"{AGENT_NAME}: selected config from state.digital.cts -> {cand}")
+        return cand
+
+    # 2) Then generic digital state
     for key in ["openlane_config", "config_json"]:
         cand = digital.get(key)
         if cand and os.path.exists(cand):
             logger.info(f"{AGENT_NAME}: selected config from state.digital[{key}] -> {cand}")
             return cand
 
+    # 3) Then concrete stage configs on disk
     for cand in [
+        os.path.join(workflow_dir, "digital", "cts", "config.json"),
         os.path.join(workflow_dir, "digital", "place", "config.json"),
+        os.path.join(workflow_dir, "digital", "floorplan", "config.json"),
         os.path.join(workflow_dir, "digital", "impl_setup", "openlane", "config.json"),
         os.path.join(workflow_dir, "digital", "synth", "config.json"),
         os.path.join(workflow_dir, "digital", "foundry", "openlane", "config.json"),

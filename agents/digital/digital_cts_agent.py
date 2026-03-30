@@ -116,15 +116,28 @@ def _resolve_sdc_from_state(state: dict, workflow_dir: str) -> str | None:
 
     logger.warning(f"{AGENT_NAME}: no upstream SDC found")
     return None
+
+    
 def _resolve_config_from_state(state: dict, workflow_dir: str) -> str | None:
     digital = state.get("digital") or {}
+    place_state = digital.get("place") or {}
 
+    # 1) Prefer place-owned config first
+    cand = place_state.get("openlane_config")
+    if cand and os.path.exists(cand):
+        logger.info(f"{AGENT_NAME}: selected config from state.digital.place -> {cand}")
+        return cand
+
+    # 2) Then generic digital state
     cand = digital.get("openlane_config")
     if cand and os.path.exists(cand):
         logger.info(f"{AGENT_NAME}: selected config from state.digital -> {cand}")
         return cand
 
+    # 3) Then concrete place config on disk
     for cand in [
+        os.path.join(workflow_dir, "digital", "place", "config.json"),
+        os.path.join(workflow_dir, "digital", "floorplan", "config.json"),
         os.path.join(workflow_dir, "digital", "impl_setup", "openlane", "config.json"),
         os.path.join(workflow_dir, "digital", "synth", "config.json"),
         os.path.join(workflow_dir, "digital", "foundry", "openlane", "config.json"),
