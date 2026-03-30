@@ -222,6 +222,13 @@ END COMPONENTS
 END DESIGN
 """
 
+def _generate_macro_placement_cfg(macro_name: str = "u_analog") -> str:
+    """
+    OpenLane macro placement config format:
+    <instance_name> <x> <y> <orientation>
+    """
+    return f"{macro_name} 100 100 N\n"
+
 def run_agent(state: dict) -> dict:
     print(f"\n🏁 Running {AGENT_NAME}...")
 
@@ -362,19 +369,13 @@ def run_agent(state: dict) -> dict:
     logger.info(f"{AGENT_NAME}: staged macro LIBs -> {staged_libs}")
     logger.info(f"{AGENT_NAME}: staged macro GDS -> {staged_gds}")
 
-    macro_def_path = os.path.join(work_stage_dir, "macro_placement.def")
+    macro_cfg_path = os.path.join(work_stage_dir, "macro_placement.cfg")
+    macro_cfg = _generate_macro_placement_cfg("u_analog")
+    _write_text(macro_cfg_path, macro_cfg)
 
-    macro_master = state.get("analog_macro_module") or "analog_subsystem"
-    macro_def = _generate_macro_placement(macro_master)
+    logger.info(f"{AGENT_NAME}: macro placement CFG generated -> {macro_cfg_path}")
 
-
-
-    _write_text(macro_def_path, macro_def)
-
-    logger.info(f"{AGENT_NAME}: macro placement DEF generated -> {macro_def_path}")
-
-    # Add macro placement DEF
-    cfg["FP_DEF_TEMPLATE"] = "floorplan/macro_placement.def"
+    cfg["MACRO_PLACEMENT_CFG"] = "floorplan/macro_placement.cfg"
     cfg["PL_SKIP_INITIAL_PLACEMENT"] = True
 
 
@@ -414,9 +415,6 @@ def run_agent(state: dict) -> dict:
         f"macro_lef_count={len(staged_lefs)}",
         f"macro_lib_count={len(staged_libs)}",
         f"macro_gds_count={len(staged_gds)}",
-        f"macro_master={macro_master}",
-        f"macro_def_path={macro_def_path}",
-        f"fp_def_template={cfg.get('FP_DEF_TEMPLATE')}",
     ]) + "\n"
     _write_text(os.path.join(logs_dir, "floorplan_input_resolution.log"), input_log)
 
@@ -477,7 +475,7 @@ docker run --rm \
         save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "floorplan/run.sh", run_sh)
         save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "floorplan/logs/openlane_floorplan.log", out)
         save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "floorplan/floorplan_summary.json", json.dumps(summary, indent=2))
-        save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "floorplan/macro_placement.def", macro_def)
+        save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "floorplan/macro_placement.cfg", macro_cfg)
         if metrics_path and os.path.exists(metrics_path):
             with open(metrics_path, "r", encoding="utf-8") as f:
                 save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "floorplan/metrics.json", f.read())
