@@ -335,16 +335,68 @@ Write to firmware/drivers/driver_scaffold.rs
         logger.warning("%s output missing required HAL imports; using deterministic fallback driver", AGENT_NAME)
         out = _build_deterministic_driver(regmap_obj, driver_name)
 
-    field_api_missing = []
+    missing_driver_apis = []
+    missing_hal_symbols = []
+
     for reg in regmap_obj.get("registers", []):
-        reg_ident = _safe_identifier(reg.get("name") or "UNNAMED")
+        reg_name = reg.get("name") or "UNNAMED"
+        reg_ident = _safe_identifier(reg_name)
+        reg_access = str(reg.get("access") or "RW").upper()
+
+        # Driver-level register helpers
+        driver_read = f"read_{reg_ident}"
+        if driver_read not in out:
+            missing_driver_apis.append(driver_read)
+
+        driver_write = f"write_{reg_ident}"
+        if reg_access not in {"RO"} and driver_write not in out:
+            missing_driver_apis.append(driver_write)
+
+        # HAL-level register helpers
+        hal_read = f"read_{reg_ident}"
+        if hal_read not in hal_code:
+            missing_hal_symbols.append(hal_read)
+
+        hal_write = f"write_{reg_ident}"
+        if reg_access not in {"RO"} and hal_write not in hal_code:
+            missing_hal_symbols.append(hal_write)
+
         for field in reg.get("fields") or []:
-            fident = _safe_identifier(field.get("name") or "UNNAMED_FIELD")
-            expected = f"get_{reg_ident}_{fident}"
-            if expected not in out:
-                field_api_missing.append(expected)
-    if field_api_missing:
-        logger.warning("%s output missing field APIs %s; using deterministic fallback driver", AGENT_NAME, field_api_missing[:5])
+            field_name = field.get("name") or "UNNAMED_FIELD"
+            field_ident = _safe_identifier(field_name)
+            field_access = str(field.get("access") or reg_access).upper()
+
+            driver_get = f"get_{reg_ident}_{field_ident}"
+            if driver_get not in out:
+                missing_driver_apis.append(driver_get)
+
+            hal_get = f"get_{reg_ident}_{field_ident}"
+            if hal_get not in hal_code:
+                missing_hal_symbols.append(hal_get)
+
+            if field_access not in {"RO"}:
+                driver_set = f"set_{reg_ident}_{field_ident}"
+                if driver_set not in out:
+                    missing_driver_apis.append(driver_set)
+
+                hal_set = f"set_{reg_ident}_{field_ident}"
+                if hal_set not in hal_code:
+                    missing_hal_symbols.append(hal_set)
+
+    if missing_driver_apis:
+        logger.warning(
+            "%s output missing required driver APIs %s; using deterministic fallback driver",
+            AGENT_NAME,
+            missing_driver_apis[:5],
+        )
+        out = _build_deterministic_driver(regmap_obj, driver_name)
+
+    if missing_hal_symbols:
+        logger.warning(
+            "%s HAL is missing required symbols %s; using deterministic fallback driver",
+            AGENT_NAME,
+            missing_hal_symbols[:5],
+        )
         out = _build_deterministic_driver(regmap_obj, driver_name)
 
     write_artifact(state, OUTPUT_PATH, out, key=os.path.basename(OUTPUT_PATH))

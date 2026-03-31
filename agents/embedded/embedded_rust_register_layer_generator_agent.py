@@ -375,13 +375,49 @@ Write to firmware/hal/registers.rs
         out = _default_hal_from_regmap(normalized_regmap)
 
     missing_offset_consts = []
+    missing_reg_helpers = []
+    missing_field_helpers = []
+
     for reg in normalized_regmap.get("registers", []):
-        const_name = f"{_safe_const_name(reg.get('name') or 'UNNAMED')}_OFFSET"
-        if const_name not in out:
-            missing_offset_consts.append(const_name)
-    if missing_offset_consts:
-        logger.warning("%s output missing offset constants %s; using deterministic fallback HAL", AGENT_NAME, missing_offset_consts[:5])
-        out = _default_hal_from_regmap(normalized_regmap)
+        reg_name = reg.get("name") or "UNNAMED"
+        reg_ident = _safe_identifier(reg_name)
+        reg_const = _safe_const_name(reg_name)
+        reg_access = str(reg.get("access") or "RW").upper()
+
+        offset_const = f"{reg_const}_OFFSET"
+        if offset_const not in out:
+            missing_offset_consts.append(offset_const)
+
+        read_helper = f"read_{reg_ident}"
+        if read_helper not in out:
+            missing_reg_helpers.append(read_helper)
+
+        write_helper = f"write_{reg_ident}"
+        if reg_access not in {"RO"} and write_helper not in out:
+            missing_reg_helpers.append(write_helper)
+
+        for field in reg.get("fields") or []:
+            field_name = field.get("name") or "UNNAMED_FIELD"
+            field_ident = _safe_identifier(field_name)
+            field_access = str(field.get("access") or reg_access).upper()
+
+            getter = f"get_{reg_ident}_{field_ident}"
+            if getter not in out:
+                missing_field_helpers.append(getter)
+
+            setter = f"set_{reg_ident}_{field_ident}"
+            if field_access not in {"RO"} and setter not in out:
+                missing_field_helpers.append(setter)
+
+    if missing_offset_consts or missing_reg_helpers or missing_field_helpers:
+        logger.warning(
+            "%s output missing required HAL contract pieces; offsets=%s reg_helpers=%s field_helpers=%s. Using deterministic fallback HAL",
+            AGENT_NAME,
+            missing_offset_consts[:5],
+            missing_reg_helpers[:5],
+            missing_field_helpers[:5],
+        )
+    out = _default_hal_from_regmap(normalized_regmap)
 
     write_artifact(state, OUTPUT_PATH, out, key=os.path.basename(OUTPUT_PATH))
     write_artifact(

@@ -250,9 +250,12 @@ def _infer_interrupt_sources(state: dict, regmap: dict) -> List[str]:
     integration = state.get("system_integration_intent") or (state.get("system") or {}).get("integration_intent") or {}
     digital = state.get("digital") or {}
 
+    # 1) Prefer explicit upstream metadata when present
     explicit = (
         integration.get("interrupt_sources")
         or digital.get("interrupt_sources")
+        or regmap.get("interrupt_sources")
+        or regmap.get("interrupts")
         or state.get("interrupt_sources")
         or []
     )
@@ -260,19 +263,32 @@ def _infer_interrupt_sources(state: dict, regmap: dict) -> List[str]:
         return [str(x) for x in explicit if x]
 
     sources: List[str] = []
+
+    # 2) Generic inference from register/field metadata
+    interrupt_keywords = {
+        "IRQ", "INT", "INTR", "INTERRUPT",
+        "DONE", "READY", "FAULT", "ERROR", "ERR",
+        "STATUS", "PENDING"
+    }
+
     for reg in regmap.get("registers") or []:
+        reg_name = str(reg.get("name") or "")
+        reg_upper = reg_name.upper()
+
+        if any(keyword in reg_upper for keyword in interrupt_keywords):
+            sources.append(reg_name)
+
         for field in reg.get("fields") or []:
-            fname = str(field.get("name") or "")
-            upper = fname.upper()
-            if upper.endswith("_IRQ") or upper.endswith("_INT") or "IRQ" in upper or "INT" in upper:
-                sources.append(fname)
+            field_name = str(field.get("name") or "")
+            field_upper = field_name.upper()
+            if any(keyword in field_upper for keyword in interrupt_keywords):
+                sources.append(field_name)
 
     ordered: List[str] = []
     for src in sources:
         if src and src not in ordered:
             ordered.append(src)
     return ordered
-
 
 def _infer_block_name(state: dict, source_obj: dict, regmap: dict) -> str:
     integration = state.get("system_integration_intent") or (state.get("system") or {}).get("integration_intent") or {}
