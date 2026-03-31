@@ -6,6 +6,7 @@ logger = logging.getLogger("chiploop")
 AGENT_NAME = "Digital STA PostPlace Agent"
 STAGE_NAME = "sta_postplace"
 OPENLANE_TO = "OpenROAD.STAMidPNR"
+EXEC_STAGE_DIR = "place"
 
 DEFAULT_PDK_VARIANT = os.getenv("CHIPLOOP_PDK_VARIANT", "sky130A")
 DEFAULT_OPENLANE_IMAGE = os.getenv("CHIPLOOP_OPENLANE_IMAGE", "ghcr.io/efabless/openlane2:2.4.0.dev1")
@@ -230,7 +231,7 @@ def run_agent(state: dict) -> dict:
     _ensure(run_work_dir)
     state["digital_run_work_dir"] = run_work_dir
 
-    work_stage_dir = os.path.join(run_work_dir, STAGE_NAME)
+    work_stage_dir = os.path.join(run_work_dir, EXEC_STAGE_DIR)
     _ensure(work_stage_dir)
     staged_lefs, staged_libs, staged_gds = _stage_macro_inputs(state, work_stage_dir)
 
@@ -325,7 +326,7 @@ docker run --rm \\
   -e PDK={pdk} \\
   -e PDK_ROOT=/pdk \\
   {image} \\
-  bash -lc 'set -e; cd /work && openlane --flow Classic --run-tag {run_tag} --override-config RUN_LINTER=False --to {OPENLANE_TO} {STAGE_NAME}/config.json'
+  bash -lc 'set -e; cd /work && openlane --flow Classic --run-tag {run_tag} --override-config RUN_LINTER=False --to {OPENLANE_TO} {EXEC_STAGE_DIR}/config.json'
 """
     _write(os.path.join(stage_dir, "run.sh"), run_sh)
     os.chmod(os.path.join(stage_dir, "run.sh"), 0o755)
