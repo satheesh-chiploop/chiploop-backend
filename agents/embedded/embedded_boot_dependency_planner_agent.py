@@ -70,67 +70,97 @@ def _infer_boot_steps(manifest: dict, regmap: dict) -> list:
         }
     ]
 
-    ctrl_exists = any(str(reg.get("name") or "").upper() == "CTRL" for reg in regmap.get("registers") or [])
-    if ctrl_exists:
-        if _has_field(regmap, "CTRL", "ANA_ENABLE"):
-            steps.append({
-                "id": len(steps),
-                "name": "enable_analog",
-                "kind": "register_write",
-                "register": "CTRL",
-                "field": "ANA_ENABLE",
-                "value": 1,
-                "depends_on": ["establish_baseline"],
-            })
-        if _has_field(regmap, "CTRL", "DAC_ENABLE"):
-            steps.append({
-                "id": len(steps),
-                "name": "enable_dac",
-                "kind": "register_write",
-                "register": "CTRL",
-                "field": "DAC_ENABLE",
-                "value": 1,
-                "depends_on": ["enable_analog"] if any(s["name"] == "enable_analog" for s in steps) else ["establish_baseline"],
-            })
-        if _has_field(regmap, "CTRL", "ADC_START"):
-            deps = []
-            if any(s["name"] == "enable_analog" for s in steps):
-                deps.append("enable_analog")
-            if any(s["name"] == "enable_dac" for s in steps):
-                deps.append("enable_dac")
-            if not deps:
-                deps = ["establish_baseline"]
-            steps.append({
-                "id": len(steps),
-                "name": "start_adc",
-                "kind": "register_write",
-                "register": "CTRL",
-                "field": "ADC_START",
-                "value": 1,
-                "depends_on": deps,
-            })
+    regs = [reg for reg in (regmap.get("registers") or []) if isinstance(reg, dict)]
+    hw = manifest.get("hardware_features") or {}
 
-    if any(str(reg.get("name") or "").upper() == "STATUS" for reg in regmap.get("registers") or []):
+    # Optional high-level sequencing derived from manifest features
+    if hw.get("has_programmable_pll"):
         steps.append({
             "id": len(steps),
-            "name": "poll_status",
-            "kind": "register_read",
-            "register": "STATUS",
-            "depends_on": [steps[-1]["name"]] if len(steps) > 1 else ["establish_baseline"],
+            "name": "configure_clock_source",
+            "kind": "clock_config",
+            "action": "Configure firmware-visible clock / PLL controls before dependent register programming.",
+            "depends_on": ["establish_baseline"],
         })
 
-    if any(str(reg.get("name") or "").upper() == "ADC_DATA" for reg in regmap.get("registers") or []):
+    # Generic register-write bring-up steps:
+    # choose RW/WO control-like registers before status/data-style reads
+    last_dep = steps[-1]["name"]
+    read_candidates = []
+
+    for reg in regs:
+        reg_name = str(reg.get("name") or "")
+        reg_upper = reg_name.upper()
+        access = str(reg.get("access") or "RW").upper()
+        fields = [f for f in (reg.get("fields") or []) if isinstance(f, dict)]
+
+        if access in {"RW", "WO", "W1C", "RW1C"}:
+            chosen_field = None
+            for field in fields:
+                fname = str(field.get("name") or "").upper()
+                if any(token in fname for token in ("ENABLE", "EN", "START", "GO", "TRIGGER", "INIT", "MODE")):
+                    chosen_field = field
+                    break
+
+            step = {
+                "id": len(steps),
+                "name": f"program_{reg_name.lower()}",
+                "kind": "register_write",
+                "register": reg_name,
+                "depends_on": [last_dep],
+            }
+            if chosen_field is not None:
+                step["field"] = chosen_field.get("name")
+                step["value"] = 1
+                step["action"] = f"Program {reg_name}.{chosen_field.get('name')} for boot-time initialization."
+            else:
+                step["action"] = f"Program boot-time defaults for writable register {reg_name}."
+
+            steps.append(step)
+            last_dep = step["name"]
+
+        if access in {"RO", "RW", "RW1C"}:
+            read_candidates.append(reg)
+
+    # Generic status-poll step if any readable register looks status-like
+    status_reg = None
+    for reg in read_candidates:
+        reg_upper = str(reg.get("name") or "").upper()
+        if any(token in reg_upper for token in ("STATUS", "STAT", "READY", "DONE", "BUSY")):
+            status_reg = reg
+            break
+
+    if status_reg is not None:
         steps.append({
             "id": len(steps),
-            "name": "read_conversion_result",
+            "name": f"poll_{str(status_reg.get('name')).lower()}",
             "kind": "register_read",
-            "register": "ADC_DATA",
-            "depends_on": ["poll_status"] if any(s["name"] == "poll_status" for s in steps) else [steps[-1]["name"]],
+            "register": status_reg.get("name"),
+            "action": f"Poll {status_reg.get('name')} until boot-visible ready/done condition is satisfied.",
+            "depends_on": [last_dep],
+        })
+        last_dep = steps[-1]["name"]
+
+    # Generic data/result read step if a readable data-like register exists
+    data_reg = None
+    for reg in read_candidates:
+        reg_upper = str(reg.get("name") or "").upper()
+        if any(token in reg_upper for token in ("DATA", "RESULT", "VALUE", "OUTPUT")):
+            data_reg = reg
+            break
+
+    if data_reg is not None:
+        steps.append({
+            "id": len(steps),
+            "name": f"read_{str(data_reg.get('name')).lower()}",
+            "kind": "register_read",
+            "register": data_reg.get("name"),
+            "action": f"Read boot-time observable result/data register {data_reg.get('name')}.",
+            "depends_on": [last_dep],
         })
 
     return steps
-
-
+    
 def _default_boot_plan(manifest: dict, regmap: dict) -> dict:
     steps = _infer_boot_steps(manifest, regmap)
     assumptions = []

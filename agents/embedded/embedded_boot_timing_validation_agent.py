@@ -44,6 +44,34 @@ def _load_boot_plan(state: dict, workflow_dir: str) -> dict:
     if isinstance(boot_plan, dict):
         return dict(boot_plan)
 
+    manifest = state.get("firmware_manifest") or (state.get("firmware") or {}).get("manifest") or {}
+
+    candidate_paths = [
+        (state.get("firmware_boot") or {}).get("boot_sequence_json_path"),
+        manifest.get("boot_sequence_json_path"),
+        (state.get("firmware_boot") or {}).get("boot_sequence_path"),
+        manifest.get("boot_sequence_path"),
+        BOOT_PLAN_JSON_PATH,
+    ]
+
+    for path in candidate_paths:
+        if not path:
+            continue
+        resolved = path
+        if not os.path.isabs(resolved):
+            resolved = os.path.join(workflow_dir, resolved)
+        loaded = _safe_load_json(resolved)
+        if isinstance(loaded, dict):
+            return loaded
+
+    return {}
+
+
+def _load_boot_plan(state: dict, workflow_dir: str) -> dict:
+    boot_plan = (state.get("firmware_boot") or {}).get("boot_sequence")
+    if isinstance(boot_plan, dict):
+        return dict(boot_plan)
+
     path = (
         (state.get("firmware_boot") or {}).get("boot_sequence_json_path")
         or (state.get("firmware_boot") or {}).get("boot_sequence_path")
@@ -194,6 +222,7 @@ def run_agent(state: dict) -> dict:
     out = _rows_to_markdown(rows)
 
     write_artifact(state, OUTPUT_PATH, out, key=os.path.basename(OUTPUT_PATH))
+
     write_artifact(
         state,
         DEBUG_PATH,
@@ -204,11 +233,20 @@ def run_agent(state: dict) -> dict:
                 "boot_plan_present": bool(boot_plan),
                 "step_count": len(steps),
                 "row_count": len(rows),
+                "boot_sequence_json_path": (
+                    (state.get("firmware_boot") or {}).get("boot_sequence_json_path")
+                    or manifest.get("boot_sequence_json_path")
+                    or BOOT_PLAN_JSON_PATH
+                ),
             },
             indent=2,
         ),
         key=os.path.basename(DEBUG_PATH),
     )
+    
+
+
+
     write_artifact(
         state,
         SUMMARY_PATH,
