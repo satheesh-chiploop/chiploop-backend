@@ -268,7 +268,7 @@ def _infer_interrupt_sources(state: dict, regmap: dict) -> List[str]:
     interrupt_keywords = {
         "IRQ", "INT", "INTR", "INTERRUPT",
         "DONE", "READY", "FAULT", "ERROR", "ERR",
-        "STATUS", "PENDING"
+        "PENDING"
     }
 
     for reg in regmap.get("registers") or []:

@@ -162,6 +162,8 @@ def _default_hal_from_regmap(regmap: dict) -> str:
             offset_lines.append(f"pub const {prefix}_WIDTH: u32 = {bit_width};")
             offset_lines.append(f"pub const {prefix}_MASK: u32 = {mask_expr};")
 
+        reg_access = str(reg.get("access") or "RW").upper()
+
         helper_lines.extend(
             [
                 "#[inline]",
@@ -169,13 +171,20 @@ def _default_hal_from_regmap(regmap: dict) -> str:
                 f"    register_block().{reg_ident}.read()",
                 "}",
                 "",
-                "#[inline]",
-                f"pub fn write_{reg_ident}(value: u32) {{",
-                f"    register_block().{reg_ident}.write(value)",
-                "}",
-                "",
             ]
         )
+
+        if reg_access not in {"RO"}:
+            helper_lines.extend(
+                [
+                    "#[inline]",
+                    f"pub fn write_{reg_ident}(value: u32) {{",
+                    f"    register_block().{reg_ident}.write(value)",
+                    "}",
+                    "",
+                ]
+            )
+
 
         for field in reg.get("fields") or []:
             fname = field.get("name") or "UNNAMED_FIELD"
@@ -417,7 +426,7 @@ Write to firmware/hal/registers.rs
             missing_reg_helpers[:5],
             missing_field_helpers[:5],
         )
-    out = _default_hal_from_regmap(normalized_regmap)
+        out = _default_hal_from_regmap(normalized_regmap)
 
     write_artifact(state, OUTPUT_PATH, out, key=os.path.basename(OUTPUT_PATH))
     write_artifact(
