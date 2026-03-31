@@ -1,8 +1,9 @@
+
 import json
 import logging
 import os
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, List, Optional
 
 from ._embedded_common import ensure_workflow_dir, llm_chat, strip_markdown_fences_for_code, write_artifact
 
@@ -98,8 +99,8 @@ def _normalize_regmap(regmap: dict) -> dict:
             raise ValueError(f"malformed register entry: {reg}")
 
     return {
-        "block_name": regmap.get("block_name") or regmap.get("module_name") or "firmware_block",
-        "module_name": regmap.get("module_name") or regmap.get("block_name") or "firmware_block",
+        "block_name": regmap.get("block_name") or regmap.get("module_name") or "digital_subsystem",
+        "module_name": regmap.get("module_name") or regmap.get("block_name") or "digital_subsystem",
         "base_address": regmap.get("base_address") or "0x00000000",
         "registers": sorted(flat_registers, key=lambda r: _parse_intish((r or {}).get("offset", 0))),
     }
@@ -111,32 +112,103 @@ def _merge_manifest(manifest: dict, regmap: dict) -> dict:
     merged["register_map_path"] = merged.get("register_map_path") or "firmware/register_map.json"
     merged["hal_path"] = OUTPUT_PATH
     merged["base_address"] = regmap.get("base_address") or merged.get("base_address") or "0x00000000"
+    merged["digital_block_name"] = (
+        merged.get("digital_block_name")
+        or regmap.get("module_name")
+        or regmap.get("block_name")
+        or "digital_subsystem"
+    )
     build.setdefault("hal_root", "firmware/hal")
     merged["build"] = build
     return merged
+
+
+def _mask_expr(bit_width: int, bit_offset: int) -> str:
+    if bit_width >= 32:
+        return "0xFFFF_FFFF"
+    mask = ((1 << bit_width) - 1) << bit_offset
+    return f"0x{mask:08X}"
+
+
+def _field_const_prefix(reg_name: str, field_name: str) -> str:
+    return f"{_safe_const_name(reg_name)}_{_safe_const_name(field_name)}"
 
 
 def _default_hal_from_regmap(regmap: dict) -> str:
     regs = regmap.get("registers") or []
     base_address = regmap.get("base_address") or "0x00000000"
 
-    field_lines = []
-    offset_lines = []
-    regref_lines = []
+    offset_lines: List[str] = []
+    field_lines: List[str] = []
+    helper_lines: List[str] = []
+
     for reg in regs:
-        name = reg.get("name") or "UNNAMED"
-        field_ident = _safe_identifier(name)
-        const_ident = _safe_const_name(name)
+        reg_name = reg.get("name") or "UNNAMED"
+        reg_ident = _safe_identifier(reg_name)
+        reg_const = _safe_const_name(reg_name)
         offset = reg.get("offset") or "0x00000000"
-        field_lines.append(f"    pub {field_ident}: VolatileRegister,")
-        offset_lines.append(f"pub const {const_ident}_OFFSET: usize = {offset};")
-        regref_lines.append(
-            f"pub fn {field_ident}_reg() -> &'static VolatileRegister {{ unsafe {{ &register_block().{field_ident} }} }}"
+
+        field_lines.append(f"    pub {reg_ident}: VolatileRegister,")
+        offset_lines.append(f"pub const {reg_const}_OFFSET: usize = {offset};")
+
+        for field in reg.get("fields") or []:
+            fname = field.get("name") or "UNNAMED_FIELD"
+            bit_offset = int(field.get("bit_offset") or 0)
+            bit_width = int(field.get("bit_width") or 1)
+            prefix = _field_const_prefix(reg_name, fname)
+            mask_expr = _mask_expr(bit_width, bit_offset)
+
+            offset_lines.append(f"pub const {prefix}_SHIFT: u32 = {bit_offset};")
+            offset_lines.append(f"pub const {prefix}_WIDTH: u32 = {bit_width};")
+            offset_lines.append(f"pub const {prefix}_MASK: u32 = {mask_expr};")
+
+        helper_lines.extend(
+            [
+                "#[inline]",
+                f"pub fn read_{reg_ident}() -> u32 {{",
+                f"    register_block().{reg_ident}.read()",
+                "}",
+                "",
+                "#[inline]",
+                f"pub fn write_{reg_ident}(value: u32) {{",
+                f"    register_block().{reg_ident}.write(value)",
+                "}",
+                "",
+            ]
         )
+
+        for field in reg.get("fields") or []:
+            fname = field.get("name") or "UNNAMED_FIELD"
+            fident = _safe_identifier(fname)
+            prefix = _field_const_prefix(reg_name, fname)
+            access = str(field.get("access") or reg.get("access") or "RW").upper()
+
+            helper_lines.extend(
+                [
+                    "#[inline]",
+                    f"pub fn get_{reg_ident}_{fident}() -> u32 {{",
+                    f"    (read_{reg_ident}() & {prefix}_MASK) >> {prefix}_SHIFT",
+                    "}",
+                    "",
+                ]
+            )
+
+            if access not in {"RO"}:
+                helper_lines.extend(
+                    [
+                        "#[inline]",
+                        f"pub fn set_{reg_ident}_{fident}(value: u32) {{",
+                        f"    let current = read_{reg_ident}();",
+                        f"    let next = (current & !{prefix}_MASK) | ((value << {prefix}_SHIFT) & {prefix}_MASK);",
+                        f"    write_{reg_ident}(next);",
+                        "}",
+                        "",
+                    ]
+                )
 
     return (
         "use core::ptr::{read_volatile, write_volatile};\n\n"
-        f"pub const BASE_ADDRESS: usize = {base_address};\n"
+        f"pub const BASE_ADDRESS: usize = {base_address};\n\n"
         + "\n".join(offset_lines)
         + "\n\n#[repr(transparent)]\npub struct VolatileRegister {\n    value: u32,\n}\n\n"
         + "impl VolatileRegister {\n"
@@ -149,7 +221,7 @@ def _default_hal_from_regmap(regmap: dict) -> str:
         + "#[inline]\npub fn register_block() -> &'static RegisterBlock {\n"
         + "    unsafe { &*(BASE_ADDRESS as *const RegisterBlock) }\n"
         + "}\n\n"
-        + "\n".join(regref_lines)
+        + "\n".join(helper_lines)
         + "\n"
     )
 
@@ -294,18 +366,22 @@ Write to firmware/hal/registers.rs
 
     bad_markers = ["Certainly!", "Below is an example", "Make sure to substitute", "Here is", "```"]
     if any(marker in out for marker in bad_markers):
-        state["status"] = "❌ HAL generation returned explanatory/prose output instead of pure module code"
-        return state
+        logger.warning("%s returned prose; using deterministic fallback HAL", AGENT_NAME)
+        out = _default_hal_from_regmap(normalized_regmap)
 
-    if "RegisterBlock" not in out or "register_block" not in out:
+    required_tokens = ["RegisterBlock", "register_block", "BASE_ADDRESS"]
+    if any(token not in out for token in required_tokens):
         logger.warning("%s output shape weak; replacing with deterministic fallback HAL", AGENT_NAME)
         out = _default_hal_from_regmap(normalized_regmap)
 
-    missing_regs = [name for name in register_names if name and name not in out]
-    if missing_regs:
-        logger.warning("%s output missing register names %s; using deterministic fallback HAL", AGENT_NAME, missing_regs[:5])
+    missing_offset_consts = []
+    for reg in normalized_regmap.get("registers", []):
+        const_name = f"{_safe_const_name(reg.get('name') or 'UNNAMED')}_OFFSET"
+        if const_name not in out:
+            missing_offset_consts.append(const_name)
+    if missing_offset_consts:
+        logger.warning("%s output missing offset constants %s; using deterministic fallback HAL", AGENT_NAME, missing_offset_consts[:5])
         out = _default_hal_from_regmap(normalized_regmap)
-        missing_regs = []
 
     write_artifact(state, OUTPUT_PATH, out, key=os.path.basename(OUTPUT_PATH))
     write_artifact(

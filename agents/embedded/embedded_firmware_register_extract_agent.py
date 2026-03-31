@@ -1,3 +1,4 @@
+
 import json
 import logging
 import os
@@ -64,6 +65,16 @@ def _normalize_access(value: Any) -> str:
     return s if s in allowed else "RW"
 
 
+def _first_nonempty(*values):
+    for value in values:
+        if value is None:
+            continue
+        if isinstance(value, str) and not value.strip():
+            continue
+        return value
+    return None
+
+
 def _normalize_fields(fields: Any) -> List[dict]:
     if isinstance(fields, dict):
         tmp = []
@@ -81,11 +92,24 @@ def _normalize_fields(fields: Any) -> List[dict]:
     for field in fields:
         if not isinstance(field, dict):
             continue
+
+        bit_offset = _parse_intish(field.get("bit_offset", field.get("lsb", 0)), 0)
+
+        if field.get("bit_width") is not None:
+            bit_width = max(1, _parse_intish(field.get("bit_width"), 1))
+        elif field.get("width") is not None:
+            bit_width = max(1, _parse_intish(field.get("width"), 1))
+        elif field.get("msb") is not None:
+            msb = _parse_intish(field.get("msb"), bit_offset)
+            bit_width = max(1, msb - bit_offset + 1)
+        else:
+            bit_width = 1
+
         out.append(
             {
                 "name": field.get("name") or "UNNAMED_FIELD",
-                "bit_offset": _parse_intish(field.get("bit_offset", field.get("lsb", 0))),
-                "bit_width": _parse_intish(field.get("bit_width", field.get("width", 1)), 1),
+                "bit_offset": bit_offset,
+                "bit_width": bit_width,
                 "access": _normalize_access(field.get("access") or field.get("sw") or "RW"),
                 "description": field.get("description") or field.get("desc") or "",
             }
@@ -171,8 +195,8 @@ def _normalize_registers_from_any_shape(obj: dict) -> dict:
     """
     if not isinstance(obj, dict):
         return {
-            "block_name": "firmware_block",
-            "module_name": "firmware_block",
+            "block_name": "digital_subsystem",
+            "module_name": "digital_subsystem",
             "base_address": "0x00000000",
             "registers": [],
             "__assumptions": ["Upstream register source was missing or invalid."],
@@ -190,8 +214,8 @@ def _normalize_registers_from_any_shape(obj: dict) -> dict:
         or obj.get("base")
         or "0x00000000"
     )
-    block_name = obj.get("block_name") or obj.get("module_name") or obj.get("name") or "firmware_block"
-    module_name = obj.get("module_name") or obj.get("block_name") or obj.get("name") or "firmware_block"
+    block_name = obj.get("block_name") or obj.get("module_name") or obj.get("name") or "digital_subsystem"
+    module_name = obj.get("module_name") or obj.get("block_name") or obj.get("name") or "digital_subsystem"
 
     regs_in = _extract_register_candidates(obj)
     regs_out = _sort_registers([_normalize_register(reg) for reg in regs_in])
@@ -222,17 +246,26 @@ def _build_summary(regmap: dict, mode: str, regmap_path: str) -> dict:
     }
 
 
-def _infer_interrupt_sources(regmap: dict) -> List[str]:
+def _infer_interrupt_sources(state: dict, regmap: dict) -> List[str]:
+    integration = state.get("system_integration_intent") or (state.get("system") or {}).get("integration_intent") or {}
+    digital = state.get("digital") or {}
+
+    explicit = (
+        integration.get("interrupt_sources")
+        or digital.get("interrupt_sources")
+        or state.get("interrupt_sources")
+        or []
+    )
+    if isinstance(explicit, list) and explicit:
+        return [str(x) for x in explicit if x]
+
     sources: List[str] = []
     for reg in regmap.get("registers") or []:
-        reg_name = str(reg.get("name") or "")
         for field in reg.get("fields") or []:
             fname = str(field.get("name") or "")
             upper = fname.upper()
-            if "IRQ" in upper or "INT" in upper or "DONE" in upper or "FAULT" in upper:
+            if upper.endswith("_IRQ") or upper.endswith("_INT") or "IRQ" in upper or "INT" in upper:
                 sources.append(fname)
-        if "IRQ" in reg_name.upper() or "INT" in reg_name.upper():
-            sources.append(reg_name)
 
     ordered: List[str] = []
     for src in sources:
@@ -241,9 +274,56 @@ def _infer_interrupt_sources(regmap: dict) -> List[str]:
     return ordered
 
 
-def _infer_bus_type(spec_text: str, goal: str, regmap: dict) -> str:
+def _infer_block_name(state: dict, source_obj: dict, regmap: dict) -> str:
+    integration = state.get("system_integration_intent") or (state.get("system") or {}).get("integration_intent") or {}
+    digital = state.get("digital") or {}
+
+    return (
+        _first_nonempty(
+            regmap.get("module_name"),
+            regmap.get("block_name"),
+            source_obj.get("module_name"),
+            source_obj.get("block_name"),
+            digital.get("module_name"),
+            digital.get("block_name"),
+            integration.get("digital_block_name"),
+            integration.get("digital_block"),
+            state.get("digital_block_name"),
+        )
+        or "digital_subsystem"
+    )
+
+
+def _infer_top_module(state: dict) -> str:
+    integration = state.get("system_integration_intent") or (state.get("system") or {}).get("integration_intent") or {}
+    return (
+        _first_nonempty(
+            state.get("system_top_module"),
+            state.get("top_module"),
+            integration.get("top_module"),
+            integration.get("soc_top_module"),
+        )
+        or "soc_top_sim"
+    )
+
+
+def _infer_bus_type_from_sources(state: dict, source_obj: dict, regmap: dict, spec_text: str, goal: str) -> str:
+    integration = state.get("system_integration_intent") or (state.get("system") or {}).get("integration_intent") or {}
+    digital = state.get("digital") or {}
+
+    explicit = _first_nonempty(
+        regmap.get("bus"),
+        source_obj.get("bus"),
+        digital.get("bus"),
+        integration.get("bus_type"),
+        integration.get("bus"),
+        state.get("bus_type"),
+    )
+    if explicit:
+        return str(explicit).upper()
+
     joined = "\n".join([spec_text or "", goal or "", json.dumps(regmap)[:4000]]).upper()
-    if " APB" in f" {joined}":
+    if "APB" in joined:
         return "APB"
     if "AHB" in joined:
         return "AHB"
@@ -252,7 +332,8 @@ def _infer_bus_type(spec_text: str, goal: str, regmap: dict) -> str:
     return "MMIO"
 
 
-def _build_manifest(state: dict, regmap: dict) -> dict:
+def _build_manifest(state: dict, regmap: dict, source_obj: Optional[dict] = None, regmap_path: str = "") -> dict:
+    source_obj = source_obj or {}
     firmware = state.get("firmware") or {}
     build_root = firmware.get("build_root") or "firmware/build"
     src_root = firmware.get("src_root") or "firmware/src"
@@ -263,17 +344,18 @@ def _build_manifest(state: dict, regmap: dict) -> dict:
     manifest = {
         "schema_version": "1.0",
         "flow": "system_firmware",
-        "top_module": state.get("system_top_module") or state.get("top_module") or "soc_top_sim",
-        "digital_block_name": regmap.get("module_name") or regmap.get("block_name") or "firmware_block",
+        "top_module": _infer_top_module(state),
+        "digital_block_name": _infer_block_name(state, source_obj, regmap),
         "analog_block_name": state.get("analog_block_name") or "analog_subsystem",
-        "bus_type": _infer_bus_type(spec_text, goal, regmap),
+        "bus_type": _infer_bus_type_from_sources(state, source_obj, regmap, spec_text, goal),
         "register_map_path": OUTPUT_PATH,
+        "register_map_source_path": regmap_path,
         "hal_path": firmware.get("hal_path") or "",
         "driver_path": firmware.get("driver_scaffold_path") or firmware.get("driver_path") or "",
         "base_address": regmap.get("base_address") or "0x00000000",
         "interrupt_model": {
             "top_irq_signal": state.get("top_irq_signal") or "irq",
-            "sources": _infer_interrupt_sources(regmap),
+            "sources": _infer_interrupt_sources(state, regmap),
         },
         "hardware_features": {
             "has_dma": False,
@@ -292,6 +374,11 @@ def _build_manifest(state: dict, regmap: dict) -> dict:
             "hal_root": "firmware/hal",
             "driver_root": "firmware/drivers",
         },
+        "provenance": {
+            "agent": AGENT_NAME,
+            "phase": PHASE,
+            "regmap_mode": regmap.get("__source", {}).get("mode", ""),
+        },
     }
     return manifest
 
@@ -308,7 +395,7 @@ def _write_debug(state: dict, base_debug: dict, extra: dict) -> None:
     write_artifact(state, DEBUG_PATH, json.dumps(payload, indent=2), key=os.path.basename(DEBUG_PATH))
 
 
-def _publish_outputs(state: dict, regmap: dict, regmap_path: str, mode: str) -> dict:
+def _publish_outputs(state: dict, regmap: dict, regmap_path: str, mode: str, source_obj: Optional[dict] = None) -> dict:
     write_artifact(state, OUTPUT_PATH, json.dumps(regmap, indent=2), key=os.path.basename(OUTPUT_PATH))
     write_artifact(
         state,
@@ -317,7 +404,7 @@ def _publish_outputs(state: dict, regmap: dict, regmap_path: str, mode: str) -> 
         key=os.path.basename(SUMMARY_PATH),
     )
 
-    manifest = _build_manifest(state, regmap)
+    manifest = _build_manifest(state, regmap, source_obj=source_obj, regmap_path=regmap_path)
     write_artifact(state, MANIFEST_PATH, json.dumps(manifest, indent=2), key=os.path.basename(MANIFEST_PATH))
 
     state["firmware_register_map"] = regmap
@@ -449,8 +536,8 @@ def run_agent(state: dict) -> dict:
         if candidate_regs:
             debug_info["passthrough_taken"] = True
             passthrough_out = {
-                "block_name": source_obj.get("block_name") or source_obj.get("module_name") or source_obj.get("name") or "firmware_block",
-                "module_name": source_obj.get("module_name") or source_obj.get("block_name") or source_obj.get("name") or "firmware_block",
+                "block_name": _infer_block_name(state, source_obj, source_obj),
+                "module_name": _infer_block_name(state, source_obj, source_obj),
                 "base_address": _fmt_hex32(
                     source_obj.get("base_address")
                     or source_obj.get("base_addr")
@@ -458,6 +545,7 @@ def run_agent(state: dict) -> dict:
                     or source_obj.get("base")
                     or "0x00000000"
                 ),
+                "bus": _infer_bus_type_from_sources(state, source_obj, source_obj, spec_text, goal),
                 "registers": _sort_registers([_normalize_register(reg) for reg in candidate_regs]),
                 "__source": {
                     "mode": "artifact_passthrough",
@@ -475,12 +563,15 @@ def run_agent(state: dict) -> dict:
                 },
             )
             logger.info("%s preserved %d registers", AGENT_NAME, len(passthrough_out["registers"]))
-            _publish_outputs(state, passthrough_out, regmap_path, "artifact_passthrough")
+            _publish_outputs(state, passthrough_out, regmap_path, "artifact_passthrough", source_obj=source_obj)
             state["status"] = f"✅ {AGENT_NAME} preserved upstream register map and emitted firmware manifest"
             return state
 
         debug_info["normalization_taken"] = True
         normalized = _normalize_registers_from_any_shape(upstream_regmap)
+        normalized["bus"] = _infer_bus_type_from_sources(state, upstream_regmap, normalized, spec_text, goal)
+        normalized["block_name"] = _infer_block_name(state, upstream_regmap, normalized)
+        normalized["module_name"] = normalized["block_name"]
         normalized["__source"] = {
             "mode": "artifact_first_normalization",
             "path": regmap_path,
@@ -514,7 +605,7 @@ def run_agent(state: dict) -> dict:
             },
         )
         logger.info("%s normalized %d registers", AGENT_NAME, len(regs))
-        _publish_outputs(state, normalized, regmap_path, "artifact_first_normalization")
+        _publish_outputs(state, normalized, regmap_path, "artifact_first_normalization", source_obj=upstream_regmap)
         state["status"] = f"✅ {AGENT_NAME} normalized upstream register map and emitted firmware manifest"
         return state
 
@@ -571,9 +662,12 @@ OUTPUT REQUIREMENTS:
         return state
 
     parsed = _normalize_registers_from_any_shape(parsed)
+    parsed["bus"] = _infer_bus_type_from_sources(state, parsed, parsed, spec_text, goal)
+    parsed["block_name"] = _infer_block_name(state, parsed, parsed)
+    parsed["module_name"] = parsed["block_name"]
     parsed["__source"] = {"mode": "llm_fallback", "path": "llm"}
     logger.info("%s fallback generated %d registers", AGENT_NAME, len(parsed.get("registers") or []))
-    _publish_outputs(state, parsed, "llm", "llm_fallback")
+    _publish_outputs(state, parsed, "llm", "llm_fallback", source_obj=parsed)
     _write_debug(
         state,
         debug_info,
@@ -586,7 +680,3 @@ OUTPUT REQUIREMENTS:
     )
     state["status"] = f"✅ {AGENT_NAME} done"
     return state
-
-
-
-

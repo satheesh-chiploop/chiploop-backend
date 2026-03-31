@@ -1,8 +1,9 @@
+
 import json
 import logging
 import os
 import re
-from typing import Any, Dict, List, Optional
+from typing import Optional
 
 from ._embedded_common import ensure_workflow_dir, llm_chat, strip_markdown_fences_for_code, write_artifact
 
@@ -37,10 +38,14 @@ def _safe_load_json(path: str) -> Optional[dict]:
 
 
 def _derive_driver_name(regmap_obj: dict) -> str:
-    raw = (regmap_obj or {}).get("module_name") or (regmap_obj or {}).get("block_name") or "firmware_block"
+    raw = (
+        (regmap_obj or {}).get("module_name")
+        or (regmap_obj or {}).get("block_name")
+        or "digital_subsystem"
+    )
     parts = re.split(r"[^A-Za-z0-9]+", raw)
     camel = "".join(part[:1].upper() + part[1:] for part in parts if part)
-    return f"{camel}Driver" if camel else "FirmwareBlockDriver"
+    return f"{camel}Driver" if camel else "DigitalSubsystemDriver"
 
 
 def _safe_identifier(name: str) -> str:
@@ -50,6 +55,16 @@ def _safe_identifier(name: str) -> str:
     if ident[0].isdigit():
         ident = f"r_{ident}"
     return ident.lower()
+
+
+def _field_rust_type(bit_width: int) -> str:
+    if bit_width <= 1:
+        return "bool"
+    if bit_width <= 8:
+        return "u8"
+    if bit_width <= 16:
+        return "u16"
+    return "u32"
 
 
 def _write_debug(state: dict, payload: dict) -> None:
@@ -70,6 +85,7 @@ def _load_manifest(state: dict, workflow_dir: str) -> dict:
 
 def _build_deterministic_driver(regmap_obj: dict, driver_name: str) -> str:
     regs = [reg for reg in (regmap_obj.get("registers") or []) if isinstance(reg, dict)]
+
     lines = [
         "use crate::hal::registers::*;",
         "",
@@ -81,36 +97,83 @@ def _build_deterministic_driver(regmap_obj: dict, driver_name: str) -> str:
         "        Self",
         "    }",
         "",
-        "    #[inline]",
-        "    pub fn register_block(&self) -> &'static RegisterBlock {",
-        "        register_block()",
-        "    }",
-        "",
     ]
 
     for reg in regs:
         reg_name = reg.get("name") or "UNNAMED"
-        ident = _safe_identifier(reg_name)
+        reg_ident = _safe_identifier(reg_name)
+        access = str(reg.get("access") or "RW").upper()
+
         lines.extend(
             [
                 "    #[inline]",
-                f"    pub fn read_{ident}(&self) -> u32 {{",
-                f"        self.register_block().{ident}.read()",
+                f"    pub fn read_{reg_ident}(&self) -> u32 {{",
+                f"        read_{reg_ident}()",
                 "    }",
                 "",
             ]
         )
-        access = str(reg.get("access") or "RW").upper()
+
         if access not in {"RO"}:
             lines.extend(
                 [
                     "    #[inline]",
-                    f"    pub fn write_{ident}(&self, value: u32) {{",
-                    f"        self.register_block().{ident}.write(value)",
+                    f"    pub fn write_{reg_ident}(&self, value: u32) {{",
+                    f"        write_{reg_ident}(value)",
                     "    }",
                     "",
                 ]
             )
+
+        for field in reg.get("fields") or []:
+            fname = field.get("name") or "UNNAMED_FIELD"
+            fident = _safe_identifier(fname)
+            bit_width = int(field.get("bit_width") or 1)
+            rust_type = _field_rust_type(bit_width)
+            field_access = str(field.get("access") or access).upper()
+            hal_get = f"get_{reg_ident}_{fident}"
+            hal_set = f"set_{reg_ident}_{fident}"
+
+            if rust_type == "bool":
+                lines.extend(
+                    [
+                        "    #[inline]",
+                        f"    pub fn get_{reg_ident}_{fident}(&self) -> bool {{",
+                        f"        {hal_get}() != 0",
+                        "    }",
+                        "",
+                    ]
+                )
+                if field_access not in {"RO"}:
+                    lines.extend(
+                        [
+                            "    #[inline]",
+                            f"    pub fn set_{reg_ident}_{fident}(&self, value: bool) {{",
+                            f"        {hal_set}(if value {{ 1 }} else {{ 0 }})",
+                            "    }",
+                            "",
+                        ]
+                    )
+            else:
+                lines.extend(
+                    [
+                        "    #[inline]",
+                        f"    pub fn get_{reg_ident}_{fident}(&self) -> {rust_type} {{",
+                        f"        {hal_get}() as {rust_type}",
+                        "    }",
+                        "",
+                    ]
+                )
+                if field_access not in {"RO"}:
+                    lines.extend(
+                        [
+                            "    #[inline]",
+                            f"    pub fn set_{reg_ident}_{fident}(&self, value: {rust_type}) {{",
+                            f"        {hal_set}(value as u32)",
+                            "    }",
+                            "",
+                        ]
+                    )
 
     lines.append("}")
     lines.append("")
@@ -206,7 +269,7 @@ STRICT REQUIREMENTS:
 - Reference only registers that appear in REGISTER MAP.
 - Reuse HAL items instead of redefining them.
 - The driver must be thin and compile-oriented, not a fake full SDK.
-- Prefer register-level methods aligned to real hardware intent.
+- Prefer register-level and field-level methods aligned to real hardware intent.
 - Do NOT wrap output in mod driver_scaffold.
 - Use: use crate::hal::registers::*;
 - Do NOT prefix imported HAL items with registers::
@@ -267,6 +330,23 @@ Write to firmware/drivers/driver_scaffold.rs
         logger.warning("%s output contained placeholder symbols %s; using deterministic fallback driver", AGENT_NAME, found_bogus)
         out = _build_deterministic_driver(regmap_obj, driver_name)
 
+    required_hal_refs = ["use crate::hal::registers::*;"]
+    if any(token not in out for token in required_hal_refs):
+        logger.warning("%s output missing required HAL imports; using deterministic fallback driver", AGENT_NAME)
+        out = _build_deterministic_driver(regmap_obj, driver_name)
+
+    field_api_missing = []
+    for reg in regmap_obj.get("registers", []):
+        reg_ident = _safe_identifier(reg.get("name") or "UNNAMED")
+        for field in reg.get("fields") or []:
+            fident = _safe_identifier(field.get("name") or "UNNAMED_FIELD")
+            expected = f"get_{reg_ident}_{fident}"
+            if expected not in out:
+                field_api_missing.append(expected)
+    if field_api_missing:
+        logger.warning("%s output missing field APIs %s; using deterministic fallback driver", AGENT_NAME, field_api_missing[:5])
+        out = _build_deterministic_driver(regmap_obj, driver_name)
+
     write_artifact(state, OUTPUT_PATH, out, key=os.path.basename(OUTPUT_PATH))
     write_artifact(
         state,
@@ -290,6 +370,8 @@ Write to firmware/drivers/driver_scaffold.rs
 
     manifest = dict(manifest or {})
     manifest["driver_path"] = OUTPUT_PATH
+    manifest["driver_name"] = driver_name
+    manifest["digital_block_name"] = manifest.get("digital_block_name") or regmap_obj.get("module_name") or regmap_obj.get("block_name") or "digital_subsystem"
     build = dict(manifest.get("build") or {})
     build.setdefault("driver_root", "firmware/drivers")
     manifest["build"] = build
@@ -323,5 +405,6 @@ Write to firmware/drivers/driver_scaffold.rs
     logger.info("%s generated driver %s", AGENT_NAME, driver_name)
     state["status"] = f"✅ {AGENT_NAME} done"
     return state
+
 
 
