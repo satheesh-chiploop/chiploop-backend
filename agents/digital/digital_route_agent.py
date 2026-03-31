@@ -296,6 +296,7 @@ def run_agent(state: dict) -> dict:
 
     # Option A: point SDC to shared inputs
     cfg["PNR_SDC_FILE"] = f"inputs/constraints/{sdc_basename}"
+    cfg["RUN_SPEF_EXTRACTION"] = True
 
 
     # --------------------------------------------------
@@ -443,7 +444,7 @@ docker run --rm \
   -e PDK={pdk} \
   -e PDK_ROOT=/pdk \
   {image} \
-  bash -lc 'set -e; cd /work && openlane --flow Classic --run-tag {run_tag} --override-config RUN_LINTER=False --to OpenROAD.DetailedRouting route/config.json'
+  bash -lc 'set -e; cd /work && openlane --flow Classic --run-tag {run_tag} --override-config RUN_LINTER=False --to OpenROAD.STAPostPNR route/config.json'
 """
 
 
