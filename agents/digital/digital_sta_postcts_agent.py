@@ -186,13 +186,13 @@ def _resolve_postcts_netlist(state: dict, workflow_dir: str) -> str | None:
 
 
 
-def _stage_macro_inputs(state: dict, run_work_dir: str) -> tuple[list[str], list[str], list[str]]:
+def _stage_macro_inputs(state: dict, work_stage_dir: str) -> tuple[list[str], list[str], list[str]]:
     digital = state.get("digital") or {}
     macro_lefs = [p for p in (digital.get("macro_lefs") or []) if p and os.path.exists(p)]
     macro_libs = [p for p in (digital.get("macro_libs") or []) if p and os.path.exists(p)]
     macro_gds  = [p for p in (digital.get("macro_gds") or []) if p and os.path.exists(p)]
 
-    inputs_dir = os.path.join(run_work_dir, "inputs", "macros")
+    inputs_dir = os.path.join(work_stage_dir, "inputs", "macros")
     lef_dir = os.path.join(inputs_dir, "lef")
     lib_dir = os.path.join(inputs_dir, "lib")
     gds_dir = os.path.join(inputs_dir, "gds")
@@ -247,7 +247,11 @@ def run_agent(state: dict) -> dict:
     _ensure_dir(run_work_dir)
     state["digital_run_work_dir"] = run_work_dir
 
-    staged_lefs, staged_libs, staged_gds = _stage_macro_inputs(state, run_work_dir)
+    
+    work_stage_dir = os.path.join(run_work_dir, STAGE_NAME)
+    _ensure_dir(work_stage_dir)
+
+    staged_lefs, staged_libs, staged_gds = _stage_macro_inputs(state, work_stage_dir)
 
     if staged_lefs:
         cfg["EXTRA_LEFS"] = staged_lefs
@@ -317,8 +321,6 @@ def run_agent(state: dict) -> dict:
     pdk_root_host = os.path.abspath(pdk_root_host)
     state["pdk_root_host"] = pdk_root_host
 
-    work_stage_dir = os.path.join(run_work_dir, STAGE_NAME)
-    _ensure_dir(work_stage_dir)
     _write_text(os.path.join(work_stage_dir, "config.json"), json.dumps(cfg, indent=2))
 
 

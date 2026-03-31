@@ -157,14 +157,14 @@ def _resolve_preplace_netlist(state: dict, workflow_dir: str) -> str | None:
     logger.warning(f"{AGENT_NAME}: no deterministic synth netlist found")
     return None
 
-def _stage_macro_inputs(state: dict, run_work_dir: str):
+def _stage_macro_inputs(state: dict, work_stage_dir: str):
     digital = state.get("digital") or {}
 
     macro_lefs = [p for p in (digital.get("macro_lefs") or []) if p and os.path.exists(p)]
     macro_libs = [p for p in (digital.get("macro_libs") or []) if p and os.path.exists(p)]
     macro_gds  = [p for p in (digital.get("macro_gds") or []) if p and os.path.exists(p)]
 
-    inputs_macros_dir = os.path.join(run_work_dir, "inputs", "macros")
+    inputs_macros_dir = os.path.join(work_stage_dir, "inputs", "macros")
     lef_dir = os.path.join(inputs_macros_dir, "lef")
     lib_dir = os.path.join(inputs_macros_dir, "lib")
     gds_dir = os.path.join(inputs_macros_dir, "gds")
@@ -236,7 +236,10 @@ def run_agent(state: dict) -> dict:
     cfg.pop("SYNTH_SDC_FILE", None)
     cfg["RUN_LINTER"] = False
 
-    staged_lefs, staged_libs, staged_gds = _stage_macro_inputs(state, run_work_dir)
+    work_stage_dir = os.path.join(run_work_dir, STAGE_NAME)
+    _ensure_dir(work_stage_dir)
+
+    staged_lefs, staged_libs, staged_gds = _stage_macro_inputs(state, work_stage_dir)
 
     if staged_lefs:
         cfg["EXTRA_LEFS"] = staged_lefs
@@ -287,11 +290,7 @@ def run_agent(state: dict) -> dict:
     top_module = str(cfg.get("DESIGN_NAME", "")).strip() or "top"
 
     # Write contract config (visible under digital/sta_preplace/config.json)
-    _write_text(os.path.join(stage_dir, "config.json"), json.dumps(cfg, indent=2))
-
-    # Write exec config under /work/sta_preplace/config.json
-    work_stage_dir = os.path.join(run_work_dir, STAGE_NAME)
-    _ensure_dir(work_stage_dir)
+    
     _write_text(os.path.join(work_stage_dir, "config.json"), json.dumps(cfg, indent=2))
 
     # ---- Docker/run.sh (mount run_work_dir) ----
