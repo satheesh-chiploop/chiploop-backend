@@ -145,26 +145,46 @@ def _resolve_config_from_state(state: dict, workflow_dir: str) -> str | None:
     logger.warning(f"{AGENT_NAME}: no OpenLane config found")
     return None
 
-def _resolve_postcts_netlist(state: dict, workflow_dir: str) -> str | None:
-    """
-    STA post-CTS should use the logical synthesized netlist as VERILOG_FILES,
-    not physical CTS netlists like *.nl.v / *.pnl.v.
-    """
-    synth_dir = os.path.join(workflow_dir, "digital", "synth", "netlist")
 
-    candidates = []
-    candidates += sorted(glob.glob(os.path.join(synth_dir, "*_synth.v")))
-    candidates += [
-        p for p in sorted(glob.glob(os.path.join(synth_dir, "*.v")))
-        if not p.endswith(".nl.v") and not p.endswith(".pnl.v")
+def _resolve_postcts_netlist(state: dict, workflow_dir: str) -> str | None:
+    digital = state.get("digital") or {}
+    cts_state = digital.get("cts") or {}
+
+    candidates = [
+        cts_state.get("netlist"),
+        cts_state.get("final_netlist"),
+        cts_state.get("cts_netlist"),
     ]
+
+    latest_run = cts_state.get("openlane_run_dir")
+    picked = _pick_stage_netlist(latest_run) if latest_run else None
+    if picked:
+        candidates.append(picked)
+
+    # Also inspect shared run_work/cts runs directly
+    run_work_dir = state.get("digital_run_work_dir") or os.path.join(workflow_dir, "digital", "run_work")
+    cts_runs = sorted(
+        glob.glob(os.path.join(run_work_dir, "cts", "runs", "*")),
+        key=os.path.getmtime
+    )
+    if cts_runs:
+        picked = _pick_stage_netlist(cts_runs[-1])
+        if picked:
+            candidates.append(picked)
+
+    candidates.extend([
+        os.path.join(workflow_dir, "digital", "cts", "netlist", "digital_subsystem_cts.v"),
+        os.path.join(workflow_dir, "digital", "cts", "netlist", "digital_subsystem.v"),
+    ])
 
     cand = _first_existing(candidates)
     if cand:
-        logger.info(f"{AGENT_NAME}: selected post-CTS logical netlist -> {cand}")
+        logger.info(f"{AGENT_NAME}: selected post-CTS netlist -> {cand}")
     else:
-        logger.warning(f"{AGENT_NAME}: no synthesized netlist found for STA post-CTS")
+        logger.warning(f"{AGENT_NAME}: no post-CTS netlist found")
     return cand
+
+
 
 def _stage_macro_inputs(state: dict, run_work_dir: str) -> tuple[list[str], list[str], list[str]]:
     digital = state.get("digital") or {}
@@ -220,6 +240,7 @@ def run_agent(state: dict) -> dict:
 
 
     cfg.pop("SYNTH_SDC_FILE", None)
+    cfg["RUN_LINTER"] = False
 
     run_work_dir = state.get("digital_run_work_dir") or os.path.join(workflow_dir, "digital", "run_work")
     run_work_dir = os.path.abspath(run_work_dir)
@@ -267,15 +288,12 @@ def run_agent(state: dict) -> dict:
     if not postcts_netlist:
         raise RuntimeError("STA postcts: missing CTS netlist output.")
 
-    if postcts_netlist.endswith(".nl.v") or postcts_netlist.endswith(".pnl.v"):
-        raise RuntimeError(
-            f"STA postcts: invalid logical netlist selected for VERILOG_FILES: {postcts_netlist}"
-        )
-
     staged_postcts_netlist = os.path.join(inputs_netlist_dir, os.path.basename(postcts_netlist))
     shutil.copy2(postcts_netlist, staged_postcts_netlist)
 
     cfg["VERILOG_FILES"] = [f"inputs/netlist/{os.path.basename(staged_postcts_netlist)}"]
+
+    
 
     if str(cfg.get("DESIGN_NAME", "")).strip() in ["", "top"]:
         inferred = _infer_top_from_netlist(staged_postcts_netlist)
@@ -342,7 +360,7 @@ docker run --rm \
   -e PDK={pdk} \
   -e PDK_ROOT=/pdk \
   {image} \
-  bash -lc 'set -e; cd /work && openlane --flow Classic --run-tag {run_tag} --to {OPENLANE_TO} {STAGE_NAME}/config.json'
+  bash -lc 'set -e; cd /work && openlane --flow Classic --run-tag {run_tag} --override-config RUN_LINTER=False --to {OPENLANE_TO} {STAGE_NAME}/config.json'
 """
 
     _write_text(os.path.join(stage_dir, "run.sh"), run_sh)

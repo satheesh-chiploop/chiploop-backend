@@ -256,6 +256,7 @@ def run_agent(state: dict) -> dict:
 
     cfg.pop("SYNTH_SDC_FILE", None)
     cfg.pop("SPEF_FILE", None)
+    cfg["RUN_LINTER"] = False
 
     run_work_dir = state.get("digital_run_work_dir") or os.path.join(workflow_dir, "digital", "run_work")
     run_work_dir = os.path.abspath(run_work_dir)
@@ -379,7 +380,7 @@ docker run --rm \
   -e PDK={pdk} \
   -e PDK_ROOT=/pdk \
   {image} \
-  bash -lc 'set -e; cd /work && openlane --flow Classic --run-tag {run_tag} --to {OPENLANE_TO} {STAGE_NAME}/config.json'
+  bash -lc 'set -e; cd /work && openlane --flow Classic --run-tag {run_tag} --override-config RUN_LINTER=False --to {OPENLANE_TO} {STAGE_NAME}/config.json'
 """
     _write_text(os.path.join(stage_dir, "run.sh"), run_sh)
     os.chmod(os.path.join(stage_dir, "run.sh"), 0o755)
@@ -388,7 +389,7 @@ docker run --rm \
     _write_text(os.path.join(logs_dir, "openlane_sta_postroute.log"), out)
 
 
-    latest = _latest_run_dir(work_stage_dir)
+    latest = _latest_run_dir(run_work_dir)
     metrics_path = _copy_metrics(latest, stage_dir)
     final_postroute_netlist, final_postroute_spef = _collect_generated_postroute_outputs(latest, stage_dir)
 

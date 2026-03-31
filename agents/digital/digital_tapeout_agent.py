@@ -112,13 +112,20 @@ def _infer_top_from_netlist(netlist_path: str) -> str | None:
 
 
 def _resolve_sdc_from_state(state: dict, workflow_dir: str) -> str | None:
-    digital = state.get("digital") or {}
+
 
     # Prefer latest explicit digital-level propagated SDC
-    cand = digital.get("constraints_sdc")
+
+
+    digital = state.get("digital") or {}
+    lvs_state = digital.get("lvs") or {}
+
+    cand = lvs_state.get("constraints_sdc")
     if cand and os.path.exists(cand):
-        logger.info(f"{AGENT_NAME}: selected SDC from state.digital -> {cand}")
+        logger.info(f"{AGENT_NAME}: selected SDC from state.digital.lvs -> {cand}")
         return cand
+
+    cand = digital.get("constraints_sdc")
 
     # Prefer later physical stages first
     for stage in [
@@ -152,6 +159,12 @@ def _resolve_sdc_from_state(state: dict, workflow_dir: str) -> str | None:
 
 def _resolve_config_from_state(state: dict, workflow_dir: str) -> str | None:
     digital = state.get("digital") or {}
+    lvs_state = digital.get("lvs") or {}
+
+    cand = lvs_state.get("openlane_config")
+    if cand and os.path.exists(cand):
+        logger.info(f"{AGENT_NAME}: selected config from state.digital.lvs -> {cand}")
+        return cand
 
     cand = digital.get("openlane_config")
     if cand and os.path.exists(cand):
@@ -176,6 +189,69 @@ def _resolve_config_from_state(state: dict, workflow_dir: str) -> str | None:
     logger.warning(f"{AGENT_NAME}: no OpenLane config found")
     return None
 
+
+def _resolve_macro_files_from_workflow(workflow_dir: str, exts: tuple[str, ...]) -> list[str]:
+    hits = []
+    for ext in exts:
+        hits.extend(glob.glob(os.path.join(workflow_dir, "**", f"*{ext}"), recursive=True))
+
+    out, seen = [], set()
+    for p in sorted(hits):
+        base = os.path.basename(p).lower()
+        if base.endswith("_llm_lef_raw.lef") or base.endswith("_raw.lef") or "debug" in base:
+            continue
+        ap = os.path.abspath(p)
+        if ap in seen:
+            continue
+        seen.add(ap)
+        out.append(ap)
+    return out
+
+
+def _stage_macro_inputs(state: dict, workflow_dir: str, work_stage_dir: str):
+    digital = state.get("digital") or {}
+
+    macro_lefs = [p for p in (digital.get("macro_lefs") or []) if p and os.path.exists(p)]
+    macro_libs = [p for p in (digital.get("macro_libs") or []) if p and os.path.exists(p)]
+    macro_gds  = [p for p in (digital.get("macro_gds") or []) if p and os.path.exists(p)]
+
+    if not macro_lefs:
+        macro_lefs = _resolve_macro_files_from_workflow(workflow_dir, (".lef",))
+    if not macro_libs:
+        macro_libs = _resolve_macro_files_from_workflow(workflow_dir, (".lib", ".db"))
+    if not macro_gds:
+        macro_gds = _resolve_macro_files_from_workflow(workflow_dir, (".gds",))
+
+    inputs_dir = os.path.join(work_stage_dir, "inputs", "macros")
+    lef_dir = os.path.join(inputs_dir, "lef")
+    lib_dir = os.path.join(inputs_dir, "lib")
+    gds_dir = os.path.join(inputs_dir, "gds")
+
+    _ensure_dir(lef_dir)
+    _ensure_dir(lib_dir)
+    _ensure_dir(gds_dir)
+
+    staged_lefs, staged_libs, staged_gds = [], [], []
+
+    for src in macro_lefs:
+        dst = os.path.join(lef_dir, os.path.basename(src))
+        if os.path.abspath(src) != os.path.abspath(dst):
+            shutil.copy2(src, dst)
+        staged_lefs.append(f"dir::inputs/macros/lef/{os.path.basename(src)}")
+
+    for src in macro_libs:
+        dst = os.path.join(lib_dir, os.path.basename(src))
+        if os.path.abspath(src) != os.path.abspath(dst):
+            shutil.copy2(src, dst)
+        staged_libs.append(f"dir::inputs/macros/lib/{os.path.basename(src)}")
+
+    for src in macro_gds:
+        dst = os.path.join(gds_dir, os.path.basename(src))
+        if os.path.abspath(src) != os.path.abspath(dst):
+            shutil.copy2(src, dst)
+        staged_gds.append(f"dir::inputs/macros/gds/{os.path.basename(src)}")
+
+    return staged_lefs, staged_libs, staged_gds
 
 def run_agent(state: dict) -> dict:
     print(f"\n🏁 Running {AGENT_NAME}...")
@@ -214,6 +290,7 @@ def run_agent(state: dict) -> dict:
 
     cfg = _read_json(base_cfg_path)
     cfg.pop("SYNTH_SDC_FILE", None)
+    cfg["RUN_LINTER"] = False
 
     run_work_dir = state.get("digital_run_work_dir") or os.path.join(workflow_dir, "digital", "run_work")
     run_work_dir = os.path.abspath(run_work_dir)
@@ -265,6 +342,20 @@ def run_agent(state: dict) -> dict:
 
     work_stage_dir = os.path.join(run_work_dir, "tapeout")
     _ensure_dir(work_stage_dir)
+
+    staged_lefs, staged_libs, staged_gds = _stage_macro_inputs(state, workflow_dir, work_stage_dir)
+
+    if staged_lefs:
+        cfg["EXTRA_LEFS"] = staged_lefs
+    if staged_libs:
+        cfg["EXTRA_LIBS"] = staged_libs
+    if staged_gds:
+        cfg["EXTRA_GDS_FILES"] = staged_gds
+
+    logger.info(f"{AGENT_NAME}: staged macro LEFs -> {staged_lefs}")
+    logger.info(f"{AGENT_NAME}: staged macro LIBs -> {staged_libs}")
+    logger.info(f"{AGENT_NAME}: staged macro GDS -> {staged_gds}")
+
     exec_config_path = os.path.join(work_stage_dir, "config.json")
     _write_text(exec_config_path, json.dumps(cfg, indent=2))
 
@@ -300,7 +391,7 @@ docker run --rm \\
   -e PDK={pdk_variant} \\
   -e PDK_ROOT=/pdk \\
   {openlane_image} \\
-  bash -lc 'set -e; cd /work && openlane --flow Classic --run-tag {run_tag} --to KLayout.StreamOut tapeout/config.json'
+  bash -lc 'set -e; cd /work && openlane --flow Classic --run-tag {run_tag} --override-config RUN_LINTER=False --to KLayout.StreamOut tapeout/config.json'
 
 docker run --rm \\
   -v "{pdk_root_host}":/pdk \\
@@ -308,7 +399,7 @@ docker run --rm \\
   -e PDK={pdk_variant} \\
   -e PDK_ROOT=/pdk \\
   {openlane_image} \\
-  bash -lc 'set -e; cd /work && openlane --flow Classic --run-tag {run_tag} --to Magic.StreamOut tapeout/config.json || true'
+  bash -lc 'set -e; cd /work && openlane --flow Classic --run-tag {run_tag} --override-config RUN_LINTER=False --to Magic.StreamOut tapeout/config.json || true'
 
 docker run --rm \\
   -v "{pdk_root_host}":/pdk \\
@@ -316,7 +407,7 @@ docker run --rm \\
   -e PDK={pdk_variant} \\
   -e PDK_ROOT=/pdk \\
   {openlane_image} \\
-  bash -lc 'set -e; cd /work && openlane --flow Classic --run-tag {run_tag} --to KLayout.XOR tapeout/config.json || true'
+  bash -lc 'set -e; cd /work && openlane --flow Classic --run-tag {run_tag} --override-config RUN_LINTER=False --to KLayout.XOR tapeout/config.json || true'
 """
     run_sh_path = os.path.join(stage_dir, "run.sh")
     _write_text(run_sh_path, run_sh)

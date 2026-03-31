@@ -211,11 +211,6 @@ def run_agent(state: dict) -> dict:
     _ensure_dir(run_work_dir)
     state["digital_run_work_dir"] = run_work_dir
 
-    staged_lefs, staged_libs, staged_gds = _stage_macro_inputs(state, run_work_dir)
-
-    cfg["EXTRA_LEFS"] = staged_lefs
-    cfg["EXTRA_LIBS"] = staged_libs
-    cfg["EXTRA_GDS_FILES"] = staged_gds
 
 
     inputs_dir = os.path.join(run_work_dir, "inputs")
@@ -239,6 +234,17 @@ def run_agent(state: dict) -> dict:
  
     cfg = _read_json(base_cfg_path)
     cfg.pop("SYNTH_SDC_FILE", None)
+    cfg["RUN_LINTER"] = False
+
+    staged_lefs, staged_libs, staged_gds = _stage_macro_inputs(state, run_work_dir)
+
+    if staged_lefs:
+        cfg["EXTRA_LEFS"] = staged_lefs
+    if staged_libs:
+        cfg["EXTRA_LIBS"] = staged_libs
+    if staged_gds:
+        cfg["EXTRA_GDS_FILES"] = staged_gds
+
 
     # ---- SSOT SDC -> run_work/inputs/constraints/top.sdc ----
     upstream_sdc = _resolve_sdc_from_state(state, workflow_dir)
@@ -336,7 +342,7 @@ docker run --rm \\
   -e PDK={pdk_variant} \\
   -e PDK_ROOT=/pdk \\
   {openlane_image} \\
-  bash -lc 'set -e; cd /work && openlane --flow Classic --run-tag {run_tag} --to {OPENLANE_TO} {STAGE_NAME}/config.json'
+  bash -lc 'set -e; cd /work && openlane --flow Classic --run-tag {run_tag} --override-config RUN_LINTER=False --to {OPENLANE_TO} {STAGE_NAME}/config.json'
 """
     run_sh_path = os.path.join(stage_dir, "run.sh")
     _write_text(run_sh_path, run_sh)

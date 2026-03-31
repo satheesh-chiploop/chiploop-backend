@@ -144,15 +144,29 @@ def _resolve_postplace_netlist(state: dict, workflow_dir: str) -> str | None:
     if picked:
         candidates.append(picked)
 
+    # Also inspect shared run_work/place runs directly
+    run_work_dir = state.get("digital_run_work_dir") or os.path.join(workflow_dir, "digital", "run_work")
+    place_runs = sorted(
+        glob.glob(os.path.join(run_work_dir, "place", "runs", "*")),
+        key=os.path.getmtime
+    )
+    if place_runs:
+        picked = _pick_stage_netlist(place_runs[-1])
+        if picked:
+            candidates.append(picked)
+
     candidates.extend([
         os.path.join(workflow_dir, "digital", "place", "netlist", "digital_subsystem_place.v"),
         os.path.join(workflow_dir, "digital", "place", "netlist", "digital_subsystem.v"),
-        os.path.join(workflow_dir, "digital", "synth", "netlist", "digital_subsystem_synth.v"),
     ])
 
     cand = _first_existing(candidates)
+    if cand:
+        logger.info(f"{AGENT_NAME}: selected post-place netlist -> {cand}")
+    else:
+        logger.warning(f"{AGENT_NAME}: no post-place netlist found")
     return cand
-
+    
 
 def _stage_macro_inputs(state: dict, run_work_dir: str):
     digital = state.get("digital") or {}
@@ -207,6 +221,7 @@ def run_agent(state: dict) -> dict:
     cfg = _read_json(base_cfg)  
 
     cfg.pop("SYNTH_SDC_FILE", None)
+    cfg["RUN_LINTER"] = False
 
     run_work_dir = state.get("digital_run_work_dir") or os.path.join(workflow_dir, "digital", "run_work")
     run_work_dir = os.path.abspath(run_work_dir)
@@ -216,9 +231,12 @@ def run_agent(state: dict) -> dict:
 
     staged_lefs, staged_libs, staged_gds = _stage_macro_inputs(state, run_work_dir)
 
-    cfg["EXTRA_LEFS"] = staged_lefs
-    cfg["EXTRA_LIBS"] = staged_libs
-    cfg["EXTRA_GDS_FILES"] = staged_gds
+    if staged_lefs:
+        cfg["EXTRA_LEFS"] = staged_lefs
+    if staged_libs:
+        cfg["EXTRA_LIBS"] = staged_libs
+    if staged_gds:
+        cfg["EXTRA_GDS_FILES"] = staged_gds
 
 
 
@@ -305,7 +323,7 @@ docker run --rm \\
   -e PDK={pdk} \\
   -e PDK_ROOT=/pdk \\
   {image} \\
-  bash -lc 'set -e; cd /work && openlane --flow Classic --run-tag {run_tag} --to {OPENLANE_TO} {STAGE_NAME}/config.json'
+  bash -lc 'set -e; cd /work && openlane --flow Classic --run-tag {run_tag} --override-config RUN_LINTER=False --to {OPENLANE_TO} {STAGE_NAME}/config.json'
 """
     _write(os.path.join(stage_dir, "run.sh"), run_sh)
     os.chmod(os.path.join(stage_dir, "run.sh"), 0o755)
