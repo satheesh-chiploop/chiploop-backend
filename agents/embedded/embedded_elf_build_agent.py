@@ -356,7 +356,7 @@ def run_agent(state: dict) -> dict:
     state["firmware_manifest"] = manifest
     state["firmware_manifest_path"] = MANIFEST_PATH
 
-        _write_json_artifact(
+    _write_json_artifact(
         state,
         DEBUG_PATH,
         {
