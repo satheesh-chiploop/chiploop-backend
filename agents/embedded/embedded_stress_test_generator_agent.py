@@ -58,10 +58,9 @@ def _safe_identifier(name: str) -> str:
     return ident.lower()
 
 
-def _deterministic_stress(manifest: dict, regmap: dict) -> str:
+def _deterministic_register_exercise(manifest: dict, regmap: dict) -> str:
     driver_name = manifest.get("driver_name") or "DigitalSubsystemDriver"
     regs = [reg for reg in (regmap.get("registers") or []) if isinstance(reg, dict)]
-    writable = [reg for reg in regs if str(reg.get("access") or "RW").upper() not in {"RO"}]
     readable = [reg for reg in regs if str(reg.get("access") or "RW").upper() in {"RO", "RW", "RW1C"}]
 
     lines = [
@@ -74,23 +73,19 @@ def _deterministic_stress(manifest: dict, regmap: dict) -> str:
         "    pub writes: u32,",
         "}",
         "",
-        f"pub fn run_stress(driver: &{driver_name}, iterations: u32) -> StressSummary {{",
+        f"pub fn run_register_exercise(driver: &{driver_name}, iterations: u32) -> StressSummary {{",
         "    let mut summary = StressSummary { iterations, reads: 0, writes: 0 };",
         "    let mut i = 0u32;",
         "    while i < iterations {",
     ]
-    for reg in writable[:3]:
-        reg_ident = _safe_identifier(reg.get("name") or "UNNAMED")
-        lines.extend([
-            f"        driver.write_{reg_ident}(i);",
-            "        summary.writes += 1;",
-        ])
+
     for reg in readable[:3]:
         reg_ident = _safe_identifier(reg.get("name") or "UNNAMED")
         lines.extend([
             f"        let _ = driver.read_{reg_ident}();",
             "        summary.reads += 1;",
         ])
+
     lines.extend([
         "        i += 1;",
         "    }",
@@ -99,6 +94,9 @@ def _deterministic_stress(manifest: dict, regmap: dict) -> str:
         "",
     ])
     return "\n".join(lines)
+
+
+
 
 
 def run_agent(state: dict) -> dict:
@@ -134,14 +132,16 @@ TOGGLES:
 {json.dumps(toggles, indent=2)}
 
 TASK:
-Create stress tests for clocks/IRQs/DMA/memory.
+Create bounded, register-safe firmware exercise routines using only features explicitly present in the firmware manifest and register map.
 
 OUTPUT REQUIREMENTS:
 - Output MUST be RAW RUST ONLY.
 - This file is a Rust MODULE (not crate root).
 - DO NOT emit crate attributes or heap allocations.
 - Reuse the existing driver layer and manifest hardware features.
-- Do not invent DMA, PLL, or power-mode behavior if unsupported by manifest.
+- Do not invent DMA, IRQ, PLL, reset, memory-controller, or power-mode behavior if unsupported by manifest.
+- Prefer bounded read-based exercise over raw full-register writes unless the manifest and register map clearly prove the write path is safe.
+- If no safe writable path is provable, generate read-only exercise routines.
 - Assumptions allowed only as:
   // ASSUMPTION: ...
 - Write output to:
@@ -153,15 +153,15 @@ OUTPUT REQUIREMENTS:
     )
     if not out:
         logger.warning("%s LLM returned empty output; using deterministic fallback", AGENT_NAME)
-        out = _deterministic_stress(manifest, regmap)
+        out = _deterministic_register_exercise(manifest, regmap)
 
     out = strip_markdown_fences_for_code(out).replace("#![no_std]", "// no_std configured at crate root").strip() + "\n"
     if any(marker in out for marker in ("```", "#![feature(", "Vec<", "String", "std::")):
         logger.warning("%s output contained invalid patterns; using deterministic fallback", AGENT_NAME)
-        out = _deterministic_stress(manifest, regmap)
-    if "run_stress" not in out:
-        logger.warning("%s output missing run_stress; using deterministic fallback", AGENT_NAME)
-        out = _deterministic_stress(manifest, regmap)
+        out = _deterministic_register_exercise(manifest, regmap)
+    if "run_register_exercise" not in out and "run_stress" not in out:
+        logger.warning("%s output missing exercise entrypoint; using deterministic fallback", AGENT_NAME)
+        out = _deterministic_register_exercise(manifest, regmap)
 
     write_artifact(state, OUTPUT_PATH, out, key=os.path.basename(OUTPUT_PATH))
     write_artifact(

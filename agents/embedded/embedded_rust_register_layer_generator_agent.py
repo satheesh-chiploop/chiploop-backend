@@ -138,8 +138,7 @@ def _default_hal_from_regmap(regmap: dict) -> str:
     regs = regmap.get("registers") or []
     base_address = regmap.get("base_address") or "0x00000000"
 
-    offset_lines: List[str] = []
-    field_lines: List[str] = []
+    const_lines: List[str] = []
     helper_lines: List[str] = []
 
     for reg in regs:
@@ -147,9 +146,9 @@ def _default_hal_from_regmap(regmap: dict) -> str:
         reg_ident = _safe_identifier(reg_name)
         reg_const = _safe_const_name(reg_name)
         offset = reg.get("offset") or "0x00000000"
+        reg_access = str(reg.get("access") or "RW").upper()
 
-        field_lines.append(f"    pub {reg_ident}: VolatileRegister,")
-        offset_lines.append(f"pub const {reg_const}_OFFSET: usize = {offset};")
+        const_lines.append(f"pub const {reg_const}_OFFSET: usize = {offset};")
 
         for field in reg.get("fields") or []:
             fname = field.get("name") or "UNNAMED_FIELD"
@@ -158,17 +157,15 @@ def _default_hal_from_regmap(regmap: dict) -> str:
             prefix = _field_const_prefix(reg_name, fname)
             mask_expr = _mask_expr(bit_width, bit_offset)
 
-            offset_lines.append(f"pub const {prefix}_SHIFT: u32 = {bit_offset};")
-            offset_lines.append(f"pub const {prefix}_WIDTH: u32 = {bit_width};")
-            offset_lines.append(f"pub const {prefix}_MASK: u32 = {mask_expr};")
-
-        reg_access = str(reg.get("access") or "RW").upper()
+            const_lines.append(f"pub const {prefix}_SHIFT: u32 = {bit_offset};")
+            const_lines.append(f"pub const {prefix}_WIDTH: u32 = {bit_width};")
+            const_lines.append(f"pub const {prefix}_MASK: u32 = {mask_expr};")
 
         helper_lines.extend(
             [
                 "#[inline]",
                 f"pub fn read_{reg_ident}() -> u32 {{",
-                f"    register_block().{reg_ident}.read()",
+                f"    read_reg({reg_const}_OFFSET)",
                 "}",
                 "",
             ]
@@ -179,18 +176,17 @@ def _default_hal_from_regmap(regmap: dict) -> str:
                 [
                     "#[inline]",
                     f"pub fn write_{reg_ident}(value: u32) {{",
-                    f"    register_block().{reg_ident}.write(value)",
+                    f"    write_reg({reg_const}_OFFSET, value)",
                     "}",
                     "",
                 ]
             )
 
-
         for field in reg.get("fields") or []:
             fname = field.get("name") or "UNNAMED_FIELD"
             fident = _safe_identifier(fname)
             prefix = _field_const_prefix(reg_name, fname)
-            access = str(field.get("access") or reg.get("access") or "RW").upper()
+            access = str(field.get("access") or reg_access).upper()
 
             helper_lines.extend(
                 [
@@ -218,21 +214,25 @@ def _default_hal_from_regmap(regmap: dict) -> str:
     return (
         "use core::ptr::{read_volatile, write_volatile};\n\n"
         f"pub const BASE_ADDRESS: usize = {base_address};\n\n"
-        + "\n".join(offset_lines)
-        + "\n\n#[repr(transparent)]\npub struct VolatileRegister {\n    value: u32,\n}\n\n"
-        + "impl VolatileRegister {\n"
-        + "    #[inline]\n    pub fn read(&self) -> u32 { unsafe { read_volatile(&self.value) } }\n"
-        + "    #[inline]\n    pub fn write(&self, value: u32) { unsafe { write_volatile((&self.value as *const u32).cast_mut(), value) } }\n"
+        + "\n".join(const_lines)
+        + "\n\n"
+        + "#[inline]\n"
+        + "fn reg_ptr(offset: usize) -> *mut u32 {\n"
+        + "    (BASE_ADDRESS + offset) as *mut u32\n"
         + "}\n\n"
-        + "#[repr(C)]\npub struct RegisterBlock {\n"
-        + "\n".join(field_lines)
-        + "\n}\n\n"
-        + "#[inline]\npub fn register_block() -> &'static RegisterBlock {\n"
-        + "    unsafe { &*(BASE_ADDRESS as *const RegisterBlock) }\n"
+        + "#[inline]\n"
+        + "fn read_reg(offset: usize) -> u32 {\n"
+        + "    unsafe { read_volatile(reg_ptr(offset) as *const u32) }\n"
+        + "}\n\n"
+        + "#[inline]\n"
+        + "fn write_reg(offset: usize, value: u32) {\n"
+        + "    unsafe { write_volatile(reg_ptr(offset), value) }\n"
         + "}\n\n"
         + "\n".join(helper_lines)
         + "\n"
     )
+
+
 
 
 def run_agent(state: dict) -> dict:
@@ -319,12 +319,13 @@ STRICT REQUIREMENTS:
 - Use REGISTER MAP as the source of truth when present.
 - Do NOT invent registers, fields, offsets, or base addresses.
 - Preserve exact register names from REGISTER MAP as much as possible.
-- Emit one RegisterBlock field per concrete register.
-- Order RegisterBlock fields by ascending register offset.
 - Emit one BASE_ADDRESS constant from REGISTER MAP or FIRMWARE MANIFEST.
 - Emit one *_OFFSET constant per register using the exact register offset.
-- Emit exactly one public RegisterBlock.
-- Emit exactly one register_block() accessor.
+- Preserve exact register and field semantics from REGISTER MAP.
+- Access registers using BASE_ADDRESS + OFFSET so sparse or irregular MMIO maps remain correct.
+- Do NOT assume registers are contiguous in memory.
+- You may emit a RegisterBlock only if you also emit correct reserved padding for all address gaps.
+- If padding is not explicitly generated and verified, use raw offset-based access helpers instead.
 - This file is crate::hal::registers module content only.
 - Do NOT emit crate attributes.
 - Do NOT emit prose.
@@ -378,7 +379,7 @@ Write to firmware/hal/registers.rs
         logger.warning("%s returned prose; using deterministic fallback HAL", AGENT_NAME)
         out = _default_hal_from_regmap(normalized_regmap)
 
-    required_tokens = ["RegisterBlock", "register_block", "BASE_ADDRESS"]
+    required_tokens = ["BASE_ADDRESS"]
     if any(token not in out for token in required_tokens):
         logger.warning("%s output shape weak; replacing with deterministic fallback HAL", AGENT_NAME)
         out = _default_hal_from_regmap(normalized_regmap)

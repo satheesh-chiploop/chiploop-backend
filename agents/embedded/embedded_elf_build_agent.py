@@ -107,17 +107,50 @@ fn panic(_info: &PanicInfo) -> ! {
 """
 
 
-def _default_main_rs() -> str:
-    return """#![no_std]
+def _default_main_rs(hal_read_helper: Optional[str] = None) -> str:
+    hal_probe = ""
+    if hal_read_helper:
+        hal_probe = f"""
+#[path = "../hal/registers.rs"]
+mod registers;
+"""
+    body_probe = ""
+    if hal_read_helper:
+        body_probe = f"""
+    let _ = registers::{hal_read_helper}();
+"""
+
+    return f"""#![no_std]
 #![no_main]
 
-mod panic;
+mod panic;{hal_probe}
 
 #[no_mangle]
-pub extern "C" fn _start() -> ! {
-    loop {}
-}
+pub extern "C" fn _start() -> ! {{{body_probe}
+    loop {{}}
+}}
 """
+
+def _discover_hal_read_helper(state: dict, workflow_dir: str) -> Optional[str]:
+    hal_code = state.get("firmware_hal_code") or (state.get("firmware") or {}).get("hal_code")
+    if not hal_code:
+        hal_path = state.get("firmware_hal_path") or "firmware/hal/registers.rs"
+        if hal_path and not os.path.isabs(hal_path):
+            hal_path = os.path.join(workflow_dir, hal_path)
+        try:
+            if hal_path and os.path.isfile(hal_path):
+                with open(hal_path, "r", encoding="utf-8") as f:
+                    hal_code = f.read()
+        except Exception as exc:
+            logger.warning("%s failed reading HAL file %s: %s", AGENT_NAME, hal_path, exc)
+            hal_code = ""
+
+    if not hal_code:
+        return None
+
+    import re
+    matches = re.findall(r"pub\s+fn\s+(read_[A-Za-z0-9_]+)\s*\(", hal_code)
+    return matches[0] if matches else None
 
 
 def _default_build_instructions(target_triple: str, bin_name: str) -> str:
@@ -145,17 +178,19 @@ ls firmware/build/target/{target_triple}/release/{bin_name}.elf
 """
 
 
-def _write_workspace_files(state: dict, target_triple: str, bin_name: str) -> None:
+
+
+def _write_workspace_files(state: dict, workflow_dir: str, target_triple: str, bin_name: str) -> None:
+    hal_read_helper = _discover_hal_read_helper(state, workflow_dir)
+
     files = {
         OUTPUT_CARGO_TOML: _default_cargo_toml(bin_name),
         OUTPUT_CARGO_CFG: _default_cargo_config(target_triple),
         OUTPUT_MEMORY_X: _default_memory_x(),
-        OUTPUT_MAIN_RS: _default_main_rs(),
+        OUTPUT_MAIN_RS: _default_main_rs(hal_read_helper),
         OUTPUT_PANIC_RS: _default_panic_rs(),
         OUTPUT_PATH: _default_build_instructions(target_triple, bin_name),
     }
-    for relpath, content in files.items():
-        write_artifact(state, relpath, content, key=os.path.basename(relpath))
 
 
 def _attempt_build(workflow_dir: str, target_triple: str, bin_name: str) -> tuple[bool, bool, str, str, str]:
@@ -194,46 +229,74 @@ def run_agent(state: dict) -> dict:
     manifest = _load_manifest(state, workflow_dir)
     target_triple, bin_name = _resolve_toolchain(state, manifest)
 
-    _write_workspace_files(state, target_triple, bin_name)
+    _write_workspace_files(state, workflow_dir, target_triple, bin_name)
 
-    _write_json_artifact(
-        state,
-        TOOLCHAIN_DEBUG_PATH,
-        {
-            "agent": AGENT_NAME,
-            "target_triple": target_triple,
-            "bin_name": bin_name,
-            "toolchain": state.get("toolchain"),
-        },
-    )
-
+    cargo_workspace_dir = os.path.join(workflow_dir, "firmware", "build")
     required_srcs = [
         os.path.join(workflow_dir, OUTPUT_MAIN_RS),
         os.path.join(workflow_dir, OUTPUT_PANIC_RS),
         os.path.join(workflow_dir, OUTPUT_CARGO_TOML),
         os.path.join(workflow_dir, OUTPUT_CARGO_CFG),
     ]
+    optional_srcs = [
+        os.path.join(workflow_dir, "firmware/hal/registers.rs"),
+        os.path.join(workflow_dir, "firmware/drivers/driver_scaffold.rs"),
+        os.path.join(workflow_dir, "firmware/diagnostics/register_dump.rs"),
+    ]
+    workspace_generated = all(os.path.isfile(p) for p in required_srcs) if workflow_dir else False
+
+    _write_json_artifact(
+        state,
+        TOOLCHAIN_DEBUG_PATH,
+        {
+            "agent": AGENT_NAME,
+            "workflow_dir": workflow_dir,
+            "cargo_workspace_dir": cargo_workspace_dir,
+            "cargo_workspace_dir_exists": os.path.isdir(cargo_workspace_dir),
+            "target_triple": target_triple,
+            "bin_name": bin_name,
+            "toolchain": state.get("toolchain"),
+            "required_srcs_abs": required_srcs,
+            "required_srcs_exists": {p: os.path.isfile(p) for p in required_srcs},
+            "optional_srcs_abs": optional_srcs,
+            "optional_srcs_exists": {p: os.path.isfile(p) for p in optional_srcs},
+            "workspace_generated": workspace_generated,
+        },
+    )
+
     missing_required = [
         os.path.relpath(p, workflow_dir).replace("\\", "/")
         for p in required_srcs
         if workflow_dir and not os.path.isfile(p)
     ]
     if missing_required:
+
         _write_json_artifact(
             state,
             DEBUG_PATH,
             {
                 "agent": AGENT_NAME,
+                "workflow_dir": workflow_dir,
+                "cwd_used_for_build": cargo_workspace_dir,
                 "target_triple": target_triple,
                 "bin_name": bin_name,
-                "build_attempted": False,
-                "build_succeeded": False,
-                "elf_exists": False,
-                "missing_required_files": missing_required,
-                "stderr_tail": "Required firmware build files missing before cargo build.",
-                "stdout_tail": "",
+                "cargo_workspace_dir": cargo_workspace_dir,
+                "cargo_workspace_dir_exists": os.path.isdir(cargo_workspace_dir),
+                "cargo_target_abs": cargo_target_abs,
+                "canonical_elf_relpath": elf_relpath,
+                "required_srcs_abs": required_srcs,
+                "required_srcs_exists": {p: os.path.isfile(p) for p in required_srcs},
+                "optional_srcs_abs": optional_srcs,
+                "optional_srcs_exists": {p: os.path.isfile(p) for p in optional_srcs},
+                "workspace_generated": workspace_generated,
+                "build_attempted": build_attempted,
+                "build_succeeded": build_succeeded,
+                "elf_exists": elf_exists,
+                "stdout_tail": build_stdout[-4000:],
+                "stderr_tail": build_stderr[-4000:],
             },
         )
+        
         state["status"] = "⚠️ ELF build blocked: required firmware build files missing"
         return state
 

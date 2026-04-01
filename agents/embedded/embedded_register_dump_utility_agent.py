@@ -67,9 +67,19 @@ def _safe_identifier(name: str) -> str:
         ident = f"r_{ident}"
     return ident.lower()
 
+def _flatten_registers(regmap: dict) -> list[dict]:
+    if isinstance(regmap.get("registers"), list):
+        return [r for r in regmap.get("registers", []) if isinstance(r, dict)]
+
+    regs = []
+    for blk in regmap.get("blocks") or []:
+        if isinstance(blk, dict):
+            regs.extend([r for r in (blk.get("registers") or []) if isinstance(r, dict)])
+    return regs
 
 def _deterministic_dump(regmap: dict) -> str:
-    regs = [reg for reg in (regmap.get("registers") or []) if isinstance(reg, dict)]
+    regs = _flatten_registers(regmap)    
+
     lines = [
         "use crate::hal::registers::*;",
         "",
@@ -160,7 +170,22 @@ OUTPUT REQUIREMENTS:
         out = _deterministic_dump(regmap)
 
     out = strip_markdown_fences_for_code(out).strip() + "\n"
-    if any(marker in out for marker in ("```", "#![no_std]", "#![no_main]", "Vec<", "String")):
+
+    if any(
+        marker in out
+        for marker in (
+            "```",
+            "#![no_std]",
+            "#![no_main]",
+            "Vec<",
+            "String",
+            "print!",
+            "println!",
+            "format!",
+            "std::",
+            "alloc::",
+        )
+    ):
         logger.warning("%s output contained invalid module patterns; using deterministic fallback", AGENT_NAME)
         out = _deterministic_dump(regmap)
     if "dump_registers" not in out:
