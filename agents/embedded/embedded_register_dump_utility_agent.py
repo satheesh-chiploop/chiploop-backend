@@ -1,18 +1,120 @@
+
 import json
-from ._embedded_common import ensure_workflow_dir, llm_chat, write_artifact, strip_markdown_fences_for_code
+import logging
+import os
+import re
+from typing import Optional
+
+from ._embedded_common import ensure_workflow_dir, llm_chat, strip_markdown_fences_for_code, write_artifact
+
+logger = logging.getLogger(__name__)
 
 AGENT_NAME = "Embedded Register Dump Utility Agent"
 PHASE = "reg_dump"
 OUTPUT_PATH = "firmware/diagnostics/register_dump.rs"
+DEBUG_PATH = "firmware/diagnostics/register_dump_debug.json"
+SUMMARY_PATH = "firmware/diagnostics/register_dump_summary.json"
+MANIFEST_PATH = "firmware/firmware_manifest.json"
+
+
+def _safe_load_json(path: str) -> Optional[dict]:
+    try:
+        if path and os.path.isfile(path):
+            with open(path, "r", encoding="utf-8") as f:
+                return json.load(f)
+    except Exception as exc:
+        logger.warning("%s failed loading %s: %s", AGENT_NAME, path, exc)
+    return None
+
+
+def _safe_read(path: str) -> str:
+    try:
+        if path and os.path.isfile(path):
+            with open(path, "r", encoding="utf-8") as f:
+                return f.read()
+    except Exception as exc:
+        logger.warning("%s failed reading %s: %s", AGENT_NAME, path, exc)
+    return ""
+
+
+def _load_manifest(state: dict, workflow_dir: str) -> dict:
+    manifest = state.get("firmware_manifest") or (state.get("firmware") or {}).get("manifest")
+    if isinstance(manifest, dict):
+        return dict(manifest)
+    manifest_path = state.get("firmware_manifest_path") or (state.get("firmware") or {}).get("manifest_path") or MANIFEST_PATH
+    if manifest_path and not os.path.isabs(manifest_path):
+        manifest_path = os.path.join(workflow_dir, manifest_path)
+    loaded = _safe_load_json(manifest_path)
+    return loaded if isinstance(loaded, dict) else {}
+
+
+def _load_regmap(state: dict, workflow_dir: str, manifest: dict) -> dict:
+    regmap = state.get("firmware_register_map") or (state.get("firmware") or {}).get("register_map")
+    if isinstance(regmap, dict):
+        return regmap
+    regmap_path = state.get("firmware_register_map_path") or manifest.get("register_map_path") or "firmware/register_map.json"
+    if regmap_path and not os.path.isabs(regmap_path):
+        regmap_path = os.path.join(workflow_dir, regmap_path)
+    loaded = _safe_load_json(regmap_path)
+    return loaded if isinstance(loaded, dict) else {}
+
+
+def _safe_identifier(name: str) -> str:
+    ident = re.sub(r"[^A-Za-z0-9_]", "_", name or "")
+    if not ident:
+        ident = "unnamed"
+    if ident[0].isdigit():
+        ident = f"r_{ident}"
+    return ident.lower()
+
+
+def _deterministic_dump(regmap: dict) -> str:
+    regs = [reg for reg in (regmap.get("registers") or []) if isinstance(reg, dict)]
+    lines = [
+        "use crate::hal::registers::*;",
+        "",
+        "#[derive(Debug, Clone, Copy, PartialEq, Eq)]",
+        "pub struct RegisterSnapshot {",
+        "    pub name: &'static str,",
+        "    pub value: u32,",
+        "}",
+        "",
+        f"pub const REGISTER_SNAPSHOT_COUNT: usize = {len(regs)};",
+        "",
+        "pub fn dump_registers() -> [RegisterSnapshot; REGISTER_SNAPSHOT_COUNT] {",
+        "    [",
+    ]
+    for reg in regs:
+        reg_name = reg.get("name") or "UNNAMED"
+        reg_ident = _safe_identifier(reg_name)
+        lines.append(f'        RegisterSnapshot {{ name: "{reg_name}", value: read_{reg_ident}() }},')
+    lines.extend([
+        "    ]",
+        "}",
+        "",
+    ])
+    return "\n".join(lines)
+
 
 def run_agent(state: dict) -> dict:
-    print(f"\n🚀 Running {AGENT_NAME}...")
+    print(f"\\n🚀 Running {AGENT_NAME}...")
+    logger.info("Starting %s", AGENT_NAME)
     ensure_workflow_dir(state)
 
+    workflow_dir = state.get("workflow_dir") or ""
     spec_text = (state.get("spec_text") or state.get("spec") or "").strip()
     goal = (state.get("goal") or "").strip()
     toolchain = state.get("toolchain") or {}
     toggles = state.get("toggles") or {}
+
+    manifest = _load_manifest(state, workflow_dir)
+    regmap = _load_regmap(state, workflow_dir, manifest)
+    hal_code = state.get("firmware_hal_code") or (state.get("firmware") or {}).get("hal_code")
+    if not hal_code:
+        hal_path = state.get("firmware_hal_path") or manifest.get("hal_path") or "firmware/hal/registers.rs"
+        if hal_path and not os.path.isabs(hal_path):
+            hal_path = os.path.join(workflow_dir, hal_path)
+        hal_code = _safe_read(hal_path)
 
     prompt = f"""USER SPEC:
 {spec_text}
@@ -20,7 +122,16 @@ def run_agent(state: dict) -> dict:
 GOAL:
 {goal}
 
-TOOLCHAIN (for future extensibility):
+FIRMWARE MANIFEST:
+{json.dumps(manifest, indent=2)}
+
+REGISTER MAP:
+{json.dumps(regmap, indent=2)}
+
+HAL REGISTER LAYER:
+{hal_code if hal_code else "(not available)"}
+
+TOOLCHAIN:
 {json.dumps(toolchain, indent=2)}
 
 TOGGLES:
@@ -32,26 +143,56 @@ Create register dump utility and formatting.
 OUTPUT REQUIREMENTS:
 - Write the primary output to match this path: firmware/diagnostics/register_dump.rs
 - Output MUST be raw, compile-ready Rust MODULE code only (no markdown fences, no prose).
-- This file is a Rust MODULE (not crate root). DO NOT emit crate attributes:
-  - NO #![no_std]
-  - NO #![no_main]
-  - NO #![feature(...)]
+- This file is a Rust MODULE (not crate root). DO NOT emit crate attributes.
 - Do not define main().
-- Do not use undefined logging macros (e.g., debug!).
-- Provide module functions (e.g., pub fn dump_registers(...) -> String / Vec<String>) callable from firmware/src/lib.rs.
+- Do not use heap allocations.
+- Reuse HAL read helpers when available.
+- Provide module functions callable from firmware code.
 - If information is missing, assumptions only as Rust comments at top:
   // ASSUMPTION: ...
-
 """
-
-    out = llm_chat(prompt, system="You are a senior embedded firmware engineer. Output MUST be raw, compile-ready Rust only. NEVER include markdown fences.")
+    out = llm_chat(
+        prompt,
+        system="You are a senior embedded firmware engineer. Output MUST be raw, compile-ready Rust only. NEVER include markdown fences.",
+    )
     if not out:
-        out = "ERROR: LLM returned empty output."
-    out = strip_markdown_fences_for_code(out)
-    write_artifact(state, OUTPUT_PATH, out, key=OUTPUT_PATH.split("/")[-1])
+        logger.warning("%s LLM returned empty output; using deterministic fallback", AGENT_NAME)
+        out = _deterministic_dump(regmap)
 
-    # lightweight state update for downstream agents
+    out = strip_markdown_fences_for_code(out).strip() + "\n"
+    if any(marker in out for marker in ("```", "#![no_std]", "#![no_main]", "Vec<", "String")):
+        logger.warning("%s output contained invalid module patterns; using deterministic fallback", AGENT_NAME)
+        out = _deterministic_dump(regmap)
+    if "dump_registers" not in out:
+        logger.warning("%s output missing dump_registers; using deterministic fallback", AGENT_NAME)
+        out = _deterministic_dump(regmap)
+
+    write_artifact(state, OUTPUT_PATH, out, key=os.path.basename(OUTPUT_PATH))
+    write_artifact(
+        state,
+        DEBUG_PATH,
+        json.dumps(
+            {
+                "agent": AGENT_NAME,
+                "manifest_present": bool(manifest),
+                "regmap_present": bool(regmap),
+                "hal_present": bool(hal_code),
+                "register_count": len(regmap.get("registers") or []),
+            },
+            indent=2,
+        ),
+        key=os.path.basename(DEBUG_PATH),
+    )
+    write_artifact(
+        state,
+        SUMMARY_PATH,
+        json.dumps({"agent": AGENT_NAME, "phase": PHASE, "register_dump_path": OUTPUT_PATH}, indent=2),
+        key=os.path.basename(SUMMARY_PATH),
+    )
+
     embedded = state.setdefault("embedded", {})
     embedded[PHASE] = OUTPUT_PATH
-
+    diag = state.setdefault("firmware_diagnostics", {})
+    diag["register_dump_path"] = OUTPUT_PATH
+    state["status"] = f"✅ {AGENT_NAME} done"
     return state

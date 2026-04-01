@@ -67,21 +67,6 @@ def _load_boot_plan(state: dict, workflow_dir: str) -> dict:
     return {}
 
 
-def _load_boot_plan(state: dict, workflow_dir: str) -> dict:
-    boot_plan = (state.get("firmware_boot") or {}).get("boot_sequence")
-    if isinstance(boot_plan, dict):
-        return dict(boot_plan)
-
-    path = (
-        (state.get("firmware_boot") or {}).get("boot_sequence_json_path")
-        or (state.get("firmware_boot") or {}).get("boot_sequence_path")
-        or BOOT_PLAN_JSON_PATH
-    )
-    if path and not os.path.isabs(path):
-        path = os.path.join(workflow_dir, path)
-    loaded = _safe_load_json(path)
-    return loaded if isinstance(loaded, dict) else {}
-
 
 def _steps_from_plan(boot_plan: dict) -> List[dict]:
     for key in ("steps", "sequence", "boot_steps"):
