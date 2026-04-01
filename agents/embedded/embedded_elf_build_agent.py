@@ -192,7 +192,10 @@ def _write_workspace_files(state: dict, workflow_dir: str, target_triple: str, b
     }
 
     for relpath, content in files.items():
+        abs_path = os.path.join(workflow_dir, relpath)
+        os.makedirs(os.path.dirname(abs_path), exist_ok=True)
         write_artifact(state, relpath, content, key=os.path.basename(relpath))
+
 
 
 def _attempt_build(workflow_dir: str, target_triple: str, bin_name: str) -> tuple[bool, bool, str, str, str]:
@@ -204,6 +207,8 @@ def _attempt_build(workflow_dir: str, target_triple: str, bin_name: str) -> tupl
     stderr = ""
 
     cargo_path = shutil.which("cargo")
+    if not cargo_path:
+        logger.warning("%s cargo not found in PATH", AGENT_NAME)
     if cargo_path and os.path.isdir(cargo_workspace_dir):
         try:
             build_attempted = True
@@ -227,13 +232,18 @@ def run_agent(state: dict) -> dict:
     logger.info("Starting %s", AGENT_NAME)
     ensure_workflow_dir(state)
 
-    workflow_dir = state.get("workflow_dir") or ""
+   
+    workflow_id=state.get("workflow_id","default")
+    workflow_dir = state.get("workflow_dir") or f"backend/workflows/{workflow_id}"
+    workflow_dir = os.path.abspath(workflow_dir)
+
     manifest = _load_manifest(state, workflow_dir)
     target_triple, bin_name = _resolve_toolchain(state, manifest)
 
     _write_workspace_files(state, workflow_dir, target_triple, bin_name)
 
     cargo_workspace_dir = os.path.join(workflow_dir, "firmware", "build")
+    os.makedirs(cargo_workspace_dir, exist_ok=True)
     required_srcs = [
         os.path.join(workflow_dir, OUTPUT_MAIN_RS),
         os.path.join(workflow_dir, OUTPUT_PANIC_RS),
@@ -267,6 +277,7 @@ def run_agent(state: dict) -> dict:
     )
 
     elf_relpath = f"firmware/build/target/{target_triple}/release/{bin_name}.elf"
+    elf_abs = os.path.join(workflow_dir, elf_relpath)
     cargo_target_abs = os.path.join(cargo_workspace_dir, "target", target_triple, "release", bin_name)
     build_attempted = False
     build_succeeded = False
@@ -303,6 +314,8 @@ def run_agent(state: dict) -> dict:
                 "missing_required_files": missing_required,
                 "build_attempted": False,
                 "build_succeeded": False,
+                "cargo_path": cargo_path,
+                "cargo_found": bool(cargo_path),
                 "elf_exists": False,
                 "stdout_tail": "",
                 "stderr_tail": "Required firmware build files missing before cargo build.",
@@ -315,8 +328,8 @@ def run_agent(state: dict) -> dict:
         
     build_attempted, build_succeeded, build_stdout, build_stderr, cargo_target_abs = _attempt_build(workflow_dir, target_triple, bin_name)
 
-    elf_relpath = f"firmware/build/target/{target_triple}/release/{bin_name}.elf"
-    elf_abs = os.path.join(workflow_dir, elf_relpath)
+
+
 
     if build_succeeded:
         try:
