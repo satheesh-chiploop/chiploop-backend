@@ -179,7 +179,6 @@ ls firmware/build/target/{target_triple}/release/{bin_name}.elf
 
 
 
-
 def _write_workspace_files(state: dict, workflow_dir: str, target_triple: str, bin_name: str) -> None:
     hal_read_helper = _discover_hal_read_helper(state, workflow_dir)
 
@@ -191,6 +190,9 @@ def _write_workspace_files(state: dict, workflow_dir: str, target_triple: str, b
         OUTPUT_PANIC_RS: _default_panic_rs(),
         OUTPUT_PATH: _default_build_instructions(target_triple, bin_name),
     }
+
+    for relpath, content in files.items():
+        write_artifact(state, relpath, content, key=os.path.basename(relpath))
 
 
 def _attempt_build(workflow_dir: str, target_triple: str, bin_name: str) -> tuple[bool, bool, str, str, str]:
@@ -264,13 +266,22 @@ def run_agent(state: dict) -> dict:
         },
     )
 
+    elf_relpath = f"firmware/build/target/{target_triple}/release/{bin_name}.elf"
+    cargo_target_abs = os.path.join(cargo_workspace_dir, "target", target_triple, "release", bin_name)
+    build_attempted = False
+    build_succeeded = False
+    build_stdout = ""
+    build_stderr = ""
+    elf_exists = False
+
     missing_required = [
         os.path.relpath(p, workflow_dir).replace("\\", "/")
         for p in required_srcs
         if workflow_dir and not os.path.isfile(p)
     ]
-    if missing_required:
 
+    
+    if missing_required:
         _write_json_artifact(
             state,
             DEBUG_PATH,
@@ -289,17 +300,19 @@ def run_agent(state: dict) -> dict:
                 "optional_srcs_abs": optional_srcs,
                 "optional_srcs_exists": {p: os.path.isfile(p) for p in optional_srcs},
                 "workspace_generated": workspace_generated,
-                "build_attempted": build_attempted,
-                "build_succeeded": build_succeeded,
-                "elf_exists": elf_exists,
-                "stdout_tail": build_stdout[-4000:],
-                "stderr_tail": build_stderr[-4000:],
+                "missing_required_files": missing_required,
+                "build_attempted": False,
+                "build_succeeded": False,
+                "elf_exists": False,
+                "stdout_tail": "",
+                "stderr_tail": "Required firmware build files missing before cargo build.",
             },
         )
-        
+
         state["status"] = "⚠️ ELF build blocked: required firmware build files missing"
         return state
 
+        
     build_attempted, build_succeeded, build_stdout, build_stderr, cargo_target_abs = _attempt_build(workflow_dir, target_triple, bin_name)
 
     elf_relpath = f"firmware/build/target/{target_triple}/release/{bin_name}.elf"
@@ -343,16 +356,24 @@ def run_agent(state: dict) -> dict:
     state["firmware_manifest"] = manifest
     state["firmware_manifest_path"] = MANIFEST_PATH
 
-    _write_json_artifact(
+        _write_json_artifact(
         state,
         DEBUG_PATH,
         {
             "agent": AGENT_NAME,
+            "workflow_dir": workflow_dir,
+            "cwd_used_for_build": cargo_workspace_dir,
             "target_triple": target_triple,
             "bin_name": bin_name,
-            "cargo_workspace_dir": os.path.join(workflow_dir, "firmware", "build"),
+            "cargo_workspace_dir": cargo_workspace_dir,
+            "cargo_workspace_dir_exists": os.path.isdir(cargo_workspace_dir),
             "cargo_target_abs": cargo_target_abs,
             "canonical_elf_relpath": elf_relpath,
+            "required_srcs_abs": required_srcs,
+            "required_srcs_exists": {p: os.path.isfile(p) for p in required_srcs},
+            "optional_srcs_abs": optional_srcs,
+            "optional_srcs_exists": {p: os.path.isfile(p) for p in optional_srcs},
+            "workspace_generated": workspace_generated,
             "build_attempted": build_attempted,
             "build_succeeded": build_succeeded,
             "elf_exists": elf_exists,
@@ -360,6 +381,8 @@ def run_agent(state: dict) -> dict:
             "stderr_tail": build_stderr[-4000:],
         },
     )
+
+    
 
     embedded = state.setdefault("embedded", {})
     embedded[PHASE] = OUTPUT_PATH
