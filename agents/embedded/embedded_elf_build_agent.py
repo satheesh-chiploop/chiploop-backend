@@ -257,6 +257,9 @@ def run_agent(state: dict) -> dict:
     ]
     workspace_generated = all(os.path.isfile(p) for p in required_srcs) if workflow_dir else False
 
+
+    cargo_path = shutil.which("cargo")
+
     _write_json_artifact(
         state,
         TOOLCHAIN_DEBUG_PATH,
@@ -268,6 +271,8 @@ def run_agent(state: dict) -> dict:
             "target_triple": target_triple,
             "bin_name": bin_name,
             "toolchain": state.get("toolchain"),
+            "cargo_path": cargo_path,
+            "cargo_found": bool(cargo_path),
             "required_srcs_abs": required_srcs,
             "required_srcs_exists": {p: os.path.isfile(p) for p in required_srcs},
             "optional_srcs_abs": optional_srcs,
@@ -279,6 +284,7 @@ def run_agent(state: dict) -> dict:
     elf_relpath = f"firmware/build/target/{target_triple}/release/{bin_name}.elf"
     elf_abs = os.path.join(workflow_dir, elf_relpath)
     cargo_target_abs = os.path.join(cargo_workspace_dir, "target", target_triple, "release", bin_name)
+    cargo_path = shutil.which("cargo")
     build_attempted = False
     build_succeeded = False
     build_stdout = ""
