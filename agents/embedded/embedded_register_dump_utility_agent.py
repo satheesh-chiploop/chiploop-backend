@@ -171,6 +171,10 @@ OUTPUT REQUIREMENTS:
 
     out = strip_markdown_fences_for_code(out).strip() + "\n"
 
+    if "use crate::hal::registers::*;" not in out:
+        logger.warning("%s output missing HAL import; using deterministic fallback", AGENT_NAME)
+        out = _deterministic_dump(regmap)
+
     if any(
         marker in out
         for marker in (
@@ -193,6 +197,8 @@ OUTPUT REQUIREMENTS:
         out = _deterministic_dump(regmap)
 
     write_artifact(state, OUTPUT_PATH, out, key=os.path.basename(OUTPUT_PATH))
+    all_regs = _flatten_registers(regmap)
+
     write_artifact(
         state,
         DEBUG_PATH,
@@ -202,12 +208,14 @@ OUTPUT REQUIREMENTS:
                 "manifest_present": bool(manifest),
                 "regmap_present": bool(regmap),
                 "hal_present": bool(hal_code),
-                "register_count": len(regmap.get("registers") or []),
+                "register_count": len(all_regs),
+                "register_names": [reg.get("name") for reg in all_regs if isinstance(reg, dict)],
             },
             indent=2,
         ),
         key=os.path.basename(DEBUG_PATH),
     )
+    
     write_artifact(
         state,
         SUMMARY_PATH,
@@ -219,5 +227,12 @@ OUTPUT REQUIREMENTS:
     embedded[PHASE] = OUTPUT_PATH
     diag = state.setdefault("firmware_diagnostics", {})
     diag["register_dump_path"] = OUTPUT_PATH
+
+    manifest = dict(manifest or {})
+    manifest["register_dump_path"] = OUTPUT_PATH
+    write_artifact(state, MANIFEST_PATH, json.dumps(manifest, indent=2), key=os.path.basename(MANIFEST_PATH))
+    state["firmware_manifest"] = manifest
+    state["firmware_manifest_path"] = MANIFEST_PATH
+
     state["status"] = f"✅ {AGENT_NAME} done"
     return state

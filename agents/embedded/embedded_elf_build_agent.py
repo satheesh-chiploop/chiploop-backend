@@ -19,6 +19,7 @@ OUTPUT_CARGO_CFG = "firmware/build/.cargo/config.toml"
 OUTPUT_MEMORY_X = "firmware/build/memory.x"
 OUTPUT_MAIN_RS = "firmware/src/main.rs"
 OUTPUT_PANIC_RS = "firmware/src/panic.rs"
+OUTPUT_HAL_MOD_RS = "firmware/src/hal/mod.rs"
 DEBUG_PATH = "firmware/debug/elf_build_result.json"
 TOOLCHAIN_DEBUG_PATH = "firmware/debug/elf_toolchain_debug.json"
 MANIFEST_PATH = "firmware/firmware_manifest.json"
@@ -105,31 +106,32 @@ fn panic(_info: &PanicInfo) -> ! {
     loop {}
 }
 """
+def _default_hal_mod_rs() -> str:
+    return """#[path = "../../hal/registers.rs"]
+pub mod registers;
+"""
 
 
 def _default_main_rs(hal_read_helper: Optional[str] = None) -> str:
-    hal_probe = ""
-    if hal_read_helper:
-        hal_probe = f"""
-#[path = "../hal/registers.rs"]
-mod registers;
-"""
     body_probe = ""
     if hal_read_helper:
         body_probe = f"""
-    let _ = registers::{hal_read_helper}();
+    let _ = crate::hal::registers::{hal_read_helper}();
 """
 
     return f"""#![no_std]
 #![no_main]
 
-mod panic;{hal_probe}
+mod panic;
+pub mod hal;
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {{{body_probe}
     loop {{}}
 }}
 """
+
+
 
 def _discover_hal_read_helper(state: dict, workflow_dir: str) -> Optional[str]:
     hal_code = state.get("firmware_hal_code") or (state.get("firmware") or {}).get("hal_code")
@@ -177,25 +179,6 @@ cp target/{target_triple}/release/{bin_name} firmware/build/target/{target_tripl
 ls firmware/build/target/{target_triple}/release/{bin_name}.elf
 """
 
-
-
-def _write_workspace_files(state: dict, workflow_dir: str, target_triple: str, bin_name: str) -> None:
-    hal_read_helper = _discover_hal_read_helper(state, workflow_dir)
-
-    files = {
-        OUTPUT_CARGO_TOML: _default_cargo_toml(bin_name),
-        OUTPUT_CARGO_CFG: _default_cargo_config(target_triple),
-        OUTPUT_MEMORY_X: _default_memory_x(),
-        OUTPUT_MAIN_RS: _default_main_rs(hal_read_helper),
-        OUTPUT_PANIC_RS: _default_panic_rs(),
-        OUTPUT_PATH: _default_build_instructions(target_triple, bin_name),
-    }
-
-    for relpath, content in files.items():
-        abs_path = os.path.join(workflow_dir, relpath)
-        os.makedirs(os.path.dirname(abs_path), exist_ok=True)
-        write_artifact(state, relpath, content, key=os.path.basename(relpath))
-
 def _write_workspace_files(state: dict, workflow_dir: str, target_triple: str, bin_name: str) -> list[str]:
     hal_read_helper = _discover_hal_read_helper(state, workflow_dir)
 
@@ -205,6 +188,7 @@ def _write_workspace_files(state: dict, workflow_dir: str, target_triple: str, b
         OUTPUT_MEMORY_X: _default_memory_x(),
         OUTPUT_MAIN_RS: _default_main_rs(hal_read_helper),
         OUTPUT_PANIC_RS: _default_panic_rs(),
+        OUTPUT_HAL_MOD_RS: _default_hal_mod_rs(),
         OUTPUT_PATH: _default_build_instructions(target_triple, bin_name),
     }
 
@@ -216,7 +200,6 @@ def _write_workspace_files(state: dict, workflow_dir: str, target_triple: str, b
         generated_relpaths.append(relpath)
 
     return generated_relpaths
-
 
 
 
@@ -277,9 +260,12 @@ def run_agent(state: dict) -> dict:
     required_relpaths = [
         OUTPUT_MAIN_RS,
         OUTPUT_PANIC_RS,
+        OUTPUT_HAL_MOD_RS,
         OUTPUT_CARGO_TOML,
         OUTPUT_CARGO_CFG,
     ]
+
+
     optional_relpaths = [
         "firmware/hal/registers.rs",
         "firmware/drivers/driver_scaffold.rs",
@@ -410,8 +396,13 @@ def run_agent(state: dict) -> dict:
     build_manifest = dict(manifest.get("build") or {})
     build_manifest["target_triple"] = target_triple
     build_manifest["build_root"] = "firmware/build"
+    build_manifest["crate_root"] = "firmware/src"
+    build_manifest["hal_mod_path"] = OUTPUT_HAL_MOD_RS
     manifest["build"] = build_manifest
     manifest["elf_path"] = elf_relpath
+    manifest["hal_path"] = manifest.get("hal_path") or "firmware/hal/registers.rs"
+    manifest["driver_path"] = manifest.get("driver_path") or "firmware/drivers/driver_scaffold.rs"
+    manifest["register_dump_path"] = manifest.get("register_dump_path") or "firmware/diagnostics/register_dump.rs"
     write_artifact(state, MANIFEST_PATH, json.dumps(manifest, indent=2), key=os.path.basename(MANIFEST_PATH))
     state["firmware_manifest"] = manifest
     state["firmware_manifest_path"] = MANIFEST_PATH

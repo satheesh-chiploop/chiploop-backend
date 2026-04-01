@@ -82,9 +82,19 @@ def _load_manifest(state: dict, workflow_dir: str) -> dict:
     loaded = _safe_load_json(manifest_path)
     return loaded if isinstance(loaded, dict) else {}
 
+def _flatten_registers(regmap_obj: dict) -> list[dict]:
+    if isinstance(regmap_obj.get("registers"), list):
+        return [reg for reg in regmap_obj.get("registers", []) if isinstance(reg, dict)]
+
+    regs = []
+    for blk in regmap_obj.get("blocks") or []:
+        if isinstance(blk, dict):
+            regs.extend([reg for reg in (blk.get("registers") or []) if isinstance(reg, dict)])
+    return regs
+
 
 def _build_deterministic_driver(regmap_obj: dict, driver_name: str) -> str:
-    regs = [reg for reg in (regmap_obj.get("registers") or []) if isinstance(reg, dict)]
+    regs = _flatten_registers(regmap_obj)
 
     lines = [
         "use crate::hal::registers::*;",
@@ -215,7 +225,9 @@ def run_agent(state: dict) -> dict:
 
     regmap = json.dumps(regmap_obj, indent=2)
     driver_name = _derive_driver_name(regmap_obj)
-    register_names = [reg.get("name") for reg in regmap_obj.get("registers", []) if isinstance(reg, dict)]
+    all_regs = _flatten_registers(regmap_obj)
+    register_names = [reg.get("name") for reg in all_regs if isinstance(reg, dict)]
+
 
     logger.info(
         "%s using regmap=%s hal=%s driver_name=%s register_count=%d",
@@ -338,7 +350,9 @@ Write to firmware/drivers/driver_scaffold.rs
     missing_driver_apis = []
     missing_hal_symbols = []
 
-    for reg in regmap_obj.get("registers", []):
+
+
+    for reg in _flatten_registers(regmap_obj):
         reg_name = reg.get("name") or "UNNAMED"
         reg_ident = _safe_identifier(reg_name)
         reg_access = str(reg.get("access") or "RW").upper()
@@ -423,6 +437,7 @@ Write to firmware/drivers/driver_scaffold.rs
     manifest = dict(manifest or {})
     manifest["driver_path"] = OUTPUT_PATH
     manifest["driver_name"] = driver_name
+    manifest["hal_path"] = manifest.get("hal_path") or "firmware/hal/registers.rs"
     manifest["digital_block_name"] = manifest.get("digital_block_name") or regmap_obj.get("module_name") or regmap_obj.get("block_name") or "digital_subsystem"
     build = dict(manifest.get("build") or {})
     build.setdefault("driver_root", "firmware/drivers")

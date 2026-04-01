@@ -13,10 +13,25 @@ PHASE = "verilator_build"
 OUTPUT_PATH = "firmware/validate/verilator_build.md"
 DEBUG_PATH = "firmware/validate/verilator_build_debug.json"
 
+def _find_existing_list(state: dict, keys: list[str]) -> list[str]:
+    for container in (state, state.get("system") or {}):
+        for key in keys:
+            value = container.get(key)
+            if isinstance(value, list):
+                cleaned = [str(v).strip() for v in value if isinstance(v, str) and str(v).strip()]
+                if cleaned:
+                    return cleaned
+    return []
 
 def _find_existing_path(state: dict, keys: list[str]) -> Optional[str]:
     for key in keys:
         value = state.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+
+    system_block = state.get("system") or {}
+    for key in keys:
+        value = system_block.get(key)
         if isinstance(value, str) and value.strip():
             return value.strip()
     return None
@@ -55,19 +70,39 @@ verilator -cc --build --trace --top-module {top_module} \
 - Drive cocotb via pytest or the cocotb makefile flow around the compiled simulator.
 - If firmware/ELF integration is needed, preload or memory-model integration should be handled by the harness or simulator wrapper, not by invented CLI flags.
 """
-
+def _materialize_filelist(workflow_dir: str, relpath: str, entries: list[str]) -> str:
+    abs_path = os.path.join(workflow_dir, relpath)
+    os.makedirs(os.path.dirname(abs_path), exist_ok=True)
+    with open(abs_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(entries) + "\n")
+    return abs_path
 
 def run_agent(state: dict) -> dict:
     print(f"\n🚀 Running {AGENT_NAME}...")
     ensure_workflow_dir(state)
 
     workflow_dir = os.path.abspath(state.get("workflow_dir") or os.getcwd())
+
     top_module = (
-        state.get("rtl_top")
+        state.get("soc_top_sim_module")
+        or state.get("system_top_sim_module")
+        or state.get("rtl_top")
         or state.get("top_module")
         or state.get("design_name")
-        or "TOP_MODULE"
+        or (state.get("system") or {}).get("soc_top_sim_module")
+        or ""
+    ).strip()
+
+    rtl_filelist_list = _find_existing_list(
+        state,
+        [
+            "system_rtl_filelist_sim",
+            "rtl_inputs",
+            "system_rtl_files",
+            "rtl_filelist_sim",
+        ],
     )
+
     rtl_filelist = _find_existing_path(
         state,
         [
@@ -75,16 +110,60 @@ def run_agent(state: dict) -> dict:
             "system_filelist_sim_path",
             "filelist_path",
         ],
-    ) or "<RTL_FILELIST>"
+    ) or ""
+
     harness = _find_existing_path(
         state,
         [
             "cocotb_harness_path",
             "sim_harness_path",
         ],
-    ) or "<HARNESS_CPP>"
+    ) or ""
+
     include_dirs = state.get("verilator_include_dirs") or []
     defines = state.get("verilator_defines") or []
+
+    if not rtl_filelist and rtl_filelist_list:
+    rtl_filelist = _materialize_filelist(
+        workflow_dir,
+        "firmware/validate/verilator_rtl_filelist.f",
+        rtl_filelist_list,
+    )
+
+    missing = []
+    if not top_module:
+        missing.append("top_module")
+    if not rtl_filelist:
+        missing.append("rtl_filelist")
+    if not harness:
+        missing.append("harness")
+
+    if missing:
+        debug_payload = {
+            "agent": AGENT_NAME,
+            "workflow_dir": workflow_dir,
+            "status": "blocked_missing_inputs",
+            "missing_inputs": missing,
+            "resolved_from_state": {
+                "soc_top_sim_module": state.get("soc_top_sim_module"),
+                "system_top_sim_module": state.get("system_top_sim_module"),
+                "rtl_top": state.get("rtl_top"),
+                "top_module": state.get("top_module"),
+                "design_name": state.get("design_name"),
+                "system_rtl_filelist_sim": state.get("system_rtl_filelist_sim"),
+                "rtl_inputs": state.get("rtl_inputs"),
+                "system_rtl_files": state.get("system_rtl_files"),
+                "system_block": state.get("system"),
+                "rtl_filelist_path": state.get("rtl_filelist_path"),
+                "system_filelist_sim_path": state.get("system_filelist_sim_path"),
+                "filelist_path": state.get("filelist_path"),
+                "cocotb_harness_path": state.get("cocotb_harness_path"),
+                "sim_harness_path": state.get("sim_harness_path"),
+            },
+        }
+        write_artifact(state, DEBUG_PATH, json.dumps(debug_payload, indent=2), key=os.path.basename(DEBUG_PATH))
+        state["status"] = f"❌ {AGENT_NAME} missing required inputs: {', '.join(missing)}"
+        return state
 
     plan = _render_plan(top_module, rtl_filelist, include_dirs, defines, harness)
     write_artifact(state, OUTPUT_PATH, plan, key=os.path.basename(OUTPUT_PATH))
@@ -92,16 +171,24 @@ def run_agent(state: dict) -> dict:
     debug_payload = {
         "agent": AGENT_NAME,
         "workflow_dir": workflow_dir,
+        "status": "resolved",
         "top_module": top_module,
         "rtl_filelist": rtl_filelist,
+        "rtl_filelist_entries": rtl_filelist_list,
         "harness": harness,
         "include_dirs": include_dirs,
         "defines": defines,
         "output_path": OUTPUT_PATH,
         "resolved_from_state": {
+            "soc_top_sim_module": state.get("soc_top_sim_module"),
+            "system_top_sim_module": state.get("system_top_sim_module"),
             "rtl_top": state.get("rtl_top"),
             "top_module": state.get("top_module"),
             "design_name": state.get("design_name"),
+            "system_rtl_filelist_sim": state.get("system_rtl_filelist_sim"),
+            "rtl_inputs": state.get("rtl_inputs"),
+            "system_rtl_files": state.get("system_rtl_files"),
+            "system_block": state.get("system"),
             "rtl_filelist_path": state.get("rtl_filelist_path"),
             "system_filelist_sim_path": state.get("system_filelist_sim_path"),
             "filelist_path": state.get("filelist_path"),
@@ -109,6 +196,8 @@ def run_agent(state: dict) -> dict:
             "sim_harness_path": state.get("sim_harness_path"),
         },
     }
+
+    
     write_artifact(state, DEBUG_PATH, json.dumps(debug_payload, indent=2), key=os.path.basename(DEBUG_PATH))
 
     embedded = state.setdefault("embedded", {})
