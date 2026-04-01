@@ -124,11 +124,11 @@ def run_agent(state: dict) -> dict:
     defines = state.get("verilator_defines") or []
 
     if not rtl_filelist and rtl_filelist_list:
-    rtl_filelist = _materialize_filelist(
-        workflow_dir,
-        "firmware/validate/verilator_rtl_filelist.f",
-        rtl_filelist_list,
-    )
+        rtl_filelist = _materialize_filelist(
+          workflow_dir,
+          "firmware/validate/verilator_rtl_filelist.f",
+          rtl_filelist_list,
+        )
 
     missing = []
     if not top_module:
