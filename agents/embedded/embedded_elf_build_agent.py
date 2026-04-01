@@ -196,6 +196,27 @@ def _write_workspace_files(state: dict, workflow_dir: str, target_triple: str, b
         os.makedirs(os.path.dirname(abs_path), exist_ok=True)
         write_artifact(state, relpath, content, key=os.path.basename(relpath))
 
+def _write_workspace_files(state: dict, workflow_dir: str, target_triple: str, bin_name: str) -> list[str]:
+    hal_read_helper = _discover_hal_read_helper(state, workflow_dir)
+
+    files = {
+        OUTPUT_CARGO_TOML: _default_cargo_toml(bin_name),
+        OUTPUT_CARGO_CFG: _default_cargo_config(target_triple),
+        OUTPUT_MEMORY_X: _default_memory_x(),
+        OUTPUT_MAIN_RS: _default_main_rs(hal_read_helper),
+        OUTPUT_PANIC_RS: _default_panic_rs(),
+        OUTPUT_PATH: _default_build_instructions(target_triple, bin_name),
+    }
+
+    generated_relpaths = []
+    for relpath, content in files.items():
+        abs_path = os.path.join(workflow_dir, relpath)
+        os.makedirs(os.path.dirname(abs_path), exist_ok=True)
+        write_artifact(state, relpath, content, key=os.path.basename(relpath))
+        generated_relpaths.append(relpath)
+
+    return generated_relpaths
+
 
 
 
@@ -246,9 +267,9 @@ def run_agent(state: dict) -> dict:
     manifest = _load_manifest(state, workflow_dir)
     target_triple, bin_name = _resolve_toolchain(state, manifest)
 
-    _write_workspace_files(state, workflow_dir, target_triple, bin_name)
 
-    
+
+    generated_relpaths = _write_workspace_files(state, workflow_dir, target_triple, bin_name)
 
     cargo_workspace_dir = os.path.join(workflow_dir, "firmware", "build")
     os.makedirs(cargo_workspace_dir, exist_ok=True)
@@ -290,6 +311,7 @@ def run_agent(state: dict) -> dict:
             "cargo_found": bool(cargo_path),
             "required_relpaths": required_relpaths,
             "optional_relpaths": optional_relpaths,
+            "generated_relpaths": generated_relpaths,
             "required_srcs_abs": required_srcs,
             "required_srcs_exists": {p: os.path.isfile(p) for p in required_srcs},
             "optional_srcs_abs": optional_srcs,

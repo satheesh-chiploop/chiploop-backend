@@ -1,9 +1,15 @@
-import os
+
 import json
+import logging
+import os
 from datetime import datetime
-from typing import Any, Dict, Optional, List
+from typing import Any, Dict, List, Optional
 
 from utils.artifact_utils import save_text_artifact_and_record
+
+logger = logging.getLogger(__name__)
+
+AGENT_NAME = "System CoSim Integration Agent"
 
 
 def _log(log_path: str, msg: str) -> None:
@@ -25,193 +31,183 @@ def _load_json(path: str) -> dict:
         return json.load(f)
 
 
-def _gen_axi_lite_slave_sv(spec: Dict[str, Any]) -> str:
-    mmio = spec.get("mmio", {})
-    regs = mmio.get("registers", [])
-    # Minimal 2-register map for CONTROL0/STATUS0 (expand later)
-    return r"""
-// Auto-generated AXI4-Lite register block (minimal scaffolding).
-// NOTE: This is a template. In a real design you'd integrate with your RTL signals.
+def _safe_name(name: str, default: str) -> str:
+    import re
+    text = (name or default).strip()
+    text = re.sub(r"[^A-Za-z0-9_]", "_", text)
+    if not text:
+        return default
+    if text[0].isdigit():
+        text = f"n_{text}"
+    return text
 
-module axi_lite_regs #(
-  parameter ADDR_WIDTH = 32,
-  parameter DATA_WIDTH = 32
-)(
-  input  wire                   aclk,
-  input  wire                   aresetn,
 
-  // AXI4-Lite slave interface
-  input  wire [ADDR_WIDTH-1:0]  s_axi_awaddr,
-  input  wire                   s_axi_awvalid,
-  output reg                    s_axi_awready,
+def _extract_mmio_spec(spec: Dict[str, Any]) -> Dict[str, Any]:
+    regmap = spec.get("mmio") or spec.get("register_map") or {}
+    base = regmap.get("base_address") or spec.get("base_address") or "0x00000000"
+    regs = regmap.get("registers") or spec.get("registers") or []
+    regs = [r for r in regs if isinstance(r, dict)]
+    regs = sorted(regs, key=lambda r: int(str(r.get("offset", "0")), 16) if str(r.get("offset", "0")).lower().startswith("0x") else int(r.get("offset", 0)))
+    return {"base_address": base, "registers": regs}
 
-  input  wire [DATA_WIDTH-1:0]  s_axi_wdata,
-  input  wire [(DATA_WIDTH/8)-1:0] s_axi_wstrb,
-  input  wire                   s_axi_wvalid,
-  output reg                    s_axi_wready,
 
-  output reg  [1:0]             s_axi_bresp,
-  output reg                    s_axi_bvalid,
-  input  wire                   s_axi_bready,
+def _gen_bus_adapter_sv(mmio: Dict[str, Any]) -> str:
+    regs = mmio.get("registers") or []
+    reg_defs = []
+    read_cases = []
+    write_cases = []
+    for idx, reg in enumerate(regs):
+        name = _safe_name(str(reg.get("name") or f"reg_{idx}").lower(), f"reg_{idx}")
+        offset = reg.get("offset") or f"0x{idx*4:08X}"
+        access = str(reg.get("access") or "RW").upper()
+        reg_defs.append(f"  output reg [31:0] {name},")
+        if access in {"RO"}:
+            read_cases.append(f"      32'h{int(str(offset), 16) if str(offset).lower().startswith('0x') else int(offset):08X}: prdata = {name};")
+        else:
+            read_cases.append(f"      32'h{int(str(offset), 16) if str(offset).lower().startswith('0x') else int(offset):08X}: prdata = {name};")
+            write_cases.append(f"""      32'h{int(str(offset), 16) if str(offset).lower().startswith('0x') else int(offset):08X}: begin
+        if (pwrite && psel && penable) {name} <= pwdata;
+      end""")
+    if reg_defs:
+        reg_defs[-1] = reg_defs[-1].rstrip(',')
+    else:
+        reg_defs.append("  // No explicit registers found in spec.")
+    read_case_text = "\n".join(read_cases) if read_cases else "      default: prdata = 32'h0;"
+    write_case_text = "\n".join(write_cases) if write_cases else "      default: begin end"
+    return f"""// Auto-generated simple APB/MMIO seam.
+// Generated from embedded spec/register map. No protocol-specific hardcoding beyond
+// the selected generic APB-style seam used for co-simulation scaffolding.
 
-  input  wire [ADDR_WIDTH-1:0]  s_axi_araddr,
-  input  wire                   s_axi_arvalid,
-  output reg                    s_axi_arready,
-
-  output reg  [DATA_WIDTH-1:0]  s_axi_rdata,
-  output reg  [1:0]             s_axi_rresp,
-  output reg                    s_axi_rvalid,
-  input  wire                   s_axi_rready,
-
-  // Register outputs to connect into RTL
-  output reg  [31:0]            reg_control0,
-  input  wire [31:0]            reg_status0
+module cosim_mmio_seam (
+  input  wire        pclk,
+  input  wire        presetn,
+  input  wire [31:0] paddr,
+  input  wire [31:0] pwdata,
+  input  wire        pwrite,
+  input  wire        psel,
+  input  wire        penable,
+  output reg  [31:0] prdata,
+  output wire        pready,
+{chr(10).join(reg_defs)}
 );
 
-  // Address decode (byte addressing)
-  localparam CTRL0_OFF  = 32'h0000_0000;
-  localparam STAT0_OFF  = 32'h0000_0004;
-  localparam IRQST_OFF  = 32'h0000_0008;
-  localparam IRQMSK_OFF = 32'h0000_000C;
+  assign pready = 1'b1;
 
-  // Simple single-beat handshake implementation
-  always @(posedge aclk) begin
-    if (!aresetn) begin
-      s_axi_awready <= 1'b0;
-      s_axi_wready  <= 1'b0;
-      s_axi_bvalid  <= 1'b0;
-      s_axi_bresp   <= 2'b00;
-
-      s_axi_arready <= 1'b0;
-      s_axi_rvalid  <= 1'b0;
-      s_axi_rresp   <= 2'b00;
-      s_axi_rdata   <= 32'b0;
-
-      reg_control0  <= 32'b0;
+  always @(posedge pclk) begin
+    if (!presetn) begin
+{chr(10).join([f"      { _safe_name(str(r.get('name') or f'reg_{i}').lower(), f'reg_{i}') } <= 32'b0;" for i, r in enumerate(regs)]) if regs else "      prdata <= 32'b0;"}
     end else begin
-      // Defaults
-      s_axi_awready <= 1'b1;
-      s_axi_wready  <= 1'b1;
-      s_axi_arready <= 1'b1;
-
-      // Write channel
-      if (s_axi_awvalid && s_axi_wvalid && s_axi_awready && s_axi_wready) begin
-        case (s_axi_awaddr[7:0])
-          CTRL0_OFF[7:0]: begin
-            // Apply byte strobes
-            if (s_axi_wstrb[0]) reg_control0[7:0]   <= s_axi_wdata[7:0];
-            if (s_axi_wstrb[1]) reg_control0[15:8]  <= s_axi_wdata[15:8];
-            if (s_axi_wstrb[2]) reg_control0[23:16] <= s_axi_wdata[23:16];
-            if (s_axi_wstrb[3]) reg_control0[31:24] <= s_axi_wdata[31:24];
-          end
-          default: begin
-            // no-op
-          end
-        endcase
-
-        s_axi_bvalid <= 1'b1;
-        s_axi_bresp  <= 2'b00; // OKAY
-      end
-
-      if (s_axi_bvalid && s_axi_bready) begin
-        s_axi_bvalid <= 1'b0;
-      end
-
-      // Read channel
-      if (s_axi_arvalid && s_axi_arready) begin
-        case (s_axi_araddr[7:0])
-          CTRL0_OFF[7:0]: s_axi_rdata <= reg_control0;
-          STAT0_OFF[7:0]: s_axi_rdata <= reg_status0;
-          default:        s_axi_rdata <= 32'hDEAD_BEEF;
-        endcase
-        s_axi_rvalid <= 1'b1;
-        s_axi_rresp  <= 2'b00; // OKAY
-      end
-
-      if (s_axi_rvalid && s_axi_rready) begin
-        s_axi_rvalid <= 1'b0;
-      end
+      case (paddr)
+{write_case_text}
+        default: begin end
+      endcase
     end
+  end
+
+  always @(*) begin
+    prdata = 32'h0;
+    case (paddr)
+{read_case_text}
+      default: prdata = 32'h0;
+    endcase
   end
 
 endmodule
 """
 
 
-def _gen_firmware_header(spec: Dict[str, Any]) -> str:
-    mmio = spec.get("mmio", {})
-    base = mmio.get("base_address", "0x40000000")
-    regs = mmio.get("registers", [])
-    # Emit offsets and simple helpers (C/C++)
-    return f"""\
-#pragma once
-#include <cstdint>
-
-// Auto-generated MMIO header for firmware/ISS access.
-
-namespace ip_mmio {{
-  static constexpr uintptr_t BASE = {base};
-
-  static constexpr uintptr_t CONTROL0_OFF = 0x00;
-  static constexpr uintptr_t STATUS0_OFF  = 0x04;
-  static constexpr uintptr_t IRQ_STATUS_OFF = 0x08;
-  static constexpr uintptr_t IRQ_MASK_OFF   = 0x0C;
-
-  inline void write32(uintptr_t off, uint32_t v) {{
-    *reinterpret_cast<volatile uint32_t*>(BASE + off) = v;
-  }}
-
-  inline uint32_t read32(uintptr_t off) {{
-    return *reinterpret_cast<volatile uint32_t*>(BASE + off);
-  }}
-}}
-"""
+def _gen_firmware_header(mmio: Dict[str, Any]) -> str:
+    base = mmio.get("base_address", "0x00000000")
+    lines = [
+        "#pragma once",
+        "#include <cstdint>",
+        "",
+        "// Auto-generated MMIO header for co-simulation access.",
+        "namespace cosim_mmio {",
+        f"  static constexpr uintptr_t BASE = {base};",
+        "",
+        "  inline void write32(uintptr_t off, uint32_t v) {",
+        "    *reinterpret_cast<volatile uint32_t*>(BASE + off) = v;",
+        "  }",
+        "",
+        "  inline uint32_t read32(uintptr_t off) {",
+        "    return *reinterpret_cast<volatile uint32_t*>(BASE + off);",
+        "  }",
+        "",
+    ]
+    for idx, reg in enumerate(mmio.get("registers") or []):
+        name = _safe_name(str(reg.get("name") or f"REG_{idx}").upper(), f"REG_{idx}")
+        offset = reg.get("offset") or f"0x{idx*4:08X}"
+        lines.append(f"  static constexpr uintptr_t {name}_OFF = {offset};")
+    lines.extend(["}", ""])
+    return "\n".join(lines)
 
 
-def _gen_cocotb_smoke() -> str:
-    return r"""\
-# Minimal cocotb smoke test for AXI-Lite regs (template).
+def _gen_cocotb_smoke(mmio: Dict[str, Any]) -> str:
+    first_offset = "0x0"
+    regs = mmio.get("registers") or []
+    if regs:
+        first_offset = str(regs[0].get("offset") or "0x0")
+    return f"""# Auto-generated cocotb smoke template.
 import cocotb
 from cocotb.triggers import RisingEdge, Timer
 
 @cocotb.test()
-async def smoke_axi_regs(dut):
-    # Reset
-    dut.aresetn.value = 0
+async def smoke_cosim_seam(dut):
+    dut.presetn.value = 0
     for _ in range(5):
-        await RisingEdge(dut.aclk)
-    dut.aresetn.value = 1
+        await RisingEdge(dut.pclk)
+    dut.presetn.value = 1
     for _ in range(5):
-        await RisingEdge(dut.aclk)
+        await RisingEdge(dut.pclk)
 
-    # This is a placeholder. In practice you use a cocotb AXI-Lite driver.
-    # Here we just demonstrate clocking and existence.
+    # Placeholder: integrate a bus functional model/driver here.
+    # Example first register offset from spec: {first_offset}
     await Timer(1, units="us")
 """
 
 
-def _gen_readme() -> str:
-    return """\
-# System Co-Simulation Integration (Scaffolding)
+def _gen_manifest(mmio: Dict[str, Any], spec_path: Optional[str]) -> str:
+    payload = {
+        "agent": AGENT_NAME,
+        "source_spec_path": spec_path,
+        "base_address": mmio.get("base_address"),
+        "register_count": len(mmio.get("registers") or []),
+        "registers": [
+            {
+                "name": reg.get("name"),
+                "offset": reg.get("offset"),
+                "access": reg.get("access"),
+            }
+            for reg in (mmio.get("registers") or [])
+        ],
+    }
+    return json.dumps(payload, indent=2)
 
-This folder contains auto-generated scaffolding to integrate:
-- RTL (Verilog/SystemVerilog) exposing an AXI4-Lite register block
-- Firmware (C/C++) using MMIO reads/writes
-- A cosim harness entry point (placeholder)
 
-Industry patterns:
-1) RTL-only sim (UVM/cocotb) for IP correctness
-2) Firmware-on-ISS + RTL regs via AXI-Lite for realistic HW/SW bring-up (SoC-style co-sim)
+def _gen_readme(mmio: Dict[str, Any]) -> str:
+    return f"""# System Co-Simulation Integration
 
-Generated artifacts:
-- axi_lite_regs.sv   : Minimal AXI-Lite register block template (CONTROL0/STATUS0)
-- ip_mmio.h          : Firmware header for MMIO register access
-- cocotb_smoke_test.py: Minimal cocotb smoke test template
+This folder contains deterministic co-simulation scaffolding generated from the embedded spec.
+
+Base address: {mmio.get("base_address")}
+Register count: {len(mmio.get("registers") or [])}
+
+Artifacts:
+- cosim_mmio_seam.sv : generic APB-style MMIO seam for co-simulation scaffolding
+- ip_mmio.h          : firmware-side MMIO header
+- cocotb_smoke_test.py : smoke test template
+- integration_manifest.json : summary of the generated integration view
+
+Notes:
+- This agent does not invent DMA/IRQ/PLL semantics.
+- It emits a generic MMIO seam and firmware access layer from the register map only.
+- Protocol-specific or SoC-specific integration can build on top of this scaffold.
 """
 
 
 def run_agent(state: dict) -> dict:
-    print("\n🧬 Running System CoSim Integration Agent (AXI-Lite seam)…")
+    print("\n🧬 Running System CoSim Integration Agent…")
 
     workflow_id = state.get("workflow_id", "default")
     os.makedirs("artifact", exist_ok=True)
@@ -219,29 +215,32 @@ def run_agent(state: dict) -> dict:
     with open(log_path, "w", encoding="utf-8") as f:
         f.write("System CoSim Integration Agent Log\n")
 
-    # Use embedded spec as the single source of truth for MMIO map
-    embedded_spec_path = _find_existing_json_path(
+    spec_path = _find_existing_json_path(
         state,
         candidates=[
             "embedded_spec_json_path",
             "embedded_spec_path",
             "code_spec_json",
             "spec_json_path",
+            "firmware_register_map_path",
         ],
     )
 
-    embedded_spec = None
-    if embedded_spec_path:
-        embedded_spec = _load_json(embedded_spec_path)
-        _log(log_path, f"Loaded embedded spec: {embedded_spec_path}")
+    spec = None
+    if spec_path:
+        spec = _load_json(spec_path)
+        _log(log_path, f"Loaded spec: {spec_path}")
     elif isinstance(state.get("embedded_spec_json"), dict):
-        embedded_spec = state["embedded_spec_json"]
+        spec = state["embedded_spec_json"]
         _log(log_path, "Loaded embedded spec from state['embedded_spec_json']")
+    elif isinstance(state.get("firmware_register_map"), dict):
+        spec = {"register_map": state["firmware_register_map"]}
+        _log(log_path, "Loaded register map from state['firmware_register_map']")
     else:
-        _log(log_path, "ERROR: Missing embedded spec for cosim integration.")
+        _log(log_path, "ERROR: Missing embedded spec/register map for cosim integration.")
         save_text_artifact_and_record(
             workflow_id=workflow_id,
-            agent_name="System CoSim Integration Agent",
+            agent_name=AGENT_NAME,
             subdir="system",
             filename="system_cosim_integration_agent.log",
             content=open(log_path, "r", encoding="utf-8").read(),
@@ -249,29 +248,33 @@ def run_agent(state: dict) -> dict:
         state["system_cosim_error"] = "missing_embedded_spec"
         return state
 
-    # Generate artifacts
-    sv = _gen_axi_lite_slave_sv(embedded_spec)
-    hdr = _gen_firmware_header(embedded_spec)
-    tb = _gen_cocotb_smoke()
-    readme = _gen_readme()
+    mmio = _extract_mmio_spec(spec)
+    sv = _gen_bus_adapter_sv(mmio)
+    hdr = _gen_firmware_header(mmio)
+    tb = _gen_cocotb_smoke(mmio)
+    manifest = _gen_manifest(mmio, spec_path)
+    readme = _gen_readme(mmio)
 
-    save_text_artifact_and_record(workflow_id, "System CoSim Integration Agent", "system/cosim", "axi_lite_regs.sv", sv)
-    save_text_artifact_and_record(workflow_id, "System CoSim Integration Agent", "system/cosim", "ip_mmio.h", hdr)
-    save_text_artifact_and_record(workflow_id, "System CoSim Integration Agent", "system/cosim", "cocotb_smoke_test.py", tb)
-    save_text_artifact_and_record(workflow_id, "System CoSim Integration Agent", "system/cosim", "README.md", readme)
+    save_text_artifact_and_record(workflow_id, AGENT_NAME, "system/cosim", "cosim_mmio_seam.sv", sv)
+    save_text_artifact_and_record(workflow_id, AGENT_NAME, "system/cosim", "ip_mmio.h", hdr)
+    save_text_artifact_and_record(workflow_id, AGENT_NAME, "system/cosim", "cocotb_smoke_test.py", tb)
+    save_text_artifact_and_record(workflow_id, AGENT_NAME, "system/cosim", "integration_manifest.json", manifest)
+    save_text_artifact_and_record(workflow_id, AGENT_NAME, "system/cosim", "README.md", readme)
 
     save_text_artifact_and_record(
         workflow_id=workflow_id,
-        agent_name="System CoSim Integration Agent",
+        agent_name=AGENT_NAME,
         subdir="system",
         filename="system_cosim_integration_agent.log",
         content=open(log_path, "r", encoding="utf-8").read(),
     )
 
     state["system_cosim_outputs"] = [
-        "backend/workflows/.../system/cosim/axi_lite_regs.sv",
-        "backend/workflows/.../system/cosim/ip_mmio.h",
-        "backend/workflows/.../system/cosim/cocotb_smoke_test.py",
-        "backend/workflows/.../system/cosim/README.md",
+        f"backend/workflows/{workflow_id}/system/cosim/cosim_mmio_seam.sv",
+        f"backend/workflows/{workflow_id}/system/cosim/ip_mmio.h",
+        f"backend/workflows/{workflow_id}/system/cosim/cocotb_smoke_test.py",
+        f"backend/workflows/{workflow_id}/system/cosim/integration_manifest.json",
+        f"backend/workflows/{workflow_id}/system/cosim/README.md",
     ]
+    state["system_cosim_manifest"] = f"backend/workflows/{workflow_id}/system/cosim/integration_manifest.json"
     return state
