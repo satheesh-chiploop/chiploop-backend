@@ -198,7 +198,8 @@ def _write_workspace_files(state: dict, workflow_dir: str, target_triple: str, b
 
 
 
-def _attempt_build(workflow_dir: str, target_triple: str, bin_name: str) -> tuple[bool, bool, str, str, str]:
+
+def _attempt_build(workflow_dir: str, target_triple: str, bin_name: str, cargo_path: Optional[str]) -> tuple[bool, bool, str, str, str]:
     cargo_workspace_dir = os.path.join(workflow_dir, "firmware", "build")
     cargo_target_abs = os.path.join(cargo_workspace_dir, "target", target_triple, "release", bin_name)
     build_attempted = False
@@ -206,7 +207,7 @@ def _attempt_build(workflow_dir: str, target_triple: str, bin_name: str) -> tupl
     stdout = ""
     stderr = ""
 
-    cargo_path = shutil.which("cargo")
+
     if not cargo_path:
         logger.warning("%s cargo not found in PATH", AGENT_NAME)
     if cargo_path and os.path.isdir(cargo_workspace_dir):
@@ -232,9 +233,14 @@ def run_agent(state: dict) -> dict:
     logger.info("Starting %s", AGENT_NAME)
     ensure_workflow_dir(state)
 
-   
-    workflow_id=state.get("workflow_id","default")
-    workflow_dir = state.get("workflow_dir") or f"backend/workflows/{workflow_id}"
+ 
+
+    workflow_dir = state.get("workflow_dir")
+
+    if not workflow_dir:
+        logger.warning("%s workflow_dir missing. Falling back to cwd", AGENT_NAME)
+        workflow_dir = os.getcwd()
+
     workflow_dir = os.path.abspath(workflow_dir)
 
     manifest = _load_manifest(state, workflow_dir)
@@ -272,6 +278,7 @@ def run_agent(state: dict) -> dict:
             "bin_name": bin_name,
             "toolchain": state.get("toolchain"),
             "cargo_path": cargo_path,
+            "cwd": os.getcwd(),
             "cargo_found": bool(cargo_path),
             "required_srcs_abs": required_srcs,
             "required_srcs_exists": {p: os.path.isfile(p) for p in required_srcs},
@@ -284,7 +291,7 @@ def run_agent(state: dict) -> dict:
     elf_relpath = f"firmware/build/target/{target_triple}/release/{bin_name}.elf"
     elf_abs = os.path.join(workflow_dir, elf_relpath)
     cargo_target_abs = os.path.join(cargo_workspace_dir, "target", target_triple, "release", bin_name)
-    cargo_path = shutil.which("cargo")
+
     build_attempted = False
     build_succeeded = False
     build_stdout = ""
@@ -332,7 +339,7 @@ def run_agent(state: dict) -> dict:
         return state
 
         
-    build_attempted, build_succeeded, build_stdout, build_stderr, cargo_target_abs = _attempt_build(workflow_dir, target_triple, bin_name)
+    build_attempted, build_succeeded, build_stdout, build_stderr, cargo_target_abs = _attempt_build(workflow_dir, target_triple, bin_name, cargo_path)
 
 
 
