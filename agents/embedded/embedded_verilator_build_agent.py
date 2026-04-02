@@ -40,6 +40,18 @@ def _find_existing_path(state: dict, keys: list[str]) -> Optional[str]:
 def _render_plan(top_module: str, rtl_filelist: str, include_dirs: list[str], defines: list[str], harness: str) -> str:
     inc_flags = " ".join([f"-I{d}" for d in include_dirs]) if include_dirs else "<OPTIONAL_INCLUDE_FLAGS>"
     def_flags = " ".join([f"-D{d}" for d in defines]) if defines else "<OPTIONAL_DEFINE_FLAGS>"
+
+    is_python = str(harness).endswith(".py")
+
+    if is_python:
+        harness_section = f"- Cocotb Python test/harness: {harness}"
+        exe_section = "# NOTE: No --exe used. Cocotb drives simulation externally."
+        exe_cmd = ""
+    else:
+        harness_section = f"- C++ harness: {harness}"
+        exe_section = f"--exe {harness}"
+        exe_cmd = f"  {exe_section} \\"
+
     return f"""<!-- ASSUMPTION: Replace placeholders with concrete file paths before execution. -->
 <!-- ASSUMPTION: Cocotb integration is driven externally through pytest/cocotb makefile flow. -->
 
@@ -50,15 +62,15 @@ def _render_plan(top_module: str, rtl_filelist: str, include_dirs: list[str], de
 - RTL filelist: {rtl_filelist}
 - Optional include flags: {inc_flags}
 - Optional define flags: {def_flags}
-- C++ harness: {harness}
+{harness_section}
 
 ## Deterministic command template
 
-verilator -cc --build --trace --top-module {top_module} \
-  -f {rtl_filelist} \
-  {inc_flags} \
-  {def_flags} \
-  --exe {harness}
+verilator -cc --build --trace --top-module {top_module} \\
+  -f {rtl_filelist} \\
+  {inc_flags} \\
+  {def_flags} \\
+  {exe_cmd}
 
 ## Expected outputs
 - Build directory: obj_dir/
@@ -66,10 +78,11 @@ verilator -cc --build --trace --top-module {top_module} \
 - Runnable binary name: obj_dir/V{top_module}
 
 ## Notes
-- Do not use undocumented Verilator flags.
-- Drive cocotb via pytest or the cocotb makefile flow around the compiled simulator.
-- If firmware/ELF integration is needed, preload or memory-model integration should be handled by the harness or simulator wrapper, not by invented CLI flags.
+- Python cocotb tests are executed via pytest or cocotb makefile flow.
+- Do not pass Python files to --exe.
+- If firmware/ELF integration is needed, handle it via simulator memory preload or cocotb hooks.
 """
+
 def _materialize_filelist(workflow_dir: str, relpath: str, entries: list[str]) -> str:
     abs_path = os.path.join(workflow_dir, relpath)
     os.makedirs(os.path.dirname(abs_path), exist_ok=True)
@@ -130,11 +143,21 @@ def run_agent(state: dict) -> dict:
     defines = state.get("verilator_defines") or []
 
     if not rtl_filelist and rtl_filelist_list:
-        rtl_filelist = _materialize_filelist(
+      rel_filelist = "firmware/validate/verilator_rtl_filelist.f"
+
+      rtl_filelist = _materialize_filelist(
           workflow_dir,
-          "firmware/validate/verilator_rtl_filelist.f",
+          rel_filelist,
           rtl_filelist_list,
-        )
+      )
+
+      # ✅ Persist as artifact (CRITICAL FIX)
+      write_artifact(
+          state,
+          rel_filelist,
+          "\n".join(rtl_filelist_list) + "\n",
+          key=os.path.basename(rel_filelist),
+      )
 
     missing = []
     if not top_module:
