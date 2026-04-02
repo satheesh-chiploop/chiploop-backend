@@ -1318,6 +1318,31 @@ AGENT_CAPABILITIES = {
         "requires": []
     },
 
+    "System Software Handoff Package Agent": {
+        "domain": "system",
+        "inputs": [
+            "firmware/firmware_manifest.json(optional)",
+            "firmware/register_map.json(optional)",
+            "system/integration/system_integration_intent.json(optional)",
+            "system/integration/soc_top_sim.sv(optional)",
+            "system/integration/system_rtl_filelist_sim.txt(optional)",
+            "system/firmware/cosim/system_firmware_execution.json(optional)",
+            "system/firmware/coverage/system_firmware_coverage_summary.json(optional)",
+            "firmware/validate/validation_report.md(optional)",
+            "firmware/validate/Makefile(optional)",
+            "firmware/validate/test_*.py(optional)",
+            "firmware/validate/cocotb_harness.py(optional)"
+        ],
+        "outputs": [
+            "system/software_handoff/system_software_handoff.json",
+            "system/software_handoff/system_software_handoff.md",
+            "system/software_handoff/software_artifact_filelist.txt",
+            "system/software_handoff/system_software_handoff_debug.json"
+        ],
+        "description": "Builds the machine-readable and human-readable software handoff package from System_Firmware outputs for downstream System_Software development.",
+        "requires": [],
+    },
+
     # -------------------------
     # Extended / optional digital flow agents
     # -------------------------

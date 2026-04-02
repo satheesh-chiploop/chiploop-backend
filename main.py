@@ -491,6 +491,7 @@ from agents.system.system_sva_assertions_agent import run_agent as system_sva_as
 from agents.system.system_functional_coverage_agent import run_agent as system_functional_coverage_agent
 from agents.system.system_simulation_control_agent import run_agent as system_simulation_control_agent
 from agents.system.system_implementation_setup_agent import run_agent as system_implementation_setup_agent
+from agents.system.system_software_handoff_package_agent import run_agent as system_software_handoff_package_agent
 
 SYSTEM_AGENT_FUNCTIONS: Dict[str,Any] = {
     "Digital Spec Agent": digital_spec_agent,
@@ -613,6 +614,7 @@ SYSTEM_AGENT_FUNCTIONS: Dict[str,Any] = {
     "System Simulation Coverage Summary Agent": system_sim_coverage_summary_agent,
     "System Firmware CoSim Execution Agent": system_firmware_cosim_execution_agent,
     "System Firmware Coverage Summary Agent": system_firmware_coverage_summary_agent,
+    "System Software Handoff Package Agent": system_software_handoff_package_agent,
 }
 
 
