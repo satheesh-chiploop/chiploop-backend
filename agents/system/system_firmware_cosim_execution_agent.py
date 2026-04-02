@@ -249,6 +249,18 @@ def _markdown_report(summary: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _safe_read_json(path: str) -> Dict[str, Any]:
+    try:
+        if path and os.path.isfile(path):
+            with open(path, "r", encoding="utf-8") as f:
+                obj = json.load(f)
+            return obj if isinstance(obj, dict) else {}
+    except Exception:
+        pass
+    return {}
+
+
+
 def _run_cocotb_simulation(workflow_dir: str, makefile_path: str, test_module: str) -> Dict[str, Any]:
     make_abs = _join_workflow_path(workflow_dir, makefile_path)
     if not os.path.isfile(make_abs):
