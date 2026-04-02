@@ -120,6 +120,12 @@ def run_agent(state: dict) -> dict:
         ],
     ) or ""
 
+    
+    
+    # Harness is not required at this stage — downstream agent will generate it
+    if not harness:
+        harness = "firmware/validate/cocotb_harness.py"
+
     include_dirs = state.get("verilator_include_dirs") or []
     defines = state.get("verilator_defines") or []
 
@@ -135,8 +141,7 @@ def run_agent(state: dict) -> dict:
         missing.append("top_module")
     if not rtl_filelist:
         missing.append("rtl_filelist")
-    if not harness:
-        missing.append("harness")
+
 
     if missing:
         debug_payload = {
@@ -176,6 +181,13 @@ def run_agent(state: dict) -> dict:
         "rtl_filelist": rtl_filelist,
         "rtl_filelist_entries": rtl_filelist_list,
         "harness": harness,
+        "harness_required_for_plan": False,
+        "harness_source": "state" if (
+            state.get("cocotb_harness_path") or
+            state.get("sim_harness_path") or
+            (state.get("system") or {}).get("cocotb_harness_path") or
+            (state.get("system") or {}).get("sim_harness_path")
+        ) else "default_expected_path",
         "include_dirs": include_dirs,
         "defines": defines,
         "output_path": OUTPUT_PATH,
@@ -199,6 +211,11 @@ def run_agent(state: dict) -> dict:
 
     
     write_artifact(state, DEBUG_PATH, json.dumps(debug_payload, indent=2), key=os.path.basename(DEBUG_PATH))
+
+    # Pass expected harness path to downstream agents
+    state["expected_cocotb_harness_path"] = harness
+    state["sim_harness_path"] = state.get("sim_harness_path") or harness
+    state["cocotb_harness_path"] = state.get("cocotb_harness_path") or harness
 
     embedded = state.setdefault("embedded", {})
     embedded[PHASE] = OUTPUT_PATH
