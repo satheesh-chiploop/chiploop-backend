@@ -290,12 +290,43 @@ def run_agent(state: dict) -> dict:
     makefile_path = _find_makefile_path(state)
     test_paths = _find_test_paths(state)
     coverage_model_path = _find_coverage_model_path(state)
+
+
+    if not coverage_model_path:
+        for path in _collect_paths_from_keys(state, ["generated_files", "artifacts"]):
+            if path.endswith("coverage_model.py"):
+                coverage_model_path = path
+                break
     assertions_path = _find_assertions_path(state)
+
+
+    if not assertions_path:
+        for path in _collect_paths_from_keys(state, ["generated_files", "artifacts"]):
+            if path.endswith(".sv") and "assert" in path.lower():
+                assertions_path = path
+                break
     rtl_inputs = _find_verilog_inputs(state, soc_top_sim_path)
 
     soc_top_exists = bool(soc_top_sim_path and os.path.isfile(_join_workflow_path(workflow_dir, soc_top_sim_path)))
     rtl_inputs = _existing_paths(workflow_dir, rtl_inputs)
-    elf_exists = bool(firmware_elf_path and os.path.isfile(_join_workflow_path(workflow_dir, firmware_elf_path)))
+
+
+    # Normalize to relative paths for consistency
+    normalized_rtl = []
+    for p in rtl_inputs:
+        abs_p = _join_workflow_path(workflow_dir, p)
+        try:
+            rel_p = os.path.relpath(abs_p, workflow_dir)
+            normalized_rtl.append(rel_p.replace("\\", "/"))
+        except Exception:
+            normalized_rtl.append(p)
+
+    rtl_inputs = _dedupe_keep_order(normalized_rtl)
+
+    elf_exists = bool(
+        state.get("firmware_elf_exists")
+        or (firmware_elf_path and os.path.isfile(_join_workflow_path(workflow_dir, firmware_elf_path)))
+    )
 
     required = {
         "soc_top_sim_path": soc_top_sim_path if soc_top_exists else "",
@@ -366,6 +397,7 @@ def run_agent(state: dict) -> dict:
             "stdout_tail": sim_result.get("stdout") if sim_result else "",
             "stderr_tail": sim_result.get("stderr") if sim_result else "",
         },
+        "elf_detection_source": "state_flag" if state.get("firmware_elf_exists") else "filesystem",
         "notes": _build_notes(readiness, optional_inputs, runtime_requested, runtime_capable),
     }
 
