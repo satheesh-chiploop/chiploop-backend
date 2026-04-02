@@ -276,6 +276,75 @@ def _run_cocotb_simulation(workflow_dir: str, makefile_path: str, test_module: s
         return {"attempted": True, "success": False, "runtime_seconds": None, "stderr": str(exc)}
 
 
+def _elf_is_placeholder(state: Dict[str, Any], workflow_dir: str, firmware_elf_path: str) -> bool:
+    build_block = state.get("firmware_build") or {}
+    if build_block.get("build_succeeded") is False and state.get("firmware_elf_exists"):
+        return True
+
+    debug_candidates = [
+        os.path.join(workflow_dir, "firmware", "debug", "elf_build_result.json"),
+        _join_workflow_path(workflow_dir, "firmware/debug/elf_build_result.json"),
+    ]
+    for dbg in debug_candidates:
+        obj = _safe_read_json(dbg)
+        if obj:
+            if obj.get("build_succeeded") is False and obj.get("elf_exists") is True:
+                return True
+            stderr_tail = str(obj.get("stderr_tail") or "")
+            if "Cargo not found in PATH" in stderr_tail and obj.get("elf_exists") is True:
+                return True
+
+    abs_elf = _join_workflow_path(workflow_dir, firmware_elf_path)
+    try:
+        if abs_elf and os.path.isfile(abs_elf):
+            with open(abs_elf, "rb") as f:
+                head = f.read(64)
+            if b"ELF_PLACEHOLDER_BINARY" in head:
+                return True
+    except Exception:
+        pass
+    return False
+
+def _find_coverage_model_path(state: Dict[str, Any], workflow_dir: str) -> str:
+    direct = _first_path_from_keys(
+        state,
+        ["coverage_model_path", "digital_coverage_model_path", "embedded_coverage_model_path"],
+    )
+    if direct:
+        return direct
+    artifacts = _collect_paths_from_keys(
+        state,
+        ["generated_files", "artifacts", "artifact_paths", "output_files", "produced_artifacts", "files"],
+    )
+    for path in artifacts:
+        if os.path.basename(path).lower() == "coverage_model.py":
+            return path
+    for rel in ("vv/tb/coverage_model.py", "system/firmware/coverage/coverage_model.py"):
+        if os.path.isfile(_join_workflow_path(workflow_dir, rel)):
+            return rel
+    return ""
+
+def _find_assertions_path(state: Dict[str, Any], workflow_dir: str) -> str:
+    direct = _first_path_from_keys(
+        state,
+        ["assertions_path", "digital_assertions_path", "digital_sva_assertions_path"],
+    )
+    if direct:
+        return direct
+    artifacts = _collect_paths_from_keys(
+        state,
+        ["generated_files", "artifacts", "artifact_paths", "output_files", "produced_artifacts", "files"],
+    )
+    for path in artifacts:
+        base = os.path.basename(path).lower()
+        if base == "assertions.sv" or "assert" in base:
+            return path
+    for rel in ("vv/tb/assertions.sv", "vv/tb/soc_top_sim_assertions.sv", "vv/tb/soc_top_assertions.sv"):
+        if os.path.isfile(_join_workflow_path(workflow_dir, rel)):
+            return rel
+    return ""
+
+
 def run_agent(state: dict) -> dict:
     workflow_id = state.get("workflow_id") or "default"
     print("\n⚙️ Running System Firmware CoSim Execution Agent")
@@ -289,22 +358,8 @@ def run_agent(state: dict) -> dict:
     firmware_elf_path = _find_elf_path(state)
     makefile_path = _find_makefile_path(state)
     test_paths = _find_test_paths(state)
-    coverage_model_path = _find_coverage_model_path(state)
-
-
-    if not coverage_model_path:
-        for path in _collect_paths_from_keys(state, ["generated_files", "artifacts"]):
-            if path.endswith("coverage_model.py"):
-                coverage_model_path = path
-                break
-    assertions_path = _find_assertions_path(state)
-
-
-    if not assertions_path:
-        for path in _collect_paths_from_keys(state, ["generated_files", "artifacts"]):
-            if path.endswith(".sv") and "assert" in path.lower():
-                assertions_path = path
-                break
+    coverage_model_path = _find_coverage_model_path(state, workflow_dir)
+    assertions_path = _find_assertions_path(state, workflow_dir)
     rtl_inputs = _find_verilog_inputs(state, soc_top_sim_path)
 
     soc_top_exists = bool(soc_top_sim_path and os.path.isfile(_join_workflow_path(workflow_dir, soc_top_sim_path)))
@@ -323,14 +378,15 @@ def run_agent(state: dict) -> dict:
 
     rtl_inputs = _dedupe_keep_order(normalized_rtl)
 
-    elf_exists = bool(
-        state.get("firmware_elf_exists")
-        or (firmware_elf_path and os.path.isfile(_join_workflow_path(workflow_dir, firmware_elf_path)))
-    )
+    
+    elf_abs = _join_workflow_path(workflow_dir, firmware_elf_path) if firmware_elf_path else ""
+    elf_exists = bool(state.get("firmware_elf_exists") or (elf_abs and os.path.isfile(elf_abs)))
+    elf_placeholder = bool(elf_exists and _elf_is_placeholder(state, workflow_dir, firmware_elf_path))
+    real_elf_exists = bool(elf_exists and not elf_placeholder)
 
     required = {
         "soc_top_sim_path": soc_top_sim_path if soc_top_exists else "",
-        "firmware_elf_exists": "yes" if elf_exists else "",
+        "firmware_elf_real": "yes" if real_elf_exists else "",
         "makefile_path": makefile_path,
         "test_paths": test_paths,
         "rtl_inputs": rtl_inputs,
@@ -348,7 +404,7 @@ def run_agent(state: dict) -> dict:
     sim_result: Optional[Dict[str, Any]] = None
     if readiness["status"] != "ready":
         execution_mode = "artifact_readiness_only"
-        overall_status = "blocked_missing_inputs"
+        overall_status = "ready_with_placeholder_elf" if elf_placeholder else "blocked_missing_inputs"
     elif runtime_requested and runtime_capable:
         execution_mode = "runtime_execution"
         test_module = os.path.splitext(os.path.basename(test_paths[0]))[0]
@@ -377,6 +433,7 @@ def run_agent(state: dict) -> dict:
             "soc_top_sim_path": soc_top_sim_path if soc_top_exists else "",
             "firmware_elf_path": firmware_elf_path,
             "firmware_elf_exists": elf_exists,
+            "firmware_elf_placeholder": elf_placeholder,
             "makefile_path": makefile_path,
             "test_paths": test_paths,
             "coverage_model_path": coverage_model_path,
