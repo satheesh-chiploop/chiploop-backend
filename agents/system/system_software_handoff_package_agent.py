@@ -159,13 +159,24 @@ def _find_firmware_manifest_path(state: Dict[str, Any], workflow_dir: str) -> st
     if direct and _path_exists(workflow_dir, direct):
         return _to_relpath(workflow_dir, direct)
 
+    # Supabase fallback
+    try:
+        supabase = _get_supabase(state)
+        source_workflow_id = _get_source_workflow_id(state)
+        wf_row = _workflow_row(supabase, source_workflow_id)
+        prefixes = _workflow_storage_prefixes(state, source_workflow_id, wf_row)
+        resolved = _resolve_supabase_artifact_path(supabase, prefixes, "firmware/firmware_manifest.json")
+        if resolved:
+            return "firmware/firmware_manifest.json"
+    except Exception:
+        pass
+
     return _find_first_existing(
         workflow_dir,
         [
             "firmware/firmware_manifest.json",
         ],
     )
-
 
 
 
@@ -842,6 +853,152 @@ def _resolve_contract_path(
     return _find_first_existing(workflow_dir, fallbacks)
 
 
+def _resolve_contract_path(
+    state: Dict[str, Any],
+    workflow_dir: str,
+    manifest: Dict[str, Any],
+    state_keys: List[str],
+    manifest_key: str,
+    fallbacks: List[str],
+) -> str:
+    # 1) state + local
+    direct = _first_path_from_keys(state, state_keys)
+    if direct and _path_exists(workflow_dir, direct):
+        return _to_relpath(workflow_dir, direct)
+
+    # 2) manifest + local
+    manifest_candidate = _norm_path(manifest.get(manifest_key))
+    if manifest_candidate and _path_exists(workflow_dir, manifest_candidate):
+        return _to_relpath(workflow_dir, manifest_candidate)
+
+    # 3) Supabase via state path
+    try:
+        supabase = _get_supabase(state)
+        source_workflow_id = _get_source_workflow_id(state)
+        wf_row = _workflow_row(supabase, source_workflow_id)
+        prefixes = _workflow_storage_prefixes(state, source_workflow_id, wf_row)
+
+        if direct:
+            resolved = _resolve_supabase_artifact_path(supabase, prefixes, direct)
+            if resolved:
+                return direct
+
+        if manifest_candidate:
+            resolved = _resolve_supabase_artifact_path(supabase, prefixes, manifest_candidate)
+            if resolved:
+                return manifest_candidate
+
+        for fb in fallbacks:
+            resolved = _resolve_supabase_artifact_path(supabase, prefixes, fb)
+            if resolved:
+                return fb
+    except Exception:
+        pass
+
+    # 4) local fallback
+    return _find_first_existing(workflow_dir, fallbacks)
+
+def _get_supabase(state: Dict[str, Any]):
+    client = state.get("supabase_client")
+    if client is None:
+        raise RuntimeError("supabase_client missing from state")
+    return client
+
+def _get_source_workflow_id(state: Dict[str, Any]) -> str:
+    for key in (
+        "workflow_id",
+        "source_workflow_id",
+        "system_firmware_workflow_id",
+        "source_firmware_workflow_id",
+    ):
+        value = state.get(key)
+        if _is_nonempty_str(value):
+            return str(value).strip()
+
+    system_block = state.get("system") or {}
+    if isinstance(system_block, dict):
+        for key in ("source_firmware_workflow_id", "system_firmware_workflow_id"):
+            value = system_block.get(key)
+            if _is_nonempty_str(value):
+                return str(value).strip()
+
+    return ""
+
+def _workflow_storage_prefixes(state: Dict[str, Any], source_workflow_id: str, workflow_row: Dict[str, Any]) -> List[str]:
+    prefixes: List[str] = []
+
+    explicit_prefix = state.get("artifact_prefix") or state.get("source_artifact_prefix")
+    if _is_nonempty_str(explicit_prefix):
+        prefixes.append(_norm_path(explicit_prefix).rstrip("/") + "/")
+
+    prefixes.append(f"backend/workflows/{source_workflow_id}/")
+
+    user_id = (workflow_row or {}).get("user_id")
+    if _is_nonempty_str(user_id):
+        prefixes.append(f"artifacts/{user_id}/{source_workflow_id}/")
+        prefixes.append(f"{user_id}/{source_workflow_id}/")
+
+    seen = set()
+    out: List[str] = []
+    for p in prefixes:
+        p = _norm_path(p)
+        if p and p not in seen:
+            seen.add(p)
+            out.append(p)
+    return out
+
+def _resolve_supabase_artifact_path(
+    supabase,
+    prefixes: List[str],
+    rel_or_abs: str,
+) -> str:
+    target = _norm_path(rel_or_abs)
+    if not target:
+        return ""
+
+    candidates: List[str] = []
+    if target.startswith("backend/workflows/") or target.startswith("artifacts/"):
+        candidates.append(target)
+    else:
+        for prefix in prefixes:
+            candidates.append(f"{prefix.rstrip('/')}/{target}")
+        candidates.append(target)
+
+    seen = set()
+    ordered: List[str] = []
+    for c in candidates:
+        c = _norm_path(c)
+        if c and c not in seen:
+            seen.add(c)
+            ordered.append(c)
+
+    for candidate in ordered:
+        try:
+            supabase.storage.from_("artifacts").download(candidate)
+            return candidate
+        except Exception:
+            pass
+
+    return ""
+
+def _load_json_from_supabase(
+    supabase,
+    prefixes: List[str],
+    rel_or_abs: str,
+) -> Tuple[Dict[str, Any], str]:
+    resolved = _resolve_supabase_artifact_path(supabase, prefixes, rel_or_abs)
+    if not resolved:
+        return {}, ""
+
+    try:
+        raw = supabase.storage.from_("artifacts").download(resolved)
+        text = raw.decode("utf-8") if isinstance(raw, bytes) else str(raw)
+        obj = json.loads(text)
+        return (obj if isinstance(obj, dict) else {}), resolved
+    except Exception:
+        return {}, ""
+
+
 def run_agent(state: dict) -> dict:
     workflow_id = state.get("workflow_id") or "default"
     workflow_dir = state.get("workflow_dir")
@@ -866,6 +1023,23 @@ def run_agent(state: dict) -> dict:
         if isinstance(obj, dict) and obj:
             firmware_manifest = obj
             break
+
+    if not firmware_manifest:
+        # Supabase first
+        try:
+            supabase = _get_supabase(state)
+            source_workflow_id = _get_source_workflow_id(state)
+            wf_row = _workflow_row(supabase, source_workflow_id)
+            prefixes = _workflow_storage_prefixes(state, source_workflow_id, wf_row)
+            firmware_manifest, _resolved_manifest_path = _load_json_from_supabase(
+                supabase,
+                prefixes,
+                firmware_manifest_path or "firmware/firmware_manifest.json",
+            )
+            if firmware_manifest and not firmware_manifest_path:
+                firmware_manifest_path = "firmware/firmware_manifest.json"
+        except Exception:
+            pass
 
     if not firmware_manifest and firmware_manifest_path:
         firmware_manifest = _safe_read_json(_join_workflow_path(workflow_dir, firmware_manifest_path))
