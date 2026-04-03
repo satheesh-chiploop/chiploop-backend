@@ -167,18 +167,21 @@ def _find_firmware_manifest_path(state: Dict[str, Any], workflow_dir: str) -> st
     )
 
 
+
+
 def _find_register_map_path(state: Dict[str, Any], workflow_dir: str, manifest: Dict[str, Any]) -> str:
-    direct = _first_path_from_keys(state, ["firmware_register_map_path", "register_map_path", "regmap_json"])
-    if direct and _path_exists(workflow_dir, direct):
-        return _to_relpath(workflow_dir, direct)
-
-    manifest_candidate = _norm_path(manifest.get("register_map_path"))
-    if manifest_candidate and _path_exists(workflow_dir, manifest_candidate):
-        return _to_relpath(workflow_dir, manifest_candidate)
-
-    return _find_first_existing(
-        workflow_dir,
-        [
+    return _resolve_contract_path(
+        state=state,
+        workflow_dir=workflow_dir,
+        manifest=manifest,
+        state_keys=[
+            "firmware_register_map_path",
+            "register_map_path",
+            "system_register_map_path",
+            "regmap_json",
+        ],
+        manifest_key="register_map_path",
+        fallbacks=[
             "firmware/register_map.json",
             "digital/digital_regmap.json",
             "handoff/docs/regmap/digital_regmap.json",
@@ -320,7 +323,7 @@ def _find_cocotb_paths(state: Dict[str, Any], workflow_dir: str, firmware_manife
     if manifest_makefile and _path_exists(workflow_dir, manifest_makefile):
         makefile_path = _to_relpath(workflow_dir, manifest_makefile)
     else:
-        makefile_path = _first_path_from_keys(state, ["embedded_cocotb_makefile_path", "cocotb_makefile_path", "makefile_path"])
+        makefile_path = _first_path_from_keys(state, ["embedded_cocotb_makefile_path", "cocotb_makefile_path", "makefile_path","system_cocotb_makefile_path"])
         if makefile_path and _path_exists(workflow_dir, makefile_path):
             makefile_path = _to_relpath(workflow_dir, makefile_path)
         elif _path_exists(workflow_dir, "firmware/validate/Makefile"):
@@ -332,7 +335,7 @@ def _find_cocotb_paths(state: Dict[str, Any], workflow_dir: str, firmware_manife
     if manifest_harness and _path_exists(workflow_dir, manifest_harness):
         harness_path = _to_relpath(workflow_dir, manifest_harness)
     else:
-        harness_path = _first_path_from_keys(state, ["cocotb_harness_path", "sim_harness_path", "expected_cocotb_harness_path"])
+        harness_path = _first_path_from_keys(state, ["cocotb_harness_path", "sim_harness_path", "expected_cocotb_harness_path","system_cocotb_harness_path"])
         if harness_path and _path_exists(workflow_dir, harness_path):
             harness_path = _to_relpath(workflow_dir, harness_path)
         elif _path_exists(workflow_dir, "firmware/validate/cocotb_harness.py"):
@@ -393,7 +396,7 @@ def _find_validation_report(state: Dict[str, Any], workflow_dir: str, firmware_m
     if manifest_report and _path_exists(workflow_dir, manifest_report):
         return _to_relpath(workflow_dir, manifest_report)
 
-    direct = _first_path_from_keys(state, ["firmware_validation_report_path", "validation_report_path"])
+    direct = _first_path_from_keys(state, ["firmware_validation_report_path", "validation_report_path","system_validation_report_path"])
     if direct and _path_exists(workflow_dir, direct):
         return _to_relpath(workflow_dir, direct)
 
@@ -443,90 +446,152 @@ def _build_manifest(
     exec_results = (execution_summary.get("results") or {}) if isinstance(execution_summary, dict) else {}
     cov_metrics = (coverage_summary.get("coverage_metrics") or {}) if isinstance(coverage_summary, dict) else {}
 
-    hal_path = _find_manifest_contract_path(
-        workflow_dir,
-        firmware_manifest,
-        "hal_path",
-        ["firmware/hal/registers.rs"],
-    )
-    driver_path = _find_manifest_contract_path(
-        workflow_dir,
-        firmware_manifest,
-        "driver_path",
-        ["firmware/drivers/driver_scaffold.rs"],
-    )
-    register_dump_path = _find_manifest_contract_path(
-        workflow_dir,
-        firmware_manifest,
-        "register_dump_path",
-        ["firmware/diagnostics/register_dump.rs"],
+    hal_path = _resolve_contract_path(
+        state=state,
+        workflow_dir=workflow_dir,
+        manifest=firmware_manifest,
+        state_keys=[
+            "hal_path",
+            "system_hal_path",
+            "embedded_hal_path",
+            "register_layer_path",
+            "rust_register_layer_path",
+        ],
+        manifest_key="hal_path",
+        fallbacks=["firmware/hal/registers.rs"],
     )
 
-    interrupt_path = _find_manifest_contract_path(
-        workflow_dir,
-        firmware_manifest,
-        "interrupt_map_path",
-        [
+    driver_path = _resolve_contract_path(
+        state=state,
+        workflow_dir=workflow_dir,
+        manifest=firmware_manifest,
+        state_keys=[
+            "driver_path",
+            "system_driver_path",
+            "embedded_driver_path",
+            "driver_scaffold_path",
+            "rust_driver_scaffold_path",
+        ],
+        manifest_key="driver_path",
+        fallbacks=["firmware/drivers/driver_scaffold.rs"],
+    )
+    register_dump_path = _resolve_contract_path(
+        state=state,
+        workflow_dir=workflow_dir,
+        manifest=firmware_manifest,
+        state_keys=[
+            "register_dump_path",
+            "system_register_dump_path",
+            "embedded_register_dump_path",
+        ],
+        manifest_key="register_dump_path",
+        fallbacks=["firmware/diagnostics/register_dump.rs"],
+    )
+
+    interrupt_path = _resolve_contract_path(
+        state=state,
+        workflow_dir=workflow_dir,
+        manifest=firmware_manifest,
+        state_keys=[
+            "interrupt_mapping_path",
+            "system_interrupt_mapping_path",
+            "embedded_interrupt_mapping_path",
+        ],
+        manifest_key="interrupt_map_path",
+        fallbacks=[
             "firmware/isr/interrupt_map.json",
             "firmware/interrupt/interrupt_mapping.json",
             "firmware/interrupt_mapping.json",
         ],
     )
 
-    dma_path = _find_manifest_contract_path(
-        workflow_dir,
-        firmware_manifest,
-        "dma_path",
-        [
+    dma_path = _resolve_contract_path(
+        state=state,
+        workflow_dir=workflow_dir,
+        manifest=firmware_manifest,
+        state_keys=[
+            "dma_path",
+            "system_dma_path",
+            "embedded_dma_path",
+            "dma_integration_path",
+        ],
+        manifest_key="dma_path",
+        fallbacks=[
             "firmware/dma/dma.rs",
             "firmware/dma/dma_integration.json",
             "firmware/dma_integration.json",
         ],
     )
 
-    boot_plan_path = _find_manifest_contract_path(
-        workflow_dir,
-        firmware_manifest,
-        "boot_sequence_json_path",
-        [
+    boot_plan_path = _resolve_contract_path(
+        state=state,
+        workflow_dir=workflow_dir,
+        manifest=firmware_manifest,
+        state_keys=[
+            "boot_dependency_plan_path",
+            "system_boot_dependency_plan_path",
+            "boot_sequence_json_path",
+        ],
+        manifest_key="boot_sequence_json_path",
+        fallbacks=[
             "firmware/boot/boot_sequence.json",
             "firmware/boot/boot_dependency_plan.json",
             "firmware/boot_dependency_plan.json",
         ],
     )
 
-    clock_config_path = _find_manifest_contract_path(
-        workflow_dir,
-        firmware_manifest,
-        "pll_config_path",
-        [
+    clock_config_path = _resolve_contract_path(
+        state=state,
+        workflow_dir=workflow_dir,
+        manifest=firmware_manifest,
+        state_keys=[
+            "clock_config_path",
+            "system_clock_config_path",
+            "pll_config_path",
+        ],
+        manifest_key="pll_config_path",
+        fallbacks=[
             "firmware/boot/pll_config.rs",
             "firmware/clock/clock_pll_config.json",
             "firmware/clock_pll_config.json",
         ],
     )
 
-    reset_sequence_path = _find_manifest_contract_path(
-        workflow_dir,
-        firmware_manifest,
-        "reset_sequence_rs_path",
-        [
+    reset_sequence_path = _resolve_contract_path(
+        state=state,
+        workflow_dir=workflow_dir,
+        manifest=firmware_manifest,
+        state_keys=[
+            "reset_sequence_path",
+            "system_reset_sequence_path",
+            "reset_sequence_rs_path",
+        ],
+        manifest_key="reset_sequence_rs_path",
+        fallbacks=[
             "firmware/boot/reset_sequence.rs",
             "firmware/reset/reset_sequence.json",
             "firmware/reset_sequence.json",
         ],
     )
 
-    power_mode_path = _find_manifest_contract_path(
-        workflow_dir,
-        firmware_manifest,
-        "power_modes_path",
-        [
+    power_mode_path = _resolve_contract_path(
+        state=state,
+        workflow_dir=workflow_dir,
+        manifest=firmware_manifest,
+        state_keys=[
+            "power_mode_path",
+            "system_power_mode_path",
+            "power_modes_path",
+        ],
+        manifest_key="power_modes_path",
+        fallbacks=[
             "firmware/power/power_modes.md",
             "firmware/power/power_modes.json",
             "firmware/power_mode_config.json",
         ],
     )
+
+    
 
 
     package = {
@@ -758,6 +823,25 @@ def _markdown_report(manifest: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _resolve_contract_path(
+    state: Dict[str, Any],
+    workflow_dir: str,
+    manifest: Dict[str, Any],
+    state_keys: List[str],
+    manifest_key: str,
+    fallbacks: List[str],
+) -> str:
+    direct = _first_path_from_keys(state, state_keys)
+    if direct and _path_exists(workflow_dir, direct):
+        return _to_relpath(workflow_dir, direct)
+
+    manifest_candidate = _norm_path(manifest.get(manifest_key))
+    if manifest_candidate and _path_exists(workflow_dir, manifest_candidate):
+        return _to_relpath(workflow_dir, manifest_candidate)
+
+    return _find_first_existing(workflow_dir, fallbacks)
+
+
 def run_agent(state: dict) -> dict:
     workflow_id = state.get("workflow_id") or "default"
     workflow_dir = state.get("workflow_dir")
@@ -769,8 +853,22 @@ def run_agent(state: dict) -> dict:
 
     workflow_dir = os.path.abspath(workflow_dir)
 
+
     firmware_manifest_path = _find_firmware_manifest_path(state, workflow_dir)
-    firmware_manifest = _safe_read_json(_join_workflow_path(workflow_dir, firmware_manifest_path)) if firmware_manifest_path else {}
+
+    firmware_manifest = {}
+    for key in (
+        "system_firmware_manifest",
+        "firmware_manifest",
+        "embedded_firmware_manifest",
+    ):
+        obj = state.get(key)
+        if isinstance(obj, dict) and obj:
+            firmware_manifest = obj
+            break
+
+    if not firmware_manifest and firmware_manifest_path:
+        firmware_manifest = _safe_read_json(_join_workflow_path(workflow_dir, firmware_manifest_path))
 
     register_map_path = _find_register_map_path(state, workflow_dir, firmware_manifest)
     system_integration_intent_path = _find_system_integration_intent_path(state, workflow_dir)
@@ -830,6 +928,13 @@ def run_agent(state: dict) -> dict:
     ])
 
     summary_md = _markdown_report(manifest)
+    required_missing = {
+        "firmware_manifest_path": not bool(manifest.get("firmware_contract", {}).get("firmware_manifest_path")),
+        "register_map_path": not bool(manifest.get("firmware_contract", {}).get("register_map_path")),
+        "hal_path": not bool(manifest.get("firmware_contract", {}).get("hal_path")),
+        "driver_path": not bool(manifest.get("firmware_contract", {}).get("driver_path")),
+        "system_integration_intent_path": not bool(manifest.get("system_contract", {}).get("system_integration_intent_path")),
+    }
     debug_payload = {
         "agent": AGENT_NAME,
         "generated_at": _now(),
@@ -847,6 +952,7 @@ def run_agent(state: dict) -> dict:
             "system_integration_intent_path": manifest.get("system_contract", {}).get("system_integration_intent_path"),
         },
         "blocking_gaps": manifest.get("software_readiness", {}).get("blocking_gaps"),
+        "required_missing": required_missing,
     }
     
 
