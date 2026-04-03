@@ -9,10 +9,11 @@ AGENT_NAME = "System Software Capability Model Agent"
 OUTPUT_SUBDIR = "system/software/model"
 MODEL_JSON = "system_software_capability_model.json"
 SUMMARY_MD = "system_software_capability_model.md"
+DEBUG_JSON = "system_software_capability_model_debug.json"
 
 
 def _now() -> str:
-    return datetime.datetime.now().isoformat()
+    return datetime.datetime.now(datetime.timezone.utc).isoformat()
 
 
 def _record_text(workflow_id: str, filename: str, content: str) -> Optional[str]:
@@ -28,20 +29,8 @@ def _record_text(workflow_id: str, filename: str, content: str) -> Optional[str]
         return None
 
 
-def _norm_path(value: Any) -> str:
-    return "" if value is None else str(value).strip().replace("\\", "/")
-
-
 def _is_nonempty_str(value: Any) -> bool:
     return isinstance(value, str) and bool(value.strip())
-
-
-def _join_workflow_path(workflow_dir: str, rel_or_abs: str) -> str:
-    if not rel_or_abs:
-        return ""
-    if os.path.isabs(rel_or_abs):
-        return rel_or_abs
-    return os.path.abspath(os.path.join(workflow_dir, rel_or_abs))
 
 
 def _safe_read_json(path: str) -> Dict[str, Any]:
@@ -55,25 +44,32 @@ def _safe_read_json(path: str) -> Dict[str, Any]:
     return {}
 
 
+def _join_workflow_path(workflow_dir: str, rel_or_abs: str) -> str:
+    if not rel_or_abs:
+        return ""
+    if os.path.isabs(rel_or_abs):
+        return rel_or_abs
+    return os.path.abspath(os.path.join(workflow_dir, rel_or_abs))
+
+
 def _load_input_contract(state: Dict[str, Any], workflow_dir: str) -> Dict[str, Any]:
     contract = state.get("system_software_input_contract")
-    if isinstance(contract, dict):
+    if isinstance(contract, dict) and contract:
         return contract
 
     for candidate in (
         state.get("system_software_input_contract_path"),
         "system/software/input/system_software_input_contract.json",
     ):
-        if _is_nonempty_str(candidate):
+        if _is_nonempty_str(candidate) and workflow_dir:
             obj = _safe_read_json(_join_workflow_path(workflow_dir, candidate))
             if obj:
                 return obj
     return {}
 
 
-def _extract_register_summary(register_map_path: str, workflow_dir: str) -> Dict[str, Any]:
-    obj = _safe_read_json(_join_workflow_path(workflow_dir, register_map_path))
-    regmap = obj.get("regmap") if isinstance(obj.get("regmap"), dict) else obj
+def _extract_register_summary(register_map_obj: Dict[str, Any]) -> Dict[str, Any]:
+    regmap = register_map_obj.get("regmap") if isinstance(register_map_obj.get("regmap"), dict) else register_map_obj
     registers = regmap.get("registers") if isinstance(regmap, dict) else None
 
     summary = {
@@ -82,6 +78,7 @@ def _extract_register_summary(register_map_path: str, workflow_dir: str) -> Dict
         "bus": "",
         "addr_width": None,
         "data_width": None,
+        "field_count": 0,
     }
 
     if isinstance(regmap, dict):
@@ -90,15 +87,24 @@ def _extract_register_summary(register_map_path: str, workflow_dir: str) -> Dict
         summary["data_width"] = regmap.get("data_width")
 
     if isinstance(registers, list):
-        names = [str(r.get("name")) for r in registers if isinstance(r, dict) and r.get("name")]
+        names = []
+        field_count = 0
+        for reg in registers:
+            if not isinstance(reg, dict):
+                continue
+            if reg.get("name"):
+                names.append(str(reg.get("name")))
+            fields = reg.get("fields")
+            if isinstance(fields, list):
+                field_count += len([f for f in fields if isinstance(f, dict)])
         summary["register_names"] = names[:64]
         summary["register_count"] = len(names)
+        summary["field_count"] = field_count
 
     return summary
 
 
-def _extract_integration_summary(path: str, workflow_dir: str) -> Dict[str, Any]:
-    obj = _safe_read_json(_join_workflow_path(workflow_dir, path))
+def _extract_integration_summary(obj: Dict[str, Any]) -> Dict[str, Any]:
     connections = obj.get("connections") if isinstance(obj.get("connections"), list) else []
     instances = obj.get("instances") if isinstance(obj.get("instances"), list) else []
     top = obj.get("top") if isinstance(obj.get("top"), dict) else {}
@@ -110,33 +116,37 @@ def _extract_integration_summary(path: str, workflow_dir: str) -> Dict[str, Any]
     }
 
 
-def _extract_services(contract: Dict[str, Any]) -> Dict[str, Any]:
+def _extract_services(contract: Dict[str, Any], state: Dict[str, Any]) -> Dict[str, Any]:
     firmware_contract = contract.get("firmware_contract") or {}
     verification_contract = contract.get("verification_contract") or {}
 
     services = {
-        "register_access": bool(firmware_contract.get("register_map_path") and firmware_contract.get("hal_path")),
-        "driver_layer": bool(firmware_contract.get("driver_path")),
-        "interrupt_control": bool(firmware_contract.get("interrupt_mapping_path")),
-        "dma_control": bool(firmware_contract.get("dma_integration_path")),
-        "boot_orchestration": bool(firmware_contract.get("boot_dependency_plan_path")),
-        "clock_control": bool(firmware_contract.get("clock_config_path")),
-        "reset_control": bool(firmware_contract.get("reset_sequence_path")),
-        "power_mode_control": bool(firmware_contract.get("power_mode_path")),
-        "runtime_validation_support": bool(verification_contract.get("cocotb_makefile_path")),
+        "register_access": bool((state.get("system_register_map") or {}) and (state.get("system_hal_contract") or {}) or (firmware_contract.get("register_map_path") and firmware_contract.get("hal_path"))),
+        "driver_layer": bool((state.get("system_driver_contract") or {}) or firmware_contract.get("driver_path")),
+        "interrupt_control": bool((state.get("system_interrupt_mapping") or {}) or firmware_contract.get("interrupt_mapping_path")),
+        "dma_control": bool((state.get("system_dma_integration") or {}) or firmware_contract.get("dma_integration_path")),
+        "boot_orchestration": bool((state.get("system_boot_dependency_plan") or {}) or firmware_contract.get("boot_dependency_plan_path")),
+        "clock_control": bool((state.get("system_clock_config") or {}) or firmware_contract.get("clock_config_path")),
+        "reset_control": bool((state.get("system_reset_sequence") or {}) or firmware_contract.get("reset_sequence_path")),
+        "power_mode_control": bool((state.get("system_power_mode") or {}) or firmware_contract.get("power_mode_path")),
+        "runtime_validation_support": bool(verification_contract.get("cocotb_makefile_path") or verification_contract.get("execution_overall_status")),
     }
     return services
 
 
-def _build_capability_model(contract: Dict[str, Any], workflow_dir: str) -> Dict[str, Any]:
+def _build_capability_model(contract: Dict[str, Any], state: Dict[str, Any]) -> Dict[str, Any]:
     system_contract = contract.get("system_contract") or {}
     firmware_contract = contract.get("firmware_contract") or {}
     verification_contract = contract.get("verification_contract") or {}
     status = contract.get("input_status") or {}
 
-    register_summary = _extract_register_summary(firmware_contract.get("register_map_path") or "", workflow_dir)
-    integration_summary = _extract_integration_summary(system_contract.get("system_integration_intent_path") or "", workflow_dir)
-    services = _extract_services(contract)
+    register_summary = _extract_register_summary(state.get("system_register_map") or {})
+    integration_summary = _extract_integration_summary(state.get("system_integration_intent") or {})
+    services = _extract_services(contract, state)
+
+    firmware_manifest = state.get("system_firmware_manifest") or {}
+    hal_contract = state.get("system_hal_contract") or {}
+    driver_contract = state.get("system_driver_contract") or {}
 
     return {
         "package_type": "system_software_capability_model",
@@ -152,6 +162,14 @@ def _build_capability_model(contract: Dict[str, Any], workflow_dir: str) -> Dict
             "integration_summary": integration_summary,
             "register_summary": register_summary,
         },
+        "firmware_layer": {
+            "firmware_manifest_present": bool(firmware_manifest),
+            "hal_contract_present": bool(hal_contract),
+            "driver_contract_present": bool(driver_contract),
+            "firmware_manifest_summary": {
+                "keys": sorted(list(firmware_manifest.keys()))[:64] if isinstance(firmware_manifest, dict) else [],
+            },
+        },
         "software_services": services,
         "runtime_contract": {
             "firmware_elf_exists": firmware_contract.get("elf_exists"),
@@ -166,6 +184,13 @@ def _build_capability_model(contract: Dict[str, Any], workflow_dir: str) -> Dict
             "input_validation_errors": status.get("errors") or [],
         },
         "public_api_candidates": contract.get("public_api_candidates") or [],
+        "software_preferences": {
+            "target_language": state.get("target_language") or "rust",
+            "sdk_style": state.get("sdk_style") or "rust_crate",
+            "build_system": state.get("build_system") or "cargo",
+            "app_names": state.get("app_names") or [],
+            "software_goal": state.get("software_goal") or "",
+        },
     }
 
 
@@ -191,6 +216,7 @@ def _markdown_report(model: Dict[str, Any]) -> str:
     lines.extend(["", "## Register model", ""])
     reg = (model.get("hardware_model") or {}).get("register_summary") or {}
     lines.append(f"- Register count: `{reg.get('register_count')}`")
+    lines.append(f"- Field count: `{reg.get('field_count')}`")
     lines.append(f"- Bus: `{reg.get('bus') or 'unavailable'}`")
 
     lines.extend(["", "## Constraints", ""])
@@ -206,22 +232,27 @@ def _markdown_report(model: Dict[str, Any]) -> str:
 
 def run_agent(state: dict) -> dict:
     workflow_id = state.get("workflow_id") or "default"
-    workflow_dir = state.get("workflow_dir")
+    workflow_dir = os.path.abspath(state.get("workflow_dir")) if _is_nonempty_str(state.get("workflow_dir")) else ""
     print(f"\n🧭 Running {AGENT_NAME}")
 
-    if not workflow_dir:
-        state["status"] = "❌ workflow_dir missing for capability model"
-        return state
-
-    workflow_dir = os.path.abspath(workflow_dir)
     contract = _load_input_contract(state, workflow_dir)
     if not isinstance(contract, dict) or not contract:
         state["status"] = "❌ system software input contract missing"
         return state
 
-    model = _build_capability_model(contract, workflow_dir)
+    model = _build_capability_model(contract, state)
+    debug_payload = {
+        "agent": AGENT_NAME,
+        "generated_at": _now(),
+        "register_map_present": bool(state.get("system_register_map")),
+        "integration_intent_present": bool(state.get("system_integration_intent")),
+        "hal_contract_present": bool(state.get("system_hal_contract")),
+        "driver_contract_present": bool(state.get("system_driver_contract")),
+    }
+
     _record_text(workflow_id, MODEL_JSON, json.dumps(model, indent=2))
     _record_text(workflow_id, SUMMARY_MD, _markdown_report(model))
+    _record_text(workflow_id, DEBUG_JSON, json.dumps(debug_payload, indent=2))
 
     state["system_software_capability_model"] = model
     state["system_software_capability_model_path"] = f"{OUTPUT_SUBDIR}/{MODEL_JSON}"

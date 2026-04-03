@@ -1,7 +1,7 @@
 import datetime
 import json
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from utils.artifact_utils import save_text_artifact_and_record
 
@@ -11,9 +11,15 @@ CONTRACT_JSON = "system_software_input_contract.json"
 SUMMARY_MD = "system_software_input_summary.md"
 DEBUG_JSON = "system_software_input_debug.json"
 
+ARTIFACT_BUCKET_CANDIDATES = ["artifacts"]
+HANDOFF_SUFFIX_CANDIDATES = [
+    "system/software_handoff/system_software_handoff.json",
+    "system_software_handoff.json",
+]
+
 
 def _now() -> str:
-    return datetime.datetime.now().isoformat()
+    return datetime.datetime.now(datetime.timezone.utc).isoformat()
 
 
 def _norm_path(value: Any) -> str:
@@ -22,6 +28,18 @@ def _norm_path(value: Any) -> str:
 
 def _is_nonempty_str(value: Any) -> bool:
     return isinstance(value, str) and bool(value.strip())
+
+
+def _safe_json_loads(text: Any) -> Dict[str, Any]:
+    if isinstance(text, dict):
+        return text
+    if not isinstance(text, str) or not text.strip():
+        return {}
+    try:
+        obj = json.loads(text)
+        return obj if isinstance(obj, dict) else {}
+    except Exception:
+        return {}
 
 
 def _safe_read_json(path: str) -> Dict[str, Any]:
@@ -56,9 +74,120 @@ def _record_text(workflow_id: str, filename: str, content: str) -> Optional[str]
         return None
 
 
-def _find_handoff_manifest_path(state: Dict[str, Any], workflow_dir: str) -> str:
-    candidates: List[str] = []
+def _get_supabase(state: Dict[str, Any]):
+    client = state.get("supabase_client")
+    if client is None:
+        raise RuntimeError("supabase_client missing from state")
+    return client
 
+
+def _get_source_workflow_id(state: Dict[str, Any]) -> str:
+    for key in (
+        "system_firmware_workflow_id",
+        "firmware_workflow_id",
+        "source_firmware_workflow_id",
+        "source_workflow_id",
+    ):
+        value = state.get(key)
+        if _is_nonempty_str(value):
+            return str(value).strip()
+    system_block = state.get("system") or {}
+    if isinstance(system_block, dict):
+        for key in ("firmware_workflow_id", "source_firmware_workflow_id"):
+            value = system_block.get(key)
+            if _is_nonempty_str(value):
+                return str(value).strip()
+    return ""
+
+
+def _workflow_row(supabase, workflow_id: str) -> Dict[str, Any]:
+    if not workflow_id:
+        return {}
+    try:
+        resp = (
+            supabase.table("workflows")
+            .select("id,user_id,name,loop_type,artifacts,definitions")
+            .eq("id", workflow_id)
+            .single()
+            .execute()
+        )
+        return resp.data or {}
+    except Exception:
+        return {}
+
+
+def _workflow_storage_prefixes(state: Dict[str, Any], source_workflow_id: str, workflow_row: Dict[str, Any]) -> List[str]:
+    prefixes: List[str] = []
+    user_id = (workflow_row or {}).get("user_id")
+    loop_type = (workflow_row or {}).get("loop_type") or "system"
+    app_name = state.get("app_name") or "system_software"
+
+    explicit_prefix = state.get("source_artifact_prefix")
+    if _is_nonempty_str(explicit_prefix):
+        prefixes.append(_norm_path(explicit_prefix).rstrip("/") + "/")
+
+    # Most robust current convention in your backend for app runs.
+    prefixes.append(f"backend/workflows/{source_workflow_id}/")
+
+    # Fallbacks for older local mirroring conventions.
+    if _is_nonempty_str(user_id):
+        prefixes.append(f"{user_id}/{source_workflow_id}/")
+        prefixes.append(f"artifacts/{user_id}/{source_workflow_id}/")
+        prefixes.append(f"backend/workflows/{source_workflow_id}/{loop_type}/{app_name}/")
+
+    seen = set()
+    out: List[str] = []
+    for prefix in prefixes:
+        norm = _norm_path(prefix)
+        if norm and norm not in seen:
+            seen.add(norm)
+            out.append(norm)
+    return out
+
+
+def _storage_download_json(supabase, bucket: str, path: str) -> Dict[str, Any]:
+    try:
+        data = supabase.storage.from_(bucket).download(path)
+        if isinstance(data, bytes):
+            text = data.decode("utf-8")
+        else:
+            text = str(data)
+        return _safe_json_loads(text)
+    except Exception:
+        return {}
+
+
+def _storage_exists_and_load(supabase, prefixes: List[str], relative_or_abs: str) -> Tuple[str, Dict[str, Any], str]:
+    target = _norm_path(relative_or_abs)
+    if not target:
+        return "", {}, ""
+
+    candidate_paths: List[str] = []
+    if target.startswith("backend/workflows/") or target.startswith("artifacts/"):
+        candidate_paths.append(target)
+    else:
+        for prefix in prefixes:
+            candidate_paths.append(f"{prefix.rstrip('/')}/{target}")
+        candidate_paths.append(target)
+
+    seen = set()
+    ordered: List[str] = []
+    for p in candidate_paths:
+        p = _norm_path(p)
+        if p and p not in seen:
+            seen.add(p)
+            ordered.append(p)
+
+    for bucket in ARTIFACT_BUCKET_CANDIDATES:
+        for full_path in ordered:
+            obj = _storage_download_json(supabase, bucket, full_path)
+            if obj:
+                return bucket, obj, full_path
+    return "", {}, ""
+
+
+def _candidate_handoff_paths(state: Dict[str, Any]) -> List[str]:
+    candidates: List[str] = []
     for key in (
         "system_software_handoff_path",
         "software_handoff_path",
@@ -70,23 +199,70 @@ def _find_handoff_manifest_path(state: Dict[str, Any], workflow_dir: str) -> str
 
     system_block = state.get("system")
     if isinstance(system_block, dict):
-        for key in ("software_handoff_path",):
+        for key in ("software_handoff_path", "system_software_handoff_path"):
             value = system_block.get(key)
             if _is_nonempty_str(value):
                 candidates.append(_norm_path(value))
 
-    candidates.extend(
-        [
-            "system/software_handoff/system_software_handoff.json",
-            "system_software_handoff.json",
-        ]
-    )
+    candidates.extend(HANDOFF_SUFFIX_CANDIDATES)
+    return candidates
 
-    for candidate in candidates:
-        abs_path = _join_workflow_path(workflow_dir, candidate)
-        if os.path.isfile(abs_path):
-            return candidate
-    return ""
+
+def _resolve_handoff_manifest(state: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    if isinstance(state.get("system_software_handoff"), dict) and state.get("system_software_handoff"):
+        return state["system_software_handoff"], {
+            "resolution_mode": "state",
+            "handoff_storage_path": state.get("system_software_handoff_storage_path") or "state:system_software_handoff",
+            "source_workflow_id": state.get("system_firmware_workflow_id") or state.get("source_firmware_workflow_id") or "",
+            "workflow_row_found": False,
+            "storage_prefixes": [],
+            "artifact_bucket": state.get("system_software_handoff_bucket") or "",
+        }
+
+    source_workflow_id = _get_source_workflow_id(state)
+    workflow_dir = state.get("workflow_dir") or ""
+
+    if source_workflow_id:
+        supabase = _get_supabase(state)
+        wf_row = _workflow_row(supabase, source_workflow_id)
+        prefixes = _workflow_storage_prefixes(state, source_workflow_id, wf_row)
+
+        for candidate in _candidate_handoff_paths(state):
+            bucket, obj, full_path = _storage_exists_and_load(supabase, prefixes, candidate)
+            if obj:
+                return obj, {
+                    "resolution_mode": "supabase",
+                    "handoff_storage_path": full_path,
+                    "source_workflow_id": source_workflow_id,
+                    "workflow_row_found": bool(wf_row),
+                    "storage_prefixes": prefixes,
+                    "artifact_bucket": bucket,
+                    "workflow_name": wf_row.get("name") if isinstance(wf_row, dict) else None,
+                }
+
+    # Local fallback only if present.
+    if workflow_dir:
+        workflow_dir = os.path.abspath(workflow_dir)
+        for candidate in _candidate_handoff_paths(state):
+            obj = _safe_read_json(_join_workflow_path(workflow_dir, candidate))
+            if obj:
+                return obj, {
+                    "resolution_mode": "local",
+                    "handoff_storage_path": candidate,
+                    "source_workflow_id": source_workflow_id,
+                    "workflow_row_found": False,
+                    "storage_prefixes": [],
+                    "artifact_bucket": "",
+                }
+
+    return {}, {
+        "resolution_mode": "missing",
+        "handoff_storage_path": "",
+        "source_workflow_id": source_workflow_id,
+        "workflow_row_found": False,
+        "storage_prefixes": [],
+        "artifact_bucket": "",
+    }
 
 
 def _validate_handoff_manifest(obj: Dict[str, Any]) -> List[str]:
@@ -119,53 +295,160 @@ def _validate_handoff_manifest(obj: Dict[str, Any]) -> List[str]:
             if not _is_nonempty_str(firmware_contract.get(key)):
                 errors.append(f"{key}_missing")
 
-    software_inputs = obj.get("software_inputs")
-    if not isinstance(software_inputs, dict):
+    if not isinstance(obj.get("software_inputs"), dict):
         errors.append("software_inputs_missing")
 
     return errors
 
 
-def _build_input_contract(handoff_manifest: Dict[str, Any], handoff_path: str, workflow_dir: str, errors: List[str]) -> Dict[str, Any]:
+def _fetch_json_artifact_from_handoff(
+    supabase,
+    prefixes: List[str],
+    artifact_path: str,
+    workflow_dir: str,
+) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    if _is_nonempty_str(artifact_path):
+        bucket, obj, full_path = _storage_exists_and_load(supabase, prefixes, artifact_path)
+        if obj:
+            return obj, {"mode": "supabase", "resolved_path": full_path, "bucket": bucket}
+
+    if workflow_dir and _is_nonempty_str(artifact_path):
+        full_local = _join_workflow_path(workflow_dir, artifact_path)
+        obj = _safe_read_json(full_local)
+        if obj:
+            return obj, {"mode": "local", "resolved_path": full_local, "bucket": ""}
+
+    return {}, {"mode": "missing", "resolved_path": artifact_path or "", "bucket": ""}
+
+
+def _build_artifact_resolution_map(
+    handoff_manifest: Dict[str, Any],
+    workflow_dir: str,
+    state: Dict[str, Any],
+    resolution_meta: Dict[str, Any],
+) -> Dict[str, Any]:
+    source_workflow_id = resolution_meta.get("source_workflow_id") or handoff_manifest.get("source_workflow_id") or ""
+    prefixes = resolution_meta.get("storage_prefixes") or []
+    supabase = _get_supabase(state) if source_workflow_id else None
+
+    resolved: Dict[str, Any] = {}
+    hydrated: Dict[str, Any] = {}
+
+    sections = {
+        "system_contract": handoff_manifest.get("system_contract") or {},
+        "firmware_contract": handoff_manifest.get("firmware_contract") or {},
+        "verification_contract": handoff_manifest.get("verification_contract") or {},
+    }
+
+    for section_name, section in sections.items():
+        if not isinstance(section, dict):
+            continue
+        for key, value in section.items():
+            if not (_is_nonempty_str(key) and _is_nonempty_str(value) and key.endswith("_path")):
+                continue
+            if not value.strip().lower().endswith(".json"):
+                continue
+            if supabase is not None:
+                obj, meta = _fetch_json_artifact_from_handoff(supabase, prefixes, value, workflow_dir)
+            else:
+                obj, meta = _fetch_json_artifact_from_handoff(None, [], value, workflow_dir)
+            resolved_key = f"{section_name}.{key}"
+            resolved[resolved_key] = meta
+            if obj:
+                hydrated[resolved_key] = obj
+
+    return {"resolved": resolved, "hydrated": hydrated}
+
+
+def _artifact_meta_for_key(hydrated_map: Dict[str, Any], resolved_map: Dict[str, Any], section_name: str, key: str, raw_path: Any) -> Dict[str, Any]:
+    fq_key = f"{section_name}.{key}"
+    hydrated = hydrated_map.get(fq_key)
+    meta = resolved_map.get(fq_key) or {}
+    return {
+        "path": _norm_path(raw_path),
+        "exists": bool(isinstance(hydrated, dict) and hydrated),
+        "source": meta.get("mode") or "missing",
+        "resolved_path": meta.get("resolved_path") or "",
+        "bucket": meta.get("bucket") or "",
+    }
+
+
+def _build_input_contract(
+    handoff_manifest: Dict[str, Any],
+    handoff_path: str,
+    errors: List[str],
+    source_meta: Dict[str, Any],
+    hydrated_map: Dict[str, Any],
+    resolved_map: Dict[str, Any],
+) -> Dict[str, Any]:
     system_contract = handoff_manifest.get("system_contract") or {}
     firmware_contract = handoff_manifest.get("firmware_contract") or {}
     verification_contract = handoff_manifest.get("verification_contract") or {}
     software_inputs = handoff_manifest.get("software_inputs") or {}
     readiness = handoff_manifest.get("software_readiness") or {}
 
-    required_artifacts = {}
+    required_artifacts: Dict[str, Any] = {}
     for key in software_inputs.get("required_inputs", []) or []:
         source_value = None
+        source_section = ""
         if key in firmware_contract:
+            source_section = "firmware_contract"
             source_value = firmware_contract.get(key)
         elif key in system_contract:
-            source_value = system_contract.get(key)
-        required_artifacts[key] = {
-            "path": _norm_path(source_value),
-            "exists": bool(_is_nonempty_str(source_value) and os.path.exists(_join_workflow_path(workflow_dir, source_value))),
-        }
-
-    recommended_artifacts = {}
-    for key in software_inputs.get("recommended_inputs", []) or []:
-        source_value = None
-        if key in firmware_contract:
-            source_value = firmware_contract.get(key)
-        elif key in system_contract:
+            source_section = "system_contract"
             source_value = system_contract.get(key)
         elif key in verification_contract:
+            source_section = "verification_contract"
             source_value = verification_contract.get(key)
-        recommended_artifacts[key] = {
-            "path": _norm_path(source_value) if not isinstance(source_value, list) else "",
-            "paths": source_value if isinstance(source_value, list) else [],
-        }
+
+        if source_section:
+            required_artifacts[key] = _artifact_meta_for_key(
+                hydrated_map, resolved_map, source_section, key, source_value
+            )
+        else:
+            required_artifacts[key] = {
+                "path": _norm_path(source_value),
+                "exists": False,
+                "source": "missing",
+                "resolved_path": "",
+                "bucket": "",
+            }
+
+    recommended_artifacts: Dict[str, Any] = {}
+    for key in software_inputs.get("recommended_inputs", []) or []:
+        source_value = None
+        source_section = ""
+        if key in firmware_contract:
+            source_section = "firmware_contract"
+            source_value = firmware_contract.get(key)
+        elif key in system_contract:
+            source_section = "system_contract"
+            source_value = system_contract.get(key)
+        elif key in verification_contract:
+            source_section = "verification_contract"
+            source_value = verification_contract.get(key)
+
+        if isinstance(source_value, list):
+            recommended_artifacts[key] = {"path": "", "paths": source_value, "exists": False, "source": "list", "resolved_path": "", "bucket": ""}
+        elif source_section:
+            meta = _artifact_meta_for_key(hydrated_map, resolved_map, source_section, key, source_value)
+            recommended_artifacts[key] = {**meta, "paths": []}
+        else:
+            recommended_artifacts[key] = {"path": _norm_path(source_value), "paths": [], "exists": False, "source": "missing", "resolved_path": "", "bucket": ""}
 
     return {
         "package_type": "system_software_input_contract",
         "package_version": "1.0",
         "generated_at": _now(),
         "source_handoff_manifest_path": handoff_path,
-        "source_workflow_id": handoff_manifest.get("source_workflow_id"),
+        "source_workflow_id": source_meta.get("source_workflow_id") or handoff_manifest.get("source_workflow_id"),
         "source_workflow_type": handoff_manifest.get("source_workflow_type"),
+        "source_resolution": {
+            "mode": source_meta.get("resolution_mode"),
+            "artifact_bucket": source_meta.get("artifact_bucket") or "",
+            "storage_prefixes": source_meta.get("storage_prefixes") or [],
+            "workflow_row_found": bool(source_meta.get("workflow_row_found")),
+        },
         "input_status": {
             "valid": len(errors) == 0,
             "errors": errors,
@@ -184,12 +467,14 @@ def _build_input_contract(handoff_manifest: Dict[str, Any], handoff_path: str, w
 
 def _markdown_report(contract: Dict[str, Any]) -> str:
     status = contract.get("input_status") or {}
+    source = contract.get("source_resolution") or {}
     lines = [
         "# System Software Input Contract Summary",
         "",
         f"- Generated at: {contract.get('generated_at')}",
         f"- Source handoff: `{contract.get('source_handoff_manifest_path') or 'missing'}`",
         f"- Source workflow id: `{contract.get('source_workflow_id') or 'unavailable'}`",
+        f"- Resolution mode: `{source.get('mode') or 'unknown'}`",
         f"- Valid: `{status.get('valid')}`",
         "",
         "## Required artifacts",
@@ -199,7 +484,9 @@ def _markdown_report(contract: Dict[str, Any]) -> str:
     required = contract.get("required_artifacts") or {}
     if required:
         for key, item in required.items():
-            lines.append(f"- `{key}` → `{item.get('path') or 'missing'}` | exists=`{item.get('exists')}`")
+            lines.append(
+                f"- `{key}` → `{item.get('path') or 'missing'}` | exists=`{item.get('exists')}` | source=`{item.get('source')}`"
+            )
     else:
         lines.append("- (none)")
 
@@ -221,7 +508,7 @@ def _markdown_report(contract: Dict[str, Any]) -> str:
         "",
         "## Conclusion",
         "",
-        "This artifact is the normalized, validated input contract for System_Software. Downstream software agents should consume this contract rather than scraping firmware artifacts directly.",
+        "This artifact is the normalized, validated input contract for System_Software. Downstream software agents should consume the hydrated state objects and this contract rather than scraping firmware artifacts directly.",
         "",
     ])
     return "\n".join(lines)
@@ -229,38 +516,65 @@ def _markdown_report(contract: Dict[str, Any]) -> str:
 
 def run_agent(state: dict) -> dict:
     workflow_id = state.get("workflow_id") or "default"
-    workflow_dir = state.get("workflow_dir")
+    workflow_dir = os.path.abspath(state.get("workflow_dir")) if _is_nonempty_str(state.get("workflow_dir")) else ""
     print(f"\n📥 Running {AGENT_NAME}")
 
-    if not workflow_dir:
-        state["status"] = "❌ workflow_dir missing for system software handoff ingest"
+    handoff_obj, source_meta = _resolve_handoff_manifest(state)
+    if not handoff_obj:
+        state["status"] = "❌ system software handoff missing (state/supabase/local lookup failed)"
         return state
 
-    workflow_dir = os.path.abspath(workflow_dir)
-    handoff_path = _find_handoff_manifest_path(state, workflow_dir)
-    handoff_obj = _safe_read_json(_join_workflow_path(workflow_dir, handoff_path)) if handoff_path else {}
     errors = _validate_handoff_manifest(handoff_obj)
-    contract = _build_input_contract(handoff_obj, handoff_path, workflow_dir, errors)
+    artifact_resolution = _build_artifact_resolution_map(handoff_obj, workflow_dir, state, source_meta)
+    contract = _build_input_contract(
+        handoff_manifest=handoff_obj,
+        handoff_path=source_meta.get("handoff_storage_path") or "",
+        errors=errors,
+        source_meta=source_meta,
+        hydrated_map=artifact_resolution.get("hydrated") or {},
+        resolved_map=artifact_resolution.get("resolved") or {},
+    )
 
     debug_payload = {
         "agent": AGENT_NAME,
         "generated_at": _now(),
         "workflow_dir": workflow_dir,
-        "handoff_manifest_path": handoff_path,
+        "source_meta": source_meta,
         "validation_errors": errors,
+        "resolved_artifacts": artifact_resolution.get("resolved") or {},
+        "hydrated_artifact_keys": sorted(list((artifact_resolution.get("hydrated") or {}).keys())),
     }
 
     _record_text(workflow_id, CONTRACT_JSON, json.dumps(contract, indent=2))
     _record_text(workflow_id, SUMMARY_MD, _markdown_report(contract))
     _record_text(workflow_id, DEBUG_JSON, json.dumps(debug_payload, indent=2))
 
+    state["system_software_handoff"] = handoff_obj
+    state["system_software_handoff_storage_path"] = source_meta.get("handoff_storage_path") or ""
+    state["source_firmware_workflow_id"] = source_meta.get("source_workflow_id") or contract.get("source_workflow_id") or ""
+
+    hydrated = artifact_resolution.get("hydrated") or {}
+    state["system_integration_intent"] = hydrated.get("system_contract.system_integration_intent_path") or state.get("system_integration_intent") or {}
+    state["system_firmware_manifest"] = hydrated.get("firmware_contract.firmware_manifest_path") or state.get("system_firmware_manifest") or {}
+    state["system_register_map"] = hydrated.get("firmware_contract.register_map_path") or state.get("system_register_map") or {}
+    state["system_hal_contract"] = hydrated.get("firmware_contract.hal_path") or state.get("system_hal_contract") or {}
+    state["system_driver_contract"] = hydrated.get("firmware_contract.driver_path") or state.get("system_driver_contract") or {}
+    state["system_interrupt_mapping"] = hydrated.get("firmware_contract.interrupt_mapping_path") or state.get("system_interrupt_mapping") or {}
+    state["system_dma_integration"] = hydrated.get("firmware_contract.dma_integration_path") or state.get("system_dma_integration") or {}
+    state["system_boot_dependency_plan"] = hydrated.get("firmware_contract.boot_dependency_plan_path") or state.get("system_boot_dependency_plan") or {}
+    state["system_clock_config"] = hydrated.get("firmware_contract.clock_config_path") or state.get("system_clock_config") or {}
+    state["system_reset_sequence"] = hydrated.get("firmware_contract.reset_sequence_path") or state.get("system_reset_sequence") or {}
+    state["system_power_mode"] = hydrated.get("firmware_contract.power_mode_path") or state.get("system_power_mode") or {}
+
     state["system_software_input_contract"] = contract
     state["system_software_input_contract_path"] = f"{OUTPUT_SUBDIR}/{CONTRACT_JSON}"
     state["system_software_input_summary_path"] = f"{OUTPUT_SUBDIR}/{SUMMARY_MD}"
 
     system_block = state.setdefault("system", {})
-    system_block["software_input_contract"] = contract
-    system_block["software_input_contract_path"] = state["system_software_input_contract_path"]
+    if isinstance(system_block, dict):
+        system_block["software_input_contract"] = contract
+        system_block["software_input_contract_path"] = state["system_software_input_contract_path"]
+        system_block["source_firmware_workflow_id"] = state.get("source_firmware_workflow_id")
 
     state["status"] = (
         "✅ System software handoff ingested"
