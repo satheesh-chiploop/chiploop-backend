@@ -492,6 +492,10 @@ from agents.system.system_functional_coverage_agent import run_agent as system_f
 from agents.system.system_simulation_control_agent import run_agent as system_simulation_control_agent
 from agents.system.system_implementation_setup_agent import run_agent as system_implementation_setup_agent
 from agents.system.system_software_handoff_package_agent import run_agent as system_software_handoff_package_agent
+from agents.system.system_software_handoff_ingest_agent import run_agent as system_software_handoff_ingest_agent
+from agents.system.system_software_capability_model_agent import run_agent as system_software_capability_model_agent
+from agents.system.system_software_api_contract_agent import run_agent as system_software_api_contract_agent
+from agents.system.system_software_sdk_scaffold_agent import run_agent as system_software_sdk_scaffold_agent
 
 SYSTEM_AGENT_FUNCTIONS: Dict[str,Any] = {
     "Digital Spec Agent": digital_spec_agent,
@@ -615,6 +619,10 @@ SYSTEM_AGENT_FUNCTIONS: Dict[str,Any] = {
     "System Firmware CoSim Execution Agent": system_firmware_cosim_execution_agent,
     "System Firmware Coverage Summary Agent": system_firmware_coverage_summary_agent,
     "System Software Handoff Package Agent": system_software_handoff_package_agent,
+    "System Software Handoff Ingest Agent": system_software_handoff_ingest_agent,
+    "System Software Capability Model Agent": system_software_capability_model_agent,
+    "System Software API Contract Agent": system_software_api_contract_agent,
+    "System Software SDK Scaffold Agent": system_software_sdk_scaffold_agent,
 }
 
 
@@ -1706,6 +1714,27 @@ class SystemAppIn(BaseModel):
     digital_spec_text: str
     analog_spec_text: str
     soc_integration_spec_text: str
+
+
+class SystemSoftwareAppIn(BaseModel):
+    project_name: Optional[str] = None
+
+    # primary upstream handoff
+    system_software_handoff_path: Optional[str] = None
+    system_firmware_workflow_id: Optional[str] = None
+
+    # optional future reuse hooks (just pass through for now)
+    system_rtl_workflow_id: Optional[str] = None
+
+    # software-side intent
+    software_goal: Optional[str] = None
+    app_names: Optional[List[str]] = None
+    target_language: Optional[str] = None   # "c" | "rust" | "mixed"
+    sdk_style: Optional[str] = None         # "c_sdk" | "rust_crate" | "mixed"
+    build_system: Optional[str] = None      # "cmake" | "cargo" | "make"
+    notes: Optional[str] = None
+
+    toggles: Optional[Dict[str, Any]] = None
 
 # ==========================================================
 # ✅ DIGITAL APPS (Arch2RTL / DQA / Verify) — same pattern as Validation Run App
@@ -4854,5 +4883,19 @@ async def apps_system_firmware(
         payload,
         "App: System Firmware",
         "System_Firmware"
+    )
+
+@app.post("/apps/system/software/run")
+async def apps_system_software(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    payload: SystemSoftwareAppIn
+):
+    return _start_system_app(
+        background_tasks,
+        request,
+        payload,
+        "App: System Software",
+        "System_Software"
     )
 

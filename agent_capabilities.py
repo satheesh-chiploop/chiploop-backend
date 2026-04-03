@@ -1343,6 +1343,63 @@ AGENT_CAPABILITIES = {
         "requires": [],
     },
 
+    "System Software Handoff Ingest Agent": {
+        "domain": "system",
+        "inputs": [
+            "system/software_handoff/system_software_handoff.json"
+        ],
+        "outputs": [
+            "system/software/input/system_software_input_contract.json",
+            "system/software/input/system_software_input_summary.md",
+            "system/software/input/system_software_input_debug.json"
+        ],
+        "description": "Consumes the System_Firmware software handoff package, validates it, and produces a normalized input contract for downstream System_Software agents.",
+        "requires": [],
+    },
+
+    "System Software Capability Model Agent": {
+        "domain": "system",
+        "inputs": [
+            "system/software/input/system_software_input_contract.json"
+        ],
+        "outputs": [
+            "system/software/model/system_software_capability_model.json",
+            "system/software/model/system_software_capability_model.md"
+        ],
+        "description": "Builds a software-facing capability model from the validated handoff: platform services, register model summary, runtime constraints, and platform identity.",
+        "requires": [],
+    },
+
+    "System Software API Contract Agent": {
+        "domain": "system",
+        "inputs": [
+            "system/software/model/system_software_capability_model.json"
+        ],
+        "outputs": [
+            "system/software/sdk/system_software_api_contract.json",
+            "system/software/sdk/system_software_api_contract.md"
+        ],
+        "description": "Defines the public and internal System_Software API surface from the capability model, including service groups and method contracts.",
+        "requires": [],
+    },
+
+    "System Software SDK Scaffold Agent": {
+        "domain": "system",
+        "inputs": [
+            "system/software/sdk/system_software_api_contract.json"
+        ],
+        "outputs": [
+            "system/software/sdk/system_software_sdk_manifest.json",
+            "system/software/sdk/build_manifest.json",
+            "system/software/sdk/README.md",
+            "system/software/sdk/include/system_software_sdk.h",
+            "system/software/sdk/src/lib.rs",
+            "system/software/sdk/examples/example_app.c"
+        ],
+        "description": "Generates the initial System_Software SDK scaffold, including public header, Rust façade, example application, and build metadata.",
+        "requires": [],
+    },
+
     # -------------------------
     # Extended / optional digital flow agents
     # -------------------------
