@@ -321,6 +321,69 @@ def _fetch_json_artifact_from_handoff(
     return {}, {"mode": "missing", "resolved_path": artifact_path or "", "bucket": ""}
 
 
+def _resolve_artifact_presence_only(
+    supabase,
+    prefixes: List[str],
+    artifact_path: str,
+    workflow_dir: str,
+) -> Dict[str, Any]:
+    target = _norm_path(artifact_path)
+    if not target:
+        return {
+            "mode": "missing",
+            "resolved_path": "",
+            "bucket": "",
+            "exists": False,
+        }
+
+    candidate_paths: List[str] = []
+    if target.startswith("backend/workflows/") or target.startswith("artifacts/"):
+        candidate_paths.append(target)
+    else:
+        for prefix in prefixes:
+            candidate_paths.append(f"{prefix.rstrip('/')}/{target}")
+        candidate_paths.append(target)
+
+    seen = set()
+    ordered: List[str] = []
+    for p in candidate_paths:
+        p = _norm_path(p)
+        if p and p not in seen:
+            seen.add(p)
+            ordered.append(p)
+
+    if supabase is not None:
+        for bucket in ARTIFACT_BUCKET_CANDIDATES:
+            for full_path in ordered:
+                try:
+                    supabase.storage.from_(bucket).download(full_path)
+                    return {
+                        "mode": "supabase",
+                        "resolved_path": full_path,
+                        "bucket": bucket,
+                        "exists": True,
+                    }
+                except Exception:
+                    pass
+
+    if workflow_dir and _is_nonempty_str(artifact_path):
+        full_local = _join_workflow_path(workflow_dir, artifact_path)
+        if os.path.exists(full_local):
+            return {
+                "mode": "local",
+                "resolved_path": full_local,
+                "bucket": "",
+                "exists": True,
+            }
+
+    return {
+        "mode": "missing",
+        "resolved_path": artifact_path or "",
+        "bucket": "",
+        "exists": False,
+    }
+
+
 def _build_artifact_resolution_map(
     handoff_manifest: Dict[str, Any],
     workflow_dir: str,
@@ -343,33 +406,63 @@ def _build_artifact_resolution_map(
     for section_name, section in sections.items():
         if not isinstance(section, dict):
             continue
+
         for key, value in section.items():
             if not (_is_nonempty_str(key) and _is_nonempty_str(value) and key.endswith("_path")):
                 continue
-            if not value.strip().lower().endswith(".json"):
-                continue
-            if supabase is not None:
-                obj, meta = _fetch_json_artifact_from_handoff(supabase, prefixes, value, workflow_dir)
-            else:
-                obj, meta = _fetch_json_artifact_from_handoff(None, [], value, workflow_dir)
+
             resolved_key = f"{section_name}.{key}"
-            resolved[resolved_key] = meta
-            if obj:
-                hydrated[resolved_key] = obj
+            value_str = str(value).strip()
+            is_json = value_str.lower().endswith(".json")
+
+            if is_json:
+                if supabase is not None:
+                    obj, meta = _fetch_json_artifact_from_handoff(supabase, prefixes, value_str, workflow_dir)
+                else:
+                    obj, meta = _fetch_json_artifact_from_handoff(None, [], value_str, workflow_dir)
+
+                resolved[resolved_key] = {
+                    **meta,
+                    "exists": bool(obj) or bool(meta.get("resolved_path")),
+                    "artifact_kind": "json",
+                }
+
+                if obj:
+                    hydrated[resolved_key] = obj
+            else:
+                meta = _resolve_artifact_presence_only(
+                    supabase=supabase,
+                    prefixes=prefixes,
+                    artifact_path=value_str,
+                    workflow_dir=workflow_dir,
+                )
+                resolved[resolved_key] = {
+                    **meta,
+                    "artifact_kind": "file",
+                }
 
     return {"resolved": resolved, "hydrated": hydrated}
 
 
-def _artifact_meta_for_key(hydrated_map: Dict[str, Any], resolved_map: Dict[str, Any], section_name: str, key: str, raw_path: Any) -> Dict[str, Any]:
+
+def _artifact_meta_for_key(
+    hydrated_map: Dict[str, Any],
+    resolved_map: Dict[str, Any],
+    section_name: str,
+    key: str,
+    raw_path: Any,
+) -> Dict[str, Any]:
     fq_key = f"{section_name}.{key}"
     hydrated = hydrated_map.get(fq_key)
     meta = resolved_map.get(fq_key) or {}
+
     return {
         "path": _norm_path(raw_path),
-        "exists": bool(isinstance(hydrated, dict) and hydrated),
+        "exists": bool(meta.get("exists") or (isinstance(hydrated, dict) and hydrated)),
         "source": meta.get("mode") or "missing",
         "resolved_path": meta.get("resolved_path") or "",
         "bucket": meta.get("bucket") or "",
+        "artifact_kind": meta.get("artifact_kind") or ("json" if isinstance(hydrated, dict) and hydrated else "file"),
     }
 
 
@@ -535,6 +628,8 @@ def run_agent(state: dict) -> dict:
         resolved_map=artifact_resolution.get("resolved") or {},
     )
 
+
+
     debug_payload = {
         "agent": AGENT_NAME,
         "generated_at": _now(),
@@ -543,6 +638,10 @@ def run_agent(state: dict) -> dict:
         "validation_errors": errors,
         "resolved_artifacts": artifact_resolution.get("resolved") or {},
         "hydrated_artifact_keys": sorted(list((artifact_resolution.get("hydrated") or {}).keys())),
+        "non_json_resolved_keys": sorted([
+            k for k, v in (artifact_resolution.get("resolved") or {}).items()
+            if (v or {}).get("artifact_kind") == "file" and (v or {}).get("exists")
+        ]),
     }
 
     _record_text(workflow_id, CONTRACT_JSON, json.dumps(contract, indent=2))
@@ -554,6 +653,12 @@ def run_agent(state: dict) -> dict:
     state["source_firmware_workflow_id"] = source_meta.get("source_workflow_id") or contract.get("source_workflow_id") or ""
 
     hydrated = artifact_resolution.get("hydrated") or {}
+    resolved = artifact_resolution.get("resolved") or {}
+    firmware_contract = handoff_obj.get("firmware_contract") or {}
+    system_contract = handoff_obj.get("system_contract") or {}
+    verification_contract = handoff_obj.get("verification_contract") or {}
+
+    # Hydrated JSON objects
     state["system_integration_intent"] = hydrated.get("system_contract.system_integration_intent_path") or state.get("system_integration_intent") or {}
     state["system_firmware_manifest"] = hydrated.get("firmware_contract.firmware_manifest_path") or state.get("system_firmware_manifest") or {}
     state["system_register_map"] = hydrated.get("firmware_contract.register_map_path") or state.get("system_register_map") or {}
@@ -565,6 +670,24 @@ def run_agent(state: dict) -> dict:
     state["system_clock_config"] = hydrated.get("firmware_contract.clock_config_path") or state.get("system_clock_config") or {}
     state["system_reset_sequence"] = hydrated.get("firmware_contract.reset_sequence_path") or state.get("system_reset_sequence") or {}
     state["system_power_mode"] = hydrated.get("firmware_contract.power_mode_path") or state.get("system_power_mode") or {}
+
+    # Always preserve raw published paths too, even for non-JSON artifacts
+    state["system_integration_intent_path"] = system_contract.get("system_integration_intent_path") or state.get("system_integration_intent_path") or ""
+    state["system_firmware_manifest_path"] = firmware_contract.get("firmware_manifest_path") or state.get("system_firmware_manifest_path") or ""
+    state["system_register_map_path"] = firmware_contract.get("register_map_path") or state.get("system_register_map_path") or ""
+    state["system_hal_path"] = firmware_contract.get("hal_path") or state.get("system_hal_path") or ""
+    state["system_driver_path"] = firmware_contract.get("driver_path") or state.get("system_driver_path") or ""
+    state["system_interrupt_mapping_path"] = firmware_contract.get("interrupt_mapping_path") or state.get("system_interrupt_mapping_path") or ""
+    state["system_dma_path"] = firmware_contract.get("dma_integration_path") or state.get("system_dma_path") or ""
+    state["system_boot_dependency_plan_path"] = firmware_contract.get("boot_dependency_plan_path") or state.get("system_boot_dependency_plan_path") or ""
+    state["system_clock_config_path"] = firmware_contract.get("clock_config_path") or state.get("system_clock_config_path") or ""
+    state["system_reset_sequence_path"] = firmware_contract.get("reset_sequence_path") or state.get("system_reset_sequence_path") or ""
+    state["system_power_mode_path"] = firmware_contract.get("power_mode_path") or state.get("system_power_mode_path") or ""
+    state["system_cocotb_makefile_path"] = verification_contract.get("cocotb_makefile_path") or state.get("system_cocotb_makefile_path") or ""
+    state["system_validation_report_path"] = verification_contract.get("validation_report_path") or state.get("system_validation_report_path") or ""
+
+    # Optional: expose resolved metadata for debugging/future agents
+    state["system_software_resolved_artifacts"] = resolved
 
     state["system_software_input_contract"] = contract
     state["system_software_input_contract_path"] = f"{OUTPUT_SUBDIR}/{CONTRACT_JSON}"

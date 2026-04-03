@@ -426,6 +426,7 @@ def _build_manifest(
     interrupt_path = _find_first_existing(
         workflow_dir,
         [
+            "firmware/isr/interrupt_map.json",
             "firmware/interrupt/interrupt_mapping.json",
             "firmware/interrupt_mapping.json",
         ],
@@ -433,20 +434,25 @@ def _build_manifest(
     dma_path = _find_first_existing(
         workflow_dir,
         [
+            "firmware/dma/dma.rs",
             "firmware/dma/dma_integration.json",
             "firmware/dma_integration.json",
         ],
     )
+
     boot_plan_path = _find_first_existing(
         workflow_dir,
         [
+            "firmware/boot/boot_sequence.json",
             "firmware/boot/boot_dependency_plan.json",
             "firmware/boot_dependency_plan.json",
         ],
     )
+
     clock_config_path = _find_first_existing(
         workflow_dir,
         [
+            "firmware/boot/pll_config.rs",
             "firmware/clock/clock_pll_config.json",
             "firmware/clock_pll_config.json",
         ],
@@ -454,17 +460,21 @@ def _build_manifest(
     reset_sequence_path = _find_first_existing(
         workflow_dir,
         [
+            "firmware/boot/reset_sequence.rs",
             "firmware/reset/reset_sequence.json",
             "firmware/reset_sequence.json",
         ],
     )
+
     power_mode_path = _find_first_existing(
         workflow_dir,
         [
+            "firmware/power/power_modes.md",
             "firmware/power/power_modes.json",
             "firmware/power_mode_config.json",
         ],
     )
+
 
     package = {
         "package_type": "system_software_handoff",
@@ -483,6 +493,7 @@ def _build_manifest(
             "firmware_manifest_path": firmware_manifest_path,
             "register_map_path": register_map_path,
             "hal_path": hal_path,
+            "hal_format": "rust_source",
             "driver_path": driver_path,
             "register_dump_path": register_dump_path,
             "interrupt_mapping_path": interrupt_path,
@@ -491,6 +502,13 @@ def _build_manifest(
             "clock_config_path": clock_config_path,
             "reset_sequence_path": reset_sequence_path,
             "power_mode_path": power_mode_path,
+            "driver_format": "rust_source",
+            "interrupt_mapping_format": "json",
+            "dma_integration_format": "rust_source",
+            "boot_dependency_plan_format": "json",
+            "clock_config_format": "rust_source",
+            "reset_sequence_format": "rust_source",
+            "power_mode_format": "markdown",
             "elf_path": elf_info.get("elf_path"),
             "elf_exists": elf_info.get("elf_exists"),
             "elf_placeholder": elf_info.get("elf_placeholder"),
@@ -539,6 +557,8 @@ def _build_manifest(
         },
         "software_readiness": {
             "ready_for_system_software": True,
+            ready = not bool(gaps),
+            package["software_readiness"]["ready_for_system_software"] = ready,
             "package_quality": "provisional" if elf_info.get("elf_placeholder") else "ready",
             "blocking_gaps": [],
             "assumptions": [],
