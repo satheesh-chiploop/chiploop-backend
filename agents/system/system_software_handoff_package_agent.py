@@ -557,7 +557,7 @@ def _build_manifest(
         },
         "software_readiness": {
             "ready_for_system_software": True,
-            ready = not bool(gaps),
+            ready : not bool(gaps),
             package["software_readiness"]["ready_for_system_software"] = ready,
             "package_quality": "provisional" if elf_info.get("elf_placeholder") else "ready",
             "blocking_gaps": [],
