@@ -555,14 +555,14 @@ def _build_manifest(
             ],
             "public_api_candidates": api_candidates,
         },
+
         "software_readiness": {
             "ready_for_system_software": True,
-            ready : not bool(gaps),
-            package["software_readiness"]["ready_for_system_software"] : ready,
             "package_quality": "provisional" if elf_info.get("elf_placeholder") else "ready",
             "blocking_gaps": [],
             "assumptions": [],
         },
+    
     }
 
     gaps: List[str] = []
@@ -591,9 +591,12 @@ def _build_manifest(
     if exec_readiness.get("status") == "blocked":
         assumptions.append("system_firmware_execution_blocked")
 
+
     package["software_readiness"]["blocking_gaps"] = gaps
     package["software_readiness"]["assumptions"] = assumptions
-    package["software_readiness"]["ready_for_system_software"] = True
+    package["software_readiness"]["ready_for_system_software"] = not bool(gaps)
+
+
     return package
 
 
