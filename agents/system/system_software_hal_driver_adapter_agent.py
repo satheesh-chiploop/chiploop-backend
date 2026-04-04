@@ -218,6 +218,30 @@ def run_agent(state: dict) -> dict:
     _record_text(workflow_id, MANIFEST_JSON, json.dumps(manifest, indent=2))
     _record_text(workflow_id, SUMMARY_MD, _markdown_summary(manifest, written_files))
     _record_text(workflow_id, DEBUG_JSON, json.dumps(debug_payload, indent=2))
+
+    # NEW FILES
+    _record_text(workflow_id, "Cargo.toml", f"""
+    [package]
+    name = "{crate_name}_adapter"
+    version = "0.1.0"
+    edition = "2021"
+
+    [dependencies]
+    thiserror = "1"
+    """, subdir=f"{OUTPUT_SUBDIR}/{crate_name}")
+
+    _record_text(workflow_id, "lib.rs", f"""
+    pub mod adapter;
+    pub mod error;
+
+    pub use adapter::*;
+    """, subdir=f"{OUTPUT_SUBDIR}/{crate_name}/src")
+
+    _record_text(workflow_id, "mod.rs", """
+    pub mod register_adapter;
+    pub mod device_adapter;
+    """, subdir=f"{OUTPUT_SUBDIR}/{crate_name}/src/adapter")
+
     state["system_software_adapter_manifest"] = manifest
     state["system_software_adapter_manifest_path"] = f"{OUTPUT_SUBDIR}/{MANIFEST_JSON}"
     state["status"] = "✅ System software HAL/driver adapter generated"

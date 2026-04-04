@@ -128,7 +128,6 @@ def run_agent(state: dict) -> dict:
         _record_text(workflow_id, f"{name}.rs", _render_service(name, str(node.get("responsibility") or "service_runtime")), subdir=f"{OUTPUT_SUBDIR}/src")
         written.append(f"{OUTPUT_SUBDIR}/src/{name}.rs")
 
-    _record_text(workflow_id, "mod.rs", _render_mod(names), subdir=f"{OUTPUT_SUBDIR}/src")
     _record_text(workflow_id, "error.rs", _render_error(), subdir=f"{OUTPUT_SUBDIR}/src")
     written.extend([f"{OUTPUT_SUBDIR}/src/mod.rs", f"{OUTPUT_SUBDIR}/src/error.rs"])
 
@@ -136,6 +135,22 @@ def run_agent(state: dict) -> dict:
     _record_text(workflow_id, MANIFEST_JSON, json.dumps(manifest, indent=2))
     _record_text(workflow_id, SUMMARY_MD, _markdown(manifest))
     _record_text(workflow_id, DEBUG_JSON, json.dumps({"agent": AGENT_NAME, "generated_at": _now(), "service_names": names}, indent=2))
+
+
+    _record_text(workflow_id, "Cargo.toml", """
+[package]
+name = "system_services"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+thiserror = "1"
+""", subdir=OUTPUT_SUBDIR)
+
+    _record_text(workflow_id, "lib.rs", f"""
+pub mod error;
+{''.join([f'pub mod {name};\n' for name in names])}
+""", subdir=f"{OUTPUT_SUBDIR}/src")
     state["system_software_core_services_manifest"] = manifest
     state["system_software_core_services_manifest_path"] = f"{OUTPUT_SUBDIR}/{MANIFEST_JSON}"
     state["status"] = "✅ System software core services generated"

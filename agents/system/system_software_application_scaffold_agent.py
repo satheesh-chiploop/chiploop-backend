@@ -119,6 +119,18 @@ def run_agent(state: dict) -> dict:
     _record_text(workflow_id, MANIFEST_JSON, json.dumps(manifest, indent=2))
     _record_text(workflow_id, SUMMARY_MD, _markdown(manifest))
     _record_text(workflow_id, DEBUG_JSON, json.dumps({"agent": AGENT_NAME, "generated_at": _now(), "app_names": app_names, "crate_name": crate_name}, indent=2))
+
+    _record_text(workflow_id, "Cargo.toml", f"""
+[package]
+name = "{app_name}"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+{crate_name} = {{ path = "../../sdk/{crate_name}" }}
+system_services = {{ path = "../../services" }}
+""", subdir=f"{OUTPUT_SUBDIR}/{app_name}")
+
     state["system_software_application_manifest"] = manifest
     state["system_software_application_manifest_path"] = f"{OUTPUT_SUBDIR}/{MANIFEST_JSON}"
     state["status"] = "✅ System software applications generated"
