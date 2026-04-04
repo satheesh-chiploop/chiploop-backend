@@ -218,7 +218,7 @@ impl Sdk {{
         Self {{}}
     }}
 
-{methods_block}
+{methods}
 }}
 '''
 
