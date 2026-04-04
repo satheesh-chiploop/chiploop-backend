@@ -237,7 +237,8 @@ def run_agent(state: dict) -> dict:
     pub use adapter::{RegisterAdapter, DeviceAdapter};
     """, subdir=f"{OUTPUT_SUBDIR}/{crate_name}/src")
 
-   _record_text(workflow_id, "mod.rs", """
+
+    _record_text(workflow_id, "mod.rs", """
     pub mod register_adapter;
     pub mod device_adapter;
 
