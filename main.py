@@ -496,6 +496,11 @@ from agents.system.system_software_handoff_ingest_agent import run_agent as syst
 from agents.system.system_software_capability_model_agent import run_agent as system_software_capability_model_agent
 from agents.system.system_software_api_contract_agent import run_agent as system_software_api_contract_agent
 from agents.system.system_software_sdk_scaffold_agent import run_agent as system_software_sdk_scaffold_agent
+from agents.system.system_software_hal_driver_adapter_agent import run_agent as system_software_hal_driver_adapter_agent
+from agents.system.system_software_config_schema_agent import run_agent as system_software_config_schema_agent
+from agents.system.system_software_service_architecture_agent import run_agent as system_software_service_architecture_agent
+from agents.system.system_software_core_service_agent import run_agent as system_software_core_service_agent
+from agents.system.system_software_application_scaffold_agent import run_agent as system_software_application_scaffold_agent
 
 SYSTEM_AGENT_FUNCTIONS: Dict[str,Any] = {
     "Digital Spec Agent": digital_spec_agent,
@@ -623,6 +628,11 @@ SYSTEM_AGENT_FUNCTIONS: Dict[str,Any] = {
     "System Software Capability Model Agent": system_software_capability_model_agent,
     "System Software API Contract Agent": system_software_api_contract_agent,
     "System Software SDK Scaffold Agent": system_software_sdk_scaffold_agent,
+    "System Software HAL/Driver Adapter Agent": system_software_hal_driver_adapter_agent,
+    "System Software Config Schema Agent": system_software_config_schema_agent,
+    "System Software Service Architecture Agent": system_software_service_architecture_agent,
+    "System Software Core Service Agent": system_software_core_service_agent,
+    "System Software Application Scaffold Agent": system_software_application_scaffold_agent,
 }
 
 

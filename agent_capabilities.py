@@ -1400,6 +1400,92 @@ AGENT_CAPABILITIES = {
         "requires": [],
     },
 
+     
+    "System Software HAL/Driver Adapter Agent": {
+        "domain": "system",
+        "inputs": [
+            "system/software/input/system_software_input_contract.json",
+            "system/software/sdk/system_software_api_contract.json",
+            "firmware/hal/registers.rs(optional)",
+            "firmware/drivers/driver_scaffold.rs(optional)"
+        ],
+        "outputs": [
+            "system/software/adapter/system_software_adapter_manifest.json",
+            "system/software/adapter/system_software_adapter_summary.md",
+            "system/software/adapter/system_software_adapter_debug.json",
+            "system/software/adapter/src/hal_driver_adapter.rs"
+        ],
+        "description": "Builds a stable software adapter layer over firmware HAL, drivers, and register access for use by SDK and services.",
+        "requires": [],
+    },
+
+    "System Software Config Schema Agent": {
+        "domain": "system",
+        "inputs": [
+            "system/software/model/system_software_capability_model.json",
+            "system/software/adapter/system_software_adapter_manifest.json(optional)"
+        ],
+        "outputs": [
+            "system/software/config/system_software_config_schema.json",
+            "system/software/config/system_software_config_summary.md",
+            "system/software/config/system_software_config_debug.json",
+            "system/software/config/default_config.json"
+        ],
+        "description": "Defines the runtime configuration schema, defaults, and software configuration contract for services and applications.",
+        "requires": [],
+    },
+
+    "System Software Service Architecture Agent": {
+        "domain": "system",
+        "inputs": [
+            "system/software/model/system_software_capability_model.json",
+            "system/software/config/system_software_config_schema.json",
+            "system/software/sdk/system_software_api_contract.json"
+        ],
+        "outputs": [
+            "system/software/architecture/system_software_architecture.json",
+            "system/software/architecture/system_software_architecture.md",
+            "system/software/architecture/system_software_architecture_debug.json"
+        ],
+        "description": "Defines the System_Software architecture split across services, libraries, daemons, tools, and application-facing layers.",
+        "requires": [],
+    },
+
+    "System Software Core Service Agent": {
+        "domain": "system",
+        "inputs": [
+            "system/software/architecture/system_software_architecture.json",
+            "system/software/config/system_software_config_schema.json",
+            "system/software/adapter/system_software_adapter_manifest.json(optional)"
+        ],
+        "outputs": [
+            "system/software/services/system_software_services_manifest.json",
+            "system/software/services/system_software_services_summary.md",
+            "system/software/services/system_software_services_debug.json",
+            "system/software/services/src/*.rs"
+        ],
+        "description": "Generates core platform services such as init manager, health monitor, telemetry, diagnostics, and control service.",
+        "requires": [],
+    },
+
+    "System Software Application Scaffold Agent": {
+        "domain": "system",
+        "inputs": [
+            "system/software/sdk/system_software_sdk_manifest.json",
+            "system/software/architecture/system_software_architecture.json",
+            "system/software/services/system_software_services_manifest.json(optional)",
+            "system/software/config/system_software_config_schema.json"
+        ],
+        "outputs": [
+            "system/software/apps/system_software_apps_manifest.json",
+            "system/software/apps/system_software_apps_summary.md",
+            "system/software/apps/system_software_apps_debug.json",
+            "system/software/apps/*"
+        ],
+        "description": "Generates sample applications and app templates using the SDK, APIs, configuration model, and core services.",
+        "requires": [],
+    },
+
     # -------------------------
     # Extended / optional digital flow agents
     # -------------------------
