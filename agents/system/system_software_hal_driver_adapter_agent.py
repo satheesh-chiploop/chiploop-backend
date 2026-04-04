@@ -206,7 +206,7 @@ def run_agent(state: dict) -> dict:
     files_to_write = {
         f"{crate_name}/src/adapter/register_adapter.rs": _render_register_adapter(),
         f"{crate_name}/src/adapter/device_adapter.rs": _render_device_adapter(bool(fc.get("interrupt_mapping_path")), bool(fc.get("dma_integration_path")), bool(fc.get("power_mode_path"))),
-        f"{crate_name}/src/adapter/error.rs": _render_error_module(),
+        f"{crate_name}/src/error.rs": _render_error_module(),
     }
     for rel_path, content in files_to_write.items():
         subdir, filename = rel_path.rsplit("/", 1)
@@ -234,7 +234,8 @@ def run_agent(state: dict) -> dict:
     pub mod adapter;
     pub mod error;
 
-    pub use adapter::*;
+
+    pub use adapter::{RegisterAdapter, DeviceAdapter};
     """, subdir=f"{OUTPUT_SUBDIR}/{crate_name}/src")
 
     _record_text(workflow_id, "mod.rs", """

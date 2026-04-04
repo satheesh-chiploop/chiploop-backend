@@ -110,16 +110,15 @@ def run_agent(state: dict) -> dict:
     crate_name = str(sdk_manifest.get("crate_name") or "system_software_sdk").strip()
     app_names = _app_names(state, sdk_manifest)
     written = []
+
     for app_name in app_names:
-        subdir = f"{OUTPUT_SUBDIR}/{app_name}/src"
-        _record_text(workflow_id, "main.rs", _render_app(crate_name, app_name), subdir=subdir)
-        written.append(f"{subdir}/main.rs")
+    subdir = f"{OUTPUT_SUBDIR}/{app_name}/src"
 
-    manifest = _manifest(arch.get("source_workflow_id"), crate_name, written, app_names)
-    _record_text(workflow_id, MANIFEST_JSON, json.dumps(manifest, indent=2))
-    _record_text(workflow_id, SUMMARY_MD, _markdown(manifest))
-    _record_text(workflow_id, DEBUG_JSON, json.dumps({"agent": AGENT_NAME, "generated_at": _now(), "app_names": app_names, "crate_name": crate_name}, indent=2))
+    # main.rs
+    _record_text(workflow_id, "main.rs", _render_app(crate_name, app_name), subdir=subdir)
+    written.append(f"{subdir}/main.rs")
 
+    # FIX: Cargo.toml per app
     _record_text(workflow_id, "Cargo.toml", f"""
 [package]
 name = "{app_name}"
@@ -130,6 +129,14 @@ edition = "2021"
 {crate_name} = {{ path = "../../sdk/{crate_name}" }}
 system_services = {{ path = "../../services" }}
 """, subdir=f"{OUTPUT_SUBDIR}/{app_name}")
+
+    written.append(f"{OUTPUT_SUBDIR}/{app_name}/Cargo.toml")
+    
+    
+    manifest = _manifest(arch.get("source_workflow_id"), crate_name, written, app_names)
+    _record_text(workflow_id, MANIFEST_JSON, json.dumps(manifest, indent=2))
+    _record_text(workflow_id, SUMMARY_MD, _markdown(manifest))
+    _record_text(workflow_id, DEBUG_JSON, json.dumps({"agent": AGENT_NAME, "generated_at": _now(), "app_names": app_names, "crate_name": crate_name}, indent=2))
 
     state["system_software_application_manifest"] = manifest
     state["system_software_application_manifest_path"] = f"{OUTPUT_SUBDIR}/{MANIFEST_JSON}"
