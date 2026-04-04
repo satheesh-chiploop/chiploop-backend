@@ -112,7 +112,7 @@ def run_agent(state: dict) -> dict:
     written = []
 
     for app_name in app_names:
-    subdir = f"{OUTPUT_SUBDIR}/{app_name}/src"
+        subdir = f"{OUTPUT_SUBDIR}/{app_name}/src"
 
     # main.rs
     _record_text(workflow_id, "main.rs", _render_app(crate_name, app_name), subdir=subdir)
