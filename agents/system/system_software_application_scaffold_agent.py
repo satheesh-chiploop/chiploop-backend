@@ -114,23 +114,23 @@ def run_agent(state: dict) -> dict:
     for app_name in app_names:
         subdir = f"{OUTPUT_SUBDIR}/{app_name}/src"
 
-    # main.rs
-    _record_text(workflow_id, "main.rs", _render_app(crate_name, app_name), subdir=subdir)
-    written.append(f"{subdir}/main.rs")
+        # main.rs
+        _record_text(workflow_id, "main.rs", _render_app(crate_name, app_name), subdir=subdir)
+        written.append(f"{subdir}/main.rs")
 
-    # FIX: Cargo.toml per app
-    _record_text(workflow_id, "Cargo.toml", f"""
-[package]
-name = "{app_name}"
-version = "0.1.0"
-edition = "2021"
+        # FIX: Cargo.toml per app
+        _record_text(workflow_id, "Cargo.toml", f"""
+    [package]
+    name = "{app_name}"
+    version = "0.1.0"
+    edition = "2021"
 
-[dependencies]
-{crate_name} = {{ path = "../../sdk/{crate_name}" }}
-system_services = {{ path = "../../services" }}
-""", subdir=f"{OUTPUT_SUBDIR}/{app_name}")
+    [dependencies]
+    {crate_name} = {{ path = "../../sdk/{crate_name}" }}
+    system_services = {{ path = "../../services" }}
+    """, subdir=f"{OUTPUT_SUBDIR}/{app_name}")
 
-    written.append(f"{OUTPUT_SUBDIR}/{app_name}/Cargo.toml")
+        written.append(f"{OUTPUT_SUBDIR}/{app_name}/Cargo.toml")
     
     
     manifest = _manifest(arch.get("source_workflow_id"), crate_name, written, app_names)
