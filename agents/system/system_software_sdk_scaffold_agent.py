@@ -138,17 +138,34 @@ def _method_signature(method: Dict[str, Any]) -> str:
 def _render_rust_lib(crate_name: str, api_contract: Dict[str, Any]) -> str:
     groups = _public_groups(api_contract)
     methods: List[str] = []
+    seen_names = set()
+
     for group in groups:
         for method in group.get("methods") or []:
             if isinstance(method, dict):
+                name = str(method.get("name") or "").strip()
+                if not name or name in seen_names:
+                    continue
+                seen_names.add(name)
                 methods.append(_method_signature(method))
 
-    
-    methods.append({
-        "name": "platform_probe",
-        "inputs": [],
-        "returns": "PlatformInfo"
-    })
+    # Always provide a stable platform probe for examples / CLI / diagnostics.
+    if "platform_probe" not in seen_names:
+        methods.append(
+            _method_signature({
+                "name": "platform_probe",
+                "inputs": [],
+                "returns": "PlatformInfo",
+            })
+        )
+
+    methods_block = (
+        "\n\n".join(methods)
+        if methods
+        else "    pub fn platform_probe(&self) -> Result<PlatformInfo, SoftwareError> {\n"
+             "        Ok(PlatformInfo::default())\n"
+             "    }"
+    )
 
     return f'''use serde::{{Deserialize, Serialize}};
 
@@ -218,9 +235,11 @@ impl Sdk {{
         Self {{}}
     }}
 
-{methods}
+{methods_block}
 }}
 '''
+
+
 
 
 def _render_rust_cargo(crate_name: str) -> str:
