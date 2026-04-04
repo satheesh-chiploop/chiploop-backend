@@ -12,9 +12,15 @@ SUMMARY_MD = "system_software_handoff.md"
 FILELIST_TXT = "software_artifact_filelist.txt"
 DEBUG_JSON = "system_software_handoff_debug.json"
 
+ARTIFACT_BUCKET = "artifacts"
+REQUIRED_FIRMWARE_MANIFEST = "firmware/firmware_manifest.json"
 
+
+# -----------------------------------------------------------------------------
+# Basic helpers
+# -----------------------------------------------------------------------------
 def _now() -> str:
-    return datetime.datetime.now().isoformat()
+    return datetime.datetime.now(datetime.timezone.utc).isoformat()
 
 
 def _norm_path(value: Any) -> str:
@@ -37,72 +43,12 @@ def _dedupe_keep_order(items: List[str]) -> List[str]:
     return out
 
 
-def _all_state_containers(state: Dict[str, Any]) -> List[Dict[str, Any]]:
-    containers = [state]
-    for key in ("system", "embedded", "firmware", "firmware_build"):
-        block = state.get(key)
-        if isinstance(block, dict):
-            containers.append(block)
-    return containers
-
-
-def _collect_candidate_values(state: Dict[str, Any], keys: List[str]) -> List[Any]:
-    values: List[Any] = []
-    for container in _all_state_containers(state):
-        for key in keys:
-            if key in container:
-                values.append(container.get(key))
-    return values
-
-
-def _collect_paths_from_keys(state: Dict[str, Any], keys: List[str]) -> List[str]:
-    found: List[str] = []
-    for value in _collect_candidate_values(state, keys):
-        if isinstance(value, list):
-            found.extend([_norm_path(v) for v in value if _is_nonempty_str(v)])
-        elif _is_nonempty_str(value):
-            found.append(_norm_path(value))
-    return _dedupe_keep_order(found)
-
-
-def _first_path_from_keys(state: Dict[str, Any], keys: List[str]) -> str:
-    hits = _collect_paths_from_keys(state, keys)
-    return hits[0] if hits else ""
-
-
 def _join_workflow_path(workflow_dir: str, rel_or_abs: str) -> str:
     if not rel_or_abs:
         return ""
     if os.path.isabs(rel_or_abs):
         return rel_or_abs
     return os.path.abspath(os.path.join(workflow_dir, rel_or_abs))
-
-
-def _path_exists(workflow_dir: str, rel_or_abs: str) -> bool:
-    abs_path = _join_workflow_path(workflow_dir, rel_or_abs)
-    return bool(abs_path and os.path.exists(abs_path))
-
-
-def _to_relpath(workflow_dir: str, rel_or_abs: str) -> str:
-    path = _norm_path(rel_or_abs)
-    if not path:
-        return ""
-    if not os.path.isabs(path):
-        return path
-    try:
-        rel = os.path.relpath(path, workflow_dir)
-        return rel.replace("\\", "/")
-    except Exception:
-        return path
-
-
-def _normalize_entries(workflow_dir: str, entries: List[str]) -> List[str]:
-    out: List[str] = []
-    for entry in entries:
-        rel = _to_relpath(workflow_dir, entry)
-        if rel:
-            out.append(rel)
-    return _dedupe_keep_order(out)
 
 
 def _safe_read_json(path: str) -> Dict[str, Any]:
@@ -139,86 +85,264 @@ def _record_text(workflow_id: str, subdir: str, filename: str, content: str) -> 
         return None
 
 
-def _find_first_existing(workflow_dir: str, candidates: List[str]) -> str:
-    for candidate in candidates:
-        if _is_nonempty_str(candidate) and _path_exists(workflow_dir, candidate):
-            return _to_relpath(workflow_dir, candidate)
+# -----------------------------------------------------------------------------
+# State traversal
+# -----------------------------------------------------------------------------
+def _all_state_containers(state: Dict[str, Any]) -> List[Dict[str, Any]]:
+    containers = [state]
+    for key in ("system", "embedded", "firmware", "firmware_build"):
+        block = state.get(key)
+        if isinstance(block, dict):
+            containers.append(block)
+    return containers
+
+
+def _collect_candidate_values(state: Dict[str, Any], keys: List[str]) -> List[Any]:
+    values: List[Any] = []
+    for container in _all_state_containers(state):
+        for key in keys:
+            if key in container:
+                values.append(container.get(key))
+    return values
+
+
+def _collect_paths_from_keys(state: Dict[str, Any], keys: List[str]) -> List[str]:
+    found: List[str] = []
+    for value in _collect_candidate_values(state, keys):
+        if isinstance(value, list):
+            found.extend([_norm_path(v) for v in value if _is_nonempty_str(v)])
+        elif _is_nonempty_str(value):
+            found.append(_norm_path(value))
+    return _dedupe_keep_order(found)
+
+
+def _first_path_from_keys(state: Dict[str, Any], keys: List[str]) -> str:
+    hits = _collect_paths_from_keys(state, keys)
+    return hits[0] if hits else ""
+
+
+# -----------------------------------------------------------------------------
+# Supabase helpers
+# -----------------------------------------------------------------------------
+def _get_supabase(state: Dict[str, Any]):
+    client = state.get("supabase_client")
+    if client is None:
+        raise RuntimeError("supabase_client missing from state")
+    return client
+
+
+def _get_source_workflow_id(state: Dict[str, Any]) -> str:
+    for key in (
+        "source_workflow_id",
+        "system_firmware_workflow_id",
+        "source_firmware_workflow_id",
+        # fallback only if caller directly runs package agent inside firmware workflow
+        "workflow_id",
+    ):
+        value = state.get(key)
+        if _is_nonempty_str(value):
+            return str(value).strip()
+
+    system_block = state.get("system") or {}
+    if isinstance(system_block, dict):
+        for key in ("source_firmware_workflow_id", "system_firmware_workflow_id"):
+            value = system_block.get(key)
+            if _is_nonempty_str(value):
+                return str(value).strip()
+
     return ""
 
 
-def _find_firmware_manifest_path(state: Dict[str, Any], workflow_dir: str) -> str:
-    direct = _first_path_from_keys(
-        state,
-        [
-            "firmware_manifest_path",
-            "system_firmware_manifest_path",
-            "embedded_firmware_manifest_path",
-            "manifest_path",
-        ],
-    )
-    if direct and _path_exists(workflow_dir, direct):
-        return _to_relpath(workflow_dir, direct)
-
-    # Supabase fallback
+def _workflow_row(supabase, workflow_id: str) -> Dict[str, Any]:
+    if not workflow_id:
+        return {}
     try:
-        supabase = _get_supabase(state)
-        source_workflow_id = _get_source_workflow_id(state)
-        wf_row = _workflow_row(supabase, source_workflow_id)
-        prefixes = _workflow_storage_prefixes(state, source_workflow_id, wf_row)
-        resolved = _resolve_supabase_artifact_path(supabase, prefixes, "firmware/firmware_manifest.json")
-        if resolved:
-            return "firmware/firmware_manifest.json"
+        resp = (
+            supabase.table("workflows")
+            .select("id,user_id,name,loop_type,artifacts,definitions")
+            .eq("id", workflow_id)
+            .single()
+            .execute()
+        )
+        return resp.data or {}
     except Exception:
-        pass
-
-    return _find_first_existing(
-        workflow_dir,
-        [
-            "firmware/firmware_manifest.json",
-        ],
-    )
+        return {}
 
 
+def _workflow_storage_prefixes(state: Dict[str, Any], source_workflow_id: str, workflow_row: Dict[str, Any]) -> List[str]:
+    prefixes: List[str] = []
 
-def _find_register_map_path(state: Dict[str, Any], workflow_dir: str, manifest: Dict[str, Any]) -> str:
-    return _resolve_contract_path(
-        state=state,
-        workflow_dir=workflow_dir,
-        manifest=manifest,
-        state_keys=[
-            "firmware_register_map_path",
-            "register_map_path",
-            "system_register_map_path",
-            "regmap_json",
-        ],
-        manifest_key="register_map_path",
-        fallbacks=[
-            "firmware/register_map.json",
-            "digital/digital_regmap.json",
-            "handoff/docs/regmap/digital_regmap.json",
-            "handoff/digital_subsystem_ip_package/docs/regmap/digital_regmap.json",
-        ],
-    )
+    explicit_prefix = state.get("artifact_prefix") or state.get("source_artifact_prefix")
+    if _is_nonempty_str(explicit_prefix):
+        prefixes.append(_norm_path(explicit_prefix).rstrip("/") + "/")
 
+    prefixes.append(f"backend/workflows/{source_workflow_id}/")
 
-def _find_manifest_contract_path(workflow_dir: str, manifest: Dict[str, Any], key: str, fallbacks: List[str]) -> str:
-    candidate = _norm_path(manifest.get(key))
-    if candidate and _path_exists(workflow_dir, candidate):
-        return _to_relpath(workflow_dir, candidate)
-    return _find_first_existing(workflow_dir, fallbacks)
+    user_id = (workflow_row or {}).get("user_id")
+    if _is_nonempty_str(user_id):
+        prefixes.append(f"artifacts/{user_id}/{source_workflow_id}/")
+        prefixes.append(f"{user_id}/{source_workflow_id}/")
+
+    seen = set()
+    out: List[str] = []
+    for p in prefixes:
+        p = _norm_path(p)
+        if p and p not in seen:
+            seen.add(p)
+            out.append(p)
+    return out
 
 
-def _find_system_integration_intent_path(state: Dict[str, Any], workflow_dir: str) -> str:
+def _resolve_supabase_artifact_path(supabase, prefixes: List[str], rel_or_abs: str) -> str:
+    target = _norm_path(rel_or_abs)
+    if not target:
+        return ""
+
+    candidates: List[str] = []
+    if target.startswith("backend/workflows/") or target.startswith("artifacts/"):
+        candidates.append(target)
+    else:
+        for prefix in prefixes:
+            candidates.append(f"{prefix.rstrip('/')}/{target}")
+        candidates.append(target)
+
+    seen = set()
+    ordered: List[str] = []
+    for c in candidates:
+        c = _norm_path(c)
+        if c and c not in seen:
+            seen.add(c)
+            ordered.append(c)
+
+    for candidate in ordered:
+        try:
+            supabase.storage.from_(ARTIFACT_BUCKET).download(candidate)
+            return candidate
+        except Exception:
+            pass
+    return ""
+
+
+def _load_json_from_supabase(supabase, prefixes: List[str], rel_or_abs: str) -> Tuple[Dict[str, Any], str]:
+    resolved = _resolve_supabase_artifact_path(supabase, prefixes, rel_or_abs)
+    if not resolved:
+        return {}, ""
+
+    try:
+        raw = supabase.storage.from_(ARTIFACT_BUCKET).download(resolved)
+        text = raw.decode("utf-8") if isinstance(raw, bytes) else str(raw)
+        obj = json.loads(text)
+        return (obj if isinstance(obj, dict) else {}), resolved
+    except Exception:
+        return {}, ""
+
+
+def _artifact_exists(workflow_dir: str, supabase, prefixes: List[str], rel_path: str) -> Dict[str, Any]:
+    rel_path = _norm_path(rel_path)
+    if not rel_path:
+        return {"exists": False, "mode": "missing", "resolved_path": "", "bucket": ""}
+
+    local = _join_workflow_path(workflow_dir, rel_path) if workflow_dir else ""
+    if local and os.path.exists(local):
+        return {"exists": True, "mode": "local", "resolved_path": local, "bucket": ""}
+
+    if supabase is not None:
+        resolved = _resolve_supabase_artifact_path(supabase, prefixes, rel_path)
+        if resolved:
+            return {"exists": True, "mode": "supabase", "resolved_path": resolved, "bucket": ARTIFACT_BUCKET}
+
+    return {"exists": False, "mode": "missing", "resolved_path": rel_path, "bucket": ""}
+
+
+# -----------------------------------------------------------------------------
+# Manifest-first contract resolution
+# -----------------------------------------------------------------------------
+def _load_required_firmware_manifest(state: Dict[str, Any], workflow_dir: str) -> Tuple[str, Dict[str, Any], Dict[str, Any]]:
+    for key in ("system_firmware_manifest", "firmware_manifest", "embedded_firmware_manifest"):
+        obj = state.get(key)
+        if isinstance(obj, dict) and obj:
+            return REQUIRED_FIRMWARE_MANIFEST, obj, {
+                "mode": "state",
+                "resolved_path": "state:" + key,
+                "bucket": "",
+                "source_workflow_id": _get_source_workflow_id(state),
+                "storage_prefixes": [],
+            }
+
+    if workflow_dir:
+        local = _join_workflow_path(workflow_dir, REQUIRED_FIRMWARE_MANIFEST)
+        obj = _safe_read_json(local)
+        if obj:
+            return REQUIRED_FIRMWARE_MANIFEST, obj, {
+                "mode": "local",
+                "resolved_path": local,
+                "bucket": "",
+                "source_workflow_id": _get_source_workflow_id(state),
+                "storage_prefixes": [],
+            }
+
+    supabase = _get_supabase(state)
+    source_workflow_id = _get_source_workflow_id(state)
+    if not source_workflow_id:
+        raise RuntimeError("source firmware workflow_id missing from state")
+
+    wf_row = _workflow_row(supabase, source_workflow_id)
+    prefixes = _workflow_storage_prefixes(state, source_workflow_id, wf_row)
+    obj, resolved = _load_json_from_supabase(supabase, prefixes, REQUIRED_FIRMWARE_MANIFEST)
+    if obj:
+        return REQUIRED_FIRMWARE_MANIFEST, obj, {
+            "mode": "supabase",
+            "resolved_path": resolved,
+            "bucket": ARTIFACT_BUCKET,
+            "source_workflow_id": source_workflow_id,
+            "storage_prefixes": prefixes,
+            "workflow_row_found": bool(wf_row),
+            "workflow_name": wf_row.get("name") if isinstance(wf_row, dict) else None,
+        }
+
+    raise RuntimeError(f"Required firmware manifest missing: {REQUIRED_FIRMWARE_MANIFEST}")
+
+
+def _required_manifest_path(manifest: Dict[str, Any], key: str) -> str:
+    value = _norm_path(manifest.get(key))
+    if not value:
+        raise RuntimeError(f"Required manifest key missing: {key}")
+    return value
+
+
+def _optional_manifest_path(manifest: Dict[str, Any], key: str) -> str:
+    return _norm_path(manifest.get(key))
+
+
+# -----------------------------------------------------------------------------
+# Other discovery helpers (non-authoritative)
+# -----------------------------------------------------------------------------
+def _find_system_integration_intent_path(state: Dict[str, Any], workflow_dir: str, supabase, prefixes: List[str]) -> str:
     direct = _first_path_from_keys(state, ["system_integration_intent_json", "integration_json_path"])
-    if direct and _path_exists(workflow_dir, direct):
-        return _to_relpath(workflow_dir, direct)
-    return _find_first_existing(
-        workflow_dir,
-        [
-            "system/integration/system_integration_intent.json",
-            "system_integration_intent.json",
-        ],
-    )
+    for candidate in [direct, "system/integration/system_integration_intent.json", "system_integration_intent.json"]:
+        candidate = _norm_path(candidate)
+        if not candidate:
+            continue
+        if _artifact_exists(workflow_dir, supabase, prefixes, candidate).get("exists"):
+            return candidate
+    return ""
+
+
+def _find_soc_top_sim_path(state: Dict[str, Any], workflow_dir: str, supabase, prefixes: List[str]) -> str:
+    direct = _first_path_from_keys(state, ["soc_top_sim_path", "system_top_sim_path", "top_sim_path"])
+    for candidate in [direct, "system/integration/soc_top_sim.sv"]:
+        candidate = _norm_path(candidate)
+        if not candidate:
+            continue
+        if _artifact_exists(workflow_dir, supabase, prefixes, candidate).get("exists"):
+            return candidate
+
+    integ_dir = os.path.join(workflow_dir, "system", "integration") if workflow_dir else ""
+    if integ_dir and os.path.isdir(integ_dir):
+        for name in sorted(os.listdir(integ_dir)):
+            if name.endswith("_sim.sv"):
+                return f"system/integration/{name}"
+    return ""
 
 
 def _find_top_module(state: Dict[str, Any], integration_obj: Dict[str, Any], workflow_dir: str, soc_top_sim_path: str) -> str:
@@ -234,28 +358,12 @@ def _find_top_module(state: Dict[str, Any], integration_obj: Dict[str, Any], wor
         if _is_nonempty_str(v):
             return _norm_path(v)
 
-    sv_text = _safe_read_text(_join_workflow_path(workflow_dir, soc_top_sim_path))
+    sv_text = _safe_read_text(_join_workflow_path(workflow_dir, soc_top_sim_path)) if workflow_dir and soc_top_sim_path else ""
     if sv_text:
         import re
         m = re.search(r"\bmodule\s+([a-zA-Z_][a-zA-Z0-9_$]*)\b", sv_text)
         if m:
             return m.group(1)
-    return ""
-
-
-def _find_soc_top_sim_path(state: Dict[str, Any], workflow_dir: str) -> str:
-    direct = _first_path_from_keys(state, ["soc_top_sim_path", "system_top_sim_path", "top_sim_path"])
-    if direct and _path_exists(workflow_dir, direct):
-        return _to_relpath(workflow_dir, direct)
-
-    if _path_exists(workflow_dir, "system/integration/soc_top_sim.sv"):
-        return "system/integration/soc_top_sim.sv"
-
-    integ_dir = os.path.join(workflow_dir, "system", "integration")
-    if os.path.isdir(integ_dir):
-        for name in sorted(os.listdir(integ_dir)):
-            if name.endswith("_sim.sv"):
-                return f"system/integration/{name}"
     return ""
 
 
@@ -269,7 +377,7 @@ def _find_rtl_filelist(state: Dict[str, Any], workflow_dir: str) -> Tuple[str, L
                 if cleaned:
                     list_from_state.extend(cleaned)
 
-    list_from_state = _normalize_entries(workflow_dir, list_from_state)
+    list_from_state = _dedupe_keep_order(list_from_state)
     if list_from_state:
         return "", list_from_state
 
@@ -278,30 +386,31 @@ def _find_rtl_filelist(state: Dict[str, Any], workflow_dir: str) -> Tuple[str, L
         abs_p = _join_workflow_path(workflow_dir, direct)
         if os.path.isfile(abs_p):
             lines = [ln.strip() for ln in _safe_read_text(abs_p).splitlines() if ln.strip()]
-            return _to_relpath(workflow_dir, direct), _normalize_entries(workflow_dir, lines)
+            return direct, _dedupe_keep_order(lines)
 
     for rel in ("system/integration/system_rtl_filelist_sim.txt", "firmware/validate/verilator_rtl_filelist.f"):
-        if _path_exists(workflow_dir, rel):
-            lines = [ln.strip() for ln in _safe_read_text(_join_workflow_path(workflow_dir, rel)).splitlines() if ln.strip()]
-            return rel, _normalize_entries(workflow_dir, lines)
+        abs_p = _join_workflow_path(workflow_dir, rel)
+        if os.path.isfile(abs_p):
+            lines = [ln.strip() for ln in _safe_read_text(abs_p).splitlines() if ln.strip()]
+            return rel, _dedupe_keep_order(lines)
 
     return "", []
 
 
-def _find_elf_info(state: Dict[str, Any], workflow_dir: str) -> Dict[str, Any]:
+def _find_elf_info(state: Dict[str, Any], workflow_dir: str, supabase, prefixes: List[str], firmware_manifest: Dict[str, Any]) -> Dict[str, Any]:
     elf_path = _first_path_from_keys(state, ["firmware_elf_path", "elf_path", "embedded_elf_path", "system_firmware_elf_path"])
-    elf_path = _to_relpath(workflow_dir, elf_path) if elf_path else ""
-    elf_exists_flag = bool(state.get("firmware_elf_exists"))
-    elf_abs = _join_workflow_path(workflow_dir, elf_path) if elf_path else ""
-    elf_exists_fs = bool(elf_abs and os.path.isfile(elf_abs))
-    elf_exists = bool(elf_exists_flag or elf_exists_fs)
+    if not elf_path:
+        elf_path = _optional_manifest_path(firmware_manifest, "elf_path")
+
+    elf_meta = _artifact_exists(workflow_dir, supabase, prefixes, elf_path) if elf_path else {"exists": False, "mode": "missing", "resolved_path": "", "bucket": ""}
+    elf_exists = bool(elf_meta.get("exists"))
 
     build_block = state.get("firmware_build") if isinstance(state.get("firmware_build"), dict) else {}
     placeholder = False
     if build_block and build_block.get("build_succeeded") is False and elf_exists:
         placeholder = True
 
-    dbg = _safe_read_json(_join_workflow_path(workflow_dir, "firmware/debug/elf_build_result.json"))
+    dbg = _safe_read_json(_join_workflow_path(workflow_dir, "firmware/debug/elf_build_result.json")) if workflow_dir else {}
     if dbg:
         stderr_tail = str(dbg.get("stderr_tail") or "")
         if dbg.get("build_succeeded") is False and dbg.get("elf_exists") is True:
@@ -309,6 +418,7 @@ def _find_elf_info(state: Dict[str, Any], workflow_dir: str) -> Dict[str, Any]:
         if "Cargo not found in PATH" in stderr_tail and dbg.get("elf_exists") is True:
             placeholder = True
 
+    elf_abs = _join_workflow_path(workflow_dir, elf_path) if workflow_dir and elf_path else ""
     try:
         if elf_abs and os.path.isfile(elf_abs):
             with open(elf_abs, "rb") as f:
@@ -329,45 +439,36 @@ def _find_elf_info(state: Dict[str, Any], workflow_dir: str) -> Dict[str, Any]:
     }
 
 
-def _find_cocotb_paths(state: Dict[str, Any], workflow_dir: str, firmware_manifest: Dict[str, Any]) -> Dict[str, Any]:
-    manifest_makefile = _norm_path(firmware_manifest.get("cocotb_makefile_path"))
-    if manifest_makefile and _path_exists(workflow_dir, manifest_makefile):
-        makefile_path = _to_relpath(workflow_dir, manifest_makefile)
-    else:
-        makefile_path = _first_path_from_keys(state, ["embedded_cocotb_makefile_path", "cocotb_makefile_path", "makefile_path","system_cocotb_makefile_path"])
-        if makefile_path and _path_exists(workflow_dir, makefile_path):
-            makefile_path = _to_relpath(workflow_dir, makefile_path)
-        elif _path_exists(workflow_dir, "firmware/validate/Makefile"):
-            makefile_path = "firmware/validate/Makefile"
-        else:
+def _find_cocotb_paths(state: Dict[str, Any], workflow_dir: str, supabase, prefixes: List[str], firmware_manifest: Dict[str, Any]) -> Dict[str, Any]:
+    makefile_path = _optional_manifest_path(firmware_manifest, "cocotb_makefile_path")
+    if not makefile_path or not _artifact_exists(workflow_dir, supabase, prefixes, makefile_path).get("exists"):
+        fallback = _first_path_from_keys(state, ["embedded_cocotb_makefile_path", "cocotb_makefile_path", "makefile_path", "system_cocotb_makefile_path"])
+        makefile_path = fallback if fallback else "firmware/validate/Makefile"
+        if not _artifact_exists(workflow_dir, supabase, prefixes, makefile_path).get("exists"):
             makefile_path = ""
 
-    manifest_harness = _norm_path(firmware_manifest.get("cocotb_harness_path"))
-    if manifest_harness and _path_exists(workflow_dir, manifest_harness):
-        harness_path = _to_relpath(workflow_dir, manifest_harness)
-    else:
-        harness_path = _first_path_from_keys(state, ["cocotb_harness_path", "sim_harness_path", "expected_cocotb_harness_path","system_cocotb_harness_path"])
-        if harness_path and _path_exists(workflow_dir, harness_path):
-            harness_path = _to_relpath(workflow_dir, harness_path)
-        elif _path_exists(workflow_dir, "firmware/validate/cocotb_harness.py"):
-            harness_path = "firmware/validate/cocotb_harness.py"
-        else:
+    harness_path = _optional_manifest_path(firmware_manifest, "cocotb_harness_path")
+    if not harness_path or not _artifact_exists(workflow_dir, supabase, prefixes, harness_path).get("exists"):
+        fallback = _first_path_from_keys(state, ["cocotb_harness_path", "sim_harness_path", "expected_cocotb_harness_path", "system_cocotb_harness_path"])
+        harness_path = fallback if fallback else "firmware/validate/cocotb_harness.py"
+        if not _artifact_exists(workflow_dir, supabase, prefixes, harness_path).get("exists"):
             harness_path = ""
 
-    manifest_test_paths = firmware_manifest.get("cocotb_test_paths")
     test_paths: List[str] = []
+    manifest_test_paths = firmware_manifest.get("cocotb_test_paths")
     if isinstance(manifest_test_paths, list):
-        test_paths = [
-            _to_relpath(workflow_dir, p)
-            for p in manifest_test_paths
-            if _is_nonempty_str(p) and _path_exists(workflow_dir, p)
-        ]
+        for p in manifest_test_paths:
+            p = _norm_path(p)
+            if p and _artifact_exists(workflow_dir, supabase, prefixes, p).get("exists"):
+                test_paths.append(p)
 
     if not test_paths:
         state_test_paths = _collect_paths_from_keys(state, ["embedded_cocotb_test_paths", "cocotb_test_paths", "test_paths"])
-        test_paths = [p for p in _normalize_entries(workflow_dir, state_test_paths) if p.lower().endswith(".py")]
+        for p in state_test_paths:
+            if p.lower().endswith(".py") and _artifact_exists(workflow_dir, supabase, prefixes, p).get("exists"):
+                test_paths.append(p)
 
-    if not test_paths:
+    if not test_paths and workflow_dir:
         test_dir = os.path.join(workflow_dir, "firmware", "validate")
         if os.path.isdir(test_dir):
             test_paths = [
@@ -387,8 +488,8 @@ def _find_execution_summary(state: Dict[str, Any], workflow_dir: str) -> Dict[st
     obj = state.get("system_firmware_execution") if isinstance(state.get("system_firmware_execution"), dict) else {}
     if obj:
         return obj
-    abs_p = _join_workflow_path(workflow_dir, "system/firmware/cosim/system_firmware_execution.json")
-    return _safe_read_json(abs_p) if os.path.isfile(abs_p) else {}
+    abs_p = _join_workflow_path(workflow_dir, "system/firmware/cosim/system_firmware_execution.json") if workflow_dir else ""
+    return _safe_read_json(abs_p) if abs_p and os.path.isfile(abs_p) else {}
 
 
 def _find_coverage_summary(state: Dict[str, Any], workflow_dir: str) -> Dict[str, Any]:
@@ -396,29 +497,30 @@ def _find_coverage_summary(state: Dict[str, Any], workflow_dir: str) -> Dict[str
     if obj:
         return obj
     for rel in ("system/firmware/coverage/system_firmware_coverage_summary.json", "coverage/coverage_summary.json"):
-        abs_p = _join_workflow_path(workflow_dir, rel)
-        if os.path.isfile(abs_p):
+        abs_p = _join_workflow_path(workflow_dir, rel) if workflow_dir else ""
+        if abs_p and os.path.isfile(abs_p):
             return _safe_read_json(abs_p)
     return {}
 
 
-def _find_validation_report(state: Dict[str, Any], workflow_dir: str, firmware_manifest: Dict[str, Any]) -> str:
-    manifest_report = _norm_path(firmware_manifest.get("validation_report_path"))
-    if manifest_report and _path_exists(workflow_dir, manifest_report):
-        return _to_relpath(workflow_dir, manifest_report)
+def _find_validation_report(state: Dict[str, Any], workflow_dir: str, supabase, prefixes: List[str], firmware_manifest: Dict[str, Any]) -> str:
+    report = _optional_manifest_path(firmware_manifest, "validation_report_path")
+    if report and _artifact_exists(workflow_dir, supabase, prefixes, report).get("exists"):
+        return report
 
-    direct = _first_path_from_keys(state, ["firmware_validation_report_path", "validation_report_path","system_validation_report_path"])
-    if direct and _path_exists(workflow_dir, direct):
-        return _to_relpath(workflow_dir, direct)
-
-    if _path_exists(workflow_dir, "firmware/validate/validation_report.md"):
-        return "firmware/validate/validation_report.md"
-
+    direct = _first_path_from_keys(state, ["firmware_validation_report_path", "validation_report_path", "system_validation_report_path"])
+    for candidate in [direct, "firmware/validate/validation_report.md"]:
+        candidate = _norm_path(candidate)
+        if candidate and _artifact_exists(workflow_dir, supabase, prefixes, candidate).get("exists"):
+            return candidate
     return ""
 
 
 def _find_public_api_candidates(workflow_dir: str) -> List[str]:
     candidates: List[str] = []
+    if not workflow_dir:
+        return candidates
+
     scan_roots = [os.path.join(workflow_dir, "firmware"), os.path.join(workflow_dir, "system")]
     tokens = ("driver", "register", "hal", "handoff", "manifest", "software_handoff", "interrupt", "dma", "boot", "power", "clock")
 
@@ -435,12 +537,15 @@ def _find_public_api_candidates(workflow_dir: str) -> List[str]:
     return _dedupe_keep_order(candidates)
 
 
+# -----------------------------------------------------------------------------
+# Manifest build
+# -----------------------------------------------------------------------------
 def _build_manifest(
     state: Dict[str, Any],
-    workflow_dir: str,
+    source_workflow_id: str,
     firmware_manifest_path: str,
     firmware_manifest: Dict[str, Any],
-    register_map_path: str,
+    required_artifacts: Dict[str, Dict[str, Any]],
     system_integration_intent_path: str,
     top_module: str,
     soc_top_sim_path: str,
@@ -457,159 +562,23 @@ def _build_manifest(
     exec_results = (execution_summary.get("results") or {}) if isinstance(execution_summary, dict) else {}
     cov_metrics = (coverage_summary.get("coverage_metrics") or {}) if isinstance(coverage_summary, dict) else {}
 
-    hal_path = _resolve_contract_path(
-        state=state,
-        workflow_dir=workflow_dir,
-        manifest=firmware_manifest,
-        state_keys=[
-            "hal_path",
-            "system_hal_path",
-            "embedded_hal_path",
-            "register_layer_path",
-            "rust_register_layer_path",
-        ],
-        manifest_key="hal_path",
-        fallbacks=["firmware/hal/registers.rs"],
-    )
+    register_map_path = _required_manifest_path(firmware_manifest, "register_map_path")
+    hal_path = _required_manifest_path(firmware_manifest, "hal_path")
+    driver_path = _required_manifest_path(firmware_manifest, "driver_path")
 
-    driver_path = _resolve_contract_path(
-        state=state,
-        workflow_dir=workflow_dir,
-        manifest=firmware_manifest,
-        state_keys=[
-            "driver_path",
-            "system_driver_path",
-            "embedded_driver_path",
-            "driver_scaffold_path",
-            "rust_driver_scaffold_path",
-        ],
-        manifest_key="driver_path",
-        fallbacks=["firmware/drivers/driver_scaffold.rs"],
-    )
-    register_dump_path = _resolve_contract_path(
-        state=state,
-        workflow_dir=workflow_dir,
-        manifest=firmware_manifest,
-        state_keys=[
-            "register_dump_path",
-            "system_register_dump_path",
-            "embedded_register_dump_path",
-        ],
-        manifest_key="register_dump_path",
-        fallbacks=["firmware/diagnostics/register_dump.rs"],
-    )
-
-    interrupt_path = _resolve_contract_path(
-        state=state,
-        workflow_dir=workflow_dir,
-        manifest=firmware_manifest,
-        state_keys=[
-            "interrupt_mapping_path",
-            "system_interrupt_mapping_path",
-            "embedded_interrupt_mapping_path",
-        ],
-        manifest_key="interrupt_map_path",
-        fallbacks=[
-            "firmware/isr/interrupt_map.json",
-            "firmware/interrupt/interrupt_mapping.json",
-            "firmware/interrupt_mapping.json",
-        ],
-    )
-
-    dma_path = _resolve_contract_path(
-        state=state,
-        workflow_dir=workflow_dir,
-        manifest=firmware_manifest,
-        state_keys=[
-            "dma_path",
-            "system_dma_path",
-            "embedded_dma_path",
-            "dma_integration_path",
-        ],
-        manifest_key="dma_path",
-        fallbacks=[
-            "firmware/dma/dma.rs",
-            "firmware/dma/dma_integration.json",
-            "firmware/dma_integration.json",
-        ],
-    )
-
-    boot_plan_path = _resolve_contract_path(
-        state=state,
-        workflow_dir=workflow_dir,
-        manifest=firmware_manifest,
-        state_keys=[
-            "boot_dependency_plan_path",
-            "system_boot_dependency_plan_path",
-            "boot_sequence_json_path",
-        ],
-        manifest_key="boot_sequence_json_path",
-        fallbacks=[
-            "firmware/boot/boot_sequence.json",
-            "firmware/boot/boot_dependency_plan.json",
-            "firmware/boot_dependency_plan.json",
-        ],
-    )
-
-    clock_config_path = _resolve_contract_path(
-        state=state,
-        workflow_dir=workflow_dir,
-        manifest=firmware_manifest,
-        state_keys=[
-            "clock_config_path",
-            "system_clock_config_path",
-            "pll_config_path",
-        ],
-        manifest_key="pll_config_path",
-        fallbacks=[
-            "firmware/boot/pll_config.rs",
-            "firmware/clock/clock_pll_config.json",
-            "firmware/clock_pll_config.json",
-        ],
-    )
-
-    reset_sequence_path = _resolve_contract_path(
-        state=state,
-        workflow_dir=workflow_dir,
-        manifest=firmware_manifest,
-        state_keys=[
-            "reset_sequence_path",
-            "system_reset_sequence_path",
-            "reset_sequence_rs_path",
-        ],
-        manifest_key="reset_sequence_rs_path",
-        fallbacks=[
-            "firmware/boot/reset_sequence.rs",
-            "firmware/reset/reset_sequence.json",
-            "firmware/reset_sequence.json",
-        ],
-    )
-
-    power_mode_path = _resolve_contract_path(
-        state=state,
-        workflow_dir=workflow_dir,
-        manifest=firmware_manifest,
-        state_keys=[
-            "power_mode_path",
-            "system_power_mode_path",
-            "power_modes_path",
-        ],
-        manifest_key="power_modes_path",
-        fallbacks=[
-            "firmware/power/power_modes.md",
-            "firmware/power/power_modes.json",
-            "firmware/power_mode_config.json",
-        ],
-    )
-
-    
-
+    register_dump_path = _optional_manifest_path(firmware_manifest, "register_dump_path")
+    interrupt_path = _optional_manifest_path(firmware_manifest, "interrupt_map_path")
+    dma_path = _optional_manifest_path(firmware_manifest, "dma_path")
+    boot_plan_path = _optional_manifest_path(firmware_manifest, "boot_sequence_json_path")
+    clock_config_path = _optional_manifest_path(firmware_manifest, "pll_config_path")
+    reset_sequence_path = _optional_manifest_path(firmware_manifest, "reset_sequence_rs_path")
+    power_mode_path = _optional_manifest_path(firmware_manifest, "power_modes_path")
 
     package = {
         "package_type": "system_software_handoff",
-        "package_version": "1.0",
+        "package_version": "2.0",
         "generated_at": _now(),
-        "source_workflow_id": state.get("workflow_id"),
+        "source_workflow_id": source_workflow_id,
         "source_workflow_type": "System_Firmware",
         "system_contract": {
             "top_module": top_module,
@@ -686,27 +655,28 @@ def _build_manifest(
             ],
             "public_api_candidates": api_candidates,
         },
-
+        "resolution_debug": required_artifacts,
         "software_readiness": {
             "ready_for_system_software": True,
             "package_quality": "provisional" if elf_info.get("elf_placeholder") else "ready",
             "blocking_gaps": [],
             "assumptions": [],
         },
-    
     }
 
     gaps: List[str] = []
     assumptions: List[str] = []
 
-    if not register_map_path:
-        gaps.append("register_map_missing")
-    if not hal_path:
-        gaps.append("hal_path_missing")
-    if not driver_path:
-        gaps.append("driver_path_missing")
-    if not firmware_manifest_path:
-        gaps.append("firmware_manifest_missing")
+    for public_key, manifest_key in (
+        ("firmware_manifest_path", "firmware_manifest_path"),
+        ("register_map_path", "register_map_path"),
+        ("hal_path", "hal_path"),
+        ("driver_path", "driver_path"),
+    ):
+        meta = required_artifacts.get(public_key) or {}
+        if not meta.get("exists"):
+            gaps.append(f"{public_key}_missing")
+
     if not system_integration_intent_path:
         assumptions.append("system_integration_intent_missing")
     if not soc_top_sim_path:
@@ -722,11 +692,9 @@ def _build_manifest(
     if exec_readiness.get("status") == "blocked":
         assumptions.append("system_firmware_execution_blocked")
 
-
     package["software_readiness"]["blocking_gaps"] = gaps
     package["software_readiness"]["assumptions"] = assumptions
     package["software_readiness"]["ready_for_system_software"] = not bool(gaps)
-
 
     return package
 
@@ -834,315 +802,159 @@ def _markdown_report(manifest: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def _resolve_contract_path(
-    state: Dict[str, Any],
-    workflow_dir: str,
-    manifest: Dict[str, Any],
-    state_keys: List[str],
-    manifest_key: str,
-    fallbacks: List[str],
-) -> str:
-    direct = _first_path_from_keys(state, state_keys)
-    if direct and _path_exists(workflow_dir, direct):
-        return _to_relpath(workflow_dir, direct)
-
-    manifest_candidate = _norm_path(manifest.get(manifest_key))
-    if manifest_candidate and _path_exists(workflow_dir, manifest_candidate):
-        return _to_relpath(workflow_dir, manifest_candidate)
-
-    return _find_first_existing(workflow_dir, fallbacks)
-
-
-def _resolve_contract_path(
-    state: Dict[str, Any],
-    workflow_dir: str,
-    manifest: Dict[str, Any],
-    state_keys: List[str],
-    manifest_key: str,
-    fallbacks: List[str],
-) -> str:
-    # 1) state + local
-    direct = _first_path_from_keys(state, state_keys)
-    if direct and _path_exists(workflow_dir, direct):
-        return _to_relpath(workflow_dir, direct)
-
-    # 2) manifest + local
-    manifest_candidate = _norm_path(manifest.get(manifest_key))
-    if manifest_candidate and _path_exists(workflow_dir, manifest_candidate):
-        return _to_relpath(workflow_dir, manifest_candidate)
-
-    # 3) Supabase via state path
-    try:
-        supabase = _get_supabase(state)
-        source_workflow_id = _get_source_workflow_id(state)
-        wf_row = _workflow_row(supabase, source_workflow_id)
-        prefixes = _workflow_storage_prefixes(state, source_workflow_id, wf_row)
-
-        if direct:
-            resolved = _resolve_supabase_artifact_path(supabase, prefixes, direct)
-            if resolved:
-                return direct
-
-        if manifest_candidate:
-            resolved = _resolve_supabase_artifact_path(supabase, prefixes, manifest_candidate)
-            if resolved:
-                return manifest_candidate
-
-        for fb in fallbacks:
-            resolved = _resolve_supabase_artifact_path(supabase, prefixes, fb)
-            if resolved:
-                return fb
-    except Exception:
-        pass
-
-    # 4) local fallback
-    return _find_first_existing(workflow_dir, fallbacks)
-
-def _get_supabase(state: Dict[str, Any]):
-    client = state.get("supabase_client")
-    if client is None:
-        raise RuntimeError("supabase_client missing from state")
-    return client
-
-def _get_source_workflow_id(state: Dict[str, Any]) -> str:
-    for key in (
-        "workflow_id",
-        "source_workflow_id",
-        "system_firmware_workflow_id",
-        "source_firmware_workflow_id",
-    ):
-        value = state.get(key)
-        if _is_nonempty_str(value):
-            return str(value).strip()
-
-    system_block = state.get("system") or {}
-    if isinstance(system_block, dict):
-        for key in ("source_firmware_workflow_id", "system_firmware_workflow_id"):
-            value = system_block.get(key)
-            if _is_nonempty_str(value):
-                return str(value).strip()
-
-    return ""
-
-def _workflow_storage_prefixes(state: Dict[str, Any], source_workflow_id: str, workflow_row: Dict[str, Any]) -> List[str]:
-    prefixes: List[str] = []
-
-    explicit_prefix = state.get("artifact_prefix") or state.get("source_artifact_prefix")
-    if _is_nonempty_str(explicit_prefix):
-        prefixes.append(_norm_path(explicit_prefix).rstrip("/") + "/")
-
-    prefixes.append(f"backend/workflows/{source_workflow_id}/")
-
-    user_id = (workflow_row or {}).get("user_id")
-    if _is_nonempty_str(user_id):
-        prefixes.append(f"artifacts/{user_id}/{source_workflow_id}/")
-        prefixes.append(f"{user_id}/{source_workflow_id}/")
-
-    seen = set()
-    out: List[str] = []
-    for p in prefixes:
-        p = _norm_path(p)
-        if p and p not in seen:
-            seen.add(p)
-            out.append(p)
-    return out
-
-def _resolve_supabase_artifact_path(
-    supabase,
-    prefixes: List[str],
-    rel_or_abs: str,
-) -> str:
-    target = _norm_path(rel_or_abs)
-    if not target:
-        return ""
-
-    candidates: List[str] = []
-    if target.startswith("backend/workflows/") or target.startswith("artifacts/"):
-        candidates.append(target)
-    else:
-        for prefix in prefixes:
-            candidates.append(f"{prefix.rstrip('/')}/{target}")
-        candidates.append(target)
-
-    seen = set()
-    ordered: List[str] = []
-    for c in candidates:
-        c = _norm_path(c)
-        if c and c not in seen:
-            seen.add(c)
-            ordered.append(c)
-
-    for candidate in ordered:
-        try:
-            supabase.storage.from_("artifacts").download(candidate)
-            return candidate
-        except Exception:
-            pass
-
-    return ""
-
-def _load_json_from_supabase(
-    supabase,
-    prefixes: List[str],
-    rel_or_abs: str,
-) -> Tuple[Dict[str, Any], str]:
-    resolved = _resolve_supabase_artifact_path(supabase, prefixes, rel_or_abs)
-    if not resolved:
-        return {}, ""
-
-    try:
-        raw = supabase.storage.from_("artifacts").download(resolved)
-        text = raw.decode("utf-8") if isinstance(raw, bytes) else str(raw)
-        obj = json.loads(text)
-        return (obj if isinstance(obj, dict) else {}), resolved
-    except Exception:
-        return {}, ""
-
-
+# -----------------------------------------------------------------------------
+# Agent entry
+# -----------------------------------------------------------------------------
 def run_agent(state: dict) -> dict:
     workflow_id = state.get("workflow_id") or "default"
-    workflow_dir = state.get("workflow_dir")
+    workflow_dir = os.path.abspath(state.get("workflow_dir")) if _is_nonempty_str(state.get("workflow_dir")) else ""
     print(f"\n📦 Running {AGENT_NAME}")
 
-    if not workflow_dir:
-        state["status"] = "❌ workflow_dir missing for system software handoff"
+    try:
+        firmware_manifest_path, firmware_manifest, source_meta = _load_required_firmware_manifest(state, workflow_dir)
+        source_workflow_id = source_meta.get("source_workflow_id") or _get_source_workflow_id(state) or workflow_id
+        supabase = None
+        prefixes: List[str] = []
+        if source_meta.get("mode") == "supabase":
+            supabase = _get_supabase(state)
+            prefixes = source_meta.get("storage_prefixes") or []
+        else:
+            try:
+                supabase = _get_supabase(state)
+                wf_row = _workflow_row(supabase, source_workflow_id)
+                prefixes = _workflow_storage_prefixes(state, source_workflow_id, wf_row)
+            except Exception:
+                supabase = None
+                prefixes = []
+
+        required_paths = {
+            "firmware_manifest_path": firmware_manifest_path,
+            "register_map_path": _required_manifest_path(firmware_manifest, "register_map_path"),
+            "hal_path": _required_manifest_path(firmware_manifest, "hal_path"),
+            "driver_path": _required_manifest_path(firmware_manifest, "driver_path"),
+        }
+
+        required_artifacts = {
+            key: {
+                "declared_path": path,
+                **_artifact_exists(workflow_dir, supabase, prefixes, path),
+            }
+            for key, path in required_paths.items()
+        }
+
+        for key, meta in required_artifacts.items():
+            if not meta.get("exists"):
+                raise RuntimeError(f"Required artifact missing for {key}: {meta.get('declared_path')}")
+
+        system_integration_intent_path = _find_system_integration_intent_path(state, workflow_dir, supabase, prefixes)
+        integration_obj = _safe_read_json(_join_workflow_path(workflow_dir, system_integration_intent_path)) if workflow_dir and system_integration_intent_path else {}
+        soc_top_sim_path = _find_soc_top_sim_path(state, workflow_dir, supabase, prefixes)
+        top_module = _find_top_module(state, integration_obj, workflow_dir, soc_top_sim_path)
+        rtl_filelist_path, rtl_file_entries = _find_rtl_filelist(state, workflow_dir)
+        elf_info = _find_elf_info(state, workflow_dir, supabase, prefixes, firmware_manifest)
+        cocotb_info = _find_cocotb_paths(state, workflow_dir, supabase, prefixes, firmware_manifest)
+        execution_summary = _find_execution_summary(state, workflow_dir)
+        coverage_summary = _find_coverage_summary(state, workflow_dir)
+        validation_report_path = _find_validation_report(state, workflow_dir, supabase, prefixes, firmware_manifest)
+        api_candidates = _find_public_api_candidates(workflow_dir)
+
+        manifest = _build_manifest(
+            state=state,
+            source_workflow_id=source_workflow_id,
+            firmware_manifest_path=firmware_manifest_path,
+            firmware_manifest=firmware_manifest,
+            required_artifacts=required_artifacts,
+            system_integration_intent_path=system_integration_intent_path,
+            top_module=top_module,
+            soc_top_sim_path=soc_top_sim_path,
+            rtl_filelist_path=rtl_filelist_path,
+            rtl_file_entries=rtl_file_entries,
+            elf_info=elf_info,
+            cocotb_info=cocotb_info,
+            execution_summary=execution_summary,
+            coverage_summary=coverage_summary,
+            validation_report_path=validation_report_path,
+            api_candidates=api_candidates,
+        )
+
+        filelist_entries = _dedupe_keep_order([
+            manifest.get("system_contract", {}).get("system_integration_intent_path"),
+            manifest.get("system_contract", {}).get("soc_top_sim_path"),
+            manifest.get("system_contract", {}).get("rtl_filelist_path"),
+            *(manifest.get("system_contract", {}).get("rtl_file_entries") or []),
+            manifest.get("firmware_contract", {}).get("firmware_manifest_path"),
+            manifest.get("firmware_contract", {}).get("register_map_path"),
+            manifest.get("firmware_contract", {}).get("hal_path"),
+            manifest.get("firmware_contract", {}).get("driver_path"),
+            manifest.get("firmware_contract", {}).get("register_dump_path"),
+            manifest.get("firmware_contract", {}).get("interrupt_mapping_path"),
+            manifest.get("firmware_contract", {}).get("dma_integration_path"),
+            manifest.get("firmware_contract", {}).get("boot_dependency_plan_path"),
+            manifest.get("firmware_contract", {}).get("clock_config_path"),
+            manifest.get("firmware_contract", {}).get("reset_sequence_path"),
+            manifest.get("firmware_contract", {}).get("power_mode_path"),
+            manifest.get("firmware_contract", {}).get("elf_path"),
+            manifest.get("verification_contract", {}).get("cocotb_makefile_path"),
+            *(manifest.get("verification_contract", {}).get("cocotb_test_paths") or []),
+            manifest.get("verification_contract", {}).get("cocotb_harness_path"),
+            manifest.get("verification_contract", {}).get("validation_report_path"),
+            *api_candidates,
+        ])
+
+        summary_md = _markdown_report(manifest)
+        debug_payload = {
+            "agent": AGENT_NAME,
+            "generated_at": _now(),
+            "workflow_id": workflow_id,
+            "workflow_dir": workflow_dir,
+            "source_meta": source_meta,
+            "required_artifacts": required_artifacts,
+            "observed_paths": filelist_entries,
+            "elf_info": elf_info,
+            "execution_summary_present": bool(execution_summary),
+            "coverage_summary_present": bool(coverage_summary),
+            "required_inputs_for_system_software": manifest.get("software_inputs", {}).get("required_inputs"),
+            "required_input_values": {
+                "firmware_manifest_path": manifest.get("firmware_contract", {}).get("firmware_manifest_path"),
+                "register_map_path": manifest.get("firmware_contract", {}).get("register_map_path"),
+                "hal_path": manifest.get("firmware_contract", {}).get("hal_path"),
+                "driver_path": manifest.get("firmware_contract", {}).get("driver_path"),
+                "system_integration_intent_path": manifest.get("system_contract", {}).get("system_integration_intent_path"),
+            },
+            "blocking_gaps": manifest.get("software_readiness", {}).get("blocking_gaps"),
+            "package_quality": manifest.get("software_readiness", {}).get("package_quality"),
+        }
+
+        _record_text(workflow_id, OUTPUT_SUBDIR, MANIFEST_JSON, json.dumps(manifest, indent=2))
+        _record_text(workflow_id, OUTPUT_SUBDIR, SUMMARY_MD, summary_md)
+        _record_text(workflow_id, OUTPUT_SUBDIR, FILELIST_TXT, "\n".join(filelist_entries) + ("\n" if filelist_entries else ""))
+        _record_text(workflow_id, OUTPUT_SUBDIR, DEBUG_JSON, json.dumps(debug_payload, indent=2))
+
+        state["system_software_handoff"] = manifest
+        state["system_software_handoff_path"] = f"{OUTPUT_SUBDIR}/{MANIFEST_JSON}"
+        state["system_software_handoff_md_path"] = f"{OUTPUT_SUBDIR}/{SUMMARY_MD}"
+        state["system_software_handoff_filelist_path"] = f"{OUTPUT_SUBDIR}/{FILELIST_TXT}"
+        state["system_software_handoff_storage_path"] = source_meta.get("resolved_path") or ""
+        state["source_firmware_workflow_id"] = source_workflow_id
+
+        system_block = state.setdefault("system", {})
+        if isinstance(system_block, dict):
+            system_block["software_handoff"] = manifest
+            system_block["software_handoff_path"] = state["system_software_handoff_path"]
+            system_block["source_firmware_workflow_id"] = source_workflow_id
+
+        state["status"] = "✅ System software handoff package generated"
         return state
 
-    workflow_dir = os.path.abspath(workflow_dir)
+    except Exception as exc:
+        debug_payload = {
+            "agent": AGENT_NAME,
+            "generated_at": _now(),
+            "workflow_id": workflow_id,
+            "workflow_dir": workflow_dir,
+            "error": str(exc),
+        }
+        _record_text(workflow_id, OUTPUT_SUBDIR, DEBUG_JSON, json.dumps(debug_payload, indent=2))
+        state["status"] = f"❌ {AGENT_NAME} failed: {exc}"
+        return state
 
-
-    firmware_manifest_path = _find_firmware_manifest_path(state, workflow_dir)
-
-    firmware_manifest = {}
-    for key in (
-        "system_firmware_manifest",
-        "firmware_manifest",
-        "embedded_firmware_manifest",
-    ):
-        obj = state.get(key)
-        if isinstance(obj, dict) and obj:
-            firmware_manifest = obj
-            break
-
-    if not firmware_manifest:
-        # Supabase first
-        try:
-            supabase = _get_supabase(state)
-            source_workflow_id = _get_source_workflow_id(state)
-            wf_row = _workflow_row(supabase, source_workflow_id)
-            prefixes = _workflow_storage_prefixes(state, source_workflow_id, wf_row)
-            firmware_manifest, _resolved_manifest_path = _load_json_from_supabase(
-                supabase,
-                prefixes,
-                firmware_manifest_path or "firmware/firmware_manifest.json",
-            )
-            if firmware_manifest and not firmware_manifest_path:
-                firmware_manifest_path = "firmware/firmware_manifest.json"
-        except Exception:
-            pass
-
-    if not firmware_manifest and firmware_manifest_path:
-        firmware_manifest = _safe_read_json(_join_workflow_path(workflow_dir, firmware_manifest_path))
-
-    register_map_path = _find_register_map_path(state, workflow_dir, firmware_manifest)
-    system_integration_intent_path = _find_system_integration_intent_path(state, workflow_dir)
-    integration_obj = _safe_read_json(_join_workflow_path(workflow_dir, system_integration_intent_path)) if system_integration_intent_path else {}
-    soc_top_sim_path = _find_soc_top_sim_path(state, workflow_dir)
-    top_module = _find_top_module(state, integration_obj, workflow_dir, soc_top_sim_path)
-    rtl_filelist_path, rtl_file_entries = _find_rtl_filelist(state, workflow_dir)
-    elf_info = _find_elf_info(state, workflow_dir)
-
-    cocotb_info = _find_cocotb_paths(state, workflow_dir, firmware_manifest)
-    execution_summary = _find_execution_summary(state, workflow_dir)
-    coverage_summary = _find_coverage_summary(state, workflow_dir)
-    validation_report_path = _find_validation_report(state, workflow_dir, firmware_manifest)
-    api_candidates = _find_public_api_candidates(workflow_dir)
-
-    manifest = _build_manifest(
-        state=state,
-        workflow_dir=workflow_dir,
-        firmware_manifest_path=firmware_manifest_path,
-        firmware_manifest=firmware_manifest,
-        register_map_path=register_map_path,
-        system_integration_intent_path=system_integration_intent_path,
-        top_module=top_module,
-        soc_top_sim_path=soc_top_sim_path,
-        rtl_filelist_path=rtl_filelist_path,
-        rtl_file_entries=rtl_file_entries,
-        elf_info=elf_info,
-        cocotb_info=cocotb_info,
-        execution_summary=execution_summary,
-        coverage_summary=coverage_summary,
-        validation_report_path=validation_report_path,
-        api_candidates=api_candidates,
-    )
-
-    filelist_entries = _dedupe_keep_order([
-        manifest.get("system_contract", {}).get("system_integration_intent_path"),
-        manifest.get("system_contract", {}).get("soc_top_sim_path"),
-        manifest.get("system_contract", {}).get("rtl_filelist_path"),
-        * (manifest.get("system_contract", {}).get("rtl_file_entries") or []),
-        manifest.get("firmware_contract", {}).get("firmware_manifest_path"),
-        manifest.get("firmware_contract", {}).get("register_map_path"),
-        manifest.get("firmware_contract", {}).get("hal_path"),
-        manifest.get("firmware_contract", {}).get("driver_path"),
-        manifest.get("firmware_contract", {}).get("register_dump_path"),
-        manifest.get("firmware_contract", {}).get("interrupt_mapping_path"),
-        manifest.get("firmware_contract", {}).get("dma_integration_path"),
-        manifest.get("firmware_contract", {}).get("boot_dependency_plan_path"),
-        manifest.get("firmware_contract", {}).get("clock_config_path"),
-        manifest.get("firmware_contract", {}).get("reset_sequence_path"),
-        manifest.get("firmware_contract", {}).get("power_mode_path"),
-        manifest.get("firmware_contract", {}).get("elf_path"),
-        manifest.get("verification_contract", {}).get("cocotb_makefile_path"),
-        *(manifest.get("verification_contract", {}).get("cocotb_test_paths") or []),
-        manifest.get("verification_contract", {}).get("cocotb_harness_path"),
-        manifest.get("verification_contract", {}).get("validation_report_path"),
-        *api_candidates,
-    ])
-
-    summary_md = _markdown_report(manifest)
-    required_missing = {
-        "firmware_manifest_path": not bool(manifest.get("firmware_contract", {}).get("firmware_manifest_path")),
-        "register_map_path": not bool(manifest.get("firmware_contract", {}).get("register_map_path")),
-        "hal_path": not bool(manifest.get("firmware_contract", {}).get("hal_path")),
-        "driver_path": not bool(manifest.get("firmware_contract", {}).get("driver_path")),
-        "system_integration_intent_path": not bool(manifest.get("system_contract", {}).get("system_integration_intent_path")),
-    }
-    debug_payload = {
-        "agent": AGENT_NAME,
-        "generated_at": _now(),
-        "source_workflow_id": workflow_id,
-        "observed_paths": filelist_entries,
-        "elf_info": elf_info,
-        "execution_summary_present": bool(execution_summary),
-        "coverage_summary_present": bool(coverage_summary),
-        "required_inputs_for_system_software": manifest.get("software_inputs", {}).get("required_inputs"),
-        "required_input_values": {
-            "firmware_manifest_path": manifest.get("firmware_contract", {}).get("firmware_manifest_path"),
-            "register_map_path": manifest.get("firmware_contract", {}).get("register_map_path"),
-            "hal_path": manifest.get("firmware_contract", {}).get("hal_path"),
-            "driver_path": manifest.get("firmware_contract", {}).get("driver_path"),
-            "system_integration_intent_path": manifest.get("system_contract", {}).get("system_integration_intent_path"),
-        },
-        "blocking_gaps": manifest.get("software_readiness", {}).get("blocking_gaps"),
-        "required_missing": required_missing,
-    }
-    
-
-    _record_text(workflow_id, OUTPUT_SUBDIR, MANIFEST_JSON, json.dumps(manifest, indent=2))
-    _record_text(workflow_id, OUTPUT_SUBDIR, SUMMARY_MD, summary_md)
-    _record_text(workflow_id, OUTPUT_SUBDIR, FILELIST_TXT, "\n".join(filelist_entries) + ("\n" if filelist_entries else ""))
-    _record_text(workflow_id, OUTPUT_SUBDIR, DEBUG_JSON, json.dumps(debug_payload, indent=2))
-
-    state["system_software_handoff"] = manifest
-    state["system_software_handoff_path"] = f"{OUTPUT_SUBDIR}/{MANIFEST_JSON}"
-    state["system_software_handoff_md_path"] = f"{OUTPUT_SUBDIR}/{SUMMARY_MD}"
-    state["system_software_handoff_filelist_path"] = f"{OUTPUT_SUBDIR}/{FILELIST_TXT}"
-
-    system_block = state.setdefault("system", {})
-    system_block["software_handoff"] = manifest
-    system_block["software_handoff_path"] = state["system_software_handoff_path"]
-
-    state["status"] = "✅ System software handoff package generated"
-    return state
