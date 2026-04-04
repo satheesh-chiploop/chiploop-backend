@@ -164,8 +164,15 @@ def _build_capability_model(contract: Dict[str, Any], state: Dict[str, Any]) -> 
         },
         "firmware_layer": {
             "firmware_manifest_present": bool(firmware_manifest),
-            "hal_contract_present": bool(hal_contract),
-            "driver_contract_present": bool(driver_contract),
+            "hal_contract_present": bool(
+                state.get("system_hal_contract")
+                or (firmware_contract.get("hal_path") is not None)
+            )
+
+            "driver_contract_present": bool(
+                state.get("system_driver_contract")
+                or (firmware_contract.get("driver_path") is not None)
+            )
             "firmware_manifest_summary": {
                 "keys": sorted(list(firmware_manifest.keys()))[:64] if isinstance(firmware_manifest, dict) else [],
             },

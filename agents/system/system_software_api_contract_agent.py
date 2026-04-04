@@ -182,14 +182,15 @@ def _build_api_contract(model: Dict[str, Any], state: Dict[str, Any]) -> Dict[st
         )
 
     if not api_groups:
+        # ALWAYS add platform group
         api_groups.append(
             _service_entry(
                 "platform",
                 [{"name": "platform_probe", "inputs": [], "returns": "PlatformInfo"}],
-                "Minimal software-facing platform probe when no richer services were discovered.",
+                "Platform probe and identity service."
             )
         )
-
+        
     public_api_candidates = model.get("public_api_candidates") or []
     if public_api_candidates:
         api_groups.append(

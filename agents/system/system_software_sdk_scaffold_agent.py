@@ -143,7 +143,12 @@ def _render_rust_lib(crate_name: str, api_contract: Dict[str, Any]) -> str:
             if isinstance(method, dict):
                 methods.append(_method_signature(method))
 
-    methods_block = "\n\n".join(methods) if methods else "    pub fn platform_probe(&self) -> Result<PlatformInfo, SoftwareError> {\n        Ok(PlatformInfo::default())\n    }"
+    
+    methods.append({
+        "name": "platform_probe",
+        "inputs": [],
+        "returns": "PlatformInfo"
+    })
 
     return f'''use serde::{{Deserialize, Serialize}};
 
@@ -238,7 +243,7 @@ def _render_example_app(crate_name: str) -> str:
 
 fn main() {{
     let sdk = Sdk::new();
-    let _ = sdk.platform_probe();
+    let _ = sdk.get_status();
     println!("system software example app initialized");
 }}
 '''
