@@ -230,18 +230,21 @@ def run_agent(state: dict) -> dict:
     thiserror = "1"
     """, subdir=f"{OUTPUT_SUBDIR}/{crate_name}")
 
-    _record_text(workflow_id, "lib.rs", f"""
-    pub mod adapter;
-    pub mod error;
+    _record_text(workflow_id, "lib.rs", """
+pub mod adapter;
+pub mod error;
 
+pub use adapter::{RegisterAdapter, DeviceAdapter};
+""", subdir=f"{OUTPUT_SUBDIR}/{crate_name}/src")
 
-    pub use adapter::{RegisterAdapter, DeviceAdapter};
-    """, subdir=f"{OUTPUT_SUBDIR}/{crate_name}/src")
+   _record_text(workflow_id, "mod.rs", """
+pub mod register_adapter;
+pub mod device_adapter;
 
-    _record_text(workflow_id, "mod.rs", """
-    pub mod register_adapter;
-    pub mod device_adapter;
-    """, subdir=f"{OUTPUT_SUBDIR}/{crate_name}/src/adapter")
+pub use register_adapter::RegisterAdapter;
+pub use device_adapter::DeviceAdapter;
+""", subdir=f"{OUTPUT_SUBDIR}/{crate_name}/src/adapter")
+
 
     state["system_software_adapter_manifest"] = manifest
     state["system_software_adapter_manifest_path"] = f"{OUTPUT_SUBDIR}/{MANIFEST_JSON}"
