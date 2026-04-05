@@ -230,12 +230,16 @@ def run_agent(state: dict) -> dict:
     thiserror = "1"
     """, subdir=f"{OUTPUT_SUBDIR}/{crate_name}")
 
+    written_files.append(f"{OUTPUT_SUBDIR}/{crate_name}/Cargo.toml")
+
     _record_text(workflow_id, "lib.rs", """
     pub mod adapter;
     pub mod error;
 
     pub use adapter::{RegisterAdapter, DeviceAdapter};
     """, subdir=f"{OUTPUT_SUBDIR}/{crate_name}/src")
+
+    written_files.append(f"{OUTPUT_SUBDIR}/{crate_name}/src/lib.rs")
 
 
     _record_text(workflow_id, "mod.rs", """
@@ -245,6 +249,10 @@ def run_agent(state: dict) -> dict:
     pub use register_adapter::RegisterAdapter;
     pub use device_adapter::DeviceAdapter;
     """, subdir=f"{OUTPUT_SUBDIR}/{crate_name}/src/adapter")
+
+    written_files.append(f"{OUTPUT_SUBDIR}/{crate_name}/src/adapter/mod.rs")
+
+
 
 
     state["system_software_adapter_manifest"] = manifest

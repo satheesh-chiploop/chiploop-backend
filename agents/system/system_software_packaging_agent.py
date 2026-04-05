@@ -115,6 +115,19 @@ def run_agent(state: dict) -> dict:
     build_manifest = _load_manifest(state, workflow_dir, "system_software_build_manifest", "system_software_build_manifest_path", "system/software/build/system_software_build_manifest.json")
     test_manifest = _load_manifest(state, workflow_dir, "system_software_test_manifest", "system_software_test_manifest_path", "system/software/tests/system_software_test_manifest.json")
     mock_manifest = _load_manifest(state, workflow_dir, "system_software_mock_manifest", "system_software_mock_manifest_path", "system/software/mock/system_software_mock_manifest.json")
+    adapter_manifest = _load_manifest(
+        state, workflow_dir,
+        "system_software_adapter_manifest",
+        "system_software_adapter_manifest_path",
+        "system/software/adapter/system_software_adapter_manifest.json"
+    )
+
+    services_manifest = _load_manifest(
+        state, workflow_dir,
+        "system_software_core_services_manifest",
+        "system_software_core_services_manifest_path",
+        "system/software/services/system_software_core_services_manifest.json"
+    )
 
     if not sdk_manifest:
         state["status"] = "❌ system software sdk manifest missing"
@@ -123,7 +136,17 @@ def run_agent(state: dict) -> dict:
         state["status"] = "❌ system software application manifest missing"
         return state
 
-    files = _collect_files(sdk_manifest, app_manifest, tools_manifest, build_manifest, test_manifest, mock_manifest)
+    
+    files = _collect_files(
+        sdk_manifest,
+        app_manifest,
+        tools_manifest,
+        build_manifest,
+        test_manifest,
+        mock_manifest,
+        adapter_manifest,
+        services_manifest
+    )
     source_workflow_id = str(app_manifest.get("source_workflow_id") or sdk_manifest.get("source_workflow_id") or "")
 
     manifest = _build_manifest(source_workflow_id, files)
@@ -142,7 +165,9 @@ def run_agent(state: dict) -> dict:
             "build": bool(build_manifest),
             "tests": bool(test_manifest),
             "mock": bool(mock_manifest),
-        },
+            "adapter": bool(adapter_manifest),
+            "services": bool(services_manifest),
+        }
     }, indent=2))
 
     state["system_software_package"] = manifest

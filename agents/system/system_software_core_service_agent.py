@@ -129,7 +129,13 @@ def run_agent(state: dict) -> dict:
         written.append(f"{OUTPUT_SUBDIR}/src/{name}.rs")
 
     _record_text(workflow_id, "error.rs", _render_error(), subdir=f"{OUTPUT_SUBDIR}/src")
-    written.extend([f"{OUTPUT_SUBDIR}/src/mod.rs", f"{OUTPUT_SUBDIR}/src/error.rs"])
+
+
+    written.append(f"{OUTPUT_SUBDIR}/src/error.rs")
+
+    # add crate files
+    written.append(f"{OUTPUT_SUBDIR}/Cargo.toml")
+    written.append(f"{OUTPUT_SUBDIR}/src/lib.rs")
 
     manifest = _manifest(arch, written, names)
     _record_text(workflow_id, MANIFEST_JSON, json.dumps(manifest, indent=2))
