@@ -501,6 +501,11 @@ from agents.system.system_software_config_schema_agent import run_agent as syste
 from agents.system.system_software_service_architecture_agent import run_agent as system_software_service_architecture_agent
 from agents.system.system_software_core_service_agent import run_agent as system_software_core_service_agent
 from agents.system.system_software_application_scaffold_agent import run_agent as system_software_application_scaffold_agent
+from agents.system.system_software_cli_tooling_agent import run_agent as system_software_cli_tooling_agent
+from agents.system.system_software_build_system_agent import run_agent as system_software_build_system_agent
+from agents.system.system_software_unit_test_agent import run_agent as system_software_unit_test_agent
+from agents.system.system_software_mock_runtime_agent import run_agent as system_software_mock_runtime_agent
+from agents.system.system_software_packaging_agent import run_agent as system_software_packaging_agent
 
 SYSTEM_AGENT_FUNCTIONS: Dict[str,Any] = {
     "Digital Spec Agent": digital_spec_agent,
@@ -633,6 +638,11 @@ SYSTEM_AGENT_FUNCTIONS: Dict[str,Any] = {
     "System Software Service Architecture Agent": system_software_service_architecture_agent,
     "System Software Core Service Agent": system_software_core_service_agent,
     "System Software Application Scaffold Agent": system_software_application_scaffold_agent,
+    "System Software CLI / Tooling Agent": system_software_cli_tooling_agent,
+    "System Software Build System Agent": system_software_build_system_agent,
+    "System Software Unit Test Agent": system_software_unit_test_agent,
+    "System Software Mock Runtime Agent": system_software_mock_runtime_agent,
+    "System Software Packaging Agent": system_software_packaging_agent,
 }
 
 

@@ -1486,6 +1486,90 @@ AGENT_CAPABILITIES = {
         "requires": [],
     },
 
+        "System Software CLI / Tooling Agent": {
+        "domain": "system",
+        "inputs": [
+            "system/software/apps/system_software_application_manifest.json",
+            "system/software/sdk/system_software_sdk_manifest.json"
+        ],
+        "outputs": [
+            "system/software/tools/system_software_tools_manifest.json",
+            "system/software/tools/system_software_tools_summary.md",
+            "system/software/tools/system_software_tools_debug.json",
+            "system/software/tools/*/Cargo.toml",
+            "system/software/tools/*/src/main.rs"
+        ],
+        "description": "Generates developer and operator CLI tools over the SDK.",
+        "requires": [],
+    },
+    "System Software Build System Agent": {
+        "domain": "system",
+        "inputs": [
+            "system/software/sdk/system_software_sdk_manifest.json",
+            "system/software/apps/system_software_application_manifest.json",
+            "system/software/tools/system_software_tools_manifest.json(optional)"
+        ],
+        "outputs": [
+            "system/software/build/system_software_build_manifest.json",
+            "system/software/build/system_software_build_summary.md",
+            "system/software/build/system_software_build_debug.json",
+            "system/software/build/Cargo.toml",
+            "system/software/build/Makefile",
+            "system/software/build/build_plan.json"
+        ],
+        "description": "Creates the workspace-level build plan and build orchestration files for System_Software.",
+        "requires": [],
+    },
+    "System Software Unit Test Agent": {
+        "domain": "system",
+        "inputs": [
+            "system/software/sdk/system_software_api_contract.json"
+        ],
+        "outputs": [
+            "system/software/tests/system_software_test_manifest.json",
+            "system/software/tests/system_software_test_summary.md",
+            "system/software/tests/system_software_test_debug.json",
+            "system/software/tests/sdk/sdk_tests.rs",
+            "system/software/tests/services/service_tests.rs",
+            "system/software/tests/apps/app_smoke.rs"
+        ],
+        "description": "Generates initial unit and smoke tests for the SDK, services, and applications.",
+        "requires": [],
+    },
+    "System Software Mock Runtime Agent": {
+        "domain": "system",
+        "inputs": [
+            "system/software/input/system_software_input_contract.json"
+        ],
+        "outputs": [
+            "system/software/mock/system_software_mock_manifest.json",
+            "system/software/mock/system_software_mock_summary.md",
+            "system/software/mock/system_software_mock_debug.json",
+            "system/software/mock/src/mock_runtime.rs"
+        ],
+        "description": "Builds a deterministic mock runtime for software-only bring-up and testing.",
+        "requires": [],
+    },
+    "System Software Packaging Agent": {
+        "domain": "system",
+        "inputs": [
+            "system/software/sdk/system_software_sdk_manifest.json",
+            "system/software/apps/system_software_application_manifest.json",
+            "system/software/tools/system_software_tools_manifest.json(optional)",
+            "system/software/build/system_software_build_manifest.json(optional)",
+            "system/software/tests/system_software_test_manifest.json(optional)",
+            "system/software/mock/system_software_mock_manifest.json(optional)"
+        ],
+        "outputs": [
+            "system/software/package/system_software_package.json",
+            "system/software/package/system_software_package.md",
+            "system/software/package/artifact_filelist.txt",
+            "system/software/package/system_software_package_debug.json"
+        ],
+        "description": "Bundles the generated System_Software deliverables into a final package manifest and artifact list.",
+        "requires": [],
+    },
+
     # -------------------------
     # Extended / optional digital flow agents
     # -------------------------
