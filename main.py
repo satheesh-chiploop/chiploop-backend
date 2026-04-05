@@ -506,6 +506,7 @@ from agents.system.system_software_build_system_agent import run_agent as system
 from agents.system.system_software_unit_test_agent import run_agent as system_software_unit_test_agent
 from agents.system.system_software_mock_runtime_agent import run_agent as system_software_mock_runtime_agent
 from agents.system.system_software_packaging_agent import run_agent as system_software_packaging_agent
+from agents.system.system_software_executive_summary_agent import run_agent as system_software_executive_summary_agent
 
 SYSTEM_AGENT_FUNCTIONS: Dict[str,Any] = {
     "Digital Spec Agent": digital_spec_agent,
@@ -643,6 +644,7 @@ SYSTEM_AGENT_FUNCTIONS: Dict[str,Any] = {
     "System Software Unit Test Agent": system_software_unit_test_agent,
     "System Software Mock Runtime Agent": system_software_mock_runtime_agent,
     "System Software Packaging Agent": system_software_packaging_agent,
+    "System Software Executive Summary Agent": system_software_executive_summary_agent,
 }
 
 

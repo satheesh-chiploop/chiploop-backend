@@ -1570,6 +1570,30 @@ AGENT_CAPABILITIES = {
         "requires": [],
     },
 
+    "System Software Executive Summary Agent": {
+        "domain": "system",
+        "inputs": [
+            "system/software/package/system_software_package.json",
+            "system/software/sdk/system_software_sdk_manifest.json(optional)",
+            "system/software/adapter/system_software_adapter_manifest.json(optional)",
+            "system/software/services/system_software_core_services_manifest.json(optional)",
+            "system/software/apps/system_software_application_manifest.json(optional)",
+            "system/software/tools/system_software_tools_manifest.json(optional)",
+            "system/software/build/system_software_build_manifest.json(optional)",
+            "system/software/tests/system_software_test_manifest.json(optional)",
+            "system/software/mock/system_software_mock_manifest.json(optional)",
+            "system/software/model/system_software_capability_model.json(optional)",
+            "system/software/input/system_software_input_contract.json(optional)"
+        ],
+        "outputs": [
+            "system/software/executive/system_software_executive_summary.json",
+            "system/software/executive/system_software_executive_summary.md",
+            "system/software/executive/system_software_executive_summary_debug.json"
+        ],
+        "description": "Generates the final executive summary for System_Software by consolidating package readiness, delivery scope, technical coverage, risks, and next steps.",
+        "requires": [],
+    },
+
     # -------------------------
     # Extended / optional digital flow agents
     # -------------------------
