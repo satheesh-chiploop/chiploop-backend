@@ -170,7 +170,7 @@ clap = {{ version = "4", features = ["derive"] }}
 
 
 def _build_manifest(source_workflow_id: str, crate_name: str, tool_names: List[str], files: List[str]) -> Dict[str, Any]:
-    return {{
+    return {
         "package_type": "system_software_tools_manifest",
         "package_version": "1.0",
         "generated_at": _now(),
@@ -178,25 +178,26 @@ def _build_manifest(source_workflow_id: str, crate_name: str, tool_names: List[s
         "crate_name": crate_name,
         "tool_names": tool_names,
         "files": files,
-    }}
+    }
+
 
 
 def _markdown_summary(manifest: Dict[str, Any]) -> str:
     lines = [
         "# System Software Tooling",
         "",
-        f"- Generated at: {{manifest.get('generated_at')}}",
-        f"- Source workflow id: {{manifest.get('source_workflow_id') or 'unavailable'}}",
-        f"- SDK crate name: `{{manifest.get('crate_name')}}`",
+        f"- Generated at: {manifest.get('generated_at')}",
+        f"- Source workflow id: {manifest.get('source_workflow_id') or 'unavailable'}",
+        f"- SDK crate name: `{manifest.get('crate_name')}`",
         "",
         "## Tools",
         "",
     ]
     for name in manifest.get("tool_names") or []:
-        lines.append(f"- `{{name}}`")
+        lines.append(f"- `{name}`")
     lines.extend(["", "## Files", ""])
     for item in manifest.get("files") or []:
-        lines.append(f"- `{{item}}`")
+        lines.append(f"- `{item}`")
     lines.append("")
     return "\n".join(lines)
 
@@ -219,11 +220,11 @@ def run_agent(state: dict) -> dict:
     written: List[str] = []
 
     for tool_name in tool_names:
-        _record_text(workflow_id, "Cargo.toml", _render_tool_cargo(crate_name, tool_name), subdir=f"{{OUTPUT_SUBDIR}}/{{tool_name}}")
-        written.append(f"{{OUTPUT_SUBDIR}}/{{tool_name}}/Cargo.toml")
+        _record_text(workflow_id, "Cargo.toml", _render_tool_cargo(crate_name, tool_name), subdir=f"{OUTPUT_SUBDIR}/{tool_name}")
+        written.append(f"{OUTPUT_SUBDIR}/{tool_name}/Cargo.toml")
 
-        _record_text(workflow_id, "main.rs", _render_tool_main(crate_name, tool_name), subdir=f"{{OUTPUT_SUBDIR}}/{{tool_name}}/src")
-        written.append(f"{{OUTPUT_SUBDIR}}/{{tool_name}}/src/main.rs")
+        _record_text(workflow_id, "main.rs", _render_tool_main(crate_name, tool_name), subdir=f"{OUTPUT_SUBDIR}/{tool_name}/src")
+        written.append(f"{OUTPUT_SUBDIR}/{tool_name}/src/main.rs")
 
     manifest = _build_manifest(
         source_workflow_id=str(app_manifest.get("source_workflow_id") or ""),
@@ -243,6 +244,6 @@ def run_agent(state: dict) -> dict:
     }, indent=2))
 
     state["system_software_tools_manifest"] = manifest
-    state["system_software_tools_manifest_path"] = f"{{OUTPUT_SUBDIR}}/{{MANIFEST_JSON}}"
+    state["system_software_tools_manifest_path"] = f"{OUTPUT_SUBDIR}/{MANIFEST_JSON}"
     state["status"] = "✅ System software tooling generated"
     return state
