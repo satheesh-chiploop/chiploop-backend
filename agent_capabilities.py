@@ -1687,6 +1687,65 @@ AGENT_CAPABILITIES = {
         "requires": []
     },
 
+    "System CoSim Ingest Agent": {
+        "domain": "system",
+        "inputs": [
+            "system/software/package/system_software_package.json(optional)",
+            "system/software_validation/summary/system_software_validation_summary.json(optional)",
+            "firmware/firmware_manifest.json(optional)",
+            "firmware/build/firmware.elf(optional)",
+            "firmware/register_map.json(optional)",
+            "system/package/system_rtl_package.json(optional)",
+            "system/integration/soc_top_sim.sv(optional)",
+            "system/integration/system_rtl_filelist_sim.txt(optional)"
+        ],
+        "outputs": [
+            "system/cosim/ingest/system_cosim_manifest.json",
+            "system/cosim/ingest/system_cosim_manifest.md",
+            "system/cosim/ingest/system_cosim_ingest_debug.json"
+        ],
+        "description": (
+            "Restores and normalizes Software, Firmware, and RTL packages into a single "
+            "System CoSim manifest for L2 full-stack validation."
+        ),
+        "requires": []
+    },
+
+    "System CoSim Contract Agent": {
+        "domain": "system",
+        "inputs": [
+            "system/cosim/ingest/system_cosim_manifest.json"
+        ],
+        "outputs": [
+            "system/cosim/contract/system_cosim_contract_report.json",
+            "system/cosim/contract/system_cosim_contract_report.md",
+            "system/cosim/contract/system_cosim_contract_debug.json"
+        ],
+        "description": (
+            "Validates cross-layer contract consistency across software, firmware, and RTL, "
+            "including register map alignment, interrupts, DMA expectations, and co-sim readiness."
+        ),
+        "requires": []
+    },
+
+    "System CoSim Scenario Generator Agent": {
+        "domain": "system",
+        "inputs": [
+            "system/cosim/ingest/system_cosim_manifest.json",
+            "system/cosim/contract/system_cosim_contract_report.json(optional)"
+        ],
+        "outputs": [
+            "system/cosim/scenarios/system_cosim_scenarios.json",
+            "system/cosim/scenarios/system_cosim_scenarios.md",
+            "system/cosim/scenarios/system_cosim_scenario_debug.json"
+        ],
+        "description": (
+            "Generates deterministic L2 co-simulation scenarios such as boot, register read/write, "
+            "and interrupt propagation using the normalized CoSim manifest and contract report."
+        ),
+        "requires": []
+    },
+
     # -------------------------
     # Extended / optional digital flow agents
     # -------------------------
