@@ -1,12 +1,12 @@
 """
 System CoSim Ingest Agent
-Production-oriented L2 validation ingest for System Software -> Firmware -> RTL co-simulation.
+Production-worthy L2 validation ingest for System Software -> Firmware -> RTL co-simulation.
 
 Key behaviors
 - State-first resolution of software / firmware / RTL packages
 - Supports firmware input from System Software Handoff Package Agent (Option A)
-- Optional local file resolution from current workflow_dir
-- Optional remote package restore via helper utilities if available
+- Local workflow_dir resolution when present
+- Explicit Supabase artifact restore using workflow ids and storage prefixes
 - Emits a normalized co-sim manifest for downstream agents
 - Writes auditable artifacts through save_text_artifact_and_record when available
 """
@@ -18,6 +18,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 AGENT_NAME = "System CoSim Ingest Agent"
 OUTPUT_SUBDIR = "system/validation/l2/ingest"
+ARTIFACT_BUCKET = "artifacts"
 
 MANIFEST_JSON = "system_cosim_manifest.json"
 SUMMARY_MD = "system_cosim_ingest_summary.md"
@@ -26,6 +27,10 @@ DEBUG_JSON = "system_cosim_ingest_debug.json"
 
 def _now() -> str:
     return datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+
+def _norm_path(value: Any) -> str:
+    return "" if value is None else str(value).strip().replace("\\", "/")
 
 
 def _safe_json(path: str) -> Dict[str, Any]:
@@ -42,7 +47,6 @@ def _safe_json(path: str) -> Dict[str, Any]:
 def _record(workflow_id: str, filename: str, content: str):
     try:
         from utils.artifact_utils import save_text_artifact_and_record
-
         return save_text_artifact_and_record(
             workflow_id=workflow_id,
             agent_name=AGENT_NAME,
@@ -54,35 +58,95 @@ def _record(workflow_id: str, filename: str, content: str):
         return None
 
 
-def _maybe_fetch_remote_json(workflow_id: str, candidates: List[str]) -> Dict[str, Any]:
-    helper_names = [
-        "utils.handoff_utils",
-        "utils.supabase_utils",
-        "utils.artifact_fetch_utils",
-        "utils.remote_artifact_utils",
-    ]
-    for helper_name in helper_names:
+def _get_supabase(state: Dict[str, Any]):
+    client = state.get("supabase_client")
+    if client is None:
+        raise RuntimeError("supabase_client missing from state")
+    return client
+
+
+def _workflow_row(supabase, workflow_id: str) -> Dict[str, Any]:
+    if not workflow_id:
+        return {}
+    try:
+        resp = (
+            supabase.table("workflows")
+            .select("id,user_id,name,loop_type,artifacts")
+            .eq("id", workflow_id)
+            .single()
+            .execute()
+        )
+        return resp.data or {}
+    except Exception:
+        return {}
+
+
+def _workflow_storage_prefixes(state: Dict[str, Any], source_workflow_id: str, workflow_row: Dict[str, Any]) -> List[str]:
+    prefixes: List[str] = []
+
+    for key in ("artifact_prefix", "source_artifact_prefix"):
+        v = state.get(key)
+        if isinstance(v, str) and v.strip():
+            prefixes.append(_norm_path(v).rstrip("/") + "/")
+
+    prefixes.append(f"backend/workflows/{source_workflow_id}/")
+
+    user_id = (workflow_row or {}).get("user_id")
+    if isinstance(user_id, str) and user_id.strip():
+        prefixes.append(f"artifacts/{user_id}/{source_workflow_id}/")
+        prefixes.append(f"{user_id}/{source_workflow_id}/")
+
+    out: List[str] = []
+    seen = set()
+    for p in prefixes:
+        p = _norm_path(p)
+        if p and p not in seen:
+            seen.add(p)
+            out.append(p)
+    return out
+
+
+def _resolve_supabase_artifact_path(supabase, prefixes: List[str], rel_or_abs: str) -> str:
+    target = _norm_path(rel_or_abs)
+    if not target:
+        return ""
+
+    candidates: List[str] = []
+    if target.startswith("backend/workflows/") or target.startswith("artifacts/"):
+        candidates.append(target)
+    else:
+        for prefix in prefixes:
+            candidates.append(f"{prefix.rstrip('/')}/{target}")
+        candidates.append(target)
+
+    ordered: List[str] = []
+    seen = set()
+    for c in candidates:
+        c = _norm_path(c)
+        if c and c not in seen:
+            seen.add(c)
+            ordered.append(c)
+
+    for candidate in ordered:
         try:
-            module = __import__(helper_name, fromlist=["dummy"])
+            supabase.storage.from_(ARTIFACT_BUCKET).download(candidate)
+            return candidate
         except Exception:
-            continue
-        for fn_name in [
-            "load_json_artifact_from_workflow",
-            "restore_json_artifact_from_workflow",
-            "fetch_json_artifact_from_workflow",
-            "get_json_artifact_from_workflow",
-        ]:
-            fn = getattr(module, fn_name, None)
-            if not callable(fn):
-                continue
-            for candidate in candidates:
-                try:
-                    data = fn(workflow_id=workflow_id, artifact_path=candidate)
-                    if isinstance(data, dict) and data:
-                        return data
-                except Exception:
-                    pass
-    return {}
+            pass
+    return ""
+
+
+def _load_json_from_supabase(supabase, prefixes: List[str], rel_or_abs: str) -> Tuple[Dict[str, Any], str]:
+    resolved = _resolve_supabase_artifact_path(supabase, prefixes, rel_or_abs)
+    if not resolved:
+        return {}, ""
+    try:
+        raw = supabase.storage.from_(ARTIFACT_BUCKET).download(resolved)
+        text = raw.decode("utf-8") if isinstance(raw, bytes) else str(raw)
+        obj = json.loads(text)
+        return (obj if isinstance(obj, dict) else {}), resolved
+    except Exception:
+        return {}, ""
 
 
 def _find_first_local_json(root_dir: str, candidates: List[str]) -> Tuple[Dict[str, Any], Optional[str]]:
@@ -94,7 +158,7 @@ def _find_first_local_json(root_dir: str, candidates: List[str]) -> Tuple[Dict[s
     return {}, None
 
 
-def _resolve_package_from_state_or_local_or_remote(
+def _resolve_package_from_state_local_or_supabase(
     state: Dict[str, Any],
     state_keys: List[str],
     workflow_dir: str,
@@ -107,12 +171,15 @@ def _resolve_package_from_state_or_local_or_remote(
         "candidate_paths": candidate_paths,
         "resolution": None,
         "resolved_path": None,
+        "storage_prefixes": [],
+        "workflow_row_found": False,
     }
 
     for key in state_keys:
         data = state.get(key)
         if isinstance(data, dict) and data:
             debug["resolution"] = f"state:{key}"
+            debug["resolved_path"] = f"state:{key}"
             return data, debug
 
     data, path = _find_first_local_json(workflow_dir, candidate_paths)
@@ -122,10 +189,20 @@ def _resolve_package_from_state_or_local_or_remote(
         return data, debug
 
     if workflow_id_hint:
-        data = _maybe_fetch_remote_json(str(workflow_id_hint), candidate_paths)
-        if data:
-            debug["resolution"] = "remote"
-            return data, debug
+        try:
+            supabase = _get_supabase(state)
+            wf_row = _workflow_row(supabase, str(workflow_id_hint))
+            prefixes = _workflow_storage_prefixes(state, str(workflow_id_hint), wf_row)
+            debug["storage_prefixes"] = prefixes
+            debug["workflow_row_found"] = bool(wf_row)
+            for candidate in candidate_paths:
+                data, resolved = _load_json_from_supabase(supabase, prefixes, candidate)
+                if data:
+                    debug["resolution"] = "supabase"
+                    debug["resolved_path"] = resolved
+                    return data, debug
+        except Exception as exc:
+            debug["supabase_error"] = str(exc)
 
     debug["resolution"] = "missing"
     return {}, debug
@@ -140,13 +217,7 @@ def _normalize_filelist(x: Any) -> List[str]:
 
 
 def _derive_software_entry(pkg: Dict[str, Any]) -> Optional[str]:
-    for key in [
-        "software_entry",
-        "entry",
-        "app_entry",
-        "main_binary",
-        "default_app",
-    ]:
+    for key in ["software_entry", "entry", "app_entry", "main_binary", "default_app"]:
         val = pkg.get(key)
         if isinstance(val, str) and val.strip():
             return val.strip()
@@ -164,25 +235,9 @@ def _derive_software_entry(pkg: Dict[str, Any]) -> Optional[str]:
     return None
 
 
-def _derive_register_map(software_pkg: Dict[str, Any], firmware_pkg: Dict[str, Any]) -> Optional[str]:
-    candidates = [
-        software_pkg.get("register_map"),
-        firmware_pkg.get("register_map"),
-        (software_pkg.get("artifacts") or {}).get("register_map"),
-        (firmware_pkg.get("artifacts") or {}).get("register_map"),
-        (firmware_pkg.get("manifest") or {}).get("register_map"),
-    ]
-
-    firmware_contract = firmware_pkg.get("firmware_contract") if isinstance(firmware_pkg.get("firmware_contract"), dict) else {}
-    candidates.extend([
-        firmware_contract.get("register_map_path"),
-        firmware_contract.get("register_map"),
-    ])
-
-    for val in candidates:
-        if isinstance(val, str) and val.strip():
-            return val.strip()
-    return None
+def _derive_firmware_contract(firmware_pkg: Dict[str, Any]) -> Dict[str, Any]:
+    fc = firmware_pkg.get("firmware_contract")
+    return fc if isinstance(fc, dict) else {}
 
 
 def _load_manifest_from_firmware_handoff(firmware_pkg: Dict[str, Any], workflow_dir: str) -> Dict[str, Any]:
@@ -190,12 +245,28 @@ def _load_manifest_from_firmware_handoff(firmware_pkg: Dict[str, Any], workflow_
     if isinstance(manifest, dict) and manifest:
         return manifest
 
-    firmware_contract = firmware_pkg.get("firmware_contract") if isinstance(firmware_pkg.get("firmware_contract"), dict) else {}
+    firmware_contract = _derive_firmware_contract(firmware_pkg)
     manifest_path = firmware_contract.get("firmware_manifest_path")
     if isinstance(manifest_path, str) and manifest_path.strip() and workflow_dir:
         return _safe_json(os.path.join(workflow_dir, manifest_path))
-
     return {}
+
+
+def _derive_register_map(software_pkg: Dict[str, Any], firmware_pkg: Dict[str, Any]) -> Optional[str]:
+    firmware_contract = _derive_firmware_contract(firmware_pkg)
+    candidates = [
+        software_pkg.get("register_map"),
+        firmware_pkg.get("register_map"),
+        (software_pkg.get("artifacts") or {}).get("register_map"),
+        (firmware_pkg.get("artifacts") or {}).get("register_map"),
+        (firmware_pkg.get("manifest") or {}).get("register_map"),
+        firmware_contract.get("register_map_path"),
+        firmware_contract.get("register_map"),
+    ]
+    for val in candidates:
+        if isinstance(val, str) and val.strip():
+            return val.strip()
+    return None
 
 
 def _derive_interrupts(firmware_pkg: Dict[str, Any], workflow_dir: str) -> List[str]:
@@ -208,13 +279,10 @@ def _derive_interrupts(firmware_pkg: Dict[str, Any], workflow_dir: str) -> List[
     if isinstance(raw, list):
         return [str(x).strip() for x in raw if str(x).strip()]
 
-    interrupt_map_path = ""
-    firmware_contract = firmware_pkg.get("firmware_contract") if isinstance(firmware_pkg.get("firmware_contract"), dict) else {}
-    if isinstance(firmware_contract.get("interrupt_mapping_path"), str):
-        interrupt_map_path = firmware_contract.get("interrupt_mapping_path", "").strip()
-
-    if interrupt_map_path and workflow_dir:
-        interrupt_map = _safe_json(os.path.join(workflow_dir, interrupt_map_path))
+    firmware_contract = _derive_firmware_contract(firmware_pkg)
+    interrupt_map_path = firmware_contract.get("interrupt_mapping_path", "")
+    if isinstance(interrupt_map_path, str) and interrupt_map_path.strip() and workflow_dir:
+        interrupt_map = _safe_json(os.path.join(workflow_dir, interrupt_map_path.strip()))
         for key in ["interrupts", "interrupt_list", "irq_list"]:
             raw = interrupt_map.get(key)
             if isinstance(raw, list):
@@ -223,7 +291,6 @@ def _derive_interrupts(firmware_pkg: Dict[str, Any], workflow_dir: str) -> List[
             keys = [str(k).strip() for k in interrupt_map.keys() if str(k).strip()]
             if keys:
                 return keys
-
     return []
 
 
@@ -244,7 +311,7 @@ def _derive_dma_present(firmware_pkg: Dict[str, Any], rtl_pkg: Dict[str, Any], w
         if isinstance(val, bool):
             return val
 
-    firmware_contract = firmware_pkg.get("firmware_contract") if isinstance(firmware_pkg.get("firmware_contract"), dict) else {}
+    firmware_contract = _derive_firmware_contract(firmware_pkg)
     dma_path = firmware_contract.get("dma_integration_path")
     if isinstance(dma_path, str) and dma_path.strip():
         return True
@@ -253,19 +320,15 @@ def _derive_dma_present(firmware_pkg: Dict[str, Any], rtl_pkg: Dict[str, Any], w
 
 
 def _derive_firmware_elf(firmware_pkg: Dict[str, Any]) -> Optional[str]:
+    firmware_contract = _derive_firmware_contract(firmware_pkg)
     for val in [
         firmware_pkg.get("firmware_elf"),
         firmware_pkg.get("elf"),
+        firmware_contract.get("elf_path"),
+        firmware_contract.get("elf"),
     ]:
         if isinstance(val, str) and val.strip():
             return val.strip()
-
-    firmware_contract = firmware_pkg.get("firmware_contract") if isinstance(firmware_pkg.get("firmware_contract"), dict) else {}
-    for key in ["elf_path", "elf"]:
-        val = firmware_contract.get(key)
-        if isinstance(val, str) and val.strip():
-            return val.strip()
-
     return None
 
 
@@ -297,7 +360,7 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
 
     print(f"\n⚙️ Running {AGENT_NAME}")
 
-    software_pkg, software_dbg = _resolve_package_from_state_or_local_or_remote(
+    software_pkg, software_dbg = _resolve_package_from_state_local_or_supabase(
         state=state,
         state_keys=[
             "system_software_validation_package",
@@ -314,7 +377,7 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
         ],
     )
 
-    firmware_pkg, firmware_dbg = _resolve_package_from_state_or_local_or_remote(
+    firmware_pkg, firmware_dbg = _resolve_package_from_state_local_or_supabase(
         state=state,
         state_keys=[
             "system_firmware_handoff",
@@ -333,7 +396,7 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
         ],
     )
 
-    rtl_pkg, rtl_dbg = _resolve_package_from_state_or_local_or_remote(
+    rtl_pkg, rtl_dbg = _resolve_package_from_state_local_or_supabase(
         state=state,
         state_keys=["system_rtl_package", "rtl_package"],
         workflow_dir=workflow_dir,
@@ -449,3 +512,4 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     state["cosim_ingest_debug"] = debug
     state["status"] = "✅ CoSim ingest ready" if manifest["readiness"]["ready_for_system_l2_contract"] else "⚠️ CoSim ingest incomplete"
     return state
+
