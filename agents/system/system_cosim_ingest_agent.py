@@ -18,7 +18,7 @@ from typing import Any, Dict, List, Optional, Tuple
 AGENT_NAME = "System CoSim Ingest Agent"
 OUTPUT_SUBDIR = "system/validation/l2/ingest"
 
-MANIFEST_JSON = "system_system_cosim_manifest.json"
+MANIFEST_JSON = "system_cosim_manifest.json"
 SUMMARY_MD = "system_cosim_ingest_summary.md"
 DEBUG_JSON = "system_cosim_ingest_debug.json"
 
@@ -134,7 +134,7 @@ def _resolve_package_from_state_or_local_or_remote(
         return data, debug
 
     if workflow_id_hint:
-        data = _maybe_fetch_remote_json(workflow_id_hint, candidate_paths)
+        data = _maybe_fetch_remote_json(str(workflow_id_hint), candidate_paths)
         if data:
             debug["resolution"] = "remote"
             return data, debug
@@ -176,12 +176,13 @@ def _derive_software_entry(pkg: Dict[str, Any]) -> Optional[str]:
     return None
 
 
-def _derive_register_map(pkg_a: Dict[str, Any], pkg_b: Dict[str, Any]) -> Optional[str]:
+def _derive_register_map(software_pkg: Dict[str, Any], firmware_pkg: Dict[str, Any]) -> Optional[str]:
     candidates = [
-        pkg_a.get("register_map"),
-        pkg_b.get("register_map"),
-        (pkg_a.get("artifacts") or {}).get("register_map"),
-        (pkg_b.get("artifacts") or {}).get("register_map"),
+        software_pkg.get("register_map"),
+        firmware_pkg.get("register_map"),
+        (software_pkg.get("artifacts") or {}).get("register_map"),
+        (firmware_pkg.get("artifacts") or {}).get("register_map"),
+        (firmware_pkg.get("manifest") or {}).get("register_map"),
     ]
     for val in candidates:
         if isinstance(val, str) and val.strip():
@@ -192,16 +193,16 @@ def _derive_register_map(pkg_a: Dict[str, Any], pkg_b: Dict[str, Any]) -> Option
 def _derive_interrupts(firmware_pkg: Dict[str, Any]) -> List[str]:
     raw = firmware_pkg.get("interrupts")
     if isinstance(raw, list):
-        return [str(x) for x in raw]
+        return [str(x) for x in raw if str(x).strip()]
     manifest = firmware_pkg.get("manifest")
     if isinstance(manifest, dict):
         raw = manifest.get("interrupts")
         if isinstance(raw, list):
-            return [str(x) for x in raw]
+            return [str(x) for x in raw if str(x).strip()]
     return []
 
 
-def _derive_dma_present(firmware_pkg: Dict[str, Any], rtl_pkg: Dict[str, Any]) -> bool:
+def _derive_dma_present(firmware_pkg: Dict[str, Any], rtl_pkg: Dict[str, Any]) -> Optional[bool]:
     for val in [
         firmware_pkg.get("dma_present"),
         (firmware_pkg.get("manifest") or {}).get("dma_present"),
@@ -210,7 +211,29 @@ def _derive_dma_present(firmware_pkg: Dict[str, Any], rtl_pkg: Dict[str, Any]) -
     ]:
         if isinstance(val, bool):
             return val
-    return False
+    return None
+
+
+def _derive_software_validation_status(state: Dict[str, Any], workflow_dir: str) -> Optional[str]:
+    candidates = []
+    for key in ["system_software_validation_summary", "software_validation_summary"]:
+        data = state.get(key)
+        if isinstance(data, dict) and data:
+            candidates.append(data)
+
+    for rel in [
+        "system/validation/l1/system_software_validation_summary.json",
+        "system/software_validation/system_software_validation_summary.json",
+    ]:
+        data = _safe_json(os.path.join(workflow_dir, rel))
+        if data:
+            candidates.append(data)
+
+    for data in candidates:
+        status = data.get("overall_status")
+        if isinstance(status, str) and status.strip():
+            return status.strip()
+    return None
 
 
 def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
@@ -221,11 +244,16 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
 
     software_pkg, software_dbg = _resolve_package_from_state_or_local_or_remote(
         state=state,
-        state_keys=["system_software_validation_package", "system_software_package", "software_package"],
+        state_keys=[
+            "system_software_validation_package",
+            "system_software_package",
+            "software_package",
+        ],
         workflow_dir=workflow_dir,
         workflow_id_hint=state.get("system_software_workflow_id") or workflow_id,
         candidate_paths=[
             "system/software/package/system_software_package.json",
+            "system/software_validation/package/system_software_validation_package.json",
             "software/package/system_software_package.json",
             "validation/l1/system_software_validation_package.json",
         ],
@@ -233,13 +261,18 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
 
     firmware_pkg, firmware_dbg = _resolve_package_from_state_or_local_or_remote(
         state=state,
-        state_keys=["system_firmware_handoff", "system_firmware_package", "firmware_package"],
+        state_keys=[
+            "system_firmware_handoff",
+            "system_firmware_package",
+            "firmware_package",
+        ],
         workflow_dir=workflow_dir,
         workflow_id_hint=state.get("system_firmware_workflow_id"),
         candidate_paths=[
-            "system/software_handoff/system_software_handoff.json",
             "firmware/package/system_firmware_package.json",
+            "firmware/package/firmware_package.json",
             "firmware/firmware_manifest.json",
+            "system/firmware/package/system_firmware_package.json",
         ],
     )
 
@@ -264,18 +297,33 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     dma_present = _derive_dma_present(firmware_pkg, rtl_pkg)
 
     compile_sim = ((rtl_pkg.get("compile") or {}).get("sim")) == "pass"
-    rtl_ready = bool(rtl_pkg.get("ready_for_cosim"))
+    rtl_ready_for_cosim = bool(rtl_pkg.get("ready_for_cosim"))
 
     top = rtl_pkg.get("top") or {}
     top_sim = top.get("sim") if isinstance(top, dict) else None
 
+    software_validation_l1_status = _derive_software_validation_status(state, workflow_dir)
+    software_l1_ready = (software_validation_l1_status == "ready") if software_validation_l1_status else None
+
+    ready_for_l2_contract = bool(
+        software_pkg and
+        firmware_pkg and
+        rtl_pkg and
+        compile_sim and
+        rtl_ready_for_cosim and
+        sim_filelist
+    )
+
     manifest: Dict[str, Any] = {
         "validation_scope": "full_stack",
         "generated_at": _now(),
+        "agent": AGENT_NAME,
         "software": {
             "package_present": bool(software_pkg),
             "entry": software_entry,
             "package_type": software_pkg.get("package_type"),
+            "l1_validation_status": software_validation_l1_status,
+            "l1_ready": software_l1_ready,
         },
         "firmware": {
             "package_present": bool(firmware_pkg),
@@ -289,7 +337,7 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
             "package_present": bool(rtl_pkg),
             "top": top_sim,
             "compile_sim": "pass" if compile_sim else "fail",
-            "ready_for_cosim": rtl_ready,
+            "ready_for_cosim": rtl_ready_for_cosim,
             "filelists": {
                 "sim": sim_filelist,
                 "phys": phys_filelist,
@@ -300,8 +348,8 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
             "software_present": bool(software_pkg),
             "firmware_present": bool(firmware_pkg),
             "rtl_present": bool(rtl_pkg),
-            "rtl_sim_ready": bool(compile_sim and rtl_ready and sim_filelist),
-            "ready_for_system_l2_contract": bool(software_pkg and firmware_pkg and rtl_pkg and compile_sim and rtl_ready and sim_filelist),
+            "rtl_sim_ready": bool(compile_sim and rtl_ready_for_cosim and sim_filelist),
+            "ready_for_system_l2_contract": ready_for_l2_contract,
         },
     }
 
@@ -316,12 +364,14 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
             "register_map_found": bool(register_map),
             "interrupt_count": len(interrupts),
             "rtl_sim_file_count": len(sim_filelist),
+            "software_l1_status_found": bool(software_validation_l1_status),
         },
     }
 
     summary = (
         "# CoSim Ingest Summary\n\n"
         f"- Software package present: {manifest['readiness']['software_present']}\n"
+        f"- Software L1 status: {software_validation_l1_status or 'unknown'}\n"
         f"- Firmware package present: {manifest['readiness']['firmware_present']}\n"
         f"- RTL package present: {manifest['readiness']['rtl_present']}\n"
         f"- RTL sim ready: {manifest['readiness']['rtl_sim_ready']}\n"

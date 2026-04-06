@@ -4,6 +4,7 @@ Production-oriented cross-layer contract validation for System Software -> Firmw
 
 Validates:
 - presence/readiness of prior L2 ingest manifest
+- L1 software validation status when available
 - register map linkage
 - interrupt consistency
 - DMA expectation consistency
@@ -20,8 +21,9 @@ from typing import Any, Dict, List
 AGENT_NAME = "System CoSim Contract Agent"
 OUTPUT_SUBDIR = "system/validation/l2/contract"
 
-REPORT_JSON = "system_system_cosim_contract_report.json"
+REPORT_JSON = "system_cosim_contract_report.json"
 SUMMARY_MD = "system_cosim_contract_summary.md"
+DEBUG_JSON = "system_cosim_contract_debug.json"
 
 
 def _now() -> str:
@@ -64,7 +66,7 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     if not manifest:
         _add_issue(
             issues, "error", "MISSING_MANIFEST",
-            "system_cosim_manifest is missing from state",
+            "system_cosim_manifest is missing from state.",
             "Run System CoSim Ingest Agent before this agent.",
         )
     else:
@@ -80,6 +82,22 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
                 issues, "error", "INGEST_NOT_READY",
                 "CoSim ingest did not reach ready_for_system_l2_contract = true.",
                 "Inspect ingest manifest and restore missing packages or RTL sim readiness.",
+            )
+
+        l1_status = sw.get("l1_validation_status")
+        if l1_status == "ready":
+            passes.append("System Software L1 validation is ready.")
+        elif l1_status == "not_ready":
+            _add_issue(
+                issues, "error", "SOFTWARE_L1_NOT_READY",
+                "System Software L1 validation is not ready.",
+                "Fix L1 build/test/mock/package issues before enabling L2 execution.",
+            )
+        else:
+            _add_issue(
+                issues, "warning", "SOFTWARE_L1_STATUS_UNKNOWN",
+                "System Software L1 validation status could not be determined.",
+                "Prefer exporting system_software_validation_summary.json into the workflow.",
             )
 
         if sw.get("entry"):
@@ -119,7 +137,8 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
                 "Export interrupts as a list in firmware manifest/package.",
             )
 
-        if isinstance(fw.get("dma_present"), bool):
+        dma_present = fw.get("dma_present")
+        if isinstance(dma_present, bool):
             passes.append("DMA expectation resolved to a boolean.")
         else:
             _add_issue(
@@ -156,7 +175,8 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
                 "Fix System RTL package generation to emit populated sim filelist.",
             )
 
-    overall_status = "ready" if not [i for i in issues if i["severity"] == "error"] else "not_ready"
+    blocking_errors = [i for i in issues if i["severity"] == "error"]
+    overall_status = "ready" if not blocking_errors else "not_ready"
 
     report = {
         "validation_scope": "full_stack",
@@ -165,6 +185,7 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
         "passes": passes,
         "issues": issues,
         "overall_status": overall_status,
+        "blocking_error_count": len(blocking_errors),
     }
 
     summary_lines = [
@@ -173,6 +194,7 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
         f"- Overall status: {overall_status}",
         f"- Pass count: {len(passes)}",
         f"- Issue count: {len(issues)}",
+        f"- Blocking error count: {len(blocking_errors)}",
     ]
     if issues:
         summary_lines.append("")
@@ -181,8 +203,18 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
             summary_lines.append(f"- [{item['severity']}] {item['code']}: {item['message']}")
     summary = "\n".join(summary_lines) + "\n"
 
+    debug = {
+        "agent": AGENT_NAME,
+        "generated_at": _now(),
+        "manifest_present": bool(manifest),
+        "pass_count": len(passes),
+        "issue_count": len(issues),
+        "blocking_error_count": len(blocking_errors),
+    }
+
     _record(workflow_id, REPORT_JSON, json.dumps(report, indent=2))
     _record(workflow_id, SUMMARY_MD, summary)
+    _record(workflow_id, DEBUG_JSON, json.dumps(debug, indent=2))
 
     state["system_cosim_contract_report"] = report
     state["status"] = "✅ CoSim contract ready" if overall_status == "ready" else "⚠️ CoSim contract has blocking issues"

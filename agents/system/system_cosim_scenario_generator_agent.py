@@ -20,8 +20,9 @@ from typing import Any, Dict, List
 AGENT_NAME = "System CoSim Scenario Generator Agent"
 OUTPUT_SUBDIR = "system/validation/l2/scenarios"
 
-SCENARIOS_JSON = "system_system_cosim_scenarios.json"
-SUMMARY_MD = "system_system_cosim_scenarios_summary.md"
+SCENARIOS_JSON = "system_cosim_scenarios.json"
+SUMMARY_MD = "system_cosim_scenarios_summary.md"
+DEBUG_JSON = "system_cosim_scenario_debug.json"
 
 
 def _now() -> str:
@@ -137,13 +138,24 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     summary = (
         "# CoSim Scenario Summary\n\n"
         f"- Contract ready: {contract_ready}\n"
+        f"- Blocking error count: {len(blocking_errors)}\n"
         f"- Total scenarios: {len(scenarios)}\n"
         f"- Enabled scenarios: {enabled_count}\n"
         f"- Disabled scenarios: {len(scenarios) - enabled_count}\n"
     )
 
+    debug = {
+        "agent": AGENT_NAME,
+        "generated_at": _now(),
+        "contract_ready": contract_ready,
+        "blocking_error_count": len(blocking_errors),
+        "scenario_ids": [s["id"] for s in scenarios],
+        "enabled_ids": [s["id"] for s in scenarios if s.get("enabled")],
+    }
+
     _record(workflow_id, SCENARIOS_JSON, json.dumps(plan, indent=2))
     _record(workflow_id, SUMMARY_MD, summary)
+    _record(workflow_id, DEBUG_JSON, json.dumps(debug, indent=2))
 
     state["system_cosim_scenarios"] = plan
     state["status"] = "✅ CoSim scenarios ready" if contract_ready else "⚠️ CoSim scenarios generated with disabled state"
