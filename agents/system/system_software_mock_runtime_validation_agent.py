@@ -74,7 +74,6 @@ def _candidate_mock_targets(mock_manifest: Dict[str, Any]) -> List[List[str]]:
             elif _is_nonempty_str(item):
                 candidates.append([str(item)])
 
-    # deterministic fallbacks
     candidates.extend([
         ["cargo", "test", "--workspace", "--features", "mock"],
         ["cargo", "test", "--workspace"],
@@ -90,23 +89,49 @@ def _candidate_mock_targets(mock_manifest: Dict[str, Any]) -> List[List[str]]:
     return deduped
 
 
+def _resolve_dir_from_manifest(state: Dict[str, Any], asset_key: str) -> str:
+    validation_manifest = state.get("system_software_validation_manifest") or {}
+    discovered = validation_manifest.get("discovered_assets") or {}
+    info = discovered.get(asset_key) or {}
+    resolved_manifest_path = str(info.get("resolved_path") or "").strip()
+    if resolved_manifest_path:
+        candidate = os.path.dirname(resolved_manifest_path)
+        if os.path.isdir(candidate):
+            return candidate
+    return ""
+
+
 def run_agent(state: dict) -> dict:
     workflow_id = state.get("workflow_id") or "default"
-    workflow_dir = os.path.abspath(state.get("workflow_dir") or "")
 
     print(f"\n🧪 Running {AGENT_NAME}")
 
     validation_manifest = state.get("system_software_validation_manifest") or {}
     mock_manifest = state.get("system_software_mock_manifest") or {}
 
-    build_root = os.path.join(workflow_dir, "system/software/build")
-    mock_root = os.path.join(workflow_dir, "system/software/mock")
+    build_root = state.get("system_software_build_root") or _resolve_dir_from_manifest(state, "build_manifest")
+    mock_root = _resolve_dir_from_manifest(state, "mock_manifest")
 
-    if not os.path.isdir(build_root):
+    if not build_root:
+        _record_text(workflow_id, DEBUG_JSON, json.dumps({
+            "agent": AGENT_NAME,
+            "generated_at": _now(),
+            "reason": "mock_runtime_validation_build_root_missing",
+            "resolved_build_manifest_path": (
+                ((validation_manifest.get("discovered_assets") or {})
+                 .get("build_manifest") or {})
+                .get("resolved_path", "")
+            ),
+            "resolved_mock_manifest_path": (
+                ((validation_manifest.get("discovered_assets") or {})
+                 .get("mock_manifest") or {})
+                .get("resolved_path", "")
+            ),
+        }, indent=2))
         state["status"] = "❌ mock runtime validation build root missing"
         return state
 
-    if not mock_manifest and not os.path.isdir(mock_root):
+    if not mock_manifest and not mock_root:
         report = {
             "agent": AGENT_NAME,
             "generated_at": _now(),
@@ -169,6 +194,7 @@ def run_agent(state: dict) -> dict:
     summary = (
         "# Mock Runtime Validation\n\n"
         f"- Status: **{mock_runtime_status}**\n"
+        f"- Build root: `{build_root}`\n"
         f"- Command: `{ ' '.join(final_attempt['command']) }`\n"
         f"- Return code: `{final_attempt['returncode']}`\n"
     )
