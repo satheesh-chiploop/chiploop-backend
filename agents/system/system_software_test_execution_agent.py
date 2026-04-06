@@ -1,6 +1,7 @@
 import datetime
 import json
 import os
+import shutil
 import subprocess
 from typing import Any, Dict
 
@@ -33,6 +34,10 @@ def _record(workflow_id, filename, content):
 
 def _tail(text: str, limit: int = 4000) -> str:
     return text[-limit:] if isinstance(text, str) else ""
+
+
+def _find_cargo() -> str:
+    return shutil.which("cargo") or ""
 
 
 def _run_cmd(cmd, cwd):
@@ -128,13 +133,44 @@ def run_agent(state: dict) -> dict:
         state["status"] = "⚠️ no tests present"
         return state
 
-    result = _run_cmd(["cargo", "test", "--workspace"], test_root)
+    cargo_bin = _find_cargo()
+    if not cargo_bin:
+        report = {
+            "agent": AGENT_NAME,
+            "generated_at": _now(),
+            "test_root": test_root,
+            "test_status": "environment_missing",
+            "message": "cargo not found on PATH",
+        }
+        _record(workflow_id, REPORT_JSON, json.dumps(report, indent=2))
+        _record(
+            workflow_id,
+            SUMMARY_MD,
+            "# Test Execution Summary\n\n"
+            "- Status: **environment_missing**\n"
+            f"- Test root: `{test_root}`\n"
+            "- Message: `cargo not found on PATH`\n",
+        )
+        _record(workflow_id, DEBUG_JSON, json.dumps({
+            "agent": AGENT_NAME,
+            "generated_at": _now(),
+            "test_root": test_root,
+            "cargo_bin": cargo_bin,
+            "PATH": os.environ.get("PATH", ""),
+        }, indent=2))
+        state["system_software_test_execution"] = report
+        state["test_status"] = "fail"
+        state["status"] = "⚠️ test environment missing"
+        return state
+
+    result = _run_cmd([cargo_bin, "test", "--workspace"], test_root)
     test_status = "pass" if result["returncode"] == 0 else "fail"
 
     report = {
         "agent": AGENT_NAME,
         "generated_at": _now(),
         "test_root": test_root,
+        "cargo_bin": cargo_bin,
         "returncode": result["returncode"],
         "test_status": test_status,
         "stdout_tail": result["stdout"],
@@ -145,6 +181,7 @@ def run_agent(state: dict) -> dict:
         "# Test Execution Summary\n\n"
         f"- Status: **{test_status}**\n"
         f"- Test root: `{test_root}`\n"
+        f"- Cargo: `{cargo_bin}`\n"
         f"- Return code: `{result['returncode']}`\n"
     )
 
@@ -154,6 +191,7 @@ def run_agent(state: dict) -> dict:
         "agent": AGENT_NAME,
         "generated_at": _now(),
         "test_root": test_root,
+        "cargo_bin": cargo_bin,
     }, indent=2))
 
     state["system_software_test_execution"] = report
