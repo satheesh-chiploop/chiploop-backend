@@ -633,6 +633,56 @@ def _markdown_summary(manifest: Dict[str, Any]) -> str:
     lines.append("")
     return "\n".join(lines)
 
+def _storage_download_bytes(supabase, bucket: str, path: str) -> bytes:
+    try:
+        data = supabase.storage.from_(bucket).download(path)
+        return data if isinstance(data, bytes) else str(data).encode("utf-8")
+    except Exception:
+        return b""
+
+
+def _restore_package_files_locally(
+    state: Dict[str, Any],
+    workflow_dir: str,
+    package_file_checks: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    restored_root = os.path.join(workflow_dir, "restored_system_software")
+    os.makedirs(restored_root, exist_ok=True)
+
+    restored_files = []
+    failed_files = []
+
+    supabase = _get_supabase(state)
+
+    for item in package_file_checks:
+        rel_path = _norm_path(item.get("path"))
+        bucket = _norm_path(item.get("bucket"))
+        resolved_path = _norm_path(item.get("resolved_path"))
+
+        if not rel_path or not bucket or not resolved_path:
+            continue
+
+        blob = _storage_download_bytes(supabase, bucket, resolved_path)
+        if not blob:
+            failed_files.append(rel_path)
+            continue
+
+        local_path = os.path.join(restored_root, rel_path)
+        os.makedirs(os.path.dirname(local_path), exist_ok=True)
+        with open(local_path, "wb") as f:
+            f.write(blob)
+
+        restored_files.append(rel_path)
+
+    return {
+        "restored_root": restored_root,
+        "restored_files": restored_files,
+        "failed_files": failed_files,
+        "build_root": os.path.join(restored_root, "system/software/build"),
+        "test_root": os.path.join(restored_root, "system/software/build"),
+        "mock_root": os.path.join(restored_root, "system/software/mock"),
+    }
+
 
 def run_agent(state: dict) -> dict:
     workflow_id = state.get("workflow_id") or "default"
@@ -804,6 +854,13 @@ def run_agent(state: dict) -> dict:
             **file_meta,
         })
 
+    restore_info = _restore_package_files_locally(
+        state=state,
+        workflow_dir=workflow_dir,
+        package_file_checks=package_file_checks,
+    )
+
+    
     manifest = _build_validation_manifest(
         source_workflow_id=source_workflow_id,
         resolution_meta=resolution_meta,
@@ -858,11 +915,14 @@ def run_agent(state: dict) -> dict:
         "missing_required_package_files": [
             item["path"] for item in package_file_checks if not item.get("exists")
         ],
+        "restore_info": restore_info,
     }
 
     _record_text(workflow_id, MANIFEST_JSON, json.dumps(manifest, indent=2))
     _record_text(workflow_id, SUMMARY_MD, _markdown_summary(manifest))
     _record_text(workflow_id, DEBUG_JSON, json.dumps(debug_payload, indent=2))
+
+    
 
     state["source_software_workflow_id"] = source_workflow_id
 
@@ -885,11 +945,22 @@ def run_agent(state: dict) -> dict:
 
     state["system_software_validation_package_file_checks"] = package_file_checks
 
+    state["system_software_validation_local_root"] = restore_info.get("restored_root") or ""
+    state["system_software_build_root"] = restore_info.get("build_root") or ""
+    state["system_software_test_root"] = restore_info.get("test_root") or ""
+    state["system_software_mock_root"] = restore_info.get("mock_root") or ""
+    state["system_software_restored_files"] = restore_info.get("restored_files") or []
+    state["system_software_restore_failed_files"] = restore_info.get("failed_files") or []
+
     system_block = state.setdefault("system", {})
     if isinstance(system_block, dict):
         system_block["software_validation_manifest"] = manifest
         system_block["software_validation_manifest_path"] = state["system_software_validation_manifest_path"]
         system_block["source_software_workflow_id"] = source_workflow_id
+        system_block["system_software_validation_local_root"] = state["system_software_validation_local_root"]
+        system_block["system_software_build_root"] = state["system_software_build_root"]
+        system_block["system_software_test_root"] = state["system_software_test_root"]
+        system_block["system_software_mock_root"] = state["system_software_mock_root"]
 
     ingest_status = ((manifest.get("validation_readiness") or {}).get("overall_ingest_status")) or "not_ready"
     state["status"] = (
