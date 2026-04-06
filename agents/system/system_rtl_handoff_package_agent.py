@@ -84,11 +84,35 @@ def run_agent(state: dict) -> dict:
     }
 
     # ---------- Compile status ----------
-    sim = compile_summary.get("sim", {})
-    phys = compile_summary.get("phys", {})
+    sim = compile_summary.get("sim", {}) if compile_summary else {}
+    phys = compile_summary.get("phys", {}) if compile_summary else {}
 
-    sim_ok = sim.get("iverilog_ok_pass1") and sim.get("verilator_ok_pass1")
-    phys_skipped = phys.get("skipped")
+    # ---------- SIM COMPILE DETECTION ----------
+    sim_ok_summary = (
+        sim.get("iverilog_ok_pass1") and sim.get("verilator_ok_pass1")
+    )
+
+    sim_ok_logs = (
+        compile_logs.get("iverilog_sim") and compile_logs.get("verilator_sim")
+    )
+
+    sim_ok = sim_ok_summary if sim_ok_summary is not None else sim_ok_logs
+
+    # ---------- FILELIST VALIDATION ----------
+    sim_filelist_ok = len(sim_filelist) > 0
+
+    # ---------- FINAL SIM STATUS ----------
+    sim_ok = bool(sim_ok and sim_filelist_ok)
+
+    # ---------- PHYS ----------
+    phys_skipped = phys.get("skipped", True)
+
+
+    if not sim_filelist:
+        print("⚠️ WARNING: Sim filelist is empty")
+
+    if not phys_filelist:
+        print("⚠️ WARNING: Phys filelist is empty")
 
     # ---------- Build package ----------
     pkg = {
@@ -113,8 +137,10 @@ def run_agent(state: dict) -> dict:
             "soc_top_phys": bool(soc_top_phys),
             "integration_intent": bool(integration_intent)
         },
-        "ready_for_cosim": bool(sim_ok)
+        "ready_for_cosim": bool(sim_ok and sim_filelist_ok)
     }
+
+    
 
     # ---------- Save ----------
     _record(workflow_id, PACKAGE_JSON, json.dumps(pkg, indent=2))
