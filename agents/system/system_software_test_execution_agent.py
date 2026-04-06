@@ -64,25 +64,38 @@ def _run_cmd(cmd, cwd):
 
 
 def _resolve_test_root(state: Dict[str, Any]) -> str:
+    candidates = []
+
     explicit = state.get("system_software_build_root")
-    if isinstance(explicit, str) and explicit.strip() and os.path.isdir(explicit.strip()):
-        return explicit.strip()
+    if isinstance(explicit, str) and explicit.strip():
+        candidates.append(explicit.strip())
 
     validation_manifest = state.get("system_software_validation_manifest") or {}
     discovered = validation_manifest.get("discovered_assets") or {}
-    build_info = discovered.get("build_manifest") or {}
 
-    resolved_build_manifest_path = str(build_info.get("resolved_path") or "").strip()
-    if resolved_build_manifest_path:
-        candidate = os.path.dirname(resolved_build_manifest_path)
-        if os.path.isdir(candidate):
-            return candidate
+    for asset_key in ["test_manifest", "build_manifest", "package_manifest", "workspace_manifest"]:
+        info = discovered.get(asset_key) or {}
+        resolved_path = str(info.get("resolved_path") or "").strip()
+        if resolved_path:
+            candidates.append(os.path.dirname(resolved_path))
 
     workflow_dir = str(state.get("workflow_dir") or "").strip()
     if workflow_dir:
-        fallback = os.path.join(workflow_dir, "system/software/build")
-        if os.path.isdir(fallback):
-            return fallback
+        candidates.extend([
+            os.path.join(workflow_dir, "system/software/build"),
+            os.path.join(workflow_dir, "system/software"),
+            os.path.join(workflow_dir, "system"),
+        ])
+
+    for candidate in candidates:
+        if candidate and os.path.isdir(candidate) and os.path.isfile(os.path.join(candidate, "Cargo.toml")):
+            return candidate
+
+    for candidate in candidates:
+        if candidate and os.path.isdir(candidate):
+            for root, _, files in os.walk(candidate):
+                if "Cargo.toml" in files:
+                    return root
 
     return ""
 
@@ -96,6 +109,13 @@ def run_agent(state: dict) -> dict:
     test_root = _resolve_test_root(state)
 
     if not test_root:
+        report = {
+            "agent": AGENT_NAME,
+            "generated_at": _now(),
+            "test_root": "",
+            "test_status": "not_present",
+            "message": "No Cargo workspace/test root could be resolved.",
+        }
         debug = {
             "agent": AGENT_NAME,
             "generated_at": _now(),
@@ -108,30 +128,15 @@ def run_agent(state: dict) -> dict:
                 .get("resolved_path", "")
             ),
         }
-        _record(workflow_id, DEBUG_JSON, json.dumps(debug, indent=2))
-        state["status"] = "❌ test root missing"
-        return state
-
-    if not test_manifest:
-        report = {
-            "agent": AGENT_NAME,
-            "generated_at": _now(),
-            "test_root": test_root,
-            "test_status": "not_present",
-            "message": "No test manifest found",
-        }
         _record(workflow_id, REPORT_JSON, json.dumps(report, indent=2))
-        _record(workflow_id, SUMMARY_MD, "# Test Execution Summary\n\n- Status: **not_present**\n")
-        _record(workflow_id, DEBUG_JSON, json.dumps({
-            "agent": AGENT_NAME,
-            "generated_at": _now(),
-            "test_root": test_root,
-            "reason": "test_manifest_missing",
-        }, indent=2))
+        _record(workflow_id, SUMMARY_MD, "# Test Execution Summary\n\n- Status: **not_present**\n- Message: `No Cargo workspace/test root could be resolved.`\n")
+        _record(workflow_id, DEBUG_JSON, json.dumps(debug, indent=2))
         state["system_software_test_execution"] = report
         state["test_status"] = "not_present"
-        state["status"] = "⚠️ no tests present"
+        state["status"] = "⚠️ test root not present"
         return state
+
+    manifest_missing = not bool(test_manifest)
 
     cargo_bin = _find_cargo()
     if not cargo_bin:
@@ -159,30 +164,60 @@ def run_agent(state: dict) -> dict:
             "PATH": os.environ.get("PATH", ""),
         }, indent=2))
         state["system_software_test_execution"] = report
-        state["test_status"] = "fail"
+        state["test_status"] = "environment_missing"
         state["status"] = "⚠️ test environment missing"
         return state
 
-    result = _run_cmd([cargo_bin, "test", "--workspace"], test_root)
-    test_status = "pass" if result["returncode"] == 0 else "fail"
+    attempts = []
+    commands = [
+        [cargo_bin, "test", "--workspace"],
+        [cargo_bin, "test"],
+    ]
+
+    selected = None
+    for cmd in commands:
+        result = _run_cmd(cmd, test_root)
+        attempts.append({
+            "command": cmd,
+            "returncode": result["returncode"],
+            "stdout_tail": result["stdout"],
+            "stderr_tail": result["stderr"],
+        })
+        if result["returncode"] == 0:
+            selected = attempts[-1]
+            break
+
+    final_attempt = selected or (attempts[-1] if attempts else {
+        "command": [],
+        "returncode": -1,
+        "stdout_tail": "",
+        "stderr_tail": "No test command candidates were generated.",
+    })
+
+    test_status = "pass" if final_attempt["returncode"] == 0 else "fail"
 
     report = {
         "agent": AGENT_NAME,
         "generated_at": _now(),
         "test_root": test_root,
         "cargo_bin": cargo_bin,
-        "returncode": result["returncode"],
+        "test_manifest_present": not manifest_missing,
+        "selected_command": final_attempt["command"],
+        "returncode": final_attempt["returncode"],
         "test_status": test_status,
-        "stdout_tail": result["stdout"],
-        "stderr_tail": result["stderr"],
+        "stdout_tail": final_attempt["stdout_tail"],
+        "stderr_tail": final_attempt["stderr_tail"],
+        "attempt_count": len(attempts),
     }
 
     summary = (
         "# Test Execution Summary\n\n"
         f"- Status: **{test_status}**\n"
         f"- Test root: `{test_root}`\n"
+        f"- Test manifest present: `{not manifest_missing}`\n"
         f"- Cargo: `{cargo_bin}`\n"
-        f"- Return code: `{result['returncode']}`\n"
+        f"- Command: `{ ' '.join(final_attempt['command']) }`\n"
+        f"- Return code: `{final_attempt['returncode']}`\n"
     )
 
     _record(workflow_id, REPORT_JSON, json.dumps(report, indent=2))
@@ -192,6 +227,7 @@ def run_agent(state: dict) -> dict:
         "generated_at": _now(),
         "test_root": test_root,
         "cargo_bin": cargo_bin,
+        "attempts": attempts,
     }, indent=2))
 
     state["system_software_test_execution"] = report

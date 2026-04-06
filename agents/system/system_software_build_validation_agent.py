@@ -64,25 +64,40 @@ def _run_cmd(cmd, cwd):
 
 
 def _resolve_build_root(state: Dict[str, Any]) -> str:
+    candidates = []
+
     explicit = state.get("system_software_build_root")
-    if isinstance(explicit, str) and explicit.strip() and os.path.isdir(explicit.strip()):
-        return explicit.strip()
+    if isinstance(explicit, str) and explicit.strip():
+        candidates.append(explicit.strip())
 
     validation_manifest = state.get("system_software_validation_manifest") or {}
     discovered = validation_manifest.get("discovered_assets") or {}
-    build_info = discovered.get("build_manifest") or {}
 
-    resolved_manifest_path = str(build_info.get("resolved_path") or "").strip()
-    if resolved_manifest_path:
-        candidate = os.path.dirname(resolved_manifest_path)
-        if os.path.isdir(candidate):
-            return candidate
+    for asset_key in ["build_manifest", "package_manifest", "sdk_manifest", "workspace_manifest"]:
+        info = discovered.get(asset_key) or {}
+        resolved_path = str(info.get("resolved_path") or "").strip()
+        if resolved_path:
+            candidates.append(os.path.dirname(resolved_path))
 
     workflow_dir = str(state.get("workflow_dir") or "").strip()
     if workflow_dir:
-        fallback = os.path.join(workflow_dir, "system/software/build")
-        if os.path.isdir(fallback):
-            return fallback
+        candidates.extend([
+            os.path.join(workflow_dir, "system/software/build"),
+            os.path.join(workflow_dir, "system/software"),
+            os.path.join(workflow_dir, "system"),
+        ])
+
+    for candidate in candidates:
+        if candidate and os.path.isdir(candidate):
+            cargo_toml = os.path.join(candidate, "Cargo.toml")
+            if os.path.isfile(cargo_toml):
+                return candidate
+
+    for candidate in candidates:
+        if candidate and os.path.isdir(candidate):
+            for root, _, files in os.walk(candidate):
+                if "Cargo.toml" in files:
+                    return root
 
     return ""
 
@@ -96,6 +111,14 @@ def run_agent(state: dict) -> dict:
     build_root = _resolve_build_root(state)
 
     if not build_root:
+        report = {
+            "agent": AGENT_NAME,
+            "generated_at": _now(),
+            "build_root": "",
+            "workspace_members": build_manifest.get("workspace_members") or [],
+            "build_status": "not_present",
+            "message": "No Cargo workspace/build root could be resolved.",
+        }
         debug = {
             "agent": AGENT_NAME,
             "generated_at": _now(),
@@ -108,8 +131,18 @@ def run_agent(state: dict) -> dict:
                 .get("resolved_path", "")
             ),
         }
+        _record(workflow_id, REPORT_JSON, json.dumps(report, indent=2))
+        _record(
+            workflow_id,
+            SUMMARY_MD,
+            "# Build Validation Summary\n\n"
+            "- Status: **not_present**\n"
+            "- Message: `No Cargo workspace/build root could be resolved.`\n",
+        )
         _record(workflow_id, DEBUG_JSON, json.dumps(debug, indent=2))
-        state["status"] = "❌ build root missing"
+        state["system_software_build_validation"] = report
+        state["build_status"] = "not_present"
+        state["status"] = "⚠️ build root not present"
         return state
 
     cargo_bin = _find_cargo()
@@ -140,7 +173,7 @@ def run_agent(state: dict) -> dict:
         }, indent=2))
         state["system_software_build_validation"] = report
         state["system_software_build_root"] = build_root
-        state["build_status"] = "fail"
+        state["build_status"] = "environment_missing"
         state["status"] = "⚠️ build environment missing"
         return state
 

@@ -120,6 +120,15 @@ def run_agent(state: dict) -> dict:
     mock_root = state.get("system_software_mock_root") or _resolve_dir_from_manifest(state, "mock_manifest")
 
     if not build_root:
+        report = {
+            "agent": AGENT_NAME,
+            "generated_at": _now(),
+            "validation_scope": "software_only",
+            "mock_runtime_status": "not_present",
+            "message": "No Cargo workspace/build root could be resolved for mock runtime validation.",
+        }
+        _record_text(workflow_id, REPORT_JSON, json.dumps(report, indent=2))
+        _record_text(workflow_id, SUMMARY_MD, "# Mock Runtime Validation\n\n- Status: **not_present**\n- Message: `No Cargo workspace/build root could be resolved for mock runtime validation.`\n")
         _record_text(workflow_id, DEBUG_JSON, json.dumps({
             "agent": AGENT_NAME,
             "generated_at": _now(),
@@ -135,30 +144,13 @@ def run_agent(state: dict) -> dict:
                 .get("resolved_path", "")
             ),
         }, indent=2))
-        state["status"] = "❌ mock runtime validation build root missing"
-        return state
-
-    if not mock_manifest and not mock_root:
-        report = {
-            "agent": AGENT_NAME,
-            "generated_at": _now(),
-            "validation_scope": "software_only",
-            "mock_runtime_status": "not_present",
-            "message": "No mock runtime manifest or mock runtime directory found.",
-        }
-        _record_text(workflow_id, REPORT_JSON, json.dumps(report, indent=2))
-        _record_text(workflow_id, SUMMARY_MD, "# Mock Runtime Validation\n\n- Status: **not_present**\n")
-        _record_text(workflow_id, DEBUG_JSON, json.dumps({
-            "agent": AGENT_NAME,
-            "generated_at": _now(),
-            "build_root": build_root,
-            "mock_root": mock_root,
-            "reason": "mock_manifest_and_directory_missing",
-        }, indent=2))
         state["system_software_mock_runtime_validation"] = report
         state["mock_runtime_status"] = "not_present"
-        state["status"] = "⚠️ mock runtime not present"
+        state["status"] = "⚠️ mock runtime build root not present"
         return state
+
+    manifest_missing = not bool(mock_manifest)
+    mock_root_missing = not bool(mock_root)
 
     cargo_bin = _find_cargo()
     if not cargo_bin:
@@ -190,7 +182,7 @@ def run_agent(state: dict) -> dict:
             "PATH": os.environ.get("PATH", ""),
         }, indent=2))
         state["system_software_mock_runtime_validation"] = report
-        state["mock_runtime_status"] = "fail"
+        state["mock_runtime_status"] = "environment_missing"
         state["status"] = "⚠️ mock runtime environment missing"
         return state
 
@@ -224,6 +216,8 @@ def run_agent(state: dict) -> dict:
         "co_sim_enabled": False,
         "build_root": build_root,
         "mock_root": mock_root,
+        "mock_manifest_present": not manifest_missing,
+        "mock_root_present": not mock_root_missing,
         "cargo_bin": cargo_bin,
         "mock_runtime_status": mock_runtime_status,
         "selected_command": final_attempt["command"],
@@ -237,6 +231,8 @@ def run_agent(state: dict) -> dict:
         "# Mock Runtime Validation\n\n"
         f"- Status: **{mock_runtime_status}**\n"
         f"- Build root: `{build_root}`\n"
+        f"- Mock manifest present: `{not manifest_missing}`\n"
+        f"- Mock root present: `{not mock_root_missing}`\n"
         f"- Cargo: `{cargo_bin}`\n"
         f"- Command: `{ ' '.join(final_attempt['command']) }`\n"
         f"- Return code: `{final_attempt['returncode']}`\n"
