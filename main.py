@@ -4767,9 +4767,9 @@ def _start_system_software_validation_app(
         run_id,
         user_id,
         artifact_dir,
-        "system-software-validation",
         template_workflow_name,
         payload_dict,
+        "system-software-validation",
     )
 
     return {
@@ -4787,7 +4787,8 @@ def execute_system_app_background(
     user_id,
     artifact_dir,
     template_workflow_name,
-    payload
+    payload,
+    app_name=None,
 ):
     try:
         os.makedirs(artifact_dir, exist_ok=True)
