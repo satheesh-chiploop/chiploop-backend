@@ -1593,6 +1593,73 @@ AGENT_CAPABILITIES = {
         "description": "Generates the final executive summary for System_Software by consolidating package readiness, delivery scope, technical coverage, risks, and next steps.",
         "requires": [],
     },
+    # -------------------------
+    # SYSTEM SOFTWARE VALIDATION (L1)
+    # -------------------------
+
+    "System Software Validation Ingest Agent": {
+        "domain": "system",
+        "inputs": ["system_software_workflow_id"],
+        "outputs": ["system/software_validation/validation_manifest.json"],
+        "description": "Restores system software artifacts from Supabase and prepares validation manifest.",
+    },
+
+    "System Software Build Validation Agent": {
+        "domain": "system",
+        "inputs": ["system/software_validation/validation_manifest.json"],
+        "outputs": [
+            "system/software_validation/build/build_validation_report.json",
+            "system/software_validation/build/build_validation_summary.md"
+        ],
+        "description": "Runs cargo build and validates build success.",
+    },
+
+    "System Software Test Execution Agent": {
+        "domain": "system",
+        "inputs": ["system/software_validation/validation_manifest.json"],
+        "outputs": [
+            "system/software_validation/test/test_execution_report.json",
+            "system/software_validation/test/test_execution_summary.md"
+        ],
+        "description": "Runs cargo test and validates test execution.",
+    },
+
+    "System Software Contract Consistency Agent": {
+        "domain": "system",
+        "inputs": ["system_software_api_contract.json", "system_software_sdk_manifest.json"],
+        "outputs": ["system/software_validation/contract/contract_consistency_report.json"],
+        "description": "Validates API ↔ SDK ↔ app contract consistency.",
+    },
+
+    "System Software Mock Runtime Validation Agent": {
+        "domain": "system",
+        "inputs": ["system/software_validation/validation_manifest.json"],
+        "outputs": [
+            "system/software_validation/mock/mock_runtime_validation_report.json",
+            "system/software_validation/mock/mock_runtime_validation_summary.md"
+        ],
+        "description": "Validates mock runtime execution.",
+    },
+
+    "System Software Package Audit Agent": {
+        "domain": "system",
+        "inputs": ["system/software/package"],
+        "outputs": [
+            "system/software_validation/package/package_audit_report.json",
+            "system/software_validation/package/package_audit_summary.md"
+        ],
+        "description": "Validates completeness of packaged artifacts.",
+    },
+
+    "System Software Validation Summary Agent": {
+        "domain": "system",
+        "inputs": ["system/software_validation/**"],
+        "outputs": [
+            "system/software_validation/summary/system_software_validation_summary.json",
+            "system/software_validation/summary/system_software_validation_summary.md"
+        ],
+        "description": "Aggregates all validation signals into final readiness decision.",
+    },  
 
     # -------------------------
     # Extended / optional digital flow agents

@@ -507,6 +507,13 @@ from agents.system.system_software_unit_test_agent import run_agent as system_so
 from agents.system.system_software_mock_runtime_agent import run_agent as system_software_mock_runtime_agent
 from agents.system.system_software_packaging_agent import run_agent as system_software_packaging_agent
 from agents.system.system_software_executive_summary_agent import run_agent as system_software_executive_summary_agent
+from agents.system.system_software_validation_ingest_agent import run_agent as system_software_validation_ingest_agent
+from agents.system.system_software_build_validation_agent import run_agent as system_software_build_validation_agent
+from agents.system.system_software_test_execution_agent import run_agent as system_software_test_execution_agent
+from agents.system.system_software_contract_consistency_agent import run_agent as system_software_contract_consistency_agent
+from agents.system.system_software_mock_runtime_validation_agent import run_agent as system_software_mock_runtime_validation_agent
+from agents.system.system_software_package_audit_agent import run_agent as system_software_package_audit_agent
+from agents.system.system_software_validation_summary_agent import run_agent as system_software_validation_summary_agent
 
 SYSTEM_AGENT_FUNCTIONS: Dict[str,Any] = {
     "Digital Spec Agent": digital_spec_agent,
@@ -645,6 +652,13 @@ SYSTEM_AGENT_FUNCTIONS: Dict[str,Any] = {
     "System Software Mock Runtime Agent": system_software_mock_runtime_agent,
     "System Software Packaging Agent": system_software_packaging_agent,
     "System Software Executive Summary Agent": system_software_executive_summary_agent,
+    "System Software Validation Ingest Agent": system_software_validation_ingest_agent,
+    "System Software Build Validation Agent": system_software_build_validation_agent,
+    "System Software Test Execution Agent": system_software_test_execution_agent,
+    "System Software Contract Consistency Agent": system_software_contract_consistency_agent,
+    "System Software Mock Runtime Validation Agent": system_software_mock_runtime_validation_agent,
+    "System Software Package Audit Agent": system_software_package_audit_agent,
+    "System Software Validation Summary Agent": system_software_validation_summary_agent,
 }
 
 
@@ -1757,6 +1771,20 @@ class SystemSoftwareAppIn(BaseModel):
     notes: Optional[str] = None
 
     toggles: Optional[Dict[str, Any]] = None
+
+
+class SystemSoftwareValidationAppIn(BaseModel):
+    system_software_workflow_id: str
+    validation_mode: Literal[
+        "software_package_validation",
+        "full_co_simulation"
+    ] = "software_package_validation"
+
+    system_firmware_workflow_id: Optional[str] = None
+    system_rtl_workflow_id: Optional[str] = None
+
+    goal: Optional[str] = None
+    notes: Optional[str] = None
 
 # ==========================================================
 # ✅ DIGITAL APPS (Arch2RTL / DQA / Verify) — same pattern as Validation Run App
@@ -4668,6 +4696,91 @@ def _start_system_app(background_tasks, request, payload, app_name, template_wor
     return {"ok": True, "workflow_id": workflow_id, "run_id": run_id}
 
 
+def _start_system_software_validation_app(
+    background_tasks: BackgroundTasks,
+    request: Request,
+    payload: SystemSoftwareValidationAppIn,
+):
+    user_id = _require_user_id(request)
+
+    mode = (payload.validation_mode or "software_package_validation").strip()
+
+    if mode not in {"software_package_validation", "full_co_simulation"}:
+        raise HTTPException(
+            status_code=400,
+            detail="validation_mode must be 'software_package_validation' or 'full_co_simulation'"
+        )
+
+    if not payload.system_software_workflow_id:
+        raise HTTPException(status_code=400, detail="system_software_workflow_id is required")
+
+    if mode == "full_co_simulation":
+        if not payload.system_firmware_workflow_id:
+            raise HTTPException(
+                status_code=400,
+                detail="system_firmware_workflow_id is required for full co-simulation"
+            )
+        if not payload.system_rtl_workflow_id:
+            raise HTTPException(
+                status_code=400,
+                detail="system_rtl_workflow_id is required for full co-simulation"
+            )
+
+    app_title = (
+        "App: System Software Validation - Full Co-Simulation"
+        if mode == "full_co_simulation"
+        else "App: System Software Validation - Software Package Validation"
+    )
+
+    workflow_id, run_id, base_dir = _create_app_workflow_and_run(user_id, app_title, "system")
+
+    artifact_dir = os.path.join(base_dir, "system-software-validation")
+    os.makedirs(artifact_dir, exist_ok=True)
+
+    template_workflow_name = (
+        "System_Software_Validation_L2"
+        if mode == "full_co_simulation"
+        else "System_Software_Validation_L1"
+    )
+
+    payload_dict = payload.dict()
+    payload_dict["app_name"] = "system_software_validation"
+    payload_dict["validation_scope"] = (
+        "full_stack" if mode == "full_co_simulation" else "software_only"
+    )
+    payload_dict["co_sim_enabled"] = (mode == "full_co_simulation")
+
+    payload_dict["source_software_workflow_id"] = payload.system_software_workflow_id
+    payload_dict["system_software_workflow_id"] = payload.system_software_workflow_id
+
+    if payload.system_firmware_workflow_id:
+        payload_dict["source_firmware_workflow_id"] = payload.system_firmware_workflow_id
+        payload_dict["system_firmware_workflow_id"] = payload.system_firmware_workflow_id
+
+    if payload.system_rtl_workflow_id:
+        payload_dict["source_rtl_workflow_id"] = payload.system_rtl_workflow_id
+        payload_dict["system_rtl_workflow_id"] = payload.system_rtl_workflow_id
+
+    background_tasks.add_task(
+        execute_system_app_background,
+        workflow_id,
+        run_id,
+        user_id,
+        artifact_dir,
+        "system-software-validation",
+        template_workflow_name,
+        payload_dict,
+    )
+
+    return {
+        "ok": True,
+        "workflow_id": workflow_id,
+        "run_id": run_id,
+        "validation_mode": mode,
+        "template_workflow": template_workflow_name,
+    }
+
+
 def execute_system_app_background(
     workflow_id,
     run_id,
@@ -4919,5 +5032,18 @@ async def apps_system_software(
         payload,
         "App: System Software",
         "System_Software"
+    )
+
+
+@app.post("/apps/system/software-validation/run")
+async def apps_system_software_validation(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    payload: SystemSoftwareValidationAppIn
+):
+    return _start_system_software_validation_app(
+        background_tasks=background_tasks,
+        request=request,
+        payload=payload,
     )
 
