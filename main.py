@@ -514,6 +514,7 @@ from agents.system.system_software_contract_consistency_agent import run_agent a
 from agents.system.system_software_mock_runtime_validation_agent import run_agent as system_software_mock_runtime_validation_agent
 from agents.system.system_software_package_audit_agent import run_agent as system_software_package_audit_agent
 from agents.system.system_software_validation_summary_agent import run_agent as system_software_validation_summary_agent
+from agents.system.system_rtl_handoff_package_agent import run_agent as system_rtl_handoff_package_agent
 
 SYSTEM_AGENT_FUNCTIONS: Dict[str,Any] = {
     "Digital Spec Agent": digital_spec_agent,
@@ -659,6 +660,7 @@ SYSTEM_AGENT_FUNCTIONS: Dict[str,Any] = {
     "System Software Mock Runtime Validation Agent": system_software_mock_runtime_validation_agent,
     "System Software Package Audit Agent": system_software_package_audit_agent,
     "System Software Validation Summary Agent": system_software_validation_summary_agent,
+    "System RTL Handoff Package Agent": system_rtl_handoff_package_agent,
 }
 
 

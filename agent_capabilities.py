@@ -1661,6 +1661,32 @@ AGENT_CAPABILITIES = {
         "description": "Aggregates all validation signals into final readiness decision.",
     },  
 
+    "System RTL Handoff Package Agent": {
+        "domain": "system",
+        "inputs": [
+            "system_rtl_workflow_id",
+            "system/integration/system_integration_intent.json(optional)",
+            "system/integration/soc_top_sim.sv(optional)",
+            "system/integration/soc_top_phys.sv(optional)",
+            "system/integration/system_rtl_filelist_sim.txt(optional)",
+            "system/integration/system_rtl_filelist_phys.txt(optional)",
+            "system/integration/system_lib_filelist_phys.txt(optional)",
+            "system/integration/system_full_compile_summary.json(optional)"
+        ],
+        "outputs": [
+            "system/package/system_rtl_package.json",
+            "system/package/system_rtl_package_summary.md",
+            "system/package/system_rtl_package_debug.json"
+        ],
+        "description": (
+            "Restores a prior System RTL workflow from Supabase/local artifacts and publishes a "
+            "machine-readable System RTL handoff package containing top modules, sim/phys filelists, "
+            "physical library filelist, compile evidence, readiness status, and restored collateral "
+            "for downstream co-simulation and handoff flows."
+        ),
+        "requires": []
+    },
+
     # -------------------------
     # Extended / optional digital flow agents
     # -------------------------
