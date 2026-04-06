@@ -4,6 +4,7 @@ Production-oriented L2 validation ingest for System Software -> Firmware -> RTL 
 
 Key behaviors
 - State-first resolution of software / firmware / RTL packages
+- Supports firmware input from System Software Handoff Package Agent (Option A)
 - Optional local file resolution from current workflow_dir
 - Optional remote package restore via helper utilities if available
 - Emits a normalized co-sim manifest for downstream agents
@@ -25,16 +26,6 @@ DEBUG_JSON = "system_cosim_ingest_debug.json"
 
 def _now() -> str:
     return datetime.datetime.now(datetime.timezone.utc).isoformat()
-
-
-def _safe_read(path: str) -> str:
-    try:
-        if path and os.path.isfile(path):
-            with open(path, "r", encoding="utf-8") as f:
-                return f.read()
-    except Exception:
-        pass
-    return ""
 
 
 def _safe_json(path: str) -> Dict[str, Any]:
@@ -64,9 +55,6 @@ def _record(workflow_id: str, filename: str, content: str):
 
 
 def _maybe_fetch_remote_json(workflow_id: str, candidates: List[str]) -> Dict[str, Any]:
-    """
-    Best-effort remote restore. This is intentionally helper-agnostic and fails safely.
-    """
     helper_names = [
         "utils.handoff_utils",
         "utils.supabase_utils",
@@ -184,25 +172,62 @@ def _derive_register_map(software_pkg: Dict[str, Any], firmware_pkg: Dict[str, A
         (firmware_pkg.get("artifacts") or {}).get("register_map"),
         (firmware_pkg.get("manifest") or {}).get("register_map"),
     ]
+
+    firmware_contract = firmware_pkg.get("firmware_contract") if isinstance(firmware_pkg.get("firmware_contract"), dict) else {}
+    candidates.extend([
+        firmware_contract.get("register_map_path"),
+        firmware_contract.get("register_map"),
+    ])
+
     for val in candidates:
         if isinstance(val, str) and val.strip():
             return val.strip()
     return None
 
 
-def _derive_interrupts(firmware_pkg: Dict[str, Any]) -> List[str]:
+def _load_manifest_from_firmware_handoff(firmware_pkg: Dict[str, Any], workflow_dir: str) -> Dict[str, Any]:
+    manifest = firmware_pkg.get("manifest")
+    if isinstance(manifest, dict) and manifest:
+        return manifest
+
+    firmware_contract = firmware_pkg.get("firmware_contract") if isinstance(firmware_pkg.get("firmware_contract"), dict) else {}
+    manifest_path = firmware_contract.get("firmware_manifest_path")
+    if isinstance(manifest_path, str) and manifest_path.strip() and workflow_dir:
+        return _safe_json(os.path.join(workflow_dir, manifest_path))
+
+    return {}
+
+
+def _derive_interrupts(firmware_pkg: Dict[str, Any], workflow_dir: str) -> List[str]:
     raw = firmware_pkg.get("interrupts")
     if isinstance(raw, list):
-        return [str(x) for x in raw if str(x).strip()]
-    manifest = firmware_pkg.get("manifest")
-    if isinstance(manifest, dict):
-        raw = manifest.get("interrupts")
-        if isinstance(raw, list):
-            return [str(x) for x in raw if str(x).strip()]
+        return [str(x).strip() for x in raw if str(x).strip()]
+
+    manifest = _load_manifest_from_firmware_handoff(firmware_pkg, workflow_dir)
+    raw = manifest.get("interrupts")
+    if isinstance(raw, list):
+        return [str(x).strip() for x in raw if str(x).strip()]
+
+    interrupt_map_path = ""
+    firmware_contract = firmware_pkg.get("firmware_contract") if isinstance(firmware_pkg.get("firmware_contract"), dict) else {}
+    if isinstance(firmware_contract.get("interrupt_mapping_path"), str):
+        interrupt_map_path = firmware_contract.get("interrupt_mapping_path", "").strip()
+
+    if interrupt_map_path and workflow_dir:
+        interrupt_map = _safe_json(os.path.join(workflow_dir, interrupt_map_path))
+        for key in ["interrupts", "interrupt_list", "irq_list"]:
+            raw = interrupt_map.get(key)
+            if isinstance(raw, list):
+                return [str(x).strip() for x in raw if str(x).strip()]
+        if isinstance(interrupt_map, dict):
+            keys = [str(k).strip() for k in interrupt_map.keys() if str(k).strip()]
+            if keys:
+                return keys
+
     return []
 
 
-def _derive_dma_present(firmware_pkg: Dict[str, Any], rtl_pkg: Dict[str, Any]) -> Optional[bool]:
+def _derive_dma_present(firmware_pkg: Dict[str, Any], rtl_pkg: Dict[str, Any], workflow_dir: str) -> Optional[bool]:
     for val in [
         firmware_pkg.get("dma_present"),
         (firmware_pkg.get("manifest") or {}).get("dma_present"),
@@ -211,6 +236,36 @@ def _derive_dma_present(firmware_pkg: Dict[str, Any], rtl_pkg: Dict[str, Any]) -
     ]:
         if isinstance(val, bool):
             return val
+
+    manifest = _load_manifest_from_firmware_handoff(firmware_pkg, workflow_dir)
+    hardware_features = manifest.get("hardware_features") if isinstance(manifest.get("hardware_features"), dict) else {}
+    for key in ["has_dma", "dma_present"]:
+        val = hardware_features.get(key)
+        if isinstance(val, bool):
+            return val
+
+    firmware_contract = firmware_pkg.get("firmware_contract") if isinstance(firmware_pkg.get("firmware_contract"), dict) else {}
+    dma_path = firmware_contract.get("dma_integration_path")
+    if isinstance(dma_path, str) and dma_path.strip():
+        return True
+
+    return None
+
+
+def _derive_firmware_elf(firmware_pkg: Dict[str, Any]) -> Optional[str]:
+    for val in [
+        firmware_pkg.get("firmware_elf"),
+        firmware_pkg.get("elf"),
+    ]:
+        if isinstance(val, str) and val.strip():
+            return val.strip()
+
+    firmware_contract = firmware_pkg.get("firmware_contract") if isinstance(firmware_pkg.get("firmware_contract"), dict) else {}
+    for key in ["elf_path", "elf"]:
+        val = firmware_contract.get(key)
+        if isinstance(val, str) and val.strip():
+            return val.strip()
+
     return None
 
 
@@ -263,12 +318,14 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
         state=state,
         state_keys=[
             "system_firmware_handoff",
+            "system_software_handoff",
             "system_firmware_package",
             "firmware_package",
         ],
         workflow_dir=workflow_dir,
         workflow_id_hint=state.get("system_firmware_workflow_id"),
         candidate_paths=[
+            "system/software_handoff/system_software_handoff.json",
             "firmware/package/system_firmware_package.json",
             "firmware/package/firmware_package.json",
             "firmware/firmware_manifest.json",
@@ -292,9 +349,10 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     lib_filelist = _normalize_filelist(((rtl_pkg.get("filelists") or {}).get("libs")))
 
     software_entry = _derive_software_entry(software_pkg)
+    firmware_elf = _derive_firmware_elf(firmware_pkg)
     register_map = _derive_register_map(software_pkg, firmware_pkg)
-    interrupts = _derive_interrupts(firmware_pkg)
-    dma_present = _derive_dma_present(firmware_pkg, rtl_pkg)
+    interrupts = _derive_interrupts(firmware_pkg, workflow_dir)
+    dma_present = _derive_dma_present(firmware_pkg, rtl_pkg, workflow_dir)
 
     compile_sim = ((rtl_pkg.get("compile") or {}).get("sim")) == "pass"
     rtl_ready_for_cosim = bool(rtl_pkg.get("ready_for_cosim"))
@@ -327,7 +385,7 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
         },
         "firmware": {
             "package_present": bool(firmware_pkg),
-            "elf": firmware_pkg.get("firmware_elf") or firmware_pkg.get("elf"),
+            "elf": firmware_elf,
             "register_map": register_map,
             "interrupts": interrupts,
             "dma_present": dma_present,
@@ -361,8 +419,10 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
         "rtl_resolution": rtl_dbg,
         "manifest_checks": {
             "software_entry_found": bool(software_entry),
+            "firmware_elf_found": bool(firmware_elf),
             "register_map_found": bool(register_map),
             "interrupt_count": len(interrupts),
+            "dma_present_resolved": isinstance(dma_present, bool),
             "rtl_sim_file_count": len(sim_filelist),
             "software_l1_status_found": bool(software_validation_l1_status),
         },
@@ -373,6 +433,9 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
         f"- Software package present: {manifest['readiness']['software_present']}\n"
         f"- Software L1 status: {software_validation_l1_status or 'unknown'}\n"
         f"- Firmware package present: {manifest['readiness']['firmware_present']}\n"
+        f"- Firmware ELF found: {bool(firmware_elf)}\n"
+        f"- Register map found: {bool(register_map)}\n"
+        f"- Interrupt count: {len(interrupts)}\n"
         f"- RTL package present: {manifest['readiness']['rtl_present']}\n"
         f"- RTL sim ready: {manifest['readiness']['rtl_sim_ready']}\n"
         f"- Ready for L2 contract: {manifest['readiness']['ready_for_system_l2_contract']}\n"
