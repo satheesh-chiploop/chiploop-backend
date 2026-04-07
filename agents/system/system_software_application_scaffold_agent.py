@@ -80,19 +80,50 @@ fn main() {{
     println!("app={app_name} status={{:?}}", status);
 }}
 '''
-
 def _manifest(source_workflow_id: str, crate_name: str, files: List[str], app_names: List[str]) -> Dict[str, Any]:
-    return {"package_type": "system_software_application_manifest", "package_version": "1.0", "generated_at": _now(), "source_workflow_id": source_workflow_id, "crate_name": crate_name, "application_names": app_names, "files": files}
+    applications = [
+        {
+            "app_name": name,
+            "package_name": _app_package_name(name),
+            "path": f"{OUTPUT_SUBDIR}/{name}",
+        }
+        for name in app_names
+    ]
+    return {
+        "package_type": "system_software_application_manifest",
+        "package_version": "1.0",
+        "generated_at": _now(),
+        "source_workflow_id": source_workflow_id,
+        "crate_name": crate_name,
+        "application_names": app_names,
+        "applications": applications,
+        "files": files,
+    }
 
 def _markdown(manifest: Dict[str, Any]) -> str:
     lines = ["# System Software Applications", "", f"- Generated at: {manifest.get('generated_at')}", f"- Source workflow id: {manifest.get('source_workflow_id') or 'unavailable'}", f"- Crate name: `{manifest.get('crate_name')}`", "", "## Applications", ""]
-    for name in manifest.get("application_names") or []:
-        lines.append(f"- `{name}`")
+    for item in manifest.get("applications") or []:
+        lines.append(f"- `{item.get('app_name')}` → package `{item.get('package_name')}`")
+
     lines.extend(["", "## Files", ""])
     for path in manifest.get("files") or []:
         lines.append(f"- `{path}`")
     lines.append("")
     return "\n".join(lines)
+
+def _cargo_safe_name(value: str) -> str:
+    text = (value or "app").strip().lower().replace("-", "_")
+    out = []
+    for ch in text:
+        out.append(ch if (ch.isalnum() or ch == "_") else "_")
+    name = "".join(out).strip("_") or "app"
+    if name[0].isdigit():
+        name = f"app_{name}"
+    return name
+
+
+def _app_package_name(app_name: str) -> str:
+    return f"ss_app_{_cargo_safe_name(app_name)}"
 
 def run_agent(state: dict) -> dict:
     workflow_id = state.get("workflow_id") or "default"
@@ -118,18 +149,20 @@ def run_agent(state: dict) -> dict:
         _record_text(workflow_id, "main.rs", _render_app(crate_name, app_name), subdir=subdir)
         written.append(f"{subdir}/main.rs")
 
+
+        app_pkg_name = _app_package_name(app_name)
+
+        _record_text(workflow_id, "Cargo.toml", f"""[package]
+        name = "{app_pkg_name}"
+        version = "0.1.0"
+        edition = "2021"
+
+        [dependencies]
+        {crate_name} = {{ path = "../../sdk/{crate_name}" }}
+        system_services = {{ path = "../../services" }}
+        """, subdir=f"{OUTPUT_SUBDIR}/{app_name}")
+
         # FIX: Cargo.toml per app
-        _record_text(workflow_id, "Cargo.toml", f"""
-    [package]
-    name = "{app_name}"
-    version = "0.1.0"
-    edition = "2021"
-
-    [dependencies]
-    {crate_name} = {{ path = "../../sdk/{crate_name}" }}
-    system_services = {{ path = "../../services" }}
-    """, subdir=f"{OUTPUT_SUBDIR}/{app_name}")
-
         written.append(f"{OUTPUT_SUBDIR}/{app_name}/Cargo.toml")
     
     

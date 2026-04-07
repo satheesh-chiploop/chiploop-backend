@@ -117,6 +117,20 @@ def _markdown_summary(manifest: Dict[str, Any]) -> str:
     lines.append("")
     return "\n".join(lines)
 
+def _package_name_from_cargo_toml(path: str) -> str:
+    try:
+        if path and os.path.isfile(path):
+            with open(path, "r", encoding="utf-8") as f:
+                for line in f:
+                    s = line.strip()
+                    if s.startswith("name") and "=" in s:
+                        rhs = s.split("=", 1)[1].strip().strip('"').strip("'")
+                        if rhs:
+                            return rhs
+    except Exception:
+        pass
+    return ""
+
 
 def run_agent(state: dict) -> dict:
     workflow_id = state.get("workflow_id") or "default"
@@ -134,12 +148,57 @@ def run_agent(state: dict) -> dict:
         return state
 
     sdk_crate = str(sdk_manifest.get("crate_name") or "system_software_sdk").strip()
+
+    applications = app_manifest.get("applications") or []
+    tools = tools_manifest.get("tools") or []
+
     app_names = [str(x).strip() for x in (app_manifest.get("application_names") or []) if str(x).strip()]
     tool_names = [str(x).strip() for x in (tools_manifest.get("tool_names") or []) if str(x).strip()]
 
     members = [f"../sdk/{sdk_crate}", "../services", f"../adapter/{sdk_crate}"]
-    members.extend([f"../apps/{name}" for name in app_names])
-    members.extend([f"../tools/{name}" for name in tool_names])
+
+    if applications:
+        members.extend([f"../apps/{item['app_name']}" for item in applications if isinstance(item, dict) and item.get("app_name")])
+    else:
+        members.extend([f"../apps/{name}" for name in app_names])
+
+    if tools:
+        members.extend([f"../tools/{item['tool_name']}" for item in tools if isinstance(item, dict) and item.get("tool_name")])
+    else:
+        members.extend([f"../tools/{name}" for name in tool_names]) 
+
+
+    package_name_to_member = {}
+    duplicates = []
+
+    for member in members:
+        cargo_toml_path = ""
+        if workflow_dir:
+            cargo_toml_path = os.path.join(workflow_dir, "system/software/build", member, "Cargo.toml")
+            cargo_toml_path = os.path.abspath(cargo_toml_path)
+
+        pkg_name = _package_name_from_cargo_toml(cargo_toml_path) if cargo_toml_path else ""
+        if not pkg_name:
+            continue
+
+        if pkg_name in package_name_to_member:
+            duplicates.append({
+                "package_name": pkg_name,
+                "members": [package_name_to_member[pkg_name], member],
+            })
+        else:
+            package_name_to_member[pkg_name] = member
+
+    if duplicates:
+        debug_payload = {
+            "agent": AGENT_NAME,
+            "generated_at": _now(),
+            "duplicate_package_names": duplicates,
+            "workspace_members": members,
+        }
+        _record_text(workflow_id, DEBUG_JSON, json.dumps(debug_payload, indent=2))
+        state["status"] = f"❌ duplicate Cargo package names detected: {', '.join(sorted({d['package_name'] for d in duplicates}))}"
+        return state
 
     written: List[str] = []
     _record_text(workflow_id, "Cargo.toml", _render_workspace(members))
@@ -148,11 +207,14 @@ def run_agent(state: dict) -> dict:
     _record_text(workflow_id, "Makefile", _render_makefile())
     written.append(f"{OUTPUT_SUBDIR}/Makefile")
 
+
+
     build_plan = {
         "sdk_crate": sdk_crate,
         "app_names": app_names,
         "tool_names": tool_names,
         "workspace_members": members,
+        "workspace_package_names": package_name_to_member,
         "default_targets": ["fmt", "build", "test"],
     }
     _record_text(workflow_id, "build_plan.json", json.dumps(build_plan, indent=2))
@@ -170,6 +232,7 @@ def run_agent(state: dict) -> dict:
         "agent": AGENT_NAME,
         "generated_at": _now(),
         "workspace_member_count": len(members),
+        "workspace_package_names": package_name_to_member,
     }, indent=2))
 
     state["system_software_build_manifest"] = manifest
