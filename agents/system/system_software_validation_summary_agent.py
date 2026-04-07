@@ -41,11 +41,32 @@ def run_agent(state: dict) -> dict:
 
     print(f"\n📋 Running {AGENT_NAME}")
 
-    build_status = _normalize_status(state.get("build_status"), ["pass", "fail"], "fail")
-    test_status = _normalize_status(state.get("test_status"), ["pass", "fail", "not_present"], "not_present")
-    contract_status = _normalize_status(state.get("contract_status"), ["pass", "fail"], "fail")
-    mock_runtime_status = _normalize_status(state.get("mock_runtime_status"), ["pass", "fail", "not_present"], "not_present")
-    package_status = _normalize_status(state.get("package_status"), ["complete", "incomplete"], "incomplete")
+
+    build_status = _normalize_status(
+        state.get("build_status"),
+        ["pass", "fail", "not_present", "environment_missing"],
+        "not_present",
+    )
+    test_status = _normalize_status(
+        state.get("test_status"),
+        ["pass", "fail", "not_present", "environment_missing"],
+        "not_present",
+    )
+    contract_status = _normalize_status(
+        state.get("contract_status"),
+        ["pass", "fail", "not_present"],
+        "not_present",
+    )
+    mock_runtime_status = _normalize_status(
+        state.get("mock_runtime_status"),
+        ["pass", "fail", "not_present", "environment_missing"],
+        "not_present",
+    )
+    package_status = _normalize_status(
+        state.get("package_status"),
+        ["complete", "incomplete", "not_present"],
+        "not_present",
+    )
 
     validation_manifest = state.get("system_software_validation_manifest") or {}
     readiness = validation_manifest.get("validation_readiness") or {}
@@ -58,16 +79,33 @@ def run_agent(state: dict) -> dict:
         blocking_issues.extend([f"missing_required_asset:{x}" for x in missing_required_assets])
     if missing_required_package_files:
         blocking_issues.extend([f"missing_required_package_file:{x}" for x in missing_required_package_files])
-    if build_status != "pass":
+
+    if build_status == "fail":
         blocking_issues.append("build_failed")
-    if contract_status != "pass":
+    elif build_status == "environment_missing":
+        blocking_issues.append("build_environment_missing")
+    elif build_status == "not_present":
+        blocking_issues.append("build_not_present")
+
+    if contract_status == "fail":
         blocking_issues.append("contract_validation_failed")
-    if package_status != "complete":
+    elif contract_status == "not_present":
+        blocking_issues.append("contract_validation_not_present")
+
+    if package_status == "incomplete":
         blocking_issues.append("package_incomplete")
+    elif package_status == "not_present":
+        blocking_issues.append("package_not_present")
+
     if test_status == "fail":
         blocking_issues.append("tests_failed")
+    elif test_status == "environment_missing":
+        blocking_issues.append("test_environment_missing")
+
     if mock_runtime_status == "fail":
         blocking_issues.append("mock_runtime_failed")
+    elif mock_runtime_status == "environment_missing":
+        blocking_issues.append("mock_runtime_environment_missing")
 
     overall_status = "ready" if not blocking_issues else "not_ready"
 

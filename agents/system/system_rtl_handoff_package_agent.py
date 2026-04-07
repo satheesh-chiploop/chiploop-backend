@@ -88,15 +88,19 @@ def run_agent(state: dict) -> dict:
     phys = compile_summary.get("phys", {}) if compile_summary else {}
 
     # ---------- SIM COMPILE DETECTION ----------
-    sim_ok_summary = (
-        sim.get("iverilog_ok_pass1") and sim.get("verilator_ok_pass1")
-    )
 
-    sim_ok_logs = (
+
+    iverilog_summary = sim.get("iverilog_ok_pass1")
+    verilator_summary = sim.get("verilator_ok_pass1")
+
+    summary_has_both = (iverilog_summary is not None and verilator_summary is not None)
+    sim_ok_summary = bool(iverilog_summary and verilator_summary)
+
+    sim_ok_logs = bool(
         compile_logs.get("iverilog_sim") and compile_logs.get("verilator_sim")
     )
 
-    sim_ok = sim_ok_summary if sim_ok_summary is not None else sim_ok_logs
+    sim_ok = sim_ok_summary if summary_has_both else sim_ok_logs
 
     # ---------- FILELIST VALIDATION ----------
     sim_filelist_ok = len(sim_filelist) > 0
