@@ -70,10 +70,52 @@ def _collect_files(*manifests: Dict[str, Any]) -> List[str]:
     seen = set()
     for manifest in manifests:
         for path in manifest.get("files") or []:
-            p = str(path).strip()
+            p = str(path).strip().replace("\\", "/")
             if p and p not in seen:
                 seen.add(p)
                 files.append(p)
+    return files
+
+
+def _extend_if_present(files: List[str], seen: set, *paths: str) -> None:
+    for path in paths:
+        p = str(path or "").strip().replace("\\", "/")
+        if p and p not in seen:
+            seen.add(p)
+            files.append(p)
+
+
+def _derive_adapter_required_files(adapter_manifest: Dict[str, Any]) -> List[str]:
+    adapter_path = str(adapter_manifest.get("adapter_path") or "").strip().replace("\\", "/")
+    adapter_crate = str(adapter_manifest.get("adapter_crate") or "").strip()
+
+    if not adapter_path:
+        if adapter_crate:
+            adapter_path = f"system/software/adapter/{adapter_crate}"
+        else:
+            return []
+
+    adapter_path = adapter_path.rstrip("/")
+    return [
+        f"{adapter_path}/Cargo.toml",
+        f"{adapter_path}/src/lib.rs",
+    ]
+
+
+def _derive_service_required_files(services_manifest: Dict[str, Any]) -> List[str]:
+    service_root = str(services_manifest.get("services_root") or "system/software/services").strip().replace("\\", "/").rstrip("/")
+    files = [
+        f"{service_root}/Cargo.toml",
+    ]
+
+    crate_names = services_manifest.get("service_crates") or services_manifest.get("crate_names") or []
+    if isinstance(crate_names, list):
+        for crate in crate_names:
+            name = str(crate or "").strip()
+            if name:
+                files.append(f"{service_root}/{name}/Cargo.toml")
+                files.append(f"{service_root}/{name}/src/lib.rs")
+
     return files
 
 
@@ -88,13 +130,14 @@ def _build_manifest(source_workflow_id: str, files: List[str]) -> Dict[str, Any]
     }
 
 
-def _markdown_summary(manifest: Dict[str, Any]) -> str:
+def _markdown_summary(manifest: Dict[str, Any], inferred_files: List[str]) -> str:
     lines = [
         "# System Software Package",
         "",
         f"- Generated at: {manifest.get('generated_at')}",
         f"- Source workflow id: {manifest.get('source_workflow_id') or 'unavailable'}",
         f"- Artifact count: {manifest.get('artifact_count')}",
+        f"- Inferred required files added: {len(inferred_files)}",
         "",
         "## Artifacts",
         "",
@@ -121,7 +164,6 @@ def run_agent(state: dict) -> dict:
         "system_software_adapter_manifest_path",
         "system/software/adapter/system_software_adapter_manifest.json"
     )
-
     services_manifest = _load_manifest(
         state, workflow_dir,
         "system_software_core_services_manifest",
@@ -136,7 +178,6 @@ def run_agent(state: dict) -> dict:
         state["status"] = "❌ system software application manifest missing"
         return state
 
-    
     files = _collect_files(
         sdk_manifest,
         app_manifest,
@@ -147,17 +188,32 @@ def run_agent(state: dict) -> dict:
         adapter_manifest,
         services_manifest
     )
-    source_workflow_id = str(app_manifest.get("source_workflow_id") or sdk_manifest.get("source_workflow_id") or "")
 
+    seen = set(files)
+    inferred_files: List[str] = []
+
+    for path in _derive_adapter_required_files(adapter_manifest):
+        p = str(path).strip().replace("\\", "/")
+        if p and p not in seen:
+            inferred_files.append(p)
+    for path in _derive_service_required_files(services_manifest):
+        p = str(path).strip().replace("\\", "/")
+        if p and p not in seen:
+            inferred_files.append(p)
+
+    _extend_if_present(files, seen, *inferred_files)
+
+    source_workflow_id = str(app_manifest.get("source_workflow_id") or sdk_manifest.get("source_workflow_id") or "")
     manifest = _build_manifest(source_workflow_id, files)
 
     _record_text(workflow_id, MANIFEST_JSON, json.dumps(manifest, indent=2))
-    _record_text(workflow_id, SUMMARY_MD, _markdown_summary(manifest))
+    _record_text(workflow_id, SUMMARY_MD, _markdown_summary(manifest, inferred_files))
     _record_text(workflow_id, FILELIST_TXT, ("\n".join(files) + "\n") if files else "")
     _record_text(workflow_id, DEBUG_JSON, json.dumps({
         "agent": AGENT_NAME,
         "generated_at": _now(),
         "artifact_count": len(files),
+        "inferred_required_files_added": inferred_files,
         "included_manifests": {
             "sdk": bool(sdk_manifest),
             "apps": bool(app_manifest),
