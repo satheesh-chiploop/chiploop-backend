@@ -20,7 +20,7 @@ SOFTWARE_PACKAGE_SUFFIX_CANDIDATES = [
 ]
 
 BUILD_MANIFEST_SUFFIX_CANDIDATES = [
-    "system/software/build/system_software_build_manifest.json",
+    "system/software/system_software_build_manifest.json",
 ]
 
 TEST_MANIFEST_SUFFIX_CANDIDATES = [
@@ -484,7 +484,7 @@ def _build_validation_manifest(
             "software_root": "system/software",
             "validation_root": OUTPUT_SUBDIR,
             "package_root": "system/software/package",
-            "build_root": "system/software/build",
+            "build_root": "system/software",
             "tests_root": "system/software/tests",
             "mock_root": "system/software/mock",
         },
@@ -678,8 +678,8 @@ def _restore_package_files_locally(
         "restored_root": restored_root,
         "restored_files": restored_files,
         "failed_files": failed_files,
-        "build_root": os.path.join(restored_root, "system/software/build"),
-        "test_root": os.path.join(restored_root, "system/software/build"),
+        "build_root": os.path.join(restored_root, "system/software"),
+        "test_root": os.path.join(restored_root, "system/software"),
         "mock_root": os.path.join(restored_root, "system/software/mock"),
     }
 
