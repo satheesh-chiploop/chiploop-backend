@@ -117,19 +117,30 @@ def _markdown_summary(manifest: Dict[str, Any]) -> str:
     lines.append("")
     return "\n".join(lines)
 
+
 def _package_name_from_cargo_toml(path: str) -> str:
     try:
         if path and os.path.isfile(path):
             with open(path, "r", encoding="utf-8") as f:
+                in_package = False
                 for line in f:
                     s = line.strip()
-                    if s.startswith("name") and "=" in s:
+                    if s.startswith("["):
+                        in_package = (s == "[package]")
+                        continue
+                    if in_package and s.startswith("name") and "=" in s:
                         rhs = s.split("=", 1)[1].strip().strip('"').strip("'")
                         if rhs:
                             return rhs
     except Exception:
         pass
     return ""
+
+
+def _member_cargo_toml_path(workflow_dir: str, member: str) -> str:
+    if not workflow_dir:
+        return ""
+    return os.path.abspath(os.path.join(workflow_dir, OUTPUT_SUBDIR, member, "Cargo.toml"))
 
 
 def run_agent(state: dict) -> dict:
@@ -139,6 +150,7 @@ def run_agent(state: dict) -> dict:
     sdk_manifest = _load_manifest(state, workflow_dir, "system_software_sdk_manifest", "system_software_sdk_manifest_path", "system/software/sdk/system_software_sdk_manifest.json")
     app_manifest = _load_manifest(state, workflow_dir, "system_software_application_manifest", "system_software_application_manifest_path", "system/software/apps/system_software_application_manifest.json")
     tools_manifest = _load_manifest(state, workflow_dir, "system_software_tools_manifest", "system_software_tools_manifest_path", "system/software/tools/system_software_tools_manifest.json")
+    adapter_manifest = _load_manifest(state, workflow_dir, "system_software_adapter_manifest", "system_software_adapter_manifest_path", "system/software/adapter/system_software_adapter_manifest.json")
 
     if not sdk_manifest:
         state["status"] = "❌ system software sdk manifest missing"
@@ -146,8 +158,13 @@ def run_agent(state: dict) -> dict:
     if not app_manifest:
         state["status"] = "❌ system software application manifest missing"
         return state
+    if not adapter_manifest:
+        state["status"] = "❌ system software adapter manifest missing"
+        return state
 
     sdk_crate = str(sdk_manifest.get("crate_name") or "system_software_sdk").strip()
+    adapter_crate = str(adapter_manifest.get("adapter_crate") or sdk_crate).strip()
+    adapter_member = f"../adapter/{adapter_crate}"
 
     applications = app_manifest.get("applications") or []
     tools = tools_manifest.get("tools") or []
@@ -155,7 +172,7 @@ def run_agent(state: dict) -> dict:
     app_names = [str(x).strip() for x in (app_manifest.get("application_names") or []) if str(x).strip()]
     tool_names = [str(x).strip() for x in (tools_manifest.get("tool_names") or []) if str(x).strip()]
 
-    members = [f"../sdk/{sdk_crate}", "../services", f"../adapter/{sdk_crate}"]
+    members = [f"../sdk/{sdk_crate}", "../services", adapter_member]
 
     if applications:
         members.extend([f"../apps/{item['app_name']}" for item in applications if isinstance(item, dict) and item.get("app_name")])
@@ -165,20 +182,28 @@ def run_agent(state: dict) -> dict:
     if tools:
         members.extend([f"../tools/{item['tool_name']}" for item in tools if isinstance(item, dict) and item.get("tool_name")])
     else:
-        members.extend([f"../tools/{name}" for name in tool_names]) 
+        members.extend([f"../tools/{name}" for name in tool_names])
 
-
+    missing_members = []
     package_name_to_member = {}
     duplicates = []
 
     for member in members:
-        cargo_toml_path = ""
-        if workflow_dir:
-            cargo_toml_path = os.path.join(workflow_dir, "system/software/build", member, "Cargo.toml")
-            cargo_toml_path = os.path.abspath(cargo_toml_path)
+        cargo_toml_path = _member_cargo_toml_path(workflow_dir, member)
+        if not cargo_toml_path or not os.path.isfile(cargo_toml_path):
+            missing_members.append({
+                "member": member,
+                "expected_cargo_toml": cargo_toml_path,
+            })
+            continue
 
-        pkg_name = _package_name_from_cargo_toml(cargo_toml_path) if cargo_toml_path else ""
+        pkg_name = _package_name_from_cargo_toml(cargo_toml_path)
         if not pkg_name:
+            missing_members.append({
+                "member": member,
+                "expected_cargo_toml": cargo_toml_path,
+                "reason": "package_name_missing",
+            })
             continue
 
         if pkg_name in package_name_to_member:
@@ -188,6 +213,17 @@ def run_agent(state: dict) -> dict:
             })
         else:
             package_name_to_member[pkg_name] = member
+
+    if missing_members:
+        debug_payload = {
+            "agent": AGENT_NAME,
+            "generated_at": _now(),
+            "missing_workspace_members": missing_members,
+            "workspace_members": members,
+        }
+        _record_text(workflow_id, DEBUG_JSON, json.dumps(debug_payload, indent=2))
+        state["status"] = "❌ missing workspace member Cargo.toml detected"
+        return state
 
     if duplicates:
         debug_payload = {
@@ -207,10 +243,9 @@ def run_agent(state: dict) -> dict:
     _record_text(workflow_id, "Makefile", _render_makefile())
     written.append(f"{OUTPUT_SUBDIR}/Makefile")
 
-
-
     build_plan = {
         "sdk_crate": sdk_crate,
+        "adapter_crate": adapter_crate,
         "app_names": app_names,
         "tool_names": tool_names,
         "workspace_members": members,
@@ -233,6 +268,7 @@ def run_agent(state: dict) -> dict:
         "generated_at": _now(),
         "workspace_member_count": len(members),
         "workspace_package_names": package_name_to_member,
+        "adapter_crate": adapter_crate,
     }, indent=2))
 
     state["system_software_build_manifest"] = manifest
