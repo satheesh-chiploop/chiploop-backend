@@ -118,6 +118,7 @@ def _markdown_summary(manifest: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+
 def _package_name_from_cargo_toml(path: str) -> str:
     try:
         if path and os.path.isfile(path):
@@ -125,6 +126,8 @@ def _package_name_from_cargo_toml(path: str) -> str:
                 in_package = False
                 for line in f:
                     s = line.strip()
+                    if not s or s.startswith("#"):
+                        continue
                     if s.startswith("["):
                         in_package = (s == "[package]")
                         continue
@@ -137,10 +140,16 @@ def _package_name_from_cargo_toml(path: str) -> str:
     return ""
 
 
+
 def _member_cargo_toml_path(workflow_dir: str, member: str) -> str:
     if not workflow_dir:
         return ""
-    return os.path.abspath(os.path.join(workflow_dir, OUTPUT_SUBDIR, member, "Cargo.toml"))
+
+    software_root = os.path.abspath(os.path.join(workflow_dir, "system/software"))
+    normalized_member = member.replace("../", "")
+    member_dir = os.path.abspath(os.path.join(software_root, normalized_member))
+
+    return os.path.join(member_dir, "Cargo.toml")
 
 
 def run_agent(state: dict) -> dict:
@@ -190,12 +199,15 @@ def run_agent(state: dict) -> dict:
 
     for member in members:
         cargo_toml_path = _member_cargo_toml_path(workflow_dir, member)
+
         if not cargo_toml_path or not os.path.isfile(cargo_toml_path):
             missing_members.append({
                 "member": member,
                 "expected_cargo_toml": cargo_toml_path,
+                "exists": bool(cargo_toml_path and os.path.isfile(cargo_toml_path)),
             })
             continue
+        
 
         pkg_name = _package_name_from_cargo_toml(cargo_toml_path)
         if not pkg_name:
@@ -203,8 +215,10 @@ def run_agent(state: dict) -> dict:
                 "member": member,
                 "expected_cargo_toml": cargo_toml_path,
                 "reason": "package_name_missing",
+                "exists": True,
             })
             continue
+      
 
         if pkg_name in package_name_to_member:
             duplicates.append({
@@ -213,14 +227,16 @@ def run_agent(state: dict) -> dict:
             })
         else:
             package_name_to_member[pkg_name] = member
-
     if missing_members:
         debug_payload = {
             "agent": AGENT_NAME,
             "generated_at": _now(),
+            "workflow_dir": workflow_dir,
+            "software_root": os.path.abspath(os.path.join(workflow_dir, "system/software")) if workflow_dir else "",
             "missing_workspace_members": missing_members,
             "workspace_members": members,
         }
+ 
         _record_text(workflow_id, DEBUG_JSON, json.dumps(debug_payload, indent=2))
         state["status"] = "❌ missing workspace member Cargo.toml detected"
         return state
