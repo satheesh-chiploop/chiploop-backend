@@ -56,11 +56,13 @@ def _load_manifest(state: Dict[str, Any], workflow_dir: str, state_key: str, pat
     obj = state.get(state_key)
     if isinstance(obj, dict) and obj:
         return obj
+
     for candidate in (state.get(path_key), fallback):
         if _is_nonempty_str(candidate) and workflow_dir:
             loaded = _safe_read_json(_join_workflow_path(workflow_dir, str(candidate)))
             if loaded:
                 return loaded
+
     return {}
 
 
@@ -118,7 +120,6 @@ def _markdown_summary(manifest: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-
 def _package_name_from_cargo_toml(path: str) -> str:
     try:
         if path and os.path.isfile(path):
@@ -140,26 +141,79 @@ def _package_name_from_cargo_toml(path: str) -> str:
     return ""
 
 
-
 def _member_cargo_toml_path(workflow_dir: str, member: str) -> str:
-    if not workflow_dir:
+    """
+    Resolve a workspace member Cargo.toml path when a local workflow_dir exists.
+    In manifest-only / Supabase-backed mode, return "" so the caller can skip
+    filesystem validation instead of incorrectly flagging missing members.
+    """
+    if not _is_nonempty_str(workflow_dir):
         return ""
 
-    software_root = os.path.abspath(os.path.join(workflow_dir, "system/software"))
-    normalized_member = member.replace("../", "")
-    member_dir = os.path.abspath(os.path.join(software_root, normalized_member))
+    software_root = os.path.abspath(os.path.join(workflow_dir, "system", "software"))
 
+    normalized_member = str(member or "").strip().replace("\\", "/")
+    if normalized_member.startswith("../"):
+        normalized_member = normalized_member[3:]
+
+    member_dir = os.path.abspath(os.path.join(software_root, normalized_member))
     return os.path.join(member_dir, "Cargo.toml")
+
+
+def _normalize_member_path(path: str, prefix: str = "system/software/") -> str:
+    """
+    Convert manifest file-system style paths like:
+      system/software/apps/health_app
+    into workspace-member-relative paths like:
+      ../apps/health_app
+    """
+    raw = str(path or "").strip().replace("\\", "/")
+    if not raw:
+        return ""
+
+    if raw.startswith(prefix):
+        raw = raw[len(prefix):]
+
+    raw = raw.lstrip("/")
+    return f"../{raw}" if raw else ""
+
+
+def _dedupe_keep_order(items: List[str]) -> List[str]:
+    return list(dict.fromkeys([x for x in items if _is_nonempty_str(x)]))
 
 
 def run_agent(state: dict) -> dict:
     workflow_id = state.get("workflow_id") or "default"
     workflow_dir = os.path.abspath(state.get("workflow_dir")) if _is_nonempty_str(state.get("workflow_dir")) else ""
 
-    sdk_manifest = _load_manifest(state, workflow_dir, "system_software_sdk_manifest", "system_software_sdk_manifest_path", "system/software/sdk/system_software_sdk_manifest.json")
-    app_manifest = _load_manifest(state, workflow_dir, "system_software_application_manifest", "system_software_application_manifest_path", "system/software/apps/system_software_application_manifest.json")
-    tools_manifest = _load_manifest(state, workflow_dir, "system_software_tools_manifest", "system_software_tools_manifest_path", "system/software/tools/system_software_tools_manifest.json")
-    adapter_manifest = _load_manifest(state, workflow_dir, "system_software_adapter_manifest", "system_software_adapter_manifest_path", "system/software/adapter/system_software_adapter_manifest.json")
+    sdk_manifest = _load_manifest(
+        state,
+        workflow_dir,
+        "system_software_sdk_manifest",
+        "system_software_sdk_manifest_path",
+        "system/software/sdk/system_software_sdk_manifest.json",
+    )
+    app_manifest = _load_manifest(
+        state,
+        workflow_dir,
+        "system_software_application_manifest",
+        "system_software_application_manifest_path",
+        "system/software/apps/system_software_application_manifest.json",
+    )
+    tools_manifest = _load_manifest(
+        state,
+        workflow_dir,
+        "system_software_tools_manifest",
+        "system_software_tools_manifest_path",
+        "system/software/tools/system_software_tools_manifest.json",
+    )
+    adapter_manifest = _load_manifest(
+        state,
+        workflow_dir,
+        "system_software_adapter_manifest",
+        "system_software_adapter_manifest_path",
+        "system/software/adapter/system_software_adapter_manifest.json",
+    )
 
     if not sdk_manifest:
         state["status"] = "❌ system software sdk manifest missing"
@@ -172,33 +226,68 @@ def run_agent(state: dict) -> dict:
         return state
 
     sdk_crate = str(sdk_manifest.get("crate_name") or "system_software_sdk").strip()
-    adapter_crate = str(adapter_manifest.get("adapter_crate") or sdk_crate).strip()
-    adapter_member = f"../adapter/{adapter_crate}"
+
+    sdk_member = _normalize_member_path(f"system/software/sdk/{sdk_crate}")
+
+    adapter_member = _normalize_member_path(
+        str(adapter_manifest.get("adapter_path") or f"system/software/adapter/{sdk_crate}")
+    )
 
     applications = app_manifest.get("applications") or []
     tools = tools_manifest.get("tools") or []
 
-    app_names = [str(x).strip() for x in (app_manifest.get("application_names") or []) if str(x).strip()]
-    tool_names = [str(x).strip() for x in (tools_manifest.get("tool_names") or []) if str(x).strip()]
+    app_names = [
+        str(x).strip()
+        for x in (app_manifest.get("application_names") or [])
+        if str(x).strip()
+    ]
+    tool_names = [
+        str(x).strip()
+        for x in (tools_manifest.get("tool_names") or [])
+        if str(x).strip()
+    ]
 
-    members = [f"../sdk/{sdk_crate}", "../services", adapter_member]
+    members: List[str] = [sdk_member, "../services", adapter_member]
 
     if applications:
-        members.extend([f"../apps/{item['app_name']}" for item in applications if isinstance(item, dict) and item.get("app_name")])
+        for item in applications:
+            if not isinstance(item, dict):
+                continue
+            member = _normalize_member_path(
+                item.get("path") or f"system/software/apps/{item.get('app_name', '')}"
+            )
+            if member:
+                members.append(member)
     else:
         members.extend([f"../apps/{name}" for name in app_names])
 
     if tools:
-        members.extend([f"../tools/{item['tool_name']}" for item in tools if isinstance(item, dict) and item.get("tool_name")])
+        for item in tools:
+            if not isinstance(item, dict):
+                continue
+            member = _normalize_member_path(
+                item.get("path") or f"system/software/tools/{item.get('tool_name', '')}"
+            )
+            if member:
+                members.append(member)
     else:
         members.extend([f"../tools/{name}" for name in tool_names])
+
+    members = _dedupe_keep_order(members)
 
     missing_members = []
     package_name_to_member = {}
     duplicates = []
+    validation_mode = "filesystem" if _is_nonempty_str(workflow_dir) else "manifest_only"
 
     for member in members:
         cargo_toml_path = _member_cargo_toml_path(workflow_dir, member)
+
+        # In manifest-only mode we intentionally skip local filesystem validation.
+        # This agent's job is to generate workspace metadata, not require that all
+        # crates are mounted locally in the current runtime.
+        if validation_mode == "manifest_only":
+            continue
 
         if not cargo_toml_path or not os.path.isfile(cargo_toml_path):
             missing_members.append({
@@ -207,7 +296,6 @@ def run_agent(state: dict) -> dict:
                 "exists": bool(cargo_toml_path and os.path.isfile(cargo_toml_path)),
             })
             continue
-        
 
         pkg_name = _package_name_from_cargo_toml(cargo_toml_path)
         if not pkg_name:
@@ -218,7 +306,6 @@ def run_agent(state: dict) -> dict:
                 "exists": True,
             })
             continue
-      
 
         if pkg_name in package_name_to_member:
             duplicates.append({
@@ -227,16 +314,18 @@ def run_agent(state: dict) -> dict:
             })
         else:
             package_name_to_member[pkg_name] = member
+
     if missing_members:
         debug_payload = {
             "agent": AGENT_NAME,
             "generated_at": _now(),
             "workflow_dir": workflow_dir,
             "software_root": os.path.abspath(os.path.join(workflow_dir, "system/software")) if workflow_dir else "",
+            "validation_mode": validation_mode,
             "missing_workspace_members": missing_members,
             "workspace_members": members,
         }
- 
+
         _record_text(workflow_id, DEBUG_JSON, json.dumps(debug_payload, indent=2))
         state["status"] = "❌ missing workspace member Cargo.toml detected"
         return state
@@ -245,6 +334,7 @@ def run_agent(state: dict) -> dict:
         debug_payload = {
             "agent": AGENT_NAME,
             "generated_at": _now(),
+            "validation_mode": validation_mode,
             "duplicate_package_names": duplicates,
             "workspace_members": members,
         }
@@ -253,6 +343,7 @@ def run_agent(state: dict) -> dict:
         return state
 
     written: List[str] = []
+
     _record_text(workflow_id, "Cargo.toml", _render_workspace(members))
     written.append(f"{OUTPUT_SUBDIR}/Cargo.toml")
 
@@ -261,31 +352,49 @@ def run_agent(state: dict) -> dict:
 
     build_plan = {
         "sdk_crate": sdk_crate,
-        "adapter_crate": adapter_crate,
+        "adapter_member": adapter_member,
         "app_names": app_names,
         "tool_names": tool_names,
         "workspace_members": members,
         "workspace_package_names": package_name_to_member,
         "default_targets": ["fmt", "build", "test"],
+        "validation_mode": validation_mode,
     }
     _record_text(workflow_id, "build_plan.json", json.dumps(build_plan, indent=2))
     written.append(f"{OUTPUT_SUBDIR}/build_plan.json")
 
     manifest = _build_manifest(
-        source_workflow_id=str(app_manifest.get("source_workflow_id") or sdk_manifest.get("source_workflow_id") or ""),
+        source_workflow_id=str(
+            app_manifest.get("source_workflow_id")
+            or sdk_manifest.get("source_workflow_id")
+            or ""
+        ),
         members=members,
         files=written,
     )
 
     _record_text(workflow_id, MANIFEST_JSON, json.dumps(manifest, indent=2))
     _record_text(workflow_id, SUMMARY_MD, _markdown_summary(manifest))
-    _record_text(workflow_id, DEBUG_JSON, json.dumps({
-        "agent": AGENT_NAME,
-        "generated_at": _now(),
-        "workspace_member_count": len(members),
-        "workspace_package_names": package_name_to_member,
-        "adapter_crate": adapter_crate,
-    }, indent=2))
+    _record_text(
+        workflow_id,
+        DEBUG_JSON,
+        json.dumps(
+            {
+                "agent": AGENT_NAME,
+                "generated_at": _now(),
+                "workflow_dir": workflow_dir,
+                "validation_mode": validation_mode,
+                "workspace_member_count": len(members),
+                "workspace_members": members,
+                "workspace_package_names": package_name_to_member,
+                "sdk_crate": sdk_crate,
+                "adapter_member": adapter_member,
+                "app_names": app_names,
+                "tool_names": tool_names,
+            },
+            indent=2,
+        ),
+    )
 
     state["system_software_build_manifest"] = manifest
     state["system_software_build_manifest_path"] = f"{OUTPUT_SUBDIR}/{MANIFEST_JSON}"
