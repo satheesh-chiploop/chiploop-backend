@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional
 from utils.artifact_utils import save_text_artifact_and_record
 
 AGENT_NAME = "System Software Build System Agent"
-OUTPUT_SUBDIR = "system/software/build"
+OUTPUT_SUBDIR = "system/software"
 MANIFEST_JSON = "system_software_build_manifest.json"
 SUMMARY_MD = "system_software_build_summary.md"
 DEBUG_JSON = "system_software_build_debug.json"
@@ -161,12 +161,6 @@ def _member_cargo_toml_path(workflow_dir: str, member: str) -> str:
 
 
 def _normalize_member_path(path: str, prefix: str = "system/software/") -> str:
-    """
-    Convert manifest file-system style paths like:
-      system/software/apps/health_app
-    into workspace-member-relative paths like:
-      ../apps/health_app
-    """
     raw = str(path or "").strip().replace("\\", "/")
     if not raw:
         return ""
@@ -174,8 +168,10 @@ def _normalize_member_path(path: str, prefix: str = "system/software/") -> str:
     if raw.startswith(prefix):
         raw = raw[len(prefix):]
 
-    raw = raw.lstrip("/")
-    return f"../{raw}" if raw else ""
+    return raw.lstrip("/")
+
+
+
 
 
 def _dedupe_keep_order(items: List[str]) -> List[str]:
@@ -247,7 +243,7 @@ def run_agent(state: dict) -> dict:
         if str(x).strip()
     ]
 
-    members: List[str] = [sdk_member, "../services", adapter_member]
+    members: List[str] = [sdk_member, "services", adapter_member]
 
     if applications:
         for item in applications:

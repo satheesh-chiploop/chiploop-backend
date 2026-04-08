@@ -82,8 +82,8 @@ def _resolve_test_root(state: Dict[str, Any]) -> str:
     workflow_dir = str(state.get("workflow_dir") or "").strip()
     if workflow_dir:
         candidates.extend([
-            os.path.join(workflow_dir, "system/software/build"),
             os.path.join(workflow_dir, "system/software"),
+            os.path.join(workflow_dir, "system/software/build"),
             os.path.join(workflow_dir, "system"),
         ])
 
