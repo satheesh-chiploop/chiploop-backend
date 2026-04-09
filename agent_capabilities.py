@@ -1239,7 +1239,6 @@ AGENT_CAPABILITIES = {
         "requires": [],
     },
 
-
     "System Firmware CoSim Execution Agent": {
         "domain": "system",
         "inputs": [
@@ -1399,7 +1398,6 @@ AGENT_CAPABILITIES = {
         "description": "Generates the initial System_Software SDK scaffold, including public header, Rust façade, example application, and build metadata.",
         "requires": [],
     },
-
      
     "System Software HAL/Driver Adapter Agent": {
         "domain": "system",
@@ -1486,7 +1484,7 @@ AGENT_CAPABILITIES = {
         "requires": [],
     },
 
-        "System Software CLI / Tooling Agent": {
+    "System Software CLI / Tooling Agent": {
         "domain": "system",
         "inputs": [
             "system/software/apps/system_software_application_manifest.json",
@@ -1502,6 +1500,7 @@ AGENT_CAPABILITIES = {
         "description": "Generates developer and operator CLI tools over the SDK.",
         "requires": [],
     },
+
     "System Software Build System Agent": {
         "domain": "system",
         "inputs": [
@@ -1520,6 +1519,7 @@ AGENT_CAPABILITIES = {
         "description": "Creates the workspace-level build plan and build orchestration files for System_Software.",
         "requires": [],
     },
+
     "System Software Unit Test Agent": {
         "domain": "system",
         "inputs": [
@@ -1536,6 +1536,7 @@ AGENT_CAPABILITIES = {
         "description": "Generates initial unit and smoke tests for the SDK, services, and applications.",
         "requires": [],
     },
+
     "System Software Mock Runtime Agent": {
         "domain": "system",
         "inputs": [
@@ -1550,6 +1551,7 @@ AGENT_CAPABILITIES = {
         "description": "Builds a deterministic mock runtime for software-only bring-up and testing.",
         "requires": [],
     },
+
     "System Software Packaging Agent": {
         "domain": "system",
         "inputs": [
