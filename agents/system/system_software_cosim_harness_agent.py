@@ -85,55 +85,66 @@ def _discover_software_assets(state: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _cosim_ingest_view(state: Dict[str, Any]) -> Dict[str, Any]:
+    return (
+        state.get("system_software_cosim_ingest")
+        or state.get("system_cosim_ingest")
+        or {}
+    )
+
 def _discover_firmware_assets(state: Dict[str, Any]) -> Dict[str, Any]:
-    ingest = state.get("system_software_cosim_ingest") or {}
+    ingest = _cosim_ingest_view(state)
     firmware = ingest.get("firmware_assets") or {}
+    manifest = state.get("system_cosim_manifest") or {}
+    manifest_fw = (manifest.get("firmware") or {}) if isinstance(manifest, dict) else {}
 
     return {
         "register_map_path": _first_nonempty(
             state.get("firmware_register_map_path"),
             firmware.get("register_map_path"),
-            _artifact_path(firmware.get("register_map")),
+            manifest_fw.get("register_map"),
         ),
         "hal_path": _first_nonempty(
             state.get("firmware_hal_path"),
             firmware.get("hal_path"),
-            _artifact_path(firmware.get("hal")),
         ),
         "elf_path": _first_nonempty(
             state.get("firmware_elf_path"),
             firmware.get("elf_path"),
-            _artifact_path(firmware.get("elf")),
+            manifest_fw.get("elf"),
         ),
     }
 
-
 def _discover_rtl_assets(state: Dict[str, Any]) -> Dict[str, Any]:
-    ingest = state.get("system_software_cosim_ingest") or {}
+    ingest = _cosim_ingest_view(state)
     rtl = ingest.get("rtl_assets") or {}
+    manifest = state.get("system_cosim_manifest") or {}
+    manifest_rtl = (manifest.get("rtl") or {}) if isinstance(manifest, dict) else {}
+    filelists = manifest_rtl.get("filelists") or {}
+
+    sim_filelist = filelists.get("sim") if isinstance(filelists, dict) else []
+    sim_first = sim_filelist[0] if isinstance(sim_filelist, list) and sim_filelist else ""
 
     return {
         "sim_top_path": _first_nonempty(
             state.get("rtl_top_path"),
             rtl.get("top_path"),
-            _artifact_path(rtl.get("top")),
+            manifest_rtl.get("top"),
         ),
         "sim_harness_path": _first_nonempty(
             state.get("rtl_sim_harness_path"),
             rtl.get("sim_harness_path"),
-            _artifact_path(rtl.get("sim_harness")),
+            sim_first,
         ),
         "verilator_makefile_path": _first_nonempty(
             state.get("rtl_verilator_makefile_path"),
             rtl.get("verilator_makefile_path"),
-            _artifact_path(rtl.get("verilator_makefile")),
         ),
         "waveform_root": _first_nonempty(
             state.get("rtl_waveform_root"),
             rtl.get("waveform_root"),
         ),
     }
-
 
 def _discover_scenarios(state: Dict[str, Any]) -> List[Dict[str, Any]]:
     scenario_manifest = (
@@ -193,11 +204,14 @@ def _build_commands(scenarios: List[Dict[str, Any]], state: Dict[str, Any], tool
                     })
             elif runner == "verilator" and tools.get("make"):
                 make_target = _first_nonempty(scenario.get("make_target"), "sim")
+                rtl_assets = _discover_rtl_assets(state)
                 make_dir = _first_nonempty(
                     scenario.get("make_dir"),
                     state.get("rtl_build_root"),
                     state.get("rtl_sim_root"),
+                    rtl_assets.get("waveform_root"),
                 )
+        
                 if make_dir:
                     commands.append({
                         "scenario_id": scenario_id,
@@ -233,8 +247,16 @@ def run_agent(state: dict) -> dict:
         blocked_dependencies.append("firmware_elf_missing")
     if not _is_nonempty_str(firmware["register_map_path"]):
         blocked_dependencies.append("firmware_register_map_missing")
-    if not (_is_nonempty_str(rtl["sim_harness_path"]) or _is_nonempty_str(rtl["verilator_makefile_path"])):
+
+    # In Supabase-first mode, an RTL sim filelist entry is enough to consider the
+    # harness artifacts resolved for downstream runtime preparation.
+    if not (
+        _is_nonempty_str(rtl["sim_harness_path"])
+        or _is_nonempty_str(rtl["verilator_makefile_path"])
+        or _is_nonempty_str(rtl["sim_top_path"])
+    ):
         blocked_dependencies.append("rtl_harness_missing")
+    
 
     commands = _build_commands(scenarios, state, tools)
     if not commands:

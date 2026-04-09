@@ -508,8 +508,60 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     _record(workflow_id, DEBUG_JSON, json.dumps(debug, indent=2))
     _record(workflow_id, SUMMARY_MD, summary)
 
+    # Canonical L2 ingest output for downstream agents.
     state["system_cosim_manifest"] = manifest
-    state["cosim_ingest_debug"] = debug
-    state["status"] = "✅ CoSim ingest ready" if manifest["readiness"]["ready_for_system_l2_contract"] else "⚠️ CoSim ingest incomplete"
+    state["system_cosim_ingest_debug"] = debug
+
+    # Supabase-first normalized asset view.
+    state["system_software_cosim_ingest"] = {
+        "software_assets": {
+            "package_present": bool(software_pkg),
+            "package_type": software_pkg.get("package_type"),
+            "package_resolved_path": software_dbg.get("resolved_path") or "",
+            "entry": software_entry or "",
+            "l1_validation_status": software_validation_l1_status or "",
+            "l1_ready": software_l1_ready,
+        },
+        "firmware_assets": {
+            "package_present": bool(firmware_pkg),
+            "package_type": firmware_pkg.get("package_type"),
+            "package_resolved_path": firmware_dbg.get("resolved_path") or "",
+            "elf_path": firmware_elf or "",
+            "register_map_path": register_map or "",
+            "interrupts": interrupts,
+            "dma_present": dma_present,
+        },
+        "rtl_assets": {
+            "package_present": bool(rtl_pkg),
+            "package_type": rtl_pkg.get("package_type"),
+            "package_resolved_path": rtl_dbg.get("resolved_path") or "",
+            "top_path": top_sim or "",
+            "sim_filelist": sim_filelist,
+            "phys_filelist": phys_filelist,
+            "lib_filelist": lib_filelist,
+            "sim_harness_path": sim_filelist[0] if sim_filelist else "",
+            "verilator_makefile_path": "",
+            "compile_sim": "pass" if compile_sim else "fail",
+            "ready_for_cosim": rtl_ready_for_cosim,
+        },
+        "readiness": manifest.get("readiness") or {},
+    }
+
+    # Flat compatibility keys for downstream agents.
+    # These are resolved logical paths, typically Supabase-backed.
+    state["firmware_elf_path"] = firmware_elf or ""
+    state["firmware_register_map_path"] = register_map or ""
+    state["rtl_top_path"] = top_sim or ""
+    state["rtl_sim_harness_path"] = sim_filelist[0] if sim_filelist else ""
+    state["rtl_verilator_makefile_path"] = ""
+    state["system_cosim_interrupts"] = interrupts
+    state["system_cosim_dma_present"] = dma_present
+
+    state["status"] = (
+        "✅ CoSim ingest ready"
+        if manifest["readiness"]["ready_for_system_l2_contract"]
+        else "⚠️ CoSim ingest incomplete"
+    )
     return state
 
+    
