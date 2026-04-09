@@ -253,9 +253,10 @@ def run_agent(state: dict) -> dict:
         state["status"] = "❌ system software sdk manifest missing"
         return state
 
+
     sdk_crate = _crate_name(str(sdk_manifest.get("crate_name") or "system_software_sdk"))
-    adapter_crate = sdk_crate
-    adapter_package_name = f"{adapter_crate}_adapter"
+    adapter_crate = f"{sdk_crate}_adapter"
+    adapter_package_name = adapter_crate
 
     fc = contract.get("firmware_contract") or {}
     written_files = []
@@ -281,19 +282,21 @@ version = "0.1.0"
 edition = "2021"
 
 [lib]
-name = "{adapter_crate}_adapter"
+name = "{adapter_crate}"
 path = "src/lib.rs"
 
 [dependencies]
 thiserror = "1"
-''', subdir=f"{OUTPUT_SUBDIR}/{adapter_crate}")
+''' , subdir=f"{OUTPUT_SUBDIR}/{adapter_crate}")
     written_files.append(f"{OUTPUT_SUBDIR}/{adapter_crate}/Cargo.toml")
 
     _record_text(workflow_id, "lib.rs", '''pub mod adapter;
 pub mod error;
 
-pub use adapter::{RegisterAdapter, DeviceAdapter};
-''', subdir=f"{OUTPUT_SUBDIR}/{adapter_crate}/src")
+pub use adapter::register_adapter::{RegisterAdapter, RegisterIo};
+pub use adapter::device_adapter::DeviceAdapter;
+pub use error::SoftwareError;
+''' , subdir=f"{OUTPUT_SUBDIR}/{adapter_crate}/src")
     written_files.append(f"{OUTPUT_SUBDIR}/{adapter_crate}/src/lib.rs")
 
     _record_text(workflow_id, "mod.rs", '''pub mod register_adapter;
@@ -305,13 +308,16 @@ pub use device_adapter::DeviceAdapter;
     written_files.append(f"{OUTPUT_SUBDIR}/{adapter_crate}/src/adapter/mod.rs")
 
     manifest = _manifest(contract, api_contract, adapter_crate, adapter_package_name)
+
     debug_payload = {
         "agent": AGENT_NAME,
         "generated_at": _now(),
+        "sdk_crate": sdk_crate,
         "adapter_crate": adapter_crate,
         "adapter_package_name": adapter_package_name,
         "adapter_path": f"{OUTPUT_SUBDIR}/{adapter_crate}",
         "written_file_count": len(written_files),
+        "written_files": written_files,
         "contract_paths": manifest.get("adapter_contract") or {},
     }
 

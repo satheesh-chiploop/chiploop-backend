@@ -84,13 +84,19 @@ def _derive_entry_metadata(
     )
     workspace_members = build_manifest.get("workspace_members") or []
 
+    cargo_run_command = ["/root/.cargo/bin/cargo", "run", "-p", app_name] if app_name else []
+    native_binary_candidates = [
+        f"target/debug/{binary_name}",
+        f"target/release/{binary_name}",
+    ] if binary_name else []
+
     return {
         "app_name": app_name,
         "binary_name": binary_name,
-        "command": [binary_name] if binary_name else [],
+        "command": cargo_run_command,
+        "native_binary_candidates": native_binary_candidates,
         "workspace_members": workspace_members,
     }
-
 
 def _load_manifest(state: Dict[str, Any], workflow_dir: str, state_key: str, path_key: str, fallback: str) -> Dict[str, Any]:
     obj = state.get(state_key)
@@ -125,21 +131,48 @@ def _extend_if_present(files: List[str], seen: set, *paths: str) -> None:
 
 
 def _derive_adapter_required_files(adapter_manifest: Dict[str, Any]) -> List[str]:
-    adapter_path = str(adapter_manifest.get("adapter_path") or "").strip().replace("\\", "/")
+    adapter_path = str(adapter_manifest.get("adapter_path") or "").strip().replace("\\", "/").rstrip("/")
     adapter_crate = str(adapter_manifest.get("adapter_crate") or "").strip()
+    adapter_package_name = str(adapter_manifest.get("adapter_package_name") or "").strip()
 
-    if not adapter_path:
-        if adapter_crate:
-            adapter_path = f"system/software/adapter/{adapter_crate}"
-        else:
-            return []
+    candidates: List[str] = []
 
-    adapter_path = adapter_path.rstrip("/")
-    return [
-        f"{adapter_path}/Cargo.toml",
-        f"{adapter_path}/src/lib.rs",
-    ]
+    if adapter_path:
+        candidates.extend([
+            f"{adapter_path}/Cargo.toml",
+            f"{adapter_path}/src/lib.rs",
+            f"{adapter_path}/src/adapter/mod.rs",
+            f"{adapter_path}/src/adapter/register_adapter.rs",
+            f"{adapter_path}/src/adapter/device_adapter.rs",
+            f"{adapter_path}/src/error.rs",
+        ])
+        return candidates
 
+    if adapter_crate:
+        base = f"system/software/adapter/{adapter_crate}".rstrip("/")
+        candidates.extend([
+            f"{base}/Cargo.toml",
+            f"{base}/src/lib.rs",
+            f"{base}/src/adapter/mod.rs",
+            f"{base}/src/adapter/register_adapter.rs",
+            f"{base}/src/adapter/device_adapter.rs",
+            f"{base}/src/error.rs",
+        ])
+        return candidates
+
+    if adapter_package_name:
+        base = f"system/software/adapter/{adapter_package_name}".rstrip("/")
+        candidates.extend([
+            f"{base}/Cargo.toml",
+            f"{base}/src/lib.rs",
+            f"{base}/src/adapter/mod.rs",
+            f"{base}/src/adapter/register_adapter.rs",
+            f"{base}/src/adapter/device_adapter.rs",
+            f"{base}/src/error.rs",
+        ])
+        return candidates
+
+    return []
 
 def _derive_service_required_files(services_manifest: Dict[str, Any]) -> List[str]:
     service_root = str(services_manifest.get("services_root") or "system/software/services").strip().replace("\\", "/").rstrip("/")
@@ -295,5 +328,7 @@ def run_agent(state: dict) -> dict:
 
     state["system_software_package"] = manifest
     state["system_software_package_path"] = f"{OUTPUT_SUBDIR}/{MANIFEST_JSON}"
-    state["status"] = "✅ System software package generated"
+    state["system_software_entry"] = manifest.get("entry") or {}
+    state["package_status"] = manifest.get("package_status") or "unknown"
+    state["status"] = "✅ System software package generated" if not missing_required_files else "⚠️ System software package incomplete"
     return state

@@ -102,7 +102,6 @@ def _tool_names(state: Dict[str, Any]) -> List[str]:
     out = [str(x).strip() for x in raw if str(x).strip()]
     return out or ["reg_viewer", "diag_cli"]
 
-
 def _render_tool_main(crate_name: str, tool_name: str) -> str:
     if tool_name == "reg_viewer":
         return f'''use clap::{{Parser, Subcommand}};
@@ -118,7 +117,7 @@ struct Cli {{
 #[derive(Subcommand)]
 enum Commands {{
     Read {{ register: String }},
-    Write {{ register: String, value: u32 }},
+    Write {{ register: String, value: u64 }},
 }}
 
 fn main() {{
@@ -130,6 +129,7 @@ fn main() {{
     }}
 }}
 '''
+
     return f'''use clap::{{Parser, Subcommand}};
 use {crate_name}::Sdk;
 
@@ -158,6 +158,8 @@ fn main() {{
 def _tool_package_name(tool_name: str) -> str:
     return f"ss_tool_{_crate_name(tool_name)}"
 
+
+
 def _render_tool_cargo(crate_name: str, tool_name: str) -> str:
     package_name = _tool_package_name(tool_name)
     return f'''[package]
@@ -166,7 +168,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-clap = {{ version = "4", features = ["derive"] }}
+clap = {{ version = "=4.5.20", features = ["derive"] }}
 {crate_name} = {{ path = "../../sdk/{crate_name}" }}
 '''
 
