@@ -1746,6 +1746,61 @@ AGENT_CAPABILITIES = {
         "requires": []
     },
 
+    # ==========================
+    # SYSTEM SOFTWARE L2 COSIM
+    # ==========================
+
+    "System Software CoSim Harness Agent": {
+        "domain": "system",
+        "inputs": [
+            "system_cosim_scenarios.json",
+            "system_top.sv",
+            "firmware/*.elf(optional)"
+        ],
+        "outputs": [
+            "system/cosim/harness_config.json",
+            "system/cosim/harness_report.md"
+        ],
+        "description": "Builds unified co-simulation harness connecting software runtime, firmware execution, and RTL simulation.",
+    },
+
+    "System Software CoSim Execution Agent": {
+        "domain": "system",
+        "inputs": [
+            "system/cosim/harness_config.json",
+            "system_cosim_scenarios.json"
+        ],
+        "outputs": [
+            "system/cosim/execution_results.json",
+            "system/cosim/execution_logs/*.log"
+        ],
+        "description": "Executes co-simulation scenarios end-to-end: software → firmware → RTL.",
+    },
+
+    "System Software CoSim Trace Validation Agent": {
+        "domain": "system",
+        "inputs": [
+            "system/cosim/execution_results.json"
+        ],
+        "outputs": [
+            "system/cosim/trace_validation.json",
+            "system/cosim/trace_validation_report.md"
+        ],
+        "description": "Validates co-simulation traces including register behavior, interrupts, and signal transitions.",
+    },
+
+    "System Software Validation Summary (L2)": {
+        "domain": "system",
+        "inputs": [
+            "system/cosim/trace_validation.json"
+        ],
+        "outputs": [
+            "system/cosim/l2_validation_summary.json",
+            "system/cosim/L2_SUMMARY.md"
+        ],
+        "description": "Aggregates co-simulation validation results into final system correctness verdict.",
+    },
+
     # -------------------------
     # Extended / optional digital flow agents
     # -------------------------

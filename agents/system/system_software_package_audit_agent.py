@@ -52,8 +52,8 @@ def _derive_adapter_required_files(package_manifest: Dict[str, Any], discovered_
         adapter_path = adapter_path.rsplit("/", 1)[0]
 
     adapter_crate = str(
-        package_manifest.get("adapter_crate")
-        or adapter_manifest.get("adapter_crate")
+        adapter_manifest.get("adapter_crate")
+        or package_manifest.get("adapter_crate")
         or "system_software_sdk"
     ).strip()
 
