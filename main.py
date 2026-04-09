@@ -518,9 +518,9 @@ from agents.system.system_rtl_handoff_package_agent import run_agent as system_r
 from agents.system.system_cosim_ingest_agent import run_agent as system_cosim_ingest_agent
 from agents.system.system_cosim_contract_agent import run_agent as system_cosim_contract_agent
 from agents.system.system_cosim_scenario_generator_agent import run_agent as system_cosim_scenario_generator_agent
-from agents.system.system_cosim_harness_agent import run_agent as system_cosim_harness_agent
-from agents.system.system_cosim_execution_agent import run_agent as system_cosim_execution_agent
-from agents.system.system_cosim_trace_validation_agent import run_agent as system_cosim_trace_validation_agent
+from agents.system.system_software_cosim_harness_agent import run_agent as system_cosim_harness_agent
+from agents.system.system_software_cosim_execution_agent import run_agent as system_cosim_execution_agent
+from agents.system.system_software_cosim_trace_validation_agent import run_agent as system_cosim_trace_validation_agent
 from agents.system.system_software_validation_summary_l2_agent import run_agent as system_software_validation_summary_l2_agent
 
 SYSTEM_AGENT_FUNCTIONS: Dict[str,Any] = {
