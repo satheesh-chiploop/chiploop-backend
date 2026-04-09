@@ -40,15 +40,38 @@ def _tail(text: str, limit: int = 4000) -> str:
     return text[-limit:] if isinstance(text, str) else ""
 
 
+def _tool_env() -> Dict[str, str]:
+    env = os.environ.copy()
+    preferred_bin = "/root/.cargo/bin"
+    path_parts = env.get("PATH", "").split(":") if env.get("PATH") else []
+    if preferred_bin not in path_parts:
+        env["PATH"] = preferred_bin + (":" + env["PATH"] if env.get("PATH") else "")
+    if not env.get("CARGO_HOME"):
+        env["CARGO_HOME"] = "/root/.cargo"
+    if not env.get("RUSTUP_HOME"):
+        env["RUSTUP_HOME"] = "/root/.rustup"
+    return env
+
+
 def _find_cargo() -> str:
-    return shutil.which("cargo") or ""
+    env = _tool_env()
+    for candidate in [
+        "/root/.cargo/bin/cargo",
+        shutil.which("cargo", path=env.get("PATH")),
+        shutil.which("cargo"),
+    ]:
+        if candidate and os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            return candidate
+    return ""
 
 
 def _run_cmd(cmd: List[str], cwd: str, timeout_sec: int = 600) -> Dict[str, Any]:
+    env = _tool_env()
     try:
         result = subprocess.run(
             cmd,
             cwd=cwd,
+            env=env,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -67,7 +90,35 @@ def _run_cmd(cmd: List[str], cwd: str, timeout_sec: int = 600) -> Dict[str, Any]
         }
 
 
-def _candidate_mock_targets(mock_manifest: Dict[str, Any], cargo_bin: str) -> List[List[str]]:
+def _detect_tool_versions(cargo_bin: str) -> Dict[str, str]:
+    cargo_version = ""
+    rustc_version = ""
+    if cargo_bin:
+        cargo_result = _run_cmd([cargo_bin, "--version"], cwd="/root")
+        cargo_version = (cargo_result.get("stdout") or cargo_result.get("stderr") or "").strip()
+    rustc_bin = shutil.which("rustc", path=_tool_env().get("PATH"))
+    if rustc_bin:
+        rustc_result = _run_cmd([rustc_bin, "--version"], cwd="/root")
+        rustc_version = (rustc_result.get("stdout") or rustc_result.get("stderr") or "").strip()
+    return {
+        "cargo_bin": cargo_bin,
+        "cargo_version": cargo_version,
+        "rustc_version": rustc_version,
+    }
+
+
+def _workspace_supports_feature(build_root: str, feature_name: str) -> bool:
+    cargo_toml = os.path.join(build_root, "Cargo.toml")
+    if not os.path.isfile(cargo_toml):
+        return False
+    try:
+        with open(cargo_toml, "r", encoding="utf-8") as f:
+            text = f.read()
+        return feature_name in text
+    except Exception:
+        return False
+
+def _candidate_mock_targets(mock_manifest: Dict[str, Any], cargo_bin: str, build_root: str) -> List[List[str]]:
     candidates: List[List[str]] = []
 
     explicit = mock_manifest.get("commands") or []
@@ -79,11 +130,19 @@ def _candidate_mock_targets(mock_manifest: Dict[str, Any], cargo_bin: str) -> Li
                     normalized[0] = cargo_bin
                 candidates.append(normalized)
             elif _is_nonempty_str(item):
-                candidates.append([str(item)])
+                parts = str(item).strip().split()
+                if parts:
+                    if parts[0] == "cargo":
+                        parts[0] = cargo_bin
+                    candidates.append(parts)
+
+    if _workspace_supports_feature(build_root, "mock"):
+        candidates.append([cargo_bin, "test", "--workspace", "--features", "mock"])
 
     candidates.extend([
-        [cargo_bin, "test", "--workspace", "--features", "mock"],
+        [cargo_bin, "test", "--workspace", "--all-targets"],
         [cargo_bin, "test", "--workspace"],
+        [cargo_bin, "test"],
     ])
 
     seen = set()
@@ -186,9 +245,12 @@ def run_agent(state: dict) -> dict:
         state["status"] = "⚠️ mock runtime environment missing"
         return state
 
+
+    tool_versions = _detect_tool_versions(cargo_bin)
+
     attempts = []
     selected = None
-    for cmd in _candidate_mock_targets(mock_manifest, cargo_bin):
+    for cmd in _candidate_mock_targets(mock_manifest, cargo_bin, build_root):
         result = _run_cmd(cmd, cwd=build_root)
         attempts.append({
             "command": cmd,
@@ -199,6 +261,8 @@ def run_agent(state: dict) -> dict:
         if result["returncode"] == 0:
             selected = attempts[-1]
             break
+
+    
 
     final_attempt = selected or (attempts[-1] if attempts else {
         "command": [],
@@ -219,6 +283,8 @@ def run_agent(state: dict) -> dict:
         "mock_manifest_present": not manifest_missing,
         "mock_root_present": not mock_root_missing,
         "cargo_bin": cargo_bin,
+        "cargo_version": tool_versions.get("cargo_version", ""),
+        "rustc_version": tool_versions.get("rustc_version", ""),
         "mock_runtime_status": mock_runtime_status,
         "selected_command": final_attempt["command"],
         "returncode": final_attempt["returncode"],
@@ -244,6 +310,9 @@ def run_agent(state: dict) -> dict:
         "validation_manifest_present": bool(validation_manifest),
         "mock_manifest_present": bool(mock_manifest),
         "cargo_bin": cargo_bin,
+        "cargo_version": tool_versions.get("cargo_version", ""),
+        "rustc_version": tool_versions.get("rustc_version", ""),
+        "PATH": _tool_env().get("PATH", ""),
         "attempts": attempts,
     }
 

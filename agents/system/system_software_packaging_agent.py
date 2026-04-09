@@ -52,6 +52,45 @@ def _join_workflow_path(workflow_dir: str, rel_or_abs: str) -> str:
         return rel_or_abs
     return os.path.abspath(os.path.join(workflow_dir, rel_or_abs))
 
+def _file_exists(workflow_dir: str, rel_or_abs: str) -> bool:
+    if not _is_nonempty_str(rel_or_abs):
+        return False
+    candidate = _join_workflow_path(workflow_dir, str(rel_or_abs))
+    return bool(candidate and os.path.isfile(candidate))
+
+
+def _first_nonempty(*values: Any) -> str:
+    for value in values:
+        s = str(value or "").strip()
+        if s:
+            return s
+    return ""
+
+
+def _derive_entry_metadata(
+    sdk_manifest: Dict[str, Any],
+    app_manifest: Dict[str, Any],
+    build_manifest: Dict[str, Any],
+) -> Dict[str, Any]:
+    app_name = _first_nonempty(
+        app_manifest.get("default_application"),
+        app_manifest.get("entry_application"),
+        app_manifest.get("application_names", [None])[0] if isinstance(app_manifest.get("application_names"), list) and app_manifest.get("application_names") else "",
+    )
+    binary_name = _first_nonempty(
+        app_manifest.get("binary_name"),
+        app_manifest.get("entry_binary"),
+        app_name,
+    )
+    workspace_members = build_manifest.get("workspace_members") or []
+
+    return {
+        "app_name": app_name,
+        "binary_name": binary_name,
+        "command": [binary_name] if binary_name else [],
+        "workspace_members": workspace_members,
+    }
+
 
 def _load_manifest(state: Dict[str, Any], workflow_dir: str, state_key: str, path_key: str, fallback: str) -> Dict[str, Any]:
     obj = state.get(state_key)
@@ -118,8 +157,12 @@ def _derive_service_required_files(services_manifest: Dict[str, Any]) -> List[st
 
     return files
 
-
-def _build_manifest(source_workflow_id: str, files: List[str]) -> Dict[str, Any]:
+def _build_manifest(
+    source_workflow_id: str,
+    files: List[str],
+    missing_required_files: List[str],
+    entry: Dict[str, Any],
+) -> Dict[str, Any]:
     return {
         "package_type": "system_software_package",
         "package_version": "1.0",
@@ -127,7 +170,11 @@ def _build_manifest(source_workflow_id: str, files: List[str]) -> Dict[str, Any]
         "source_workflow_id": source_workflow_id,
         "artifact_count": len(files),
         "files": files,
+        "missing_required_files": missing_required_files,
+        "package_status": "complete" if not missing_required_files else "incomplete",
+        "entry": entry,
     }
+
 
 
 def _markdown_summary(manifest: Dict[str, Any], inferred_files: List[str]) -> str:
@@ -138,10 +185,19 @@ def _markdown_summary(manifest: Dict[str, Any], inferred_files: List[str]) -> st
         f"- Source workflow id: {manifest.get('source_workflow_id') or 'unavailable'}",
         f"- Artifact count: {manifest.get('artifact_count')}",
         f"- Inferred required files added: {len(inferred_files)}",
-        "",
-        "## Artifacts",
+        f"- Package status: `{manifest.get('package_status')}`",
+        f"- Entry binary: `{((manifest.get('entry') or {}).get('binary_name') or '')}`",
         "",
     ]
+
+    missing = manifest.get("missing_required_files") or []
+    if missing:
+        lines.extend(["## Missing required files", ""])
+        for item in missing:
+            lines.append(f"- `{item}`")
+        lines.append("")
+
+    lines.extend(["## Artifacts", ""])
     for item in manifest.get("files") or []:
         lines.append(f"- `{item}`")
     lines.append("")
@@ -201,10 +257,19 @@ def run_agent(state: dict) -> dict:
         if p and p not in seen:
             inferred_files.append(p)
 
+    
     _extend_if_present(files, seen, *inferred_files)
 
+    missing_required_files: List[str] = []
+    if workflow_dir:
+        for path in inferred_files:
+            if not _file_exists(workflow_dir, path):
+                missing_required_files.append(path)
+
+    entry = _derive_entry_metadata(sdk_manifest, app_manifest, build_manifest)
+
     source_workflow_id = str(app_manifest.get("source_workflow_id") or sdk_manifest.get("source_workflow_id") or "")
-    manifest = _build_manifest(source_workflow_id, files)
+    manifest = _build_manifest(source_workflow_id, files, missing_required_files, entry)
 
     _record_text(workflow_id, MANIFEST_JSON, json.dumps(manifest, indent=2))
     _record_text(workflow_id, SUMMARY_MD, _markdown_summary(manifest, inferred_files))
@@ -214,6 +279,8 @@ def run_agent(state: dict) -> dict:
         "generated_at": _now(),
         "artifact_count": len(files),
         "inferred_required_files_added": inferred_files,
+        "missing_required_files": missing_required_files,
+        "entry": entry,
         "included_manifests": {
             "sdk": bool(sdk_manifest),
             "apps": bool(app_manifest),

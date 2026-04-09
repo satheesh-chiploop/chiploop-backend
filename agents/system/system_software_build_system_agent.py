@@ -76,17 +76,26 @@ members = [
 '''
 
 
-def _render_makefile() -> str:
-    return '''.PHONY: fmt build test
+
+
+def _render_makefile(cargo_bin: str = "/root/.cargo/bin/cargo") -> str:
+    cargo = cargo_bin or "cargo"
+    return f'''.PHONY: fmt build test toolchain
+
+CARGO := {cargo}
+
+toolchain:
+\t$(CARGO) --version
+\trustc --version
 
 fmt:
-\tcargo fmt --all
+\t$(CARGO) fmt --all
 
 build:
-\tcargo build --workspace
+\t$(CARGO) build --workspace
 
 test:
-\tcargo test --workspace
+\t$(CARGO) test --workspace
 '''
 
 
@@ -176,6 +185,12 @@ def _normalize_member_path(path: str, prefix: str = "system/software/") -> str:
 
 def _dedupe_keep_order(items: List[str]) -> List[str]:
     return list(dict.fromkeys([x for x in items if _is_nonempty_str(x)]))
+
+def _preferred_cargo_bin() -> str:
+    preferred = "/root/.cargo/bin/cargo"
+    if os.path.isfile(preferred) and os.access(preferred, os.X_OK):
+        return preferred
+    return "cargo"
 
 
 def run_agent(state: dict) -> dict:
@@ -343,7 +358,11 @@ def run_agent(state: dict) -> dict:
     _record_text(workflow_id, "Cargo.toml", _render_workspace(members))
     written.append(f"{OUTPUT_SUBDIR}/Cargo.toml")
 
-    _record_text(workflow_id, "Makefile", _render_makefile())
+
+
+    cargo_bin = _preferred_cargo_bin()
+
+    _record_text(workflow_id, "Makefile", _render_makefile(cargo_bin))
     written.append(f"{OUTPUT_SUBDIR}/Makefile")
 
     build_plan = {
@@ -353,8 +372,10 @@ def run_agent(state: dict) -> dict:
         "tool_names": tool_names,
         "workspace_members": members,
         "workspace_package_names": package_name_to_member,
-        "default_targets": ["fmt", "build", "test"],
+        "default_targets": ["toolchain", "fmt", "build", "test"],
         "validation_mode": validation_mode,
+        "preferred_cargo_bin": cargo_bin,
+        "preferred_rustc_bin": "rustc",
     }
     _record_text(workflow_id, "build_plan.json", json.dumps(build_plan, indent=2))
     written.append(f"{OUTPUT_SUBDIR}/build_plan.json")
@@ -387,6 +408,8 @@ def run_agent(state: dict) -> dict:
                 "adapter_member": adapter_member,
                 "app_names": app_names,
                 "tool_names": tool_names,
+                "preferred_cargo_bin": cargo_bin,
+                "preferred_rustc_bin": "rustc",
             },
             indent=2,
         ),

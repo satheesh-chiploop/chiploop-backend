@@ -3,7 +3,7 @@ import json
 import os
 import shutil
 import subprocess
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional, Tuple
 
 from utils.artifact_utils import save_text_artifact_and_record
 
@@ -36,19 +36,42 @@ def _tail(text: str, limit: int = 4000) -> str:
     return text[-limit:] if isinstance(text, str) else ""
 
 
+def _tool_env() -> Dict[str, str]:
+    env = os.environ.copy()
+    preferred_bin = "/root/.cargo/bin"
+    path_parts = env.get("PATH", "").split(":") if env.get("PATH") else []
+    if preferred_bin not in path_parts:
+        env["PATH"] = preferred_bin + (":" + env["PATH"] if env.get("PATH") else "")
+    if not env.get("CARGO_HOME"):
+        env["CARGO_HOME"] = "/root/.cargo"
+    if not env.get("RUSTUP_HOME"):
+        env["RUSTUP_HOME"] = "/root/.rustup"
+    return env
+
+
 def _find_cargo() -> str:
-    return shutil.which("cargo") or ""
+    env = _tool_env()
+    for candidate in [
+        "/root/.cargo/bin/cargo",
+        shutil.which("cargo", path=env.get("PATH")),
+        shutil.which("cargo"),
+    ]:
+        if candidate and os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            return candidate
+    return ""
 
 
-def _run_cmd(cmd, cwd):
+def _run_cmd(cmd: List[str], cwd: str, timeout_sec: int = 600) -> Dict[str, Any]:
+    env = _tool_env()
     try:
         result = subprocess.run(
             cmd,
             cwd=cwd,
+            env=env,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            timeout=600,
+            timeout=timeout_sec,
         )
         return {
             "returncode": result.returncode,
@@ -62,6 +85,52 @@ def _run_cmd(cmd, cwd):
             "stderr": str(e),
         }
 
+
+def _detect_tool_versions(cargo_bin: str) -> Dict[str, str]:
+    cargo_version = ""
+    rustc_version = ""
+    if cargo_bin:
+        cargo_result = _run_cmd([cargo_bin, "--version"], cwd="/root")
+        cargo_version = (cargo_result.get("stdout") or cargo_result.get("stderr") or "").strip()
+    rustc_bin = shutil.which("rustc", path=_tool_env().get("PATH"))
+    if rustc_bin:
+        rustc_result = _run_cmd([rustc_bin, "--version"], cwd="/root")
+        rustc_version = (rustc_result.get("stdout") or rustc_result.get("stderr") or "").strip()
+    return {
+        "cargo_bin": cargo_bin,
+        "cargo_version": cargo_version,
+        "rustc_version": rustc_version,
+    }
+
+
+def _candidate_test_commands(cargo_bin: str, test_manifest: Dict[str, Any]) -> List[List[str]]:
+    commands: List[List[str]] = []
+
+    explicit = test_manifest.get("commands") or []
+    if isinstance(explicit, list):
+        for item in explicit:
+            if isinstance(item, list) and item:
+                normalized = [str(x) for x in item]
+                if normalized[0] == "cargo":
+                    normalized[0] = cargo_bin
+                commands.append(normalized)
+            elif isinstance(item, str) and item.strip():
+                commands.append([cargo_bin] + item.strip().split())
+
+    commands.extend([
+        [cargo_bin, "test", "--workspace", "--all-targets"],
+        [cargo_bin, "test", "--workspace"],
+        [cargo_bin, "test"],
+    ])
+
+    deduped: List[List[str]] = []
+    seen = set()
+    for cmd in commands:
+        key = tuple(cmd)
+        if key not in seen:
+            seen.add(key)
+            deduped.append(cmd)
+    return deduped
 
 def _resolve_test_root(state: Dict[str, Any]) -> str:
     candidates = []
@@ -168,14 +237,11 @@ def run_agent(state: dict) -> dict:
         state["status"] = "⚠️ test environment missing"
         return state
 
-    attempts = []
-    commands = [
-        [cargo_bin, "test", "--workspace"],
-        [cargo_bin, "test"],
-    ]
+    tool_versions = _detect_tool_versions(cargo_bin)
 
+    attempts = []
     selected = None
-    for cmd in commands:
+    for cmd in _candidate_test_commands(cargo_bin, test_manifest):
         result = _run_cmd(cmd, test_root)
         attempts.append({
             "command": cmd,
@@ -201,6 +267,8 @@ def run_agent(state: dict) -> dict:
         "generated_at": _now(),
         "test_root": test_root,
         "cargo_bin": cargo_bin,
+        "cargo_version": tool_versions.get("cargo_version", ""),
+        "rustc_version": tool_versions.get("rustc_version", ""),
         "test_manifest_present": not manifest_missing,
         "selected_command": final_attempt["command"],
         "returncode": final_attempt["returncode"],
@@ -227,8 +295,12 @@ def run_agent(state: dict) -> dict:
         "generated_at": _now(),
         "test_root": test_root,
         "cargo_bin": cargo_bin,
+        "cargo_version": tool_versions.get("cargo_version", ""),
+        "rustc_version": tool_versions.get("rustc_version", ""),
+        "PATH": _tool_env().get("PATH", ""),
         "attempts": attempts,
     }, indent=2))
+ 
 
     state["system_software_test_execution"] = report
     state["test_status"] = test_status
