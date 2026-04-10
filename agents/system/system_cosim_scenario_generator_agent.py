@@ -43,53 +43,76 @@ def _record(workflow_id: str, filename: str, content: str):
     except Exception:
         return None
 
-def _default_software_target(manifest: Dict[str, Any]) -> Dict[str, Any]:
+def _software_targets(manifest: Dict[str, Any]) -> List[Dict[str, Any]]:
     software = manifest.get("software") or {}
+    applications = software.get("applications") or []
     entry = software.get("entry") or {}
 
-    if not isinstance(entry, dict):
-        entry = {}
+    targets: List[Dict[str, Any]] = []
 
-    app_name = str(entry.get("app_name") or "").strip()
-    binary_name = str(entry.get("binary_name") or "").strip()
-    cargo_package = str(entry.get("cargo_package") or "").strip()
+    if isinstance(applications, list):
+        for item in applications:
+            if isinstance(item, dict):
+                target = {
+                    "app_name": str(item.get("app_name") or "").strip(),
+                    "binary_name": str(item.get("binary_name") or "").strip(),
+                    "cargo_package": str(item.get("cargo_package") or "").strip(),
+                }
+                if target["cargo_package"]:
+                    targets.append(target)
 
-    return {
-        "app_name": app_name,
-        "binary_name": binary_name,
-        "cargo_package": cargo_package,
-    }
+    if not targets and isinstance(entry, dict):
+        target = {
+            "app_name": str(entry.get("app_name") or "").strip(),
+            "binary_name": str(entry.get("binary_name") or "").strip(),
+            "cargo_package": str(entry.get("cargo_package") or "").strip(),
+        }
+        if target["cargo_package"]:
+            targets.append(target)
 
-def _scenario_boot(manifest: Dict[str, Any]) -> Dict[str, Any]:
+    return targets
+
+def _scenario_boot(manifest: Dict[str, Any], sw: Dict[str, Any]) -> Dict[str, Any]:
     fw = manifest.get("firmware") or {}
     rtl = manifest.get("rtl") or {}
-    sw = _default_software_target(manifest)
+    app_name = str(sw.get("app_name") or "app").strip()
 
     return {
-        "id": "boot_smoke",
+        "id": f"{app_name}_boot_smoke",
         "class": "boot",
         "enabled": bool(fw.get("elf") and rtl.get("top")),
         "software_target": sw,
         "deterministic_seed": 101,
         "description": "Boot the firmware ELF on the RTL sim top and verify reset release and first observable software activity.",
+        "expected_events": [
+            f"app={app_name}",
+        ],
+        "expected_registers": {},
+        "expected_interrupts": [],
+        "expected_signals": [],
         "expected_observations": [
             "firmware ELF is loaded",
             "reset is released",
             "simulation reaches first software-visible activity",
         ],
     }
-
-def _scenario_reg_rw(manifest: Dict[str, Any]) -> Dict[str, Any]:
+def _scenario_reg_rw(manifest: Dict[str, Any], sw: Dict[str, Any]) -> Dict[str, Any]:
     fw = manifest.get("firmware") or {}
-    sw = _default_software_target(manifest)
+    app_name = str(sw.get("app_name") or "app").strip()
 
     return {
-        "id": "register_rw_basic",
+        "id": f"{app_name}_register_rw_basic",
         "class": "register_read_write",
         "enabled": bool(fw.get("register_map")),
         "software_target": sw,
         "deterministic_seed": 202,
         "description": "Perform deterministic register write/readback against known register map content.",
+        "expected_events": [
+            f"app={app_name}",
+        ],
+        "expected_registers": {},
+        "expected_interrupts": [],
+        "expected_signals": [],
         "expected_observations": [
             "write transaction issued",
             "readback matches expected value",
@@ -97,18 +120,24 @@ def _scenario_reg_rw(manifest: Dict[str, Any]) -> Dict[str, Any]:
         ],
     }
 
-def _scenario_interrupt(manifest: Dict[str, Any]) -> Dict[str, Any]:
+def _scenario_interrupt(manifest: Dict[str, Any], sw: Dict[str, Any]) -> Dict[str, Any]:
     fw = manifest.get("firmware") or {}
     interrupts = fw.get("interrupts") or []
-    sw = _default_software_target(manifest)
+    app_name = str(sw.get("app_name") or "app").strip()
 
     return {
-        "id": "interrupt_propagation_basic",
+        "id": f"{app_name}_interrupt_propagation_basic",
         "class": "interrupt_propagation",
         "enabled": bool(interrupts),
         "software_target": sw,
         "deterministic_seed": 303,
         "description": "Trigger an interrupt source and validate propagation from RTL event to firmware/software observable handling.",
+        "expected_events": [
+            f"app={app_name}",
+        ],
+        "expected_registers": {},
+        "expected_interrupts": [str(x) for x in interrupts],
+        "expected_signals": [],
         "expected_observations": [
             "interrupt source event occurs",
             "interrupt line/state becomes observable",
@@ -131,11 +160,26 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     ]
     contract_ready = (contract_report.get("overall_status") == "ready")
 
-    scenarios = [
-        _scenario_boot(manifest),
-        _scenario_reg_rw(manifest),
-        _scenario_interrupt(manifest),
-    ]
+    targets = _software_targets(manifest)
+    scenarios: List[Dict[str, Any]] = []
+
+    for sw in targets:
+        scenarios.extend([
+            _scenario_boot(manifest, sw),
+            _scenario_reg_rw(manifest, sw),
+            _scenario_interrupt(manifest, sw),
+        ])
+    if not scenarios:
+        fallback_target = {
+            "app_name": "",
+            "binary_name": "",
+            "cargo_package": "",
+        }
+        scenarios = [
+            _scenario_boot(manifest, fallback_target),
+            _scenario_reg_rw(manifest, fallback_target),
+            _scenario_interrupt(manifest, fallback_target),
+        ]
 
     if not contract_ready:
         for s in scenarios:

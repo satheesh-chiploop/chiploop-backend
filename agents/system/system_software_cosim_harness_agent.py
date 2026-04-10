@@ -235,9 +235,37 @@ def _build_commands(scenarios: List[Dict[str, Any]], state: Dict[str, Any], tool
                 })
                 continue
 
-        # Minimal prod fallback: use packaged software entry when scenario has no explicit command.
-        if isinstance(entry_command, list) and entry_command:
+        scenario_target = scenario.get("software_target") or {}
+        scenario_pkg = _first_nonempty(
+            scenario_target.get("cargo_package"),
+            software_entry.get("cargo_package"),
+        )
+        scenario_app_name = _first_nonempty(
+            scenario_target.get("app_name"),
+            software_entry.get("app_name"),
+            software_entry.get("binary_name"),
+        )
+
+        if scenario_pkg:
             scenario_args: List[str] = []
+            scenario_name = _first_nonempty(
+                scenario.get("scenario_id"),
+                scenario.get("id"),
+                scenario.get("name"),
+            )
+            if scenario_name:
+                scenario_args = ["--", "--scenario", scenario_name]
+
+            commands.append({
+                "scenario_id": scenario_id,
+                "command_id": f"{scenario_id}_software_entry",
+                "command": ["cargo", "run", "-p", scenario_pkg] + scenario_args,
+                "source": "software.target.command",
+                "entry_app_name": scenario_app_name,
+                "cargo_package": scenario_pkg,
+            })
+        elif isinstance(entry_command, list) and entry_command:
+            scenario_args = []
             scenario_name = _first_nonempty(
                 scenario.get("scenario_id"),
                 scenario.get("id"),
@@ -253,7 +281,6 @@ def _build_commands(scenarios: List[Dict[str, Any]], state: Dict[str, Any], tool
                 "source": "software.entry.command",
                 "entry_app_name": entry_app_name,
             })
-
     return commands
 
 

@@ -179,13 +179,19 @@ def run_agent(state: dict) -> dict:
                 execution_status = "fail"
                 break
 
+
+        stdout_text = "\n".join(
+            [str(cr.get("stdout_tail") or "") for cr in command_results if isinstance(cr, dict)]
+        ).strip()
+
         observed_behavior = {
-            "observed_events": scenario.get("observed_events") or [],
-            "observed_registers": scenario.get("observed_registers") or {},
-            "observed_interrupts": scenario.get("observed_interrupts") or [],
-            "observed_signals": scenario.get("observed_signals") or [],
+            "observed_events": [stdout_text] if stdout_text else [],
+            "observed_registers": {},
+            "observed_interrupts": [],
+            "observed_signals": [],
         }
 
+        
         scenario_results.append({
             "scenario_id": scenario_id,
             "scenario_type": scenario.get("scenario_type") or scenario.get("type") or "",

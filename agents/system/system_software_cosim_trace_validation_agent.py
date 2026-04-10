@@ -114,9 +114,16 @@ def run_agent(state: dict) -> dict:
         expected = item.get("expected_behavior") or {}
         observed = item.get("observed_behavior") or {}
 
+
+
         expected_events = _listify(expected.get("expected_events"))
         observed_events = _listify(observed.get("observed_events"))
-        missing_events = _missing_expected_items(expected_events, observed_events)
+
+        observed_event_text = "\n".join(str(x) for x in observed_events)
+        missing_events = [
+            ev for ev in expected_events
+            if str(ev) not in observed_event_text
+        ]
 
         expected_interrupts = _listify(expected.get("expected_interrupts"))
         observed_interrupts = _listify(observed.get("observed_interrupts"))
