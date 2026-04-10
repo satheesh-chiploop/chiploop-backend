@@ -1,6 +1,7 @@
 
 import datetime
 import json
+import os
 from typing import Any, Dict, List, Optional
 
 from utils.artifact_utils import save_text_artifact_and_record
@@ -74,6 +75,7 @@ def _derive_adapter_required_files(package_manifest: Dict[str, Any], discovered_
 
 def run_agent(state: dict) -> dict:
     workflow_id = state.get("workflow_id") or "default"
+    workflow_dir = str(state.get("workflow_dir") or "").strip()
 
     print(f"\n📦 Running {AGENT_NAME}")
 
