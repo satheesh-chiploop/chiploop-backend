@@ -170,17 +170,19 @@ def run_agent(state: dict) -> dict:
 
         # FIX: Cargo.toml per app
         written.append(f"{OUTPUT_SUBDIR}/{app_name}/Cargo.toml")
-    
-    
+
     manifest = _manifest(arch.get("source_workflow_id"), crate_name, written, app_names)
     _record_text(workflow_id, MANIFEST_JSON, json.dumps(manifest, indent=2))
     _record_text(workflow_id, SUMMARY_MD, _markdown(manifest))
     _record_text(workflow_id, DEBUG_JSON, json.dumps({"agent": AGENT_NAME, "generated_at": _now(), "app_names": app_names, "crate_name": crate_name}, indent=2))
 
+    default_application = str(manifest.get("default_application") or "").strip()
+
     state["system_software_application_manifest"] = manifest
     state["system_software_default_application"] = default_application
-    state["system_software_entry_application"] = default_application
-    state["system_software_entry_binary"] = default_application
+    state["system_software_entry_application"] = str(manifest.get("entry_application") or default_application).strip()
+    state["system_software_entry_binary"] = str(manifest.get("entry_binary") or default_application).strip()
     state["system_software_application_manifest_path"] = f"{OUTPUT_SUBDIR}/{MANIFEST_JSON}"
     state["status"] = "✅ System software applications generated"
     return state
+    
