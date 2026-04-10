@@ -72,29 +72,54 @@ def _derive_entry_metadata(
     app_manifest: Dict[str, Any],
     build_manifest: Dict[str, Any],
 ) -> Dict[str, Any]:
-    app_name = _first_nonempty(
-        app_manifest.get("default_application"),
+    applications = app_manifest.get("applications") or []
+    default_application = _first_nonempty(
         app_manifest.get("entry_application"),
+        app_manifest.get("default_application"),
+    )
+
+    selected_app: Dict[str, Any] = {}
+    if isinstance(applications, list):
+        for item in applications:
+            if isinstance(item, dict) and _first_nonempty(item.get("app_name")) == default_application:
+                selected_app = item
+                break
+
+    app_name = _first_nonempty(
+        default_application,
         app_manifest.get("application_names", [None])[0] if isinstance(app_manifest.get("application_names"), list) and app_manifest.get("application_names") else "",
     )
+
+    cargo_package = _first_nonempty(
+        selected_app.get("cargo_package"),
+        app_manifest.get("entry_package"),
+        app_manifest.get("package_name"),
+    )
+
     binary_name = _first_nonempty(
-        app_manifest.get("binary_name"),
+        selected_app.get("binary_name"),
         app_manifest.get("entry_binary"),
+        cargo_package,
         app_name,
     )
-    workspace_members = build_manifest.get("workspace_members") or []
 
-    cargo_run_command = ["/root/.cargo/bin/cargo", "run", "-p", app_name] if app_name else []
-    native_binary_candidates = [
-        f"target/debug/{binary_name}",
-        f"target/release/{binary_name}",
-    ] if binary_name else []
+    workspace_members = build_manifest.get("workspace_members") or []
+    command = ["cargo", "run", "-p", cargo_package] if cargo_package else []
+
+    entry_resolution_status = "resolved" if app_name and cargo_package and command else "missing"
 
     return {
         "app_name": app_name,
+        "cargo_package": cargo_package,
         "binary_name": binary_name,
-        "command": cargo_run_command,
-        "native_binary_candidates": native_binary_candidates,
+        "command": command,
+        "working_dir": f"{OUTPUT_SUBDIR.replace('/package', '')}/apps/{app_name}" if app_name else "",
+        "command_source": "package_entry",
+        "entry_resolution_status": entry_resolution_status,
+        "native_binary_candidates": [
+            f"target/debug/{binary_name}",
+            f"target/release/{binary_name}",
+        ] if binary_name else [],
         "workspace_members": workspace_members,
     }
 
@@ -204,7 +229,7 @@ def _build_manifest(
         "artifact_count": len(files),
         "files": files,
         "missing_required_files": missing_required_files,
-        "package_status": "complete" if not missing_required_files else "incomplete",
+        "package_status": "complete" if (not missing_required_files and (entry or {}).get("entry_resolution_status") == "resolved") else "incomplete",
         "entry": entry,
     }
 
@@ -327,10 +352,12 @@ def run_agent(state: dict) -> dict:
             "services": bool(services_manifest),
         }
     }, indent=2))
-
     state["system_software_package"] = manifest
     state["system_software_package_path"] = f"{OUTPUT_SUBDIR}/{MANIFEST_JSON}"
     state["system_software_entry"] = manifest.get("entry") or {}
+    state["system_software_entry_command"] = ((manifest.get("entry") or {}).get("command") or [])
     state["package_status"] = manifest.get("package_status") or "unknown"
-    state["status"] = "✅ System software package generated" if not missing_required_files else "⚠️ System software package incomplete"
+    state["status"] = "✅ System software package generated" if manifest.get("package_status") == "complete" else "⚠️ System software package incomplete"
+
+
     return state

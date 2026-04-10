@@ -178,9 +178,17 @@ def _build_commands(scenarios: List[Dict[str, Any]], state: Dict[str, Any], tool
                     "source": "state.system_software_cosim_commands",
                 })
 
+    software_entry = _discover_software_entry(state)
+    entry_command = software_entry.get("command") or []
+    entry_app_name = _first_nonempty(
+        software_entry.get("app_name"),
+        software_entry.get("binary_name"),
+    )
+
     for scenario in scenarios:
         scenario_id = scenario["scenario_id"]
         scenario_commands = scenario.get("commands") or []
+
         if isinstance(scenario_commands, list):
             for idx, cmd in enumerate(scenario_commands):
                 if isinstance(cmd, list) and cmd:
@@ -191,35 +199,79 @@ def _build_commands(scenarios: List[Dict[str, Any]], state: Dict[str, Any], tool
                         "source": "scenario.commands",
                     })
 
-        if not scenario_commands:
-            runner = scenario.get("runner") or ""
-            if runner == "cocotb" and tools.get("python"):
-                test_mod = _first_nonempty(scenario.get("cocotb_test"), scenario.get("test_module"))
-                if test_mod:
-                    commands.append({
-                        "scenario_id": scenario_id,
-                        "command_id": f"{scenario_id}_cocotb",
-                        "command": ["python", "-m", test_mod],
-                        "source": "scenario.runner:cocotb",
-                    })
-            elif runner == "verilator" and tools.get("make"):
-                make_target = _first_nonempty(scenario.get("make_target"), "sim")
-                rtl_assets = _discover_rtl_assets(state)
-                make_dir = _first_nonempty(
-                    scenario.get("make_dir"),
-                    state.get("rtl_build_root"),
-                    state.get("rtl_sim_root"),
-                    rtl_assets.get("waveform_root"),
-                )
-        
-                if make_dir:
-                    commands.append({
-                        "scenario_id": scenario_id,
-                        "command_id": f"{scenario_id}_verilator",
-                        "command": ["make", "-C", make_dir, make_target],
-                        "source": "scenario.runner:verilator",
-                    })
+        if scenario_commands:
+            continue
+
+        runner = scenario.get("runner") or ""
+
+        if runner == "cocotb" and tools.get("python"):
+            test_mod = _first_nonempty(scenario.get("cocotb_test"), scenario.get("test_module"))
+            if test_mod:
+                commands.append({
+                    "scenario_id": scenario_id,
+                    "command_id": f"{scenario_id}_cocotb",
+                    "command": ["python", "-m", test_mod],
+                    "source": "scenario.runner:cocotb",
+                })
+                continue
+
+        elif runner == "verilator" and tools.get("make"):
+            make_target = _first_nonempty(scenario.get("make_target"), "sim")
+            rtl_assets = _discover_rtl_assets(state)
+            make_dir = _first_nonempty(
+                scenario.get("make_dir"),
+                state.get("rtl_build_root"),
+                state.get("rtl_sim_root"),
+                rtl_assets.get("waveform_root"),
+            )
+            if make_dir:
+                commands.append({
+                    "scenario_id": scenario_id,
+                    "command_id": f"{scenario_id}_verilator",
+                    "command": ["make", "-C", make_dir, make_target],
+                    "source": "scenario.runner:verilator",
+                })
+                continue
+
+        # Minimal prod fallback: use packaged software entry when scenario has no explicit command.
+        if isinstance(entry_command, list) and entry_command:
+            scenario_args: List[str] = []
+            scenario_name = _first_nonempty(
+                scenario.get("scenario_id"),
+                scenario.get("id"),
+                scenario.get("name"),
+            )
+            if scenario_name:
+                scenario_args = ["--", "--scenario", scenario_name]
+
+            commands.append({
+                "scenario_id": scenario_id,
+                "command_id": f"{scenario_id}_software_entry",
+                "command": [str(x) for x in entry_command] + scenario_args,
+                "source": "software.entry.command",
+                "entry_app_name": entry_app_name,
+            })
+
     return commands
+
+
+
+
+def _discover_software_entry(state: Dict[str, Any]) -> Dict[str, Any]:
+    manifest = state.get("system_cosim_manifest") or {}
+    manifest_sw = (manifest.get("software") or {}) if isinstance(manifest, dict) else {}
+    package = state.get("system_software_package") or {}
+    validation_manifest = state.get("system_software_validation_manifest") or {}
+    discovered_assets = validation_manifest.get("discovered_assets") or {}
+
+    entry = (
+        manifest_sw.get("entry")
+        or state.get("system_software_entry")
+        or package.get("entry")
+        or discovered_assets.get("software_entry")
+        or {}
+    )
+    return entry if isinstance(entry, dict) else {}
 
 
 def run_agent(state: dict) -> dict:
@@ -229,6 +281,7 @@ def run_agent(state: dict) -> dict:
     firmware = _discover_firmware_assets(state)
     rtl = _discover_rtl_assets(state)
     scenarios = _discover_scenarios(state)
+    software_entry = _discover_software_entry(state)
 
     tools = {
         "python": _tool_available("python"),
@@ -274,6 +327,7 @@ def run_agent(state: dict) -> dict:
         "harness_status": harness_status,
         "blocked_dependencies": blocked_dependencies,
         "software_assets": software,
+        "software_entry": software_entry,
         "firmware_assets": firmware,
         "rtl_assets": rtl,
         "tool_availability": tools,
@@ -308,6 +362,7 @@ def run_agent(state: dict) -> dict:
         "agent": AGENT_NAME,
         "generated_at": _now(),
         "software": software,
+        "software_entry": software_entry,
         "firmware": firmware,
         "rtl": rtl,
         "tool_availability": tools,

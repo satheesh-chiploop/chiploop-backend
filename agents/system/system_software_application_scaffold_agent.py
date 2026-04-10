@@ -80,17 +80,26 @@ fn main() {{
     println!("app={app_name} status={{:?}}", status);
 }}
 '''
+
 def _manifest(source_workflow_id: str, crate_name: str, files: List[str], app_names: List[str]) -> Dict[str, Any]:
-    applications = [
-        {
-            "app_name": name,
-            "package_name": _app_package_name(name),
-            "path": f"{OUTPUT_SUBDIR}/{name}",
-        }
-        for name in app_names
-    ]
     default_application = app_names[0] if app_names else ""
-    
+    default_package = _app_package_name(default_application) if default_application else ""
+
+    applications = []
+    for name in app_names:
+        cargo_package = _app_package_name(name)
+        applications.append(
+            {
+                "app_name": name,
+                "cargo_package": cargo_package,
+                "package_name": cargo_package,
+                "binary_name": cargo_package,
+                "path": f"{OUTPUT_SUBDIR}/{name}",
+                "is_default": name == default_application,
+                "is_entry": name == default_application,
+            }
+        )
+
     return {
         "package_type": "system_software_application_manifest",
         "package_version": "1.0",
@@ -101,8 +110,9 @@ def _manifest(source_workflow_id: str, crate_name: str, files: List[str], app_na
         "applications": applications,
         "default_application": default_application,
         "entry_application": default_application,
-        "binary_name": default_application,
-        "entry_binary": default_application,
+        "entry_package": default_package,
+        "binary_name": default_package,
+        "entry_binary": default_package,
         "files": files,
     }
 
@@ -176,13 +186,17 @@ def run_agent(state: dict) -> dict:
     _record_text(workflow_id, SUMMARY_MD, _markdown(manifest))
     _record_text(workflow_id, DEBUG_JSON, json.dumps({"agent": AGENT_NAME, "generated_at": _now(), "app_names": app_names, "crate_name": crate_name}, indent=2))
 
+
     default_application = str(manifest.get("default_application") or "").strip()
+    entry_package = str(manifest.get("entry_package") or "").strip()
 
     state["system_software_application_manifest"] = manifest
     state["system_software_default_application"] = default_application
     state["system_software_entry_application"] = str(manifest.get("entry_application") or default_application).strip()
-    state["system_software_entry_binary"] = str(manifest.get("entry_binary") or default_application).strip()
+    state["system_software_entry_package"] = entry_package
+    state["system_software_entry_binary"] = str(manifest.get("entry_binary") or entry_package).strip()
     state["system_software_application_manifest_path"] = f"{OUTPUT_SUBDIR}/{MANIFEST_JSON}"
     state["status"] = "✅ System software applications generated"
+    
     return state
     
