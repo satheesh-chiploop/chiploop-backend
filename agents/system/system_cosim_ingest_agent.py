@@ -353,6 +353,33 @@ def _derive_software_validation_status(state: Dict[str, Any], workflow_dir: str)
             return status.strip()
     return None
 
+def _load_optional_json_artifact(
+    state: Dict[str, Any],
+    workflow_dir: str,
+    prefixes: List[str],
+    rel_or_abs: Optional[str],
+) -> Dict[str, Any]:
+    target = _norm_path(rel_or_abs)
+    if not target:
+        return {}
+
+    # Local first
+    local_path = os.path.join(workflow_dir, target) if workflow_dir and not os.path.isabs(target) else target
+    data = _safe_json(local_path)
+    if data:
+        return data
+
+    # Supabase fallback
+    try:
+        supabase = _get_supabase(state)
+        obj, _ = _load_json_from_supabase(supabase, prefixes, target)
+        if isinstance(obj, dict):
+            return obj
+    except Exception:
+        pass
+
+    return {}
+
 
 def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     workflow_id = str(state.get("workflow_id") or "default")
@@ -439,6 +466,30 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     existing_sw = existing_cosim.get("software") if isinstance(existing_cosim, dict) else {}
     existing_apps = existing_sw.get("applications") if isinstance(existing_sw, dict) else []
 
+
+        register_map_spec = _load_optional_json_artifact(
+        state=state,
+        workflow_dir=workflow_dir,
+        prefixes=firmware_dbg.get("storage_prefixes") or [],
+        rel_or_abs=register_map,
+    )
+
+    validation_spec = {
+        "software": {
+            "applications": existing_apps if isinstance(existing_apps, list) else [],
+            "entry": software_entry,
+        },
+        "firmware": {
+            "register_map_path": register_map or "",
+            "register_map_spec": register_map_spec,
+            "interrupts": interrupts,
+        },
+        "rtl": {
+            "top": top_sim or "",
+            "sim_filelist": sim_filelist,
+        },
+    }
+
     manifest: Dict[str, Any] = {
         "validation_scope": "full_stack",
         "generated_at": _now(),
@@ -446,7 +497,7 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
         "software": {
             "package_present": bool(software_pkg),
             "entry": software_entry,
-            "applications": existing_apps if isinstance(existing_apps, list) else [],  # ✅ CRITICAL FIX
+            "applications": existing_apps if isinstance(existing_apps, list) else [],
             "package_type": software_pkg.get("package_type"),
             "l1_validation_status": software_validation_l1_status,
             "l1_ready": software_l1_ready,
@@ -455,6 +506,7 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
             "package_present": bool(firmware_pkg),
             "elf": firmware_elf,
             "register_map": register_map,
+            "register_map_spec": register_map_spec,
             "interrupts": interrupts,
             "dma_present": dma_present,
             "package_type": firmware_pkg.get("package_type"),
@@ -470,6 +522,7 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
                 "libs": lib_filelist,
             },
         },
+        "validation_spec": validation_spec,
         "readiness": {
             "software_present": bool(software_pkg),
             "firmware_present": bool(firmware_pkg),
@@ -478,6 +531,8 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
             "ready_for_system_l2_contract": ready_for_l2_contract,
         },
     }
+
+    
 
     debug = {
         "agent": AGENT_NAME,

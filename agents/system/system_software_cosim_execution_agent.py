@@ -97,6 +97,78 @@ def _scenario_expectations(scenario: Dict[str, Any]) -> Dict[str, Any]:
         "expected_signals": scenario.get("expected_signals") or [],
     }
 
+def _llm_extract_observations(
+    state: Dict[str, Any],
+    scenario: Dict[str, Any],
+    stdout_text: str,
+) -> Dict[str, Any]:
+    infer = state.get("llm_json_infer")
+    if not callable(infer):
+        return {}
+
+    prompt = {
+        "task": "Extract structured observations from software and simulation stdout.",
+        "scenario": scenario,
+        "stdout_text": stdout_text,
+        "required_schema": {
+            "observed_events": ["list[str]"],
+            "observed_registers": {"example_register": "example_value"},
+            "observed_interrupts": ["list[str]"],
+            "observed_signals": ["list[str]"],
+        },
+    }
+
+    try:
+        result = infer(prompt)
+        return result if isinstance(result, dict) else {}
+    except Exception:
+        return {}
+
+
+def _extract_observations(
+    state: Dict[str, Any],
+    scenario: Dict[str, Any],
+    stdout_text: str,
+) -> Dict[str, Any]:
+    lines = [line.strip() for line in stdout_text.splitlines() if line.strip()]
+
+    observed_events = lines[:]
+    observed_registers: Dict[str, Any] = {}
+    observed_interrupts: List[str] = []
+    observed_signals: List[str] = []
+
+    for line in lines:
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        k = key.strip().lower()
+        v = value.strip()
+
+        if k.startswith("register_"):
+            observed_registers[k] = v
+        elif k.startswith("interrupt_") and v in {"1", "true", "asserted"}:
+            observed_interrupts.append(k)
+        elif k.startswith("signal_") or "reset" in k:
+            observed_signals.append(k)
+
+    llm_obs = _llm_extract_observations(state, scenario, stdout_text)
+
+    if isinstance(llm_obs.get("observed_events"), list):
+        observed_events = llm_obs["observed_events"]
+    if isinstance(llm_obs.get("observed_registers"), dict):
+        observed_registers = llm_obs["observed_registers"]
+    if isinstance(llm_obs.get("observed_interrupts"), list):
+        observed_interrupts = llm_obs["observed_interrupts"]
+    if isinstance(llm_obs.get("observed_signals"), list):
+        observed_signals = llm_obs["observed_signals"]
+
+    return {
+        "observed_events": observed_events,
+        "observed_registers": observed_registers,
+        "observed_interrupts": observed_interrupts,
+        "observed_signals": observed_signals,
+    }
+
 
 def run_agent(state: dict) -> dict:
     workflow_id = state.get("workflow_id") or "default"
@@ -179,19 +251,16 @@ def run_agent(state: dict) -> dict:
                 execution_status = "fail"
                 break
 
-
         stdout_text = "\n".join(
             [str(cr.get("stdout_tail") or "") for cr in command_results if isinstance(cr, dict)]
         ).strip()
 
-        observed_behavior = {
-            "observed_events": [stdout_text] if stdout_text else [],
-            "observed_registers": {},
-            "observed_interrupts": [],
-            "observed_signals": [],
-        }
-
-        
+        observed_behavior = _extract_observations(
+            state=state,
+            scenario=scenario,
+            stdout_text=stdout_text,
+        )
+                
         scenario_results.append({
             "scenario_id": scenario_id,
             "scenario_type": scenario.get("scenario_type") or scenario.get("type") or "",
