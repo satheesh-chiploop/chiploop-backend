@@ -866,6 +866,13 @@ def run_agent(state: dict) -> dict:
 
     software_entry = _software_entry(package_manifest)
 
+    # Inject into a lightweight co-sim compatible structure
+    state["system_cosim_manifest"] = state.get("system_cosim_manifest") or {}
+
+    if isinstance(state["system_cosim_manifest"], dict):
+        sw = state["system_cosim_manifest"].setdefault("software", {})
+        if isinstance(sw, dict) and software_entry:
+            sw["entry"] = software_entry
     
     manifest = _build_validation_manifest(
         source_workflow_id=source_workflow_id,

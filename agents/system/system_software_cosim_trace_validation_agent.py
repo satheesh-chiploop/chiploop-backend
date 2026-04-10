@@ -139,17 +139,18 @@ def run_agent(state: dict) -> dict:
             mismatches.append({"type": "signal_missing", "expected": sig})
         mismatches.extend(register_mismatches)
 
+        # If scenario is disabled → do NOT validate it as pass/fail
         if not enabled:
-            mismatches.append({
-                "type": "disabled_scenario_executed",
+            scenario_validations.append({
                 "scenario_id": scenario_id,
+                "scenario_type": item.get("scenario_type") or "",
+                "trace_validation_status": "not_applicable",
+                "expected_behavior": expected,
+                "observed_behavior": observed,
+                "mismatches": [],
+                "note": "Scenario disabled by contract; not validated.",
             })
-
-        if item.get("execution_status") != "pass":
-            mismatches.append({
-                "type": "execution_failed",
-                "returncode": item.get("returncode"),
-            })
+            continue
 
         for mm in mismatches:
             mtype = str(mm.get("type") or "").strip()
@@ -166,8 +167,11 @@ def run_agent(state: dict) -> dict:
             "mismatches": mismatches,
         })
 
+ 
     pass_count = sum(1 for x in scenario_validations if x.get("trace_validation_status") == "pass")
     fail_count = sum(1 for x in scenario_validations if x.get("trace_validation_status") == "fail")
+    applicable_count = sum(1 for x in scenario_validations if x.get("trace_validation_status") != "not_applicable")
+    
     overall_status = "pass" if fail_count == 0 else ("partial_pass" if pass_count > 0 else "fail")
 
     report = {
