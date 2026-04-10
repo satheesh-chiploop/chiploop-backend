@@ -168,6 +168,8 @@ def run_agent(state: dict) -> dict:
         app_name = app["app_name"]
         pkg = app["cargo_package"]
 
+        test_file = f"{OUTPUT_SUBDIR}/apps/{app_name}_smoke.rs"
+
         test_code = f'''
     use std::process::Command;
 
@@ -182,16 +184,12 @@ def run_agent(state: dict) -> dict:
     }}
     '''
 
-        _record_text(
-            workflow_id,
-            f"{app_name}_smoke.rs",
-            test_code,
-            subdir=f"{OUTPUT_SUBDIR}/apps"
-        )
+        _record_text(workflow_id, f"{app_name}_smoke.rs", test_code, subdir=f"{OUTPUT_SUBDIR}/apps")
 
+        written.append(test_file)
 
-    written.append(f"{OUTPUT_SUBDIR}/apps/app_smoke.rs")
-
+   
+    
     manifest = _build_manifest(
         source_workflow_id=str(api_contract.get("source_workflow_id") or ""),
         files=written,
