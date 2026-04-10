@@ -435,6 +435,10 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
         sim_filelist
     )
 
+    existing_cosim = state.get("system_cosim_manifest") or {}
+    existing_sw = existing_cosim.get("software") if isinstance(existing_cosim, dict) else {}
+    existing_apps = existing_sw.get("applications") if isinstance(existing_sw, dict) else []
+
     manifest: Dict[str, Any] = {
         "validation_scope": "full_stack",
         "generated_at": _now(),
@@ -442,6 +446,7 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
         "software": {
             "package_present": bool(software_pkg),
             "entry": software_entry,
+            "applications": existing_apps if isinstance(existing_apps, list) else [],  # ✅ CRITICAL FIX
             "package_type": software_pkg.get("package_type"),
             "l1_validation_status": software_validation_l1_status,
             "l1_ready": software_l1_ready,
