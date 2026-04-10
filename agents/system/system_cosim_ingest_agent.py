@@ -467,7 +467,7 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     existing_apps = existing_sw.get("applications") if isinstance(existing_sw, dict) else []
 
 
-        register_map_spec = _load_optional_json_artifact(
+    register_map_spec = _load_optional_json_artifact(
         state=state,
         workflow_dir=workflow_dir,
         prefixes=firmware_dbg.get("storage_prefixes") or [],
