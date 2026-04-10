@@ -395,6 +395,10 @@ def _workspace_members(build_manifest: Dict[str, Any]) -> List[str]:
     members = build_manifest.get("workspace_members") or []
     return [str(x).strip() for x in members if _is_nonempty_str(x)]
 
+def _software_entry(package_manifest: Dict[str, Any]) -> Dict[str, Any]:
+    entry = package_manifest.get("entry") or {}
+    return entry if isinstance(entry, dict) else {}
+
 
 def _status_for_required_asset(name: str, exists: bool) -> Dict[str, Any]:
     return {
@@ -860,6 +864,8 @@ def run_agent(state: dict) -> dict:
         package_file_checks=package_file_checks,
     )
 
+    software_entry = _software_entry(package_manifest)
+
     
     manifest = _build_validation_manifest(
         source_workflow_id=source_workflow_id,
@@ -945,6 +951,18 @@ def run_agent(state: dict) -> dict:
 
     state["system_software_validation_package_file_checks"] = package_file_checks
 
+    state["system_software_entry"] = software_entry
+    state["system_software_entry_command"] = (software_entry.get("command") or []) if isinstance(software_entry, dict) else []
+
+    state["system_software_cosim_ingest"] = {
+        "software_assets": {
+            "package_manifest_path": (manifest.get("discovered_assets") or {}).get("software_package_manifest", {}).get("resolved_path", ""),
+            "build_root": restore_info.get("build_root") or "",
+            "software_root": restore_info.get("restored_root") or "",
+        },
+        "software_entry": software_entry,
+    }
+
     state["system_software_validation_local_root"] = restore_info.get("restored_root") or ""
     state["system_software_build_root"] = restore_info.get("build_root") or ""
     state["system_software_test_root"] = restore_info.get("test_root") or ""
@@ -961,6 +979,7 @@ def run_agent(state: dict) -> dict:
         system_block["system_software_build_root"] = state["system_software_build_root"]
         system_block["system_software_test_root"] = state["system_software_test_root"]
         system_block["system_software_mock_root"] = state["system_software_mock_root"]
+        system_block["system_software_entry"] = software_entry
 
     ingest_status = ((manifest.get("validation_readiness") or {}).get("overall_ingest_status")) or "not_ready"
     state["status"] = (

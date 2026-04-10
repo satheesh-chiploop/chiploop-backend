@@ -43,14 +43,33 @@ def _record(workflow_id: str, filename: str, content: str):
     except Exception:
         return None
 
+def _default_software_target(manifest: Dict[str, Any]) -> Dict[str, Any]:
+    software = manifest.get("software") or {}
+    entry = software.get("entry") or {}
+
+    if not isinstance(entry, dict):
+        entry = {}
+
+    app_name = str(entry.get("app_name") or "").strip()
+    binary_name = str(entry.get("binary_name") or "").strip()
+    cargo_package = str(entry.get("cargo_package") or "").strip()
+
+    return {
+        "app_name": app_name,
+        "binary_name": binary_name,
+        "cargo_package": cargo_package,
+    }
 
 def _scenario_boot(manifest: Dict[str, Any]) -> Dict[str, Any]:
     fw = manifest.get("firmware") or {}
     rtl = manifest.get("rtl") or {}
+    sw = _default_software_target(manifest)
+
     return {
         "id": "boot_smoke",
         "class": "boot",
         "enabled": bool(fw.get("elf") and rtl.get("top")),
+        "software_target": sw,
         "deterministic_seed": 101,
         "description": "Boot the firmware ELF on the RTL sim top and verify reset release and first observable software activity.",
         "expected_observations": [
@@ -60,13 +79,15 @@ def _scenario_boot(manifest: Dict[str, Any]) -> Dict[str, Any]:
         ],
     }
 
-
 def _scenario_reg_rw(manifest: Dict[str, Any]) -> Dict[str, Any]:
     fw = manifest.get("firmware") or {}
+    sw = _default_software_target(manifest)
+
     return {
         "id": "register_rw_basic",
         "class": "register_read_write",
         "enabled": bool(fw.get("register_map")),
+        "software_target": sw,
         "deterministic_seed": 202,
         "description": "Perform deterministic register write/readback against known register map content.",
         "expected_observations": [
@@ -76,14 +97,16 @@ def _scenario_reg_rw(manifest: Dict[str, Any]) -> Dict[str, Any]:
         ],
     }
 
-
 def _scenario_interrupt(manifest: Dict[str, Any]) -> Dict[str, Any]:
     fw = manifest.get("firmware") or {}
     interrupts = fw.get("interrupts") or []
+    sw = _default_software_target(manifest)
+
     return {
         "id": "interrupt_propagation_basic",
         "class": "interrupt_propagation",
         "enabled": bool(interrupts),
+        "software_target": sw,
         "deterministic_seed": 303,
         "description": "Trigger an interrupt source and validate propagation from RTL event to firmware/software observable handling.",
         "expected_observations": [

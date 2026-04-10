@@ -65,6 +65,18 @@ def _validate_registers(expected: Dict[str, Any], observed: Dict[str, Any]) -> L
     return mismatches
 
 
+def _scenario_enabled_map(state: Dict[str, Any]) -> Dict[str, bool]:
+    harness = state.get("system_software_cosim_harness_manifest") or {}
+    scenarios = harness.get("scenarios") or []
+    out: Dict[str, bool] = {}
+    for item in scenarios:
+        if isinstance(item, dict):
+            sid = str(item.get("scenario_id") or item.get("id") or "").strip()
+            if sid:
+                out[sid] = bool(item.get("enabled", True))
+    return out
+
+
 def run_agent(state: dict) -> dict:
     workflow_id = state.get("workflow_id") or "default"
     execution = state.get("system_software_cosim_execution_report") or {}
@@ -94,8 +106,11 @@ def run_agent(state: dict) -> dict:
     scenario_validations: List[Dict[str, Any]] = []
     mismatch_categories: List[str] = []
 
+    scenario_enabled = _scenario_enabled_map(state)
+
     for item in scenario_results:
         scenario_id = str(item.get("scenario_id") or "").strip()
+        enabled = scenario_enabled.get(scenario_id, True)
         expected = item.get("expected_behavior") or {}
         observed = item.get("observed_behavior") or {}
 
@@ -123,6 +138,12 @@ def run_agent(state: dict) -> dict:
         for sig in missing_signals:
             mismatches.append({"type": "signal_missing", "expected": sig})
         mismatches.extend(register_mismatches)
+
+        if not enabled:
+            mismatches.append({
+                "type": "disabled_scenario_executed",
+                "scenario_id": scenario_id,
+            })
 
         if item.get("execution_status") != "pass":
             mismatches.append({

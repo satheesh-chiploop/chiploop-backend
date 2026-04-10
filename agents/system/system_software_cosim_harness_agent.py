@@ -187,6 +187,8 @@ def _build_commands(scenarios: List[Dict[str, Any]], state: Dict[str, Any], tool
 
     for scenario in scenarios:
         scenario_id = scenario["scenario_id"]
+        if scenario.get("enabled") is False:
+            continue
         scenario_commands = scenario.get("commands") or []
 
         if isinstance(scenario_commands, list):
