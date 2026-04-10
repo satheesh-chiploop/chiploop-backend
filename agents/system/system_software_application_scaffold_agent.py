@@ -72,12 +72,30 @@ def _app_names(state: Dict[str, Any], sdk_manifest: Dict[str, Any]) -> List[str]
     return out or ["health_app", "diag_console"]
 
 def _render_app(crate_name: str, app_name: str) -> str:
-    return f'''use {crate_name}::Sdk;
+    return f'''
+use {crate_name}::Sdk;
+use std::env;
 
 fn main() {{
+    let args: Vec<String> = env::args().collect();
+    let scenario = args.iter()
+        .position(|x| x == "--scenario")
+        .and_then(|i| args.get(i+1))
+        .map(|s| s.as_str())
+        .unwrap_or("default");
+
     let sdk = Sdk::new();
     let status = sdk.get_status();
-    println!("app={app_name} status={{:?}}", status);
+
+    println!("app={app_name} scenario={{}} status={{:?}}", scenario, status);
+
+    if scenario.contains("register") {{
+        println!("register_write=0x10");
+    }}
+
+    if scenario.contains("interrupt") {{
+        println!("interrupt_triggered=1");
+    }}
 }}
 '''
 

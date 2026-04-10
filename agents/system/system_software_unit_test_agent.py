@@ -127,6 +127,19 @@ def _markdown_summary(manifest: Dict[str, Any]) -> str:
     lines.append("")
     return "\n".join(lines)
 
+def _applications(state: Dict[str, Any]) -> List[Dict[str, str]]:
+    manifest = state.get("system_software_application_manifest") or {}
+    apps = manifest.get("applications") or []
+
+    out = []
+    for item in apps:
+        if isinstance(item, dict):
+            app_name = str(item.get("app_name") or "").strip()
+            pkg = str(item.get("cargo_package") or "").strip()
+            if app_name and pkg:
+                out.append({"app_name": app_name, "cargo_package": pkg})
+    return out
+
 
 def run_agent(state: dict) -> dict:
     workflow_id = state.get("workflow_id") or "default"
@@ -148,7 +161,35 @@ def run_agent(state: dict) -> dict:
     _record_text(workflow_id, "service_tests.rs", _render_service_tests(), subdir=f"{OUTPUT_SUBDIR}/services")
     written.append(f"{OUTPUT_SUBDIR}/services/service_tests.rs")
 
-    _record_text(workflow_id, "app_smoke.rs", _render_app_smoke(crate_name), subdir=f"{OUTPUT_SUBDIR}/apps")
+
+    apps = _applications(state)
+
+    for app in apps:
+        app_name = app["app_name"]
+        pkg = app["cargo_package"]
+
+        test_code = f'''
+    use std::process::Command;
+
+    #[test]
+    fn test_{app_name}_smoke() {{
+        let status = Command::new("cargo")
+            .args(["run", "-p", "{pkg}", "--", "--scenario", "{app_name}_boot_smoke"])
+            .status()
+            .expect("failed to run app");
+
+        assert!(status.success());
+    }}
+    '''
+
+        _record_text(
+            workflow_id,
+            f"{app_name}_smoke.rs",
+            test_code,
+            subdir=f"{OUTPUT_SUBDIR}/apps"
+        )
+
+
     written.append(f"{OUTPUT_SUBDIR}/apps/app_smoke.rs")
 
     manifest = _build_manifest(
