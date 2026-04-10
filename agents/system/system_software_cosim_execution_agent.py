@@ -35,15 +35,35 @@ def _tail(text: str, limit: int = 4000) -> str:
 
 
 def _resolve_cwd(state: Dict[str, Any], scenario: Dict[str, Any]) -> str:
-    for candidate in (
-        scenario.get("cwd"),
-        state.get("system_software_validation_local_root"),
-        (state.get("system") or {}).get("system_software_validation_local_root"),
-        os.getcwd(),
-    ):
-        if isinstance(candidate, str) and candidate.strip() and os.path.isdir(candidate):
+    # 1. scenario-specific cwd (highest priority)
+    scenario_cwd = scenario.get("cwd")
+    if isinstance(scenario_cwd, str) and scenario_cwd.strip() and os.path.isdir(scenario_cwd):
+        return scenario_cwd
+
+    # 2. software entry working dir (CRITICAL FIX)
+    software_entry = (
+        (state.get("system_software_cosim_harness_manifest") or {}).get("software_entry")
+        or state.get("system_software_entry")
+        or {}
+    )
+
+    entry_working_dir = str(software_entry.get("working_dir") or "").strip()
+    validation_root = state.get("system_software_validation_local_root") or ""
+
+    if entry_working_dir and validation_root:
+        candidate = os.path.join(validation_root, entry_working_dir)
+        if os.path.isdir(candidate):
             return candidate
+
+    # 3. fallback → validation root (current behavior)
+    if isinstance(validation_root, str) and validation_root.strip() and os.path.isdir(validation_root):
+        return validation_root
+
+    # 4. final fallback
     return os.getcwd()
+
+
+
 
 
 def _run_cmd(cmd: List[str], cwd: str, timeout_sec: int) -> Dict[str, Any]:

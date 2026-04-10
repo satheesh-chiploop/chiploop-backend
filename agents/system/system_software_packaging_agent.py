@@ -113,7 +113,7 @@ def _derive_entry_metadata(
         "cargo_package": cargo_package,
         "binary_name": binary_name,
         "command": command,
-        "working_dir": f"{OUTPUT_SUBDIR.replace('/package', '')}/apps/{app_name}" if app_name else "",
+        "working_dir": "system/software",
         "command_source": "package_entry",
         "entry_resolution_status": entry_resolution_status,
         "native_binary_candidates": [
