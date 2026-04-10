@@ -253,6 +253,8 @@ def run_agent(state: dict) -> dict:
         "system_software_adapter_manifest_path",
         "system/software/adapter/system_software_adapter_manifest.json"
     )
+    if not adapter_manifest:
+        adapter_manifest = state.get("system_software_adapter_manifest") or {}
     services_manifest = _load_manifest(
         state, workflow_dir,
         "system_software_core_services_manifest",

@@ -89,6 +89,8 @@ def _manifest(source_workflow_id: str, crate_name: str, files: List[str], app_na
         }
         for name in app_names
     ]
+    default_application = app_names[0] if app_names else ""
+    
     return {
         "package_type": "system_software_application_manifest",
         "package_version": "1.0",
@@ -97,6 +99,10 @@ def _manifest(source_workflow_id: str, crate_name: str, files: List[str], app_na
         "crate_name": crate_name,
         "application_names": app_names,
         "applications": applications,
+        "default_application": default_application,
+        "entry_application": default_application,
+        "binary_name": default_application,
+        "entry_binary": default_application,
         "files": files,
     }
 
@@ -172,6 +178,9 @@ def run_agent(state: dict) -> dict:
     _record_text(workflow_id, DEBUG_JSON, json.dumps({"agent": AGENT_NAME, "generated_at": _now(), "app_names": app_names, "crate_name": crate_name}, indent=2))
 
     state["system_software_application_manifest"] = manifest
+    state["system_software_default_application"] = default_application
+    state["system_software_entry_application"] = default_application
+    state["system_software_entry_binary"] = default_application
     state["system_software_application_manifest_path"] = f"{OUTPUT_SUBDIR}/{MANIFEST_JSON}"
     state["status"] = "✅ System software applications generated"
     return state

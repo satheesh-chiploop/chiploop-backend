@@ -54,16 +54,16 @@ def _derive_adapter_required_files(package_manifest: Dict[str, Any], discovered_
     adapter_crate = str(
         adapter_manifest.get("adapter_crate")
         or package_manifest.get("adapter_crate")
-        or "system_software_sdk"
+        or adapter_manifest.get("adapter_package_name")
+        or ""
     ).strip()
 
     if not adapter_path:
         adapter_path = f"system/software/adapter/{adapter_crate}"
     elif adapter_path.endswith("/adapter"):
         adapter_path = f"{adapter_path}/{adapter_crate}"
-    elif not adapter_path.endswith(f"/{adapter_crate}"):
-        if "/system/software/adapter/" not in adapter_path:
-            adapter_path = f"system/software/adapter/{adapter_crate}"
+    elif adapter_crate and not adapter_path.endswith(f"/{adapter_crate}"):    
+        adapter_path = f"system/software/adapter/{adapter_crate}"
 
     adapter_path = adapter_path.rstrip("/")
     return [
@@ -107,7 +107,14 @@ def run_agent(state: dict) -> dict:
 
     package_files = {_norm(p) for p in (package_manifest.get("files") or []) if _norm(p)}
     required_adapter_files = _derive_adapter_required_files(package_manifest, discovered_assets)
-    missing_adapter_package_files = [p for p in required_adapter_files if _norm(p) not in package_files]
+    missing_adapter_package_files = []
+
+    for path in required_adapter_files:
+        if workflow_dir:
+            full_path = os.path.join(workflow_dir, path)
+            if not os.path.isfile(full_path):
+                missing_adapter_package_files.append(path)
+
 
     package_status = "complete"
     if missing_required_assets or missing_required_files or missing_adapter_package_files:
