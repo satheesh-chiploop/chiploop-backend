@@ -864,15 +864,26 @@ def run_agent(state: dict) -> dict:
         package_file_checks=package_file_checks,
     )
 
-    software_entry = _software_entry(package_manifest)
 
-    # Inject into a lightweight co-sim compatible structure
+
+    software_entry = _software_entry(package_manifest)
+    app_manifest = app_manifest or {}
+
+    applications = app_manifest.get("applications") if isinstance(app_manifest, dict) else []
+
+    # Inject into co-sim manifest
     state["system_cosim_manifest"] = state.get("system_cosim_manifest") or {}
 
     if isinstance(state["system_cosim_manifest"], dict):
         sw = state["system_cosim_manifest"].setdefault("software", {})
-        if isinstance(sw, dict) and software_entry:
-            sw["entry"] = software_entry
+
+        if isinstance(sw, dict):
+            if software_entry:
+                sw["entry"] = software_entry
+
+            # ✅ CRITICAL FIX
+            if isinstance(applications, list) and applications:
+                sw["applications"] = applications
     
     manifest = _build_validation_manifest(
         source_workflow_id=source_workflow_id,
