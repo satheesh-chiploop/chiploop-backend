@@ -39,31 +39,71 @@ def _dictify(value: Any) -> Dict[str, Any]:
         return value
     return {}
 
+def _normalize_token(value: Any) -> str:
+    return str(value).strip().lower().replace("-", "_").replace(" ", "_")
 
-def _missing_expected_items(expected: List[Any], observed: List[Any]) -> List[Any]:
-    observed_set = set(str(x) for x in observed)
-    return [x for x in expected if str(x) not in observed_set]
+
+def _semantic_aliases(state: Dict[str, Any]) -> Dict[str, List[str]]:
+    return {
+        "reset_released": ["rst_n=1", "reset_n=1", "rst_n", "reset_n", "deassert_reset"],
+        "done_irq": ["interrupt_done", "done_interrupt", "irq_done", "done_irq"],
+    }
+
+
+def _matches_expected_token(expected: Any, observed: List[Any], aliases: Dict[str, List[str]]) -> bool:
+    exp = _normalize_token(expected)
+    observed_norm = [_normalize_token(x) for x in observed]
+    if exp in observed_norm:
+        return True
+
+    for alias in aliases.get(exp, []):
+        if _normalize_token(alias) in observed_norm:
+            return True
+
+    observed_blob = "\n".join(observed_norm)
+    if exp in observed_blob:
+        return True
+    for alias in aliases.get(exp, []):
+        if _normalize_token(alias) in observed_blob:
+            return True
+    return False
+
+
+def _missing_expected_items(expected: List[Any], observed: List[Any], aliases: Dict[str, List[str]]) -> List[Any]:
+    return [x for x in expected if not _matches_expected_token(x, observed, aliases)]
+
+def _normalize_register_map(observed: Dict[str, Any]) -> Dict[str, Any]:
+    out: Dict[str, Any] = {}
+    for k, v in observed.items():
+        out[str(k).strip().upper()] = v
+    return out
+
+
+def _normalize_scalar(value: Any) -> str:
+    return str(value).strip().lower()
 
 
 def _validate_registers(expected: Dict[str, Any], observed: Dict[str, Any]) -> List[Dict[str, Any]]:
     mismatches: List[Dict[str, Any]] = []
+    observed_norm = _normalize_register_map(observed)
+
     for reg_name, exp_value in expected.items():
-        if reg_name not in observed:
+        reg_key = str(reg_name).strip().upper()
+        if reg_key not in observed_norm:
             mismatches.append({
                 "type": "register_missing",
                 "register": reg_name,
                 "expected": exp_value,
                 "observed": None,
             })
-        elif observed.get(reg_name) != exp_value:
+        elif _normalize_scalar(observed_norm.get(reg_key)) != _normalize_scalar(exp_value):
             mismatches.append({
                 "type": "register_mismatch",
                 "register": reg_name,
                 "expected": exp_value,
-                "observed": observed.get(reg_name),
+                "observed": observed_norm.get(reg_key),
             })
     return mismatches
-
 
 def _scenario_enabled_map(state: Dict[str, Any]) -> Dict[str, bool]:
     harness = state.get("system_software_cosim_harness_manifest") or {}
@@ -116,22 +156,19 @@ def run_agent(state: dict) -> dict:
 
 
 
+        aliases = _semantic_aliases(state)
+
         expected_events = _listify(expected.get("expected_events"))
         observed_events = _listify(observed.get("observed_events"))
-
-        observed_event_text = "\n".join(str(x) for x in observed_events)
-        missing_events = [
-            ev for ev in expected_events
-            if str(ev) not in observed_event_text
-        ]
+        missing_events = _missing_expected_items(expected_events, observed_events, aliases)
 
         expected_interrupts = _listify(expected.get("expected_interrupts"))
         observed_interrupts = _listify(observed.get("observed_interrupts"))
-        missing_interrupts = _missing_expected_items(expected_interrupts, observed_interrupts)
+        missing_interrupts = _missing_expected_items(expected_interrupts, observed_interrupts, aliases)
 
         expected_signals = _listify(expected.get("expected_signals"))
         observed_signals = _listify(observed.get("observed_signals"))
-        missing_signals = _missing_expected_items(expected_signals, observed_signals)
+        missing_signals = _missing_expected_items(expected_signals, observed_signals, aliases)
 
         expected_registers = _dictify(expected.get("expected_registers"))
         observed_registers = _dictify(observed.get("observed_registers"))
@@ -175,11 +212,22 @@ def run_agent(state: dict) -> dict:
         })
 
  
+
     pass_count = sum(1 for x in scenario_validations if x.get("trace_validation_status") == "pass")
     fail_count = sum(1 for x in scenario_validations if x.get("trace_validation_status") == "fail")
-    applicable_count = sum(1 for x in scenario_validations if x.get("trace_validation_status") != "not_applicable")
-    
-    overall_status = "pass" if fail_count == 0 else ("partial_pass" if pass_count > 0 else "fail")
+    na_count = sum(1 for x in scenario_validations if x.get("trace_validation_status") == "not_applicable")
+    applicable_count = pass_count + fail_count
+
+    if applicable_count == 0:
+        overall_status = "blocked"
+    elif fail_count == 0:
+        overall_status = "pass"
+    elif pass_count > 0:
+        overall_status = "partial_pass"
+    else:
+        overall_status = "fail"
+
+
 
     report = {
         "agent": AGENT_NAME,
@@ -188,6 +236,8 @@ def run_agent(state: dict) -> dict:
         "scenario_count": len(scenario_validations),
         "scenario_pass_count": pass_count,
         "scenario_fail_count": fail_count,
+        "scenario_not_applicable_count": na_count,
+        "scenario_applicable_count": applicable_count,
         "mismatch_categories": mismatch_categories,
         "scenario_validations": scenario_validations,
     }

@@ -92,18 +92,32 @@ def _cosim_ingest_view(state: Dict[str, Any]) -> Dict[str, Any]:
         or {}
     )
 
+def _safe_load_json(path: str) -> Dict[str, Any]:
+    try:
+        if _is_nonempty_str(path) and os.path.isfile(path):
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                return data if isinstance(data, dict) else {}
+    except Exception:
+        pass
+    return {}
+
+
 def _discover_firmware_assets(state: Dict[str, Any]) -> Dict[str, Any]:
     ingest = _cosim_ingest_view(state)
     firmware = ingest.get("firmware_assets") or {}
     manifest = state.get("system_cosim_manifest") or {}
     manifest_fw = (manifest.get("firmware") or {}) if isinstance(manifest, dict) else {}
 
+    register_map_path = _first_nonempty(
+        state.get("firmware_register_map_path"),
+        firmware.get("register_map_path"),
+        manifest_fw.get("register_map"),
+    )
+
     return {
-        "register_map_path": _first_nonempty(
-            state.get("firmware_register_map_path"),
-            firmware.get("register_map_path"),
-            manifest_fw.get("register_map"),
-        ),
+        "register_map_path": register_map_path,
+        "register_map_json": _safe_load_json(register_map_path),
         "hal_path": _first_nonempty(
             state.get("firmware_hal_path"),
             firmware.get("hal_path"),
@@ -113,6 +127,33 @@ def _discover_firmware_assets(state: Dict[str, Any]) -> Dict[str, Any]:
             firmware.get("elf_path"),
             manifest_fw.get("elf"),
         ),
+    }
+
+
+def _discover_semantic_assets(state: Dict[str, Any]) -> Dict[str, Any]:
+    ingest = _cosim_ingest_view(state)
+    manifest = state.get("system_cosim_manifest") or {}
+    rtl_manifest = (manifest.get("rtl") or {}) if isinstance(manifest, dict) else {}
+    integration_manifest = (manifest.get("integration") or {}) if isinstance(manifest, dict) else {}
+
+    digital_spec_path = _first_nonempty(
+        state.get("digital_spec_json_path"),
+        state.get("system_digital_spec_json_path"),
+        ingest.get("digital_spec_json_path"),
+        rtl_manifest.get("digital_spec_json"),
+    )
+    integration_intent_path = _first_nonempty(
+        state.get("system_integration_intent_path"),
+        state.get("integration_intent_path"),
+        ingest.get("integration_intent_path"),
+        integration_manifest.get("system_integration_intent"),
+    )
+
+    return {
+        "digital_spec_json_path": digital_spec_path,
+        "digital_spec_json": _safe_load_json(digital_spec_path),
+        "integration_intent_path": integration_intent_path,
+        "integration_intent_json": _safe_load_json(integration_intent_path),
     }
 
 def _discover_rtl_assets(state: Dict[str, Any]) -> Dict[str, Any]:
@@ -309,6 +350,7 @@ def run_agent(state: dict) -> dict:
     software = _discover_software_assets(state)
     firmware = _discover_firmware_assets(state)
     rtl = _discover_rtl_assets(state)
+    semantic_assets = _discover_semantic_assets(state)
     scenarios = _discover_scenarios(state)
     software_entry = _discover_software_entry(state)
 
@@ -346,6 +388,8 @@ def run_agent(state: dict) -> dict:
 
     harness_status = "ready" if not blocked_dependencies else "blocked"
 
+    
+
     manifest = {
         "package_type": "system_cosim_harness_manifest",
         "package_version": "1.0",
@@ -359,6 +403,7 @@ def run_agent(state: dict) -> dict:
         "software_entry": software_entry,
         "firmware_assets": firmware,
         "rtl_assets": rtl,
+        "semantic_assets": semantic_assets,
         "tool_availability": tools,
         "scenario_count": len(scenarios),
         "scenarios": scenarios,
@@ -387,6 +432,8 @@ def run_agent(state: dict) -> dict:
     else:
         summary_lines.append("- none")
 
+
+
     debug_payload = {
         "agent": AGENT_NAME,
         "generated_at": _now(),
@@ -394,6 +441,12 @@ def run_agent(state: dict) -> dict:
         "software_entry": software_entry,
         "firmware": firmware,
         "rtl": rtl,
+        "semantic_assets": {
+            "digital_spec_json_path": semantic_assets.get("digital_spec_json_path"),
+            "integration_intent_path": semantic_assets.get("integration_intent_path"),
+            "digital_spec_loaded": bool(semantic_assets.get("digital_spec_json")),
+            "integration_intent_loaded": bool(semantic_assets.get("integration_intent_json")),
+        },
         "tool_availability": tools,
         "blocked_dependencies": blocked_dependencies,
         "resolved_command_count": len(commands),
@@ -406,5 +459,6 @@ def run_agent(state: dict) -> dict:
     state["system_software_cosim_harness_manifest"] = manifest
     state["system_software_cosim_harness_manifest_path"] = f"{OUTPUT_SUBDIR}/{MANIFEST_JSON}"
     state["system_software_cosim_harness_status"] = harness_status
+    state["system_software_cosim_semantic_assets"] = semantic_assets
     state["status"] = "✅ System software co-sim harness ready" if harness_status == "ready" else "⚠️ System software co-sim harness blocked"
     return state

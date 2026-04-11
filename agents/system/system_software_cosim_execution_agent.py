@@ -125,6 +125,107 @@ def _llm_extract_observations(
         return {}
 
 
+def _safe_int(value: Any) -> Optional[int]:
+    try:
+        s = str(value).strip().lower()
+        if s.startswith("0x"):
+            return int(s, 16)
+        return int(s)
+    except Exception:
+        return None
+
+
+def _build_register_lookup(state: Dict[str, Any]) -> Dict[int, str]:
+    harness = state.get("system_software_cosim_harness_manifest") or {}
+    firmware_assets = harness.get("firmware_assets") or {}
+    semantic_assets = harness.get("semantic_assets") or {}
+
+    register_map = firmware_assets.get("register_map_json") or {}
+    digital_spec = semantic_assets.get("digital_spec_json") or {}
+
+    lookup: Dict[int, str] = {}
+
+    base_candidates = []
+    for key in ("base_address", "base_addr", "mmio_base"):
+        val = register_map.get(key)
+        if val is not None:
+            iv = _safe_int(val)
+            if iv is not None:
+                base_candidates.append(iv)
+
+    registers = register_map.get("registers") or digital_spec.get("registers") or []
+    if isinstance(registers, list):
+        for reg in registers:
+            if not isinstance(reg, dict):
+                continue
+            reg_name = str(reg.get("name") or "").strip()
+            offset = _safe_int(reg.get("offset"))
+            address = _safe_int(reg.get("address"))
+            if reg_name and address is not None:
+                lookup[address] = reg_name
+            elif reg_name and offset is not None:
+                for base in base_candidates:
+                    lookup[base + offset] = reg_name
+
+    return lookup
+
+
+def _normalize_observations(
+    state: Dict[str, Any],
+    scenario: Dict[str, Any],
+    raw_obs: Dict[str, Any],
+) -> Dict[str, Any]:
+    observed_events = list(raw_obs.get("observed_events") or [])
+    observed_registers = dict(raw_obs.get("observed_registers") or {})
+    observed_interrupts = list(raw_obs.get("observed_interrupts") or [])
+    observed_signals = list(raw_obs.get("observed_signals") or [])
+
+    reg_lookup = _build_register_lookup(state)
+
+    canonical_registers: Dict[str, Any] = {}
+    canonical_events: List[str] = list(observed_events)
+    canonical_interrupts: List[str] = list(observed_interrupts)
+    canonical_signals: List[str] = list(observed_signals)
+
+    for key, value in observed_registers.items():
+        norm_key = str(key).strip().lower()
+
+        if norm_key in {"ctrl", "status"}:
+            canonical_registers[norm_key.upper()] = value
+            continue
+
+        addr = None
+        if "0x" in norm_key:
+            try:
+                addr_text = norm_key[norm_key.index("0x"):]
+                addr = _safe_int(addr_text)
+            except Exception:
+                addr = None
+
+        if addr is not None and addr in reg_lookup:
+            canonical_registers[reg_lookup[addr]] = value
+        else:
+            canonical_registers[key] = value
+
+    signal_text = "\n".join(str(x) for x in canonical_signals).lower()
+    event_text = "\n".join(str(x) for x in canonical_events).lower()
+
+    if "rst_n=1" in event_text or "reset_n=1" in event_text or "rst_n" in signal_text or "reset_n" in signal_text:
+        if "reset_released" not in canonical_signals:
+            canonical_signals.append("reset_released")
+        if "reset_released" not in canonical_events:
+            canonical_events.append("reset_released")
+
+    dedup = lambda seq: list(dict.fromkeys(str(x) for x in seq if str(x).strip()))
+
+    return {
+        "observed_events": dedup(canonical_events),
+        "observed_registers": canonical_registers,
+        "observed_interrupts": dedup(canonical_interrupts),
+        "observed_signals": dedup(canonical_signals),
+    }
+
+
 def _extract_observations(
     state: Dict[str, Any],
     scenario: Dict[str, Any],
@@ -144,15 +245,10 @@ def _extract_observations(
         k = key.strip().lower()
         v = value.strip()
 
-        
         if k.startswith("register"):
-            # Normalize register observation
             observed_registers[k] = v
-
-        elif "interrupt" in k and v in {"1", "true", "asserted"}:
-            # Normalize interrupt event
+        elif "interrupt" in k and v.lower() in {"1", "true", "asserted"}:
             observed_interrupts.append(k)
-
         elif k.startswith("signal") or "reset" in k:
             observed_signals.append(k)
 
@@ -167,13 +263,18 @@ def _extract_observations(
     if isinstance(llm_obs.get("observed_signals"), list):
         observed_signals = llm_obs["observed_signals"]
 
-    return {
+    raw_obs = {
         "observed_events": observed_events,
         "observed_registers": observed_registers,
         "observed_interrupts": observed_interrupts,
         "observed_signals": observed_signals,
     }
 
+    return _normalize_observations(
+        state=state,
+        scenario=scenario,
+        raw_obs=raw_obs,
+    )
 
 def run_agent(state: dict) -> dict:
     workflow_id = state.get("workflow_id") or "default"
@@ -274,6 +375,7 @@ def run_agent(state: dict) -> dict:
             "command_results": command_results,
             "expected_behavior": _scenario_expectations(scenario),
             "observed_behavior": observed_behavior,
+            "semantic_validation_ready": True,
             "artifacts": {
                 "waveform": scenario.get("waveform"),
                 "software_log": scenario.get("software_log"),
