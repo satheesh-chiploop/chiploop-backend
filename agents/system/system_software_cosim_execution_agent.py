@@ -144,11 +144,16 @@ def _extract_observations(
         k = key.strip().lower()
         v = value.strip()
 
-        if k.startswith("register_"):
+        
+        if k.startswith("register"):
+            # Normalize register observation
             observed_registers[k] = v
-        elif k.startswith("interrupt_") and v in {"1", "true", "asserted"}:
+
+        elif "interrupt" in k and v in {"1", "true", "asserted"}:
+            # Normalize interrupt event
             observed_interrupts.append(k)
-        elif k.startswith("signal_") or "reset" in k:
+
+        elif k.startswith("signal") or "reset" in k:
             observed_signals.append(k)
 
     llm_obs = _llm_extract_observations(state, scenario, stdout_text)
