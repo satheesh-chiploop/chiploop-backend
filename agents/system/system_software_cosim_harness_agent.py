@@ -103,6 +103,7 @@ def _safe_load_json(path: str) -> Dict[str, Any]:
     return {}
 
 
+
 def _discover_firmware_assets(state: Dict[str, Any]) -> Dict[str, Any]:
     ingest = _cosim_ingest_view(state)
     firmware = ingest.get("firmware_assets") or {}
@@ -115,9 +116,17 @@ def _discover_firmware_assets(state: Dict[str, Any]) -> Dict[str, Any]:
         manifest_fw.get("register_map"),
     )
 
+    register_map_json = (
+        state.get("firmware_register_map")
+        or firmware.get("register_map_spec")
+        or {}
+    )
+    if not isinstance(register_map_json, dict) or not register_map_json:
+        register_map_json = _safe_load_json(register_map_path)
+
     return {
         "register_map_path": register_map_path,
-        "register_map_json": _safe_load_json(register_map_path),
+        "register_map_json": register_map_json,
         "hal_path": _first_nonempty(
             state.get("firmware_hal_path"),
             firmware.get("hal_path"),
@@ -132,28 +141,45 @@ def _discover_firmware_assets(state: Dict[str, Any]) -> Dict[str, Any]:
 
 def _discover_semantic_assets(state: Dict[str, Any]) -> Dict[str, Any]:
     ingest = _cosim_ingest_view(state)
+    semantic_ingest = ingest.get("semantic_assets") or {}
     manifest = state.get("system_cosim_manifest") or {}
-    rtl_manifest = (manifest.get("rtl") or {}) if isinstance(manifest, dict) else {}
-    integration_manifest = (manifest.get("integration") or {}) if isinstance(manifest, dict) else {}
+    validation_spec = manifest.get("validation_spec") or {}
+    rtl_spec = validation_spec.get("rtl") or {}
 
     digital_spec_path = _first_nonempty(
         state.get("digital_spec_json_path"),
-        state.get("system_digital_spec_json_path"),
-        ingest.get("digital_spec_json_path"),
-        rtl_manifest.get("digital_spec_json"),
+        semantic_ingest.get("digital_spec_json_path"),
+        rtl_spec.get("digital_spec_path"),
     )
     integration_intent_path = _first_nonempty(
         state.get("system_integration_intent_path"),
-        state.get("integration_intent_path"),
-        ingest.get("integration_intent_path"),
-        integration_manifest.get("system_integration_intent"),
+        semantic_ingest.get("integration_intent_path"),
+        rtl_spec.get("integration_intent_path"),
     )
+
+    digital_spec_json = (
+        state.get("digital_spec_json")
+        or semantic_ingest.get("digital_spec_json")
+        or rtl_spec.get("digital_spec_json")
+        or {}
+    )
+    if not isinstance(digital_spec_json, dict) or not digital_spec_json:
+        digital_spec_json = _safe_load_json(digital_spec_path)
+
+    integration_intent_json = (
+        state.get("system_integration_intent")
+        or semantic_ingest.get("integration_intent_json")
+        or rtl_spec.get("integration_intent_json")
+        or {}
+    )
+    if not isinstance(integration_intent_json, dict) or not integration_intent_json:
+        integration_intent_json = _safe_load_json(integration_intent_path)
 
     return {
         "digital_spec_json_path": digital_spec_path,
-        "digital_spec_json": _safe_load_json(digital_spec_path),
+        "digital_spec_json": digital_spec_json,
         "integration_intent_path": integration_intent_path,
-        "integration_intent_json": _safe_load_json(integration_intent_path),
+        "integration_intent_json": integration_intent_json,
     }
 
 def _discover_rtl_assets(state: Dict[str, Any]) -> Dict[str, Any]:
@@ -383,10 +409,18 @@ def run_agent(state: dict) -> dict:
     
 
     commands = _build_commands(scenarios, state, tools)
+    if not semantic_assets.get("digital_spec_json"):
+        blocked_dependencies.append("digital_spec_missing")
+    if not semantic_assets.get("integration_intent_json"):
+        blocked_dependencies.append("integration_intent_missing")
+    if not firmware.get("register_map_json"):
+        blocked_dependencies.append("register_map_spec_missing")
+
     if not commands:
         blocked_dependencies.append("no_executable_cosim_commands_resolved")
 
     harness_status = "ready" if not blocked_dependencies else "blocked"
+
 
     
 

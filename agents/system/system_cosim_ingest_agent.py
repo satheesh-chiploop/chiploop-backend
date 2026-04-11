@@ -453,25 +453,53 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     software_validation_l1_status = _derive_software_validation_status(state, workflow_dir)
     software_l1_ready = (software_validation_l1_status == "ready") if software_validation_l1_status else None
 
+
+    semantic_ready = bool(digital_spec_json and integration_intent_json)
+
     ready_for_l2_contract = bool(
         software_pkg and
         firmware_pkg and
         rtl_pkg and
         compile_sim and
         rtl_ready_for_cosim and
-        sim_filelist
+        sim_filelist and
+        semantic_ready
     )
 
     existing_cosim = state.get("system_cosim_manifest") or {}
     existing_sw = existing_cosim.get("software") if isinstance(existing_cosim, dict) else {}
     existing_apps = existing_sw.get("applications") if isinstance(existing_sw, dict) else []
 
-
-    register_map_spec = _load_optional_json_artifact(
+        register_map_spec = _load_optional_json_artifact(
         state=state,
         workflow_dir=workflow_dir,
         prefixes=firmware_dbg.get("storage_prefixes") or [],
         rel_or_abs=register_map,
+    )
+
+    # ---- semantic truth restore (CRITICAL FIX) ----
+    digital_spec_path = (
+        rtl_pkg.get("digital_spec_json")
+        or rtl_pkg.get("digital_spec_path")
+        or "spec/digital_subsystem_spec.json"
+    )
+    digital_spec_json = _load_optional_json_artifact(
+        state=state,
+        workflow_dir=workflow_dir,
+        prefixes=rtl_dbg.get("storage_prefixes") or [],
+        rel_or_abs=digital_spec_path,
+    )
+
+    integration_intent_path = (
+        rtl_pkg.get("integration_intent")
+        or rtl_pkg.get("integration_intent_path")
+        or "system/integration/system_integration_intent.json"
+    )
+    integration_intent_json = _load_optional_json_artifact(
+        state=state,
+        workflow_dir=workflow_dir,
+        prefixes=rtl_dbg.get("storage_prefixes") or [],
+        rel_or_abs=integration_intent_path,
     )
 
     validation_spec = {
@@ -487,8 +515,14 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
         "rtl": {
             "top": top_sim or "",
             "sim_filelist": sim_filelist,
+            "digital_spec_path": digital_spec_path,
+            "digital_spec_json": digital_spec_json,
+            "integration_intent_path": integration_intent_path,
+            "integration_intent_json": integration_intent_json,
         },
     }
+
+    
 
     manifest: Dict[str, Any] = {
         "validation_scope": "full_stack",
@@ -523,11 +557,13 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
             },
         },
         "validation_spec": validation_spec,
+
         "readiness": {
             "software_present": bool(software_pkg),
             "firmware_present": bool(firmware_pkg),
             "rtl_present": bool(rtl_pkg),
             "rtl_sim_ready": bool(compile_sim and rtl_ready_for_cosim and sim_filelist),
+            "semantic_ready": semantic_ready,
             "ready_for_system_l2_contract": ready_for_l2_contract,
         },
     }
@@ -548,6 +584,8 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
             "dma_present_resolved": isinstance(dma_present, bool),
             "rtl_sim_file_count": len(sim_filelist),
             "software_l1_status_found": bool(software_validation_l1_status),
+            "digital_spec_found": bool(digital_spec_json),
+            "integration_intent_found": bool(integration_intent_json),
         },
     }
 
@@ -573,7 +611,7 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     state["system_cosim_ingest_debug"] = debug
 
     # Supabase-first normalized asset view.
-    state["system_software_cosim_ingest"] = {
+        state["system_software_cosim_ingest"] = {
         "software_assets": {
             "package_present": bool(software_pkg),
             "package_type": software_pkg.get("package_type"),
@@ -588,6 +626,7 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
             "package_resolved_path": firmware_dbg.get("resolved_path") or "",
             "elf_path": firmware_elf or "",
             "register_map_path": register_map or "",
+            "register_map_spec": register_map_spec,
             "interrupts": interrupts,
             "dma_present": dma_present,
         },
@@ -604,18 +643,27 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
             "compile_sim": "pass" if compile_sim else "fail",
             "ready_for_cosim": rtl_ready_for_cosim,
         },
+        "semantic_assets": {
+            "digital_spec_json_path": digital_spec_path,
+            "digital_spec_json": digital_spec_json,
+            "integration_intent_path": integration_intent_path,
+            "integration_intent_json": integration_intent_json,
+        },
         "readiness": manifest.get("readiness") or {},
     }
 
-    # Flat compatibility keys for downstream agents.
-    # These are resolved logical paths, typically Supabase-backed.
     state["firmware_elf_path"] = firmware_elf or ""
     state["firmware_register_map_path"] = register_map or ""
+    state["firmware_register_map"] = register_map_spec or {}
     state["rtl_top_path"] = top_sim or ""
     state["rtl_sim_harness_path"] = sim_filelist[0] if sim_filelist else ""
     state["rtl_verilator_makefile_path"] = ""
     state["system_cosim_interrupts"] = interrupts
     state["system_cosim_dma_present"] = dma_present
+    state["digital_spec_json_path"] = digital_spec_path
+    state["digital_spec_json"] = digital_spec_json
+    state["system_integration_intent_path"] = integration_intent_path
+    state["system_integration_intent"] = integration_intent_json
 
     state["status"] = (
         "✅ CoSim ingest ready"

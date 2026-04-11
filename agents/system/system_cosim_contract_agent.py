@@ -100,7 +100,10 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
                 "Prefer exporting system_software_validation_summary.json into the workflow.",
             )
 
-        if sw.get("entry"):
+        harness = state.get("system_software_cosim_harness_manifest") or {}
+        harness_entry = harness.get("software_entry") or {}
+
+        if sw.get("entry") or harness_entry:
             passes.append("Software entry point resolved.")
         else:
             _add_issue(

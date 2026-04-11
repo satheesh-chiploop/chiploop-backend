@@ -106,10 +106,17 @@ def _llm_extract_observations(
     if not callable(infer):
         return {}
 
+    harness = state.get("system_software_cosim_harness_manifest") or {}
+    firmware_assets = harness.get("firmware_assets") or {}
+    semantic_assets = harness.get("semantic_assets") or {}
+
     prompt = {
-        "task": "Extract structured observations from software and simulation stdout.",
+        "task": "Extract structured observations from software, firmware, and RTL evidence.",
         "scenario": scenario,
         "stdout_text": stdout_text,
+        "register_map_spec": firmware_assets.get("register_map_json") or {},
+        "digital_spec_json": semantic_assets.get("digital_spec_json") or {},
+        "integration_intent_json": semantic_assets.get("integration_intent_json") or {},
         "required_schema": {
             "observed_events": ["list[str]"],
             "observed_registers": {"example_register": "example_value"},
@@ -117,12 +124,6 @@ def _llm_extract_observations(
             "observed_signals": ["list[str]"],
         },
     }
-
-    try:
-        result = infer(prompt)
-        return result if isinstance(result, dict) else {}
-    except Exception:
-        return {}
 
 
 def _safe_int(value: Any) -> Optional[int]:
@@ -140,8 +141,18 @@ def _build_register_lookup(state: Dict[str, Any]) -> Dict[int, str]:
     firmware_assets = harness.get("firmware_assets") or {}
     semantic_assets = harness.get("semantic_assets") or {}
 
-    register_map = firmware_assets.get("register_map_json") or {}
-    digital_spec = semantic_assets.get("digital_spec_json") or {}
+
+
+    register_map = (
+        state.get("firmware_register_map")
+        or firmware_assets.get("register_map_json")
+        or {}
+    )
+    digital_spec = (
+        state.get("digital_spec_json")
+        or semantic_assets.get("digital_spec_json")
+        or {}
+    )
 
     lookup: Dict[int, str] = {}
 
@@ -357,14 +368,25 @@ def run_agent(state: dict) -> dict:
                 execution_status = "fail"
                 break
 
+
+
         stdout_text = "\n".join(
             [str(cr.get("stdout_tail") or "") for cr in command_results if isinstance(cr, dict)]
+        ).strip()
+
+        combined_text = "\n".join(
+            [
+                stdout_text,
+                str(scenario.get("software_log") or ""),
+                str(scenario.get("firmware_log") or ""),
+                str(scenario.get("rtl_log") or ""),
+            ]
         ).strip()
 
         observed_behavior = _extract_observations(
             state=state,
             scenario=scenario,
-            stdout_text=stdout_text,
+            stdout_text=combined_text,
         )
                 
         scenario_results.append({

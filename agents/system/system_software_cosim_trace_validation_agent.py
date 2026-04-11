@@ -42,12 +42,46 @@ def _dictify(value: Any) -> Dict[str, Any]:
 def _normalize_token(value: Any) -> str:
     return str(value).strip().lower().replace("-", "_").replace(" ", "_")
 
-
 def _semantic_aliases(state: Dict[str, Any]) -> Dict[str, List[str]]:
-    return {
+    harness = state.get("system_software_cosim_harness_manifest") or {}
+    semantic_assets = harness.get("semantic_assets") or {}
+    integration = (
+        state.get("system_integration_intent")
+        or semantic_assets.get("integration_intent_json")
+        or {}
+    )
+
+    aliases = {
         "reset_released": ["rst_n=1", "reset_n=1", "rst_n", "reset_n", "deassert_reset"],
-        "done_irq": ["interrupt_done", "done_interrupt", "irq_done", "done_irq"],
     }
+
+    event_paths = integration.get("event_paths") or []
+    if isinstance(event_paths, list):
+        for item in event_paths:
+            if not isinstance(item, dict):
+                continue
+            rtl_event = str(item.get("rtl_event") or "").strip()
+            firmware_handler = str(item.get("firmware_handler") or "").strip()
+            software_effect = str(item.get("software_effect") or "").strip()
+
+            if rtl_event:
+                aliases.setdefault(rtl_event, [])
+                aliases[rtl_event].extend([
+                    rtl_event,
+                    f"interrupt_{rtl_event}",
+                    f"{rtl_event}_irq",
+                    f"irq_{rtl_event}",
+                ])
+
+            if firmware_handler:
+                aliases.setdefault(firmware_handler, [])
+                aliases[firmware_handler].append(firmware_handler)
+
+            if software_effect:
+                aliases.setdefault(software_effect, [])
+                aliases[software_effect].append(software_effect)
+
+    return aliases
 
 
 def _matches_expected_token(expected: Any, observed: List[Any], aliases: Dict[str, List[str]]) -> bool:
