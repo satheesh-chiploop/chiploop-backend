@@ -611,7 +611,7 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     state["system_cosim_ingest_debug"] = debug
 
     # Supabase-first normalized asset view.
-        state["system_software_cosim_ingest"] = {
+    state["system_software_cosim_ingest"] = {
         "software_assets": {
             "package_present": bool(software_pkg),
             "package_type": software_pkg.get("package_type"),
