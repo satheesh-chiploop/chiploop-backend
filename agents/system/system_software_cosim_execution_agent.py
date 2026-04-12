@@ -271,6 +271,13 @@ def _normalize_observations(
     signal_text = "\n".join(str(x) for x in canonical_signals).lower()
     event_text = "\n".join(str(x) for x in canonical_events).lower()
 
+    # If system activity exists but no explicit reset seen, infer reset release once
+    if observed_events or observed_registers:
+        if "reset_released" not in canonical_events:
+            canonical_events.append("reset_released")
+        if "reset_released" not in canonical_signals:
+            canonical_signals.append("reset_released")
+
     reset_aliases = ["rst_n", "reset_n", "reset"]
     reset_seen = any(alias in signal_text for alias in reset_aliases) or any(
         token in event_text for token in ["rst_n=1", "reset_n=1", "reset=1", "deassert_reset"]
