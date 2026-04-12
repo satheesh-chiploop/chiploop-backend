@@ -235,13 +235,38 @@ def _normalize_observations(
                 addr = None
 
         # Generic fallback: try to resolve from the observed value
-        if addr is None:
-            addr = _safe_int(value)
 
-        if addr is not None and addr in reg_lookup:
-            canonical_registers[reg_lookup[addr]] = value
-        else:
+        addr_candidates = []
+
+        # Try value directly
+        addr_val = _safe_int(value)
+        if addr_val is not None:
+            addr_candidates.append(addr_val)
+
+        # Try extracting hex from value text
+        if isinstance(value, str) and "0x" in value.lower():
+            try:
+                addr_candidates.append(_safe_int(value[value.lower().index("0x"):]))
+            except Exception:
+                pass
+
+        # Try key as fallback
+        if "0x" in norm_key:
+            try:
+                addr_candidates.append(_safe_int(norm_key[norm_key.index("0x"):]))
+            except Exception:
+                pass
+
+        resolved = False
+        for addr in addr_candidates:
+            if addr in reg_lookup:
+                canonical_registers[reg_lookup[addr]] = value
+                resolved = True
+                break
+
+        if not resolved:
             canonical_registers[key] = value
+
 
     signal_text = "\n".join(str(x) for x in canonical_signals).lower()
     event_text = "\n".join(str(x) for x in canonical_events).lower()
