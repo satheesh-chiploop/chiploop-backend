@@ -5,6 +5,7 @@ import subprocess
 from typing import Any, Dict, List, Optional
 
 from utils.artifact_utils import save_text_artifact_and_record
+from agents.analog._analog_llm import llm_text
 
 AGENT_NAME = "System Software CoSim Execution Agent"
 OUTPUT_SUBDIR = "system/software_validation/cosim/execution"
@@ -102,28 +103,43 @@ def _llm_extract_observations(
     scenario: Dict[str, Any],
     stdout_text: str,
 ) -> Dict[str, Any]:
-    infer = state.get("llm_json_infer")
-    if not callable(infer):
-        return {}
-
     harness = state.get("system_software_cosim_harness_manifest") or {}
     firmware_assets = harness.get("firmware_assets") or {}
     semantic_assets = harness.get("semantic_assets") or {}
 
-    prompt = {
-        "task": "Extract structured observations from software, firmware, and RTL evidence.",
-        "scenario": scenario,
-        "stdout_text": stdout_text,
-        "register_map_spec": firmware_assets.get("register_map_json") or {},
-        "digital_spec_json": semantic_assets.get("digital_spec_json") or {},
-        "integration_intent_json": semantic_assets.get("integration_intent_json") or {},
-        "required_schema": {
-            "observed_events": ["list[str]"],
-            "observed_registers": {"example_register": "example_value"},
-            "observed_interrupts": ["list[str]"],
-            "observed_signals": ["list[str]"],
-        },
-    }
+    prompt = f"""
+You are extracting structured observations from software, firmware, and RTL evidence.
+
+Return ONLY valid JSON with this schema:
+{{
+  "observed_events": ["..."],
+  "observed_registers": {{"REGISTER_NAME": "value"}},
+  "observed_interrupts": ["..."],
+  "observed_signals": ["..."]
+}}
+
+Scenario:
+{json.dumps(scenario, indent=2)}
+
+Register map spec:
+{json.dumps(firmware_assets.get("register_map_json") or {}, indent=2)}
+
+Digital spec JSON:
+{json.dumps(semantic_assets.get("digital_spec_json") or {}, indent=2)}
+
+Integration intent JSON:
+{json.dumps(semantic_assets.get("integration_intent_json") or {}, indent=2)}
+
+Evidence text:
+{stdout_text}
+"""
+
+    try:
+        raw = llm_text(prompt)
+        parsed = json.loads(raw) if isinstance(raw, str) else {}
+        return parsed if isinstance(parsed, dict) else {}
+    except Exception:
+        return {}
 
 
 def _safe_int(value: Any) -> Optional[int]:
@@ -198,20 +214,29 @@ def _normalize_observations(
     canonical_interrupts: List[str] = list(observed_interrupts)
     canonical_signals: List[str] = list(observed_signals)
 
+
     for key, value in observed_registers.items():
         norm_key = str(key).strip().lower()
 
-        if norm_key in {"ctrl", "status"}:
-            canonical_registers[norm_key.upper()] = value
-            continue
+        if norm_key.isidentifier():
+            canonical_name = norm_key.upper()
+            if canonical_name in {str(v).strip().upper() for v in reg_lookup.values()}:
+                canonical_registers[canonical_name] = value
+                continue
 
         addr = None
+
+        # First try to resolve from the observed key
         if "0x" in norm_key:
             try:
                 addr_text = norm_key[norm_key.index("0x"):]
                 addr = _safe_int(addr_text)
             except Exception:
                 addr = None
+
+        # Generic fallback: try to resolve from the observed value
+        if addr is None:
+            addr = _safe_int(value)
 
         if addr is not None and addr in reg_lookup:
             canonical_registers[reg_lookup[addr]] = value
@@ -221,11 +246,17 @@ def _normalize_observations(
     signal_text = "\n".join(str(x) for x in canonical_signals).lower()
     event_text = "\n".join(str(x) for x in canonical_events).lower()
 
-    if "rst_n=1" in event_text or "reset_n=1" in event_text or "rst_n" in signal_text or "reset_n" in signal_text:
+    reset_aliases = ["rst_n", "reset_n", "reset"]
+    reset_seen = any(alias in signal_text for alias in reset_aliases) or any(
+        token in event_text for token in ["rst_n=1", "reset_n=1", "reset=1", "deassert_reset"]
+    )
+
+    if reset_seen:
         if "reset_released" not in canonical_signals:
             canonical_signals.append("reset_released")
         if "reset_released" not in canonical_events:
             canonical_events.append("reset_released")
+
 
     dedup = lambda seq: list(dict.fromkeys(str(x) for x in seq if str(x).strip()))
 
