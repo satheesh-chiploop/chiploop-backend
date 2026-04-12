@@ -453,22 +453,17 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     software_validation_l1_status = _derive_software_validation_status(state, workflow_dir)
     software_l1_ready = (software_validation_l1_status == "ready") if software_validation_l1_status else None
 
-
-    semantic_ready = bool(digital_spec_json and integration_intent_json)
-
-    ready_for_l2_contract = bool(
-        software_pkg and
-        firmware_pkg and
-        rtl_pkg and
-        compile_sim and
-        rtl_ready_for_cosim and
-        sim_filelist and
-        semantic_ready
-    )
+    digital_spec_path = ""
+    digital_spec_json = {}
+    integration_intent_path = ""
+    integration_intent_json = {}
+    
 
     existing_cosim = state.get("system_cosim_manifest") or {}
     existing_sw = existing_cosim.get("software") if isinstance(existing_cosim, dict) else {}
     existing_apps = existing_sw.get("applications") if isinstance(existing_sw, dict) else []
+
+    
 
     register_map_spec = _load_optional_json_artifact(
         state=state,
@@ -477,7 +472,7 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
         rel_or_abs=register_map,
     )
 
-    # ---- semantic truth restore (CRITICAL FIX) ----
+    # ---- semantic truth restore (MOVE THIS UP) ----
     digital_spec_path = (
         rtl_pkg.get("digital_spec_json")
         or rtl_pkg.get("digital_spec_path")
@@ -521,6 +516,20 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
             "integration_intent_json": integration_intent_json,
         },
     }
+
+
+    # ---- NOW SAFE TO USE ----
+    semantic_ready = bool(digital_spec_json and integration_intent_json)
+
+    ready_for_l2_contract = bool(
+        software_pkg and
+        firmware_pkg and
+        rtl_pkg and
+        compile_sim and
+        rtl_ready_for_cosim and
+        sim_filelist and
+        semantic_ready
+    )
 
     
 
