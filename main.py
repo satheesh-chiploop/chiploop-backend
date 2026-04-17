@@ -865,39 +865,8 @@ def _load_workflow_def_by_name(name: str, user_id: Optional[str]) -> Dict[str, A
 
     raise HTTPException(status_code=404, detail=f"Workflow template not found: {name}")
 
-    
-#def _load_workflow_def_by_name(name: str, user_id: Optional[str]) -> Dict[str, Any]:
-""" """    Loads workflow template from public.workflows by exact name.
-    Prefer user-owned workflow if present; fallback to prebuilt.
-    Returns dict: {"nodes": [...], "edges": [...]}
-    """
-    q = supabase.table("workflows").select(
-        "id,name,definitions,nodes,edges,loop_type,is_prebuilt,user_id"
-    ).eq("name", name)
 
-    # Prefer user-owned
-    if user_id:
-        r = q.eq("user_id", user_id).limit(1).execute()
-        if r.data:
-            row = r.data[0]
-            defn = row.get("definitions") or {}
-            return {
-                "nodes": (defn.get("nodes") if isinstance(defn, dict) else None) or row.get("nodes") or [],
-                "edges": (defn.get("edges") if isinstance(defn, dict) else None) or row.get("edges") or [],
-            }
 
-    # Fallback to prebuilt
-    r2 = q.eq("is_prebuilt", True).limit(1).execute()
-    if r2.data:
-        row = r2.data[0]
-        defn = row.get("definitions") or {}
-        return {
-            "nodes": (defn.get("nodes") if isinstance(defn, dict) else None) or row.get("nodes") or [],
-            "edges": (defn.get("edges") if isinstance(defn, dict) else None) or row.get("edges") or [],
-        }
-
-    raise HTTPException(status_code=404, detail=f"Workflow template not found: {name}")
-"""
 
 def _toposort_nodes(defn: Dict[str, Any]) -> List[Dict[str, Any]]:
     nodes = defn.get("nodes") or []
