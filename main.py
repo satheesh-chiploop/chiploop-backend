@@ -821,48 +821,6 @@ def _require_user_id(request: Request) -> str:
 
 from typing import Tuple
 
-  def _load_workflow_def_by_name(name: str, user_id: Optional[str]) -> Dict[str, Any]:
-      """
-      Loads workflow template from public.workflows by exact name.
-      Prefer user-owned workflow if present; fallback to global prebuilt.
-      For prebuilt workflows, user_id is intentionally ignored.
-      """
-      select_cols = "id,name,definitions,nodes,edges,loop_type,is_prebuilt,user_id"
-
-      def unpack(row: Dict[str, Any]) -> Dict[str, Any]:
-          defn = row.get("definitions") or {}
-          return {
-              "nodes": (defn.get("nodes") if isinstance(defn, dict) else None) or row.get("nodes") or [],
-              "edges": (defn.get("edges") if isinstance(defn, dict) else None) or row.get("edges") or [],
-          }
-
-      # 1) User-owned custom workflow.
-      if user_id:
-          r = (
-              supabase.table("workflows")
-              .select(select_cols)
-              .eq("name", name)
-              .eq("user_id", user_id)
-              .eq("is_prebuilt", False)
-              .limit(1)
-              .execute()
-          )
-          if r.data:
-              return unpack(r.data[0])
-
-      # 2) Global prebuilt workflow. user_id is intentionally ignored.
-      r2 = (
-          supabase.table("workflows")
-          .select(select_cols)
-          .eq("name", name)
-          .eq("is_prebuilt", True)
-          .limit(1)
-          .execute()
-      )
-      if r2.data:
-          return unpack(r2.data[0])
-
-      raise HTTPException(status_code=404, detail=f"Workflow template not found: {name}")
 
 def _load_workflow_def_by_name(name: str, user_id: Optional[str]) -> Dict[str, Any]:
     """
@@ -906,6 +864,8 @@ def _load_workflow_def_by_name(name: str, user_id: Optional[str]) -> Dict[str, A
         return unpack(r2.data[0])
 
     raise HTTPException(status_code=404, detail=f"Workflow template not found: {name}")
+
+    
 #def _load_workflow_def_by_name(name: str, user_id: Optional[str]) -> Dict[str, Any]:
 """ """    Loads workflow template from public.workflows by exact name.
     Prefer user-owned workflow if present; fallback to prebuilt.
