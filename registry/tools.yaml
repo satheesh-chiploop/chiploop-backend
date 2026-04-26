@@ -1,0 +1,71 @@
+{
+  "version": "studio_contract_v1",
+  "tools": [
+    {
+      "name": "openai_or_portkey_llm",
+      "description": "Existing OpenAI/Portkey LLM routing used by legacy agents.",
+      "kind": "service",
+      "optional": true
+    },
+    {
+      "name": "supabase",
+      "description": "Existing Supabase database and artifact storage integration.",
+      "kind": "service",
+      "optional": false
+    },
+    {
+      "name": "python",
+      "description": "Python runtime for backend agent execution and validation scripts.",
+      "kind": "runtime",
+      "optional": false
+    },
+    {
+      "name": "iverilog",
+      "description": "Icarus Verilog compile checks used by RTL agents.",
+      "kind": "external_tool",
+      "optional": true
+    },
+    {
+      "name": "verilator",
+      "description": "Verilator lint/build checks used by RTL and embedded flows.",
+      "kind": "external_tool",
+      "optional": true
+    },
+    {
+      "name": "cocotb",
+      "description": "Cocotb simulation and testbench support.",
+      "kind": "python_package",
+      "optional": true
+    },
+    {
+      "name": "yosys",
+      "description": "Synthesis tooling for physical implementation flows.",
+      "kind": "external_tool",
+      "optional": true
+    },
+    {
+      "name": "openlane",
+      "description": "OpenLane physical implementation flow tooling.",
+      "kind": "external_tool",
+      "optional": true
+    },
+    {
+      "name": "openroad",
+      "description": "OpenROAD physical design and STA tooling.",
+      "kind": "external_tool",
+      "optional": true
+    },
+    {
+      "name": "cargo",
+      "description": "Rust cargo tooling used by embedded Rust flows.",
+      "kind": "external_tool",
+      "optional": true
+    },
+    {
+      "name": "git",
+      "description": "Git CLI for handoff and packaging flows when needed.",
+      "kind": "external_tool",
+      "optional": true
+    }
+  ]
+}

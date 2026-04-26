@@ -17,6 +17,8 @@ Added `agents/runtime.py` with:
 
 The runtime wrapper logs structured fields for `workflow_id`, `run_id`, `loop_type`, `agent_name`, start/end time, elapsed time, status, artifacts detected in the legacy result, and traceback on failure.
 
+Runtime logging is configured with `configure_runtime_logging()` so known runtime `extra` fields are visible in standard log output.
+
 ## Execution Entry Points Mapped
 
 Current backend agent execution is centralized in `main.py` through:
@@ -25,6 +27,7 @@ Current backend agent execution is centralized in `main.py` through:
 - `execute_workflow_background(...)` for general workflow execution.
 - `execute_validation_run_app_background(...)` direct schematic-agent branch.
 - `/validation/test_plan/preview` direct validation test-plan preview call.
+- Simulation queue handoff now emits `agent.queue_handoff` with workflow/run/loop/agent context before preserving the existing ChipRunner queue behavior.
 
 All call sites now route legacy `run_agent(state)` functions through `_execute_agent_with_runtime(...)`, which uses `execute_legacy_agent(...)`.
 
@@ -72,9 +75,14 @@ Most existing agents remain legacy internally and use `execute_legacy_agent(...)
 - `tests/test_agent_runtime.py`
 - `AGENT_RUNTIME_MIGRATION_REPORT.md`
 
+## Hardening Added
+
+- Duplicate runtime logs are suppressed for the five directly shimmed reference agents when they are invoked through the central executor adapter.
+- Direct calls to those reference agents still produce runtime logs.
+- The legacy adapter sets and restores a transient `_agent_runtime_active` marker and removes it before returning, so shared workflow state is not polluted.
+
 ## Known Risks
 
-- Five directly shimmed agents will emit nested runtime logs when invoked through `main.py`, because they are wrapped both locally and at the executor boundary. This is non-behavioral but may produce duplicate runtime log lines.
 - Agents invoked outside `main.py` and outside their own direct shim still depend on callers using `execute_legacy_agent(...)`.
 - Full integration testing requires valid Supabase and LLM/Portkey environment configuration; unit tests intentionally avoid secrets and network calls.
 

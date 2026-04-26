@@ -1,0 +1,172 @@
+{
+  "version": "studio_contract_v1",
+  "skills": [
+    {
+      "name": "spec_ingest",
+      "description": "Normalize user intent, specs, datasheets, or handoff contracts into state.",
+      "domains": [
+        "digital",
+        "analog",
+        "firmware",
+        "validation",
+        "system",
+        "software"
+      ],
+      "tools": [
+        "openai_or_portkey_llm",
+        "python"
+      ]
+    },
+    {
+      "name": "rtl_generation",
+      "description": "Generate or assemble Verilog/SystemVerilog RTL artifacts.",
+      "domains": [
+        "digital",
+        "system",
+        "physical_design"
+      ],
+      "tools": [
+        "openai_or_portkey_llm",
+        "python"
+      ]
+    },
+    {
+      "name": "rtl_repair",
+      "description": "Repair RTL based on compile/lint feedback while preserving interfaces.",
+      "domains": [
+        "digital",
+        "system"
+      ],
+      "tools": [
+        "openai_or_portkey_llm",
+        "iverilog",
+        "verilator"
+      ]
+    },
+    {
+      "name": "rtl_compile_check",
+      "description": "Run compile, lint, smoke, or simulation checks over RTL collateral.",
+      "domains": [
+        "digital",
+        "system",
+        "physical_design"
+      ],
+      "tools": [
+        "iverilog",
+        "verilator",
+        "python"
+      ]
+    },
+    {
+      "name": "cocotb_testbench_generation",
+      "description": "Create cocotb/UVM-style testbench collateral and validation scaffolds.",
+      "domains": [
+        "digital",
+        "firmware",
+        "system"
+      ],
+      "tools": [
+        "cocotb",
+        "python",
+        "openai_or_portkey_llm"
+      ]
+    },
+    {
+      "name": "firmware_manifest_generation",
+      "description": "Generate firmware, embedded manifests, drivers, and validation support files.",
+      "domains": [
+        "firmware",
+        "system"
+      ],
+      "tools": [
+        "python",
+        "cargo",
+        "openai_or_portkey_llm"
+      ]
+    },
+    {
+      "name": "register_map_extraction",
+      "description": "Extract or generate register maps, CSR models, and register-layer code.",
+      "domains": [
+        "digital",
+        "firmware",
+        "software"
+      ],
+      "tools": [
+        "python",
+        "openai_or_portkey_llm"
+      ]
+    },
+    {
+      "name": "software_sdk_generation",
+      "description": "Generate SDK, API, service, build, package, and validation software collateral.",
+      "domains": [
+        "software",
+        "system"
+      ],
+      "tools": [
+        "python",
+        "openai_or_portkey_llm",
+        "git"
+      ]
+    },
+    {
+      "name": "openlane_config_generation",
+      "description": "Generate or validate OpenLane/OpenROAD physical implementation collateral.",
+      "domains": [
+        "physical_design",
+        "digital"
+      ],
+      "tools": [
+        "openlane",
+        "openroad",
+        "yosys",
+        "python"
+      ]
+    },
+    {
+      "name": "sta_constraint_generation",
+      "description": "Create timing constraints and static timing analysis collateral.",
+      "domains": [
+        "physical_design",
+        "digital",
+        "system"
+      ],
+      "tools": [
+        "openroad",
+        "python"
+      ]
+    },
+    {
+      "name": "artifact_publish",
+      "description": "Publish text artifacts through existing Supabase artifact helpers.",
+      "domains": [
+        "digital",
+        "analog",
+        "firmware",
+        "validation",
+        "system",
+        "software",
+        "physical_design"
+      ],
+      "tools": [
+        "supabase",
+        "python"
+      ]
+    },
+    {
+      "name": "supabase_handoff_ingest",
+      "description": "Load, normalize, or package Supabase-backed workflow handoff artifacts.",
+      "domains": [
+        "system",
+        "software",
+        "firmware",
+        "validation"
+      ],
+      "tools": [
+        "supabase",
+        "python"
+      ]
+    }
+  ]
+}

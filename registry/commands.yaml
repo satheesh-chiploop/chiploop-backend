@@ -1,0 +1,17 @@
+{
+  "version": "studio_contract_v1",
+  "commands": [
+    {
+      "name": "digital_rtl.generate",
+      "description": "Run Digital RTL Agent through Agent Runtime Contract v1.",
+      "agent": "Digital RTL Agent",
+      "command_type": "agent"
+    },
+    {
+      "name": "registry.validate",
+      "description": "Dry-run validate ChipLoop Studio Contract registry files.",
+      "agent": "",
+      "command_type": "registry"
+    }
+  ]
+}

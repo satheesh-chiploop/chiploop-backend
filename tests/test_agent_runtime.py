@@ -6,7 +6,15 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from agents.runtime import AgentContext, AgentResult, AgentStatus, execute_agent, execute_legacy_agent
+from agents.runtime import (
+    RUNTIME_ACTIVE_STATE_KEY,
+    AgentContext,
+    AgentResult,
+    AgentStatus,
+    execute_agent,
+    execute_legacy_agent,
+    log_runtime_event,
+)
 
 
 def test_agent_context_from_state_keeps_legacy_state_reference():
@@ -73,6 +81,21 @@ def test_execute_legacy_agent_adapter_preserves_state_return():
     assert result.raw is not None
     assert result.raw["artifact"] == "artifact.txt"
     assert result.runtime_status == AgentStatus.SUCCESS
+    assert RUNTIME_ACTIVE_STATE_KEY not in state
+
+
+def test_execute_legacy_agent_restores_existing_runtime_marker():
+    state = {"workflow_id": "wf-legacy", RUNTIME_ACTIVE_STATE_KEY: "outer"}
+    context = AgentContext.from_state(state, "Legacy Agent")
+
+    def legacy_agent(legacy_state):
+        assert legacy_state[RUNTIME_ACTIVE_STATE_KEY] is True
+        legacy_state["status"] = "done"
+        return legacy_state
+
+    execute_legacy_agent(legacy_agent, context)
+
+    assert state[RUNTIME_ACTIVE_STATE_KEY] == "outer"
 
 
 @pytest.mark.parametrize("loop_type", ["digital", "analog", "embedded", "validation", "system"])
@@ -104,3 +127,27 @@ def test_execute_agent_logs_and_reraises_failures(caplog):
 
     assert any(record.message == "agent.failed" and record.agent_name == "Failing Agent" for record in caplog.records)
     assert any(getattr(record, "error_traceback", "") for record in caplog.records)
+
+
+def test_log_runtime_event_includes_context_fields(caplog):
+    context = AgentContext.from_state(
+        {"workflow_id": "wf-q", "run_id": "run-q", "loop_type": "digital"},
+        "Digital Sim Agent",
+    )
+
+    with caplog.at_level(logging.INFO, logger="chiploop.agent_runtime"):
+        log_runtime_event(
+            context,
+            "agent.queue_handoff",
+            status="queued",
+            artifacts_produced={"artifacts_path": "artifacts/u/wf/run"},
+            phase="simulation",
+        )
+
+    record = next(record for record in caplog.records if record.message == "agent.queue_handoff")
+    assert record.workflow_id == "wf-q"
+    assert record.run_id == "run-q"
+    assert record.loop_type == "digital"
+    assert record.agent_name == "Digital Sim Agent"
+    assert record.status == "queued"
+    assert record.artifacts_produced == {"artifacts_path": "artifacts/u/wf/run"}

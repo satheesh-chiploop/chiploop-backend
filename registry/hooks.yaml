@@ -1,0 +1,35 @@
+{
+  "version": "studio_contract_v1",
+  "hooks": [
+    {
+      "name": "pre_run_validate_inputs",
+      "description": "Validate required state and registry metadata before agent execution.",
+      "lifecycle": "pre_run"
+    },
+    {
+      "name": "post_run_collect_artifacts",
+      "description": "Collect artifact references emitted by legacy or native agents.",
+      "lifecycle": "post_run"
+    },
+    {
+      "name": "post_run_update_state",
+      "description": "Merge returned agent state into workflow shared state.",
+      "lifecycle": "post_run"
+    },
+    {
+      "name": "on_failure_capture_traceback",
+      "description": "Capture exception type, message, and traceback on runtime failure.",
+      "lifecycle": "on_failure"
+    },
+    {
+      "name": "on_failure_preserve_logs",
+      "description": "Preserve existing agent log files and failure summaries.",
+      "lifecycle": "on_failure"
+    },
+    {
+      "name": "artifact_publish_to_supabase",
+      "description": "Publish artifacts using existing Supabase helper behavior.",
+      "lifecycle": "artifact_publish"
+    }
+  ]
+}

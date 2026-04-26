@@ -8,6 +8,52 @@ from typing import Any, Callable, Dict, List, Mapping, Optional
 
 
 logger = logging.getLogger("chiploop.agent_runtime")
+RUNTIME_ACTIVE_STATE_KEY = "_agent_runtime_active"
+RUNTIME_LOG_FIELDS = (
+    "workflow_id",
+    "run_id",
+    "loop_type",
+    "agent_name",
+    "start_time",
+    "end_time",
+    "elapsed_ms",
+    "status",
+    "runtime_status",
+    "artifacts_produced",
+    "error_traceback",
+)
+
+
+class RuntimeExtraFormatter(logging.Formatter):
+    def format(self, record: logging.LogRecord) -> str:
+        base = super().format(record)
+        parts = []
+        for key in RUNTIME_LOG_FIELDS:
+            value = getattr(record, key, None)
+            if value not in (None, "", {}, []):
+                parts.append(f"{key}={value}")
+        if parts:
+            return f"{base} {' '.join(parts)}"
+        return base
+
+
+def configure_runtime_logging() -> None:
+    """
+    Make Agent Runtime `extra` fields visible on existing logging handlers.
+
+    This only changes formatter output; it does not alter workflow execution,
+    artifact storage, or log persistence behavior.
+    """
+    formatter = RuntimeExtraFormatter("%(levelname)s:%(name)s:%(message)s")
+    root = logging.getLogger()
+    if root.handlers:
+        for handler in root.handlers:
+            handler.setFormatter(formatter)
+    else:
+        handler = logging.StreamHandler()
+        handler.setFormatter(formatter)
+        root.addHandler(handler)
+    logger.setLevel(logging.INFO)
 
 
 class AgentStatus(str, Enum):
@@ -219,6 +265,25 @@ def execute_agent(
         raise
 
 
+def log_runtime_event(
+    context: AgentContext,
+    event: str,
+    status: Optional[Any] = None,
+    artifacts_produced: Optional[Dict[str, Any]] = None,
+    **fields: Any,
+) -> None:
+    extra = {
+        "workflow_id": context.workflow_id,
+        "run_id": context.run_id,
+        "loop_type": context.loop_type,
+        "agent_name": context.agent_name,
+        "status": status.value if isinstance(status, AgentStatus) else status,
+        "artifacts_produced": artifacts_produced or {},
+    }
+    extra.update({k: v for k, v in fields.items() if v is not None})
+    logger.info(event, extra=extra)
+
+
 def execute_legacy_agent(
     agent_fn: Callable[[Dict[str, Any]], Any],
     context: AgentContext,
@@ -232,6 +297,15 @@ def execute_legacy_agent(
     """
 
     def _handler(ctx: AgentContext) -> Any:
-        return agent_fn(ctx.state)
+        marker_was_present = RUNTIME_ACTIVE_STATE_KEY in ctx.state
+        previous_marker = ctx.state.get(RUNTIME_ACTIVE_STATE_KEY)
+        ctx.state[RUNTIME_ACTIVE_STATE_KEY] = True
+        try:
+            return agent_fn(ctx.state)
+        finally:
+            if marker_was_present:
+                ctx.state[RUNTIME_ACTIVE_STATE_KEY] = previous_marker
+            else:
+                ctx.state.pop(RUNTIME_ACTIVE_STATE_KEY, None)
 
     return execute_agent(context, _handler)

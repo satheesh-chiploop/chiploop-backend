@@ -3,7 +3,7 @@ import json
 from datetime import datetime
 from openai import OpenAI
 from portkey_ai import Portkey
-from agents.runtime import AgentContext, execute_agent
+from agents.runtime import RUNTIME_ACTIVE_STATE_KEY, AgentContext, execute_agent
 from utils.artifact_utils import save_text_artifact_and_record
 
 AGENT_NAME = "Embedded Result Agent"
@@ -116,6 +116,8 @@ Telemetry JSON:
 
 def run_agent(state: dict) -> dict:
     context = AgentContext.from_state(state, AGENT_NAME)
+    if state.get(RUNTIME_ACTIVE_STATE_KEY):
+        return _run(context)
     result = execute_agent(context, _run)
     state.update(result.to_state_update())
     return state

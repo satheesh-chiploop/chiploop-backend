@@ -31,13 +31,14 @@ from utils.notion_utils import append_to_notion, get_or_create_notion_page
 from fastapi import WebSocket
 import asyncio
 from planner.auto_fill_missing import auto_fill_missing_fields
-from agents.runtime import AgentContext, execute_legacy_agent
+from agents.runtime import AgentContext, configure_runtime_logging, execute_legacy_agent, log_runtime_event
 from utils.artifact_utils import save_text_artifact_and_record
 
 
 import logging
 logger = logging.getLogger("chiploop")
 logging.basicConfig(level=logging.INFO)
+configure_runtime_logging()
 
 # Soft limits to avoid PostgREST "payload string too long" on logs/artifacts fields.
 MAX_LOG_CHARS = 850  # ~200KB
@@ -1511,6 +1512,21 @@ def execute_workflow_background(
 
             # Queue to external runner at Simulation phase (for any loop)
             if " sim agent" in step.lower():
+                log_runtime_event(
+                    AgentContext(
+                        agent_name=step,
+                        state=shared_state,
+                        workflow_id=workflow_id,
+                        run_id=run_id,
+                        loop_type=loop_type,
+                        artifact_dir=artifact_dir,
+                        user_id=user_id,
+                    ),
+                    "agent.queue_handoff",
+                    status="queued",
+                    artifacts_produced={"artifacts_path": artifact_dir},
+                    phase="simulation",
+                )
                 # Mark workflow queued for simulation runner
                 supabase.table("workflows").update({
                     "status": "queued",
