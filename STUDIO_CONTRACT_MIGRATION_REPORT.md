@@ -33,6 +33,16 @@ Studio Contract metadata only. No frontend changes, workflow execution changes, 
 - Tools registered: 11
 - Workflows registered: 6
 
+## Current Status
+
+- Agents registered: 151
+- Skills registered: 12
+- Tools/plugins registered: 11
+- Hooks registered: 6
+- Workflows registered: 6
+- Commands registered: 2
+- Contract tests passing: 15
+
 ## Reference Agent
 
 Reference Studio-compatible agent:
@@ -89,3 +99,14 @@ $env:PYTHONDONTWRITEBYTECODE='1'; pytest tests/test_studio_contract_registry.py
 2. Add persisted custom-agent metadata export so dynamic `AGENT_REGISTRY` entries can be materialized into registry files.
 3. Add optional tool availability validation as a separate dry-run mode.
 4. Add workflow template metadata once Studio DAG contracts are ready.
+
+## Next Phase: Codex Studio Agent Factory
+
+The next phase should use the Studio Contract registries as read-only source metadata first. Recommended scope:
+
+1. Build a factory planner that reads `registry/agents.yaml`, `registry/skills.yaml`, `registry/tools.yaml`, and `registry/hooks.yaml`.
+2. Generate new agent scaffolds only behind explicit developer commands.
+3. Generate matching registry entries and run dry-run validation before any workflow use.
+4. Keep generated agents on `execution_mode: legacy_adapter` until manually reviewed.
+5. Add optional tool availability checks separately from registry reference validation.
+6. Avoid Studio DAG or parallel execution changes until the registry layer is stable.
