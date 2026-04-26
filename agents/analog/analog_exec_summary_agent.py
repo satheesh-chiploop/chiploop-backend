@@ -1,7 +1,10 @@
 from utils.artifact_utils import save_text_artifact_and_record
+from agents.runtime import AgentContext, execute_agent
 import os
 import json
 import glob
+
+AGENT_NAME = "Analog Executive Summary Agent"
 
 def _fmt(v):
     return "NA" if v is None else str(v)
@@ -32,8 +35,9 @@ def _get_requirements(state: dict) -> dict:
     return {"requirements": requirements, "notes": ["requirements derived from spec.targets (fallback)"]}
 
 
-def run_agent(state: dict) -> dict:
-    agent_name = "Analog Executive Summary Agent"
+def _run(context: AgentContext) -> dict:
+    state = context.state
+    agent_name = context.agent_name
     workflow_id = state.get("workflow_id")
     preview_only = bool(state.get("preview_only"))
 
@@ -241,4 +245,11 @@ def run_agent(state: dict) -> dict:
     if not preview_only:
         save_text_artifact_and_record(workflow_id, agent_name, "analog", "executive_summary.md", content)
 
+    return state
+
+
+def run_agent(state: dict) -> dict:
+    context = AgentContext.from_state(state, AGENT_NAME)
+    result = execute_agent(context, _run)
+    state.update(result.to_state_update())
     return state

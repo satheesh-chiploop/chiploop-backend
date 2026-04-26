@@ -31,6 +31,7 @@ from utils.notion_utils import append_to_notion, get_or_create_notion_page
 from fastapi import WebSocket
 import asyncio
 from planner.auto_fill_missing import auto_fill_missing_fields
+from agents.runtime import AgentContext, execute_legacy_agent
 from utils.artifact_utils import save_text_artifact_and_record
 
 
@@ -919,6 +920,33 @@ def _definition_to_executor_nodes(defn: Dict[str, Any]) -> List[Dict[str, Any]]:
     return out
 
 
+def _execute_agent_with_runtime(
+    agent_name: str,
+    agent_fn: Any,
+    shared_state: Dict[str, Any],
+    workflow_id: str,
+    run_id: Optional[str],
+    loop_type: str,
+) -> Dict[str, Any]:
+    """
+    Route legacy run_agent(state) functions through Agent Runtime Contract v1.
+
+    The returned value remains the legacy state/result dict so existing workflow
+    artifact indexing, run logging, and downstream state merging stay unchanged.
+    """
+    context = AgentContext(
+        agent_name=agent_name,
+        state=shared_state,
+        workflow_id=str(workflow_id or shared_state.get("workflow_id") or "default"),
+        run_id=run_id or shared_state.get("run_id"),
+        loop_type=loop_type or shared_state.get("loop_type"),
+        artifact_dir=shared_state.get("artifact_dir"),
+        user_id=shared_state.get("user_id"),
+    )
+    runtime_result = execute_legacy_agent(agent_fn, context)
+    return runtime_result.raw or runtime_result.to_state_update()
+
+
 
 
 
@@ -998,7 +1026,14 @@ def _run_nodes_with_shared_state(
             continue
 
         try:
-            result = fn(shared_state)
+            result = _execute_agent_with_runtime(
+                label,
+                fn,
+                shared_state,
+                workflow_id,
+                run_id,
+                loop_type,
+            )
             if isinstance(result, dict):
                 shared_state.update(result)
                 result_status = str(result.get("status", ""))
@@ -1503,7 +1538,14 @@ def execute_workflow_background(
                 # Execute agent function; start from shared_state snapshot
 
 
-                result = fn(shared_state)  # your agents accept a dict 'state'
+                result = _execute_agent_with_runtime(
+                    step,
+                    fn,
+                    shared_state,
+                    workflow_id,
+                    run_id,
+                    loop_type,
+                )  # agents accept legacy dict state through runtime adapter
 
                 # Save artifacts if provided
                 if isinstance(result, dict):
@@ -1677,7 +1719,14 @@ def execute_validation_run_app_background(
                     shared_state["bench_id"] = bench_id
                     fn = VALIDATION_AGENT_FUNCTIONS.get("Validation Bench Schematic Agent")
                     if fn:
-                        out = fn(shared_state)
+                        out = _execute_agent_with_runtime(
+                            "Validation Bench Schematic Agent",
+                            fn,
+                            shared_state,
+                            workflow_id,
+                            run_id,
+                            "validation",
+                        )
                         if isinstance(out, dict):
                             shared_state.update(out)
                     else:
@@ -4271,8 +4320,16 @@ async def validation_test_plan_preview(request: Request):
         "datasheet_text": datasheet_text,
         "goal": goal,
         "preview_only": True,
+        "loop_type": "validation",
     }
-    out_state = validation_test_plan_agent(state)
+    out_state = _execute_agent_with_runtime(
+        "Validation Test Plan Agent",
+        validation_test_plan_agent,
+        state,
+        workflow_id,
+        state.get("run_id"),
+        "validation",
+    )
 
     plan = out_state.get("test_plan") or {}
     return {"status": "ok", "test_plan": plan}

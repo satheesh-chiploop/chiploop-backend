@@ -10,8 +10,10 @@ from typing import Dict, List, Tuple, Optional
 
 from portkey_ai import Portkey
 
+from agents.runtime import AgentContext, execute_agent
 from utils.artifact_utils import save_text_artifact_and_record
 
+AGENT_NAME = "Digital RTL Agent"
 PORTKEY_API_KEY = os.getenv("PORTKEY_API_KEY")
 
 def _stage(msg: str):
@@ -1553,15 +1555,16 @@ def _validate_and_materialize_rtl(
     }
 
 
-def run_agent(state: dict) -> dict:
-    agent_name = "Digital RTL Agent"
+def _run(context: AgentContext) -> dict:
+    state = context.state
+    agent_name = context.agent_name
     print("\n🧠 Running RTL Agent (implementation mode).")
 
 
 
     _stage("entered_run_agent")
 
-    workflow_id = state.get("workflow_id", "default")
+    workflow_id = context.workflow_id
     workflow_dir = state.get("workflow_dir", f"backend/workflows/{workflow_id}")
     os.makedirs(workflow_dir, exist_ok=True)
 
@@ -1922,6 +1925,12 @@ def run_agent(state: dict) -> dict:
 
     except Exception as e:
         return _fail_and_upload("Unhandled RTL agent exception after LLM generation.", e)
-    
+
+
+def run_agent(state: dict) -> dict:
+    context = AgentContext.from_state(state, AGENT_NAME)
+    result = execute_agent(context, _run)
+    state.update(result.to_state_update())
+    return state
 
   

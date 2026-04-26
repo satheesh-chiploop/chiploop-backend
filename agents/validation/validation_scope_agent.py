@@ -1,7 +1,10 @@
 import json, datetime
 from typing import Any, Dict, List, Optional
 
+from agents.runtime import AgentContext, execute_agent
 from utils.artifact_utils import save_text_artifact_and_record
+
+AGENT_NAME = "Validation Scope Agent"
 
 
 def _now_iso() -> str:
@@ -28,7 +31,8 @@ def _match_any_tag(test_tags: List[str], wanted: List[str]) -> bool:
     return False
 
 
-def run_agent(state: dict) -> dict:
+def _run(context: AgentContext) -> dict:
+    state = context.state
     """
     Validation Scope Agent (between Test Plan and Sequence Builder)
 
@@ -120,7 +124,7 @@ def run_agent(state: dict) -> dict:
     }
     scoped_plan["tests"] = selected
 
-    agent_name = "Validation Scope Agent"
+    agent_name = context.agent_name
 
     # Save artifacts
       # ✅ Save artifacts using correct artifact_utils signature
@@ -142,4 +146,11 @@ def run_agent(state: dict) -> dict:
 
     state["scoped_test_plan"] = scoped_plan
     state["status"] = f"✅ Scope applied: {scoped_plan['scope']['tests_after']}/{scoped_plan['scope']['tests_before']} tests selected"
+    return state
+
+
+def run_agent(state: dict) -> dict:
+    context = AgentContext.from_state(state, AGENT_NAME)
+    result = execute_agent(context, _run)
+    state.update(result.to_state_update())
     return state

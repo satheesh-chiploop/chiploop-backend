@@ -2,9 +2,13 @@ import os
 import json
 import datetime
 import subprocess
+from agents.runtime import AgentContext, execute_agent
 from utils.artifact_utils import save_text_artifact_and_record
 
-def run_agent(state: dict) -> dict:
+AGENT_NAME = "System Workflow Agent"
+
+def _run(context: AgentContext) -> dict:
+    state = context.state
     """
     System Workflow Agent
     Validates cross-loop integration — ensures Digital, Analog, and Embedded outputs exist
@@ -62,7 +66,7 @@ def run_agent(state: dict) -> dict:
     # --- Upload artifacts to Supabase ---
         # --- Upload artifacts to Supabase (new helper) ---
     try:
-        agent_name = "System Workflow Agent"
+        agent_name = context.agent_name
 
         # 1) System validation JSON
         try:
@@ -108,4 +112,11 @@ def run_agent(state: dict) -> dict:
     })
 
     print(f"✅ System Validation Completed → {validation_path}")
+    return state
+
+
+def run_agent(state: dict) -> dict:
+    context = AgentContext.from_state(state, AGENT_NAME)
+    result = execute_agent(context, _run)
+    state.update(result.to_state_update())
     return state

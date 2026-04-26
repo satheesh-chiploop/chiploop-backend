@@ -3,8 +3,10 @@ import json
 from datetime import datetime
 from openai import OpenAI
 from portkey_ai import Portkey
+from agents.runtime import AgentContext, execute_agent
 from utils.artifact_utils import save_text_artifact_and_record
 
+AGENT_NAME = "Embedded Result Agent"
 USE_LOCAL_OLLAMA = os.getenv("USE_LOCAL_OLLAMA", "false").lower() == "true"
 OLLAMA_URL = "http://127.0.0.1:11434/api/generate"
 PORTKEY_API_KEY = os.getenv("PORTKEY_API_KEY")
@@ -12,7 +14,8 @@ client_portkey = Portkey(api_key=PORTKEY_API_KEY)
 client_openai = OpenAI()
 
 
-def run_agent(state: dict) -> dict:
+def _run(context: AgentContext) -> dict:
+    state = context.state
     print("\n📈 Running Embedded Result Agent...")
 
     telemetry_path = state.get("telemetry_file")
@@ -21,7 +24,7 @@ def run_agent(state: dict) -> dict:
         return state
 
     workflow_id = state.get("workflow_id", "embedded_default")
-    agent_name = "Embedded Result Agent"
+    agent_name = context.agent_name
 
     with open(telemetry_path, "r", encoding="utf-8") as f:
         telemetry = json.load(f)
@@ -109,3 +112,10 @@ Telemetry JSON:
             log.write(f"[{datetime.now()}] ⚠️ Result generation failed: {e}\n")
         state["status"] = f"⚠️ Result generation failed: {e}"
         return state
+
+
+def run_agent(state: dict) -> dict:
+    context = AgentContext.from_state(state, AGENT_NAME)
+    result = execute_agent(context, _run)
+    state.update(result.to_state_update())
+    return state
