@@ -12,7 +12,7 @@ No frontend behavior, public workflow API behavior, Supabase artifact behavior, 
 - Hooks registered: 6
 - Workflows registered: 6
 - Commands registered: 2
-- Tests passing: 15
+- Contract tests passing: 26
 
 ## Phase 1: Agent Runtime Contract v1
 
@@ -234,6 +234,14 @@ Run:
 python -m studio_contract.validate_registry --registry-dir registry
 ```
 
+Optional local tool availability report:
+
+```powershell
+python -m studio_contract.validate_tools --registry-dir registry
+```
+
+Use `--strict` only when a CI or worker image should fail on missing required tools.
+
 Run tests:
 
 ```powershell
@@ -243,7 +251,7 @@ $env:PYTHONDONTWRITEBYTECODE='1'; pytest tests/test_studio_contract_registry.py
 Run all current contract tests:
 
 ```powershell
-$env:PYTHONDONTWRITEBYTECODE='1'; pytest tests/test_agent_runtime.py tests/test_studio_contract_registry.py
+$env:PYTHONDONTWRITEBYTECODE='1'; pytest tests/test_agent_runtime.py tests/test_studio_contract_registry.py tests/test_studio_planner_factory.py
 ```
 
 ## Adding a New Agent to the Registry
@@ -270,15 +278,50 @@ $env:PYTHONDONTWRITEBYTECODE='1'; pytest tests/test_agent_runtime.py tests/test_
 python -m studio_contract.validate_registry --registry-dir registry
 ```
 
-## Next Phase: Codex Studio Agent Factory
+## Phase 3: Codex Studio Agent Factory
 
-The next phase should build on the metadata layer without changing existing production workflows by default.
+Phase 3 adds standalone developer tools for planning and safely generating reviewable agent stubs. It does not change existing app workflows or production execution.
 
-Recommended scope:
+Planner CLI:
 
-1. Add a factory planner that reads Studio Contract registries and proposes agent scaffolds.
-2. Generate agent skeletons only behind explicit developer commands.
-3. Generate matching registry entries and dry-run validate them before use.
-4. Keep generated agents on the legacy adapter path until manually promoted to native runtime shims.
-5. Add optional tool availability checks as a separate validation mode.
-6. Add Studio workflow-template metadata only after the non-DAG registry layer is stable.
+```powershell
+python -m studio_planner.plan_agent --request examples/studio_planner/request.json
+```
+
+Factory dry-run CLI:
+
+```powershell
+python -m studio_factory.generate_agent --request examples/studio_factory/system_sta_constraint_agent_request.json --dry-run
+```
+
+Factory write mode:
+
+```powershell
+python -m studio_factory.generate_agent --request examples/studio_factory/system_sta_constraint_agent_request.json --write --output-dir .
+```
+
+Custom-agent metadata export:
+
+```powershell
+python -m studio_factory.export_custom_agents --input examples/studio_factory/custom_agents_export_input.json --write
+```
+
+This export writes review-only metadata patches and does not query Supabase or modify production registries.
+
+The factory writes only to safe generated directories:
+
+- `generated_studio_agents/`
+- `generated_patches/`
+- `examples/studio_factory/`
+
+It never writes into production paths such as `agents/`, `registry/`, or `main.py`.
+
+See `PHASE3_CODEX_STUDIO_AGENT_FACTORY.md` for full details.
+
+## Next Phase After Factory v1
+
+Recommended follow-up scope:
+
+1. Review generated factory outputs before promotion.
+2. Review custom-agent metadata patches before manually merging any dynamic agents.
+3. Add workflow-template metadata once Studio DAG contracts are ready.

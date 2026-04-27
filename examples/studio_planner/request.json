@@ -1,0 +1,13 @@
+{
+  "natural_language_request": "Generate RTL and repair compile issues for a digital block",
+  "domain": "digital",
+  "loop_type": "digital",
+  "inputs": [
+    "digital_spec_json",
+    "regmap.json"
+  ],
+  "outputs": [
+    "rtl/*.v",
+    "rtl_agent_compile.log"
+  ]
+}

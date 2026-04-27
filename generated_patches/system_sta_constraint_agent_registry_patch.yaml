@@ -1,0 +1,51 @@
+{
+  "agents": [
+    {
+      "name": "System STA Constraint Agent",
+      "loop_type": "system",
+      "domain": "physical_design",
+      "description": "Create a system-level STA constraint generation agent that prepares timing constraints for integrated SoC handoff.",
+      "entrypoint": "generated_studio_agents.system_sta_constraint_agent:run_agent",
+      "execution_mode": "native",
+      "inputs": [
+        "system_integration_intent",
+        "clock_reset_arch_intent",
+        "rtl_filelist"
+      ],
+      "outputs": [
+        "system/constraints/system_top.sdc",
+        "system/constraints/sta_notes.md"
+      ],
+      "artifact_paths": [
+        "agent-defined generated artifact paths"
+      ],
+      "artifact_types": [
+        "review_artifact"
+      ],
+      "required_skills": [
+        "artifact_publish",
+        "sta_constraint_generation"
+      ],
+      "required_tools": [
+        "openroad",
+        "python",
+        "supabase"
+      ],
+      "hooks": [
+        "pre_run_validate_inputs",
+        "post_run_collect_artifacts",
+        "post_run_update_state",
+        "on_failure_capture_traceback",
+        "on_failure_preserve_logs",
+        "artifact_publish_to_supabase"
+      ],
+      "metadata": {
+        "generated_by": "studio_factory_v1",
+        "review_required": true
+      }
+    }
+  ],
+  "skills": [],
+  "review_required": true,
+  "instructions": "Manually merge these entries into registry files after review."
+}

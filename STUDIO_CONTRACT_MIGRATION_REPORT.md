@@ -41,7 +41,7 @@ Studio Contract metadata only. No frontend changes, workflow execution changes, 
 - Hooks registered: 6
 - Workflows registered: 6
 - Commands registered: 2
-- Contract tests passing: 15
+- Contract tests passing: 26
 
 ## Reference Agent
 
@@ -90,23 +90,36 @@ $env:PYTHONDONTWRITEBYTECODE='1'; pytest tests/test_studio_contract_registry.py
 
 - Registry metadata is inferred from current `main.py` maps and `agent_capabilities.py`; some descriptions and input/output patterns are best-effort where capability metadata is absent.
 - `.yaml` registry files are JSON-compatible YAML and intentionally loaded with Python stdlib JSON to avoid adding dependencies.
-- Tool dependencies are metadata declarations only; no tool availability checks are run.
+- Tool dependencies remain metadata declarations for default registry validation; optional local availability reporting is available separately.
 - Workflow registry entries model existing loop-level agent registries, not actual Studio DAG execution.
 
 ## Next Migration Plan
 
 1. Promote selected high-value agents from `legacy_adapter` to richer native Studio specs as their internals are migrated.
-2. Add persisted custom-agent metadata export so dynamic `AGENT_REGISTRY` entries can be materialized into registry files.
-3. Add optional tool availability validation as a separate dry-run mode.
-4. Add workflow template metadata once Studio DAG contracts are ready.
+2. Review custom-agent metadata exports from `generated_patches/` before manually materializing dynamic `AGENT_REGISTRY` entries into registry files.
+3. Add workflow template metadata once Studio DAG contracts are ready.
 
-## Next Phase: Codex Studio Agent Factory
+## Phase 3: Codex Studio Agent Factory
 
-The next phase should use the Studio Contract registries as read-only source metadata first. Recommended scope:
+Implemented as standalone developer tooling:
 
-1. Build a factory planner that reads `registry/agents.yaml`, `registry/skills.yaml`, `registry/tools.yaml`, and `registry/hooks.yaml`.
-2. Generate new agent scaffolds only behind explicit developer commands.
-3. Generate matching registry entries and run dry-run validation before any workflow use.
-4. Keep generated agents on `execution_mode: legacy_adapter` until manually reviewed.
-5. Add optional tool availability checks separately from registry reference validation.
-6. Avoid Studio DAG or parallel execution changes until the registry layer is stable.
+- `studio_planner` plans reuse, extension, composition, or creation from registry metadata.
+- `studio_factory` generates reviewable agent stubs and registry patches only in safe generated directories.
+- Default mode is dry-run.
+- Write mode requires `--write` and rejects production paths.
+
+CLI examples:
+
+```powershell
+python -m studio_planner.plan_agent --request examples/studio_planner/request.json
+python -m studio_factory.generate_agent --request examples/studio_factory/system_sta_constraint_agent_request.json --dry-run
+python -m studio_factory.generate_agent --request examples/studio_factory/system_sta_constraint_agent_request.json --write --output-dir .
+python -m studio_contract.validate_tools --registry-dir registry
+python -m studio_factory.export_custom_agents --input examples/studio_factory/custom_agents_export_input.json --write
+```
+
+Phase 3 tests:
+
+```powershell
+$env:PYTHONDONTWRITEBYTECODE='1'; pytest tests/test_studio_planner_factory.py
+```

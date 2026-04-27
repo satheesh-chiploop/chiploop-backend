@@ -1,0 +1,13 @@
+{
+  "custom_agents": [
+    {
+      "agent_name": "Example Custom Review Agent",
+      "domain": "custom",
+      "loop_type": "custom",
+      "description": "Example dynamic custom agent metadata exported for Studio registry review.",
+      "inputs": ["state"],
+      "outputs": ["state update"],
+      "required_tools": ["python", "supabase"]
+    }
+  ]
+}

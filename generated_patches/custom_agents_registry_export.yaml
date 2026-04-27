@@ -1,0 +1,42 @@
+{
+  "agents": [
+    {
+      "name": "Example Custom Review Agent",
+      "loop_type": "custom",
+      "domain": "custom",
+      "description": "Example dynamic custom agent metadata exported for Studio registry review.",
+      "entrypoint": "AGENT_REGISTRY:Example Custom Review Agent",
+      "execution_mode": "legacy_adapter",
+      "inputs": [
+        "state"
+      ],
+      "outputs": [
+        "state update"
+      ],
+      "artifact_paths": [],
+      "artifact_types": [
+        "custom_agent_artifact"
+      ],
+      "required_skills": [],
+      "required_tools": [
+        "python",
+        "supabase"
+      ],
+      "hooks": [
+        "pre_run_validate_inputs",
+        "post_run_collect_artifacts",
+        "post_run_update_state",
+        "on_failure_capture_traceback",
+        "on_failure_preserve_logs",
+        "artifact_publish_to_supabase"
+      ],
+      "metadata": {
+        "exported_by": "custom_agent_export_v1",
+        "review_required": true,
+        "source": "custom_agent_metadata"
+      }
+    }
+  ],
+  "review_required": true,
+  "instructions": "Review these dynamic custom-agent specs before manually merging into registry/agents.yaml."
+}

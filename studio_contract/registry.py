@@ -43,6 +43,8 @@ def _items(doc: Dict[str, Any], key: str) -> List[Dict[str, Any]]:
 
 def load_registry(registry_dir: str = "registry") -> StudioRegistry:
     root = Path(registry_dir)
+    if not root.exists() and not root.is_absolute():
+        root = Path(__file__).resolve().parents[1] / registry_dir
     docs = {
         key: _load_json_compatible_yaml(root / filename)
         for key, filename in REGISTRY_FILES.items()
