@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from .models import APIKeyRecord, APIKeyValidation, Entitlement, UsageEvent
+from .repositories import APIKeyRepository, SupabaseAPIKeyRepository, SupabaseUsageRepository, UsageRepository
 
 
 API_KEY_PREFIXES = ("cl_live_", "cl_test_")
@@ -112,28 +113,38 @@ class JsonFileAPIKeyStore(InMemoryAPIKeyStore):
 
 class SupabaseAPIKeyStore(APIKeyStore):
     def __init__(self, supabase_client):
-        self.supabase = supabase_client
+        self.api_keys = SupabaseAPIKeyRepository(supabase_client)
+        self.usage = SupabaseUsageRepository(supabase_client)
 
     def get_by_hash(self, key_hash: str) -> Optional[APIKeyRecord]:
-        result = (
-            self.supabase.table("api_keys")
-            .select("id,key_hash,key_prefix,user_id,name,created_at,revoked_at,last_used_at")
-            .eq("key_hash", key_hash)
-            .limit(1)
-            .execute()
-        )
-        rows = result.data or []
-        return APIKeyRecord.from_dict(rows[0]) if rows else None
+        return self.api_keys.get_by_hash(key_hash)
 
     def save(self, record: APIKeyRecord) -> APIKeyRecord:
-        self.supabase.table("api_keys").insert(record.to_dict()).execute()
-        return record
+        return self.api_keys.save(record)
 
     def update_last_used(self, record_id: str, timestamp: str) -> None:
-        self.supabase.table("api_keys").update({"last_used_at": timestamp}).eq("id", record_id).execute()
+        self.api_keys.update_last_used(record_id, timestamp)
 
     def record_usage(self, event: UsageEvent) -> None:
-        self.supabase.table("api_usage_events").insert(event.to_dict()).execute()
+        self.usage.record_usage(event)
+
+
+class RepositoryBackedAPIKeyStore(APIKeyStore):
+    def __init__(self, api_keys: APIKeyRepository, usage: UsageRepository):
+        self.api_keys = api_keys
+        self.usage = usage
+
+    def get_by_hash(self, key_hash: str) -> Optional[APIKeyRecord]:
+        return self.api_keys.get_by_hash(key_hash)
+
+    def save(self, record: APIKeyRecord) -> APIKeyRecord:
+        return self.api_keys.save(record)
+
+    def update_last_used(self, record_id: str, timestamp: str) -> None:
+        self.api_keys.update_last_used(record_id, timestamp)
+
+    def record_usage(self, event: UsageEvent) -> None:
+        self.usage.record_usage(event)
 
 
 class APIKeyService:

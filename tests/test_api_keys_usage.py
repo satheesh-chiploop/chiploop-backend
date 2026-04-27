@@ -8,7 +8,15 @@ from fastapi.testclient import TestClient
 
 from auth_api_keys.middleware import require_sdk_api_key
 from auth_api_keys.models import APIKeyRecord
-from auth_api_keys.service import APIKeyService, InMemoryAPIKeyStore, configure_api_key_service, hash_api_key, key_prefix
+from auth_api_keys.repositories import APIKeyRepository, UsageRepository
+from auth_api_keys.service import (
+    APIKeyService,
+    InMemoryAPIKeyStore,
+    RepositoryBackedAPIKeyStore,
+    configure_api_key_service,
+    hash_api_key,
+    key_prefix,
+)
 from chiploop_sdk.client import ChipLoopClient
 
 
@@ -125,3 +133,44 @@ def test_sdk_sends_bearer_token():
     client.list_agents()
 
     assert session.calls[0]["headers"]["Authorization"] == "Bearer cl_test_abc"
+
+
+def test_api_key_service_uses_repository_layer():
+    class MockAPIKeys(APIKeyRepository):
+        def __init__(self):
+            self.records = {}
+            self.last_used_updates = []
+
+        def get_by_hash(self, key_hash):
+            return self.records.get(key_hash)
+
+        def save(self, record):
+            self.records[record.key_hash] = record
+            return record
+
+        def update_last_used(self, record_id, timestamp):
+            self.last_used_updates.append((record_id, timestamp))
+
+    class MockUsage(UsageRepository):
+        def __init__(self):
+            self.events = []
+
+        def record_usage(self, event):
+            self.events.append(event)
+
+    api_keys = MockAPIKeys()
+    usage = MockUsage()
+    service = APIKeyService(RepositoryBackedAPIKeyStore(api_keys, usage))
+    raw, record = service.create_key("user-1", "repo-test")
+
+    validation = service.validate_key(raw)
+    service.record_usage(
+        user_id="user-1",
+        api_key_id=record.id,
+        endpoint="/sdk/agents",
+        event_type="sdk_agents_list",
+    )
+
+    assert validation.ok
+    assert api_keys.last_used_updates[0][0] == record.id
+    assert usage.events[0].event_type == "sdk_agents_list"
