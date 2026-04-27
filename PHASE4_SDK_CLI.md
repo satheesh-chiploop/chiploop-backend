@@ -19,6 +19,9 @@ pip install -e .
 
 This installs the `chiploop` console command from `pyproject.toml`.
 
+The editable package intentionally includes only `chiploop_sdk` and `auth_api_keys`.
+Backend runtime packages such as `agents`, `registry`, `services`, generated artifacts, and tests are excluded from SDK/CLI packaging.
+
 Local module usage without installation:
 
 ```powershell

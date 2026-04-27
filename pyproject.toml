@@ -1,3 +1,7 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "chiploop-backend-tools"
 version = "0.1.0"
@@ -9,3 +13,35 @@ dependencies = [
 
 [project.scripts]
 chiploop = "chiploop_sdk.cli:main"
+
+[tool.setuptools.packages.find]
+include = [
+  "chiploop_sdk",
+  "chiploop_sdk.*",
+  "auth_api_keys",
+  "auth_api_keys.*",
+]
+exclude = [
+  "agents",
+  "agents.*",
+  "analyze",
+  "analyze.*",
+  "planner",
+  "planner.*",
+  "registry",
+  "registry.*",
+  "services",
+  "services.*",
+  "generated_patches",
+  "generated_patches.*",
+  "generated_studio_agents",
+  "generated_studio_agents.*",
+  "tests",
+  "tests.*",
+  "studio_factory",
+  "studio_factory.*",
+  "studio_planner",
+  "studio_planner.*",
+  "studio_contract",
+  "studio_contract.*",
+]
