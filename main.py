@@ -2707,11 +2707,13 @@ async def plan_workflow_api(request: Request):
     workflow_id = data.get("workflow_id", "manual_plan")
     structured_spec_final = data.get("structured_spec_final")
     user_id = data.get("user_id") or data.get("uid") or "anonymous"
+    output_mode = data.get("workflow_mode") or data.get("output_mode") or "serial"
 
     plan = await plan_workflow(
        user_prompt,
        structured_spec_final=structured_spec_final,
        user_id=user_id,
+       output_mode=output_mode,
     )
     return {"status": "ok", "plan": plan}
 

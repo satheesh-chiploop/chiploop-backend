@@ -1,0 +1,80 @@
+{
+  "workflow_mode": "dag",
+  "metadata": {
+    "name": "arch2rtl_dag_preview",
+    "loop_type": "system",
+    "available_inputs": ["design_spec"],
+    "description": "Preview-only DAG for Arch2RTL-style planning. Not used by existing App execution."
+  },
+  "nodes": [
+    {
+      "node_id": "spec_ingest",
+      "agent_name": "Digital Spec Agent",
+      "loop_type": "digital",
+      "depends_on": [],
+      "required_inputs": ["design_spec"],
+      "produced_outputs": ["normalized_spec"],
+      "can_run_parallel": false,
+      "failure_policy": "fail_fast"
+    },
+    {
+      "node_id": "rtl_generation",
+      "agent_name": "Digital RTL Agent",
+      "loop_type": "digital",
+      "depends_on": ["spec_ingest"],
+      "required_inputs": ["normalized_spec"],
+      "produced_outputs": ["rtl_files"],
+      "can_run_parallel": false,
+      "failure_policy": "fail_fast"
+    },
+    {
+      "node_id": "simulation",
+      "agent_name": "Digital Sim Agent",
+      "loop_type": "digital",
+      "depends_on": ["rtl_generation"],
+      "required_inputs": ["rtl_files"],
+      "produced_outputs": ["simulation_report"],
+      "can_run_parallel": true,
+      "failure_policy": "skip_dependents"
+    },
+    {
+      "node_id": "firmware_prep",
+      "agent_name": "Embedded Firmware Integration Contract Agent",
+      "loop_type": "embedded",
+      "depends_on": ["rtl_generation"],
+      "required_inputs": ["rtl_files"],
+      "produced_outputs": ["firmware_manifest"],
+      "can_run_parallel": true,
+      "failure_policy": "continue_on_failure"
+    },
+    {
+      "node_id": "software_prep",
+      "agent_name": "System Software SDK Scaffold Agent",
+      "loop_type": "system",
+      "depends_on": ["rtl_generation"],
+      "required_inputs": ["rtl_files"],
+      "produced_outputs": ["software_sdk"],
+      "can_run_parallel": true,
+      "failure_policy": "continue_on_failure"
+    },
+    {
+      "node_id": "final_integration",
+      "agent_name": "System Integration Intent Agent",
+      "loop_type": "system",
+      "depends_on": ["simulation", "firmware_prep", "software_prep"],
+      "required_inputs": ["simulation_report", "firmware_manifest", "software_sdk"],
+      "produced_outputs": ["integration_summary"],
+      "can_run_parallel": false,
+      "failure_policy": "fail_fast"
+    }
+  ],
+  "edges": [
+    {"from_node": "spec_ingest", "to_node": "rtl_generation"},
+    {"from_node": "rtl_generation", "to_node": "simulation"},
+    {"from_node": "rtl_generation", "to_node": "firmware_prep"},
+    {"from_node": "rtl_generation", "to_node": "software_prep"},
+    {"from_node": "simulation", "to_node": "final_integration"},
+    {"from_node": "firmware_prep", "to_node": "final_integration"},
+    {"from_node": "software_prep", "to_node": "final_integration"}
+  ]
+}

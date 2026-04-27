@@ -50,7 +50,7 @@ def extract_json_block(text):
 
     
 
-async def plan_workflow(prompt: str, structured_spec_final=None, user_id="anonymous") -> dict:
+async def plan_workflow(prompt: str, structured_spec_final=None, user_id="anonymous", output_mode: str = "serial") -> dict:
     """
     Generates an AI workflow plan from user intent using LLM (Portkey-first).
     Now enhanced with structured_spec_final → AGX-context-informed LLM planning.
@@ -197,14 +197,14 @@ Rules:
             logger.info(f"🧠 After behavioral LLM inference, missing agents: {plan['missing_agents']}")
 
             logger.info(f"🧩 Missing agents detected (to autogen in auto-compose): {missing}")
-            return plan
+            return _maybe_add_dag_plan(plan, output_mode)
 
         except Exception as e:
             logger.warning(f"Portkey fallback failed: {e}")
 
     # --- 5. If all fail ---
     logger.error("❌ All AI backends failed for workflow planning.")
-    return {"loop_type": "unknown", "agents": []}
+    return _maybe_add_dag_plan({"loop_type": "unknown", "agents": []}, output_mode)
 
 
 
@@ -240,6 +240,30 @@ def safe_parse_plan(text: str):
     return {"loop_type": "unknown", "agents": []}
 
 
+def _maybe_add_dag_plan(plan: dict, output_mode: str = "serial") -> dict:
+    if (output_mode or "serial").lower() != "dag":
+        return plan
+    from workflow_dag.planner import dag_from_agents, dry_run_plan
+
+    agents = [str(agent) for agent in (plan.get("agents") or [])]
+    dag = dag_from_agents(
+        agents,
+        loop_type=plan.get("loop_type") or "digital",
+        metadata={
+            "source": "system_planner",
+            "serial_order_preserved": True,
+            "planner_output_mode": "dag",
+        },
+        infer_parallel=True,
+    )
+    out = dict(plan)
+    out["workflow_mode"] = "dag"
+    out["nodes"] = [node.to_dict() for node in dag.nodes]
+    out["edges"] = [edge.to_dict() for edge in dag.edges]
+    out["dag_preview"] = dry_run_plan(dag)
+    return out
+
+
 def register_new_agent(agent_data: dict):
     """Persist newly generated agent so it can be reused."""
     name = agent_data["agent_name"].replace(" ", "_").lower()
@@ -258,7 +282,8 @@ async def auto_compose_workflow_graph(
     goal: str,
     structured_spec_final: dict,
     preplan: Optional[Union[dict, str]] = None,
-    final_agents: Optional[list] = None
+    final_agents: Optional[list] = None,
+    output_mode: str = "serial",
 ):
 
 
@@ -295,6 +320,23 @@ async def auto_compose_workflow_graph(
         }
 
         logger.success("✅ Auto-compose complete (System Planner final agent list).")
+        if (output_mode or "serial").lower() == "dag":
+            from workflow_dag.planner import dag_from_agents, dry_run_plan
+
+            dag = dag_from_agents(
+                final_agents,
+                loop_type=(structured_spec_final or {}).get("loop_type") or "digital",
+                metadata={"source": "auto_compose_workflow_graph", "serial_order_preserved": True},
+                infer_parallel=True,
+            )
+            return {
+                "workflow_mode": "dag",
+                "nodes": [node.to_dict() for node in dag.nodes],
+                "edges": [edge.to_dict() for edge in dag.edges],
+                "summary": plan["summary"],
+                "dag_preview": dry_run_plan(dag),
+                "structured_spec_final": structured_spec_final,
+            }
         return {
             "nodes": plan["nodes"],
             "edges": plan["edges"],
