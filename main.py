@@ -40,6 +40,7 @@ from studio_factory.generate_agent import run_factory as run_studio_factory
 from studio_factory.models import AgentFactoryRequest
 from studio_planner.models import AgentPlanRequest
 from studio_planner.planner import plan_agent as plan_studio_agent
+from browser_routes import router as browser_router
 
 
 import logging
@@ -225,7 +226,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.state.supabase = supabase
-get_api_key_service(supabase)
+app.state.api_key_service = get_api_key_service(supabase)
+app.include_router(browser_router)
 
 
 

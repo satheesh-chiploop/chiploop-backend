@@ -35,13 +35,22 @@ class APIKeyStore:
     def get_by_hash(self, key_hash: str) -> Optional[APIKeyRecord]:
         raise NotImplementedError
 
+    def list_by_user(self, user_id: str) -> List[APIKeyRecord]:
+        raise NotImplementedError
+
     def save(self, record: APIKeyRecord) -> APIKeyRecord:
         raise NotImplementedError
 
     def update_last_used(self, record_id: str, timestamp: str) -> None:
         raise NotImplementedError
 
+    def revoke(self, record_id: str, user_id: str, timestamp: str) -> bool:
+        raise NotImplementedError
+
     def record_usage(self, event: UsageEvent) -> None:
+        raise NotImplementedError
+
+    def list_usage_by_user(self, user_id: str, limit: int = 50) -> List[UsageEvent]:
         raise NotImplementedError
 
 
@@ -53,6 +62,10 @@ class InMemoryAPIKeyStore(APIKeyStore):
     def get_by_hash(self, key_hash: str) -> Optional[APIKeyRecord]:
         return self.records.get(key_hash)
 
+    def list_by_user(self, user_id: str) -> List[APIKeyRecord]:
+        records = [record for record in self.records.values() if record.user_id == user_id]
+        return sorted(records, key=lambda record: record.created_at, reverse=True)
+
     def save(self, record: APIKeyRecord) -> APIKeyRecord:
         self.records[record.key_hash] = record
         return record
@@ -63,8 +76,19 @@ class InMemoryAPIKeyStore(APIKeyStore):
                 record.last_used_at = timestamp
                 return
 
+    def revoke(self, record_id: str, user_id: str, timestamp: str) -> bool:
+        for record in self.records.values():
+            if record.id == record_id and record.user_id == user_id:
+                record.revoked_at = timestamp
+                return True
+        return False
+
     def record_usage(self, event: UsageEvent) -> None:
         self.usage_events.append(event)
+
+    def list_usage_by_user(self, user_id: str, limit: int = 50) -> List[UsageEvent]:
+        events = [event for event in self.usage_events if event.user_id == user_id]
+        return sorted(events, key=lambda event: event.created_at, reverse=True)[:limit]
 
 
 class JsonFileAPIKeyStore(InMemoryAPIKeyStore):
@@ -106,6 +130,12 @@ class JsonFileAPIKeyStore(InMemoryAPIKeyStore):
         super().update_last_used(record_id, timestamp)
         self._flush()
 
+    def revoke(self, record_id: str, user_id: str, timestamp: str) -> bool:
+        revoked = super().revoke(record_id, user_id, timestamp)
+        if revoked:
+            self._flush()
+        return revoked
+
     def record_usage(self, event: UsageEvent) -> None:
         super().record_usage(event)
         self._flush()
@@ -119,14 +149,23 @@ class SupabaseAPIKeyStore(APIKeyStore):
     def get_by_hash(self, key_hash: str) -> Optional[APIKeyRecord]:
         return self.api_keys.get_by_hash(key_hash)
 
+    def list_by_user(self, user_id: str) -> List[APIKeyRecord]:
+        return self.api_keys.list_by_user(user_id)
+
     def save(self, record: APIKeyRecord) -> APIKeyRecord:
         return self.api_keys.save(record)
 
     def update_last_used(self, record_id: str, timestamp: str) -> None:
         self.api_keys.update_last_used(record_id, timestamp)
 
+    def revoke(self, record_id: str, user_id: str, timestamp: str) -> bool:
+        return self.api_keys.revoke(record_id, user_id, timestamp)
+
     def record_usage(self, event: UsageEvent) -> None:
         self.usage.record_usage(event)
+
+    def list_usage_by_user(self, user_id: str, limit: int = 50) -> List[UsageEvent]:
+        return self.usage.list_by_user(user_id, limit=limit)
 
 
 class RepositoryBackedAPIKeyStore(APIKeyStore):
@@ -137,14 +176,23 @@ class RepositoryBackedAPIKeyStore(APIKeyStore):
     def get_by_hash(self, key_hash: str) -> Optional[APIKeyRecord]:
         return self.api_keys.get_by_hash(key_hash)
 
+    def list_by_user(self, user_id: str) -> List[APIKeyRecord]:
+        return self.api_keys.list_by_user(user_id)
+
     def save(self, record: APIKeyRecord) -> APIKeyRecord:
         return self.api_keys.save(record)
 
     def update_last_used(self, record_id: str, timestamp: str) -> None:
         self.api_keys.update_last_used(record_id, timestamp)
 
+    def revoke(self, record_id: str, user_id: str, timestamp: str) -> bool:
+        return self.api_keys.revoke(record_id, user_id, timestamp)
+
     def record_usage(self, event: UsageEvent) -> None:
         self.usage.record_usage(event)
+
+    def list_usage_by_user(self, user_id: str, limit: int = 50) -> List[UsageEvent]:
+        return self.usage.list_by_user(user_id, limit=limit)
 
 
 class APIKeyService:
@@ -163,6 +211,12 @@ class APIKeyService:
         )
         self.store.save(record)
         return raw_key, record
+
+    def list_key_metadata(self, user_id: str) -> List[dict]:
+        return [_key_metadata(record) for record in self.store.list_by_user(user_id)]
+
+    def revoke_key(self, record_id: str, user_id: str) -> bool:
+        return self.store.revoke(record_id, user_id, _utcnow())
 
     def validate_key(self, raw_key: str) -> APIKeyValidation:
         if not raw_key or not raw_key.startswith(API_KEY_PREFIXES):
@@ -211,6 +265,29 @@ class APIKeyService:
             agent_factory_write_enabled=os.getenv("CHIPLOOP_AGENT_FACTORY_WRITE_ENABLED", "").lower()
             in {"1", "true", "yes"},
         )
+
+    def usage_summary(self, user_id: str, *, limit: int = 50) -> dict:
+        events = self.store.list_usage_by_user(user_id, limit=limit)
+        by_type: Dict[str, int] = {}
+        for event in events:
+            by_type[event.event_type] = by_type.get(event.event_type, 0) + 1
+        return {
+            "user_id": user_id,
+            "recent_event_count": len(events),
+            "by_event_type": by_type,
+            "recent_events": [event.to_dict() for event in events],
+        }
+
+
+def _key_metadata(record: APIKeyRecord) -> dict:
+    return {
+        "id": record.id,
+        "key_prefix": record.key_prefix,
+        "name": record.name,
+        "created_at": record.created_at,
+        "last_used_at": record.last_used_at,
+        "revoked_at": record.revoked_at,
+    }
 
 
 _service: Optional[APIKeyService] = None
