@@ -1,0 +1,11 @@
+[project]
+name = "chiploop-backend-tools"
+version = "0.1.0"
+description = "ChipLoop backend developer SDK and CLI tools"
+requires-python = ">=3.10"
+dependencies = [
+  "requests",
+]
+
+[project.scripts]
+chiploop = "chiploop_sdk.cli:main"

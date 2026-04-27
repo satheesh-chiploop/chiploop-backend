@@ -33,6 +33,13 @@ import asyncio
 from planner.auto_fill_missing import auto_fill_missing_fields
 from agents.runtime import AgentContext, configure_runtime_logging, execute_legacy_agent, log_runtime_event
 from utils.artifact_utils import save_text_artifact_and_record
+from auth_api_keys.middleware import require_sdk_api_key
+from auth_api_keys.service import get_api_key_service
+from studio_contract.registry import load_registry
+from studio_factory.generate_agent import run_factory as run_studio_factory
+from studio_factory.models import AgentFactoryRequest
+from studio_planner.models import AgentPlanRequest
+from studio_planner.planner import plan_agent as plan_studio_agent
 
 
 import logging
@@ -217,6 +224,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.state.supabase = supabase
+get_api_key_service(supabase)
 
 
 
@@ -2632,6 +2641,61 @@ async def list_agents():
         "agents": AGENT_CAPABILITIES,
         "graph": serialize_graph(G)
     }
+
+
+@app.get("/sdk/agents", dependencies=[Depends(require_sdk_api_key("sdk_agents_list"))])
+def sdk_list_agents():
+    registry = load_registry("registry")
+    return {
+        "status": "ok",
+        "agents": [agent.__dict__ for agent in registry.agents.values()],
+        "count": len(registry.agents),
+    }
+
+
+@app.get("/sdk/workflows", dependencies=[Depends(require_sdk_api_key("sdk_workflows_list"))])
+def sdk_list_workflows():
+    registry = load_registry("registry")
+    return {
+        "status": "ok",
+        "workflows": [workflow.__dict__ for workflow in registry.workflows.values()],
+        "count": len(registry.workflows),
+    }
+
+
+@app.get("/sdk/workflows/{workflow_id}/status", dependencies=[Depends(require_sdk_api_key("sdk_workflow_status"))])
+def sdk_workflow_status(workflow_id: str):
+    row = (
+        supabase.table("workflows")
+        .select("id,name,status,phase,loop_type,logs,artifacts,created_at,updated_at")
+        .eq("id", workflow_id)
+        .single()
+        .execute()
+    )
+    if not row.data:
+        raise HTTPException(status_code=404, detail="workflow not found")
+    data = dict(row.data)
+    data["workflow_id"] = data.get("id")
+    return data
+
+
+@app.post("/sdk/studio/plan-agent", dependencies=[Depends(require_sdk_api_key("sdk_studio_plan_agent"))])
+async def sdk_studio_plan_agent(request: Request):
+    data = await request.json()
+    result = plan_studio_agent(AgentPlanRequest.from_dict(data))
+    return result.to_dict()
+
+
+@app.post("/sdk/studio/generate-agent", dependencies=[Depends(require_sdk_api_key("sdk_studio_generate_agent"))])
+async def sdk_studio_generate_agent(request: Request):
+    data = await request.json()
+    request_data = data.get("request") if isinstance(data.get("request"), dict) else data
+    dry_run = bool(data.get("dry_run", True))
+    entitlement = getattr(request.state, "entitlement", None)
+    if not dry_run and not getattr(entitlement, "agent_factory_write_enabled", False):
+        raise HTTPException(status_code=403, detail="agent_factory_write_not_enabled")
+    result = run_studio_factory(AgentFactoryRequest.from_dict(request_data), dry_run=dry_run)
+    return result.to_dict()
 
 from planner.ai_work_planner import plan_workflow
 
