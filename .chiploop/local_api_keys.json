@@ -1,0 +1,15 @@
+{
+  "api_keys": [
+    {
+      "id": "23600fd7c84c45ecbab9ecd7",
+      "key_hash": "23600fd7c84c45ecbab9ecd78a88a13d589fe07ae30cb3040f4d6469c1d93916",
+      "key_prefix": "cl_test_AIpFD-m_",
+      "user_id": "dev-user",
+      "name": "local-test",
+      "created_at": "2026-04-27T03:46:56.927505+00:00",
+      "revoked_at": null,
+      "last_used_at": null
+    }
+  ],
+  "usage_events": []
+}
