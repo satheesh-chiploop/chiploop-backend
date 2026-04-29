@@ -9,6 +9,8 @@ from studio_factory.generate_agent import run_factory as run_studio_factory
 from studio_factory.models import AgentFactoryRequest
 from studio_planner.models import AgentPlanRequest
 from studio_planner.planner import plan_agent as plan_studio_agent
+from user_agents.repository import SupabaseUserAgentRepository
+from user_agents.service import UserAgentService
 from workflow_dag.models import WorkflowDAG
 from workflow_dag.planner import dag_from_agents, dag_from_studio_graph, dry_run_plan
 from workflow_dag.validator import validate_dag
@@ -21,6 +23,16 @@ def _api_key_service(request: Request):
     return getattr(request.app.state, "api_key_service", None) or get_api_key_service(
         getattr(request.app.state, "supabase", None)
     )
+
+
+def _user_agent_service(request: Request) -> UserAgentService:
+    existing = getattr(request.app.state, "user_agent_service", None)
+    if existing is not None:
+        return existing
+    supabase = getattr(request.app.state, "supabase", None)
+    if supabase is None:
+        raise HTTPException(status_code=500, detail="user_agent_store_unavailable")
+    return UserAgentService(SupabaseUserAgentRepository(supabase))
 
 
 def _registry_counts(registry_dir: str = "registry") -> Dict[str, int]:
@@ -107,6 +119,55 @@ async def studio_dag_validate(
     dag = _dag_from_payload(data)
     ok, errors = validate_dag(dag)
     return {"status": "ok", "valid": ok, "errors": errors, "warnings": []}
+
+
+@router.get("/studio/user-agents")
+def studio_list_user_agents(
+    request: Request,
+    user: BrowserUser = Depends(require_browser_user),
+):
+    service = _user_agent_service(request)
+    return {"status": "ok", "agents": service.list_my_agents(user.user_id)}
+
+
+@router.post("/studio/user-agents")
+async def studio_save_user_agent(
+    request: Request,
+    user: BrowserUser = Depends(require_browser_user),
+):
+    data = await request.json()
+    payload = data.get("agent") if isinstance(data.get("agent"), dict) else data
+    service = _user_agent_service(request)
+    try:
+        agent = service.save_private_agent(user.user_id, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"status": "ok", "agent": agent}
+
+
+@router.delete("/studio/user-agents/{agent_id}")
+def studio_delete_user_agent(
+    agent_id: str,
+    request: Request,
+    user: BrowserUser = Depends(require_browser_user),
+):
+    service = _user_agent_service(request)
+    if not service.delete_my_agent(user.user_id, agent_id):
+        raise HTTPException(status_code=404, detail="agent_not_found")
+    return {"status": "ok", "deleted": 1, "agent_id": agent_id}
+
+
+@router.post("/studio/user-agents/{agent_id}/submit")
+def studio_submit_user_agent(
+    agent_id: str,
+    request: Request,
+    user: BrowserUser = Depends(require_browser_user),
+):
+    service = _user_agent_service(request)
+    result = service.submit_my_agent(user.user_id, agent_id)
+    if not result.get("ok"):
+        raise HTTPException(status_code=404, detail="agent_not_found")
+    return {"status": "ok", **result}
 
 
 @router.get("/settings/api-keys")

@@ -2880,6 +2880,21 @@ async def save_custom_agent(request: Request):
     try:
         data = await request.json()
         agent = data.get("agent", {})
+        body_user_id = data.get("user_id") or agent.get("owner_id") or agent.get("user_id")
+        header_user_id = (
+            request.headers.get("x-user-id")
+            or request.headers.get("x-supabase-user-id")
+            or request.headers.get("x-client-user-id")
+        )
+        jwt_user_id = None
+        try:
+            token_data = verify_token(request)
+            jwt_user_id = token_data.get("sub")
+        except Exception:
+            pass
+        owner_id = header_user_id or body_user_id or jwt_user_id
+        if owner_id == "anonymous":
+            owner_id = None
         if not agent.get("agent_name"):
             return {"status": "error", "message": "agent_name missing"}
 
@@ -2892,6 +2907,7 @@ async def save_custom_agent(request: Request):
             "is_custom": True,
             "is_prebuilt": False,
             "is_marketplace": False,
+            "owner_id": owner_id,
         }
 
         res = supabase.table("agents").insert(record).execute()
@@ -3572,6 +3588,8 @@ from planner.ai_agent_planner import generate_missing_agents_batch
 
 @app.post("/generate_missing_agents_batch")
 async def api_generate_missing_agents_batch(request: Request):
+    # Legacy System Planner path. Keep for compatibility, but new browser flows should
+    # prefer Studio Agent Planner + Agent Factory dry-run + private user-agent save.
     payload = await request.json()
     result = await generate_missing_agents_batch(payload)
     created_names = result.get("created_agents", [])
@@ -3667,13 +3685,13 @@ async def rename_custom_agent(request: Request):
         raise HTTPException(status_code=400, detail="old_name and new_name required")
 
 
-    user_id = (await request.json()).get("user_id") or None
+    user_id = data.get("user_id") or None
 
     q = supabase.table("agents") \
         .select("id") \
         .eq("agent_name", old_name) \
         .eq("is_custom", True)
-    q = q.eq("user_id", user_id) if user_id else q.is_("user_id", None)
+    q = q.eq("owner_id", user_id) if user_id else q.is_("owner_id", None)
     res = q.limit(1).execute()
 
     if not res.data:
