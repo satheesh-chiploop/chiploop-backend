@@ -17,12 +17,14 @@ from auth_api_keys.service import (
     hash_api_key,
     key_prefix,
 )
+from billing import BillingService, InMemoryBillingRepository
 from chiploop_sdk.client import ChipLoopClient
 
 
 def _app_with_auth(service: APIKeyService) -> FastAPI:
     configure_api_key_service(service)
     app = FastAPI()
+    app.state.billing_service = BillingService(InMemoryBillingRepository(default_plan_id="starter"))
 
     @app.get("/sdk/agents", dependencies=[Depends(require_sdk_api_key("sdk_agents_list"))])
     def sdk_agents():

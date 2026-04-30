@@ -3,6 +3,7 @@ from typing import Any, Dict
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from auth_api_keys.service import get_api_key_service
+from billing import CreditLimitExceeded, EntitlementDenied, get_billing_service
 from browser_auth import BrowserUser, require_browser_user
 from studio_contract.registry import load_registry
 from studio_factory.generate_agent import run_factory as run_studio_factory
@@ -23,6 +24,44 @@ def _api_key_service(request: Request):
     return getattr(request.app.state, "api_key_service", None) or get_api_key_service(
         getattr(request.app.state, "supabase", None)
     )
+
+
+def _billing_service(request: Request):
+    return getattr(request.app.state, "billing_service", None) or get_billing_service(
+        getattr(request.app.state, "supabase", None)
+    )
+
+
+def _enforce_feature(request: Request, user_id: str, feature: str):
+    service = _billing_service(request)
+    try:
+        return service.assert_entitlement(user_id, feature)
+    except EntitlementDenied:
+        raise HTTPException(status_code=403, detail=f"{feature}_not_enabled")
+
+
+def _deduct(request: Request, user_id: str, action_type: str, *, reference_id: str | None = None):
+    service = _billing_service(request)
+    try:
+        return service.deduct_credits(user_id, action_type, reference_id=reference_id)
+    except CreditLimitExceeded as exc:
+        raise HTTPException(
+            status_code=402,
+            detail={
+                "error": "insufficient_credits",
+                "required": exc.required,
+                "remaining": exc.remaining,
+            },
+        )
+
+
+def _upgrade_hint(request: Request, user_id: str, *, reason: str | None = None):
+    return _billing_service(request).upgrade_status(user_id, reason=reason).get("suggested_upgrade")
+
+
+def _with_upgrade(payload: Dict[str, Any], request: Request, user_id: str, *, reason: str | None = None) -> Dict[str, Any]:
+    upgrade = _upgrade_hint(request, user_id, reason=reason)
+    return {**payload, "upgrade_hint": upgrade, "upgrade": upgrade}
 
 
 def _user_agent_service(request: Request) -> UserAgentService:
@@ -70,55 +109,63 @@ def studio_registry_summary(_: BrowserUser = Depends(require_browser_user)):
 @router.post("/studio/agent-planner/plan")
 async def studio_agent_planner_plan(
     request: Request,
-    _: BrowserUser = Depends(require_browser_user),
+    user: BrowserUser = Depends(require_browser_user),
 ):
+    _enforce_feature(request, user.user_id, "agent_planner_enabled")
+    _deduct(request, user.user_id, "studio_agent_planner")
     data = await request.json()
     result = plan_studio_agent(AgentPlanRequest.from_dict(data))
-    return {"status": "ok", "result": result.to_dict()}
+    return _with_upgrade({"status": "ok", "result": result.to_dict()}, request, user.user_id)
 
 
 @router.post("/studio/agent-factory/dry-run")
 async def studio_agent_factory_dry_run(
     request: Request,
-    _: BrowserUser = Depends(require_browser_user),
+    user: BrowserUser = Depends(require_browser_user),
 ):
+    _enforce_feature(request, user.user_id, "agent_factory_dry_run_enabled")
+    _deduct(request, user.user_id, "studio_agent_factory_dry_run")
     data = await request.json()
     request_data = data.get("request") if isinstance(data.get("request"), dict) else data
     result = run_studio_factory(AgentFactoryRequest.from_dict(request_data), dry_run=True)
     response = result.to_dict()
     response["dry_run"] = True
     response["written_files"] = []
-    return {"status": "ok", "result": response}
+    return _with_upgrade({"status": "ok", "result": response}, request, user.user_id)
 
 
 @router.post("/studio/dag/preview")
 async def studio_dag_preview(
     request: Request,
-    _: BrowserUser = Depends(require_browser_user),
+    user: BrowserUser = Depends(require_browser_user),
 ):
+    _enforce_feature(request, user.user_id, "dag_optimization_enabled")
+    _deduct(request, user.user_id, "dag_parallelism_analyze")
     data = await request.json()
     dag = _dag_from_payload(data)
     ok, errors = validate_dag(dag)
     preview = dry_run_plan(dag)
-    return {
+    return _with_upgrade({
         "status": "ok",
         "valid": ok,
         "warnings": [],
         "errors": errors,
         "dag": dag.to_dict(),
         "preview": preview,
-    }
+    }, request, user.user_id)
 
 
 @router.post("/studio/dag/validate")
 async def studio_dag_validate(
     request: Request,
-    _: BrowserUser = Depends(require_browser_user),
+    user: BrowserUser = Depends(require_browser_user),
 ):
+    _enforce_feature(request, user.user_id, "dag_optimization_enabled")
+    _deduct(request, user.user_id, "dag_parallelism_analyze")
     data = await request.json()
     dag = _dag_from_payload(data)
     ok, errors = validate_dag(dag)
-    return {"status": "ok", "valid": ok, "errors": errors, "warnings": []}
+    return _with_upgrade({"status": "ok", "valid": ok, "errors": errors, "warnings": []}, request, user.user_id)
 
 
 @router.get("/studio/user-agents")
@@ -135,14 +182,28 @@ async def studio_save_user_agent(
     request: Request,
     user: BrowserUser = Depends(require_browser_user),
 ):
+    billing = _billing_service(request)
+    service = _user_agent_service(request)
+    try:
+        entitlements = billing.assert_entitlement(user.user_id, "private_agent_save_enabled")
+        billing.assert_private_agent_limit(user.user_id)
+        if len(service.list_my_agents(user.user_id)) >= entitlements.max_private_agents:
+            raise EntitlementDenied("max_private_agents")
+        billing.deduct_credits(user.user_id, "private_agent_save")
+    except EntitlementDenied as exc:
+        raise HTTPException(status_code=403, detail=f"{exc.feature}_not_enabled")
+    except CreditLimitExceeded as exc:
+        raise HTTPException(
+            status_code=402,
+            detail={"error": "insufficient_credits", "required": exc.required, "remaining": exc.remaining},
+        )
     data = await request.json()
     payload = data.get("agent") if isinstance(data.get("agent"), dict) else data
-    service = _user_agent_service(request)
     try:
         agent = service.save_private_agent(user.user_id, payload)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    return {"status": "ok", "agent": agent}
+    return _with_upgrade({"status": "ok", "agent": agent}, request, user.user_id)
 
 
 @router.delete("/studio/user-agents/{agent_id}")
@@ -163,11 +224,13 @@ def studio_submit_user_agent(
     request: Request,
     user: BrowserUser = Depends(require_browser_user),
 ):
+    _enforce_feature(request, user.user_id, "marketplace_submit_enabled")
+    _deduct(request, user.user_id, "marketplace_submit", reference_id=agent_id)
     service = _user_agent_service(request)
     result = service.submit_my_agent(user.user_id, agent_id)
     if not result.get("ok"):
         raise HTTPException(status_code=404, detail="agent_not_found")
-    return {"status": "ok", **result}
+    return _with_upgrade({"status": "ok", **result}, request, user.user_id)
 
 
 @router.get("/settings/api-keys")
@@ -184,12 +247,22 @@ async def settings_create_api_key(
     request: Request,
     user: BrowserUser = Depends(require_browser_user),
 ):
+    billing = _billing_service(request)
+    key_service = _api_key_service(request)
+    try:
+        entitlements = billing.assert_api_key_limit(user.user_id)
+        active_keys = [
+            key for key in key_service.list_key_metadata(user.user_id) if not key.get("revoked_at")
+        ]
+        if len(active_keys) >= entitlements.max_api_keys:
+            raise EntitlementDenied("max_api_keys")
+    except EntitlementDenied as exc:
+        raise HTTPException(status_code=403, detail=f"{exc.feature}_limit_reached")
     data = await request.json()
     name = str(data.get("name") or "Browser key").strip() or "Browser key"
     environment = str(data.get("environment") or data.get("mode") or "test").lower()
     test = environment != "live"
-    service = _api_key_service(request)
-    raw_key, record = service.create_key(user.user_id, name, test=test)
+    raw_key, record = key_service.create_key(user.user_id, name, test=test)
     return {
         "status": "ok",
         "api_key": raw_key,
@@ -223,3 +296,19 @@ def settings_usage(
 ):
     service = _api_key_service(request)
     return {"status": "ok", "usage": service.usage_summary(user.user_id)}
+
+
+@router.get("/settings/plan")
+def settings_plan(
+    request: Request,
+    user: BrowserUser = Depends(require_browser_user),
+):
+    return {"status": "ok", "plan": _billing_service(request).plan_summary(user.user_id)}
+
+
+@router.get("/settings/upgrade-status")
+def settings_upgrade_status(
+    request: Request,
+    user: BrowserUser = Depends(require_browser_user),
+):
+    return {"status": "ok", "upgrade_status": _billing_service(request).upgrade_status(user.user_id)}

@@ -35,6 +35,7 @@ from agents.runtime import AgentContext, configure_runtime_logging, execute_lega
 from utils.artifact_utils import save_text_artifact_and_record
 from auth_api_keys.middleware import require_sdk_api_key
 from auth_api_keys.service import get_api_key_service
+from billing import get_billing_service
 from studio_contract.registry import load_registry
 from studio_factory.generate_agent import run_factory as run_studio_factory
 from studio_factory.models import AgentFactoryRequest
@@ -53,6 +54,15 @@ MAX_LOG_CHARS = 850  # ~200KB
 MAX_WORKFLOW_ARTIFACTS_JSON_CHARS = 850
 ENABLE_LEGACY_WORKFLOW_ARTIFACTS_INDEX = False
 MAX_LOG_LINE_CHARS = 400
+
+
+def _upgrade_hint_for_user(user_id: Optional[str], *, reason: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    if not user_id or user_id == "anonymous":
+        return None
+    try:
+        return get_billing_service(supabase).upgrade_status(user_id, reason=reason).get("suggested_upgrade")
+    except Exception:
+        return None
 
 def _truncate_tail(s: str, max_chars: int) -> str:
     if not s:
@@ -1219,7 +1229,13 @@ async def run_workflow(
             preview_test_plan_json,
         )
 
-        return JSONResponse({"workflow_id": workflow_id, "run_id": run_id, "loop_type": loop_type, "status": "queued"})
+        return JSONResponse({
+            "workflow_id": workflow_id,
+            "run_id": run_id,
+            "loop_type": loop_type,
+            "status": "queued",
+            "upgrade_hint": _upgrade_hint_for_user(user_id),
+        })
 
     except Exception as e:
         logger.error(f"❌ run_workflow failed: {e}")
@@ -2646,27 +2662,29 @@ async def list_agents():
 
 
 @app.get("/sdk/agents", dependencies=[Depends(require_sdk_api_key("sdk_agents_list"))])
-def sdk_list_agents():
+def sdk_list_agents(request: Request):
     registry = load_registry("registry")
     return {
         "status": "ok",
         "agents": [agent.__dict__ for agent in registry.agents.values()],
         "count": len(registry.agents),
+        "upgrade_hint": getattr(request.state, "upgrade_hint", None),
     }
 
 
 @app.get("/sdk/workflows", dependencies=[Depends(require_sdk_api_key("sdk_workflows_list"))])
-def sdk_list_workflows():
+def sdk_list_workflows(request: Request):
     registry = load_registry("registry")
     return {
         "status": "ok",
         "workflows": [workflow.__dict__ for workflow in registry.workflows.values()],
         "count": len(registry.workflows),
+        "upgrade_hint": getattr(request.state, "upgrade_hint", None),
     }
 
 
 @app.get("/sdk/workflows/{workflow_id}/status", dependencies=[Depends(require_sdk_api_key("sdk_workflow_status"))])
-def sdk_workflow_status(workflow_id: str):
+def sdk_workflow_status(workflow_id: str, request: Request):
     row = (
         supabase.table("workflows")
         .select("id,name,status,phase,loop_type,logs,artifacts,created_at,updated_at")
@@ -2678,6 +2696,7 @@ def sdk_workflow_status(workflow_id: str):
         raise HTTPException(status_code=404, detail="workflow not found")
     data = dict(row.data)
     data["workflow_id"] = data.get("id")
+    data["upgrade_hint"] = getattr(request.state, "upgrade_hint", None)
     return data
 
 
@@ -2685,7 +2704,7 @@ def sdk_workflow_status(workflow_id: str):
 async def sdk_studio_plan_agent(request: Request):
     data = await request.json()
     result = plan_studio_agent(AgentPlanRequest.from_dict(data))
-    return result.to_dict()
+    return {**result.to_dict(), "upgrade_hint": getattr(request.state, "upgrade_hint", None)}
 
 
 @app.post("/sdk/studio/generate-agent", dependencies=[Depends(require_sdk_api_key("sdk_studio_generate_agent"))])
@@ -2697,7 +2716,7 @@ async def sdk_studio_generate_agent(request: Request):
     if not dry_run and not getattr(entitlement, "agent_factory_write_enabled", False):
         raise HTTPException(status_code=403, detail="agent_factory_write_not_enabled")
     result = run_studio_factory(AgentFactoryRequest.from_dict(request_data), dry_run=dry_run)
-    return result.to_dict()
+    return {**result.to_dict(), "upgrade_hint": getattr(request.state, "upgrade_hint", None)}
 
 from planner.ai_work_planner import plan_workflow
 
@@ -2940,8 +2959,21 @@ async def save_custom_workflow(request: Request):
 
     
 
-        # Support both flat and nested payloads
-        wf = data.get("workflow", {})
+        # Support both the nested Studio Planner payload and the older flat
+        # canvas-save payload so saved workflows keep their nodes/edges.
+        wf = data.get("workflow")
+        if not isinstance(wf, dict):
+            definitions = data.get("definitions") if isinstance(data.get("definitions"), dict) else {}
+            wf = {
+                "workflow_name": data.get("workflow_name") or data.get("name"),
+                "name": data.get("name"),
+                "goal": data.get("goal", ""),
+                "summary": data.get("summary", ""),
+                "loop_type": data.get("loop_type", "system"),
+                "nodes": data.get("nodes") or definitions.get("nodes") or [],
+                "edges": data.get("edges") or definitions.get("edges") or [],
+                "user_id": data.get("user_id"),
+            }
         body_user_id = data.get("user_id") or wf.get("user_id")
 
         # ✅ Step 2: extract from headers if body didn’t include
@@ -2969,8 +3001,8 @@ async def save_custom_workflow(request: Request):
         logger.info(f"💾 Final resolved user_id={user_id}")
         
         name = (
-          data.get("workflow", {}).get("workflow_name")
-          or data.get("workflow", {}).get("name")
+          wf.get("workflow_name")
+          or wf.get("name")
           or "Untitled Workflow"
         )
 

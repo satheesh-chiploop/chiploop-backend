@@ -2,6 +2,7 @@ from typing import Callable
 
 from fastapi import HTTPException, Request
 
+from billing import CreditLimitExceeded, EntitlementDenied, get_billing_service
 from .service import get_api_key_service
 
 
@@ -20,9 +21,29 @@ def require_sdk_api_key(event_type: str) -> Callable:
         if not validation.ok or validation.record is None:
             raise HTTPException(status_code=401, detail=validation.error or "missing_api_key")
 
-        entitlement = service.get_entitlement(validation.record.user_id)
-        if not entitlement.sdk_cli_enabled:
-            raise HTTPException(status_code=403, detail="sdk_cli_not_enabled")
+        billing = getattr(request.app.state, "billing_service", None) or get_billing_service(
+            getattr(request.app.state, "supabase", None)
+        )
+        try:
+            entitlement = billing.assert_sdk_event_allowed(validation.record.user_id, event_type)
+            billing.deduct_credits(
+                validation.record.user_id,
+                event_type,
+                api_key_id=validation.record.id,
+                workflow_id=request.path_params.get("workflow_id"),
+            )
+            request.state.upgrade_hint = billing.upgrade_status(validation.record.user_id).get("suggested_upgrade")
+        except EntitlementDenied as exc:
+            raise HTTPException(status_code=403, detail=f"{exc.feature}_not_enabled")
+        except CreditLimitExceeded as exc:
+            raise HTTPException(
+                status_code=402,
+                detail={
+                    "error": "insufficient_credits",
+                    "required": exc.required,
+                    "remaining": exc.remaining,
+                },
+            )
 
         request.state.user_id = validation.record.user_id
         request.state.api_key_id = validation.record.id

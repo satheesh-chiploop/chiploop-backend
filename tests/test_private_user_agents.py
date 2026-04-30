@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 
 import browser_auth
 import browser_routes
+from billing import BillingService, InMemoryBillingRepository
 from user_agents.repository import UserAgentRepository
 from user_agents.service import UserAgentService, build_effective_agent_catalog
 
@@ -76,6 +77,7 @@ def _client(service: UserAgentService) -> TestClient:
     browser_auth.SUPABASE_JWT_SECRET = JWT_SECRET
     app = FastAPI()
     app.state.user_agent_service = service
+    app.state.billing_service = BillingService(InMemoryBillingRepository(default_plan_id="pro"))
     app.include_router(browser_routes.router)
     return TestClient(app)
 

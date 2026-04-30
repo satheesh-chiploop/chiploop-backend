@@ -8,6 +8,7 @@ import browser_auth
 import browser_routes
 from auth_api_keys.models import UsageEvent
 from auth_api_keys.service import APIKeyService, InMemoryAPIKeyStore
+from billing import BillingService, InMemoryBillingRepository
 
 
 JWT_SECRET = "phase7-test-secret"
@@ -21,6 +22,7 @@ def _client(service: APIKeyService | None = None) -> TestClient:
     browser_auth.SUPABASE_JWT_SECRET = JWT_SECRET
     app = FastAPI()
     app.state.api_key_service = service or APIKeyService(InMemoryAPIKeyStore())
+    app.state.billing_service = BillingService(InMemoryBillingRepository(default_plan_id="pro"))
     app.include_router(browser_routes.router)
     return TestClient(app)
 
