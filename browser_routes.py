@@ -1,3 +1,4 @@
+import os
 from typing import Any, Dict
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -5,6 +6,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from auth_api_keys.service import get_api_key_service
 from billing import CreditLimitExceeded, EntitlementDenied, get_billing_service
 from browser_auth import BrowserUser, require_browser_user
+from marketplace import MarketplaceService, SupabaseMarketplaceRepository
+from onboarding import OnboardingService, SupabaseOnboardingRepository
 from studio_contract.registry import load_registry
 from studio_factory.generate_agent import run_factory as run_studio_factory
 from studio_factory.models import AgentFactoryRequest
@@ -72,6 +75,40 @@ def _user_agent_service(request: Request) -> UserAgentService:
     if supabase is None:
         raise HTTPException(status_code=500, detail="user_agent_store_unavailable")
     return UserAgentService(SupabaseUserAgentRepository(supabase))
+
+
+def _marketplace_service(request: Request) -> MarketplaceService:
+    existing = getattr(request.app.state, "marketplace_service", None)
+    if existing is not None:
+        return existing
+    supabase = getattr(request.app.state, "supabase", None)
+    if supabase is None:
+        raise HTTPException(status_code=500, detail="marketplace_store_unavailable")
+    return MarketplaceService(SupabaseMarketplaceRepository(supabase), _user_agent_service(request))
+
+
+def _require_admin(user: BrowserUser) -> None:
+    admin_ids = {
+        item.strip()
+        for item in os.environ.get("CHIPLOOP_ADMIN_USER_IDS", "").split(",")
+        if item.strip()
+    }
+    role = str(user.claims.get("role") or user.claims.get("app_role") or "")
+    if role in {"admin", "platform_admin", "marketplace_admin"}:
+        return
+    if admin_ids and user.user_id in admin_ids:
+        return
+    raise HTTPException(status_code=403, detail="admin_required")
+
+
+def _onboarding_service(request: Request) -> OnboardingService:
+    existing = getattr(request.app.state, "onboarding_service", None)
+    if existing is not None:
+        return existing
+    supabase = getattr(request.app.state, "supabase", None)
+    if supabase is None:
+        raise HTTPException(status_code=500, detail="onboarding_store_unavailable")
+    return OnboardingService(SupabaseOnboardingRepository(supabase))
 
 
 def _registry_counts(registry_dir: str = "registry") -> Dict[str, int]:
@@ -312,3 +349,155 @@ def settings_upgrade_status(
     user: BrowserUser = Depends(require_browser_user),
 ):
     return {"status": "ok", "upgrade_status": _billing_service(request).upgrade_status(user.user_id)}
+
+
+@router.get("/settings/onboarding")
+def settings_onboarding(
+    request: Request,
+    user: BrowserUser = Depends(require_browser_user),
+):
+    state = _onboarding_service(request).get_state(user.user_id)
+    return {"status": "ok", "onboarding": state.to_dict()}
+
+
+@router.post("/settings/onboarding")
+async def settings_update_onboarding(
+    request: Request,
+    user: BrowserUser = Depends(require_browser_user),
+):
+    data = await request.json()
+    state = _onboarding_service(request).update_state(user.user_id, data)
+    return {"status": "ok", "onboarding": state.to_dict()}
+
+
+@router.get("/marketplace/agents")
+def marketplace_agents(
+    request: Request,
+    q: str = "",
+    loop_type: str = "",
+    domain: str = "",
+    _: BrowserUser = Depends(require_browser_user),
+):
+    agents = _marketplace_service(request).list_agents(query=q, loop_type=loop_type, domain=domain)
+    return {"status": "ok", "agents": agents}
+
+
+@router.get("/marketplace/agents/{listing_id_or_slug}")
+def marketplace_agent_detail(
+    listing_id_or_slug: str,
+    request: Request,
+    _: BrowserUser = Depends(require_browser_user),
+):
+    agent = _marketplace_service(request).get_agent(listing_id_or_slug)
+    if not agent:
+        raise HTTPException(status_code=404, detail="marketplace_agent_not_found")
+    return {"status": "ok", "agent": agent}
+
+
+@router.post("/marketplace/agents/{listing_id_or_slug}/install")
+def marketplace_install_agent(
+    listing_id_or_slug: str,
+    request: Request,
+    user: BrowserUser = Depends(require_browser_user),
+):
+    result = _marketplace_service(request).install_agent(user.user_id, listing_id_or_slug)
+    if not result.get("ok"):
+        raise HTTPException(status_code=404, detail=result.get("reason") or "install_failed")
+    return {"status": "ok", **result}
+
+
+@router.get("/marketplace/agents/{listing_id_or_slug}/reviews")
+def marketplace_reviews(
+    listing_id_or_slug: str,
+    request: Request,
+    _: BrowserUser = Depends(require_browser_user),
+):
+    return {"status": "ok", "reviews": _marketplace_service(request).list_reviews(listing_id_or_slug)}
+
+
+@router.post("/marketplace/agents/{listing_id_or_slug}/reviews")
+async def marketplace_create_review(
+    listing_id_or_slug: str,
+    request: Request,
+    user: BrowserUser = Depends(require_browser_user),
+):
+    data = await request.json()
+    result = _marketplace_service(request).review_agent(
+        user.user_id,
+        listing_id_or_slug,
+        int(data.get("rating") or 5),
+        str(data.get("review_text") or data.get("text") or ""),
+    )
+    if not result.get("ok"):
+        raise HTTPException(status_code=404, detail=result.get("reason") or "review_failed")
+    return {"status": "ok", **result}
+
+
+@router.get("/admin/marketplace/submissions")
+def admin_marketplace_submissions(
+    request: Request,
+    status: str = "",
+    user: BrowserUser = Depends(require_browser_user),
+):
+    _require_admin(user)
+    return {"status": "ok", "submissions": _marketplace_service(request).list_submissions(status=status)}
+
+
+@router.get("/admin/marketplace/submissions/{submission_id}")
+def admin_marketplace_submission_detail(
+    submission_id: str,
+    request: Request,
+    user: BrowserUser = Depends(require_browser_user),
+):
+    _require_admin(user)
+    submission = _marketplace_service(request).get_submission(submission_id)
+    if not submission:
+        raise HTTPException(status_code=404, detail="submission_not_found")
+    return {"status": "ok", "submission": submission}
+
+
+@router.post("/admin/marketplace/submissions/{submission_id}/approve")
+async def admin_marketplace_approve(
+    submission_id: str,
+    request: Request,
+    user: BrowserUser = Depends(require_browser_user),
+):
+    _require_admin(user)
+    data = await request.json()
+    result = _marketplace_service(request).approve_submission(submission_id, user.user_id, str(data.get("notes") or ""))
+    if not result.get("ok"):
+        raise HTTPException(status_code=404, detail=result.get("reason") or "approval_failed")
+    return {"status": "ok", **result}
+
+
+@router.post("/admin/marketplace/submissions/{submission_id}/reject")
+async def admin_marketplace_reject(
+    submission_id: str,
+    request: Request,
+    user: BrowserUser = Depends(require_browser_user),
+):
+    _require_admin(user)
+    data = await request.json()
+    result = _marketplace_service(request).reject_submission(submission_id, user.user_id, str(data.get("notes") or ""))
+    if not result.get("ok"):
+        raise HTTPException(status_code=404, detail=result.get("reason") or "reject_failed")
+    return {"status": "ok", **result}
+
+
+@router.post("/admin/marketplace/submissions/{submission_id}/request-changes")
+async def admin_marketplace_request_changes(
+    submission_id: str,
+    request: Request,
+    user: BrowserUser = Depends(require_browser_user),
+):
+    _require_admin(user)
+    data = await request.json()
+    result = _marketplace_service(request).reject_submission(
+        submission_id,
+        user.user_id,
+        str(data.get("notes") or ""),
+        changes_requested=True,
+    )
+    if not result.get("ok"):
+        raise HTTPException(status_code=404, detail=result.get("reason") or "request_changes_failed")
+    return {"status": "ok", **result}
