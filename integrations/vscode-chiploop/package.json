@@ -1,0 +1,75 @@
+{
+  "name": "chiploop-vscode",
+  "displayName": "ChipLoop",
+  "description": "Run ChipLoop workflows from VS Code using the ChipLoop CLI.",
+  "version": "0.1.0",
+  "publisher": "chiploop",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onCommand:chiploop.configure",
+    "onCommand:chiploop.runCurrentFile",
+    "onCommand:chiploop.runArch2Rtl",
+    "onCommand:chiploop.checkStatus",
+    "onCommand:chiploop.downloadArtifacts",
+    "onCommand:chiploop.openApps",
+    "onCommand:chiploop.openStudio"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "configuration": {
+      "title": "ChipLoop",
+      "properties": {
+        "chiploop.baseUrl": {
+          "type": "string",
+          "default": "",
+          "description": "ChipLoop backend base URL. API key is stored in VS Code SecretStorage."
+        },
+        "chiploop.defaultWorkflow": {
+          "type": "string",
+          "default": "arch2rtl",
+          "description": "Default ChipLoop workflow used by Run Current File."
+        },
+        "chiploop.outputDir": {
+          "type": "string",
+          "default": "chiploop_outputs",
+          "description": "Workspace-relative directory for downloaded artifacts."
+        }
+      }
+    },
+    "commands": [
+      {
+        "command": "chiploop.configure",
+        "title": "ChipLoop: Configure"
+      },
+      {
+        "command": "chiploop.runCurrentFile",
+        "title": "ChipLoop: Run Workflow from Current File"
+      },
+      {
+        "command": "chiploop.runArch2Rtl",
+        "title": "ChipLoop: Run Arch2RTL"
+      },
+      {
+        "command": "chiploop.checkStatus",
+        "title": "ChipLoop: Check Workflow Status"
+      },
+      {
+        "command": "chiploop.downloadArtifacts",
+        "title": "ChipLoop: Download Artifacts"
+      },
+      {
+        "command": "chiploop.openApps",
+        "title": "ChipLoop: Open Apps"
+      },
+      {
+        "command": "chiploop.openStudio",
+        "title": "ChipLoop: Open Studio"
+      }
+    ]
+  }
+}

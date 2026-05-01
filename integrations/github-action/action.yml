@@ -1,0 +1,152 @@
+name: "ChipLoop Workflow"
+description: "Run a ChipLoop workflow from GitHub Actions using the ChipLoop CLI."
+
+inputs:
+  workflow:
+    description: "ChipLoop workflow name, for example arch2rtl."
+    required: true
+  spec:
+    description: "Path to a spec file in the repository."
+    required: false
+    default: ""
+  spec-text:
+    description: "Inline spec text. Use either spec or spec-text."
+    required: false
+    default: ""
+  output-dir:
+    description: "Directory where ChipLoop artifacts should be downloaded."
+    required: false
+    default: "chiploop_outputs"
+  wait:
+    description: "Poll workflow status until completion."
+    required: false
+    default: "true"
+  timeout-seconds:
+    description: "Maximum polling duration when wait is true."
+    required: false
+    default: "900"
+  poll-interval-seconds:
+    description: "Polling interval when wait is true."
+    required: false
+    default: "15"
+  fail-on-error:
+    description: "Fail the GitHub job if the ChipLoop workflow fails."
+    required: false
+    default: "true"
+
+outputs:
+  workflow-id:
+    description: "The ChipLoop workflow ID."
+    value: ${{ steps.run.outputs.workflow_id }}
+  output-dir:
+    description: "Directory containing downloaded artifacts."
+    value: ${{ inputs.output-dir }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Install ChipLoop CLI
+      shell: bash
+      run: python -m pip install --upgrade chiploop-sdk
+
+    - name: Verify ChipLoop CLI
+      shell: bash
+      run: chiploop doctor --json
+
+    - name: Run ChipLoop workflow
+      id: run
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        if [ -z "${CHIPLOOP_BASE_URL:-}" ]; then
+          echo "CHIPLOOP_BASE_URL is required." >&2
+          exit 1
+        fi
+        if [ -z "${CHIPLOOP_API_KEY:-}" ]; then
+          echo "CHIPLOOP_API_KEY is required." >&2
+          exit 1
+        fi
+
+        if [ -n "${{ inputs.spec }}" ] && [ -n "${{ inputs.spec-text }}" ]; then
+          echo "Use either spec or spec-text, not both." >&2
+          exit 1
+        fi
+
+        if [ -n "${{ inputs.spec }}" ]; then
+          chiploop run "${{ inputs.workflow }}" --spec "${{ inputs.spec }}" --json > chiploop_run.json
+        elif [ -n "${{ inputs.spec-text }}" ]; then
+          chiploop run "${{ inputs.workflow }}" --spec-text "${{ inputs.spec-text }}" --json > chiploop_run.json
+        else
+          echo "Either spec or spec-text is required." >&2
+          exit 1
+        fi
+
+        cat chiploop_run.json
+        workflow_id="$(python -c "import json; data=json.load(open('chiploop_run.json')); print(data.get('workflow_id') or data.get('raw', {}).get('workflow_id') or '')")"
+        if [ -z "$workflow_id" ]; then
+          echo "ChipLoop run did not return workflow_id." >&2
+          exit 1
+        fi
+        echo "workflow_id=$workflow_id" >> "$GITHUB_OUTPUT"
+
+    - name: Wait for completion
+      if: ${{ inputs.wait == 'true' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        workflow_id="${{ steps.run.outputs.workflow_id }}"
+        deadline=$(( $(date +%s) + ${{ inputs.timeout-seconds }} ))
+        status="unknown"
+
+        while [ "$(date +%s)" -lt "$deadline" ]; do
+          chiploop status "$workflow_id" --json > chiploop_status.json || true
+          cat chiploop_status.json
+          status="$(python -c "import json; data=json.load(open('chiploop_status.json')); print((data.get('status') or data.get('raw', {}).get('status') or 'unknown').lower())")"
+          case "$status" in
+            completed|complete|success|succeeded|done)
+              exit 0
+              ;;
+            failed|error|cancelled|canceled)
+              if [ "${{ inputs.fail-on-error }}" = "true" ]; then
+                exit 1
+              fi
+              exit 0
+              ;;
+          esac
+          sleep "${{ inputs.poll-interval-seconds }}"
+        done
+
+        echo "Timed out waiting for ChipLoop workflow $workflow_id. Last status: $status" >&2
+        if [ "${{ inputs.fail-on-error }}" = "true" ]; then
+          exit 1
+        fi
+
+    - name: Download artifacts
+      shell: bash
+      run: |
+        set -euo pipefail
+        mkdir -p "${{ inputs.output-dir }}"
+        workflow_id="${{ steps.run.outputs.workflow_id }}"
+        chiploop artifacts list "$workflow_id" --json > chiploop_artifacts.json
+        cat chiploop_artifacts.json
+        python - <<'PY'
+        import json
+        import subprocess
+
+        data = json.load(open("chiploop_artifacts.json"))
+        files = data.get("files") or []
+        workflow_id = "${{ steps.run.outputs.workflow_id }}"
+        output_dir = "${{ inputs.output-dir }}"
+        for name in files:
+            subprocess.check_call([
+                "chiploop",
+                "artifacts",
+                "download",
+                workflow_id,
+                "--name",
+                name,
+                "--out",
+                output_dir,
+            ])
+        PY

@@ -1,0 +1,27 @@
+name: ChipLoop Arch2RTL
+
+on:
+  workflow_dispatch:
+
+jobs:
+  arch2rtl:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # If this action lives in the same repository, use the local path.
+      # If published later, replace with chiploop/chiploop-action@v1.
+      - uses: ./backend/integrations/github-action
+        with:
+          workflow: arch2rtl
+          spec: backend/examples/sdk/arch2rtl_spec.md
+          output-dir: chiploop_outputs
+          wait: "true"
+        env:
+          CHIPLOOP_BASE_URL: ${{ secrets.CHIPLOOP_BASE_URL }}
+          CHIPLOOP_API_KEY: ${{ secrets.CHIPLOOP_API_KEY }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: chiploop-artifacts
+          path: chiploop_outputs
