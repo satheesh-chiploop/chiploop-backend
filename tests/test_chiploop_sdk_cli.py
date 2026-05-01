@@ -58,8 +58,9 @@ def test_sdk_api_error_handling():
         session=FakeSession(FakeResponse(status_code=500, data={"detail": "failed"}, text="failed")),
     )
 
-    with pytest.raises(ChipLoopAPIError):
+    with pytest.raises(ChipLoopAPIError) as exc:
         client.list_workflows()
+    assert exc.value.status_code == 500
 
 
 def test_run_workflow_request_construction():
@@ -70,7 +71,7 @@ def test_run_workflow_request_construction():
 
     method, url, kwargs = session.calls[0]
     assert method == "POST"
-    assert url == "https://chiploop.example/run_workflow"
+    assert url == "https://chiploop.example/sdk/v1/workflows/run"
     assert json.loads(kwargs["data"]["workflow"])["loop_type"] == "digital"
     assert kwargs["data"]["spec_text"] == "module top; endmodule"
     assert kwargs["headers"]["Authorization"] == "Bearer token"
@@ -99,6 +100,32 @@ def test_cli_workflows_list(monkeypatch, capsys):
 
     assert cli_main(["workflows", "list", "--json"]) == 0
     assert "\"count\": 1" in capsys.readouterr().out
+
+
+def test_sdk_plan_and_usage_models():
+    responses = [
+        FakeResponse(data={"status": "ok", "usage": {"recent_event_count": 2, "by_event_type": {"sdk_plan": 1}}}),
+        FakeResponse(data={"status": "ok", "plan": {"plan_name": "Pro", "credits": 5000, "credits_used": 100, "credits_remaining": 4900}}),
+    ]
+
+    class MultiSession:
+        def __init__(self):
+            self.calls = []
+
+        def request(self, method, url, **kwargs):
+            self.calls.append((method, url, kwargs))
+            return responses.pop(0)
+
+    session = MultiSession()
+    client = ChipLoopClient("https://chiploop.example", session=session)
+
+    usage = client.get_usage()
+    plan = client.get_plan()
+
+    assert usage.recent_event_count == 2
+    assert plan.plan_name == "Pro"
+    assert session.calls[0][1] == "https://chiploop.example/sdk/v1/usage"
+    assert session.calls[1][1] == "https://chiploop.example/sdk/v1/plan"
 
 
 def test_cli_run_uses_spec_text(monkeypatch, capsys):
@@ -159,3 +186,34 @@ def test_cli_studio_generate_agent_defaults_to_dry_run(tmp_path, monkeypatch):
 
     assert cli_main(["--base-url", "http://local", "studio", "generate-agent", "--request", str(request)]) == 0
     assert calls["dry_run"] is True
+
+
+def test_cli_usage_and_plan(monkeypatch, capsys):
+    class FakeUsage:
+        recent_event_count = 3
+        by_event_type = {"sdk_agents_list": 2}
+        raw = {"usage": {"recent_event_count": 3}}
+
+    class FakePlan:
+        plan_name = "Starter"
+        credits = 2000
+        credits_used = 10
+        credits_remaining = 1990
+        raw = {"plan": {"plan_name": "Starter"}}
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def get_usage(self):
+            return FakeUsage()
+
+        def get_plan(self):
+            return FakePlan()
+
+    monkeypatch.setattr("chiploop_sdk.cli.ChipLoopClient", FakeClient)
+
+    assert cli_main(["--base-url", "http://local", "usage"]) == 0
+    assert "recent_event_count" in capsys.readouterr().out
+    assert cli_main(["--base-url", "http://local", "plan"]) == 0
+    assert "Starter" in capsys.readouterr().out

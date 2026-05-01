@@ -3,7 +3,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "chiploop-backend-tools"
+name = "chiploop-sdk"
 version = "0.1.0"
 description = "ChipLoop backend developer SDK and CLI tools"
 requires-python = ">=3.10"

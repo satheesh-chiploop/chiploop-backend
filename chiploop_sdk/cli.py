@@ -18,6 +18,50 @@ def _print(data: Any, as_json: bool = False) -> None:
         print(data)
 
 
+def _print_rows(rows: list[dict], columns: list[str]) -> None:
+    if not rows:
+        print("No results.")
+        return
+    widths = {
+        column: max(len(column), *(len(str(row.get(column, ""))) for row in rows))
+        for column in columns
+    }
+    print("  ".join(column.ljust(widths[column]) for column in columns))
+    print("  ".join("-" * widths[column] for column in columns))
+    for row in rows:
+        print("  ".join(str(row.get(column, "")).ljust(widths[column]) for column in columns))
+
+
+def _print_workflows(payload: Dict[str, Any], as_json: bool) -> None:
+    if as_json:
+        _print(payload, True)
+        return
+    rows = [
+        {
+            "name": item.get("name", ""),
+            "loop_type": item.get("loop_type", ""),
+            "description": (item.get("description") or "")[:70],
+        }
+        for item in payload.get("workflows", [])
+    ]
+    _print_rows(rows, ["name", "loop_type", "description"])
+
+
+def _print_agents(payload: Dict[str, Any], as_json: bool) -> None:
+    if as_json:
+        _print(payload, True)
+        return
+    rows = [
+        {
+            "name": item.get("name", ""),
+            "loop_type": item.get("loop_type", ""),
+            "mode": item.get("execution_mode", ""),
+        }
+        for item in payload.get("agents", [])
+    ]
+    _print_rows(rows, ["name", "loop_type", "mode"])
+
+
 def _load_json_file(path: str) -> Dict[str, Any]:
     return json.loads(Path(path).read_text(encoding="utf-8"))
 
@@ -57,6 +101,9 @@ def build_parser() -> argparse.ArgumentParser:
     artifacts_download.add_argument("--name", required=True)
     artifacts_download.add_argument("--out", required=True)
 
+    sub.add_parser("usage")
+    sub.add_parser("plan")
+
     studio = sub.add_parser("studio")
     studio_sub = studio.add_subparsers(dest="studio_command", required=True)
     studio_plan = studio_sub.add_parser("plan-agent")
@@ -90,11 +137,11 @@ def main(argv: list[str] | None = None) -> int:
             return 0
 
         if args.command == "workflows" and args.workflows_command == "list":
-            _print(client.list_workflows(), args.json)
+            _print_workflows(client.list_workflows(), args.json)
             return 0
 
         if args.command == "agents" and args.agents_command == "list":
-            _print(client.list_agents(), args.json)
+            _print_agents(client.list_agents(), args.json)
             return 0
 
         if args.command == "run":
@@ -114,6 +161,24 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "artifacts" and args.artifacts_command == "download":
             target = client.download_artifact(args.workflow_id, args.name, args.out)
             _print({"downloaded": str(target)}, args.json)
+            return 0
+
+        if args.command == "usage":
+            usage = client.get_usage()
+            _print(usage.raw if args.json else {
+                "recent_event_count": usage.recent_event_count,
+                "by_event_type": usage.by_event_type,
+            }, args.json)
+            return 0
+
+        if args.command == "plan":
+            plan = client.get_plan()
+            _print(plan.raw if args.json else {
+                "plan": plan.plan_name,
+                "credits": plan.credits,
+                "credits_used": plan.credits_used,
+                "credits_remaining": plan.credits_remaining,
+            }, args.json)
             return 0
 
         if args.command == "studio" and args.studio_command == "plan-agent":

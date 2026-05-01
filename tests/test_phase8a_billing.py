@@ -83,6 +83,23 @@ def test_api_key_limit_enforced():
         service.assert_api_key_limit("user-1")
 
 
+def test_sdk_cli_available_only_on_pro_and_above():
+    repo = InMemoryBillingRepository(default_plan_id="starter")
+    service = BillingService(repo)
+
+    with pytest.raises(EntitlementDenied):
+        service.assert_entitlement("user-1", "sdk_cli_enabled")
+
+    repo.set_user_plan("user-1", "pro")
+    service.assert_entitlement("user-1", "sdk_cli_enabled")
+
+    repo.set_user_plan("user-1", "pro_max")
+    service.assert_entitlement("user-1", "sdk_cli_enabled")
+
+    repo.set_user_plan("user-1", "enterprise")
+    service.assert_entitlement("user-1", "sdk_cli_enabled")
+
+
 def test_agent_factory_entitlement_denied_for_custom_plan():
     class NoFactoryRepository(InMemoryBillingRepository):
         def get_plan(self, plan_id):

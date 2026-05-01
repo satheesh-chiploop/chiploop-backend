@@ -7,7 +7,7 @@ from urllib.parse import quote
 import requests
 
 from .errors import ChipLoopAPIError, ChipLoopConfigError
-from .models import WorkflowRun, WorkflowStatus
+from .models import PlanSummary, UsageSummary, WorkflowRun, WorkflowStatus
 
 
 class ChipLoopClient:
@@ -17,6 +17,7 @@ class ChipLoopClient:
         api_key: Optional[str] = None,
         timeout: float = 60.0,
         session: Optional[requests.Session] = None,
+        api_version: str = "v1",
     ):
         self.base_url = (base_url or os.getenv("CHIPLOOP_BASE_URL") or "").rstrip("/")
         if not self.base_url:
@@ -24,6 +25,7 @@ class ChipLoopClient:
         self.api_key = api_key if api_key is not None else os.getenv("CHIPLOOP_API_KEY")
         self.timeout = timeout
         self.session = session or requests.Session()
+        self.api_version = api_version.strip("/") or "v1"
 
     def _headers(self) -> Dict[str, str]:
         headers = {"User-Agent": "chiploop-python-sdk/0.1"}
@@ -39,10 +41,26 @@ class ChipLoopClient:
         headers.update(self._headers())
         response = self.session.request(method, self._url(path), timeout=self.timeout, headers=headers, **kwargs)
         if response.status_code >= 400:
+            detail: Any = None
+            code: Optional[str] = None
+            request_id = response.headers.get("x-request-id") or response.headers.get("X-Request-ID")
+            try:
+                payload = response.json()
+                detail = payload.get("detail") if isinstance(payload, dict) else payload
+                if isinstance(detail, dict):
+                    code = str(detail.get("error") or detail.get("code") or "")
+                elif isinstance(detail, str):
+                    code = detail
+            except Exception:
+                payload = None
+            message_detail = detail if isinstance(detail, str) else code or response.text
             raise ChipLoopAPIError(
-                f"ChipLoop API error {response.status_code}: {response.text}",
+                f"ChipLoop API error {response.status_code}: {message_detail}",
                 status_code=response.status_code,
                 response_text=response.text,
+                code=code or None,
+                detail=detail,
+                request_id=request_id,
             )
         content_type = response.headers.get("content-type", "")
         if "application/json" in content_type:
@@ -78,22 +96,22 @@ class ChipLoopClient:
                 path = Path(spec_path)
                 handle = path.open("rb")
                 files = {"file": (path.name, handle)}
-            result = self._request("POST", "/run_workflow", data=data, files=files)
+            result = self._request("POST", f"/sdk/{self.api_version}/workflows/run", data=data, files=files)
             return WorkflowRun.from_dict(result)
         finally:
             if handle:
                 handle.close()
 
     def get_workflow_status(self, workflow_id: str) -> WorkflowStatus:
-        return WorkflowStatus.from_dict(self._request("GET", f"/sdk/workflows/{workflow_id}/status"))
+        return WorkflowStatus.from_dict(self._request("GET", f"/sdk/{self.api_version}/workflows/{workflow_id}/status"))
 
     def list_artifacts(self, workflow_id: str) -> Dict[str, Any]:
-        return self._request("GET", f"/list_artifacts/{workflow_id}")
+        return self._request("GET", f"/sdk/{self.api_version}/workflows/{workflow_id}/artifacts")
 
     def download_artifact(self, workflow_id: str, artifact_name: str, output_dir: str) -> Path:
         target = _safe_artifact_target(output_dir, artifact_name)
         encoded = quote(artifact_name.replace("\\", "/"), safe="/")
-        content = self._request("GET", f"/download_artifacts/{workflow_id}/{encoded}")
+        content = self._request("GET", f"/sdk/{self.api_version}/workflows/{workflow_id}/artifacts/{encoded}")
         target.parent.mkdir(parents=True, exist_ok=True)
         if isinstance(content, bytes):
             payload = content
@@ -105,16 +123,22 @@ class ChipLoopClient:
         return target
 
     def list_agents(self) -> Dict[str, Any]:
-        return self._request("GET", "/sdk/agents")
+        return self._request("GET", f"/sdk/{self.api_version}/agents")
 
     def list_workflows(self) -> Dict[str, Any]:
-        return self._request("GET", "/sdk/workflows")
+        return self._request("GET", f"/sdk/{self.api_version}/workflows")
 
     def plan_agent(self, request: Dict[str, Any]) -> Dict[str, Any]:
-        return self._request("POST", "/sdk/studio/plan-agent", json=request)
+        return self._request("POST", f"/sdk/{self.api_version}/studio/plan-agent", json=request)
 
     def generate_agent(self, request: Dict[str, Any], *, dry_run: bool = True) -> Dict[str, Any]:
-        return self._request("POST", "/sdk/studio/generate-agent", json={"request": request, "dry_run": dry_run})
+        return self._request("POST", f"/sdk/{self.api_version}/studio/generate-agent", json={"request": request, "dry_run": dry_run})
+
+    def get_usage(self) -> UsageSummary:
+        return UsageSummary.from_dict(self._request("GET", f"/sdk/{self.api_version}/usage"))
+
+    def get_plan(self) -> PlanSummary:
+        return PlanSummary.from_dict(self._request("GET", f"/sdk/{self.api_version}/plan"))
 
 
 def _safe_artifact_target(output_dir: str, artifact_name: str) -> Path:

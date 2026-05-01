@@ -1,0 +1,25 @@
+name: ChipLoop Arch2RTL Smoke
+
+on:
+  workflow_dispatch:
+
+jobs:
+  arch2rtl:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install ChipLoop SDK
+        run: pip install chiploop-sdk
+
+      - name: Run Arch2RTL
+        env:
+          CHIPLOOP_BASE_URL: ${{ secrets.CHIPLOOP_BASE_URL }}
+          CHIPLOOP_API_KEY: ${{ secrets.CHIPLOOP_API_KEY }}
+        run: |
+          chiploop doctor
+          chiploop run arch2rtl --spec examples/sdk/arch2rtl_spec.md --json

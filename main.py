@@ -1112,7 +1112,8 @@ async def run_workflow(
       - Queues background execution
     """
     try:
-        user = verify_token(request)
+        sdk_user_id = getattr(request.state, "user_id", None)
+        user = verify_token(request) if not sdk_user_id else {"sub": sdk_user_id}
         user_id = user.get("sub") if user and user.get("sub") and user.get("sub") != "anonymous" else None
         workflow_id = str(uuid.uuid4())
         run_id = str(uuid.uuid4())
@@ -2672,6 +2673,11 @@ def sdk_list_agents(request: Request):
     }
 
 
+@app.get("/sdk/v1/agents", dependencies=[Depends(require_sdk_api_key("sdk_agents_list"))])
+def sdk_v1_list_agents(request: Request):
+    return sdk_list_agents(request)
+
+
 @app.get("/sdk/workflows", dependencies=[Depends(require_sdk_api_key("sdk_workflows_list"))])
 def sdk_list_workflows(request: Request):
     registry = load_registry("registry")
@@ -2681,6 +2687,42 @@ def sdk_list_workflows(request: Request):
         "count": len(registry.workflows),
         "upgrade_hint": getattr(request.state, "upgrade_hint", None),
     }
+
+
+@app.get("/sdk/v1/workflows", dependencies=[Depends(require_sdk_api_key("sdk_workflows_list"))])
+def sdk_v1_list_workflows(request: Request):
+    return sdk_list_workflows(request)
+
+
+@app.post("/sdk/v1/workflows/run", dependencies=[Depends(require_sdk_api_key("sdk_workflow_run"))])
+async def sdk_v1_run_workflow(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    workflow: str = Form(...),
+    file: UploadFile = File(None),
+    spec_text: str = Form(None),
+    instrument_ids: Optional[str] = Form(None),
+    scope_json: Optional[str] = Form(None),
+    bench_id: Optional[str] = Form(None),
+    bench_name: Optional[str] = Form(None),
+    bench_location: Optional[str] = Form(None),
+    test_plan_name: Optional[str] = Form(None),
+    preview_test_plan_json: Optional[str] = Form(None),
+):
+    return await run_workflow(
+        request=request,
+        background_tasks=background_tasks,
+        workflow=workflow,
+        file=file,
+        spec_text=spec_text,
+        instrument_ids=instrument_ids,
+        scope_json=scope_json,
+        bench_id=bench_id,
+        bench_name=bench_name,
+        bench_location=bench_location,
+        test_plan_name=test_plan_name,
+        preview_test_plan_json=preview_test_plan_json,
+    )
 
 
 @app.get("/sdk/workflows/{workflow_id}/status", dependencies=[Depends(require_sdk_api_key("sdk_workflow_status"))])
@@ -2700,11 +2742,60 @@ def sdk_workflow_status(workflow_id: str, request: Request):
     return data
 
 
+@app.get("/sdk/v1/workflows/{workflow_id}/status", dependencies=[Depends(require_sdk_api_key("sdk_workflow_status"))])
+def sdk_v1_workflow_status(workflow_id: str, request: Request):
+    return sdk_workflow_status(workflow_id, request)
+
+
+@app.get("/sdk/v1/workflows/{workflow_id}/artifacts", dependencies=[Depends(require_sdk_api_key("sdk_artifacts_list"))])
+def sdk_v1_list_artifacts(workflow_id: str, request: Request):
+    payload = list_artifacts(workflow_id)
+    payload["upgrade_hint"] = getattr(request.state, "upgrade_hint", None)
+    return payload
+
+
+@app.get(
+    "/sdk/v1/workflows/{workflow_id}/artifacts/{rel_path:path}",
+    dependencies=[Depends(require_sdk_api_key("sdk_artifact_download"))],
+)
+def sdk_v1_download_artifact(workflow_id: str, rel_path: str):
+    return download_artifact(workflow_id, rel_path)
+
+
+@app.get("/sdk/v1/usage", dependencies=[Depends(require_sdk_api_key("sdk_usage"))])
+def sdk_v1_usage(request: Request):
+    service = get_api_key_service(getattr(request.app.state, "supabase", None))
+    user_id = getattr(request.state, "user_id", None)
+    return {
+        "status": "ok",
+        "usage": service.usage_summary(user_id),
+        "upgrade_hint": getattr(request.state, "upgrade_hint", None),
+    }
+
+
+@app.get("/sdk/v1/plan", dependencies=[Depends(require_sdk_api_key("sdk_plan"))])
+def sdk_v1_plan(request: Request):
+    billing = getattr(request.app.state, "billing_service", None) or get_billing_service(
+        getattr(request.app.state, "supabase", None)
+    )
+    user_id = getattr(request.state, "user_id", None)
+    return {
+        "status": "ok",
+        "plan": billing.plan_summary(user_id),
+        "upgrade_hint": getattr(request.state, "upgrade_hint", None),
+    }
+
+
 @app.post("/sdk/studio/plan-agent", dependencies=[Depends(require_sdk_api_key("sdk_studio_plan_agent"))])
 async def sdk_studio_plan_agent(request: Request):
     data = await request.json()
     result = plan_studio_agent(AgentPlanRequest.from_dict(data))
     return {**result.to_dict(), "upgrade_hint": getattr(request.state, "upgrade_hint", None)}
+
+
+@app.post("/sdk/v1/studio/plan-agent", dependencies=[Depends(require_sdk_api_key("sdk_studio_plan_agent"))])
+async def sdk_v1_studio_plan_agent(request: Request):
+    return await sdk_studio_plan_agent(request)
 
 
 @app.post("/sdk/studio/generate-agent", dependencies=[Depends(require_sdk_api_key("sdk_studio_generate_agent"))])
@@ -2717,6 +2808,11 @@ async def sdk_studio_generate_agent(request: Request):
         raise HTTPException(status_code=403, detail="agent_factory_write_not_enabled")
     result = run_studio_factory(AgentFactoryRequest.from_dict(request_data), dry_run=dry_run)
     return {**result.to_dict(), "upgrade_hint": getattr(request.state, "upgrade_hint", None)}
+
+
+@app.post("/sdk/v1/studio/generate-agent", dependencies=[Depends(require_sdk_api_key("sdk_studio_generate_agent"))])
+async def sdk_v1_studio_generate_agent(request: Request):
+    return await sdk_studio_generate_agent(request)
 
 from planner.ai_work_planner import plan_workflow
 

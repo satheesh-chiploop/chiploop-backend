@@ -21,10 +21,10 @@ from billing import BillingService, InMemoryBillingRepository
 from chiploop_sdk.client import ChipLoopClient
 
 
-def _app_with_auth(service: APIKeyService) -> FastAPI:
+def _app_with_auth(service: APIKeyService, *, plan_id: str = "pro") -> FastAPI:
     configure_api_key_service(service)
     app = FastAPI()
-    app.state.billing_service = BillingService(InMemoryBillingRepository(default_plan_id="starter"))
+    app.state.billing_service = BillingService(InMemoryBillingRepository(default_plan_id=plan_id))
 
     @app.get("/sdk/agents", dependencies=[Depends(require_sdk_api_key("sdk_agents_list"))])
     def sdk_agents():
@@ -91,6 +91,17 @@ def test_valid_api_key_accepted_and_usage_recorded():
     assert len(store.usage_events) == 1
     assert store.usage_events[0].event_type == "sdk_workflow_status"
     assert store.usage_events[0].workflow_id == "wf-1"
+
+
+def test_starter_plan_rejects_sdk_access():
+    store = InMemoryAPIKeyStore()
+    service = APIKeyService(store)
+    raw, _ = service.create_key("user-1", "starter")
+    client = TestClient(_app_with_auth(service, plan_id="starter"))
+
+    response = client.get("/sdk/agents", headers={"Authorization": f"Bearer {raw}"})
+
+    assert response.status_code == 403
 
 
 def test_app_non_sdk_endpoint_not_affected():
