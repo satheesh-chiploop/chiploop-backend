@@ -6,7 +6,7 @@ Phase 8D defines the trial-to-paid ladder and backend-driven upgrade nudges. It 
 
 | Plan | Price | Intro discount | Credits |
 | --- | ---: | ---: | ---: |
-| Trial | Free for 30 days | N/A | 100 trial credits |
+| Trial | Free for 7 days | N/A | 100 trial credits |
 | Starter | $19.99/month | $14.99 for first 3 cycles | 2,000/month |
 | Pro | $39.99/month | $29.99 for first 3 cycles | 5,000/month |
 | Pro Max | $59.99/month | $44.99 for first 3 cycles | 12,000/month |
@@ -17,7 +17,7 @@ Pro is marked as Most Popular in the frontend pricing page.
 ## Trial Rules
 
 - Credit card is required at signup through Stripe checkout.
-- Trial duration is 30 days.
+- Trial duration is 7 days.
 - No charge during trial.
 - Trial auto-converts to Starter unless canceled.
 - Users can cancel before trial end.
@@ -76,7 +76,7 @@ Create Stripe prices for:
 
 Use:
 
-- `trial_period_days = 30`
+- `trial_period_days = 7`
 - a 25% coupon or promotion code limited to 3 billing cycles
 
 Store Stripe price IDs in plan metadata or environment-backed server config. Do not expose Stripe secrets to the browser.
@@ -107,3 +107,4 @@ npm run build
 - Real Stripe checkout/webhooks are not implemented in this phase.
 - Auto-conversion updates subscription state but does not charge until Stripe integration is added.
 - Existing `free` plan rows are compatibility aliases for Trial and should be migrated deliberately.
+

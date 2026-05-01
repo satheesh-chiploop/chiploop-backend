@@ -26,10 +26,10 @@ create index if not exists idx_user_subscriptions_user_trial
   on public.user_subscriptions (user_id, trial_status, trial_end_at desc);
 
 comment on column public.user_subscriptions.trial_start_at is
-  'Start timestamp for the 30-day Stripe-backed trial.';
+  'Start timestamp for the 7-day Stripe-backed trial.';
 
 comment on column public.user_subscriptions.trial_end_at is
-  'End timestamp for the 30-day trial. Trial converts to Starter when auto_renew is true.';
+  'End timestamp for the 7-day trial. Trial converts to Starter when auto_renew is true.';
 
 comment on column public.user_subscriptions.trial_status is
   'Trial lifecycle: active, expired, converted, canceled.';
@@ -73,7 +73,7 @@ insert into public.subscription_plans (
   (
     'trial',
     'Trial',
-    '30-day Trial',
+    '7-day Trial',
     0,
     100,
     100,
@@ -85,16 +85,16 @@ insert into public.subscription_plans (
     0,
     '{
       "requires_credit_card": true,
-      "trial_days": 30,
+      "trial_days": 7,
       "converts_to": "starter",
-      "trial_message": "Start free trial. $19.99/month after 30 days. Cancel anytime before trial ends.",
+      "trial_message": "Start free trial. $19.99/month after 7 days. Cancel anytime before trial ends.",
       "entitlements": {
         "plan_id": "trial",
         "plan_name": "Trial",
         "monthly_credits": 100,
-        "max_api_keys": 1,
+        "max_api_keys": 0,
         "max_private_agents": 1,
-        "sdk_cli_enabled": true,
+        "sdk_cli_enabled": false,
         "agent_planner_enabled": true,
         "agent_factory_dry_run_enabled": true,
         "private_agent_save_enabled": true,

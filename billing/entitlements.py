@@ -7,7 +7,7 @@ PLAN_DEFINITIONS: Dict[str, Plan] = {
     "trial": Plan(
         id="trial",
         name="Trial",
-        display_name="30-day Trial",
+        display_name="7-day Trial",
         price_monthly_usd=0,
         monthly_credits=100,
         entitlements=Entitlements(
@@ -23,7 +23,7 @@ PLAN_DEFINITIONS: Dict[str, Plan] = {
             dag_optimization_enabled=False,
             marketplace_submit_enabled=False,
         ),
-        metadata={"requires_credit_card": True, "trial_days": 30, "converts_to": "starter"},
+        metadata={"requires_credit_card": True, "trial_days": 7, "converts_to": "starter"},
     ),
     "starter": Plan(
         id="starter",

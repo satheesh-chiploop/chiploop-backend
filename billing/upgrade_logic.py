@@ -38,14 +38,14 @@ def build_upgrade_decision(
             "show": True,
             "type": "trial_expired",
             "target_plan": "Starter",
-            "message": "Your trial has ended. Starter is $19.99/month after the 30-day trial, with 25% off for the first 3 months.",
+            "message": "Your trial has ended. Starter is $19.99/month after the 7-day trial, with 25% off for the first 3 months.",
             "reason": reason or "trial_expired",
         }
 
     if days is not None and days <= 5:
         message = (
             f"Your trial ends in {days} day{'s' if days != 1 else ''}. "
-            "Starter is $19.99/month after 30 days, with 25% off for the first 3 months. Cancel anytime before the trial ends."
+            "Starter is $19.99/month after 7 days, with 25% off for the first 3 months. Cancel anytime before the trial ends."
         )
         return {
             "show": True,
