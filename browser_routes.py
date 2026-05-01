@@ -15,6 +15,7 @@ from studio_planner.models import AgentPlanRequest
 from studio_planner.planner import plan_agent as plan_studio_agent
 from user_agents.repository import SupabaseUserAgentRepository
 from user_agents.service import UserAgentService
+from webinar import SupabaseWebinarRegistrationRepository, WebinarRegistrationError, WebinarRegistrationService
 from workflow_dag.models import WorkflowDAG
 from workflow_dag.planner import dag_from_agents, dag_from_studio_graph, dry_run_plan
 from workflow_dag.validator import validate_dag
@@ -111,6 +112,16 @@ def _onboarding_service(request: Request) -> OnboardingService:
     return OnboardingService(SupabaseOnboardingRepository(supabase))
 
 
+def _webinar_service(request: Request) -> WebinarRegistrationService:
+    existing = getattr(request.app.state, "webinar_service", None)
+    if existing is not None:
+        return existing
+    supabase = getattr(request.app.state, "supabase", None)
+    if supabase is None:
+        raise HTTPException(status_code=500, detail="webinar_registration_store_unavailable")
+    return WebinarRegistrationService(SupabaseWebinarRegistrationRepository(supabase))
+
+
 def _registry_counts(registry_dir: str = "registry") -> Dict[str, int]:
     registry = load_registry(registry_dir)
     return {
@@ -136,6 +147,23 @@ def _dag_from_payload(data: Dict[str, Any]) -> WorkflowDAG:
             infer_parallel=bool(data.get("infer_parallel", True)),
         )
     return WorkflowDAG.from_dict(data)
+
+
+@router.post("/webinar/register")
+async def webinar_register(request: Request):
+    data = await request.json()
+    try:
+        registration = _webinar_service(request).register(data)
+    except WebinarRegistrationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {
+        "status": "ok",
+        "registration": {
+            "id": registration.id,
+            "preferred_session": registration.preferred_session,
+            "created_at": registration.created_at,
+        },
+    }
 
 
 @router.get("/studio/registry/summary")
