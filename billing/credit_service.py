@@ -20,6 +20,13 @@ class CreditLimitExceeded(Exception):
         super().__init__(f"insufficient credits: required={required}, remaining={remaining}")
 
 
+class BillingPaymentRequired(Exception):
+    def __init__(self, billing_status: str, grace_period_end_at: Optional[str] = None):
+        self.billing_status = billing_status
+        self.grace_period_end_at = grace_period_end_at
+        super().__init__(billing_status)
+
+
 class BillingService:
     def __init__(self, repository: BillingRepository):
         self.repository = repository
@@ -34,6 +41,23 @@ class BillingService:
 
     def get_entitlements(self, user_id: str) -> Entitlements:
         return self.get_user_plan(user_id).entitlements
+
+    def is_billing_blocked(self, user_id: str) -> bool:
+        subscription = self._subscription(user_id)
+        if not subscription or subscription.billing_status not in {"past_due", "unpaid", "payment_failed"}:
+            return False
+        if not subscription.grace_period_end_at:
+            return True
+        try:
+            grace_end = datetime.fromisoformat(subscription.grace_period_end_at.replace("Z", "+00:00"))
+        except ValueError:
+            return True
+        return datetime.now(timezone.utc) >= grace_end
+
+    def assert_billing_current(self, user_id: str) -> None:
+        subscription = self._subscription(user_id)
+        if subscription and self.is_billing_blocked(user_id):
+            raise BillingPaymentRequired(subscription.billing_status, subscription.grace_period_end_at)
 
     def discounted_price(self, plan: Plan) -> Optional[float]:
         if plan.price_monthly_usd is None:
@@ -125,6 +149,7 @@ class BillingService:
         return entitlements
 
     def assert_sdk_event_allowed(self, user_id: str, event_type: str) -> Entitlements:
+        self.assert_billing_current(user_id)
         feature = SDK_EVENT_TO_FEATURE.get(event_type, "sdk_cli_enabled")
         return self.assert_entitlement(user_id, feature)
 
@@ -150,6 +175,7 @@ class BillingService:
         api_key_id: Optional[str] = None,
         workflow_id: Optional[str] = None,
     ) -> Dict[str, Optional[int]]:
+        self.assert_billing_current(user_id)
         estimate = self.estimate_credits(action_type, metadata)
         credits = int(amount if amount is not None else estimate.credits)
         balance = self.get_credit_balance(user_id)
@@ -190,6 +216,7 @@ class BillingService:
         )
         return {
             "current_plan": plan_payload(plan),
+            "billing_blocked": self.is_billing_blocked(user_id),
             "trial_status": subscription.trial_status if subscription else ("active" if plan.id in {"trial", "free"} else None),
             "days_remaining": self.get_trial_days_remaining(user_id),
             "suggested_upgrade": suggestion,
@@ -229,6 +256,8 @@ class BillingService:
             "discount_months_remaining": discount_months_remaining,
             "entitlements": plan.entitlements.to_dict(),
             "billing_status": subscription.billing_status if subscription else ("trial" if plan.id in {"trial", "free"} else "placeholder"),
+            "billing_blocked": self.is_billing_blocked(user_id),
+            "grace_period_end_at": subscription.grace_period_end_at if subscription else None,
             "trial": trial,
             "suggested_upgrade": upgrade["suggested_upgrade"],
             "upgrade_hint": upgrade["suggested_upgrade"],

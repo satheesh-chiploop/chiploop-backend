@@ -23,6 +23,15 @@ class BillingRepository:
     def update_user_subscription(self, subscription_id: str, patch: Dict[str, Any]) -> Optional[SubscriptionRecord]:
         raise NotImplementedError
 
+    def upsert_user_subscription(self, data: Dict[str, Any]) -> SubscriptionRecord:
+        raise NotImplementedError
+
+    def get_user_subscription_by_stripe_customer(self, stripe_customer_id: str) -> Optional[SubscriptionRecord]:
+        raise NotImplementedError
+
+    def get_user_subscription_by_stripe_subscription(self, stripe_subscription_id: str) -> Optional[SubscriptionRecord]:
+        raise NotImplementedError
+
     def get_monthly_credit_usage(self, user_id: str) -> int:
         raise NotImplementedError
 
@@ -61,6 +70,11 @@ class InMemoryBillingRepository(BillingRepository):
         subscription.id = subscription.id or f"sub-{subscription.user_id}"
         self.subscriptions[subscription.user_id] = subscription
 
+    def upsert_user_subscription(self, data: Dict[str, Any]) -> SubscriptionRecord:
+        subscription = SubscriptionRecord.from_dict(data)
+        self.set_user_subscription(subscription)
+        return self.subscriptions[subscription.user_id]
+
     def get_user_subscription(self, user_id: str) -> Optional[SubscriptionRecord]:
         return self.subscriptions.get(user_id)
 
@@ -70,6 +84,18 @@ class InMemoryBillingRepository(BillingRepository):
                 updated = SubscriptionRecord.from_dict({**subscription.to_dict(), **patch})
                 self.subscriptions[user_id] = updated
                 return updated
+        return None
+
+    def get_user_subscription_by_stripe_customer(self, stripe_customer_id: str) -> Optional[SubscriptionRecord]:
+        for subscription in self.subscriptions.values():
+            if subscription.stripe_customer_id == stripe_customer_id:
+                return subscription
+        return None
+
+    def get_user_subscription_by_stripe_subscription(self, stripe_subscription_id: str) -> Optional[SubscriptionRecord]:
+        for subscription in self.subscriptions.values():
+            if subscription.stripe_subscription_id == stripe_subscription_id:
+                return subscription
         return None
 
     def get_monthly_credit_usage(self, user_id: str) -> int:
@@ -115,7 +141,7 @@ class SupabaseBillingRepository(BillingRepository):
                 self.supabase.table("user_subscriptions")
                 .select("*")
                 .eq("user_id", user_id)
-                .in_("status", ["active", "trialing"])
+                .in_("status", ["active", "trialing", "past_due", "unpaid"])
                 .order("created_at", desc=True)
                 .limit(1)
                 .execute()
@@ -131,6 +157,54 @@ class SupabaseBillingRepository(BillingRepository):
                 self.supabase.table("user_subscriptions")
                 .update(patch)
                 .eq("id", subscription_id)
+                .execute()
+            )
+            rows = result.data or []
+            return SubscriptionRecord.from_dict(rows[0]) if rows else None
+        except Exception:
+            return None
+
+    def upsert_user_subscription(self, data: Dict[str, Any]) -> SubscriptionRecord:
+        payload = {key: value for key, value in data.items() if value is not None}
+        try:
+            stripe_subscription_id = payload.get("stripe_subscription_id")
+            existing = (
+                self.get_user_subscription_by_stripe_subscription(stripe_subscription_id)
+                if stripe_subscription_id
+                else self.get_user_subscription(str(payload.get("user_id") or ""))
+            )
+            if existing:
+                updated = self.update_user_subscription(existing.id, payload)
+                return updated or existing
+            result = self.supabase.table("user_subscriptions").insert(payload).execute()
+            rows = result.data or []
+            return SubscriptionRecord.from_dict(rows[0] if rows else payload)
+        except Exception:
+            return SubscriptionRecord.from_dict(payload)
+
+    def get_user_subscription_by_stripe_customer(self, stripe_customer_id: str) -> Optional[SubscriptionRecord]:
+        try:
+            result = (
+                self.supabase.table("user_subscriptions")
+                .select("*")
+                .eq("stripe_customer_id", stripe_customer_id)
+                .order("created_at", desc=True)
+                .limit(1)
+                .execute()
+            )
+            rows = result.data or []
+            return SubscriptionRecord.from_dict(rows[0]) if rows else None
+        except Exception:
+            return None
+
+    def get_user_subscription_by_stripe_subscription(self, stripe_subscription_id: str) -> Optional[SubscriptionRecord]:
+        try:
+            result = (
+                self.supabase.table("user_subscriptions")
+                .select("*")
+                .eq("stripe_subscription_id", stripe_subscription_id)
+                .order("created_at", desc=True)
+                .limit(1)
                 .execute()
             )
             rows = result.data or []

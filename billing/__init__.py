@@ -1,5 +1,6 @@
 from .credit_service import (
     BillingService,
+    BillingPaymentRequired,
     CreditLimitExceeded,
     EntitlementDenied,
     build_billing_service,
@@ -11,6 +12,7 @@ from .repositories import InMemoryBillingRepository, SupabaseBillingRepository
 
 __all__ = [
     "BillingService",
+    "BillingPaymentRequired",
     "CreditLimitExceeded",
     "EntitlementDenied",
     "Entitlements",

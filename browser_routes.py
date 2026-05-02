@@ -4,7 +4,7 @@ from typing import Any, Dict
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from auth_api_keys.service import get_api_key_service
-from billing import CreditLimitExceeded, EntitlementDenied, get_billing_service
+from billing import BillingPaymentRequired, CreditLimitExceeded, EntitlementDenied, get_billing_service
 from browser_auth import BrowserUser, require_browser_user
 from marketplace import MarketplaceService, SupabaseMarketplaceRepository
 from onboarding import OnboardingService, SupabaseOnboardingRepository
@@ -13,6 +13,7 @@ from studio_factory.generate_agent import run_factory as run_studio_factory
 from studio_factory.models import AgentFactoryRequest
 from studio_planner.models import AgentPlanRequest
 from studio_planner.planner import plan_agent as plan_studio_agent
+from stripe_billing import StripeBillingConfigError, StripeBillingService
 from user_agents.repository import SupabaseUserAgentRepository
 from user_agents.service import UserAgentService
 from webinar import SupabaseWebinarRegistrationRepository, WebinarRegistrationError, WebinarRegistrationService
@@ -36,6 +37,13 @@ def _billing_service(request: Request):
     )
 
 
+def _stripe_billing_service(request: Request) -> StripeBillingService:
+    existing = getattr(request.app.state, "stripe_billing_service", None)
+    if existing is not None:
+        return existing
+    return StripeBillingService(_billing_service(request).repository)
+
+
 def _enforce_feature(request: Request, user_id: str, feature: str):
     service = _billing_service(request)
     try:
@@ -48,6 +56,15 @@ def _deduct(request: Request, user_id: str, action_type: str, *, reference_id: s
     service = _billing_service(request)
     try:
         return service.deduct_credits(user_id, action_type, reference_id=reference_id)
+    except BillingPaymentRequired as exc:
+        raise HTTPException(
+            status_code=402,
+            detail={
+                "error": "payment_required",
+                "billing_status": exc.billing_status,
+                "grace_period_end_at": exc.grace_period_end_at,
+            },
+        )
     except CreditLimitExceeded as exc:
         raise HTTPException(
             status_code=402,
@@ -377,6 +394,54 @@ def settings_upgrade_status(
     user: BrowserUser = Depends(require_browser_user),
 ):
     return {"status": "ok", "upgrade_status": _billing_service(request).upgrade_status(user.user_id)}
+
+
+@router.post("/settings/billing/checkout")
+async def settings_billing_checkout(
+    request: Request,
+    user: BrowserUser = Depends(require_browser_user),
+):
+    data = await request.json()
+    plan_id = str(data.get("plan_id") or "starter").lower()
+    try:
+        result = _stripe_billing_service(request).create_checkout_session(
+            user_id=user.user_id,
+            user_email=str(user.claims.get("email") or "") or None,
+            plan_id=plan_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except StripeBillingConfigError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    return {"status": "ok", **result}
+
+
+@router.post("/settings/billing/portal")
+def settings_billing_portal(
+    request: Request,
+    user: BrowserUser = Depends(require_browser_user),
+):
+    try:
+        result = _stripe_billing_service(request).create_portal_session(user_id=user.user_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except StripeBillingConfigError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    return {"status": "ok", **result}
+
+
+@router.post("/billing/stripe/webhook")
+async def stripe_webhook(request: Request):
+    payload = await request.body()
+    signature = request.headers.get("stripe-signature", "")
+    try:
+        event = _stripe_billing_service(request).construct_event(payload, signature)
+        result = _stripe_billing_service(request).handle_event(event)
+    except StripeBillingConfigError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"stripe_webhook_invalid: {type(exc).__name__}")
+    return {"status": "ok", **result}
 
 
 @router.get("/settings/onboarding")

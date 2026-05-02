@@ -131,6 +131,13 @@ class SubscriptionRecord:
     current_period_start: Optional[str] = None
     current_period_end: Optional[str] = None
     billing_status: str = "placeholder"
+    stripe_customer_id: Optional[str] = None
+    stripe_subscription_id: Optional[str] = None
+    stripe_price_id: Optional[str] = None
+    stripe_checkout_session_id: Optional[str] = None
+    cancel_at_period_end: bool = False
+    payment_failure_at: Optional[str] = None
+    grace_period_end_at: Optional[str] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
 
     @classmethod

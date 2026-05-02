@@ -2,7 +2,7 @@ from typing import Callable
 
 from fastapi import HTTPException, Request
 
-from billing import CreditLimitExceeded, EntitlementDenied, get_billing_service
+from billing import BillingPaymentRequired, CreditLimitExceeded, EntitlementDenied, get_billing_service
 from .service import get_api_key_service
 
 
@@ -35,6 +35,15 @@ def require_sdk_api_key(event_type: str) -> Callable:
             request.state.upgrade_hint = billing.upgrade_status(validation.record.user_id).get("suggested_upgrade")
         except EntitlementDenied as exc:
             raise HTTPException(status_code=403, detail=f"{exc.feature}_not_enabled")
+        except BillingPaymentRequired as exc:
+            raise HTTPException(
+                status_code=402,
+                detail={
+                    "error": "payment_required",
+                    "billing_status": exc.billing_status,
+                    "grace_period_end_at": exc.grace_period_end_at,
+                },
+            )
         except CreditLimitExceeded as exc:
             raise HTTPException(
                 status_code=402,
