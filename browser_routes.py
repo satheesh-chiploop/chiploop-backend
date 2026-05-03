@@ -4,7 +4,7 @@ from typing import Any, Dict
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from auth_api_keys.service import get_api_key_service
-from billing import BillingPaymentRequired, CreditLimitExceeded, EntitlementDenied, get_billing_service
+from billing import BillingPaymentRequired, CreditLimitExceeded, EntitlementDenied, TrialCheckoutRequired, get_billing_service
 from browser_auth import BrowserUser, require_browser_user
 from marketplace import MarketplaceService, SupabaseMarketplaceRepository
 from onboarding import OnboardingService, SupabaseOnboardingRepository
@@ -47,7 +47,27 @@ def _stripe_billing_service(request: Request) -> StripeBillingService:
 def _enforce_feature(request: Request, user_id: str, feature: str):
     service = _billing_service(request)
     try:
+        service.assert_checkout_started(user_id)
         return service.assert_entitlement(user_id, feature)
+    except TrialCheckoutRequired:
+        raise HTTPException(
+            status_code=402,
+            detail={
+                "error": "trial_checkout_required",
+                "message": "Start your 7-day trial with a credit card to use this Studio feature.",
+                "requires_checkout": True,
+                "checkout_plan_id": "starter",
+            },
+        )
+    except BillingPaymentRequired as exc:
+        raise HTTPException(
+            status_code=402,
+            detail={
+                "error": "payment_required",
+                "billing_status": exc.billing_status,
+                "grace_period_end_at": exc.grace_period_end_at,
+            },
+        )
     except EntitlementDenied:
         raise HTTPException(status_code=403, detail=f"{feature}_not_enabled")
 
@@ -338,6 +358,25 @@ async def settings_create_api_key(
         ]
         if len(active_keys) >= entitlements.max_api_keys:
             raise EntitlementDenied("max_api_keys")
+    except TrialCheckoutRequired:
+        raise HTTPException(
+            status_code=402,
+            detail={
+                "error": "trial_checkout_required",
+                "message": "Start your 7-day trial before creating API keys.",
+                "requires_checkout": True,
+                "checkout_plan_id": "starter",
+            },
+        )
+    except BillingPaymentRequired as exc:
+        raise HTTPException(
+            status_code=402,
+            detail={
+                "error": "payment_required",
+                "billing_status": exc.billing_status,
+                "grace_period_end_at": exc.grace_period_end_at,
+            },
+        )
     except EntitlementDenied as exc:
         raise HTTPException(status_code=403, detail=f"{exc.feature}_limit_reached")
     data = await request.json()

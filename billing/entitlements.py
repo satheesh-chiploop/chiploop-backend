@@ -4,6 +4,27 @@ from .models import Entitlements, Plan
 
 
 PLAN_DEFINITIONS: Dict[str, Plan] = {
+    "account": Plan(
+        id="account",
+        name="Account",
+        display_name="Account setup",
+        price_monthly_usd=0,
+        monthly_credits=0,
+        entitlements=Entitlements(
+            plan_id="account",
+            plan_name="Account setup",
+            monthly_credits=0,
+            max_api_keys=0,
+            max_private_agents=0,
+            sdk_cli_enabled=False,
+            agent_planner_enabled=False,
+            agent_factory_dry_run_enabled=False,
+            private_agent_save_enabled=False,
+            dag_optimization_enabled=False,
+            marketplace_submit_enabled=False,
+        ),
+        metadata={"requires_checkout": True, "converts_to": "starter"},
+    ),
     "trial": Plan(
         id="trial",
         name="Trial",

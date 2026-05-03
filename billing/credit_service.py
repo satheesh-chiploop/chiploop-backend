@@ -27,6 +27,11 @@ class BillingPaymentRequired(Exception):
         super().__init__(billing_status)
 
 
+class TrialCheckoutRequired(Exception):
+    def __init__(self):
+        super().__init__("trial_checkout_required")
+
+
 class BillingService:
     def __init__(self, repository: BillingRepository):
         self.repository = repository
@@ -36,8 +41,8 @@ class BillingService:
 
     def get_user_plan(self, user_id: str) -> Plan:
         self.auto_convert_expired_trial(user_id)
-        plan_id = self.repository.get_user_plan_id(user_id) or "trial"
-        return self.repository.get_plan(plan_id) or PLAN_DEFINITIONS["trial"]
+        plan_id = self.repository.get_user_plan_id(user_id) or "account"
+        return self.repository.get_plan(plan_id) or PLAN_DEFINITIONS["account"]
 
     def get_entitlements(self, user_id: str) -> Entitlements:
         return self.get_user_plan(user_id).entitlements
@@ -58,6 +63,16 @@ class BillingService:
         subscription = self._subscription(user_id)
         if subscription and self.is_billing_blocked(user_id):
             raise BillingPaymentRequired(subscription.billing_status, subscription.grace_period_end_at)
+
+    def has_checkout_subscription(self, user_id: str) -> bool:
+        if self._subscription(user_id) is not None:
+            return True
+        return (self.repository.get_user_plan_id(user_id) or "account") != "account"
+
+    def assert_checkout_started(self, user_id: str) -> None:
+        if not self.has_checkout_subscription(user_id):
+            raise TrialCheckoutRequired()
+        self.assert_billing_current(user_id)
 
     def discounted_price(self, plan: Plan) -> Optional[float]:
         if plan.price_monthly_usd is None:
@@ -154,12 +169,14 @@ class BillingService:
         return self.assert_entitlement(user_id, feature)
 
     def assert_api_key_limit(self, user_id: str) -> Entitlements:
+        self.assert_checkout_started(user_id)
         entitlements = self.get_entitlements(user_id)
         if self.repository.count_active_api_keys(user_id) >= entitlements.max_api_keys:
             raise EntitlementDenied("max_api_keys")
         return entitlements
 
     def assert_private_agent_limit(self, user_id: str) -> Entitlements:
+        self.assert_checkout_started(user_id)
         entitlements = self.get_entitlements(user_id)
         if self.repository.count_private_agents(user_id) >= entitlements.max_private_agents:
             raise EntitlementDenied("max_private_agents")
@@ -255,9 +272,11 @@ class BillingService:
             "trial_days_remaining": trial["days_remaining"],
             "discount_months_remaining": discount_months_remaining,
             "entitlements": plan.entitlements.to_dict(),
-            "billing_status": subscription.billing_status if subscription else ("trial" if plan.id in {"trial", "free"} else "placeholder"),
+            "billing_status": subscription.billing_status if subscription else ("checkout_required" if plan.id == "account" else ("trial" if plan.id in {"trial", "free"} else "placeholder")),
             "billing_blocked": self.is_billing_blocked(user_id),
             "grace_period_end_at": subscription.grace_period_end_at if subscription else None,
+            "requires_checkout": subscription is None,
+            "can_run_workflows": subscription is not None and not self.is_billing_blocked(user_id),
             "trial": trial,
             "suggested_upgrade": upgrade["suggested_upgrade"],
             "upgrade_hint": upgrade["suggested_upgrade"],

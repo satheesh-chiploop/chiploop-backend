@@ -133,7 +133,7 @@ class SupabaseBillingRepository(BillingRepository):
         subscription = self.get_user_subscription(user_id)
         if subscription:
             return subscription.plan_id
-        return "trial"
+        return "account"
 
     def get_user_subscription(self, user_id: str) -> Optional[SubscriptionRecord]:
         try:

@@ -11,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import browser_auth
 import browser_routes
-from billing import BillingService, CreditLimitExceeded, EntitlementDenied, InMemoryBillingRepository
+from billing import BillingService, CreditLimitExceeded, EntitlementDenied, InMemoryBillingRepository, TrialCheckoutRequired
 from billing.entitlements import PLAN_DEFINITIONS
 
 
@@ -41,6 +41,19 @@ def test_trial_plan_fallback():
 
     assert plan.id == "trial"
     assert service.get_entitlements("missing-user").monthly_credits == 100
+
+
+def test_account_without_checkout_cannot_run_paid_actions():
+    service = BillingService(InMemoryBillingRepository(default_plan_id="account"))
+
+    plan = service.get_user_plan("missing-user")
+    summary = service.plan_summary("missing-user")
+
+    assert plan.id == "account"
+    assert summary["requires_checkout"] is True
+    assert summary["can_run_workflows"] is False
+    with pytest.raises(TrialCheckoutRequired):
+        service.assert_checkout_started("missing-user")
 
 
 def test_entitlement_allowed_and_denied():

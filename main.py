@@ -35,13 +35,14 @@ from agents.runtime import AgentContext, configure_runtime_logging, execute_lega
 from utils.artifact_utils import save_text_artifact_and_record
 from auth_api_keys.middleware import require_sdk_api_key
 from auth_api_keys.service import get_api_key_service
-from billing import get_billing_service
+from billing import BillingPaymentRequired, TrialCheckoutRequired, get_billing_service
 from studio_contract.registry import load_registry
 from studio_factory.generate_agent import run_factory as run_studio_factory
 from studio_factory.models import AgentFactoryRequest
 from studio_planner.models import AgentPlanRequest
 from studio_planner.planner import plan_agent as plan_studio_agent
 from browser_routes import router as browser_router
+from browser_auth import require_browser_user
 
 
 import logging
@@ -237,6 +238,51 @@ app.add_middleware(
 )
 app.state.supabase = supabase
 app.state.api_key_service = get_api_key_service(supabase)
+
+
+def _requires_trial_checkout(path: str, method: str) -> bool:
+    if method.upper() != "POST":
+        return False
+    return (
+        path == "/run_workflow"
+        or (path.startswith("/apps/") and path.endswith("/run"))
+        or path == "/validation/test_plan/preview"
+    )
+
+
+@app.middleware("http")
+async def require_checkout_for_workflow_runs(request: Request, call_next):
+    if not _requires_trial_checkout(request.url.path, request.method):
+        return await call_next(request)
+    try:
+        user = require_browser_user(request)
+        get_billing_service(supabase).assert_checkout_started(user.user_id)
+    except TrialCheckoutRequired:
+        return JSONResponse(
+            status_code=402,
+            content={
+                "status": "error",
+                "error": "trial_checkout_required",
+                "detail": "Start your 7-day trial with a credit card to run workflows.",
+                "requires_checkout": True,
+                "checkout_plan_id": "starter",
+            },
+        )
+    except BillingPaymentRequired as exc:
+        return JSONResponse(
+            status_code=402,
+            content={
+                "status": "error",
+                "error": "payment_required",
+                "detail": "Please update your payment method to continue running workflows.",
+                "billing_status": exc.billing_status,
+                "grace_period_end_at": exc.grace_period_end_at,
+            },
+        )
+    except HTTPException as exc:
+        return JSONResponse(status_code=exc.status_code, content={"status": "error", "detail": exc.detail})
+    return await call_next(request)
+
 app.include_router(browser_router)
 
 
