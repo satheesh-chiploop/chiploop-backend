@@ -30,13 +30,21 @@ Notion is no longer required for the core voice flow.
 
 ## Frontend Integration
 
-Arch2RTL now includes a compact Voice Design Session next to the spec box:
+Spec-driven Apps now use a shared `VoiceSpecDraft` component next to their spec box:
 
 1. Record one or more voice notes.
 2. Review transcript cards.
 3. Click `Generate Spec`.
-4. Edit the generated spec if needed.
-5. Run Arch2RTL normally.
+4. Edit the generated spec in the normal app spec box if needed.
+5. Run the App normally.
+
+System Apps that need multiple specs expose separate voice flows:
+
+- Digital spec voice draft.
+- Analog spec voice draft.
+- SoC integration spec voice draft.
+
+This keeps System RTL, System Simulation, System PD, System Firmware, and System End-to-End aligned with the three-spec workflow.
 
 ## Legacy Notion/Voice Status
 
