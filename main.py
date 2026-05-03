@@ -36,6 +36,7 @@ from utils.artifact_utils import save_text_artifact_and_record
 from auth_api_keys.middleware import require_sdk_api_key
 from auth_api_keys.service import get_api_key_service
 from billing import BillingPaymentRequired, TrialCheckoutRequired, get_billing_service
+from onboarding import OnboardingService, SupabaseOnboardingRepository, is_arch2rtl_guided_demo_payload
 from studio_contract.registry import load_registry
 from studio_factory.generate_agent import run_factory as run_studio_factory
 from studio_factory.models import AgentFactoryRequest
@@ -245,8 +246,49 @@ def _requires_trial_checkout(path: str, method: str) -> bool:
         return False
     return (
         path == "/run_workflow"
-        or (path.startswith("/apps/") and path.endswith("/run"))
+        or (path.startswith("/apps/") and path.endswith("/run") and path != "/apps/arch2rtl/run")
         or path == "/validation/test_plan/preview"
+    )
+
+
+def _onboarding_service_for_main() -> OnboardingService:
+    existing = getattr(app.state, "onboarding_service", None)
+    if isinstance(existing, OnboardingService):
+        return existing
+    service = OnboardingService(SupabaseOnboardingRepository(supabase))
+    app.state.onboarding_service = service
+    return service
+
+
+def _checkout_started_for_user(user_id: str) -> bool:
+    try:
+        get_billing_service(supabase).assert_checkout_started(user_id)
+        return True
+    except TrialCheckoutRequired:
+        return False
+
+
+def _payment_required_response(exc: BillingPaymentRequired) -> HTTPException:
+    return HTTPException(
+        status_code=402,
+        detail={
+            "error": "payment_required",
+            "message": "Please update your payment method to continue running workflows.",
+            "billing_status": exc.billing_status,
+            "grace_period_end_at": exc.grace_period_end_at,
+        },
+    )
+
+
+def _trial_required_response(message: str) -> HTTPException:
+    return HTTPException(
+        status_code=402,
+        detail={
+            "error": "trial_checkout_required",
+            "message": message,
+            "requires_checkout": True,
+            "checkout_plan_id": "starter",
+        },
     )
 
 
@@ -2274,9 +2316,30 @@ def _create_app_workflow_and_run(user_id: str, app_title: str, loop_type: str):
 @app.post("/apps/arch2rtl/run")
 async def apps_arch2rtl_run(request: Request, background_tasks: BackgroundTasks, payload: DigitalArch2RTLAppIn):
     user_id = _require_user_id(request)
+    payload_dict = payload.dict()
+    demo_run = False
+    try:
+        checkout_started = _checkout_started_for_user(user_id)
+    except BillingPaymentRequired as exc:
+        raise _payment_required_response(exc)
+
+    if not checkout_started:
+        onboarding_service = _onboarding_service_for_main()
+        if not is_arch2rtl_guided_demo_payload(payload_dict):
+            raise _trial_required_response(
+                "Start your 7-day trial with a credit card to run custom Arch2RTL workflows."
+            )
+        if not onboarding_service.can_run_arch2rtl_demo(user_id):
+            raise _trial_required_response(
+                "You have completed your free Arch2RTL demo runs. Start your 7-day trial to keep using ChipLoop."
+            )
+        demo_run = True
+
     workflow_id, run_id, base_dir = _create_app_workflow_and_run(user_id, "App: Arch2RTL", "digital")
     artifact_dir = os.path.join(base_dir, "arch2rtl")
     os.makedirs(artifact_dir, exist_ok=True)
+    if demo_run:
+        _onboarding_service_for_main().record_arch2rtl_demo_run(user_id, workflow_id=workflow_id)
 
     background_tasks.add_task(
         execute_digital_app_background,
@@ -2286,10 +2349,18 @@ async def apps_arch2rtl_run(request: Request, background_tasks: BackgroundTasks,
         artifact_dir,
         "arch2rtl",
         "Digital_Arch2RTL",
-        payload.dict(),
+        payload_dict,
     )
 
-    return {"ok": True, "workflow_id": workflow_id, "run_id": run_id}
+    response = {"ok": True, "workflow_id": workflow_id, "run_id": run_id}
+    if demo_run:
+        response["demo"] = _onboarding_service_for_main().arch2rtl_demo_usage(user_id)
+        response["trial_cta"] = {
+            "show": True,
+            "message": "Start your 7-day trial to run your own specs. No charge today.",
+            "checkout_plan_id": "starter",
+        }
+    return response
 
 @app.post("/apps/arch2synthesis/run")
 async def apps_arch2synthesis_run(request: Request, background_tasks: BackgroundTasks, payload: DigitalArch2SynthesisAppIn):

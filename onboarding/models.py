@@ -3,6 +3,9 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 
+ARCH2RTL_DEMO_LIMIT = 3
+
+
 def utcnow_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -23,6 +26,17 @@ class OnboardingState:
     def completed(self) -> bool:
         return bool(self.completed_at or self.skipped_at)
 
+    @property
+    def arch2rtl_demo_runs(self) -> int:
+        try:
+            return int(self.metadata.get("arch2rtl_demo_runs") or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    @property
+    def arch2rtl_demo_runs_remaining(self) -> int:
+        return max(ARCH2RTL_DEMO_LIMIT - self.arch2rtl_demo_runs, 0)
+
     def to_dict(self) -> Dict[str, Any]:
         return {
             "user_id": self.user_id,
@@ -33,6 +47,14 @@ class OnboardingState:
             "first_workflow_id": self.first_workflow_id,
             "last_step": self.last_step,
             "metadata": self.metadata,
+            "demo": {
+                "arch2rtl": {
+                    "limit": ARCH2RTL_DEMO_LIMIT,
+                    "runs_used": self.arch2rtl_demo_runs,
+                    "runs_remaining": self.arch2rtl_demo_runs_remaining,
+                    "can_run": self.arch2rtl_demo_runs_remaining > 0,
+                }
+            },
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
