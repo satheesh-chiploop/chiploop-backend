@@ -228,6 +228,11 @@ async def webinar_register(request: Request):
     }
 
 
+@router.get("/webinar/sessions")
+def webinar_sessions(request: Request):
+    return {"status": "ok", "sessions": _webinar_service(request).sessions()}
+
+
 @router.get("/studio/registry/summary")
 def studio_registry_summary(_: BrowserUser = Depends(require_browser_user)):
     return {"status": "ok", **_registry_counts()}
