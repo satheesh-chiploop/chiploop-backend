@@ -452,6 +452,8 @@ async def settings_billing_checkout(
         raise HTTPException(status_code=400, detail=str(exc))
     except StripeBillingConfigError as exc:
         raise HTTPException(status_code=503, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"stripe_checkout_failed: {type(exc).__name__}")
     return {"status": "ok", **result}
 
 
