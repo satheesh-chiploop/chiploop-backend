@@ -3325,37 +3325,13 @@ async def spec_live_feedback(websocket: WebSocket):
 
 @app.post("/voice_to_spec")
 async def voice_to_spec(file: UploadFile = File(...)):
-    """Convert voice to summarized spec via Whisper + Notion"""
+    """Legacy voice-to-spec endpoint. Prefer /studio/voice/* for new UI."""
     try:
-        import openai, tempfile
-        from notion_client import Client
-
-        # --- Step 1: Save temporary audio file ---
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
-            tmp.write(await file.read())
-            tmp_path = tmp.name
-
-        # --- Step 2: Transcribe using Whisper ---
-        openai.api_key = os.getenv("OPENAI_API_KEY")
-        transcript = openai.Audio.transcriptions.create(
-            model="whisper-1", file=open(tmp_path, "rb")
-        )
-        text = transcript.text.strip()
-
-        # --- Step 3: Append to Notion ---
-        notion = Client(auth=os.getenv("NOTION_API_KEY"))
-        db_id = os.getenv("NOTION_DATABASE_ID")
-        notion.pages.create(
-            parent={"database_id": db_id},
-            properties={"Name": {"title": [{"text": {"content": text[:100]}}]}},
-        )
-
-        # --- Step 4: Summarize spec (optional) ---
-        from utils.llm_utils import run_llm_fallback
+        text = transcribe_audio(await file.read())
         summary_prompt = f"Summarize and structure this design spec:\n{text}"
-        summary = run_llm_fallback(summary_prompt)
+        summary = await run_llm_fallback(summary_prompt)
 
-        return {"summary": summary, "coverage": 65, "mode": "voice"}
+        return {"summary": summary, "transcript": text, "coverage": 65, "mode": "voice", "legacy": True}
 
     except Exception as e:
         return {"error": str(e)}

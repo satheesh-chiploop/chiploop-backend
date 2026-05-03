@@ -1,7 +1,7 @@
 import os
 from typing import Any, Dict
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 
 from auth_api_keys.service import get_api_key_service
 from billing import BillingPaymentRequired, CreditLimitExceeded, EntitlementDenied, TrialCheckoutRequired, get_billing_service
@@ -17,6 +17,7 @@ from stripe_billing import StripeBillingConfigError, StripeBillingService
 from user_agents.repository import SupabaseUserAgentRepository
 from user_agents.service import UserAgentService
 from webinar import SupabaseWebinarRegistrationRepository, WebinarRegistrationError, WebinarRegistrationService
+from voice_design import VoiceDesignConfigError, build_spec_draft, transcribe_audio_bytes
 from workflow_dag.models import WorkflowDAG
 from workflow_dag.planner import dag_from_agents, dag_from_studio_graph, dry_run_plan
 from workflow_dag.validator import validate_dag
@@ -103,6 +104,30 @@ def _upgrade_hint(request: Request, user_id: str, *, reason: str | None = None):
 def _with_upgrade(payload: Dict[str, Any], request: Request, user_id: str, *, reason: str | None = None) -> Dict[str, Any]:
     upgrade = _upgrade_hint(request, user_id, reason=reason)
     return {**payload, "upgrade_hint": upgrade, "upgrade": upgrade}
+
+
+def _require_checkout(request: Request, user_id: str):
+    try:
+        _billing_service(request).assert_checkout_started(user_id)
+    except TrialCheckoutRequired:
+        raise HTTPException(
+            status_code=402,
+            detail={
+                "error": "trial_checkout_required",
+                "message": "Start your 7-day trial with a credit card to use voice design sessions.",
+                "requires_checkout": True,
+                "checkout_plan_id": "starter",
+            },
+        )
+    except BillingPaymentRequired as exc:
+        raise HTTPException(
+            status_code=402,
+            detail={
+                "error": "payment_required",
+                "billing_status": exc.billing_status,
+                "grace_period_end_at": exc.grace_period_end_at,
+            },
+        )
 
 
 def _user_agent_service(request: Request) -> UserAgentService:
@@ -268,6 +293,44 @@ async def studio_dag_validate(
     dag = _dag_from_payload(data)
     ok, errors = validate_dag(dag)
     return _with_upgrade({"status": "ok", "valid": ok, "errors": errors, "warnings": []}, request, user.user_id)
+
+
+@router.post("/studio/voice/transcribe")
+async def studio_voice_transcribe(
+    request: Request,
+    file: UploadFile = File(...),
+    user: BrowserUser = Depends(require_browser_user),
+):
+    _require_checkout(request, user.user_id)
+    try:
+        transcript = transcribe_audio_bytes(await file.read(), filename=file.filename or "voice.webm")
+    except VoiceDesignConfigError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return _with_upgrade({"status": "ok", "transcript": transcript}, request, user.user_id)
+
+
+@router.post("/studio/voice/spec-draft")
+async def studio_voice_spec_draft(
+    request: Request,
+    user: BrowserUser = Depends(require_browser_user),
+):
+    _require_checkout(request, user.user_id)
+    data = await request.json()
+    transcripts = data.get("transcripts") or []
+    if not isinstance(transcripts, list):
+        raise HTTPException(status_code=400, detail="transcripts_must_be_list")
+    try:
+        draft = await build_spec_draft(
+            [str(item) for item in transcripts],
+            loop_type=str(data.get("loop_type") or "digital"),
+            target=str(data.get("target") or "Arch2RTL"),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    _deduct(request, user.user_id, "studio_agent_planner")
+    return _with_upgrade({"status": "ok", "spec_draft": draft}, request, user.user_id)
 
 
 @router.get("/studio/user-agents")
