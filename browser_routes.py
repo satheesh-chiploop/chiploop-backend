@@ -1,3 +1,4 @@
+import logging
 import os
 from typing import Any, Dict
 
@@ -24,6 +25,7 @@ from workflow_dag.validator import validate_dag
 
 
 router = APIRouter()
+logger = logging.getLogger("chiploop.billing")
 
 
 def _api_key_service(request: Request):
@@ -43,6 +45,26 @@ def _stripe_billing_service(request: Request) -> StripeBillingService:
     if existing is not None:
         return existing
     return StripeBillingService(_billing_service(request).repository)
+
+
+def _stripe_error_response(exc: Exception) -> Dict[str, Any]:
+    user_message = getattr(exc, "user_message", None)
+    message = user_message or str(exc) or type(exc).__name__
+    response: Dict[str, Any] = {
+        "error": "stripe_checkout_failed",
+        "type": type(exc).__name__,
+        "message": message,
+    }
+    code = getattr(exc, "code", None)
+    param = getattr(exc, "param", None)
+    request_id = getattr(exc, "request_id", None)
+    if code:
+        response["code"] = code
+    if param:
+        response["param"] = param
+    if request_id:
+        response["request_id"] = request_id
+    return response
 
 
 def _enforce_feature(request: Request, user_id: str, feature: str):
@@ -510,8 +532,9 @@ async def settings_billing_checkout(
 ):
     data = await request.json()
     plan_id = str(data.get("plan_id") or "starter").lower()
+    service = _stripe_billing_service(request)
     try:
-        result = _stripe_billing_service(request).create_checkout_session(
+        result = service.create_checkout_session(
             user_id=user.user_id,
             user_email=str(user.claims.get("email") or "") or None,
             plan_id=plan_id,
@@ -521,6 +544,20 @@ async def settings_billing_checkout(
     except StripeBillingConfigError as exc:
         raise HTTPException(status_code=503, detail=str(exc))
     except Exception as exc:
+        stripe_error_base = getattr(getattr(service.stripe, "error", None), "StripeError", None)
+        if stripe_error_base and isinstance(exc, stripe_error_base):
+            detail = _stripe_error_response(exc)
+            logger.warning(
+                "stripe_checkout_failed",
+                extra={
+                    "stripe_error_type": detail.get("type"),
+                    "stripe_error_code": detail.get("code"),
+                    "stripe_error_param": detail.get("param"),
+                    "stripe_request_id": detail.get("request_id"),
+                    "plan_id": plan_id,
+                },
+            )
+            raise HTTPException(status_code=502, detail=detail)
         raise HTTPException(status_code=502, detail=f"stripe_checkout_failed: {type(exc).__name__}")
     return {"status": "ok", **result}
 

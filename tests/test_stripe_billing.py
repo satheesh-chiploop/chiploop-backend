@@ -9,7 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from billing import BillingPaymentRequired, BillingService, InMemoryBillingRepository
 from billing.models import SubscriptionRecord
-from stripe_billing import StripeBillingService
+from stripe_billing import StripeBillingConfigError, StripeBillingService
 
 
 class _FakeCheckoutSession:
@@ -68,6 +68,28 @@ def test_checkout_session_uses_hosted_stripe_and_trial():
     assert _FakeStripe.last_checkout["payment_method_collection"] == "always"
     assert _FakeStripe.last_checkout["subscription_data"]["trial_period_days"] == 7
     assert _FakeStripe.last_checkout["client_reference_id"] == "user-1"
+    assert _FakeStripe.last_checkout["allow_promotion_codes"] is True
+    assert "discounts" not in _FakeStripe.last_checkout
+
+
+def test_checkout_session_uses_intro_coupon_without_promotion_codes(monkeypatch):
+    monkeypatch.setenv("STRIPE_INTRO_COUPON_ID", "coupon_live_intro")
+    repo = InMemoryBillingRepository()
+    service = StripeBillingService(repo, stripe_module=_FakeStripe)
+
+    service.create_checkout_session(user_id="user-1", user_email="u@example.com", plan_id="starter")
+
+    assert _FakeStripe.last_checkout["discounts"] == [{"coupon": "coupon_live_intro"}]
+    assert "allow_promotion_codes" not in _FakeStripe.last_checkout
+
+
+def test_checkout_rejects_product_id_env(monkeypatch):
+    monkeypatch.setenv("STRIPE_PRICE_STARTER", "prod_starter")
+    repo = InMemoryBillingRepository()
+    service = StripeBillingService(repo, stripe_module=_FakeStripe)
+
+    with pytest.raises(StripeBillingConfigError, match="expected_price_id"):
+        service.create_checkout_session(user_id="user-1", user_email="u@example.com", plan_id="starter")
 
 
 def test_customer_portal_requires_existing_stripe_customer():

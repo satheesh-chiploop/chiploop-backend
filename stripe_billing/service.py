@@ -64,6 +64,14 @@ class StripeBillingService:
             raise ValueError("unsupported_checkout_plan")
         if not price_id:
             raise StripeBillingConfigError(f"STRIPE_PRICE_{plan_id.upper()}_missing")
+        if price_id.startswith("prod_"):
+            raise StripeBillingConfigError(
+                f"STRIPE_PRICE_{plan_id.upper()}_uses_product_id_expected_price_id"
+            )
+        if not price_id.startswith("price_"):
+            raise StripeBillingConfigError(
+                f"STRIPE_PRICE_{plan_id.upper()}_invalid_expected_price_id"
+            )
         return price_id
 
     def create_checkout_session(self, *, user_id: str, user_email: Optional[str], plan_id: str) -> Dict[str, Any]:
@@ -76,7 +84,6 @@ class StripeBillingService:
             "success_url": f"{self.app_url}/settings/plan?checkout=success",
             "cancel_url": f"{self.app_url}/pricing?checkout=cancelled",
             "client_reference_id": user_id,
-            "allow_promotion_codes": True,
             "metadata": {"user_id": user_id, "plan_id": plan_id},
             "subscription_data": {
                 "trial_period_days": self.trial_days,
@@ -87,6 +94,8 @@ class StripeBillingService:
             params["customer_email"] = user_email
         if self.coupon_id:
             params["discounts"] = [{"coupon": self.coupon_id}]
+        else:
+            params["allow_promotion_codes"] = True
         session = self.stripe.checkout.Session.create(**params)
         return {
             "checkout_session_id": session.get("id"),
