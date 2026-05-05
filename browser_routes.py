@@ -67,6 +67,10 @@ def _stripe_error_response(exc: Exception) -> Dict[str, Any]:
     return response
 
 
+def _checkout_trial_requested(data: Dict[str, Any]) -> bool:
+    return data.get("trial") is True or data.get("checkout_kind") == "trial"
+
+
 def _enforce_feature(request: Request, user_id: str, feature: str):
     service = _billing_service(request)
     try:
@@ -532,7 +536,7 @@ async def settings_billing_checkout(
 ):
     data = await request.json()
     plan_id = str(data.get("plan_id") or "starter").lower()
-    trial = bool(data.get("trial") or data.get("checkout_kind") == "trial")
+    trial = _checkout_trial_requested(data)
     if trial:
         plan_id = "starter"
     service = _stripe_billing_service(request)

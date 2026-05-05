@@ -27,8 +27,72 @@ def _client(service: APIKeyService | None = None) -> TestClient:
     return TestClient(app)
 
 
+class _FakeStripeBillingService:
+    def __init__(self):
+        self.last_checkout = None
+
+    def create_checkout_session(self, **kwargs):
+        self.last_checkout = kwargs
+        return {"checkout_session_id": "cs_test_123", "url": "https://checkout.stripe.test/session"}
+
+
+def _client_with_stripe_service(stripe_service: _FakeStripeBillingService) -> TestClient:
+    browser_auth.SUPABASE_JWT_SECRET = JWT_SECRET
+    app = FastAPI()
+    app.state.api_key_service = APIKeyService(InMemoryAPIKeyStore())
+    app.state.billing_service = BillingService(InMemoryBillingRepository(default_plan_id="pro"))
+    app.state.stripe_billing_service = stripe_service
+    app.include_router(browser_routes.router)
+    return TestClient(app)
+
+
 def _auth(user_id: str = "user-1") -> dict:
     return {"Authorization": f"Bearer {_token(user_id)}"}
+
+
+def test_paid_checkout_does_not_enable_trial_for_false_payload():
+    stripe_service = _FakeStripeBillingService()
+    client = _client_with_stripe_service(stripe_service)
+
+    response = client.post(
+        "/settings/billing/checkout",
+        headers=_auth(),
+        json={"plan_id": "starter", "trial": False},
+    )
+
+    assert response.status_code == 200
+    assert stripe_service.last_checkout["plan_id"] == "starter"
+    assert stripe_service.last_checkout["trial"] is False
+
+
+def test_paid_checkout_does_not_enable_trial_for_string_false_payload():
+    stripe_service = _FakeStripeBillingService()
+    client = _client_with_stripe_service(stripe_service)
+
+    response = client.post(
+        "/settings/billing/checkout",
+        headers=_auth(),
+        json={"plan_id": "starter", "trial": "false"},
+    )
+
+    assert response.status_code == 200
+    assert stripe_service.last_checkout["plan_id"] == "starter"
+    assert stripe_service.last_checkout["trial"] is False
+
+
+def test_trial_checkout_forces_starter_plan():
+    stripe_service = _FakeStripeBillingService()
+    client = _client_with_stripe_service(stripe_service)
+
+    response = client.post(
+        "/settings/billing/checkout",
+        headers=_auth(),
+        json={"plan_id": "pro", "trial": True},
+    )
+
+    assert response.status_code == 200
+    assert stripe_service.last_checkout["plan_id"] == "starter"
+    assert stripe_service.last_checkout["trial"] is True
 
 
 def test_unauthenticated_studio_request_rejected():
