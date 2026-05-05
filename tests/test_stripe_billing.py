@@ -57,19 +57,38 @@ def stripe_env(monkeypatch):
     yield
 
 
-def test_checkout_session_uses_hosted_stripe_and_trial():
+def test_paid_checkout_session_uses_hosted_stripe_without_trial():
     repo = InMemoryBillingRepository()
     service = StripeBillingService(repo, stripe_module=_FakeStripe)
 
     result = service.create_checkout_session(user_id="user-1", user_email="u@example.com", plan_id="starter")
 
     assert result["url"].startswith("https://checkout.stripe.test")
+    assert result["checkout_kind"] == "paid"
     assert _FakeStripe.last_checkout["mode"] == "subscription"
     assert _FakeStripe.last_checkout["payment_method_collection"] == "always"
-    assert _FakeStripe.last_checkout["subscription_data"]["trial_period_days"] == 7
+    assert "trial_period_days" not in _FakeStripe.last_checkout["subscription_data"]
     assert _FakeStripe.last_checkout["client_reference_id"] == "user-1"
+    assert _FakeStripe.last_checkout["metadata"]["checkout_kind"] == "paid"
     assert _FakeStripe.last_checkout["allow_promotion_codes"] is True
     assert "discounts" not in _FakeStripe.last_checkout
+
+
+def test_trial_checkout_session_uses_starter_trial():
+    repo = InMemoryBillingRepository()
+    service = StripeBillingService(repo, stripe_module=_FakeStripe)
+
+    result = service.create_checkout_session(
+        user_id="user-1",
+        user_email="u@example.com",
+        plan_id="starter",
+        trial=True,
+    )
+
+    assert result["checkout_kind"] == "trial"
+    assert _FakeStripe.last_checkout["line_items"] == [{"price": "price_starter", "quantity": 1}]
+    assert _FakeStripe.last_checkout["subscription_data"]["trial_period_days"] == 7
+    assert _FakeStripe.last_checkout["metadata"]["checkout_kind"] == "trial"
 
 
 def test_checkout_session_uses_intro_coupon_without_promotion_codes(monkeypatch):
@@ -116,7 +135,7 @@ def test_checkout_completed_webhook_creates_trial_subscription():
             "client_reference_id": "user-1",
             "customer": "cus_123",
             "subscription": "sub_123",
-            "metadata": {"plan_id": "starter"},
+            "metadata": {"plan_id": "starter", "checkout_kind": "trial"},
         }},
     })
 
@@ -125,6 +144,28 @@ def test_checkout_completed_webhook_creates_trial_subscription():
     assert subscription.stripe_customer_id == "cus_123"
     assert subscription.stripe_subscription_id == "sub_123"
     assert subscription.status == "trialing"
+
+
+def test_checkout_completed_webhook_creates_paid_subscription():
+    repo = InMemoryBillingRepository()
+    service = StripeBillingService(repo, stripe_module=_FakeStripe)
+
+    service.handle_event({
+        "type": "checkout.session.completed",
+        "data": {"object": {
+            "id": "cs_123",
+            "client_reference_id": "user-1",
+            "customer": "cus_123",
+            "subscription": "sub_123",
+            "metadata": {"plan_id": "pro", "checkout_kind": "paid"},
+        }},
+    })
+
+    subscription = repo.get_user_subscription("user-1")
+    assert subscription is not None
+    assert subscription.plan_id == "pro"
+    assert subscription.status == "active"
+    assert subscription.billing_status == "current"
 
 
 def test_payment_failure_blocks_after_grace_period():

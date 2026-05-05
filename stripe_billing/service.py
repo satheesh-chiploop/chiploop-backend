@@ -74,9 +74,21 @@ class StripeBillingService:
             )
         return price_id
 
-    def create_checkout_session(self, *, user_id: str, user_email: Optional[str], plan_id: str) -> Dict[str, Any]:
+    def create_checkout_session(
+        self,
+        *,
+        user_id: str,
+        user_email: Optional[str],
+        plan_id: str,
+        trial: bool = False,
+    ) -> Dict[str, Any]:
         self._require_configured()
         price_id = self._price_id(plan_id)
+        checkout_kind = "trial" if trial else "paid"
+        metadata = {"user_id": user_id, "plan_id": plan_id, "checkout_kind": checkout_kind}
+        subscription_data: Dict[str, Any] = {"metadata": metadata}
+        if trial:
+            subscription_data["trial_period_days"] = self.trial_days
         params: Dict[str, Any] = {
             "mode": "subscription",
             "payment_method_collection": "always",
@@ -84,11 +96,8 @@ class StripeBillingService:
             "success_url": f"{self.app_url}/settings/plan?checkout=success",
             "cancel_url": f"{self.app_url}/pricing?checkout=cancelled",
             "client_reference_id": user_id,
-            "metadata": {"user_id": user_id, "plan_id": plan_id},
-            "subscription_data": {
-                "trial_period_days": self.trial_days,
-                "metadata": {"user_id": user_id, "plan_id": plan_id},
-            },
+            "metadata": metadata,
+            "subscription_data": subscription_data,
         }
         if user_email:
             params["customer_email"] = user_email
@@ -101,6 +110,7 @@ class StripeBillingService:
             "checkout_session_id": session.get("id"),
             "url": session.get("url"),
             "plan_id": plan_id,
+            "checkout_kind": checkout_kind,
         }
 
     def create_portal_session(self, *, user_id: str) -> Dict[str, Any]:
@@ -175,17 +185,20 @@ class StripeBillingService:
 
     def _handle_checkout_completed(self, session: Dict[str, Any]) -> Dict[str, Any]:
         user_id = str(session.get("client_reference_id") or (session.get("metadata") or {}).get("user_id") or "")
-        plan_id = str((session.get("metadata") or {}).get("plan_id") or "starter")
+        metadata = session.get("metadata") or {}
+        plan_id = str(metadata.get("plan_id") or "starter")
+        checkout_kind = str(metadata.get("checkout_kind") or "trial")
+        trial = checkout_kind == "trial"
         data = {
             "user_id": user_id,
             "plan_id": plan_id,
-            "status": "trialing",
-            "trial_status": "active",
-            "billing_status": "checkout_completed",
+            "status": "trialing" if trial else "active",
+            "trial_status": "active" if trial else "converted",
+            "billing_status": "checkout_completed" if trial else "current",
             "stripe_customer_id": str(session.get("customer") or ""),
             "stripe_subscription_id": str(session.get("subscription") or ""),
             "stripe_checkout_session_id": str(session.get("id") or ""),
-            "metadata": {"checkout_session_id": session.get("id"), "plan_id": plan_id},
+            "metadata": {"checkout_session_id": session.get("id"), "plan_id": plan_id, "checkout_kind": checkout_kind},
         }
         self.repository.upsert_user_subscription(data)
         return {"handled": True, "event_type": "checkout.session.completed", "user_id": user_id}

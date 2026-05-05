@@ -532,12 +532,16 @@ async def settings_billing_checkout(
 ):
     data = await request.json()
     plan_id = str(data.get("plan_id") or "starter").lower()
+    trial = bool(data.get("trial") or data.get("checkout_kind") == "trial")
+    if trial:
+        plan_id = "starter"
     service = _stripe_billing_service(request)
     try:
         result = service.create_checkout_session(
             user_id=user.user_id,
             user_email=str(user.claims.get("email") or "") or None,
             plan_id=plan_id,
+            trial=trial,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
