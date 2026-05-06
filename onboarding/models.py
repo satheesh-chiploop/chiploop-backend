@@ -62,6 +62,7 @@ class OnboardingState:
     def to_row(self) -> Dict[str, Any]:
         data = self.to_dict()
         data.pop("completed", None)
+        data.pop("demo", None)
         return data
 
     @classmethod

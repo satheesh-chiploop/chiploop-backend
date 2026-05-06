@@ -46,6 +46,20 @@ def test_onboarding_defaults_to_incomplete():
     assert onboarding["demo"]["arch2rtl"]["runs_remaining"] == 3
 
 
+def test_onboarding_row_excludes_response_only_fields():
+    service = OnboardingService(InMemoryOnboardingRepository())
+    state = service.record_arch2rtl_demo_run("user-1", workflow_id="wf-1")
+
+    as_response = state.to_dict()
+    as_row = state.to_row()
+
+    assert "demo" in as_response
+    assert "completed" in as_response
+    assert "demo" not in as_row
+    assert "completed" not in as_row
+    assert as_row["metadata"]["arch2rtl_demo_runs"] == 1
+
+
 def test_onboarding_complete_records_workflow_id():
     client = _client()
     response = client.post(
