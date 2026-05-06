@@ -32,7 +32,7 @@ class _FakeWebhook:
                     "metadata": {
                         "checkout_kind": "workshop",
                         "registration_id": _FakeStripe.registration_id,
-                        "batch_id": "2026-05-30_09-30am_pt",
+                        "batch_id": "2026-06-06_09-30am_pt",
                     },
                 }
             },
@@ -70,7 +70,8 @@ def test_workshop_batches_show_capacity(monkeypatch):
     first = response.json()["batches"][0]
     assert first["capacity"] == 10
     assert first["remaining"] == 10
-    assert first["price_usd"] == 99
+    assert first["price_usd"] == 149
+    assert first["id"] == "2026-06-06_09-30am_pt"
 
 
 def test_workshop_checkout_creates_pending_registration(monkeypatch):
@@ -84,7 +85,7 @@ def test_workshop_checkout_creates_pending_registration(monkeypatch):
         json={
             "name": "Grace Hopper",
             "email": "Grace@Example.com",
-            "batch_id": "2026-05-30_09-30am_pt",
+            "batch_id": "2026-06-06_09-30am_pt",
             "loop_interest": "Digital",
         },
     )
@@ -108,7 +109,7 @@ def test_workshop_checkout_requires_price_id(monkeypatch):
 
     response = client.post(
         "/workshop/checkout",
-        json={"name": "User", "email": "user@example.com", "batch_id": "2026-05-30_09-30am_pt"},
+        json={"name": "User", "email": "user@example.com", "batch_id": "2026-06-06_09-30am_pt"},
     )
 
     assert response.status_code == 503
@@ -122,7 +123,7 @@ def test_workshop_webhook_marks_registration_paid(monkeypatch):
     client, repo = _client()
     checkout = client.post(
         "/workshop/checkout",
-        json={"name": "Paid User", "email": "paid@example.com", "batch_id": "2026-05-30_09-30am_pt"},
+        json={"name": "Paid User", "email": "paid@example.com", "batch_id": "2026-06-06_09-30am_pt"},
     )
     registration_id = checkout.json()["registration_id"]
     _FakeStripe.registration_id = registration_id
@@ -147,7 +148,7 @@ def test_workshop_full_batch_rejected(monkeypatch):
             json={
                 "name": f"User {index}",
                 "email": f"user{index}@example.com",
-                "batch_id": "2026-05-30_09-30am_pt",
+                "batch_id": "2026-06-06_09-30am_pt",
             },
         )
         _FakeStripe.registration_id = checkout.json()["registration_id"]
@@ -155,7 +156,7 @@ def test_workshop_full_batch_rejected(monkeypatch):
 
     response = client.post(
         "/workshop/checkout",
-        json={"name": "Late User", "email": "late@example.com", "batch_id": "2026-05-30_09-30am_pt"},
+        json={"name": "Late User", "email": "late@example.com", "batch_id": "2026-06-06_09-30am_pt"},
     )
 
     assert response.status_code == 400

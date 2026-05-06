@@ -9,54 +9,38 @@ from .repository import WorkshopRegistrationRepository
 
 
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
-WORKSHOP_PRICE_USD = 99
+WORKSHOP_PRICE_USD = 149
 WORKSHOP_BATCH_CAPACITY = 10
 WORKSHOP_BATCHES = [
     {
-        "id": "2026-05-30_09-30am_pt",
-        "label": "May 30 + June 6, 2026, 9:30 AM PST",
-        "day_1": "2026-05-30",
-        "day_2": "2026-06-06",
+        "id": "2026-06-06_09-30am_pt",
+        "label": "June 6 + June 13, 2026, 9:30 AM PST",
+        "day_1": "2026-06-06",
+        "day_2": "2026-06-13",
         "time": "9:30 AM",
         "timezone": "PST",
     },
     {
-        "id": "2026-05-30_09-30pm_pt",
-        "label": "May 30 + June 6, 2026, 9:30 PM PST",
-        "day_1": "2026-05-30",
-        "day_2": "2026-06-06",
+        "id": "2026-06-06_09-30pm_pt",
+        "label": "June 6 + June 13, 2026, 9:30 PM PST",
+        "day_1": "2026-06-06",
+        "day_2": "2026-06-13",
         "time": "9:30 PM",
         "timezone": "PST",
     },
     {
-        "id": "2026-06-13_09-30am_pt",
-        "label": "June 13 + June 20, 2026, 9:30 AM PST",
-        "day_1": "2026-06-13",
-        "day_2": "2026-06-20",
+        "id": "2026-06-20_09-30am_pt",
+        "label": "June 20 + June 27, 2026, 9:30 AM PST",
+        "day_1": "2026-06-20",
+        "day_2": "2026-06-27",
         "time": "9:30 AM",
         "timezone": "PST",
     },
     {
-        "id": "2026-06-13_09-30pm_pt",
-        "label": "June 13 + June 20, 2026, 9:30 PM PST",
-        "day_1": "2026-06-13",
-        "day_2": "2026-06-20",
-        "time": "9:30 PM",
-        "timezone": "PST",
-    },
-    {
-        "id": "2026-06-27_09-30am_pt",
-        "label": "June 27 + July 4, 2026, 9:30 AM PST",
-        "day_1": "2026-06-27",
-        "day_2": "2026-07-04",
-        "time": "9:30 AM",
-        "timezone": "PST",
-    },
-    {
-        "id": "2026-06-27_09-30pm_pt",
-        "label": "June 27 + July 4, 2026, 9:30 PM PST",
-        "day_1": "2026-06-27",
-        "day_2": "2026-07-04",
+        "id": "2026-06-20_09-30pm_pt",
+        "label": "June 20 + June 27, 2026, 9:30 PM PST",
+        "day_1": "2026-06-20",
+        "day_2": "2026-06-27",
         "time": "9:30 PM",
         "timezone": "PST",
     },
