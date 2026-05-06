@@ -18,6 +18,7 @@ from stripe_billing import StripeBillingConfigError, StripeBillingService
 from user_agents.repository import SupabaseUserAgentRepository
 from user_agents.service import UserAgentService
 from webinar import SupabaseWebinarRegistrationRepository, WebinarRegistrationError, WebinarRegistrationService
+from workshop import SupabaseWorkshopRegistrationRepository, WorkshopRegistrationError, WorkshopService
 from voice_design import VoiceDesignConfigError, build_spec_draft, transcribe_audio_bytes
 from workflow_dag.models import WorkflowDAG
 from workflow_dag.planner import dag_from_agents, dag_from_studio_graph, dry_run_plan
@@ -211,6 +212,16 @@ def _webinar_service(request: Request) -> WebinarRegistrationService:
     return WebinarRegistrationService(SupabaseWebinarRegistrationRepository(supabase))
 
 
+def _workshop_service(request: Request) -> WorkshopService:
+    existing = getattr(request.app.state, "workshop_service", None)
+    if existing is not None:
+        return existing
+    supabase = getattr(request.app.state, "supabase", None)
+    if supabase is None:
+        raise HTTPException(status_code=500, detail="workshop_registration_store_unavailable")
+    return WorkshopService(SupabaseWorkshopRegistrationRepository(supabase))
+
+
 def _registry_counts(registry_dir: str = "registry") -> Dict[str, int]:
     registry = load_registry(registry_dir)
     return {
@@ -258,6 +269,47 @@ async def webinar_register(request: Request):
 @router.get("/webinar/sessions")
 def webinar_sessions(request: Request):
     return {"status": "ok", "sessions": _webinar_service(request).sessions()}
+
+
+@router.get("/workshop/batches")
+def workshop_batches(request: Request):
+    return {"status": "ok", "batches": _workshop_service(request).batches()}
+
+
+@router.post("/workshop/checkout")
+async def workshop_checkout(request: Request):
+    data = await request.json()
+    try:
+        result = _workshop_service(request).create_checkout(data)
+    except WorkshopRegistrationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except StripeBillingConfigError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    except Exception as exc:
+        service = _workshop_service(request)
+        stripe_error_base = getattr(getattr(service.stripe, "error", None), "StripeError", None)
+        if stripe_error_base and isinstance(exc, stripe_error_base):
+            detail = _stripe_error_response(exc)
+            raise HTTPException(status_code=502, detail=detail)
+        raise HTTPException(status_code=502, detail=f"workshop_checkout_failed: {type(exc).__name__}")
+    return {"status": "ok", **result}
+
+
+@router.get("/workshop/registrations/{registration_id}")
+def workshop_registration(registration_id: str, request: Request):
+    registration = _workshop_service(request).get_registration(registration_id)
+    if not registration:
+        raise HTTPException(status_code=404, detail="workshop_registration_not_found")
+    return {
+        "status": "ok",
+        "registration": {
+            "id": registration.id,
+            "email": registration.email,
+            "batch_id": registration.batch_id,
+            "payment_status": registration.status,
+            "paid": registration.status == "paid",
+        },
+    }
 
 
 @router.get("/studio/registry/summary")
@@ -586,7 +638,12 @@ async def stripe_webhook(request: Request):
     signature = request.headers.get("stripe-signature", "")
     try:
         event = _stripe_billing_service(request).construct_event(payload, signature)
-        result = _stripe_billing_service(request).handle_event(event)
+        obj = (event.get("data") or {}).get("object") or {}
+        metadata = obj.get("metadata") or {}
+        if event.get("type") == "checkout.session.completed" and metadata.get("checkout_kind") == "workshop":
+            result = _workshop_service(request).complete_checkout(obj)
+        else:
+            result = _stripe_billing_service(request).handle_event(event)
     except StripeBillingConfigError as exc:
         raise HTTPException(status_code=503, detail=str(exc))
     except Exception as exc:
