@@ -288,6 +288,8 @@ def _trial_required_response(message: str) -> HTTPException:
             "message": message,
             "requires_checkout": True,
             "checkout_plan_id": "starter",
+            "checkout_url": "/pricing?trial=1",
+            "checkout_label": "Start 7-day trial",
         },
     )
 
@@ -305,9 +307,11 @@ async def require_checkout_for_workflow_runs(request: Request, call_next):
             content={
                 "status": "error",
                 "error": "trial_checkout_required",
-                "detail": "Start your 7-day trial with a credit card to run workflows.",
+                "detail": "Start your 7-day trial to run workflows.",
                 "requires_checkout": True,
                 "checkout_plan_id": "starter",
+                "checkout_url": "/pricing?trial=1",
+                "checkout_label": "Start 7-day trial",
             },
         )
     except BillingPaymentRequired as exc:
@@ -2327,7 +2331,7 @@ async def apps_arch2rtl_run(request: Request, background_tasks: BackgroundTasks,
         onboarding_service = _onboarding_service_for_main()
         if not is_arch2rtl_guided_demo_payload(payload_dict):
             raise _trial_required_response(
-                "Start your 7-day trial with a credit card to run custom Arch2RTL workflows."
+                "Start your 7-day trial to run custom Arch2RTL workflows."
             )
         if not onboarding_service.can_run_arch2rtl_demo(user_id):
             raise _trial_required_response(
@@ -2359,6 +2363,8 @@ async def apps_arch2rtl_run(request: Request, background_tasks: BackgroundTasks,
             "show": True,
             "message": "Start your 7-day trial to run your own specs. No charge today.",
             "checkout_plan_id": "starter",
+            "checkout_url": "/pricing?trial=1",
+            "checkout_label": "Start 7-day trial",
         }
     return response
 

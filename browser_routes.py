@@ -71,6 +71,17 @@ def _checkout_trial_requested(data: Dict[str, Any]) -> bool:
     return data.get("trial") is True or data.get("checkout_kind") == "trial"
 
 
+def _trial_checkout_detail(message: str) -> Dict[str, Any]:
+    return {
+        "error": "trial_checkout_required",
+        "message": message,
+        "requires_checkout": True,
+        "checkout_plan_id": "starter",
+        "checkout_url": "/pricing?trial=1",
+        "checkout_label": "Start 7-day trial",
+    }
+
+
 def _enforce_feature(request: Request, user_id: str, feature: str):
     service = _billing_service(request)
     try:
@@ -79,12 +90,7 @@ def _enforce_feature(request: Request, user_id: str, feature: str):
     except TrialCheckoutRequired:
         raise HTTPException(
             status_code=402,
-            detail={
-                "error": "trial_checkout_required",
-                "message": "Start your 7-day trial with a credit card to use this Studio feature.",
-                "requires_checkout": True,
-                "checkout_plan_id": "starter",
-            },
+            detail=_trial_checkout_detail("Start your 7-day trial to use this Studio feature."),
         )
     except BillingPaymentRequired as exc:
         raise HTTPException(
@@ -138,12 +144,7 @@ def _require_checkout(request: Request, user_id: str):
     except TrialCheckoutRequired:
         raise HTTPException(
             status_code=402,
-            detail={
-                "error": "trial_checkout_required",
-                "message": "Start your 7-day trial with a credit card to use voice design sessions.",
-                "requires_checkout": True,
-                "checkout_plan_id": "starter",
-            },
+            detail=_trial_checkout_detail("Start your 7-day trial to use voice design sessions."),
         )
     except BillingPaymentRequired as exc:
         raise HTTPException(
@@ -455,12 +456,7 @@ async def settings_create_api_key(
     except TrialCheckoutRequired:
         raise HTTPException(
             status_code=402,
-            detail={
-                "error": "trial_checkout_required",
-                "message": "Start your 7-day trial before creating API keys.",
-                "requires_checkout": True,
-                "checkout_plan_id": "starter",
-            },
+            detail=_trial_checkout_detail("Start your 7-day trial before creating API keys."),
         )
     except BillingPaymentRequired as exc:
         raise HTTPException(
