@@ -9,7 +9,7 @@ from .repository import WorkshopRegistrationRepository
 
 
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
-WORKSHOP_PRICE_USD = 149
+WORKSHOP_PRICE_USD = 99.98
 WORKSHOP_BATCH_CAPACITY = 10
 WORKSHOP_BATCHES = [
     {

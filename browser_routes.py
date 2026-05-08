@@ -1,5 +1,6 @@
 import logging
 import os
+import json
 from typing import Any, Dict
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
@@ -27,6 +28,131 @@ from workflow_dag.validator import validate_dag
 
 router = APIRouter()
 logger = logging.getLogger("chiploop.billing")
+ARTIFACT_BUCKET = os.getenv("ARTIFACT_BUCKET_NAME", "artifacts")
+ASK_THIS_RUN_MAX_LOG_CHARS = int(os.getenv("ASK_THIS_RUN_MAX_LOG_CHARS", "8000"))
+ASK_THIS_RUN_MAX_ARTIFACT_CHARS = int(os.getenv("ASK_THIS_RUN_MAX_ARTIFACT_CHARS", "6000"))
+ASK_THIS_RUN_MAX_CONTEXT_CHARS = int(os.getenv("ASK_THIS_RUN_MAX_CONTEXT_CHARS", "24000"))
+
+
+def _iter_leaf_strings(obj: Any):
+    if isinstance(obj, dict):
+        for value in obj.values():
+            yield from _iter_leaf_strings(value)
+    elif isinstance(obj, list):
+        for value in obj:
+            yield from _iter_leaf_strings(value)
+    elif isinstance(obj, str):
+        value = obj.strip()
+        if value:
+            yield value
+
+
+def _normalize_storage_path(path: str) -> str:
+    path = path.strip()
+    if path.startswith("/artifacts/anonymous/"):
+        return path[len("/artifacts/anonymous/") :]
+    if path.startswith("/artifacts/"):
+        return path[len("/artifacts/") :]
+    if path.startswith("/"):
+        return path[1:]
+    return path
+
+
+def _is_text_artifact(path: str) -> bool:
+    lowered = path.lower()
+    return lowered.endswith((
+        ".txt",
+        ".md",
+        ".json",
+        ".log",
+        ".csv",
+        ".yaml",
+        ".yml",
+        ".sv",
+        ".v",
+        ".py",
+        ".sdc",
+        ".upf",
+        ".rpt",
+    ))
+
+
+def _safe_text(value: Any, limit: int) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, (dict, list)):
+        text = json.dumps(value, ensure_ascii=False, indent=2)
+    else:
+        text = str(value)
+    if len(text) <= limit:
+        return text
+    return text[:limit] + "\n[TRUNCATED]"
+
+
+def _download_text_artifact(supabase: Any, path: str) -> str:
+    data = supabase.storage.from_(ARTIFACT_BUCKET).download(path)
+    if isinstance(data, bytes):
+        return data.decode("utf-8", errors="replace")
+    if isinstance(data, bytearray):
+        return bytes(data).decode("utf-8", errors="replace")
+    return str(data or "")
+
+
+def _collect_run_inspection_context(supabase: Any, workflow: Dict[str, Any]) -> tuple[str, list[Dict[str, str]]]:
+    sources: list[Dict[str, str]] = []
+    sections: list[str] = [
+        "RUN METADATA",
+        _safe_text(
+            {
+                "id": workflow.get("id"),
+                "name": workflow.get("name"),
+                "status": workflow.get("status"),
+                "loop_type": workflow.get("loop_type"),
+                "created_at": workflow.get("created_at"),
+            },
+            2000,
+        ),
+    ]
+
+    logs = _safe_text(workflow.get("logs") or "", ASK_THIS_RUN_MAX_LOG_CHARS)
+    if logs:
+        sections.extend(["WORKFLOW LOGS", logs])
+        sources.append({"type": "logs", "path": "workflows.logs"})
+
+    artifacts = workflow.get("artifacts") or {}
+    artifact_index = _safe_text(artifacts, 5000)
+    if artifact_index:
+        sections.extend(["ARTIFACT INDEX", artifact_index])
+        sources.append({"type": "artifact_index", "path": "workflows.artifacts"})
+
+    seen: set[str] = set()
+    for raw_path in _iter_leaf_strings(artifacts):
+        path = _normalize_storage_path(raw_path)
+        if not path or path in seen or not _is_text_artifact(path):
+            continue
+        seen.add(path)
+        try:
+            content = _safe_text(_download_text_artifact(supabase, path), ASK_THIS_RUN_MAX_ARTIFACT_CHARS)
+        except Exception as exc:
+            logger.info("ask_this_run: skipped artifact %s: %s", path, exc)
+            continue
+        if not content:
+            continue
+        sections.extend([f"ARTIFACT: {path}", content])
+        sources.append({"type": "artifact", "path": path})
+        if len("\n\n".join(sections)) >= ASK_THIS_RUN_MAX_CONTEXT_CHARS:
+            break
+
+    context = "\n\n".join(sections)
+    if len(context) > ASK_THIS_RUN_MAX_CONTEXT_CHARS:
+        context = context[:ASK_THIS_RUN_MAX_CONTEXT_CHARS] + "\n[CONTEXT TRUNCATED]"
+    return context, sources
+
+
+async def _run_inspection_llm(prompt: str) -> str:
+    from utils.llm_utils import run_llm_fallback
+
+    return await run_llm_fallback(prompt)
 
 
 def _api_key_service(request: Request):
@@ -309,6 +435,69 @@ def workshop_registration(registration_id: str, request: Request):
             "payment_status": registration.status,
             "paid": registration.status == "paid",
         },
+    }
+
+
+@router.post("/workflow/{workflow_id}/ask")
+async def ask_this_run(workflow_id: str, request: Request, user: BrowserUser = Depends(require_browser_user)):
+    data = await request.json()
+    question = str(data.get("question") or "").strip()
+    if len(question) < 3:
+        raise HTTPException(status_code=400, detail="question_required")
+    if len(question) > 1000:
+        raise HTTPException(status_code=400, detail="question_too_long")
+
+    supabase = getattr(request.app.state, "supabase", None)
+    if supabase is None:
+        raise HTTPException(status_code=500, detail="workflow_store_unavailable")
+
+    try:
+        row = (
+            supabase.table("workflows")
+            .select("id,user_id,name,status,loop_type,created_at,logs,artifacts")
+            .eq("id", workflow_id)
+            .single()
+            .execute()
+        )
+    except Exception:
+        raise HTTPException(status_code=404, detail="workflow_not_found")
+
+    workflow = getattr(row, "data", None) or {}
+    if not workflow:
+        raise HTTPException(status_code=404, detail="workflow_not_found")
+
+    owner_id = str(workflow.get("user_id") or "")
+    if owner_id and owner_id != user.user_id:
+        raise HTTPException(status_code=403, detail="workflow_access_denied")
+
+    context, sources = _collect_run_inspection_context(supabase, workflow)
+    if not context.strip():
+        raise HTTPException(status_code=400, detail="run_context_empty")
+
+    prompt = f"""
+You are ChipLoop's Ask This Run inspector.
+
+Answer the user's question using only the run context below. Be concise, technical, and explicit.
+If the context does not contain enough evidence, say what is missing instead of guessing.
+Reference source paths from the context when useful.
+
+User question:
+{question}
+
+Run context:
+{context}
+""".strip()
+
+    answer = (await _run_inspection_llm(prompt)).strip()
+    if not answer:
+        raise HTTPException(status_code=503, detail="inspection_llm_unavailable")
+
+    return {
+        "workflow_id": workflow_id,
+        "question": question,
+        "answer": answer,
+        "sources": sources[:20],
+        "source_count": len(sources),
     }
 
 

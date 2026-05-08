@@ -70,7 +70,7 @@ def test_workshop_batches_show_capacity(monkeypatch):
     first = response.json()["batches"][0]
     assert first["capacity"] == 10
     assert first["remaining"] == 10
-    assert first["price_usd"] == 149
+    assert first["price_usd"] == 99.98
     assert first["id"] == "2026-06-06_09-30am_pt"
 
 
