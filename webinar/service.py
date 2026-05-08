@@ -9,20 +9,6 @@ EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 WEBINAR_SESSION_CAPACITY = 10
 WEBINAR_SESSIONS = [
     {
-        "id": "2026-05-23_09am_pt",
-        "label": "May 23, 2026, 9:00 AM PST",
-        "date": "2026-05-23",
-        "time": "9:00 AM",
-        "timezone": "PST",
-    },
-    {
-        "id": "2026-05-23_09pm_pt",
-        "label": "May 23, 2026, 9:00 PM PST",
-        "date": "2026-05-23",
-        "time": "9:00 PM",
-        "timezone": "PST",
-    },
-    {
         "id": "2026-05-30_09am_pt",
         "label": "May 30, 2026, 9:00 AM PST",
         "date": "2026-05-30",
