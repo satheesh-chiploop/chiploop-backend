@@ -17,12 +17,15 @@ from user_agents.service import UserAgentService, build_effective_agent_catalog
 JWT_SECRET = "phase7h-test-secret"
 
 
-def _token(user_id: str = "user-1") -> str:
-    return jwt.encode({"sub": user_id}, JWT_SECRET, algorithm="HS256")
+def _token(user_id: str = "user-1", *, email: str | None = None) -> str:
+    claims = {"sub": user_id}
+    if email:
+        claims["email"] = email
+    return jwt.encode(claims, JWT_SECRET, algorithm="HS256")
 
 
-def _auth(user_id: str = "user-1") -> dict:
-    return {"Authorization": f"Bearer {_token(user_id)}"}
+def _auth(user_id: str = "user-1", *, email: str | None = None) -> dict:
+    return {"Authorization": f"Bearer {_token(user_id, email=email)}"}
 
 
 class FakeUserAgentRepository(UserAgentRepository):
@@ -73,11 +76,11 @@ class FakeUserAgentRepository(UserAgentRepository):
         return {"id": f"submission-{len(self.submissions)}", **row}
 
 
-def _client(service: UserAgentService) -> TestClient:
+def _client(service: UserAgentService, *, default_plan_id: str = "pro") -> TestClient:
     browser_auth.SUPABASE_JWT_SECRET = JWT_SECRET
     app = FastAPI()
     app.state.user_agent_service = service
-    app.state.billing_service = BillingService(InMemoryBillingRepository(default_plan_id="pro"))
+    app.state.billing_service = BillingService(InMemoryBillingRepository(default_plan_id=default_plan_id))
     app.include_router(browser_routes.router)
     return TestClient(app)
 
@@ -229,3 +232,32 @@ def test_browser_submit_endpoint_keeps_visibility_private():
     body = response.json()
     assert body["agent"]["status"] == "submitted"
     assert body["agent"]["visibility"] == "private"
+
+
+def test_admin_email_bypasses_private_agent_plan_requirement():
+    repo = FakeUserAgentRepository()
+    service = UserAgentService(repo)
+    client = _client(service, default_plan_id="account")
+
+    response = client.post(
+        "/studio/user-agents",
+        headers=_auth("admin-user", email="chiploop.agx@gmail.com"),
+        json={"name": "Admin Private Agent"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["agent"]["agent_name"] == "Admin Private Agent"
+
+
+def test_admin_email_gets_admin_plan_summary_without_checkout():
+    repo = FakeUserAgentRepository()
+    service = UserAgentService(repo)
+    client = _client(service, default_plan_id="account")
+
+    response = client.get("/settings/plan", headers=_auth("admin-user", email="chiploop.agx@gmail.com"))
+
+    assert response.status_code == 200
+    plan = response.json()["plan"]
+    assert plan["is_admin"] is True
+    assert plan["requires_checkout"] is False
+    assert plan["can_run_workflows"] is True

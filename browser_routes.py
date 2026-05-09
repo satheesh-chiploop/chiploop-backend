@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 
 from auth_api_keys.service import get_api_key_service
 from billing import BillingPaymentRequired, CreditLimitExceeded, EntitlementDenied, TrialCheckoutRequired, get_billing_service
-from browser_auth import BrowserUser, require_browser_user
+from browser_auth import BrowserUser, browser_user_email, is_browser_admin, require_browser_user
 from marketplace import MarketplaceService, SupabaseMarketplaceRepository
 from onboarding import OnboardingService, SupabaseOnboardingRepository
 from studio_contract.registry import load_registry
@@ -210,6 +210,9 @@ def _trial_checkout_detail(message: str) -> Dict[str, Any]:
 
 
 def _enforce_feature(request: Request, user_id: str, feature: str):
+    user = getattr(request.state, "browser_user", None)
+    if user and is_browser_admin(user):
+        return None
     service = _billing_service(request)
     try:
         service.assert_checkout_started(user_id)
@@ -233,6 +236,9 @@ def _enforce_feature(request: Request, user_id: str, feature: str):
 
 
 def _deduct(request: Request, user_id: str, action_type: str, *, reference_id: str | None = None):
+    user = getattr(request.state, "browser_user", None)
+    if user and is_browser_admin(user):
+        return {"monthly_credits": None, "credits_used": 0, "credits_remaining": None, "deducted": 0}
     service = _billing_service(request)
     try:
         return service.deduct_credits(user_id, action_type, reference_id=reference_id)
@@ -257,6 +263,9 @@ def _deduct(request: Request, user_id: str, action_type: str, *, reference_id: s
 
 
 def _upgrade_hint(request: Request, user_id: str, *, reason: str | None = None):
+    user = getattr(request.state, "browser_user", None)
+    if user and is_browser_admin(user):
+        return None
     return _billing_service(request).upgrade_status(user_id, reason=reason).get("suggested_upgrade")
 
 
@@ -266,6 +275,9 @@ def _with_upgrade(payload: Dict[str, Any], request: Request, user_id: str, *, re
 
 
 def _require_checkout(request: Request, user_id: str):
+    user = getattr(request.state, "browser_user", None)
+    if user and is_browser_admin(user):
+        return
     try:
         _billing_service(request).assert_checkout_started(user_id)
     except TrialCheckoutRequired:
@@ -310,12 +322,55 @@ def _require_admin(user: BrowserUser) -> None:
         for item in os.environ.get("CHIPLOOP_ADMIN_USER_IDS", "").split(",")
         if item.strip()
     }
-    role = str(user.claims.get("role") or user.claims.get("app_role") or "")
-    if role in {"admin", "platform_admin", "marketplace_admin"}:
+    if is_browser_admin(user):
         return
     if admin_ids and user.user_id in admin_ids:
         return
     raise HTTPException(status_code=403, detail="admin_required")
+
+
+def _admin_plan_summary(user: BrowserUser) -> Dict[str, Any]:
+    entitlements = {
+        "plan_id": "admin",
+        "plan_name": "Administrator",
+        "monthly_credits": None,
+        "max_api_keys": 999,
+        "max_private_agents": 999,
+        "sdk_cli_enabled": True,
+        "agent_planner_enabled": True,
+        "agent_factory_dry_run_enabled": True,
+        "private_agent_save_enabled": True,
+        "dag_optimization_enabled": True,
+        "marketplace_submit_enabled": True,
+        "agent_factory_write_enabled": True,
+        "higher_workflow_limits": True,
+        "custom_limits": True,
+    }
+    return {
+        "current_plan": {"id": "admin", "name": "Administrator", "display_name": "Administrator"},
+        "plan_name": "Administrator",
+        "base_price": "admin",
+        "discounted_price": None,
+        "price_monthly": None,
+        "price": "admin",
+        "credits": None,
+        "monthly_credits": None,
+        "credits_used": 0,
+        "credits_remaining": None,
+        "trial_days_remaining": None,
+        "discount_months_remaining": 0,
+        "entitlements": entitlements,
+        "billing_status": "admin",
+        "billing_blocked": False,
+        "grace_period_end_at": None,
+        "requires_checkout": False,
+        "can_run_workflows": True,
+        "trial": {"status": None, "days_remaining": None, "auto_renew": False, "converts_to": None},
+        "suggested_upgrade": None,
+        "upgrade_hint": None,
+        "is_admin": True,
+        "admin_email": browser_user_email(user),
+    }
 
 
 def _onboarding_service(request: Request) -> OnboardingService:
@@ -622,19 +677,20 @@ async def studio_save_user_agent(
 ):
     billing = _billing_service(request)
     service = _user_agent_service(request)
-    try:
-        entitlements = billing.assert_entitlement(user.user_id, "private_agent_save_enabled")
-        billing.assert_private_agent_limit(user.user_id)
-        if len(service.list_my_agents(user.user_id)) >= entitlements.max_private_agents:
-            raise EntitlementDenied("max_private_agents")
-        billing.deduct_credits(user.user_id, "private_agent_save")
-    except EntitlementDenied as exc:
-        raise HTTPException(status_code=403, detail=f"{exc.feature}_not_enabled")
-    except CreditLimitExceeded as exc:
-        raise HTTPException(
-            status_code=402,
-            detail={"error": "insufficient_credits", "required": exc.required, "remaining": exc.remaining},
-        )
+    if not is_browser_admin(user):
+        try:
+            entitlements = billing.assert_entitlement(user.user_id, "private_agent_save_enabled")
+            billing.assert_private_agent_limit(user.user_id)
+            if len(service.list_my_agents(user.user_id)) >= entitlements.max_private_agents:
+                raise EntitlementDenied("max_private_agents")
+            billing.deduct_credits(user.user_id, "private_agent_save")
+        except EntitlementDenied as exc:
+            raise HTTPException(status_code=403, detail=f"{exc.feature}_not_enabled")
+        except CreditLimitExceeded as exc:
+            raise HTTPException(
+                status_code=402,
+                detail={"error": "insufficient_credits", "required": exc.required, "remaining": exc.remaining},
+            )
     data = await request.json()
     payload = data.get("agent") if isinstance(data.get("agent"), dict) else data
     try:
@@ -705,29 +761,30 @@ async def settings_create_api_key(
 ):
     billing = _billing_service(request)
     key_service = _api_key_service(request)
-    try:
-        entitlements = billing.assert_api_key_limit(user.user_id)
-        active_keys = [
-            key for key in key_service.list_key_metadata(user.user_id) if not key.get("revoked_at")
-        ]
-        if len(active_keys) >= entitlements.max_api_keys:
-            raise EntitlementDenied("max_api_keys")
-    except TrialCheckoutRequired:
-        raise HTTPException(
-            status_code=402,
-            detail=_trial_checkout_detail("Start your 7-day trial before creating API keys."),
-        )
-    except BillingPaymentRequired as exc:
-        raise HTTPException(
-            status_code=402,
-            detail={
-                "error": "payment_required",
-                "billing_status": exc.billing_status,
-                "grace_period_end_at": exc.grace_period_end_at,
-            },
-        )
-    except EntitlementDenied as exc:
-        raise HTTPException(status_code=403, detail=f"{exc.feature}_limit_reached")
+    if not is_browser_admin(user):
+        try:
+            entitlements = billing.assert_api_key_limit(user.user_id)
+            active_keys = [
+                key for key in key_service.list_key_metadata(user.user_id) if not key.get("revoked_at")
+            ]
+            if len(active_keys) >= entitlements.max_api_keys:
+                raise EntitlementDenied("max_api_keys")
+        except TrialCheckoutRequired:
+            raise HTTPException(
+                status_code=402,
+                detail=_trial_checkout_detail("Start your 7-day trial before creating API keys."),
+            )
+        except BillingPaymentRequired as exc:
+            raise HTTPException(
+                status_code=402,
+                detail={
+                    "error": "payment_required",
+                    "billing_status": exc.billing_status,
+                    "grace_period_end_at": exc.grace_period_end_at,
+                },
+            )
+        except EntitlementDenied as exc:
+            raise HTTPException(status_code=403, detail=f"{exc.feature}_limit_reached")
     data = await request.json()
     name = str(data.get("name") or "Browser key").strip() or "Browser key"
     environment = str(data.get("environment") or data.get("mode") or "test").lower()
@@ -773,6 +830,8 @@ def settings_plan(
     request: Request,
     user: BrowserUser = Depends(require_browser_user),
 ):
+    if is_browser_admin(user):
+        return {"status": "ok", "plan": _admin_plan_summary(user)}
     return {"status": "ok", "plan": _billing_service(request).plan_summary(user.user_id)}
 
 
@@ -781,6 +840,8 @@ def settings_upgrade_status(
     request: Request,
     user: BrowserUser = Depends(require_browser_user),
 ):
+    if is_browser_admin(user):
+        return {"status": "ok", "upgrade_status": {**_admin_plan_summary(user), "suggested_upgrade": None}}
     return {"status": "ok", "upgrade_status": _billing_service(request).upgrade_status(user.user_id)}
 
 

@@ -15,6 +15,27 @@ class BrowserUser:
     claims: Dict[str, Any]
 
 
+ADMIN_EMAILS = {
+    email.strip().lower()
+    for email in os.environ.get("CHIPLOOP_ADMIN_EMAILS", "chiploop.agx@gmail.com").split(",")
+    if email.strip()
+}
+
+
+def browser_user_email(user: BrowserUser) -> str:
+    email = user.claims.get("email")
+    if not email and isinstance(user.claims.get("user_metadata"), dict):
+        email = user.claims["user_metadata"].get("email")
+    return str(email or "").strip().lower()
+
+
+def is_browser_admin(user: BrowserUser) -> bool:
+    role = str(user.claims.get("role") or user.claims.get("app_role") or "")
+    if role in {"admin", "platform_admin", "marketplace_admin"}:
+        return True
+    return browser_user_email(user) in ADMIN_EMAILS
+
+
 def _bearer_token(request: Request) -> str:
     header = request.headers.get("authorization") or request.headers.get("Authorization") or ""
     if not header.lower().startswith("bearer "):
@@ -22,13 +43,17 @@ def _bearer_token(request: Request) -> str:
     return header.split(" ", 1)[1].strip()
 
 
-def _user_id_from_supabase_client(request: Request, token: str) -> str:
+def _claims_from_supabase_client(request: Request, token: str) -> Dict[str, Any]:
     supabase = getattr(request.app.state, "supabase", None)
     if supabase is None or not hasattr(supabase, "auth"):
-        return ""
+        return {}
     result = supabase.auth.get_user(token)
     user = getattr(result, "user", None)
-    return str(getattr(user, "id", "") or "")
+    user_id = str(getattr(user, "id", "") or "")
+    if not user_id:
+        return {}
+    email = str(getattr(user, "email", "") or "")
+    return {"sub": user_id, "email": email}
 
 
 def require_browser_user(request: Request) -> BrowserUser:
@@ -49,12 +74,17 @@ def require_browser_user(request: Request) -> BrowserUser:
         user_id = str(claims.get("sub") or "")
         if not user_id:
             raise HTTPException(status_code=401, detail="invalid_session_token")
-        return BrowserUser(user_id=user_id, claims=claims)
+        user = BrowserUser(user_id=user_id, claims=claims)
+        request.state.browser_user = user
+        return user
 
     try:
-        user_id = _user_id_from_supabase_client(request, token)
+        claims = _claims_from_supabase_client(request, token)
     except Exception:
-        user_id = ""
+        claims = {}
+    user_id = str(claims.get("sub") or "")
     if not user_id:
         raise HTTPException(status_code=401, detail="invalid_session_token")
-    return BrowserUser(user_id=user_id, claims={"sub": user_id})
+    user = BrowserUser(user_id=user_id, claims=claims)
+    request.state.browser_user = user
+    return user
