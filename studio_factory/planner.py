@@ -46,7 +46,7 @@ def _resolve_tools(request: AgentFactoryRequest, registry, skills: List[str]) ->
 def plan_factory_request(request: AgentFactoryRequest, registry_dir: str = "registry") -> AgentFactoryPlan:
     registry, lookup = lookup_existing_agents(request, registry_dir=registry_dir)
 
-    if lookup.exact_matches:
+    if lookup.exact_matches and not request.force_create_private:
         match = lookup.exact_matches[0]
         return AgentFactoryPlan(
             decision="reuse_existing",
@@ -56,7 +56,7 @@ def plan_factory_request(request: AgentFactoryRequest, registry_dir: str = "regi
             exact_match=match.name,
         )
 
-    if lookup.similar_matches and not request.allow_extension:
+    if lookup.similar_matches and not request.allow_extension and not request.force_create_private:
         return AgentFactoryPlan(
             decision="extend_or_create_variant",
             proposed_agent_spec={},
@@ -71,13 +71,19 @@ def plan_factory_request(request: AgentFactoryRequest, registry_dir: str = "regi
     files = build_generated_files(request, agent_spec, proposed_skills)
     patch = build_registry_patch_plan(request, agent_spec, proposed_skills)
     decision = "create_new" if not lookup.similar_matches else "create_new_variant"
+    risk_notes = [
+        "Generated files are review artifacts only.",
+        "Factory never writes into production agents/, registry/, or main.py.",
+    ]
+    if request.force_create_private and (lookup.exact_matches or lookup.similar_matches):
+        risk_notes.append("Private creation requested; existing matches are references and did not block this draft.")
 
     return AgentFactoryPlan(
         decision=decision,
         proposed_agent_spec=agent_spec,
         proposed_skill_specs=proposed_skills,
         proposed_tool_refs=tools,
-        proposed_hook_refs=STANDARD_HOOKS,
+        proposed_hook_refs=agent_spec.get("hooks", STANDARD_HOOKS),
         files_to_generate=files,
         registry_patch=patch,
         validation_checklist=[
@@ -86,9 +92,7 @@ def plan_factory_request(request: AgentFactoryRequest, registry_dir: str = "regi
             "Dry-run registry patch before merging.",
             f"Generated module slug: {slugify(request.name)}",
         ],
-        risk_notes=[
-            "Generated files are review artifacts only.",
-            "Factory never writes into production agents/, registry/, or main.py.",
-        ],
+        risk_notes=risk_notes,
+        exact_match=lookup.exact_matches[0].name if lookup.exact_matches else None,
         similar_matches=[m.name for m in lookup.similar_matches],
     )

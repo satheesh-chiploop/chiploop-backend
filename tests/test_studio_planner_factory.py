@@ -57,6 +57,38 @@ def test_factory_exact_match_stops_generation():
     assert not plan.files_to_generate
 
 
+def test_factory_private_create_bypasses_exact_match_guard():
+    plan = plan_factory_request(
+        AgentFactoryRequest(
+            name="Digital RTL Agent",
+            natural_language_request="Digital RTL Agent",
+            domain="digital",
+            loop_type="digital",
+            force_create_private=True,
+        )
+    )
+
+    assert plan.decision in {"create_new", "create_new_variant"}
+    assert plan.exact_match == "Digital RTL Agent"
+    assert plan.files_to_generate
+    assert any("Private creation requested" in note for note in plan.risk_notes)
+
+
+def test_factory_uses_requested_hooks_in_draft_spec():
+    plan = plan_factory_request(
+        AgentFactoryRequest(
+            name="Hooked Private Agent",
+            natural_language_request="Create a private agent with custom lifecycle hooks.",
+            loop_type="system",
+            required_hooks=["before_private_review"],
+            force_create_private=True,
+        )
+    )
+
+    assert "before_private_review" in plan.proposed_hook_refs
+    assert "before_private_review" in plan.proposed_agent_spec["hooks"]
+
+
 def test_factory_create_new_plan_json_serializable():
     plan = plan_factory_request(
         AgentFactoryRequest(

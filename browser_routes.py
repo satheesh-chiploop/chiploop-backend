@@ -644,6 +644,24 @@ async def studio_save_user_agent(
     return _with_upgrade({"status": "ok", "agent": agent}, request, user.user_id)
 
 
+@router.patch("/studio/user-agents/{agent_id}")
+async def studio_update_user_agent(
+    agent_id: str,
+    request: Request,
+    user: BrowserUser = Depends(require_browser_user),
+):
+    service = _user_agent_service(request)
+    data = await request.json()
+    payload = data.get("agent") if isinstance(data.get("agent"), dict) else data
+    try:
+        agent = service.update_private_agent(user.user_id, agent_id, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    if not agent:
+        raise HTTPException(status_code=404, detail="agent_not_found")
+    return _with_upgrade({"status": "ok", "agent": agent}, request, user.user_id)
+
+
 @router.delete("/studio/user-agents/{agent_id}")
 def studio_delete_user_agent(
     agent_id: str,

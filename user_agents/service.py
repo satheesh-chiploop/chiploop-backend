@@ -24,6 +24,15 @@ class UserAgentService:
         saved = self.repository.insert_private(row)
         return PrivateAgent.from_row(saved).to_dict()
 
+    def update_private_agent(self, user_id: str, agent_id: str, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        request = PrivateAgentPayload.from_dict(payload)
+        row = request.to_agent_row(user_id)
+        row["visibility"] = "private"
+        if row.get("status") == "approved":
+            row["status"] = "private"
+        updated = self.repository.update_owned(user_id, agent_id, row)
+        return PrivateAgent.from_row(updated).to_dict() if updated else None
+
     def delete_my_agent(self, user_id: str, agent_id: str) -> bool:
         return self.repository.delete_owned(user_id, agent_id)
 

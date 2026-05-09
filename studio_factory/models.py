@@ -12,7 +12,9 @@ class AgentFactoryRequest:
     outputs: List[str] = field(default_factory=list)
     required_skills: List[str] = field(default_factory=list)
     required_tools: List[str] = field(default_factory=list)
+    required_hooks: List[str] = field(default_factory=list)
     allow_extension: bool = False
+    force_create_private: bool = False
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "AgentFactoryRequest":
@@ -25,7 +27,9 @@ class AgentFactoryRequest:
             outputs=[str(x) for x in (data.get("outputs") or [])],
             required_skills=[str(x) for x in (data.get("required_skills") or [])],
             required_tools=[str(x) for x in (data.get("required_tools") or [])],
+            required_hooks=[str(x) for x in (data.get("required_hooks") or [])],
             allow_extension=bool(data.get("allow_extension", False)),
+            force_create_private=bool(data.get("force_create_private", False)),
         )
 
 

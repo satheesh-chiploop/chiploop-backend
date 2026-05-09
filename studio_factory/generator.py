@@ -27,6 +27,7 @@ def module_name_for(request: AgentFactoryRequest) -> str:
 
 def build_agent_spec(request: AgentFactoryRequest, skills: List[str], tools: List[str]) -> Dict:
     module_name = module_name_for(request)
+    hooks = list(dict.fromkeys((request.required_hooks or []) + STANDARD_HOOKS))
     return {
         "name": request.name,
         "loop_type": request.loop_type or request.domain or "system",
@@ -40,7 +41,7 @@ def build_agent_spec(request: AgentFactoryRequest, skills: List[str], tools: Lis
         "artifact_types": ["review_artifact"],
         "required_skills": skills,
         "required_tools": tools,
-        "hooks": STANDARD_HOOKS,
+        "hooks": hooks,
         "metadata": {
             "generated_by": "studio_factory_v1",
             "review_required": True,

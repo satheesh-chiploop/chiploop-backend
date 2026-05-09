@@ -125,6 +125,29 @@ def test_delete_enforces_ownership():
     assert service.delete_my_agent("user-2", other["id"]) is True
 
 
+def test_update_private_agent_keeps_owner_and_private_visibility():
+    repo = FakeUserAgentRepository()
+    service = UserAgentService(repo)
+    saved = service.save_private_agent("user-1", {"name": "Editable Agent"})
+
+    updated = service.update_private_agent(
+        "user-1",
+        saved["id"],
+        {
+            "name": "Editable Agent",
+            "description": "Updated description",
+            "visibility": "global",
+            "status": "approved",
+        },
+    )
+
+    assert updated is not None
+    assert updated["description"] == "Updated description"
+    assert updated["visibility"] == "private"
+    assert updated["status"] == "private"
+    assert service.update_private_agent("user-2", saved["id"], {"name": "Nope"}) is None
+
+
 def test_submit_does_not_make_agent_global():
     repo = FakeUserAgentRepository()
     service = UserAgentService(repo)
@@ -184,6 +207,14 @@ def test_browser_user_agent_endpoints_enforce_session_and_ownership():
     listed = client.get("/studio/user-agents", headers=_auth("user-1"))
     assert listed.status_code == 200
     assert listed.json()["agents"][0]["agent_name"] == "Browser Agent"
+
+    update = client.patch(
+        f"/studio/user-agents/{agent_id}",
+        headers=_auth("user-1"),
+        json={"name": "Browser Agent", "description": "Updated in browser"},
+    )
+    assert update.status_code == 200
+    assert update.json()["agent"]["description"] == "Updated in browser"
 
 
 def test_browser_submit_endpoint_keeps_visibility_private():
