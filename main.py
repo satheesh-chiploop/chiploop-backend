@@ -43,7 +43,7 @@ from studio_factory.models import AgentFactoryRequest
 from studio_planner.models import AgentPlanRequest
 from studio_planner.planner import plan_agent as plan_studio_agent
 from browser_routes import router as browser_router
-from browser_auth import require_browser_user
+from browser_auth import BrowserUser, is_browser_admin, require_browser_user
 
 
 import logging
@@ -200,11 +200,31 @@ def verify_token(request: Request) -> Dict[str, Any]:
     token = auth.replace("Bearer ", "").strip()
     if token and SUPABASE_JWT_SECRET:
         try:
-            payload = jwt.decode(token, SUPABASE_JWT_SECRET, algorithms=["HS256"])
+            payload = jwt.decode(
+                token,
+                SUPABASE_JWT_SECRET,
+                algorithms=["HS256"],
+                options={"verify_aud": False},
+            )
             return payload  # should contain sub/user id
         except Exception as e:
             logger.warning(f"JWT decode failed, continuing as anonymous: {e}")
     return {"sub": "anonymous"}
+
+
+def _browser_user_from_token(request: Request) -> BrowserUser:
+    claims = verify_token(request)
+    return BrowserUser(user_id=str(claims.get("sub") or ""), claims=claims)
+
+
+def _is_admin_request(request: Request) -> bool:
+    user = getattr(request.state, "browser_user", None)
+    if isinstance(user, BrowserUser):
+        return is_browser_admin(user)
+    user = _browser_user_from_token(request)
+    if user.user_id and user.user_id != "anonymous":
+        request.state.browser_user = user
+    return is_browser_admin(user)
 
 # ---------------- FastAPI app ----------------
 app = FastAPI(title="ChipLoop API", version="1.0")
@@ -268,6 +288,12 @@ def _checkout_started_for_user(user_id: str) -> bool:
         return False
 
 
+def _checkout_started_for_request(request: Request, user_id: str) -> bool:
+    if _is_admin_request(request):
+        return True
+    return _checkout_started_for_user(user_id)
+
+
 def _payment_required_response(exc: BillingPaymentRequired) -> HTTPException:
     return HTTPException(
         status_code=402,
@@ -300,6 +326,8 @@ async def require_checkout_for_workflow_runs(request: Request, call_next):
         return await call_next(request)
     try:
         user = require_browser_user(request)
+        if is_browser_admin(user):
+            return await call_next(request)
         get_billing_service(supabase).assert_checkout_started(user.user_id)
     except TrialCheckoutRequired:
         return JSONResponse(
@@ -2323,7 +2351,7 @@ async def apps_arch2rtl_run(request: Request, background_tasks: BackgroundTasks,
     payload_dict = payload.dict()
     demo_run = False
     try:
-        checkout_started = _checkout_started_for_user(user_id)
+        checkout_started = _checkout_started_for_request(request, user_id)
     except BillingPaymentRequired as exc:
         raise _payment_required_response(exc)
 
