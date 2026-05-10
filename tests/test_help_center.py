@@ -44,3 +44,16 @@ def test_help_ask_rejects_short_question():
 
     assert response.status_code == 400
     assert response.json()["detail"] == "question_too_short"
+
+
+def test_help_ask_answers_cursor_and_vscode_questions():
+    response = _client().post(
+        "/help/ask",
+        headers=_auth(),
+        json={"question": "How do I use ChipLoop in Cursor or VS Code?"},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["sources"][0]["slug"] == "cursor-vscode"
+    assert "CLI" in data["answer"]
