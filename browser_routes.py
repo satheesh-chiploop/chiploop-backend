@@ -8,7 +8,8 @@ from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from auth_api_keys.service import get_api_key_service
 from billing import BillingPaymentRequired, CreditLimitExceeded, EntitlementDenied, TrialCheckoutRequired, get_billing_service
 from browser_auth import BrowserUser, browser_user_email, is_browser_admin, require_browser_user
-from github_integration import GitHubIntegrationService, GitHubNotConfiguredError, GitHubRequestError
+from github_integration import GitHubIntegrationService, GitHubNotConfiguredError, GitHubRequestError, SupabaseGitHubInstallationRepository
+from help_center import answer_help_question
 from marketplace import MarketplaceService, SupabaseMarketplaceRepository
 from onboarding import OnboardingService, SupabaseOnboardingRepository
 from studio_contract.registry import load_registry
@@ -199,6 +200,16 @@ def _checkout_trial_requested(data: Dict[str, Any]) -> bool:
     return data.get("trial") is True or data.get("checkout_kind") == "trial"
 
 
+@router.post("/help/ask")
+async def ask_chiploop_help(request: Request, _: BrowserUser = Depends(require_browser_user)):
+    data = await request.json()
+    question = str(data.get("question") or "").strip()
+    try:
+        return answer_help_question(question)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="question_too_short")
+
+
 def _trial_checkout_detail(message: str) -> Dict[str, Any]:
     return {
         "error": "trial_checkout_required",
@@ -321,7 +332,9 @@ def _github_service(request: Request) -> GitHubIntegrationService:
     existing = getattr(request.app.state, "github_service", None)
     if existing is not None:
         return existing
-    return GitHubIntegrationService()
+    supabase = getattr(request.app.state, "supabase", None)
+    repository = SupabaseGitHubInstallationRepository(supabase) if supabase is not None else None
+    return GitHubIntegrationService(repository=repository)
 
 
 def _github_error(exc: Exception) -> HTTPException:
@@ -845,18 +858,50 @@ def settings_usage(
 @router.get("/settings/github/status")
 def settings_github_status(
     request: Request,
-    _: BrowserUser = Depends(require_browser_user),
+    user: BrowserUser = Depends(require_browser_user),
 ):
-    return {"status": "ok", "github": _github_service(request).status()}
+    return {"status": "ok", "github": _github_service(request).status(user.user_id)}
+
+
+@router.post("/settings/github/callback")
+async def settings_github_callback(
+    request: Request,
+    user: BrowserUser = Depends(require_browser_user),
+):
+    data = await request.json()
+    installation_id = str(data.get("installation_id") or "").strip()
+    if not installation_id:
+        raise HTTPException(status_code=400, detail="installation_id_required")
+    try:
+        installation = await _github_service(request).register_installation(user.user_id, installation_id)
+    except Exception as exc:
+        raise _github_error(exc)
+    return {"status": "ok", "installation": installation, "github": _github_service(request).status(user.user_id)}
+
+
+@router.post("/settings/github/disconnect")
+async def settings_github_disconnect(
+    request: Request,
+    user: BrowserUser = Depends(require_browser_user),
+):
+    data = await request.json()
+    installation_id = str(data.get("installation_id") or "").strip()
+    if not installation_id:
+        current = _github_service(request).status(user.user_id).get("installation") or {}
+        installation_id = str(current.get("github_installation_id") or "")
+    if not installation_id:
+        raise HTTPException(status_code=400, detail="installation_id_required")
+    disconnected = _github_service(request).disconnect(user.user_id, installation_id)
+    return {"status": "ok", "disconnected": disconnected}
 
 
 @router.get("/github/repos")
 async def github_repos(
     request: Request,
-    _: BrowserUser = Depends(require_browser_user),
+    user: BrowserUser = Depends(require_browser_user),
 ):
     try:
-        repos = await _github_service(request).list_repositories()
+        repos = await _github_service(request).list_repositories(user_id=user.user_id)
     except Exception as exc:
         raise _github_error(exc)
     return {"status": "ok", "repos": repos}
@@ -869,10 +914,10 @@ async def github_tree(
     request: Request,
     ref: str = "main",
     path: str = "",
-    _: BrowserUser = Depends(require_browser_user),
+    user: BrowserUser = Depends(require_browser_user),
 ):
     try:
-        tree = await _github_service(request).list_tree(owner, repo, ref=ref, path=path)
+        tree = await _github_service(request).list_tree(owner, repo, ref=ref, path=path, user_id=user.user_id)
     except Exception as exc:
         raise _github_error(exc)
     return {"status": "ok", "tree": tree}
@@ -881,7 +926,7 @@ async def github_tree(
 @router.post("/github/import")
 async def github_import(
     request: Request,
-    _: BrowserUser = Depends(require_browser_user),
+    user: BrowserUser = Depends(require_browser_user),
 ):
     data = await request.json()
     owner = str(data.get("owner") or "").strip()
@@ -891,7 +936,7 @@ async def github_import(
     if not owner or not repo:
         raise HTTPException(status_code=400, detail="owner_and_repo_required")
     try:
-        files = await _github_service(request).read_files(owner, repo, paths, ref=ref)
+        files = await _github_service(request).read_files(owner, repo, paths, ref=ref, user_id=user.user_id)
     except Exception as exc:
         raise _github_error(exc)
     return {
