@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from auth_api_keys.service import get_api_key_service
 from billing import BillingPaymentRequired, CreditLimitExceeded, EntitlementDenied, TrialCheckoutRequired, get_billing_service
 from browser_auth import BrowserUser, browser_user_email, is_browser_admin, require_browser_user
+from github_integration import GitHubIntegrationService, GitHubNotConfiguredError, GitHubRequestError
 from marketplace import MarketplaceService, SupabaseMarketplaceRepository
 from onboarding import OnboardingService, SupabaseOnboardingRepository
 from studio_contract.registry import load_registry
@@ -314,6 +315,22 @@ def _marketplace_service(request: Request) -> MarketplaceService:
     if supabase is None:
         raise HTTPException(status_code=500, detail="marketplace_store_unavailable")
     return MarketplaceService(SupabaseMarketplaceRepository(supabase), _user_agent_service(request))
+
+
+def _github_service(request: Request) -> GitHubIntegrationService:
+    existing = getattr(request.app.state, "github_service", None)
+    if existing is not None:
+        return existing
+    return GitHubIntegrationService()
+
+
+def _github_error(exc: Exception) -> HTTPException:
+    if isinstance(exc, GitHubNotConfiguredError):
+        return HTTPException(status_code=503, detail="github_not_configured")
+    if isinstance(exc, GitHubRequestError):
+        status = 400 if exc.status_code < 500 else 502
+        return HTTPException(status_code=status, detail=str(exc))
+    return HTTPException(status_code=502, detail=f"github_request_failed: {type(exc).__name__}")
 
 
 def _require_admin(user: BrowserUser) -> None:
@@ -823,6 +840,96 @@ def settings_usage(
 ):
     service = _api_key_service(request)
     return {"status": "ok", "usage": service.usage_summary(user.user_id)}
+
+
+@router.get("/settings/github/status")
+def settings_github_status(
+    request: Request,
+    _: BrowserUser = Depends(require_browser_user),
+):
+    return {"status": "ok", "github": _github_service(request).status()}
+
+
+@router.get("/github/repos")
+async def github_repos(
+    request: Request,
+    _: BrowserUser = Depends(require_browser_user),
+):
+    try:
+        repos = await _github_service(request).list_repositories()
+    except Exception as exc:
+        raise _github_error(exc)
+    return {"status": "ok", "repos": repos}
+
+
+@router.get("/github/tree")
+async def github_tree(
+    owner: str,
+    repo: str,
+    request: Request,
+    ref: str = "main",
+    path: str = "",
+    _: BrowserUser = Depends(require_browser_user),
+):
+    try:
+        tree = await _github_service(request).list_tree(owner, repo, ref=ref, path=path)
+    except Exception as exc:
+        raise _github_error(exc)
+    return {"status": "ok", "tree": tree}
+
+
+@router.post("/github/import")
+async def github_import(
+    request: Request,
+    _: BrowserUser = Depends(require_browser_user),
+):
+    data = await request.json()
+    owner = str(data.get("owner") or "").strip()
+    repo = str(data.get("repo") or "").strip()
+    ref = str(data.get("ref") or "main").strip() or "main"
+    paths = [str(item).strip() for item in (data.get("paths") or []) if str(item).strip()]
+    if not owner or not repo:
+        raise HTTPException(status_code=400, detail="owner_and_repo_required")
+    try:
+        files = await _github_service(request).read_files(owner, repo, paths, ref=ref)
+    except Exception as exc:
+        raise _github_error(exc)
+    return {
+        "status": "ok",
+        "source": {"provider": "github", "owner": owner, "repo": repo, "ref": ref},
+        "files": files,
+        "combined_text": "\n\n".join(f"// {item['path']}\n{item['content']}" for item in files),
+    }
+
+
+@router.post("/github/export-plan")
+async def github_export_plan(
+    request: Request,
+    user: BrowserUser = Depends(require_browser_user),
+):
+    data = await request.json()
+    workflow_id = str(data.get("workflow_id") or "").strip()
+    repo = str(data.get("repo") or "").strip()
+    owner = str(data.get("owner") or "").strip()
+    branch = str(data.get("branch") or f"chiploop/{workflow_id[:8] or 'export'}").strip()
+    if not workflow_id or not owner or not repo:
+        raise HTTPException(status_code=400, detail="workflow_id_owner_repo_required")
+    return {
+        "status": "ok",
+        "export_plan": {
+            "provider": "github",
+            "owner": owner,
+            "repo": repo,
+            "branch": branch,
+            "workflow_id": workflow_id,
+            "created_by": user.user_id,
+            "next_steps": [
+                "Create or update the export branch.",
+                "Write selected ChipLoop artifacts to the branch.",
+                "Open a pull request with the run summary.",
+            ],
+        },
+    }
 
 
 @router.get("/settings/plan")
