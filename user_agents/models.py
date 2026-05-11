@@ -86,7 +86,6 @@ class PrivateAgentPayload:
             "status": status,
             "visibility": visibility,
             "source": self.source or "studio_factory",
-            "updated_at": utc_now_iso(),
         }
 
 

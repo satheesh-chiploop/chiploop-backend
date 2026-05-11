@@ -45,7 +45,6 @@ class UserAgentService:
             "status": "submitted",
             "visibility": "private",
             "submitted_at": _now(),
-            "updated_at": _now(),
         }
         updated = self.repository.update_owned(user_id, agent_id, patch)
         updated_agent = updated or {**agent, **patch}

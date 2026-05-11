@@ -5,7 +5,7 @@ AGENT_SELECT_COLUMNS = (
     "id,owner_id,agent_name,loop_type,description,script_path,is_custom,is_prebuilt,"
     "is_marketplace,agent_spec,skills,tools,hooks,generated_files,registry_patch,"
     "status,visibility,source,submitted_at,reviewed_at,reviewed_by,review_notes,"
-    "created_at,updated_at"
+    "created_at"
 )
 
 
