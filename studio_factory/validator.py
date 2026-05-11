@@ -39,12 +39,14 @@ def validate_factory_plan(plan: AgentFactoryPlan, registry_dir: str = "registry"
         if not spec.get(field):
             errors.append(f"proposed_agent_spec missing {field}")
 
+    proposed_tool_names = {str(tool.get("name") or "") for tool in plan.proposed_tool_specs}
     for tool in plan.proposed_tool_refs:
-        if tool not in registry.tools:
+        if tool not in registry.tools and tool not in proposed_tool_names:
             errors.append(f"missing tool reference {tool}")
 
+    proposed_hook_names = {str(hook.get("name") or "") for hook in plan.proposed_hook_specs}
     for hook in plan.proposed_hook_refs:
-        if hook not in registry.hooks:
+        if hook not in registry.hooks and hook not in proposed_hook_names:
             errors.append(f"missing hook reference {hook}")
 
     for file_plan in plan.files_to_generate:

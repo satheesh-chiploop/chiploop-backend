@@ -60,7 +60,9 @@ class AgentFactoryPlan:
     proposed_agent_spec: Dict[str, Any]
     proposed_skill_specs: List[Dict[str, Any]] = field(default_factory=list)
     proposed_tool_refs: List[str] = field(default_factory=list)
+    proposed_tool_specs: List[Dict[str, Any]] = field(default_factory=list)
     proposed_hook_refs: List[str] = field(default_factory=list)
+    proposed_hook_specs: List[Dict[str, Any]] = field(default_factory=list)
     files_to_generate: List[GeneratedFilePlan] = field(default_factory=list)
     registry_patch: Optional[RegistryPatchPlan] = None
     validation_checklist: List[str] = field(default_factory=list)

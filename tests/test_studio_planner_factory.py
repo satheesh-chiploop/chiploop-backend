@@ -87,6 +87,28 @@ def test_factory_uses_requested_hooks_in_draft_spec():
 
     assert "before_private_review" in plan.proposed_hook_refs
     assert "before_private_review" in plan.proposed_agent_spec["hooks"]
+    assert any(hook["name"] == "before_private_review" for hook in plan.proposed_hook_specs)
+
+
+def test_factory_generates_missing_tool_and_hook_specs():
+    plan = plan_factory_request(
+        AgentFactoryRequest(
+            name="Counter Review Agent",
+            natural_language_request="Create a private 4-bit counter review agent.",
+            loop_type="digital",
+            required_skills=["counter_review_skill"],
+            required_tools=["counter_mcp"],
+            required_hooks=["pre_run_validate_counter_spec"],
+            force_create_private=True,
+        )
+    )
+
+    assert any(skill["name"] == "counter_review_skill" for skill in plan.proposed_skill_specs)
+    assert "counter_mcp" in plan.proposed_tool_refs
+    assert any(tool["name"] == "counter_mcp" for tool in plan.proposed_tool_specs)
+    assert "pre_run_validate_counter_spec" in plan.proposed_hook_refs
+    assert any(hook["name"] == "pre_run_validate_counter_spec" for hook in plan.proposed_hook_specs)
+    assert validate_factory_plan(plan) == []
 
 
 def test_factory_create_new_plan_json_serializable():
