@@ -57,6 +57,13 @@ def _demo_sweep(state: Dict[str, Any]) -> Dict[str, List[int]]:
     }
 
 
+def _int_state(state: Dict[str, Any], key: str, default: int) -> int:
+    try:
+        return int(state.get(key) or default)
+    except (TypeError, ValueError):
+        return default
+
+
 def system_architecture_intent_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     agent_name = "System Architecture Intent Agent"
     goal = str(
@@ -69,8 +76,12 @@ def system_architecture_intent_agent(state: Dict[str, Any]) -> Dict[str, Any]:
         "simulator": state.get("simulator") or state.get("simulation_tool") or "gem5",
         "isa": state.get("isa") or "x86",
         "cpu_model": state.get("cpu_model") or "TimingSimpleCPU",
+        "cores": _int_state(state, "cores", 1),
         "workload": state.get("workload") or state.get("workload_name") or "matrix_multiply",
         "mode": state.get("mode") or "syscall_emulation",
+        "clock": state.get("clock") or "2GHz",
+        "memory_type": state.get("memory_type") or "DDR3_1600_8x8",
+        "memory_size": state.get("memory_size") or "2GB",
         "goal": goal,
         "metrics": ["ipc", "cpi", "l1d_miss_rate", "l2_miss_rate", "estimated_power_w", "estimated_area_mm2"],
         "created_at": _now(),
@@ -104,13 +115,17 @@ def system_gem5_config_agent(state: Dict[str, Any]) -> Dict[str, Any]:
         "mode": intent.get("mode") or "syscall_emulation",
         "isa": intent.get("isa") or "x86",
         "cpu_model": intent.get("cpu_model") or "TimingSimpleCPU",
-        "clock": state.get("clock") or "2GHz",
-        "memory": {"type": "DDR3_1600_8x8", "size": "2GB"},
+        "cores": intent.get("cores") or 1,
+        "clock": intent.get("clock") or "2GHz",
+        "memory": {"type": intent.get("memory_type") or "DDR3_1600_8x8", "size": intent.get("memory_size") or "2GB"},
         "cache_template": {
-            "l1i_size": "32kB",
+            "l1i_size": state.get("l1i_size") or "32kB",
             "l1d_size_kb": sweep["l1d_size_kb"],
             "l2_size_kb": sweep["l2_size_kb"],
-            "line_size": 64,
+            "line_size": _int_state(state, "cache_line_size", 64),
+            "l1_assoc": _int_state(state, "l1_assoc", 2),
+            "l2_assoc": _int_state(state, "l2_assoc", 8),
+            "prefetcher": state.get("prefetcher") or "none",
         },
         "workload": intent.get("workload") or "matrix_multiply",
     }
@@ -143,6 +158,12 @@ def system_design_space_exploration_agent(state: Dict[str, Any]) -> Dict[str, An
                 "l1d_size_kb": l1,
                 "l2_size_kb": l2,
                 "cpu_model": state.get("cpu_model") or "TimingSimpleCPU",
+                "isa": state.get("isa") or "x86",
+                "cores": _int_state(state, "cores", 1),
+                "memory_type": state.get("memory_type") or "DDR3_1600_8x8",
+                "l1_assoc": _int_state(state, "l1_assoc", 2),
+                "l2_assoc": _int_state(state, "l2_assoc", 8),
+                "prefetcher": state.get("prefetcher") or "none",
             })
             idx += 1
     plan = {"sweep_points": matrix, "count": len(matrix), "created_at": _now()}
@@ -150,14 +171,26 @@ def system_design_space_exploration_agent(state: Dict[str, Any]) -> Dict[str, An
     return {"system_architecture_sweep": plan, "status": "ok"}
 
 
-def _estimate_metrics(l1_kb: int, l2_kb: int) -> Dict[str, float]:
+def _estimate_metrics(point: Dict[str, Any]) -> Dict[str, float]:
+    l1_kb = int(point.get("l1d_size_kb") or 32)
+    l2_kb = int(point.get("l2_size_kb") or 512)
+    cores = max(1, int(point.get("cores") or 1))
+    cpu_model = str(point.get("cpu_model") or "TimingSimpleCPU")
+    isa = str(point.get("isa") or "x86").lower()
+    memory_type = str(point.get("memory_type") or "DDR3_1600_8x8")
+    prefetcher = str(point.get("prefetcher") or "none")
     l1_gain = {16: 0.00, 32: 0.16, 64: 0.22}.get(l1_kb, min(l1_kb / 256.0, 0.25))
     l2_gain = {256: 0.00, 512: 0.10, 1024: 0.14}.get(l2_kb, min(l2_kb / 4096.0, 0.18))
-    ipc = round(0.82 + l1_gain + l2_gain, 3)
+    cpu_factor = {"TimingSimpleCPU": 1.0, "MinorCPU": 1.18, "O3CPU": 1.42}.get(cpu_model, 1.0)
+    isa_factor = {"x86": 1.0, "riscv": 0.96, "arm": 0.98}.get(isa, 1.0)
+    memory_factor = 1.06 if "DDR4" in memory_type or "LPDDR5" in memory_type else 1.0
+    prefetch_gain = 0.05 if prefetcher != "none" else 0.0
+    core_scale = 1.0 + min(cores - 1, 7) * 0.035
+    ipc = round((0.82 + l1_gain + l2_gain + prefetch_gain) * cpu_factor * isa_factor * memory_factor * core_scale, 3)
     l1_mpki = round(max(18.0, 44.0 - (l1_kb / 2.7)), 2)
     l2_mpki = round(max(6.5, 19.0 - (l2_kb / 92.0)), 2)
-    power = round(1.05 + (l1_kb * 0.006) + (l2_kb * 0.00055), 3)
-    area = round(0.30 + (l1_kb * 0.0032) + (l2_kb * 0.00042), 3)
+    power = round((1.05 + (l1_kb * 0.006) + (l2_kb * 0.00055)) * (0.85 + cores * 0.15) * cpu_factor, 3)
+    area = round((0.30 + (l1_kb * 0.0032) + (l2_kb * 0.00042)) * (0.9 + cores * 0.1) * (1.12 if cpu_model == "O3CPU" else 1.0), 3)
     return {
         "ipc": ipc,
         "cpi": round(1.0 / ipc, 3),
@@ -178,7 +211,7 @@ def system_gem5_execution_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     mode = "estimated_demo" if not gem5_bin else "gem5_ready"
     rows = []
     for point in points:
-        metrics = _estimate_metrics(int(point["l1d_size_kb"]), int(point["l2_size_kb"]))
+        metrics = _estimate_metrics(point)
         rows.append({**point, **metrics, "execution_mode": mode})
     result = {
         "tool": "gem5",

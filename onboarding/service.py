@@ -157,9 +157,15 @@ def is_system_architecture_guided_demo_payload(payload: Dict[str, object]) -> bo
 
     l1d_sizes = sweep.get("l1d_size_kb") if isinstance(sweep, dict) else None
     l2_sizes = sweep.get("l2_size_kb") if isinstance(sweep, dict) else None
-    if l1d_sizes != [16, 32, 64]:
+    if not isinstance(l1d_sizes, list) or not l1d_sizes:
         return False
-    if l2_sizes != [256, 512, 1024]:
+    if not isinstance(l2_sizes, list) or not l2_sizes:
+        return False
+    if len(l1d_sizes) > 4 or len(l2_sizes) > 4:
+        return False
+    if any(v not in {16, 32, 64, 128} for v in l1d_sizes):
+        return False
+    if any(v not in {256, 512, 1024, 2048} for v in l2_sizes):
         return False
 
     if toggles:
