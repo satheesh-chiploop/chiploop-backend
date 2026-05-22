@@ -9,7 +9,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import browser_auth
 import browser_routes
-from onboarding import InMemoryOnboardingRepository, OnboardingService, is_arch2rtl_guided_demo_payload
+from onboarding import (
+    InMemoryOnboardingRepository,
+    OnboardingService,
+    is_arch2rtl_guided_demo_payload,
+    is_system_architecture_guided_demo_payload,
+)
 
 
 JWT_SECRET = "onboarding-test-secret"
@@ -44,6 +49,8 @@ def test_onboarding_defaults_to_incomplete():
     assert onboarding["completed_at"] is None
     assert onboarding["demo"]["arch2rtl"]["limit"] == 3
     assert onboarding["demo"]["arch2rtl"]["runs_remaining"] == 3
+    assert onboarding["demo"]["system_architecture"]["limit"] == 3
+    assert onboarding["demo"]["system_architecture"]["runs_remaining"] == 3
 
 
 def test_onboarding_row_excludes_response_only_fields():
@@ -115,3 +122,45 @@ def test_arch2rtl_demo_payload_detection():
         "design_language": "systemverilog",
         "spec_text": "Design a parameterized PWM controller.\nduty_cycle[7:0]\nGenerate synthesizable SystemVerilog",
     }) is False
+
+
+def test_system_architecture_demo_usage_limit():
+    service = OnboardingService(InMemoryOnboardingRepository())
+
+    assert service.can_run_system_architecture_demo("user-1") is True
+    service.record_system_architecture_demo_run("user-1", workflow_id="wf-1")
+    service.record_system_architecture_demo_run("user-1", workflow_id="wf-2")
+    state = service.record_system_architecture_demo_run("user-1", workflow_id="wf-3")
+
+    assert state.system_architecture_demo_runs == 3
+    assert state.system_architecture_demo_runs_remaining == 0
+    assert state.first_workflow_id == "wf-1"
+    assert service.can_run_system_architecture_demo("user-1") is False
+
+
+def test_system_architecture_demo_payload_detection():
+    payload = {
+        "project_name": "matrix_multiply_cache_sweep_demo",
+        "workload": "matrix_multiply",
+        "simulator": "gem5",
+        "isa": "x86",
+        "cpu_model": "TimingSimpleCPU",
+        "goal": (
+            "Explore cache-size tradeoffs for matrix multiplication with performance, power, "
+            "and area estimates; show workload vs cache size charts."
+        ),
+        "sweep": {
+            "l1d_size_kb": [16, 32, 64],
+            "l2_size_kb": [256, 512, 1024],
+        },
+        "toggles": {
+            "enable_power_estimation": True,
+            "enable_area_estimation": True,
+            "enable_visualizations": True,
+        },
+    }
+
+    assert is_system_architecture_guided_demo_payload(payload) is True
+
+    invalid_payload = {**payload, "workload": "custom_binary"}
+    assert is_system_architecture_guided_demo_payload(invalid_payload) is False

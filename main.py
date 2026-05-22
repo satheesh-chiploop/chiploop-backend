@@ -36,7 +36,12 @@ from utils.artifact_utils import save_text_artifact_and_record
 from auth_api_keys.middleware import require_sdk_api_key
 from auth_api_keys.service import get_api_key_service
 from billing import BillingPaymentRequired, TrialCheckoutRequired, get_billing_service
-from onboarding import OnboardingService, SupabaseOnboardingRepository, is_arch2rtl_guided_demo_payload
+from onboarding import (
+    OnboardingService,
+    SupabaseOnboardingRepository,
+    is_arch2rtl_guided_demo_payload,
+    is_system_architecture_guided_demo_payload,
+)
 from studio_contract.registry import load_registry
 from studio_factory.generate_agent import run_factory as run_studio_factory
 from studio_factory.models import AgentFactoryRequest
@@ -266,7 +271,11 @@ def _requires_trial_checkout(path: str, method: str) -> bool:
         return False
     return (
         path == "/run_workflow"
-        or (path.startswith("/apps/") and path.endswith("/run") and path != "/apps/arch2rtl/run")
+        or (
+            path.startswith("/apps/")
+            and path.endswith("/run")
+            and path not in {"/apps/arch2rtl/run", "/apps/system/architecture/run"}
+        )
         or path == "/validation/test_plan/preview"
     )
 
@@ -665,6 +674,19 @@ from agents.system.system_software_cosim_harness_agent import run_agent as syste
 from agents.system.system_software_cosim_execution_agent import run_agent as system_cosim_execution_agent
 from agents.system.system_software_cosim_trace_validation_agent import run_agent as system_cosim_trace_validation_agent
 from agents.system.system_software_validation_summary_l2_agent import run_agent as system_software_validation_summary_l2_agent
+from agents.system.system_architecture_explorer_agents import (
+    system_architecture_intent_agent,
+    system_workload_characterization_agent,
+    system_gem5_config_agent,
+    system_design_space_exploration_agent,
+    system_gem5_execution_agent,
+    system_performance_metrics_agent,
+    system_power_estimation_agent,
+    system_area_estimation_agent,
+    system_ppa_tradeoff_agent,
+    system_architecture_visualization_agent,
+    system_architecture_report_agent,
+)
 
 SYSTEM_AGENT_FUNCTIONS: Dict[str,Any] = {
     "Digital Spec Agent": digital_spec_agent,
@@ -818,6 +840,17 @@ SYSTEM_AGENT_FUNCTIONS: Dict[str,Any] = {
     "System Software CoSim Execution Agent": system_cosim_execution_agent,
     "System Software CoSim Trace Validation Agent": system_cosim_trace_validation_agent,
     "System Software Validation Summary (L2)": system_software_validation_summary_l2_agent,
+    "System Architecture Intent Agent": system_architecture_intent_agent,
+    "System Workload Characterization Agent": system_workload_characterization_agent,
+    "System gem5 Config Agent": system_gem5_config_agent,
+    "System Design Space Exploration Agent": system_design_space_exploration_agent,
+    "System gem5 Execution Agent": system_gem5_execution_agent,
+    "System Performance Metrics Agent": system_performance_metrics_agent,
+    "System Power Estimation Agent": system_power_estimation_agent,
+    "System Area Estimation Agent": system_area_estimation_agent,
+    "System PPA Tradeoff Agent": system_ppa_tradeoff_agent,
+    "System Visualization Agent": system_architecture_visualization_agent,
+    "System Architecture Report Agent": system_architecture_report_agent,
 }
 
 
@@ -831,6 +864,39 @@ AGENT_FUNCTIONS: Dict[str, Dict[str, Any]] = {
     "embedded": EMBEDDED_AGENT_FUNCTIONS,
     "system": SYSTEM_AGENT_FUNCTIONS,
     "validation": VALIDATION_AGENT_FUNCTIONS,
+}
+
+
+def _linear_workflow_definition(agent_names: List[str]) -> Dict[str, Any]:
+    nodes = []
+    edges = []
+    for index, name in enumerate(agent_names):
+        node_id = f"n{index + 1}"
+        nodes.append({
+            "id": node_id,
+            "type": "agent",
+            "position": {"x": 80 + index * 240, "y": 180},
+            "data": {"uiLabel": name.replace("System ", ""), "backendLabel": name},
+        })
+        if index:
+            edges.append({"id": f"e{index}", "source": f"n{index}", "target": node_id})
+    return {"nodes": nodes, "edges": edges}
+
+
+LOCAL_PREBUILT_WORKFLOW_DEFINITIONS: Dict[str, Dict[str, Any]] = {
+    "System_Architecture_Explorer": _linear_workflow_definition([
+        "System Architecture Intent Agent",
+        "System Workload Characterization Agent",
+        "System gem5 Config Agent",
+        "System Design Space Exploration Agent",
+        "System gem5 Execution Agent",
+        "System Performance Metrics Agent",
+        "System Power Estimation Agent",
+        "System Area Estimation Agent",
+        "System PPA Tradeoff Agent",
+        "System Visualization Agent",
+        "System Architecture Report Agent",
+    ]),
 }
 
 # Dynamically load user-created agents as modules under `agents/` (optional)
@@ -1005,6 +1071,9 @@ def _load_workflow_def_by_name(name: str, user_id: Optional[str]) -> Dict[str, A
     )
     if r2.data:
         return unpack(r2.data[0])
+
+    if name in LOCAL_PREBUILT_WORKFLOW_DEFINITIONS:
+        return LOCAL_PREBUILT_WORKFLOW_DEFINITIONS[name]
 
     raise HTTPException(status_code=404, detail=f"Workflow template not found: {name}")
 
@@ -1992,6 +2061,22 @@ class SystemAppIn(BaseModel):
     digital_spec_text: str
     analog_spec_text: str
     soc_integration_spec_text: str
+
+
+class SystemArchitectureAppIn(BaseModel):
+    project_name: Optional[str] = None
+    workload: Optional[str] = None
+    workload_name: Optional[str] = None
+    simulator: Optional[str] = "gem5"
+    simulation_tool: Optional[str] = None
+    isa: Optional[str] = "x86"
+    cpu_model: Optional[str] = "TimingSimpleCPU"
+    mode: Optional[str] = "syscall_emulation"
+    goal: Optional[str] = None
+    experiment_goal: Optional[str] = None
+    sweep: Optional[Dict[str, Any]] = None
+    toggles: Optional[Dict[str, Any]] = None
+    notes: Optional[str] = None
 
 
 class SystemSoftwareAppIn(BaseModel):
@@ -5418,6 +5503,62 @@ async def apps_system_sim(
         "App: System Simulation",
         "System_Sim"
     )
+
+
+@app.post("/apps/system/architecture/run")
+async def apps_system_architecture(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    payload: SystemArchitectureAppIn
+):
+    user_id = _require_user_id(request)
+    payload_dict = payload.dict()
+    demo_run = False
+    try:
+        checkout_started = _checkout_started_for_request(request, user_id)
+    except BillingPaymentRequired as exc:
+        raise _payment_required_response(exc)
+
+    if not checkout_started:
+        onboarding_service = _onboarding_service_for_main()
+        if not is_system_architecture_guided_demo_payload(payload_dict):
+            raise _trial_required_response(
+                "Start your 7-day trial to run custom System Architecture Explorer workflows."
+            )
+        if not onboarding_service.can_run_system_architecture_demo(user_id):
+            raise _trial_required_response(
+                "You have completed your free System Architecture Explorer demo runs. Start your 7-day trial to keep exploring custom architectures."
+            )
+        demo_run = True
+
+    workflow_id, run_id, base_dir = _create_app_workflow_and_run(user_id, "App: System Architecture Explorer", "system")
+    artifact_dir = os.path.join(base_dir, "system-architecture")
+    os.makedirs(artifact_dir, exist_ok=True)
+    if demo_run:
+        _onboarding_service_for_main().record_system_architecture_demo_run(user_id, workflow_id=workflow_id)
+
+    background_tasks.add_task(
+        execute_system_app_background,
+        workflow_id,
+        run_id,
+        user_id,
+        artifact_dir,
+        "System_Architecture_Explorer",
+        payload_dict,
+    )
+
+    response = {"ok": True, "workflow_id": workflow_id, "run_id": run_id}
+    if demo_run:
+        response["demo"] = _onboarding_service_for_main().system_architecture_demo_usage(user_id)
+        response["trial_cta"] = {
+            "show": True,
+            "message": "Start your 7-day trial to run your own workloads, binaries, and architecture sweeps.",
+            "checkout_plan_id": "starter",
+            "checkout_url": "/pricing?trial=1",
+            "checkout_label": "Start 7-day trial",
+        }
+    return response
+
 
 @app.post("/apps/system/rtl/run")
 async def apps_system_rtl(

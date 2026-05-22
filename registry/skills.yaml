@@ -167,6 +167,61 @@
         "supabase",
         "python"
       ]
+    },
+    {
+      "name": "gem5_experiment_planning",
+      "description": "Plan no-code gem5 architecture experiments, workloads, and cache/memory design-space sweeps.",
+      "domains": [
+        "system"
+      ],
+      "tools": [
+        "gem5",
+        "python"
+      ]
+    },
+    {
+      "name": "gem5_config_generation",
+      "description": "Generate validated gem5 syscall-emulation configuration collateral from structured System Architecture intent.",
+      "domains": [
+        "system"
+      ],
+      "tools": [
+        "gem5",
+        "python"
+      ]
+    },
+    {
+      "name": "gem5_stats_parsing",
+      "description": "Parse gem5 stats, logs, and generated run summaries into stable performance metrics.",
+      "domains": [
+        "system"
+      ],
+      "tools": [
+        "gem5",
+        "python"
+      ]
+    },
+    {
+      "name": "system_ppa_estimation",
+      "description": "Estimate and compare system-level performance, power, and area from architecture sweep metrics.",
+      "domains": [
+        "system"
+      ],
+      "tools": [
+        "python",
+        "mcpat",
+        "cacti"
+      ]
+    },
+    {
+      "name": "system_arch_visualization",
+      "description": "Emit chart-ready JSON for workload, cache-size, performance, power, area, and Pareto tradeoff views.",
+      "domains": [
+        "system"
+      ],
+      "tools": [
+        "python"
+      ]
     }
   ]
 }

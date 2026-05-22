@@ -4,6 +4,7 @@ from typing import Any, Dict, Optional
 
 
 ARCH2RTL_DEMO_LIMIT = 3
+SYSTEM_ARCHITECTURE_DEMO_LIMIT = 3
 
 
 def utcnow_iso() -> str:
@@ -37,6 +38,17 @@ class OnboardingState:
     def arch2rtl_demo_runs_remaining(self) -> int:
         return max(ARCH2RTL_DEMO_LIMIT - self.arch2rtl_demo_runs, 0)
 
+    @property
+    def system_architecture_demo_runs(self) -> int:
+        try:
+            return int(self.metadata.get("system_architecture_demo_runs") or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    @property
+    def system_architecture_demo_runs_remaining(self) -> int:
+        return max(SYSTEM_ARCHITECTURE_DEMO_LIMIT - self.system_architecture_demo_runs, 0)
+
     def to_dict(self) -> Dict[str, Any]:
         return {
             "user_id": self.user_id,
@@ -53,6 +65,12 @@ class OnboardingState:
                     "runs_used": self.arch2rtl_demo_runs,
                     "runs_remaining": self.arch2rtl_demo_runs_remaining,
                     "can_run": self.arch2rtl_demo_runs_remaining > 0,
+                },
+                "system_architecture": {
+                    "limit": SYSTEM_ARCHITECTURE_DEMO_LIMIT,
+                    "runs_used": self.system_architecture_demo_runs,
+                    "runs_remaining": self.system_architecture_demo_runs_remaining,
+                    "can_run": self.system_architecture_demo_runs_remaining > 0,
                 }
             },
             "created_at": self.created_at,

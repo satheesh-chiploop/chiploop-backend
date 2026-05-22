@@ -30,6 +30,16 @@
       "name": "artifact_publish_to_supabase",
       "description": "Publish artifacts using existing Supabase helper behavior.",
       "lifecycle": "artifact_publish"
+    },
+    {
+      "name": "pre_run_validate_gem5_intent",
+      "description": "Validate System Architecture Explorer demo/custom intent, workload, simulator, and sweep bounds before execution.",
+      "lifecycle": "pre_run"
+    },
+    {
+      "name": "post_run_emit_chart_artifacts",
+      "description": "Ensure System Architecture Explorer runs publish chart-ready JSON for frontend visualization.",
+      "lifecycle": "post_run"
     }
   ]
 }

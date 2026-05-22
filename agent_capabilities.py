@@ -1055,6 +1055,75 @@ AGENT_CAPABILITIES = {
         "description": "Performs cross-loop/system-level sanity checks and produces integration notes across digital RTL, firmware, and analog artifacts.",
     },
 
+    "System Architecture Intent Agent": {
+        "domain": "system",
+        "inputs": ["project_name", "workload", "simulator", "isa", "cpu_model", "goal", "sweep"],
+        "outputs": ["system/architecture/intent.json"],
+        "description": "Normalizes no-code gem5 architecture exploration input into structured System Architecture intent.",
+    },
+    "System Workload Characterization Agent": {
+        "domain": "system",
+        "inputs": ["system/architecture/intent.json"],
+        "outputs": ["system/architecture/workload_profile.json"],
+        "description": "Classifies workload behavior and likely cache/memory bottlenecks for architecture exploration.",
+    },
+    "System gem5 Config Agent": {
+        "domain": "system",
+        "inputs": ["system/architecture/intent.json", "sweep"],
+        "outputs": ["system/architecture/gem5_config.json", "system/architecture/gem5_config.py"],
+        "description": "Generates gem5 configuration collateral for no-code System Architecture experiments.",
+        "requires": ["gem5"],
+    },
+    "System Design Space Exploration Agent": {
+        "domain": "system",
+        "inputs": ["system/architecture/gem5_config.json"],
+        "outputs": ["system/architecture/sweep_matrix.json"],
+        "description": "Builds cache-size and memory hierarchy sweep matrices.",
+    },
+    "System gem5 Execution Agent": {
+        "domain": "system",
+        "inputs": ["system/architecture/sweep_matrix.json"],
+        "outputs": ["system/architecture/gem5_run_results.json", "system/architecture/gem5_execution.log"],
+        "description": "Runs or prepares gem5 sweep points and emits deterministic demo results if gem5 is not configured.",
+        "requires": ["gem5"],
+    },
+    "System Performance Metrics Agent": {
+        "domain": "system",
+        "inputs": ["system/architecture/gem5_run_results.json"],
+        "outputs": ["system/architecture/performance_metrics.json"],
+        "description": "Extracts IPC, CPI, MPKI, and best-performance summaries from gem5 run results.",
+    },
+    "System Power Estimation Agent": {
+        "domain": "system",
+        "inputs": ["system/architecture/gem5_run_results.json"],
+        "outputs": ["system/architecture/power_estimates.json"],
+        "description": "Produces power estimates and performance-per-watt metrics for architecture sweep points.",
+    },
+    "System Area Estimation Agent": {
+        "domain": "system",
+        "inputs": ["system/architecture/gem5_run_results.json"],
+        "outputs": ["system/architecture/area_estimates.json"],
+        "description": "Produces cache hierarchy area estimates and performance-per-area metrics.",
+    },
+    "System PPA Tradeoff Agent": {
+        "domain": "system",
+        "inputs": ["performance_metrics.json", "power_estimates.json", "area_estimates.json"],
+        "outputs": ["system/architecture/ppa_summary.json"],
+        "description": "Ranks performance, power, and area tradeoffs and recommends the best architecture point.",
+    },
+    "System Visualization Agent": {
+        "domain": "system",
+        "inputs": ["system/architecture/gem5_run_results.json", "system/architecture/ppa_summary.json"],
+        "outputs": ["system/architecture/charts.json"],
+        "description": "Emits chart-ready JSON for workload vs cache-size and PPA visualizations.",
+    },
+    "System Architecture Report Agent": {
+        "domain": "system",
+        "inputs": ["system/architecture/ppa_summary.json", "system/architecture/charts.json"],
+        "outputs": ["system/architecture/report.md"],
+        "description": "Generates the no-code architecture exploration report and next experiment recommendation.",
+    },
+
     "System CoSim Integration Agent": {
         "domain": "system",
         "inputs": ["*_embedded_spec.json", "*.v", "*.sv"],

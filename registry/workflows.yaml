@@ -334,6 +334,34 @@
       ]
     },
     {
+      "name": "System_Architecture_Explorer",
+      "loop_type": "system",
+      "description": "No-code gem5 System Loop workflow for workload/cache design-space exploration with performance, power, area, and chart-ready reports.",
+      "agents": [
+        "System Architecture Intent Agent",
+        "System Workload Characterization Agent",
+        "System gem5 Config Agent",
+        "System Design Space Exploration Agent",
+        "System gem5 Execution Agent",
+        "System Performance Metrics Agent",
+        "System Power Estimation Agent",
+        "System Area Estimation Agent",
+        "System PPA Tradeoff Agent",
+        "System Visualization Agent",
+        "System Architecture Report Agent"
+      ],
+      "hooks": [
+        "pre_run_validate_inputs",
+        "pre_run_validate_gem5_intent",
+        "post_run_collect_artifacts",
+        "post_run_update_state",
+        "post_run_emit_chart_artifacts",
+        "on_failure_capture_traceback",
+        "on_failure_preserve_logs",
+        "artifact_publish_to_supabase"
+      ]
+    },
+    {
       "name": "custom_agent_registry",
       "loop_type": "custom",
       "description": "Dynamic custom agents loaded into AGENT_REGISTRY remain supported through the legacy runtime adapter when present in backend memory.",
