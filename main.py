@@ -5579,11 +5579,19 @@ async def apps_system_architecture(
 def apps_system_architecture_results(workflow_id: str):
     base = _artifacts_dir_for_workflow(workflow_id)
     candidates = [
+        base / "system-architecture" / "gem5_run_results.json",
+        base / "gem5_run_results.json",
         base / "system" / "architecture" / "gem5_run_results.json",
         base / "system-architecture" / "system" / "architecture" / "gem5_run_results.json",
     ]
     for path in candidates:
         if path.exists() and path.is_file():
+            try:
+                return JSONResponse(json.loads(path.read_text(encoding="utf-8")))
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"Failed to parse gem5 results artifact: {exc}")
+    for path in base.rglob("gem5_run_results.json") if base.exists() else []:
+        if path.is_file():
             try:
                 return JSONResponse(json.loads(path.read_text(encoding="utf-8")))
             except Exception as exc:
