@@ -7583,7 +7583,7 @@
       "name": "System gem5 Execution Agent",
       "loop_type": "system",
       "domain": "system",
-      "description": "Runs or prepares gem5 sweep points and records deterministic demo results when gem5 is not configured.",
+      "description": "Runs gem5 sweep points, parses stats.txt, and records chart-ready architecture results.",
       "entrypoint": "agents.system.system_architecture_explorer_agents:system_gem5_execution_agent",
       "execution_mode": "native",
       "inputs": ["system/architecture/sweep_matrix.json"],

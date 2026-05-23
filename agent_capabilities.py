@@ -1084,7 +1084,7 @@ AGENT_CAPABILITIES = {
         "domain": "system",
         "inputs": ["system/architecture/sweep_matrix.json"],
         "outputs": ["system/architecture/gem5_run_results.json", "system/architecture/gem5_execution.log"],
-        "description": "Runs or prepares gem5 sweep points and emits deterministic demo results if gem5 is not configured.",
+        "description": "Runs gem5 sweep points, parses stats.txt, and emits chart-ready architecture results.",
         "requires": ["gem5"],
     },
     "System Performance Metrics Agent": {

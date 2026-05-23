@@ -2074,7 +2074,18 @@ class SystemArchitectureAppIn(BaseModel):
     isas: Optional[List[str]] = None
     cpu_model: Optional[str] = "TimingSimpleCPU"
     cpu_models: Optional[List[str]] = None
+    cores: Optional[int] = 1
+    clock: Optional[str] = "2GHz"
     mode: Optional[str] = "syscall_emulation"
+    memory_type: Optional[str] = "DDR3_1600_8x8"
+    memory_size: Optional[str] = "2GB"
+    l1_assoc: Optional[int] = 2
+    l2_assoc: Optional[int] = 8
+    cache_line_size: Optional[int] = 64
+    prefetcher: Optional[str] = "none"
+    branch_predictor: Optional[str] = "default"
+    maxinsts: Optional[int] = None
+    workload_binary: Optional[str] = None
     goal: Optional[str] = None
     experiment_goal: Optional[str] = None
     sweep: Optional[Dict[str, Any]] = None
@@ -5562,6 +5573,25 @@ async def apps_system_architecture(
             "checkout_label": "Start 7-day trial",
         }
     return response
+
+
+@app.get("/apps/system/architecture/results/{workflow_id}")
+def apps_system_architecture_results(workflow_id: str):
+    base = _artifacts_dir_for_workflow(workflow_id)
+    candidates = [
+        base / "system" / "architecture" / "gem5_run_results.json",
+        base / "system-architecture" / "system" / "architecture" / "gem5_run_results.json",
+    ]
+    for path in candidates:
+        if path.exists() and path.is_file():
+            try:
+                return JSONResponse(json.loads(path.read_text(encoding="utf-8")))
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"Failed to parse gem5 results artifact: {exc}")
+    raise HTTPException(
+        status_code=404,
+        detail="gem5 results are not available yet. Wait for the System Architecture workflow to complete successfully.",
+    )
 
 
 @app.post("/apps/system/rtl/run")

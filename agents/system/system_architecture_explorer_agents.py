@@ -1,6 +1,9 @@
 import json
 import os
+import shutil
+import subprocess
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from utils.artifact_utils import save_text_artifact_and_record
@@ -96,6 +99,8 @@ def system_architecture_intent_agent(state: Dict[str, Any]) -> Dict[str, Any]:
         "memory_type": state.get("memory_type") or "DDR3_1600_8x8",
         "memory_types": _str_list(state, "memory_types", [str(state.get("memory_type") or "DDR3_1600_8x8")]),
         "memory_size": state.get("memory_size") or "2GB",
+        "prefetcher": state.get("prefetcher") or "none",
+        "branch_predictor": state.get("branch_predictor") or "default",
         "goal": goal,
         "metrics": ["ipc", "cpi", "l1d_miss_rate", "l2_miss_rate", "estimated_power_w", "estimated_area_mm2"],
         "created_at": _now(),
@@ -140,6 +145,7 @@ def system_gem5_config_agent(state: Dict[str, Any]) -> Dict[str, Any]:
             "l1_assoc": _int_state(state, "l1_assoc", 2),
             "l2_assoc": _int_state(state, "l2_assoc", 8),
             "prefetcher": state.get("prefetcher") or "none",
+            "branch_predictor": state.get("branch_predictor") or "default",
         },
         "workload": intent.get("workload") or "matrix_multiply",
     }
@@ -193,6 +199,7 @@ def system_design_space_exploration_agent(state: Dict[str, Any]) -> Dict[str, An
                             "l1_assoc": _int_state(state, "l1_assoc", 2),
                             "l2_assoc": _int_state(state, "l2_assoc", 8),
                             "prefetcher": state.get("prefetcher") or "none",
+                            "branch_predictor": state.get("branch_predictor") or "default",
                         })
                         idx += 1
     plan = {"sweep_points": matrix, "count": len(matrix), "created_at": _now()}
@@ -200,35 +207,395 @@ def system_design_space_exploration_agent(state: Dict[str, Any]) -> Dict[str, An
     return {"system_architecture_sweep": plan, "status": "ok"}
 
 
-def _estimate_metrics(point: Dict[str, Any]) -> Dict[str, float]:
+GEM5_CONFIG_TEMPLATE = r'''
+import argparse
+import os
+import m5
+from m5.objects import *
+
+
+class L1Cache(Cache):
+    assoc = 2
+    tag_latency = 2
+    data_latency = 2
+    response_latency = 2
+    mshrs = 4
+    tgts_per_mshr = 20
+
+    def connect_bus(self, bus):
+        self.mem_side = bus.cpu_side_ports
+
+
+class L1ICache(L1Cache):
+    size = "32kB"
+
+    def connect_cpu(self, cpu):
+        self.cpu_side = cpu.icache_port
+
+
+class L1DCache(L1Cache):
+    size = "32kB"
+
+    def connect_cpu(self, cpu):
+        self.cpu_side = cpu.dcache_port
+
+
+class L2Cache(Cache):
+    size = "256kB"
+    assoc = 8
+    tag_latency = 20
+    data_latency = 20
+    response_latency = 20
+    mshrs = 20
+    tgts_per_mshr = 12
+
+    def connect_cpu_side_bus(self, bus):
+        self.cpu_side = bus.mem_side_ports
+
+    def connect_mem_side_bus(self, bus):
+        self.mem_side = bus.cpu_side_ports
+
+
+def get_object_class(name):
+    obj = globals().get(name)
+    if obj is None:
+        raise RuntimeError(f"gem5 object is not available in this build: {name}")
+    return obj
+
+
+def maybe_get_object_class(name):
+    return globals().get(name)
+
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--cmd", required=True)
+parser.add_argument("--cpu-type", default="TimingSimpleCPU")
+parser.add_argument("--num-cpus", type=int, default=1)
+parser.add_argument("--clock", default="2GHz")
+parser.add_argument("--mem-type", default="DDR3_1600_8x8")
+parser.add_argument("--mem-size", default="2GB")
+parser.add_argument("--l1d-size", default="32kB")
+parser.add_argument("--l1i-size", default="32kB")
+parser.add_argument("--l2-size", default="256kB")
+parser.add_argument("--l1-assoc", type=int, default=2)
+parser.add_argument("--l2-assoc", type=int, default=8)
+parser.add_argument("--cacheline-size", type=int, default=64)
+parser.add_argument("--prefetcher", default="none")
+parser.add_argument("--branch-predictor", default="default")
+parser.add_argument("--maxinsts", type=int, default=250000)
+args = parser.parse_args()
+
+cpu_map = {
+    "TimingSimpleCPU": "TimingSimpleCPU",
+    "MinorCPU": "MinorCPU",
+    "O3CPU": "DerivO3CPU",
+    "AtomicSimpleCPU": "AtomicSimpleCPU",
+}
+prefetch_map = {
+    "stride": "StridePrefetcher",
+    "tagged": "TaggedPrefetcher",
+    "queued": "QueuedPrefetcher",
+}
+branch_map = {
+    "local": "LocalBP",
+    "tournament": "TournamentBP",
+    "bi_mode": "BiModeBP",
+    "ltage": "LTAGE",
+}
+
+if args.cpu_type == "KvmCPU":
+    raise RuntimeError("KvmCPU is not supported by the ChipLoop gem5 SE runner.")
+
+CPUClass = get_object_class(cpu_map.get(args.cpu_type, args.cpu_type))
+cpus = [CPUClass() for _ in range(max(args.num_cpus, 1))]
+for idx, cpu in enumerate(cpus):
+    if hasattr(cpu, "cpu_id"):
+        cpu.cpu_id = idx
+    if hasattr(cpu, "max_insts_any_thread"):
+        cpu.max_insts_any_thread = args.maxinsts
+
+    bp_name = branch_map.get(args.branch_predictor)
+    if bp_name:
+        bp_cls = maybe_get_object_class(bp_name)
+        if bp_cls is None:
+            raise RuntimeError(f"Branch predictor is not available in this gem5 build: {args.branch_predictor}")
+        if not hasattr(cpu, "branchPred"):
+            raise RuntimeError(f"CPU model {args.cpu_type} does not expose a branch predictor in this gem5 build.")
+        cpu.branchPred = bp_cls()
+
+system = System()
+system.clk_domain = SrcClockDomain(clock=args.clock, voltage_domain=VoltageDomain())
+system.mem_mode = "atomic" if args.cpu_type == "AtomicSimpleCPU" else "timing"
+system.mem_ranges = [AddrRange(args.mem_size)]
+system.cache_line_size = args.cacheline_size
+system.cpu = cpus
+system.membus = SystemXBar()
+
+pf_name = prefetch_map.get(args.prefetcher)
+pf_cls = None
+if pf_name:
+    pf_cls = maybe_get_object_class(pf_name)
+    if pf_cls is None:
+        raise RuntimeError(f"Prefetcher is not available in this gem5 build: {args.prefetcher}")
+
+system.l2bus = L2XBar()
+for idx, cpu in enumerate(cpus):
+    cpu.icache = L1ICache(size=args.l1i_size, assoc=args.l1_assoc)
+    cpu.dcache = L1DCache(size=args.l1d_size, assoc=args.l1_assoc)
+    if pf_cls is not None:
+        cpu.dcache.prefetcher = pf_cls()
+    cpu.icache.connect_cpu(cpu)
+    cpu.dcache.connect_cpu(cpu)
+    cpu.icache.connect_bus(system.l2bus)
+    cpu.dcache.connect_bus(system.l2bus)
+
+system.l2cache = L2Cache(size=args.l2_size, assoc=args.l2_assoc)
+system.l2cache.connect_cpu_side_bus(system.l2bus)
+system.l2cache.connect_mem_side_bus(system.membus)
+system.system_port = system.membus.cpu_side_ports
+
+mem_cls = maybe_get_object_class(args.mem_type)
+if mem_cls is None:
+    raise RuntimeError(f"Memory type is not available in this gem5 build: {args.mem_type}")
+system.mem_ctrl = MemCtrl()
+system.mem_ctrl.dram = mem_cls()
+system.mem_ctrl.dram.range = system.mem_ranges[0]
+system.mem_ctrl.port = system.membus.mem_side_ports
+
+binary = os.path.abspath(args.cmd)
+system.workload = SEWorkload.init_compatible(binary)
+for idx, cpu in enumerate(cpus):
+    process = Process(pid=100 + idx)
+    process.cmd = [binary]
+    cpu.workload = process
+    cpu.createThreads()
+
+root = Root(full_system=False, system=system)
+m5.instantiate()
+exit_event = m5.simulate()
+print(f"Exiting @ tick {m5.curTick()} because {exit_event.getCause()}")
+'''
+
+
+MATRIX_BENCHMARK_C = r'''
+#include <stdio.h>
+#include <stdlib.h>
+
+#ifndef CHIPLOOP_N
+#define CHIPLOOP_N 24
+#endif
+
+int main(void) {
+    const int n = CHIPLOOP_N;
+    double *a = (double *)malloc((size_t)n * n * sizeof(double));
+    double *b = (double *)malloc((size_t)n * n * sizeof(double));
+    double *c = (double *)calloc((size_t)n * n, sizeof(double));
+    if (!a || !b || !c) return 2;
+    for (int i = 0; i < n * n; ++i) {
+        a[i] = (double)((i % 17) + 1);
+        b[i] = (double)(((i * 3) % 19) + 1);
+    }
+    for (int rep = 0; rep < 6; ++rep) {
+        for (int i = 0; i < n; ++i) {
+            for (int k = 0; k < n; ++k) {
+                double aik = a[i * n + k];
+                for (int j = 0; j < n; ++j) {
+                    c[i * n + j] += aik * b[k * n + j];
+                }
+            }
+        }
+    }
+    volatile double checksum = 0.0;
+    for (int i = 0; i < n * n; ++i) checksum += c[i];
+    printf("chiploop_matrix_checksum=%0.3f\n", checksum);
+    free(a);
+    free(b);
+    free(c);
+    return 0;
+}
+'''
+
+
+def _find_gem5_bin(isa: str) -> str:
+    isa_key = isa.upper()
+    candidates = [
+        os.environ.get(f"GEM5_{isa_key}_BIN"),
+        os.environ.get("GEM5_BIN"),
+        f"/opt/gem5/build/{isa_key}/gem5.opt",
+    ]
+    if isa_key == "X86":
+        candidates.append("/opt/gem5/build/X86/gem5.opt")
+    if isa_key in {"RISCV", "RISC-V"}:
+        candidates.append("/opt/gem5/build/RISCV/gem5.opt")
+    for candidate in candidates:
+        if candidate and os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            return candidate
+    raise RuntimeError(f"gem5 binary not found for ISA {isa}. Build gem5.opt for that ISA on the backend runner.")
+
+
+def _compiler_candidates(isa: str) -> List[str]:
+    if isa.lower() in {"x86", "x86_64"}:
+        return [os.environ.get("CC") or "", "gcc", "clang"]
+    return [
+        os.environ.get("RISCV_GCC") or "",
+        "riscv64-linux-gnu-gcc",
+        "riscv64-unknown-linux-gnu-gcc",
+    ]
+
+
+def _compile_matrix_workload(state: Dict[str, Any], isa: str) -> str:
+    env_key = "GEM5_RISCV_WORKLOAD" if isa.lower().startswith("riscv") else "GEM5_X86_WORKLOAD"
+    workload = state.get("workload_binary") or os.environ.get(env_key) or os.environ.get("GEM5_WORKLOAD")
+    if workload:
+        workload_path = str(workload)
+        if os.path.isfile(workload_path):
+            return workload_path
+        raise RuntimeError(f"Configured workload binary does not exist: {workload_path}")
+
+    out_dir = Path(_artifact_dir(state)) / "workloads" / isa.lower()
+    out_dir.mkdir(parents=True, exist_ok=True)
+    source = out_dir / "matrix_multiply.c"
+    binary = out_dir / "matrix_multiply"
+    source.write_text(MATRIX_BENCHMARK_C, encoding="utf-8")
+    compiler = next((c for c in _compiler_candidates(isa) if c and shutil.which(c)), "")
+    if not compiler:
+        raise RuntimeError(f"No compiler found to build the gem5 {isa} workload binary.")
+
+    base_cmd = [compiler, "-O2", "-DCHIPLOOP_N=24", str(source), "-o", str(binary)]
+    static_cmd = base_cmd[:3] + ["-static"] + base_cmd[3:]
+    run = subprocess.run(static_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=120)
+    if run.returncode != 0:
+        run = subprocess.run(base_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=120)
+    if run.returncode != 0:
+        raise RuntimeError(f"Failed to compile gem5 workload for {isa}: {run.stderr[-1200:]}")
+    return str(binary)
+
+
+def _write_gem5_config(state: Dict[str, Any]) -> str:
+    path = Path(_artifact_dir(state)) / "chiploop_gem5_se.py"
+    path.write_text(GEM5_CONFIG_TEMPLATE, encoding="utf-8")
+    return str(path)
+
+
+def _parse_stat_value(stats: Dict[str, float], names: List[str]) -> float:
+    for name in names:
+        if name in stats:
+            return stats[name]
+    for key, value in stats.items():
+        if any(name in key for name in names):
+            return value
+    return 0.0
+
+
+def _read_gem5_stats(stats_path: str) -> Dict[str, float]:
+    stats: Dict[str, float] = {}
+    with open(stats_path, "r", encoding="utf-8", errors="ignore") as f:
+        for line in f:
+            clean = line.split("#", 1)[0].strip()
+            if not clean or clean.startswith("-"):
+                continue
+            parts = clean.split()
+            if len(parts) < 2:
+                continue
+            try:
+                stats[parts[0]] = float(parts[1])
+            except ValueError:
+                continue
+    return stats
+
+
+def _metrics_from_gem5_stats(point: Dict[str, Any], stats_path: str) -> Dict[str, float]:
+    stats = _read_gem5_stats(stats_path)
+    sim_insts = _parse_stat_value(stats, ["simInsts", "system.cpu.committedInsts", "system.cpu.numInsts"])
+    cycles = _parse_stat_value(stats, ["system.cpu.numCycles", "system.cpu.numCycles::total", "numCycles"])
+    if sim_insts <= 0:
+        raise RuntimeError(f"gem5 stats did not include simulated instructions: {stats_path}")
+    ipc = (sim_insts / cycles) if cycles > 0 else _parse_stat_value(stats, ["system.cpu.ipc"])
+    if ipc <= 0:
+        ipc = sim_insts / max(_parse_stat_value(stats, ["simTicks"]), 1.0)
+    l1_misses = _parse_stat_value(stats, [
+        "system.cpu.dcache.overallMisses::total",
+        "system.cpu.dcache.demandMisses::total",
+        "system.cpu.dcache.overallMisses",
+        "dcache.overallMisses::total",
+        "dcache.demandMisses::total",
+    ])
+    l2_misses = _parse_stat_value(stats, [
+        "system.l2cache.overallMisses::total",
+        "system.l2cache.demandMisses::total",
+        "system.l2cache.overallMisses",
+    ])
+    l1_mpki = (l1_misses * 1000.0) / sim_insts
+    l2_mpki = (l2_misses * 1000.0) / sim_insts
+    power, area = _power_area_from_gem5_activity(point, ipc, l1_mpki, l2_mpki)
+    return {
+        "ipc": round(ipc, 4),
+        "cpi": round(1.0 / ipc, 4) if ipc > 0 else 0.0,
+        "l1d_mpki": round(l1_mpki, 3),
+        "l2_mpki": round(l2_mpki, 3),
+        "sim_insts": round(sim_insts, 0),
+        "sim_ticks": round(_parse_stat_value(stats, ["simTicks"]), 0),
+        "estimated_power_w": power,
+        "estimated_area_mm2": area,
+        "perf_per_watt": round(ipc / power, 4) if power > 0 else 0.0,
+        "perf_per_area": round(ipc / area, 4) if area > 0 else 0.0,
+    }
+
+
+def _power_area_from_gem5_activity(point: Dict[str, Any], ipc: float, l1_mpki: float, l2_mpki: float) -> tuple[float, float]:
     l1_kb = int(point.get("l1d_size_kb") or 32)
     l2_kb = int(point.get("l2_size_kb") or 512)
     cores = max(1, int(point.get("cores") or 1))
-    cpu_model = str(point.get("cpu_model") or "TimingSimpleCPU")
-    isa = str(point.get("isa") or "x86").lower()
-    memory_type = str(point.get("memory_type") or "DDR3_1600_8x8")
-    prefetcher = str(point.get("prefetcher") or "none")
-    l1_gain = {16: 0.00, 32: 0.16, 64: 0.22}.get(l1_kb, min(l1_kb / 256.0, 0.25))
-    l2_gain = {256: 0.00, 512: 0.10, 1024: 0.14}.get(l2_kb, min(l2_kb / 4096.0, 0.18))
-    cpu_factor = {"TimingSimpleCPU": 1.0, "MinorCPU": 1.18, "O3CPU": 1.42}.get(cpu_model, 1.0)
-    isa_factor = {"x86": 1.0, "riscv": 0.96, "arm": 0.98}.get(isa, 1.0)
-    memory_factor = 1.06 if "DDR4" in memory_type or "LPDDR5" in memory_type else 1.0
-    prefetch_gain = 0.05 if prefetcher != "none" else 0.0
-    core_scale = 1.0 + min(cores - 1, 7) * 0.035
-    ipc = round((0.82 + l1_gain + l2_gain + prefetch_gain) * cpu_factor * isa_factor * memory_factor * core_scale, 3)
-    l1_mpki = round(max(18.0, 44.0 - (l1_kb / 2.7)), 2)
-    l2_mpki = round(max(6.5, 19.0 - (l2_kb / 92.0)), 2)
-    power = round((1.05 + (l1_kb * 0.006) + (l2_kb * 0.00055)) * (0.85 + cores * 0.15) * cpu_factor, 3)
-    area = round((0.30 + (l1_kb * 0.0032) + (l2_kb * 0.00042)) * (0.9 + cores * 0.1) * (1.12 if cpu_model == "O3CPU" else 1.0), 3)
+    cpu_factor = {"TimingSimpleCPU": 0.85, "MinorCPU": 1.05, "O3CPU": 1.35, "AtomicSimpleCPU": 0.65}.get(str(point.get("cpu_model") or ""), 1.0)
+    cache_dynamic = (l1_mpki * 0.0025) + (l2_mpki * 0.009)
+    power = (0.42 + ipc * 0.36 + cache_dynamic + l1_kb * 0.0028 + l2_kb * 0.00024) * cores * cpu_factor
+    area = (0.22 + l1_kb * 0.0029 + l2_kb * 0.00038) * (0.95 + cores * 0.1) * (1.15 if point.get("cpu_model") == "O3CPU" else 1.0)
+    return round(power, 4), round(area, 4)
+
+
+def _run_gem5_point(state: Dict[str, Any], point: Dict[str, Any], config_path: str) -> Dict[str, Any]:
+    isa = str(point.get("isa") or "x86")
+    gem5_bin = _find_gem5_bin(isa)
+    workload = _compile_matrix_workload(state, isa)
+    run_dir = Path(_artifact_dir(state)) / "gem5_runs" / str(point.get("run_id") or "run")
+    run_dir.mkdir(parents=True, exist_ok=True)
+    cmd = [
+        gem5_bin,
+        f"--outdir={run_dir}",
+        config_path,
+        "--cmd", workload,
+        "--cpu-type", str(point.get("cpu_model") or "TimingSimpleCPU"),
+        "--num-cpus", str(point.get("cores") or 1),
+        "--clock", str(state.get("clock") or "2GHz"),
+        "--mem-type", str(point.get("memory_type") or state.get("memory_type") or "DDR3_1600_8x8"),
+        "--mem-size", str(state.get("memory_size") or "2GB"),
+        "--l1d-size", f"{point.get('l1d_size_kb') or 32}kB",
+        "--l1i-size", str(state.get("l1i_size") or "32kB"),
+        "--l2-size", f"{point.get('l2_size_kb') or 512}kB",
+        "--l1-assoc", str(point.get("l1_assoc") or 2),
+        "--l2-assoc", str(point.get("l2_assoc") or 8),
+        "--cacheline-size", str(state.get("cache_line_size") or 64),
+        "--prefetcher", str(point.get("prefetcher") or "none"),
+        "--branch-predictor", str(point.get("branch_predictor") or "default"),
+        "--maxinsts", str(state.get("maxinsts") or os.environ.get("GEM5_MAX_INSTS") or 250000),
+    ]
+    timeout = int(os.environ.get("GEM5_RUN_TIMEOUT_SEC", "180"))
+    proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=timeout)
+    (run_dir / "stdout.log").write_text(proc.stdout, encoding="utf-8", errors="ignore")
+    (run_dir / "stderr.log").write_text(proc.stderr, encoding="utf-8", errors="ignore")
+    if proc.returncode != 0:
+        raise RuntimeError(f"gem5 failed for {point.get('run_id')}: {proc.stderr[-1600:] or proc.stdout[-1600:]}")
+    stats_path = run_dir / "stats.txt"
+    if not stats_path.exists():
+        raise RuntimeError(f"gem5 completed but stats.txt was not produced for {point.get('run_id')}")
+    metrics = _metrics_from_gem5_stats(point, str(stats_path))
     return {
-        "ipc": ipc,
-        "cpi": round(1.0 / ipc, 3),
-        "l1d_mpki": l1_mpki,
-        "l2_mpki": l2_mpki,
-        "estimated_power_w": power,
-        "estimated_area_mm2": area,
-        "perf_per_watt": round(ipc / power, 3),
-        "perf_per_area": round(ipc / area, 3),
+        **point,
+        **metrics,
+        "execution_mode": "gem5",
+        "gem5_bin": gem5_bin,
+        "workload_binary": workload,
+        "stats_path": str(stats_path),
     }
 
 
@@ -236,21 +603,27 @@ def system_gem5_execution_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     agent_name = "System gem5 Execution Agent"
     sweep = state.get("system_architecture_sweep") or {}
     points = sweep.get("sweep_points") or []
-    gem5_bin = os.environ.get("GEM5_X86_BIN") or os.environ.get("GEM5_RISCV_BIN") or os.environ.get("GEM5_BIN")
-    mode = "estimated_demo" if not gem5_bin else "gem5_ready"
+    if not points:
+        raise RuntimeError("No gem5 sweep points were produced.")
+    config_path = _write_gem5_config(state)
     rows = []
+    log_lines = ["ChipLoop System Architecture Explorer: real gem5 execution"]
     for point in points:
-        metrics = _estimate_metrics(point)
-        rows.append({**point, **metrics, "execution_mode": mode})
+        row = _run_gem5_point(state, point, config_path)
+        rows.append(row)
+        log_lines.append(
+            f"{row['run_id']} gem5 ipc={row['ipc']} l1d_mpki={row['l1d_mpki']} "
+            f"l2_mpki={row['l2_mpki']} stats={row['stats_path']}"
+        )
     result = {
         "tool": "gem5",
-        "execution_mode": mode,
-        "note": "Demo uses deterministic estimates when GEM5_BIN is not configured on the backend runner.",
+        "execution_mode": "gem5",
+        "note": "Charts are generated from gem5 stats.txt. Power and area are ChipLoop activity estimates driven by parsed gem5 metrics.",
         "runs": rows,
         "created_at": _now(),
     }
     _record(state, agent_name, "gem5_run_results.json", _json(result))
-    _record(state, agent_name, "gem5_execution.log", "\n".join([f"{r['run_id']} {mode} ipc={r['ipc']}" for r in rows]) + "\n")
+    _record(state, agent_name, "gem5_execution.log", "\n".join(log_lines) + "\n")
     return {"system_gem5_results": result, "status": "ok"}
 
 
@@ -275,7 +648,7 @@ def system_power_estimation_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     agent_name = "System Power Estimation Agent"
     rows = (state.get("system_gem5_results") or {}).get("runs") or []
     estimates = {
-        "method": "ChipLoop cache/activity model; replace with McPAT integration when configured.",
+        "method": "ChipLoop power model driven by parsed gem5 activity metrics from stats.txt.",
         "rows": [{"run_id": r["run_id"], "estimated_power_w": r["estimated_power_w"], "perf_per_watt": r["perf_per_watt"]} for r in rows],
     }
     _record(state, agent_name, "power_estimates.json", _json(estimates))
@@ -286,7 +659,7 @@ def system_area_estimation_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     agent_name = "System Area Estimation Agent"
     rows = (state.get("system_gem5_results") or {}).get("runs") or []
     estimates = {
-        "method": "ChipLoop cache area model; replace with CACTI/McPAT integration when configured.",
+        "method": "ChipLoop cache and CPU area model driven by the gem5 run configuration.",
         "rows": [{"run_id": r["run_id"], "estimated_area_mm2": r["estimated_area_mm2"], "perf_per_area": r["perf_per_area"]} for r in rows],
     }
     _record(state, agent_name, "area_estimates.json", _json(estimates))
