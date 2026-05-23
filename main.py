@@ -2065,16 +2065,20 @@ class SystemAppIn(BaseModel):
 
 class SystemArchitectureAppIn(BaseModel):
     project_name: Optional[str] = None
+    exploration_type: Optional[str] = "cache_tuning"
     workload: Optional[str] = None
     workload_name: Optional[str] = None
     simulator: Optional[str] = "gem5"
     simulation_tool: Optional[str] = None
     isa: Optional[str] = "x86"
+    isas: Optional[List[str]] = None
     cpu_model: Optional[str] = "TimingSimpleCPU"
+    cpu_models: Optional[List[str]] = None
     mode: Optional[str] = "syscall_emulation"
     goal: Optional[str] = None
     experiment_goal: Optional[str] = None
     sweep: Optional[Dict[str, Any]] = None
+    memory_types: Optional[List[str]] = None
     toggles: Optional[Dict[str, Any]] = None
     notes: Optional[str] = None
 

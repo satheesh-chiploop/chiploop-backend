@@ -137,7 +137,10 @@ def is_system_architecture_guided_demo_payload(payload: Dict[str, object]) -> bo
     workload = str(payload.get("workload") or payload.get("workload_name") or "").strip()
     simulator = str(payload.get("simulator") or payload.get("simulation_tool") or "").strip().lower()
     isa = str(payload.get("isa") or "").strip().lower()
+    isas = payload.get("isas") if isinstance(payload.get("isas"), list) else []
     cpu_model = str(payload.get("cpu_model") or "").strip()
+    cpu_models = payload.get("cpu_models") if isinstance(payload.get("cpu_models"), list) else []
+    exploration_type = str(payload.get("exploration_type") or "cache_tuning").strip()
     goal = str(payload.get("goal") or payload.get("experiment_goal") or "")
     sweep = payload.get("sweep") if isinstance(payload.get("sweep"), dict) else {}
     toggles = payload.get("toggles") if isinstance(payload.get("toggles"), dict) else {}
@@ -148,9 +151,16 @@ def is_system_architecture_guided_demo_payload(payload: Dict[str, object]) -> bo
         return False
     if simulator != SYSTEM_ARCHITECTURE_DEMO_SIMULATOR:
         return False
-    if isa not in {"x86", "riscv"}:
+    if exploration_type not in {"cache_tuning", "isa_compare", "memory_bottleneck", "cpu_model"}:
+        return False
+    allowed_isas = {"x86", "riscv", "arm", "mips", "power", "sparc"}
+    if isa not in allowed_isas:
+        return False
+    if isas and any(str(v).lower() not in allowed_isas for v in isas):
         return False
     if cpu_model not in {"TimingSimpleCPU", "MinorCPU", "O3CPU"}:
+        return False
+    if cpu_models and any(str(v) not in {"TimingSimpleCPU", "MinorCPU", "O3CPU"} for v in cpu_models):
         return False
     if not all(marker in goal for marker in SYSTEM_ARCHITECTURE_DEMO_GOAL_MARKERS):
         return False

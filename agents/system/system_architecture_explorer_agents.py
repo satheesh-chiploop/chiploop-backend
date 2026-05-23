@@ -57,6 +57,16 @@ def _demo_sweep(state: Dict[str, Any]) -> Dict[str, List[int]]:
     }
 
 
+def _str_list(state: Dict[str, Any], key: str, fallback: List[str]) -> List[str]:
+    value = state.get(key)
+    if isinstance(value, list):
+        cleaned = [str(v).strip() for v in value if str(v).strip()]
+        return cleaned or fallback
+    if isinstance(value, str) and value.strip():
+        return [value.strip()]
+    return fallback
+
+
 def _int_state(state: Dict[str, Any], key: str, default: int) -> int:
     try:
         return int(state.get(key) or default)
@@ -73,14 +83,18 @@ def system_architecture_intent_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     )
     intent = {
         "project_name": state.get("project_name") or "matrix_multiply_cache_sweep_demo",
+        "exploration_type": state.get("exploration_type") or "cache_tuning",
         "simulator": state.get("simulator") or state.get("simulation_tool") or "gem5",
         "isa": state.get("isa") or "x86",
+        "isas": _str_list(state, "isas", [str(state.get("isa") or "x86")]),
         "cpu_model": state.get("cpu_model") or "TimingSimpleCPU",
+        "cpu_models": _str_list(state, "cpu_models", [str(state.get("cpu_model") or "TimingSimpleCPU")]),
         "cores": _int_state(state, "cores", 1),
         "workload": state.get("workload") or state.get("workload_name") or "matrix_multiply",
         "mode": state.get("mode") or "syscall_emulation",
         "clock": state.get("clock") or "2GHz",
         "memory_type": state.get("memory_type") or "DDR3_1600_8x8",
+        "memory_types": _str_list(state, "memory_types", [str(state.get("memory_type") or "DDR3_1600_8x8")]),
         "memory_size": state.get("memory_size") or "2GB",
         "goal": goal,
         "metrics": ["ipc", "cpi", "l1d_miss_rate", "l2_miss_rate", "estimated_power_w", "estimated_area_mm2"],
@@ -150,22 +164,37 @@ def system_design_space_exploration_agent(state: Dict[str, Any]) -> Dict[str, An
     sweep = _demo_sweep(state)
     matrix = []
     idx = 1
-    for l1 in sweep["l1d_size_kb"]:
-        for l2 in sweep["l2_size_kb"]:
-            matrix.append({
-                "run_id": f"archsim_{idx:02d}",
-                "workload": state.get("workload") or "matrix_multiply",
-                "l1d_size_kb": l1,
-                "l2_size_kb": l2,
-                "cpu_model": state.get("cpu_model") or "TimingSimpleCPU",
-                "isa": state.get("isa") or "x86",
-                "cores": _int_state(state, "cores", 1),
-                "memory_type": state.get("memory_type") or "DDR3_1600_8x8",
-                "l1_assoc": _int_state(state, "l1_assoc", 2),
-                "l2_assoc": _int_state(state, "l2_assoc", 8),
-                "prefetcher": state.get("prefetcher") or "none",
-            })
-            idx += 1
+    exploration_type = str(state.get("exploration_type") or "cache_tuning")
+    isas = _str_list(state, "isas", [str(state.get("isa") or "x86")])
+    cpu_models = _str_list(state, "cpu_models", [str(state.get("cpu_model") or "TimingSimpleCPU")])
+    memory_types = _str_list(state, "memory_types", [str(state.get("memory_type") or "DDR3_1600_8x8")])
+    if exploration_type != "isa_compare":
+        isas = [str(state.get("isa") or isas[0])]
+    if exploration_type != "cpu_model":
+        cpu_models = [str(state.get("cpu_model") or cpu_models[0])]
+    if exploration_type != "memory_bottleneck":
+        memory_types = [str(state.get("memory_type") or memory_types[0])]
+
+    for isa in isas:
+        for cpu_model in cpu_models:
+            for memory_type in memory_types:
+                for l1 in sweep["l1d_size_kb"]:
+                    for l2 in sweep["l2_size_kb"]:
+                        matrix.append({
+                            "run_id": f"archsim_{idx:02d}",
+                            "exploration_type": exploration_type,
+                            "workload": state.get("workload") or "matrix_multiply",
+                            "l1d_size_kb": l1,
+                            "l2_size_kb": l2,
+                            "cpu_model": cpu_model,
+                            "isa": isa,
+                            "cores": _int_state(state, "cores", 1),
+                            "memory_type": memory_type,
+                            "l1_assoc": _int_state(state, "l1_assoc", 2),
+                            "l2_assoc": _int_state(state, "l2_assoc", 8),
+                            "prefetcher": state.get("prefetcher") or "none",
+                        })
+                        idx += 1
     plan = {"sweep_points": matrix, "count": len(matrix), "created_at": _now()}
     _record(state, agent_name, "sweep_matrix.json", _json(plan))
     return {"system_architecture_sweep": plan, "status": "ok"}
