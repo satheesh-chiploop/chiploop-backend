@@ -4,7 +4,7 @@ This phase adds secure hosted billing for ChipLoop without storing card data.
 
 ## Model
 
-- Stripe Checkout collects payment methods and starts the 7-day trial.
+- Stripe Checkout collects payment methods and starts the 3-day trial.
 - Stripe Billing owns subscription charging, retries, Apple Pay/Google Pay/Link eligibility, and 3DS/SCA where available.
 - Stripe Customer Portal lets users update cards and cancel/manage billing.
 - ChipLoop stores only Stripe identifiers and subscription status in `user_subscriptions`.
@@ -38,7 +38,7 @@ Backend only:
 - `STRIPE_PRICE_PRO`
 - `STRIPE_PRICE_PRO_MAX`
 - `STRIPE_INTRO_COUPON_ID` optional
-- `STRIPE_TRIAL_DAYS=7`
+- `STRIPE_TRIAL_DAYS=3`
 - `STRIPE_PAYMENT_GRACE_DAYS=3`
 - `CHIPLOOP_APP_URL=https://<frontend-host>`
 
@@ -63,7 +63,7 @@ On `invoice.payment_failed`, ChipLoop marks the subscription `past_due` and sets
 1. Set Stripe test env vars.
 2. Sign in to ChipLoop.
 3. Open `/pricing`.
-4. Click Start 7-day trial or a paid plan.
+4. Click Start 3-day trial or a paid plan.
 5. Complete Stripe Checkout with a test card.
 6. Confirm `/settings/plan` shows Stripe-backed subscription state after webhook delivery.
 7. Click Update payment to open Stripe Customer Portal.

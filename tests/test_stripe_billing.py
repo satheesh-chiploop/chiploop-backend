@@ -87,7 +87,7 @@ def test_trial_checkout_session_uses_starter_trial():
 
     assert result["checkout_kind"] == "trial"
     assert _FakeStripe.last_checkout["line_items"] == [{"price": "price_starter", "quantity": 1}]
-    assert _FakeStripe.last_checkout["subscription_data"]["trial_period_days"] == 7
+    assert _FakeStripe.last_checkout["subscription_data"]["trial_period_days"] == 3
     assert _FakeStripe.last_checkout["metadata"]["checkout_kind"] == "trial"
 
 

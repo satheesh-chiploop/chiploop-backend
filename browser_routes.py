@@ -217,7 +217,7 @@ def _trial_checkout_detail(message: str) -> Dict[str, Any]:
         "requires_checkout": True,
         "checkout_plan_id": "starter",
         "checkout_url": "/pricing?trial=1",
-        "checkout_label": "Start 7-day trial",
+        "checkout_label": "Start 3-day trial",
     }
 
 
@@ -232,7 +232,7 @@ def _enforce_feature(request: Request, user_id: str, feature: str):
     except TrialCheckoutRequired:
         raise HTTPException(
             status_code=402,
-            detail=_trial_checkout_detail("Start your 7-day trial to use this Studio feature."),
+            detail=_trial_checkout_detail("Start your 3-day trial to use this Studio feature."),
         )
     except BillingPaymentRequired as exc:
         raise HTTPException(
@@ -295,7 +295,7 @@ def _require_checkout(request: Request, user_id: str):
     except TrialCheckoutRequired:
         raise HTTPException(
             status_code=402,
-            detail=_trial_checkout_detail("Start your 7-day trial to use voice design sessions."),
+            detail=_trial_checkout_detail("Start your 3-day trial to use voice design sessions."),
         )
     except BillingPaymentRequired as exc:
         raise HTTPException(
@@ -802,7 +802,7 @@ async def settings_create_api_key(
         except TrialCheckoutRequired:
             raise HTTPException(
                 status_code=402,
-                detail=_trial_checkout_detail("Start your 7-day trial before creating API keys."),
+                detail=_trial_checkout_detail("Start your 3-day trial before creating API keys."),
             )
         except BillingPaymentRequired as exc:
             raise HTTPException(

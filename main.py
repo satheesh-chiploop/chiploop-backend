@@ -324,7 +324,7 @@ def _trial_required_response(message: str) -> HTTPException:
             "requires_checkout": True,
             "checkout_plan_id": "starter",
             "checkout_url": "/pricing?trial=1",
-            "checkout_label": "Start 7-day trial",
+            "checkout_label": "Start 3-day trial",
         },
     )
 
@@ -344,11 +344,11 @@ async def require_checkout_for_workflow_runs(request: Request, call_next):
             content={
                 "status": "error",
                 "error": "trial_checkout_required",
-                "detail": "Start your 7-day trial to run workflows.",
+                "detail": "Start your 3-day trial to run workflows.",
                 "requires_checkout": True,
                 "checkout_plan_id": "starter",
                 "checkout_url": "/pricing?trial=1",
-                "checkout_label": "Start 7-day trial",
+                "checkout_label": "Start 3-day trial",
             },
         )
     except BillingPaymentRequired as exc:
@@ -2469,11 +2469,11 @@ async def apps_arch2rtl_run(request: Request, background_tasks: BackgroundTasks,
         onboarding_service = _onboarding_service_for_main()
         if not is_arch2rtl_guided_demo_payload(payload_dict):
             raise _trial_required_response(
-                "Start your 7-day trial to run custom Arch2RTL workflows."
+                "Start your 3-day trial to run custom Arch2RTL workflows."
             )
         if not onboarding_service.can_run_arch2rtl_demo(user_id):
             raise _trial_required_response(
-                "You have completed your free Arch2RTL demo runs. Start your 7-day trial to keep using ChipLoop."
+                "You have completed your free Arch2RTL demo runs. Start your 3-day trial to keep using ChipLoop."
             )
         demo_run = True
 
@@ -2499,10 +2499,10 @@ async def apps_arch2rtl_run(request: Request, background_tasks: BackgroundTasks,
         response["demo"] = _onboarding_service_for_main().arch2rtl_demo_usage(user_id)
         response["trial_cta"] = {
             "show": True,
-            "message": "Start your 7-day trial to run your own specs. No charge today.",
+            "message": "Start your 3-day trial to run your own specs. No charge today.",
             "checkout_plan_id": "starter",
             "checkout_url": "/pricing?trial=1",
-            "checkout_label": "Start 7-day trial",
+            "checkout_label": "Start 3-day trial",
         }
     return response
 
@@ -5552,11 +5552,11 @@ async def apps_system_architecture(
         onboarding_service = _onboarding_service_for_main()
         if not is_system_architecture_guided_demo_payload(payload_dict):
             raise _trial_required_response(
-                "Start your 7-day trial to run custom System Architecture Explorer workflows."
+                "Start your 3-day trial to run custom System Architecture Explorer workflows."
             )
         if not onboarding_service.can_run_system_architecture_demo(user_id):
             raise _trial_required_response(
-                "You have completed your free System Architecture Explorer demo runs. Start your 7-day trial to keep exploring custom architectures."
+                "You have completed your free System Architecture Explorer demo runs. Start your 3-day trial to keep exploring custom architectures."
             )
         demo_run = True
 
@@ -5581,10 +5581,10 @@ async def apps_system_architecture(
         response["demo"] = _onboarding_service_for_main().system_architecture_demo_usage(user_id)
         response["trial_cta"] = {
             "show": True,
-            "message": "Start your 7-day trial to run your own workloads, binaries, and architecture sweeps.",
+            "message": "Start your 3-day trial to run your own workloads, binaries, and architecture sweeps.",
             "checkout_plan_id": "starter",
             "checkout_url": "/pricing?trial=1",
-            "checkout_label": "Start 7-day trial",
+            "checkout_label": "Start 3-day trial",
         }
     return response
 

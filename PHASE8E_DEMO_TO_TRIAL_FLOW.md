@@ -2,10 +2,10 @@
 
 ## Product Rule
 
-ChipLoop separates low-friction demo access from the 7-day trial.
+ChipLoop separates low-friction demo access from the 3-day trial.
 
 - Demo: email signup only, no credit card.
-- Trial: credit card required through Stripe, no charge during the 7-day trial.
+- Trial: credit card required through Stripe, no charge during the 3-day trial.
 - Paid conversion: trial converts to Starter unless canceled.
 
 ## Demo Limit
@@ -13,7 +13,7 @@ ChipLoop separates low-friction demo access from the 7-day trial.
 The guided Arch2RTL demo is limited to 3 server-counted runs per user.
 
 - Runs 1-3: allow the prefilled PWM Arch2RTL demo and return a soft trial CTA.
-- Run 4: block before starting the workflow and ask the user to start the 7-day trial.
+- Run 4: block before starting the workflow and ask the user to start the 3-day trial.
 
 The backend only treats the request as demo-eligible when it matches the guided PWM payload:
 
@@ -41,7 +41,7 @@ The `/settings/onboarding` response includes demo usage under `onboarding.demo.a
 ## Frontend Behavior
 
 - Apps onboarding explains demo mode is no-credit-card and limited to 3 runs.
-- After each allowed demo run, Arch2RTL shows a friendly 7-day trial CTA.
+- After each allowed demo run, Arch2RTL shows a friendly 3-day trial CTA.
 - If the backend returns `trial_checkout_required`, Arch2RTL shows a blocking trial prompt instead of a raw error.
 
 ## Safety

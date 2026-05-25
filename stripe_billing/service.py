@@ -36,7 +36,7 @@ class StripeBillingService:
         self.secret_key = os.environ.get("STRIPE_SECRET_KEY", "").strip()
         self.webhook_secret = os.environ.get("STRIPE_WEBHOOK_SECRET", "").strip()
         self.app_url = os.environ.get("CHIPLOOP_APP_URL", os.environ.get("FRONTEND_URL", "http://localhost:3000")).rstrip("/")
-        self.trial_days = int(os.environ.get("STRIPE_TRIAL_DAYS", "7"))
+        self.trial_days = int(os.environ.get("STRIPE_TRIAL_DAYS", "3"))
         self.grace_days = int(os.environ.get("STRIPE_PAYMENT_GRACE_DAYS", "3"))
         self.coupon_id = os.environ.get("STRIPE_INTRO_COUPON_ID", "").strip() or None
         self.price_ids = {
