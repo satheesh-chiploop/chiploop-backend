@@ -7690,6 +7690,22 @@
       "required_tools": ["python", "supabase"],
       "hooks": ["post_run_collect_artifacts", "post_run_update_state", "artifact_publish_to_supabase"],
       "metadata": {"registry_source": "SYSTEM_AGENT_FUNCTIONS", "variable": "system_architecture_report_agent", "studio_contract_version": "v1"}
+    },
+    {
+      "name": "System Architecture to RTL Intent Agent",
+      "loop_type": "system",
+      "domain": "system",
+      "description": "Converts a completed gem5 System Architecture run into Arch2RTL-ready intent, architecture decision, and traceability artifacts.",
+      "entrypoint": "agents.system.system_architecture_explorer_agents:system_architecture_to_rtl_intent_agent",
+      "execution_mode": "native",
+      "inputs": ["system/architecture/gem5_run_results.json", "system/architecture/ppa_summary.json", "system/architecture/charts.json"],
+      "outputs": ["system/architecture/rtl_intent.yaml", "system/architecture/requirements_trace.md", "system/architecture/architecture_decision.md", "system/architecture/arch2rtl_prefill.json"],
+      "artifact_paths": ["system/architecture/rtl_intent.yaml", "system/architecture/requirements_trace.md", "system/architecture/architecture_decision.md", "system/architecture/arch2rtl_prefill.json"],
+      "artifact_types": ["structured_data", "report", "handoff"],
+      "required_skills": ["architecture_to_rtl_traceability", "artifact_publish"],
+      "required_tools": ["python", "supabase"],
+      "hooks": ["post_run_collect_artifacts", "post_run_update_state", "artifact_publish_to_supabase"],
+      "metadata": {"registry_source": "SYSTEM_AGENT_FUNCTIONS", "variable": "system_architecture_to_rtl_intent_agent", "studio_contract_version": "v1"}
     }
   ]
 }

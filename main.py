@@ -686,6 +686,7 @@ from agents.system.system_architecture_explorer_agents import (
     system_ppa_tradeoff_agent,
     system_architecture_visualization_agent,
     system_architecture_report_agent,
+    system_architecture_to_rtl_intent_agent,
 )
 
 SYSTEM_AGENT_FUNCTIONS: Dict[str,Any] = {
@@ -851,6 +852,7 @@ SYSTEM_AGENT_FUNCTIONS: Dict[str,Any] = {
     "System PPA Tradeoff Agent": system_ppa_tradeoff_agent,
     "System Visualization Agent": system_architecture_visualization_agent,
     "System Architecture Report Agent": system_architecture_report_agent,
+    "System Architecture to RTL Intent Agent": system_architecture_to_rtl_intent_agent,
 }
 
 
@@ -2092,6 +2094,12 @@ class SystemArchitectureAppIn(BaseModel):
     memory_types: Optional[List[str]] = None
     toggles: Optional[Dict[str, Any]] = None
     notes: Optional[str] = None
+
+
+class SystemArchitectureToRTLHandoffIn(BaseModel):
+    selected_run_id: Optional[str] = None
+    reviewer: Optional[str] = None
+    top_module: Optional[str] = None
 
 
 class SystemSoftwareAppIn(BaseModel):
@@ -5600,6 +5608,36 @@ def apps_system_architecture_results(workflow_id: str):
         status_code=404,
         detail="gem5 results are not available yet. Wait for the System Architecture workflow to complete successfully.",
     )
+
+
+@app.post("/apps/system/architecture/rtl-handoff/{workflow_id}")
+def apps_system_architecture_rtl_handoff(
+    workflow_id: str,
+    request: Request,
+    payload: SystemArchitectureToRTLHandoffIn,
+):
+    user_id = _require_user_id(request)
+    base = _artifacts_dir_for_workflow(workflow_id)
+    source_dir = base / "system-architecture"
+    if not source_dir.exists():
+        source_dir = base
+    state = {
+        "workflow_id": workflow_id,
+        "artifact_dir": str(source_dir),
+        "user_id": user_id,
+        "reviewer": payload.reviewer or user_id,
+        "selected_run_id": payload.selected_run_id,
+        "top_module": payload.top_module,
+    }
+    try:
+        result = system_architecture_to_rtl_intent_agent(state)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {
+        "ok": True,
+        "workflow_id": workflow_id,
+        "handoff": result.get("system_architecture_to_rtl_handoff"),
+    }
 
 
 @app.post("/apps/system/rtl/run")

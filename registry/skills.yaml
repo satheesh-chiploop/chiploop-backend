@@ -222,6 +222,18 @@
       "tools": [
         "python"
       ]
+    },
+    {
+      "name": "architecture_to_rtl_traceability",
+      "description": "Convert gem5-backed architecture evidence into reviewed Arch2RTL intent, architecture decisions, and RTL parameter traceability.",
+      "domains": [
+        "system",
+        "digital"
+      ],
+      "tools": [
+        "python",
+        "supabase"
+      ]
     }
   ]
 }

@@ -362,6 +362,32 @@
       ]
     },
     {
+      "name": "System_Architecture_to_RTL_Delivery",
+      "loop_type": "system",
+      "description": "Prebuilt workflow for converting gem5-backed architecture results into reviewed Arch2RTL intent, traceability, RTL generation, lint/compile, UPF-lite, and handoff packaging.",
+      "agents": [
+        "System Architecture Intent Agent",
+        "System gem5 Execution Agent",
+        "System PPA Tradeoff Agent",
+        "System Architecture to RTL Intent Agent",
+        "Digital Spec Agent",
+        "Digital Architecture Agent",
+        "Digital Microarchitecture Agent",
+        "Digital RTL Agent",
+        "Digital RTL Linting Agent",
+        "Digital Power Intent (UPF-lite) Agent",
+        "Digital IP Packaging & Handoff Agent"
+      ],
+      "hooks": [
+        "pre_run_validate_inputs",
+        "post_run_collect_artifacts",
+        "post_run_update_state",
+        "on_failure_capture_traceback",
+        "on_failure_preserve_logs",
+        "artifact_publish_to_supabase"
+      ]
+    },
+    {
       "name": "custom_agent_registry",
       "loop_type": "custom",
       "description": "Dynamic custom agents loaded into AGENT_REGISTRY remain supported through the legacy runtime adapter when present in backend memory.",

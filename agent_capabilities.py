@@ -1123,6 +1123,17 @@ AGENT_CAPABILITIES = {
         "outputs": ["system/architecture/report.md"],
         "description": "Generates the no-code architecture exploration report and next experiment recommendation.",
     },
+    "System Architecture to RTL Intent Agent": {
+        "domain": "system",
+        "inputs": ["system/architecture/gem5_run_results.json", "system/architecture/ppa_summary.json", "system/architecture/charts.json"],
+        "outputs": [
+            "system/architecture/rtl_intent.yaml",
+            "system/architecture/requirements_trace.md",
+            "system/architecture/architecture_decision.md",
+            "system/architecture/arch2rtl_prefill.json",
+        ],
+        "description": "Converts gem5-backed architecture evidence into reviewed Arch2RTL intent, traceability, and decision artifacts.",
+    },
 
     "System CoSim Integration Agent": {
         "domain": "system",

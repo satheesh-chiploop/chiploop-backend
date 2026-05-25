@@ -52,6 +52,51 @@ def _json(data: Any) -> str:
     return json.dumps(data, indent=2, sort_keys=True)
 
 
+def _read_local_json(state: Dict[str, Any], filename: str) -> Dict[str, Any]:
+    root = Path(_artifact_dir(state))
+    candidates = [root / filename]
+    if root.exists():
+        candidates.extend(root.rglob(filename))
+    for path in candidates:
+        if path.exists() and path.is_file():
+            try:
+                return json.loads(path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+    return {}
+
+
+def _yaml_scalar(value: Any) -> str:
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return str(value)
+    text = str(value).replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{text}"'
+
+
+def _simple_yaml(data: Dict[str, Any], indent: int = 0) -> str:
+    lines: List[str] = []
+    pad = " " * indent
+    for key, value in data.items():
+        if isinstance(value, dict):
+            lines.append(f"{pad}{key}:")
+            lines.append(_simple_yaml(value, indent + 2))
+        elif isinstance(value, list):
+            lines.append(f"{pad}{key}:")
+            for item in value:
+                if isinstance(item, dict):
+                    lines.append(f"{pad}  -")
+                    lines.append(_simple_yaml(item, indent + 4))
+                else:
+                    lines.append(f"{pad}  - {_yaml_scalar(item)}")
+        else:
+            lines.append(f"{pad}{key}: {_yaml_scalar(value)}")
+    return "\n".join(lines)
+
+
 def _demo_sweep(state: Dict[str, Any]) -> Dict[str, List[int]]:
     sweep = state.get("sweep") if isinstance(state.get("sweep"), dict) else {}
     return {
@@ -720,3 +765,177 @@ Run the same sweep on a second workload, then compare whether the cache knee is 
 """
     _record(state, agent_name, "report.md", report)
     return {"system_architecture_report": report, "status": "ok"}
+
+
+def system_architecture_to_rtl_intent_agent(state: Dict[str, Any]) -> Dict[str, Any]:
+    agent_name = "System Architecture to RTL Intent Agent"
+    gem5_results = state.get("system_gem5_results") or _read_local_json(state, "gem5_run_results.json")
+    ppa_summary = state.get("system_ppa_summary") or _read_local_json(state, "ppa_summary.json")
+    intent = state.get("system_architecture_intent") or _read_local_json(state, "intent.json")
+    charts = state.get("system_architecture_charts") or _read_local_json(state, "charts.json")
+    rows = gem5_results.get("runs") or []
+    if not rows:
+        raise RuntimeError("Cannot create RTL intent because gem5_run_results.json has no run rows.")
+
+    selected_run_id = str(state.get("selected_run_id") or "").strip()
+    selected = next((r for r in rows if str(r.get("run_id")) == selected_run_id), None)
+    if not selected:
+        selected = (ppa_summary.get("recommended_point") or {}) if isinstance(ppa_summary, dict) else {}
+    if not selected:
+        selected = sorted(rows, key=lambda r: (r.get("perf_per_watt", 0), r.get("perf_per_area", 0), r.get("ipc", 0)), reverse=True)[0]
+
+    reviewer = str(state.get("reviewer") or state.get("user_id") or "chiploop_user")
+    workflow_id = _workflow_id(state)
+    project_name = str(intent.get("project_name") or state.get("project_name") or "system_architecture_to_rtl")
+    top_module = str(state.get("top_module") or f"{project_name}_arch_wrapper").replace("-", "_")
+    workload = selected.get("workload") or intent.get("workload") or "matrix_multiply"
+    rtl_parameters = {
+        "isa": selected.get("isa"),
+        "cpu_model": selected.get("cpu_model"),
+        "cores": selected.get("cores"),
+        "l1d_size_kb": selected.get("l1d_size_kb"),
+        "l2_size_kb": selected.get("l2_size_kb"),
+        "l1_assoc": selected.get("l1_assoc"),
+        "l2_assoc": selected.get("l2_assoc"),
+        "prefetcher": selected.get("prefetcher"),
+        "branch_predictor": selected.get("branch_predictor"),
+        "memory_type": selected.get("memory_type"),
+    }
+    metrics = {
+        "ipc": selected.get("ipc"),
+        "l1d_mpki": selected.get("l1d_mpki"),
+        "l2_mpki": selected.get("l2_mpki"),
+        "estimated_power_w": selected.get("estimated_power_w"),
+        "estimated_area_mm2": selected.get("estimated_area_mm2"),
+        "perf_per_watt": selected.get("perf_per_watt"),
+        "perf_per_area": selected.get("perf_per_area"),
+    }
+    trace_items = [
+        {
+            "rtl_parameter": key,
+            "value": value,
+            "source": {
+                "workflow_id": workflow_id,
+                "run_id": selected.get("run_id"),
+                "artifact": "gem5_run_results.json",
+                "workload": workload,
+                "metric": "selected_sweep_point",
+            },
+            "review_status": "generated_from_architecture_evidence",
+            "reviewer": reviewer,
+        }
+        for key, value in rtl_parameters.items()
+        if value is not None
+    ]
+    rtl_intent = {
+        "project_name": project_name,
+        "top_module": top_module,
+        "design_language": "systemverilog",
+        "source": {
+            "type": "system_architecture_gem5_handoff",
+            "workflow_id": workflow_id,
+            "selected_run_id": selected.get("run_id"),
+            "workload": workload,
+        },
+        "rtl_scope": {
+            "intent": "Create a synthesizable architecture configuration wrapper and control-plane RTL intent package for the selected system architecture point.",
+            "non_goals": [
+                "Do not implement a full CPU core from gem5.",
+                "Do not claim RTL functional correctness from gem5 performance results alone.",
+            ],
+        },
+        "parameters": rtl_parameters,
+        "evidence_metrics": metrics,
+        "interfaces": {
+            "clock": "clk",
+            "reset": "reset_n",
+            "control": "AXI4-Lite or simple CSR interface for architecture configuration/status",
+            "status_outputs": ["selected_run_id", "configuration_valid", "performance_profile_id"],
+        },
+        "traceability": trace_items,
+    }
+    rtl_yaml = _simple_yaml(rtl_intent) + "\n"
+    decision_md = f"""# Architecture Decision
+
+## Selected Sweep Point
+- Workflow: `{workflow_id}`
+- Run: `{selected.get('run_id')}`
+- Workload: `{workload}`
+- ISA: `{selected.get('isa')}`
+- CPU model: `{selected.get('cpu_model')}`
+- Cores: `{selected.get('cores')}`
+- L1D: `{selected.get('l1d_size_kb')}KB`
+- L2: `{selected.get('l2_size_kb')}KB`
+- Prefetcher: `{selected.get('prefetcher')}`
+- Branch predictor: `{selected.get('branch_predictor')}`
+
+## Evidence
+- IPC: `{metrics.get('ipc')}`
+- L1D MPKI: `{metrics.get('l1d_mpki')}`
+- L2 MPKI: `{metrics.get('l2_mpki')}`
+- Estimated power: `{metrics.get('estimated_power_w')}W`
+- Estimated area: `{metrics.get('estimated_area_mm2')}mm2`
+
+## RTL Interpretation
+This handoff converts gem5-backed architecture evidence into an Arch2RTL-ready intent package. It should be reviewed as architecture intent, not as proof of RTL correctness.
+"""
+    trace_md_lines = ["# Requirements Trace", "", "| RTL parameter | Value | Evidence | Reviewer |", "| --- | --- | --- | --- |"]
+    for item in trace_items:
+        src = item["source"]
+        trace_md_lines.append(
+            f"| `{item['rtl_parameter']}` | `{item['value']}` | `{src['artifact']}::{src['run_id']}` | `{reviewer}` |"
+        )
+    requirements_trace = "\n".join(trace_md_lines) + "\n"
+    spec_text = f"""Design a synthesizable SystemVerilog architecture configuration wrapper named `{top_module}`.
+
+The wrapper captures the selected system architecture point from a gem5-backed ChipLoop System Architecture run and exposes the configuration through a simple control/status interface.
+
+Selected architecture:
+- ISA: {selected.get('isa')}
+- CPU model profile: {selected.get('cpu_model')}
+- Cores: {selected.get('cores')}
+- L1D cache size: {selected.get('l1d_size_kb')}KB
+- L2 cache size: {selected.get('l2_size_kb')}KB
+- L1 associativity: {selected.get('l1_assoc')}
+- L2 associativity: {selected.get('l2_assoc')}
+- Prefetcher profile: {selected.get('prefetcher')}
+- Branch predictor profile: {selected.get('branch_predictor')}
+- Memory type profile: {selected.get('memory_type')}
+
+Evidence from gem5:
+- Workload: {workload}
+- Run ID: {selected.get('run_id')}
+- IPC: {metrics.get('ipc')}
+- L1D MPKI: {metrics.get('l1d_mpki')}
+- L2 MPKI: {metrics.get('l2_mpki')}
+- Estimated power: {metrics.get('estimated_power_w')}W
+- Estimated area: {metrics.get('estimated_area_mm2')}mm2
+
+Generate:
+- Parameterized SystemVerilog RTL for the architecture configuration wrapper.
+- Clear parameters/localparams for the selected architecture values.
+- A CSR/register map for reading the selected configuration and evidence metrics.
+- SDC constraints for `clk`.
+- UPF-lite power intent.
+- A handoff note preserving traceability to workflow `{workflow_id}` and run `{selected.get('run_id')}`.
+
+Do not implement a full CPU core. Treat CPU model, prefetcher, and branch predictor as architecture profile parameters unless additional implementation detail is provided.
+"""
+    handoff = {
+        "rtl_intent": rtl_intent,
+        "architecture_decision": decision_md,
+        "requirements_trace": requirements_trace,
+        "arch2rtl_prefill": {
+            "projectName": project_name,
+            "topModule": top_module,
+            "designLanguage": "systemverilog",
+            "specText": spec_text,
+            "toggles": {"genRegmap": True, "genUpfLite": True, "genPackaging": True},
+        },
+        "charts_available": bool(charts),
+    }
+    _record(state, agent_name, "rtl_intent.yaml", rtl_yaml)
+    _record(state, agent_name, "architecture_decision.md", decision_md)
+    _record(state, agent_name, "requirements_trace.md", requirements_trace)
+    _record(state, agent_name, "arch2rtl_prefill.json", _json(handoff["arch2rtl_prefill"]))
+    return {"system_architecture_to_rtl_handoff": handoff, "status": "ok"}
