@@ -57,3 +57,17 @@ def test_help_ask_answers_cursor_and_vscode_questions():
     data = response.json()
     assert data["sources"][0]["slug"] == "cursor-vscode"
     assert "CLI" in data["answer"]
+
+
+def test_help_ask_answers_studio_arrange_questions():
+    response = _client().post(
+        "/help/ask",
+        headers=_auth(),
+        json={"question": "How do I arrange a crowded Studio canvas and understand the arrows?"},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["sources"][0]["slug"] == "studio-workflows"
+    assert "arranging" in data["answer"]
+    assert "OUT port" in data["answer"]
