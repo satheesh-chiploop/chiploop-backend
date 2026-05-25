@@ -413,6 +413,15 @@ for idx, cpu in enumerate(cpus):
     process = Process(pid=100 + idx)
     process.cmd = [binary]
     cpu.workload = process
+    cpu.createInterruptController()
+    if cpu.interrupts:
+        interrupt = cpu.interrupts[0]
+        if hasattr(interrupt, "pio"):
+            interrupt.pio = system.membus.mem_side_ports
+        if hasattr(interrupt, "int_requestor"):
+            interrupt.int_requestor = system.membus.cpu_side_ports
+        if hasattr(interrupt, "int_responder"):
+            interrupt.int_responder = system.membus.mem_side_ports
     cpu.createThreads()
 
 root = Root(full_system=False, system=system)

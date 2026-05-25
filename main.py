@@ -1259,7 +1259,9 @@ def _run_nodes_with_shared_state(
         except Exception as e:
             append_log_workflow(workflow_id, f"❌ {label} failed: {type(e).__name__}: {e}")
             append_log_run(run_id, f"❌ {label} failed: {type(e).__name__}: {e}")
-            # continue (do not crash whole app run)
+            if shared_state.get("_fail_fast_on_agent_error"):
+                raise
+            # Continue for legacy workflows that preserve best-effort execution.
 def _has_bench_schematic(bench_id: str) -> bool:
     try:
         rows = (
@@ -5350,6 +5352,10 @@ def execute_system_app_background(
             "artifact_dir": artifact_dir,
             "supabase_client": supabase,
             "user_id": user_id,
+            "_fail_fast_on_agent_error": template_workflow_name in {
+                "System_Architecture_Explorer",
+                "System_Architecture_to_RTL_Delivery",
+            },
         }
 
         # ---------------------------------------------------------
