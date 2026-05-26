@@ -93,7 +93,7 @@ HELP_TOPICS = [
             "Studio shows prebuilt workflows and user-created workflows. Prebuilt workflows open on an arranged canvas, and connections show direction with arrowheads from each agent OUT port to the next agent IN port.",
             "Use the planner when the workflow needs a new agent or a different execution graph.",
             "The main Studio building blocks are workflows, agents, design intent, and integrations. A workflow connects agents into an execution path. Agents perform scoped engineering tasks. Design intent records reusable requirements, constraints, and assumptions that should guide generation and review.",
-            "Canvas controls support Auto-connect dropped agents, Delete selected edge, and Arrange. Use Arrange after adding or moving agents to reflow crowded canvases into readable left-to-right rows.",
+            "Canvas controls support Auto-connect dropped agents, Delete selected edge, and Arrange. Use Arrange after adding or moving agents to reflow crowded canvases into readable left-to-right rows; wide canvases use more columns while compact canvases keep connections spaced clearly.",
             "The Studio plan and credit banner shows the current plan, trial status when applicable, and available credits before a workflow is run.",
             "Step 1: Go to Home -> Studio and choose a prebuilt workflow or create a new workflow.",
             "Step 2: Review the nodes and follow the arrow direction from OUT to IN so you know which agents run and what each handoff artifact should be.",
