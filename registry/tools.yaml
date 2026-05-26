@@ -66,6 +66,12 @@
       "description": "Git CLI for handoff and packaging flows when needed.",
       "kind": "external_tool",
       "optional": true
+    },
+    {
+      "name": "gem5",
+      "description": "gem5 simulator used by System Architecture workflows for X86 and RISC-V design-space exploration.",
+      "kind": "external_tool",
+      "optional": false
     }
   ]
 }

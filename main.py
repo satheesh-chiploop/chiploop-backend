@@ -885,8 +885,7 @@ def _linear_workflow_definition(agent_names: List[str]) -> Dict[str, Any]:
     return {"nodes": nodes, "edges": edges}
 
 
-LOCAL_PREBUILT_WORKFLOW_DEFINITIONS: Dict[str, Dict[str, Any]] = {
-    "System_Architecture_Explorer": _linear_workflow_definition([
+SYSTEM_ARCHITECTURE_EXPLORER_DEFINITION = _linear_workflow_definition([
         "System Architecture Intent Agent",
         "System Workload Characterization Agent",
         "System gem5 Config Agent",
@@ -898,7 +897,14 @@ LOCAL_PREBUILT_WORKFLOW_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         "System PPA Tradeoff Agent",
         "System Visualization Agent",
         "System Architecture Report Agent",
-    ]),
+])
+
+LOCAL_PREBUILT_WORKFLOW_DEFINITIONS: Dict[str, Dict[str, Any]] = {
+    "System_Architecture_Explorer": SYSTEM_ARCHITECTURE_EXPLORER_DEFINITION,
+    "System_Cache_Tuning": SYSTEM_ARCHITECTURE_EXPLORER_DEFINITION,
+    "System_ISA_Compare": SYSTEM_ARCHITECTURE_EXPLORER_DEFINITION,
+    "System_Memory_Bottleneck": SYSTEM_ARCHITECTURE_EXPLORER_DEFINITION,
+    "System_CPU_Model": SYSTEM_ARCHITECTURE_EXPLORER_DEFINITION,
 }
 
 # Dynamically load user-created agents as modules under `agents/` (optional)
@@ -5354,6 +5360,10 @@ def execute_system_app_background(
             "user_id": user_id,
             "_fail_fast_on_agent_error": template_workflow_name in {
                 "System_Architecture_Explorer",
+                "System_Cache_Tuning",
+                "System_ISA_Compare",
+                "System_Memory_Bottleneck",
+                "System_CPU_Model",
                 "System_Architecture_to_RTL_Delivery",
             },
         }

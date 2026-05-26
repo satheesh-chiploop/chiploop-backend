@@ -42,6 +42,7 @@ HELP_TOPICS = [
             "System Architecture Explorer is a System Loop app family for no-code gem5 exploration. The startup demo uses matrix multiplication and cache sweeps, then shows PPA charts after the workflow completes.",
             "The app is run-driven like Arch2RTL: choose settings, click Run, wait for completion, then inspect charts, sweep tables, downloads, and Ask This Run.",
             "The current supported app entry points are System Architecture Explorer, System Cache Tuning, System ISA Compare, System Memory Bottleneck, and System CPU Model.",
+            "Each System Architecture app is also available as a prebuilt workflow in Studio, where users can inspect the shared gem5 agent pipeline or adapt it into a larger System Loop workflow.",
             "ChipLoop supports gem5-backed X86 and RISC-V exploration for the current MVP. Users only choose workload and architecture settings in the app.",
             "Step 1: Open Apps and choose System Architecture Explorer or one of the focused System apps.",
             "Step 2: Review the prefilled workload and architecture settings. For the demo, matrix_multiply is already selected.",
