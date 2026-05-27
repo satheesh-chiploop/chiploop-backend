@@ -44,6 +44,29 @@ def _first_download(client, paths: List[str]) -> tuple[str, bytes]:
     return "", b""
 
 
+def _list_storage_folder(client: Any, folder: str) -> List[str]:
+    try:
+        entries = client.storage.from_(ARTIFACT_BUCKET).list(folder) or []
+    except Exception:
+        return []
+    paths: List[str] = []
+    for entry in entries:
+        name = entry.get("name") if isinstance(entry, dict) else None
+        if name:
+            paths.append(f"{folder.rstrip('/')}/{name}")
+    return paths
+
+
+def _first_local(workflow_id: str, subdir: str, suffixes: tuple[str, ...]) -> tuple[str, bytes]:
+    base = Path("backend") / "workflows" / workflow_id / subdir
+    if not base.exists():
+        return "", b""
+    for path in sorted(base.rglob("*")):
+        if path.is_file() and path.name.lower().endswith(suffixes):
+            return str(path.resolve()), path.read_bytes()
+    return "", b""
+
+
 def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     source_workflow_id = str(state.get("from_workflow_id") or state.get("source_digital_workflow_id") or "").strip()
     if not source_workflow_id:
@@ -66,9 +89,11 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     source_row = response.data or {}
     indexed_paths = _storage_paths(source_row.get("artifacts") or {})
     prefix = f"backend/workflows/{source_workflow_id}"
+    stored_rtl_paths = _list_storage_folder(client, f"{prefix}/rtl")
+    stored_digital_paths = _list_storage_folder(client, f"{prefix}/digital")
 
     rtl_candidates = [
-        path for path in indexed_paths
+        path for path in indexed_paths + stored_rtl_paths
         if path.lower().endswith((".sv", ".v")) and "/rtl/" in path.replace("\\", "/").lower()
     ]
     if requested_top:
@@ -77,13 +102,17 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
             f"{prefix}/rtl/{requested_top}.v",
         ])
     regmap_candidates = [
-        path for path in indexed_paths
+        path for path in indexed_paths + stored_digital_paths
         if path.lower().endswith("digital_regmap.json")
     ]
     regmap_candidates.append(f"{prefix}/digital/digital_regmap.json")
 
     rtl_source_path, rtl_raw = _first_download(client, list(dict.fromkeys(rtl_candidates)))
     regmap_source_path, regmap_raw = _first_download(client, list(dict.fromkeys(regmap_candidates)))
+    if not rtl_raw:
+        rtl_source_path, rtl_raw = _first_local(source_workflow_id, "rtl", (".sv", ".v"))
+    if not regmap_raw:
+        regmap_source_path, regmap_raw = _first_local(source_workflow_id, "", ("digital_regmap.json",))
     if not rtl_raw:
         raise RuntimeError(f"No generated RTL artifact found in Arch2RTL workflow {source_workflow_id}")
     if not regmap_raw:

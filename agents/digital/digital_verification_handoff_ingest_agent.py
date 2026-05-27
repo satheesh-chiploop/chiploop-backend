@@ -44,6 +44,29 @@ def _first_download(client: Any, candidates: List[str]) -> tuple[str, bytes]:
     return "", b""
 
 
+def _list_storage_folder(client: Any, folder: str) -> List[str]:
+    try:
+        entries = client.storage.from_(ARTIFACT_BUCKET).list(folder) or []
+    except Exception:
+        return []
+    paths: List[str] = []
+    for entry in entries:
+        name = entry.get("name") if isinstance(entry, dict) else None
+        if name:
+            paths.append(f"{folder.rstrip('/')}/{name}")
+    return paths
+
+
+def _first_local(workflow_id: str, subdir: str, suffixes: tuple[str, ...]) -> tuple[str, bytes]:
+    base = Path("backend") / "workflows" / workflow_id / subdir
+    if not base.exists():
+        return "", b""
+    for path in sorted(base.rglob("*")):
+        if path.is_file() and path.name.lower().endswith(suffixes):
+            return str(path.resolve()), path.read_bytes()
+    return "", b""
+
+
 def _top_module(spec: Dict[str, Any], rtl_path: str) -> str:
     hierarchy = spec.get("hierarchy")
     if isinstance(hierarchy, dict):
@@ -83,25 +106,32 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     source_row = source_response.data or {}
     indexed_paths = _storage_paths(source_row.get("artifacts") or {})
     prefix = f"backend/workflows/{source_workflow_id}"
+    stored_spec_paths = _list_storage_folder(client, f"{prefix}/spec")
+    stored_rtl_paths = _list_storage_folder(client, f"{prefix}/rtl")
 
     spec_candidates = [
-        path for path in indexed_paths
+        path for path in indexed_paths + stored_spec_paths
         if path.lower().endswith("_spec.json") and "/spec/" in path.lower()
     ]
     spec_candidates.extend([
-        path for path in indexed_paths
+        path for path in indexed_paths + stored_spec_paths
         if path.lower().endswith("_spec.json")
     ])
     spec_source_path, spec_raw = _first_download(client, spec_candidates)
     if not spec_raw:
-        raise RuntimeError(f"No generated digital spec artifact found in Arch2RTL workflow {source_workflow_id}")
+        spec_source_path, spec_raw = _first_local(source_workflow_id, "spec", ("_spec.json",))
+    if not spec_raw:
+        raise RuntimeError(
+            f"No generated digital spec artifact found in Arch2RTL workflow {source_workflow_id}. "
+            "Run Arch2RTL again after deploying the current backend if this is an older workflow."
+        )
     try:
         spec = json.loads(spec_raw.decode("utf-8"))
     except Exception as exc:
         raise RuntimeError(f"Imported Arch2RTL digital spec is invalid JSON: {exc}") from exc
 
     rtl_candidates = [
-        path for path in indexed_paths
+        path for path in indexed_paths + stored_rtl_paths
         if path.lower().endswith((".sv", ".v")) and "/rtl/" in path.lower()
     ]
     rtl_files: List[str] = []
@@ -118,6 +148,17 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
             workflow_id, AGENT_NAME, "verification/handoff/rtl", rtl_name,
             raw.decode("utf-8", errors="replace"),
         )
+    if not rtl_files:
+        local_rtl_path, local_rtl_raw = _first_local(source_workflow_id, "rtl", (".sv", ".v"))
+        if local_rtl_raw:
+            rtl_name = os.path.basename(local_rtl_path)
+            local_rtl = _write_local(workflow_dir, f"handoff/rtl/{rtl_name}", local_rtl_raw)
+            rtl_files.append(local_rtl)
+            imported_rtl_paths.append(local_rtl_path)
+            save_text_artifact_and_record(
+                workflow_id, AGENT_NAME, "verification/handoff/rtl", rtl_name,
+                local_rtl_raw.decode("utf-8", errors="replace"),
+            )
     if not rtl_files:
         raise RuntimeError(f"No generated RTL artifact found in Arch2RTL workflow {source_workflow_id}")
 

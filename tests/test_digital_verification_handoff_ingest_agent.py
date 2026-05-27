@@ -39,6 +39,15 @@ class _Storage:
             raise FileNotFoundError(path)
         return self._files[path]
 
+    def list(self, folder):
+        prefix = folder.rstrip("/") + "/"
+        names = {
+            path[len(prefix):].split("/", 1)[0]
+            for path in self._files
+            if path.startswith(prefix)
+        }
+        return [{"name": name} for name in sorted(names)]
+
 
 class _StorageClient:
     def __init__(self, files):
@@ -82,6 +91,28 @@ def test_imports_arch2rtl_spec_and_rtl_for_verify(tmp_path, monkeypatch):
     assert [Path(path).name for path in result["rtl_files"]] == ["pwm_controller.sv"]
     assert result["verification_source_handoff"]["source_workflow_id"] == "source-wf"
     assert len(uploads) == 3
+
+
+def test_imports_from_storage_when_workflow_index_has_lost_spec_path(tmp_path, monkeypatch):
+    spec_path = "backend/workflows/source-wf/spec/pwm_controller_spec.json"
+    rtl_path = "backend/workflows/source-wf/rtl/pwm_controller.sv"
+    files = {
+        spec_path: json.dumps({"name": "pwm_controller", "rtl_output_file": "pwm_controller.sv", "ports": []}).encode(),
+        rtl_path: b"module pwm_controller; endmodule\n",
+    }
+    monkeypatch.setattr(agent, "save_text_artifact_and_record", lambda *args, **kwargs: None)
+    state = {
+        "workflow_id": "verify-wf",
+        "workflow_dir": str(tmp_path),
+        "rtl_source_mode": "from_arch2rtl",
+        "from_workflow_id": "source-wf",
+        "supabase_client": _Client({"__mode": "prefix", "__prefix": "backend/workflows/source-wf/"}, files),
+    }
+
+    result = agent.run_agent(state)
+
+    assert result["verification_source_handoff"]["spec_source_path"] == spec_path
+    assert result["verification_source_handoff"]["rtl_source_paths"] == [rtl_path]
 
 
 def test_rejects_verify_run_without_arch2rtl_source():
