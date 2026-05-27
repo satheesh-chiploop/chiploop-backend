@@ -44,9 +44,9 @@ OUTPUT REQUIREMENTS:
   - set -euo pipefail
   - DO NOT hardcode RTL paths like ./rtl or specific filenames unless provided in USER SPEC/TOOLCHAIN.
   - Use placeholders and environment overrides:
-    RTL_TOP=${RTL_TOP:-<RTL_TOP>}
-    RTL_DIR=${RTL_DIR:-<RTL_DIR>}
-    FILELIST=${FILELIST:-<FILELIST>}
+    RTL_TOP=${{RTL_TOP:-<RTL_TOP>}}
+    RTL_DIR=${{RTL_DIR:-<RTL_DIR>}}
+    FILELIST=${{FILELIST:-<FILELIST>}}
   - Prefer calling commands described in firmware/validate/verilator_build.md when present.
   - run cocotb via pytest (pytest -q ...)
   - write outputs under firmware/validate/

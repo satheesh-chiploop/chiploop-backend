@@ -5,7 +5,7 @@ from utils.artifact_utils import save_text_artifact_and_record
 
 PORTKEY_API_KEY = os.getenv("PORTKEY_API_KEY")
 client_portkey = Portkey(api_key=PORTKEY_API_KEY) if PORTKEY_API_KEY else None
-client_openai = OpenAI()
+client_openai = None
 
 def get_embedded_model() -> str:
     return (
@@ -16,6 +16,7 @@ def get_embedded_model() -> str:
     )
 
 def llm_chat(prompt: str, system: str = "") -> str:
+    global client_openai
     model = get_embedded_model()
     messages = []
     if system:
@@ -31,6 +32,8 @@ def llm_chat(prompt: str, system: str = "") -> str:
         )
         return (resp.choices[0].message.content or "").strip()
 
+    if client_openai is None:
+        client_openai = OpenAI()
     resp = client_openai.chat.completions.create(
         model=model,
         messages=messages,
@@ -130,5 +133,4 @@ def strip_outer_markdown_fences(content: str) -> str:
         return "\n".join(lines).strip()
 
     return content
-
 
