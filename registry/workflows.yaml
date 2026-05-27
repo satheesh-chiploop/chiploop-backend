@@ -57,7 +57,8 @@
         "Digital Testbench Agent",
         "Digital Testbench Generator Agent",
         "Digital Testcase Agent",
-        "Digital Top Assembly Agent"
+        "Digital Top Assembly Agent",
+        "Digital Verification Handoff Ingest Agent"
       ],
       "hooks": [
         "pre_run_validate_inputs",

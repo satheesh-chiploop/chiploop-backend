@@ -66,6 +66,13 @@ AGENT_CAPABILITIES = {
         "description": "Validates and compiles generated Verilog RTL against the spec; provides lint feedback and summary.",
     },
 
+    "Digital Verification Handoff Ingest Agent": {
+        "domain": "digital",
+        "inputs": ["from_workflow_id"],
+        "outputs": ["verification/handoff/verification_source_handoff.json", "verification/handoff/spec/*_spec.json", "verification/handoff/rtl/*.sv"],
+        "description": "Imports generated digital spec and RTL artifacts from a completed Arch2RTL workflow for downstream verification execution.",
+    },
+
     # -------------------------
     # DIGITAL: RTL Quality & Correctness
     # -------------------------

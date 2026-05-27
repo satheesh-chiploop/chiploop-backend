@@ -437,6 +437,7 @@ from agents.digital.digital_tapeout_agent import run_agent as digital_tapeout_ag
 from agents.digital.digital_executive_summary_agent import run_agent as digital_executive_summary_agent
 from agents.digital.digital_simulation_execution_agent import run_agent as digital_simulation_execution_agent
 from agents.digital.digital_simulation_summary_coverage_agent import run_agent as digital_simulation_summary_coverage_agent
+from agents.digital.digital_verification_handoff_ingest_agent import run_agent as digital_verification_handoff_ingest_agent
 
 DIGITAL_AGENT_FUNCTIONS: Dict[str, Any] = {
     "Digital Spec Agent": digital_spec_agent,
@@ -465,6 +466,7 @@ DIGITAL_AGENT_FUNCTIONS: Dict[str, Any] = {
     "Digital Simulation Control Agent": digital_simulation_control_agent,
     "Digital Simulation Execution Agent": digital_simulation_execution_agent,
     "Digital Simulation Summary Coverage Agent": digital_simulation_summary_coverage_agent,
+    "Digital Verification Handoff Ingest Agent": digital_verification_handoff_ingest_agent,
     "Digital Bug Localization Agent": digital_bug_localization_agent,
     "Digital Formal Verification Agent": digital_formal_verification_agent,
     "Digital Synthesis Readiness Agent": digital_synthesis_readiness_agent,
@@ -718,6 +720,7 @@ SYSTEM_AGENT_FUNCTIONS: Dict[str,Any] = {
     "Digital Simulation Control Agent": digital_simulation_control_agent,
     "Digital Simulation Execution Agent": digital_simulation_execution_agent,
     "Digital Simulation Summary Coverage Agent": digital_simulation_summary_coverage_agent,
+    "Digital Verification Handoff Ingest Agent": digital_verification_handoff_ingest_agent,
     "Digital Bug Localization Agent": digital_bug_localization_agent,
     "Digital Formal Verification Agent": digital_formal_verification_agent,   
     "Digital Synthesis Readiness Agent": digital_synthesis_readiness_agent,
@@ -912,8 +915,7 @@ DIGITAL_ARCH2RTL_DEFINITION = _linear_workflow_definition([
 ])
 
 DIGITAL_VERIFY_DEFINITION = _linear_workflow_definition([
-    "Digital Spec Agent",
-    "Digital RTL Agent",
+    "Digital Verification Handoff Ingest Agent",
     "Digital Testbench Generator Agent",
     "Digital Assertions (SVA) Agent",
     "Digital Simulation Control Agent",
@@ -1114,7 +1116,11 @@ def _require_user_id(request: Request) -> str:
 from typing import Tuple
 
 
-def _load_workflow_def_by_name(name: str, user_id: Optional[str]) -> Dict[str, Any]:
+def _load_workflow_def_by_name(
+    name: str,
+    user_id: Optional[str],
+    force_platform_definition: bool = False,
+) -> Dict[str, Any]:
     """
       Loads workflow template from public.workflows by exact name.
       Prefer user-owned workflow if present; fallback to global prebuilt.
@@ -1128,6 +1134,9 @@ def _load_workflow_def_by_name(name: str, user_id: Optional[str]) -> Dict[str, A
               "nodes": (defn.get("nodes") if isinstance(defn, dict) else None) or row.get("nodes") or [],
               "edges": (defn.get("edges") if isinstance(defn, dict) else None) or row.get("edges") or [],
         }
+
+    if force_platform_definition and name in LOCAL_RUNTIME_WORKFLOW_OVERRIDES:
+        return LOCAL_PREBUILT_WORKFLOW_DEFINITIONS[name]
 
     # 1) User-owned custom workflow.
     if user_id:
@@ -2475,6 +2484,8 @@ def execute_digital_app_background(
         # Normalize spec fields (Arch2RTL agents often expect state["spec"])
         if shared_state.get("spec_text"):
             shared_state["spec"] = shared_state["spec_text"]
+        if app_name == "verify":
+            shared_state["_fail_fast_on_agent_error"] = True
 
         append_log_workflow(workflow_id, f"🚀 Starting Digital App: {app_name}", phase="start")
         append_log_run(run_id, f"🚀 Starting Digital App: {app_name}")
@@ -2483,7 +2494,11 @@ def execute_digital_app_background(
         append_log_run(run_id, f"▶️ Loading Studio workflow: {template_workflow_name}")
 
         # Load Studio prebuilt workflow and convert to executor nodes
-        defn = _load_workflow_def_by_name(template_workflow_name, user_id=user_id)
+        defn = _load_workflow_def_by_name(
+            template_workflow_name,
+            user_id=user_id,
+            force_platform_definition=True,
+        )
         nodes = _definition_to_executor_nodes(defn)
 
         # Run nodes (loop_type="digital" so it uses DIGITAL_AGENT_FUNCTIONS)
@@ -5116,7 +5131,11 @@ def execute_analog_app_background(
         append_log_workflow(workflow_id, f"▶️ Phase: {template_workflow_name}", phase="start")
         append_log_run(run_id, f"▶️ Phase: {template_workflow_name}")
 
-        defn = _load_workflow_def_by_name(template_workflow_name, user_id=user_id)
+        defn = _load_workflow_def_by_name(
+            template_workflow_name,
+            user_id=user_id,
+            force_platform_definition=True,
+        )
         nodes = _definition_to_executor_nodes(defn)
 
         _run_nodes_with_shared_state(
@@ -5275,7 +5294,11 @@ def execute_embedded_app_background(
         append_log_workflow(workflow_id, f"▶️ Phase: {template_workflow_name}", phase="start")
         append_log_run(run_id, f"▶️ Phase: {template_workflow_name}")
 
-        defn = _load_workflow_def_by_name(template_workflow_name, user_id=user_id)
+        defn = _load_workflow_def_by_name(
+            template_workflow_name,
+            user_id=user_id,
+            force_platform_definition=True,
+        )
         nodes = _definition_to_executor_nodes(defn)
 
         _run_nodes_with_shared_state(
@@ -5588,7 +5611,11 @@ def execute_system_app_background(
         append_log_run(run_id, f"▶️ Loading Studio workflow: {template_workflow_name}")
 
         # Load Studio workflow and resolve nodes exactly like digital/embedded/validation style
-        defn = _load_workflow_def_by_name(template_workflow_name, user_id=user_id)
+        defn = _load_workflow_def_by_name(
+            template_workflow_name,
+            user_id=user_id,
+            force_platform_definition=True,
+        )
         nodes = _definition_to_executor_nodes(defn)
 
         # Execute using system loop map

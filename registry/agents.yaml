@@ -1915,6 +1915,51 @@
       }
     },
     {
+      "name": "Digital Verification Handoff Ingest Agent",
+      "loop_type": "digital",
+      "domain": "digital",
+      "description": "Imports generated digital spec and RTL artifacts from a completed Arch2RTL workflow for downstream verification execution.",
+      "entrypoint": "agents.digital.digital_verification_handoff_ingest_agent:run_agent",
+      "execution_mode": "legacy_adapter",
+      "inputs": [
+        "from_workflow_id"
+      ],
+      "outputs": [
+        "verification/handoff/verification_source_handoff.json",
+        "verification/handoff/spec/*_spec.json",
+        "verification/handoff/rtl/*.sv"
+      ],
+      "artifact_paths": [
+        "verification/handoff/verification_source_handoff.json",
+        "verification/handoff/spec/*_spec.json",
+        "verification/handoff/rtl/*.sv"
+      ],
+      "artifact_types": [
+        "structured_data",
+        "rtl"
+      ],
+      "required_skills": [
+        "artifact_publish"
+      ],
+      "required_tools": [
+        "python",
+        "supabase"
+      ],
+      "hooks": [
+        "pre_run_validate_inputs",
+        "post_run_collect_artifacts",
+        "post_run_update_state",
+        "on_failure_capture_traceback",
+        "on_failure_preserve_logs",
+        "artifact_publish_to_supabase"
+      ],
+      "metadata": {
+        "registry_source": "DIGITAL_AGENT_FUNCTIONS",
+        "variable": "digital_verification_handoff_ingest_agent",
+        "studio_contract_version": "v1"
+      }
+    },
+    {
       "name": "Digital RTL Agent",
       "loop_type": "digital",
       "domain": "digital",

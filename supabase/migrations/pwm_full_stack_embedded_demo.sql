@@ -120,21 +120,19 @@ where workflow.name = 'Digital_Arch2RTL'
 update public.workflows as workflow
 set definitions = jsonb_build_object(
       'nodes', jsonb_build_array(
-        jsonb_build_object('id','n1','type','agentNode','position',jsonb_build_object('x',80,'y',160),'data',jsonb_build_object('uiLabel','Digital Spec','backendLabel','Digital Spec Agent')),
-        jsonb_build_object('id','n2','type','agentNode','position',jsonb_build_object('x',320,'y',160),'data',jsonb_build_object('uiLabel','Digital RTL','backendLabel','Digital RTL Agent')),
-        jsonb_build_object('id','n3','type','agentNode','position',jsonb_build_object('x',560,'y',160),'data',jsonb_build_object('uiLabel','Testbench Generator','backendLabel','Digital Testbench Generator Agent')),
-        jsonb_build_object('id','n4','type','agentNode','position',jsonb_build_object('x',800,'y',160),'data',jsonb_build_object('uiLabel','Assertions','backendLabel','Digital Assertions (SVA) Agent')),
-        jsonb_build_object('id','n5','type','agentNode','position',jsonb_build_object('x',1040,'y',160),'data',jsonb_build_object('uiLabel','Simulation Control','backendLabel','Digital Simulation Control Agent')),
-        jsonb_build_object('id','n6','type','agentNode','position',jsonb_build_object('x',1280,'y',160),'data',jsonb_build_object('uiLabel','Simulation Execution','backendLabel','Digital Simulation Execution Agent')),
-        jsonb_build_object('id','n7','type','agentNode','position',jsonb_build_object('x',1520,'y',160),'data',jsonb_build_object('uiLabel','Summary Coverage','backendLabel','Digital Simulation Summary Coverage Agent'))
+        jsonb_build_object('id','n1','type','agentNode','position',jsonb_build_object('x',80,'y',160),'data',jsonb_build_object('uiLabel','RTL Handoff Ingest','backendLabel','Digital Verification Handoff Ingest Agent')),
+        jsonb_build_object('id','n2','type','agentNode','position',jsonb_build_object('x',320,'y',160),'data',jsonb_build_object('uiLabel','Testbench Generator','backendLabel','Digital Testbench Generator Agent')),
+        jsonb_build_object('id','n3','type','agentNode','position',jsonb_build_object('x',560,'y',160),'data',jsonb_build_object('uiLabel','Assertions','backendLabel','Digital Assertions (SVA) Agent')),
+        jsonb_build_object('id','n4','type','agentNode','position',jsonb_build_object('x',800,'y',160),'data',jsonb_build_object('uiLabel','Simulation Control','backendLabel','Digital Simulation Control Agent')),
+        jsonb_build_object('id','n5','type','agentNode','position',jsonb_build_object('x',1040,'y',160),'data',jsonb_build_object('uiLabel','Simulation Execution','backendLabel','Digital Simulation Execution Agent')),
+        jsonb_build_object('id','n6','type','agentNode','position',jsonb_build_object('x',1280,'y',160),'data',jsonb_build_object('uiLabel','Summary Coverage','backendLabel','Digital Simulation Summary Coverage Agent'))
       ),
       'edges', jsonb_build_array(
         jsonb_build_object('id','e1','source','n1','target','n2'),
         jsonb_build_object('id','e2','source','n2','target','n3'),
         jsonb_build_object('id','e3','source','n3','target','n4'),
         jsonb_build_object('id','e4','source','n4','target','n5'),
-        jsonb_build_object('id','e5','source','n5','target','n6'),
-        jsonb_build_object('id','e6','source','n6','target','n7')
+        jsonb_build_object('id','e5','source','n5','target','n6')
       )
     ),
     is_prebuilt = true,
