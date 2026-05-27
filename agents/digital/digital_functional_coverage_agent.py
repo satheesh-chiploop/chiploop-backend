@@ -278,12 +278,12 @@ def _infer_clocks_resets(spec: Dict[str, Any], ports: List[Dict[str, Any]]) -> T
     clocks = list(dict.fromkeys(clocks))
 
     norm_resets: List[Dict[str, Any]] = []
-    nm = str(r.get("name"))
-    is_name_active_low = bool(re.search(r"(rst_n|reset_n|por_n)", nm, re.IGNORECASE))
     for r in resets:
         if isinstance(r, dict) and r.get("name"):
+            nm = str(r.get("name"))
+            is_name_active_low = bool(re.search(r"(rst_n|reset_n|por_n)", nm, re.IGNORECASE))
             rr = {
-                "name": str(r.get("name")),
+                "name": nm,
                 "active_low": bool(
                     r.get("active_low", False)
                     or is_name_active_low
@@ -713,4 +713,3 @@ Reports emitted by CoverageModel:
 
     _log(log_path, f"{agent_name} completed successfully.")
     return state
-

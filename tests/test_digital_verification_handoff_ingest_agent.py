@@ -6,6 +6,7 @@ os.environ.setdefault("SUPABASE_URL", "http://localhost:54321")
 os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-service-role-key")
 
 from agents.digital import digital_verification_handoff_ingest_agent as agent
+from agents.digital.digital_functional_coverage_agent import _infer_clocks_resets
 from agents.digital.digital_simulation_execution_agent import _merge_functional_coverage_summaries
 
 
@@ -201,3 +202,20 @@ def test_functional_coverage_is_aggregated_across_regression_runs():
     assert merged["outputs"]["pwm_out"]["samples"] == 12
     assert merged["functional_coverage_pct"] == 100.0
     assert merged["aggregated_run_count"] == 2
+
+
+def test_functional_coverage_infers_pwm_clock_and_reset_polarity():
+    clocks, resets = _infer_clocks_resets(
+        {},
+        [
+            {"name": "clk", "direction": "input"},
+            {"name": "reset_n", "direction": "input"},
+            {"name": "debug_reset", "direction": "input"},
+        ],
+    )
+
+    assert clocks == ["clk"]
+    assert resets == [
+        {"name": "reset_n", "active_low": True, "async": False},
+        {"name": "debug_reset", "active_low": False, "async": False},
+    ]
