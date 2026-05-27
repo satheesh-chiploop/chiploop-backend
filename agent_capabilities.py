@@ -854,6 +854,16 @@ AGENT_CAPABILITIES = {
 
         # ✅ Embedded Firmware Loop Agents (v2)
 
+    "Embedded Digital RTL Handoff Ingest Agent": {
+        "inputs": ["from_workflow_id", "source_verification_workflow_id(optional)", "top_module(optional)"],
+        "outputs": [
+            "digital/rtl/*.sv",
+            "digital/digital_regmap.json",
+            "system/package/system_rtl_package.json",
+            "firmware/handoff/digital_handoff_ingest.json",
+        ],
+        "description": "Imports Arch2RTL RTL and register-map artifacts into an Embedded firmware run while preserving verification lineage for downstream co-simulation.",
+    },
     "Embedded Firmware Register Extract Agent": {
         "domain": "embedded",
         "inputs": [

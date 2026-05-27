@@ -334,6 +334,38 @@
       ]
     },
     {
+      "name": "Embedded_Run",
+      "loop_type": "embedded",
+      "description": "Prefilled PWM firmware demonstration that imports Arch2RTL RTL and register-map artifacts, generates Rust firmware, evaluates co-simulation readiness/execution, and publishes a System Software handoff.",
+      "agents": [
+        "Embedded Digital RTL Handoff Ingest Agent",
+        "Embedded Firmware Register Extract Agent",
+        "Embedded Rust Register Layer Generator Agent",
+        "Embedded Register Validation Agent",
+        "Embedded Rust Driver Scaffold Agent",
+        "Embedded Interrupt Mapping Agent",
+        "Embedded Firmware Integration Contract Agent",
+        "Embedded ELF Build Agent",
+        "Embedded Verilator Build Agent",
+        "Embedded Cocotb Harness Agent",
+        "Embedded Co Sim Runner Agent",
+        "System Firmware CoSim Execution Agent",
+        "System Firmware Coverage Summary Agent",
+        "Embedded Coverage Collector Agent",
+        "Embedded Validation Report Agent",
+        "Embedded Firmware Executive Summary Agent",
+        "System Software Handoff Package Agent"
+      ],
+      "hooks": [
+        "pre_run_validate_inputs",
+        "post_run_collect_artifacts",
+        "post_run_update_state",
+        "on_failure_capture_traceback",
+        "on_failure_preserve_logs",
+        "artifact_publish_to_supabase"
+      ]
+    },
+    {
       "name": "System_Architecture_Explorer",
       "loop_type": "system",
       "description": "No-code gem5 System Loop workflow for workload/cache design-space exploration with performance, power, area, and chart-ready reports.",

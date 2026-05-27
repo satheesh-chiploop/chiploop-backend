@@ -3806,6 +3806,56 @@
       }
     },
     {
+      "name": "Embedded Digital RTL Handoff Ingest Agent",
+      "loop_type": "embedded",
+      "domain": "firmware",
+      "description": "Imports generated RTL and register-map artifacts from an Arch2RTL workflow for Rust firmware generation and downstream co-simulation lineage.",
+      "entrypoint": "agents.embedded.embedded_digital_handoff_ingest_agent:run_agent",
+      "execution_mode": "legacy_adapter",
+      "inputs": [
+        "from_workflow_id",
+        "source_verification_workflow_id(optional)",
+        "top_module(optional)"
+      ],
+      "outputs": [
+        "digital/rtl/*.sv",
+        "digital/digital_regmap.json",
+        "system/package/system_rtl_package.json",
+        "firmware/handoff/digital_handoff_ingest.json"
+      ],
+      "artifact_paths": [
+        "digital/digital_regmap.json",
+        "system/package/system_rtl_package.json",
+        "firmware/handoff/digital_handoff_ingest.json"
+      ],
+      "artifact_types": [
+        "rtl",
+        "structured_data"
+      ],
+      "required_skills": [
+        "artifact_publish",
+        "firmware_manifest_generation",
+        "register_map_extraction"
+      ],
+      "required_tools": [
+        "python",
+        "supabase"
+      ],
+      "hooks": [
+        "pre_run_validate_inputs",
+        "post_run_collect_artifacts",
+        "post_run_update_state",
+        "on_failure_capture_traceback",
+        "on_failure_preserve_logs",
+        "artifact_publish_to_supabase"
+      ],
+      "metadata": {
+        "registry_source": "EMBEDDED_AGENT_FUNCTIONS",
+        "variable": "embedded_digital_handoff_ingest_agent_run",
+        "studio_contract_version": "v1"
+      }
+    },
+    {
       "name": "Embedded Firmware Register Extract Agent",
       "loop_type": "embedded",
       "domain": "firmware",

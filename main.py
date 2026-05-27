@@ -552,6 +552,7 @@ from agents.embedded.embedded_cocotb_harness_agent import run_agent as embedded_
 from agents.embedded.embedded_co_sim_runner_agent import run_agent as embedded_co_sim_runner_agent_run
 from agents.embedded.embedded_coverage_collector_agent import run_agent as embedded_coverage_collector_agent_run
 from agents.embedded.embedded_validation_report_agent import run_agent as embedded_validation_report_agent_run
+from agents.embedded.embedded_digital_handoff_ingest_agent import run_agent as embedded_digital_handoff_ingest_agent_run
 
 
 EMBEDDED_AGENT_FUNCTIONS: Dict[str, Any] = {
@@ -581,6 +582,7 @@ EMBEDDED_AGENT_FUNCTIONS: Dict[str, Any] = {
     "Embedded Co Sim Runner Agent": embedded_co_sim_runner_agent_run,
     "Embedded Coverage Collector Agent": embedded_coverage_collector_agent_run,
     "Embedded Validation Report Agent": embedded_validation_report_agent_run,
+    "Embedded Digital RTL Handoff Ingest Agent": embedded_digital_handoff_ingest_agent_run,
 }
 
 from agents.validation.validation_instrument_setup_agent import run_agent as validation_instrument_setup_agent
@@ -899,12 +901,85 @@ SYSTEM_ARCHITECTURE_EXPLORER_DEFINITION = _linear_workflow_definition([
         "System Architecture Report Agent",
 ])
 
+DIGITAL_ARCH2RTL_DEFINITION = _linear_workflow_definition([
+    "Digital Spec Agent",
+    "Digital Architecture Agent",
+    "Digital Microarchitecture Agent",
+    "Digital Register Map Agent",
+    "Digital RTL Agent",
+    "Digital Power Intent (UPF-lite) Agent",
+    "Digital IP Packaging & Handoff Agent",
+])
+
+DIGITAL_VERIFY_DEFINITION = _linear_workflow_definition([
+    "Digital Spec Agent",
+    "Digital RTL Agent",
+    "Digital Testbench Generator Agent",
+    "Digital Assertions (SVA) Agent",
+    "Digital Simulation Control Agent",
+    "Digital Simulation Execution Agent",
+    "Digital Simulation Summary Coverage Agent",
+])
+
+EMBEDDED_RUN_DEFINITION = _linear_workflow_definition([
+    "Embedded Digital RTL Handoff Ingest Agent",
+    "Embedded Firmware Register Extract Agent",
+    "Embedded Rust Register Layer Generator Agent",
+    "Embedded Register Validation Agent",
+    "Embedded Rust Driver Scaffold Agent",
+    "Embedded Interrupt Mapping Agent",
+    "Embedded Firmware Integration Contract Agent",
+    "Embedded ELF Build Agent",
+    "Embedded Verilator Build Agent",
+    "Embedded Cocotb Harness Agent",
+    "Embedded Co Sim Runner Agent",
+    "System Firmware CoSim Execution Agent",
+    "System Firmware Coverage Summary Agent",
+    "Embedded Coverage Collector Agent",
+    "Embedded Validation Report Agent",
+    "Embedded Firmware Executive Summary Agent",
+    "System Software Handoff Package Agent",
+])
+
+SYSTEM_SOFTWARE_DEFINITION = _linear_workflow_definition([
+    "System Software Handoff Ingest Agent",
+    "System Software Capability Model Agent",
+    "System Software API Contract Agent",
+    "System Software SDK Scaffold Agent",
+    "System Software Application Scaffold Agent",
+    "System Software Packaging Agent",
+])
+
+SYSTEM_SOFTWARE_VALIDATION_L2_DEFINITION = _linear_workflow_definition([
+    "System Software Validation Ingest Agent",
+    "System CoSim Ingest Agent",
+    "System CoSim Contract Agent",
+    "System CoSim Scenario Generator Agent",
+    "System Software CoSim Harness Agent",
+    "System Software CoSim Execution Agent",
+    "System Software CoSim Trace Validation Agent",
+    "System Software Validation Summary (L2)",
+])
+
 LOCAL_PREBUILT_WORKFLOW_DEFINITIONS: Dict[str, Dict[str, Any]] = {
+    "Digital_Arch2RTL": DIGITAL_ARCH2RTL_DEFINITION,
+    "Digital_Verify": DIGITAL_VERIFY_DEFINITION,
     "System_Architecture_Explorer": SYSTEM_ARCHITECTURE_EXPLORER_DEFINITION,
     "System_Cache_Tuning": SYSTEM_ARCHITECTURE_EXPLORER_DEFINITION,
     "System_ISA_Compare": SYSTEM_ARCHITECTURE_EXPLORER_DEFINITION,
     "System_Memory_Bottleneck": SYSTEM_ARCHITECTURE_EXPLORER_DEFINITION,
     "System_CPU_Model": SYSTEM_ARCHITECTURE_EXPLORER_DEFINITION,
+    "Embedded_Run": EMBEDDED_RUN_DEFINITION,
+    "System_Software": SYSTEM_SOFTWARE_DEFINITION,
+    "System_Software_Validation_L2": SYSTEM_SOFTWARE_VALIDATION_L2_DEFINITION,
+}
+
+LOCAL_RUNTIME_WORKFLOW_OVERRIDES = {
+    "Digital_Arch2RTL",
+    "Digital_Verify",
+    "Embedded_Run",
+    "System_Software",
+    "System_Software_Validation_L2",
 }
 
 # Dynamically load user-created agents as modules under `agents/` (optional)
@@ -1067,6 +1142,11 @@ def _load_workflow_def_by_name(name: str, user_id: Optional[str]) -> Dict[str, A
         )
         if r.data:
             return unpack(r.data[0])
+
+    # Platform-owned runtime overrides keep shipped app execution in sync with
+    # executable agent registrations even if an older global template remains.
+    if name in LOCAL_RUNTIME_WORKFLOW_OVERRIDES:
+        return LOCAL_PREBUILT_WORKFLOW_DEFINITIONS[name]
 
     # 2) Global prebuilt workflow. user_id is intentionally ignored.
     r2 = (
@@ -2918,6 +2998,47 @@ def download_artifact(workflow_id: str, rel_path: str):
     if not requested.exists() or not requested.is_file():
         raise HTTPException(status_code=404, detail="file not found")
     return FileResponse(str(requested))
+
+@app.get("/apps/dashboard/artifact/{workflow_id}")
+def dashboard_json_artifact(workflow_id: str, filename: str = Query(..., min_length=1, max_length=160)):
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+\.json", filename):
+        raise HTTPException(status_code=400, detail="invalid artifact filename")
+
+    local_base = _artifacts_dir_for_workflow(workflow_id)
+    if local_base.exists():
+        for path in local_base.rglob(filename):
+            if path.is_file():
+                try:
+                    return JSONResponse(json.loads(path.read_text(encoding="utf-8")))
+                except Exception:
+                    continue
+
+    prefix = f"backend/workflows/{workflow_id}/"
+
+    def find_storage_file(path_prefix: str) -> Optional[str]:
+        entries = supabase.storage.from_(ARTIFACT_BUCKET).list(path_prefix) or []
+        for entry in entries:
+            name = entry.get("name")
+            if not name:
+                continue
+            full_path = f"{path_prefix}{name}"
+            if name == filename:
+                return full_path
+            metadata = entry.get("metadata") or {}
+            if not metadata.get("mimetype"):
+                found = find_storage_file(full_path + "/")
+                if found:
+                    return found
+        return None
+
+    storage_path = find_storage_file(prefix)
+    if not storage_path:
+        raise HTTPException(status_code=404, detail=f"artifact not found: {filename}")
+    try:
+        raw = supabase.storage.from_(ARTIFACT_BUCKET).download(storage_path)
+        return JSONResponse(json.loads(raw.decode("utf-8")))
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"failed to load artifact: {filename}") from exc
 
 @app.get("/list_agents")
 async def list_agents():
@@ -5108,6 +5229,10 @@ class EmbeddedAppIn(BaseModel):
     toolchain: Dict[str, str] = Field(default_factory=dict)
     toggles: Optional[Dict[str, bool]] = None
     from_workflow_id: Optional[str] = None
+    from_run_id: Optional[str] = None
+    source_verification_workflow_id: Optional[str] = None
+    source_verification_run_id: Optional[str] = None
+    top_module: Optional[str] = None
 
 
 def execute_embedded_app_background(
@@ -5143,6 +5268,9 @@ def execute_embedded_app_background(
         # Ensure toolchain dict exists even if UI sends nothing
         if not isinstance(shared_state.get("toolchain"), dict):
             shared_state["toolchain"] = {}
+        toggles = shared_state.get("toggles") or {}
+        if template_workflow_name == "Embedded_Run" and bool(toggles.get("enable_cosim")):
+            shared_state["execute_cosim"] = True
 
         append_log_workflow(workflow_id, f"▶️ Phase: {template_workflow_name}", phase="start")
         append_log_run(run_id, f"▶️ Phase: {template_workflow_name}")
@@ -5153,7 +5281,7 @@ def execute_embedded_app_background(
         _run_nodes_with_shared_state(
             workflow_id=workflow_id,
             run_id=run_id,
-            loop_type="embedded",
+            loop_type="system" if template_workflow_name == "Embedded_Run" else "embedded",
             nodes=nodes,
             shared_state=shared_state,
         )
