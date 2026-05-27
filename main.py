@@ -916,6 +916,7 @@ DIGITAL_ARCH2RTL_DEFINITION = _linear_workflow_definition([
 
 DIGITAL_VERIFY_DEFINITION = _linear_workflow_definition([
     "Digital Verification Handoff Ingest Agent",
+    "Digital Functional Coverage Agent",
     "Digital Testbench Generator Agent",
     "Digital Assertions (SVA) Agent",
     "Digital Simulation Control Agent",

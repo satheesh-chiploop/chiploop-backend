@@ -6,6 +6,7 @@ os.environ.setdefault("SUPABASE_URL", "http://localhost:54321")
 os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-service-role-key")
 
 from agents.digital import digital_verification_handoff_ingest_agent as agent
+from agents.digital.digital_simulation_execution_agent import _merge_functional_coverage_summaries
 
 
 class _Response:
@@ -122,3 +123,23 @@ def test_rejects_verify_run_without_arch2rtl_source():
         assert "completed Arch2RTL workflow source" in str(exc)
     else:
         raise AssertionError("Expected Verify source validation failure")
+
+
+def test_functional_coverage_is_aggregated_across_regression_runs():
+    merged = _merge_functional_coverage_summaries([
+        {
+            "top_module": "pwm_controller",
+            "outputs": {"pwm_out": {"samples": 5, "seen_values": [0], "total_bins": 2}},
+            "inputs": {},
+        },
+        {
+            "top_module": "pwm_controller",
+            "outputs": {"pwm_out": {"samples": 7, "seen_values": [1], "total_bins": 2}},
+            "inputs": {},
+        },
+    ])
+
+    assert merged["outputs"]["pwm_out"]["seen_values"] == [0, 1]
+    assert merged["outputs"]["pwm_out"]["samples"] == 12
+    assert merged["functional_coverage_pct"] == 100.0
+    assert merged["aggregated_run_count"] == 2

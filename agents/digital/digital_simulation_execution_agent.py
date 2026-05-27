@@ -53,6 +53,52 @@ def _write_file(path: str, content: str) -> None:
         f.write(content)
 
 
+def _merge_functional_coverage_summaries(summaries: list[Dict[str, Any]]) -> Dict[str, Any]:
+    if not summaries:
+        return {}
+    merged: Dict[str, Any] = {
+        "type": "functional_coverage_summary",
+        "top_module": summaries[-1].get("top_module"),
+        "outputs": {},
+        "inputs": {},
+    }
+    total_bins = 0
+    bins_hit = 0
+    for group_name in ("outputs", "inputs"):
+        signal_names = sorted({
+            name
+            for summary in summaries
+            for name in (summary.get(group_name) or {}).keys()
+        })
+        for name in signal_names:
+            entries = [
+                (summary.get(group_name) or {}).get(name) or {}
+                for summary in summaries
+                if name in (summary.get(group_name) or {})
+            ]
+            seen_values = sorted({
+                value
+                for entry in entries
+                for value in (entry.get("seen_values") or [])
+            })
+            local_total = max((int(entry.get("total_bins") or 0) for entry in entries), default=0)
+            local_hit = int(0 in seen_values) + int(any(value != 0 for value in seen_values))
+            local_hit = min(local_hit, local_total)
+            merged[group_name][name] = {
+                "samples": sum(int(entry.get("samples") or 0) for entry in entries),
+                "seen_values": seen_values,
+                "hit_bins": local_hit,
+                "total_bins": local_total,
+            }
+            total_bins += local_total
+            bins_hit += local_hit
+    merged["bins_hit"] = bins_hit
+    merged["total_bins"] = total_bins
+    merged["functional_coverage_pct"] = round(100.0 * bins_hit / max(total_bins, 1), 2)
+    merged["aggregated_run_count"] = len(summaries)
+    return merged
+
+
 def _record_text(
     workflow_id: str,
     agent_name: str,
@@ -101,14 +147,26 @@ def run_agent(state: dict) -> dict:
         if not isinstance(tests, list):
             tests = []
 
-        seeds = state.get("simulation_seeds", [1])
-        if not isinstance(seeds, list):
-            seeds = [1]
+        seeds = state.get("simulation_seeds")
+        if not isinstance(seeds, list) or not seeds:
+            seed_count = state.get("seed_count")
+            try:
+                seed_count = max(int(seed_count), 1)
+            except (TypeError, ValueError):
+                seed_count = 1
+            seeds = list(range(1, seed_count + 1))
 
         _log_kv(log_path, "tests", tests)
         _log_kv(log_path, "seeds", seeds)
 
+        coverage_json_path = manifest.get("functional_coverage_summary_json") or os.path.join(
+            reports_dir, "functional_coverage_summary.json"
+        )
+        coverage_md_path = manifest.get("functional_coverage_md") or os.path.join(
+            reports_dir, "COVERAGE.md"
+        )
         results = []
+        runtime_coverage_summaries: list[Dict[str, Any]] = []
 
         for t in tests:
             for s in seeds:
@@ -146,6 +204,9 @@ def run_agent(state: dict) -> dict:
                         "stdout_tail": stdout_tail,
                         "stderr_tail": stderr_tail,
                     })
+                    run_coverage = _safe_read_json(coverage_json_path)
+                    if run_coverage:
+                        runtime_coverage_summaries.append(run_coverage)
 
                 except Exception as e:
                     _log(log_path, f"Execution failed testcase={t} seed={s}: {e}", level="error")
@@ -156,13 +217,9 @@ def run_agent(state: dict) -> dict:
                         "error": str(e),
                     })
 
-
-        coverage_json_path = manifest.get("functional_coverage_summary_json") or os.path.join(
-            reports_dir, "functional_coverage_summary.json"
-        )
-        coverage_md_path = manifest.get("functional_coverage_md") or os.path.join(
-            reports_dir, "COVERAGE.md"
-        )
+        aggregated_coverage = _merge_functional_coverage_summaries(runtime_coverage_summaries)
+        if aggregated_coverage:
+            _write_file(coverage_json_path, json.dumps(aggregated_coverage, indent=2))
 
         coverage_json_present = os.path.exists(coverage_json_path)
         coverage_md_present = os.path.exists(coverage_md_path)
