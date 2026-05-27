@@ -57,6 +57,16 @@ def _list_storage_folder(client: Any, folder: str) -> List[str]:
     return paths
 
 
+def _list_storage_tree(client: Any, folder: str, depth: int = 0, max_depth: int = 6) -> List[str]:
+    if depth > max_depth:
+        return []
+    paths: List[str] = []
+    for path in _list_storage_folder(client, folder):
+        paths.append(path)
+        paths.extend(_list_storage_tree(client, path, depth + 1, max_depth))
+    return paths
+
+
 def _first_local(workflow_id: str, subdir: str, suffixes: tuple[str, ...]) -> tuple[str, bytes]:
     base = Path("backend") / "workflows" / workflow_id / subdir
     if not base.exists():
@@ -64,6 +74,40 @@ def _first_local(workflow_id: str, subdir: str, suffixes: tuple[str, ...]) -> tu
     for path in sorted(base.rglob("*")):
         if path.is_file() and path.name.lower().endswith(suffixes):
             return str(path.resolve()), path.read_bytes()
+    return "", b""
+
+
+def _source_local_roots(client: Any, workflow_id: str) -> List[Path]:
+    roots: List[Path] = [Path("backend") / "workflows" / workflow_id]
+    try:
+        response = (
+            client.table("runs")
+            .select("artifacts_path")
+            .eq("workflow_id", workflow_id)
+            .order("created_at", desc=True)
+            .limit(5)
+            .execute()
+        )
+        rows = response.data or []
+        if isinstance(rows, dict):
+            rows = [rows]
+        for row in rows:
+            if not isinstance(row, dict) or not row.get("artifacts_path"):
+                continue
+            root = Path(str(row["artifacts_path"]))
+            roots.extend([root / "arch2rtl", root])
+    except Exception:
+        pass
+    return roots
+
+
+def _first_local_in_roots(roots: List[Path], suffixes: tuple[str, ...]) -> tuple[str, bytes]:
+    for root in roots:
+        if not root.exists():
+            continue
+        for path in sorted(root.rglob("*")):
+            if path.is_file() and path.name.lower().endswith(suffixes):
+                return str(path.resolve()), path.read_bytes()
     return "", b""
 
 
@@ -89,11 +133,10 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     source_row = response.data or {}
     indexed_paths = _storage_paths(source_row.get("artifacts") or {})
     prefix = f"backend/workflows/{source_workflow_id}"
-    stored_rtl_paths = _list_storage_folder(client, f"{prefix}/rtl")
-    stored_digital_paths = _list_storage_folder(client, f"{prefix}/digital")
+    stored_source_paths = _list_storage_tree(client, prefix)
 
     rtl_candidates = [
-        path for path in indexed_paths + stored_rtl_paths
+        path for path in indexed_paths + stored_source_paths
         if path.lower().endswith((".sv", ".v")) and "/rtl/" in path.replace("\\", "/").lower()
     ]
     if requested_top:
@@ -102,7 +145,7 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
             f"{prefix}/rtl/{requested_top}.v",
         ])
     regmap_candidates = [
-        path for path in indexed_paths + stored_digital_paths
+        path for path in indexed_paths + stored_source_paths
         if path.lower().endswith("digital_regmap.json")
     ]
     regmap_candidates.append(f"{prefix}/digital/digital_regmap.json")
@@ -110,7 +153,9 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     rtl_source_path, rtl_raw = _first_download(client, list(dict.fromkeys(rtl_candidates)))
     regmap_source_path, regmap_raw = _first_download(client, list(dict.fromkeys(regmap_candidates)))
     if not rtl_raw:
-        rtl_source_path, rtl_raw = _first_local(source_workflow_id, "rtl", (".sv", ".v"))
+        rtl_source_path, rtl_raw = _first_local_in_roots(
+            _source_local_roots(client, source_workflow_id), (".sv", ".v")
+        )
     if not regmap_raw:
         regmap_source_path, regmap_raw = _first_local(source_workflow_id, "", ("digital_regmap.json",))
     if not rtl_raw:

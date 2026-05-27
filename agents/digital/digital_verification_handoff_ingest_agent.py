@@ -57,6 +57,16 @@ def _list_storage_folder(client: Any, folder: str) -> List[str]:
     return paths
 
 
+def _list_storage_tree(client: Any, folder: str, depth: int = 0, max_depth: int = 6) -> List[str]:
+    if depth > max_depth:
+        return []
+    paths: List[str] = []
+    for path in _list_storage_folder(client, folder):
+        paths.append(path)
+        paths.extend(_list_storage_tree(client, path, depth + 1, max_depth))
+    return paths
+
+
 def _first_local(workflow_id: str, subdir: str, suffixes: tuple[str, ...]) -> tuple[str, bytes]:
     base = Path("backend") / "workflows" / workflow_id / subdir
     if not base.exists():
@@ -65,6 +75,53 @@ def _first_local(workflow_id: str, subdir: str, suffixes: tuple[str, ...]) -> tu
         if path.is_file() and path.name.lower().endswith(suffixes):
             return str(path.resolve()), path.read_bytes()
     return "", b""
+
+
+def _source_local_roots(client: Any, workflow_id: str) -> List[Path]:
+    roots: List[Path] = [Path("backend") / "workflows" / workflow_id]
+    try:
+        response = (
+            client.table("runs")
+            .select("artifacts_path")
+            .eq("workflow_id", workflow_id)
+            .order("created_at", desc=True)
+            .limit(5)
+            .execute()
+        )
+        rows = response.data or []
+        if isinstance(rows, dict):
+            rows = [rows]
+        for row in rows:
+            if not isinstance(row, dict) or not row.get("artifacts_path"):
+                continue
+            root = Path(str(row["artifacts_path"]))
+            roots.extend([root / "arch2rtl", root])
+    except Exception:
+        pass
+    return roots
+
+
+def _first_local_in_roots(roots: List[Path], suffixes: tuple[str, ...]) -> tuple[str, bytes]:
+    for root in roots:
+        if not root.exists():
+            continue
+        for path in sorted(root.rglob("*")):
+            if path.is_file() and path.name.lower().endswith(suffixes):
+                return str(path.resolve()), path.read_bytes()
+    return "", b""
+
+
+def _expected_rtl_names(spec: Dict[str, Any]) -> List[str]:
+    names: List[str] = []
+    if isinstance(spec.get("rtl_output_file"), str):
+        names.append(os.path.basename(str(spec["rtl_output_file"])).lower())
+    hierarchy = spec.get("hierarchy")
+    if isinstance(hierarchy, dict):
+        modules = [hierarchy.get("top_module")] + list(hierarchy.get("modules") or [])
+        for module in modules:
+            if isinstance(module, dict) and isinstance(module.get("rtl_output_file"), str):
+                names.append(os.path.basename(str(module["rtl_output_file"])).lower())
+    return list(dict.fromkeys(names))
 
 
 def _top_module(spec: Dict[str, Any], rtl_path: str) -> str:
@@ -107,7 +164,7 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     indexed_paths = _storage_paths(source_row.get("artifacts") or {})
     prefix = f"backend/workflows/{source_workflow_id}"
     stored_spec_paths = _list_storage_folder(client, f"{prefix}/spec")
-    stored_rtl_paths = _list_storage_folder(client, f"{prefix}/rtl")
+    stored_source_paths = _list_storage_tree(client, prefix)
 
     spec_candidates = [
         path for path in indexed_paths + stored_spec_paths
@@ -130,10 +187,17 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     except Exception as exc:
         raise RuntimeError(f"Imported Arch2RTL digital spec is invalid JSON: {exc}") from exc
 
+    available_paths = list(dict.fromkeys(indexed_paths + stored_source_paths))
+    expected_rtl_names = set(_expected_rtl_names(spec))
     rtl_candidates = [
-        path for path in indexed_paths + stored_rtl_paths
-        if path.lower().endswith((".sv", ".v")) and "/rtl/" in path.lower()
+        path for path in available_paths
+        if os.path.basename(path).lower() in expected_rtl_names
+        and path.lower().endswith((".sv", ".v"))
     ]
+    rtl_candidates.extend([
+        path for path in available_paths
+        if path.lower().endswith((".sv", ".v")) and "/rtl/" in path.lower()
+    ])
     rtl_files: List[str] = []
     imported_rtl_paths: List[str] = []
     for source_path in dict.fromkeys(rtl_candidates):
@@ -149,7 +213,9 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
             raw.decode("utf-8", errors="replace"),
         )
     if not rtl_files:
-        local_rtl_path, local_rtl_raw = _first_local(source_workflow_id, "rtl", (".sv", ".v"))
+        local_rtl_path, local_rtl_raw = _first_local_in_roots(
+            _source_local_roots(client, source_workflow_id), (".sv", ".v")
+        )
         if local_rtl_raw:
             rtl_name = os.path.basename(local_rtl_path)
             local_rtl = _write_local(workflow_dir, f"handoff/rtl/{rtl_name}", local_rtl_raw)
