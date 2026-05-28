@@ -297,6 +297,7 @@ def run_agent(state: dict) -> dict:
                     "toggle_hit": code_cov.get("toggle_hit"),
                     "toggle_found": code_cov.get("toggle_found"),
                     "toggle_source": code_cov.get("toggle_source") or "not_reported_by_verilator_lcov",
+                    "missed_toggle_points": code_cov.get("missed_toggle_points") or [],
                     "tool": code_cov.get("tool") or "verilator_coverage",
                 },
                 "assertions": {

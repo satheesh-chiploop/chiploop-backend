@@ -73,6 +73,30 @@ def test_parse_verilator_lcov_da_records_reports_line_coverage(tmp_path):
     assert parsed["toggle_source"] == "not_reported_by_verilator_lcov"
 
 
+def test_parse_verilator_annotated_points_reports_toggle_coverage(tmp_path):
+    annotated = tmp_path / "annotated"
+    annotated.mkdir()
+    (annotated / "pwm_controller.sv").write_text(
+        "\n".join(
+            [
+                " 000001 logic pwm_out;",
+                "+000003 point: type=toggle comment=pwm_out[0] hier=TOP.pwm_controller",
+                "-000000 point: type=toggle comment=counter_value[0] hier=TOP.pwm_controller",
+                "+000001 point: type=line comment=assign",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    parsed = execution_agent._parse_verilator_annotated_toggle_coverage(str(annotated))
+
+    assert parsed["toggle_found"] == 2
+    assert parsed["toggle_hit"] == 1
+    assert parsed["toggle_coverage_pct"] == 50.0
+    assert parsed["toggle_source"] == "verilator_coverage_annotate_points"
+    assert parsed["missed_toggle_points"][0]["point"].startswith("comment=counter_value")
+
+
 def test_testbench_generator_can_select_directed_random_or_both():
     assert tb_agent._selected_default_tests("directed") == ["smoke_test"]
     assert tb_agent._selected_default_tests("random") == ["constrained_random_sanity"]

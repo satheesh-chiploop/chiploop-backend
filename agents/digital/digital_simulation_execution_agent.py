@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 from datetime import datetime
@@ -175,6 +176,41 @@ def _parse_lcov_info(path: str) -> Dict[str, Any]:
     }
 
 
+def _parse_verilator_annotated_toggle_coverage(annotation_dir: str) -> Dict[str, Any]:
+    toggle_found = 0
+    toggle_hit = 0
+    missed: list[Dict[str, Any]] = []
+    point_re = re.compile(r"^[+\-]\s*(\d+)\s+point:\s+type=toggle\b(.*)$")
+    for root, _, files in os.walk(annotation_dir):
+        for name in files:
+            path = os.path.join(root, name)
+            try:
+                with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                    for raw in f:
+                        match = point_re.match(raw.strip())
+                        if not match:
+                            continue
+                        count = int(match.group(1) or 0)
+                        details = match.group(2).strip()
+                        toggle_found += 1
+                        if count > 0:
+                            toggle_hit += 1
+                        elif len(missed) < 20:
+                            missed.append({
+                                "file": os.path.relpath(path, annotation_dir),
+                                "point": details,
+                            })
+            except OSError:
+                continue
+    return {
+        "toggle_found": toggle_found,
+        "toggle_hit": toggle_hit,
+        "toggle_coverage_pct": _coverage_pct(toggle_hit, toggle_found),
+        "toggle_source": "verilator_coverage_annotate_points" if toggle_found else "not_reported_by_verilator_annotate_points",
+        "missed_toggle_points": missed,
+    }
+
+
 def _find_verilator_coverage_data(tb_root: str) -> list[str]:
     matches: list[str] = []
     for root, _, files in os.walk(tb_root):
@@ -250,6 +286,26 @@ def _collect_code_coverage(
             summary["status"] = "invalid"
             return summary
         summary.update(parsed)
+        annotation_dir = os.path.abspath(os.path.join(reports_dir, "verilator_coverage_annotated"))
+        shutil.rmtree(annotation_dir, ignore_errors=True)
+        annotate_cmd = [
+            verilator_coverage,
+            "--annotate",
+            annotation_dir,
+            "--annotate-points",
+            "--annotate-all",
+            "--annotate-min",
+            "1",
+        ] + dat_files
+        annotate_proc = subprocess.run(annotate_cmd, cwd=tb_root, capture_output=True, text=True, timeout=120)
+        summary["annotate_returncode"] = annotate_proc.returncode
+        summary["annotate_stdout_tail"] = (annotate_proc.stdout or "").splitlines()[-80:]
+        summary["annotate_stderr_tail"] = (annotate_proc.stderr or "").splitlines()[-80:]
+        summary["toggle_annotation_dir"] = annotation_dir
+        if annotate_proc.returncode == 0 and os.path.isdir(annotation_dir):
+            summary.update(_parse_verilator_annotated_toggle_coverage(annotation_dir))
+        else:
+            _log(log_path, "verilator_coverage --annotate-points did not produce toggle annotation data", level="warning")
         summary["status"] = "ok"
         return summary
     except Exception as exc:
