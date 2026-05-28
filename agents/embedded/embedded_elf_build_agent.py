@@ -84,9 +84,15 @@ codegen-units = 1
 
 
 def _default_cargo_config(target_triple: str) -> str:
-    return f"""[build]
+    config = f"""[build]
 target = "{target_triple}"
 """
+    if target_triple.endswith("-linux-gnu"):
+        config += f"""
+[target.{target_triple}]
+rustflags = ["-C", "link-arg=-nostartfiles"]
+"""
+    return config
 
 
 def _default_memory_x() -> str:
@@ -275,7 +281,7 @@ def run_agent(state: dict) -> dict:
     required_srcs = [os.path.join(workflow_dir, p) for p in required_relpaths]
     optional_srcs = [os.path.join(workflow_dir, p) for p in optional_relpaths]
 
-    # Generation succeeded if write_artifact() completed without raising.
+    # Generation succeeded if the workspace files were written and recorded.
     workspace_generated = True
 
 
@@ -318,9 +324,6 @@ def run_agent(state: dict) -> dict:
     elf_exists = False
 
 
-    # Do not use filesystem existence as the primary proof of generation success.
-    # In this runtime, artifacts may be persisted by write_artifact() even when
-    # os.path.isfile(workflow_dir/relpath) does not reflect them immediately.
     missing_required = []
 
     if not cargo_path:

@@ -66,9 +66,19 @@ def write_artifact(state: dict, rel_path: str, content: str, key: str | None = N
     if not workflow_id:
         raise RuntimeError("Missing workflow_id in state (required for artifact recording).")
 
+    workflow_dir = os.path.abspath(ensure_workflow_dir(state))
+    normalized_rel_path = rel_path.replace("\\", "/").lstrip("/")
+    local_path = os.path.abspath(os.path.join(workflow_dir, normalized_rel_path))
+    if os.path.commonpath([workflow_dir, local_path]) != workflow_dir:
+        raise RuntimeError(f"Artifact path escapes workflow directory: {rel_path}")
+
+    os.makedirs(os.path.dirname(local_path), exist_ok=True)
+    with open(local_path, "w", encoding="utf-8") as artifact_file:
+        artifact_file.write(content)
+
     # rel_path examples: "firmware/register_map.json", "firmware/hal/lib.rs"
     # We'll store under subdir="firmware" and filename="register_map.json" etc.
-    parts = rel_path.split("/", 1)
+    parts = normalized_rel_path.split("/", 1)
     if len(parts) == 1:
         subdir = "firmware"
         filename = parts[0]
@@ -88,7 +98,7 @@ def write_artifact(state: dict, rel_path: str, content: str, key: str | None = N
         filename=filename,
         content=content,
     )
-    return rel_path
+    return normalized_rel_path
 
 # --- add near the bottom of _embedded_common.py ---
 
@@ -133,4 +143,3 @@ def strip_outer_markdown_fences(content: str) -> str:
         return "\n".join(lines).strip()
 
     return content
-
