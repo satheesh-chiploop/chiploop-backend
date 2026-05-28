@@ -50,6 +50,8 @@ def run_agent(state: dict) -> dict:
     scenario_count = int(trace.get("scenario_count") or execution.get("scenario_count") or 0)
     pass_count = int(trace.get("scenario_pass_count") or 0)
     fail_count = int(trace.get("scenario_fail_count") or 0)
+    not_applicable_count = int(trace.get("scenario_not_applicable_count") or 0)
+    applicable_count = int(trace.get("scenario_applicable_count") or max(pass_count + fail_count, 0))
     blocked_count = int(execution.get("scenario_blocked_count") or 0)
 
     if harness_status == "blocked":
@@ -75,6 +77,8 @@ def run_agent(state: dict) -> dict:
         "scenario_count": scenario_count,
         "scenario_pass_count": pass_count,
         "scenario_fail_count": fail_count,
+        "scenario_not_applicable_count": not_applicable_count,
+        "scenario_applicable_count": applicable_count,
         "scenario_blocked_count": blocked_count,
         "coverage_summary": {
             "boot": "covered" if scenario_count > 0 else "not_covered",
@@ -103,6 +107,7 @@ def run_agent(state: dict) -> dict:
         f"- Scenario count: `{scenario_count}`",
         f"- Passed: `{pass_count}`",
         f"- Failed: `{fail_count}`",
+        f"- Not applicable: `{not_applicable_count}`",
         f"- Blocked: `{blocked_count}`",
         "",
         "## Mismatch categories",
