@@ -60,17 +60,31 @@ def _tool_available(name: str) -> bool:
     return bool(shutil.which(name))
 
 
+def _read_l1_ready(l1: Dict[str, Any]) -> Optional[bool]:
+    if not isinstance(l1, dict) or not l1:
+        return None
+
+    for key in ("l1_ready", "overall_l1_ready"):
+        if l1.get(key) is True:
+            return True
+        if l1.get(key) is False:
+            return False
+
+    status = str(l1.get("overall_status") or l1.get("status") or "").strip().lower()
+    if status in {"ready", "pass", "passed", "green", "success", "ok"}:
+        return True
+    if status in {"blocked", "fail", "failed", "red", "error"}:
+        return False
+    return None
+
+
 def _discover_software_assets(state: Dict[str, Any]) -> Dict[str, Any]:
     l1 = state.get("system_software_validation_summary_l1") or state.get("system_software_validation_summary") or {}
     validation_manifest = state.get("system_software_validation_manifest") or {}
     discovered = validation_manifest.get("discovered_assets") or {}
 
     return {
-        "l1_ready": bool(
-            l1.get("l1_ready") is True
-            or l1.get("overall_l1_ready") is True
-            or str(l1.get("overall_status") or "").lower() in {"ready", "pass", "green"}
-        ),
+        "l1_ready": _read_l1_ready(l1),
         "software_root": _first_nonempty(
             state.get("system_software_validation_local_root"),
             (state.get("system") or {}).get("system_software_validation_local_root"),
