@@ -248,6 +248,10 @@ TOPLEVEL = {topmodule}
 MODULE = {test_module}
 SIM ?= verilator
 
+ifeq ($(SIM),verilator)
+EXTRA_ARGS += -Wno-fatal -Wno-CASEINCOMPLETE
+endif
+
 VERILOG_SOURCES = \\
 \t{verilog_sources_str}
 
