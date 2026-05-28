@@ -208,6 +208,148 @@ def _resolve_package_from_state_local_or_supabase(
     return {}, debug
 
 
+def _storage_paths_from_artifacts(artifacts: Any) -> List[str]:
+    paths: List[str] = []
+    if isinstance(artifacts, dict):
+        for value in artifacts.values():
+            paths.extend(_storage_paths_from_artifacts(value))
+    elif isinstance(artifacts, list):
+        for value in artifacts:
+            paths.extend(_storage_paths_from_artifacts(value))
+    elif isinstance(artifacts, str):
+        paths.append(_norm_path(artifacts))
+    return paths
+
+
+def _list_storage_folder(supabase: Any, folder: str) -> List[str]:
+    try:
+        entries = supabase.storage.from_(ARTIFACT_BUCKET).list(folder) or []
+    except Exception:
+        return []
+    paths: List[str] = []
+    for entry in entries:
+        name = entry.get("name") if isinstance(entry, dict) else None
+        if name:
+            paths.append(f"{folder.rstrip('/')}/{name}")
+    return paths
+
+
+def _list_storage_tree(supabase: Any, folder: str, depth: int = 0, max_depth: int = 6) -> List[str]:
+    if depth > max_depth:
+        return []
+    paths: List[str] = []
+    for path in _list_storage_folder(supabase, folder):
+        paths.append(path)
+        paths.extend(_list_storage_tree(supabase, path, depth + 1, max_depth))
+    return paths
+
+
+def _load_json_from_absolute_storage_path(supabase: Any, path: str) -> Dict[str, Any]:
+    try:
+        raw = supabase.storage.from_(ARTIFACT_BUCKET).download(path)
+        text = raw.decode("utf-8") if isinstance(raw, bytes) else str(raw)
+        obj = json.loads(text)
+        return obj if isinstance(obj, dict) else {}
+    except Exception:
+        return {}
+
+
+def _build_rtl_package_from_arch2rtl(
+    state: Dict[str, Any],
+    workflow_dir: str,
+    source_workflow_id: Optional[str],
+    existing_debug: Dict[str, Any],
+) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    if not source_workflow_id:
+        return {}, existing_debug
+    try:
+        supabase = _get_supabase(state)
+        wf_row = _workflow_row(supabase, str(source_workflow_id))
+        prefix = f"backend/workflows/{source_workflow_id}"
+        indexed_paths = _storage_paths_from_artifacts((wf_row or {}).get("artifacts") or {})
+        stored_paths = _list_storage_tree(supabase, prefix)
+    except Exception as exc:
+        debug = dict(existing_debug)
+        debug["arch2rtl_fallback_error"] = str(exc)
+        return {}, debug
+
+    all_paths = list(dict.fromkeys(indexed_paths + stored_paths))
+    rtl_candidates = [
+        p for p in all_paths
+        if p.lower().endswith((".sv", ".v")) and "/rtl/" in p.lower()
+    ]
+    if not rtl_candidates:
+        rtl_candidates = [p for p in all_paths if p.lower().endswith((".sv", ".v"))]
+
+    regmap_candidates = [p for p in all_paths if p.lower().endswith("digital_regmap.json")]
+    spec_candidates = [
+        p for p in all_paths
+        if p.lower().endswith(".json") and ("/spec/" in p.lower() or p.lower().endswith("_spec.json"))
+    ]
+    intent_candidates = [p for p in all_paths if p.lower().endswith("integration_intent.json")]
+
+    if not rtl_candidates:
+        debug = dict(existing_debug)
+        debug["arch2rtl_fallback_checked_path_count"] = len(all_paths)
+        debug["arch2rtl_fallback_resolution"] = "missing_rtl"
+        return {}, debug
+
+    rtl_path = rtl_candidates[0]
+    top_name = os.path.splitext(os.path.basename(rtl_path))[0] or "rtl_top"
+    regmap_path = regmap_candidates[0] if regmap_candidates else ""
+    spec_path = spec_candidates[0] if spec_candidates else ""
+    intent_path = intent_candidates[0] if intent_candidates else ""
+
+    regmap_json = _load_json_from_absolute_storage_path(supabase, regmap_path) if regmap_path else {}
+    spec_json = _load_json_from_absolute_storage_path(supabase, spec_path) if spec_path else {}
+    intent_json = _load_json_from_absolute_storage_path(supabase, intent_path) if intent_path else {}
+
+    if not spec_json and regmap_json:
+        spec_json = {
+            "package_type": "derived_digital_spec_from_register_map",
+            "source": regmap_path,
+            "top_module": top_name,
+            "registers": regmap_json.get("registers") or [],
+            "register_map": regmap_json,
+        }
+    if not intent_json:
+        intent_json = {
+            "package_type": "derived_integration_intent_from_arch2rtl",
+            "source_workflow_id": source_workflow_id,
+            "top": {"sim_module": top_name, "phys_module": top_name},
+            "instances": [{"name": top_name, "module": top_name}],
+            "connections": [],
+            "assumptions": ["Single imported Arch2RTL block used as the co-simulation RTL boundary."],
+        }
+
+    package = {
+        "package_type": "system_rtl",
+        "package_version": "1.0",
+        "source_workflow_id": source_workflow_id,
+        "top": {"sim": top_name, "phys": top_name},
+        "filelists": {"sim": [rtl_path], "phys": [rtl_path], "libs": []},
+        "register_map_path": regmap_path,
+        "digital_spec_path": spec_path,
+        "digital_spec_json": spec_json,
+        "integration_intent_path": intent_path,
+        "integration_intent": intent_json,
+        "compile": {"sim": "imported_from_arch2rtl"},
+        "ready_for_cosim": True,
+        "notes": ["Synthesized L2 RTL package from a direct Arch2RTL workflow because no system_rtl_package artifact was present."],
+    }
+
+    debug = dict(existing_debug)
+    debug.update({
+        "resolution": "arch2rtl_fallback",
+        "resolved_path": rtl_path,
+        "arch2rtl_fallback_checked_path_count": len(all_paths),
+        "arch2rtl_fallback_regmap_path": regmap_path,
+        "arch2rtl_fallback_spec_path": spec_path,
+        "arch2rtl_fallback_intent_path": intent_path,
+    })
+    return package, debug
+
+
 def _normalize_filelist(x: Any) -> List[str]:
     if isinstance(x, list):
         return [str(v).strip() for v in x if str(v).strip()]
@@ -216,9 +358,11 @@ def _normalize_filelist(x: Any) -> List[str]:
     return []
 
 
-def _derive_software_entry(pkg: Dict[str, Any]) -> Optional[str]:
+def _derive_software_entry(pkg: Dict[str, Any]) -> Any:
     for key in ["software_entry", "entry", "app_entry", "main_binary", "default_app"]:
         val = pkg.get(key)
+        if isinstance(val, dict) and val:
+            return val
         if isinstance(val, str) and val.strip():
             return val.strip()
 
@@ -433,6 +577,13 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
             "system/integration/system_rtl_package.json",
         ],
     )
+    if not rtl_pkg:
+        rtl_pkg, rtl_dbg = _build_rtl_package_from_arch2rtl(
+            state=state,
+            workflow_dir=workflow_dir,
+            source_workflow_id=state.get("system_rtl_workflow_id"),
+            existing_debug=rtl_dbg,
+        )
 
     sim_filelist = _normalize_filelist(((rtl_pkg.get("filelists") or {}).get("sim")))
     phys_filelist = _normalize_filelist(((rtl_pkg.get("filelists") or {}).get("phys")))
@@ -444,7 +595,8 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     interrupts = _derive_interrupts(firmware_pkg, workflow_dir)
     dma_present = _derive_dma_present(firmware_pkg, rtl_pkg, workflow_dir)
 
-    compile_sim = ((rtl_pkg.get("compile") or {}).get("sim")) == "pass"
+    compile_sim_value = str((rtl_pkg.get("compile") or {}).get("sim") or "").strip().lower()
+    compile_sim = compile_sim_value in {"pass", "imported_from_verified_digital_flow", "imported_from_arch2rtl"}
     rtl_ready_for_cosim = bool(rtl_pkg.get("ready_for_cosim"))
 
     top = rtl_pkg.get("top") or {}
@@ -473,29 +625,25 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     )
 
     # ---- semantic truth restore (MOVE THIS UP) ----
-    digital_spec_path = (
-        rtl_pkg.get("digital_spec_json")
-        or rtl_pkg.get("digital_spec_path")
-        or "spec/digital_subsystem_spec.json"
-    )
-    digital_spec_json = _load_optional_json_artifact(
-        state=state,
-        workflow_dir=workflow_dir,
-        prefixes=rtl_dbg.get("storage_prefixes") or [],
-        rel_or_abs=digital_spec_path,
-    )
+    digital_spec_path = rtl_pkg.get("digital_spec_path") or "spec/digital_subsystem_spec.json"
+    digital_spec_json = rtl_pkg.get("digital_spec_json") if isinstance(rtl_pkg.get("digital_spec_json"), dict) else {}
+    if not digital_spec_json:
+        digital_spec_json = _load_optional_json_artifact(
+            state=state,
+            workflow_dir=workflow_dir,
+            prefixes=rtl_dbg.get("storage_prefixes") or [],
+            rel_or_abs=digital_spec_path,
+        )
 
-    integration_intent_path = (
-        rtl_pkg.get("integration_intent")
-        or rtl_pkg.get("integration_intent_path")
-        or "system/integration/system_integration_intent.json"
-    )
-    integration_intent_json = _load_optional_json_artifact(
-        state=state,
-        workflow_dir=workflow_dir,
-        prefixes=rtl_dbg.get("storage_prefixes") or [],
-        rel_or_abs=integration_intent_path,
-    )
+    integration_intent_path = rtl_pkg.get("integration_intent_path") or "system/integration/system_integration_intent.json"
+    integration_intent_json = rtl_pkg.get("integration_intent") if isinstance(rtl_pkg.get("integration_intent"), dict) else {}
+    if not integration_intent_json:
+        integration_intent_json = _load_optional_json_artifact(
+            state=state,
+            workflow_dir=workflow_dir,
+            prefixes=rtl_dbg.get("storage_prefixes") or [],
+            rel_or_abs=integration_intent_path,
+        )
 
     validation_spec = {
         "software": {

@@ -949,9 +949,12 @@ SYSTEM_SOFTWARE_DEFINITION = _linear_workflow_definition([
     "System Software Capability Model Agent",
     "System Software API Contract Agent",
     "System Software SDK Scaffold Agent",
+    "System Software HAL/Driver Adapter Agent",
     "System Software Config Schema Agent",
     "System Software Service Architecture Agent",
+    "System Software Core Service Agent",
     "System Software Application Scaffold Agent",
+    "System Software Build System Agent",
     "System Software Packaging Agent",
 ])
 

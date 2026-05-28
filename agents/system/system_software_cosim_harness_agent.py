@@ -389,7 +389,7 @@ def run_agent(state: dict) -> dict:
 
     blocked_dependencies: List[str] = []
 
-    if not software["l1_ready"]:
+    if software["l1_ready"] is False:
         blocked_dependencies.append("software_l1_not_ready")
     if not scenarios:
         blocked_dependencies.append("scenario_manifest_missing_or_empty")
