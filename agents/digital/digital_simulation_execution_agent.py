@@ -156,13 +156,22 @@ def _parse_lcov_info(path: str) -> Dict[str, Any]:
                     branch_found += int(line.split(":", 1)[1] or 0)
                 elif line.startswith("BRH:"):
                     branch_hit += int(line.split(":", 1)[1] or 0)
+    branch_pct = _coverage_pct(branch_hit, branch_found)
     return {
         "line_found": line_found,
         "line_hit": line_hit,
         "line_coverage_pct": _coverage_pct(line_hit, line_found),
         "branch_found": branch_found,
         "branch_hit": branch_hit,
-        "branch_coverage_pct": _coverage_pct(branch_hit, branch_found),
+        "branch_coverage_pct": branch_pct,
+        "condition_found": branch_found,
+        "condition_hit": branch_hit,
+        "condition_coverage_pct": branch_pct,
+        "condition_source": "verilator_lcov_branch_proxy" if branch_found else "unavailable",
+        "toggle_found": None,
+        "toggle_hit": None,
+        "toggle_coverage_pct": None,
+        "toggle_source": "not_reported_by_verilator_lcov",
     }
 
 
@@ -192,6 +201,8 @@ def _collect_code_coverage(
             "status": "disabled",
             "line_coverage_pct": None,
             "branch_coverage_pct": None,
+            "condition_coverage_pct": None,
+            "toggle_coverage_pct": None,
         }
 
     dat_files = [os.path.abspath(path) for path in _find_verilator_coverage_data(tb_root)]
@@ -202,6 +213,10 @@ def _collect_code_coverage(
         "coverage_dat_files": dat_files,
         "line_coverage_pct": None,
         "branch_coverage_pct": None,
+        "condition_coverage_pct": None,
+        "toggle_coverage_pct": None,
+        "condition_source": "unavailable",
+        "toggle_source": "not_reported_by_verilator_lcov",
     }
     if not dat_files:
         _log(log_path, "No Verilator coverage.dat files found", level="warning")

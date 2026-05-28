@@ -18,6 +18,14 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     gaps = gap.get("gaps") if isinstance(gap.get("gaps"), list) else []
     functional_gaps = gap.get("functional_gaps") if isinstance(gap.get("functional_gaps"), list) else []
     failures = triage.get("failures") if isinstance(triage.get("failures"), list) else []
+    summary = state.get("source_simulation_summary_coverage") if isinstance(state.get("source_simulation_summary_coverage"), dict) else {}
+    coverage = summary.get("coverage") if isinstance(summary.get("coverage"), dict) else {}
+    code = coverage.get("code") if isinstance(coverage.get("code"), dict) else {}
+    functional = coverage.get("functional") if isinstance(coverage.get("functional"), dict) else {}
+    simulation = summary.get("simulation") if isinstance(summary.get("simulation"), dict) else {}
+    formal = summary.get("formal") if isinstance(summary.get("formal"), dict) else {}
+    golden = summary.get("golden_model") if isinstance(summary.get("golden_model"), dict) else {}
+    toolchain = summary.get("toolchain") if isinstance(summary.get("toolchain"), dict) else {}
 
     actions: List[Dict[str, Any]] = []
     if failures:
@@ -58,6 +66,25 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
         "functional_gap_count": len(functional_gaps),
         "functional_gaps": functional_gaps[:20],
         "failure_count": len(failures),
+        "verify_evidence": {
+            "simulation": {
+                "total": simulation.get("total"),
+                "pass": simulation.get("pass"),
+                "fail": simulation.get("fail"),
+            },
+            "functional_coverage_pct": coverage.get("functional_coverage_pct") or functional.get("coverage_pct"),
+            "code_coverage": {
+                "line_coverage_pct": code.get("line_coverage_pct"),
+                "branch_coverage_pct": code.get("branch_coverage_pct"),
+                "condition_coverage_pct": code.get("condition_coverage_pct"),
+                "condition_source": code.get("condition_source"),
+                "toggle_coverage_pct": code.get("toggle_coverage_pct"),
+                "toggle_source": code.get("toggle_source"),
+            },
+            "formal": formal,
+            "golden_model": golden,
+            "toolchain": toolchain,
+        },
         "recommended_actions": actions,
         "rerun_policy": {
             "automatic_rtl_edit": False,
@@ -73,6 +100,17 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
         f"- Coverage gaps: {len(gaps)}",
         f"- Functional bin gaps: {len(functional_gaps)}",
         f"- Failing testcase/seed pairs: {len(failures)}",
+        "",
+        "## Verify Evidence Snapshot",
+        f"- Runs: {simulation.get('total')}",
+        f"- Simulation pass/fail: {simulation.get('pass')} / {simulation.get('fail')}",
+        f"- Functional coverage: {coverage.get('functional_coverage_pct') or functional.get('coverage_pct')}",
+        f"- Code line/branch/condition/toggle coverage: "
+        f"{code.get('line_coverage_pct')} / {code.get('branch_coverage_pct')} / "
+        f"{code.get('condition_coverage_pct')} / {code.get('toggle_coverage_pct')}",
+        f"- Formal: {formal.get('status')}",
+        f"- Golden model: {golden.get('status')}",
+        f"- Tools: {toolchain.get('simulator')} / {toolchain.get('code_coverage')} / {toolchain.get('formal')}",
         "",
         "## Functional Coverage Not Met",
         *[

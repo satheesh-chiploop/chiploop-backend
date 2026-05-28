@@ -628,7 +628,22 @@ async def constrained_random_sanity(dut):
         randomizable_inputs_json=json.dumps(randomizable_inputs, indent=2),
     )
 
-def _build_testcases_manifest(top: str, clocks: List[str], resets: List[Dict[str, Any]], mode: str) -> Dict[str, Any]:
+def _selected_default_tests(selection: Any) -> List[str]:
+    mode = str(selection or "both").strip().lower()
+    if mode in {"directed", "directed_only", "smoke"}:
+        return ["smoke_test"]
+    if mode in {"random", "random_only", "constrained_random"}:
+        return ["constrained_random_sanity"]
+    return ["smoke_test", "constrained_random_sanity"]
+
+
+def _build_testcases_manifest(
+    top: str,
+    clocks: List[str],
+    resets: List[Dict[str, Any]],
+    mode: str,
+    test_selection: Any = "both",
+) -> Dict[str, Any]:
     clock_names = list(clocks)
     reset_names = [r["name"] for r in resets]
 
@@ -662,7 +677,8 @@ def _build_testcases_manifest(top: str, clocks: List[str], resets: List[Dict[str
         "version": "1.0",
         "top_module": top,
         "mode": mode,
-        "default_tests": [t["name"] for t in tests],
+        "test_selection": str(test_selection or "both"),
+        "default_tests": _selected_default_tests(test_selection),
         "tests": tests,
     }
 
@@ -765,7 +781,8 @@ def run_agent(state: dict) -> dict:
     os.makedirs(tb_root, exist_ok=True)
 
     test_py = _gen_cocotb_test(spec, top, clocks, resets, soc_mode=soc_mode)
-    testcase_manifest = _build_testcases_manifest(top, clocks, resets, mode)
+    test_selection = state.get("random_vs_directed") or "both"
+    testcase_manifest = _build_testcases_manifest(top, clocks, resets, mode, test_selection)
 
     verification_files = [
         p for p in [
@@ -793,6 +810,7 @@ def run_agent(state: dict) -> dict:
         "generated_rtl_sources_mk": "vv/tb/rtl_sources.mk",
         "generated_verification_sources_mk": "vv/tb/verification_sources.mk",
         "generated_testcases_manifest": "vv/tb/testcases.json",
+        "test_selection": testcase_manifest["test_selection"],
     }
 
     artifacts: Dict[str, Any] = {}
@@ -822,6 +840,7 @@ Run (from this folder):
 make
 RANDOM_SEED=123 make
 NUM_ITERS=200 RANDOM_SEED=7 make TESTCASE=constrained_random_sanity
+python run_regression.py --tests smoke_test constrained_random_sanity --seeds 1 2 3 4
 ```
 """
 
@@ -861,6 +880,7 @@ NUM_ITERS=200 RANDOM_SEED=7 make TESTCASE=constrained_random_sanity
         "resets": resets,
         "generated_dir": "vv/tb",
         "default_tests": testcase_manifest["default_tests"],
+        "test_selection": testcase_manifest["test_selection"],
         "tools_detected": {
             "verilator": bool(_which("verilator")),
             "make": bool(_which("make")),

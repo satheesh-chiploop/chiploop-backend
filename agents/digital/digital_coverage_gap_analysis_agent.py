@@ -19,6 +19,8 @@ def _target(text: Any, kind: str, default: float) -> float:
         "functional": r"(\d+(?:\.\d+)?)\s*%?\s*(?:functional|func)",
         "line": r"(\d+(?:\.\d+)?)\s*%?\s*(?:line|code)",
         "branch": r"(\d+(?:\.\d+)?)\s*%?\s*branch",
+        "condition": r"(\d+(?:\.\d+)?)\s*%?\s*condition",
+        "toggle": r"(\d+(?:\.\d+)?)\s*%?\s*toggle",
     }
     m = re.search(patterns[kind], raw, re.IGNORECASE)
     return float(m.group(1)) if m else default
@@ -74,10 +76,14 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     functional_pct = _num(coverage.get("functional_coverage_pct")) or _num(functional.get("coverage_pct"))
     line_pct = _num(code.get("line_coverage_pct"))
     branch_pct = _num(code.get("branch_coverage_pct"))
+    condition_pct = _num(code.get("condition_coverage_pct"))
+    toggle_pct = _num(code.get("toggle_coverage_pct"))
     targets = {
         "functional": _target(state.get("coverage_targets"), "functional", 100.0),
         "line": _target(state.get("coverage_targets"), "line", 90.0),
         "branch": _target(state.get("coverage_targets"), "branch", 80.0),
+        "condition": _target(state.get("coverage_targets"), "condition", 80.0),
+        "toggle": _target(state.get("coverage_targets"), "toggle", 80.0),
     }
 
     gaps: List[Dict[str, Any]] = []
@@ -105,6 +111,30 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
             "actual": branch_pct,
             "target": targets["branch"],
             "recommendation": "Add branch-directed tests around control conditions and error/edge paths.",
+        })
+    if condition_pct is None:
+        gaps.append({
+            "type": "code_condition_coverage_unavailable",
+            "recommendation": "Use a coverage backend that exports condition coverage, or review Verilator branch coverage as a condition proxy.",
+        })
+    elif condition_pct < targets["condition"]:
+        gaps.append({
+            "type": "code_condition_coverage_below_target",
+            "actual": condition_pct,
+            "target": targets["condition"],
+            "recommendation": "Add tests that exercise each boolean condition outcome in control logic.",
+        })
+    if toggle_pct is None:
+        gaps.append({
+            "type": "code_toggle_coverage_unavailable",
+            "recommendation": "Enable a simulator coverage flow that exports toggle coverage, or add toggle extraction from the native coverage database.",
+        })
+    elif toggle_pct < targets["toggle"]:
+        gaps.append({
+            "type": "code_toggle_coverage_below_target",
+            "actual": toggle_pct,
+            "target": targets["toggle"],
+            "recommendation": "Add tests that toggle idle outputs, status bits, interrupts, and register-controlled datapath signals.",
         })
     functional_bin_gaps = _functional_gaps(functional_raw)
     gaps.extend(functional_bin_gaps[:20])
@@ -137,6 +167,10 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
             "functional_coverage_pct": functional_pct,
             "code_line_coverage_pct": line_pct,
             "code_branch_coverage_pct": branch_pct,
+            "code_condition_coverage_pct": condition_pct,
+            "code_toggle_coverage_pct": toggle_pct,
+            "code_condition_source": code.get("condition_source"),
+            "code_toggle_source": code.get("toggle_source"),
         },
         "gap_count": len(gaps),
         "functional_gap_count": len(functional_bin_gaps),
@@ -151,6 +185,8 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
         f"- Functional coverage: {functional_pct if functional_pct is not None else 'unavailable'} / target {targets['functional']}%",
         f"- Code line coverage: {line_pct if line_pct is not None else 'unavailable'} / target {targets['line']}%",
         f"- Code branch coverage: {branch_pct if branch_pct is not None else 'unavailable'} / target {targets['branch']}%",
+        f"- Code condition coverage: {condition_pct if condition_pct is not None else 'unavailable'} / target {targets['condition']}%",
+        f"- Code toggle coverage: {toggle_pct if toggle_pct is not None else 'unavailable'} / target {targets['toggle']}%",
         f"- Gap count: {len(gaps)}",
         f"- Functional bin gaps: {len(functional_bin_gaps)}",
         "",

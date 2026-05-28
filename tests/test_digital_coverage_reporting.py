@@ -40,6 +40,9 @@ def test_parse_lcov_info_reports_line_and_branch_coverage(tmp_path):
 
     assert parsed["line_coverage_pct"] == 80.0
     assert parsed["branch_coverage_pct"] == 75.0
+    assert parsed["condition_coverage_pct"] == 75.0
+    assert parsed["condition_source"] == "verilator_lcov_branch_proxy"
+    assert parsed["toggle_coverage_pct"] is None
 
 
 def test_parse_verilator_lcov_da_records_reports_line_coverage(tmp_path):
@@ -66,6 +69,14 @@ def test_parse_verilator_lcov_da_records_reports_line_coverage(tmp_path):
     assert parsed["line_hit"] == 2
     assert parsed["line_coverage_pct"] == 66.67
     assert parsed["branch_coverage_pct"] == 25.0
+    assert parsed["condition_coverage_pct"] == 25.0
+    assert parsed["toggle_source"] == "not_reported_by_verilator_lcov"
+
+
+def test_testbench_generator_can_select_directed_random_or_both():
+    assert tb_agent._selected_default_tests("directed") == ["smoke_test"]
+    assert tb_agent._selected_default_tests("random") == ["constrained_random_sanity"]
+    assert tb_agent._selected_default_tests("both") == ["smoke_test", "constrained_random_sanity"]
 
 
 def test_formal_sby_uses_selected_solver():
@@ -116,6 +127,12 @@ def test_summary_agent_includes_code_assertion_formal_and_golden_coverage(tmp_pa
                 "branch_coverage_pct": 50.0,
                 "branch_hit": 1,
                 "branch_found": 2,
+                "condition_coverage_pct": 50.0,
+                "condition_hit": 1,
+                "condition_found": 2,
+                "condition_source": "verilator_lcov_branch_proxy",
+                "toggle_coverage_pct": None,
+                "toggle_source": "not_reported_by_verilator_lcov",
             }
         ),
         encoding="utf-8",
@@ -141,6 +158,9 @@ def test_summary_agent_includes_code_assertion_formal_and_golden_coverage(tmp_pa
     summary = json.loads((reports_dir / "simulation_summary_coverage.json").read_text(encoding="utf-8"))
     assert summary["coverage"]["functional"]["coverage_pct"] == 66.67
     assert summary["coverage"]["code"]["line_coverage_pct"] == 81.25
+    assert summary["coverage"]["code"]["branch_coverage_pct"] == 50.0
+    assert summary["coverage"]["code"]["condition_coverage_pct"] == 50.0
+    assert summary["coverage"]["code"]["toggle_coverage_pct"] is None
     assert summary["coverage"]["assertions"]["assertions_generated"] == 2
     assert summary["coverage"]["assertions"]["assertion_pass_pct"] == 100.0
     assert summary["formal"]["status"] == "pass"

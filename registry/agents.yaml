@@ -1464,6 +1464,57 @@
       }
     },
     {
+      "name": "Digital Arch2RTL Dashboard Agent",
+      "loop_type": "digital",
+      "domain": "digital",
+      "description": "Builds a post-Arch2RTL evidence dashboard with lint status, inferred storage counts, timing path classes, interface counts, clock/reset names, register-map summary, and handoff package pointers.",
+      "entrypoint": "agents.digital.digital_arch2rtl_dashboard_agent:run_agent",
+      "execution_mode": "native",
+      "inputs": [
+        "rtl/*.v",
+        "rtl/*.sv",
+        "digital/digital_regmap.json",
+        "digital/constraints/*.sdc",
+        "handoff/**"
+      ],
+      "outputs": [
+        "digital/arch2rtl_dashboard.json",
+        "digital/ARCH2RTL_DASHBOARD.md"
+      ],
+      "artifact_paths": [
+        "digital/arch2rtl_dashboard.json",
+        "digital/ARCH2RTL_DASHBOARD.md"
+      ],
+      "artifact_types": [
+        "report",
+        "structured_data"
+      ],
+      "required_skills": [
+        "rtl_compile_check",
+        "register_map_extraction",
+        "artifact_publish"
+      ],
+      "required_tools": [
+        "python",
+        "supabase",
+        "verilator"
+      ],
+      "hooks": [
+        "pre_run_validate_inputs",
+        "post_run_collect_artifacts",
+        "post_run_update_state",
+        "on_failure_capture_traceback",
+        "on_failure_preserve_logs",
+        "artifact_publish_to_supabase"
+      ],
+      "metadata": {
+        "registry_source": "DIGITAL_AGENT_FUNCTIONS",
+        "variable": "digital_arch2rtl_dashboard_agent",
+        "studio_contract_version": "v1",
+        "supabase_is_golden": true
+      }
+    },
+    {
       "name": "Digital IP Packaging & Handoff Agent",
       "loop_type": "digital",
       "domain": "digital",

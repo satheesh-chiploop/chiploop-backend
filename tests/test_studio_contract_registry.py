@@ -30,7 +30,7 @@ def test_studio_registry_dry_run_validation_mode():
     result = dry_run_validate("registry")
 
     assert result["ok"], result["errors"]
-    assert result["counts"]["agents"] == 169
+    assert result["counts"]["agents"] == 170
     assert result["counts"]["skills"] == 19
     assert result["counts"]["tools"] == 12
     assert result["counts"]["hooks"] == 9

@@ -121,6 +121,37 @@ def _status_label(value: Optional[float], status: str) -> str:
         return f"{value}%"
     return status or "Unavailable"
 
+def _functional_gaps(cov: Dict[str, Any]) -> list[Dict[str, Any]]:
+    gaps: list[Dict[str, Any]] = []
+    for group in ("outputs", "inputs"):
+        entries = cov.get(group) if isinstance(cov.get(group), dict) else {}
+        for name, entry in entries.items():
+            if not isinstance(entry, dict):
+                continue
+            hit = int(entry.get("hit_bins") or 0)
+            total = int(entry.get("total_bins") or 0)
+            if total <= 0 or hit >= total:
+                continue
+            seen_values = entry.get("seen_values") if isinstance(entry.get("seen_values"), list) else []
+            seen_zero = any(value == 0 for value in seen_values)
+            seen_nonzero = any(isinstance(value, (int, float)) and value != 0 for value in seen_values)
+            missing_bins = []
+            if not seen_zero:
+                missing_bins.append("zero")
+            if not seen_nonzero:
+                missing_bins.append("nonzero")
+            gaps.append({
+                "type": "functional_bin_gap",
+                "signal": name,
+                "group": group,
+                "coverage_point": f"{group}.{name}",
+                "hit_bins": hit,
+                "total_bins": total,
+                "seen_values": seen_values[:20],
+                "missing_bins": missing_bins,
+            })
+    return gaps
+
 
 def _record_text(
     workflow_id: str,
@@ -228,6 +259,7 @@ def run_agent(state: dict) -> dict:
         _log_kv(log_path, "code_cov_loaded", code_cov_loaded)
         _log_kv(log_path, "coverage_status", coverage_status)
         _log_kv(log_path, "code_coverage_status", code_coverage_status)
+        functional_gaps = _functional_gaps(cov)
 
         summary = {
             "type": "simulation_summary_coverage",
@@ -246,6 +278,8 @@ def run_agent(state: dict) -> dict:
                     "coverage_pct": cov.get("functional_coverage_pct"),
                     "bins_hit": cov.get("bins_hit"),
                     "total_bins": cov.get("total_bins"),
+                    "gap_count": len(functional_gaps),
+                    "gaps": functional_gaps,
                 },
                 "code": {
                     "status": code_coverage_status,
@@ -255,6 +289,14 @@ def run_agent(state: dict) -> dict:
                     "branch_coverage_pct": code_cov.get("branch_coverage_pct"),
                     "branch_hit": code_cov.get("branch_hit"),
                     "branch_found": code_cov.get("branch_found"),
+                    "condition_coverage_pct": code_cov.get("condition_coverage_pct"),
+                    "condition_hit": code_cov.get("condition_hit"),
+                    "condition_found": code_cov.get("condition_found"),
+                    "condition_source": code_cov.get("condition_source") or "unavailable",
+                    "toggle_coverage_pct": code_cov.get("toggle_coverage_pct"),
+                    "toggle_hit": code_cov.get("toggle_hit"),
+                    "toggle_found": code_cov.get("toggle_found"),
+                    "toggle_source": code_cov.get("toggle_source") or "not_reported_by_verilator_lcov",
                     "tool": code_cov.get("tool") or "verilator_coverage",
                 },
                 "assertions": {
@@ -297,8 +339,11 @@ def run_agent(state: dict) -> dict:
             f"- Functional coverage %: {summary['coverage']['functional_coverage_pct']}",
             f"- Coverage bins hit: {summary['coverage']['bins_hit']}",
             f"- Coverage total bins: {summary['coverage']['total_bins']}",
+            f"- Functional bin gaps: {len(functional_gaps)}",
             f"- Code line coverage: {_status_label(summary['coverage']['code']['line_coverage_pct'], code_coverage_status)}",
             f"- Code branch coverage: {_status_label(summary['coverage']['code']['branch_coverage_pct'], code_coverage_status)}",
+            f"- Code condition coverage: {_status_label(summary['coverage']['code']['condition_coverage_pct'], str(summary['coverage']['code']['condition_source']))}",
+            f"- Code toggle coverage: {_status_label(summary['coverage']['code']['toggle_coverage_pct'], str(summary['coverage']['code']['toggle_source']))}",
             f"- SVA/assertion status: {assertion_status}",
             f"- SVA/assertion pass %: {_status_label(assertion_pass_pct, assertion_status)}",
             f"- Formal status: {formal_status}",
@@ -307,6 +352,16 @@ def run_agent(state: dict) -> dict:
             f"- Code coverage tool: {summary['toolchain']['code_coverage']}",
             f"- Formal tool: {summary['toolchain']['formal']}",
             f"- Golden model tool: {summary['toolchain']['golden_model']}",
+            "",
+            "## Functional Coverage Not Met",
+            *[
+                (
+                    f"- {item['coverage_point']}: bins {item['hit_bins']}/{item['total_bins']}, "
+                    f"missing {', '.join(item.get('missing_bins') or ['unknown'])}, "
+                    f"seen values {item.get('seen_values')}"
+                )
+                for item in functional_gaps[:20]
+            ],
         ]
 
         

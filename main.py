@@ -442,6 +442,7 @@ from agents.digital.digital_verify_closure_ingest_agent import run_agent as digi
 from agents.digital.digital_coverage_gap_analysis_agent import run_agent as digital_coverage_gap_analysis_agent
 from agents.digital.digital_failure_triage_agent import run_agent as digital_failure_triage_agent
 from agents.digital.digital_closure_recommendation_agent import run_agent as digital_closure_recommendation_agent
+from agents.digital.digital_arch2rtl_dashboard_agent import run_agent as digital_arch2rtl_dashboard_agent
 
 DIGITAL_AGENT_FUNCTIONS: Dict[str, Any] = {
     "Digital Spec Agent": digital_spec_agent,
@@ -475,6 +476,7 @@ DIGITAL_AGENT_FUNCTIONS: Dict[str, Any] = {
     "Digital Coverage Gap Analysis Agent": digital_coverage_gap_analysis_agent,
     "Digital Failure Triage Agent": digital_failure_triage_agent,
     "Digital Closure Recommendation Agent": digital_closure_recommendation_agent,
+    "Digital Arch2RTL Dashboard Agent": digital_arch2rtl_dashboard_agent,
     "Digital Bug Localization Agent": digital_bug_localization_agent,
     "Digital Formal Verification Agent": digital_formal_verification_agent,
     "Digital Synthesis Readiness Agent": digital_synthesis_readiness_agent,
@@ -733,6 +735,7 @@ SYSTEM_AGENT_FUNCTIONS: Dict[str,Any] = {
     "Digital Coverage Gap Analysis Agent": digital_coverage_gap_analysis_agent,
     "Digital Failure Triage Agent": digital_failure_triage_agent,
     "Digital Closure Recommendation Agent": digital_closure_recommendation_agent,
+    "Digital Arch2RTL Dashboard Agent": digital_arch2rtl_dashboard_agent,
     "Digital Bug Localization Agent": digital_bug_localization_agent,
     "Digital Formal Verification Agent": digital_formal_verification_agent,   
     "Digital Synthesis Readiness Agent": digital_synthesis_readiness_agent,
@@ -924,6 +927,7 @@ DIGITAL_ARCH2RTL_DEFINITION = _linear_workflow_definition([
     "Digital RTL Agent",
     "Digital Power Intent (UPF-lite) Agent",
     "Digital IP Packaging & Handoff Agent",
+    "Digital Arch2RTL Dashboard Agent",
 ])
 
 DIGITAL_VERIFY_DEFINITION = _linear_workflow_definition([

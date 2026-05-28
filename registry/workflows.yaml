@@ -27,6 +27,7 @@
         "Digital Foundry Profile Agent",
         "Digital Functional Coverage Agent",
         "Digital Golden Model Comparison Agent",
+        "Digital Arch2RTL Dashboard Agent",
         "Digital IP Packaging & Handoff Agent",
         "Digital Implementation Setup Agent",
         "Digital Integration Doc Agent",
@@ -206,6 +207,7 @@
         "Digital Foundry Profile Agent",
         "Digital Functional Coverage Agent",
         "Digital Golden Model Comparison Agent",
+        "Digital Arch2RTL Dashboard Agent",
         "Digital IP Packaging & Handoff Agent",
         "Digital Implementation Setup Agent",
         "Digital Integration Doc Agent",
@@ -525,7 +527,8 @@
         "Digital RTL Agent",
         "Digital RTL Linting Agent",
         "Digital Power Intent (UPF-lite) Agent",
-        "Digital IP Packaging & Handoff Agent"
+        "Digital IP Packaging & Handoff Agent",
+        "Digital Arch2RTL Dashboard Agent"
       ],
       "hooks": [
         "pre_run_validate_inputs",
