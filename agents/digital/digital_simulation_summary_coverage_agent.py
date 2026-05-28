@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import re
 from datetime import datetime
 from typing import Any, Dict, Optional
 
@@ -52,6 +53,75 @@ def _write_file(path: str, content: str) -> None:
         f.write(content)
 
 
+def _find_first_json(workflow_dir: str, filename: str) -> Dict[str, Any]:
+    for root, _, files in os.walk(workflow_dir):
+        if filename in files:
+            found = _safe_read_json(os.path.join(root, filename))
+            if found:
+                return found
+    return {}
+
+
+def _count_sva_assertions(state: Dict[str, Any], workflow_dir: str) -> int:
+    sva = ((state.get("vv") or {}).get("sva") or {}) if isinstance(state.get("vv"), dict) else {}
+    generated = sva.get("assertion_count")
+    if isinstance(generated, int):
+        return generated
+
+    path = state.get("sva_assertions_path")
+    candidates = [path] if isinstance(path, str) else []
+    for root, _, files in os.walk(workflow_dir):
+        for name in files:
+            if name.endswith(".sv") and ("sva" in name.lower() or "assert" in name.lower()):
+                candidates.append(os.path.join(root, name))
+
+    for candidate in candidates:
+        try:
+            if candidate and os.path.exists(candidate):
+                with open(candidate, "r", encoding="utf-8", errors="ignore") as f:
+                    text = f.read()
+                return len(re.findall(r"\bassert\s+property\b", text))
+        except Exception:
+            continue
+    return 0
+
+
+def _scan_assertion_failures(reports_dir: str) -> int:
+    count = 0
+    run_logs_dir = os.path.join(reports_dir, "run_logs")
+    if not os.path.isdir(run_logs_dir):
+        return 0
+    patterns = (
+        "assertion failed",
+        "assert failed",
+        "sva error",
+        "%error",
+    )
+    for root, _, files in os.walk(run_logs_dir):
+        for name in files:
+            if not name.endswith(".log"):
+                continue
+            try:
+                with open(os.path.join(root, name), "r", encoding="utf-8", errors="ignore") as f:
+                    text = f.read().lower()
+                count += sum(text.count(pattern) for pattern in patterns)
+            except Exception:
+                continue
+    return count
+
+
+def _pct(hit: int, total: int) -> Optional[float]:
+    if total <= 0:
+        return None
+    return round(100.0 * hit / total, 2)
+
+
+def _status_label(value: Optional[float], status: str) -> str:
+    if isinstance(value, (int, float)):
+        return f"{value}%"
+    return status or "Unavailable"
+
+
 def _record_text(
     workflow_id: str,
     agent_name: str,
@@ -92,18 +162,25 @@ def run_agent(state: dict) -> dict:
         cov_path = state.get("functional_coverage_summary_json") or os.path.join(
             reports_dir, "functional_coverage_summary.json"
         )
+        code_cov_path = state.get("code_coverage_summary_json") or os.path.join(
+            reports_dir, "code_coverage_summary.json"
+        )
 
         _log(log_path, f"simulation_execution_summary_json={sim_path}")
         _log(log_path, f"functional_coverage_summary_json={cov_path}")
+        _log(log_path, f"code_coverage_summary_json={code_cov_path}")
 
         sim_exists = bool(sim_path and os.path.exists(sim_path))
         cov_exists = bool(cov_path and os.path.exists(cov_path))
+        code_cov_exists = bool(code_cov_path and os.path.exists(code_cov_path))
 
         sim = _safe_read_json(sim_path)
         cov = _safe_read_json(cov_path)
+        code_cov = _safe_read_json(code_cov_path)
 
         sim_loaded = bool(sim)
         cov_loaded = bool(cov)
+        code_cov_loaded = bool(code_cov)
 
         if not cov_exists:
             coverage_status = "missing"
@@ -111,12 +188,46 @@ def run_agent(state: dict) -> dict:
             coverage_status = "invalid"
         else:
             coverage_status = "ok"
+        if not code_cov_exists:
+            code_coverage_status = "missing"
+        elif code_cov_exists and not code_cov_loaded:
+            code_coverage_status = "invalid"
+        else:
+            code_coverage_status = str(code_cov.get("status") or "ok")
+
+        assertion_count = _count_sva_assertions(state, workflow_dir)
+        assertion_failures = _scan_assertion_failures(reports_dir)
+        assertion_pass_pct = _pct(max(assertion_count - assertion_failures, 0), assertion_count)
+        assertion_status = "missing" if assertion_count <= 0 else ("failed" if assertion_failures else "ok")
+
+        formal = ((state.get("vv") or {}).get("formal") or {}) if isinstance(state.get("vv"), dict) else {}
+        if not formal:
+            formal = _find_first_json(workflow_dir, "formal_report.json")
+        formal_run = formal.get("run") if isinstance(formal.get("run"), dict) else {}
+        formal_status = "not_enabled"
+        if formal:
+            if formal_run.get("attempted") is True:
+                formal_status = "pass" if formal_run.get("returncode") == 0 else "fail"
+            elif formal_run.get("available") is False:
+                formal_status = "tool_unavailable"
+            else:
+                formal_status = "generated"
+
+        golden = ((state.get("vv") or {}).get("golden_model") or {}) if isinstance(state.get("vv"), dict) else {}
+        if not golden:
+            golden = _find_first_json(workflow_dir, "golden_model_generation_report.json")
+        golden_status = "generated" if golden else "not_enabled"
+        sim_toolchain = sim.get("toolchain") if isinstance(sim.get("toolchain"), dict) else {}
+        formal_toolchain = formal.get("toolchain") if isinstance(formal.get("toolchain"), dict) else {}
 
         _log_kv(log_path, "sim_exists", sim_exists)
         _log_kv(log_path, "cov_exists", cov_exists)
+        _log_kv(log_path, "code_cov_exists", code_cov_exists)
         _log_kv(log_path, "sim_loaded", sim_loaded)
         _log_kv(log_path, "cov_loaded", cov_loaded)
+        _log_kv(log_path, "code_cov_loaded", code_cov_loaded)
         _log_kv(log_path, "coverage_status", coverage_status)
+        _log_kv(log_path, "code_coverage_status", code_coverage_status)
 
         summary = {
             "type": "simulation_summary_coverage",
@@ -130,7 +241,46 @@ def run_agent(state: dict) -> dict:
                 "functional_coverage_pct": cov.get("functional_coverage_pct"),
                 "bins_hit": cov.get("bins_hit"),
                 "total_bins": cov.get("total_bins"),
-            }
+                "functional": {
+                    "status": coverage_status,
+                    "coverage_pct": cov.get("functional_coverage_pct"),
+                    "bins_hit": cov.get("bins_hit"),
+                    "total_bins": cov.get("total_bins"),
+                },
+                "code": {
+                    "status": code_coverage_status,
+                    "line_coverage_pct": code_cov.get("line_coverage_pct"),
+                    "line_hit": code_cov.get("line_hit"),
+                    "line_found": code_cov.get("line_found"),
+                    "branch_coverage_pct": code_cov.get("branch_coverage_pct"),
+                    "branch_hit": code_cov.get("branch_hit"),
+                    "branch_found": code_cov.get("branch_found"),
+                    "tool": code_cov.get("tool") or "verilator_coverage",
+                },
+                "assertions": {
+                    "status": assertion_status,
+                    "assertions_generated": assertion_count,
+                    "assertion_failures": assertion_failures,
+                    "assertion_pass_pct": assertion_pass_pct,
+                },
+            },
+            "formal": {
+                "status": formal_status,
+                "available": formal_run.get("available"),
+                "attempted": formal_run.get("attempted"),
+                "returncode": formal_run.get("returncode"),
+            },
+            "golden_model": {
+                "status": golden_status,
+                "top_module": golden.get("top_module") if golden else None,
+            },
+            "toolchain": {
+                "simulator": sim_toolchain.get("simulator") or "verilator",
+                "code_coverage": sim_toolchain.get("code_coverage") or code_cov.get("tool") or "verilator_coverage",
+                "formal": formal_toolchain.get("formal") or ("symbiyosys" if formal_status != "not_enabled" else "none"),
+                "formal_solver": formal_toolchain.get("formal_solver") or formal_run.get("solver"),
+                "golden_model": "chiploop_python_scoreboard" if golden else "none",
+            },
         }
 
         
@@ -147,6 +297,16 @@ def run_agent(state: dict) -> dict:
             f"- Functional coverage %: {summary['coverage']['functional_coverage_pct']}",
             f"- Coverage bins hit: {summary['coverage']['bins_hit']}",
             f"- Coverage total bins: {summary['coverage']['total_bins']}",
+            f"- Code line coverage: {_status_label(summary['coverage']['code']['line_coverage_pct'], code_coverage_status)}",
+            f"- Code branch coverage: {_status_label(summary['coverage']['code']['branch_coverage_pct'], code_coverage_status)}",
+            f"- SVA/assertion status: {assertion_status}",
+            f"- SVA/assertion pass %: {_status_label(assertion_pass_pct, assertion_status)}",
+            f"- Formal status: {formal_status}",
+            f"- Golden model status: {golden_status}",
+            f"- Simulator tool: {summary['toolchain']['simulator']}",
+            f"- Code coverage tool: {summary['toolchain']['code_coverage']}",
+            f"- Formal tool: {summary['toolchain']['formal']}",
+            f"- Golden model tool: {summary['toolchain']['golden_model']}",
         ]
 
         
@@ -169,6 +329,7 @@ def run_agent(state: dict) -> dict:
             "type": "simulation_summary_coverage_report",
             "simulation_execution_summary_json": sim_path,
             "functional_coverage_summary_json": cov_path,
+            "code_coverage_summary_json": code_cov_path,
             "artifacts": artifacts,
         }
         rep_txt = json.dumps(report, indent=2)

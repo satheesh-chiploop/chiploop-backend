@@ -234,6 +234,20 @@
         "python",
         "supabase"
       ]
+    },
+    {
+      "name": "verification_closure_analysis",
+      "description": "Analyze completed Verify workflow artifacts for functional/code coverage gaps, failing testcase seeds, debug replay recommendations, and human-approved closure actions.",
+      "domains": [
+        "digital",
+        "validation"
+      ],
+      "tools": [
+        "python",
+        "supabase",
+        "verilator",
+        "verilator_coverage"
+      ]
     }
   ]
 }

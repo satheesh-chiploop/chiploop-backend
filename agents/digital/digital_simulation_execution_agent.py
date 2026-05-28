@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import shutil
 import subprocess
 from datetime import datetime
 from typing import Any, Dict, Optional
@@ -97,6 +98,115 @@ def _merge_functional_coverage_summaries(summaries: list[Dict[str, Any]]) -> Dic
     merged["functional_coverage_pct"] = round(100.0 * bins_hit / max(total_bins, 1), 2)
     merged["aggregated_run_count"] = len(summaries)
     return merged
+
+
+def _coverage_pct(hit: int, found: int) -> Optional[float]:
+    if found <= 0:
+        return None
+    return round(100.0 * hit / found, 2)
+
+
+def _parse_lcov_info(path: str) -> Dict[str, Any]:
+    line_found = line_hit = branch_found = branch_hit = 0
+    try:
+        with open(path, "r", encoding="utf-8", errors="ignore") as f:
+            for raw in f:
+                line = raw.strip()
+                if line.startswith("LF:"):
+                    line_found += int(line.split(":", 1)[1] or 0)
+                elif line.startswith("LH:"):
+                    line_hit += int(line.split(":", 1)[1] or 0)
+                elif line.startswith("BRF:"):
+                    branch_found += int(line.split(":", 1)[1] or 0)
+                elif line.startswith("BRH:"):
+                    branch_hit += int(line.split(":", 1)[1] or 0)
+    except Exception:
+        return {}
+    return {
+        "line_found": line_found,
+        "line_hit": line_hit,
+        "line_coverage_pct": _coverage_pct(line_hit, line_found),
+        "branch_found": branch_found,
+        "branch_hit": branch_hit,
+        "branch_coverage_pct": _coverage_pct(branch_hit, branch_found),
+    }
+
+
+def _find_verilator_coverage_data(tb_root: str) -> list[str]:
+    matches: list[str] = []
+    for root, _, files in os.walk(tb_root):
+        for name in files:
+            lower = name.lower()
+            if lower in {"coverage.dat", "coverage.dat.tmp"} or lower.endswith(".dat") and "coverage" in lower:
+                matches.append(os.path.join(root, name))
+    return sorted(matches)
+
+
+def _collect_code_coverage(
+    tb_root: str,
+    reports_dir: str,
+    log_path: str,
+    toolchain: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    selected_tool = "verilator_coverage"
+    if isinstance(toolchain, dict):
+        selected_tool = str(toolchain.get("code_coverage") or selected_tool).strip().lower()
+    if selected_tool in {"none", "disabled", "off"}:
+        return {
+            "type": "code_coverage_summary",
+            "tool": selected_tool,
+            "status": "disabled",
+            "line_coverage_pct": None,
+            "branch_coverage_pct": None,
+        }
+
+    dat_files = _find_verilator_coverage_data(tb_root)
+    summary: Dict[str, Any] = {
+        "type": "code_coverage_summary",
+        "tool": selected_tool,
+        "status": "missing_data",
+        "coverage_dat_files": dat_files,
+        "line_coverage_pct": None,
+        "branch_coverage_pct": None,
+    }
+    if not dat_files:
+        _log(log_path, "No Verilator coverage.dat files found", level="warning")
+        return summary
+
+    if selected_tool != "verilator_coverage":
+        summary["status"] = "unsupported_tool"
+        summary["supported_tools"] = ["verilator_coverage"]
+        _log(log_path, f"Unsupported code coverage tool selected: {selected_tool}", level="warning")
+        return summary
+
+    verilator_coverage = shutil.which("verilator_coverage")
+    if not verilator_coverage:
+        summary["status"] = "tool_unavailable"
+        _log(log_path, "verilator_coverage was not found in PATH", level="warning")
+        return summary
+
+    info_path = os.path.join(reports_dir, "code_coverage.info")
+    cmd = [verilator_coverage, "--write-info", info_path] + dat_files
+    try:
+        proc = subprocess.run(cmd, cwd=tb_root, capture_output=True, text=True, timeout=120)
+        summary["returncode"] = proc.returncode
+        summary["stdout_tail"] = (proc.stdout or "").splitlines()[-80:]
+        summary["stderr_tail"] = (proc.stderr or "").splitlines()[-80:]
+        summary["lcov_info_path"] = info_path
+        if proc.returncode != 0:
+            summary["status"] = "failed"
+            return summary
+        parsed = _parse_lcov_info(info_path)
+        if not parsed:
+            summary["status"] = "invalid"
+            return summary
+        summary.update(parsed)
+        summary["status"] = "ok"
+        return summary
+    except Exception as exc:
+        summary["status"] = "failed"
+        summary["error"] = str(exc)
+        return summary
 
 
 def _record_text(
@@ -245,6 +355,28 @@ def run_agent(state: dict) -> dict:
         if not coverage_md_present:
             _log(log_path, f"Missing runtime coverage markdown: {coverage_md_path}", level="warning")
 
+        toolchain = state.get("toolchain") if isinstance(state.get("toolchain"), dict) else {}
+        code_coverage = _collect_code_coverage(tb_root, reports_dir, log_path, toolchain)
+        code_coverage_path = os.path.join(reports_dir, "code_coverage_summary.json")
+        code_coverage_txt = json.dumps(code_coverage, indent=2)
+        _write_file(code_coverage_path, code_coverage_txt)
+        artifacts["code_coverage_summary"] = _record_text(
+            workflow_id,
+            agent_name,
+            "vv/tb/reports",
+            "code_coverage_summary.json",
+            code_coverage_txt,
+        )
+        info_path = code_coverage.get("lcov_info_path")
+        if isinstance(info_path, str) and os.path.exists(info_path):
+            artifacts["code_coverage_info"] = _record_text(
+                workflow_id,
+                agent_name,
+                "vv/tb/reports",
+                "code_coverage.info",
+                open(info_path, "r", encoding="utf-8", errors="ignore").read(),
+            )
+
         summary = {
             "type": "simulation_execution_summary",
             "total": len(results),
@@ -254,6 +386,13 @@ def run_agent(state: dict) -> dict:
             "coverage_md_present": coverage_md_present,
             "coverage_json_path": coverage_json_path,
             "coverage_md_path": coverage_md_path,
+            "code_coverage_json_present": os.path.exists(code_coverage_path),
+            "code_coverage_json_path": code_coverage_path,
+            "code_coverage": code_coverage,
+            "toolchain": {
+                "simulator": toolchain.get("simulator") or state.get("simulator_type") or "verilator",
+                "code_coverage": toolchain.get("code_coverage") or "verilator_coverage",
+            },
             "results": results,
         }
 
@@ -298,6 +437,9 @@ def run_agent(state: dict) -> dict:
             "fail": summary["fail"],
             "coverage_json_present": summary["coverage_json_present"],
             "coverage_md_present": summary["coverage_md_present"],
+            "code_coverage_json_present": summary["code_coverage_json_present"],
+            "code_coverage": code_coverage,
+            "toolchain": summary["toolchain"],
             "artifacts": artifacts,
         }
         rep_txt = json.dumps(report, indent=2)
@@ -321,6 +463,7 @@ def run_agent(state: dict) -> dict:
 
         state["simulation_execution_summary_json"] = summary_path
         state["simulation_execution_report_json"] = report_path
+        state["code_coverage_summary_json"] = code_coverage_path
         state.setdefault("vv", {})
         state["vv"]["simulation_execution"] = report
 

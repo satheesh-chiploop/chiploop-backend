@@ -177,7 +177,19 @@ def _record_text(workflow_id: str, agent_name: str, subdir: str, filename: str, 
         return None
 
 
-def _gen_sby(top: str, rtl_files: List[str], clk: Optional[str], rst: Optional[Dict[str, Any]]) -> str:
+def _formal_solver_from_state(state: Dict[str, Any]) -> str:
+    toolchain = state.get("toolchain") if isinstance(state.get("toolchain"), dict) else {}
+    solver = str(toolchain.get("formal_solver") or state.get("formal_solver") or "z3").strip().lower()
+    return solver if solver in {"z3", "boolector"} else "z3"
+
+
+def _gen_sby(
+    top: str,
+    rtl_files: List[str],
+    clk: Optional[str],
+    rst: Optional[Dict[str, Any]],
+    solver: str = "z3",
+) -> str:
     rel_files = [os.path.relpath(f) for f in rtl_files[:200]]
     files_block = "\n".join(rel_files)
     read_cmds = "\n".join([f"read_verilog -sv {rf}" for rf in rel_files])
@@ -195,7 +207,7 @@ depth 40
 multiclock on
 
 [engines]
-smtbmc z3
+smtbmc {solver}
 
 [script]
 {read_cmds}
@@ -251,19 +263,30 @@ def run_agent(state: dict) -> dict:
     clocks, resets = _infer_clocks_resets(spec, ports)
     clk = clocks[0] if clocks else None
     rst = resets[0] if resets else None
+    toolchain = state.get("toolchain") if isinstance(state.get("toolchain"), dict) else {}
+    formal_tool = str(toolchain.get("formal") or state.get("formal_tool") or "symbiyosys").strip().lower()
+    formal_solver = _formal_solver_from_state(state)
 
     formal_root = os.path.join(workflow_dir, "vv", "formal")
     os.makedirs(formal_root, exist_ok=True)
 
-    sby_txt = _gen_sby(top, rtl_files, clk, rst)
+    sby_txt = _gen_sby(top, rtl_files, clk, rst, formal_solver)
     props_sv = _gen_formal_props(top, clk, rst)
 
     _write_file(os.path.join(formal_root, f"{top}.sby"), sby_txt)
     _write_file(os.path.join(formal_root, f"{top}_formal.sv"), props_sv)
 
     sby_bin = _which("sby")
-    run_result: Dict[str, Any] = {"available": bool(sby_bin), "attempted": False}
-    if sby_bin:
+    solver_bin = _which(formal_solver)
+    run_result: Dict[str, Any] = {
+        "tool": formal_tool,
+        "solver": formal_solver,
+        "available": bool(sby_bin and solver_bin and formal_tool == "symbiyosys"),
+        "attempted": False,
+    }
+    if formal_tool == "none":
+        run_result["disabled"] = True
+    elif sby_bin and solver_bin:
         run_result["attempted"] = True
         try:
             cmd = ["sby", "-f", f"{top}.sby"]
@@ -300,7 +323,17 @@ def run_agent(state: dict) -> dict:
         "rtl_file_count": len(rtl_files),
         "clock": clk,
         "reset": rst,
-        "tools_detected": {"sby": bool(sby_bin), "yosys": bool(_which("yosys")), "z3": bool(_which("z3"))},
+        "toolchain": {
+            "formal": formal_tool,
+            "formal_solver": formal_solver,
+        },
+        "tools_detected": {
+            "sby": bool(sby_bin),
+            "yosys": bool(_which("yosys")),
+            "z3": bool(_which("z3")),
+            "boolector": bool(_which("boolector")),
+            formal_solver: bool(solver_bin),
+        },
         "run": run_result,
         "artifacts": artifacts,
     }

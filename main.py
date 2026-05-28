@@ -438,6 +438,10 @@ from agents.digital.digital_executive_summary_agent import run_agent as digital_
 from agents.digital.digital_simulation_execution_agent import run_agent as digital_simulation_execution_agent
 from agents.digital.digital_simulation_summary_coverage_agent import run_agent as digital_simulation_summary_coverage_agent
 from agents.digital.digital_verification_handoff_ingest_agent import run_agent as digital_verification_handoff_ingest_agent
+from agents.digital.digital_verify_closure_ingest_agent import run_agent as digital_verify_closure_ingest_agent
+from agents.digital.digital_coverage_gap_analysis_agent import run_agent as digital_coverage_gap_analysis_agent
+from agents.digital.digital_failure_triage_agent import run_agent as digital_failure_triage_agent
+from agents.digital.digital_closure_recommendation_agent import run_agent as digital_closure_recommendation_agent
 
 DIGITAL_AGENT_FUNCTIONS: Dict[str, Any] = {
     "Digital Spec Agent": digital_spec_agent,
@@ -467,6 +471,10 @@ DIGITAL_AGENT_FUNCTIONS: Dict[str, Any] = {
     "Digital Simulation Execution Agent": digital_simulation_execution_agent,
     "Digital Simulation Summary Coverage Agent": digital_simulation_summary_coverage_agent,
     "Digital Verification Handoff Ingest Agent": digital_verification_handoff_ingest_agent,
+    "Digital Verify Closure Ingest Agent": digital_verify_closure_ingest_agent,
+    "Digital Coverage Gap Analysis Agent": digital_coverage_gap_analysis_agent,
+    "Digital Failure Triage Agent": digital_failure_triage_agent,
+    "Digital Closure Recommendation Agent": digital_closure_recommendation_agent,
     "Digital Bug Localization Agent": digital_bug_localization_agent,
     "Digital Formal Verification Agent": digital_formal_verification_agent,
     "Digital Synthesis Readiness Agent": digital_synthesis_readiness_agent,
@@ -721,6 +729,10 @@ SYSTEM_AGENT_FUNCTIONS: Dict[str,Any] = {
     "Digital Simulation Execution Agent": digital_simulation_execution_agent,
     "Digital Simulation Summary Coverage Agent": digital_simulation_summary_coverage_agent,
     "Digital Verification Handoff Ingest Agent": digital_verification_handoff_ingest_agent,
+    "Digital Verify Closure Ingest Agent": digital_verify_closure_ingest_agent,
+    "Digital Coverage Gap Analysis Agent": digital_coverage_gap_analysis_agent,
+    "Digital Failure Triage Agent": digital_failure_triage_agent,
+    "Digital Closure Recommendation Agent": digital_closure_recommendation_agent,
     "Digital Bug Localization Agent": digital_bug_localization_agent,
     "Digital Formal Verification Agent": digital_formal_verification_agent,   
     "Digital Synthesis Readiness Agent": digital_synthesis_readiness_agent,
@@ -924,6 +936,13 @@ DIGITAL_VERIFY_DEFINITION = _linear_workflow_definition([
     "Digital Simulation Summary Coverage Agent",
 ])
 
+DIGITAL_VERIFY_CLOSURE_DEFINITION = _linear_workflow_definition([
+    "Digital Verify Closure Ingest Agent",
+    "Digital Coverage Gap Analysis Agent",
+    "Digital Failure Triage Agent",
+    "Digital Closure Recommendation Agent",
+])
+
 EMBEDDED_RUN_DEFINITION = _linear_workflow_definition([
     "Embedded Digital RTL Handoff Ingest Agent",
     "Embedded Firmware Register Extract Agent",
@@ -972,6 +991,7 @@ SYSTEM_SOFTWARE_VALIDATION_L2_DEFINITION = _linear_workflow_definition([
 LOCAL_PREBUILT_WORKFLOW_DEFINITIONS: Dict[str, Dict[str, Any]] = {
     "Digital_Arch2RTL": DIGITAL_ARCH2RTL_DEFINITION,
     "Digital_Verify": DIGITAL_VERIFY_DEFINITION,
+    "Digital_Verify_Closure": DIGITAL_VERIFY_CLOSURE_DEFINITION,
     "System_Architecture_Explorer": SYSTEM_ARCHITECTURE_EXPLORER_DEFINITION,
     "System_Cache_Tuning": SYSTEM_ARCHITECTURE_EXPLORER_DEFINITION,
     "System_ISA_Compare": SYSTEM_ARCHITECTURE_EXPLORER_DEFINITION,
@@ -985,6 +1005,7 @@ LOCAL_PREBUILT_WORKFLOW_DEFINITIONS: Dict[str, Dict[str, Any]] = {
 LOCAL_RUNTIME_WORKFLOW_OVERRIDES = {
     "Digital_Arch2RTL",
     "Digital_Verify",
+    "Digital_Verify_Closure",
     "Embedded_Run",
     "System_Software",
     "System_Software_Validation_L2",
@@ -1231,6 +1252,25 @@ def _definition_to_executor_nodes(defn: Dict[str, Any]) -> List[Dict[str, Any]]:
         label = (data.get("backendLabel") or data.get("uiLabel") or n.get("type") or "").strip()
         if label:
             out.append({"label": label})
+    return out
+
+
+def _insert_node_before_once(
+    nodes: List[Dict[str, Any]],
+    label: str,
+    before_label: str,
+) -> List[Dict[str, Any]]:
+    if any((node or {}).get("label") == label for node in nodes):
+        return nodes
+    out: List[Dict[str, Any]] = []
+    inserted = False
+    for node in nodes:
+        if not inserted and (node or {}).get("label") == before_label:
+            out.append({"label": label})
+            inserted = True
+        out.append(node)
+    if not inserted:
+        out.append({"label": label})
     return out
 
 
@@ -2340,8 +2380,16 @@ class DigitalVerifyAppIn(BaseModel):
     simulator_type: Optional[str] = None
     seed_count: Optional[int] = None
 
+    toolchain: Optional[Dict[str, str]] = None
+    run_closure_analysis: Optional[bool] = False
     toggles: Optional[Dict[str, bool]] = None  # {"enable_formal":false, "enable_golden_model":false}
 
+
+class DigitalVerifyClosureAppIn(BaseModel):
+    source_verify_workflow_id: str
+    coverage_targets: Optional[str] = None
+    seed_count: Optional[int] = None
+    toolchain: Optional[Dict[str, str]] = None
 
 
 class DigitalSmokeAppIn(BaseModel):
@@ -2506,6 +2554,21 @@ def execute_digital_app_background(
             force_platform_definition=True,
         )
         nodes = _definition_to_executor_nodes(defn)
+        if app_name == "verify":
+            toggles = shared_state.get("toggles") if isinstance(shared_state.get("toggles"), dict) else {}
+            optional_before = "Digital Simulation Control Agent"
+            if toggles.get("enable_golden_model"):
+                nodes = _insert_node_before_once(
+                    nodes,
+                    "Digital Golden Model Comparison Agent",
+                    optional_before,
+                )
+            if toggles.get("enable_formal"):
+                nodes = _insert_node_before_once(
+                    nodes,
+                    "Digital Formal Verification Agent",
+                    optional_before,
+                )
 
         # Run nodes (loop_type="digital" so it uses DIGITAL_AGENT_FUNCTIONS)
         _run_nodes_with_shared_state(
@@ -2692,6 +2755,29 @@ async def apps_verify_run(request: Request, background_tasks: BackgroundTasks, p
         "verify",
         "Digital_Verify",
         payload.dict(),
+    )
+
+    return {"ok": True, "workflow_id": workflow_id, "run_id": run_id}
+
+@app.post("/apps/verify/closure/run")
+async def apps_verify_closure_run(request: Request, background_tasks: BackgroundTasks, payload: DigitalVerifyClosureAppIn):
+    user_id = _require_user_id(request)
+    workflow_id, run_id, base_dir = _create_app_workflow_and_run(user_id, "App: Verify Closure Analysis", "digital")
+    artifact_dir = os.path.join(base_dir, "verify_closure")
+    os.makedirs(artifact_dir, exist_ok=True)
+
+    payload_dict = payload.dict()
+    payload_dict["parent_workflow_id"] = payload.source_verify_workflow_id
+
+    background_tasks.add_task(
+        execute_digital_app_background,
+        workflow_id,
+        run_id,
+        user_id,
+        artifact_dir,
+        "verify_closure",
+        "Digital_Verify_Closure",
+        payload_dict,
     )
 
     return {"ok": True, "workflow_id": workflow_id, "run_id": run_id}

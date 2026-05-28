@@ -14,10 +14,13 @@
         "Digital CDC Analysis Agent",
         "Digital CTS Agent",
         "Digital Clock & Reset Architecture Agent",
+        "Digital Closure Recommendation Agent",
         "Digital CoverGroup Agent",
         "Digital Coverage Agent",
+        "Digital Coverage Gap Analysis Agent",
         "Digital DRC Agent",
         "Digital Executive Summary Agent",
+        "Digital Failure Triage Agent",
         "Digital Fill Agent",
         "Digital Floorplan Agent",
         "Digital Formal Verification Agent",
@@ -58,7 +61,8 @@
         "Digital Testbench Generator Agent",
         "Digital Testcase Agent",
         "Digital Top Assembly Agent",
-        "Digital Verification Handoff Ingest Agent"
+        "Digital Verification Handoff Ingest Agent",
+        "Digital Verify Closure Ingest Agent"
       ],
       "hooks": [
         "pre_run_validate_inputs",
@@ -541,6 +545,26 @@
         "pre_run_validate_inputs",
         "post_run_collect_artifacts",
         "post_run_update_state",
+        "on_failure_capture_traceback",
+        "on_failure_preserve_logs",
+        "artifact_publish_to_supabase"
+      ]
+    },
+    {
+      "name": "Digital_Verify_Closure",
+      "loop_type": "digital",
+      "description": "Linked child workflow that analyzes a completed Verify run for coverage closure gaps, failing seeds, debug replay needs, and human-approved next actions.",
+      "agents": [
+        "Digital Verify Closure Ingest Agent",
+        "Digital Coverage Gap Analysis Agent",
+        "Digital Failure Triage Agent",
+        "Digital Closure Recommendation Agent"
+      ],
+      "hooks": [
+        "pre_run_validate_inputs",
+        "post_run_collect_artifacts",
+        "post_run_update_state",
+        "post_verify_trigger_closure_analysis",
         "on_failure_capture_traceback",
         "on_failure_preserve_logs",
         "artifact_publish_to_supabase"

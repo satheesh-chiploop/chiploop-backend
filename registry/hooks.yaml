@@ -40,6 +40,11 @@
       "name": "post_run_emit_chart_artifacts",
       "description": "Ensure System Architecture Explorer runs publish chart-ready JSON for frontend visualization.",
       "lifecycle": "post_run"
+    },
+    {
+      "name": "post_verify_trigger_closure_analysis",
+      "description": "Optionally launch a linked Verify Closure workflow after a Verify run completes when coverage is below target or failures need triage.",
+      "lifecycle": "post_run"
     }
   ]
 }

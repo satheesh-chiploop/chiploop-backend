@@ -139,6 +139,17 @@ def _validate_registers(expected: Dict[str, Any], observed: Dict[str, Any]) -> L
             })
     return mismatches
 
+def _signal_validation_available(item: Dict[str, Any], observed: Dict[str, Any]) -> bool:
+    if _listify(observed.get("observed_signals")):
+        return True
+    artifacts = item.get("artifacts") or {}
+    if isinstance(artifacts, dict):
+        for key in ("waveform", "rtl_log", "firmware_log"):
+            value = artifacts.get(key)
+            if isinstance(value, str) and value.strip():
+                return True
+    return False
+
 def _scenario_enabled_map(state: Dict[str, Any]) -> Dict[str, bool]:
     harness = state.get("system_software_cosim_harness_manifest") or {}
     scenarios = harness.get("scenarios") or []
@@ -202,7 +213,11 @@ def run_agent(state: dict) -> dict:
 
         expected_signals = _listify(expected.get("expected_signals"))
         observed_signals = _listify(observed.get("observed_signals"))
-        missing_signals = _missing_expected_items(expected_signals, observed_signals, aliases)
+        missing_signals = (
+            _missing_expected_items(expected_signals, observed_signals, aliases)
+            if _signal_validation_available(item, observed)
+            else []
+        )
 
         expected_registers = _dictify(expected.get("expected_registers"))
         observed_registers = _dictify(observed.get("observed_registers"))

@@ -708,6 +708,7 @@ override export PYTHON_BIN := {python_exe}
 override export PYTHON     := {python_exe}
 override SIM := verilator
 EXTRA_ARGS += --trace --trace-structs
+EXTRA_ARGS += --coverage
 EXTRA_ARGS += -Wno-fatal
 EXTRA_ARGS += -Wno-CASEINCOMPLETE
 EXTRA_ARGS += -Wno-WIDTH
@@ -895,4 +896,3 @@ NUM_ITERS=200 RANDOM_SEED=7 make TESTCASE=constrained_random_sanity
 
     _log(log_path, f"{agent_name} completed successfully.")
     return state
-

@@ -52,7 +52,13 @@ def run_agent(state: dict) -> dict:
     fail_count = int(trace.get("scenario_fail_count") or 0)
     not_applicable_count = int(trace.get("scenario_not_applicable_count") or 0)
     applicable_count = int(trace.get("scenario_applicable_count") or max(pass_count + fail_count, 0))
-    blocked_count = int(execution.get("scenario_blocked_count") or 0)
+    trace_validations = trace.get("scenario_validations") or []
+    if isinstance(trace_validations, list) and trace_validations:
+        blocked_count = sum(1 for item in trace_validations if isinstance(item, dict) and item.get("trace_validation_status") == "blocked")
+    elif trace:
+        blocked_count = int(trace.get("scenario_blocked_count") or 0)
+    else:
+        blocked_count = int(execution.get("scenario_blocked_count") or 0)
 
     if harness_status == "blocked":
         final_verdict = "blocked"

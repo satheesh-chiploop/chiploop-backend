@@ -24,6 +24,14 @@ def test_summary_preserves_not_applicable_scenario_count(monkeypatch):
             "scenario_fail_count": 0,
             "scenario_not_applicable_count": 2,
             "scenario_applicable_count": 4,
+            "scenario_validations": [
+                {"trace_validation_status": "pass"},
+                {"trace_validation_status": "pass"},
+                {"trace_validation_status": "not_applicable"},
+                {"trace_validation_status": "pass"},
+                {"trace_validation_status": "pass"},
+                {"trace_validation_status": "not_applicable"},
+            ],
         },
     }
 
@@ -35,3 +43,4 @@ def test_summary_preserves_not_applicable_scenario_count(monkeypatch):
     assert summary["scenario_pass_count"] == 4
     assert summary["scenario_not_applicable_count"] == 2
     assert summary["scenario_applicable_count"] == 4
+    assert summary["scenario_blocked_count"] == 0
