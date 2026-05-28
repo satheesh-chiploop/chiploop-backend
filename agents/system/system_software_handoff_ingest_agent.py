@@ -627,6 +627,8 @@ def run_agent(state: dict) -> dict:
         hydrated_map=artifact_resolution.get("hydrated") or {},
         resolved_map=artifact_resolution.get("resolved") or {},
     )
+    source_rtl_workflow_id = state.get("system_rtl_workflow_id") or state.get("source_rtl_workflow_id") or ""
+    contract["source_rtl_workflow_id"] = source_rtl_workflow_id
 
 
 
@@ -651,6 +653,7 @@ def run_agent(state: dict) -> dict:
     state["system_software_handoff"] = handoff_obj
     state["system_software_handoff_storage_path"] = source_meta.get("handoff_storage_path") or ""
     state["source_firmware_workflow_id"] = source_meta.get("source_workflow_id") or contract.get("source_workflow_id") or ""
+    state["source_rtl_workflow_id"] = source_rtl_workflow_id
 
     hydrated = artifact_resolution.get("hydrated") or {}
     resolved = artifact_resolution.get("resolved") or {}
@@ -698,6 +701,7 @@ def run_agent(state: dict) -> dict:
         system_block["software_input_contract"] = contract
         system_block["software_input_contract_path"] = state["system_software_input_contract_path"]
         system_block["source_firmware_workflow_id"] = state.get("source_firmware_workflow_id")
+        system_block["source_rtl_workflow_id"] = state.get("source_rtl_workflow_id")
 
     state["status"] = (
         "✅ System software handoff ingested"
