@@ -3,6 +3,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import time
 from typing import Any, Dict, List, Optional
 
@@ -268,11 +269,21 @@ def _run_cocotb_simulation(workflow_dir: str, makefile_path: str, test_module: s
     make_bin = shutil.which("make")
     if not make_bin:
         return {"attempted": False, "reason": "make not available"}
+    make_dir = os.path.dirname(make_abs)
+    python_bin_dir = os.path.dirname(sys.executable)
+    env = os.environ.copy()
+    env["PATH"] = os.pathsep.join(
+        [p for p in [python_bin_dir, env.get("PATH", "")] if p]
+    )
+    env["PYTHONPATH"] = os.pathsep.join(
+        [p for p in [make_dir, workflow_dir, env.get("PYTHONPATH", "")] if p]
+    )
     start = time.time()
     try:
         proc = subprocess.run(
             [make_bin, "-f", make_abs, f"MODULE={test_module}"],
             cwd=workflow_dir,
+            env=env,
             capture_output=True,
             text=True,
             timeout=600,
