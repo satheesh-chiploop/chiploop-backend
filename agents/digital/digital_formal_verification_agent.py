@@ -189,8 +189,12 @@ def _gen_sby(
     clk: Optional[str],
     rst: Optional[Dict[str, Any]],
     solver: str = "z3",
+    base_dir: Optional[str] = None,
 ) -> str:
-    rel_files = [os.path.relpath(f) for f in rtl_files[:200]]
+    rel_files = [
+        os.path.relpath(os.path.abspath(f), os.path.abspath(base_dir)) if base_dir else os.path.relpath(f)
+        for f in rtl_files[:200]
+    ]
     files_block = "\n".join(rel_files)
     read_cmds = "\n".join([f"read_verilog -sv {rf}" for rf in rel_files])
 
@@ -270,7 +274,7 @@ def run_agent(state: dict) -> dict:
     formal_root = os.path.join(workflow_dir, "vv", "formal")
     os.makedirs(formal_root, exist_ok=True)
 
-    sby_txt = _gen_sby(top, rtl_files, clk, rst, formal_solver)
+    sby_txt = _gen_sby(top, rtl_files, clk, rst, formal_solver, formal_root)
     props_sv = _gen_formal_props(top, clk, rst)
 
     _write_file(os.path.join(formal_root, f"{top}.sby"), sby_txt)

@@ -87,5 +87,8 @@ def test_verify_closure_agents_generate_plan_from_parent_verify_artifacts(tmp_pa
     plan = json.loads(plan_path.read_text(encoding="utf-8"))
     assert plan["verdict"] == "debug_failures_first"
     assert plan["coverage_gap_count"] >= 1
+    assert plan["functional_gap_count"] == 1
+    assert plan["functional_gaps"][0]["coverage_point"] == "outputs.irq"
+    assert plan["functional_gaps"][0]["missing_bins"] == ["nonzero"]
     assert plan["failure_count"] == 1
     assert any(item["id"] == "rerun_failed_seeds_with_waveform" for item in plan["recommended_actions"])

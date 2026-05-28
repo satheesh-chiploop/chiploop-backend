@@ -16,6 +16,7 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     gap = state.get("coverage_gap_analysis") if isinstance(state.get("coverage_gap_analysis"), dict) else {}
     triage = state.get("failure_triage") if isinstance(state.get("failure_triage"), dict) else {}
     gaps = gap.get("gaps") if isinstance(gap.get("gaps"), list) else []
+    functional_gaps = gap.get("functional_gaps") if isinstance(gap.get("functional_gaps"), list) else []
     failures = triage.get("failures") if isinstance(triage.get("failures"), list) else []
 
     actions: List[Dict[str, Any]] = []
@@ -54,6 +55,8 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
         "source_verify_workflow_id": state.get("source_verify_workflow_id"),
         "verdict": verdict,
         "coverage_gap_count": len(gaps),
+        "functional_gap_count": len(functional_gaps),
+        "functional_gaps": functional_gaps[:20],
         "failure_count": len(failures),
         "recommended_actions": actions,
         "rerun_policy": {
@@ -68,7 +71,18 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
         "",
         f"- Verdict: {verdict}",
         f"- Coverage gaps: {len(gaps)}",
+        f"- Functional bin gaps: {len(functional_gaps)}",
         f"- Failing testcase/seed pairs: {len(failures)}",
+        "",
+        "## Functional Coverage Not Met",
+        *[
+            (
+                f"- {item.get('coverage_point')}: bins {item.get('hit_bins')}/{item.get('total_bins')}, "
+                f"missing {', '.join(item.get('missing_bins') or ['unknown'])}; "
+                f"{item.get('recommendation')}"
+            )
+            for item in functional_gaps[:20]
+        ],
         "",
         "## Recommended Actions",
         *[f"- {item['priority']}: {item['description']}" for item in actions],

@@ -34,13 +34,27 @@ def _functional_gaps(cov: Dict[str, Any]) -> List[Dict[str, Any]]:
             hit = int(entry.get("hit_bins") or 0)
             total = int(entry.get("total_bins") or 0)
             if total > 0 and hit < total:
+                seen_values = entry.get("seen_values") if isinstance(entry.get("seen_values"), list) else []
+                seen_zero = any(value == 0 for value in seen_values)
+                seen_nonzero = any(isinstance(value, (int, float)) and value != 0 for value in seen_values)
+                missing_bins = []
+                if not seen_zero:
+                    missing_bins.append("zero")
+                if not seen_nonzero:
+                    missing_bins.append("nonzero")
                 gaps.append({
                     "type": "functional_bin_gap",
                     "signal": name,
                     "group": group,
+                    "coverage_point": f"{group}.{name}",
                     "hit_bins": hit,
                     "total_bins": total,
-                    "recommendation": f"Add directed stimulus and checker sampling for {name}; review whether the missing bin is reachable.",
+                    "seen_values": seen_values[:20],
+                    "missing_bins": missing_bins,
+                    "recommendation": (
+                        f"Add directed stimulus and checker sampling for {group}.{name}; "
+                        f"target missing bins: {', '.join(missing_bins) if missing_bins else 'unknown'}."
+                    ),
                 })
     return gaps
 
@@ -92,7 +106,8 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
             "target": targets["branch"],
             "recommendation": "Add branch-directed tests around control conditions and error/edge paths.",
         })
-    gaps.extend(_functional_gaps(functional_raw)[:20])
+    functional_bin_gaps = _functional_gaps(functional_raw)
+    gaps.extend(functional_bin_gaps[:20])
 
     seed_count = int(state.get("seed_count") or 0)
     actions = []
@@ -124,6 +139,8 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
             "code_branch_coverage_pct": branch_pct,
         },
         "gap_count": len(gaps),
+        "functional_gap_count": len(functional_bin_gaps),
+        "functional_gaps": functional_bin_gaps,
         "gaps": gaps,
         "recommended_actions": actions,
     }
@@ -135,6 +152,17 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
         f"- Code line coverage: {line_pct if line_pct is not None else 'unavailable'} / target {targets['line']}%",
         f"- Code branch coverage: {branch_pct if branch_pct is not None else 'unavailable'} / target {targets['branch']}%",
         f"- Gap count: {len(gaps)}",
+        f"- Functional bin gaps: {len(functional_bin_gaps)}",
+        "",
+        "## Functional Coverage Gaps",
+        *[
+            (
+                f"- {item['coverage_point']}: bins {item['hit_bins']}/{item['total_bins']}, "
+                f"missing {', '.join(item.get('missing_bins') or ['unknown'])}, "
+                f"seen values {item.get('seen_values')}"
+            )
+            for item in functional_bin_gaps[:20]
+        ],
         "",
         "## Recommended Actions",
         *[f"- {item['priority']}: {item['action']} - {item['why']}" for item in actions],

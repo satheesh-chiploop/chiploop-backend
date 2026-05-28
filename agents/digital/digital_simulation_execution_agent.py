@@ -160,7 +160,7 @@ def _collect_code_coverage(
             "branch_coverage_pct": None,
         }
 
-    dat_files = _find_verilator_coverage_data(tb_root)
+    dat_files = [os.path.abspath(path) for path in _find_verilator_coverage_data(tb_root)]
     summary: Dict[str, Any] = {
         "type": "code_coverage_summary",
         "tool": selected_tool,
@@ -185,7 +185,7 @@ def _collect_code_coverage(
         _log(log_path, "verilator_coverage was not found in PATH", level="warning")
         return summary
 
-    info_path = os.path.join(reports_dir, "code_coverage.info")
+    info_path = os.path.abspath(os.path.join(reports_dir, "code_coverage.info"))
     cmd = [verilator_coverage, "--write-info", info_path] + dat_files
     try:
         proc = subprocess.run(cmd, cwd=tb_root, capture_output=True, text=True, timeout=120)

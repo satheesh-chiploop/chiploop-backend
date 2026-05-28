@@ -48,6 +48,20 @@ def test_formal_sby_uses_selected_solver():
     assert "smtbmc boolector" in text
 
 
+def test_formal_sby_paths_are_relative_to_formal_workdir(tmp_path):
+    workflow_dir = tmp_path / "backend" / "workflows" / "wf"
+    rtl = workflow_dir / "handoff" / "rtl" / "pwm_controller.v"
+    formal_dir = workflow_dir / "vv" / "formal"
+    rtl.parent.mkdir(parents=True)
+    formal_dir.mkdir(parents=True)
+    rtl.write_text("module pwm_controller; endmodule\n", encoding="utf-8")
+
+    text = formal_agent._gen_sby("pwm_controller", [str(rtl)], "clk", None, "z3", str(formal_dir))
+
+    assert "backend/workflows/wf/handoff" not in text
+    assert "../../handoff/rtl/pwm_controller.v" in text.replace("\\", "/")
+
+
 def test_summary_agent_includes_code_assertion_formal_and_golden_coverage(tmp_path, monkeypatch):
     monkeypatch.setattr(summary_agent, "_record_text", lambda *args, **kwargs: None)
     monkeypatch.chdir(tmp_path)
