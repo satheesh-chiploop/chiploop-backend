@@ -108,6 +108,7 @@ def _coverage_pct(hit: int, found: int) -> Optional[float]:
 
 def _parse_lcov_info(path: str) -> Dict[str, Any]:
     line_found = line_hit = branch_found = branch_hit = 0
+    saw_da_lines = False
     try:
         with open(path, "r", encoding="utf-8", errors="ignore") as f:
             for raw in f:
@@ -116,12 +117,45 @@ def _parse_lcov_info(path: str) -> Dict[str, Any]:
                     line_found += int(line.split(":", 1)[1] or 0)
                 elif line.startswith("LH:"):
                     line_hit += int(line.split(":", 1)[1] or 0)
+                elif line.startswith("DA:"):
+                    _, payload = line.split(":", 1)
+                    parts = payload.split(",")
+                    if len(parts) >= 2:
+                        saw_da_lines = True
+                        line_found += 1
+                        try:
+                            if int(parts[1] or 0) > 0:
+                                line_hit += 1
+                        except ValueError:
+                            pass
                 elif line.startswith("BRF:"):
                     branch_found += int(line.split(":", 1)[1] or 0)
                 elif line.startswith("BRH:"):
                     branch_hit += int(line.split(":", 1)[1] or 0)
+                elif line.startswith("BRDA:"):
+                    _, payload = line.split(":", 1)
+                    parts = payload.split(",")
+                    if len(parts) >= 4 and parts[3] not in {"", "-"}:
+                        branch_found += 1
+                        try:
+                            if int(parts[3] or 0) > 0:
+                                branch_hit += 1
+                        except ValueError:
+                            pass
     except Exception:
         return {}
+    if saw_da_lines:
+        # Verilator emits DA/BRDA records but may omit LF/LH. If BRF/BRH are also
+        # present they are authoritative for branch totals, so avoid double count.
+        with open(path, "r", encoding="utf-8", errors="ignore") as f:
+            text = f.read()
+        if "BRF:" in text or "BRH:" in text:
+            branch_found = branch_hit = 0
+            for line in text.splitlines():
+                if line.startswith("BRF:"):
+                    branch_found += int(line.split(":", 1)[1] or 0)
+                elif line.startswith("BRH:"):
+                    branch_hit += int(line.split(":", 1)[1] or 0)
     return {
         "line_found": line_found,
         "line_hit": line_hit,

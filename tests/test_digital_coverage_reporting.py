@@ -42,6 +42,32 @@ def test_parse_lcov_info_reports_line_and_branch_coverage(tmp_path):
     assert parsed["branch_coverage_pct"] == 75.0
 
 
+def test_parse_verilator_lcov_da_records_reports_line_coverage(tmp_path):
+    info = tmp_path / "code_coverage.info"
+    info.write_text(
+        "\n".join(
+            [
+                "TN:verilator_coverage",
+                "SF:../../handoff/rtl/pwm_controller.v",
+                "DA:2,26",
+                "DA:3,0",
+                "DA:4,1",
+                "BRF:4",
+                "BRH:1",
+                "end_of_record",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    parsed = execution_agent._parse_lcov_info(str(info))
+
+    assert parsed["line_found"] == 3
+    assert parsed["line_hit"] == 2
+    assert parsed["line_coverage_pct"] == 66.67
+    assert parsed["branch_coverage_pct"] == 25.0
+
+
 def test_formal_sby_uses_selected_solver():
     text = formal_agent._gen_sby("pwm_controller", ["rtl/pwm_controller.v"], "clk", None, "boolector")
 
@@ -59,6 +85,7 @@ def test_formal_sby_paths_are_relative_to_formal_workdir(tmp_path):
     text = formal_agent._gen_sby("pwm_controller", [str(rtl)], "clk", None, "z3", str(formal_dir))
 
     assert "backend/workflows/wf/handoff" not in text
+    assert "read_verilog -sv pwm_controller.v" in text
     assert "../../handoff/rtl/pwm_controller.v" in text.replace("\\", "/")
 
 

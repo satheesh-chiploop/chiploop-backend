@@ -195,8 +195,9 @@ def _gen_sby(
         os.path.relpath(os.path.abspath(f), os.path.abspath(base_dir)) if base_dir else os.path.relpath(f)
         for f in rtl_files[:200]
     ]
+    script_files = [os.path.basename(path) for path in rel_files]
     files_block = "\n".join(rel_files)
-    read_cmds = "\n".join([f"read_verilog -sv {rf}" for rf in rel_files])
+    read_cmds = "\n".join([f"read_verilog -sv {rf}" for rf in script_files])
 
     clock_comment = f"clock {clk}" if clk else "clock <clk> (no clock detected)"
     reset_comment = ""
