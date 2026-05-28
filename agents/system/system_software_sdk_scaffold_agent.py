@@ -1,6 +1,7 @@
 import datetime
 import json
 import os
+import re
 from typing import Any, Dict, List, Optional
 
 from utils.artifact_utils import save_text_artifact_and_record
@@ -92,6 +93,20 @@ def _public_groups(api_contract: Dict[str, Any]) -> List[Dict[str, Any]]:
     return [g for g in groups if isinstance(g, dict)]
 
 
+def _safe_rust_identifier(value: Any, fallback: str = "generated_api") -> str:
+    raw = str(value or "").strip().lower()
+    if not raw:
+        return fallback
+    raw = re.sub(r"\.[a-z0-9]+$", "", raw)
+    raw = re.sub(r"[^a-z0-9_]+", "_", raw)
+    raw = re.sub(r"_+", "_", raw).strip("_")
+    if not raw:
+        raw = fallback
+    if raw[0].isdigit():
+        raw = f"api_{raw}"
+    return raw
+
+
 def _rust_type_for_return(ret: str) -> str:
     mapping = {
         "u8": "u8",
@@ -114,7 +129,7 @@ def _rust_type_for_return(ret: str) -> str:
 
 
 def _method_signature(method: Dict[str, Any]) -> str:
-    name = method.get("name") or "unnamed"
+    name = _safe_rust_identifier(method.get("name"), "unnamed")
     inputs = method.get("inputs") or []
     rendered_inputs = ["&self"]
     for raw in inputs:

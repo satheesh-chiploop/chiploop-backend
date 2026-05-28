@@ -1,6 +1,7 @@
 import datetime
 import json
 import os
+import re
 from typing import Any, Dict, List, Optional
 
 from utils.artifact_utils import save_text_artifact_and_record
@@ -70,6 +71,40 @@ def _service_entry(name: str, methods: List[Dict[str, Any]], description: str, v
         "description": description,
         "methods": methods,
     }
+
+
+def _safe_api_name(value: Any, fallback: str = "candidate_api") -> str:
+    raw = str(value or "").strip().lower()
+    if not raw:
+        return fallback
+    raw = re.sub(r"\.[a-z0-9]+$", "", raw)
+    raw = re.sub(r"[^a-z0-9_]+", "_", raw)
+    raw = re.sub(r"_+", "_", raw).strip("_")
+    if not raw:
+        raw = fallback
+    if raw[0].isdigit():
+        raw = f"api_{raw}"
+    return raw
+
+
+def _normalize_method_names(api_groups: List[Dict[str, Any]]) -> None:
+    for group in api_groups:
+        seen = set()
+        normalized_methods: List[Dict[str, Any]] = []
+        for idx, method in enumerate(group.get("methods") or []):
+            if not isinstance(method, dict):
+                continue
+            normalized = dict(method)
+            base_name = _safe_api_name(normalized.get("name"), f"method_{idx + 1}")
+            name = base_name
+            suffix = 2
+            while name in seen:
+                name = f"{base_name}_{suffix}"
+                suffix += 1
+            seen.add(name)
+            normalized["name"] = name
+            normalized_methods.append(normalized)
+        group["methods"] = normalized_methods
 
 
 def _lang_pref(state: Dict[str, Any], model: Dict[str, Any]) -> str:
@@ -197,12 +232,14 @@ def _build_api_contract(model: Dict[str, Any], state: Dict[str, Any]) -> Dict[st
             _service_entry(
                 "handoff_candidates",
                 [
-                    {"name": str(item), "inputs": [], "returns": "candidate"}
-                    for item in public_api_candidates[:32]
+                    {"name": _safe_api_name(item, f"candidate_api_{idx + 1}"), "inputs": [], "returns": "candidate"}
+                    for idx, item in enumerate(public_api_candidates[:32])
                 ],
                 "Candidate APIs derived directly from the upstream handoff.",
             )
         )
+
+    _normalize_method_names(api_groups)
 
     return {
         "package_type": "system_software_api_contract",
