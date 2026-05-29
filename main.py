@@ -688,6 +688,10 @@ from agents.system.system_software_cosim_harness_agent import run_agent as syste
 from agents.system.system_software_cosim_execution_agent import run_agent as system_cosim_execution_agent
 from agents.system.system_software_cosim_trace_validation_agent import run_agent as system_cosim_trace_validation_agent
 from agents.system.system_software_validation_summary_l2_agent import run_agent as system_software_validation_summary_l2_agent
+from agents.system.system_product_collateral_ingest_agent import run_agent as system_product_collateral_ingest_agent
+from agents.system.system_product_capability_model_agent import run_agent as system_product_capability_model_agent
+from agents.system.system_product_dashboard_agent import run_agent as system_product_dashboard_agent
+from agents.system.system_product_package_agent import run_agent as system_product_package_agent
 from agents.system.system_architecture_explorer_agents import (
     system_architecture_intent_agent,
     system_workload_characterization_agent,
@@ -861,6 +865,10 @@ SYSTEM_AGENT_FUNCTIONS: Dict[str,Any] = {
     "System Software CoSim Execution Agent": system_cosim_execution_agent,
     "System Software CoSim Trace Validation Agent": system_cosim_trace_validation_agent,
     "System Software Validation Summary (L2)": system_software_validation_summary_l2_agent,
+    "System Product Collateral Ingest Agent": system_product_collateral_ingest_agent,
+    "System Product Capability Model Agent": system_product_capability_model_agent,
+    "System Product Dashboard Agent": system_product_dashboard_agent,
+    "System Product Package Agent": system_product_package_agent,
     "System Architecture Intent Agent": system_architecture_intent_agent,
     "System Workload Characterization Agent": system_workload_characterization_agent,
     "System gem5 Config Agent": system_gem5_config_agent,
@@ -992,6 +1000,13 @@ SYSTEM_SOFTWARE_VALIDATION_L2_DEFINITION = _linear_workflow_definition([
     "System Software Validation Summary (L2)",
 ])
 
+SYSTEM_PRODUCT_APP_BUILDER_DEFINITION = _linear_workflow_definition([
+    "System Product Collateral Ingest Agent",
+    "System Product Capability Model Agent",
+    "System Product Dashboard Agent",
+    "System Product Package Agent",
+])
+
 LOCAL_PREBUILT_WORKFLOW_DEFINITIONS: Dict[str, Dict[str, Any]] = {
     "Digital_Arch2RTL": DIGITAL_ARCH2RTL_DEFINITION,
     "Digital_Verify": DIGITAL_VERIFY_DEFINITION,
@@ -1004,6 +1019,7 @@ LOCAL_PREBUILT_WORKFLOW_DEFINITIONS: Dict[str, Dict[str, Any]] = {
     "Embedded_Run": EMBEDDED_RUN_DEFINITION,
     "System_Software": SYSTEM_SOFTWARE_DEFINITION,
     "System_Software_Validation_L2": SYSTEM_SOFTWARE_VALIDATION_L2_DEFINITION,
+    "System_Product_App_Builder": SYSTEM_PRODUCT_APP_BUILDER_DEFINITION,
 }
 
 LOCAL_RUNTIME_WORKFLOW_OVERRIDES = {
@@ -1013,6 +1029,7 @@ LOCAL_RUNTIME_WORKFLOW_OVERRIDES = {
     "Embedded_Run",
     "System_Software",
     "System_Software_Validation_L2",
+    "System_Product_App_Builder",
 }
 
 # Dynamically load user-created agents as modules under `agents/` (optional)
@@ -2281,6 +2298,18 @@ class SystemSoftwareValidationAppIn(BaseModel):
     system_rtl_workflow_id: Optional[str] = None
 
     goal: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class SystemProductBuilderAppIn(BaseModel):
+    arch2rtl_workflow_id: Optional[str] = None
+    verify_workflow_id: Optional[str] = None
+    system_firmware_workflow_id: Optional[str] = None
+    system_software_workflow_id: Optional[str] = None
+    system_validation_workflow_id: Optional[str] = None
+    product_intent: Optional[str] = None
+    app_type: Optional[str] = "web_dashboard"
+    target_runtime: Optional[str] = "simulated_device"
     notes: Optional[str] = None
 
 # ==========================================================
@@ -5977,5 +6006,20 @@ async def apps_system_software_validation(
         background_tasks=background_tasks,
         request=request,
         payload=payload,
+    )
+
+
+@app.post("/apps/system/product-builder/run")
+async def apps_system_product_builder(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    payload: SystemProductBuilderAppIn,
+):
+    return _start_system_app(
+        background_tasks,
+        request,
+        payload,
+        "App: System Product Builder",
+        "System_Product_App_Builder",
     )
 

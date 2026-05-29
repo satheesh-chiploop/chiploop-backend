@@ -279,6 +279,10 @@
         "System ISS Bridge Agent",
         "System Implementation Setup Agent",
         "System Integration Intent Agent",
+        "System Product Capability Model Agent",
+        "System Product Collateral Ingest Agent",
+        "System Product Dashboard Agent",
+        "System Product Package Agent",
         "System RTL Handoff Package Agent",
         "System Simulation Control Agent",
         "System Simulation Coverage Summary Agent",
@@ -529,6 +533,25 @@
         "Digital Power Intent (UPF-lite) Agent",
         "Digital IP Packaging & Handoff Agent",
         "Digital Arch2RTL Dashboard Agent"
+      ],
+      "hooks": [
+        "pre_run_validate_inputs",
+        "post_run_collect_artifacts",
+        "post_run_update_state",
+        "on_failure_capture_traceback",
+        "on_failure_preserve_logs",
+        "artifact_publish_to_supabase"
+      ]
+    },
+    {
+      "name": "System_Product_App_Builder",
+      "loop_type": "system",
+      "description": "Builds a simulator-backed product dashboard from completed RTL, verification, firmware, software, and validation workflow collateral.",
+      "agents": [
+        "System Product Collateral Ingest Agent",
+        "System Product Capability Model Agent",
+        "System Product Dashboard Agent",
+        "System Product Package Agent"
       ],
       "hooks": [
         "pre_run_validate_inputs",

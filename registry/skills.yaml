@@ -248,6 +248,30 @@
         "verilator",
         "verilator_coverage"
       ]
+    },
+    {
+      "name": "product_collateral_ingest",
+      "description": "Normalize RTL, verification, firmware, software, and validation workflow lineage into a product-builder input contract.",
+      "domains": ["system", "software", "firmware", "digital"],
+      "tools": ["python", "supabase"]
+    },
+    {
+      "name": "product_capability_modeling",
+      "description": "Convert validated register, firmware, and software API collateral into user-facing device capabilities.",
+      "domains": ["system", "software", "firmware"],
+      "tools": ["python"]
+    },
+    {
+      "name": "simulator_backed_product_app",
+      "description": "Generate a runnable UI backed by a simulator adapter that can later be replaced by a board or silicon transport.",
+      "domains": ["system", "software"],
+      "tools": ["python", "html", "javascript"]
+    },
+    {
+      "name": "product_package",
+      "description": "Package generated product apps with runnable entrypoints, lineage, and deployment handoff notes.",
+      "domains": ["system", "software"],
+      "tools": ["python", "supabase"]
     }
   ]
 }

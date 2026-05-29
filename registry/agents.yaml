@@ -8335,6 +8335,70 @@
         "variable": "digital_closure_recommendation_agent",
         "studio_contract_version": "v1"
       }
+    },
+    {
+      "name": "System Product Collateral Ingest Agent",
+      "loop_type": "system",
+      "domain": "system",
+      "description": "Imports workflow lineage from RTL, Verify, Firmware, Software, and Validation runs for product app generation.",
+      "entrypoint": "agents.system.system_product_collateral_ingest_agent:run_agent",
+      "execution_mode": "native",
+      "inputs": ["workflow_ids", "product_intent"],
+      "outputs": ["system/product/input/system_product_collateral_contract.json"],
+      "artifact_paths": ["system/product/input/system_product_collateral_contract.json"],
+      "artifact_types": ["structured_data"],
+      "required_skills": ["product_collateral_ingest", "artifact_publish"],
+      "required_tools": ["python", "supabase"],
+      "hooks": ["pre_run_validate_inputs", "post_run_collect_artifacts", "post_run_update_state", "artifact_publish_to_supabase"],
+      "metadata": {"registry_source": "SYSTEM_AGENT_FUNCTIONS", "studio_contract_version": "v1"}
+    },
+    {
+      "name": "System Product Capability Model Agent",
+      "loop_type": "system",
+      "domain": "system",
+      "description": "Builds a user-visible capability and register-backed device model from product collateral.",
+      "entrypoint": "agents.system.system_product_capability_model_agent:run_agent",
+      "execution_mode": "native",
+      "inputs": ["system/product/input/system_product_collateral_contract.json"],
+      "outputs": ["system/product/model/system_product_capability_model.json"],
+      "artifact_paths": ["system/product/model/system_product_capability_model.json"],
+      "artifact_types": ["structured_data"],
+      "required_skills": ["product_capability_modeling", "artifact_publish"],
+      "required_tools": ["python", "supabase"],
+      "hooks": ["pre_run_validate_inputs", "post_run_collect_artifacts", "post_run_update_state", "artifact_publish_to_supabase"],
+      "metadata": {"registry_source": "SYSTEM_AGENT_FUNCTIONS", "studio_contract_version": "v1"}
+    },
+    {
+      "name": "System Product Dashboard Agent",
+      "loop_type": "system",
+      "domain": "system",
+      "description": "Generates a simulator-backed product dashboard UI driven by the capability/register model.",
+      "entrypoint": "agents.system.system_product_dashboard_agent:run_agent",
+      "execution_mode": "native",
+      "inputs": ["system/product/model/system_product_capability_model.json"],
+      "outputs": ["system/product/app/index.html", "system/product/app/system_product_dashboard_manifest.json"],
+      "artifact_paths": ["system/product/app/index.html", "system/product/app/system_product_dashboard_manifest.json"],
+      "artifact_types": ["application", "structured_data"],
+      "required_skills": ["simulator_backed_product_app", "artifact_publish"],
+      "required_tools": ["python", "supabase"],
+      "hooks": ["pre_run_validate_inputs", "post_run_collect_artifacts", "post_run_update_state", "artifact_publish_to_supabase"],
+      "metadata": {"registry_source": "SYSTEM_AGENT_FUNCTIONS", "studio_contract_version": "v1"}
+    },
+    {
+      "name": "System Product Package Agent",
+      "loop_type": "system",
+      "domain": "system",
+      "description": "Packages the generated product app and documents the simulator-to-board replacement path.",
+      "entrypoint": "agents.system.system_product_package_agent:run_agent",
+      "execution_mode": "native",
+      "inputs": ["system/product/app/system_product_dashboard_manifest.json"],
+      "outputs": ["system/product/system_product_package.json", "system/product/README_PRODUCT_APP.md"],
+      "artifact_paths": ["system/product/system_product_package.json", "system/product/README_PRODUCT_APP.md"],
+      "artifact_types": ["structured_data", "report"],
+      "required_skills": ["product_package", "artifact_publish"],
+      "required_tools": ["python", "supabase"],
+      "hooks": ["pre_run_validate_inputs", "post_run_collect_artifacts", "post_run_update_state", "artifact_publish_to_supabase"],
+      "metadata": {"registry_source": "SYSTEM_AGENT_FUNCTIONS", "studio_contract_version": "v1"}
     }
   ]
 }
