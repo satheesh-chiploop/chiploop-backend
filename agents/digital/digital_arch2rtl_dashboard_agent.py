@@ -198,7 +198,7 @@ def _lint_summary(rtl_files: List[str]) -> Dict[str, Any]:
         return {"status": "tool_unavailable", "tool": "verilator", "available": False}
     cmd = [verilator, "--lint-only", "-Wall", "-Wno-fatal"] + rtl_files
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=45)
         combined = f"{proc.stdout}\n{proc.stderr}"
         error_count = len(re.findall(r"%Error", combined))
         warning_count = len(re.findall(r"%Warning", combined))
@@ -252,7 +252,6 @@ def _markdown(report: Dict[str, Any]) -> str:
         f"- Reset: {report['clock_reset'].get('primary_reset') or 'not inferred'}",
         f"- Modules: {report.get('module_count')}",
         f"- RTL files: {report.get('rtl_file_count')}",
-        f"- Registers: {report['register_map'].get('register_count')}",
         "",
     ])
 
