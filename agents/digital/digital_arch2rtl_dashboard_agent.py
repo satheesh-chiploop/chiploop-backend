@@ -114,21 +114,62 @@ def _infer_clock_reset(modules: List[Dict[str, Any]], state: Dict[str, Any]) -> 
     }
 
 
+def _range_width(width: str) -> int:
+    if not width:
+        return 1
+    m = re.search(r"\[\s*(\d+)\s*:\s*(\d+)\s*\]", width)
+    if not m:
+        return 1
+    return abs(int(m.group(1)) - int(m.group(2))) + 1
+
+
+def _array_count(suffix: str) -> int:
+    count = 1
+    for hi, lo in re.findall(r"\[\s*(\d+)\s*:\s*(\d+)\s*\]", suffix or ""):
+        count *= abs(int(hi) - int(lo)) + 1
+    return count
+
+
+def _declared_storage_bits(text: str) -> Dict[str, int]:
+    decls: Dict[str, int] = {}
+    decl_pat = re.compile(r"\b(?:reg|logic)\b\s*(?:signed\s*)?(\[[^\]]+\])?\s*([^;]+);", re.IGNORECASE)
+    for dm in decl_pat.finditer(text):
+        packed = dm.group(1) or ""
+        width = _range_width(packed)
+        for raw in dm.group(2).split(","):
+            item = re.sub(r"=.*$", "", raw).strip()
+            nm = re.match(r"([A-Za-z_][A-Za-z0-9_$]*)\s*((?:\[[^\]]+\]\s*)*)$", item)
+            if not nm:
+                continue
+            decls[nm.group(1)] = width * _array_count(nm.group(2))
+    return decls
+
+
+def _storage_target_name(lhs: str) -> str:
+    return re.sub(r"\[[^\]]+\]", "", lhs or "").strip()
+
+
 def _count_storage(rtl_files: List[str]) -> Dict[str, Any]:
     flop_targets = set()
     latch_targets = set()
+    flop_bits_by_target: Dict[str, int] = {}
+    latch_bits_by_target: Dict[str, int] = {}
     posedge_blocks = 0
     negedge_blocks = 0
     always_comb_blocks = 0
     for path in rtl_files:
         text = _strip_comments(_read_text(path))
+        decl_bits = _declared_storage_bits(text)
         for block in re.findall(r"\balways_ff\b\s*@\s*\((.*?)\)(.*?)(?=\balways|\bendmodule\b)", text, re.DOTALL):
             sens, body = block
             if re.search(r"\bposedge\b", sens):
                 posedge_blocks += 1
             if re.search(r"\bnegedge\b", sens):
                 negedge_blocks += 1
-            flop_targets.update(re.findall(r"\b([A-Za-z_][A-Za-z0-9_$]*(?:\[[^\]]+\])?)\s*<=", body))
+            for lhs in re.findall(r"\b([A-Za-z_][A-Za-z0-9_$]*(?:\[[^\]]+\])?)\s*<=", body):
+                target = _storage_target_name(lhs)
+                flop_targets.add(target)
+                flop_bits_by_target[target] = max(flop_bits_by_target.get(target, 0), decl_bits.get(target, 1))
         for block in re.findall(r"\balways\s*@\s*\((.*?)\)(.*?)(?=\balways|\bendmodule\b)", text, re.DOTALL):
             sens, body = block
             if re.search(r"\b(posedge|negedge)\b", sens):
@@ -136,14 +177,27 @@ def _count_storage(rtl_files: List[str]) -> Dict[str, Any]:
                     posedge_blocks += 1
                 if re.search(r"\bnegedge\b", sens):
                     negedge_blocks += 1
-                flop_targets.update(re.findall(r"\b([A-Za-z_][A-Za-z0-9_$]*(?:\[[^\]]+\])?)\s*<=", body))
+                for lhs in re.findall(r"\b([A-Za-z_][A-Za-z0-9_$]*(?:\[[^\]]+\])?)\s*<=", body):
+                    target = _storage_target_name(lhs)
+                    flop_targets.add(target)
+                    flop_bits_by_target[target] = max(flop_bits_by_target.get(target, 0), decl_bits.get(target, 1))
             elif "<=" in body:
-                latch_targets.update(re.findall(r"\b([A-Za-z_][A-Za-z0-9_$]*(?:\[[^\]]+\])?)\s*<=", body))
+                for lhs in re.findall(r"\b([A-Za-z_][A-Za-z0-9_$]*(?:\[[^\]]+\])?)\s*<=", body):
+                    target = _storage_target_name(lhs)
+                    latch_targets.add(target)
+                    latch_bits_by_target[target] = max(latch_bits_by_target.get(target, 0), decl_bits.get(target, 1))
         always_comb_blocks += len(re.findall(r"\balways_comb\b|\balways\s*@\s*\*", text))
-        latch_targets.update(re.findall(r"\balways_latch\b.*?\b([A-Za-z_][A-Za-z0-9_$]*)\s*<=", text, re.DOTALL))
+        for lhs in re.findall(r"\balways_latch\b.*?\b([A-Za-z_][A-Za-z0-9_$]*)\s*<=", text, re.DOTALL):
+            target = _storage_target_name(lhs)
+            latch_targets.add(target)
+            latch_bits_by_target[target] = max(latch_bits_by_target.get(target, 0), decl_bits.get(target, 1))
+    flop_bit_count = sum(flop_bits_by_target.values()) or len(flop_targets)
+    latch_bit_count = sum(latch_bits_by_target.values()) or len(latch_targets)
     return {
-        "flipflop_count": len(flop_targets),
-        "latch_count": len(latch_targets),
+        "flipflop_count": flop_bit_count,
+        "latch_count": latch_bit_count,
+        "storage_target_count": len(flop_targets),
+        "latch_target_count": len(latch_targets),
         "sequential_blocks": posedge_blocks + negedge_blocks,
         "posedge_blocks": posedge_blocks,
         "negedge_blocks": negedge_blocks,

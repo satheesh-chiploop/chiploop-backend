@@ -67,6 +67,9 @@ def _normalize_spec_json(spec_json: dict) -> Tuple[dict, str]:
 
         return {
             "design_name": spec_json.get("design_name") or top["name"],
+            "design_summary": spec_json.get("design_summary", ""),
+            "implementation_requirements": spec_json.get("implementation_requirements", []),
+            "verification_requirements": spec_json.get("verification_requirements", []),
             "hierarchy": {
                 "top_module": top,
                 "modules": modules,
@@ -82,6 +85,9 @@ def _normalize_spec_json(spec_json: dict) -> Tuple[dict, str]:
         return {
             "name": spec_json["name"],
             "description": spec_json.get("description", ""),
+            "design_summary": spec_json.get("design_summary", ""),
+            "implementation_requirements": spec_json.get("implementation_requirements", []),
+            "verification_requirements": spec_json.get("verification_requirements", []),
             "ports": spec_json.get("ports", []),
             "functionality": spec_json.get("functionality", ""),
             "responsibilities": spec_json.get("responsibilities", []),
@@ -122,6 +128,106 @@ def _parse_named_verilog_blocks(llm_output: str) -> Dict[str, str]:
         re.DOTALL,
     )
     return {fname.strip(): code.strip() for fname, code in blocks}
+
+
+def _range_width(width: str) -> int:
+    m = re.search(r"\[\s*(\d+)\s*:\s*(\d+)\s*\]", width or "")
+    if not m:
+        return 1
+    return abs(int(m.group(1)) - int(m.group(2))) + 1
+
+
+def _array_count(suffix: str) -> int:
+    count = 1
+    for hi, lo in re.findall(r"\[\s*(\d+)\s*:\s*(\d+)\s*\]", suffix or ""):
+        count *= abs(int(hi) - int(lo)) + 1
+    return count
+
+
+def _declared_storage_bits(text: str) -> Dict[str, int]:
+    decls: Dict[str, int] = {}
+    decl_pat = re.compile(r"\b(?:reg|logic)\b\s*(?:signed\s*)?(\[[^\]]+\])?\s*([^;]+);", re.IGNORECASE)
+    for dm in decl_pat.finditer(_strip_verilog_comments(text)):
+        width = _range_width(dm.group(1) or "")
+        for raw in dm.group(2).split(","):
+            item = re.sub(r"=.*$", "", raw).strip()
+            nm = re.match(r"([A-Za-z_][A-Za-z0-9_$]*)\s*((?:\[[^\]]+\]\s*)*)$", item)
+            if nm:
+                decls[nm.group(1)] = width * _array_count(nm.group(2))
+    return decls
+
+
+def _assigned_storage_bits(verilog_text: str) -> Tuple[int, List[str]]:
+    text = _strip_verilog_comments(verilog_text)
+    decl_bits = _declared_storage_bits(text)
+    targets: Dict[str, int] = {}
+    for block in re.findall(r"\balways(?:_ff)?\s*@\s*\((.*?)\)(.*?)(?=\balways|\bendmodule\b)", text, re.DOTALL):
+        sens, body = block
+        if not re.search(r"\b(posedge|negedge)\b", sens):
+            continue
+        for lhs in re.findall(r"\b([A-Za-z_][A-Za-z0-9_$]*(?:\[[^\]]+\])?)\s*<=", body):
+            target = re.sub(r"\[[^\]]+\]", "", lhs).strip()
+            if target:
+                targets[target] = max(targets.get(target, 0), decl_bits.get(target, 1))
+    return sum(targets.values()), sorted(targets)
+
+
+def _minimum_expected_flops(spec_json: dict, mode: str) -> int:
+    text = json.dumps(spec_json).lower()
+    targets: List[int] = []
+    for m in re.finditer(r"(\d[\d,]*)\s*(?:-|to|through|–|—)\s*(\d[\d,]*)\s*(?:flip[- ]?flops?|flops?|register bits?)", text):
+        lo = int(m.group(1).replace(",", ""))
+        targets.append(max(1, int(lo * 0.65)))
+    for m in re.finditer(r"(?:roughly|about|around|approximately|approx\.?|target)\s+(\d[\d,]*)\s*(?:flip[- ]?flops?|flops?|register bits?)", text):
+        val = int(m.group(1).replace(",", ""))
+        targets.append(max(1, int(val * 0.50)))
+    for m in re.finditer(r"(\d[\d,]*)\s*(?:flip[- ]?flops?|flops?|register bits?)", text):
+        val = int(m.group(1).replace(",", ""))
+        if val >= 64:
+            targets.append(max(1, int(val * 0.50)))
+    if "fifo" in text:
+        depths = [int(x) for x in re.findall(r"(?:fifo depth|depth is|depth)\D{0,20}(\d+)", text)]
+        if depths:
+            targets.append(max(depths) * 8)
+        else:
+            targets.append(64)
+    if "line buffer" in text or "histogram" in text or "dma" in text:
+        targets.append(512)
+    return max(targets) if targets else 0
+
+
+def _validate_generated_complexity(spec_json: dict, mode: str, verilog_map: Dict[str, str]) -> List[str]:
+    issues: List[str] = []
+    full_text = "\n".join(verilog_map.values())
+    scan = _strip_verilog_comments(full_text).lower()
+    placeholder_patterns = [
+        "placeholder",
+        "implementation of functionality",
+        "this logic to be defined",
+        "omitted in this stub",
+        "assume additional logic",
+        "todo",
+        "implement here",
+        "fill in later",
+    ]
+    hits = [p for p in placeholder_patterns if p in scan]
+    if hits:
+        issues.append("❌ RTL contains placeholder/stub text instead of implemented logic: " + ", ".join(hits[:4]))
+
+    min_flops = _minimum_expected_flops(spec_json, mode)
+    assigned_bits, targets = _assigned_storage_bits(full_text)
+    if min_flops and assigned_bits < min_flops:
+        issues.append(
+            "❌ RTL storage is materially below the spec scale: "
+            f"assigned_flipflop_bits={assigned_bits}, expected_minimum={min_flops}. "
+            "Implement real FIFOs, buffers, counters, shifters, state machines, and register storage described by the spec."
+        )
+    if min_flops >= 128 and len(targets) < 12:
+        issues.append(
+            "❌ RTL appears collapsed into too few state elements for this spec: "
+            f"storage_targets={len(targets)}. Do not return an output-register shell."
+        )
+    return issues
 
 
 def _extract_module_ports(verilog_text: str) -> Dict[str, List[str]]:
@@ -591,7 +697,15 @@ Every combinational always @(*) block must:
   {{dac_code_h[3:0], dac_code_l[7:0]}}
 - Never concatenate two full 8-bit registers into a 12-bit destination.
 - Never assign a concatenation wider than the declared destination signal width.
-- Prefer the simplest deterministic smoke-test implementation consistent with the contract.
+- Prefer the simplest deterministic smoke-test implementation consistent with the contract, but do not collapse the architecture below the state/storage scale requested by the spec.
+
+SCALE AND COMPLETENESS RULES
+- If the spec requests a rough flip-flop/register-bit target, FIFO depth, line-buffer storage, histogram counters, DMA buffers, packet buffers, shifters, or multiple pipeline stages, implement those as real Verilog storage and real sequential logic.
+- Do not satisfy a complex design by registering only outputs or by emitting a shell with comments.
+- If the spec says FIFO, implement explicit FIFO storage, pointers, levels, full/empty status, push/pop behavior, and reset.
+- If the spec says line buffer, histogram, frame buffer, or pipeline metadata, implement explicit storage arrays/counters/registers and update them in clocked logic.
+- If the spec says UART/SPI/I2C/packet engine, implement real shifter/counter/FSM state consistent with the described smoke-test behavior.
+- Placeholder text such as "implementation omitted", "logic to be defined", "assume additional logic", TODO, or comments in place of behavior is a hard failure.
 UNUSED SIGNAL HYGIENE
 - Every declared input, status input, and internal register should be either:
   - functionally used in logic, or
@@ -1392,6 +1506,8 @@ def _validate_and_materialize_rtl(
     full_text = "\n".join(verilog_map.values())
     scan_text = _strip_verilog_comments(full_text)
 
+    issues.extend(_validate_generated_complexity(spec_json, mode, verilog_map))
+
     for pat in forbidden_sv_patterns:
         if pat == r"\blogic\b":
             if re.search(r"\blogic\s+(\[[^\]]+\]\s+)?[A-Za-z_]\w*", scan_text):
@@ -1662,6 +1778,9 @@ def _run(context: AgentContext) -> dict:
     try:
         _stage("normalizing_spec")
         spec_json, mode = _normalize_spec_json(spec_obj)
+        source_spec_text = state.get("spec_text") or state.get("spec") or state.get("digital_spec_text")
+        if isinstance(source_spec_text, str) and source_spec_text.strip():
+            spec_json["_source_spec_text"] = source_spec_text.strip()
         _stage(f"normalized_spec: mode={mode}")
     except Exception as e:
         return _fail_and_upload("Spec JSON normalization failed.", e)
