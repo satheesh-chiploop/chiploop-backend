@@ -36,6 +36,21 @@ def _strip_comments(text: str) -> str:
     return re.sub(r"/\*.*?\*/", "", text, flags=re.DOTALL)
 
 
+def _prefer_handoff_rtl(files: List[str]) -> List[str]:
+    by_basename: Dict[str, str] = {}
+    for path in files:
+        name = Path(path).name
+        current = by_basename.get(name)
+        if current is None:
+            by_basename[name] = path
+            continue
+        current_is_handoff = "handoff" in Path(current).parts
+        path_is_handoff = "handoff" in Path(path).parts
+        if path_is_handoff and not current_is_handoff:
+            by_basename[name] = path
+    return sorted(by_basename.values())
+
+
 def _collect_rtl_files(workflow_dir: str, state: Dict[str, Any]) -> List[str]:
     files: List[str] = []
     for key in ("rtl_files", "artifact_list"):
@@ -45,7 +60,8 @@ def _collect_rtl_files(workflow_dir: str, state: Dict[str, Any]) -> List[str]:
     for root in (Path(workflow_dir) / "rtl", Path(workflow_dir) / "handoff"):
         if root.exists():
             files.extend(str(p) for p in root.rglob("*") if p.suffix.lower() in {".v", ".sv"})
-    return sorted(str(Path(p)) for p in dict.fromkeys(files) if Path(p).exists())
+    existing = sorted(str(Path(p)) for p in dict.fromkeys(files) if Path(p).exists())
+    return _prefer_handoff_rtl(existing)
 
 
 def _module_header(text: str, module_name: str) -> str:
@@ -55,6 +71,7 @@ def _module_header(text: str, module_name: str) -> str:
 
 def _parse_modules(rtl_files: List[str]) -> List[Dict[str, Any]]:
     modules: List[Dict[str, Any]] = []
+    seen_modules = set()
     mod_pat = re.compile(r"\bmodule\s+([A-Za-z_][A-Za-z0-9_$]*)\b(.*?)(?=\bendmodule\b)", re.DOTALL)
     port_decl = re.compile(
         r"\b(input|output|inout)\b\s*(?:wire|reg|logic)?\s*(?:signed\s*)?(\[[^\]]+\])?\s*([^;]+);",
@@ -68,6 +85,9 @@ def _parse_modules(rtl_files: List[str]) -> List[Dict[str, Any]]:
         text = _strip_comments(_read_text(path))
         for m in mod_pat.finditer(text):
             name = m.group(1)
+            if name in seen_modules:
+                continue
+            seen_modules.add(name)
             body = m.group(2)
             ports: List[Dict[str, Any]] = []
             seen = set()
@@ -90,9 +110,12 @@ def _parse_modules(rtl_files: List[str]) -> List[Dict[str, Any]]:
             modules.append({
                 "name": name,
                 "file": path,
-                "input_count": sum(1 for p in ports if p["direction"] == "input"),
-                "output_count": sum(1 for p in ports if p["direction"] == "output"),
-                "inout_count": sum(1 for p in ports if p["direction"] == "inout"),
+                "input_count": sum(_range_width(str(p.get("width") or "1")) for p in ports if p["direction"] == "input"),
+                "output_count": sum(_range_width(str(p.get("width") or "1")) for p in ports if p["direction"] == "output"),
+                "inout_count": sum(_range_width(str(p.get("width") or "1")) for p in ports if p["direction"] == "inout"),
+                "input_port_count": sum(1 for p in ports if p["direction"] == "input"),
+                "output_port_count": sum(1 for p in ports if p["direction"] == "output"),
+                "inout_port_count": sum(1 for p in ports if p["direction"] == "inout"),
                 "ports": ports,
             })
     return modules
@@ -300,8 +323,10 @@ def _markdown(report: Dict[str, Any]) -> str:
         f"- Latches: {storage.get('latch_count')}",
         f"- Full-cycle paths: {timing.get('full_cycle_path_count')}",
         f"- Half-cycle paths: {timing.get('half_cycle_path_count')}",
-        f"- Inputs: {io.get('input_count')}",
-        f"- Outputs: {io.get('output_count')}",
+        f"- Input bits: {io.get('input_count')}",
+        f"- Output bits: {io.get('output_count')}",
+        f"- Input ports: {io.get('input_port_count')}",
+        f"- Output ports: {io.get('output_port_count')}",
         f"- Clock: {report['clock_reset'].get('primary_clock') or 'not inferred'}",
         f"- Reset: {report['clock_reset'].get('primary_reset') or 'not inferred'}",
         f"- Modules: {report.get('module_count')}",
@@ -327,6 +352,10 @@ def _run(context: AgentContext) -> AgentResult:
         "input_count": int(top_module.get("input_count") or 0),
         "output_count": int(top_module.get("output_count") or 0),
         "inout_count": int(top_module.get("inout_count") or 0),
+        "input_port_count": int(top_module.get("input_port_count") or 0),
+        "output_port_count": int(top_module.get("output_port_count") or 0),
+        "inout_port_count": int(top_module.get("inout_port_count") or 0),
+        "count_basis": "bits",
         "ports": top_module.get("ports") or [],
     }
     report = {
