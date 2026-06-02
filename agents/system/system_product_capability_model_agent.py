@@ -16,6 +16,26 @@ def _record(workflow_id: str, filename: str, obj: Dict[str, Any]) -> Optional[st
     return save_text_artifact_and_record(workflow_id, AGENT_NAME, OUTPUT_SUBDIR, filename, json.dumps(obj, indent=2))
 
 
+def _base_experience(
+    *,
+    summary: str,
+    controls: Dict[str, str],
+    metrics: Dict[str, str],
+    scenario_name: str,
+    scenario_steps: list[Dict[str, str]],
+    timing_model: str = "",
+) -> Dict[str, Any]:
+    return {
+        "summary": summary,
+        "control_explanations": controls,
+        "metric_explanations": metrics,
+        "scenario_name": scenario_name,
+        "scenario_steps": scenario_steps,
+        "timing_model": timing_model,
+        "hardware_replacement_note": "The generated simulator adapter can later be replaced with UART, JTAG, Ethernet, PCIe, or board-specific transport while preserving the application API.",
+    }
+
+
 def _pwm_model(lineage: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "type": "system_product_capability_model",
@@ -37,6 +57,28 @@ def _pwm_model(lineage: Dict[str, Any]) -> Dict[str, Any]:
             {"name": "PERIOD", "offset": "0x08", "fields": [{"name": "period", "bits": "7:0"}]},
             {"name": "COUNTER_VALUE", "offset": "0x0C", "fields": [{"name": "counter_value", "bits": "7:0"}]},
         ],
+        "product_experience": _base_experience(
+            summary="Fan-control dashboard for a memory-mapped PWM controller. Software configures enable, duty cycle, and period while telemetry shows the internal counter and PWM output.",
+            controls={
+                "Enable PWM": "Turns the PWM output path on or off through the CONTROL.ENABLE field.",
+                "Duty cycle": "Sets how much of each PWM period is high. Higher duty drives the fan harder.",
+                "Period": "Sets the number of controller clock ticks in one PWM cycle.",
+            },
+            metrics={
+                "Counter": "Internal PWM position within the current period.",
+                "PWM Out": "Current output level driven to the fan-control pin.",
+                "PWM Frequency": "Simulated controller clock divided by period.",
+                "High Threshold": "Counter value below which PWM output is high.",
+            },
+            scenario_name="Run thermal scenario",
+            scenario_steps=[
+                {"label": "25 C", "description": "Fan off policy"},
+                {"label": "45 C", "description": "Quiet airflow policy"},
+                {"label": "60 C", "description": "Nominal cooling policy"},
+                {"label": "80 C", "description": "Thermal recovery policy"},
+            ],
+            timing_model="Simulated 1 MHz controller clock. PWM frequency = 1,000,000 / period.",
+        ),
     }
 
 
@@ -65,6 +107,28 @@ def _uart_model(lineage: Dict[str, Any]) -> Dict[str, Any]:
             {"name": "STATUS", "offset": "0x14", "fields": [{"name": "tx_full"}, {"name": "rx_empty"}, {"name": "packet_active"}, {"name": "error"}]},
             {"name": "IRQ_STATUS", "offset": "0x18", "fields": [{"name": "rx_done"}, {"name": "tx_done"}, {"name": "overflow"}, {"name": "framing_error"}, {"name": "packet_done"}]},
         ],
+        "product_experience": _base_experience(
+            summary="UART packet-engine dashboard for exercising software-driven baud setup, payload transmit, loopback receive, FIFO telemetry, and interrupt recovery.",
+            controls={
+                "Enable engine": "Turns the UART packet engine on through the CONTROL register.",
+                "Loopback mode": "Routes transmitted bytes back to the receive path for board-free validation.",
+                "Baud divider": "Controls UART bit timing. Lower divider means higher baud rate.",
+                "Packet payload": "Hex bytes written by software into the transmit path.",
+            },
+            metrics={
+                "TX Level": "Bytes queued for transmit.",
+                "RX Level": "Bytes available for software to read.",
+                "IRQ Status": "Interrupt cause observed by firmware/software.",
+                "Estimated Baud": "50 MHz divided by baud divider and 16x oversampling.",
+            },
+            scenario_name="Run packet scenario",
+            scenario_steps=[
+                {"label": "Boot", "description": "Engine enabled and FIFOs empty"},
+                {"label": "Loopback", "description": "Packet transmitted and received"},
+                {"label": "Error", "description": "Framing error raised and cleared"},
+            ],
+            timing_model="Estimated baud = 50 MHz / baud_divider / 16.",
+        ),
     }
 
 
@@ -101,6 +165,140 @@ def _image_model(lineage: Dict[str, Any]) -> Dict[str, Any]:
             "target_flipflops": "25000",
             "reason": "Register-based 3x256x8 line buffers, histogram counters, DMA state, pipeline valid/metadata, and control/status registers.",
         },
+        "product_experience": _base_experience(
+            summary="Image-processing dashboard for a DMA-backed pixel pipeline. Software configures frame parameters and filter mode, starts processing, and observes progress, histogram, and frame-done interrupt state.",
+            controls={
+                "Filter mode": "Selects the pixel-processing kernel for the frame.",
+                "Threshold": "Classification threshold used by threshold and edge-oriented modes.",
+                "Brightness": "Signed offset applied to generated pixel values.",
+                "Start frame": "Starts one DMA-backed frame-processing transaction.",
+            },
+            metrics={
+                "DMA progress": "Percentage of the 64 x 64 frame that has moved through the pipeline.",
+                "Pixels": "Processed pixel count for the current frame.",
+                "Histogram": "Distribution of output pixel intensity bins.",
+                "IRQ": "Frame completion or error signal visible to software.",
+            },
+            scenario_name="Run vision scenario",
+            scenario_steps=[
+                {"label": "Load", "description": "Raw frame moved through bypass"},
+                {"label": "Edge", "description": "Edge-detect kernel selected"},
+                {"label": "Threshold", "description": "Bright pixels classified and IRQ asserted"},
+            ],
+            timing_model="Demo frame size is 64 x 64 = 4096 pixels. Production frame geometry can be mapped to the generated register interface.",
+        ),
+    }
+
+
+def _sensor_hub_model(lineage: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "type": "system_product_capability_model",
+        "version": "1.0",
+        "generated_at": _now(),
+        "product_name": "Smart Sensor Hub Dashboard",
+        "device_model": "smart_sensor_hub_mcu",
+        "lineage": lineage,
+        "capabilities": [
+            {"id": "configure_sample_period", "label": "Configure sample period", "kind": "integer", "register": "SAMPLE_PERIOD"},
+            {"id": "select_sensor_channels", "label": "Select sensor channels", "kind": "bitmask", "register": "SENSOR_SELECT"},
+            {"id": "set_thresholds", "label": "Set alert thresholds", "kind": "configuration", "registers": ["TEMP_THRESHOLD", "HUMIDITY_THRESHOLD", "AIR_THRESHOLD"]},
+            {"id": "read_latest_values", "label": "Read latest sensor values", "kind": "telemetry", "registers": ["LATEST_TEMP", "LATEST_HUMIDITY", "LATEST_AIR"]},
+            {"id": "read_fifo_level", "label": "Read FIFO depth", "kind": "telemetry", "register": "FIFO_LEVEL"},
+            {"id": "clear_alerts", "label": "Clear alerts", "kind": "command", "register": "ALERT_CLEAR"},
+            {"id": "control_low_power", "label": "Control low-power sampling", "kind": "boolean", "register": "CONTROL.LOW_POWER_EN"},
+        ],
+        "registers": [
+            {"name": "CONTROL", "offset": "0x000", "fields": [{"name": "ENABLE", "bit": 0}, {"name": "SAMPLE_START", "bit": 1}, {"name": "LOW_POWER_EN", "bit": 2}, {"name": "IRQ_ENABLE", "bit": 3}]},
+            {"name": "STATUS", "offset": "0x004", "fields": [{"name": "busy"}, {"name": "sample_done"}, {"name": "fifo_empty"}, {"name": "fifo_full"}, {"name": "alert_pending"}, {"name": "low_power_active"}]},
+            {"name": "SAMPLE_PERIOD", "offset": "0x008", "fields": [{"name": "period_ticks", "bits": "31:0"}]},
+            {"name": "SENSOR_SELECT", "offset": "0x00C", "fields": [{"name": "temp_en"}, {"name": "humidity_en"}, {"name": "air_en"}]},
+            {"name": "TEMP_THRESHOLD", "offset": "0x010", "fields": [{"name": "temp_threshold", "bits": "15:0"}]},
+            {"name": "HUMIDITY_THRESHOLD", "offset": "0x014", "fields": [{"name": "humidity_threshold", "bits": "15:0"}]},
+            {"name": "AIR_THRESHOLD", "offset": "0x018", "fields": [{"name": "air_threshold", "bits": "15:0"}]},
+            {"name": "FIFO_LEVEL", "offset": "0x02C", "fields": [{"name": "fifo_level", "bits": "5:0"}]},
+            {"name": "ALERT_STATUS", "offset": "0x030", "fields": [{"name": "temp_alert"}, {"name": "humidity_alert"}, {"name": "air_alert"}, {"name": "fifo_overflow"}, {"name": "sample_timeout"}]},
+            {"name": "SAMPLE_COUNT", "offset": "0x038", "fields": [{"name": "sample_count", "bits": "31:0"}]},
+        ],
+        "product_experience": _base_experience(
+            summary="IoT smart sensor hub dashboard for a microcontroller-style subsystem. Software configures sample rate, enabled channels, thresholds, FIFO handling, alert interrupts, and low-power behavior.",
+            controls={
+                "Sample period": "Controls how often the sensor hub requests a new sample.",
+                "Sensor channels": "Selects temperature, humidity, and air-quality telemetry channels.",
+                "Thresholds": "Alert limits used by local hardware comparators before software/cloud upload.",
+                "Low-power mode": "Reduces activity when the node is idle or sampling is slowed.",
+            },
+            metrics={
+                "Temperature/Humidity/Air": "Latest sampled telemetry values visible to firmware/software.",
+                "FIFO depth": "Buffered sample records waiting for software to drain.",
+                "Alert state": "Latched threshold or FIFO events that can raise alert_irq.",
+                "Sample count": "Completed sensor sample transactions.",
+            },
+            scenario_name="Run IoT telemetry scenario",
+            scenario_steps=[
+                {"label": "Sample", "description": "Collect periodic sensor readings"},
+                {"label": "Alert", "description": "Cross threshold and assert IRQ"},
+                {"label": "Drain", "description": "Read FIFO and clear alert"},
+                {"label": "Low power", "description": "Slow sampling for idle mode"},
+            ],
+            timing_model="Sample period is modeled as controller clock ticks. Product software can later map this to a real RTC or MCU timer.",
+        ),
+    }
+
+
+def _generic_model(lineage: Dict[str, Any], intent: str) -> Dict[str, Any]:
+    clean_intent = " ".join(str(intent or "").split())
+    product_name = "Generated Device Control Dashboard"
+    if clean_intent:
+        product_name = f"{clean_intent[:56].strip().title()} Dashboard"
+    capabilities = [
+        {"id": "configure_device", "label": "Configure device", "kind": "configuration", "register": "CONTROL"},
+        {"id": "start_operation", "label": "Start operation", "kind": "command", "register": "CONTROL.START"},
+        {"id": "read_status", "label": "Read status", "kind": "telemetry", "register": "STATUS"},
+        {"id": "read_result", "label": "Read result", "kind": "telemetry", "register": "RESULT"},
+        {"id": "clear_interrupt", "label": "Clear interrupt", "kind": "command", "register": "IRQ_STATUS"},
+    ]
+    return {
+        "type": "system_product_capability_model",
+        "version": "1.0",
+        "generated_at": _now(),
+        "product_name": product_name,
+        "device_model": "generic_device_control",
+        "lineage": lineage,
+        "capabilities": capabilities,
+        "registers": [
+            {"name": "CONTROL", "offset": "0x00", "fields": [{"name": "ENABLE", "bit": 0}, {"name": "START", "bit": 1}]},
+            {"name": "STATUS", "offset": "0x04", "fields": [{"name": "busy"}, {"name": "done"}, {"name": "error"}]},
+            {"name": "CONFIG", "offset": "0x08", "fields": [{"name": "mode", "bits": "3:0"}, {"name": "level", "bits": "15:8"}]},
+            {"name": "RESULT", "offset": "0x0C", "fields": [{"name": "result_value", "bits": "31:0"}]},
+            {"name": "IRQ_STATUS", "offset": "0x10", "fields": [{"name": "done_irq"}, {"name": "error_irq"}]},
+        ],
+        "product_experience": _base_experience(
+            summary=(
+                f"Generated product dashboard for: {clean_intent}."
+                if clean_intent
+                else "Generated product dashboard based on the available RTL, firmware, software, and validation collateral."
+            ),
+            controls={
+                "Enable": "Enables the generated simulator adapter for this device.",
+                "Mode": "Selects an operating mode derived from the product intent and generated API shape.",
+                "Level": "Represents a tunable configuration value that software writes through the generated control path.",
+                "Start operation": "Kicks off one device transaction and updates live status telemetry.",
+            },
+            metrics={
+                "Status": "Current device execution state.",
+                "Progress": "How far the active transaction has advanced.",
+                "Result": "Representative output value returned by the generated software-visible API.",
+                "IRQ": "Completion or error interrupt state visible to firmware/software.",
+            },
+            scenario_name="Run product scenario",
+            scenario_steps=[
+                {"label": "Configure", "description": "Apply mode and level settings"},
+                {"label": "Execute", "description": "Start one simulated transaction"},
+                {"label": "Observe", "description": "Read status, result, and IRQ"},
+            ],
+            timing_model="Generic simulator mode advances progress in discrete application ticks. Replace with board or silicon transport when hardware is available.",
+        ),
+        "notes": ["Generic mode uses the validated software API shape and a simulator-backed device adapter."],
     }
 
 
@@ -113,11 +311,12 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
         model = _image_model(lineage)
     elif "uart" in intent or "packet" in intent or "fifo" in intent:
         model = _uart_model(lineage)
-    else:
+    elif "sensor" in intent or "iot" in intent or "telemetry" in intent or "humidity" in intent or "air-quality" in intent or "low-power" in intent:
+        model = _sensor_hub_model(lineage)
+    elif "pwm" in intent or "fan" in intent:
         model = _pwm_model(lineage)
-    if model.get("device_model") == "pwm_controller" and "pwm" not in intent and "fan" not in intent:
-        model["product_name"] = "Generated Device Control Dashboard"
-        model["notes"] = ["Generic mode uses the validated software API shape and a simulator-backed device adapter."]
+    else:
+        model = _generic_model(lineage, intent)
     _record(workflow_id, "system_product_capability_model.json", model)
     state["system_product_capability_model"] = model
     state["system_product_capability_model_path"] = f"{OUTPUT_SUBDIR}/system_product_capability_model.json"
