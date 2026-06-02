@@ -2,6 +2,7 @@
 
 import os, json, glob, shutil, subprocess, re, logging
 from datetime import datetime
+from tooling.runner import run_command
 from utils.artifact_utils import save_text_artifact_and_record
 
 logger = logging.getLogger("chiploop")
@@ -29,10 +30,9 @@ def _write_text(path: str, content: str) -> None:
     with open(path, "w", encoding="utf-8") as f:
         f.write(content)
 
-def _run(cmd: list[str], cwd: str) -> tuple[int, str]:
-    p = subprocess.Popen(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-    out, _ = p.communicate()
-    return p.returncode, out
+def _run(cmd: list[str], cwd: str, state: dict | None = None) -> tuple[int, str]:
+    p = run_command(state or {}, "digital_sta_preplace", [str(x) for x in cmd], cwd=cwd, timeout_sec=1800)
+    return p.returncode if p.returncode is not None else 1, (p.stdout or "") + (p.stderr or "")
 
 def _infer_top_from_netlist(netlist_path: str) -> str | None:
     try:
@@ -347,7 +347,7 @@ docker run --rm \\
     _write_text(run_sh_path, run_sh)
     os.chmod(run_sh_path, 0o755)
 
-    rc, out = _run(["bash", "-lc", "./run.sh"], cwd=stage_dir)
+    rc, out = _run(["bash", "-lc", "./run.sh"], cwd=stage_dir, state=state)
     log_path = os.path.join(logs_dir, "openlane_sta_preplace.log")
     _write_text(log_path, out)
 

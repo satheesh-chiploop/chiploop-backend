@@ -14,6 +14,9 @@
     },
     "pytest": {
       "executable": "/root/chiploop-backend/venv/bin/pytest"
+    },
+    "python3": {
+      "executable": "/root/chiploop-backend/venv/bin/python3"
     }
   },
   "tools": {
@@ -46,6 +49,48 @@
     },
     "gem5_riscv": {
       "executable": "/opt/gem5/build/RISCV/gem5.opt"
+    },
+    "make": {
+      "executable": "/usr/bin/make"
+    },
+    "cargo": {
+      "executable": "/root/.cargo/bin/cargo"
+    },
+    "rustc": {
+      "executable": "/root/.cargo/bin/rustc"
+    },
+    "llvm_cov": {
+      "executable": "llvm-cov"
+    },
+    "llvm_profdata": {
+      "executable": "llvm-profdata"
+    },
+    "gcov": {
+      "executable": "gcov"
+    },
+    "git": {
+      "executable": "/usr/bin/git"
+    },
+    "bash": {
+      "executable": "/bin/bash"
+    },
+    "scons": {
+      "executable": "/usr/bin/scons"
+    },
+    "gcc": {
+      "executable": "/usr/bin/gcc"
+    },
+    "ngspice": {
+      "executable": "/usr/bin/ngspice"
+    },
+    "riscv64_linux_gnu_gcc": {
+      "executable": "riscv64-linux-gnu-gcc"
+    },
+    "riscv64_unknown_elf_gcc": {
+      "executable": "riscv64-unknown-elf-gcc"
+    },
+    "x86_64_linux_gnu_gcc": {
+      "executable": "x86_64-linux-gnu-gcc"
     }
   },
   "env": {

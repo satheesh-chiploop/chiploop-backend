@@ -7,6 +7,7 @@ import subprocess
 from typing import Optional
 
 from ._embedded_common import ensure_workflow_dir, write_artifact
+from tooling.runner import run_command, tool_path
 
 logger = logging.getLogger(__name__)
 
@@ -223,12 +224,12 @@ def _attempt_build(workflow_dir: str, target_triple: str, bin_name: str, cargo_p
     if cargo_path and os.path.isdir(cargo_workspace_dir):
         try:
             build_attempted = True
-            proc = subprocess.run(
+            proc = run_command(
+                {},
+                "embedded_firmware_build",
                 [cargo_path, "build", "--release", "--target", target_triple],
                 cwd=cargo_workspace_dir,
-                capture_output=True,
-                text=True,
-                timeout=180,
+                timeout_sec=180,
             )
             stdout = proc.stdout or ""
             stderr = proc.stderr or ""
@@ -285,7 +286,7 @@ def run_agent(state: dict) -> dict:
     workspace_generated = True
 
 
-    cargo_path = shutil.which("cargo")
+    cargo_path = tool_path("cargo") or shutil.which("cargo")
 
     _write_json_artifact(
         state,

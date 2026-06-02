@@ -6,6 +6,8 @@ import requests
 from portkey_ai import Portkey
 from openai import OpenAI
 
+from tooling.runner import run_command
+
 # --- Configuration ---
 OLLAMA_URL = "http://127.0.0.1:11434/api/generate"
 USE_LOCAL_OLLAMA = os.getenv("USE_LOCAL_OLLAMA", "false").lower() == "true"
@@ -141,12 +143,13 @@ Task:
 
     # --- 4️⃣ Compile with Icarus ---
     try:
-        result = subprocess.run(
+        result = run_command(
+            state,
+            "digital_optimizer_compile",
             ["iverilog", "-o", "design_optimized.out", optimized_file],
-            capture_output=True,
-            text=True,
-            check=True,
         )
+        if result.returncode != 0:
+            raise subprocess.CalledProcessError(result.returncode if result.returncode is not None else 1, result.command, output=result.stdout, stderr=result.stderr)
         compile_status = "✅ Optimized RTL compiled successfully"
         with open(log_path, "w", encoding="utf-8") as logf:
             logf.write(result.stdout + result.stderr)

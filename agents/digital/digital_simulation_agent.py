@@ -1,5 +1,6 @@
 import os, subprocess, datetime, re
 import importlib.util
+from tooling.runner import run_command
 
 def has_pyuvm():
     return importlib.util.find_spec("pyuvm") is not None
@@ -30,10 +31,7 @@ def run_agent(state: dict) -> dict:
         # --- Detect pyuvm testbench first ---
         if any(f.endswith(".py") for f in tb_files):
             print("🐍 Detected pyuvm testbench — running Python-based simulation...")
-            run_proc = subprocess.run(
-                ["python3", os.path.join(tb_dir, "run_test.py")],
-                capture_output=True, text=True
-            )
+            run_proc = run_command(state, "digital_simulation_python", ["python3", os.path.join(tb_dir, "run_test.py")])
             sim_output = run_proc.stdout + run_proc.stderr
 
         else:
@@ -49,23 +47,23 @@ def run_agent(state: dict) -> dict:
                 "--top-module", "tb_top"
             ]
 
-            compile_proc = subprocess.run(cmd_compile, capture_output=True, text=True)
+            compile_proc = run_command(state, "digital_simulation_verilator_compile", cmd_compile)
 
             # --- Fallback if Verilator fails (UVM unsupported) ---
             if compile_proc.returncode != 0:
                 print("⚠️ Verilator failed — retrying with Icarus Verilog (UVM-lite fallback)...")
                 cmd_compile = ["iverilog", "-g2012", "-I", "/root/chiploop-backend/uvm_stub","-o", sim_exe, rtl_file, *tb_files]
-                run_compile = subprocess.run(cmd_compile, capture_output=True, text=True)
+                run_compile = run_command(state, "digital_simulation_iverilog_compile", cmd_compile)
                 if run_compile.returncode != 0:
                     raise subprocess.CalledProcessError(
                         run_compile.returncode, cmd_compile,
                         run_compile.stdout, run_compile.stderr
                     )
-                run_proc = subprocess.run(["vvp", sim_exe], capture_output=True, text=True)
+                run_proc = run_command(state, "digital_simulation_vvp", ["vvp", sim_exe])
                 sim_output = run_proc.stdout + run_proc.stderr
             else:
                 print("▶️ Running simulation...")
-                run_proc = subprocess.run(["obj_dir/Vtb_top"], capture_output=True, text=True)
+                run_proc = run_command(state, "digital_simulation_binary", ["obj_dir/Vtb_top"])
                 sim_output = run_proc.stdout + run_proc.stderr
 
                 # ✅ Extract real Verilator coverage if available
@@ -73,7 +71,7 @@ def run_agent(state: dict) -> dict:
                 if os.path.exists(vdb_path):
                     cov_dir = os.path.join(workflow_dir, "coverage")
                     os.makedirs(cov_dir, exist_ok=True)
-                    subprocess.run([
+                    run_command(state, "digital_simulation_coverage", [
                         "verilator_coverage",
                         "--write-info", "max",
                         "--annotate", cov_dir,

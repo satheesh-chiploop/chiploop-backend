@@ -5,6 +5,7 @@ import subprocess
 from typing import Any, Dict, List, Optional
 
 from ._embedded_common import ensure_workflow_dir, write_artifact
+from tooling.runner import tool_path
 
 AGENT_NAME = "Embedded Coverage Collector Agent"
 PHASE = "coverage"
@@ -15,7 +16,7 @@ SUMMARY_JSON = "firmware/validate/coverage_summary.json"
 
 
 def _which(name: str) -> Optional[str]:
-    return shutil.which(name)
+    return tool_path(name) or shutil.which(name)
 
 
 def _tool_snapshot() -> Dict[str, Any]:

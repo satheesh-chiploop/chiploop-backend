@@ -6,6 +6,7 @@ import subprocess
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
+from tooling.runner import run_command, tool_path
 from utils.artifact_utils import save_text_artifact_and_record
 
 AGENT_NAME = "Digital RTL Handoff Ingest Agent"
@@ -301,7 +302,7 @@ def _is_git_url(value: str) -> bool:
 
 
 def _clone_git_repo(repo_url: str, state: Dict[str, Any], workflow_dir: str) -> Path:
-    if shutil.which("git") is None:
+    if not (tool_path("git", state) or shutil.which("git")):
         raise RuntimeError("git is not installed on this backend, so repo-based RTL ingest cannot clone URLs")
     if not repo_url.lower().startswith("https://"):
         raise RuntimeError("Only HTTPS git repository URLs are supported for backend RTL ingest")
@@ -311,7 +312,7 @@ def _clone_git_repo(repo_url: str, state: Dict[str, Any], workflow_dir: str) -> 
     if ref:
         cmd.extend(["--branch", ref])
     cmd.extend([repo_url, str(dest)])
-    proc = subprocess.run(cmd, cwd=workflow_dir, text=True, capture_output=True, timeout=300)
+    proc = run_command(state, "rtl_handoff_git_clone", cmd, cwd=workflow_dir, timeout_sec=300)
     if proc.returncode != 0:
         raise RuntimeError(f"git clone failed: {(proc.stderr or proc.stdout)[-1200:]}")
     return dest.resolve()

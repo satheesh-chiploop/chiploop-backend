@@ -25,6 +25,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 from utils.artifact_utils import save_text_artifact_and_record
+from tooling.runner import run_command, tool_path
 
 
 def _now() -> str:
@@ -155,7 +156,7 @@ def _infer_clocks_resets(spec: Dict[str, Any], ports: List[Dict[str, Any]]) -> T
 
 
 def _which(binname: str) -> Optional[str]:
-    return shutil.which(binname)
+    return tool_path(binname) or shutil.which(binname)
 
 
 def _write_file(path: str, content: str) -> None:
@@ -295,12 +296,13 @@ def run_agent(state: dict) -> dict:
         run_result["attempted"] = True
         try:
             cmd = ["sby", "-f", f"{top}.sby"]
-            p = subprocess.run(cmd, cwd=formal_root, capture_output=True, text=True, timeout=600)
+            p = run_command(state, "formal_verification", cmd, cwd=formal_root, timeout_sec=600)
             run_result.update(
                 {
                     "returncode": p.returncode,
                     "stdout_tail": (p.stdout or "").splitlines()[-120:],
                     "stderr_tail": (p.stderr or "").splitlines()[-120:],
+                    "tool_execution": p.to_dict(),
                 }
             )
         except Exception as e:

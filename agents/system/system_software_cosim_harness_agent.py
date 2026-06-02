@@ -4,6 +4,7 @@ import os
 import shutil
 from typing import Any, Dict, List, Optional
 
+from tooling.runner import tool_path
 from utils.artifact_utils import save_text_artifact_and_record
 
 AGENT_NAME = "System Software CoSim Harness Agent"
@@ -57,7 +58,7 @@ def _first_nonempty(*values: Any) -> str:
 
 
 def _tool_available(name: str) -> bool:
-    return bool(shutil.which(name))
+    return bool(tool_path(name) or shutil.which(name))
 
 
 def _read_l1_ready(l1: Dict[str, Any]) -> Optional[bool]:

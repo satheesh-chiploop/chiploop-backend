@@ -8,6 +8,7 @@ from datetime import datetime
 from typing import Any, Dict, Optional
 
 from utils.artifact_utils import save_text_artifact_and_record
+from tooling.runner import run_command, tool_path
 
 logger = logging.getLogger("chiploop")
 
@@ -264,7 +265,7 @@ def _collect_code_coverage(
         _log(log_path, f"Unsupported code coverage tool selected: {selected_tool}", level="warning")
         return summary
 
-    verilator_coverage = shutil.which("verilator_coverage")
+    verilator_coverage = tool_path("verilator_coverage", state) or shutil.which("verilator_coverage")
     if not verilator_coverage:
         summary["status"] = "tool_unavailable"
         _log(log_path, "verilator_coverage was not found in PATH", level="warning")
@@ -273,10 +274,11 @@ def _collect_code_coverage(
     info_path = os.path.abspath(os.path.join(reports_dir, "code_coverage.info"))
     cmd = [verilator_coverage, "--write-info", info_path] + dat_files
     try:
-        proc = subprocess.run(cmd, cwd=tb_root, capture_output=True, text=True, timeout=120)
+        proc = run_command(state, "code_coverage_lcov", cmd, cwd=tb_root, timeout_sec=120)
         summary["returncode"] = proc.returncode
         summary["stdout_tail"] = (proc.stdout or "").splitlines()[-80:]
         summary["stderr_tail"] = (proc.stderr or "").splitlines()[-80:]
+        summary["tool_execution"] = proc.to_dict()
         summary["lcov_info_path"] = info_path
         if proc.returncode != 0:
             summary["status"] = "failed"
@@ -297,10 +299,11 @@ def _collect_code_coverage(
             "--annotate-min",
             "1",
         ] + dat_files
-        annotate_proc = subprocess.run(annotate_cmd, cwd=tb_root, capture_output=True, text=True, timeout=120)
+        annotate_proc = run_command(state, "code_coverage_annotate", annotate_cmd, cwd=tb_root, timeout_sec=120)
         summary["annotate_returncode"] = annotate_proc.returncode
         summary["annotate_stdout_tail"] = (annotate_proc.stdout or "").splitlines()[-80:]
         summary["annotate_stderr_tail"] = (annotate_proc.stderr or "").splitlines()[-80:]
+        summary["annotate_tool_execution"] = annotate_proc.to_dict()
         summary["toggle_annotation_dir"] = annotation_dir
         if annotate_proc.returncode == 0 and os.path.isdir(annotation_dir):
             summary.update(_parse_verilator_annotated_toggle_coverage(annotation_dir))
@@ -391,11 +394,11 @@ def run_agent(state: dict) -> dict:
                 env["RANDOM_SEED"] = str(s)
 
                 try:
-                    p = subprocess.run(
+                    p = run_command(
+                        state,
+                        "digital_simulation",
                         ["make", f"TESTCASE={t}"],
                         cwd=tb_root,
-                        capture_output=True,
-                        text=True,
                         env=env,
                     )
 
@@ -418,6 +421,7 @@ def run_agent(state: dict) -> dict:
                         "rc": p.returncode,
                         "stdout_tail": stdout_tail,
                         "stderr_tail": stderr_tail,
+                        "tool_execution": p.to_dict(),
                     })
                     run_coverage = _safe_read_json(coverage_json_path)
                     if run_coverage:

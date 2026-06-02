@@ -11,21 +11,17 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from utils.artifact_utils import save_text_artifact_and_record
+from tooling.runner import run_command, tool_path
 
 def _now() -> str:
     return datetime.now().isoformat()
 
 def _which(binname: str) -> Optional[str]:
-    return shutil.which(binname)
+    return tool_path(binname) or shutil.which(binname)
 
 def _python_has_module(module_name: str) -> bool:
     try:
-        p = subprocess.run(
-            [sys.executable, "-c", f"import {module_name}"],
-            capture_output=True,
-            text=True,
-            timeout=20,
-        )
+        p = run_command({}, "python_module_check", [sys.executable, "-c", f"import {module_name}"], timeout_sec=20)
         return p.returncode == 0
     except Exception:
         return False
@@ -123,14 +119,7 @@ def _looks_pass(run: Dict[str, Any]) -> bool:
 def _run(cmd: List[str], cwd: Optional[str] = None, env: Optional[Dict[str, str]] = None, timeout: int = 1800) -> Dict[str, Any]:
     t0 = time.time()
     try:
-        p = subprocess.run(
-            cmd,
-            cwd=cwd,
-            env=env,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-        )
+        p = run_command({}, "system_sim_execution", cmd, cwd=cwd, env=env, timeout_sec=timeout)
         dt = round(time.time() - t0, 3)
         return {
             "cmd": cmd,
@@ -545,4 +534,3 @@ def run_agent(state: dict) -> dict:
     state["simulation_execution_summary_json"] = summary_alias_json_path
     state["status"] = f"✅ System simulation executed: {tests_passed}/{len(results)} runs passed"
     return state
-

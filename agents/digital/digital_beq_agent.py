@@ -9,6 +9,7 @@ from datetime import datetime
 
 logger = logging.getLogger("chiploop")
 
+from tooling.runner import run_command
 from utils.artifact_utils import save_text_artifact_and_record
 
 AGENT_NAME = "Digital BEQ Agent"
@@ -36,16 +37,9 @@ def _read_json(path: str) -> dict:
         return {}
 
 
-def _run(cmd: list[str], cwd: str) -> tuple[int, str]:
-    p = subprocess.Popen(
-        cmd,
-        cwd=cwd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-    )
-    out, _ = p.communicate()
-    return p.returncode, out
+def _run(cmd: list[str], cwd: str, state: dict | None = None) -> tuple[int, str]:
+    p = run_command(state or {}, "digital_beq", [str(x) for x in cmd], cwd=cwd, timeout_sec=1800)
+    return p.returncode if p.returncode is not None else 1, (p.stdout or "") + (p.stderr or "")
 
 
 def _first_existing(paths: list[str]) -> str | None:
@@ -423,7 +417,7 @@ docker run --rm \\
     _write_text(run_sh_path, run_sh)
     os.chmod(run_sh_path, 0o755)
 
-    rc, out = _run(["bash", "-lc", "./run.sh"], cwd=stage_dir)
+    rc, out = _run(["bash", "-lc", "./run.sh"], cwd=stage_dir, state=state)
     log_path = os.path.join(logs_dir, "openlane_beq.log")
     _write_text(log_path, out)
 

@@ -19,6 +19,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 from utils.artifact_utils import save_text_artifact_and_record
+from tooling.runner import tool_path
 
 logger = logging.getLogger("chiploop")
 
@@ -124,7 +125,7 @@ def _record_text(
 
 
 def _which(binname: str) -> Optional[str]:
-    return shutil.which(binname)
+    return tool_path(binname) or shutil.which(binname)
 
 
 # -----------------------------------------------------------------------------

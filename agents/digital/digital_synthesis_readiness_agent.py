@@ -18,6 +18,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 from utils.artifact_utils import save_text_artifact_and_record
+from tooling.runner import run_command, tool_path
 
 
 def _now() -> str:
@@ -38,12 +39,18 @@ def _read_json(path: str) -> Dict[str, Any]:
     return {}
 
 def _which(binname: str) -> Optional[str]:
-    return shutil.which(binname)
+    return tool_path(binname) or shutil.which(binname)
 
-def _run(cmd: List[str], cwd: Optional[str]=None, timeout: int=300) -> Dict[str, Any]:
+def _run(cmd: List[str], cwd: Optional[str]=None, timeout: int=300, state: Optional[Dict[str, Any]]=None) -> Dict[str, Any]:
     try:
-        p = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout)
-        return {"cmd": cmd, "returncode": p.returncode, "stdout": p.stdout or "", "stderr": p.stderr or ""}
+        p = run_command(state or {}, "synthesis_readiness", cmd, cwd=cwd, timeout_sec=timeout)
+        return {
+            "cmd": p.command,
+            "returncode": p.returncode,
+            "stdout": p.stdout or "",
+            "stderr": p.stderr or "",
+            "tool_execution": p.to_dict(),
+        }
     except Exception as e:
         return {"cmd": cmd, "returncode": -1, "stdout": "", "stderr": str(e)}
 
@@ -150,7 +157,7 @@ def _intent_checks(spec: Dict[str, Any]) -> List[Dict[str, Any]]:
                          "message":"No area/gatecount intent found. Provide rough bounds if needed."})
     return findings
 
-def _yosys_synth(workflow_dir: str, top: str, rtl_files: List[str]) -> Dict[str, Any]:
+def _yosys_synth(workflow_dir: str, top: str, rtl_files: List[str], state: Optional[Dict[str, Any]]=None) -> Dict[str, Any]:
     if not _which("yosys"):
         return {"available": False, "note": "yosys not found in PATH"}
 
@@ -167,7 +174,7 @@ def _yosys_synth(workflow_dir: str, top: str, rtl_files: List[str]) -> Dict[str,
     ys = "\n".join(script) + "\n"
     _write(os.path.join(synth_dir, "synth.ys"), ys)
 
-    res = _run(["yosys", "-q", "-l", "yosys_synth.log", "synth.ys"], cwd=synth_dir, timeout=600)
+    res = _run(["yosys", "-q", "-l", "yosys_synth.log", "synth.ys"], cwd=synth_dir, timeout=600, state=state)
     log_path = os.path.join(synth_dir, "yosys_synth.log")
     log_txt = ""
     if os.path.exists(log_path):
@@ -194,7 +201,7 @@ def run_agent(state: dict) -> dict:
 
     redflags = _scan_rtl_for_redflags(rtl_files)
     intent = _intent_checks(spec)
-    yosys = _yosys_synth(workflow_dir, top, rtl_files)
+    yosys = _yosys_synth(workflow_dir, top, rtl_files, state)
 
     score = 100
     score -= min(40, len(redflags))

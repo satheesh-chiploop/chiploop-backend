@@ -2,6 +2,7 @@ import json
 import re
 import os
 import subprocess
+from tooling.runner import run_command
 from utils.artifact_utils import save_text_artifact_and_record
 from agents.analog._analog_llm import llm_text, safe_json_load
 
@@ -524,9 +525,9 @@ def _has_non_top_analog_rtl(rtl_files, top_abs):
     return False
 
 
-def _run_full_compile_pair(workflow_id, agent_name, workflow_dir, tag, top_module, rtl_files):
-    iverilog_ok, iverilog_log = _run_iverilog_full_compile(workflow_dir, top_module, rtl_files)
-    verilator_ok, verilator_log = _run_verilator_full_lint(workflow_dir, top_module, rtl_files)
+def _run_full_compile_pair(workflow_id, agent_name, workflow_dir, tag, top_module, rtl_files, state=None):
+    iverilog_ok, iverilog_log = _run_iverilog_full_compile(workflow_dir, top_module, rtl_files, state=state)
+    verilator_ok, verilator_log = _run_verilator_full_lint(workflow_dir, top_module, rtl_files, state=state)
 
     save_text_artifact_and_record(
         workflow_id, agent_name, "system/integration",
@@ -551,6 +552,7 @@ def _run_pass2_for_top(
     tag,
     iverilog_log,
     verilator_log,
+    state=None,
 ):
     top_abs = os.path.join(workflow_dir, rel_path)
     with open(top_abs, "r", encoding="utf-8") as f:
@@ -599,6 +601,7 @@ def _run_pass2_for_top(
         tag=f"{tag}_pass2",
         top_module=top_module,
         rtl_files=rtl_files,
+        state=state,
     )
 
     return {
@@ -608,7 +611,7 @@ def _run_pass2_for_top(
         "verilator_log_pass2": verilator_log_2,
     }
 
-def _run_iverilog_full_compile(workflow_dir: str, top_module: str, rtl_files):
+def _run_iverilog_full_compile(workflow_dir: str, top_module: str, rtl_files, state=None):
     log_path = os.path.join(workflow_dir, "system", "integration", "system_full_compile_iverilog.log")
     cmd = [
         "iverilog",
@@ -618,7 +621,7 @@ def _run_iverilog_full_compile(workflow_dir: str, top_module: str, rtl_files):
         *rtl_files,
     ]
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, cwd=workflow_dir)
+        proc = run_command(state or {}, "system_top_assembly_iverilog", cmd, cwd=workflow_dir)
         text = f"$ {' '.join(cmd)}\n\nSTDOUT:\n{proc.stdout}\n\nSTDERR:\n{proc.stderr}\n"
         with open(log_path, "w", encoding="utf-8") as f:
             f.write(text)
@@ -632,7 +635,7 @@ def _run_iverilog_full_compile(workflow_dir: str, top_module: str, rtl_files):
 
 
 
-def _run_verilator_full_lint(workflow_dir: str, top_module: str, rtl_files):
+def _run_verilator_full_lint(workflow_dir: str, top_module: str, rtl_files, state=None):
     log_path = os.path.join(workflow_dir, "system", "integration", "system_full_compile_verilator.log")
     cmd = [
         "verilator",
@@ -644,7 +647,7 @@ def _run_verilator_full_lint(workflow_dir: str, top_module: str, rtl_files):
         *rtl_files,
     ]
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, cwd=workflow_dir)
+        proc = run_command(state or {}, "system_top_assembly_verilator", cmd, cwd=workflow_dir)
         text = f"$ {' '.join(cmd)}\n\nSTDOUT:\n{proc.stdout}\n\nSTDERR:\n{proc.stderr}\n"
         with open(log_path, "w", encoding="utf-8") as f:
             f.write(text)
@@ -1057,6 +1060,7 @@ def run_agent(state: dict) -> dict:
             tag="sim_pass1",
             top_module=top_sim,
             rtl_files=sim_abs_list,
+            state=state,
         )
 
         summary["sim"]["iverilog_ok_pass1"] = sim_iv_ok
@@ -1074,6 +1078,7 @@ def run_agent(state: dict) -> dict:
                 tag="sim",
                 iverilog_log=sim_iv_log,
                 verilator_log=sim_vlt_log,
+                state=state,
             )
             summary["sim"].update({
                 "iverilog_ok_pass2": sim_pass2["iverilog_ok_pass2"],
@@ -1091,6 +1096,7 @@ def run_agent(state: dict) -> dict:
             tag="phys_pass1",
             top_module=top_phys,
             rtl_files=phys_abs_list,
+            state=state,
         )
 
         summary["phys"]["iverilog_ok_pass1"] = phys_iv_ok
@@ -1108,6 +1114,7 @@ def run_agent(state: dict) -> dict:
                 tag="phys",
                 iverilog_log=phys_iv_log,
                 verilator_log=phys_vlt_log,
+                state=state,
             )
             summary["phys"].update({
                 "iverilog_ok_pass2": phys_pass2["iverilog_ok_pass2"],

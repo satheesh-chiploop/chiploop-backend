@@ -3,6 +3,8 @@ import os, subprocess, re, json
 from datetime import datetime
 from typing import Dict, Any
 
+from tooling.runner import run_command
+
 def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     """
     Analog Sim Agent
@@ -26,7 +28,9 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     cmd = ["ngspice", "-b", "-o", log_path, netlist]
     print(f"→ Running: {' '.join(cmd)}")
     try:
-        subprocess.run(cmd, cwd=wf_dir, check=True)
+        result = run_command(state, "analog_simulation", cmd, cwd=wf_dir)
+        if result.returncode != 0:
+            raise subprocess.CalledProcessError(result.returncode if result.returncode is not None else 1, result.command, output=result.stdout, stderr=result.stderr)
     except subprocess.CalledProcessError as e:
         # still save partial logs and return failure state
         state.update({"status": f"❌ ngspice failed: {e}", "artifact_log": log_path})

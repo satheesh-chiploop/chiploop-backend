@@ -46,6 +46,13 @@ def _default_profile() -> Dict[str, Any]:
                 "/root/chiploop-backend/venv/bin/pytest",
                 "pytest",
             ])},
+            "python3": {"executable": _first_existing([
+                os.getenv("CHIPLOOP_PYTHON3", ""),
+                "/root/chiploop-backend/venv/bin/python3",
+                "/usr/bin/python3",
+                "python3",
+                "python",
+            ])},
         },
         "tools": {
             "iverilog": {"executable": _first_existing([
@@ -99,6 +106,72 @@ def _default_profile() -> Dict[str, Any]:
                 os.getenv("GEM5_RISCV_BIN", ""),
                 "/opt/gem5/build/RISCV/gem5.opt",
             ])},
+            "make": {"executable": _first_existing([
+                os.getenv("CHIPLOOP_MAKE", ""),
+                "/usr/bin/make",
+                "make",
+            ])},
+            "cargo": {"executable": _first_existing([
+                os.getenv("CHIPLOOP_CARGO", ""),
+                "/root/.cargo/bin/cargo",
+                "/usr/bin/cargo",
+                "cargo",
+            ])},
+            "rustc": {"executable": _first_existing([
+                os.getenv("CHIPLOOP_RUSTC", ""),
+                "/root/.cargo/bin/rustc",
+                "/usr/bin/rustc",
+                "rustc",
+            ])},
+            "llvm_cov": {"executable": _first_existing([
+                os.getenv("CHIPLOOP_LLVM_COV", ""),
+                "llvm-cov",
+            ])},
+            "llvm_profdata": {"executable": _first_existing([
+                os.getenv("CHIPLOOP_LLVM_PROFDATA", ""),
+                "llvm-profdata",
+            ])},
+            "gcov": {"executable": _first_existing([
+                os.getenv("CHIPLOOP_GCOV", ""),
+                "gcov",
+            ])},
+            "git": {"executable": _first_existing([
+                os.getenv("CHIPLOOP_GIT", ""),
+                "/usr/bin/git",
+                "git",
+            ])},
+            "bash": {"executable": _first_existing([
+                os.getenv("CHIPLOOP_BASH", ""),
+                "/bin/bash",
+                "bash",
+            ])},
+            "scons": {"executable": _first_existing([
+                os.getenv("CHIPLOOP_SCONS", ""),
+                "/usr/bin/scons",
+                "scons",
+            ])},
+            "gcc": {"executable": _first_existing([
+                os.getenv("CHIPLOOP_GCC", ""),
+                "/usr/bin/gcc",
+                "gcc",
+            ])},
+            "ngspice": {"executable": _first_existing([
+                os.getenv("CHIPLOOP_NGSPICE", ""),
+                "/usr/bin/ngspice",
+                "ngspice",
+            ])},
+            "riscv64_linux_gnu_gcc": {"executable": _first_existing([
+                os.getenv("CHIPLOOP_RISCV64_LINUX_GNU_GCC", ""),
+                "riscv64-linux-gnu-gcc",
+            ])},
+            "riscv64_unknown_elf_gcc": {"executable": _first_existing([
+                os.getenv("CHIPLOOP_RISCV64_UNKNOWN_ELF_GCC", ""),
+                "riscv64-unknown-elf-gcc",
+            ])},
+            "x86_64_linux_gnu_gcc": {"executable": _first_existing([
+                os.getenv("CHIPLOOP_X86_64_LINUX_GNU_GCC", ""),
+                "x86_64-linux-gnu-gcc",
+            ])},
         },
         "env": {
             "PATH": {
@@ -150,6 +223,9 @@ def resolve_tool(name: str, state: Optional[Dict[str, Any]] = None, *, kind: str
     profile = get_tool_profile(state)
     section = profile.get(kind) if isinstance(profile.get(kind), dict) else {}
     entry = section.get(name)
+    if entry is None and kind == "tools":
+        runtime = profile.get("runtime") if isinstance(profile.get("runtime"), dict) else {}
+        entry = runtime.get(name)
     if isinstance(entry, dict):
         executable = entry.get("executable") or entry.get("path")
     elif isinstance(entry, str):

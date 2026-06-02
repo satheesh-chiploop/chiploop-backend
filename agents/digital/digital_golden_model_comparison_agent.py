@@ -24,6 +24,7 @@ import subprocess
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
+from tooling.runner import tool_path
 from utils.artifact_utils import save_text_artifact_and_record
 
 
@@ -156,7 +157,7 @@ def _infer_clocks_resets(spec: Dict[str, Any], ports: List[Dict[str, Any]]) -> T
     return clocks, uniq
 
 def _which(binname: str) -> Optional[str]:
-    return shutil.which(binname)
+    return tool_path(binname) or shutil.which(binname)
 
 def _write_file(path: str, content: str) -> None:
     os.makedirs(os.path.dirname(path), exist_ok=True)

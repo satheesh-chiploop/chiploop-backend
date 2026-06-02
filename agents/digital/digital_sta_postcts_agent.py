@@ -9,6 +9,7 @@ from datetime import datetime
 
 logger = logging.getLogger("chiploop")
 
+from tooling.runner import run_command
 from utils.artifact_utils import save_text_artifact_and_record
 
 AGENT_NAME = "Digital STA PostCTS Agent"
@@ -28,10 +29,9 @@ def _read_json(p):
         return {}
 
 
-def _run(cmd, cwd):
-    p = subprocess.Popen(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-    out, _ = p.communicate()
-    return p.returncode, out
+def _run(cmd, cwd, state=None):
+    p = run_command(state or {}, "digital_sta_postcts", [str(x) for x in cmd], cwd=cwd, timeout_sec=1800)
+    return p.returncode if p.returncode is not None else 1, (p.stdout or "") + (p.stderr or "")
 def _ensure_dir(path: str) -> None:
     os.makedirs(path, exist_ok=True)
 
@@ -368,7 +368,7 @@ docker run --rm \
     _write_text(os.path.join(stage_dir, "run.sh"), run_sh)
     os.chmod(os.path.join(stage_dir, "run.sh"), 0o755)
 
-    rc, out = _run(["bash", "-lc", "./run.sh"], cwd=stage_dir)
+    rc, out = _run(["bash", "-lc", "./run.sh"], cwd=stage_dir, state=state)
     _write_text(os.path.join(logs_dir, "openlane_sta_postcts.log"), out)
 
     latest = _latest_run_dir(run_work_dir)

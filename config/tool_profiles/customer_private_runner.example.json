@@ -8,6 +8,9 @@
     },
     "cocotb_config": {
       "executable": "/opt/chiploop/venv/bin/cocotb-config"
+    },
+    "python3": {
+      "executable": "/opt/chiploop/venv/bin/python3"
     }
   },
   "tools": {
@@ -31,6 +34,33 @@
     },
     "xcelium": {
       "executable": "/eda/cadence/XCELIUM/bin/xrun"
+    },
+    "make": {
+      "executable": "/usr/bin/make"
+    },
+    "cargo": {
+      "executable": "/opt/rust/bin/cargo"
+    },
+    "rustc": {
+      "executable": "/opt/rust/bin/rustc"
+    },
+    "git": {
+      "executable": "/usr/bin/git"
+    },
+    "bash": {
+      "executable": "/bin/bash"
+    },
+    "gcc": {
+      "executable": "/usr/bin/gcc"
+    },
+    "ngspice": {
+      "executable": "/eda/spice/bin/ngspice"
+    },
+    "gem5_x86": {
+      "executable": "/eda/gem5/build/X86/gem5.opt"
+    },
+    "gem5_riscv": {
+      "executable": "/eda/gem5/build/RISCV/gem5.opt"
     }
   },
   "env": {

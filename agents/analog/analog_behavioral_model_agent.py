@@ -2,6 +2,7 @@ import os
 import re
 import json
 import subprocess
+from tooling.runner import run_command
 from utils.artifact_utils import save_text_artifact_and_record
 from agents.analog._analog_llm import llm_text
 
@@ -141,11 +142,11 @@ Return corrected code only.
 
 
 
-def _run_verilator_lint(model_path: str) -> tuple[int, str]:
+def _run_verilator_lint(model_path: str, state: dict | None = None) -> tuple[int, str]:
     cmd = ["verilator", "--lint-only", model_path]
-    cp = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    cp = run_command(state or {}, "analog_behavioral_verilator_lint", cmd)
     text = (cp.stdout or "") + "\n" + (cp.stderr or "")
-    return cp.returncode, text
+    return cp.returncode if cp.returncode is not None else 1, text
 
 
 def _is_fatal_verilator_log(log_text: str) -> bool:
@@ -390,7 +391,7 @@ SELF-CHECK BEFORE OUTPUT
     repair_used = False
 
     try:
-        cp = subprocess.run(compile_cmd, capture_output=True, text=True, check=False)
+        cp = run_command(state, "analog_behavioral_iverilog_compile", compile_cmd)
         compile_status = (cp.stdout or "") + "\n" + (cp.stderr or "")
         compile_failed = cp.returncode != 0
     except Exception as e:
@@ -400,7 +401,7 @@ SELF-CHECK BEFORE OUTPUT
     fatal_lint = False
     if not compile_failed:
         try:
-            vrc, verilator_log = _run_verilator_lint(model_path)
+            vrc, verilator_log = _run_verilator_lint(model_path, state=state)
             fatal_lint = (vrc != 0) and _is_fatal_verilator_log(verilator_log)
         except Exception as e:
             verilator_log = f"Verilator invocation failed: {e}"
@@ -419,7 +420,7 @@ SELF-CHECK BEFORE OUTPUT
             with open(model_path, "w", encoding="utf-8") as f:
                 f.write(model.rstrip() + "\n")
 
-            cp2 = subprocess.run(compile_cmd, capture_output=True, text=True, check=False)
+            cp2 = run_command(state, "analog_behavioral_iverilog_compile_repair", compile_cmd)
             compile_status = (cp2.stdout or "") + "\n" + (cp2.stderr or "")
             compile_failed = cp2.returncode != 0
 
@@ -427,7 +428,7 @@ SELF-CHECK BEFORE OUTPUT
             fatal_lint = False
             if not compile_failed:
                 try:
-                    vrc2, verilator_log = _run_verilator_lint(model_path)
+                    vrc2, verilator_log = _run_verilator_lint(model_path, state=state)
                     fatal_lint = (vrc2 != 0) and _is_fatal_verilator_log(verilator_log)
                 except Exception as e:
                     verilator_log = f"Verilator invocation failed: {e}"

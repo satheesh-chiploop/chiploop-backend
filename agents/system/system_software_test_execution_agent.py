@@ -6,6 +6,7 @@ import subprocess
 from typing import Any, Dict, List, Optional, Tuple
 
 from utils.artifact_utils import save_text_artifact_and_record
+from tooling.runner import run_command, tool_env, tool_path
 
 AGENT_NAME = "System Software Test Execution Agent"
 OUTPUT_SUBDIR = "system/software_validation/test"
@@ -37,7 +38,7 @@ def _tail(text: str, limit: int = 4000) -> str:
 
 
 def _tool_env() -> Dict[str, str]:
-    env = os.environ.copy()
+    env = tool_env()
     preferred_bin = "/root/.cargo/bin"
     path_parts = env.get("PATH", "").split(":") if env.get("PATH") else []
     if preferred_bin not in path_parts:
@@ -52,6 +53,7 @@ def _tool_env() -> Dict[str, str]:
 def _find_cargo() -> str:
     env = _tool_env()
     for candidate in [
+        tool_path("cargo"),
         "/root/.cargo/bin/cargo",
         shutil.which("cargo", path=env.get("PATH")),
         shutil.which("cargo"),
@@ -64,14 +66,13 @@ def _find_cargo() -> str:
 def _run_cmd(cmd: List[str], cwd: str, timeout_sec: int = 600) -> Dict[str, Any]:
     env = _tool_env()
     try:
-        result = subprocess.run(
+        result = run_command(
+            {},
+            "system_software_test_execution",
             cmd,
             cwd=cwd,
             env=env,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            timeout=timeout_sec,
+            timeout_sec=timeout_sec,
         )
         return {
             "returncode": result.returncode,
@@ -92,7 +93,7 @@ def _detect_tool_versions(cargo_bin: str) -> Dict[str, str]:
     if cargo_bin:
         cargo_result = _run_cmd([cargo_bin, "--version"], cwd="/root")
         cargo_version = (cargo_result.get("stdout") or cargo_result.get("stderr") or "").strip()
-    rustc_bin = shutil.which("rustc", path=_tool_env().get("PATH"))
+    rustc_bin = tool_path("rustc") or shutil.which("rustc", path=_tool_env().get("PATH"))
     if rustc_bin:
         rustc_result = _run_cmd([rustc_bin, "--version"], cwd="/root")
         rustc_version = (rustc_result.get("stdout") or rustc_result.get("stderr") or "").strip()

@@ -4,6 +4,7 @@ import os
 import subprocess
 from typing import Any, Dict, List, Optional
 
+from tooling.runner import run_command
 from utils.artifact_utils import save_text_artifact_and_record
 from agents.analog._analog_llm import llm_text
 
@@ -67,20 +68,14 @@ def _resolve_cwd(state: Dict[str, Any], scenario: Dict[str, Any]) -> str:
 
 
 
-def _run_cmd(cmd: List[str], cwd: str, timeout_sec: int) -> Dict[str, Any]:
+def _run_cmd(cmd: List[str], cwd: str, timeout_sec: int, state: Dict[str, Any] | None = None) -> Dict[str, Any]:
     try:
-        result = subprocess.run(
-            cmd,
-            cwd=cwd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            timeout=timeout_sec,
-        )
+        result = run_command(state or {}, "system_software_cosim", cmd, cwd=cwd, timeout_sec=timeout_sec)
         return {
             "returncode": result.returncode,
             "stdout_tail": _tail(result.stdout),
             "stderr_tail": _tail(result.stderr),
+            "tool_execution": result.to_dict(),
         }
     except Exception as exc:
         return {
@@ -409,7 +404,7 @@ def run_agent(state: dict) -> dict:
         final_returncode = 0
         for command in commands:
             cmd = [str(x) for x in (command.get("command") or []) if str(x).strip()]
-            result = _run_cmd(cmd, cwd=cwd, timeout_sec=timeout_sec)
+            result = _run_cmd(cmd, cwd=cwd, timeout_sec=timeout_sec, state=state)
             command_result = {
                 "command_id": command.get("command_id") or "",
                 "source": command.get("source") or "",

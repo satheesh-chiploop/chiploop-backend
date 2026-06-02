@@ -6,6 +6,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from tooling.runner import run_command, tool_path
 from utils.artifact_utils import save_text_artifact_and_record
 
 
@@ -472,6 +473,10 @@ int main(void) {
 
 def _find_gem5_bin(isa: str) -> str:
     isa_key = isa.upper()
+    profile_key = "gem5_riscv" if isa_key in {"RISCV", "RISC-V"} else "gem5_x86"
+    profiled = tool_path(profile_key)
+    if profiled and os.path.isfile(profiled) and os.access(profiled, os.X_OK):
+        return profiled
     candidates = [
         os.environ.get(f"GEM5_{isa_key}_BIN"),
         os.environ.get("GEM5_BIN"),
@@ -511,15 +516,22 @@ def _compile_matrix_workload(state: Dict[str, Any], isa: str) -> str:
     source = out_dir / "matrix_multiply.c"
     binary = out_dir / "matrix_multiply"
     source.write_text(MATRIX_BENCHMARK_C, encoding="utf-8")
-    compiler = next((c for c in _compiler_candidates(isa) if c and shutil.which(c)), "")
+    compiler = next(
+        (
+            tool_path(c.replace("-", "_")) or tool_path(c) or c
+            for c in _compiler_candidates(isa)
+            if c and (tool_path(c.replace("-", "_")) or tool_path(c) or shutil.which(c))
+        ),
+        "",
+    )
     if not compiler:
         raise RuntimeError(f"No compiler found to build the gem5 {isa} workload binary.")
 
     base_cmd = [compiler, "-O2", "-DCHIPLOOP_N=24", str(source), "-o", str(binary)]
     static_cmd = base_cmd[:3] + ["-static"] + base_cmd[3:]
-    run = subprocess.run(static_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=120)
+    run = run_command(state, "gem5_workload_compile", static_cmd, timeout_sec=120)
     if run.returncode != 0:
-        run = subprocess.run(base_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=120)
+        run = run_command(state, "gem5_workload_compile", base_cmd, timeout_sec=120)
     if run.returncode != 0:
         raise RuntimeError(f"Failed to compile gem5 workload for {isa}: {run.stderr[-1200:]}")
     return str(binary)
@@ -634,7 +646,7 @@ def _run_gem5_point(state: Dict[str, Any], point: Dict[str, Any], config_path: s
         "--maxinsts", str(state.get("maxinsts") or os.environ.get("GEM5_MAX_INSTS") or 250000),
     ]
     timeout = int(os.environ.get("GEM5_RUN_TIMEOUT_SEC", "180"))
-    proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=timeout)
+    proc = run_command(state, "gem5_run", cmd, timeout_sec=timeout)
     (run_dir / "stdout.log").write_text(proc.stdout, encoding="utf-8", errors="ignore")
     (run_dir / "stderr.log").write_text(proc.stderr, encoding="utf-8", errors="ignore")
     if proc.returncode != 0:

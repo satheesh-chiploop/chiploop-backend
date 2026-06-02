@@ -10,6 +10,7 @@ from datetime import datetime
 logger = logging.getLogger("chiploop")
 
 
+from tooling.runner import run_command
 from utils.artifact_utils import save_text_artifact_and_record
 
 AGENT_NAME = "Digital Synthesis Agent"
@@ -105,9 +106,9 @@ def _write_local(path: str, content: str) -> None:
     with open(path, "w", encoding="utf-8") as f:
         f.write(content)
 
-def _run(cmd: list[str], cwd: str | None = None) -> tuple[int, str]:
-    p = subprocess.run(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-    return p.returncode, p.stdout
+def _run(cmd: list[str], cwd: str | None = None, state: dict | None = None) -> tuple[int, str]:
+    p = run_command(state or {}, "digital_synthesis", [str(x) for x in cmd], cwd=cwd, timeout_sec=1800)
+    return p.returncode if p.returncode is not None else 1, (p.stdout or "") + (p.stderr or "")
 
 def _resolve_rtl_files_from_state(state: dict, workflow_dir: str) -> list[str]:
     digital = state.get("digital") or {}
@@ -427,7 +428,7 @@ echo "Done. Inspect /work/runs/{run_tag} or latest run folder under /work/runs/"
     # This is the first production step; we run it now and capture logs.
     exec_log_path = os.path.join(logs_dir, "openlane_synth.log")
 
-    rc, out = _run(["bash", "./run.sh"], cwd=stage_dir)
+    rc, out = _run(["bash", "./run.sh"], cwd=stage_dir, state=state)
     _write_local(exec_log_path, out)
 
     # ---------- Collect best-effort outputs ----------

@@ -7,6 +7,7 @@ import sys
 import time
 from typing import Any, Dict, List, Optional
 
+from tooling.runner import run_command, tool_env, tool_path
 from utils.artifact_utils import save_text_artifact_and_record
 
 AGENT_NAME = "System Firmware CoSim Execution Agent"
@@ -262,16 +263,16 @@ def _safe_read_json(path: str) -> Dict[str, Any]:
 
 
 
-def _run_cocotb_simulation(workflow_dir: str, makefile_path: str, test_module: str) -> Dict[str, Any]:
+def _run_cocotb_simulation(state: Dict[str, Any], workflow_dir: str, makefile_path: str, test_module: str) -> Dict[str, Any]:
     make_abs = _join_workflow_path(workflow_dir, makefile_path)
     if not os.path.isfile(make_abs):
         return {"attempted": False, "reason": "Makefile not found"}
-    make_bin = shutil.which("make")
+    make_bin = tool_path("make", state) or shutil.which("make")
     if not make_bin:
         return {"attempted": False, "reason": "make not available"}
     make_dir = os.path.dirname(make_abs)
     python_bin_dir = os.path.dirname(sys.executable)
-    env = os.environ.copy()
+    env = tool_env(state)
     env["PATH"] = os.pathsep.join(
         [p for p in [python_bin_dir, env.get("PATH", "")] if p]
     )
@@ -280,13 +281,13 @@ def _run_cocotb_simulation(workflow_dir: str, makefile_path: str, test_module: s
     )
     start = time.time()
     try:
-        proc = subprocess.run(
+        proc = run_command(
+            state,
+            "system_firmware_cosim",
             [make_bin, "-f", make_abs, f"MODULE={test_module}"],
             cwd=workflow_dir,
             env=env,
-            capture_output=True,
-            text=True,
-            timeout=600,
+            timeout_sec=600,
         )
         return {
             "attempted": True,
@@ -294,6 +295,7 @@ def _run_cocotb_simulation(workflow_dir: str, makefile_path: str, test_module: s
             "runtime_seconds": time.time() - start,
             "stdout": (proc.stdout or "")[-5000:],
             "stderr": (proc.stderr or "")[-5000:],
+            "tool_execution": proc.to_dict(),
         }
     except Exception as exc:
         return {"attempted": True, "success": False, "runtime_seconds": None, "stderr": str(exc)}
@@ -431,7 +433,7 @@ def run_agent(state: dict) -> dict:
     elif runtime_requested and runtime_capable:
         execution_mode = "runtime_execution"
         test_module = os.path.splitext(os.path.basename(test_paths[0]))[0]
-        sim_result = _run_cocotb_simulation(workflow_dir, makefile_path, test_module)
+        sim_result = _run_cocotb_simulation(state, workflow_dir, makefile_path, test_module)
         overall_status = "simulation_passed" if sim_result.get("success") else "simulation_failed"
     else:
         execution_mode = "artifact_readiness_only"

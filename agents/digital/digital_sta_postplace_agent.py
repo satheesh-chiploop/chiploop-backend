@@ -1,4 +1,5 @@
 import os, json, glob, shutil, subprocess, re, logging
+from tooling.runner import run_command
 from utils.artifact_utils import save_text_artifact_and_record
 
 logger = logging.getLogger("chiploop")
@@ -26,10 +27,9 @@ def _write(p, s):
     with open(p, "w", encoding="utf-8") as f:
         f.write(s)
 
-def _run(cmd, cwd):
-    p = subprocess.Popen(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-    out, _ = p.communicate()
-    return p.returncode, out
+def _run(cmd, cwd, state=None):
+    p = run_command(state or {}, "digital_sta_postplace", [str(x) for x in cmd], cwd=cwd, timeout_sec=1800)
+    return p.returncode if p.returncode is not None else 1, (p.stdout or "") + (p.stderr or "")
 
 def _latest_run(run_work_dir):
     runs = os.path.join(run_work_dir, "runs")
@@ -331,7 +331,7 @@ docker run --rm \\
     _write(os.path.join(stage_dir, "run.sh"), run_sh)
     os.chmod(os.path.join(stage_dir, "run.sh"), 0o755)
 
-    rc, out = _run(["bash", "-lc", "./run.sh"], cwd=stage_dir)
+    rc, out = _run(["bash", "-lc", "./run.sh"], cwd=stage_dir, state=state)
     _write(os.path.join(logs_dir, "openlane_sta_postplace.log"), out)
 
     latest = _latest_run(run_work_dir)

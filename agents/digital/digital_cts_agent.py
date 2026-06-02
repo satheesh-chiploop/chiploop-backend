@@ -9,6 +9,7 @@ from datetime import datetime
 
 logger = logging.getLogger("chiploop")
 
+from tooling.runner import run_command
 from utils.artifact_utils import save_text_artifact_and_record
 
 AGENT_NAME = "Digital CTS Agent"
@@ -23,10 +24,9 @@ def _read_json(p):
     except Exception: return {}
 
 
-def _run(cmd, cwd):
-    p = subprocess.Popen(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-    out, _ = p.communicate()
-    return p.returncode, out
+def _run(cmd, cwd, state=None):
+    p = run_command(state or {}, "digital_cts", [str(x) for x in cmd], cwd=cwd, timeout_sec=1800)
+    return p.returncode if p.returncode is not None else 1, (p.stdout or "") + (p.stderr or "")
 
 
 
@@ -406,7 +406,7 @@ docker run --rm \
     run_sh_path = os.path.join(stage_dir, "run.sh")
     _write_text(run_sh_path, run_sh); os.chmod(run_sh_path, 0o755)
 
-    rc, out = _run(["bash","-lc","./run.sh"], cwd=stage_dir)
+    rc, out = _run(["bash","-lc","./run.sh"], cwd=stage_dir, state=state)
     log_path = os.path.join(logs_dir, "openlane_cts.log")
     _write_text(log_path, out)
 
