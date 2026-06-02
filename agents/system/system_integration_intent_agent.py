@@ -6,8 +6,6 @@ import re
 from collections import defaultdict
 from typing import Dict
 
-from portkey_ai import Portkey
-from openai import OpenAI
 from utils.artifact_utils import save_text_artifact_and_record
 from agents.analog._analog_llm import llm_text, safe_json_load
 
@@ -20,10 +18,6 @@ from agents.analog._analog_llm import llm_text, safe_json_load
 
 OLLAMA_URL = "http://127.0.0.1:11434/api/generate"
 USE_LOCAL_OLLAMA = os.getenv("USE_LOCAL_OLLAMA", "false").lower() == "true"
-
-PORTKEY_API_KEY = os.getenv("PORTKEY_API_KEY")
-client_portkey = Portkey(api_key=PORTKEY_API_KEY) if PORTKEY_API_KEY else None
-client_openai = OpenAI()
 
 def _normalize_dir_token(d: str):
     d = str(d or "").lower().strip()

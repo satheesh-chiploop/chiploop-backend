@@ -1,15 +1,11 @@
 import json, datetime
 from utils.artifact_utils import save_text_artifact_and_record
-from portkey_ai import Portkey
-from openai import OpenAI
+from model_gateway import complete_text
 import os
 
 # ✅ NEW: Supabase for saving test plans
 from supabase import create_client
 
-PORTKEY_API_KEY = os.getenv("PORTKEY_API_KEY")
-client_portkey = Portkey(api_key=PORTKEY_API_KEY) if PORTKEY_API_KEY else None
-client_openai = OpenAI()
 
 # ✅ NEW: Supabase env (service key recommended because your backend uses it elsewhere)
 SUPABASE_URL = os.getenv("SUPABASE_URL")
@@ -153,20 +149,12 @@ Rules:
 - Provide realistic tests (10–15 for a demo is fine)
 """
 
-    # Use your existing LLM helper if you have one; otherwise:
-    if client_portkey:
-        resp = client_portkey.chat.completions.create(
-            model="@chiploop/gpt-5-mini",
-            messages=[{"role": "user", "content": prompt}],
-            stream=False
-        )
-        out = resp.choices[0].message.content or "{}"
-    else:
-        resp = client_openai.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": prompt}],
-        )
-        out = resp.choices[0].message.content or "{}"
+    out = complete_text(
+        prompt,
+        capability="verification_debug",
+        agent_name="Validation Test Plan Agent",
+        state=state,
+    ) or "{}"
 
     plan = _safe_json_load(out)
 

@@ -7,9 +7,8 @@ import shutil
 logger = logging.getLogger("chiploop")
 from typing import Dict, List, Tuple, Optional
 
-from portkey_ai import Portkey
-
 from agents.runtime import RUNTIME_ACTIVE_STATE_KEY, AgentContext, execute_agent
+from model_gateway import complete_text
 from tooling.profiles import profile_summary
 from tooling.runner import run_tool
 from utils.artifact_utils import save_text_artifact_and_record
@@ -1730,11 +1729,6 @@ def _run(context: AgentContext) -> dict:
         })
         return state
 
-    try:
-        client_portkey = Portkey(api_key=PORTKEY_API_KEY)
-    except Exception as e:
-        return _fail_and_upload("Failed to initialize Portkey client.", e)
-
     entry_log = os.path.join(rtl_dir, "rtl_agent_entry.json")
     with open(entry_log, "w", encoding="utf-8") as ef:
         json.dump({
@@ -1876,12 +1870,7 @@ def _run(context: AgentContext) -> dict:
 
 
     try:
-        completion = client_portkey.chat.completions.create(
-            model="@chiploop/gpt-4o-mini",
-            messages=[{"role": "user", "content": prompt}],
-            stream=False,
-        )
-        llm_output = completion.choices[0].message.content or ""
+        llm_output = complete_text(prompt, capability="rtl_generation", state=state)
         _stage(f"llm_output_pass1_chars: {len(llm_output)}")
     except Exception as e:
         log_path = os.path.join(rtl_dir, "rtl_agent_compile.log")
@@ -1952,12 +1941,7 @@ def _run(context: AgentContext) -> dict:
 
             
             try:
-                completion_pass2 = client_portkey.chat.completions.create(
-                    model="@chiploop/gpt-4o-mini",
-                    messages=[{"role": "user", "content": repair_prompt}],
-                    stream=False,
-                )
-                llm_output_pass2 = completion_pass2.choices[0].message.content or ""
+                llm_output_pass2 = complete_text(repair_prompt, capability="rtl_generation", state=state)
                 _stage(f"llm_output_pass2_chars: {len(llm_output_pass2)}")
             except Exception as e2:
                 pass2_exc = os.path.join(rtl_dir, "rtl_agent_exception_pass2.txt")

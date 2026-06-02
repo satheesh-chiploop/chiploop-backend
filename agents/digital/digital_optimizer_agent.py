@@ -3,17 +3,14 @@ import json
 import subprocess
 import datetime
 import requests
-from portkey_ai import Portkey
-from openai import OpenAI
 
+from model_gateway import complete_text
 from tooling.runner import run_command
 
 # --- Configuration ---
 OLLAMA_URL = "http://127.0.0.1:11434/api/generate"
 USE_LOCAL_OLLAMA = os.getenv("USE_LOCAL_OLLAMA", "false").lower() == "true"
 PORTKEY_API_KEY = os.getenv("PORTKEY_API_KEY")
-client_portkey = Portkey(api_key=PORTKEY_API_KEY)
-client_openai = OpenAI()
 
 def run_agent(state: dict) -> dict:
     print("\n⚡ Running Optimizer Agent...")
@@ -98,17 +95,13 @@ Task:
         else:
             print("🌐 Using Portkey backend for optimization...")
             try:
-                completion = client_portkey.chat.completions.create(
-                    model="gpt-4o-mini",
-                    messages=[{"role": "user", "content": prompt}],
-                    stream=True,
+                optimized_rtl += complete_text(
+                    prompt,
+                    capability="rtl_generation",
+                    agent_name="Digital Optimizer Agent",
+                    state=state,
                 )
-                for chunk in completion:
-                    if chunk and hasattr(chunk, "choices"):
-                        delta = chunk.choices[0].delta.get("content", "")
-                        if delta:
-                            optimized_rtl += delta
-                            print(delta, end="", flush=True)
+                print(optimized_rtl[:1200], flush=True)
             except Exception as e:
                 print(f"⚠️ Portkey failed, falling back to Ollama: {e}")
                 payload = {"model": "llama3", "prompt": prompt}

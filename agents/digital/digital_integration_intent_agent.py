@@ -4,8 +4,7 @@ import datetime
 import requests
 from typing import Any, Dict
 
-from portkey_ai import Portkey
-from openai import OpenAI
+from model_gateway import complete_text
 from utils.artifact_utils import save_text_artifact_and_record
 
 # ---------------------------------------------------------------------
@@ -15,8 +14,6 @@ OLLAMA_URL = "http://127.0.0.1:11434/api/generate"
 USE_LOCAL_OLLAMA = os.getenv("USE_LOCAL_OLLAMA", "false").lower() == "true"
 
 PORTKEY_API_KEY = os.getenv("PORTKEY_API_KEY")
-client_portkey = Portkey(api_key=PORTKEY_API_KEY)
-client_openai = OpenAI()
 
 
 def _now():
@@ -78,17 +75,12 @@ def _llm_generate(prompt: str, timeout_s: int = 600) -> str:
 
         print("🌐 Using Portkey backend for integration intent.")
         try:
-            completion = client_portkey.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[{"role": "user", "content": prompt}],
-                stream=True,
+            out += complete_text(
+                prompt,
+                capability="spec_generation",
+                agent_name="Digital Integration Intent Agent",
+                state=state,
             )
-            for chunk in completion:
-                if chunk and hasattr(chunk, "choices"):
-                    delta = chunk.choices[0].delta.get("content", "")
-                    if delta:
-                        out += delta
-                        print(delta, end="", flush=True)
             return out
 
         except Exception as e:

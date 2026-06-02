@@ -5,13 +5,12 @@ import json
 import datetime
 import subprocess
 import requests
-from portkey_ai import Portkey
+from model_gateway import complete_text
 
 # --- Config consistent with other agents ---
 OLLAMA_URL = "http://127.0.0.1:11434/api/generate"
 USE_LOCAL_OLLAMA = os.getenv("USE_LOCAL_OLLAMA", "false").lower() == "true"
 PORTKEY_API_KEY = os.getenv("PORTKEY_API_KEY")
-client_portkey = Portkey(api_key=PORTKEY_API_KEY)
 
 
 def run_agent(state: dict) -> dict:
@@ -89,17 +88,12 @@ Coverage numbers:
     else:
         print("🌐 Using Portkey to summarize coverage...")
         try:
-            completion = client_portkey.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[{"role": "user", "content": prompt}],
-                stream=True,
+            coverage_summary += complete_text(
+                prompt,
+                capability="verification_debug",
+                agent_name="Digital Coverage Agent",
+                state=state,
             )
-            for chunk in completion:
-                if chunk and hasattr(chunk, "choices"):
-                    delta = chunk.choices[0].delta.get("content", "")
-                    if delta:
-                        coverage_summary += delta
-                        print(delta, end="", flush=True)
         except Exception as e:
             print(f"⚠️ Portkey failed, fallback to Ollama: {e}")
             payload = {"model": "llama3", "prompt": prompt}

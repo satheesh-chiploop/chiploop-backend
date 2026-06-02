@@ -1,15 +1,11 @@
 import os
 import json
 from datetime import datetime
-from openai import OpenAI
-from portkey_ai import Portkey
+from model_gateway import complete_text
 from utils.artifact_utils import save_text_artifact_and_record
 
 USE_LOCAL_OLLAMA = os.getenv("USE_LOCAL_OLLAMA", "false").lower() == "true"
 OLLAMA_URL = "http://127.0.0.1:11434/api/generate"
-PORTKEY_API_KEY = os.getenv("PORTKEY_API_KEY")
-client_portkey = Portkey(api_key=PORTKEY_API_KEY)
-client_openai = OpenAI()
 
 
 def run_agent(state: dict) -> dict:
@@ -70,11 +66,12 @@ C code:
             response = requests.post(OLLAMA_URL, json=payload, timeout=600)
             sim_result = response.json().get("response", "")
         else:
-            completion = client_portkey.chat.completions.create(
-                model="@chiploop/gpt-4o-mini",
-                messages=[{"role": "user", "content": prompt}],
-            )
-            sim_result = completion.choices[0].message.content.strip()
+            sim_result = complete_text(
+                prompt,
+                capability="embedded_generation",
+                agent_name="Embedded Sim Agent",
+                state=state,
+            ).strip()
 
         # 4) Strip fences if present
         if sim_result.startswith("```"):

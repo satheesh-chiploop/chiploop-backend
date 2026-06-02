@@ -1,17 +1,13 @@
 import os
 import json
 from datetime import datetime
-from openai import OpenAI
-from portkey_ai import Portkey
 from agents.runtime import RUNTIME_ACTIVE_STATE_KEY, AgentContext, execute_agent
+from model_gateway import complete_text
 from utils.artifact_utils import save_text_artifact_and_record
 
 AGENT_NAME = "Embedded Result Agent"
 USE_LOCAL_OLLAMA = os.getenv("USE_LOCAL_OLLAMA", "false").lower() == "true"
 OLLAMA_URL = "http://127.0.0.1:11434/api/generate"
-PORTKEY_API_KEY = os.getenv("PORTKEY_API_KEY")
-client_portkey = Portkey(api_key=PORTKEY_API_KEY)
-client_openai = OpenAI()
 
 
 def _run(context: AgentContext) -> dict:
@@ -57,11 +53,12 @@ Telemetry JSON:
             response = requests.post(OLLAMA_URL, json=payload, timeout=600)
             summary = response.json().get("response", "").strip()
         else:
-            completion = client_portkey.chat.completions.create(
-                model="@chiploop/gpt-4o-mini",
-                messages=[{"role": "user", "content": prompt}],
-            )
-            summary = completion.choices[0].message.content.strip()
+            summary = complete_text(
+                prompt,
+                capability="summarizer",
+                agent_name=AGENT_NAME,
+                state=state,
+            ).strip()
 
         # Save summary
         with open(result_path, "w", encoding="utf-8") as f:

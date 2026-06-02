@@ -1,7 +1,7 @@
 import os
 import json
 from utils.artifact_utils import save_text_artifact_and_record
-from portkey_ai import Portkey
+from model_gateway import complete_text
 import logging
 
 
@@ -488,9 +488,6 @@ def run_agent(state: dict) -> dict:
     spec_dir = os.path.join(workflow_dir, "spec")
     os.makedirs(spec_dir, exist_ok=True)
 
-    client_portkey = Portkey(api_key=PORTKEY_API_KEY)
-
-
     entry_path = os.path.join(spec_dir, "spec_agent_entry.json")
     entry_payload = {
         "workflow_id": workflow_id,
@@ -912,12 +909,7 @@ Return JSON only.
 """.strip()
 
     try:
-        completion = client_portkey.chat.completions.create(
-            model="@chiploop/gpt-4o-mini",
-            messages=[{"role": "user", "content": prompt}],
-            stream=False,
-        )
-        llm_output = completion.choices[0].message.content or ""
+        llm_output = complete_text(prompt, capability="spec_generation", state=state)
     except Exception as e:
             log_path = os.path.join(spec_dir, "spec_agent_contract.log")
             summary_path = os.path.join(spec_dir, "spec_agent_summary.txt")
@@ -969,12 +961,7 @@ Return JSON only.
         try:
             logger.warning(f"❌ Digital Spec Agent pass1 contract compile failed: {e}")
             logger.info("🔁 Digital Spec Agent invoking pass2 repair flow")
-            completion_pass2 = client_portkey.chat.completions.create(
-                model="@chiploop/gpt-4o-mini",
-                messages=[{"role": "user", "content": repair_prompt}],
-                stream=False,
-            )
-            llm_output_pass2 = completion_pass2.choices[0].message.content or ""
+            llm_output_pass2 = complete_text(repair_prompt, capability="spec_generation", state=state)
             logger.info(f"🧠 Digital Spec Agent pass2 LLM output size: {len(llm_output_pass2)} chars")
         except Exception as e2:
             logger.error(f"❌ Digital Spec Agent pass2 contract compile failed: {e2}")

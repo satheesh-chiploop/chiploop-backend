@@ -16,14 +16,9 @@ import re
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
+from model_gateway import complete_text
 from utils.artifact_utils import save_text_artifact_and_record
 
-try:
-    from openai import OpenAI
-except Exception:
-    OpenAI = None
-
-client_openai = OpenAI() if OpenAI else None
 logger = logging.getLogger("chiploop")
 
 
@@ -638,11 +633,8 @@ def _maybe_llm_expand(
     sva: str,
     log_path: str,
     sva_spec: Dict[str, Any],
+    state: Dict[str, Any] | None = None,
 ) -> str:
-    if not client_openai:
-        _log(log_path, "LLM expansion unavailable; using deterministic scaffold only.", level="warning")
-        return sva
-
     try:
         prompt = (
             "You are a senior RTL verification engineer.\n"
@@ -659,15 +651,14 @@ def _maybe_llm_expand(
             f"SOC_TOP_SIM:\n{soc_top_text}\n\n"
             f"SVA_CODE:\n{sva}\n"
         )
-        resp = client_openai.chat.completions.create(
-            model=os.getenv("SYSTEM_SVA_MODEL", "gpt-4o-mini"),
-            messages=[
-                {"role": "system", "content": "Return code only. No markdown."},
-                {"role": "user", "content": prompt},
-            ],
+        out = complete_text(
+            prompt,
+            capability="verification_debug",
+            agent_name="System Assertions Agent",
+            system="Return code only. No markdown.",
+            state=state,
             temperature=0.1,
-        )
-        out = resp.choices[0].message.content.strip()
+        ).strip()
         if out:
             _log(log_path, "LLM expansion completed.")
             return out
@@ -754,7 +745,7 @@ def run_agent(state: dict) -> dict:
 
     enable_llm_expand = str(os.getenv("CHIPLOOP_ENABLE_LLM_SVA_EXPAND", "0")).strip().lower() in ("1", "true", "yes")
     if enable_llm_expand:
-        sva_sv = _maybe_llm_expand(integration, regmap, soc_top_text, sva_sv, log_path, sva_spec)
+        sva_sv = _maybe_llm_expand(integration, regmap, soc_top_text, sva_sv, log_path, sva_spec, state=state)
     else:
         _log(log_path, "LLM SVA expansion disabled; using deterministic scaffold.")
 

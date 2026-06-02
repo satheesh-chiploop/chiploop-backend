@@ -2,8 +2,7 @@
 import os, json, math
 from typing import Dict, Any, List, Tuple
 from datetime import datetime
-from portkey_ai import Portkey
-from openai import OpenAI
+from model_gateway import complete_text
 
 # plotting is optional (fallback to text summary if not available)
 try:
@@ -15,8 +14,6 @@ except Exception:
     HAS_MPL = False
 
 PORTKEY_API_KEY = os.getenv("PORTKEY_API_KEY")
-client_portkey = Portkey(api_key=PORTKEY_API_KEY)
-client_openai = OpenAI()
 
 
 def _load_csv(csv_path: str) -> Tuple[List[float], List[float]]:
@@ -109,11 +106,12 @@ Return Markdown only.
 
     report_md = ""
     try:
-        comp = client_portkey.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": analysis_prompt}],
-        )
-        report_md = comp.choices[0].message.content.strip()
+        report_md = complete_text(
+            analysis_prompt,
+            capability="summarizer",
+            agent_name="Analog Result Agent",
+            state=state,
+        ).strip()
     except Exception as e:
         report_md = f"### Result Summary\n\n{datum}\n\n*(LLM analysis unavailable: {e})*"
 

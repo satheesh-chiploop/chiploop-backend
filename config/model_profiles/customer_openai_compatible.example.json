@@ -1,0 +1,23 @@
+{
+  "model_profile_id": "customer_openai_compatible_example",
+  "provider": "openai_compatible",
+  "base_url": "https://llm-gateway.customer.example/v1",
+  "routing": {
+    "planner": {
+      "model": "customer-frontier"
+    },
+    "rtl_generation": {
+      "model": "customer-frontier"
+    },
+    "verification_debug": {
+      "model": "customer-frontier"
+    },
+    "summarizer": {
+      "model": "customer-small"
+    }
+  },
+  "env": {
+    "OPENAI_API_KEY": "set-in-secret-manager"
+  }
+}
+

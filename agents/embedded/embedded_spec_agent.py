@@ -4,18 +4,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 from utils.artifact_utils import save_text_artifact_and_record
-
-# Optional LLM enhancement (kept non-blocking)
-try:
-    from openai import OpenAI
-    from portkey_ai import Portkey
-except Exception:
-    OpenAI = None
-    Portkey = None
-
-PORTKEY_API_KEY = os.getenv("PORTKEY_API_KEY")
-client_portkey = Portkey(api_key=PORTKEY_API_KEY) if Portkey and PORTKEY_API_KEY else None
-client_openai = OpenAI() if OpenAI else None
+from model_gateway import complete_text
 
 
 def _log(log_path: str, msg: str) -> None:
@@ -160,14 +149,11 @@ def _build_default_mmio_map(fw_reads: List[dict], fw_writes: List[dict]) -> dict
     return regmap
 
 
-def _maybe_llm_polish_spec(embedded_spec: dict, log_path: str) -> dict:
+def _maybe_llm_polish_spec(embedded_spec: dict, log_path: str, state: dict | None = None) -> dict:
     """
     Optional LLM step: improve descriptions + add usage notes.
     Non-blocking; if it fails we return the input.
     """
-    if not client_openai:
-        return embedded_spec
-
     try:
         prompt = (
             "You are generating an embedded firmware integration spec for a hardware IP.\n"
@@ -176,15 +162,14 @@ def _maybe_llm_polish_spec(embedded_spec: dict, log_path: str) -> dict:
             f"INPUT_JSON:\n{json.dumps(embedded_spec, indent=2)}\n"
         )
         # Keep model flexible; this is a “polish” step, not required for correctness
-        resp = client_openai.chat.completions.create(
-            model=os.getenv("EMBEDDED_SPEC_MODEL", "gpt-4o-mini"),
-            messages=[
-                {"role": "system", "content": "Return JSON only. No markdown."},
-                {"role": "user", "content": prompt},
-            ],
+        txt = complete_text(
+            prompt,
+            capability="embedded_generation",
+            agent_name="Embedded Spec Agent",
+            system="Return JSON only. No markdown.",
+            state=state,
             temperature=0.2,
-        )
-        txt = resp.choices[0].message.content.strip()
+        ).strip()
         return json.loads(txt)
     except Exception as e:
         _log(log_path, f"LLM polish step skipped/failed: {e}")
@@ -245,7 +230,7 @@ def run_agent(state: dict) -> dict:
     }
 
     embedded_spec.update(_build_default_mmio_map(fw_reads, fw_writes))
-    embedded_spec = _maybe_llm_polish_spec(embedded_spec, log_path)
+    embedded_spec = _maybe_llm_polish_spec(embedded_spec, log_path, state=state)
 
     embedded_spec_json = json.dumps(embedded_spec, indent=2)
 

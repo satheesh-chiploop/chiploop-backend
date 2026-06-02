@@ -1,14 +1,11 @@
 # backend/agents/analog/analog_netlist_agent.py
 import os, json, requests
 from typing import Dict, Any, List
-from portkey_ai import Portkey
-from openai import OpenAI
+from model_gateway import complete_text
 
 OLLAMA_URL = "http://127.0.0.1:11434/api/generate"
 USE_LOCAL_OLLAMA = os.getenv("USE_LOCAL_OLLAMA", "false").lower() == "true"
 PORTKEY_API_KEY = os.getenv("PORTKEY_API_KEY")
-client_portkey = Portkey(api_key=PORTKEY_API_KEY)
-client_openai = OpenAI()
 
 
 def _include_lines_for_tech(workflow_dir: str, technology: str, pdk_dir: str | None, pdk_files: List[str]) -> List[str]:
@@ -110,7 +107,7 @@ def _fallback_netlist(spec: Dict[str, Any], workflow_dir: str) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _llm_netlist(spec: Dict[str, Any]) -> str:
+def _llm_netlist(spec: Dict[str, Any], state: Dict[str, Any] | None = None) -> str:
     prompt = f"""
 You are a SPICE expert. Convert the following analog spec JSON into a valid ngspice netlist (.cir).
 
@@ -130,11 +127,12 @@ Requirements:
     if USE_LOCAL_OLLAMA:
         r = requests.post(OLLAMA_URL, json={"model":"llama3","prompt":prompt}, timeout=600)
         return r.text.strip()
-    comp = client_portkey.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[{"role":"user","content":prompt}]
-    )
-    return comp.choices[0].message.content.strip()
+    return complete_text(
+        prompt,
+        capability="analog_generation",
+        agent_name="Analog Netlist Agent",
+        state=state,
+    ).strip()
 
 
 def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
@@ -165,7 +163,7 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     netlist = ""
     try:
         print(f"🌐 Using {'Ollama' if USE_LOCAL_OLLAMA else 'Portkey/OpenAI'} to generate netlist...")
-        netlist = _llm_netlist(spec)
+        netlist = _llm_netlist(spec, state=state)
         assert ".end" in netlist.lower()
     except Exception as e:
         llm_error = str(e)

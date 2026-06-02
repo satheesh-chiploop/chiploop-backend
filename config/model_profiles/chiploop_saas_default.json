@@ -1,0 +1,37 @@
+{
+  "model_profile_id": "chiploop_saas_default",
+  "provider": "openai",
+  "routing": {
+    "planner": {
+      "model": "gpt-5.5"
+    },
+    "rtl_generation": {
+      "model": "gpt-5.5"
+    },
+    "spec_generation": {
+      "model": "gpt-5.5"
+    },
+    "verification_debug": {
+      "model": "gpt-5.5"
+    },
+    "embedded_generation": {
+      "model": "gpt-5.5"
+    },
+    "analog_generation": {
+      "model": "gpt-5.5"
+    },
+    "summarizer": {
+      "model": "gpt-5.5"
+    },
+    "doc_generation": {
+      "model": "gpt-5.5"
+    },
+    "embeddings": {
+      "model": "text-embedding-3-small"
+    }
+  },
+  "agents": {},
+  "env": {
+    "OPENAI_API_KEY": "managed-by-chiploop"
+  }
+}

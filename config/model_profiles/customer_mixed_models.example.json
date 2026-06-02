@@ -1,0 +1,47 @@
+{
+  "model_profile_id": "customer_mixed_models_example",
+  "provider": "openai",
+  "routing": {
+    "default": {
+      "model": "gpt-5.4"
+    },
+    "rtl_generation": {
+      "model": "gpt-5.5"
+    },
+    "spec_generation": {
+      "model": "gpt-5.5"
+    },
+    "verification_debug": {
+      "model": "gpt-5.5"
+    },
+    "doc_generation": {
+      "provider": "anthropic",
+      "model": "claude-sonnet-4-5"
+    },
+    "summarizer": {
+      "model": "gpt-5.4"
+    },
+    "embeddings": {
+      "provider": "openai",
+      "model": "text-embedding-3-small"
+    }
+  },
+  "agents": {
+    "Digital RTL Agent": {
+      "provider": "openai",
+      "model": "gpt-5.5"
+    },
+    "Digital Spec Agent": {
+      "provider": "openai",
+      "model": "gpt-5.5"
+    },
+    "Digital Architecture Documentation Agent": {
+      "provider": "anthropic",
+      "model": "claude-sonnet-4-5"
+    }
+  },
+  "env": {
+    "OPENAI_API_KEY": "set-in-secret-manager",
+    "ANTHROPIC_API_KEY": "set-in-secret-manager"
+  }
+}

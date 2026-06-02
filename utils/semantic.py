@@ -1,16 +1,8 @@
 # imports (top of file)
 from datetime import datetime
-from portkey_ai import Portkey
 from utils.llm_utils import run_llm_fallback  # you already use this
-from openai import OpenAI
+from model_gateway import embed_text
 import os
-
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-client = OpenAI(api_key=OPENAI_API_KEY)
-
-import os
-PORTKEY_API_KEY = os.getenv("PORTKEY_API_KEY")
-portkey = Portkey(api_key=PORTKEY_API_KEY)  # OpenAI-compatible
 
 async def summarize_capability_long(description: str) -> str:
     """
@@ -34,16 +26,7 @@ async def compute_embedding(text: str) -> list[float]:
     Compute embedding vector using OpenAI directly (not Portkey).
     This ensures compatibility with pgvector and avoids Portkey headers.
     """
-    text = text.strip()
-    if not text:
-        return []
-
-    resp = client.embeddings.create(
-        model="text-embedding-3-small",   # ✅ recommended lightweight model
-        input=text
-    )
-
-    return resp.data[0].embedding
+    return embed_text(text)
 
 def build_capability_signature(agent: dict) -> str:
     name = agent.get("agent_name", "")

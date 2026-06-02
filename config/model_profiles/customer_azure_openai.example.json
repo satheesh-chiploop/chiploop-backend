@@ -1,0 +1,23 @@
+{
+  "model_profile_id": "customer_azure_openai_example",
+  "provider": "azure_openai",
+  "routing": {
+    "planner": {
+      "deployment": "chiploop-planner"
+    },
+    "rtl_generation": {
+      "deployment": "chiploop-rtl-generation"
+    },
+    "verification_debug": {
+      "deployment": "chiploop-verification-debug"
+    },
+    "summarizer": {
+      "deployment": "chiploop-summarizer"
+    }
+  },
+  "env": {
+    "AZURE_OPENAI_ENDPOINT": "https://customer-openai.openai.azure.com",
+    "AZURE_OPENAI_API_KEY": "set-in-secret-manager"
+  }
+}
+

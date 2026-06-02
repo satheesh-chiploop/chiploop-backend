@@ -1,12 +1,9 @@
 import os
 import json
-from portkey_ai import Portkey
-from openai import OpenAI
+from model_gateway import complete_text
 from utils.artifact_utils import save_text_artifact_and_record
 
 PORTKEY_API_KEY = os.getenv("PORTKEY_API_KEY")
-client_portkey = Portkey(api_key=PORTKEY_API_KEY)
-client_openai = OpenAI()
 
 
 def _read_json_if_exists(v):
@@ -135,12 +132,7 @@ OUTPUT SCHEMA
 """.strip()
 
     try:
-        completion = client_portkey.chat.completions.create(
-            model="@chiploop/gpt-4o-mini",
-            messages=[{"role": "user", "content": prompt}],
-            stream=False,
-        )
-        llm_output = completion.choices[0].message.content or ""
+        llm_output = complete_text(prompt, capability="spec_generation", agent_name="Digital Register Map Agent", state=state)
     except Exception as e:
         state["status"] = f"❌ Register map LLM generation failed: {e}"
         return state

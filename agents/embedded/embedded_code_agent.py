@@ -3,14 +3,8 @@ import json
 from datetime import datetime
 from typing import Any, Dict, Optional, List
 
+from model_gateway import complete_text
 from utils.artifact_utils import save_text_artifact_and_record
-
-try:
-    from openai import OpenAI
-except Exception:
-    OpenAI = None
-
-client_openai = OpenAI() if OpenAI else None
 
 
 # -----------------------------
@@ -204,13 +198,10 @@ def _render_cpp(spec: Dict[str, Any]) -> str:
     return "\n".join([line for line in cpp_lines if line is not None])
 
 
-def _maybe_llm_improve_cpp(spec: Dict[str, Any], cpp: str, log_path: str) -> str:
+def _maybe_llm_improve_cpp(spec: Dict[str, Any], cpp: str, log_path: str, state: Dict[str, Any] | None = None) -> str:
     """
     Optional: let an LLM improve formatting/structure without inventing semantics.
     """
-    if not client_openai:
-        return cpp
-
     try:
         prompt = (
             "You are an expert embedded firmware engineer.\n"
@@ -223,15 +214,14 @@ def _maybe_llm_improve_cpp(spec: Dict[str, Any], cpp: str, log_path: str) -> str
             f"CODE:\n{cpp}\n"
         )
 
-        resp = client_openai.chat.completions.create(
-            model=os.getenv("EMBEDDED_CODE_MODEL", "gpt-4o-mini"),
-            messages=[
-                {"role": "system", "content": "Return code only. No markdown."},
-                {"role": "user", "content": prompt},
-            ],
+        improved = complete_text(
+            prompt,
+            capability="embedded_generation",
+            agent_name="Embedded Code Agent",
+            system="Return code only. No markdown.",
+            state=state,
             temperature=0.2,
-        )
-        improved = (resp.choices[0].message.content or "").strip()
+        ).strip()
         return improved if improved else cpp
     except Exception as e:
         _log(log_path, f"LLM improve step skipped/failed: {e}")
@@ -291,7 +281,7 @@ def run_agent(state: dict) -> dict:
     cpp = _render_cpp(embedded_spec)
 
     # Optional LLM polish (still generic)
-    cpp = _maybe_llm_improve_cpp(embedded_spec, cpp, log_path)
+    cpp = _maybe_llm_improve_cpp(embedded_spec, cpp, log_path, state=state)
 
     # Upload artifacts
     save_text_artifact_and_record(

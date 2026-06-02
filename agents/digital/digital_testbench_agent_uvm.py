@@ -5,8 +5,7 @@ import logging
 import datetime
 import requests
 from pathlib import Path
-from portkey_ai import Portkey
-from openai import OpenAI
+from model_gateway import complete_text
 
 logger = logging.getLogger(__name__)
 
@@ -14,8 +13,6 @@ logger = logging.getLogger(__name__)
 OLLAMA_URL = "http://127.0.0.1:11434/api/generate"
 USE_LOCAL_OLLAMA = os.getenv("USE_LOCAL_OLLAMA", "false").lower() == "true"
 PORTKEY_API_KEY = os.getenv("PORTKEY_API_KEY")
-client_portkey = Portkey(api_key=PORTKEY_API_KEY)
-client_openai = OpenAI()
 
 
 def run_agent(state: dict) -> dict:
@@ -181,17 +178,13 @@ Guidelines:
             else:
                 print("🌐 Using Portkey backend to suggest UVM enhancements...")
                 try:
-                    completion = client_portkey.chat.completions.create(
-                        model="gpt-4o-mini",
-                        messages=[{"role": "user", "content": llm_prompt}],
-                        stream=True,
+                    extra_uvm += complete_text(
+                        llm_prompt,
+                        capability="verification_debug",
+                        agent_name="Digital Testbench Agent UVM",
+                        state=state,
                     )
-                    for chunk in completion:
-                        if chunk and hasattr(chunk, "choices"):
-                            delta = chunk.choices[0].delta.get("content", "")
-                            if delta:
-                                extra_uvm += delta
-                                print(delta, end="", flush=True)
+                    print(extra_uvm[:1200], flush=True)
                 except Exception as e:
                     print(f"⚠️ Portkey failed, falling back to Ollama: {e}")
                     payload = {"model": "llama3", "prompt": llm_prompt}
