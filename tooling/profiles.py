@@ -114,6 +114,8 @@ def _default_profile() -> Dict[str, Any]:
 def _deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
     merged = dict(base)
     for key, value in override.items():
+        if key in {"tools", "runtime"} and not isinstance(value, dict):
+            continue
         if isinstance(value, dict) and isinstance(merged.get(key), dict):
             merged[key] = _deep_merge(merged[key], value)
         else:
@@ -161,10 +163,12 @@ def resolve_tool(name: str, state: Optional[Dict[str, Any]] = None, *, kind: str
 
 def profile_summary(state: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     profile = get_tool_profile(state)
+    tools = profile.get("tools")
+    runtime = profile.get("runtime")
     return {
         "profile_id": profile.get("profile_id") or DEFAULT_PROFILE_ID,
         "runner": profile.get("runner") or "local_saas",
         "artifact_policy": profile.get("artifact_policy") or DEFAULT_ARTIFACT_POLICY,
-        "tools": sorted((profile.get("tools") or {}).keys()),
-        "runtime": sorted((profile.get("runtime") or {}).keys()),
+        "tools": sorted(tools.keys()) if isinstance(tools, dict) else sorted(tools or []),
+        "runtime": sorted(runtime.keys()) if isinstance(runtime, dict) else sorted(runtime or []),
     }
