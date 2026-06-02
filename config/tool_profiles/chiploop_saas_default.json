@@ -1,0 +1,59 @@
+{
+  "profile_id": "chiploop_saas_default",
+  "runner": "local_saas",
+  "artifact_policy": "full_sync",
+  "runtime": {
+    "python": {
+      "executable": "/root/chiploop-backend/venv/bin/python"
+    },
+    "pip": {
+      "executable": "/root/chiploop-backend/venv/bin/pip"
+    },
+    "cocotb_config": {
+      "executable": "/root/chiploop-backend/venv/bin/cocotb-config"
+    },
+    "pytest": {
+      "executable": "/root/chiploop-backend/venv/bin/pytest"
+    }
+  },
+  "tools": {
+    "iverilog": {
+      "executable": "/usr/bin/iverilog"
+    },
+    "vvp": {
+      "executable": "/usr/bin/vvp"
+    },
+    "verilator": {
+      "executable": "/usr/local/bin/verilator"
+    },
+    "verilator_coverage": {
+      "executable": "/usr/local/bin/verilator_coverage"
+    },
+    "yosys": {
+      "executable": "/usr/bin/yosys"
+    },
+    "sby": {
+      "executable": "/usr/local/bin/sby"
+    },
+    "z3": {
+      "executable": "/usr/bin/z3"
+    },
+    "boolector": {
+      "executable": "/usr/bin/boolector"
+    },
+    "gem5_x86": {
+      "executable": "/opt/gem5/build/X86/gem5.opt"
+    },
+    "gem5_riscv": {
+      "executable": "/opt/gem5/build/RISCV/gem5.opt"
+    }
+  },
+  "env": {
+    "PATH": {
+      "prepend": [
+        "/root/chiploop-backend/venv/bin",
+        "/usr/local/bin"
+      ]
+    }
+  }
+}

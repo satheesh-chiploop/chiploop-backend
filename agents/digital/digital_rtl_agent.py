@@ -2,7 +2,6 @@ import os
 import re
 import json
 import datetime
-import subprocess
 import logging
 import shutil
 logger = logging.getLogger("chiploop")
@@ -11,6 +10,8 @@ from typing import Dict, List, Tuple, Optional
 from portkey_ai import Portkey
 
 from agents.runtime import RUNTIME_ACTIVE_STATE_KEY, AgentContext, execute_agent
+from tooling.profiles import profile_summary
+from tooling.runner import run_tool
 from utils.artifact_utils import save_text_artifact_and_record
 
 AGENT_NAME = "Digital RTL Agent"
@@ -1323,7 +1324,7 @@ SELF-CHECK BEFORE RETURNING RTL
 """.strip()
 
 
-def _run_verilator_lint(rtl_dir: str, verilog_files: List[str], top_module: str, suffix: str = "") -> Tuple[bool, str, str]:
+def _run_verilator_lint(rtl_dir: str, verilog_files: List[str], top_module: str, suffix: str = "", state: Optional[dict] = None) -> Tuple[bool, str, str, dict]:
     log_name = "rtl_verilator_lint.log" if not suffix else f"rtl_verilator_lint_{suffix}.log"
     lint_log_path = os.path.join(rtl_dir, log_name)
 
@@ -1331,7 +1332,7 @@ def _run_verilator_lint(rtl_dir: str, verilog_files: List[str], top_module: str,
         msg = "No Verilog files provided to Verilator lint.\n"
         with open(lint_log_path, "w", encoding="utf-8") as f:
             f.write(msg)
-        return False, lint_log_path, msg
+        return False, lint_log_path, msg, {}
 
     # When cwd=rtl_dir, pass only basenames (or absolute paths), not rtl_dir-prefixed relative paths.
     verilator_inputs = []
@@ -1341,8 +1342,7 @@ def _run_verilator_lint(rtl_dir: str, verilog_files: List[str], top_module: str,
         else:
             verilator_inputs.append(os.path.basename(vf))
 
-    cmd = [
-        "verilator",
+    args = [
         "--lint-only",
         "-Wall",
         "-Wno-fatal",
@@ -1354,45 +1354,34 @@ def _run_verilator_lint(rtl_dir: str, verilog_files: List[str], top_module: str,
         f"[RTL DEBUG] running_verilator_lint suffix={suffix or 'pass1'} "
         f"top={top_module} file_count={len(verilog_files)}"
     )
-    logger.info(f"[RTL DEBUG] verilator_cmd={' '.join(cmd)}")
-
-    try:
-        proc = subprocess.run(
-            cmd,
-            cwd=rtl_dir,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-    except FileNotFoundError:
-        msg = "Verilator executable not found in PATH.\n"
-        with open(lint_log_path, "w", encoding="utf-8") as f:
-            f.write(msg)
-        logger.error("[RTL DEBUG] verilator_not_found")
-        return False, lint_log_path, msg
-    except Exception as e:
-        msg = f"Verilator execution failed: {e}\n"
-        with open(lint_log_path, "w", encoding="utf-8") as f:
-            f.write(msg)
-        logger.error(f"[RTL DEBUG] verilator_exception: {e}")
-        return False, lint_log_path, msg
+    logger.info(f"[RTL DEBUG] verilator_args={' '.join(args)}")
+    result = run_tool(
+        state or {},
+        "rtl_lint",
+        "verilator",
+        args,
+        cwd=rtl_dir,
+        metadata={"agent": AGENT_NAME, "suffix": suffix or "pass1"},
+    )
 
     combined = ""
-    if proc.stdout:
-        combined += "=== STDOUT ===\n" + proc.stdout + "\n"
-    if proc.stderr:
-        combined += "=== STDERR ===\n" + proc.stderr + "\n"
-    combined += f"=== RETURN CODE ===\n{proc.returncode}\n"
+    if result.stdout:
+        combined += "=== STDOUT ===\n" + result.stdout + "\n"
+    if result.stderr:
+        combined += "=== STDERR ===\n" + result.stderr + "\n"
+    if result.error:
+        combined += "=== ERROR ===\n" + result.error + "\n"
+    combined += f"=== RETURN CODE ===\n{result.returncode}\n"
 
     with open(lint_log_path, "w", encoding="utf-8") as f:
         f.write(combined)
 
-    if proc.returncode != 0:
-        logger.error(f"[RTL DEBUG] verilator_failed suffix={suffix or 'pass1'} rc={proc.returncode}")
-        return False, lint_log_path, combined
+    if result.returncode != 0 or result.status in {"tool_unavailable", "exception"}:
+        logger.error(f"[RTL DEBUG] verilator_failed suffix={suffix or 'pass1'} rc={result.returncode}")
+        return False, lint_log_path, combined, result.to_dict()
 
     logger.info(f"[RTL DEBUG] verilator_passed suffix={suffix or 'pass1'}")
-    return True, lint_log_path, combined
+    return True, lint_log_path, combined, result.to_dict()
 
 
 
@@ -1451,6 +1440,7 @@ def _validate_and_materialize_rtl(
     mode: str,
     suffix: str = "",
     materialize_subdir: str = "",
+    state: Optional[dict] = None,
 ) -> dict:
     raw_name = "rtl_llm_raw_output.txt" if not suffix else f"rtl_llm_raw_output_{suffix}.txt"
     compile_log_name = "rtl_agent_compile.log" if not suffix else f"rtl_agent_compile_{suffix}.log"
@@ -1559,18 +1549,27 @@ def _validate_and_materialize_rtl(
                     issues.append(f"❌ Top module appears to procedurally drive child-owned signal '{sig}'.")
 
         _stage(f"iverilog_compile_start_{suffix or 'pass1'}")
-    compile_cmd = [
-        "iverilog",
+    compile_args = [
         "-g2005",
         "-o",
         os.path.join(rtl_dir, f"rtl_out{('_' + suffix) if suffix else ''}")
     ] + artifact_list
 
     iverilog_failed = False
+    tool_executions = []
     try:
-        cp = subprocess.run(compile_cmd, capture_output=True, text=True, check=False)
+        cp = run_tool(
+            state or {},
+            "rtl_compile",
+            "iverilog",
+            compile_args,
+            metadata={"agent": AGENT_NAME, "suffix": suffix or "pass1"},
+        )
+        tool_executions.append(cp.to_dict())
         compile_status = (cp.stdout or "") + "\n" + (cp.stderr or "")
-        if cp.returncode != 0:
+        if cp.error:
+            compile_status += "\n" + cp.error
+        if cp.returncode != 0 or cp.status in {"tool_unavailable", "exception"}:
             iverilog_failed = True
             issues.append("❌ Icarus Verilog compile failed.")
             _stage(f"iverilog_compile_failed_{suffix or 'pass1'}")
@@ -1598,12 +1597,15 @@ def _validate_and_materialize_rtl(
     verilator_severity = "not_run"
 
     _stage(f"running_verilator_lint_{suffix or 'pass1'}")
-    verilator_ok, verilator_log_path, verilator_output = _run_verilator_lint(
+    verilator_ok, verilator_log_path, verilator_output, verilator_result = _run_verilator_lint(
         rtl_dir=rtl_dir,
         verilog_files=artifact_list,
         top_module=_top_module_name(spec_json, mode),
         suffix=suffix,
+        state=state,
     )
+    if verilator_result:
+        tool_executions.append(verilator_result)
 
     verilator_severity = _classify_verilator_result(verilator_ok, verilator_output)
 
@@ -1666,6 +1668,8 @@ def _validate_and_materialize_rtl(
         "verilator_log_path": verilator_log_path,
         "verilator_output": verilator_output,
         "verilator_severity": verilator_severity,
+        "tool_profile": profile_summary(state or {}),
+        "tool_executions": tool_executions,
         "llm_output": llm_output,
         "verilog_map": verilog_map,
     }
@@ -1918,6 +1922,7 @@ def _run(context: AgentContext) -> dict:
             mode=mode,
             suffix="",
             materialize_subdir="",      # keep pass1 exactly as today
+            state=state,
         )
 
 
@@ -1983,6 +1988,7 @@ def _run(context: AgentContext) -> dict:
                 mode=mode,
                 suffix="pass2",
                 materialize_subdir="pass2", # isolate pass2 RTL
+                state=state,
             )
 
             final_result = pass2 if pass2["ok"] else pass1
@@ -2023,6 +2029,19 @@ def _run(context: AgentContext) -> dict:
                 print(f"⚠️ Failed to upload RTL artifact {path}: {e}")
 
         _upload_rtl_debug_artifacts(workflow_id, agent_name, rtl_dir)
+        tool_profile_text = json.dumps(final_result.get("tool_profile") or profile_summary(state), indent=2)
+        tool_summary = {
+            "agent": agent_name,
+            "tool_profile": final_result.get("tool_profile") or profile_summary(state),
+            "executions": final_result.get("tool_executions") or [],
+        }
+        tool_summary_text = json.dumps(tool_summary, indent=2)
+        with open(os.path.join(rtl_dir, "tool_profile_used.json"), "w", encoding="utf-8") as f:
+            f.write(tool_profile_text)
+        with open(os.path.join(rtl_dir, "tool_execution_summary.json"), "w", encoding="utf-8") as f:
+            f.write(tool_summary_text)
+        save_text_artifact_and_record(workflow_id, agent_name, "rtl", "tool_profile_used.json", tool_profile_text)
+        save_text_artifact_and_record(workflow_id, agent_name, "rtl", "tool_execution_summary.json", tool_summary_text)
 
         state.update({
             "rtl_output_dir": rtl_dir,
@@ -2037,6 +2056,8 @@ def _run(context: AgentContext) -> dict:
             "status": f"✅ RTL generation complete ({final_suffix})" if not issues else f"⚠ RTL generation completed with issues ({final_suffix})",
             "digital_rtl_generated": True,
             "digital_rtl_dir": rtl_dir,
+            "tool_profile": final_result.get("tool_profile") or profile_summary(state),
+            "tool_execution_summary": tool_summary,
             "workflow_id": workflow_id,
             "workflow_dir": workflow_dir,
         })

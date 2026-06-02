@@ -1,12 +1,12 @@
 import json
 import os
 import re
-import shutil
-import subprocess
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from agents.runtime import AgentContext, AgentResult, AgentStatus, execute_agent
+from tooling.profiles import profile_summary
+from tooling.runner import run_tool, tool_available
 from utils.artifact_utils import save_text_artifact_and_record
 
 AGENT_NAME = "Digital Arch2RTL Dashboard Agent"
@@ -267,37 +267,46 @@ def _timing_summary(workflow_dir: str, state: Dict[str, Any], storage: Dict[str,
     }
 
 
-def _lint_summary(rtl_files: List[str]) -> Dict[str, Any]:
-    verilator = shutil.which("verilator")
+def _lint_summary(rtl_files: List[str], state: Dict[str, Any]) -> Dict[str, Any]:
+    verilator_available = tool_available("verilator", state)
     if not rtl_files:
-        return {"status": "missing_rtl", "tool": "verilator", "available": bool(verilator)}
-    if not verilator:
+        return {"status": "missing_rtl", "tool": "verilator", "available": verilator_available}
+    if not verilator_available:
         return {"status": "tool_unavailable", "tool": "verilator", "available": False}
-    cmd = [verilator, "--lint-only", "-Wall", "-Wno-fatal"] + rtl_files
-    try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=45)
-        combined = f"{proc.stdout}\n{proc.stderr}"
-        error_count = len(re.findall(r"%Error", combined))
-        warning_count = len(re.findall(r"%Warning", combined))
-        if proc.returncode != 0 or error_count:
-            status = "errors"
-        elif warning_count:
-            status = "warnings"
-        else:
-            status = "clean"
-        return {
-            "status": status,
-            "tool": "verilator",
-            "available": True,
-            "returncode": proc.returncode,
-            "warning_count": warning_count,
-            "error_count": error_count,
-            "command": cmd,
-            "stdout_tail": (proc.stdout or "").splitlines()[-80:],
-            "stderr_tail": (proc.stderr or "").splitlines()[-80:],
-        }
-    except Exception as exc:
-        return {"status": "failed", "tool": "verilator", "available": True, "error": str(exc)}
+    result = run_tool(
+        state,
+        "rtl_lint",
+        "verilator",
+        ["--lint-only", "-Wall", "-Wno-fatal"] + rtl_files,
+        timeout_sec=45,
+        metadata={"agent": AGENT_NAME, "stage": "arch2rtl_dashboard"},
+    )
+    combined = f"{result.stdout}\n{result.stderr}"
+    error_count = len(re.findall(r"%Error", combined))
+    warning_count = len(re.findall(r"%Warning", combined))
+    if result.status in {"exception", "tool_unavailable"}:
+        status = result.status
+    elif result.returncode != 0 or error_count:
+        status = "errors"
+    elif warning_count:
+        status = "warnings"
+    else:
+        status = "clean"
+    return {
+        "status": status,
+        "tool": "verilator",
+        "available": True,
+        "profile_id": result.profile_id,
+        "runner": result.runner,
+        "returncode": result.returncode,
+        "warning_count": warning_count,
+        "error_count": error_count,
+        "command": result.command,
+        "stdout_tail": (result.stdout or "").splitlines()[-80:],
+        "stderr_tail": (result.stderr or "").splitlines()[-80:],
+        "error": result.error,
+        "run_result": result.to_dict(),
+    }
 
 
 def _regmap_summary(state: Dict[str, Any]) -> Dict[str, Any]:
@@ -369,7 +378,11 @@ def _run(context: AgentContext) -> AgentResult:
         "clock_reset": clock_reset,
         "storage": storage,
         "timing": _timing_summary(workflow_dir, state, storage),
-        "lint": _lint_summary(rtl_files),
+        "lint": _lint_summary(rtl_files, state),
+        "tooling": {
+            "tool_profile": profile_summary(state),
+            "artifact_policy": profile_summary(state).get("artifact_policy"),
+        },
         "register_map": _regmap_summary(state),
         "handoff": {
             "package_dir": state.get("ip_package_dir"),
@@ -380,8 +393,19 @@ def _run(context: AgentContext) -> AgentResult:
     md_text = _markdown(report)
     (out_dir / "arch2rtl_dashboard.json").write_text(json_text, encoding="utf-8")
     (out_dir / "ARCH2RTL_DASHBOARD.md").write_text(md_text, encoding="utf-8")
+    tool_profile_text = json.dumps(profile_summary(state), indent=2)
+    tool_summary = {
+        "agent": AGENT_NAME,
+        "tool_profile": profile_summary(state),
+        "executions": [report["lint"].get("run_result")] if report["lint"].get("run_result") else [],
+    }
+    tool_summary_text = json.dumps(tool_summary, indent=2)
+    (out_dir / "tool_profile_used.json").write_text(tool_profile_text, encoding="utf-8")
+    (out_dir / "tool_execution_summary.json").write_text(tool_summary_text, encoding="utf-8")
     save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "arch2rtl_dashboard.json", json_text)
     save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "ARCH2RTL_DASHBOARD.md", md_text)
+    save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "tool_profile_used.json", tool_profile_text)
+    save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "tool_execution_summary.json", tool_summary_text)
     return AgentResult(
         status="Arch2RTL dashboard generated",
         runtime_status=AgentStatus.SUCCESS,

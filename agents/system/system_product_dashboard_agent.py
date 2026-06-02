@@ -821,7 +821,7 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
         html = _image_html(model)
     elif model.get("device_model") == "uart_packet_engine":
         html = _uart_html(model)
-    elif model.get("device_model") in {"generic_device_control", "smart_sensor_hub_mcu"}:
+    elif model.get("device_model") in {"generic_device_control", "smart_sensor_hub_mcu", "secure_boot_key_manager", "safety_fault_watchdog"}:
         html = _generic_html(model)
     else:
         html = _html(model)

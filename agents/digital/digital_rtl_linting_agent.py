@@ -1,10 +1,10 @@
 import os
 import json
-import shutil
-import subprocess
 from datetime import datetime
 from typing import List, Dict, Any
 
+from tooling.profiles import profile_summary
+from tooling.runner import run_tool, tool_available
 from utils.artifact_utils import save_text_artifact_and_record
 
 
@@ -44,22 +44,30 @@ def _basic_lint_file(path: str) -> List[Dict[str, Any]]:
     return issues
 
 
-def _try_verilator_lint(rtl_files: List[str], log_path: str) -> Dict[str, Any]:
+def _try_verilator_lint(rtl_files: List[str], log_path: str, state: Dict[str, Any]) -> Dict[str, Any]:
     if not rtl_files:
         return {"available": False, "reason": "no_rtl_files"}
 
-    if shutil.which("verilator") is None:
+    if not tool_available("verilator", state):
         return {"available": False, "reason": "verilator_not_found"}
 
-    cmd = ["verilator", "--lint-only", "-Wall"] + rtl_files
-    _log(log_path, f"Running: {' '.join(cmd)}")
+    args = ["--lint-only", "-Wall"] + rtl_files
+    _log(log_path, f"Running via ChipLoop tool profile: verilator {' '.join(args)}")
     try:
-        p = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        p = run_tool(
+            state,
+            "rtl_lint",
+            "verilator",
+            args,
+            timeout_sec=300,
+            metadata={"agent": "RTL Linting Agent"},
+        )
         return {
             "available": True,
             "returncode": p.returncode,
             "stdout": p.stdout,
             "stderr": p.stderr,
+            "run_result": p.to_dict(),
         }
     except Exception as e:
         return {"available": True, "returncode": -1, "stdout": "", "stderr": f"verilator_run_failed: {e}"}
@@ -85,7 +93,7 @@ def run_agent(state: dict) -> dict:
     for fpath in rtl_files:
         issues.extend(_basic_lint_file(fpath))
 
-    verilator = _try_verilator_lint(rtl_files, log_path)
+    verilator = _try_verilator_lint(rtl_files, log_path, state)
 
     report = {
         "type": "rtl_lint_report",
@@ -100,7 +108,11 @@ def run_agent(state: dict) -> dict:
         "summary": {
             "heuristic_issue_count": len(issues),
             "recommended_action": "Fix warnings before CDC/reset checks; keep lint clean for better downstream signal inference."
-        }
+        },
+        "tooling": {
+            "tool_profile": profile_summary(state),
+            "executions": [verilator.get("run_result")] if verilator.get("run_result") else [],
+        },
     }
 
     save_text_artifact_and_record(workflow_id, agent_name, "digital", "rtl_lint_report.json", json.dumps(report, indent=2))
@@ -110,6 +122,21 @@ def run_agent(state: dict) -> dict:
 
     save_text_artifact_and_record(workflow_id, agent_name, "digital", "digital_rtl_linting_agent.log",
                                   open(log_path, "r", encoding="utf-8").read())
+    save_text_artifact_and_record(
+        workflow_id,
+        agent_name,
+        "digital",
+        "tool_profile_used.json",
+        json.dumps(profile_summary(state), indent=2),
+    )
+    save_text_artifact_and_record(
+        workflow_id,
+        agent_name,
+        "digital",
+        "tool_execution_summary.json",
+        json.dumps(report["tooling"], indent=2),
+    )
 
     state["rtl_lint_report_path"] = os.path.join(workflow_dir, "digital", "rtl_lint_report.json")
+    state["tool_profile"] = profile_summary(state)
     return state

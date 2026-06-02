@@ -245,6 +245,111 @@ def _sensor_hub_model(lineage: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _secure_boot_model(lineage: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "type": "system_product_capability_model",
+        "version": "1.0",
+        "generated_at": _now(),
+        "product_name": "Secure Boot Key Manager Dashboard",
+        "device_model": "secure_boot_key_manager",
+        "lineage": lineage,
+        "capabilities": [
+            {"id": "select_key_slot", "label": "Select key slot", "kind": "integer", "register": "KEY_SLOT"},
+            {"id": "set_image_version", "label": "Set image version", "kind": "integer", "register": "IMAGE_VERSION"},
+            {"id": "set_min_version", "label": "Set anti-rollback minimum", "kind": "integer", "register": "MIN_VERSION"},
+            {"id": "start_boot_check", "label": "Start authentication", "kind": "command", "register": "CONTROL.START_BOOT_CHECK"},
+            {"id": "lock_debug", "label": "Lock debug", "kind": "boolean", "register": "CONTROL.LOCK_DEBUG"},
+            {"id": "read_boot_status", "label": "Read boot/security status", "kind": "telemetry", "register": "STATUS"},
+            {"id": "read_audit_count", "label": "Read audit count", "kind": "telemetry", "register": "AUDIT_COUNT"},
+        ],
+        "registers": [
+            {"name": "CONTROL", "offset": "0x000", "fields": [{"name": "ENABLE", "bit": 0}, {"name": "START_BOOT_CHECK", "bit": 1}, {"name": "LOCK_DEBUG", "bit": 2}, {"name": "IRQ_ENABLE", "bit": 3}]},
+            {"name": "STATUS", "offset": "0x004", "fields": [{"name": "busy"}, {"name": "authenticated"}, {"name": "failed"}, {"name": "rollback_fail"}, {"name": "tamper_seen"}, {"name": "debug_locked"}]},
+            {"name": "IMAGE_VERSION", "offset": "0x008", "fields": [{"name": "image_version", "bits": "31:0"}]},
+            {"name": "MIN_VERSION", "offset": "0x00C", "fields": [{"name": "min_version", "bits": "31:0"}]},
+            {"name": "KEY_SLOT", "offset": "0x010", "fields": [{"name": "key_slot", "bits": "3:0"}]},
+            {"name": "LIFECYCLE_STATE", "offset": "0x018", "fields": [{"name": "state", "bits": "3:0"}]},
+            {"name": "IRQ_STATUS", "offset": "0x01C", "fields": [{"name": "boot_done"}, {"name": "boot_fail"}, {"name": "tamper"}, {"name": "rollback_fail"}]},
+            {"name": "AUDIT_COUNT", "offset": "0x024", "fields": [{"name": "audit_count", "bits": "31:0"}]},
+        ],
+        "product_experience": _base_experience(
+            summary="Root-of-trust dashboard for secure boot and key management. Software selects key slot and image version, starts authentication, locks debug, and observes boot, rollback, tamper, IRQ, lifecycle, and audit state.",
+            controls={
+                "Key slot": "Selects the active authentication key slot for the boot check.",
+                "Image version": "Firmware version presented for anti-rollback comparison.",
+                "Minimum version": "Anti-rollback floor below which boot must fail.",
+                "Debug lock": "Locks debug access according to lifecycle policy.",
+            },
+            metrics={
+                "Boot status": "Authenticated, failed, rollback, and tamper state.",
+                "Security IRQ": "Latched boot, tamper, or rollback event visible to firmware/software.",
+                "Lifecycle": "Current lifecycle/debug-lock state.",
+                "Audit count": "Number of security-relevant events observed.",
+            },
+            scenario_name="Run secure boot scenario",
+            scenario_steps=[
+                {"label": "Authenticate", "description": "Valid image passes boot check"},
+                {"label": "Rollback", "description": "Old image version is rejected"},
+                {"label": "Tamper", "description": "Tamper event blocks boot"},
+                {"label": "Lock", "description": "Debug access is locked"},
+            ],
+            timing_model="Authentication is simulator-backed; replace the adapter with a real hash accelerator, OTP, or lifecycle controller transport later.",
+        ),
+    }
+
+
+def _safety_fault_model(lineage: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "type": "system_product_capability_model",
+        "version": "1.0",
+        "generated_at": _now(),
+        "product_name": "Safety Fault Watchdog Dashboard",
+        "device_model": "safety_fault_watchdog",
+        "lineage": lineage,
+        "capabilities": [
+            {"id": "configure_watchdog", "label": "Configure watchdog timeout", "kind": "integer", "register": "WATCHDOG_TIMEOUT"},
+            {"id": "feed_heartbeat", "label": "Feed heartbeat", "kind": "command", "signal": "heartbeat"},
+            {"id": "configure_fault_mask", "label": "Configure fault mask", "kind": "bitmask", "register": "FAULT_MASK"},
+            {"id": "inject_fault", "label": "Inject/report fault", "kind": "command", "signal": "fault_in"},
+            {"id": "read_escalation", "label": "Read escalation level", "kind": "telemetry", "register": "ESCALATION_LEVEL"},
+            {"id": "ack_reset", "label": "Acknowledge reset", "kind": "command", "signal": "external_reset_done"},
+        ],
+        "registers": [
+            {"name": "CONTROL", "offset": "0x000", "fields": [{"name": "ENABLE", "bit": 0}, {"name": "WATCHDOG_ENABLE", "bit": 1}, {"name": "IRQ_ENABLE", "bit": 2}, {"name": "FAULT_CLEAR", "bit": 3}]},
+            {"name": "STATUS", "offset": "0x004", "fields": [{"name": "healthy"}, {"name": "watchdog_expired"}, {"name": "fault_pending"}, {"name": "reset_requested"}, {"name": "escalation_active"}]},
+            {"name": "WATCHDOG_TIMEOUT", "offset": "0x008", "fields": [{"name": "timeout_ticks", "bits": "31:0"}]},
+            {"name": "FAULT_MASK", "offset": "0x010", "fields": [{"name": "enabled_faults", "bits": "7:0"}]},
+            {"name": "FAULT_STATUS", "offset": "0x014", "fields": [{"name": "latched_faults", "bits": "7:0"}]},
+            {"name": "ESCALATION_LEVEL", "offset": "0x01C", "fields": [{"name": "level", "bits": "1:0"}]},
+            {"name": "IRQ_STATUS", "offset": "0x020", "fields": [{"name": "watchdog"}, {"name": "fault"}, {"name": "reset_request"}, {"name": "escalation"}]},
+            {"name": "RESET_COUNT", "offset": "0x028", "fields": [{"name": "reset_count", "bits": "31:0"}]},
+        ],
+        "product_experience": _base_experience(
+            summary="Automotive safety dashboard for watchdog and fault-management behavior. Software configures timeout and fault masks, feeds heartbeat, observes latched faults, escalation, reset request, safety IRQ, and recovery status.",
+            controls={
+                "Watchdog timeout": "Controller tick budget before missing heartbeat becomes a safety event.",
+                "Heartbeat": "Software service action that proves the monitored software is alive.",
+                "Fault mask": "Selects which incoming fault pins are safety-relevant.",
+                "Reset acknowledge": "Clears reset request after external reset handling completes.",
+            },
+            metrics={
+                "Fault status": "Latched enabled fault inputs.",
+                "Escalation level": "None, warning, reset, or shutdown policy state.",
+                "Reset request": "Hardware request to recover from repeated or severe faults.",
+                "Safety IRQ": "Interrupt visible to diagnostic firmware/software.",
+            },
+            scenario_name="Run safety scenario",
+            scenario_steps=[
+                {"label": "Healthy", "description": "Heartbeat keeps watchdog clear"},
+                {"label": "Timeout", "description": "Missing heartbeat expires watchdog"},
+                {"label": "Fault", "description": "Enabled fault latches and raises IRQ"},
+                {"label": "Recover", "description": "Reset request is acknowledged"},
+            ],
+            timing_model="Watchdog timeout is modeled in controller ticks. Replace the simulator adapter with MCU timer or safety island transport later.",
+        ),
+    }
+
+
 def _generic_model(lineage: Dict[str, Any], intent: str) -> Dict[str, Any]:
     clean_intent = " ".join(str(intent or "").split())
     product_name = "Generated Device Control Dashboard"
@@ -313,6 +418,10 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
         model = _uart_model(lineage)
     elif "sensor" in intent or "iot" in intent or "telemetry" in intent or "humidity" in intent or "air-quality" in intent or "low-power" in intent:
         model = _sensor_hub_model(lineage)
+    elif "secure" in intent or "root-of-trust" in intent or "key manager" in intent or "rollback" in intent or "tamper" in intent:
+        model = _secure_boot_model(lineage)
+    elif "safety" in intent or "watchdog" in intent or "fault" in intent or "automotive" in intent or "escalation" in intent:
+        model = _safety_fault_model(lineage)
     elif "pwm" in intent or "fan" in intent:
         model = _pwm_model(lineage)
     else:

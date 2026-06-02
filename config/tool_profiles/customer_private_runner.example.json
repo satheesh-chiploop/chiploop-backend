@@ -1,0 +1,49 @@
+{
+  "profile_id": "customer_private_runner_example",
+  "runner": "customer_private_runner",
+  "artifact_policy": "summary_only",
+  "runtime": {
+    "python": {
+      "executable": "/opt/chiploop/venv/bin/python"
+    },
+    "cocotb_config": {
+      "executable": "/opt/chiploop/venv/bin/cocotb-config"
+    }
+  },
+  "tools": {
+    "verilator": {
+      "executable": "/usr/local/bin/verilator"
+    },
+    "iverilog": {
+      "executable": "/usr/bin/iverilog"
+    },
+    "yosys": {
+      "executable": "/usr/bin/yosys"
+    },
+    "synopsys_dc": {
+      "executable": "/eda/synopsys/syn/bin/dc_shell"
+    },
+    "cadence_genus": {
+      "executable": "/eda/cadence/GENUS/bin/genus"
+    },
+    "vcs": {
+      "executable": "/eda/synopsys/vcs/bin/vcs"
+    },
+    "xcelium": {
+      "executable": "/eda/cadence/XCELIUM/bin/xrun"
+    }
+  },
+  "env": {
+    "SNPSLMD_LICENSE_FILE": "27000@license-server",
+    "CDS_LIC_FILE": "5280@license-server",
+    "PDK_ROOT": "/eda/pdk/customer_node",
+    "STD_CELL_LIB": "/eda/libs/customer_node/slow.lib",
+    "PATH": {
+      "prepend": [
+        "/opt/chiploop/venv/bin",
+        "/eda/synopsys/syn/bin",
+        "/eda/cadence/GENUS/bin"
+      ]
+    }
+  }
+}
