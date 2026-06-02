@@ -223,6 +223,7 @@ def _find_verilator_coverage_data(tb_root: str) -> list[str]:
 
 
 def _collect_code_coverage(
+    state: Dict[str, Any],
     tb_root: str,
     reports_dir: str,
     log_path: str,
@@ -465,7 +466,7 @@ def run_agent(state: dict) -> dict:
             _log(log_path, f"Missing runtime coverage markdown: {coverage_md_path}", level="warning")
 
         toolchain = state.get("toolchain") if isinstance(state.get("toolchain"), dict) else {}
-        code_coverage = _collect_code_coverage(tb_root, reports_dir, log_path, toolchain)
+        code_coverage = _collect_code_coverage(state, tb_root, reports_dir, log_path, toolchain)
         code_coverage_path = os.path.join(reports_dir, "code_coverage_summary.json")
         code_coverage_txt = json.dumps(code_coverage, indent=2)
         _write_file(code_coverage_path, code_coverage_txt)
