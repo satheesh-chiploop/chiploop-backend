@@ -158,6 +158,7 @@
       "name": "supabase_handoff_ingest",
       "description": "Load, normalize, or package Supabase-backed workflow handoff artifacts.",
       "domains": [
+        "digital",
         "system",
         "software",
         "firmware",
@@ -165,6 +166,20 @@
       ],
       "tools": [
         "supabase",
+        "python"
+      ]
+    },
+    {
+      "name": "repo_source_ingest",
+      "description": "Import source artifacts from a controlled local path or public HTTPS git repository into a workflow workspace without executing repository code.",
+      "domains": [
+        "digital",
+        "system",
+        "software",
+        "firmware"
+      ],
+      "tools": [
+        "git",
         "python"
       ]
     },

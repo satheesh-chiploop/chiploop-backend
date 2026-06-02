@@ -443,6 +443,7 @@ from agents.digital.digital_coverage_gap_analysis_agent import run_agent as digi
 from agents.digital.digital_failure_triage_agent import run_agent as digital_failure_triage_agent
 from agents.digital.digital_closure_recommendation_agent import run_agent as digital_closure_recommendation_agent
 from agents.digital.digital_arch2rtl_dashboard_agent import run_agent as digital_arch2rtl_dashboard_agent
+from agents.digital.digital_rtl_handoff_ingest_agent import run_agent as digital_rtl_handoff_ingest_agent
 
 DIGITAL_AGENT_FUNCTIONS: Dict[str, Any] = {
     "Digital Spec Agent": digital_spec_agent,
@@ -477,6 +478,7 @@ DIGITAL_AGENT_FUNCTIONS: Dict[str, Any] = {
     "Digital Failure Triage Agent": digital_failure_triage_agent,
     "Digital Closure Recommendation Agent": digital_closure_recommendation_agent,
     "Digital Arch2RTL Dashboard Agent": digital_arch2rtl_dashboard_agent,
+    "Digital RTL Handoff Ingest Agent": digital_rtl_handoff_ingest_agent,
     "Digital Bug Localization Agent": digital_bug_localization_agent,
     "Digital Formal Verification Agent": digital_formal_verification_agent,
     "Digital Synthesis Readiness Agent": digital_synthesis_readiness_agent,
@@ -740,6 +742,7 @@ SYSTEM_AGENT_FUNCTIONS: Dict[str,Any] = {
     "Digital Failure Triage Agent": digital_failure_triage_agent,
     "Digital Closure Recommendation Agent": digital_closure_recommendation_agent,
     "Digital Arch2RTL Dashboard Agent": digital_arch2rtl_dashboard_agent,
+    "Digital RTL Handoff Ingest Agent": digital_rtl_handoff_ingest_agent,
     "Digital Bug Localization Agent": digital_bug_localization_agent,
     "Digital Formal Verification Agent": digital_formal_verification_agent,   
     "Digital Synthesis Readiness Agent": digital_synthesis_readiness_agent,
@@ -955,6 +958,96 @@ DIGITAL_VERIFY_CLOSURE_DEFINITION = _linear_workflow_definition([
     "Digital Closure Recommendation Agent",
 ])
 
+DIGITAL_ARCH2SYNTHESIS_DEFINITION = _linear_workflow_definition([
+    "Digital RTL Handoff Ingest Agent",
+    "Digital Spec Agent",
+    "Digital Architecture Agent",
+    "Digital Microarchitecture Agent",
+    "Digital Register Map Agent",
+    "Digital Clock & Reset Architecture Agent",
+    "Digital Power Intent (UPF-lite) Agent",
+    "Digital RTL Agent",
+    "Digital IP Packaging & Handoff Agent",
+    "Digital Foundry Profile Agent",
+    "Digital Implementation Setup Agent",
+    "Digital Synthesis Agent",
+])
+
+DIGITAL_ARCH2SIM_DEFINITION = _linear_workflow_definition([
+    "Digital RTL Handoff Ingest Agent",
+    "Digital Spec Agent",
+    "Digital Architecture Agent",
+    "Digital Microarchitecture Agent",
+    "Digital Register Map Agent",
+    "Digital Clock & Reset Architecture Agent",
+    "Digital Power Intent (UPF-lite) Agent",
+    "Digital RTL Agent",
+    "Digital IP Packaging & Handoff Agent",
+    "Digital Testbench Generator Agent",
+    "Digital Assertions (SVA) Agent",
+    "Digital Functional Coverage Agent",
+    "Digital Simulation Control Agent",
+    "Digital Simulation Execution Agent",
+    "Digital Simulation Summary Coverage Agent",
+    "Digital Executive Summary Agent",
+])
+
+DIGITAL_ARCH2TAPEOUT_DEFINITION = _linear_workflow_definition([
+    "Digital RTL Handoff Ingest Agent",
+    "Digital Spec Agent",
+    "Digital Architecture Agent",
+    "Digital Microarchitecture Agent",
+    "Digital Register Map Agent",
+    "Digital Clock & Reset Architecture Agent",
+    "Digital Power Intent (UPF-lite) Agent",
+    "Digital RTL Agent",
+    "Digital IP Packaging & Handoff Agent",
+    "Digital Foundry Profile Agent",
+    "Digital Implementation Setup Agent",
+    "Digital Synthesis Agent",
+    "Digital STA PrePlace Agent",
+    "Digital Floorplan Agent",
+    "Digital Placement Agent",
+    "Digital STA PostPlace Agent",
+    "Digital CTS Agent",
+    "Digital STA PostCTS Agent",
+    "Digital Route Agent",
+    "Digital STA PostRoute Agent",
+    "Digital Fill Agent",
+    "Digital DRC Agent",
+    "Digital LVS Agent",
+    "Digital Tapeout Agent",
+    "Digital Executive Summary Agent",
+])
+
+DIGITAL_DQA_DEFINITION = _linear_workflow_definition([
+    "Digital RTL Handoff Ingest Agent",
+    "Digital RTL Linting Agent",
+    "Digital CDC Analysis Agent",
+    "Digital Reset Integrity Agent",
+    "Digital Synthesis Readiness Agent",
+    "Digital Executive Summary Agent",
+])
+
+DIGITAL_SMOKE_DEFINITION = _linear_workflow_definition([
+    "Digital RTL Handoff Ingest Agent",
+    "Digital Smoke Preflight Agent",
+    "Digital RTL Agent",
+    "Digital Testbench Generator Agent",
+    "Digital Assertions (SVA) Agent",
+    "Digital Simulation Control Agent",
+    "Digital Bug Localization Agent",
+    "Digital Smoke Executive Summary Agent",
+])
+
+DIGITAL_INTEGRATE_DEFINITION = _linear_workflow_definition([
+    "Digital RTL Handoff Ingest Agent",
+    "Digital RTL Signature Agent",
+    "Digital Integration Intent Agent",
+    "Digital Top Assembly Agent",
+    "Digital IP Packaging & Handoff Agent",
+])
+
 EMBEDDED_RUN_DEFINITION = _linear_workflow_definition([
     "Embedded Digital RTL Handoff Ingest Agent",
     "Embedded Firmware Register Extract Agent",
@@ -1011,6 +1104,12 @@ LOCAL_PREBUILT_WORKFLOW_DEFINITIONS: Dict[str, Dict[str, Any]] = {
     "Digital_Arch2RTL": DIGITAL_ARCH2RTL_DEFINITION,
     "Digital_Verify": DIGITAL_VERIFY_DEFINITION,
     "Digital_Verify_Closure": DIGITAL_VERIFY_CLOSURE_DEFINITION,
+    "Digital_Arch2Synthesis": DIGITAL_ARCH2SYNTHESIS_DEFINITION,
+    "Digital_Arch2Sim": DIGITAL_ARCH2SIM_DEFINITION,
+    "Digital_Arch2Tapeout": DIGITAL_ARCH2TAPEOUT_DEFINITION,
+    "Digital_DQA": DIGITAL_DQA_DEFINITION,
+    "Digital_Smoke": DIGITAL_SMOKE_DEFINITION,
+    "Digital_Integrate": DIGITAL_INTEGRATE_DEFINITION,
     "System_Architecture_Explorer": SYSTEM_ARCHITECTURE_EXPLORER_DEFINITION,
     "System_Cache_Tuning": SYSTEM_ARCHITECTURE_EXPLORER_DEFINITION,
     "System_ISA_Compare": SYSTEM_ARCHITECTURE_EXPLORER_DEFINITION,
@@ -1026,6 +1125,12 @@ LOCAL_RUNTIME_WORKFLOW_OVERRIDES = {
     "Digital_Arch2RTL",
     "Digital_Verify",
     "Digital_Verify_Closure",
+    "Digital_Arch2Synthesis",
+    "Digital_Arch2Sim",
+    "Digital_Arch2Tapeout",
+    "Digital_DQA",
+    "Digital_Smoke",
+    "Digital_Integrate",
     "Embedded_Run",
     "System_Software",
     "System_Software_Validation_L2",
@@ -2339,7 +2444,12 @@ class DigitalRTLSourceIn(BaseModel):
     rtl_source_mode: Optional[str] = None  # "from_arch2rtl" | "paste" | "repo_path"
     from_workflow_id: Optional[str] = None
     repo_path: Optional[str] = None
+    repo_ref: Optional[str] = None
+    repo_subdir: Optional[str] = None
     pasted_rtl_files: Optional[Any] = None  # [{path, content}]
+    source_arch2rtl_workflow_id: Optional[str] = None
+    parent_workflow_id: Optional[str] = None
+    upstream_workflows: Optional[Dict[str, Any]] = None
 
 
 class DigitalArch2SynthesisAppIn(DigitalArch2RTLAppIn, DigitalRTLSourceIn):
@@ -2389,7 +2499,12 @@ class DigitalDQAAppIn(BaseModel):
     rtl_source_mode: Optional[str] = None  # "from_arch2rtl" | "paste" | "repo_path"
     from_workflow_id: Optional[str] = None
     repo_path: Optional[str] = None
+    repo_ref: Optional[str] = None
+    repo_subdir: Optional[str] = None
     pasted_rtl_files: Optional[Any] = None  # [{path, content}]
+    source_arch2rtl_workflow_id: Optional[str] = None
+    parent_workflow_id: Optional[str] = None
+    upstream_workflows: Optional[Dict[str, Any]] = None
 
     clocks: Optional[Any] = None
     resets: Optional[Any] = None
@@ -2404,7 +2519,12 @@ class DigitalVerifyAppIn(BaseModel):
     rtl_source_mode: Optional[str] = None
     from_workflow_id: Optional[str] = None
     repo_path: Optional[str] = None
+    repo_ref: Optional[str] = None
+    repo_subdir: Optional[str] = None
     pasted_rtl_files: Optional[Any] = None
+    source_arch2rtl_workflow_id: Optional[str] = None
+    parent_workflow_id: Optional[str] = None
+    upstream_workflows: Optional[Dict[str, Any]] = None
 
     test_intent: Optional[str] = None
     interfaces: Optional[Any] = None
@@ -2430,7 +2550,12 @@ class DigitalSmokeAppIn(BaseModel):
     rtl_source_mode: Optional[str] = None  # "from_arch2rtl" | "paste" | "repo_path"
     from_workflow_id: Optional[str] = None
     repo_path: Optional[str] = None
+    repo_ref: Optional[str] = None
+    repo_subdir: Optional[str] = None
     pasted_rtl_files: Optional[Any] = None  # [{path, content}]
+    source_arch2rtl_workflow_id: Optional[str] = None
+    parent_workflow_id: Optional[str] = None
+    upstream_workflows: Optional[Dict[str, Any]] = None
 
     # Smoke knobs (small)
     simulator_type: Optional[str] = None     # e.g. "verilator" / "iverilog" / "vcs"
@@ -2447,7 +2572,12 @@ class DigitalIntegrateAppIn(BaseModel):
     rtl_source_mode: Optional[str] = None  # "from_arch2rtl" | "paste" | "repo_path"
     from_workflow_id: Optional[str] = None
     repo_path: Optional[str] = None
+    repo_ref: Optional[str] = None
+    repo_subdir: Optional[str] = None
     pasted_rtl_files: Optional[Any] = None  # [{path, content}]
+    source_arch2rtl_workflow_id: Optional[str] = None
+    parent_workflow_id: Optional[str] = None
+    upstream_workflows: Optional[Dict[str, Any]] = None
 
     # Integrate knobs (Model 2: text -> intent -> top.sv)
     top_name: str
@@ -2568,6 +2698,35 @@ def execute_digital_app_background(
             if v is not None:
                 shared_state[k] = v
 
+        upstream = shared_state.get("upstream_workflows") if isinstance(shared_state.get("upstream_workflows"), dict) else {}
+        source_arch2rtl_workflow_id = (
+            shared_state.get("source_arch2rtl_workflow_id")
+            or shared_state.get("from_workflow_id")
+            or upstream.get("arch2rtl")
+        )
+        if shared_state.get("rtl_source_mode") == "from_arch2rtl" and source_arch2rtl_workflow_id and not shared_state.get("from_workflow_id"):
+            shared_state["from_workflow_id"] = source_arch2rtl_workflow_id
+        workflow_chain = {
+            "source_arch2rtl_workflow_id": source_arch2rtl_workflow_id,
+            "parent_workflow_id": shared_state.get("parent_workflow_id"),
+            "current_workflow_id": workflow_id,
+            "current_run_id": run_id,
+            "current_app": app_name,
+            "upstream_workflows": {
+                **upstream,
+                **({"arch2rtl": source_arch2rtl_workflow_id} if source_arch2rtl_workflow_id else {}),
+                app_name: workflow_id,
+            },
+        }
+        shared_state["workflow_chain"] = workflow_chain
+        save_text_artifact_and_record(
+            workflow_id,
+            "Digital Workflow Chain",
+            f"digital/{app_name}",
+            "workflow_chain.json",
+            json.dumps(workflow_chain, indent=2),
+        )
+
         # Normalize spec fields (Arch2RTL agents often expect state["spec"])
         if shared_state.get("spec_text"):
             shared_state["spec"] = shared_state["spec_text"]
@@ -2587,6 +2746,40 @@ def execute_digital_app_background(
             force_platform_definition=True,
         )
         nodes = _definition_to_executor_nodes(defn)
+        if shared_state.get("rtl_source_mode") and app_name == "arch2synthesis":
+            keep = {
+                "Digital RTL Handoff Ingest Agent",
+                "Digital IP Packaging & Handoff Agent",
+                "Digital Foundry Profile Agent",
+                "Digital Implementation Setup Agent",
+                "Digital Synthesis Agent",
+            }
+            nodes = [node for node in nodes if ((node.get("data") or {}).get("backendLabel") or node.get("label")) in keep]
+        if shared_state.get("rtl_source_mode") and app_name == "smoke":
+            skip = {"Digital RTL Agent"}
+            nodes = [node for node in nodes if ((node.get("data") or {}).get("backendLabel") or node.get("label")) not in skip]
+        if shared_state.get("rtl_source_mode") and app_name == "arch2tapeout":
+            keep = {
+                "Digital RTL Handoff Ingest Agent",
+                "Digital IP Packaging & Handoff Agent",
+                "Digital Foundry Profile Agent",
+                "Digital Implementation Setup Agent",
+                "Digital Synthesis Agent",
+                "Digital STA PrePlace Agent",
+                "Digital Floorplan Agent",
+                "Digital Placement Agent",
+                "Digital STA PostPlace Agent",
+                "Digital CTS Agent",
+                "Digital STA PostCTS Agent",
+                "Digital Route Agent",
+                "Digital STA PostRoute Agent",
+                "Digital Fill Agent",
+                "Digital DRC Agent",
+                "Digital LVS Agent",
+                "Digital Tapeout Agent",
+                "Digital Executive Summary Agent",
+            }
+            nodes = [node for node in nodes if ((node.get("data") or {}).get("backendLabel") or node.get("label")) in keep]
         if app_name == "verify":
             toggles = shared_state.get("toggles") if isinstance(shared_state.get("toggles"), dict) else {}
             optional_before = "Digital Simulation Control Agent"

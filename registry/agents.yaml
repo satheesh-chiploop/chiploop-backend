@@ -1570,6 +1570,61 @@
       }
     },
     {
+      "name": "Digital RTL Handoff Ingest Agent",
+      "loop_type": "digital",
+      "domain": "digital",
+      "description": "Imports RTL, optional spec, and optional register-map collateral from Arch2RTL Supabase artifacts, pasted RTL, or a local/public git repository for downstream DQA, smoke, synthesis, tapeout, and integration workflows.",
+      "entrypoint": "agents.digital.digital_rtl_handoff_ingest_agent:run_agent",
+      "execution_mode": "legacy_adapter",
+      "inputs": [
+        "rtl_source_mode",
+        "from_workflow_id",
+        "repo_path",
+        "repo_ref",
+        "repo_subdir",
+        "pasted_rtl_files",
+        "top_module"
+      ],
+      "outputs": [
+        "digital/handoff/rtl_handoff_ingest_manifest.json",
+        "digital/handoff/rtl/*.sv",
+        "digital/handoff/rtl/*.v"
+      ],
+      "artifact_paths": [
+        "digital/handoff/rtl_handoff_ingest_manifest.json",
+        "digital/handoff/rtl/*.sv",
+        "digital/handoff/rtl/*.v"
+      ],
+      "artifact_types": [
+        "structured_data",
+        "rtl"
+      ],
+      "required_skills": [
+        "artifact_publish",
+        "repo_source_ingest",
+        "supabase_handoff_ingest"
+      ],
+      "required_tools": [
+        "git",
+        "python",
+        "supabase"
+      ],
+      "hooks": [
+        "pre_run_validate_inputs",
+        "post_run_collect_artifacts",
+        "post_run_update_state",
+        "on_failure_capture_traceback",
+        "on_failure_preserve_logs",
+        "artifact_publish_to_supabase"
+      ],
+      "metadata": {
+        "registry_source": "DIGITAL_AGENT_FUNCTIONS",
+        "variable": "digital_rtl_handoff_ingest_agent",
+        "studio_contract_version": "v1",
+        "supabase_is_golden": true
+      }
+    },
+    {
       "name": "Digital Implementation Setup Agent",
       "loop_type": "digital",
       "domain": "physical_design",

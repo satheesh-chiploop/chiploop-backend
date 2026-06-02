@@ -137,7 +137,13 @@ def _top_module(spec: Dict[str, Any], rtl_path: str) -> str:
 
 def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     source_mode = str(state.get("rtl_source_mode") or "").strip()
-    source_workflow_id = str(state.get("from_workflow_id") or "").strip()
+    upstream = state.get("upstream_workflows") if isinstance(state.get("upstream_workflows"), dict) else {}
+    source_workflow_id = str(
+        state.get("from_workflow_id")
+        or state.get("source_arch2rtl_workflow_id")
+        or upstream.get("arch2rtl")
+        or ""
+    ).strip()
     if source_mode != "from_arch2rtl" or not source_workflow_id:
         raise RuntimeError(
             "Verification requires a completed Arch2RTL workflow source. "

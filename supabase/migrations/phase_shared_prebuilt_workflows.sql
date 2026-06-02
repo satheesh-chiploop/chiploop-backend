@@ -81,6 +81,7 @@ where not exists (
 with platform_templates(name) as (
   values
     ('Digital_Arch2RTL'),
+    ('Digital_Arch2Sim'),
     ('Digital_Arch2Synthesis'),
     ('Digital_Arch2Tapeout'),
     ('Digital_DQA'),
