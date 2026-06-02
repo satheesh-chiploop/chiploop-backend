@@ -10,6 +10,7 @@ from ._embedded_common import (
     strip_outer_markdown_fences,
     write_artifact,
 )
+from ._rtl_top_utils import apply_resolved_top, collect_rtl_paths, resolve_rtl_top_from_files
 
 logger = logging.getLogger(__name__)
 
@@ -312,15 +313,24 @@ def _infer_block_name(state: dict, source_obj: dict, regmap: dict) -> str:
 
 def _infer_top_module(state: dict) -> str:
     integration = state.get("system_integration_intent") or (state.get("system") or {}).get("integration_intent") or {}
-    return (
+    candidate = (
         _first_nonempty(
             state.get("system_top_module"),
             state.get("top_module"),
+            state.get("soc_top_sim_module"),
+            state.get("rtl_top"),
             integration.get("top_module"),
             integration.get("soc_top_module"),
         )
         or "soc_top_sim"
     )
+    workflow_dir = os.path.abspath(state.get("workflow_dir") or "")
+    rtl_paths = collect_rtl_paths(state, workflow_dir)
+    resolved, _debug = resolve_rtl_top_from_files(str(candidate), rtl_paths)
+    if resolved:
+        apply_resolved_top(state, resolved)
+        return resolved
+    return str(candidate)
 
 
 def _infer_bus_type_from_sources(state: dict, source_obj: dict, regmap: dict, spec_text: str, goal: str) -> str:

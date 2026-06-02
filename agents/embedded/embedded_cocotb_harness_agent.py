@@ -5,6 +5,7 @@ import re
 from typing import Dict, List, Optional, Tuple
 
 from ._embedded_common import ensure_workflow_dir, write_artifact
+from ._rtl_top_utils import apply_resolved_top, collect_rtl_paths, resolve_rtl_top_from_files
 
 logger = logging.getLogger(__name__)
 
@@ -368,6 +369,12 @@ def run_agent(state: dict) -> dict:
     )
 
     verilog_sources = _resolve_required_verilog_sources(workflow_dir, soc_top_relpath, soc_top_text, state)
+    rtl_paths = collect_rtl_paths({**state, "rtl_inputs": verilog_sources}, workflow_dir)
+    resolved_top, rtl_top_debug = resolve_rtl_top_from_files(topmodule, rtl_paths)
+    if resolved_top:
+        topmodule = resolved_top
+        apply_resolved_top(state, topmodule)
+
     top_ports = _extract_top_ports(soc_top_text)
     clk_name, rst_name, reset_active_low = _detect_clk_reset_names(top_ports)
     harness_code, smoke_test_code = _render_python("firmware_smoke", clk_name, rst_name, reset_active_low)
@@ -381,6 +388,8 @@ def run_agent(state: dict) -> dict:
         "agent": AGENT_NAME,
         "soc_top_sim_path": soc_top_relpath,
         "soc_top_sim_module": topmodule,
+        "rtl_top_resolution": rtl_top_debug,
+        "rtl_paths_scanned": rtl_paths,
         "resolved_verilog_sources": verilog_sources,
         "top_ports": top_ports,
         "detected_clock": clk_name,

@@ -5,6 +5,7 @@ import os
 from typing import Optional
 
 from ._embedded_common import ensure_workflow_dir, write_artifact
+from ._rtl_top_utils import apply_resolved_top, collect_rtl_paths, resolve_rtl_top_from_files
 
 logger = logging.getLogger(__name__)
 
@@ -159,6 +160,13 @@ def run_agent(state: dict) -> dict:
           key=os.path.basename(rel_filelist),
       )
 
+    rtl_top_debug = {}
+    rtl_paths = collect_rtl_paths(state, workflow_dir)
+    resolved_top, rtl_top_debug = resolve_rtl_top_from_files(top_module, rtl_paths)
+    if resolved_top:
+        top_module = resolved_top
+        apply_resolved_top(state, top_module)
+
     missing = []
     if not top_module:
         missing.append("top_module")
@@ -201,6 +209,8 @@ def run_agent(state: dict) -> dict:
         "workflow_dir": workflow_dir,
         "status": "resolved",
         "top_module": top_module,
+        "rtl_top_resolution": rtl_top_debug,
+        "rtl_paths_scanned": rtl_paths,
         "rtl_filelist": rtl_filelist,
         "rtl_filelist_entries": rtl_filelist_list,
         "harness": harness,

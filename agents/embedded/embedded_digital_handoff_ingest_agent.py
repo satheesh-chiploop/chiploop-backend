@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 from ._embedded_common import ensure_workflow_dir, write_artifact
+from ._rtl_top_utils import apply_resolved_top, resolve_rtl_top_from_files
 
 AGENT_NAME = "Embedded Digital RTL Handoff Ingest Agent"
 ARTIFACT_BUCKET = "artifacts"
@@ -167,6 +168,7 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     source_top = requested_top or Path(rtl_name).stem
     local_rtl = _write_local(workflow_dir, f"digital/rtl/{rtl_name}", rtl_raw)
     local_regmap = _write_local(workflow_dir, "digital/digital_regmap.json", regmap_raw)
+    source_top, rtl_top_debug = resolve_rtl_top_from_files(source_top, [local_rtl])
     try:
         digital_regmap = json.loads(regmap_raw.decode("utf-8"))
     except Exception as exc:
@@ -179,6 +181,7 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     state["soc_top_sim_module"] = source_top
     state["soc_top_sim_path"] = f"digital/rtl/{rtl_name}"
     state["system_top_sim_path"] = f"digital/rtl/{rtl_name}"
+    apply_resolved_top(state, source_top)
     state["digital_regmap"] = digital_regmap
     state["digital_regmap_path"] = local_regmap
     state["digital_register_map_path"] = local_regmap
@@ -211,6 +214,7 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
         "source_workflow_id": source_workflow_id,
         "source_verification_workflow_id": state.get("source_verification_workflow_id"),
         "rtl_source_path": rtl_source_path,
+        "rtl_top_resolution": rtl_top_debug,
         "regmap_source_path": regmap_source_path,
         "local_rtl_path": local_rtl,
         "local_regmap_path": local_regmap,
