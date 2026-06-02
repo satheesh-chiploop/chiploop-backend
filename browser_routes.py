@@ -1,6 +1,7 @@
 import logging
 import os
 import json
+import asyncio
 from typing import Any, Dict
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
@@ -152,9 +153,23 @@ def _collect_run_inspection_context(supabase: Any, workflow: Dict[str, Any]) -> 
 
 
 async def _run_inspection_llm(prompt: str) -> str:
-    from utils.llm_utils import run_llm_fallback
+    from model_gateway import complete_text
 
-    return await run_llm_fallback(prompt)
+    try:
+        return await asyncio.to_thread(
+            complete_text,
+            prompt,
+            capability="inspection",
+            agent_name="Ask This Run Inspector",
+            temperature=0.2,
+        )
+    except Exception as exc:
+        logger.warning("ask_this_run: inspection LLM unavailable: %s", exc)
+        return (
+            "I could not reach the inspection model for this request. "
+            "The run context was collected successfully, so use Download ZIP or the listed run artifacts/logs "
+            "to inspect the generated outputs while the model service is retried."
+        )
 
 
 def _api_key_service(request: Request):
@@ -575,7 +590,11 @@ Run context:
 
     answer = (await _run_inspection_llm(prompt)).strip()
     if not answer:
-        raise HTTPException(status_code=503, detail="inspection_llm_unavailable")
+        answer = (
+            "I could not generate an inspection summary from the model for this request. "
+            "The run context was collected, so download the ZIP or review the listed logs/artifacts "
+            "to inspect generated outputs while the model service is retried."
+        )
 
     return {
         "workflow_id": workflow_id,

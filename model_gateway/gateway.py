@@ -187,7 +187,7 @@ def complete_text(
     route = resolve_route(profile, capability, agent_name=agent_name)
     provider = str(route.get("provider") or profile.get("provider") or "openai").strip().lower()
     messages = _messages(prompt, system)
-    stream = _bool_route_value(route, "stream", "CHIPLOOP_LLM_STREAM", default=False)
+    stream = _bool_route_value(route, "stream", "CHIPLOOP_LLM_STREAM", default=True)
 
     if provider == "portkey":
         if Portkey is None:

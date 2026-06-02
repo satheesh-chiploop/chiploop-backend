@@ -2,8 +2,13 @@
   "model_profile_id": "chiploop_saas_default",
   "provider": "openai",
   "routing": {
+    "default": {
+      "model": "gpt-5.5",
+      "stream": true
+    },
     "planner": {
-      "model": "gpt-5.5"
+      "model": "gpt-5.5",
+      "stream": true
     },
     "rtl_generation": {
       "model": "gpt-5.5",
@@ -20,19 +25,31 @@
       "stream": true
     },
     "verification_debug": {
-      "model": "gpt-5.5"
+      "model": "gpt-5.5",
+      "stream": true
     },
     "embedded_generation": {
-      "model": "gpt-5.5"
+      "model": "gpt-5.5",
+      "stream": true
     },
     "analog_generation": {
-      "model": "gpt-5.5"
+      "model": "gpt-5.5",
+      "stream": true
     },
     "summarizer": {
-      "model": "gpt-5.5"
+      "model": "gpt-5.5",
+      "stream": true
     },
     "doc_generation": {
-      "model": "gpt-5.5"
+      "model": "gpt-5.5",
+      "stream": true
+    },
+    "inspection": {
+      "model": "gpt-5.5",
+      "stream": true,
+      "max_completion_tokens": 4096,
+      "timeout_sec": 60,
+      "max_retries": 1
     },
     "embeddings": {
       "model": "text-embedding-3-small"
