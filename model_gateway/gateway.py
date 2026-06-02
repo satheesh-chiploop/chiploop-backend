@@ -1,4 +1,6 @@
 import os
+import logging
+import time
 from typing import Any, Dict, List, Optional
 
 import httpx
@@ -11,6 +13,8 @@ except Exception:  # pragma: no cover - optional dependency in private installs
     Portkey = None
 
 from .profiles import get_model_profile, model_profile_summary, resolve_route
+
+logger = logging.getLogger("chiploop.model_gateway")
 
 
 def _messages(prompt: str, system: str = "") -> List[Dict[str, str]]:
@@ -55,11 +59,117 @@ def _max_completion_args(route: Dict[str, Any]) -> Dict[str, int]:
         return {}
 
 
+def _bool_route_value(route: Dict[str, Any], key: str, env_key: str, default: bool = False) -> bool:
+    value = route.get(key)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in ("1", "true", "yes", "on")
+    raw = os.getenv(env_key)
+    if isinstance(raw, str) and raw:
+        return raw.strip().lower() in ("1", "true", "yes", "on")
+    return default
+
+
 def _wrap_model_error(provider: str, model: str, exc: Exception) -> RuntimeError:
     return RuntimeError(
         f"ChipLoop model call failed provider={provider} model={model}: "
         f"{type(exc).__name__}: {exc}"
     )
+
+
+def _log_call_start(provider: str, model: str, capability: str, agent_name: Optional[str], prompt: str) -> float:
+    logger.info(
+        "model.call.start provider=%s model=%s capability=%s agent=%s prompt_chars=%s",
+        provider,
+        model,
+        capability,
+        agent_name or "",
+        len(prompt or ""),
+    )
+    return time.monotonic()
+
+
+def _extract_chat_text(resp: Any, provider: str, model: str, started_at: float) -> str:
+    choice = resp.choices[0] if getattr(resp, "choices", None) else None
+    finish_reason = getattr(choice, "finish_reason", "") if choice is not None else ""
+    message = getattr(choice, "message", None) if choice is not None else None
+    content = getattr(message, "content", "") if message is not None else ""
+    text = (content or "").strip()
+    logger.info(
+        "model.call.complete provider=%s model=%s elapsed_sec=%.2f finish_reason=%s response_chars=%s",
+        provider,
+        model,
+        time.monotonic() - started_at,
+        finish_reason,
+        len(text),
+    )
+    if not text:
+        raise RuntimeError(f"OpenAI-compatible response was empty provider={provider} model={model} finish_reason={finish_reason}")
+    if finish_reason == "length":
+        raise RuntimeError(f"Model response was truncated provider={provider} model={model}; increase max_completion_tokens")
+    return text
+
+
+def _chunk_delta_text(chunk: Any) -> str:
+    choices = getattr(chunk, "choices", None)
+    if not choices:
+        return ""
+    delta = getattr(choices[0], "delta", None)
+    if delta is None:
+        return ""
+    content = getattr(delta, "content", "")
+    if isinstance(content, str):
+        return content
+    if isinstance(delta, dict):
+        value = delta.get("content", "")
+        return value if isinstance(value, str) else ""
+    return ""
+
+
+def _chunk_finish_reason(chunk: Any) -> str:
+    choices = getattr(chunk, "choices", None)
+    if not choices:
+        return ""
+    return str(getattr(choices[0], "finish_reason", "") or "")
+
+
+def _collect_stream_text(stream: Any, provider: str, model: str, started_at: float) -> str:
+    parts: List[str] = []
+    finish_reason = ""
+    last_log_at = started_at
+    for chunk in stream:
+        delta = _chunk_delta_text(chunk)
+        if delta:
+            parts.append(delta)
+        fr = _chunk_finish_reason(chunk)
+        if fr:
+            finish_reason = fr
+        now = time.monotonic()
+        if now - last_log_at >= 10.0:
+            logger.info(
+                "model.call.stream provider=%s model=%s elapsed_sec=%.2f response_chars=%s",
+                provider,
+                model,
+                now - started_at,
+                sum(len(p) for p in parts),
+            )
+            last_log_at = now
+
+    text = "".join(parts).strip()
+    logger.info(
+        "model.call.complete provider=%s model=%s elapsed_sec=%.2f finish_reason=%s response_chars=%s stream=true",
+        provider,
+        model,
+        time.monotonic() - started_at,
+        finish_reason,
+        len(text),
+    )
+    if not text:
+        raise RuntimeError(f"Streamed response was empty provider={provider} model={model} finish_reason={finish_reason}")
+    if finish_reason == "length":
+        raise RuntimeError(f"Streamed model response was truncated provider={provider} model={model}; increase max_completion_tokens")
+    return text
 
 
 def complete_text(
@@ -77,6 +187,7 @@ def complete_text(
     route = resolve_route(profile, capability, agent_name=agent_name)
     provider = str(route.get("provider") or profile.get("provider") or "openai").strip().lower()
     messages = _messages(prompt, system)
+    stream = _bool_route_value(route, "stream", "CHIPLOOP_LLM_STREAM", default=False)
 
     if provider == "portkey":
         if Portkey is None:
@@ -85,17 +196,20 @@ def complete_text(
         if not api_key:
             raise RuntimeError("PORTKEY_API_KEY is required for Portkey model profile")
         model = _route_value(route, "model", default=os.getenv("CHIPLOOP_DEFAULT_MODEL", "gpt-5.5"))
+        started_at = _log_call_start(provider, model, capability, agent_name, prompt)
         try:
             resp = Portkey(api_key=api_key).chat.completions.create(
                 model=model,
                 messages=messages,
-                stream=False,
+                stream=stream,
                 **_max_completion_args(route),
                 **({"temperature": temperature} if temperature is not None else {}),
             )
         except Exception as exc:
             raise _wrap_model_error(provider, model, exc) from exc
-        return (resp.choices[0].message.content or "").strip()
+        if stream:
+            return _collect_stream_text(resp, provider, model, started_at)
+        return _extract_chat_text(resp, provider, model, started_at)
 
     if provider == "azure_openai":
         endpoint = _env_value(profile, "AZURE_OPENAI_ENDPOINT")
@@ -104,6 +218,7 @@ def complete_text(
         deployment = _route_value(route, "deployment", "model", default=os.getenv("AZURE_OPENAI_DEPLOYMENT", ""))
         if not endpoint or not api_key or not deployment:
             raise RuntimeError("Azure OpenAI profile requires endpoint, api key, and deployment")
+        started_at = _log_call_start(provider, deployment, capability, agent_name, prompt)
         client = AzureOpenAI(
             azure_endpoint=endpoint,
             api_key=api_key,
@@ -115,12 +230,15 @@ def complete_text(
             resp = client.chat.completions.create(
                 model=deployment,
                 messages=messages,
+                stream=stream,
                 **_max_completion_args(route),
                 **({"temperature": temperature} if temperature is not None else {}),
             )
         except Exception as exc:
             raise _wrap_model_error(provider, deployment, exc) from exc
-        return (resp.choices[0].message.content or "").strip()
+        if stream:
+            return _collect_stream_text(resp, provider, deployment, started_at)
+        return _extract_chat_text(resp, provider, deployment, started_at)
 
     if provider == "openai_compatible":
         api_key = _env_value(profile, "OPENAI_API_KEY", "not-required")
@@ -128,6 +246,7 @@ def complete_text(
         model = _route_value(route, "model", default=os.getenv("CHIPLOOP_DEFAULT_MODEL", "gpt-5.5"))
         if not base_url:
             raise RuntimeError("OpenAI-compatible profile requires base_url")
+        started_at = _log_call_start(provider, model, capability, agent_name, prompt)
         client = OpenAI(
             api_key=api_key,
             base_url=base_url,
@@ -138,12 +257,15 @@ def complete_text(
             resp = client.chat.completions.create(
                 model=model,
                 messages=messages,
+                stream=stream,
                 **_max_completion_args(route),
                 **({"temperature": temperature} if temperature is not None else {}),
             )
         except Exception as exc:
             raise _wrap_model_error(provider, model, exc) from exc
-        return (resp.choices[0].message.content or "").strip()
+        if stream:
+            return _collect_stream_text(resp, provider, model, started_at)
+        return _extract_chat_text(resp, provider, model, started_at)
 
     if provider == "openai":
         api_key = _env_value(profile, "OPENAI_API_KEY")
@@ -153,10 +275,12 @@ def complete_text(
             "max_retries": int(route.get("max_retries") or os.getenv("CHIPLOOP_LLM_MAX_RETRIES", "1")),
         }
         client = OpenAI(api_key=api_key, **client_kwargs) if api_key else OpenAI(**client_kwargs)
+        started_at = _log_call_start(provider, model, capability, agent_name, prompt)
         try:
             resp = client.chat.completions.create(
                 model=model,
                 messages=messages,
+                stream=stream,
                 **_max_completion_args(route),
                 **({"temperature": temperature} if temperature is not None else {}),
             )
@@ -164,7 +288,9 @@ def complete_text(
             raise _wrap_model_error(provider, model, exc) from exc
         except Exception as exc:
             raise _wrap_model_error(provider, model, exc) from exc
-        return (resp.choices[0].message.content or "").strip()
+        if stream:
+            return _collect_stream_text(resp, provider, model, started_at)
+        return _extract_chat_text(resp, provider, model, started_at)
 
     if provider == "anthropic":
         api_key = _env_value(profile, "ANTHROPIC_API_KEY")
