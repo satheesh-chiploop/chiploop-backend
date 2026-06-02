@@ -19,8 +19,8 @@
     },
     "spec_generation": {
       "model": "gpt-5.5",
-      "max_completion_tokens": 12000,
-      "timeout_sec": 90,
+      "max_completion_tokens": 24000,
+      "timeout_sec": 150,
       "max_retries": 1,
       "stream": true
     },

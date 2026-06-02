@@ -12,6 +12,48 @@ PORTKEY_API_KEY = os.getenv("PORTKEY_API_KEY")
 logger = logging.getLogger("chiploop")
 
 
+def _is_truncated_model_response(exc: Exception) -> bool:
+    msg = str(exc).lower()
+    return "truncated" in msg and "max_completion_tokens" in msg
+
+
+def _state_with_spec_token_budget(state: dict, token_budget: int) -> dict:
+    profile = json.loads(json.dumps(state.get("model_profile") or {})) if isinstance(state.get("model_profile"), dict) else {}
+    routing = profile.setdefault("routing", {})
+    spec_route = routing.setdefault("spec_generation", {})
+    spec_route["max_completion_tokens"] = token_budget
+    spec_route["timeout_sec"] = max(int(spec_route.get("timeout_sec") or 0), 180)
+
+    retry_state = dict(state)
+    retry_state["model_profile"] = profile
+    return retry_state
+
+
+def _complete_spec_generation(prompt: str, agent_name: str, state: dict, phase: str) -> str:
+    try:
+        return complete_text(
+            prompt,
+            capability="spec_generation",
+            agent_name=agent_name,
+            state=state,
+        )
+    except Exception as exc:
+        if not _is_truncated_model_response(exc):
+            raise
+        retry_tokens = int(os.getenv("CHIPLOOP_SPEC_RETRY_MAX_COMPLETION_TOKENS", "32000"))
+        logger.warning(
+            "Digital Spec Agent %s response truncated; retrying with max_completion_tokens=%s",
+            phase,
+            retry_tokens,
+        )
+        return complete_text(
+            prompt,
+            capability="spec_generation",
+            agent_name=agent_name,
+            state=_state_with_spec_token_budget(state, retry_tokens),
+        )
+
+
 
 
 def _normalize_spec_json(spec_json: dict):
@@ -926,12 +968,7 @@ Return JSON only.
     try:
         logger.info(f"Digital Spec Agent pass1 prompt size: {len(prompt)} chars")
         t0 = time.monotonic()
-        llm_output = complete_text(
-            prompt,
-            capability="spec_generation",
-            agent_name=agent_name,
-            state=state,
-        )
+        llm_output = _complete_spec_generation(prompt, agent_name, state, "pass1")
         logger.info(f"Digital Spec Agent pass1 LLM elapsed: {time.monotonic() - t0:.2f}s")
     except Exception as e:
             log_path = os.path.join(spec_dir, "spec_agent_contract.log")
@@ -986,12 +1023,7 @@ Return JSON only.
             logger.info("🔁 Digital Spec Agent invoking pass2 repair flow")
             logger.info(f"Digital Spec Agent pass2 prompt size: {len(repair_prompt)} chars")
             t0 = time.monotonic()
-            llm_output_pass2 = complete_text(
-                repair_prompt,
-                capability="spec_generation",
-                agent_name=agent_name,
-                state=state,
-            )
+            llm_output_pass2 = _complete_spec_generation(repair_prompt, agent_name, state, "pass2")
             logger.info(f"Digital Spec Agent pass2 LLM elapsed: {time.monotonic() - t0:.2f}s")
             logger.info(f"🧠 Digital Spec Agent pass2 LLM output size: {len(llm_output_pass2)} chars")
         except Exception as e2:
