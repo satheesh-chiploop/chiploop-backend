@@ -984,7 +984,15 @@ Return JSON only.
         try:
             logger.warning(f"❌ Digital Spec Agent pass1 contract compile failed: {e}")
             logger.info("🔁 Digital Spec Agent invoking pass2 repair flow")
-            llm_output_pass2 = complete_text(repair_prompt, capability="spec_generation", state=state)
+            logger.info(f"Digital Spec Agent pass2 prompt size: {len(repair_prompt)} chars")
+            t0 = time.monotonic()
+            llm_output_pass2 = complete_text(
+                repair_prompt,
+                capability="spec_generation",
+                agent_name=agent_name,
+                state=state,
+            )
+            logger.info(f"Digital Spec Agent pass2 LLM elapsed: {time.monotonic() - t0:.2f}s")
             logger.info(f"🧠 Digital Spec Agent pass2 LLM output size: {len(llm_output_pass2)} chars")
         except Exception as e2:
             logger.error(f"❌ Digital Spec Agent pass2 contract compile failed: {e2}")

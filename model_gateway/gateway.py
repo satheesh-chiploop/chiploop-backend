@@ -3,6 +3,7 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 from openai import AzureOpenAI, OpenAI
+from openai import APITimeoutError, APIConnectionError, RateLimitError, BadRequestError
 
 try:
     from portkey_ai import Portkey
@@ -36,6 +37,31 @@ def _route_value(route: Dict[str, Any], *keys: str, default: str = "") -> str:
     return default
 
 
+def _timeout_value(route: Dict[str, Any]) -> float:
+    raw = route.get("timeout_sec") or os.getenv("CHIPLOOP_LLM_TIMEOUT_SEC", "90")
+    try:
+        return max(5.0, float(raw))
+    except Exception:
+        return 90.0
+
+
+def _max_completion_args(route: Dict[str, Any]) -> Dict[str, int]:
+    raw = route.get("max_completion_tokens") or route.get("max_tokens") or os.getenv("CHIPLOOP_LLM_MAX_COMPLETION_TOKENS", "")
+    if not raw:
+        return {}
+    try:
+        return {"max_completion_tokens": int(raw)}
+    except Exception:
+        return {}
+
+
+def _wrap_model_error(provider: str, model: str, exc: Exception) -> RuntimeError:
+    return RuntimeError(
+        f"ChipLoop model call failed provider={provider} model={model}: "
+        f"{type(exc).__name__}: {exc}"
+    )
+
+
 def complete_text(
     prompt: str,
     *,
@@ -59,12 +85,16 @@ def complete_text(
         if not api_key:
             raise RuntimeError("PORTKEY_API_KEY is required for Portkey model profile")
         model = _route_value(route, "model", default=os.getenv("CHIPLOOP_DEFAULT_MODEL", "gpt-5.5"))
-        resp = Portkey(api_key=api_key).chat.completions.create(
-            model=model,
-            messages=messages,
-            stream=False,
-            **({"temperature": temperature} if temperature is not None else {}),
-        )
+        try:
+            resp = Portkey(api_key=api_key).chat.completions.create(
+                model=model,
+                messages=messages,
+                stream=False,
+                **_max_completion_args(route),
+                **({"temperature": temperature} if temperature is not None else {}),
+            )
+        except Exception as exc:
+            raise _wrap_model_error(provider, model, exc) from exc
         return (resp.choices[0].message.content or "").strip()
 
     if provider == "azure_openai":
@@ -74,12 +104,22 @@ def complete_text(
         deployment = _route_value(route, "deployment", "model", default=os.getenv("AZURE_OPENAI_DEPLOYMENT", ""))
         if not endpoint or not api_key or not deployment:
             raise RuntimeError("Azure OpenAI profile requires endpoint, api key, and deployment")
-        client = AzureOpenAI(azure_endpoint=endpoint, api_key=api_key, api_version=api_version)
-        resp = client.chat.completions.create(
-            model=deployment,
-            messages=messages,
-            **({"temperature": temperature} if temperature is not None else {}),
+        client = AzureOpenAI(
+            azure_endpoint=endpoint,
+            api_key=api_key,
+            api_version=api_version,
+            timeout=_timeout_value(route),
+            max_retries=int(route.get("max_retries") or os.getenv("CHIPLOOP_LLM_MAX_RETRIES", "1")),
         )
+        try:
+            resp = client.chat.completions.create(
+                model=deployment,
+                messages=messages,
+                **_max_completion_args(route),
+                **({"temperature": temperature} if temperature is not None else {}),
+            )
+        except Exception as exc:
+            raise _wrap_model_error(provider, deployment, exc) from exc
         return (resp.choices[0].message.content or "").strip()
 
     if provider == "openai_compatible":
@@ -88,23 +128,42 @@ def complete_text(
         model = _route_value(route, "model", default=os.getenv("CHIPLOOP_DEFAULT_MODEL", "gpt-5.5"))
         if not base_url:
             raise RuntimeError("OpenAI-compatible profile requires base_url")
-        client = OpenAI(api_key=api_key, base_url=base_url)
-        resp = client.chat.completions.create(
-            model=model,
-            messages=messages,
-            **({"temperature": temperature} if temperature is not None else {}),
+        client = OpenAI(
+            api_key=api_key,
+            base_url=base_url,
+            timeout=_timeout_value(route),
+            max_retries=int(route.get("max_retries") or os.getenv("CHIPLOOP_LLM_MAX_RETRIES", "1")),
         )
+        try:
+            resp = client.chat.completions.create(
+                model=model,
+                messages=messages,
+                **_max_completion_args(route),
+                **({"temperature": temperature} if temperature is not None else {}),
+            )
+        except Exception as exc:
+            raise _wrap_model_error(provider, model, exc) from exc
         return (resp.choices[0].message.content or "").strip()
 
     if provider == "openai":
         api_key = _env_value(profile, "OPENAI_API_KEY")
         model = _route_value(route, "model", default=os.getenv("CHIPLOOP_DEFAULT_MODEL", "gpt-5.5"))
-        client = OpenAI(api_key=api_key) if api_key else OpenAI()
-        resp = client.chat.completions.create(
-            model=model,
-            messages=messages,
-            **({"temperature": temperature} if temperature is not None else {}),
-        )
+        client_kwargs = {
+            "timeout": _timeout_value(route),
+            "max_retries": int(route.get("max_retries") or os.getenv("CHIPLOOP_LLM_MAX_RETRIES", "1")),
+        }
+        client = OpenAI(api_key=api_key, **client_kwargs) if api_key else OpenAI(**client_kwargs)
+        try:
+            resp = client.chat.completions.create(
+                model=model,
+                messages=messages,
+                **_max_completion_args(route),
+                **({"temperature": temperature} if temperature is not None else {}),
+            )
+        except (APITimeoutError, APIConnectionError, RateLimitError, BadRequestError) as exc:
+            raise _wrap_model_error(provider, model, exc) from exc
+        except Exception as exc:
+            raise _wrap_model_error(provider, model, exc) from exc
         return (resp.choices[0].message.content or "").strip()
 
     if provider == "anthropic":

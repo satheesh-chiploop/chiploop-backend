@@ -4,6 +4,7 @@ import json
 import datetime
 import logging
 import shutil
+import time
 logger = logging.getLogger("chiploop")
 from typing import Dict, List, Tuple, Optional
 
@@ -36,6 +37,19 @@ def _safe_json(obj):
         return json.dumps(obj, indent=2, default=str)
     except Exception:
         return json.dumps(str(obj), indent=2)
+
+
+def _truncate_text(text: str, max_chars: int) -> str:
+    text = text or ""
+    if len(text) <= max_chars:
+        return text
+    head = max_chars // 2
+    tail = max_chars - head
+    return (
+        text[:head]
+        + f"\n\n...[truncated {len(text) - max_chars} chars for repair prompt]...\n\n"
+        + text[-tail:]
+    )
 
 
 def _load_json_if_path(v):
@@ -1135,7 +1149,8 @@ def _append_text(path: str, content: str) -> None:
 
 def _build_rtl_repair_prompt(base_prompt: str, previous_llm_output: str, compile_log_text: str, verilator_log_text: str) -> str:
     return f"""
-{base_prompt}
+ORIGINAL RTL GENERATION CONTRACT EXCERPT:
+{_truncate_text(base_prompt, 12000)}
 
 ==============================
 REPAIR MODE (SECOND PASS)
@@ -1146,13 +1161,13 @@ Your previous RTL output failed one or more correctness gates.
 You MUST preserve the same architecture unless a structural change is strictly required to fix the errors.
 
 PREVIOUS RTL OUTPUT:
-{previous_llm_output}
+{_truncate_text(previous_llm_output, 30000)}
 
 ICARUS COMPILE LOG:
-{compile_log_text}
+{_truncate_text(compile_log_text, 8000)}
 
 FATAL VERILATOR LOG (if any):
-{verilator_log_text}
+{_truncate_text(verilator_log_text, 8000)}
 
 REPAIR RULES:
 - Do NOT redesign the architecture unless required to resolve correctness errors
@@ -1870,7 +1885,14 @@ def _run(context: AgentContext) -> dict:
 
 
     try:
-        llm_output = complete_text(prompt, capability="rtl_generation", state=state)
+        t0 = time.monotonic()
+        llm_output = complete_text(
+            prompt,
+            capability="rtl_generation",
+            agent_name=agent_name,
+            state=state,
+        )
+        _stage(f"llm_pass1_elapsed_sec: {time.monotonic() - t0:.2f}")
         _stage(f"llm_output_pass1_chars: {len(llm_output)}")
     except Exception as e:
         log_path = os.path.join(rtl_dir, "rtl_agent_compile.log")
@@ -1941,7 +1963,15 @@ def _run(context: AgentContext) -> dict:
 
             
             try:
-                llm_output_pass2 = complete_text(repair_prompt, capability="rtl_generation", state=state)
+                _stage(f"repair_prompt_length: {len(repair_prompt)}")
+                t0 = time.monotonic()
+                llm_output_pass2 = complete_text(
+                    repair_prompt,
+                    capability="rtl_generation",
+                    agent_name=agent_name,
+                    state=state,
+                )
+                _stage(f"llm_pass2_elapsed_sec: {time.monotonic() - t0:.2f}")
                 _stage(f"llm_output_pass2_chars: {len(llm_output_pass2)}")
             except Exception as e2:
                 pass2_exc = os.path.join(rtl_dir, "rtl_agent_exception_pass2.txt")
