@@ -137,11 +137,26 @@ def _top_rtl_file(spec_json: dict, mode: str) -> str:
 
 def _parse_named_verilog_blocks(llm_output: str) -> Dict[str, str]:
     blocks = re.findall(
-        r"---BEGIN\s+([A-Za-z_][\w\-]*\.v)---(.*?)---END\s+\1---",
+        r"---BEGIN\s+([A-Za-z_][\w\-]*\.s?vh?)---(.*?)---END\s+\1---",
         llm_output,
         re.DOTALL,
     )
     return {fname.strip(): code.strip() for fname, code in blocks}
+
+
+def _normalize_emitted_rtl_filenames(verilog_map: Dict[str, str], expected_files: List[str]) -> Dict[str, str]:
+    normalized = dict(verilog_map)
+    by_stem = {os.path.splitext(name)[0]: name for name in verilog_map}
+    for expected in expected_files:
+        if expected in normalized:
+            continue
+        stem = os.path.splitext(expected)[0]
+        candidate = by_stem.get(stem)
+        if candidate and os.path.splitext(candidate)[1] in {".v", ".sv"} and os.path.splitext(expected)[1] in {".v", ".sv"}:
+            normalized[expected] = normalized[candidate]
+            if candidate != expected:
+                normalized.pop(candidate, None)
+    return normalized
 
 
 def _range_width(width: str) -> int:
@@ -1477,6 +1492,7 @@ def _validate_and_materialize_rtl(
         }
 
     expected_files = _collect_expected_rtl_files(spec_json, mode)
+    verilog_map = _normalize_emitted_rtl_filenames(verilog_map, expected_files)
     artifact_list = []
 
     materialize_dir = rtl_dir if not materialize_subdir else os.path.join(rtl_dir, materialize_subdir)
