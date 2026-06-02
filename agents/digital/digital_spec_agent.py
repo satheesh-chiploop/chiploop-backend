@@ -3,6 +3,7 @@ import json
 from utils.artifact_utils import save_text_artifact_and_record
 from model_gateway import complete_text
 import logging
+import time
 
 
 PORTKEY_API_KEY = os.getenv("PORTKEY_API_KEY")
@@ -262,6 +263,19 @@ def _write_text(path: str, content: str) -> None:
     with open(path, "w", encoding="utf-8") as f:
         f.write(content)
 
+
+def _truncate_text(text: str, max_chars: int) -> str:
+    text = text or ""
+    if len(text) <= max_chars:
+        return text
+    head = max_chars // 2
+    tail = max_chars - head
+    return (
+        text[:head]
+        + f"\n\n...[truncated {len(text) - max_chars} chars for repair prompt]...\n\n"
+        + text[-tail:]
+    )
+
 def _record_text_artifact_safe(workflow_id, agent_name, subdir, filename, path):
     try:
         if os.path.exists(path):
@@ -419,8 +433,6 @@ def _ensure_hierarchical_port_closure(spec_json: dict) -> dict:
 
 def _build_repair_prompt(base_prompt: str, previous_json_text: str, failure_log_text: str) -> str:
     return f"""
-{base_prompt}
-
 ==============================
 REPAIR MODE (SECOND PASS)
 ==============================
@@ -429,11 +441,14 @@ Your previous JSON did not pass contract validation.
 
 You MUST preserve the same architecture unless a structural change is strictly required to fix the validation errors.
 
+ORIGINAL GENERATION CONTRACT EXCERPT:
+{_truncate_text(base_prompt, 9000)}
+
 PREVIOUS JSON:
-{previous_json_text}
+{_truncate_text(previous_json_text, 12000)}
 
 VALIDATION FAILURE LOG:
-{failure_log_text}
+{_truncate_text(failure_log_text, 4000)}
 
 REPAIR RULES:
 - Do NOT redesign the architecture unless required to resolve the errors
@@ -909,7 +924,15 @@ Return JSON only.
 """.strip()
 
     try:
-        llm_output = complete_text(prompt, capability="spec_generation", state=state)
+        logger.info(f"Digital Spec Agent pass1 prompt size: {len(prompt)} chars")
+        t0 = time.monotonic()
+        llm_output = complete_text(
+            prompt,
+            capability="spec_generation",
+            agent_name=agent_name,
+            state=state,
+        )
+        logger.info(f"Digital Spec Agent pass1 LLM elapsed: {time.monotonic() - t0:.2f}s")
     except Exception as e:
             log_path = os.path.join(spec_dir, "spec_agent_contract.log")
             summary_path = os.path.join(spec_dir, "spec_agent_summary.txt")
