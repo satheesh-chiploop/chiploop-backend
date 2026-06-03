@@ -1,6 +1,7 @@
 import os
-import subprocess
 from typing import Dict, List, Optional, Tuple
+
+from tooling.runner import run_command
 
 def run_docker(
     image: str,
@@ -9,6 +10,7 @@ def run_docker(
     env: Optional[Dict[str, str]] = None,
     workdir: Optional[str] = None,
     timeout_sec: int = 60 * 60,
+    state: Optional[Dict] = None,
 ) -> Tuple[int, str]:
     """
     Minimal, deterministic docker runner.
@@ -29,11 +31,6 @@ def run_docker(
 
     docker_cmd += [image] + cmd
 
-    p = subprocess.run(
-        docker_cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        timeout=timeout_sec,
-    )
-    return p.returncode, p.stdout
+    result = run_command(state or {}, "docker_run", docker_cmd, timeout_sec=timeout_sec)
+    output = "\n".join(part for part in [result.stdout, result.stderr, result.error] if part)
+    return result.returncode if result.returncode is not None else 1, output

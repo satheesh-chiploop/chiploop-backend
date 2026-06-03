@@ -23,17 +23,17 @@ import json
 import os
 from typing import Any, Dict, Optional
 
-from supabase import create_client
+from platform_adapters.compat import create_client
 from utils.artifact_utils import save_text_artifact_and_record
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 
-if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
+if os.getenv("CHIPLOOP_DATABASE_PROVIDER", "supabase") == "supabase" and (not SUPABASE_URL or not SUPABASE_SERVICE_KEY):
     # Keep import-time failures explicit (matches your other agents' expectations)
     raise RuntimeError("Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY env vars")
 
-supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+supabase = create_client()
 
 
 def _require_str(state: Dict[str, Any], key: str) -> Optional[str]:

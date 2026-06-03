@@ -28,14 +28,9 @@ def _get_supabase_client():
     Optional: update validation_instruments.scpi_idn from the agent.
     If env vars are missing, we simply skip DB updates.
     """
-    url = os.getenv("SUPABASE_URL")
-    key = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_ANON_KEY")
-    if not url or not key:
-        return None
-
     try:
-        from supabase import create_client  # type: ignore
-        return create_client(url, key)
+        from platform_adapters.compat import create_client
+        return create_client()
     except Exception:
         return None
 

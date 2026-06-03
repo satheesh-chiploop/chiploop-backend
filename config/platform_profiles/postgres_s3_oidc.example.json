@@ -1,0 +1,15 @@
+{
+  "profile_id": "postgres_s3_oidc_example",
+  "database_provider": "postgresql",
+  "storage_provider": "s3",
+  "auth_provider": "oidc",
+  "required_env": [
+    "DATABASE_URL",
+    "CHIPLOOP_STORAGE_BUCKET",
+    "AWS_REGION",
+    "CHIPLOOP_OIDC_ISSUER",
+    "CHIPLOOP_OIDC_CLIENT_ID",
+    "CHIPLOOP_FRONTEND_PLATFORM_PROVIDER",
+    "NEXT_PUBLIC_CHIPLOOP_PLATFORM_PROVIDER"
+  ]
+}

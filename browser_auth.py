@@ -38,9 +38,9 @@ def is_browser_admin(user: BrowserUser) -> bool:
 
 def _bearer_token(request: Request) -> str:
     header = request.headers.get("authorization") or request.headers.get("Authorization") or ""
-    if not header.lower().startswith("bearer "):
-        return ""
-    return header.split(" ", 1)[1].strip()
+    if header.lower().startswith("bearer "):
+        return header.split(" ", 1)[1].strip()
+    return str(request.cookies.get("chiploop_access_token") or "").strip()
 
 
 def _claims_from_supabase_client(request: Request, token: str) -> Dict[str, Any]:
@@ -48,6 +48,9 @@ def _claims_from_supabase_client(request: Request, token: str) -> Dict[str, Any]
     if supabase is None or not hasattr(supabase, "auth"):
         return {}
     result = supabase.auth.get_user(token)
+    claims = getattr(result, "claims", None)
+    if isinstance(claims, dict) and claims.get("sub"):
+        return claims
     user = getattr(result, "user", None)
     user_id = str(getattr(user, "id", "") or "")
     if not user_id:

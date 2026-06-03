@@ -267,7 +267,7 @@ def _run_cocotb_simulation(state: Dict[str, Any], workflow_dir: str, makefile_pa
     make_abs = _join_workflow_path(workflow_dir, makefile_path)
     if not os.path.isfile(make_abs):
         return {"attempted": False, "reason": "Makefile not found"}
-    make_bin = tool_path("make", state) or shutil.which("make")
+    make_bin = tool_path("make", state)
     if not make_bin:
         return {"attempted": False, "reason": "make not available"}
     make_dir = os.path.dirname(make_abs)

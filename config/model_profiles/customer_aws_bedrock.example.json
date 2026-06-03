@@ -1,0 +1,20 @@
+{
+  "model_profile_id": "customer_aws_bedrock_example",
+  "provider": "aws_bedrock",
+  "routing": {
+    "default": {
+      "model": "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+      "region": "us-east-1",
+      "max_completion_tokens": 8192
+    },
+    "rtl_generation": {
+      "model": "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+      "region": "us-east-1",
+      "max_completion_tokens": 32000
+    }
+  },
+  "env": {
+    "AWS_PROFILE": "customer-managed",
+    "AWS_REGION": "us-east-1"
+  }
+}

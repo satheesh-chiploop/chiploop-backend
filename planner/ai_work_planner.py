@@ -12,10 +12,10 @@ from utils.semantic import compute_embedding
 from utils.semantic import build_capability_signature
 # ---------------- Supabase client ----------------
 
-from supabase import create_client
+from platform_adapters.compat import create_client
 SUPABASE_URL = os.environ.get("SUPABASE_URL") or os.environ.get("NEXT_PUBLIC_SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or os.environ.get("NEXT_PUBLIC_SUPABASE_ANON_KEY")
-supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+supabase = create_client()
 
 
 # Reuse your environment variable pattern

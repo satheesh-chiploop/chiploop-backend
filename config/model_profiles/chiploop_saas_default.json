@@ -12,9 +12,9 @@
     },
     "rtl_generation": {
       "model": "gpt-5.5",
-      "max_completion_tokens": 24000,
-      "timeout_sec": 120,
-      "max_retries": 1,
+      "max_completion_tokens": 32000,
+      "timeout_sec": 360,
+      "max_retries": 2,
       "stream": true
     },
     "spec_generation": {

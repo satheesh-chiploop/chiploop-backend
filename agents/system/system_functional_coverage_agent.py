@@ -125,7 +125,7 @@ def _record_text(
 
 
 def _which(binname: str) -> Optional[str]:
-    return tool_path(binname) or shutil.which(binname)
+    return tool_path(binname)
 
 
 # -----------------------------------------------------------------------------

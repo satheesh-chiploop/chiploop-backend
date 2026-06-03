@@ -50,16 +50,7 @@ def _tool_env() -> Dict[str, str]:
 
 
 def _find_cargo() -> str:
-    env = _tool_env()
-    for candidate in [
-        tool_path("cargo"),
-        "/root/.cargo/bin/cargo",
-        shutil.which("cargo", path=env.get("PATH")),
-        shutil.which("cargo"),
-    ]:
-        if candidate and os.path.isfile(candidate) and os.access(candidate, os.X_OK):
-            return candidate
-    return ""
+    return tool_path("cargo") or ""
 
 
 def _run_cmd(cmd: List[str], cwd: str, timeout_sec: int = 600) -> Dict[str, Any]:
@@ -94,7 +85,7 @@ def _detect_tool_versions(cargo_bin: str) -> Dict[str, str]:
         result = _run_cmd([cargo_bin, "--version"], cwd="/root")
         cargo_version = (result.get("stdout") or result.get("stderr") or "").strip()
 
-    rustc_bin = tool_path("rustc") or shutil.which("rustc", path=_tool_env().get("PATH"))
+    rustc_bin = tool_path("rustc")
     if rustc_bin:
         result = _run_cmd([rustc_bin, "--version"], cwd="/root")
         rustc_version = (result.get("stdout") or result.get("stderr") or "").strip()

@@ -48,7 +48,9 @@ from studio_factory.models import AgentFactoryRequest
 from studio_planner.models import AgentPlanRequest
 from studio_planner.planner import plan_agent as plan_studio_agent
 from browser_routes import router as browser_router
+from platform_browser_api import router as platform_browser_router
 from browser_auth import BrowserUser, is_browser_admin, require_browser_user
+from platform_adapters import get_platform_client
 
 
 import logging
@@ -79,19 +81,10 @@ def _truncate_tail(s: str, max_chars: int) -> str:
     # Keep the tail so the newest context stays visible.
     return "[TRUNCATED]\n" + s[-max_chars:]
 
-# ---------------- Supabase client ----------------
-try:
-    from supabase import create_client, Client  # supabase-py v2
-except ImportError:
-    raise RuntimeError("Please install supabase-py v2: pip install supabase")
-
-SUPABASE_URL = os.environ.get("SUPABASE_URL") or os.environ.get("NEXT_PUBLIC_SUPABASE_URL")
-SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")  # <<< REMOVE fallback
-
-if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
-    raise RuntimeError("Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY")
-
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+# ---------------- Platform client ----------------
+# Supabase remains the default provider. Private deployments may independently
+# select PostgreSQL, local/S3 storage, and OIDC through CHIPLOOP_*_PROVIDER.
+supabase = get_platform_client()
 
 
 # ---------------- Auth helper (JWT) ----------------
@@ -367,6 +360,7 @@ async def require_checkout_for_workflow_runs(request: Request, call_next):
     return await call_next(request)
 
 app.include_router(browser_router)
+app.include_router(platform_browser_router)
 
 
 

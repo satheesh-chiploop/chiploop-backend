@@ -286,7 +286,7 @@ def run_agent(state: dict) -> dict:
     workspace_generated = True
 
 
-    cargo_path = tool_path("cargo") or shutil.which("cargo")
+    cargo_path = tool_path("cargo", state)
 
     _write_json_artifact(
         state,

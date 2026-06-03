@@ -1,10 +1,10 @@
 # utils/notion_utils.py
 import os
 from notion_client import Client
-from supabase import create_client, Client as SupabaseClient
+from platform_adapters.compat import create_client, Client as SupabaseClient
 
 notion = Client(auth=os.getenv("NOTION_API_KEY"))
-supabase: SupabaseClient = create_client(os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_SERVICE_ROLE_KEY"))
+supabase: SupabaseClient = create_client()
 
 def get_or_create_notion_page(user_id: str) -> str:
     """Gets or creates a Notion page mapped to the user."""

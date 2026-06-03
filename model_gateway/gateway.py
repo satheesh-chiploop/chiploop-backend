@@ -12,6 +12,11 @@ try:
 except Exception:  # pragma: no cover - optional dependency in private installs
     Portkey = None
 
+try:
+    import boto3
+except Exception:  # pragma: no cover - optional dependency in private installs
+    boto3 = None
+
 from .profiles import get_model_profile, model_profile_summary, resolve_route
 
 logger = logging.getLogger("chiploop.model_gateway")
@@ -72,9 +77,15 @@ def _bool_route_value(route: Dict[str, Any], key: str, env_key: str, default: bo
 
 
 def _wrap_model_error(provider: str, model: str, exc: Exception) -> RuntimeError:
+    message = str(exc)
+    if isinstance(exc, RateLimitError) or "429" in message or "too many requests" in message.lower():
+        return RuntimeError(
+            f"model_rate_limited provider={provider} model={model}: "
+            f"{type(exc).__name__}: {message}"
+        )
     return RuntimeError(
         f"ChipLoop model call failed provider={provider} model={model}: "
-        f"{type(exc).__name__}: {exc}"
+        f"{type(exc).__name__}: {message}"
     )
 
 
@@ -322,6 +333,45 @@ def complete_text(
         if isinstance(parts, list):
             return "".join(str(p.get("text") or "") for p in parts if isinstance(p, dict)).strip()
         return ""
+
+    if provider == "aws_bedrock":
+        if boto3 is None:
+            raise RuntimeError("boto3 is required for AWS Bedrock model profiles")
+        model = _route_value(route, "model", default=os.getenv("AWS_BEDROCK_MODEL_ID", ""))
+        region = _route_value(route, "region", default=os.getenv("AWS_REGION", os.getenv("AWS_DEFAULT_REGION", "us-east-1")))
+        if not model:
+            raise RuntimeError("AWS Bedrock profile requires a model id")
+        inference: Dict[str, Any] = {}
+        max_tokens = route.get("max_completion_tokens") or route.get("max_tokens")
+        if max_tokens:
+            inference["maxTokens"] = int(max_tokens)
+        if temperature is not None:
+            inference["temperature"] = float(temperature)
+        payload: Dict[str, Any] = {
+            "modelId": model,
+            "messages": [{"role": "user", "content": [{"text": prompt}]}],
+        }
+        if system:
+            payload["system"] = [{"text": system}]
+        if inference:
+            payload["inferenceConfig"] = inference
+        started_at = _log_call_start(provider, model, capability, agent_name, prompt)
+        try:
+            response = boto3.client("bedrock-runtime", region_name=region).converse(**payload)
+        except Exception as exc:
+            raise _wrap_model_error(provider, model, exc) from exc
+        content = (((response or {}).get("output") or {}).get("message") or {}).get("content") or []
+        text = "".join(str(item.get("text") or "") for item in content if isinstance(item, dict)).strip()
+        logger.info(
+            "model.call.complete provider=%s model=%s elapsed_sec=%.2f response_chars=%s",
+            provider,
+            model,
+            time.monotonic() - started_at,
+            len(text),
+        )
+        if not text:
+            raise RuntimeError(f"AWS Bedrock response was empty provider={provider} model={model}")
+        return text
 
     raise RuntimeError(f"Unsupported ChipLoop model provider: {provider}")
 

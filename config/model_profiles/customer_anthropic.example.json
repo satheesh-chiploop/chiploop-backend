@@ -1,0 +1,17 @@
+{
+  "model_profile_id": "customer_anthropic_example",
+  "provider": "anthropic",
+  "routing": {
+    "default": {
+      "model": "claude-sonnet-4-5",
+      "max_tokens": 8192
+    },
+    "doc_generation": {
+      "model": "claude-sonnet-4-5",
+      "max_tokens": 12000
+    }
+  },
+  "env": {
+    "ANTHROPIC_API_KEY": "set-in-secret-manager"
+  }
+}

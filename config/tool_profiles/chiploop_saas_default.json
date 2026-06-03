@@ -2,6 +2,7 @@
   "profile_id": "chiploop_saas_default",
   "runner": "local_saas",
   "artifact_policy": "full_sync",
+  "strict_tool_profile": false,
   "runtime": {
     "python": {
       "executable": "/root/chiploop-backend/venv/bin/python"
@@ -82,6 +83,21 @@
     },
     "ngspice": {
       "executable": "/usr/bin/ngspice"
+    },
+    "docker": {
+      "executable": "docker"
+    },
+    "synopsys_dc": {
+      "executable": ""
+    },
+    "cadence_genus": {
+      "executable": ""
+    },
+    "xcelium": {
+      "executable": ""
+    },
+    "vcs": {
+      "executable": ""
     },
     "riscv64_linux_gnu_gcc": {
       "executable": "riscv64-linux-gnu-gcc"

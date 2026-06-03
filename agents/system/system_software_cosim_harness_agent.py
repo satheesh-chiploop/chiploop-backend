@@ -58,7 +58,7 @@ def _first_nonempty(*values: Any) -> str:
 
 
 def _tool_available(name: str) -> bool:
-    return bool(tool_path(name) or shutil.which(name))
+    return bool(tool_path(name))
 
 
 def _read_l1_ready(l1: Dict[str, Any]) -> Optional[bool]:

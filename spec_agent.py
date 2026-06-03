@@ -1,11 +1,11 @@
 # agents/spec_agent.py
 import os
-import subprocess
 import requests
 import json
 import time
 from portkey_ai import Portkey
 from openai import OpenAI
+from tooling.runner import run_tool
 
 OLLAMA_URL = "http://127.0.0.1:11434/api/generate"
 USE_LOCAL_OLLAMA = os.getenv("USE_LOCAL_OLLAMA", "false").lower() == "true"
@@ -91,19 +91,16 @@ def spec_agent(state: dict) -> dict:
 
     try:
         print("\n🚀 Compiling...")
-        result = subprocess.run(
-            ["/usr/bin/iverilog", "-o", "design.out", rtl_path],
-            check=True,
-            capture_output=True,
-            text=True
-        )
+        result = run_tool(state, "legacy_spec_compile", "iverilog", ["-o", "design.out", rtl_path])
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr or result.stdout or result.error or "iverilog compilation failed")
         state["status"] = "✅ Compilation successful"
         state["compiler_output"] = result.stdout.strip()
         with open(log_path, "a") as logf:
             logf.write(result.stdout or "")
-    except subprocess.CalledProcessError as e:
+    except Exception as e:
         state["status"] = "❌ Compilation failed"
-        state["error_log"] = (e.stderr or e.stdout or "").strip()
+        state["error_log"] = str(e).strip()
         with open(log_path, "a") as logf:
             logf.write(state["error_log"])
 

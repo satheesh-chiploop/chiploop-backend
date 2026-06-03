@@ -471,10 +471,10 @@ int main(void) {
 '''
 
 
-def _find_gem5_bin(isa: str) -> str:
+def _find_gem5_bin(isa: str, state: Dict[str, Any] | None = None) -> str:
     isa_key = isa.upper()
     profile_key = "gem5_riscv" if isa_key in {"RISCV", "RISC-V"} else "gem5_x86"
-    profiled = tool_path(profile_key)
+    profiled = tool_path(profile_key, state or {})
     if profiled and os.path.isfile(profiled) and os.access(profiled, os.X_OK):
         return profiled
     candidates = [
@@ -518,9 +518,9 @@ def _compile_matrix_workload(state: Dict[str, Any], isa: str) -> str:
     source.write_text(MATRIX_BENCHMARK_C, encoding="utf-8")
     compiler = next(
         (
-            tool_path(c.replace("-", "_")) or tool_path(c) or c
+            tool_path(c.replace("-", "_"), state) or tool_path(c, state) or c
             for c in _compiler_candidates(isa)
-            if c and (tool_path(c.replace("-", "_")) or tool_path(c) or shutil.which(c))
+            if c and (tool_path(c.replace("-", "_"), state) or tool_path(c, state))
         ),
         "",
     )
@@ -621,7 +621,7 @@ def _power_area_from_gem5_activity(point: Dict[str, Any], ipc: float, l1_mpki: f
 
 def _run_gem5_point(state: Dict[str, Any], point: Dict[str, Any], config_path: str) -> Dict[str, Any]:
     isa = str(point.get("isa") or "x86")
-    gem5_bin = _find_gem5_bin(isa)
+    gem5_bin = _find_gem5_bin(isa, state)
     workload = _compile_matrix_workload(state, isa)
     run_dir = Path(_artifact_dir(state)) / "gem5_runs" / str(point.get("run_id") or "run")
     run_dir.mkdir(parents=True, exist_ok=True)

@@ -1,8 +1,8 @@
 import importlib.util
-import shutil
 from dataclasses import asdict, dataclass
 from typing import Dict, List
 
+from tooling.runner import tool_path
 from .registry import load_registry
 from .specs import ToolSpec
 
@@ -33,14 +33,14 @@ def check_tool_availability(tool: ToolSpec) -> ToolAvailability:
         return ToolAvailability(tool.name, tool.kind, tool.optional, True, "runtime", "current Python process")
 
     if tool.kind == "external_tool":
-        found = shutil.which(tool.name)
+        found = tool_path(tool.name)
         return ToolAvailability(
             tool.name,
             tool.kind,
             tool.optional,
             bool(found),
-            f"PATH:{tool.name}",
-            found or "not found on PATH",
+            f"tool_profile:{tool.name}",
+            found or "not configured in active tool profile",
         )
 
     package_names = PACKAGE_CHECKS.get(tool.name)

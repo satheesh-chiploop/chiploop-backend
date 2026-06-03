@@ -1,0 +1,14 @@
+{
+  "profile_id": "postgres_local_oidc_example",
+  "database_provider": "postgresql",
+  "storage_provider": "local_fs",
+  "auth_provider": "oidc",
+  "required_env": [
+    "DATABASE_URL",
+    "CHIPLOOP_PRIVATE_ARTIFACT_ROOT",
+    "CHIPLOOP_OIDC_ISSUER",
+    "CHIPLOOP_OIDC_CLIENT_ID",
+    "CHIPLOOP_FRONTEND_PLATFORM_PROVIDER",
+    "NEXT_PUBLIC_CHIPLOOP_PLATFORM_PROVIDER"
+  ]
+}

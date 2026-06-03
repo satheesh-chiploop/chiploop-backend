@@ -35,9 +35,44 @@ TOOL_ALIASES = {
     "scons": "scons",
     "gcc": "gcc",
     "ngspice": "ngspice",
+    "docker": "docker",
+    "dc_shell": "synopsys_dc",
+    "synopsys_dc": "synopsys_dc",
+    "genus": "cadence_genus",
+    "cadence_genus": "cadence_genus",
+    "xrun": "xcelium",
+    "xcelium": "xcelium",
+    "vcs": "vcs",
     "riscv64-linux-gnu-gcc": "riscv64_linux_gnu_gcc",
     "riscv64-unknown-elf-gcc": "riscv64_unknown_elf_gcc",
     "x86_64-linux-gnu-gcc": "x86_64_linux_gnu_gcc",
+}
+
+VERSION_ARGS = {
+    "python": ["--version"],
+    "python3": ["--version"],
+    "pip": ["--version"],
+    "pytest": ["--version"],
+    "cocotb_config": ["--version"],
+    "verilator": ["--version"],
+    "verilator_coverage": ["--version"],
+    "iverilog": ["-V"],
+    "vvp": ["-V"],
+    "yosys": ["-V"],
+    "sby": ["--version"],
+    "z3": ["--version"],
+    "boolector": ["--version"],
+    "make": ["--version"],
+    "cargo": ["--version"],
+    "rustc": ["--version"],
+    "git": ["--version"],
+    "gcc": ["--version"],
+    "ngspice": ["--version"],
+    "docker": ["--version"],
+    "synopsys_dc": ["-version"],
+    "cadence_genus": ["-version"],
+    "xcelium": ["-version"],
+    "vcs": ["-ID"],
 }
 
 
@@ -61,6 +96,13 @@ def _build_env(profile: Dict[str, Any], extra_env: Optional[Dict[str, str]]) -> 
                 env[key] = os.pathsep.join(parts)
         elif value is not None:
             env[key] = str(value)
+    for section_name in ("runtime", "tools"):
+        section = profile.get(section_name) if isinstance(profile.get(section_name), dict) else {}
+        for name, entry in section.items():
+            executable = entry.get("executable") or entry.get("path") if isinstance(entry, dict) else entry
+            if executable:
+                env_key = "CHIPLOOP_" + str(name).upper().replace("-", "_")
+                env.setdefault(env_key, str(executable))
     for key, value in (extra_env or {}).items():
         if value is not None:
             env[key] = str(value)
@@ -216,7 +258,9 @@ def run_command(
 
     head = str(command[0])
     alias = TOOL_ALIASES.get(os.path.basename(head), os.path.basename(head))
-    if not os.path.isabs(head) and resolve_tool(alias, state or {}):
+    profile = get_tool_profile(state or {})
+    resolved = resolve_tool(alias, state or {})
+    if not os.path.isabs(head) and resolved:
         return run_tool(
             state,
             capability,
@@ -228,8 +272,24 @@ def run_command(
             metadata=metadata,
         )
 
-    profile = get_tool_profile(state or {})
     summary = profile_summary(state or {})
+    if not os.path.isabs(head) and bool(profile.get("strict_tool_profile")):
+        return RunResult(
+            profile_id=str(summary["profile_id"]),
+            runner=str(summary["runner"]),
+            capability=capability,
+            tool=alias,
+            executable=None,
+            command=[str(x) for x in command],
+            cwd=cwd,
+            returncode=None,
+            status="tool_unavailable",
+            error=f"{alias} is not configured in strict ChipLoop tool profile",
+            started_at=_iso_now(),
+            ended_at=_iso_now(),
+            elapsed_ms=0,
+        )
+
     started_at = _iso_now()
     start = time.monotonic()
     command_str = [str(x) for x in command]
@@ -261,3 +321,52 @@ def run_command(
         )
     except Exception as exc:
         return _result_from_exception(state, capability, head, head, command_str, cwd, exc, started_at, start)
+
+
+def run_tool_diagnostics(
+    state: Optional[Dict[str, Any]] = None,
+    *,
+    tools: Optional[List[str]] = None,
+    timeout_sec: int = 15,
+) -> Dict[str, Any]:
+    state = state or {}
+    profile = get_tool_profile(state)
+    configured = profile.get("tools") if isinstance(profile.get("tools"), dict) else {}
+    runtime = profile.get("runtime") if isinstance(profile.get("runtime"), dict) else {}
+    names = tools or sorted(set(configured.keys()) | set(runtime.keys()))
+    results: Dict[str, Any] = {}
+
+    for name in names:
+        kind = "runtime" if name in runtime else "tools"
+        executable = resolve_tool(name, state, kind=kind)
+        if not executable:
+            results[name] = {
+                "status": "tool_unavailable",
+                "available": False,
+                "executable": "",
+                "output": "",
+            }
+            continue
+        args = VERSION_ARGS.get(name)
+        if not args:
+            results[name] = {
+                "status": "available",
+                "available": True,
+                "executable": executable,
+                "output": "Version probe not configured.",
+            }
+            continue
+        result = run_tool(state, f"diagnostic.{name}", name, args, timeout_sec=timeout_sec, kind=kind)
+        output = (result.stdout or result.stderr or result.error or "").strip()
+        results[name] = {
+            "status": result.status,
+            "available": result.status == "success",
+            "executable": result.executable or executable,
+            "returncode": result.returncode,
+            "output": output[:1000],
+        }
+
+    return {
+        "profile": profile_summary(state),
+        "results": results,
+    }

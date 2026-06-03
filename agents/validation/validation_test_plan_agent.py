@@ -4,7 +4,7 @@ from model_gateway import complete_text
 import os
 
 # ✅ NEW: Supabase for saving test plans
-from supabase import create_client
+from platform_adapters.compat import create_client
 
 
 # ✅ NEW: Supabase env (service key recommended because your backend uses it elsewhere)
@@ -12,8 +12,10 @@ SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 
 supabase = None
-if SUPABASE_URL and SUPABASE_SERVICE_KEY:
-    supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+try:
+    supabase = create_client()
+except Exception:
+    supabase = None
 
 
 def _safe_json_load(s: str) -> dict:
@@ -52,7 +54,7 @@ def save_plan_to_supabase(state: dict, plan: dict) -> dict:
         return state
 
     if not supabase:
-        save_error = "Supabase client not configured (missing SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY)."
+        save_error = "Platform database client is not configured."
     elif not user_id:
         save_error = "Missing user_id in state (required to save test plan)."
     else:

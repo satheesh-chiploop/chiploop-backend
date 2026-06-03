@@ -17,7 +17,7 @@ def _default_profile() -> Dict[str, Any]:
         "routing": {
             "default": {"model": DEFAULT_MODEL, "stream": True},
             "planner": {"model": DEFAULT_MODEL, "stream": True},
-            "rtl_generation": {"model": DEFAULT_MODEL, "max_completion_tokens": 24000, "timeout_sec": 120, "max_retries": 1, "stream": True},
+            "rtl_generation": {"model": DEFAULT_MODEL, "max_completion_tokens": 32000, "timeout_sec": 360, "max_retries": 2, "stream": True},
             "spec_generation": {"model": DEFAULT_MODEL, "max_completion_tokens": 24000, "timeout_sec": 150, "max_retries": 1, "stream": True},
             "verification_debug": {"model": DEFAULT_MODEL, "stream": True},
             "embedded_generation": {"model": DEFAULT_MODEL, "stream": True},

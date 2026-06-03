@@ -2,7 +2,7 @@
 
 from datetime import datetime
 from typing import Dict, Any
-from supabase import create_client
+from platform_adapters.compat import create_client
 import os
 import json
 from utils.artifact_utils import save_text_artifact_and_record
@@ -10,7 +10,7 @@ from utils.artifact_utils import save_text_artifact_and_record
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 
-supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+supabase = create_client()
 
 def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     """
@@ -128,4 +128,3 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     state["status"] = f"✅ Bench created: {bench_name} ({bench_id})"
     return state
 
-    

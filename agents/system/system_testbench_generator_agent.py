@@ -117,7 +117,7 @@ def _record_text(
         return None
 
 def _which(binname: str) -> Optional[str]:
-    return tool_path(binname) or shutil.which(binname)
+    return tool_path(binname)
 
 
 def _rel_to_workflow(workflow_dir: str, path: Optional[str]) -> Optional[str]:

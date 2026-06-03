@@ -15,21 +15,37 @@ def test_cocotb_execution_uses_python_env_paths(tmp_path, monkeypatch):
     makefile.write_text("all:\n\t@echo ok\n", encoding="utf-8")
     captured = {}
 
-    monkeypatch.setattr(agent.shutil, "which", lambda name: "/usr/bin/make" if name == "make" else None)
+    state = {
+        "tool_profile": {
+            "profile_id": "test",
+            "strict_tool_profile": True,
+            "tools": {"make": {"executable": "/usr/bin/make"}},
+        }
+    }
 
-    def fake_run(cmd, cwd, env, capture_output, text, timeout):
-        captured.update({"cmd": cmd, "cwd": cwd, "env": env})
+    def fake_run(state, adapter_id, command, cwd=None, env=None, timeout_sec=None):
+        captured.update({
+            "state": state,
+            "adapter_id": adapter_id,
+            "cmd": command,
+            "cwd": cwd,
+            "env": env,
+            "timeout_sec": timeout_sec,
+        })
 
         class Result:
             returncode = 0
             stdout = "ok"
             stderr = ""
 
+            def to_dict(self):
+                return {"returncode": self.returncode}
+
         return Result()
 
-    monkeypatch.setattr(agent.subprocess, "run", fake_run)
+    monkeypatch.setattr(agent, "run_command", fake_run)
 
-    result = agent._run_cocotb_simulation(str(tmp_path), "firmware/validate/Makefile", "test_firmware_smoke")
+    result = agent._run_cocotb_simulation(state, str(tmp_path), "firmware/validate/Makefile", "test_firmware_smoke")
 
     assert result["success"] is True
     path_entries = captured["env"]["PATH"].split(os.pathsep)
@@ -37,3 +53,4 @@ def test_cocotb_execution_uses_python_env_paths(tmp_path, monkeypatch):
     assert path_entries[0] == os.path.dirname(sys.executable)
     assert str(validate_dir) in pythonpath_entries
     assert str(tmp_path) in pythonpath_entries
+    assert captured["adapter_id"] == "system_firmware_cosim"

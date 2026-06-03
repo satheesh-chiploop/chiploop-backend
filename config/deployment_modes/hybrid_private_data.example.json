@@ -1,0 +1,11 @@
+{
+  "mode": "hybrid_private_data",
+  "frontend_owner": "chiploop",
+  "backend_owner": "customer",
+  "data_owner": "customer",
+  "tool_owner": "customer",
+  "model_owner": "customer",
+  "tool_profile_path": "/opt/chiploop/config/tool_profile.json",
+  "model_profile_path": "/opt/chiploop/config/model_profile.json",
+  "artifact_policy": "full_private"
+}

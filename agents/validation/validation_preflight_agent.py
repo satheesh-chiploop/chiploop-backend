@@ -30,7 +30,7 @@ from utils.artifact_utils import save_text_artifact_and_record
 
 # --- Supabase (read-only) for schematic presence check ---
 try:
-    from supabase import create_client, Client  # supabase-py v2
+    from platform_adapters.compat import create_client, Client
 except Exception:
     create_client = None
     Client = None
@@ -39,8 +39,8 @@ SUPABASE_URL = os.environ.get("SUPABASE_URL") or os.environ.get("NEXT_PUBLIC_SUP
 SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
 
 supabase = None
-if create_client and SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY:
-    supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+if create_client:
+    supabase = create_client()
 # --------------------------------------------------------
 
 logger = logging.getLogger(__name__)

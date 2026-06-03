@@ -23,17 +23,17 @@ from utils.artifact_utils import save_text_artifact_and_record
 logger = logging.getLogger(__name__)
 
 try:
-    from supabase import create_client, Client  # supabase-py v2
+    from platform_adapters.compat import create_client, Client
 except ImportError:
     raise RuntimeError("Please install supabase-py v2: pip install supabase")
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL") or os.environ.get("NEXT_PUBLIC_SUPABASE_URL")
 SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
 
-if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
+if os.getenv("CHIPLOOP_DATABASE_PROVIDER", "supabase") == "supabase" and (not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY):
     raise RuntimeError("Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY")
 
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+supabase: Client = create_client()
 
 
 def _now_iso() -> str:

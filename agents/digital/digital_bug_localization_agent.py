@@ -157,7 +157,7 @@ def _infer_clocks_resets(spec: Dict[str, Any], ports: List[Dict[str, Any]]) -> T
     return clocks, uniq
 
 def _which(binname: str) -> Optional[str]:
-    return tool_path(binname) or shutil.which(binname)
+    return tool_path(binname)
 
 def _write_file(path: str, content: str) -> None:
     os.makedirs(os.path.dirname(path), exist_ok=True)

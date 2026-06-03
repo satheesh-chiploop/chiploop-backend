@@ -17,7 +17,7 @@ def _now() -> str:
     return datetime.now().isoformat()
 
 def _which(binname: str) -> Optional[str]:
-    return tool_path(binname) or shutil.which(binname)
+    return tool_path(binname)
 
 def _python_has_module(module_name: str) -> bool:
     try:

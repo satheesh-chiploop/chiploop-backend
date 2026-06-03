@@ -16,7 +16,7 @@ SUMMARY_JSON = "firmware/validate/coverage_summary.json"
 
 
 def _which(name: str) -> Optional[str]:
-    return tool_path(name) or shutil.which(name)
+    return tool_path(name)
 
 
 def _tool_snapshot() -> Dict[str, Any]:

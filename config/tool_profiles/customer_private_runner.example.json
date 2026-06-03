@@ -2,6 +2,7 @@
   "profile_id": "customer_private_runner_example",
   "runner": "customer_private_runner",
   "artifact_policy": "summary_only",
+  "strict_tool_profile": true,
   "runtime": {
     "python": {
       "executable": "/opt/chiploop/venv/bin/python"

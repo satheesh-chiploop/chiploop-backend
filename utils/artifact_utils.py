@@ -5,7 +5,8 @@ import json
 import logging
 from typing import Any, Dict, Optional
 
-from supabase import create_client, Client  # supabase-py v2
+from artifact_policy import active_artifact_policy, artifact_may_sync, write_private_artifact
+from platform_adapters import get_platform_client
 
 logger = logging.getLogger("chiploop")
 
@@ -14,13 +15,19 @@ logger = logging.getLogger("chiploop")
 SUPABASE_URL = os.environ.get("SUPABASE_URL") or os.environ.get("NEXT_PUBLIC_SUPABASE_URL")
 SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
 
-if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
+if (
+    "supabase" in {
+        os.getenv("CHIPLOOP_DATABASE_PROVIDER", "supabase"),
+        os.getenv("CHIPLOOP_STORAGE_PROVIDER", "supabase"),
+    }
+    and (not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY)
+):
     raise RuntimeError(
         "artifact_utils: Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY "
         "— check your environment variables."
     )
 
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+supabase = get_platform_client()
 
 # Default bucket name (matches how you're writing artifacts now)
 ARTIFACT_BUCKET = os.getenv("ARTIFACT_BUCKET_NAME", "artifacts")
@@ -178,12 +185,23 @@ def save_text_artifact_and_record(
             )
             return None
 
+        policy = active_artifact_policy()
+        if not artifact_may_sync(filename, policy):
+            local_path = write_private_artifact(workflow_id, subdir, filename, content)
+            logger.info(
+                "artifact_utils: Kept artifact private workflow=%s agent=%s file=%s policy=%s path=%s",
+                workflow_id,
+                agent_name,
+                filename,
+                policy,
+                local_path,
+            )
+            return local_path
+
         # Path inside the bucket
         storage_path = f"{tenant}/workflows/{workflow_id}/{subdir.rstrip('/')}/{filename}"
 
         # Upload to the 'artifacts' bucket
-        from supabase.lib.client_options import ClientOptions  # (import here to avoid issues)
-
         # supabase.storage.from_(bucket).upload(path, content[, ...])
         storage = supabase.storage.from_(ARTIFACT_BUCKET)
 

@@ -20,7 +20,6 @@ import os
 import re
 import json
 import shutil
-import subprocess
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -171,7 +170,7 @@ def _infer_clocks_resets(spec: Dict[str, Any], ports: List[Dict[str, Any]]) -> T
     return clocks, uniq
 
 def _which(binname: str) -> Optional[str]:
-    return tool_path(binname) or shutil.which(binname)
+    return tool_path(binname)
 
 def _write_file(path: str, content: str) -> None:
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -196,8 +195,8 @@ def _gen_regression_runner(top: str, default_tests: list) -> str:
 import argparse
 import json
 import os
-import subprocess
 from datetime import datetime
+import subprocess
 
 DEFAULT_TESTS = {json.dumps(default_tests, indent=2)}
 
@@ -207,7 +206,7 @@ def _now():
 def run_one(testcase: str, seed: int) -> dict:
     env = os.environ.copy()
     env["RANDOM_SEED"] = str(seed)
-    cmd = ["make", f"TESTCASE={{testcase}}"]
+    cmd = [os.environ.get("CHIPLOOP_MAKE", "make"), f"TESTCASE={{testcase}}"]
     p = subprocess.run(cmd, capture_output=True, text=True, env=env)
     return {{
         "testcase": testcase,

@@ -266,7 +266,7 @@ def _collect_code_coverage(
         _log(log_path, f"Unsupported code coverage tool selected: {selected_tool}", level="warning")
         return summary
 
-    verilator_coverage = tool_path("verilator_coverage", state) or shutil.which("verilator_coverage")
+    verilator_coverage = tool_path("verilator_coverage", state)
     if not verilator_coverage:
         summary["status"] = "tool_unavailable"
         _log(log_path, "verilator_coverage was not found in PATH", level="warning")

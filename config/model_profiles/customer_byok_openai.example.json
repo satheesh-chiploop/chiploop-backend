@@ -1,0 +1,19 @@
+{
+  "model_profile_id": "customer_byok_openai_example",
+  "provider": "openai",
+  "routing": {
+    "default": {
+      "model": "gpt-5.5",
+      "stream": true
+    },
+    "rtl_generation": {
+      "model": "gpt-5.5",
+      "max_completion_tokens": 32000,
+      "timeout_sec": 360,
+      "stream": true
+    }
+  },
+  "env": {
+    "OPENAI_API_KEY": "set-in-secret-manager"
+  }
+}

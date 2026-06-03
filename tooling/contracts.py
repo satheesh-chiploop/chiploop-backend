@@ -26,6 +26,39 @@ class RunRequest:
 
 
 @dataclass
+class RunnerJob:
+    job_id: str
+    workflow_id: str
+    capability: str
+    adapter: str
+    inputs: Dict[str, Any] = field(default_factory=dict)
+    expected_outputs: List[str] = field(default_factory=list)
+    tool_profile_id: Optional[str] = None
+    model_profile_id: Optional[str] = None
+    artifact_policy: str = DEFAULT_ARTIFACT_POLICY
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> Dict[str, Any]:
+        data = asdict(self)
+        data["created_at"] = datetime.now(timezone.utc).isoformat()
+        return data
+
+
+@dataclass
+class ToolAdapter:
+    adapter_id: str
+    capability: str
+    tool: str
+    description: str
+    command_template: List[str]
+    expected_outputs: List[str] = field(default_factory=list)
+    log_patterns: List[str] = field(default_factory=list)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
 class RunResult:
     profile_id: str
     runner: str

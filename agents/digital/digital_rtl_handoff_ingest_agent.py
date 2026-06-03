@@ -302,7 +302,7 @@ def _is_git_url(value: str) -> bool:
 
 
 def _clone_git_repo(repo_url: str, state: Dict[str, Any], workflow_dir: str) -> Path:
-    if not (tool_path("git", state) or shutil.which("git")):
+    if not tool_path("git", state):
         raise RuntimeError("git is not installed on this backend, so repo-based RTL ingest cannot clone URLs")
     if not repo_url.lower().startswith("https://"):
         raise RuntimeError("Only HTTPS git repository URLs are supported for backend RTL ingest")

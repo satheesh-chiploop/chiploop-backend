@@ -23,6 +23,7 @@ def _default_profile() -> Dict[str, Any]:
         "profile_id": DEFAULT_PROFILE_ID,
         "runner": "local_saas",
         "artifact_policy": DEFAULT_ARTIFACT_POLICY,
+        "strict_tool_profile": False,
         "runtime": {
             "python": {"executable": _first_existing([
                 os.getenv("CHIPLOOP_PYTHON", ""),
@@ -160,6 +161,30 @@ def _default_profile() -> Dict[str, Any]:
                 "/usr/bin/ngspice",
                 "ngspice",
             ])},
+            "docker": {"executable": _first_existing([
+                os.getenv("CHIPLOOP_DOCKER", ""),
+                "/usr/bin/docker",
+                "docker",
+            ])},
+            "synopsys_dc": {"executable": _first_existing([
+                os.getenv("CHIPLOOP_SYNOPSYS_DC", ""),
+                os.getenv("DC_SHELL", ""),
+                "dc_shell",
+            ])},
+            "cadence_genus": {"executable": _first_existing([
+                os.getenv("CHIPLOOP_CADENCE_GENUS", ""),
+                os.getenv("GENUS_BIN", ""),
+                "genus",
+            ])},
+            "xcelium": {"executable": _first_existing([
+                os.getenv("CHIPLOOP_XCELIUM", ""),
+                os.getenv("XRUN", ""),
+                "xrun",
+            ])},
+            "vcs": {"executable": _first_existing([
+                os.getenv("CHIPLOOP_VCS", ""),
+                "vcs",
+            ])},
             "riscv64_linux_gnu_gcc": {"executable": _first_existing([
                 os.getenv("CHIPLOOP_RISCV64_LINUX_GNU_GCC", ""),
                 "riscv64-linux-gnu-gcc",
@@ -234,6 +259,8 @@ def resolve_tool(name: str, state: Optional[Dict[str, Any]] = None, *, kind: str
         executable = None
     if executable:
         return executable
+    if bool(profile.get("strict_tool_profile")):
+        return None
     return shutil.which(name)
 
 
@@ -245,6 +272,31 @@ def profile_summary(state: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         "profile_id": profile.get("profile_id") or DEFAULT_PROFILE_ID,
         "runner": profile.get("runner") or "local_saas",
         "artifact_policy": profile.get("artifact_policy") or DEFAULT_ARTIFACT_POLICY,
+        "strict_tool_profile": bool(profile.get("strict_tool_profile")),
         "tools": sorted(tools.keys()) if isinstance(tools, dict) else sorted(tools or []),
         "runtime": sorted(runtime.keys()) if isinstance(runtime, dict) else sorted(runtime or []),
+    }
+
+
+def profile_diagnostics(state: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    profile = get_tool_profile(state)
+
+    def _section(name: str) -> Dict[str, Any]:
+        section = profile.get(name) if isinstance(profile.get(name), dict) else {}
+        out: Dict[str, Any] = {}
+        for key, value in sorted(section.items()):
+            configured = value.get("executable") or value.get("path") if isinstance(value, dict) else value
+            resolved = resolve_tool(key, state, kind=name)
+            out[key] = {
+                "configured": configured or "",
+                "resolved": resolved or "",
+                "available": bool(resolved and (os.path.basename(resolved) == resolved or os.path.exists(resolved))),
+            }
+        return out
+
+    return {
+        **profile_summary(state),
+        "tools": _section("tools"),
+        "runtime": _section("runtime"),
+        "env_keys": sorted((profile.get("env") or {}).keys()) if isinstance(profile.get("env"), dict) else [],
     }

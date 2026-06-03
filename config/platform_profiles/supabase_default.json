@@ -1,0 +1,12 @@
+{
+  "profile_id": "supabase_default",
+  "database_provider": "supabase",
+  "storage_provider": "supabase",
+  "auth_provider": "supabase",
+  "required_env": [
+    "SUPABASE_URL",
+    "SUPABASE_SERVICE_ROLE_KEY",
+    "NEXT_PUBLIC_SUPABASE_URL",
+    "NEXT_PUBLIC_SUPABASE_ANON_KEY"
+  ]
+}

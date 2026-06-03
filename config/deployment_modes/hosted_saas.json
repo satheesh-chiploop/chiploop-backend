@@ -1,0 +1,10 @@
+{
+  "mode": "hosted_saas",
+  "frontend_owner": "chiploop",
+  "backend_owner": "chiploop",
+  "data_owner": "chiploop",
+  "tool_owner": "chiploop",
+  "model_owner": "chiploop",
+  "tool_profile_path": "backend/config/tool_profiles/chiploop_saas_default.json",
+  "model_profile_path": "backend/config/model_profiles/chiploop_saas_default.json"
+}

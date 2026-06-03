@@ -1,0 +1,31 @@
+{
+  "profile_id": "hybrid_runner_synopsys_cadence_example",
+  "runner": "customer_private_runner",
+  "artifact_policy": "private_storage",
+  "strict_tool_profile": true,
+  "runtime": {
+    "python": { "executable": "/opt/chiploop/venv/bin/python" },
+    "python3": { "executable": "/opt/chiploop/venv/bin/python3" },
+    "cocotb_config": { "executable": "/opt/chiploop/venv/bin/cocotb-config" }
+  },
+  "tools": {
+    "synopsys_dc": { "executable": "/eda/synopsys/syn/bin/dc_shell" },
+    "vcs": { "executable": "/eda/synopsys/vcs/bin/vcs" },
+    "cadence_genus": { "executable": "/eda/cadence/GENUS/bin/genus" },
+    "xcelium": { "executable": "/eda/cadence/XCELIUM/bin/xrun" },
+    "verilator": { "executable": "/usr/local/bin/verilator" },
+    "yosys": { "executable": "/usr/bin/yosys" },
+    "make": { "executable": "/usr/bin/make" },
+    "git": { "executable": "/usr/bin/git" },
+    "bash": { "executable": "/bin/bash" }
+  },
+  "env": {
+    "SNPSLMD_LICENSE_FILE": "27000@license-server",
+    "CDS_LIC_FILE": "5280@license-server",
+    "PDK_ROOT": "/eda/pdk/customer_node",
+    "STD_CELL_LIB": "/eda/libs/customer_node/slow.lib",
+    "PATH": {
+      "prepend": ["/opt/chiploop/venv/bin", "/eda/synopsys/syn/bin", "/eda/cadence/GENUS/bin"]
+    }
+  }
+}

@@ -7,12 +7,17 @@ from typing import Any, Dict
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 
 from auth_api_keys.service import get_api_key_service
+from artifact_policy import artifact_policy_summary
 from billing import BillingPaymentRequired, CreditLimitExceeded, EntitlementDenied, TrialCheckoutRequired, get_billing_service
 from browser_auth import BrowserUser, browser_user_email, is_browser_admin, require_browser_user
+from deployment_modes import deployment_summary
 from github_integration import GitHubIntegrationService, GitHubNotConfiguredError, GitHubRequestError, SupabaseGitHubInstallationRepository
 from help_center import answer_help_question
+from license_policy import license_summary
 from marketplace import MarketplaceService, SupabaseMarketplaceRepository
+from model_gateway import complete_text, model_profile_summary
 from onboarding import OnboardingService, SupabaseOnboardingRepository
+from platform_services import platform_services_summary
 from studio_contract.registry import load_registry
 from studio_factory.generate_agent import run_factory as run_studio_factory
 from studio_factory.models import AgentFactoryRequest
@@ -27,6 +32,9 @@ from voice_design import VoiceDesignConfigError, build_spec_draft, transcribe_au
 from workflow_dag.models import WorkflowDAG
 from workflow_dag.planner import dag_from_agents, dag_from_studio_graph, dry_run_plan
 from workflow_dag.validator import validate_dag
+from tooling.adapters import list_adapters
+from tooling.profiles import profile_diagnostics
+from tooling.runner import run_tool_diagnostics
 
 
 router = APIRouter()
@@ -872,6 +880,76 @@ def settings_usage(
 ):
     service = _api_key_service(request)
     return {"status": "ok", "usage": service.usage_summary(user.user_id)}
+
+
+@router.get("/settings/deployment")
+def settings_deployment(
+    request: Request,
+    user: BrowserUser = Depends(require_browser_user),
+):
+    return {
+        "status": "ok",
+        "deployment": deployment_summary(),
+        "model_profile": model_profile_summary(),
+        "tool_profile": profile_diagnostics(),
+        "tool_adapters": list_adapters(),
+        "artifact_policy": artifact_policy_summary(),
+        "platform_services": platform_services_summary(),
+        "license": license_summary(),
+        "editable": is_browser_admin(user),
+    }
+
+
+@router.post("/settings/deployment/tool-diagnostics")
+async def settings_deployment_tool_diagnostics(
+    request: Request,
+    user: BrowserUser = Depends(require_browser_user),
+):
+    data = await request.json()
+    requested = data.get("tools") if isinstance(data.get("tools"), list) else None
+    tools = [str(item) for item in requested] if requested else None
+    return {
+        "status": "ok",
+        "diagnostics": run_tool_diagnostics(tools=tools),
+        "requested_by": user.user_id,
+    }
+
+
+@router.post("/settings/deployment/model-diagnostics")
+def settings_deployment_model_diagnostics(
+    request: Request,
+    user: BrowserUser = Depends(require_browser_user),
+):
+    _require_admin(user)
+    text = complete_text(
+        "Return exactly: CHIPLOOP_MODEL_OK",
+        capability="inspection",
+        agent_name="Deployment Model Diagnostics",
+    )
+    return {
+        "status": "ok",
+        "model_profile": model_profile_summary(),
+        "response": text[:200],
+    }
+
+
+@router.get("/settings/deployment/support-bundle")
+def settings_deployment_support_bundle(
+    request: Request,
+    user: BrowserUser = Depends(require_browser_user),
+):
+    _require_admin(user)
+    return {
+        "status": "ok",
+        "support_bundle": {
+            "deployment": deployment_summary(),
+            "artifact_policy": artifact_policy_summary(),
+            "platform_services": platform_services_summary(),
+            "license": license_summary(),
+            "model_profile": model_profile_summary(),
+            "tool_diagnostics": run_tool_diagnostics(),
+        },
+    }
 
 
 @router.get("/settings/github/status")

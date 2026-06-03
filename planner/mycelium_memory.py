@@ -1,11 +1,11 @@
 # backend/planner/mycelium_memory.py
 import hashlib
-from supabase import create_client
+from platform_adapters.compat import create_client
 import os
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
-supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+supabase = create_client()
 
 def context_hash(struct):
     return hashlib.sha256(str(struct).encode("utf-8")).hexdigest()[:12]

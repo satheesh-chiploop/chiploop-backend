@@ -39,7 +39,7 @@ def _read_json(path: str) -> Dict[str, Any]:
     return {}
 
 def _which(binname: str) -> Optional[str]:
-    return tool_path(binname) or shutil.which(binname)
+    return tool_path(binname)
 
 def _run(cmd: List[str], cwd: Optional[str]=None, timeout: int=300, state: Optional[Dict[str, Any]]=None) -> Dict[str, Any]:
     try:
