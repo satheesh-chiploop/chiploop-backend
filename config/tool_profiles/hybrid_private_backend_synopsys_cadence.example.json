@@ -1,12 +1,12 @@
 {
-  "profile_id": "hybrid_runner_synopsys_cadence_example",
-  "runner": "customer_private_runner",
-  "artifact_policy": "private_storage",
+  "profile_id": "hybrid_private_backend_synopsys_cadence_example",
+  "runner": "customer_private_backend",
+  "artifact_policy": "full_sync",
   "strict_tool_profile": true,
   "runtime": {
-    "python": { "executable": "/opt/chiploop/venv/bin/python" },
-    "python3": { "executable": "/opt/chiploop/venv/bin/python3" },
-    "cocotb_config": { "executable": "/opt/chiploop/venv/bin/cocotb-config" }
+    "python": { "executable": "/usr/local/bin/python" },
+    "python3": { "executable": "/usr/local/bin/python3" },
+    "cocotb_config": { "executable": "/usr/local/bin/cocotb-config" }
   },
   "tools": {
     "synopsys_dc": { "executable": "/eda/synopsys/syn/bin/dc_shell" },
@@ -25,7 +25,7 @@
     "PDK_ROOT": "/eda/pdk/customer_node",
     "STD_CELL_LIB": "/eda/libs/customer_node/slow.lib",
     "PATH": {
-      "prepend": ["/opt/chiploop/venv/bin", "/eda/synopsys/syn/bin", "/eda/cadence/GENUS/bin"]
+      "prepend": ["/eda/synopsys/syn/bin", "/eda/cadence/GENUS/bin", "/usr/local/bin"]
     }
   }
 }

@@ -228,6 +228,18 @@ def _is_admin_request(request: Request) -> bool:
 app = FastAPI(title="ChipLoop API", version="1.0")
 
 
+def _allowed_cors_origins() -> List[str]:
+    configured = os.getenv("CHIPLOOP_ALLOWED_ORIGINS", "")
+    if configured.strip():
+        return [item.strip().rstrip("/") for item in configured.split(",") if item.strip()]
+    return [
+        "https://www.getchiploop.com",
+        "https://getchiploop.com",
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+    ]
+
+
 # ---------------- Validation Loop: Instruments (API schemas) ----------------
 
 class InstrumentRegisterIn(BaseModel):
@@ -250,7 +262,7 @@ class InstrumentSetDefaultIn(BaseModel):
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # tighten later
+    allow_origins=_allowed_cors_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -1428,6 +1440,15 @@ def _execute_agent_with_runtime(
 @app.get("/health")
 def health():
     return {"ok": True, "ts": datetime.utcnow().isoformat()}
+
+
+@app.get("/ready")
+def readiness():
+    from deployment_readiness import build_readiness_payload
+
+    payload = build_readiness_payload(supabase)
+    return JSONResponse(status_code=200 if payload.get("ok") else 503, content=payload)
+
 
 @app.get("/runs/recent")
 def recent_runs(request: Request, limit: int = Query(10, ge=1, le=50)):
@@ -3155,102 +3176,14 @@ def _artifacts_dir_for_workflow(workflow_id: str) -> Path:
     p = Path("artifacts") / user_id / workflow_id
     return p
 
-def _touch_runner_seen(runner_name: str):
-    try:
-        supabase.table("runners").update({"last_seen": datetime.utcnow().isoformat()}).eq("runner_name", runner_name).execute()
-    except Exception:
-        pass
-
-# ---------- 1) Register runner ----------
-@app.post("/register_runner")
-def register_runner(payload: dict = Body(...)):
-    """
-    Body: { runner_name, email, token }
-    Upserts runner and marks online.
-    """
-    runner = {
-        "runner_name": payload.get("runner_name"),
-        "email": payload.get("email"),
-        "token": payload.get("token"),
-        "status": "idle",
-        "last_seen": datetime.utcnow().isoformat(),
-    }
-    if not runner["runner_name"]:
-        raise HTTPException(status_code=400, detail="runner_name required")
-    # upsert by runner_name
-    supabase.table("runners").upsert(runner, on_conflict="runner_name").execute()
-    return {"ok": True, "runner": runner}
-
-# ---------- 2) Get a queued job (simulation) ----------
-@app.get("/get_job")
-def get_job(runner: str):
-    """
-    Query: ?runner=<runner_name>
-    Finds a workflow queued for 'simulation' phase and assigns it.
-    Returns: { job: { workflow_id, loop_type, top_module?, ... } } or { job: null }
-    """
-    if not runner:
-        raise HTTPException(status_code=400, detail="runner required")
-
-    _touch_runner_seen(runner)
-
-    # Find first queued workflow for simulation
-    q = (
-        supabase.table("workflows")
-        .select("id, user_id, loop_type, params")
-        .eq("status", "queued")
-        .eq("phase", "simulation")
-        .is_("runner_assigned", None)
-        .order("created_at", desc=False)
-        .limit(1)
-        .execute()
-    )
-    rows = q.data or []
-    if not rows:
-        return {"job": None}
-
-    wf = rows[0]
-    workflow_id = wf["id"]
-    loop_type = (wf.get("loop_type") or "digital")
-    params = wf.get("params") or ""
-    # Allow a 'top_module=<name>' hint in workflows.params
-    top_module = None
-    if isinstance(params, str) and "top_module" in params:
-        # naive parse "top_module=<name>" from params text
-        for token in params.replace(",", " ").split():
-            if token.startswith("top_module="):
-                top_module = token.split("=", 1)[1].strip()
-
-    # Assign runner
-    supabase.table("workflows").update({
-        "runner_assigned": runner,
-        "status": "running",
-        "updated_at": datetime.utcnow().isoformat(),
-    }).eq("id", workflow_id).execute()
-
-    supabase.table("runners").upsert({
-        "runner_name": runner,
-        "status": "busy",
-        "current_job": workflow_id,
-        "last_seen": datetime.utcnow().isoformat()
-    }, on_conflict="runner_name").execute()
-
-    job = {
-        "workflow_id": workflow_id,
-        "loop_type": loop_type,
-        "top_module": top_module or "tb_counter_4b",
-    }
-    return {"job": job}
-
-# ---------- 3) Upload results from runner ----------
-@app.post("/upload_results")
-def upload_results(payload: dict = Body(...)):
+def _unsupported_legacy_external_execution(payload: dict = Body(...)):
     """
     Body: { workflow_id, status, logs, artifacts?, runner_name }
     - Appends logs
     - Updates workflow status/phase
     - Marks run completed
     """
+    raise HTTPException(status_code=410, detail="unsupported_legacy_endpoint")
     workflow_id = payload.get("workflow_id")
     status = (payload.get("status") or "completed").lower()
     logs = payload.get("logs") or ""

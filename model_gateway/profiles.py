@@ -86,6 +86,8 @@ def model_profile_summary(state: Optional[Dict[str, Any]] = None) -> Dict[str, A
     return {
         "model_profile_id": profile.get("model_profile_id") or DEFAULT_MODEL_PROFILE_ID,
         "provider": profile.get("provider") or DEFAULT_MODEL_PROVIDER,
+        "ai_billing_mode": profile.get("ai_billing_mode") or os.getenv("CHIPLOOP_AI_BILLING_MODE", "byok"),
+        "model_key_owner": profile.get("model_key_owner") or os.getenv("CHIPLOOP_MODEL_KEY_OWNER", "customer"),
         "capabilities": sorted(routing.keys()),
         "agents": sorted((profile.get("agents") or {}).keys()) if isinstance(profile.get("agents"), dict) else [],
     }

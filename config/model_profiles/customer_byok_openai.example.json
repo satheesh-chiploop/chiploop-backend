@@ -1,6 +1,8 @@
 {
   "model_profile_id": "customer_byok_openai_example",
   "provider": "openai",
+  "ai_billing_mode": "byok",
+  "model_key_owner": "customer",
   "routing": {
     "default": {
       "model": "gpt-5.5",

@@ -1,4 +1,5 @@
 from deployment_modes import active_deployment_mode, deployment_summary
+from deployment_readiness import build_readiness_payload
 from artifact_policy import artifact_may_sync
 from license_policy import license_summary
 from tooling.adapters import list_adapters, resolve_adapter
@@ -17,7 +18,7 @@ def test_default_deployment_mode_is_hosted_saas(monkeypatch):
 def test_deployment_summary_lists_hybrid_and_private_modes():
     summary = deployment_summary()
     modes = {item["mode"] for item in summary["available_modes"]}
-    assert {"hosted_saas", "hybrid_runner", "hybrid_private_data", "private", "customer_cloud"}.issubset(modes)
+    assert {"hosted_saas", "hybrid_private_backend", "hybrid_private_data", "private", "customer_cloud"}.issubset(modes)
 
 
 def test_tool_profile_diagnostics_include_commercial_placeholders():
@@ -74,3 +75,35 @@ def test_license_summary_defaults_by_deployment_mode(monkeypatch):
     assert summary["mode"] == "private_enterprise"
     assert summary["license_key_configured"] is False
     assert summary["third_party_tool_licenses"] == "customer_managed"
+
+
+class _ReadyQuery:
+    def select(self, *_args, **_kwargs):
+        return self
+
+    def limit(self, *_args, **_kwargs):
+        return self
+
+    def execute(self):
+        return type("Result", (), {"data": []})()
+
+
+class _ReadyClient:
+    def table(self, _name):
+        return _ReadyQuery()
+
+
+def test_readiness_reports_hybrid_private_backend_license_gap(monkeypatch):
+    monkeypatch.setenv("CHIPLOOP_DEPLOYMENT_MODE", "hybrid_private_backend")
+    monkeypatch.delenv("CHIPLOOP_LICENSE_KEY", raising=False)
+    payload = build_readiness_payload(_ReadyClient())
+    assert payload["ok"] is False
+    assert payload["checks"]["data_store"]["ok"] is True
+    assert payload["checks"]["license"]["ok"] is False
+
+
+def test_readiness_accepts_hybrid_private_backend_license_key(monkeypatch):
+    monkeypatch.setenv("CHIPLOOP_DEPLOYMENT_MODE", "hybrid_private_backend")
+    monkeypatch.setenv("CHIPLOOP_LICENSE_KEY", "test-license")
+    payload = build_readiness_payload(_ReadyClient())
+    assert payload["checks"]["license"]["ok"] is True

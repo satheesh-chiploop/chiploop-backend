@@ -1,0 +1,11 @@
+{
+  "mode": "hybrid_private_backend",
+  "frontend_owner": "chiploop",
+  "backend_owner": "customer",
+  "data_owner": "chiploop",
+  "tool_owner": "customer",
+  "model_owner": "customer",
+  "tool_profile_path": "/etc/chiploop/tool_profile.json",
+  "model_profile_path": "/etc/chiploop/model_profile.json",
+  "artifact_policy": "full_sync"
+}

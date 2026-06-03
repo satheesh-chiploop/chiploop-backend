@@ -34,16 +34,16 @@ DEPLOYMENT_MODES: Dict[str, DeploymentMode] = {
         description="Default managed ChipLoop service: Vercel frontend, ChipLoop backend, ChipLoop Supabase, ChipLoop tools, and managed model keys.",
         capabilities=["managed_frontend", "managed_backend", "managed_data", "managed_tools", "managed_models"],
     ),
-    "hybrid_runner": DeploymentMode(
-        mode="hybrid_runner",
-        label="ChipLoop Hybrid Runner",
+    "hybrid_private_backend": DeploymentMode(
+        mode="hybrid_private_backend",
+        label="ChipLoop Hybrid Private Backend",
         frontend_owner="chiploop",
         backend_owner="customer",
         data_owner="chiploop",
         tool_owner="customer",
-        model_owner="chiploop_or_customer",
-        description="ChipLoop manages frontend/data while the customer runs a private backend or runner for local tools and sensitive files.",
-        capabilities=["managed_frontend", "managed_data", "private_backend", "private_tools", "runner_job_contract"],
+        model_owner="customer",
+        description="ChipLoop hosts frontend and Supabase while the customer runs the complete backend, agents, tools, licenses, and model credentials in their private environment.",
+        capabilities=["managed_frontend", "managed_data", "private_backend", "private_tools", "customer_models", "full_reference_journeys"],
     ),
     "hybrid_private_data": DeploymentMode(
         mode="hybrid_private_data",

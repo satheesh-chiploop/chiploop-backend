@@ -1,14 +1,14 @@
 {
-  "profile_id": "hybrid_runner_opensource_example",
-  "runner": "customer_private_runner",
-  "artifact_policy": "summary_only",
+  "profile_id": "hybrid_private_backend_opensource_example",
+  "runner": "customer_private_backend",
+  "artifact_policy": "full_sync",
   "strict_tool_profile": true,
   "runtime": {
-    "python": { "executable": "/opt/chiploop/venv/bin/python" },
-    "python3": { "executable": "/opt/chiploop/venv/bin/python3" },
-    "pip": { "executable": "/opt/chiploop/venv/bin/pip" },
-    "pytest": { "executable": "/opt/chiploop/venv/bin/pytest" },
-    "cocotb_config": { "executable": "/opt/chiploop/venv/bin/cocotb-config" }
+    "python": { "executable": "/usr/local/bin/python" },
+    "python3": { "executable": "/usr/local/bin/python3" },
+    "pip": { "executable": "/usr/local/bin/pip" },
+    "pytest": { "executable": "/usr/local/bin/pytest" },
+    "cocotb_config": { "executable": "/usr/local/bin/cocotb-config" }
   },
   "tools": {
     "verilator": { "executable": "/usr/local/bin/verilator" },
@@ -20,8 +20,8 @@
     "z3": { "executable": "/usr/bin/z3" },
     "boolector": { "executable": "/usr/bin/boolector" },
     "make": { "executable": "/usr/bin/make" },
-    "cargo": { "executable": "/root/.cargo/bin/cargo" },
-    "rustc": { "executable": "/root/.cargo/bin/rustc" },
+    "cargo": { "executable": "/usr/bin/cargo" },
+    "rustc": { "executable": "/usr/bin/rustc" },
     "gcc": { "executable": "/usr/bin/gcc" },
     "git": { "executable": "/usr/bin/git" },
     "bash": { "executable": "/bin/bash" },
@@ -30,7 +30,7 @@
   },
   "env": {
     "PATH": {
-      "prepend": ["/opt/chiploop/venv/bin", "/usr/local/bin"]
+      "prepend": ["/usr/local/bin"]
     }
   }
 }

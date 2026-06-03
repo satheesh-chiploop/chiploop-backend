@@ -1,6 +1,8 @@
 {
   "model_profile_id": "chiploop_saas_default",
   "provider": "openai",
+  "ai_billing_mode": "chiploop_managed",
+  "model_key_owner": "chiploop",
   "routing": {
     "default": {
       "model": "gpt-5.5",

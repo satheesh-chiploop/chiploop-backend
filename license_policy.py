@@ -6,8 +6,8 @@ from deployment_modes import active_deployment_mode
 
 DEFAULT_LICENSE_MODES = {
     "hosted_saas": "hosted_subscription",
-    "hybrid_runner": "hybrid_runner",
-    "hybrid_private_data": "hybrid_runner",
+    "hybrid_private_backend": "hybrid_private_backend",
+    "hybrid_private_data": "hybrid_private_backend",
     "private": "private_enterprise",
     "customer_cloud": "customer_cloud",
 }

@@ -18,6 +18,7 @@ except Exception:  # pragma: no cover - optional dependency in private installs
     boto3 = None
 
 from .profiles import get_model_profile, model_profile_summary, resolve_route
+from .usage import record_model_usage
 
 logger = logging.getLogger("chiploop.model_gateway")
 
@@ -183,6 +184,73 @@ def _collect_stream_text(stream: Any, provider: str, model: str, started_at: flo
     return text
 
 
+def _record_success(
+    *,
+    state: Optional[Dict[str, Any]],
+    profile: Dict[str, Any],
+    route: Dict[str, Any],
+    provider: str,
+    model: str,
+    capability: str,
+    agent_name: Optional[str],
+    prompt: str,
+    output: str,
+    provider_usage: Any = None,
+    request_type: str = "chat",
+    stream: bool = False,
+    started_at: Optional[float] = None,
+) -> None:
+    record_model_usage(
+        state=state,
+        profile=profile,
+        route=route,
+        provider=provider,
+        model=model,
+        capability=capability,
+        agent_name=agent_name,
+        prompt=prompt,
+        output=output,
+        provider_usage=provider_usage,
+        request_type=request_type,
+        stream=stream,
+        status="ok",
+        started_at=started_at,
+    )
+
+
+def _record_failure(
+    *,
+    state: Optional[Dict[str, Any]],
+    profile: Dict[str, Any],
+    route: Dict[str, Any],
+    provider: str,
+    model: str,
+    capability: str,
+    agent_name: Optional[str],
+    prompt: str,
+    exc: Exception,
+    request_type: str = "chat",
+    stream: bool = False,
+    started_at: Optional[float] = None,
+) -> None:
+    record_model_usage(
+        state=state,
+        profile=profile,
+        route=route,
+        provider=provider,
+        model=model,
+        capability=capability,
+        agent_name=agent_name,
+        prompt=prompt,
+        output="",
+        request_type=request_type,
+        stream=stream,
+        status="failed",
+        error_type=type(exc).__name__,
+        started_at=started_at,
+    )
+
+
 def complete_text(
     prompt: str,
     *,
@@ -217,10 +285,15 @@ def complete_text(
                 **({"temperature": temperature} if temperature is not None else {}),
             )
         except Exception as exc:
+            _record_failure(state=state, profile=profile, route=route, provider=provider, model=model, capability=capability, agent_name=agent_name, prompt=prompt, exc=exc, stream=stream, started_at=started_at)
             raise _wrap_model_error(provider, model, exc) from exc
         if stream:
-            return _collect_stream_text(resp, provider, model, started_at)
-        return _extract_chat_text(resp, provider, model, started_at)
+            text = _collect_stream_text(resp, provider, model, started_at)
+            _record_success(state=state, profile=profile, route=route, provider=provider, model=model, capability=capability, agent_name=agent_name, prompt=prompt, output=text, stream=True, started_at=started_at)
+            return text
+        text = _extract_chat_text(resp, provider, model, started_at)
+        _record_success(state=state, profile=profile, route=route, provider=provider, model=model, capability=capability, agent_name=agent_name, prompt=prompt, output=text, provider_usage=getattr(resp, "usage", None), started_at=started_at)
+        return text
 
     if provider == "azure_openai":
         endpoint = _env_value(profile, "AZURE_OPENAI_ENDPOINT")
@@ -246,10 +319,15 @@ def complete_text(
                 **({"temperature": temperature} if temperature is not None else {}),
             )
         except Exception as exc:
+            _record_failure(state=state, profile=profile, route=route, provider=provider, model=deployment, capability=capability, agent_name=agent_name, prompt=prompt, exc=exc, stream=stream, started_at=started_at)
             raise _wrap_model_error(provider, deployment, exc) from exc
         if stream:
-            return _collect_stream_text(resp, provider, deployment, started_at)
-        return _extract_chat_text(resp, provider, deployment, started_at)
+            text = _collect_stream_text(resp, provider, deployment, started_at)
+            _record_success(state=state, profile=profile, route=route, provider=provider, model=deployment, capability=capability, agent_name=agent_name, prompt=prompt, output=text, stream=True, started_at=started_at)
+            return text
+        text = _extract_chat_text(resp, provider, deployment, started_at)
+        _record_success(state=state, profile=profile, route=route, provider=provider, model=deployment, capability=capability, agent_name=agent_name, prompt=prompt, output=text, provider_usage=getattr(resp, "usage", None), started_at=started_at)
+        return text
 
     if provider == "openai_compatible":
         api_key = _env_value(profile, "OPENAI_API_KEY", "not-required")
@@ -273,10 +351,15 @@ def complete_text(
                 **({"temperature": temperature} if temperature is not None else {}),
             )
         except Exception as exc:
+            _record_failure(state=state, profile=profile, route=route, provider=provider, model=model, capability=capability, agent_name=agent_name, prompt=prompt, exc=exc, stream=stream, started_at=started_at)
             raise _wrap_model_error(provider, model, exc) from exc
         if stream:
-            return _collect_stream_text(resp, provider, model, started_at)
-        return _extract_chat_text(resp, provider, model, started_at)
+            text = _collect_stream_text(resp, provider, model, started_at)
+            _record_success(state=state, profile=profile, route=route, provider=provider, model=model, capability=capability, agent_name=agent_name, prompt=prompt, output=text, stream=True, started_at=started_at)
+            return text
+        text = _extract_chat_text(resp, provider, model, started_at)
+        _record_success(state=state, profile=profile, route=route, provider=provider, model=model, capability=capability, agent_name=agent_name, prompt=prompt, output=text, provider_usage=getattr(resp, "usage", None), started_at=started_at)
+        return text
 
     if provider == "openai":
         api_key = _env_value(profile, "OPENAI_API_KEY")
@@ -296,12 +379,18 @@ def complete_text(
                 **({"temperature": temperature} if temperature is not None else {}),
             )
         except (APITimeoutError, APIConnectionError, RateLimitError, BadRequestError) as exc:
+            _record_failure(state=state, profile=profile, route=route, provider=provider, model=model, capability=capability, agent_name=agent_name, prompt=prompt, exc=exc, stream=stream, started_at=started_at)
             raise _wrap_model_error(provider, model, exc) from exc
         except Exception as exc:
+            _record_failure(state=state, profile=profile, route=route, provider=provider, model=model, capability=capability, agent_name=agent_name, prompt=prompt, exc=exc, stream=stream, started_at=started_at)
             raise _wrap_model_error(provider, model, exc) from exc
         if stream:
-            return _collect_stream_text(resp, provider, model, started_at)
-        return _extract_chat_text(resp, provider, model, started_at)
+            text = _collect_stream_text(resp, provider, model, started_at)
+            _record_success(state=state, profile=profile, route=route, provider=provider, model=model, capability=capability, agent_name=agent_name, prompt=prompt, output=text, stream=True, started_at=started_at)
+            return text
+        text = _extract_chat_text(resp, provider, model, started_at)
+        _record_success(state=state, profile=profile, route=route, provider=provider, model=model, capability=capability, agent_name=agent_name, prompt=prompt, output=text, provider_usage=getattr(resp, "usage", None), started_at=started_at)
+        return text
 
     if provider == "anthropic":
         api_key = _env_value(profile, "ANTHROPIC_API_KEY")
@@ -318,20 +407,28 @@ def complete_text(
         if temperature is not None:
             payload["temperature"] = temperature
         with httpx.Client(timeout=float(route.get("timeout_sec") or 120.0)) as client:
-            resp = client.post(
-                "https://api.anthropic.com/v1/messages",
-                headers={
-                    "x-api-key": api_key,
-                    "anthropic-version": str(route.get("api_version") or "2023-06-01"),
-                    "content-type": "application/json",
-                },
-                json=payload,
-            )
-            resp.raise_for_status()
-            data = resp.json()
+            started_at = _log_call_start(provider, model, capability, agent_name, prompt)
+            try:
+                resp = client.post(
+                    "https://api.anthropic.com/v1/messages",
+                    headers={
+                        "x-api-key": api_key,
+                        "anthropic-version": str(route.get("api_version") or "2023-06-01"),
+                        "content-type": "application/json",
+                    },
+                    json=payload,
+                )
+                resp.raise_for_status()
+                data = resp.json()
+            except Exception as exc:
+                _record_failure(state=state, profile=profile, route=route, provider=provider, model=model, capability=capability, agent_name=agent_name, prompt=prompt, exc=exc, started_at=started_at)
+                raise
         parts = data.get("content") if isinstance(data, dict) else []
         if isinstance(parts, list):
-            return "".join(str(p.get("text") or "") for p in parts if isinstance(p, dict)).strip()
+            text = "".join(str(p.get("text") or "") for p in parts if isinstance(p, dict)).strip()
+            _record_success(state=state, profile=profile, route=route, provider=provider, model=model, capability=capability, agent_name=agent_name, prompt=prompt, output=text, provider_usage=data.get("usage") if isinstance(data, dict) else None, started_at=started_at)
+            return text
+        _record_success(state=state, profile=profile, route=route, provider=provider, model=model, capability=capability, agent_name=agent_name, prompt=prompt, output="", provider_usage=data.get("usage") if isinstance(data, dict) else None, started_at=started_at)
         return ""
 
     if provider == "aws_bedrock":
@@ -359,6 +456,7 @@ def complete_text(
         try:
             response = boto3.client("bedrock-runtime", region_name=region).converse(**payload)
         except Exception as exc:
+            _record_failure(state=state, profile=profile, route=route, provider=provider, model=model, capability=capability, agent_name=agent_name, prompt=prompt, exc=exc, started_at=started_at)
             raise _wrap_model_error(provider, model, exc) from exc
         content = (((response or {}).get("output") or {}).get("message") or {}).get("content") or []
         text = "".join(str(item.get("text") or "") for item in content if isinstance(item, dict)).strip()
@@ -371,6 +469,7 @@ def complete_text(
         )
         if not text:
             raise RuntimeError(f"AWS Bedrock response was empty provider={provider} model={model}")
+        _record_success(state=state, profile=profile, route=route, provider=provider, model=model, capability=capability, agent_name=agent_name, prompt=prompt, output=text, provider_usage=(response or {}).get("usage"), started_at=started_at)
         return text
 
     raise RuntimeError(f"Unsupported ChipLoop model provider: {provider}")
