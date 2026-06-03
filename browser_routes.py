@@ -169,7 +169,6 @@ async def _run_inspection_llm(prompt: str) -> str:
             prompt,
             capability="inspection",
             agent_name="Ask This Run Inspector",
-            temperature=0.2,
         )
     except Exception as exc:
         logger.warning("ask_this_run: inspection LLM unavailable: %s", exc)

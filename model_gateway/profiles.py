@@ -24,7 +24,7 @@ def _default_profile() -> Dict[str, Any]:
             "analog_generation": {"model": DEFAULT_MODEL, "stream": True},
             "summarizer": {"model": DEFAULT_MODEL, "stream": True},
             "doc_generation": {"model": DEFAULT_MODEL, "stream": True},
-            "inspection": {"model": DEFAULT_MODEL, "stream": True, "max_completion_tokens": 4096, "timeout_sec": 60, "max_retries": 1},
+            "inspection": {"model": DEFAULT_MODEL, "stream": True, "max_completion_tokens": 4096, "timeout_sec": 150, "max_retries": 1},
             "embeddings": {"model": "text-embedding-3-small"},
         },
         "agents": {},

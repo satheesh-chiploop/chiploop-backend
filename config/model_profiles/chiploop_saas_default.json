@@ -48,7 +48,7 @@
       "model": "gpt-5.5",
       "stream": true,
       "max_completion_tokens": 4096,
-      "timeout_sec": 60,
+      "timeout_sec": 150,
       "max_retries": 1
     },
     "embeddings": {

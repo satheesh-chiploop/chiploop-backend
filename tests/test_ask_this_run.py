@@ -1,3 +1,4 @@
+import asyncio
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -8,6 +9,7 @@ from fastapi.testclient import TestClient
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import browser_routes
+import model_gateway
 from browser_auth import BrowserUser, require_browser_user
 
 
@@ -104,3 +106,22 @@ def test_ask_this_run_requires_question(monkeypatch):
 
     assert response.status_code == 400
     assert response.json()["detail"] == "question_required"
+
+
+def test_inspection_llm_uses_profile_defaults_without_forcing_temperature(monkeypatch):
+    captured = {}
+
+    def fake_complete_text(prompt, **kwargs):
+        captured["prompt"] = prompt
+        captured["kwargs"] = kwargs
+        return "inspection answer"
+
+    monkeypatch.setattr(model_gateway, "complete_text", fake_complete_text)
+
+    answer = asyncio.run(browser_routes._run_inspection_llm("inspect this run"))
+
+    assert answer == "inspection answer"
+    assert captured["prompt"] == "inspect this run"
+    assert captured["kwargs"]["capability"] == "inspection"
+    assert captured["kwargs"]["agent_name"] == "Ask This Run Inspector"
+    assert "temperature" not in captured["kwargs"]
