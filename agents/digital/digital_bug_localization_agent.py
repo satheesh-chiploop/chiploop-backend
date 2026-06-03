@@ -176,7 +176,7 @@ def _record_text(workflow_id: str, agent_name: str, subdir: str, filename: str, 
     except Exception:
         return None
 def _gen_bug_localizer(top: str) -> str:
-    return f'''"""Bug localization helper for Cocotb + Verilator logs."""
+    return rf'''"""Bug localization helper for Cocotb + Verilator logs."""
 
 import argparse
 import json
