@@ -3034,6 +3034,227 @@
       }
     },
     {
+      "name": "Digital Logic Equivalence Check Agent",
+      "loop_type": "digital",
+      "domain": "physical_design",
+      "description": "Runs post-synthesis RTL-vs-gate equivalence using Yosys where available. Reports pass/fail/inconclusive and preserves the generated Yosys script/log.",
+      "entrypoint": "agents.digital.digital_logic_equivalence_agent:run_agent",
+      "execution_mode": "legacy_adapter",
+      "inputs": [
+        "handoff/rtl/*.v",
+        "handoff/rtl/*.sv",
+        "digital/handoff/rtl/*.v",
+        "digital/handoff/rtl/*.sv",
+        "digital/synth/netlist/*_synth.v"
+      ],
+      "outputs": [
+        "digital/lec/yosys_lec.ys",
+        "digital/lec/logs/yosys_lec.log",
+        "digital/lec/lec_summary.json",
+        "digital/lec/lec_report.md"
+      ],
+      "artifact_paths": [
+        "digital/lec/yosys_lec.ys",
+        "digital/lec/logs/yosys_lec.log",
+        "digital/lec/lec_summary.json",
+        "digital/lec/lec_report.md"
+      ],
+      "artifact_types": [
+        "implementation_artifact",
+        "report",
+        "structured_data"
+      ],
+      "required_skills": [
+        "artifact_publish",
+        "formal_equivalence"
+      ],
+      "required_tools": [
+        "python",
+        "supabase",
+        "yosys"
+      ],
+      "hooks": [
+        "pre_run_validate_inputs",
+        "post_run_collect_artifacts",
+        "post_run_update_state",
+        "on_failure_capture_traceback",
+        "on_failure_preserve_logs",
+        "artifact_publish_to_supabase"
+      ],
+      "metadata": {
+        "registry_source": "DIGITAL_AGENT_FUNCTIONS",
+        "variable": "digital_logic_equivalence_agent",
+        "studio_contract_version": "v1"
+      }
+    },
+    {
+      "name": "Digital DFT Scan Stitching Agent",
+      "loop_type": "digital",
+      "domain": "physical_design",
+      "description": "Generates scan stitching collateral and runs OpenROAD DFT when available. Reports scan chains, scan flops, and stitched-netlist status.",
+      "entrypoint": "agents.digital.digital_dft_scan_stitching_agent:run_agent",
+      "execution_mode": "legacy_adapter",
+      "inputs": [
+        "digital/synth/netlist/*_synth.v",
+        "digital/synth/metrics.json"
+      ],
+      "outputs": [
+        "digital/dft/scan_config.json",
+        "digital/dft/openroad_dft_scan.tcl",
+        "digital/dft/logs/openroad_dft_scan.log",
+        "digital/dft/scan_summary.json",
+        "digital/dft/dft_report.md",
+        "digital/dft/scan_stitched_netlist.v"
+      ],
+      "artifact_paths": [
+        "digital/dft/scan_config.json",
+        "digital/dft/openroad_dft_scan.tcl",
+        "digital/dft/logs/openroad_dft_scan.log",
+        "digital/dft/scan_summary.json",
+        "digital/dft/dft_report.md",
+        "digital/dft/scan_stitched_netlist.v"
+      ],
+      "artifact_types": [
+        "implementation_artifact",
+        "report",
+        "rtl",
+        "structured_data"
+      ],
+      "required_skills": [
+        "artifact_publish",
+        "dft_scan"
+      ],
+      "required_tools": [
+        "openroad",
+        "python",
+        "supabase"
+      ],
+      "hooks": [
+        "pre_run_validate_inputs",
+        "post_run_collect_artifacts",
+        "post_run_update_state",
+        "on_failure_capture_traceback",
+        "on_failure_preserve_logs",
+        "artifact_publish_to_supabase"
+      ],
+      "metadata": {
+        "registry_source": "DIGITAL_AGENT_FUNCTIONS",
+        "variable": "digital_dft_scan_stitching_agent",
+        "studio_contract_version": "v1"
+      }
+    },
+    {
+      "name": "Digital Scan ATPG Coverage Agent",
+      "loop_type": "digital",
+      "domain": "physical_design",
+      "description": "Stages scan/gate netlists for open-source ATPG and records tool readiness, pattern, and stuck-at coverage evidence when a configured ATPG adapter command is available.",
+      "entrypoint": "agents.digital.digital_scan_atpg_agent:run_agent",
+      "execution_mode": "legacy_adapter",
+      "inputs": [
+        "digital/dft/scan_stitched_netlist.v",
+        "digital/synth/netlist/*_synth.v"
+      ],
+      "outputs": [
+        "digital/atpg/input/scan_or_gate_netlist.v",
+        "digital/atpg/logs/scan_atpg.log",
+        "digital/atpg/atpg_summary.json",
+        "digital/atpg/atpg_report.md"
+      ],
+      "artifact_paths": [
+        "digital/atpg/input/scan_or_gate_netlist.v",
+        "digital/atpg/logs/scan_atpg.log",
+        "digital/atpg/atpg_summary.json",
+        "digital/atpg/atpg_report.md"
+      ],
+      "artifact_types": [
+        "implementation_artifact",
+        "report",
+        "structured_data"
+      ],
+      "required_skills": [
+        "artifact_publish",
+        "scan_atpg"
+      ],
+      "required_tools": [
+        "python",
+        "supabase",
+        "fault",
+        "atalanta",
+        "podem"
+      ],
+      "hooks": [
+        "pre_run_validate_inputs",
+        "post_run_collect_artifacts",
+        "post_run_update_state",
+        "on_failure_capture_traceback",
+        "on_failure_preserve_logs",
+        "artifact_publish_to_supabase"
+      ],
+      "metadata": {
+        "registry_source": "DIGITAL_AGENT_FUNCTIONS",
+        "variable": "digital_scan_atpg_agent",
+        "studio_contract_version": "v1"
+      }
+    },
+    {
+      "name": "Digital MBIST Collateral Agent",
+      "loop_type": "digital",
+      "domain": "physical_design",
+      "description": "Detects memory-like RTL/netlist structures and generates limited MBIST collateral. For memoryless demos, emits clearly labeled scratchpad MBIST reference collateral.",
+      "entrypoint": "agents.digital.digital_mbist_collateral_agent:run_agent",
+      "execution_mode": "legacy_adapter",
+      "inputs": [
+        "handoff/rtl/*.v",
+        "handoff/rtl/*.sv",
+        "digital/handoff/rtl/*.v",
+        "digital/handoff/rtl/*.sv",
+        "digital/synth/netlist/*_synth.v"
+      ],
+      "outputs": [
+        "digital/mbist/mbist_summary.json",
+        "digital/mbist/mbist_intent.json",
+        "digital/mbist/chiploop_mbist_controller.sv",
+        "digital/mbist/chiploop_mbist_demo_scratchpad.sv",
+        "digital/mbist/mbist_march_c_testplan.md",
+        "digital/mbist/mbist_report.md"
+      ],
+      "artifact_paths": [
+        "digital/mbist/mbist_summary.json",
+        "digital/mbist/mbist_intent.json",
+        "digital/mbist/chiploop_mbist_controller.sv",
+        "digital/mbist/chiploop_mbist_demo_scratchpad.sv",
+        "digital/mbist/mbist_march_c_testplan.md",
+        "digital/mbist/mbist_report.md"
+      ],
+      "artifact_types": [
+        "implementation_artifact",
+        "report",
+        "rtl",
+        "structured_data"
+      ],
+      "required_skills": [
+        "artifact_publish",
+        "mbist_collateral"
+      ],
+      "required_tools": [
+        "python",
+        "supabase"
+      ],
+      "hooks": [
+        "pre_run_validate_inputs",
+        "post_run_collect_artifacts",
+        "post_run_update_state",
+        "on_failure_capture_traceback",
+        "on_failure_preserve_logs",
+        "artifact_publish_to_supabase"
+      ],
+      "metadata": {
+        "registry_source": "DIGITAL_AGENT_FUNCTIONS",
+        "variable": "digital_mbist_collateral_agent",
+        "studio_contract_version": "v1"
+      }
+    },
+    {
       "name": "Digital Synthesis Agent",
       "loop_type": "digital",
       "domain": "physical_design",

@@ -425,6 +425,10 @@ from agents.digital.digital_top_assembly_agent import run_agent as digital_top_a
 from agents.digital.digital_implementation_setup_agent import run_agent as digital_implementation_setup_agent
 from agents.digital.digital_foundry_profile_agent import run_agent as digital_foundry_profile_agent
 from agents.digital.digital_synthesis_agent import run_agent as digital_synthesis_agent
+from agents.digital.digital_logic_equivalence_agent import run_agent as digital_logic_equivalence_agent
+from agents.digital.digital_dft_scan_stitching_agent import run_agent as digital_dft_scan_stitching_agent
+from agents.digital.digital_scan_atpg_agent import run_agent as digital_scan_atpg_agent
+from agents.digital.digital_mbist_collateral_agent import run_agent as digital_mbist_collateral_agent
 from agents.digital.digital_foundry_profile_agent import run_agent as digital_foundry_profile_agent
 from agents.digital.digital_implementation_setup_agent import run_agent as digital_implementation_setup_agent
 from agents.digital.digital_synthesis_agent import run_agent as digital_synthesis_agent
@@ -498,6 +502,10 @@ DIGITAL_AGENT_FUNCTIONS: Dict[str, Any] = {
     "Digital Foundry Profile Agent": digital_foundry_profile_agent,
     "Digital Implementation Setup Agent": digital_implementation_setup_agent,
     "Digital Synthesis Agent": digital_synthesis_agent,
+    "Digital Logic Equivalence Check Agent": digital_logic_equivalence_agent,
+    "Digital DFT Scan Stitching Agent": digital_dft_scan_stitching_agent,
+    "Digital Scan ATPG Coverage Agent": digital_scan_atpg_agent,
+    "Digital MBIST Collateral Agent": digital_mbist_collateral_agent,
     "Digital STA PrePlace Agent": digital_sta_preplace_agent,
     "Digital Floorplan Agent": digital_floorplan_agent,
     "Digital Placement Agent": digital_placement_agent,
@@ -762,6 +770,10 @@ SYSTEM_AGENT_FUNCTIONS: Dict[str,Any] = {
     "Digital Foundry Profile Agent": digital_foundry_profile_agent,
     "Digital Implementation Setup Agent": digital_implementation_setup_agent,
     "Digital Synthesis Agent": digital_synthesis_agent,
+    "Digital Logic Equivalence Check Agent": digital_logic_equivalence_agent,
+    "Digital DFT Scan Stitching Agent": digital_dft_scan_stitching_agent,
+    "Digital Scan ATPG Coverage Agent": digital_scan_atpg_agent,
+    "Digital MBIST Collateral Agent": digital_mbist_collateral_agent,
     "Digital STA PrePlace Agent": digital_sta_preplace_agent,
     "Digital Floorplan Agent": digital_floorplan_agent,
     "Digital Placement Agent": digital_placement_agent,
@@ -977,6 +989,10 @@ DIGITAL_ARCH2SYNTHESIS_DEFINITION = _linear_workflow_definition([
     "Digital Foundry Profile Agent",
     "Digital Implementation Setup Agent",
     "Digital Synthesis Agent",
+    "Digital Logic Equivalence Check Agent",
+    "Digital DFT Scan Stitching Agent",
+    "Digital Scan ATPG Coverage Agent",
+    "Digital MBIST Collateral Agent",
 ])
 
 DIGITAL_ARCH2SIM_DEFINITION = _linear_workflow_definition([
@@ -1011,6 +1027,10 @@ DIGITAL_ARCH2TAPEOUT_DEFINITION = _linear_workflow_definition([
     "Digital Foundry Profile Agent",
     "Digital Implementation Setup Agent",
     "Digital Synthesis Agent",
+    "Digital Logic Equivalence Check Agent",
+    "Digital DFT Scan Stitching Agent",
+    "Digital Scan ATPG Coverage Agent",
+    "Digital MBIST Collateral Agent",
     "Digital STA PrePlace Agent",
     "Digital Floorplan Agent",
     "Digital Placement Agent",
@@ -2768,6 +2788,10 @@ def execute_digital_app_background(
                 "Digital Foundry Profile Agent",
                 "Digital Implementation Setup Agent",
                 "Digital Synthesis Agent",
+                "Digital Logic Equivalence Check Agent",
+                "Digital DFT Scan Stitching Agent",
+                "Digital Scan ATPG Coverage Agent",
+                "Digital MBIST Collateral Agent",
             }
             nodes = [node for node in nodes if ((node.get("data") or {}).get("backendLabel") or node.get("label")) in keep]
         if shared_state.get("rtl_source_mode") and app_name == "smoke":
@@ -2780,6 +2804,10 @@ def execute_digital_app_background(
                 "Digital Foundry Profile Agent",
                 "Digital Implementation Setup Agent",
                 "Digital Synthesis Agent",
+                "Digital Logic Equivalence Check Agent",
+                "Digital DFT Scan Stitching Agent",
+                "Digital Scan ATPG Coverage Agent",
+                "Digital MBIST Collateral Agent",
                 "Digital STA PrePlace Agent",
                 "Digital Floorplan Agent",
                 "Digital Placement Agent",

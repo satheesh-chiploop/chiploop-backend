@@ -377,6 +377,80 @@ AGENT_CAPABILITIES = {
         ],
     },
 
+    "Digital Logic Equivalence Check Agent": {
+        "domain": "digital",
+        "description": "Runs post-synthesis RTL-vs-gate equivalence using Yosys where available. Reports pass/fail/inconclusive and preserves the Yosys script/log.",
+        "requires": ["yosys"],
+        "inputs": [
+            "handoff/rtl/*.v",
+            "handoff/rtl/*.sv",
+            "digital/handoff/rtl/*.v",
+            "digital/handoff/rtl/*.sv",
+            "digital/synth/netlist/*_synth.v",
+        ],
+        "outputs": [
+            "digital/lec/yosys_lec.ys",
+            "digital/lec/logs/yosys_lec.log",
+            "digital/lec/lec_summary.json",
+            "digital/lec/lec_report.md",
+        ],
+    },
+
+    "Digital DFT Scan Stitching Agent": {
+        "domain": "digital",
+        "description": "Generates scan stitching collateral and runs OpenROAD DFT when available. Reports scan-chain estimates, scan flop count, and stitched-netlist status.",
+        "requires": ["openroad"],
+        "inputs": [
+            "digital/synth/netlist/*_synth.v",
+            "digital/synth/metrics.json",
+        ],
+        "outputs": [
+            "digital/dft/scan_config.json",
+            "digital/dft/openroad_dft_scan.tcl",
+            "digital/dft/logs/openroad_dft_scan.log",
+            "digital/dft/scan_summary.json",
+            "digital/dft/dft_report.md",
+            "digital/dft/scan_stitched_netlist.v",
+        ],
+    },
+
+    "Digital Scan ATPG Coverage Agent": {
+        "domain": "digital",
+        "description": "Stages scan/gate netlists for open-source ATPG and records tool readiness, pattern, and stuck-at coverage evidence when a configured ATPG adapter command is available.",
+        "requires": ["fault", "atalanta", "podem"],
+        "inputs": [
+            "digital/dft/scan_stitched_netlist.v",
+            "digital/synth/netlist/*_synth.v",
+        ],
+        "outputs": [
+            "digital/atpg/input/scan_or_gate_netlist.v",
+            "digital/atpg/logs/scan_atpg.log",
+            "digital/atpg/atpg_summary.json",
+            "digital/atpg/atpg_report.md",
+        ],
+    },
+
+    "Digital MBIST Collateral Agent": {
+        "domain": "digital",
+        "description": "Detects memory-like RTL/netlist structures and generates limited MBIST collateral. For memoryless reference designs, emits clearly labeled demo scratchpad MBIST collateral without claiming insertion into the design.",
+        "requires": ["python"],
+        "inputs": [
+            "handoff/rtl/*.v",
+            "handoff/rtl/*.sv",
+            "digital/handoff/rtl/*.v",
+            "digital/handoff/rtl/*.sv",
+            "digital/synth/netlist/*_synth.v",
+        ],
+        "outputs": [
+            "digital/mbist/mbist_summary.json",
+            "digital/mbist/mbist_intent.json",
+            "digital/mbist/chiploop_mbist_controller.sv",
+            "digital/mbist/chiploop_mbist_demo_scratchpad.sv",
+            "digital/mbist/mbist_march_c_testplan.md",
+            "digital/mbist/mbist_report.md",
+        ],
+    },
+
     "Digital STA PrePlace Agent": {
         "domain": "digital",
         "description": (

@@ -2,6 +2,30 @@
   "version": "studio_contract_v1",
   "skills": [
     {
+      "name": "formal_equivalence",
+      "description": "Compare golden RTL and synthesized netlists with equivalence/formal tools and produce pass/fail/inconclusive reports.",
+      "domains": [
+        "digital",
+        "physical_design"
+      ],
+      "tools": [
+        "yosys",
+        "python"
+      ]
+    },
+    {
+      "name": "dft_scan",
+      "description": "Generate scan configuration, scan stitching scripts, DFT reports, and stitched scan collateral when supported by the configured toolchain.",
+      "domains": [
+        "digital",
+        "physical_design"
+      ],
+      "tools": [
+        "openroad",
+        "python"
+      ]
+    },
+    {
       "name": "spec_ingest",
       "description": "Normalize user intent, specs, datasheets, or handoff contracts into state.",
       "domains": [
@@ -269,6 +293,18 @@
       "description": "Normalize RTL, verification, firmware, software, and validation workflow lineage into a product-builder input contract.",
       "domains": ["system", "software", "firmware", "digital"],
       "tools": ["python", "supabase"]
+    },
+    {
+      "name": "mbist_collateral",
+      "description": "Detect memory-like RTL/netlist structures and generate limited MBIST intent, March-test controller RTL, scratchpad demo collateral, and report artifacts.",
+      "domains": ["digital", "system"],
+      "tools": ["python"]
+    },
+    {
+      "name": "scan_atpg",
+      "description": "Stage scan/gate netlists for open-source ATPG tools and parse pattern-count, stuck-at coverage, and fault-status reports when configured.",
+      "domains": ["digital", "physical_design"],
+      "tools": ["fault", "atalanta", "podem", "python"]
     },
     {
       "name": "product_capability_modeling",

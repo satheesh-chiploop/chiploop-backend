@@ -166,6 +166,42 @@ def _default_profile() -> Dict[str, Any]:
                 "/usr/bin/docker",
                 "docker",
             ])},
+            "openroad": {"executable": _first_existing([
+                os.getenv("CHIPLOOP_OPENROAD", ""),
+                "/usr/bin/openroad",
+                "/usr/local/bin/openroad",
+                "openroad",
+            ])},
+            "fault": {"executable": _first_existing([
+                os.getenv("CHIPLOOP_FAULT", ""),
+                "/usr/local/bin/fault",
+                "/usr/bin/fault",
+                "fault",
+            ])},
+            "atalanta": {"executable": _first_existing([
+                os.getenv("CHIPLOOP_ATALANTA", ""),
+                "/usr/local/bin/atalanta",
+                "/usr/bin/atalanta",
+                "atalanta",
+            ])},
+            "podem": {"executable": _first_existing([
+                os.getenv("CHIPLOOP_PODEM", ""),
+                "/usr/local/bin/podem",
+                "/usr/bin/podem",
+                "podem",
+            ])},
+            "openram": {"executable": _first_existing([
+                os.getenv("CHIPLOOP_OPENRAM", ""),
+                "/usr/local/bin/openram",
+                "/usr/bin/openram",
+                "openram",
+            ])},
+            "autombist": {"executable": _first_existing([
+                os.getenv("CHIPLOOP_AUTOMBIST", ""),
+                "/usr/local/bin/autombist",
+                "/usr/bin/autombist",
+                "autombist",
+            ])},
             "synopsys_dc": {"executable": _first_existing([
                 os.getenv("CHIPLOOP_SYNOPSYS_DC", ""),
                 os.getenv("DC_SHELL", ""),

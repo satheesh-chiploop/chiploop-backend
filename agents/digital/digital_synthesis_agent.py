@@ -99,6 +99,71 @@ def _read_json(path: str) -> dict:
     except Exception:
         return {}
 
+def _read_text(path: str | None) -> str:
+    if not path:
+        return ""
+    try:
+        with open(path, "r", encoding="utf-8", errors="ignore") as f:
+            return f.read()
+    except Exception:
+        return ""
+
+def _count_netlist_cells(netlist_path: str | None) -> dict:
+    text = _read_text(netlist_path)
+    if not text:
+        return {
+            "chiploop__netlist_present": False,
+            "chiploop__flipflop_count": None,
+            "chiploop__latch_count": None,
+        }
+
+    lower = text.lower()
+    # Count mapped standard-cell instances. These patterns cover Sky130 and
+    # common liberty naming styles without tying the dashboard to one PDK.
+    ff_markers = (
+        "sky130_fd_sc_hd__df",
+        "sky130_fd_sc_hs__df",
+        "sky130_fd_sc_ms__df",
+        "__dff",
+        "__sdff",
+        " dff",
+        " sdff",
+    )
+    latch_markers = (
+        "sky130_fd_sc_hd__dl",
+        "sky130_fd_sc_hs__dl",
+        "sky130_fd_sc_ms__dl",
+        "latch",
+    )
+
+    flop_count = 0
+    latch_count = 0
+    for raw in lower.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("//"):
+            continue
+        if any(marker in line for marker in ff_markers):
+            flop_count += 1
+        elif any(marker in line for marker in latch_markers):
+            latch_count += 1
+
+    return {
+        "chiploop__netlist_present": True,
+        "chiploop__flipflop_count": flop_count,
+        "chiploop__latch_count": latch_count,
+    }
+
+def _augment_synth_metrics(metrics_path: str, netlist_path: str | None) -> dict:
+    metrics = _read_json(metrics_path) if os.path.exists(metrics_path) else {}
+    metrics.update(_count_netlist_cells(netlist_path))
+    if "design__instance_unmapped__count" in metrics:
+        metrics["chiploop__unmapped_cell_count"] = metrics.get("design__instance_unmapped__count")
+    if "synthesis__check_error__count" in metrics:
+        metrics["chiploop__synthesis_check_error_count"] = metrics.get("synthesis__check_error__count")
+    if metrics:
+        _write_local(metrics_path, json.dumps(metrics, indent=2))
+    return metrics
+
 def _pick_clock(spec: dict) -> tuple[str, float]:
     """
     Returns (clock_name, clock_period_ns)
@@ -535,6 +600,10 @@ echo "Done. Inspect /work/runs/{run_tag} or latest run folder under /work/runs/"
                     print(f"⚠️ Failed to persist netlist: {e}")
                     stable_netlist_path = None
 
+    enriched_metrics = {}
+    if os.path.exists(stable_metrics_path):
+        enriched_metrics = _augment_synth_metrics(stable_metrics_path, stable_netlist_path)
+
     summary = {
         "workflow_id": workflow_id,
         "agent": AGENT_NAME,
@@ -559,6 +628,7 @@ echo "Done. Inspect /work/runs/{run_tag} or latest run folder under /work/runs/"
             "metrics_json": stable_metrics_path if os.path.exists(stable_metrics_path) else None,
             "netlist": stable_netlist_path,
             "netlist_candidates": netlist_candidates[:10],
+            "enriched_metrics": bool(enriched_metrics),
         }
     }
 
