@@ -18,6 +18,7 @@ AGENT_NAME = "Digital Synthesis Agent"
 DEFAULT_PDK_VARIANT = os.getenv("CHIPLOOP_PDK_VARIANT", "sky130A")
 DEFAULT_OPENLANE_IMAGE = os.getenv("CHIPLOOP_OPENLANE_IMAGE", "ghcr.io/efabless/openlane2:2.4.0.dev1")
 DEFAULT_NUM_CORES = int(os.getenv("OPENLANE_NUM_CORES", "2"))
+OPENLANE_SYNTH_TO_STEP = os.getenv("CHIPLOOP_SYNTH_OPENLANE_TO", "OpenROAD.STAPrePNR")
 
 def _existing_path(value, workflow_dir: str | None = None) -> str | None:
     if not isinstance(value, str) or not value.strip():
@@ -160,6 +161,22 @@ def _augment_synth_metrics(metrics_path: str, netlist_path: str | None) -> dict:
         metrics["chiploop__unmapped_cell_count"] = metrics.get("design__instance_unmapped__count")
     if "synthesis__check_error__count" in metrics:
         metrics["chiploop__synthesis_check_error_count"] = metrics.get("synthesis__check_error__count")
+    wns = metrics.get("timing__setup__ws")
+    tns = metrics.get("timing__setup__tns")
+    if isinstance(wns, (int, float)):
+        metrics.setdefault("chiploop__sta_preplace_wns", wns)
+    if isinstance(tns, (int, float)):
+        metrics.setdefault("chiploop__sta_preplace_tns", tns)
+    for key in (
+        "timing__setup__vio__count",
+        "timing__setup_vio__count",
+        "timing__setup__violation__count",
+        "timing__setup__violating_paths",
+        "sta__setup__violation_count",
+    ):
+        if key in metrics:
+            metrics.setdefault("chiploop__sta_preplace_setup_violation_count", metrics.get(key))
+            break
     if metrics:
         _write_local(metrics_path, json.dumps(metrics, indent=2))
     return metrics
@@ -526,8 +543,9 @@ docker run --rm \\
       ls -la macro_libs || true
     fi
 
-    # Run OpenLane synthesis first
-    openlane --pdk {pdk_variant} --run-tag {run_tag} --flow Classic --override-config RUN_LINTER=False --to Yosys.Synthesis config.json
+    # Run OpenLane synthesis through pre-PnR STA. This keeps the Synth app
+    # lightweight while producing real OpenSTA/OpenROAD WNS/TNS metrics.
+    openlane --pdk {pdk_variant} --run-tag {run_tag} --flow Classic --override-config RUN_LINTER=False --to {OPENLANE_SYNTH_TO_STEP} config.json
 
     # Patch the synthesized design with explicit Liberty blackbox load if macro libs exist
     if [ -n "{macro_lib_read_cmd}" ]; then
@@ -545,8 +563,8 @@ echo "Done. Inspect /work/runs/{run_tag} or latest run folder under /work/runs/"
     _write_local(run_sh_path, run_sh)
     os.chmod(run_sh_path, 0o755)
 
-    # ---------- Execute synthesis (best-effort) ----------
-    # This is the first production step; we run it now and capture logs.
+    # ---------- Execute synthesis + pre-PnR STA (best-effort) ----------
+    # Stop at pre-PnR STA so this app reports real WNS/TNS without place/route.
     exec_log_path = os.path.join(logs_dir, "openlane_synth.log")
 
     rc, out = _run(["bash", "./run.sh"], cwd=stage_dir, state=state)
@@ -617,6 +635,7 @@ echo "Done. Inspect /work/runs/{run_tag} or latest run folder under /work/runs/"
             "clock_period_ns": clk_period_ns,
             "pdk_variant": pdk_variant,
             "openlane_image": openlane_image,
+            "openlane_to_step": OPENLANE_SYNTH_TO_STEP,
             "pdk_root_host": default_pdk_host,
         },
         "outputs": {
@@ -644,6 +663,7 @@ echo "Done. Inspect /work/runs/{run_tag} or latest run folder under /work/runs/"
 - **Clock**: `{clk_name}` @ **{clk_period_ns:.3f} ns**
 - **PDK**: `{pdk_variant}`
 - **Image**: `{openlane_image}`
+- **OpenLane stop step**: `{OPENLANE_SYNTH_TO_STEP}`
 
 ## Deterministic outputs (rerunnable)
 - `digital/synth/config.json`

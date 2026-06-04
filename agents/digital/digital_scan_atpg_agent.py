@@ -80,6 +80,16 @@ def _tool_choice(state: dict) -> tuple[str | None, str | None]:
     return None, None
 
 
+def _is_wrong_fault_tool(log: str) -> bool:
+    text = log.lower()
+    return (
+        "network resilience" in text
+        or "resilience proxy" in text
+        or "injecting various faults" in text
+        or "fault injection" in text and "atpg" not in text
+    )
+
+
 def _run_detected_tool(state: dict, tool_name: str, stage_dir: str, netlist_path: str) -> tuple[int | None, str]:
     # Open-source ATPG tools do not share a stable CLI. For production use,
     # private/hybrid profiles should set CHIPLOOP_ATPG_COMMAND or map a tool
@@ -127,8 +137,13 @@ def run_agent(state: dict) -> dict:
         log = "No open-source ATPG tool found. Configure CHIPLOOP_FAULT, CHIPLOOP_ATALANTA, CHIPLOOP_PODEM, or CHIPLOOP_ATPG_COMMAND.\n"
     else:
         rc, log = _run_detected_tool(state, tool_name, stage_dir, input_netlist)
-        status = "adapter_ready" if os.getenv("CHIPLOOP_ATPG_COMMAND", "").strip() else "tool_detected_needs_adapter_command"
-        if rc not in (0, None) and "usage" not in log.lower() and "help" not in log.lower():
+        configured = bool(os.getenv("CHIPLOOP_ATPG_COMMAND", "").strip())
+        if tool_name == "fault" and not configured and _is_wrong_fault_tool(log):
+            status = "wrong_tool_detected"
+            log += "\n\nThe detected `fault` executable is not a digital ATPG tool; it appears to be a network resilience/fault-injection CLI. Ignoring it for ATPG coverage.\n"
+        else:
+            status = "adapter_ready" if configured else "tool_detected_needs_adapter_command"
+        if status != "wrong_tool_detected" and rc not in (0, None) and "usage" not in log.lower() and "help" not in log.lower():
             status = "tool_probe_failed"
 
     log_path = os.path.join(logs_dir, "scan_atpg.log")
@@ -168,6 +183,7 @@ def run_agent(state: dict) -> dict:
         "- Stuck-at coverage: `not reported`",
         "",
         "This agent is adapter-ready for open-source ATPG tools. Set `CHIPLOOP_ATPG_COMMAND` to the validated command for the installed toolchain to produce real pattern and coverage reports.",
+        "If status is `wrong_tool_detected`, the executable name matched but the binary is not a digital ATPG tool.",
     ]) + "\n"
     _write_text(summary_path, json.dumps(summary, indent=2))
     _write_text(report_path, report)
