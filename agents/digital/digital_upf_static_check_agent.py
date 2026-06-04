@@ -300,6 +300,15 @@ def run_agent(state: dict) -> dict:
     logs_dir = os.path.join(stage_dir, "logs")
     _ensure_dir(logs_dir)
 
+    toggles = state.get("toggles") if isinstance(state.get("toggles"), dict) else {}
+    if toggles.get("gen_upf_lite") is False:
+        state.setdefault("digital", {})["upf_static_check"] = {
+            "status": "not_applicable",
+            "reason": "gen_upf_lite_disabled",
+        }
+        state["status"] = f"{AGENT_NAME}: not_applicable"
+        return state
+
     upf_path = _find_upf(state, workflow_dir)
     rtl_files = _find_rtl_files(state, workflow_dir)
     upf_text = _read_text(upf_path)

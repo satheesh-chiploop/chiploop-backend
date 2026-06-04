@@ -2788,6 +2788,16 @@ def execute_digital_app_background(
             force_platform_definition=True,
         )
         nodes = _definition_to_executor_nodes(defn)
+        toggles = shared_state.get("toggles") if isinstance(shared_state.get("toggles"), dict) else {}
+        if toggles.get("gen_upf_lite") is False:
+            upf_agents = {
+                "Digital Power Intent (UPF-lite) Agent",
+                "Digital UPF Static Check Agent",
+            }
+            nodes = [
+                node for node in nodes
+                if ((node.get("data") or {}).get("backendLabel") or node.get("label")) not in upf_agents
+            ]
         if shared_state.get("rtl_source_mode") and app_name == "arch2synthesis":
             keep = {
                 "Digital RTL Handoff Ingest Agent",
@@ -2833,7 +2843,6 @@ def execute_digital_app_background(
             }
             nodes = [node for node in nodes if ((node.get("data") or {}).get("backendLabel") or node.get("label")) in keep]
         if app_name == "verify":
-            toggles = shared_state.get("toggles") if isinstance(shared_state.get("toggles"), dict) else {}
             optional_before = "Digital Simulation Control Agent"
             if toggles.get("enable_golden_model"):
                 nodes = _insert_node_before_once(
@@ -3335,7 +3344,8 @@ def dashboard_json_artifact(workflow_id: str, filename: str = Query(..., min_len
         raw = supabase.storage.from_(ARTIFACT_BUCKET).download(storage_path)
         return JSONResponse(json.loads(raw.decode("utf-8")))
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"failed to load artifact: {filename}") from exc
+        logger.warning("Dashboard artifact load failed workflow=%s filename=%s path=%s error=%s", workflow_id, filename, storage_path, exc)
+        raise HTTPException(status_code=404, detail=f"artifact not found: {filename}") from exc
 
 @app.get("/list_agents")
 async def list_agents():

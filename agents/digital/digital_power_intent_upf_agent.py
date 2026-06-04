@@ -94,6 +94,12 @@ def run_agent(state: dict) -> dict:
     workflow_dir = state.get("workflow_dir", f"backend/workflows/{workflow_id}")
     os.makedirs(workflow_dir, exist_ok=True)
 
+    toggles = state.get("toggles") if isinstance(state.get("toggles"), dict) else {}
+    if toggles.get("gen_upf_lite") is False:
+        state["status"] = "Power intent generation not applicable: UPF-lite is disabled."
+        state.setdefault("signoff", {})["power_intent"] = {"status": "not_applicable", "reason": "gen_upf_lite_disabled"}
+        return state
+
     spec_path = state.get("digital_spec_json") or state.get("spec_json")
     spec = _read_json(spec_path) if spec_path else {}
 
