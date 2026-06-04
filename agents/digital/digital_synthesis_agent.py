@@ -19,14 +19,42 @@ DEFAULT_PDK_VARIANT = os.getenv("CHIPLOOP_PDK_VARIANT", "sky130A")
 DEFAULT_OPENLANE_IMAGE = os.getenv("CHIPLOOP_OPENLANE_IMAGE", "ghcr.io/efabless/openlane2:2.4.0.dev1")
 DEFAULT_NUM_CORES = int(os.getenv("OPENLANE_NUM_CORES", "2"))
 
+def _existing_path(value, workflow_dir: str | None = None) -> str | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    raw = value.strip()
+    candidates = [raw]
+    if workflow_dir and not os.path.isabs(raw):
+        candidates.insert(0, os.path.join(workflow_dir, raw))
+    for cand in candidates:
+        try:
+            cand = os.path.abspath(cand)
+            if os.path.exists(cand):
+                return cand
+        except (TypeError, ValueError, OSError):
+            continue
+    return None
+
+def _dedupe_paths(paths: list[str]) -> list[str]:
+    out = []
+    seen = set()
+    for path in paths:
+        abs_path = os.path.abspath(path)
+        if abs_path not in seen:
+            seen.add(abs_path)
+            out.append(abs_path)
+    return out
+
 def _resolve_spec_json(state: dict, workflow_dir: str) -> str | None:
     for cand in [
         (state.get("digital") or {}).get("spec_json"),
         state.get("digital_spec_json"),
         state.get("spec_json"),
+        state.get("spec_json_path"),
     ]:
-        if cand and os.path.exists(cand):
-            return cand
+        path = _existing_path(cand, workflow_dir)
+        if path:
+            return path
 
     files = sorted(glob.glob(os.path.join(workflow_dir, "spec", "*_spec.json")))
     return files[0] if files else None
@@ -36,8 +64,8 @@ def _resolve_sdc_from_state(state: dict, workflow_dir: str) -> str | None:
     digital = state.get("digital") or {}
 
     # 1) State is the primary source of truth
-    cand = digital.get("constraints_sdc")
-    if cand and os.path.exists(cand):
+    cand = _existing_path(digital.get("constraints_sdc"), workflow_dir)
+    if cand:
         logger.info(f"{AGENT_NAME}: selected constraints_sdc from state.digital -> {cand}")
         return cand
 
@@ -113,24 +141,52 @@ def _run(cmd: list[str], cwd: str | None = None, state: dict | None = None) -> t
 def _resolve_rtl_files_from_state(state: dict, workflow_dir: str) -> list[str]:
     digital = state.get("digital") or {}
 
-    if isinstance(digital.get("rtl_files"), list):
-        xs = [p for p in digital["rtl_files"] if p and os.path.exists(p)]
+    for key, cands in (
+        ("state.digital.rtl_files", digital.get("rtl_files")),
+        ("state.rtl_files", state.get("rtl_files")),
+        ("state.rtl_inputs", state.get("rtl_inputs")),
+        ("state.source_rtl_files", state.get("source_rtl_files")),
+        ("state.artifact_list", state.get("artifact_list")),
+    ):
+        if not isinstance(cands, list):
+            continue
+        xs = [_existing_path(p, workflow_dir) for p in cands]
+        xs = _dedupe_paths([p for p in xs if p])
         if xs:
+            logger.info(f"{AGENT_NAME}: selected rtl_files from {key} -> {len(xs)} files")
             return xs
 
-    fl = digital.get("impl_filelist")
-    if fl and os.path.exists(fl):
+    fl = _existing_path(digital.get("impl_filelist"), workflow_dir)
+    if fl:
         xs = []
         with open(fl, "r", encoding="utf-8") as f:
             for line in f:
-                p = line.strip()
-                if p and os.path.exists(p):
+                p = _existing_path(line.strip(), workflow_dir)
+                if p:
                     xs.append(p)
         if xs:
+            xs = _dedupe_paths(xs)
+            logger.info(f"{AGENT_NAME}: selected rtl_files from impl_filelist -> {len(xs)} files")
             return xs
 
-    xs = sorted(glob.glob(os.path.join(workflow_dir, "digital", "rtl_refactored", "*.v")))
+    single = _existing_path(state.get("artifact"), workflow_dir)
+    if single and single.lower().endswith((".v", ".sv")):
+        logger.info(f"{AGENT_NAME}: selected rtl_files from state.artifact -> 1 file")
+        return [single]
+
+    patterns = [
+        os.path.join(workflow_dir, "handoff", "rtl", "**", "*.v"),
+        os.path.join(workflow_dir, "handoff", "rtl", "**", "*.sv"),
+        os.path.join(workflow_dir, "digital", "handoff", "rtl", "**", "*.v"),
+        os.path.join(workflow_dir, "digital", "handoff", "rtl", "**", "*.sv"),
+        os.path.join(workflow_dir, "digital", "rtl_refactored", "**", "*.v"),
+        os.path.join(workflow_dir, "digital", "rtl_refactored", "**", "*.sv"),
+        os.path.join(workflow_dir, "digital", "rtl", "**", "*.v"),
+        os.path.join(workflow_dir, "digital", "rtl", "**", "*.sv"),
+    ]
+    xs = _dedupe_paths([p for pattern in patterns for p in sorted(glob.glob(pattern, recursive=True))])
     if xs:
+        logger.info(f"{AGENT_NAME}: selected rtl_files from workflow glob -> {len(xs)} files")
         return xs
 
     return []
@@ -175,11 +231,11 @@ def run_agent(state: dict) -> dict:
     if not rtl_files:
         artifact_list = state.get("artifact_list") or []
         if isinstance(artifact_list, list) and artifact_list:
-            rtl_files = [p for p in artifact_list if p and os.path.exists(p)]
+            rtl_files = _dedupe_paths([p for p in (_existing_path(x, workflow_dir) for x in artifact_list) if p])
 
     if not rtl_files:
-        single = state.get("artifact")
-        if single and os.path.exists(single):
+        single = _existing_path(state.get("artifact"), workflow_dir)
+        if single:
             rtl_files = [single]
 
     if not rtl_files:

@@ -16,13 +16,43 @@ def _read_json_safe(path: str) -> dict:
     except Exception:
         return {}
 
+def _existing_path(value, workflow_dir: str | None = None) -> str | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    raw = value.strip()
+    candidates = [raw]
+    if workflow_dir and not os.path.isabs(raw):
+        candidates.insert(0, os.path.join(workflow_dir, raw))
+    for cand in candidates:
+        try:
+            cand = os.path.abspath(cand)
+            if os.path.exists(cand):
+                return cand
+        except (TypeError, ValueError, OSError):
+            continue
+    return None
+
+def _spec_from_state(state: dict) -> dict:
+    digital = state.get("digital") if isinstance(state.get("digital"), dict) else {}
+    for cand in (
+        state.get("digital_spec_json"),
+        state.get("spec_json"),
+        digital.get("spec_json"),
+        state.get("digital_spec"),
+        state.get("spec"),
+    ):
+        if isinstance(cand, dict):
+            return cand
+    return {}
+
 def _resolve_spec_json_path(state: dict, workflow_dir: str) -> str | None:
-    cand = (
+    cand = _existing_path(
         state.get("digital_spec_json")
         or state.get("spec_json")
-        or (state.get("digital") or {}).get("spec_json")
+        or (state.get("digital") or {}).get("spec_json"),
+        workflow_dir,
     )
-    if cand and os.path.exists(cand):
+    if cand:
         return cand
 
     spec_dir = os.path.join(workflow_dir, "spec")
@@ -92,7 +122,7 @@ def run_agent(state: dict) -> dict:
     logger.info(f"workflow_id={workflow_id}")
 
     spec_json_path = _resolve_spec_json_path(state, workflow_dir)
-    spec = _read_json_safe(spec_json_path) if spec_json_path else {}
+    spec = _read_json_safe(spec_json_path) if spec_json_path else _spec_from_state(state)
 
     top_module, clock_name, target_clock_mhz, reset_name = _extract_top_clock_reset(spec)
 

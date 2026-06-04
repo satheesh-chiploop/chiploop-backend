@@ -32,6 +32,34 @@ def _read_json_safe(path: str | None) -> dict:
         return {}
 
 
+def _existing_path(value, workflow_dir: str | None = None) -> str | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    raw = value.strip()
+    candidates = [raw]
+    if workflow_dir and not os.path.isabs(raw):
+        candidates.insert(0, os.path.join(workflow_dir, raw))
+    for cand in candidates:
+        try:
+            cand = os.path.abspath(cand)
+            if os.path.exists(cand):
+                return cand
+        except (TypeError, ValueError, OSError):
+            continue
+    return None
+
+
+def _dedupe_paths(paths: list[str]) -> list[str]:
+    out = []
+    seen = set()
+    for path in paths:
+        abs_path = os.path.abspath(path)
+        if abs_path not in seen:
+            seen.add(abs_path)
+            out.append(abs_path)
+    return out
+
+
 def _resolve_spec_json(state: dict, workflow_dir: str) -> str | None:
     digital = state.get("digital") or {}
 
@@ -41,9 +69,10 @@ def _resolve_spec_json(state: dict, workflow_dir: str) -> str | None:
         state.get("spec_json"),
     ]
     for cand in candidates:
-        if cand and os.path.exists(cand):
-            logger.info(f"{AGENT_NAME}: selected spec_json from state -> {cand}")
-            return cand
+        path = _existing_path(cand, workflow_dir)
+        if path:
+            logger.info(f"{AGENT_NAME}: selected spec_json from state -> {path}")
+            return path
 
     spec_dir = os.path.join(workflow_dir, "spec")
     files = sorted(glob.glob(os.path.join(spec_dir, "*_spec.json")))
@@ -72,21 +101,39 @@ def _resolve_top_module(spec: dict, state: dict) -> str:
 def _resolve_rtl_files(state: dict, workflow_dir: str) -> list[str]:
     digital = state.get("digital") or {}
 
-    cands = digital.get("rtl_files")
-    if isinstance(cands, list):
-        xs = [p for p in cands if p and os.path.exists(p)]
+    for key, cands in (
+        ("state.digital.rtl_files", digital.get("rtl_files")),
+        ("state.rtl_files", state.get("rtl_files")),
+        ("state.rtl_inputs", state.get("rtl_inputs")),
+        ("state.source_rtl_files", state.get("source_rtl_files")),
+        ("state.artifact_list", state.get("artifact_list")),
+    ):
+        if not isinstance(cands, list):
+            continue
+        xs = [_existing_path(p, workflow_dir) for p in cands]
+        xs = _dedupe_paths([p for p in xs if p])
         if xs:
-            logger.info(f"{AGENT_NAME}: selected rtl_files from state.digital -> {len(xs)} files")
+            logger.info(f"{AGENT_NAME}: selected rtl_files from {key} -> {len(xs)} files")
             return xs
 
-    xs = sorted(glob.glob(os.path.join(workflow_dir, "digital", "rtl_refactored", "*.v")))
-    if xs:
-        logger.info(f"{AGENT_NAME}: selected rtl_files from rtl_refactored -> {len(xs)} files")
-        return xs
+    single = _existing_path(state.get("artifact"), workflow_dir)
+    if single and single.lower().endswith((".v", ".sv")):
+        logger.info(f"{AGENT_NAME}: selected rtl_files from state.artifact -> 1 file")
+        return [single]
 
-    xs = sorted(glob.glob(os.path.join(workflow_dir, "digital", "rtl", "*.v")))
+    patterns = [
+        os.path.join(workflow_dir, "handoff", "rtl", "**", "*.v"),
+        os.path.join(workflow_dir, "handoff", "rtl", "**", "*.sv"),
+        os.path.join(workflow_dir, "digital", "handoff", "rtl", "**", "*.v"),
+        os.path.join(workflow_dir, "digital", "handoff", "rtl", "**", "*.sv"),
+        os.path.join(workflow_dir, "digital", "rtl_refactored", "**", "*.v"),
+        os.path.join(workflow_dir, "digital", "rtl_refactored", "**", "*.sv"),
+        os.path.join(workflow_dir, "digital", "rtl", "**", "*.v"),
+        os.path.join(workflow_dir, "digital", "rtl", "**", "*.sv"),
+    ]
+    xs = _dedupe_paths([p for pattern in patterns for p in sorted(glob.glob(pattern, recursive=True))])
     if xs:
-        logger.info(f"{AGENT_NAME}: selected rtl_files from rtl -> {len(xs)} files")
+        logger.info(f"{AGENT_NAME}: selected rtl_files from workflow glob -> {len(xs)} files")
         return xs
 
     logger.warning(f"{AGENT_NAME}: no rtl files found")
@@ -96,8 +143,8 @@ def _resolve_rtl_files(state: dict, workflow_dir: str) -> list[str]:
 def _resolve_profile_from_state(state: dict, workflow_dir: str) -> str | None:
     digital = state.get("digital") or {}
 
-    cand = digital.get("foundry_profile")
-    if cand and os.path.exists(cand):
+    cand = _existing_path(digital.get("foundry_profile"), workflow_dir)
+    if cand:
         logger.info(f"{AGENT_NAME}: selected profile from state.digital -> {cand}")
         return cand
 
@@ -113,13 +160,13 @@ def _resolve_profile_from_state(state: dict, workflow_dir: str) -> str | None:
 def _resolve_sdc_from_state(state: dict, workflow_dir: str) -> tuple[str | None, str]:
     digital = state.get("digital") or {}
 
-    cand = digital.get("constraints_sdc")
-    if cand and os.path.exists(cand):
+    cand = _existing_path(digital.get("constraints_sdc"), workflow_dir)
+    if cand:
         logger.info(f"{AGENT_NAME}: selected SDC from state.digital -> {cand}")
         return cand, "state.digital.constraints_sdc"
 
-    cand = state.get("constraints_sdc")
-    if cand and os.path.exists(cand):
+    cand = _existing_path(state.get("constraints_sdc"), workflow_dir)
+    if cand:
         logger.info(f"{AGENT_NAME}: selected SDC from state -> {cand}")
         return cand, "state.constraints_sdc"
 
