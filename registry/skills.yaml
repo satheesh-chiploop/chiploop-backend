@@ -26,6 +26,22 @@
       ]
     },
     {
+      "name": "upf_static_check",
+      "description": "Parse UPF-lite/power intent collateral, run structural low-power intent checks, optionally probe OpenROAD read_upf, and call private licensed low-power checks through a tool profile command.",
+      "domains": [
+        "digital",
+        "physical_design"
+      ],
+      "tools": [
+        "python",
+        "openroad",
+        "vcs",
+        "xcelium",
+        "questa",
+        "vc_lp"
+      ]
+    },
+    {
       "name": "spec_ingest",
       "description": "Normalize user intent, specs, datasheets, or handoff contracts into state.",
       "domains": [

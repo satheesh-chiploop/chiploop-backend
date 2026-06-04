@@ -121,7 +121,7 @@ def _find_local_files(roots: Iterable[Path], predicate) -> List[Path]:
     return found
 
 
-def _artifact_candidates(client: Any, source_workflow_id: str) -> Tuple[List[str], List[str], List[str]]:
+def _artifact_candidates(client: Any, source_workflow_id: str) -> Tuple[List[str], List[str], List[str], List[str]]:
     response = (
         client.table("workflows")
         .select("artifacts")
@@ -144,7 +144,8 @@ def _artifact_candidates(client: Any, source_workflow_id: str) -> Tuple[List[str
         p for p in unique
         if p.lower().endswith(".json") and any(token in p.lower() for token in ("regmap", "register_map", "digital_regmap"))
     ]
-    return rtl, spec, regmap
+    upf = [p for p in unique if p.lower().endswith(".upf")]
+    return rtl, spec, regmap, upf
 
 
 def _copy_supabase_arch2rtl(state: Dict[str, Any], workflow_dir: str) -> Dict[str, Any]:
@@ -161,7 +162,7 @@ def _copy_supabase_arch2rtl(state: Dict[str, Any], workflow_dir: str) -> Dict[st
     if not source_workflow_id:
         raise RuntimeError("from_workflow_id is required for Arch2RTL handoff ingest")
 
-    rtl_paths, spec_paths, regmap_paths = _artifact_candidates(client, str(source_workflow_id))
+    rtl_paths, spec_paths, regmap_paths, upf_paths = _artifact_candidates(client, str(source_workflow_id))
     roots = _source_local_roots(client, str(source_workflow_id))
 
     imported_rtl: List[str] = []
@@ -193,10 +194,26 @@ def _copy_supabase_arch2rtl(state: Dict[str, Any], workflow_dir: str) -> Dict[st
         state["regmap_json"] = regmap_json
         state["digital_regmap_json_path"] = regmap_path
 
+    imported_upf: List[str] = []
+    for path in upf_paths:
+        raw = _download(client, path)
+        if not raw:
+            continue
+        imported_upf.append(_write_local(workflow_dir, f"handoff/power/{os.path.basename(path)}", raw))
+
+    if not imported_upf:
+        for local_path in _find_local_files(roots, lambda p: p.name.lower().endswith(".upf")):
+            imported_upf.append(_write_local(workflow_dir, f"handoff/power/{local_path.name}", local_path.read_bytes()))
+
+    if imported_upf:
+        state["power_intent_upf"] = imported_upf[0]
+        state.setdefault("digital", {})["power_intent_upf"] = imported_upf[0]
+
     return {
         "source_mode": "from_arch2rtl",
         "source_workflow_id": str(source_workflow_id),
         "rtl_files": imported_rtl,
+        "upf_files": imported_upf,
         "spec_imported": bool(spec_json),
         "regmap_imported": bool(regmap_json),
     }
@@ -387,6 +404,13 @@ def _record_outputs(state: Dict[str, Any], workflow_dir: str, manifest: Dict[str
         except ValueError:
             rel = source_path.name
         save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital/handoff/rtl", os.path.basename(rel), text)
+    for path in manifest.get("upf_files") or []:
+        try:
+            source_path = Path(path).resolve()
+            text = source_path.read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            continue
+        save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital/handoff/power", source_path.name, text)
     save_text_artifact_and_record(
         workflow_id,
         AGENT_NAME,

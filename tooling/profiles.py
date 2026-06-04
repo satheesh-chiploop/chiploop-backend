@@ -221,6 +221,20 @@ def _default_profile() -> Dict[str, Any]:
                 os.getenv("CHIPLOOP_VCS", ""),
                 "vcs",
             ])},
+            "questa": {"executable": _first_existing([
+                os.getenv("CHIPLOOP_QUESTA", ""),
+                os.getenv("VSIM", ""),
+                "vsim",
+            ])},
+            "vc_lp": {"executable": _first_existing([
+                os.getenv("CHIPLOOP_VC_LP", ""),
+                "vc_static_shell",
+                "vcst",
+            ])},
+            "jasper": {"executable": _first_existing([
+                os.getenv("CHIPLOOP_JASPER", ""),
+                "jaspergold",
+            ])},
             "riscv64_linux_gnu_gcc": {"executable": _first_existing([
                 os.getenv("CHIPLOOP_RISCV64_LINUX_GNU_GCC", ""),
                 "riscv64-linux-gnu-gcc",
@@ -242,13 +256,23 @@ def _default_profile() -> Dict[str, Any]:
                 ]
             }
         },
+        "commands": {
+            "upf_static_check": {
+                "command": os.getenv("CHIPLOOP_UPF_STATIC_CHECK_COMMAND", ""),
+                "description": "Optional private low-power static check command. CHIPLOOP_UPF_FILE and CHIPLOOP_UPF_STAGE_DIR are exported when invoked.",
+            },
+            "upf_power_aware_sim": {
+                "command": os.getenv("CHIPLOOP_UPF_POWER_AWARE_SIM_COMMAND", ""),
+                "description": "Optional private power-aware simulation command for licensed simulators.",
+            },
+        },
     }
 
 
 def _deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
     merged = dict(base)
     for key, value in override.items():
-        if key in {"tools", "runtime"} and not isinstance(value, dict):
+        if key in {"tools", "runtime", "commands"} and not isinstance(value, dict):
             continue
         if isinstance(value, dict) and isinstance(merged.get(key), dict):
             merged[key] = _deep_merge(merged[key], value)
@@ -304,6 +328,7 @@ def profile_summary(state: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     profile = get_tool_profile(state)
     tools = profile.get("tools")
     runtime = profile.get("runtime")
+    commands = profile.get("commands")
     return {
         "profile_id": profile.get("profile_id") or DEFAULT_PROFILE_ID,
         "runner": profile.get("runner") or "local_saas",
@@ -311,6 +336,7 @@ def profile_summary(state: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         "strict_tool_profile": bool(profile.get("strict_tool_profile")),
         "tools": sorted(tools.keys()) if isinstance(tools, dict) else sorted(tools or []),
         "runtime": sorted(runtime.keys()) if isinstance(runtime, dict) else sorted(runtime or []),
+        "commands": sorted(commands.keys()) if isinstance(commands, dict) else sorted(commands or []),
     }
 
 
@@ -334,5 +360,6 @@ def profile_diagnostics(state: Optional[Dict[str, Any]] = None) -> Dict[str, Any
         **profile_summary(state),
         "tools": _section("tools"),
         "runtime": _section("runtime"),
+        "commands": sorted((profile.get("commands") or {}).keys()) if isinstance(profile.get("commands"), dict) else [],
         "env_keys": sorted((profile.get("env") or {}).keys()) if isinstance(profile.get("env"), dict) else [],
     }

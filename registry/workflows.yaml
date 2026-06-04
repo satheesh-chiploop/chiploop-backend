@@ -38,6 +38,7 @@
         "Digital Opitmizer Agent",
         "Digital Placement Agent",
         "Digital Power Intent (UPF-lite) Agent",
+        "Digital UPF Static Check Agent",
         "Digital RTL Agent",
         "Digital RTL Handoff Ingest Agent",
         "Digital RTL Linting Agent",
@@ -223,6 +224,7 @@
         "Digital Opitmizer Agent",
         "Digital Placement Agent",
         "Digital Power Intent (UPF-lite) Agent",
+        "Digital UPF Static Check Agent",
         "Digital RTL Agent",
         "Digital RTL Handoff Ingest Agent",
         "Digital RTL Linting Agent",
@@ -541,6 +543,7 @@
         "Digital RTL Agent",
         "Digital RTL Linting Agent",
         "Digital Power Intent (UPF-lite) Agent",
+        "Digital UPF Static Check Agent",
         "Digital IP Packaging & Handoff Agent",
         "Digital Arch2RTL Dashboard Agent"
       ],

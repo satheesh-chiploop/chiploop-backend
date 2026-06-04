@@ -2021,6 +2021,68 @@
       }
     },
     {
+      "name": "Digital UPF Static Check Agent",
+      "loop_type": "digital",
+      "domain": "digital",
+      "description": "Runs open-source-friendly structural UPF checks and optional OpenROAD/private low-power tool probes without claiming full power-aware signoff.",
+      "entrypoint": "agents.digital.digital_upf_static_check_agent:run_agent",
+      "execution_mode": "legacy_adapter",
+      "inputs": [
+        "*.upf",
+        "*.v",
+        "*.sv",
+        "*_spec.json",
+        "digital_architecture.json"
+      ],
+      "outputs": [
+        "digital/upf/upf_static_check.json",
+        "digital/upf/upf_static_check.md",
+        "digital/upf/upf_unsupported_commands.txt",
+        "digital/upf/logs/openroad_read_upf.log"
+      ],
+      "artifact_paths": [
+        "digital/upf/upf_static_check.json",
+        "digital/upf/upf_static_check.md",
+        "digital/upf/upf_unsupported_commands.txt",
+        "digital/upf/logs/openroad_read_upf.log"
+      ],
+      "artifact_types": [
+        "structured_data",
+        "report",
+        "log"
+      ],
+      "required_skills": [
+        "upf_static_check",
+        "artifact_publish"
+      ],
+      "required_tools": [
+        "python",
+        "supabase"
+      ],
+      "hooks": [
+        "pre_run_validate_inputs",
+        "post_run_collect_artifacts",
+        "post_run_update_state",
+        "on_failure_capture_traceback",
+        "on_failure_preserve_logs",
+        "artifact_publish_to_supabase"
+      ],
+      "metadata": {
+        "registry_source": "DIGITAL_AGENT_FUNCTIONS",
+        "variable": "digital_upf_static_check_agent",
+        "studio_contract_version": "v1",
+        "open_source_scope": "structural_upf_check_not_power_aware_signoff",
+        "optional_tools": [
+          "openroad",
+          "vcs",
+          "xcelium",
+          "questa",
+          "vc_lp"
+        ],
+        "private_profile_command": "commands.upf_static_check"
+      }
+    },
+    {
       "name": "Digital Verification Handoff Ingest Agent",
       "loop_type": "digital",
       "domain": "digital",

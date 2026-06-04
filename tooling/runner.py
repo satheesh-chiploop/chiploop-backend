@@ -49,6 +49,13 @@ TOOL_ALIASES = {
     "xrun": "xcelium",
     "xcelium": "xcelium",
     "vcs": "vcs",
+    "vsim": "questa",
+    "questa": "questa",
+    "vc_static_shell": "vc_lp",
+    "vcst": "vc_lp",
+    "vc_lp": "vc_lp",
+    "jaspergold": "jasper",
+    "jasper": "jasper",
     "riscv64-linux-gnu-gcc": "riscv64_linux_gnu_gcc",
     "riscv64-unknown-elf-gcc": "riscv64_unknown_elf_gcc",
     "x86_64-linux-gnu-gcc": "x86_64_linux_gnu_gcc",
@@ -85,6 +92,9 @@ VERSION_ARGS = {
     "cadence_genus": ["-version"],
     "xcelium": ["-version"],
     "vcs": ["-ID"],
+    "questa": ["-version"],
+    "vc_lp": ["-version"],
+    "jasper": ["-version"],
 }
 
 

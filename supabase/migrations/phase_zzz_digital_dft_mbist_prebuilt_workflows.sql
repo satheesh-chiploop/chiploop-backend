@@ -9,6 +9,17 @@ alter table if exists public.workflows
 
 with templates(name, loop_type, agents) as (
   values
+    ('Digital_Arch2RTL', 'digital', array[
+      'Digital Spec Agent',
+      'Digital Architecture Agent',
+      'Digital Microarchitecture Agent',
+      'Digital Register Map Agent',
+      'Digital RTL Agent',
+      'Digital Power Intent (UPF-lite) Agent',
+      'Digital UPF Static Check Agent',
+      'Digital IP Packaging & Handoff Agent',
+      'Digital Arch2RTL Dashboard Agent'
+    ]::text[]),
     ('Digital_Arch2Synthesis', 'digital', array[
       'Digital RTL Handoff Ingest Agent',
       'Digital Spec Agent',
@@ -17,6 +28,7 @@ with templates(name, loop_type, agents) as (
       'Digital Register Map Agent',
       'Digital Clock & Reset Architecture Agent',
       'Digital Power Intent (UPF-lite) Agent',
+      'Digital UPF Static Check Agent',
       'Digital RTL Agent',
       'Digital IP Packaging & Handoff Agent',
       'Digital Foundry Profile Agent',
@@ -35,6 +47,7 @@ with templates(name, loop_type, agents) as (
       'Digital Register Map Agent',
       'Digital Clock & Reset Architecture Agent',
       'Digital Power Intent (UPF-lite) Agent',
+      'Digital UPF Static Check Agent',
       'Digital RTL Agent',
       'Digital IP Packaging & Handoff Agent',
       'Digital Foundry Profile Agent',

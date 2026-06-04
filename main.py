@@ -416,6 +416,7 @@ from agents.digital.digital_testbench_generator_agent import run_agent as digita
 from agents.digital.digital_golden_model_comparison_agent import run_agent as digital_golden_model_comparison_agent
 from agents.digital.digital_ip_packaging_handoff_agent import run_agent as digital_ip_packaging_handoff_agent
 from agents.digital.digital_power_intent_upf_agent import run_agent as digital_power_intent_upf_agent
+from agents.digital.digital_upf_static_check_agent import run_agent as digital_upf_static_check_agent
 from agents.digital.digital_synthesis_readiness_agent import run_agent as digital_synthesis_readiness_agent
 from agents.digital.digital_smoke_preflight_agent import run_agent as digital_smoke_preflight_agent
 from agents.digital.digital_smoke_exec_summary_agent import run_agent as digital_smoke_exec_summary_agent
@@ -493,6 +494,7 @@ DIGITAL_AGENT_FUNCTIONS: Dict[str, Any] = {
     "Digital Formal Verification Agent": digital_formal_verification_agent,
     "Digital Synthesis Readiness Agent": digital_synthesis_readiness_agent,
     "Digital Power Intent (UPF-lite) Agent": digital_power_intent_upf_agent,
+    "Digital UPF Static Check Agent": digital_upf_static_check_agent,
     "Digital IP Packaging & Handoff Agent": digital_ip_packaging_handoff_agent,
     "Digital Smoke Preflight Agent": digital_smoke_preflight_agent,
     "Digital Smoke Executive Summary Agent": digital_smoke_exec_summary_agent,
@@ -761,6 +763,7 @@ SYSTEM_AGENT_FUNCTIONS: Dict[str,Any] = {
     "Digital Formal Verification Agent": digital_formal_verification_agent,   
     "Digital Synthesis Readiness Agent": digital_synthesis_readiness_agent,
     "Digital Power Intent (UPF-lite) Agent": digital_power_intent_upf_agent,
+    "Digital UPF Static Check Agent": digital_upf_static_check_agent,
     "Digital IP Packaging & Handoff Agent": digital_ip_packaging_handoff_agent, 
     "Digital Smoke Preflight Agent": digital_smoke_preflight_agent,
     "Digital Smoke Executive Summary Agent": digital_smoke_exec_summary_agent,
@@ -955,6 +958,7 @@ DIGITAL_ARCH2RTL_DEFINITION = _linear_workflow_definition([
     "Digital Register Map Agent",
     "Digital RTL Agent",
     "Digital Power Intent (UPF-lite) Agent",
+    "Digital UPF Static Check Agent",
     "Digital IP Packaging & Handoff Agent",
     "Digital Arch2RTL Dashboard Agent",
 ])
@@ -984,6 +988,7 @@ DIGITAL_ARCH2SYNTHESIS_DEFINITION = _linear_workflow_definition([
     "Digital Register Map Agent",
     "Digital Clock & Reset Architecture Agent",
     "Digital Power Intent (UPF-lite) Agent",
+    "Digital UPF Static Check Agent",
     "Digital RTL Agent",
     "Digital IP Packaging & Handoff Agent",
     "Digital Foundry Profile Agent",
@@ -1003,6 +1008,7 @@ DIGITAL_ARCH2SIM_DEFINITION = _linear_workflow_definition([
     "Digital Register Map Agent",
     "Digital Clock & Reset Architecture Agent",
     "Digital Power Intent (UPF-lite) Agent",
+    "Digital UPF Static Check Agent",
     "Digital RTL Agent",
     "Digital IP Packaging & Handoff Agent",
     "Digital Testbench Generator Agent",
@@ -1022,6 +1028,7 @@ DIGITAL_ARCH2TAPEOUT_DEFINITION = _linear_workflow_definition([
     "Digital Register Map Agent",
     "Digital Clock & Reset Architecture Agent",
     "Digital Power Intent (UPF-lite) Agent",
+    "Digital UPF Static Check Agent",
     "Digital RTL Agent",
     "Digital IP Packaging & Handoff Agent",
     "Digital Foundry Profile Agent",
@@ -2789,6 +2796,7 @@ def execute_digital_app_background(
                 "Digital Implementation Setup Agent",
                 "Digital Synthesis Agent",
                 "Digital Logic Equivalence Check Agent",
+                "Digital UPF Static Check Agent",
                 "Digital DFT Scan Stitching Agent",
                 "Digital Scan ATPG Coverage Agent",
                 "Digital MBIST Collateral Agent",
@@ -2805,6 +2813,7 @@ def execute_digital_app_background(
                 "Digital Implementation Setup Agent",
                 "Digital Synthesis Agent",
                 "Digital Logic Equivalence Check Agent",
+                "Digital UPF Static Check Agent",
                 "Digital DFT Scan Stitching Agent",
                 "Digital Scan ATPG Coverage Agent",
                 "Digital MBIST Collateral Agent",

@@ -274,6 +274,19 @@ AGENT_CAPABILITIES = {
         "requires": [],
     },
 
+    "Digital UPF Static Check Agent": {
+        "domain": "digital",
+        "inputs": ["*.upf", "*.v", "*.sv", "*_spec.json", "digital_architecture.json"],
+        "outputs": [
+            "digital/upf/upf_static_check.json",
+            "digital/upf/upf_static_check.md",
+            "digital/upf/upf_unsupported_commands.txt",
+            "digital/upf/logs/openroad_read_upf.log",
+        ],
+        "description": "Runs open-source-friendly structural UPF checks and optional OpenROAD/private low-power tool probes without claiming full power-aware signoff.",
+        "requires": ["python"],
+    },
+
     "Digital IP Packaging & Handoff Agent": {
         "domain": "digital",
         "inputs": ["*_spec.json", "*.v", "*.sv", "regmap.json", "signoff/power_intent.upf", "signoff/synthesis_readiness_findings.json", "vv/**"],
