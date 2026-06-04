@@ -56,6 +56,13 @@ def _write_file(path: str, content: str) -> None:
         f.write(content)
 
 
+def _safe_relpath(path: str, root: str) -> str:
+    try:
+        return os.path.relpath(os.path.abspath(path), os.path.abspath(root)).replace("\\", "/")
+    except Exception:
+        return os.path.basename(str(path))
+
+
 def _merge_functional_coverage_summaries(summaries: list[Dict[str, Any]]) -> Dict[str, Any]:
     if not summaries:
         return {}
@@ -198,7 +205,7 @@ def _parse_verilator_annotated_toggle_coverage(annotation_dir: str) -> Dict[str,
                             toggle_hit += 1
                         elif len(missed) < 20:
                             missed.append({
-                                "file": os.path.relpath(path, annotation_dir),
+                                "file": _safe_relpath(path, annotation_dir),
                                 "point": details,
                             })
             except OSError:

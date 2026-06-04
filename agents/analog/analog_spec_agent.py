@@ -10,6 +10,13 @@ USE_LOCAL_OLLAMA = os.getenv("USE_LOCAL_OLLAMA", "false").lower() == "true"
 PORTKEY_API_KEY = os.getenv("PORTKEY_API_KEY")
 
 
+def _safe_relpath(path: str, root: str) -> str:
+    try:
+        return os.path.relpath(os.path.abspath(path), os.path.abspath(root)).replace("\\", "/")
+    except Exception:
+        return os.path.basename(str(path))
+
+
 def _save_uploaded_files(workflow_dir: str, uploaded_files: List[Dict[str, Any]]) -> List[str]:
     """Save user-uploaded PDK/model files. Supports raw bytes or base64."""
     pdk_dir = os.path.join(workflow_dir, "pdk")
@@ -36,7 +43,7 @@ def _save_uploaded_files(workflow_dir: str, uploaded_files: List[Dict[str, Any]]
             # empty placeholder to ensure path existence
             open(path, "a").close()
 
-        saved.append(os.path.relpath(path, workflow_dir))
+        saved.append(_safe_relpath(path, workflow_dir))
     return saved
 
 

@@ -124,9 +124,9 @@ def _rel_to_workflow(workflow_dir: str, path: Optional[str]) -> Optional[str]:
     if not path or not isinstance(path, str):
         return path
     try:
-        return os.path.relpath(path, workflow_dir).replace("\\", "/")
+        return os.path.relpath(os.path.abspath(path), os.path.abspath(workflow_dir)).replace("\\", "/")
     except Exception:
-        return path.replace("\\", "/")
+        return os.path.basename(path).replace("\\", "/")
 
 
 def _rel_list_to_workflow(workflow_dir: str, paths: List[str]) -> List[str]:
@@ -863,10 +863,10 @@ def _build_testcases_manifest(top: str, clocks: List[str], resets: List[Dict[str
 
 def _to_make_relpath(base_dir: str, abs_path: str) -> str:
     try:
-        rel = os.path.relpath(abs_path, base_dir)
+        rel = os.path.relpath(os.path.abspath(abs_path), os.path.abspath(base_dir))
         return rel.replace("\\", "/")
     except Exception:
-        return abs_path.replace("\\", "/")
+        return os.path.basename(abs_path).replace("\\", "/")
 
 
 def _gen_rtl_sources_mk(tb_root: str, rtl_files: List[str]) -> str:

@@ -686,10 +686,10 @@ def _build_testcases_manifest(
 
 def _to_make_relpath(base_dir: str, abs_path: str) -> str:
     try:
-        rel = os.path.relpath(abs_path, base_dir)
+        rel = os.path.relpath(os.path.abspath(abs_path), os.path.abspath(base_dir))
         return rel.replace("\\", "/")
     except Exception:
-        return abs_path.replace("\\", "/")
+        return os.path.basename(abs_path).replace("\\", "/")
 
 def _gen_rtl_sources_mk(tb_root: str, rtl_files: List[str]) -> str:
     lines = [

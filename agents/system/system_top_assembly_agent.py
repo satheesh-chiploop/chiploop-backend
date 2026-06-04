@@ -138,7 +138,7 @@ def _collect_module_files(workflow_dir: str):
                     continue
 
                 abs_path = os.path.join(walk_root, name)
-                rel_path = os.path.relpath(abs_path, workflow_dir).replace("\\", "/")
+                rel_path = os.path.relpath(os.path.abspath(abs_path), os.path.abspath(workflow_dir)).replace("\\", "/")
 
                 # Do not rediscover generated SoC top assembly outputs.
                 if rel_path.startswith("system/integration/") and (
@@ -166,7 +166,7 @@ def _collect_lib_files(workflow_dir: str):
             low = fn.lower()
             if low.endswith(".lib") or low.endswith(".lib.gz") or low.endswith(".db"):
                 abs_path = os.path.join(root, fn)
-                rel_path = os.path.relpath(abs_path, workflow_dir).replace("\\", "/")
+                rel_path = os.path.relpath(os.path.abspath(abs_path), os.path.abspath(workflow_dir)).replace("\\", "/")
                 hits.append(rel_path)
 
     # stable order, unique
@@ -976,7 +976,7 @@ def run_agent(state: dict) -> dict:
         abs_p = os.path.abspath(abs_p)
         if os.path.exists(abs_p):
             try:
-                explicit_rel_libs.append(os.path.relpath(abs_p, workflow_dir).replace("\\", "/"))
+                explicit_rel_libs.append(os.path.relpath(os.path.abspath(abs_p), os.path.abspath(workflow_dir)).replace("\\", "/"))
             except Exception:
                 explicit_rel_libs.append(abs_p)
 

@@ -34,6 +34,12 @@ def _collect_rtl_files(workflow_dir: str) -> List[str]:
     out.sort()
     return out
 
+def _safe_relpath(path: str, root: str) -> str:
+    try:
+        return os.path.relpath(os.path.abspath(path), os.path.abspath(root)).replace("\\", "/")
+    except Exception:
+        return os.path.basename(str(path))
+
 def _pick_top(rtl_files: List[str], state_top: Optional[str]) -> str:
     if state_top and isinstance(state_top, str) and state_top.strip():
         return state_top.strip()
@@ -66,7 +72,7 @@ def run_agent(state: dict) -> dict:
         "workflow_dir": workflow_dir,
         "top_module": top,
         "rtl_file_count": len(rtl_files),
-        "rtl_files": [os.path.relpath(p, workflow_dir).replace("\\", "/") for p in rtl_files],
+        "rtl_files": [_safe_relpath(p, workflow_dir) for p in rtl_files],
         "simulator": state.get("simulator") or state.get("sim_type") or "verilator",
         "time_budget": state.get("time_budget") or "fast",
         "waveform": bool(state.get("enable_waveform", False)),

@@ -148,6 +148,13 @@ def _is_allowed_impl_file(rel_path: str) -> bool:
     return rel.endswith((".sv", ".v")) and not rel.endswith(("_tb.sv", "_tb.v"))
 
 
+def _safe_relpath(path: str, root: str) -> str:
+    try:
+        return os.path.relpath(os.path.abspath(path), os.path.abspath(root)).replace("\\", "/")
+    except Exception:
+        return os.path.basename(str(path))
+
+
 def _index_module_definitions(workflow_dir: str) -> Dict[str, List[str]]:
     module_to_files: Dict[str, List[str]] = {}
     if not workflow_dir or not os.path.isdir(workflow_dir):
@@ -155,7 +162,7 @@ def _index_module_definitions(workflow_dir: str) -> Dict[str, List[str]]:
     for root, _, files in os.walk(workflow_dir):
         for name in sorted(files):
             abs_path = os.path.join(root, name)
-            rel_path = os.path.relpath(abs_path, workflow_dir).replace("\\", "/")
+            rel_path = _safe_relpath(abs_path, workflow_dir)
             if not _is_allowed_impl_file(rel_path):
                 continue
             for mod in _extract_defined_modules_from_file(abs_path):

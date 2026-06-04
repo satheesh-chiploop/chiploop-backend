@@ -531,7 +531,10 @@ def _find_public_api_candidates(workflow_dir: str) -> List[str]:
             for name in sorted(files):
                 low = name.lower()
                 if low.endswith((".h", ".hpp", ".c", ".cc", ".cpp", ".rs", ".json", ".md", ".toml", ".yaml", ".yml")):
-                    rel = os.path.relpath(os.path.join(walk_root, name), workflow_dir).replace("\\", "/")
+                    rel = os.path.relpath(
+                        os.path.abspath(os.path.join(walk_root, name)),
+                        os.path.abspath(workflow_dir),
+                    ).replace("\\", "/")
                     if any(token in rel.lower() for token in tokens):
                         candidates.append(rel)
     return _dedupe_keep_order(candidates)
@@ -957,4 +960,3 @@ def run_agent(state: dict) -> dict:
         _record_text(workflow_id, OUTPUT_SUBDIR, DEBUG_JSON, json.dumps(debug_payload, indent=2))
         state["status"] = f"❌ {AGENT_NAME} failed: {exc}"
         return state
-

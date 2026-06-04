@@ -168,9 +168,9 @@ def _rel_to_workflow(workflow_dir: str, path: Optional[str]) -> Optional[str]:
     if not path or not isinstance(path, str):
         return path
     try:
-        return os.path.relpath(path, workflow_dir).replace("\\", "/")
+        return os.path.relpath(os.path.abspath(path), os.path.abspath(workflow_dir)).replace("\\", "/")
     except Exception:
-        return path.replace("\\", "/")
+        return os.path.basename(path).replace("\\", "/")
 
 def run_agent(state: dict) -> dict:
     agent_name = "System Simulation Execution Agent"
@@ -424,9 +424,9 @@ def run_agent(state: dict) -> dict:
         "tests_passed": tests_passed,
         "tests_failed": tests_failed,
         "total_runtime_sec": round(sum(float(r.get("runtime_sec") or 0.0) for r in results), 3),
-        "waveforms": [os.path.relpath(p, workflow_dir).replace("\\", "/") for p in new_waveforms],
+        "waveforms": [_rel_to_workflow(workflow_dir, p) for p in new_waveforms],
         "coverage_candidates": {
-            k: [os.path.relpath(p, workflow_dir).replace("\\", "/") for p in v]
+            k: [_rel_to_workflow(workflow_dir, p) for p in v]
             for k, v in coverage_candidates.items()
         } if any_pass else {},
         "functional_coverage_summary_json": _rel_to_workflow(workflow_dir, coverage_json_path),

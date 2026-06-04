@@ -375,12 +375,17 @@ def _record_outputs(state: Dict[str, Any], workflow_dir: str, manifest: Dict[str
     workflow_id = str(state.get("workflow_id") or "")
     if not workflow_id:
         return
+    workflow_root = Path(workflow_dir).resolve()
     for path in manifest.get("rtl_files") or []:
         try:
-            text = Path(path).read_text(encoding="utf-8", errors="ignore")
+            source_path = Path(path).resolve()
+            text = source_path.read_text(encoding="utf-8", errors="ignore")
         except Exception:
             continue
-        rel = Path(path).relative_to(Path(workflow_dir)).as_posix()
+        try:
+            rel = source_path.relative_to(workflow_root).as_posix()
+        except ValueError:
+            rel = source_path.name
         save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital/handoff/rtl", os.path.basename(rel), text)
     save_text_artifact_and_record(
         workflow_id,

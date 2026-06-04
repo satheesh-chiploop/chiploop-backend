@@ -156,9 +156,9 @@ def _rel_to_workflow(workflow_dir: str, path: Optional[str]) -> Optional[str]:
     if not path or not isinstance(path, str):
         return path
     try:
-        return os.path.relpath(path, workflow_dir).replace("\\", "/")
+        return os.path.relpath(os.path.abspath(path), os.path.abspath(workflow_dir)).replace("\\", "/")
     except Exception:
-        return path.replace("\\", "/")
+        return os.path.basename(path).replace("\\", "/")
 
 
 def _rel_list_to_workflow(workflow_dir: str, paths: List[str]) -> List[str]:

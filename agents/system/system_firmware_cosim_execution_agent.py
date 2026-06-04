@@ -88,6 +88,13 @@ def _join_workflow_path(workflow_dir: str, rel_or_abs: str) -> str:
     return os.path.abspath(os.path.join(workflow_dir, rel_or_abs))
 
 
+def _safe_relpath(path: str, root: str) -> str:
+    try:
+        return os.path.relpath(os.path.abspath(path), os.path.abspath(root)).replace("\\", "/")
+    except Exception:
+        return os.path.basename(str(path))
+
+
 def _existing_paths(workflow_dir: str, paths: List[str]) -> List[str]:
     out: List[str] = []
     for path in paths:
@@ -396,8 +403,7 @@ def run_agent(state: dict) -> dict:
     for p in rtl_inputs:
         abs_p = _join_workflow_path(workflow_dir, p)
         try:
-            rel_p = os.path.relpath(abs_p, workflow_dir)
-            normalized_rtl.append(rel_p.replace("\\", "/"))
+            normalized_rtl.append(_safe_relpath(abs_p, workflow_dir))
         except Exception:
             normalized_rtl.append(p)
 
