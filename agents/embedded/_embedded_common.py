@@ -7,7 +7,7 @@ def get_embedded_model() -> str:
         os.getenv("CHIPLOOP_EMBEDDED_MODEL")
         or os.getenv("CHIPLOOP_FIRMWARE_MODEL")
         or os.getenv("CHIPLOOP_DEFAULT_MODEL")
-        or "gpt-5.5"
+        or "gpt-5.4-mini"
     )
 
 def llm_chat(prompt: str, system: str = "") -> str:

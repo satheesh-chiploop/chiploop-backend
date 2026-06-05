@@ -15,8 +15,8 @@ async def run_llm_fallback(prompt: str) -> str:
     """
     Shared LLM runner.
 
-    Hosted SaaS defaults to the ChipLoop model gateway, which currently routes to
-    OpenAI gpt-5.5. Customers can override routing with CHIPLOOP_MODEL_PROFILE_PATH.
+    Hosted SaaS defaults to the ChipLoop model gateway. Customers can override
+    routing with CHIPLOOP_MODEL_PROFILE_PATH.
     Ollama remains as an explicit local override for developer/private testing.
     """
     if USE_LOCAL_OLLAMA:

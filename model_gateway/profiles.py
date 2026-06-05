@@ -7,7 +7,7 @@ from typing import Any, Dict, Optional
 
 DEFAULT_MODEL_PROFILE_ID = "chiploop_saas_default"
 DEFAULT_MODEL_PROVIDER = "openai"
-DEFAULT_MODEL = "gpt-5.5"
+DEFAULT_MODEL = "gpt-5.4-mini"
 
 
 def _default_profile() -> Dict[str, Any]:

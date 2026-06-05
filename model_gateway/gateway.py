@@ -274,7 +274,7 @@ def complete_text(
         api_key = _env_value(profile, "PORTKEY_API_KEY")
         if not api_key:
             raise RuntimeError("PORTKEY_API_KEY is required for Portkey model profile")
-        model = _route_value(route, "model", default=os.getenv("CHIPLOOP_DEFAULT_MODEL", "gpt-5.5"))
+        model = _route_value(route, "model", default=os.getenv("CHIPLOOP_DEFAULT_MODEL", "gpt-5.4-mini"))
         started_at = _log_call_start(provider, model, capability, agent_name, prompt)
         try:
             resp = Portkey(api_key=api_key).chat.completions.create(
@@ -332,7 +332,7 @@ def complete_text(
     if provider == "openai_compatible":
         api_key = _env_value(profile, "OPENAI_API_KEY", "not-required")
         base_url = str(profile.get("base_url") or os.getenv("OPENAI_BASE_URL") or "").strip()
-        model = _route_value(route, "model", default=os.getenv("CHIPLOOP_DEFAULT_MODEL", "gpt-5.5"))
+        model = _route_value(route, "model", default=os.getenv("CHIPLOOP_DEFAULT_MODEL", "gpt-5.4-mini"))
         if not base_url:
             raise RuntimeError("OpenAI-compatible profile requires base_url")
         started_at = _log_call_start(provider, model, capability, agent_name, prompt)
@@ -363,7 +363,7 @@ def complete_text(
 
     if provider == "openai":
         api_key = _env_value(profile, "OPENAI_API_KEY")
-        model = _route_value(route, "model", default=os.getenv("CHIPLOOP_DEFAULT_MODEL", "gpt-5.5"))
+        model = _route_value(route, "model", default=os.getenv("CHIPLOOP_DEFAULT_MODEL", "gpt-5.4-mini"))
         client_kwargs = {
             "timeout": _timeout_value(route),
             "max_retries": int(route.get("max_retries") or os.getenv("CHIPLOOP_LLM_MAX_RETRIES", "1")),
