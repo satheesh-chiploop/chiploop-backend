@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from utils.artifact_utils import save_text_artifact_and_record
+from .clock_intent import build_clock_intent
 
 AGENT_NAME = "Digital Verification Handoff Ingest Agent"
 ARTIFACT_BUCKET = "artifacts"
@@ -109,6 +110,15 @@ def _first_local_in_roots(roots: List[Path], suffixes: tuple[str, ...]) -> tuple
             if path.is_file() and path.name.lower().endswith(suffixes):
                 return str(path.resolve()), path.read_bytes()
     return "", b""
+
+
+def _read_first_text(paths: List[str]) -> str:
+    for path in paths:
+        try:
+            return Path(path).read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            continue
+    return ""
 
 
 def _expected_rtl_names(spec: Dict[str, Any]) -> List[str]:
@@ -234,6 +244,25 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     if not rtl_files:
         raise RuntimeError(f"No generated RTL artifact found in Arch2RTL workflow {source_workflow_id}")
 
+    sdc_candidates = [
+        path for path in available_paths
+        if path.lower().endswith(".sdc")
+    ]
+    local_sdc_files: List[str] = []
+    for source_path in dict.fromkeys(sdc_candidates):
+        raw = _download(client, source_path)
+        if not raw:
+            continue
+        sdc_name = os.path.basename(source_path)
+        local_sdc = _write_local(workflow_dir, f"handoff/constraints/{sdc_name}", raw)
+        local_sdc_files.append(local_sdc)
+        save_text_artifact_and_record(
+            workflow_id, AGENT_NAME, "verification/handoff/constraints", sdc_name,
+            raw.decode("utf-8", errors="replace"),
+        )
+        if len(local_sdc_files) >= 4:
+            break
+
     spec_name = os.path.basename(spec_source_path) or "source_spec.json"
     local_spec = _write_local(workflow_dir, f"spec/{spec_name}", spec_raw)
     save_text_artifact_and_record(
@@ -250,10 +279,22 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
         "top_module": top_module,
         "local_spec_path": local_spec,
         "local_rtl_files": rtl_files,
+        "local_sdc_files": local_sdc_files,
     }
+    clock_intent = build_clock_intent(
+        spec=spec,
+        rtl_files=rtl_files,
+        sdc_text=_read_first_text(local_sdc_files),
+        requested=state.get("clock_constraints") or state.get("clocks"),
+    )
+    manifest["clock_intent"] = clock_intent
     save_text_artifact_and_record(
         workflow_id, AGENT_NAME, "verification/handoff", "verification_source_handoff.json",
         json.dumps(manifest, indent=2),
+    )
+    save_text_artifact_and_record(
+        workflow_id, AGENT_NAME, "verification/handoff/timing", "clock_intent.json",
+        json.dumps(clock_intent, indent=2),
     )
 
     state["spec_json"] = local_spec
@@ -261,6 +302,11 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     state["rtl_files"] = rtl_files
     state["rtl_inputs"] = rtl_files
     state["top_module"] = top_module
+    state["clock_intent"] = clock_intent
+    state.setdefault("digital", {})["clock_intent"] = clock_intent
+    if local_sdc_files:
+        state["constraints_sdc"] = local_sdc_files[0]
+        state.setdefault("digital", {})["constraints_sdc"] = local_sdc_files[0]
     state["verification_source_handoff"] = manifest
     state["status"] = "Imported Arch2RTL spec and RTL for digital verification."
     return state

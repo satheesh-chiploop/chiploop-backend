@@ -69,6 +69,16 @@ def _download_json(path: str) -> Dict[str, Any]:
         return {}
 
 
+def _download_text(path: str) -> str:
+    try:
+        raw = supabase.storage.from_(ARTIFACT_BUCKET).download(path)
+        if isinstance(raw, bytes):
+            return raw.decode("utf-8", errors="replace")
+        return str(raw)
+    except Exception:
+        return ""
+
+
 def _storage_json_by_filename(source_workflow_id: str, filename: str) -> tuple[str | None, Dict[str, Any]]:
     prefix = f"backend/workflows/{source_workflow_id}"
     for path in _list_storage_tree(prefix):
@@ -77,6 +87,16 @@ def _storage_json_by_filename(source_workflow_id: str, filename: str) -> tuple[s
             if obj:
                 return path, obj
     return None, {}
+
+
+def _storage_text_by_filename(source_workflow_id: str, filename: str) -> tuple[str | None, str]:
+    prefix = f"backend/workflows/{source_workflow_id}"
+    for path in _list_storage_tree(prefix):
+        if Path(path).name == filename:
+            text = _download_text(path)
+            if text:
+                return path, text
+    return None, ""
 
 
 def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
@@ -97,6 +117,9 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
         "code_coverage_summary": _find(source_dir, "code_coverage_summary.json"),
         "coverage_spec": _find(source_dir, "coverage_spec.json"),
         "testcases": _find(source_dir, "testcases.json"),
+        "verification_plan": _find(source_dir, "verification_plan.md"),
+        "monitor_checker_plan": _find(source_dir, "monitor_checker_plan.md"),
+        "coverage_point_plan": _find(source_dir, "coverage_point_plan.md"),
     }
     storage_files: Dict[str, str | None] = {}
     filename_by_key = {
@@ -116,6 +139,23 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
         else:
             loaded[key] = _read_json(files.get(key)) if files.get(key) else {}
 
+    text_artifacts: Dict[str, str] = {}
+    text_storage_files: Dict[str, str | None] = {}
+    for key, filename in {
+        "verification_plan": "verification_plan.md",
+        "monitor_checker_plan": "monitor_checker_plan.md",
+        "coverage_point_plan": "coverage_point_plan.md",
+    }.items():
+        storage_path, text_value = _storage_text_by_filename(source_workflow_id, filename)
+        text_storage_files[key] = storage_path
+        if not text_value and files.get(key):
+            try:
+                text_value = Path(files[key]).read_text(encoding="utf-8")
+            except Exception:
+                text_value = ""
+        if text_value:
+            text_artifacts[key] = text_value
+
     out_dir = workflow_dir / "verify_closure"
     manifest = {
         "type": "verify_closure_ingest",
@@ -123,11 +163,14 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
         "source_workflow_dir": str(source_dir),
         "found_files": {key: str(path) if path else None for key, path in files.items()},
         "found_storage_files": storage_files,
+        "found_text_storage_files": text_storage_files,
         "coverage_targets": state.get("coverage_targets"),
         "seed_count": state.get("seed_count"),
         "toolchain": state.get("toolchain") if isinstance(state.get("toolchain"), dict) else {},
     }
     for key, value in loaded.items():
+        state[f"source_{key}"] = value
+    for key, value in text_artifacts.items():
         state[f"source_{key}"] = value
 
     text = json.dumps(manifest, indent=2)
@@ -138,6 +181,20 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
             continue
         filename = filename_by_key.get(key) or f"{key}.json"
         payload = json.dumps(value, indent=2)
+        _write(out_dir / "source_verify_artifacts" / filename, payload)
+        save_text_artifact_and_record(
+            workflow_id,
+            AGENT_NAME,
+            "verify_closure/source_verify_artifacts",
+            filename,
+            payload,
+        )
+    for key, payload in text_artifacts.items():
+        filename = {
+            "verification_plan": "verification_plan.md",
+            "monitor_checker_plan": "monitor_checker_plan.md",
+            "coverage_point_plan": "coverage_point_plan.md",
+        }.get(key, f"{key}.md")
         _write(out_dir / "source_verify_artifacts" / filename, payload)
         save_text_artifact_and_record(
             workflow_id,

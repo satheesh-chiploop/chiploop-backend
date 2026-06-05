@@ -133,6 +133,28 @@ def _synth_netlist(state: dict, workflow_dir: str) -> str | None:
     return hits[0] if hits else None
 
 
+def _constraints_sdc(state: dict, workflow_dir: str) -> str | None:
+    digital = state.get("digital") if isinstance(state.get("digital"), dict) else {}
+    synth = digital.get("synth") if isinstance(digital.get("synth"), dict) else {}
+    for cand in (
+        synth.get("constraints_sdc"),
+        digital.get("constraints_sdc"),
+        state.get("constraints_sdc"),
+    ):
+        path = _existing_path(cand, workflow_dir)
+        if path:
+            return path
+    for pattern in (
+        "digital/synth/constraints/*.sdc",
+        "digital/impl_setup/constraints/*.sdc",
+        "digital/constraints/*.sdc",
+    ):
+        hits = sorted(glob.glob(os.path.join(workflow_dir, pattern)))
+        if hits:
+            return hits[0]
+    return None
+
+
 def _top_module(state: dict, netlist: str | None) -> str:
     digital = state.get("digital") if isinstance(state.get("digital"), dict) else {}
     synth = digital.get("synth") if isinstance(digital.get("synth"), dict) else {}
@@ -180,7 +202,7 @@ def _scan_config(state: dict, top: str, flop_count: int) -> dict:
     }
 
 
-def _openroad_tcl(config: dict, netlist: str | None, out_netlist: str, pdk: dict) -> str:
+def _openroad_tcl(config: dict, netlist: str | None, sdc: str | None, out_netlist: str, pdk: dict) -> str:
     # OpenROAD DFT command availability depends on build/package. Keep this
     # generated script explicit so private deployments can adapt it to local
     # foundry/scan-cell naming without changing the agent.
@@ -193,6 +215,7 @@ def _openroad_tcl(config: dict, netlist: str | None, out_netlist: str, pdk: dict
 {_tcl_read_existing("read_liberty", tech["liberties"])}
 read_verilog {json.dumps(netlist or "")}
 link_design {config["top_module"]}
+if {{[file exists {json.dumps(sdc or "")}]}} {{ read_sdc {json.dumps(sdc or "")} }}
 
 set_dft_config \\
   -max_length {config["max_chain_length_estimate"] or 1} \\
@@ -219,7 +242,10 @@ def _classify(
         return "no_scan_flops"
     if not tool_available:
         return "tool_unavailable"
+    actual_chains = _actual_scan_chain_count(log)
     if rc == 0:
+        if actual_chains == 0:
+            return "scan_not_inserted"
         return "scan_replace_pass" if stitched else "preview_pass"
     text = log.lower()
     if "unknown command" in text or "invalid command" in text or "dft" in text and "not" in text and "enabled" in text:
@@ -227,6 +253,16 @@ def _classify(
     if "no technology has been read" in text or "ord-2010" in text:
         return "tool_needs_technology"
     return "fail"
+
+
+def _actual_scan_chain_count(log: str) -> int | None:
+    match = re.search(r"Number\s+of\s+chains:\s*(\d+)", log, flags=re.IGNORECASE)
+    if not match:
+        return None
+    try:
+        return int(match.group(1))
+    except Exception:
+        return None
 
 
 def _docker_openroad_command(stage_dir: str, image: str, pdk_root_host: str, pdk_variant: str) -> list[str]:
@@ -251,12 +287,43 @@ def _docker_openroad_command(stage_dir: str, image: str, pdk_root_host: str, pdk
 
 def run_agent(state: dict) -> dict:
     workflow_id = state.get("workflow_id", "default")
+    toggles = state.get("toggles") if isinstance(state.get("toggles"), dict) else {}
+    if toggles.get("enable_scan_dft") is False:
+        workflow_dir = os.path.abspath(state.get("workflow_dir") or f"backend/workflows/{workflow_id}")
+        stage_dir = os.path.join(workflow_dir, "digital", "dft")
+        _ensure_dir(stage_dir)
+        summary = {
+            "workflow_id": workflow_id,
+            "agent": AGENT_NAME,
+            "status": "not_applicable",
+            "reason": "enable_scan_dft_disabled",
+            "scan_chains": None,
+            "actual_scan_chains": None,
+            "scan_flops": None,
+            "stitched_netlist_generated": False,
+            "generated_at": datetime.utcnow().isoformat() + "Z",
+        }
+        report = "# DFT Scan Stitching\n\n- Status: `not_applicable`\n- Reason: `enable_scan_dft_disabled`\n"
+        _write_text(os.path.join(stage_dir, "scan_summary.json"), json.dumps(summary, indent=2))
+        _write_text(os.path.join(stage_dir, "dft_report.md"), report)
+        save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "dft/scan_summary.json", json.dumps(summary, indent=2))
+        save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "dft/dft_report.md", report)
+        digital = state.setdefault("digital", {})
+        digital["dft"] = {
+            "status": "not_applicable",
+            "reason": "enable_scan_dft_disabled",
+            "scan_stitched_netlist": None,
+        }
+        state["status"] = f"{AGENT_NAME}: not_applicable"
+        return state
+
     workflow_dir = os.path.abspath(state.get("workflow_dir") or f"backend/workflows/{workflow_id}")
     stage_dir = os.path.join(workflow_dir, "digital", "dft")
     logs_dir = os.path.join(stage_dir, "logs")
     _ensure_dir(logs_dir)
 
     netlist = _synth_netlist(state, workflow_dir)
+    sdc = _constraints_sdc(state, workflow_dir)
     top = _top_module(state, netlist)
     flop_count, latch_count = _count_scan_candidates(netlist)
     config = _scan_config(state, top, flop_count)
@@ -269,6 +336,7 @@ def run_agent(state: dict) -> dict:
     scan_netlist_path = os.path.join(stage_dir, "scan_stitched_netlist.v")
     input_dir = os.path.join(stage_dir, "input")
     input_netlist_path = os.path.join(input_dir, "synth_netlist.v")
+    input_sdc_path = os.path.join(input_dir, "constraints.sdc")
     tcl_path = os.path.join(stage_dir, "openroad_dft_scan.tcl")
     log_path = os.path.join(logs_dir, "openroad_dft_scan.log")
     summary_path = os.path.join(stage_dir, "scan_summary.json")
@@ -276,8 +344,11 @@ def run_agent(state: dict) -> dict:
 
     if netlist:
         _write_text(input_netlist_path, _read_text(netlist))
+    if sdc:
+        _write_text(input_sdc_path, _read_text(sdc))
     tcl_netlist = "input/synth_netlist.v" if netlist else None
-    tcl = _openroad_tcl(config, tcl_netlist, "scan_stitched_netlist.v", pdk)
+    tcl_sdc = "input/constraints.sdc" if sdc else None
+    tcl = _openroad_tcl(config, tcl_netlist, tcl_sdc, "scan_stitched_netlist.v", pdk)
     _write_text(tcl_path, tcl)
 
     rc = None
@@ -310,6 +381,7 @@ def run_agent(state: dict) -> dict:
     stitched = os.path.exists(scan_netlist_path)
     tool_available = bool(openroad or docker)
     status = _classify(rc, log, tool_available, netlist, flop_count, stitched)
+    actual_scan_chains = _actual_scan_chain_count(log)
     summary = {
         "workflow_id": workflow_id,
         "agent": AGENT_NAME,
@@ -325,9 +397,11 @@ def run_agent(state: dict) -> dict:
         "return_code": rc,
         "top_module": top,
         "synth_netlist": os.path.basename(netlist) if netlist else None,
+        "constraints_sdc": os.path.basename(sdc) if sdc else None,
         "scan_flops": flop_count,
         "latches": latch_count,
         "scan_chains": config["scan_chains"],
+        "actual_scan_chains": actual_scan_chains,
         "max_chain_length_estimate": config["max_chain_length_estimate"],
         "scan_enable": config["scan_enable"],
         "stitched_netlist_generated": stitched,
@@ -349,9 +423,11 @@ def run_agent(state: dict) -> dict:
         f"- PDK: `{pdk['pdk_variant']}`",
         f"- DFT mode: `scan_replace_preview`",
         f"- Top module: `{top}`",
+        f"- SDC: `{os.path.basename(sdc) if sdc else 'missing'}`",
         f"- Scan flops: `{flop_count}`",
         f"- Latches: `{latch_count}`",
         f"- Scan chains: `{config['scan_chains']}`",
+        f"- Actual scan chains: `{actual_scan_chains if actual_scan_chains is not None else 'not reported'}`",
         f"- Max chain length estimate: `{config['max_chain_length_estimate']}`",
         f"- Scan enable: `{config['scan_enable']}`",
         f"- Stitched netlist generated: `{stitched}`",
@@ -369,6 +445,8 @@ def run_agent(state: dict) -> dict:
     save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "dft/openroad_dft_scan.tcl", tcl)
     if netlist:
         save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "dft/input/synth_netlist.v", _read_text(input_netlist_path))
+    if sdc:
+        save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "dft/input/constraints.sdc", _read_text(input_sdc_path))
     save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "dft/logs/openroad_dft_scan.log", log)
     save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "dft/scan_summary.json", json.dumps(summary, indent=2))
     save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "dft/dft_report.md", report)

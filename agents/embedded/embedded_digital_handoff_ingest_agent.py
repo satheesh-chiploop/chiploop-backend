@@ -5,6 +5,7 @@ from typing import Any, Dict, List
 
 from ._embedded_common import ensure_workflow_dir, write_artifact
 from ._rtl_top_utils import apply_resolved_top, resolve_rtl_top_from_files
+from agents.digital.clock_intent import build_clock_intent
 
 AGENT_NAME = "Embedded Digital RTL Handoff Ingest Agent"
 ARTIFACT_BUCKET = "artifacts"
@@ -112,6 +113,15 @@ def _first_local_in_roots(roots: List[Path], suffixes: tuple[str, ...]) -> tuple
     return "", b""
 
 
+def _read_first_text(paths: List[str]) -> str:
+    for path in paths:
+        try:
+            return Path(path).read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            continue
+    return ""
+
+
 def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     source_workflow_id = str(state.get("from_workflow_id") or state.get("source_digital_workflow_id") or "").strip()
     if not source_workflow_id:
@@ -150,6 +160,10 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
         if path.lower().endswith("digital_regmap.json")
     ]
     regmap_candidates.append(f"{prefix}/digital/digital_regmap.json")
+    sdc_candidates = [
+        path for path in indexed_paths + stored_source_paths
+        if path.lower().endswith(".sdc")
+    ]
 
     rtl_source_path, rtl_raw = _first_download(client, list(dict.fromkeys(rtl_candidates)))
     regmap_source_path, regmap_raw = _first_download(client, list(dict.fromkeys(regmap_candidates)))
@@ -168,6 +182,14 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     source_top = requested_top or Path(rtl_name).stem
     local_rtl = _write_local(workflow_dir, f"digital/rtl/{rtl_name}", rtl_raw)
     local_regmap = _write_local(workflow_dir, "digital/digital_regmap.json", regmap_raw)
+    local_sdc_files: List[str] = []
+    for source_path in dict.fromkeys(sdc_candidates):
+        sdc_raw = _first_download(client, [source_path])[1]
+        if not sdc_raw:
+            continue
+        local_sdc_files.append(_write_local(workflow_dir, f"digital/constraints/{os.path.basename(source_path)}", sdc_raw))
+        if len(local_sdc_files) >= 4:
+            break
     source_top, rtl_top_debug = resolve_rtl_top_from_files(source_top, [local_rtl])
     try:
         digital_regmap = json.loads(regmap_raw.decode("utf-8"))
@@ -191,6 +213,17 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
         "digital_regmap_path": local_regmap,
         "rtl_files": [local_rtl],
     })
+    clock_intent = build_clock_intent(
+        spec={},
+        rtl_files=[local_rtl],
+        sdc_text=_read_first_text(local_sdc_files),
+        requested=state.get("clock_constraints") or state.get("clocks"),
+    )
+    state["clock_intent"] = clock_intent
+    state.setdefault("digital", {})["clock_intent"] = clock_intent
+    if local_sdc_files:
+        state["constraints_sdc"] = local_sdc_files[0]
+        state.setdefault("digital", {})["constraints_sdc"] = local_sdc_files[0]
 
     rtl_package = {
         "package_type": "system_rtl",
@@ -200,6 +233,8 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
         "top": {"sim": source_top, "phys": source_top},
         "filelists": {"sim": [local_rtl], "phys": [local_rtl], "libs": []},
         "register_map_path": "digital/digital_regmap.json",
+        "clock_intent_path": "digital/timing/clock_intent.json",
+        "clock_intent": clock_intent,
         "ready_for_cosim": True,
         "compile": {"sim": "imported_from_verified_digital_flow"},
         "notes": [
@@ -209,6 +244,7 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     }
     write_artifact(state, "digital/rtl/" + rtl_name, rtl_raw.decode("utf-8", errors="replace"), key=rtl_name)
     write_artifact(state, "digital/digital_regmap.json", json.dumps(digital_regmap, indent=2), key="digital_regmap.json")
+    write_artifact(state, "digital/timing/clock_intent.json", json.dumps(clock_intent, indent=2), key="clock_intent.json")
     write_artifact(state, RTL_PACKAGE_PATH, json.dumps(rtl_package, indent=2), key="system_rtl_package.json")
     write_artifact(state, DEBUG_PATH, json.dumps({
         "source_workflow_id": source_workflow_id,
@@ -216,6 +252,8 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
         "rtl_source_path": rtl_source_path,
         "rtl_top_resolution": rtl_top_debug,
         "regmap_source_path": regmap_source_path,
+        "local_sdc_files": local_sdc_files,
+        "clock_intent": clock_intent,
         "local_rtl_path": local_rtl,
         "local_regmap_path": local_regmap,
     }, indent=2), key="digital_handoff_ingest.json")

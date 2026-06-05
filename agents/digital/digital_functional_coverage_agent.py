@@ -380,6 +380,7 @@ def _build_coverage_points(
     spec: Dict[str, Any],
     top: str,
     soc_mode: bool = False,
+    coverage_plan: str = "",
 ) -> Dict[str, Any]:
     ports = [] if soc_mode else _ports_from_spec(spec)
 
@@ -410,7 +411,197 @@ def _build_coverage_points(
         "top_module": top,
         "output_points": output_points,
         "input_points": input_points,
+        "user_coverage_plan_points": _extract_user_plan_points(coverage_plan),
     }
+
+
+def _extract_user_plan_points(plan: str) -> List[Dict[str, Any]]:
+    if not isinstance(plan, str) or not plan.strip():
+        return []
+    points: List[Dict[str, Any]] = []
+    for raw in plan.splitlines():
+        line = raw.strip().strip("-*0123456789. ")
+        if not line:
+            continue
+        lower = line.lower()
+        if not any(token in lower for token in ("cover", "bin", "cross", "scenario", "assert", "check")):
+            continue
+        points.append({"name": line[:96], "source": "uploaded_coverage_plan"})
+        if len(points) >= 64:
+            break
+    return points
+
+
+def _plan_port_rows(ports: List[Dict[str, Any]], direction: str) -> List[str]:
+    rows: List[str] = []
+    for p in ports:
+        if _normalize_direction(p.get("direction")) != direction:
+            continue
+        name = str(p.get("name") or "").strip()
+        if name:
+            rows.append(f"- `{name}` width `{_port_width_expr(p)}`")
+    return rows
+
+
+def _generate_verification_plan(
+    spec: Dict[str, Any],
+    top: str,
+    ports: List[Dict[str, Any]],
+    clocks: List[str],
+    resets: List[Dict[str, Any]],
+    test_intent: str,
+) -> str:
+    reset_names = [str(r.get("name")) for r in resets if isinstance(r, dict) and r.get("name")]
+    inputs = _plan_port_rows(ports, "input")
+    outputs = _plan_port_rows(ports, "output")
+    feature_rows: List[str] = []
+    features = spec.get("features") or spec.get("requirements") or spec.get("functional_requirements") or []
+    if isinstance(features, list):
+        for item in features[:12]:
+            if isinstance(item, dict):
+                text = item.get("name") or item.get("description") or item.get("requirement")
+            else:
+                text = item
+            if text:
+                feature_rows.append(f"- {str(text).strip()}")
+
+    lines = [
+        "# Verification Plan",
+        "",
+        "- Source: generated_from_spec",
+        f"- Top module: `{top}`",
+        f"- Clocks: {', '.join(f'`{c}`' for c in clocks) if clocks else 'not declared'}",
+        f"- Resets: {', '.join(f'`{r}`' for r in reset_names) if reset_names else 'not declared'}",
+        "",
+        "## User/Test Intent",
+        test_intent.strip() or "No explicit test intent was provided. The plan is derived from the resolved RTL specification.",
+        "",
+        "## Interfaces Under Test",
+        "### Inputs",
+        *(inputs or ["- No spec-declared inputs found"]),
+        "",
+        "### Outputs",
+        *(outputs or ["- No spec-declared outputs found"]),
+        "",
+    ]
+    if feature_rows:
+        lines.extend(["## Functional Requirements", *feature_rows, ""])
+    lines.extend(
+        [
+            "## Planned Tests",
+            "- Reset/boot smoke test.",
+            "- Directed behavior tests for the uploaded/generated verification intent.",
+            "- Constrained-random stimulus for declared input ports.",
+            "- Output known-value and response checks for declared output ports.",
+            "",
+            "## Closure Criteria",
+            "- Simulation tests pass.",
+            "- Functional coverage points are either hit or waived with rationale.",
+            "- Code coverage and formal results are reviewed when enabled.",
+            "",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _generate_coverage_plan(cov_spec: Dict[str, Any]) -> str:
+    lines = [
+        "# Coverage Point Plan",
+        "",
+        "- Source: generated_from_spec",
+        f"- Top module: `{cov_spec.get('top_module') or 'top'}`",
+        "",
+        "## Output Coverpoints",
+    ]
+    for point in cov_spec.get("output_points") or []:
+        lines.append(f"- Cover `{point.get('name')}` zero and non-zero/value-transition bins.")
+    if not cov_spec.get("output_points"):
+        lines.append("- No spec-declared outputs found.")
+    lines.extend(["", "## Input Coverpoints"])
+    for point in cov_spec.get("input_points") or []:
+        lines.append(f"- Cover `{point.get('name')}` zero and non-zero/input-stimulus bins.")
+    if not cov_spec.get("input_points"):
+        lines.append("- No spec-declared inputs found.")
+    user_points = cov_spec.get("user_coverage_plan_points") or []
+    if user_points:
+        lines.extend(["", "## Uploaded Coverage Plan Points"])
+        for point in user_points:
+            lines.append(f"- {point.get('name')}")
+    lines.extend(
+        [
+            "",
+            "## Cross Coverage Candidates",
+            "- Cross reset release with first observed output activity.",
+            "- Cross primary control inputs with output response bins when both are present.",
+            "",
+            "## Closure Guidance",
+            "- Add directed tests for missed bins.",
+            "- Waive bins only with reviewer rationale.",
+            "",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _generate_monitor_checker_plan(
+    top: str,
+    ports: List[Dict[str, Any]],
+    clocks: List[str],
+    resets: List[Dict[str, Any]],
+    cov_spec: Dict[str, Any],
+) -> str:
+    reset_names = [str(r.get("name")) for r in resets if isinstance(r, dict) and r.get("name")]
+    input_names = [
+        str(p.get("name"))
+        for p in ports
+        if p.get("name") and _normalize_direction(p.get("direction")) in ("input", "inout")
+    ][:16]
+    output_names = [
+        str(p.get("name"))
+        for p in ports
+        if p.get("name") and _normalize_direction(p.get("direction")) == "output"
+    ][:16]
+    output_cov_names = [f"`{p.get('name')}`" for p in cov_spec.get("output_points", []) if p.get("name")]
+    input_cov_names = [f"`{p.get('name')}`" for p in cov_spec.get("input_points", []) if p.get("name")]
+
+    lines = [
+        "# Monitor And Checker Plan",
+        "",
+        "- Source: generated_from_spec",
+        f"- Top module: `{top}`",
+        f"- Clock observations: {', '.join(f'`{c}`' for c in clocks) if clocks else 'not declared'}",
+        f"- Reset observations: {', '.join(f'`{r}`' for r in reset_names) if reset_names else 'not declared'}",
+        "",
+        "## Monitors",
+        "- Clock/reset monitor: observe reset sequencing and active simulation edges.",
+        "- Input stimulus monitor: record values driven on declared inputs.",
+        "- Output response monitor: sample declared outputs after reset and stimulus changes.",
+        "- Coverage monitor: call `CoverageModel.sample()` at transaction/checkpoint boundaries.",
+        "",
+        "## Observed Inputs",
+        *( [f"- `{name}`" for name in input_names] or ["- No spec-declared inputs found"] ),
+        "",
+        "## Observed Outputs",
+        *( [f"- `{name}`" for name in output_names] or ["- No spec-declared outputs found"] ),
+        "",
+        "## Checkers",
+        "- Reset known-value checker: outputs should settle after reset release.",
+        "- Width/value checker: sampled signals use spec-declared widths.",
+        "- Scenario checker: directed tests should encode expected responses from the verification plan.",
+        "- Scoreboard hook: compare expected versus observed transactions when `scoreboard.py` is present.",
+        "- SVA hook: include generated assertion bind files when available.",
+        "",
+        "## Coverage Coupling",
+        f"- Functional output points: {', '.join(output_cov_names) or 'none'}",
+        f"- Functional input points: {', '.join(input_cov_names) or 'none'}",
+        "",
+        "## Review Checklist",
+        "- Every important requirement should have a monitor point.",
+        "- Every monitor should feed a checker, scoreboard, assertion, or coverage point.",
+        "- Add custom scoreboard logic for behavior that cannot be inferred from ports alone.",
+        "",
+    ]
+    return "\n".join(lines)
 
 
 def _gen_coverage_model(cov_spec: Dict[str, Any]) -> str:
@@ -607,7 +798,21 @@ def run_agent(state: dict) -> dict:
     spec = _safe_read_json(spec_path)
     ports = [] if soc_mode else _ports_from_spec(spec)
     clocks, resets = _infer_clocks_resets(spec, ports)
-    cov_spec = _build_coverage_points(spec, top, soc_mode=soc_mode)
+    uploaded_verification_plan = state.get("verification_plan") if isinstance(state.get("verification_plan"), str) else ""
+    uploaded_monitor_checker_plan = state.get("monitor_checker_plan") if isinstance(state.get("monitor_checker_plan"), str) else ""
+    uploaded_coverage_plan = state.get("coverage_plan") if isinstance(state.get("coverage_plan"), str) else ""
+    test_intent = state.get("test_intent") if isinstance(state.get("test_intent"), str) else ""
+    cov_spec = _build_coverage_points(spec, top, soc_mode=soc_mode, coverage_plan=uploaded_coverage_plan)
+    verification_plan_source = "uploaded" if uploaded_verification_plan.strip() else "generated_from_spec"
+    monitor_checker_plan_source = "uploaded" if uploaded_monitor_checker_plan.strip() else "generated_from_spec"
+    coverage_plan_source = "uploaded" if uploaded_coverage_plan.strip() else "generated_from_spec"
+    verification_plan = uploaded_verification_plan.strip() or _generate_verification_plan(
+        spec, top, ports, clocks, resets, test_intent
+    )
+    monitor_checker_plan = uploaded_monitor_checker_plan.strip() or _generate_monitor_checker_plan(
+        top, ports, clocks, resets, cov_spec
+    )
+    coverage_plan = uploaded_coverage_plan.strip() or _generate_coverage_plan(cov_spec)
 
     _log(log_path, f"resolved_mode={mode}")
     _log(log_path, f"spec_path={spec_path}")
@@ -621,6 +826,7 @@ def run_agent(state: dict) -> dict:
         {
             "output_points": [p["name"] for p in cov_spec["output_points"]],
             "input_points": [p["name"] for p in cov_spec["input_points"]],
+            "user_coverage_plan_points": [p["name"] for p in cov_spec.get("user_coverage_plan_points", [])],
         },
     )
 
@@ -654,6 +860,9 @@ Reports emitted by CoverageModel:
     _write_file(os.path.join(tb_root, "coverage_model.py"), cov_model_py)
     _write_file(os.path.join(tb_root, "coverage_spec.json"), cov_spec_txt)
     _write_file(os.path.join(tb_root, "COVERAGE.md"), readme)
+    _write_file(os.path.join(tb_root, "verification_plan.md"), verification_plan.strip() + "\n")
+    _write_file(os.path.join(tb_root, "monitor_checker_plan.md"), monitor_checker_plan.strip() + "\n")
+    _write_file(os.path.join(tb_root, "coverage_point_plan.md"), coverage_plan.strip() + "\n")
 
     _log(log_path, "Generated coverage_model.py")
     _log(log_path, "Generated coverage_spec.json")
@@ -663,6 +872,9 @@ Reports emitted by CoverageModel:
     artifacts["coverage_model_py"] = _record_text(workflow_id, agent_name, "vv/tb", "coverage_model.py", cov_model_py)
     artifacts["coverage_spec_json"] = _record_text(workflow_id, agent_name, "vv/tb", "coverage_spec.json", cov_spec_txt)
     artifacts["coverage_readme"] = _record_text(workflow_id, agent_name, "vv/tb", "COVERAGE.md", readme)
+    artifacts["verification_plan"] = _record_text(workflow_id, agent_name, "vv/tb", "verification_plan.md", verification_plan.strip() + "\n")
+    artifacts["monitor_checker_plan"] = _record_text(workflow_id, agent_name, "vv/tb", "monitor_checker_plan.md", monitor_checker_plan.strip() + "\n")
+    artifacts["coverage_point_plan"] = _record_text(workflow_id, agent_name, "vv/tb", "coverage_point_plan.md", coverage_plan.strip() + "\n")
 
     report = {
         "type": "functional_coverage_generation",
@@ -682,6 +894,17 @@ Reports emitted by CoverageModel:
         "coverage_points": {
             "output_points": [p["name"] for p in cov_spec["output_points"]],
             "input_points": [p["name"] for p in cov_spec["input_points"]],
+            "user_coverage_plan_points": [p["name"] for p in cov_spec.get("user_coverage_plan_points", [])],
+        },
+        "uploaded_plans": {
+            "verification_plan_present": bool(uploaded_verification_plan.strip()),
+            "monitor_checker_plan_present": bool(uploaded_monitor_checker_plan.strip()),
+            "coverage_plan_present": bool(uploaded_coverage_plan.strip()),
+        },
+        "plan_sources": {
+            "verification_plan": verification_plan_source,
+            "monitor_checker_plan": monitor_checker_plan_source,
+            "coverage_point_plan": coverage_plan_source,
         },
         "tools_detected": {
             "python": True,

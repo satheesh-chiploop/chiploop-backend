@@ -8,6 +8,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from tooling.runner import run_command, tool_path
 from utils.artifact_utils import save_text_artifact_and_record
+from .clock_intent import build_clock_intent
 
 AGENT_NAME = "Digital RTL Handoff Ingest Agent"
 ARTIFACT_BUCKET = "artifacts"
@@ -121,7 +122,7 @@ def _find_local_files(roots: Iterable[Path], predicate) -> List[Path]:
     return found
 
 
-def _artifact_candidates(client: Any, source_workflow_id: str) -> Tuple[List[str], List[str], List[str], List[str]]:
+def _artifact_candidates(client: Any, source_workflow_id: str) -> Tuple[List[str], List[str], List[str], List[str], List[str]]:
     response = (
         client.table("workflows")
         .select("artifacts")
@@ -145,7 +146,8 @@ def _artifact_candidates(client: Any, source_workflow_id: str) -> Tuple[List[str
         if p.lower().endswith(".json") and any(token in p.lower() for token in ("regmap", "register_map", "digital_regmap"))
     ]
     upf = [p for p in unique if p.lower().endswith(".upf")]
-    return rtl, spec, regmap, upf
+    sdc = [p for p in unique if p.lower().endswith(".sdc")]
+    return rtl, spec, regmap, upf, sdc
 
 
 def _copy_supabase_arch2rtl(state: Dict[str, Any], workflow_dir: str) -> Dict[str, Any]:
@@ -162,7 +164,7 @@ def _copy_supabase_arch2rtl(state: Dict[str, Any], workflow_dir: str) -> Dict[st
     if not source_workflow_id:
         raise RuntimeError("from_workflow_id is required for Arch2RTL handoff ingest")
 
-    rtl_paths, spec_paths, regmap_paths, upf_paths = _artifact_candidates(client, str(source_workflow_id))
+    rtl_paths, spec_paths, regmap_paths, upf_paths, sdc_paths = _artifact_candidates(client, str(source_workflow_id))
     roots = _source_local_roots(client, str(source_workflow_id))
 
     imported_rtl: List[str] = []
@@ -209,11 +211,25 @@ def _copy_supabase_arch2rtl(state: Dict[str, Any], workflow_dir: str) -> Dict[st
         state["power_intent_upf"] = imported_upf[0]
         state.setdefault("digital", {})["power_intent_upf"] = imported_upf[0]
 
+    imported_sdc: List[str] = []
+    for path in sdc_paths:
+        raw = _download(client, path)
+        if not raw:
+            continue
+        imported_sdc.append(_write_local(workflow_dir, f"handoff/constraints/{os.path.basename(path)}", raw))
+        if len(imported_sdc) >= 4:
+            break
+
+    if imported_sdc:
+        state["constraints_sdc"] = imported_sdc[0]
+        state.setdefault("digital", {})["constraints_sdc"] = imported_sdc[0]
+
     return {
         "source_mode": "from_arch2rtl",
         "source_workflow_id": str(source_workflow_id),
         "rtl_files": imported_rtl,
         "upf_files": imported_upf,
+        "sdc_files": imported_sdc,
         "spec_imported": bool(spec_json),
         "regmap_imported": bool(regmap_json),
     }
@@ -418,6 +434,24 @@ def _record_outputs(state: Dict[str, Any], workflow_dir: str, manifest: Dict[str
         "rtl_handoff_ingest_manifest.json",
         json.dumps(manifest, indent=2),
     )
+    clock_intent = state.get("clock_intent") or (state.get("digital") or {}).get("clock_intent")
+    if isinstance(clock_intent, dict):
+        save_text_artifact_and_record(
+            workflow_id,
+            AGENT_NAME,
+            "digital/handoff/timing",
+            "clock_intent.json",
+            json.dumps(clock_intent, indent=2),
+        )
+
+
+def _read_first_text(paths: Iterable[str]) -> str:
+    for path in paths:
+        try:
+            return Path(path).read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            continue
+    return ""
 
 
 def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
@@ -446,6 +480,26 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     if top_module:
         state["top_module"] = top_module
         manifest["top_module"] = top_module
+
+    requested_clock_constraints = state.get("clock_constraints") or state.get("clocks")
+    try:
+        default_mhz = float(state.get("target_frequency_mhz")) if state.get("target_frequency_mhz") is not None else None
+    except Exception:
+        default_mhz = None
+    clock_intent = build_clock_intent(
+        spec=state.get("spec_json") or state.get("digital_spec_json"),
+        rtl_files=rtl_files,
+        sdc_text=_read_first_text(manifest.get("sdc_files") or []),
+        requested=requested_clock_constraints,
+        default_frequency_mhz=default_mhz,
+    )
+    state["clock_intent"] = clock_intent
+    state.setdefault("digital", {})["clock_intent"] = clock_intent
+    if clock_intent.get("primary_clock"):
+        state["clock_ports"] = [c.get("port") for c in clock_intent.get("clocks", []) if c.get("port")]
+    if clock_intent.get("primary_reset"):
+        state["reset_ports"] = [r.get("port") for r in clock_intent.get("resets", []) if r.get("port")]
+    manifest["clock_intent"] = clock_intent
 
     manifest.update({
         "agent": AGENT_NAME,

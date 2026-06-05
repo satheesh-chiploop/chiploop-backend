@@ -114,6 +114,38 @@ def _run_detected_tool(state: dict, tool_name: str, stage_dir: str, netlist_path
 
 def run_agent(state: dict) -> dict:
     workflow_id = state.get("workflow_id", "default")
+    toggles = state.get("toggles") if isinstance(state.get("toggles"), dict) else {}
+    digital = state.setdefault("digital", {})
+    dft_state = digital.get("dft") if isinstance(digital.get("dft"), dict) else {}
+    if toggles.get("enable_scan_dft") is False or dft_state.get("status") in {"not_applicable", "scan_not_inserted", "no_scan_flops", "tool_unavailable"}:
+        workflow_dir = os.path.abspath(state.get("workflow_dir") or f"backend/workflows/{workflow_id}")
+        stage_dir = os.path.join(workflow_dir, "digital", "atpg")
+        _ensure_dir(stage_dir)
+        reason = "enable_scan_dft_disabled" if toggles.get("enable_scan_dft") is False else "scan_dft_not_available"
+        summary = {
+            "workflow_id": workflow_id,
+            "agent": AGENT_NAME,
+            "status": "not_applicable",
+            "reason": reason,
+            "tool": None,
+            "pattern_count": None,
+            "stuck_at_coverage_pct": None,
+            "coverage_source": "not_applicable",
+            "generated_at": datetime.utcnow().isoformat() + "Z",
+        }
+        report = f"# Scan ATPG Coverage\n\n- Status: `not_applicable`\n- Reason: `{reason}`\n"
+        _write_text(os.path.join(stage_dir, "atpg_summary.json"), json.dumps(summary, indent=2))
+        _write_text(os.path.join(stage_dir, "atpg_report.md"), report)
+        save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "atpg/atpg_summary.json", json.dumps(summary, indent=2))
+        save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "atpg/atpg_report.md", report)
+        digital["atpg"] = {
+            "status": "not_applicable",
+            "reason": reason,
+            "summary_json": os.path.join(stage_dir, "atpg_summary.json"),
+        }
+        state["status"] = f"{AGENT_NAME}: not_applicable"
+        return state
+
     workflow_dir = os.path.abspath(state.get("workflow_dir") or f"backend/workflows/{workflow_id}")
     stage_dir = os.path.join(workflow_dir, "digital", "atpg")
     logs_dir = os.path.join(stage_dir, "logs")
@@ -194,7 +226,6 @@ def run_agent(state: dict) -> dict:
     save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "atpg/atpg_summary.json", json.dumps(summary, indent=2))
     save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "atpg/atpg_report.md", report)
 
-    digital = state.setdefault("digital", {})
     digital["atpg"] = {
         "status": status,
         "summary_json": summary_path,

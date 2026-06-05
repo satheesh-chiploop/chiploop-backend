@@ -8,6 +8,7 @@ from datetime import datetime
 logger = logging.getLogger("chiploop")
 
 from utils.artifact_utils import save_text_artifact_and_record
+from .clock_intent import build_clock_intent, normalize_clock_constraints, sdc_from_clock_intent
 
 AGENT_NAME = "Digital Implementation Setup Agent"
 
@@ -193,6 +194,34 @@ create_clock -name {clk_name} -period {period_ns:.3f} [get_ports {clk_name}]
 """
 
 
+def _override_sdc_from_request(state: dict, clk_name: str, reset_name: str) -> tuple[str | None, str]:
+    raw_sdc = state.get("constraints_sdc")
+    if isinstance(raw_sdc, str) and raw_sdc.strip():
+        return raw_sdc.strip() + "\n", "request_constraints_sdc"
+
+    explicit_clock_constraints = normalize_clock_constraints(state.get("clock_constraints"))
+    if explicit_clock_constraints.get("clocks"):
+        text = sdc_from_clock_intent(explicit_clock_constraints)
+        if text:
+            return text, "request_clock_constraints"
+
+    clock_intent = state.get("clock_intent") or (state.get("digital") or {}).get("clock_intent")
+    if isinstance(clock_intent, dict) and clock_intent.get("clocks"):
+        text = sdc_from_clock_intent(clock_intent)
+        if text:
+            return text, "inferred_clock_intent"
+
+    target_mhz = state.get("target_frequency_mhz")
+    try:
+        mhz = float(target_mhz) if target_mhz is not None else 0.0
+    except Exception:
+        mhz = 0.0
+    if mhz > 0:
+        return _build_fallback_sdc(clk_name, mhz, reset_name), "request_target_frequency_mhz"
+
+    return None, "none"
+
+
 def _resolve_clock_reset(profile: dict, spec: dict) -> tuple[str, str, float]:
     timing = profile.get("timing") or {}
     spec_clock = spec.get("clock") or {}
@@ -204,6 +233,29 @@ def _resolve_clock_reset(profile: dict, spec: dict) -> tuple[str, str, float]:
     except Exception:
         clk_mhz = 50.0
     return clk_name, reset_name, clk_mhz
+
+
+def _clock_intent_for_setup(state: dict, spec: dict, rtl_files: list[str], upstream_sdc: str | None) -> dict:
+    sdc_text = ""
+    if upstream_sdc and os.path.exists(upstream_sdc):
+        try:
+            with open(upstream_sdc, "r", encoding="utf-8", errors="ignore") as f:
+                sdc_text = f.read()
+        except Exception:
+            sdc_text = ""
+    try:
+        default_mhz = float(state.get("target_frequency_mhz")) if state.get("target_frequency_mhz") is not None else None
+    except Exception:
+        default_mhz = None
+    existing = state.get("clock_intent") or (state.get("digital") or {}).get("clock_intent")
+    requested = state.get("clock_constraints") or existing
+    return build_clock_intent(
+        spec=spec,
+        rtl_files=rtl_files,
+        sdc_text=sdc_text,
+        requested=requested,
+        default_frequency_mhz=default_mhz,
+    )
 
 
 def run_agent(state: dict) -> dict:
@@ -241,13 +293,33 @@ def run_agent(state: dict) -> dict:
 
         top_module = _resolve_top_module(spec, state)
         clk_name, reset_name, clk_mhz = _resolve_clock_reset(profile, spec)
-        period_ns = 1000.0 / float(clk_mhz)
+        try:
+            requested_mhz = float(state.get("target_frequency_mhz")) if state.get("target_frequency_mhz") is not None else 0.0
+        except Exception:
+            requested_mhz = 0.0
+        if requested_mhz > 0:
+            clk_mhz = requested_mhz
 
         rtl_files = _resolve_rtl_files(state, workflow_dir)
         if not rtl_files:
             raise RuntimeError("No RTL files found for implementation setup.")
 
         upstream_sdc, sdc_source = _resolve_sdc_from_state(state, workflow_dir)
+        clock_intent = _clock_intent_for_setup(state, spec, rtl_files, upstream_sdc)
+        if clock_intent.get("primary_clock"):
+            clk_name = str(clock_intent["primary_clock"])
+        if clock_intent.get("primary_reset"):
+            reset_name = str(clock_intent["primary_reset"])
+        primary = (clock_intent.get("clocks") or [{}])[0] if isinstance(clock_intent.get("clocks"), list) and clock_intent.get("clocks") else {}
+        try:
+            if primary.get("frequency_mhz"):
+                clk_mhz = float(primary["frequency_mhz"])
+            elif primary.get("period_ns"):
+                clk_mhz = 1000.0 / float(primary["period_ns"])
+        except Exception:
+            pass
+        period_ns = 1000.0 / float(clk_mhz)
+        override_sdc_text, override_sdc_source = _override_sdc_from_request(state, clk_name, reset_name)
 
         logger.info(f"{AGENT_NAME}: profile_path={profile_path}")
         logger.info(f"{AGENT_NAME}: spec_json_path={spec_json_path}")
@@ -263,10 +335,15 @@ def run_agent(state: dict) -> dict:
         filelist_text = "\n".join(rtl_files) + "\n"
         _write_text(filelist_path, filelist_text)
 
-        sdc_basename = os.path.basename(upstream_sdc) if upstream_sdc else f"{top_module}.sdc"
+        sdc_basename = f"{top_module}.sdc" if override_sdc_text else os.path.basename(upstream_sdc) if upstream_sdc else f"{top_module}.sdc"
         canonical_sdc_path = os.path.join(constraints_dir, sdc_basename)
 
-        if upstream_sdc and os.path.exists(upstream_sdc):
+        if override_sdc_text:
+            sdc_text = override_sdc_text
+            _write_text(canonical_sdc_path, sdc_text)
+            sdc_source = override_sdc_source
+            logger.info(f"{AGENT_NAME}: using request SDC override -> {canonical_sdc_path}")
+        elif upstream_sdc and os.path.exists(upstream_sdc):
             shutil.copy2(upstream_sdc, canonical_sdc_path)
             with open(canonical_sdc_path, "r", encoding="utf-8") as f:
                 sdc_text = f.read()
@@ -325,6 +402,9 @@ def run_agent(state: dict) -> dict:
             f"reset_name={reset_name}",
             f"clock_mhz={clk_mhz}",
             f"clock_period_ns={period_ns}",
+            f"clock_intent={json.dumps(clock_intent)}",
+            f"request_target_frequency_mhz={state.get('target_frequency_mhz')}",
+            f"request_constraints_sdc_present={bool(isinstance(state.get('constraints_sdc'), str) and state.get('constraints_sdc').strip())}",
             f"upstream_sdc={upstream_sdc}",
             f"sdc_source={sdc_source}",
             f"sdc_basename={sdc_basename}",
@@ -369,6 +449,7 @@ def run_agent(state: dict) -> dict:
                 "input_resolution_log": "digital/impl_setup/logs/implementation_setup_input_resolution.log",
                 "setup_log": "digital/impl_setup/implementation_setup.log",
             },
+            "clock_intent": clock_intent,
         }
         summary_path = os.path.join(stage_dir, "implementation_setup_summary.json")
         _write_text(summary_path, json.dumps(summary, indent=2))
@@ -442,6 +523,13 @@ def run_agent(state: dict) -> dict:
             "impl_setup/implementation_setup_summary.json",
             json.dumps(summary, indent=2),
         )
+        save_text_artifact_and_record(
+            workflow_id,
+            AGENT_NAME,
+            "digital",
+            "timing/clock_intent.json",
+            json.dumps(clock_intent, indent=2),
+        )
         logger.info(f"{AGENT_NAME}: artifact upload complete")
 
         digital = state.setdefault("digital", {})
@@ -449,6 +537,7 @@ def run_agent(state: dict) -> dict:
         digital["top_module"] = top_module
         digital["rtl_files"] = rtl_files
         digital["constraints_sdc"] = canonical_sdc_path
+        digital["clock_intent"] = clock_intent
         digital["impl_filelist"] = filelist_path
         digital["openlane_config"] = cfg_path
         digital["implementation_setup_log"] = setup_log_path

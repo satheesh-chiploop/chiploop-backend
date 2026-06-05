@@ -33,6 +33,7 @@ import asyncio
 from planner.auto_fill_missing import auto_fill_missing_fields
 from agents.runtime import AgentContext, configure_runtime_logging, execute_legacy_agent, log_runtime_event
 from utils.artifact_utils import save_text_artifact_and_record
+from agents.digital.clock_intent import build_clock_intent
 from auth_api_keys.middleware import require_sdk_api_key
 from auth_api_keys.service import get_api_key_service
 from billing import BillingPaymentRequired, TrialCheckoutRequired, get_billing_service
@@ -2476,7 +2477,7 @@ class DigitalArch2RTLAppIn(BaseModel):
     resets: Optional[Any] = None
     power_priority: Optional[str] = None
 
-    toggles: Optional[Dict[str, bool]] = None  # {"gen_regmap":true, "gen_upf_lite":false, "gen_packaging":true}
+    toggles: Optional[Dict[str, bool]] = None  # {"gen_regmap":true, "gen_upf_lite":false, "gen_packaging":true, "enable_scan_dft":false}
 
 
 class DigitalRTLSourceIn(BaseModel):
@@ -2504,6 +2505,7 @@ class DigitalArch2SynthesisAppIn(DigitalArch2RTLAppIn, DigitalRTLSourceIn):
     toolchain: Optional[str] = None        # e.g., "openlane2"
     target_frequency_mhz: Optional[float] = None
     constraints_sdc: Optional[str] = None
+    clock_constraints: Optional[Any] = None
 
     # stage control
     start_stage: Optional[str] = "arch2rtl"   # "arch2rtl" | "synth"
@@ -2524,6 +2526,7 @@ class DigitalArch2TapeoutAppIn(DigitalArch2RTLAppIn, DigitalRTLSourceIn):
     toolchain: Optional[str] = None
     target_frequency_mhz: Optional[float] = None
     constraints_sdc: Optional[str] = None
+    clock_constraints: Optional[Any] = None
 
     # implementation knobs
     effort: Optional[str] = "balanced"     # "fast" | "balanced" | "signoff"
@@ -2550,6 +2553,7 @@ class DigitalDQAAppIn(BaseModel):
 
     clocks: Optional[Any] = None
     resets: Optional[Any] = None
+    clock_constraints: Optional[Any] = None
 
     lint_profile: Optional[str] = "medium"
     cdc_profile: Optional[str] = "default"
@@ -2569,15 +2573,19 @@ class DigitalVerifyAppIn(BaseModel):
     upstream_workflows: Optional[Dict[str, Any]] = None
 
     test_intent: Optional[str] = None
+    verification_plan: Optional[str] = None
+    monitor_checker_plan: Optional[str] = None
     interfaces: Optional[Any] = None
     random_vs_directed: Optional[str] = None
     coverage_targets: Optional[str] = None
+    coverage_plan: Optional[str] = None
     simulator_type: Optional[str] = None
     seed_count: Optional[int] = None
 
     toolchain: Optional[Dict[str, str]] = None
     run_closure_analysis: Optional[bool] = False
     toggles: Optional[Dict[str, bool]] = None  # {"enable_formal":false, "enable_golden_model":false}
+    clock_constraints: Optional[Any] = None
 
 
 class DigitalVerifyClosureAppIn(BaseModel):
@@ -2604,6 +2612,7 @@ class DigitalSmokeAppIn(BaseModel):
     time_budget: Optional[str] = "fast"      # "fast" | "medium"
     seed_count: Optional[int] = None         # optional override
     enable_waveform: Optional[bool] = False
+    clock_constraints: Optional[Any] = None
 
     # optional freeform notes
     notes: Optional[str] = None
@@ -2628,6 +2637,7 @@ class DigitalIntegrateAppIn(BaseModel):
     # Optional extras
     enable_packaging: Optional[bool] = True
     notes: Optional[str] = None
+    clock_constraints: Optional[Any] = None
 
 class ValidationPlanCoverageAppIn(BaseModel):
     datasheet_text: str
@@ -3003,6 +3013,106 @@ async def apps_arch2tapeout_run(request: Request, background_tasks: BackgroundTa
     )
 
     return {"ok": True, "workflow_id": workflow_id, "run_id": run_id}
+
+
+def _artifact_storage_paths_for_main(value: Any) -> List[str]:
+    paths: List[str] = []
+    if isinstance(value, dict):
+        for child in value.values():
+            paths.extend(_artifact_storage_paths_for_main(child))
+    elif isinstance(value, list):
+        for child in value:
+            paths.extend(_artifact_storage_paths_for_main(child))
+    elif isinstance(value, str):
+        paths.append(value.replace("\\", "/"))
+    return paths
+
+
+def _list_storage_tree_for_main(folder: str, depth: int = 0, max_depth: int = 5) -> List[str]:
+    if depth > max_depth:
+        return []
+    try:
+        entries = supabase.storage.from_(ARTIFACT_BUCKET).list(folder) or []
+    except Exception:
+        return []
+    paths: List[str] = []
+    for entry in entries:
+        name = entry.get("name") if isinstance(entry, dict) else None
+        if not name:
+            continue
+        path = f"{folder.rstrip('/')}/{name}"
+        paths.append(path)
+        paths.extend(_list_storage_tree_for_main(path, depth + 1, max_depth))
+    return paths
+
+
+def _download_text_for_main(path: str, max_bytes: int = 2_000_000) -> str:
+    try:
+        raw = supabase.storage.from_(ARTIFACT_BUCKET).download(path)
+    except Exception:
+        return ""
+    if not raw:
+        return ""
+    if len(raw) > max_bytes:
+        return ""
+    return raw.decode("utf-8", errors="replace")
+
+
+@app.get("/apps/digital/clock-candidates/{source_workflow_id}")
+async def apps_digital_clock_candidates(request: Request, source_workflow_id: str):
+    _require_user_id(request)
+    row = (
+        supabase.table("workflows")
+        .select("id,artifacts")
+        .eq("id", source_workflow_id)
+        .single()
+        .execute()
+    ).data or {}
+    if not row:
+        raise HTTPException(status_code=404, detail="source workflow not found")
+
+    prefix = f"backend/workflows/{source_workflow_id}"
+    paths = list(dict.fromkeys(
+        _artifact_storage_paths_for_main(row.get("artifacts") or {})
+        + _list_storage_tree_for_main(prefix)
+    ))
+    rtl_texts = [
+        _download_text_for_main(path)
+        for path in paths
+        if path.lower().endswith((".sv", ".v")) and "/rtl/" in path.lower()
+    ][:16]
+    spec_text = ""
+    for path in paths:
+        lowered = path.lower()
+        if lowered.endswith(".json") and ("spec" in os.path.basename(lowered) or "/spec/" in lowered):
+            spec_text = _download_text_for_main(path)
+            if spec_text:
+                break
+    sdc_text = ""
+    for path in paths:
+        if path.lower().endswith(".sdc"):
+            sdc_text = _download_text_for_main(path)
+            if sdc_text:
+                break
+
+    temp_dir = os.path.join("artifacts", "_clock_probe", source_workflow_id)
+    os.makedirs(temp_dir, exist_ok=True)
+    rtl_files: List[str] = []
+    for idx, text in enumerate(rtl_texts):
+        if not text:
+            continue
+        local = os.path.join(temp_dir, f"source_{idx}.sv")
+        with open(local, "w", encoding="utf-8") as f:
+            f.write(text)
+        rtl_files.append(local)
+    spec_obj: Any = {}
+    if spec_text:
+        try:
+            spec_obj = json.loads(spec_text)
+        except Exception:
+            spec_obj = {}
+    intent = build_clock_intent(spec=spec_obj, rtl_files=rtl_files, sdc_text=sdc_text)
+    return {"ok": True, "source_workflow_id": source_workflow_id, "clock_intent": intent}
 
 
 @app.post("/apps/dqa/run")

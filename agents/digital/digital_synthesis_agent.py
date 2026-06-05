@@ -336,6 +336,12 @@ def run_agent(state: dict) -> dict:
     logger.info(f"{AGENT_NAME}: spec_json={spec_json}")
 
     clk_name, clk_period_ns = _pick_clock(spec)
+    try:
+        requested_mhz = float(state.get("target_frequency_mhz")) if state.get("target_frequency_mhz") is not None else 0.0
+    except Exception:
+        requested_mhz = 0.0
+    if requested_mhz > 0:
+        clk_period_ns = 1000.0 / requested_mhz
 
     # ---------- Stage folder ----------
     stage_dir = os.path.join(workflow_dir, "digital", "synth")
@@ -436,6 +442,8 @@ def run_agent(state: dict) -> dict:
         f"spec_json={spec_json}",
         f"top_module={top_module}",
         f"rtl_count={len(rtl_files)}",
+        f"request_target_frequency_mhz={state.get('target_frequency_mhz')}",
+        f"clock_period_ns={clk_period_ns}",
         f"upstream_sdc={upstream_sdc}",
         f"sdc_basename={sdc_basename}",
         f"synth_sdc_path={sdc_path}",

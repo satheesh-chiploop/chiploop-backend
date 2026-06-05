@@ -109,6 +109,25 @@ def _download_text_artifact(supabase: Any, path: str) -> str:
     return str(data or "")
 
 
+def _inspection_probe_paths(workflow: Dict[str, Any]) -> list[str]:
+    workflow_id = str(workflow.get("id") or "").strip()
+    if not workflow_id:
+        return []
+    prefix = f"backend/workflows/{workflow_id}"
+    return [
+        f"{prefix}/digital/upf/upf_static_check.json",
+        f"{prefix}/digital/upf/upf_static_check.md",
+        f"{prefix}/digital/upf/upf_unsupported_commands.txt",
+        f"{prefix}/digital/upf/logs/openroad_read_upf.log",
+        f"{prefix}/digital/upf/logs/private_upf_static_check.log",
+        f"{prefix}/digital/synth/synth_summary.json",
+        f"{prefix}/digital/synth/synth_summary.md",
+        f"{prefix}/digital/lec/lec_summary.json",
+        f"{prefix}/digital/dft/scan_summary.json",
+        f"{prefix}/digital/atpg/atpg_summary.json",
+    ]
+
+
 def _collect_run_inspection_context(supabase: Any, workflow: Dict[str, Any]) -> tuple[str, list[Dict[str, str]]]:
     sources: list[Dict[str, str]] = []
     sections: list[str] = [
@@ -137,7 +156,7 @@ def _collect_run_inspection_context(supabase: Any, workflow: Dict[str, Any]) -> 
         sources.append({"type": "artifact_index", "path": "workflows.artifacts"})
 
     seen: set[str] = set()
-    for raw_path in _iter_leaf_strings(artifacts):
+    for raw_path in list(_iter_leaf_strings(artifacts)) + _inspection_probe_paths(workflow):
         path = _normalize_storage_path(raw_path)
         if not path or path in seen or not _is_text_artifact(path):
             continue

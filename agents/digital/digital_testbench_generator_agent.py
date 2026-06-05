@@ -465,6 +465,17 @@ def _build_randomizable_inputs(
     return arr
 
 
+def _build_observable_outputs(ports: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    arr: List[Dict[str, Any]] = []
+    for p in ports:
+        name = p.get("name")
+        direction = _normalize_direction(p.get("direction"))
+        if not name or direction != "output":
+            continue
+        arr.append({"name": name, "width_expr": _port_width_expr(p)})
+    return arr
+
+
 def _gen_cocotb_test(
     spec: Dict[str, Any],
     top: str,
@@ -477,6 +488,7 @@ def _gen_cocotb_test(
     clock_start = _render_clock_start(clocks)
     reset_seq = _render_reset_sequence(resets)
     randomizable_inputs = _build_randomizable_inputs(ports, clocks, resets)
+    observable_outputs = _build_observable_outputs(ports)
 
     template = '''"""Auto-generated Cocotb testbench skeleton for: {top}
 
@@ -531,6 +543,16 @@ def _safe_drive_random(sig, width_expr: str):
     sig.value = random.getrandbits(width)
 
 
+def _assert_outputs_known(dut, observable_outputs):
+    for p in observable_outputs:
+        name = p.get("name")
+        if not name or not hasattr(dut, name):
+            continue
+        sig = getattr(dut, name)
+        value = str(sig.value).lower()
+        assert "x" not in value and "z" not in value, f"Output {{name}} is unknown/high-Z: {{sig.value}}"
+
+
 @cocotb.test()
 async def smoke_test(dut):
     """Basic smoke test: clock/reset bring-up and brief settle window."""
@@ -561,6 +583,8 @@ async def smoke_test(dut):
                 cov.sample()
             except Exception:
                 pass
+
+    _assert_outputs_known(dut, {observable_outputs_json})
 
     if cov:
         try:
@@ -611,6 +635,8 @@ async def constrained_random_sanity(dut):
             except Exception:
                 pass
 
+    _assert_outputs_known(dut, {observable_outputs_json})
+
     if cov:
         try:
             cov.stop()
@@ -627,6 +653,7 @@ async def constrained_random_sanity(dut):
         reset_seq=reset_seq.rstrip(),
         input_init=input_init,
         randomizable_inputs_json=json.dumps(randomizable_inputs, indent=2),
+        observable_outputs_json=json.dumps(observable_outputs, indent=2),
     )
 
 def _selected_default_tests(selection: Any) -> List[str]:
@@ -744,6 +771,209 @@ include $(COCOTB_MAKEFILES)/Makefile.sim
 """
 
 
+def _plan_port_rows(ports: List[Dict[str, Any]], direction: str) -> List[str]:
+    rows: List[str] = []
+    for p in ports:
+        if _normalize_direction(p.get("direction")) != direction:
+            continue
+        name = str(p.get("name") or "").strip()
+        if not name:
+            continue
+        rows.append(f"- `{name}` width `{_port_width_expr(p)}`")
+    return rows
+
+
+def _generate_verification_plan(
+    spec: Dict[str, Any],
+    top: str,
+    ports: List[Dict[str, Any]],
+    clocks: List[str],
+    resets: List[Dict[str, Any]],
+    test_intent: str,
+) -> str:
+    inputs = _plan_port_rows(ports, "input")
+    outputs = _plan_port_rows(ports, "output")
+    inouts = _plan_port_rows(ports, "inout")
+    reset_names = [str(r.get("name")) for r in resets if isinstance(r, dict) and r.get("name")]
+    features = spec.get("features") or spec.get("requirements") or spec.get("functional_requirements") or []
+    feature_rows: List[str] = []
+    if isinstance(features, list):
+        for item in features[:12]:
+            if isinstance(item, dict):
+                text = item.get("name") or item.get("description") or item.get("requirement")
+            else:
+                text = item
+            if text:
+                feature_rows.append(f"- {str(text).strip()}")
+
+    lines = [
+        "# Verification Plan",
+        "",
+        f"- Source: generated_from_spec",
+        f"- Top module: `{top}`",
+        f"- Clocks: {', '.join(f'`{c}`' for c in clocks) if clocks else 'not declared'}",
+        f"- Resets: {', '.join(f'`{r}`' for r in reset_names) if reset_names else 'not declared'}",
+        "",
+        "## User/Test Intent",
+        test_intent.strip() or "No explicit test intent was provided. The plan is derived from the resolved RTL specification.",
+        "",
+        "## Interfaces Under Test",
+        "### Inputs",
+        *(inputs or ["- No spec-declared inputs found"]),
+        "",
+        "### Outputs",
+        *(outputs or ["- No spec-declared outputs found"]),
+        "",
+    ]
+    if inouts:
+        lines.extend(["### Inouts", *inouts, ""])
+    if feature_rows:
+        lines.extend(["## Functional Requirements", *feature_rows, ""])
+    lines.extend(
+        [
+            "## Planned Tests",
+            "- Reset/boot smoke test: drive reset, release reset, confirm stable known behavior.",
+            "- Register or control path test: exercise configuration/control inputs and observe outputs.",
+            "- Directed scenario tests: cover the key user intent and spec-declared behavior.",
+            "- Constrained-random sanity: vary input values around zero, one, max, and non-zero buckets.",
+            "- Output stability checks: confirm outputs do not become unknown after reset release.",
+            "",
+            "## Assertions And Checks",
+            "- Reset sequencing checks for declared reset ports.",
+            "- Clocked output known-value checks after reset release.",
+            "- Interface-specific checks generated from port directions and widths.",
+            "",
+            "## Closure Criteria",
+            "- All generated simulation tests pass.",
+            "- Functional coverage points in `coverage_point_plan.md` are reviewed and either hit or waived.",
+            "- Code coverage and formal results are reviewed when enabled for this run.",
+            "",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _generate_coverage_plan(cov_spec: Dict[str, Any]) -> str:
+    lines = [
+        "# Coverage Point Plan",
+        "",
+        "- Source: generated_from_spec",
+        f"- Top module: `{cov_spec.get('top_module') or 'top'}`",
+        "",
+        "## Output Coverpoints",
+    ]
+    outputs = cov_spec.get("output_points") or []
+    if outputs:
+        for point in outputs:
+            lines.append(f"- Cover `{point.get('name')}` zero and non-zero/value-transition bins.")
+    else:
+        lines.append("- No spec-declared outputs found.")
+    lines.extend(["", "## Input Coverpoints"])
+    inputs = cov_spec.get("input_points") or []
+    if inputs:
+        for point in inputs:
+            lines.append(f"- Cover `{point.get('name')}` zero and non-zero/input-stimulus bins.")
+    else:
+        lines.append("- No spec-declared inputs found.")
+    user_points = cov_spec.get("user_coverage_plan_points") or []
+    if user_points:
+        lines.extend(["", "## Uploaded Coverage Plan Points"])
+        for point in user_points:
+            lines.append(f"- {point.get('name')}")
+    lines.extend(
+        [
+            "",
+            "## Cross Coverage Candidates",
+            "- Cross reset release with first observed output activity.",
+            "- Cross primary control inputs with output response bins when both are present.",
+            "",
+            "## Closure Guidance",
+            "- Review uncovered bins before accepting closure.",
+            "- Add directed tests for missed bins, or mark exclusions with reviewer rationale.",
+            "",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _generate_monitor_checker_plan(
+    top: str,
+    ports: List[Dict[str, Any]],
+    clocks: List[str],
+    resets: List[Dict[str, Any]],
+    cov_spec: Dict[str, Any],
+) -> str:
+    reset_names = [str(r.get("name")) for r in resets if isinstance(r, dict) and r.get("name")]
+    inputs = [p for p in ports if _normalize_direction(p.get("direction")) in ("input", "inout")]
+    outputs = [p for p in ports if _normalize_direction(p.get("direction")) == "output"]
+    control_inputs = [
+        str(p.get("name"))
+        for p in inputs
+        if p.get("name") and not str(p.get("name")) in set(clocks + reset_names)
+    ][:16]
+    observed_outputs = [str(p.get("name")) for p in outputs if p.get("name")][:16]
+    output_cov_names = [f"`{p.get('name')}`" for p in cov_spec.get("output_points", []) if p.get("name")]
+    input_cov_names = [f"`{p.get('name')}`" for p in cov_spec.get("input_points", []) if p.get("name")]
+
+    lines = [
+        "# Monitor And Checker Plan",
+        "",
+        "- Source: generated_from_spec",
+        f"- Top module: `{top}`",
+        f"- Clock observations: {', '.join(f'`{c}`' for c in clocks) if clocks else 'not declared'}",
+        f"- Reset observations: {', '.join(f'`{r}`' for r in reset_names) if reset_names else 'not declared'}",
+        "",
+        "## Monitors",
+        "- Clock/reset monitor: observes reset assertion/deassertion and first active clock edges.",
+        "- Input stimulus monitor: records driven values on declared non-clock/reset inputs.",
+        "- Output response monitor: samples declared outputs after reset release and after stimulus changes.",
+        "- Coverage monitor: calls `CoverageModel.sample()` at transaction/checkpoint boundaries.",
+        "",
+        "## Observed Inputs",
+        *( [f"- `{name}`" for name in control_inputs] or ["- No spec-declared non-clock/reset inputs found"] ),
+        "",
+        "## Observed Outputs",
+        *( [f"- `{name}`" for name in observed_outputs] or ["- No spec-declared outputs found"] ),
+        "",
+        "## Checkers",
+        "- Reset known-value checker: outputs must not remain unknown after reset release and settle.",
+        "- Width/value checker: sampled signals are interpreted using spec-declared widths.",
+        "- Scenario checker: directed tests should encode expected responses from the verification plan.",
+        "- Scoreboard hook: `Scoreboard` is loaded when `scoreboard.py` is present and can compare expected versus observed transactions.",
+        "- SVA hook: generated SVA/bind files are included through `verification_sources.mk` when available.",
+        "",
+        "## Coverage Coupling",
+        f"- Functional output points: {', '.join(output_cov_names) or 'none'}",
+        f"- Functional input points: {', '.join(input_cov_names) or 'none'}",
+        "",
+        "## Review Checklist",
+        "- Confirm each important requirement has a monitor point.",
+        "- Confirm each monitor feeds a checker, scoreboard, assertion, or coverage point.",
+        "- Add directed tests or custom scoreboard logic for behavior that cannot be inferred from ports alone.",
+        "",
+    ]
+    return "\n".join(lines)
+
+
+def _coverage_points_from_ports(top: str, ports: List[Dict[str, Any]]) -> Dict[str, Any]:
+    output_points: List[Dict[str, Any]] = []
+    input_points: List[Dict[str, Any]] = []
+    for p in ports:
+        name = p.get("name")
+        if not name:
+            continue
+        point = {
+            "name": str(name),
+            "direction": _normalize_direction(p.get("direction")),
+            "width_expr": _port_width_expr(p),
+        }
+        if point["direction"] == "output":
+            output_points.append(point)
+        elif point["direction"] in ("input", "inout"):
+            input_points.append(point)
+    return {"top_module": top, "output_points": output_points[:16], "input_points": input_points[:16]}
+
+
 
 
 def run_agent(state: dict) -> dict:
@@ -784,6 +1014,21 @@ def run_agent(state: dict) -> dict:
     test_py = _gen_cocotb_test(spec, top, clocks, resets, soc_mode=soc_mode)
     test_selection = state.get("random_vs_directed") or "both"
     testcase_manifest = _build_testcases_manifest(top, clocks, resets, mode, test_selection)
+    uploaded_verification_plan = state.get("verification_plan") if isinstance(state.get("verification_plan"), str) else ""
+    uploaded_monitor_checker_plan = state.get("monitor_checker_plan") if isinstance(state.get("monitor_checker_plan"), str) else ""
+    uploaded_coverage_plan = state.get("coverage_plan") if isinstance(state.get("coverage_plan"), str) else ""
+    test_intent = state.get("test_intent") if isinstance(state.get("test_intent"), str) else ""
+    verification_plan_source = "uploaded" if uploaded_verification_plan.strip() else "generated_from_spec"
+    monitor_checker_plan_source = "uploaded" if uploaded_monitor_checker_plan.strip() else "generated_from_spec"
+    coverage_plan_source = "uploaded" if uploaded_coverage_plan.strip() else "generated_from_spec"
+    cov_plan_spec = _coverage_points_from_ports(top, ports)
+    verification_plan = uploaded_verification_plan.strip() or _generate_verification_plan(
+        spec, top, ports, clocks, resets, test_intent
+    )
+    monitor_checker_plan = uploaded_monitor_checker_plan.strip() or _generate_monitor_checker_plan(
+        top, ports, clocks, resets, cov_plan_spec
+    )
+    coverage_plan = uploaded_coverage_plan.strip() or _generate_coverage_plan(cov_plan_spec)
 
     verification_files = [
         p for p in [
@@ -811,6 +1056,12 @@ def run_agent(state: dict) -> dict:
         "generated_rtl_sources_mk": "vv/tb/rtl_sources.mk",
         "generated_verification_sources_mk": "vv/tb/verification_sources.mk",
         "generated_testcases_manifest": "vv/tb/testcases.json",
+        "verification_plan_path": "vv/tb/verification_plan.md",
+        "verification_plan_source": verification_plan_source,
+        "monitor_checker_plan_path": "vv/tb/monitor_checker_plan.md",
+        "monitor_checker_plan_source": monitor_checker_plan_source,
+        "coverage_point_plan_path": "vv/tb/coverage_point_plan.md",
+        "coverage_point_plan_source": coverage_plan_source,
         "test_selection": testcase_manifest["test_selection"],
     }
 
@@ -835,6 +1086,7 @@ Generated:
 - `rtl_sources.mk`    : explicit RTL file list
 - `testcases.json`    : testcase manifest
 - `tb_contract.json`  : resolved contract used for testbench generation
+- `verification_plan.md`, `monitor_checker_plan.md`, `coverage_point_plan.md` : generated or uploaded review plans
 
 Run (from this folder):
 ```bash
@@ -854,6 +1106,9 @@ python run_regression.py --tests smoke_test constrained_random_sanity --seeds 1 
     _write_file(os.path.join(tb_root, "README.md"), readme)
     _write_file(os.path.join(tb_root, "testcases.json"), testcase_manifest_txt)
     _write_file(os.path.join(tb_root, "tb_contract.json"), tb_contract_txt)
+    _write_file(os.path.join(tb_root, "verification_plan.md"), verification_plan.strip() + "\n")
+    _write_file(os.path.join(tb_root, "monitor_checker_plan.md"), monitor_checker_plan.strip() + "\n")
+    _write_file(os.path.join(tb_root, "coverage_point_plan.md"), coverage_plan.strip() + "\n")
 
     _log(log_path, f"Generated testbench: vv/tb/test_{top}.py")
     _log(log_path, "Generated Makefile")
@@ -869,6 +1124,9 @@ python run_regression.py --tests smoke_test constrained_random_sanity --seeds 1 
     artifacts["tb_readme"] = _record_text(workflow_id, agent_name, "vv/tb", "README.md", readme)
     artifacts["testcases_manifest"] = _record_text(workflow_id, agent_name, "vv/tb", "testcases.json", testcase_manifest_txt)
     artifacts["tb_contract"] = _record_text(workflow_id, agent_name, "vv/tb", "tb_contract.json", tb_contract_txt)
+    artifacts["verification_plan"] = _record_text(workflow_id, agent_name, "vv/tb", "verification_plan.md", verification_plan.strip() + "\n")
+    artifacts["monitor_checker_plan"] = _record_text(workflow_id, agent_name, "vv/tb", "monitor_checker_plan.md", monitor_checker_plan.strip() + "\n")
+    artifacts["coverage_point_plan"] = _record_text(workflow_id, agent_name, "vv/tb", "coverage_point_plan.md", coverage_plan.strip() + "\n")
 
     report = {
         "type": "vv_testbench_generation",
@@ -882,6 +1140,16 @@ python run_regression.py --tests smoke_test constrained_random_sanity --seeds 1 
         "generated_dir": "vv/tb",
         "default_tests": testcase_manifest["default_tests"],
         "test_selection": testcase_manifest["test_selection"],
+        "uploaded_plans": {
+            "verification_plan_present": bool(uploaded_verification_plan.strip()),
+            "monitor_checker_plan_present": bool(uploaded_monitor_checker_plan.strip()),
+            "coverage_plan_present": bool(uploaded_coverage_plan.strip()),
+        },
+        "plan_sources": {
+            "verification_plan": verification_plan_source,
+            "monitor_checker_plan": monitor_checker_plan_source,
+            "coverage_point_plan": coverage_plan_source,
+        },
         "tools_detected": {
             "verilator": bool(_which("verilator")),
             "make": bool(_which("make")),

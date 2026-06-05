@@ -99,6 +99,32 @@ def test_ask_this_run_answers_from_logs_and_artifacts(monkeypatch):
     assert any(source["path"].endswith("rtl_agent_summary.txt") for source in data["sources"])
 
 
+def test_ask_this_run_probes_upf_artifacts_not_in_index(monkeypatch):
+    app = FastAPI()
+    fake_supabase = _FakeSupabase()
+    fake_supabase.storage.files[
+        "backend/workflows/wf-1/digital/upf/upf_static_check.json"
+    ] = '{"status":"warning","checks":[{"name":"openroad_read_upf","status":"warning","message":"read_upf accepts this UPF-lite subset only"}]}'
+    app.state.supabase = fake_supabase
+    app.dependency_overrides[require_browser_user] = lambda: BrowserUser(user_id="user-1", claims={"sub": "user-1"})
+    app.include_router(browser_routes.router)
+
+    async def fake_llm(prompt: str) -> str:
+        assert "upf_static_check.json" in prompt
+        assert "read_upf accepts this UPF-lite subset only" in prompt
+        return "UPF warning: read_upf accepts this UPF-lite subset only."
+
+    monkeypatch.setattr(browser_routes, "_run_inspection_llm", fake_llm)
+    client = TestClient(app)
+
+    response = client.post("/workflow/wf-1/ask", json={"question": "What is the upf warning in this run?"})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert "upf warning" in data["answer"].lower()
+    assert any(source["path"].endswith("upf_static_check.json") for source in data["sources"])
+
+
 def test_ask_this_run_requires_question(monkeypatch):
     client = _client(monkeypatch)
 

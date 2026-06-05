@@ -26,6 +26,10 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     formal = summary.get("formal") if isinstance(summary.get("formal"), dict) else {}
     golden = summary.get("golden_model") if isinstance(summary.get("golden_model"), dict) else {}
     toolchain = summary.get("toolchain") if isinstance(summary.get("toolchain"), dict) else {}
+    verification_plan_text = state.get("source_verification_plan") if isinstance(state.get("source_verification_plan"), str) else ""
+    monitor_checker_plan_text = state.get("source_monitor_checker_plan") if isinstance(state.get("source_monitor_checker_plan"), str) else ""
+    coverage_point_plan_text = state.get("source_coverage_point_plan") if isinstance(state.get("source_coverage_point_plan"), str) else ""
+    missing_monitor_checker_plan = not monitor_checker_plan_text.strip()
 
     actions: List[Dict[str, Any]] = []
     if failures:
@@ -49,7 +53,14 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
             "human_approval_required": True,
             "description": "Review whether any coverage holes are unreachable or incorrectly modeled.",
         })
-    if not gaps and not failures:
+    if missing_monitor_checker_plan:
+        actions.append({
+            "id": "add_monitor_checker_plan",
+            "priority": "medium",
+            "human_approval_required": True,
+            "description": "Add or regenerate a monitor/checker plan so each requirement has an observing monitor and a checker, assertion, scoreboard, or coverage point.",
+        })
+    if not gaps and not failures and not missing_monitor_checker_plan:
         actions.append({
             "id": "no_action_required",
             "priority": "info",
@@ -57,7 +68,11 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
             "description": "Coverage targets are met and no failing tests were found.",
         })
 
-    verdict = "closed" if not gaps and not failures else ("debug_failures_first" if failures else "coverage_closure_needed")
+    verdict = (
+        "closed"
+        if not gaps and not failures and not missing_monitor_checker_plan
+        else ("debug_failures_first" if failures else "coverage_closure_needed")
+    )
     plan = {
         "type": "verify_closure_plan",
         "source_verify_workflow_id": state.get("source_verify_workflow_id"),
@@ -67,6 +82,11 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
         "functional_gaps": functional_gaps[:20],
         "failure_count": len(failures),
         "verify_evidence": {
+            "plans": {
+                "verification_plan_present": bool(verification_plan_text.strip()),
+                "monitor_checker_plan_present": bool(monitor_checker_plan_text.strip()),
+                "coverage_point_plan_present": bool(coverage_point_plan_text.strip()),
+            },
             "simulation": {
                 "total": simulation.get("total"),
                 "pass": simulation.get("pass"),
@@ -111,6 +131,9 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
         f"- Formal: {formal.get('status')}",
         f"- Golden model: {golden.get('status')}",
         f"- Tools: {toolchain.get('simulator')} / {toolchain.get('code_coverage')} / {toolchain.get('formal')}",
+        f"- Plans: verification={bool(verification_plan_text.strip())}, "
+        f"monitor/checker={bool(monitor_checker_plan_text.strip())}, "
+        f"coverage={bool(coverage_point_plan_text.strip())}",
         "",
         "## Functional Coverage Not Met",
         *[
