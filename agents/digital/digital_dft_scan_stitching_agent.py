@@ -183,6 +183,97 @@ def _count_scan_candidates(netlist: str | None) -> tuple[int, int]:
     return flop_count, latch_count
 
 
+def _add_scan_ports(text: str, chain_count: int, scan_enable: str, scan_in_prefix: str, scan_out_prefix: str) -> str:
+    match = re.search(r"module\s+([A-Za-z_][A-Za-z0-9_$]*)\s*\((.*?)\);", text, flags=re.DOTALL)
+    if not match:
+        return text
+    port_text = match.group(2).strip()
+    scan_in = scan_in_prefix
+    scan_out = scan_out_prefix
+    if scan_enable in port_text and scan_in in port_text and scan_out in port_text:
+        return text
+
+    new_ports = f"{port_text}, {scan_enable}, {scan_in}, {scan_out}"
+    text = text[:match.start(2)] + new_ports + text[match.end(2):]
+    decl = (
+        f"  input {scan_enable};\n"
+        f"  input [{chain_count - 1}:0] {scan_in};\n"
+        f"  output [{chain_count - 1}:0] {scan_out};\n"
+    )
+    insert_at = text.find("\n", match.end())
+    if insert_at >= 0:
+        text = text[:insert_at + 1] + decl + text[insert_at + 1:]
+    return text
+
+
+def _scan_map_sky130_reset_flops(netlist_text: str, config: dict) -> tuple[str, dict]:
+    """
+    Deterministically map SKY130 reset DFFs to equivalent scan DFFs.
+
+    OpenROAD's DFT commands expect scan-capable flops before chain stitching.
+    For SKY130 HD, dfrtp has ports CLK/D/RESET_B/Q; sdfrtp adds SCD/SCE.
+    """
+    chain_count = max(1, int(config.get("scan_chains") or 1))
+    scan_enable = str(config.get("scan_enable") or "scan_en")
+    scan_in = str(config.get("scan_in_prefix") or "scan_in")
+    scan_out = str(config.get("scan_out_prefix") or "scan_out")
+    chain_tails: dict[int, str] = {}
+    mapped = 0
+
+    pattern = re.compile(
+        r"(?P<cell>sky130_fd_sc_hd__dfrtp(?:_\d+)?)\s+"
+        r"(?P<inst>(?:\\[^\s(]+|[A-Za-z_][A-Za-z0-9_$]*))\s*"
+        r"\((?P<ports>.*?)\n\s*\);",
+        flags=re.DOTALL,
+    )
+
+    def verilog_signal(raw: str) -> str:
+        signal = raw.strip()
+        if signal.startswith("\\"):
+            return signal + " "
+        return signal
+
+    def repl(match: re.Match[str]) -> str:
+        nonlocal mapped
+        ports = match.group("ports")
+        q_match = re.search(r"\.Q\s*\(\s*(.*?)\s*\)", ports, flags=re.DOTALL)
+        q_signal = verilog_signal(q_match.group(1)) if q_match else ""
+        chain = mapped % chain_count
+        scd = chain_tails.get(chain) or f"{scan_in}[{chain}]"
+        if q_signal:
+            chain_tails[chain] = q_signal
+        mapped += 1
+        scan_cell = match.group("cell").replace("__dfrtp", "__sdfrtp")
+        return (
+            f"{scan_cell} {match.group('inst')} ("
+            f"{ports},\n"
+            f"    .SCD({scd}),\n"
+            f"    .SCE({scan_enable})\n"
+            f"  );"
+        )
+
+    mapped_text = pattern.sub(repl, netlist_text)
+    if mapped <= 0:
+        return netlist_text, {"status": "not_applied", "mapped_flops": 0, "scan_chains": chain_count}
+
+    mapped_text = _add_scan_ports(mapped_text, chain_count, scan_enable, scan_in, scan_out)
+    assignments = []
+    for chain in range(chain_count):
+        tail = chain_tails.get(chain) or f"{scan_in}[{chain}]"
+        assignments.append(f"  assign {scan_out}[{chain}] = {tail};")
+    assignment_block = "\n" + "\n".join(assignments) + "\nendmodule\n"
+    mapped_text = re.sub(r"\nendmodule\s*$", lambda _: assignment_block, mapped_text, count=1)
+    return mapped_text, {
+        "status": "mapped",
+        "mapping": "sky130_fd_sc_hd__dfrtp_to_sdfrtp",
+        "mapped_flops": mapped,
+        "scan_chains": chain_count,
+        "scan_enable": scan_enable,
+        "scan_in": scan_in,
+        "scan_out": scan_out,
+    }
+
+
 def _scan_config(state: dict, top: str, flop_count: int) -> dict:
     dft = state.get("dft") if isinstance(state.get("dft"), dict) else {}
     requested_chains = dft.get("scan_chains") or state.get("scan_chains")
@@ -339,13 +430,24 @@ def run_agent(state: dict) -> dict:
     input_dir = os.path.join(stage_dir, "input")
     input_netlist_path = os.path.join(input_dir, "synth_netlist.v")
     input_sdc_path = os.path.join(input_dir, "constraints.sdc")
+    scan_mapped_netlist_path = os.path.join(input_dir, "scan_mapped_netlist.v")
     tcl_path = os.path.join(stage_dir, "openroad_dft_scan.tcl")
     log_path = os.path.join(logs_dir, "openroad_dft_scan.log")
     summary_path = os.path.join(stage_dir, "scan_summary.json")
     report_path = os.path.join(stage_dir, "dft_report.md")
 
+    scan_mapping = {"status": "not_applied", "mapped_flops": 0}
     if netlist:
-        _write_text(input_netlist_path, _read_text(netlist))
+        source_netlist_text = _read_text(netlist)
+        if str(pdk["pdk_variant"]).lower().startswith("sky130"):
+            mapped_text, scan_mapping = _scan_map_sky130_reset_flops(source_netlist_text, config)
+            if scan_mapping.get("status") == "mapped":
+                _write_text(scan_mapped_netlist_path, mapped_text)
+                _write_text(input_netlist_path, mapped_text)
+            else:
+                _write_text(input_netlist_path, source_netlist_text)
+        else:
+            _write_text(input_netlist_path, source_netlist_text)
     if sdc:
         _write_text(input_sdc_path, _read_text(sdc))
     tcl_netlist = "input/synth_netlist.v" if netlist else None
@@ -395,6 +497,7 @@ def run_agent(state: dict) -> dict:
         "pdk_variant": pdk["pdk_variant"],
         "pdk_root_host": pdk["pdk_root_host"],
         "dft_mode": "scan_replace_preview",
+        "scan_mapping": scan_mapping,
         "full_dft_plan_commands_available": False,
         "return_code": rc,
         "top_module": top,
@@ -415,6 +518,7 @@ def run_agent(state: dict) -> dict:
             "summary": "digital/dft/scan_summary.json",
             "report": "digital/dft/dft_report.md",
             "stitched_netlist": "digital/dft/scan_stitched_netlist.v" if stitched else None,
+            "scan_mapped_netlist": "digital/dft/input/scan_mapped_netlist.v" if scan_mapping.get("status") == "mapped" else None,
         },
     }
     report = "\n".join([
@@ -424,6 +528,8 @@ def run_agent(state: dict) -> dict:
         f"- Tool: `openroad` via `{tool_source}`",
         f"- PDK: `{pdk['pdk_variant']}`",
         f"- DFT mode: `scan_replace_preview`",
+        f"- Scan mapping: `{scan_mapping.get('status')}`",
+        f"- Scan-mapped flops: `{scan_mapping.get('mapped_flops', 0)}`",
         f"- Top module: `{top}`",
         f"- SDC: `{os.path.basename(sdc) if sdc else 'missing'}`",
         f"- Scan flops: `{flop_count}`",
@@ -448,6 +554,8 @@ def run_agent(state: dict) -> dict:
     save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "dft/openroad_dft_scan.tcl", tcl)
     if netlist:
         save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "dft/input/synth_netlist.v", _read_text(input_netlist_path))
+        if scan_mapping.get("status") == "mapped":
+            save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "dft/input/scan_mapped_netlist.v", _read_text(scan_mapped_netlist_path))
     if sdc:
         save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "dft/input/constraints.sdc", _read_text(input_sdc_path))
     save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "dft/logs/openroad_dft_scan.log", log)
