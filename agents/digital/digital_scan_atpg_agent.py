@@ -50,20 +50,15 @@ def _existing_path(value: Any, workflow_dir: str | None = None) -> str | None:
 def _scan_netlist(state: dict, workflow_dir: str) -> str | None:
     digital = state.get("digital") if isinstance(state.get("digital"), dict) else {}
     dft = digital.get("dft") if isinstance(digital.get("dft"), dict) else {}
-    synth = digital.get("synth") if isinstance(digital.get("synth"), dict) else {}
     for cand in (
         dft.get("scan_stitched_netlist"),
         state.get("scan_stitched_netlist"),
-        synth.get("netlist"),
-        digital.get("synth_netlist"),
-        state.get("synth_netlist"),
     ):
         path = _existing_path(cand, workflow_dir)
         if path:
             return path
     patterns = [
         os.path.join(workflow_dir, "digital", "dft", "scan_stitched_netlist.v"),
-        os.path.join(workflow_dir, "digital", "synth", "netlist", "*.v"),
     ]
     for pattern in patterns:
         hits = sorted(glob.glob(pattern))
@@ -72,12 +67,24 @@ def _scan_netlist(state: dict, workflow_dir: str) -> str | None:
     return None
 
 
-def _tool_choice(state: dict) -> tuple[str | None, str | None]:
-    for name in ("fault", "atalanta", "podem"):
+def _tool_choice(state: dict, stage_dir: str) -> tuple[str | None, str | None, list[dict[str, str]]]:
+    diagnostics: list[dict[str, str]] = []
+    for name in ("atalanta", "podem", "fault"):
         path = tool_path(name, state)
-        if path:
-            return name, path
-    return None, None
+        if not path:
+            continue
+        if name == "fault":
+            proc = run_command(state, "scan_atpg_probe", ["fault", "--help"], cwd=stage_dir, timeout_sec=120)
+            log = (proc.stdout or "") + (proc.stderr or "")
+            if _is_wrong_fault_tool(log):
+                diagnostics.append({
+                    "tool": name,
+                    "executable": path,
+                    "status": "skipped_wrong_tool",
+                })
+                continue
+        return name, path, diagnostics
+    return None, None, diagnostics
 
 
 def _is_wrong_fault_tool(log: str) -> bool:
@@ -164,23 +171,31 @@ def run_agent(state: dict) -> dict:
     if netlist:
         _write_text(input_netlist, _read_text(netlist))
 
-    tool_name, tool_exe = _tool_choice(state)
+    tool_name, tool_exe, tool_diagnostics = _tool_choice(state, stage_dir)
     rc = None
     log = ""
+    configured_atpg = bool(os.getenv("CHIPLOOP_ATPG_COMMAND", "").strip())
+    if configured_atpg and not tool_name:
+        tool_name = "configured_command"
+        tool_exe = os.getenv("CHIPLOOP_ATPG_COMMAND", "").strip()
+
     if not netlist:
         status = "incomplete_inputs"
-        log = "No scan-stitched or synthesized gate netlist found for ATPG.\n"
+        log = "No scan-stitched DFT netlist found for ATPG.\n"
     elif not tool_name:
         status = "tool_unavailable"
         log = "No open-source ATPG tool found. Configure CHIPLOOP_FAULT, CHIPLOOP_ATALANTA, CHIPLOOP_PODEM, or CHIPLOOP_ATPG_COMMAND.\n"
+        if tool_diagnostics:
+            log += "\nSkipped non-ATPG tool matches:\n"
+            for item in tool_diagnostics:
+                log += f"- {item.get('tool')}: {item.get('status')} ({item.get('executable')})\n"
     else:
         rc, log = _run_detected_tool(state, tool_name, stage_dir, input_netlist)
-        configured = bool(os.getenv("CHIPLOOP_ATPG_COMMAND", "").strip())
-        if tool_name == "fault" and not configured and _is_wrong_fault_tool(log):
+        if tool_name == "fault" and not configured_atpg and _is_wrong_fault_tool(log):
             status = "wrong_tool_detected"
             log += "\n\nThe detected `fault` executable is not a digital ATPG tool; it appears to be a network resilience/fault-injection CLI. Ignoring it for ATPG coverage.\n"
         else:
-            status = "adapter_ready" if configured else "tool_detected_needs_adapter_command"
+            status = "adapter_ready" if configured_atpg else "tool_detected_needs_adapter_command"
         if status != "wrong_tool_detected" and rc not in (0, None) and "usage" not in log.lower() and "help" not in log.lower():
             status = "tool_probe_failed"
 
@@ -203,6 +218,7 @@ def run_agent(state: dict) -> dict:
         "faults_undetected": None,
         "faults_aborted": None,
         "coverage_source": "not_reported" if status != "adapter_ready" else "configured_adapter",
+        "tool_diagnostics": tool_diagnostics,
         "generated_at": datetime.utcnow().isoformat() + "Z",
         "artifacts": {
             "summary": "digital/atpg/atpg_summary.json",
