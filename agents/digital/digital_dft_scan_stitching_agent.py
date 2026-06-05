@@ -245,6 +245,8 @@ def _classify(
     actual_chains = _actual_scan_chain_count(log)
     if rc == 0:
         if actual_chains == 0:
+            if "not a scan cell" in log.lower():
+                return "scan_cell_mapping_required"
             return "scan_not_inserted"
         return "scan_replace_pass" if stitched else "preview_pass"
     text = log.lower()
@@ -433,6 +435,7 @@ def run_agent(state: dict) -> dict:
         f"- Stitched netlist generated: `{stitched}`",
         "",
         "This OpenROAD integration uses the DFT commands available in the OpenLane2 image: `set_dft_config`, `preview_dft`, and `scan_replace`.",
+        "If status is `scan_cell_mapping_required`, synthesis produced ordinary flops rather than scan flops; use a scan-cell mapping step or a private DFT adapter before ATPG.",
         "If status is `tool_unavailable` or `tool_missing_dft_support`, install/configure OpenROAD/OpenLane2 with DFT support or map this agent to a private DFT tool adapter.",
         "If status is `tool_needs_technology`, configure the active PDK root so OpenROAD can read technology LEF, standard-cell LEF, and Liberty files.",
     ]) + "\n"

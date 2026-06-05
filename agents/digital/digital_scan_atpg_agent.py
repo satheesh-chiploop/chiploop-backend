@@ -117,11 +117,17 @@ def run_agent(state: dict) -> dict:
     toggles = state.get("toggles") if isinstance(state.get("toggles"), dict) else {}
     digital = state.setdefault("digital", {})
     dft_state = digital.get("dft") if isinstance(digital.get("dft"), dict) else {}
-    if toggles.get("enable_scan_dft") is False or dft_state.get("status") in {"not_applicable", "scan_not_inserted", "no_scan_flops", "tool_unavailable"}:
+    blocked_dft_statuses = {"not_applicable", "scan_not_inserted", "scan_cell_mapping_required", "no_scan_flops", "tool_unavailable"}
+    if toggles.get("enable_scan_dft") is False or dft_state.get("status") in blocked_dft_statuses:
         workflow_dir = os.path.abspath(state.get("workflow_dir") or f"backend/workflows/{workflow_id}")
         stage_dir = os.path.join(workflow_dir, "digital", "atpg")
         _ensure_dir(stage_dir)
-        reason = "enable_scan_dft_disabled" if toggles.get("enable_scan_dft") is False else "scan_dft_not_available"
+        if toggles.get("enable_scan_dft") is False:
+            reason = "enable_scan_dft_disabled"
+        elif dft_state.get("status") == "scan_cell_mapping_required":
+            reason = "scan_cell_mapping_required"
+        else:
+            reason = "scan_dft_not_available"
         summary = {
             "workflow_id": workflow_id,
             "agent": AGENT_NAME,
