@@ -55,6 +55,8 @@ def _collect_rtl_files(workflow_dir: str) -> List[str]:
     handoff_dirs = [
         os.path.join(workflow_dir, "handoff", "digital_subsystem_ip_package", "rtl"),
         os.path.join(workflow_dir, "handoff", "rtl"),
+        os.path.join(workflow_dir, "digital", "handoff", "digital_subsystem_ip_package", "rtl"),
+        os.path.join(workflow_dir, "digital", "handoff", "rtl"),
     ]
 
     for d in handoff_dirs:

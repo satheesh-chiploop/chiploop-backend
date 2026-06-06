@@ -31,6 +31,8 @@ with templates(name, agents) as (
       'Digital Testbench Generator Agent',
       'Digital Assertions (SVA) Agent',
       'Digital Simulation Control Agent',
+      'Digital Simulation Execution Agent',
+      'Digital Simulation Summary Coverage Agent',
       'Digital Bug Localization Agent',
       'Digital Smoke Executive Summary Agent'
     ]::text[]),
@@ -174,4 +176,3 @@ where not exists (
     and w.user_id is null
     and coalesce(w.is_prebuilt, false) = true
 );
-

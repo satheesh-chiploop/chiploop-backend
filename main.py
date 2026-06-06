@@ -1070,6 +1070,8 @@ DIGITAL_SMOKE_DEFINITION = _linear_workflow_definition([
     "Digital Testbench Generator Agent",
     "Digital Assertions (SVA) Agent",
     "Digital Simulation Control Agent",
+    "Digital Simulation Execution Agent",
+    "Digital Simulation Summary Coverage Agent",
     "Digital Bug Localization Agent",
     "Digital Smoke Executive Summary Agent",
 ])
