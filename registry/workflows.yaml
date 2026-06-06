@@ -15,9 +15,12 @@
         "Digital CTS Agent",
         "Digital Clock & Reset Architecture Agent",
         "Digital Closure Recommendation Agent",
+        "Digital Closure Rerun Planner Agent",
+        "Digital Closure Iteration Judge Agent",
         "Digital CoverGroup Agent",
         "Digital Coverage Agent",
         "Digital Coverage Gap Analysis Agent",
+        "Digital Coverage Plan Update Agent",
         "Digital DRC Agent",
         "Digital Executive Summary Agent",
         "Digital Failure Triage Agent",
@@ -67,8 +70,10 @@
         "Digital Testbench Agent",
         "Digital Testbench Generator Agent",
         "Digital Testcase Agent",
+        "Digital Testcase Seed Update Agent",
         "Digital Top Assembly Agent",
         "Digital Verification Handoff Ingest Agent",
+        "Digital Verification Plan Update Agent",
         "Digital Verify Closure Ingest Agent"
       ],
       "hooks": [
@@ -598,6 +603,38 @@
         "Digital Coverage Gap Analysis Agent",
         "Digital Failure Triage Agent",
         "Digital Closure Recommendation Agent"
+      ],
+      "hooks": [
+        "pre_run_validate_inputs",
+        "post_run_collect_artifacts",
+        "post_run_update_state",
+        "post_verify_trigger_closure_analysis",
+        "on_failure_capture_traceback",
+        "on_failure_preserve_logs",
+        "artifact_publish_to_supabase"
+      ]
+    },
+    {
+      "name": "Digital_Verify_Closure_Loop",
+      "loop_type": "digital",
+      "description": "Linked child workflow that updates verification/coverage plans, adds traceable testcase intents and seed plans, reruns executable verification tests, judges coverage delta, and emits chart-ready closure data.",
+      "agents": [
+        "Digital Verify Closure Ingest Agent",
+        "Digital Coverage Gap Analysis Agent",
+        "Digital Failure Triage Agent",
+        "Digital Closure Recommendation Agent",
+        "Digital Verification Plan Update Agent",
+        "Digital Coverage Plan Update Agent",
+        "Digital Testcase Seed Update Agent",
+        "Digital Closure Rerun Planner Agent",
+        "Digital Verification Handoff Ingest Agent",
+        "Digital Testbench Generator Agent",
+        "Digital Assertions (SVA) Agent",
+        "Digital Functional Coverage Agent",
+        "Digital Simulation Control Agent",
+        "Digital Simulation Execution Agent",
+        "Digital Simulation Summary Coverage Agent",
+        "Digital Closure Iteration Judge Agent"
       ],
       "hooks": [
         "pre_run_validate_inputs",

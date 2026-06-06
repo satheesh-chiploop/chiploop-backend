@@ -257,6 +257,19 @@ def run_agent(state: dict) -> dict:
     cfg.pop("SYNTH_SDC_FILE", None)
     cfg.pop("SPEF_FILE", None)
     cfg["RUN_LINTER"] = False
+    digital = state.get("digital") or {}
+    has_explicit_macros = any(
+        p and os.path.exists(p)
+        for key in ("macro_lefs", "macro_libs", "macro_gds")
+        for p in (digital.get(key) or [])
+    )
+    if not has_explicit_macros:
+        cfg.pop("EXTRA_LEFS", None)
+        cfg.pop("EXTRA_LIBS", None)
+        cfg.pop("EXTRA_GDS_FILES", None)
+        cfg.pop("MACRO_PLACEMENT_CFG", None)
+        cfg.pop("MACROS", None)
+        cfg.pop("FP_DEF_TEMPLATE", None)
 
     run_work_dir = state.get("digital_run_work_dir") or os.path.join(workflow_dir, "digital", "run_work")
     run_work_dir = os.path.abspath(run_work_dir)

@@ -1016,6 +1016,23 @@ def run_agent(state: dict) -> dict:
     test_py = _gen_cocotb_test(spec, top, clocks, resets, soc_mode=soc_mode)
     test_selection = state.get("random_vs_directed") or "both"
     testcase_manifest = _build_testcases_manifest(top, clocks, resets, mode, test_selection)
+    closure_testcase_intents = [
+        item for item in (state.get("closure_testcase_intents") or [])
+        if isinstance(item, dict)
+    ]
+    if closure_testcase_intents:
+        testcase_manifest["closure_testcase_intents"] = closure_testcase_intents
+        testcase_manifest["tests"].extend(closure_testcase_intents)
+        executable = [
+            str(item.get("mapped_executable_test"))
+            for item in closure_testcase_intents
+            if item.get("mapped_executable_test")
+        ]
+        if executable:
+            testcase_manifest["default_tests"] = list(dict.fromkeys([
+                *testcase_manifest["default_tests"],
+                *executable,
+            ]))
     uploaded_verification_plan = state.get("verification_plan") if isinstance(state.get("verification_plan"), str) else ""
     uploaded_monitor_checker_plan = state.get("monitor_checker_plan") if isinstance(state.get("monitor_checker_plan"), str) else ""
     uploaded_coverage_plan = state.get("coverage_plan") if isinstance(state.get("coverage_plan"), str) else ""
@@ -1141,6 +1158,7 @@ python run_regression.py --tests smoke_test constrained_random_sanity --seeds 1 
         "resets": resets,
         "generated_dir": "vv/tb",
         "default_tests": testcase_manifest["default_tests"],
+        "closure_testcase_intents": closure_testcase_intents,
         "test_selection": testcase_manifest["test_selection"],
         "uploaded_plans": {
             "verification_plan_present": bool(uploaded_verification_plan.strip()),

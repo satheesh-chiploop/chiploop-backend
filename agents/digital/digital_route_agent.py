@@ -210,13 +210,6 @@ def _stage_macro_inputs(state: dict, workflow_dir: str, work_stage_dir: str) -> 
     macro_libs = [p for p in (digital.get("macro_libs") or []) if p and os.path.exists(p)]
     macro_gds  = [p for p in (digital.get("macro_gds") or []) if p and os.path.exists(p)]
 
-    if not macro_lefs:
-        macro_lefs = _resolve_macro_files_from_workflow(workflow_dir, (".lef",))
-    if not macro_libs:
-        macro_libs = _resolve_macro_files_from_workflow(workflow_dir, (".lib", ".lib.gz", ".db"))
-    if not macro_gds:
-        macro_gds = _resolve_macro_files_from_workflow(workflow_dir, (".gds", ".gds.gz"))
-
     inputs_dir = os.path.join(work_stage_dir, "inputs", "macros")
     lef_dir = os.path.join(inputs_dir, "lef")
     lib_dir = os.path.join(inputs_dir, "lib")
@@ -403,6 +396,13 @@ def run_agent(state: dict) -> dict:
         cfg["EXTRA_LIBS"] = staged_libs
     if staged_gds:
         cfg["EXTRA_GDS_FILES"] = staged_gds
+    if not (staged_lefs or staged_libs or staged_gds):
+        cfg.pop("EXTRA_LEFS", None)
+        cfg.pop("EXTRA_LIBS", None)
+        cfg.pop("EXTRA_GDS_FILES", None)
+        cfg.pop("MACRO_PLACEMENT_CFG", None)
+        cfg.pop("MACROS", None)
+        cfg.pop("FP_DEF_TEMPLATE", None)
 
     logger.info(f"{AGENT_NAME}: staged macro LEFs -> {staged_lefs}")
     logger.info(f"{AGENT_NAME}: staged macro LIBs -> {staged_libs}")

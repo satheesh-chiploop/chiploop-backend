@@ -191,32 +191,51 @@ def _emit_mux2(lines: list[str], inst: str, ports: dict[str, str]) -> bool:
     return True
 
 
+def _emit_xor2(lines: list[str], cell_base: str, inst: str, ports: dict[str, str]) -> bool:
+    out = _out_signal(ports)
+    a = ports.get("A")
+    b = ports.get("B")
+    if not out or not a or not b:
+        return False
+    na = f"{inst}_A_inv"
+    nb = f"{inst}_B_inv"
+    t0 = f"{inst}_xor_t0"
+    t1 = f"{inst}_xor_t1"
+    xor_out = f"{inst}_xor"
+    _bench_gate(lines, na, "NOT", [a])
+    _bench_gate(lines, nb, "NOT", [b])
+    _bench_gate(lines, t0, "AND", [a, nb])
+    _bench_gate(lines, t1, "AND", [na, b])
+    _bench_gate(lines, xor_out, "OR", [t0, t1])
+    if cell_base.startswith("xnor"):
+        _bench_gate(lines, out, "NOT", [xor_out])
+    else:
+        _bench_gate(lines, out, "BUFF", [xor_out])
+    return True
+
+
 def _emit_compound(lines: list[str], cell_base: str, inst: str, ports: dict[str, str]) -> bool:
     out = _out_signal(ports)
     if not out:
         return False
     inverted = cell_base.endswith("i")
     base = cell_base[:-1] if inverted else cell_base
-    groups: list[list[str]]
     final_gate: str
+    group_letters = "ABCDE"
     if base.startswith("a"):
         final_gate = "OR"
         spec = "".join(ch for ch in base[1:].rstrip("o") if ch.isdigit())
-        groups = [["A" + str(idx) for idx in range(1, int(spec[0]) + 1)]]
-        if len(spec) > 1:
-            groups.append(["B" + str(idx) for idx in range(1, int(spec[1]) + 1)])
-        if len(spec) > 2:
-            groups.append(["C" + str(idx) for idx in range(1, int(spec[2]) + 1)])
     elif base.startswith("o"):
         final_gate = "AND"
         spec = "".join(ch for ch in base[1:].rstrip("a") if ch.isdigit())
-        groups = [["A" + str(idx) for idx in range(1, int(spec[0]) + 1)]]
-        if len(spec) > 1:
-            groups.append(["B" + str(idx) for idx in range(1, int(spec[1]) + 1)])
-        if len(spec) > 2:
-            groups.append(["C" + str(idx) for idx in range(1, int(spec[2]) + 1)])
     else:
         return False
+    if not spec:
+        return False
+    groups = [
+        [group_letters[group_idx] + str(pin_idx) for pin_idx in range(1, int(count) + 1)]
+        for group_idx, count in enumerate(spec[:len(group_letters)])
+    ]
 
     terms: list[str] = []
     group_gate = "AND" if final_gate == "OR" else "OR"
@@ -263,10 +282,12 @@ def _generate_full_scan_bench(netlist_text: str) -> tuple[str, dict]:
             if d:
                 scan_d_outputs.append(_bench_name(d))
             continue
-        if cell_base.startswith("mux2"):
+        if cell_base.startswith(("xor2", "xnor2")):
+            ok = _emit_xor2(gates, cell_base, inst, ports)
+        elif cell_base.startswith("mux2"):
             ok = _emit_mux2(gates, inst, ports)
-        elif cell_base[0:1] in {"a", "o"} and any(token in cell_base for token in ("a21", "a22", "a211", "a221", "a32", "o21", "o22", "o211", "o221")):
-            ok = _emit_compound(gates, cell_base, inst, ports)
+        elif cell_base[0:1] in {"a", "o"} and _emit_compound(gates, cell_base, inst, ports):
+            ok = True
         else:
             ok = _emit_basic_gate(gates, cell_base, inst, ports)
         if not ok:

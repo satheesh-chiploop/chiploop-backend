@@ -117,6 +117,7 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
         "code_coverage_summary": _find(source_dir, "code_coverage_summary.json"),
         "coverage_spec": _find(source_dir, "coverage_spec.json"),
         "testcases": _find(source_dir, "testcases.json"),
+        "verification_source_handoff": _find(source_dir, "verification_source_handoff.json"),
         "verification_plan": _find(source_dir, "verification_plan.md"),
         "monitor_checker_plan": _find(source_dir, "monitor_checker_plan.md"),
         "coverage_point_plan": _find(source_dir, "coverage_point_plan.md"),
@@ -129,6 +130,7 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
         "code_coverage_summary": "code_coverage_summary.json",
         "coverage_spec": "coverage_spec.json",
         "testcases": "testcases.json",
+        "verification_source_handoff": "verification_source_handoff.json",
     }
     loaded: Dict[str, Dict[str, Any]] = {}
     for key, filename in filename_by_key.items():

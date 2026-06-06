@@ -454,6 +454,11 @@ from agents.digital.digital_verify_closure_ingest_agent import run_agent as digi
 from agents.digital.digital_coverage_gap_analysis_agent import run_agent as digital_coverage_gap_analysis_agent
 from agents.digital.digital_failure_triage_agent import run_agent as digital_failure_triage_agent
 from agents.digital.digital_closure_recommendation_agent import run_agent as digital_closure_recommendation_agent
+from agents.digital.digital_verification_plan_update_agent import run_agent as digital_verification_plan_update_agent
+from agents.digital.digital_coverage_plan_update_agent import run_agent as digital_coverage_plan_update_agent
+from agents.digital.digital_testcase_seed_update_agent import run_agent as digital_testcase_seed_update_agent
+from agents.digital.digital_closure_rerun_planner_agent import run_agent as digital_closure_rerun_planner_agent
+from agents.digital.digital_closure_iteration_judge_agent import run_agent as digital_closure_iteration_judge_agent
 from agents.digital.digital_arch2rtl_dashboard_agent import run_agent as digital_arch2rtl_dashboard_agent
 from agents.digital.digital_rtl_handoff_ingest_agent import run_agent as digital_rtl_handoff_ingest_agent
 
@@ -489,6 +494,11 @@ DIGITAL_AGENT_FUNCTIONS: Dict[str, Any] = {
     "Digital Coverage Gap Analysis Agent": digital_coverage_gap_analysis_agent,
     "Digital Failure Triage Agent": digital_failure_triage_agent,
     "Digital Closure Recommendation Agent": digital_closure_recommendation_agent,
+    "Digital Verification Plan Update Agent": digital_verification_plan_update_agent,
+    "Digital Coverage Plan Update Agent": digital_coverage_plan_update_agent,
+    "Digital Testcase Seed Update Agent": digital_testcase_seed_update_agent,
+    "Digital Closure Rerun Planner Agent": digital_closure_rerun_planner_agent,
+    "Digital Closure Iteration Judge Agent": digital_closure_iteration_judge_agent,
     "Digital Arch2RTL Dashboard Agent": digital_arch2rtl_dashboard_agent,
     "Digital RTL Handoff Ingest Agent": digital_rtl_handoff_ingest_agent,
     "Digital Bug Localization Agent": digital_bug_localization_agent,
@@ -758,6 +768,11 @@ SYSTEM_AGENT_FUNCTIONS: Dict[str,Any] = {
     "Digital Coverage Gap Analysis Agent": digital_coverage_gap_analysis_agent,
     "Digital Failure Triage Agent": digital_failure_triage_agent,
     "Digital Closure Recommendation Agent": digital_closure_recommendation_agent,
+    "Digital Verification Plan Update Agent": digital_verification_plan_update_agent,
+    "Digital Coverage Plan Update Agent": digital_coverage_plan_update_agent,
+    "Digital Testcase Seed Update Agent": digital_testcase_seed_update_agent,
+    "Digital Closure Rerun Planner Agent": digital_closure_rerun_planner_agent,
+    "Digital Closure Iteration Judge Agent": digital_closure_iteration_judge_agent,
     "Digital Arch2RTL Dashboard Agent": digital_arch2rtl_dashboard_agent,
     "Digital RTL Handoff Ingest Agent": digital_rtl_handoff_ingest_agent,
     "Digital Bug Localization Agent": digital_bug_localization_agent,
@@ -981,6 +996,25 @@ DIGITAL_VERIFY_CLOSURE_DEFINITION = _linear_workflow_definition([
     "Digital Closure Recommendation Agent",
 ])
 
+DIGITAL_VERIFY_CLOSURE_LOOP_DEFINITION = _linear_workflow_definition([
+    "Digital Verify Closure Ingest Agent",
+    "Digital Coverage Gap Analysis Agent",
+    "Digital Failure Triage Agent",
+    "Digital Closure Recommendation Agent",
+    "Digital Verification Plan Update Agent",
+    "Digital Coverage Plan Update Agent",
+    "Digital Testcase Seed Update Agent",
+    "Digital Closure Rerun Planner Agent",
+    "Digital Verification Handoff Ingest Agent",
+    "Digital Testbench Generator Agent",
+    "Digital Assertions (SVA) Agent",
+    "Digital Functional Coverage Agent",
+    "Digital Simulation Control Agent",
+    "Digital Simulation Execution Agent",
+    "Digital Simulation Summary Coverage Agent",
+    "Digital Closure Iteration Judge Agent",
+])
+
 DIGITAL_ARCH2SYNTHESIS_DEFINITION = _linear_workflow_definition([
     "Digital RTL Handoff Ingest Agent",
     "Digital Spec Agent",
@@ -1140,6 +1174,7 @@ LOCAL_PREBUILT_WORKFLOW_DEFINITIONS: Dict[str, Dict[str, Any]] = {
     "Digital_Arch2RTL": DIGITAL_ARCH2RTL_DEFINITION,
     "Digital_Verify": DIGITAL_VERIFY_DEFINITION,
     "Digital_Verify_Closure": DIGITAL_VERIFY_CLOSURE_DEFINITION,
+    "Digital_Verify_Closure_Loop": DIGITAL_VERIFY_CLOSURE_LOOP_DEFINITION,
     "Digital_Arch2Synthesis": DIGITAL_ARCH2SYNTHESIS_DEFINITION,
     "Digital_Arch2Sim": DIGITAL_ARCH2SIM_DEFINITION,
     "Digital_Arch2Tapeout": DIGITAL_ARCH2TAPEOUT_DEFINITION,
@@ -1161,6 +1196,7 @@ LOCAL_RUNTIME_WORKFLOW_OVERRIDES = {
     "Digital_Arch2RTL",
     "Digital_Verify",
     "Digital_Verify_Closure",
+    "Digital_Verify_Closure_Loop",
     "Digital_Arch2Synthesis",
     "Digital_Arch2Sim",
     "Digital_Arch2Tapeout",
@@ -2594,6 +2630,10 @@ class DigitalVerifyClosureAppIn(BaseModel):
     source_verify_workflow_id: str
     coverage_targets: Optional[str] = None
     seed_count: Optional[int] = None
+    seed_budget: Optional[int] = None
+    max_iterations: Optional[int] = 1
+    rerun_mode: Optional[str] = "coverage_targeted"
+    approval_mode: Optional[str] = "automatic"
     toolchain: Optional[Dict[str, str]] = None
 
 
@@ -3176,6 +3216,33 @@ async def apps_verify_closure_run(request: Request, background_tasks: Background
         artifact_dir,
         "verify_closure",
         "Digital_Verify_Closure",
+        payload_dict,
+    )
+
+    return {"ok": True, "workflow_id": workflow_id, "run_id": run_id}
+
+@app.post("/apps/verify/closure-loop/run")
+async def apps_verify_closure_loop_run(request: Request, background_tasks: BackgroundTasks, payload: DigitalVerifyClosureAppIn):
+    user_id = _require_user_id(request)
+    workflow_id, run_id, base_dir = _create_app_workflow_and_run(user_id, "App: Verify Closure Loop", "digital")
+    artifact_dir = os.path.join(base_dir, "verify_closure_loop")
+    os.makedirs(artifact_dir, exist_ok=True)
+
+    payload_dict = payload.dict()
+    payload_dict["parent_workflow_id"] = payload.source_verify_workflow_id
+    payload_dict["closure_iteration_index"] = 1
+    payload_dict["max_iterations"] = max(int(payload.max_iterations or 1), 1)
+    if not payload_dict.get("seed_budget"):
+        payload_dict["seed_budget"] = payload.seed_count or 5
+
+    background_tasks.add_task(
+        execute_digital_app_background,
+        workflow_id,
+        run_id,
+        user_id,
+        artifact_dir,
+        "verify_closure_loop",
+        "Digital_Verify_Closure_Loop",
         payload_dict,
     )
 

@@ -218,6 +218,160 @@ def _referenced_sky130_cells(gate: str | None) -> list[str]:
     return [name for name in _referenced_modules(gate) if name.startswith("sky130_fd_sc_")]
 
 
+def _parse_sky130_instances(netlist_text: str) -> dict[str, set[str]]:
+    cells: dict[str, set[str]] = {}
+    pattern = re.compile(
+        r"(?P<cell>sky130_fd_sc_hd__[A-Za-z0-9_]+)\s+"
+        r"(?P<inst>(?:\\[^\s(]+|[A-Za-z_][A-Za-z0-9_$]*))\s*"
+        r"\((?P<ports>.*?)\);",
+        flags=re.DOTALL,
+    )
+    for match in pattern.finditer(netlist_text):
+        pins = cells.setdefault(match.group("cell"), set())
+        for item in re.finditer(r"\.(?P<pin>[A-Za-z0-9_]+)\s*\(", match.group("ports")):
+            pins.add(item.group("pin"))
+    return cells
+
+
+def _cell_base(cell: str) -> str:
+    return re.sub(r"_\d+$", "", cell.replace("sky130_fd_sc_hd__", ""))
+
+
+def _output_pins(pins: set[str]) -> list[str]:
+    return [pin for pin in ("X", "Y", "Q", "Q_N") if pin in pins]
+
+
+def _input_pins(pins: set[str]) -> list[str]:
+    return sorted(pin for pin in pins if pin not in set(_output_pins(pins)))
+
+
+def _pin_expr(pin: str) -> str:
+    return f"~{pin}" if pin.endswith("_N") else pin
+
+
+def _gate_expr(gate: str, pins: list[str]) -> str:
+    terms = [_pin_expr(pin) for pin in pins]
+    if not terms:
+        return "1'b0"
+    joiner = " & " if gate in {"and", "nand"} else " | "
+    expr = "(" + joiner.join(terms) + ")"
+    return f"~{expr}" if gate in {"nand", "nor"} else expr
+
+
+def _compound_expr(cell_base: str, pins: set[str]) -> str | None:
+    inverted = cell_base.endswith("i")
+    base = cell_base[:-1] if inverted else cell_base
+    group_letters = "ABCDE"
+    if base.startswith("a"):
+        final_joiner = " | "
+        group_joiner = " & "
+        spec = "".join(ch for ch in base[1:].rstrip("o") if ch.isdigit())
+    elif base.startswith("o"):
+        final_joiner = " & "
+        group_joiner = " | "
+        spec = "".join(ch for ch in base[1:].rstrip("a") if ch.isdigit())
+    else:
+        return None
+    if not spec:
+        return None
+    groups: list[str] = []
+    for group_idx, count in enumerate(spec[:len(group_letters)]):
+        letter = group_letters[group_idx]
+        group_terms: list[str] = []
+        for pin_idx in range(1, int(count) + 1):
+            pin = f"{letter}{pin_idx}"
+            if pin in pins:
+                group_terms.append(pin)
+            elif f"{pin}_N" in pins:
+                group_terms.append(f"{pin}_N")
+        if group_terms:
+            groups.append("(" + group_joiner.join(_pin_expr(pin) for pin in group_terms) + ")")
+    if not groups:
+        return None
+    expr = "(" + final_joiner.join(groups) + ")"
+    return f"~{expr}" if inverted else expr
+
+
+def _cell_assign_expr(cell_base: str, pins: set[str]) -> str | None:
+    if cell_base.startswith("inv"):
+        return "~A" if "A" in pins else None
+    if cell_base.startswith("buf") or cell_base.startswith("clkbuf"):
+        return "A" if "A" in pins else None
+    if cell_base.startswith("xor2"):
+        return "(A ^ B)" if {"A", "B"}.issubset(pins) else None
+    if cell_base.startswith("xnor2"):
+        return "~(A ^ B)" if {"A", "B"}.issubset(pins) else None
+    if cell_base.startswith("mux2"):
+        return "(S ? A1 : A0)" if {"A0", "A1", "S"}.issubset(pins) else None
+    for prefix in ("nand", "nor", "and", "or"):
+        if cell_base.startswith(prefix):
+            return _gate_expr(prefix, _input_pins(pins))
+    return _compound_expr(cell_base, pins)
+
+
+def _generated_stdcell_model(netlist: str | None, stage_dir: str) -> str | None:
+    text = _read_text(netlist)
+    if not text:
+        return None
+    cells = _parse_sky130_instances(text)
+    if not cells:
+        return None
+    lines = [
+        "// Auto-generated functional SKY130 cell wrappers for Yosys LEC.",
+        "// Generated from the synthesized netlist's referenced cell/pin set.",
+    ]
+    unsupported: list[str] = []
+    for cell in sorted(cells):
+        pins = cells[cell]
+        base = _cell_base(cell)
+        inputs = _input_pins(pins)
+        outputs = _output_pins(pins)
+        if not outputs:
+            unsupported.append(cell)
+            continue
+        body: list[str] = []
+        decls = [f"input {pin}" for pin in inputs] + [f"output {pin}" for pin in outputs]
+        if base.startswith(("dfrtp", "dfxtp", "sdfrtp")):
+            if "CLK" not in pins or "D" not in pins or "Q" not in pins:
+                unsupported.append(cell)
+                continue
+            else:
+                body.append("  reg q_reg;")
+                if "RESET_B" in pins:
+                    body.append("  always @(posedge CLK or negedge RESET_B) begin")
+                    body.append("    if (!RESET_B) q_reg <= 1'b0;")
+                    body.append("    else q_reg <= D;")
+                    body.append("  end")
+                else:
+                    body.append("  always @(posedge CLK) q_reg <= D;")
+                body.append("  assign Q = q_reg;")
+                if "Q_N" in pins:
+                    body.append("  assign Q_N = ~q_reg;")
+        else:
+            expr = _cell_assign_expr(base, pins)
+            if expr is None:
+                unsupported.append(cell)
+                continue
+            else:
+                out = "X" if "X" in pins else ("Y" if "Y" in pins else outputs[0])
+                body.append(f"  assign {out} = {expr};")
+                if "Q_N" in pins and out == "Q":
+                    body.append("  assign Q_N = ~Q;")
+        lines.append(f"module {cell}({', '.join([*inputs, *outputs])});")
+        for decl in decls:
+            lines.append(f"  {decl};")
+        lines.extend(body)
+        lines.append("endmodule")
+        lines.append("")
+    if unsupported:
+        lines.append("// Unsupported cells intentionally left absent so Yosys reports unresolved models:")
+        for cell in sorted(set(unsupported)):
+            lines.append(f"// - {cell}")
+    out = os.path.join(stage_dir, "input", "stdcell_functional_wrappers.v")
+    _write_text(out, "\n".join(lines) + "\n")
+    return out
+
+
 def _missing_stdcell_models(gate: str | None, existing_models: list[str]) -> list[str]:
     referenced = _referenced_sky130_cells(gate)
     modeled_by_pdk = _module_names_in_files(existing_models)
@@ -310,6 +464,7 @@ def _yosys_script(golden: list[str], gate: str, top: str, stdcell_verilog: list[
 {read_golden}
 hierarchy -check -top {top}
 proc; opt; memory; opt
+async2sync
 flatten
 splitnets -ports
 opt_clean
@@ -320,6 +475,7 @@ design -stash gold
 read_verilog -sv {json.dumps(gate)}
 hierarchy -check -top {top}
 proc; opt; memory; opt
+async2sync
 flatten
 splitnets -ports
 opt_clean
@@ -330,9 +486,9 @@ design -copy-from gold -as gold gold
 design -copy-from gate -as gate gate
 equiv_make gold gate equiv
 hierarchy -top equiv
-equiv_simple -seq 10
+equiv_simple -seq 20
 equiv_induct -undef
-equiv_simple -seq 10
+equiv_simple -seq 20
 equiv_status -assert
 """
 
@@ -344,11 +500,13 @@ def _classify(returncode: int | None, log: str, tool_available: bool) -> tuple[s
     if returncode == 0 and "equivalence successfully proven" in text:
         return "pass", 0
     unproven = 0
-    for match in re.finditer(r"(\d+)\s+unproven", text):
-        try:
-            unproven += int(match.group(1))
-        except Exception:
-            pass
+    total_match = re.search(r"found a total of\s+(\d+)\s+unproven", text)
+    if total_match:
+        unproven = int(total_match.group(1))
+    else:
+        counts = [int(match.group(1)) for match in re.finditer(r"(\d+)\s+unproven", text)]
+        if counts:
+            unproven = counts[-1]
     if "syntax error" in text and ("sky130_fd_sc" in text or "stdcell" in text or "primitive" in text):
         return "inconclusive_stdcell_model_parse_error", unproven
     if "syntax error" in text:
@@ -403,9 +561,15 @@ def run_agent(state: dict) -> dict:
     yosys = tool_path("yosys", state)
     liberty_files = _liberty_candidates(state, workflow_dir)
     stdcell_verilog = _stdcell_verilog_candidates(state, workflow_dir)
-    missing_stdcell_models = _missing_stdcell_models(netlist, stdcell_verilog)
-    model_strategy = "pdk_stdcell_verilog" if stdcell_verilog else "none"
-    yosys_stdcell_verilog = _prepare_stdcell_models_for_yosys(stdcell_verilog, stage_dir)
+    generated_stdcell_model = _generated_stdcell_model(netlist, stage_dir)
+    yosys_stdcell_verilog = [generated_stdcell_model] if generated_stdcell_model else _prepare_stdcell_models_for_yosys(stdcell_verilog, stage_dir)
+    missing_stdcell_models = _missing_stdcell_models(netlist, yosys_stdcell_verilog)
+    if generated_stdcell_model:
+        model_strategy = "generated_functional_wrappers_from_gate_netlist"
+    elif stdcell_verilog:
+        model_strategy = "pdk_stdcell_verilog"
+    else:
+        model_strategy = "none"
 
     script_path = os.path.join(stage_dir, "yosys_lec.ys")
     log_path = os.path.join(logs_dir, "yosys_lec.log")
@@ -427,7 +591,7 @@ def run_agent(state: dict) -> dict:
         log = (proc.stdout or "") + (proc.stderr or "")
     elif not yosys:
         log = "Yosys executable was not found in the active ChipLoop tool profile.\n"
-    elif not stdcell_verilog:
+    elif not yosys_stdcell_verilog:
         log = "Missing real standard-cell Verilog simulation/functional models for synthesized gate netlist LEC.\n"
     elif missing_stdcell_models:
         log = "Standard-cell Verilog model coverage is incomplete for synthesized gate netlist LEC.\nMissing cells:\n" + "\n".join(missing_stdcell_models) + "\n"
@@ -438,7 +602,7 @@ def run_agent(state: dict) -> dict:
     verdict, unproven = _classify(rc, log, bool(yosys))
     if not rtl_files or not netlist:
         verdict = "incomplete_inputs"
-    if not stdcell_verilog:
+    if not yosys_stdcell_verilog:
         verdict = "missing_stdcell_models"
     if missing_stdcell_models:
         verdict = "incomplete_stdcell_models"
@@ -448,7 +612,7 @@ def run_agent(state: dict) -> dict:
         netlist=netlist,
         yosys=yosys,
         liberty_files=liberty_files,
-        stdcell_verilog=stdcell_verilog,
+        stdcell_verilog=yosys_stdcell_verilog,
         missing_cells=missing_stdcell_models,
         unproven=unproven,
     )
@@ -469,6 +633,7 @@ def run_agent(state: dict) -> dict:
         "stdcell_verilog_files": [os.path.basename(p) for p in stdcell_verilog],
         "stdcell_verilog_file_count": len(stdcell_verilog),
         "yosys_stdcell_verilog_files": [os.path.basename(p) for p in yosys_stdcell_verilog],
+        "generated_stdcell_model": os.path.basename(generated_stdcell_model) if generated_stdcell_model else None,
         "stdcell_model_strategy": model_strategy,
         "missing_stdcell_models": missing_stdcell_models,
         "missing_stdcell_model_count": len(missing_stdcell_models),
@@ -480,6 +645,7 @@ def run_agent(state: dict) -> dict:
             "log": "digital/lec/logs/yosys_lec.log",
             "summary": "digital/lec/lec_summary.json",
             "report": "digital/lec/lec_report.md",
+            "generated_stdcell_model": "digital/lec/input/stdcell_functional_wrappers.v" if generated_stdcell_model else None,
         },
     }
     report = "\n".join([
@@ -491,7 +657,7 @@ def run_agent(state: dict) -> dict:
         f"- RTL files: `{len(rtl_files)}`",
         f"- Synth netlist: `{os.path.basename(netlist) if netlist else 'missing'}`",
         f"- Liberty files discovered: `{len(liberty_files)}`",
-        f"- Standard-cell Verilog models loaded: `{len(stdcell_verilog)}`",
+        f"- Standard-cell Verilog models loaded: `{len(yosys_stdcell_verilog)}`",
         f"- Standard-cell model strategy: `{model_strategy}`",
         f"- Missing standard-cell models: `{len(missing_stdcell_models)}`",
         f"- Unproven points: `{unproven}`",
@@ -505,6 +671,8 @@ def run_agent(state: dict) -> dict:
     _write_text(summary_path, json.dumps(summary, indent=2))
     _write_text(report_path, report)
 
+    if generated_stdcell_model:
+        save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "lec/input/stdcell_functional_wrappers.v", _read_text(generated_stdcell_model))
     save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "lec/yosys_lec.ys", script)
     save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "lec/logs/yosys_lec.log", log)
     save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "lec/lec_summary.json", json.dumps(summary, indent=2))

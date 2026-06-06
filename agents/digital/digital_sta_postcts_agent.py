@@ -259,6 +259,13 @@ def run_agent(state: dict) -> dict:
         cfg["EXTRA_LIBS"] = staged_libs
     if staged_gds:
         cfg["EXTRA_GDS_FILES"] = staged_gds
+    if not (staged_lefs or staged_libs or staged_gds):
+        cfg.pop("EXTRA_LEFS", None)
+        cfg.pop("EXTRA_LIBS", None)
+        cfg.pop("EXTRA_GDS_FILES", None)
+        cfg.pop("MACRO_PLACEMENT_CFG", None)
+        cfg.pop("MACROS", None)
+        cfg.pop("FP_DEF_TEMPLATE", None)
 
     upstream_sdc = _resolve_sdc_from_state(state, workflow_dir)
     if not upstream_sdc:
