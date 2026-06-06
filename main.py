@@ -446,6 +446,7 @@ from agents.digital.digital_fill_agent import run_agent as digital_fill_agent
 from agents.digital.digital_drc_agent import run_agent as digital_drc_agent
 from agents.digital.digital_lvs_agent import run_agent as digital_lvs_agent
 from agents.digital.digital_tapeout_agent import run_agent as digital_tapeout_agent
+from agents.digital.digital_tapeout_lec_agent import run_agent as digital_tapeout_lec_agent
 from agents.digital.digital_executive_summary_agent import run_agent as digital_executive_summary_agent
 from agents.digital.digital_simulation_execution_agent import run_agent as digital_simulation_execution_agent
 from agents.digital.digital_simulation_summary_coverage_agent import run_agent as digital_simulation_summary_coverage_agent
@@ -531,6 +532,7 @@ DIGITAL_AGENT_FUNCTIONS: Dict[str, Any] = {
     "Digital DRC Agent": digital_drc_agent,
     "Digital LVS Agent": digital_lvs_agent,
     "Digital Tapeout Agent": digital_tapeout_agent,
+    "Digital Tapeout Logic Equivalence Check Agent": digital_tapeout_lec_agent,
     "Digital Executive Summary Agent": digital_executive_summary_agent,
 }
 
@@ -805,6 +807,7 @@ SYSTEM_AGENT_FUNCTIONS: Dict[str,Any] = {
     "Digital DRC Agent": digital_drc_agent,
     "Digital LVS Agent": digital_lvs_agent,
     "Digital Tapeout Agent": digital_tapeout_agent,
+    "Digital Tapeout Logic Equivalence Check Agent": digital_tapeout_lec_agent,
     "Digital Executive Summary Agent": digital_executive_summary_agent,
     "Analog Spec Builder Agent": analog_spec_builder_agent,
     "Analog Netlist Scaffold Agent": analog_netlist_scaffold_agent, 
@@ -1085,6 +1088,7 @@ DIGITAL_ARCH2TAPEOUT_DEFINITION = _linear_workflow_definition([
     "Digital DRC Agent",
     "Digital LVS Agent",
     "Digital Tapeout Agent",
+    "Digital Tapeout Logic Equivalence Check Agent",
     "Digital Executive Summary Agent",
 ])
 
@@ -2891,6 +2895,7 @@ def execute_digital_app_background(
                 "Digital DRC Agent",
                 "Digital LVS Agent",
                 "Digital Tapeout Agent",
+                "Digital Tapeout Logic Equivalence Check Agent",
                 "Digital Executive Summary Agent",
             }
             nodes = [node for node in nodes if ((node.get("data") or {}).get("backendLabel") or node.get("label")) in keep]

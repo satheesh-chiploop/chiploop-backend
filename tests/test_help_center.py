@@ -71,3 +71,45 @@ def test_help_ask_answers_studio_arrange_questions():
     assert data["sources"][0]["slug"] == "studio-workflows"
     assert "arranging" in data["answer"]
     assert "OUT port" in data["answer"]
+
+
+def test_help_ask_answers_chiploop_differentiation_questions():
+    response = _client().post(
+        "/help/ask",
+        headers=_auth(),
+        json={"question": "How is ChipLoop different from a traditional flow with RTL to product app visibility?"},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["sources"][0]["slug"] == "chiploop-vs-traditional-flow"
+    assert "unified" in data["answer"].lower() or "platform" in data["answer"].lower()
+    assert "product app" in data["answer"].lower()
+
+
+def test_help_ask_answers_verification_closure_loop_questions():
+    response = _client().post(
+        "/help/ask",
+        headers=_auth(),
+        json={"question": "How do I run the verification closure loop and chart coverage improvement by iteration?"},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert any(source["slug"] == "verification-closure-loop" for source in data["sources"])
+    assert "coverage" in data["answer"]
+    assert "closure" in data["answer"].lower()
+
+
+def test_help_ask_answers_dft_atpg_macro_questions():
+    response = _client().post(
+        "/help/ask",
+        headers=_auth(),
+        json={"question": "How do DFT ATPG LEC and analog macro collateral work for tapeout?"},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["sources"][0]["slug"] == "digital-implementation-signoff"
+    assert "ATPG" in data["answer"]
+    assert "macro" in data["answer"]

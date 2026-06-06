@@ -336,7 +336,7 @@ docker run --rm \\
     log_path = os.path.join(logs_dir, "openlane_drc.log")
     _write_text(log_path, out)
 
-    latest = _latest_run_dir(run_work_dir)
+    latest = _latest_run_dir(work_stage_dir)
     metrics_path = _copy_metrics(latest, stage_dir)
 
     summary = {

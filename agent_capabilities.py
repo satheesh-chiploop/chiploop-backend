@@ -701,7 +701,7 @@ AGENT_CAPABILITIES = {
 
     "Digital Tapeout Agent": {
         "domain": "digital",
-        "description": "Runs OpenLane2 streamout to GDS (KLayout.StreamOut + Magic.StreamOut + optional KLayout.XOR). Exports GDS paths + metrics.json.",
+        "description": "Runs OpenLane2 streamout to GDS (KLayout.StreamOut + Magic.StreamOut + optional KLayout.XOR). Reports failed unless DRC/LVS are clean, XOR is clean, and GDS is produced.",
         "requires": ["docker"],
         "inputs": [
             "digital/fill/primary.def",
@@ -716,6 +716,27 @@ AGENT_CAPABILITIES = {
             "digital/tapeout/gds/magic.gds",
             "digital/tapeout/tapeout_summary.json",
             "digital/tapeout/tapeout_summary.md"
+        ],
+    },
+
+    "Digital Tapeout Logic Equivalence Check Agent": {
+        "domain": "digital",
+        "description": "Runs post-tapeout RTL-vs-final-implementation-netlist equivalence using Yosys. This is separate from synthesis LEC.",
+        "requires": ["yosys"],
+        "inputs": [
+            "handoff/rtl/*.v",
+            "handoff/rtl/*.sv",
+            "digital/handoff/rtl/*.v",
+            "digital/handoff/rtl/*.sv",
+            "digital/tapeout/netlist/*.v",
+            "digital/route/netlist/*.v",
+            "OpenLane final implementation netlist",
+        ],
+        "outputs": [
+            "digital/tapeout_lec/yosys_tapeout_lec.ys",
+            "digital/tapeout_lec/logs/yosys_tapeout_lec.log",
+            "digital/tapeout_lec/tapeout_lec_summary.json",
+            "digital/tapeout_lec/tapeout_lec_report.md",
         ],
     },
 

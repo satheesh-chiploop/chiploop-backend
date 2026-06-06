@@ -96,6 +96,45 @@ def _pick_gds(latest: str | None) -> tuple[str | None, str | None]:
     return (klayout_gds, magic_gds)
 
 
+def _stage_status(state: dict, stage: str) -> str | None:
+    digital = state.get("digital") if isinstance(state.get("digital"), dict) else {}
+    stage_state = digital.get(stage) if isinstance(digital.get(stage), dict) else {}
+    value = stage_state.get("status")
+    return str(value).strip().lower() if value is not None else None
+
+
+def _xor_difference_count(log: str) -> int | None:
+    counts = [int(match.group(1)) for match in re.finditer(r"Total XOR differences:\s*(\d+)", log or "", flags=re.IGNORECASE)]
+    if counts:
+        return counts[-1]
+    match = re.search(r"(\d+)\s+XOR differences found", log or "", flags=re.IGNORECASE)
+    return int(match.group(1)) if match else None
+
+
+def _tapeout_failure_reasons(
+    *,
+    rc: int,
+    log: str,
+    drc_status: str | None,
+    lvs_status: str | None,
+    klayout_gds: str | None,
+    magic_gds: str | None,
+) -> list[str]:
+    reasons: list[str] = []
+    if rc != 0:
+        reasons.append("streamout_command_failed")
+    if drc_status != "ok":
+        reasons.append("drc_not_clean")
+    if lvs_status != "ok":
+        reasons.append("lvs_not_clean")
+    xor_count = _xor_difference_count(log)
+    if xor_count is not None and xor_count > 0:
+        reasons.append("xor_differences_found")
+    if not (klayout_gds or magic_gds):
+        reasons.append("gds_not_produced")
+    return reasons
+
+
 def _infer_top_from_netlist(netlist_path: str) -> str | None:
     try:
         txt = open(netlist_path, "r", encoding="utf-8", errors="ignore").read()
@@ -412,7 +451,7 @@ docker run --rm \\
     log_path = os.path.join(logs_dir, "openlane_tapeout.log")
     _write_text(log_path, out)
 
-    latest = _latest_run_dir(run_work_dir)
+    latest = _latest_run_dir(work_stage_dir)
     metrics_path = _copy_metrics(latest, stage_dir)
 
     kl_src, mg_src = _pick_gds(latest)
@@ -424,11 +463,29 @@ docker run --rm \\
     if mg_src and mg_dst:
         shutil.copy2(mg_src, mg_dst)
 
+    drc_status = _stage_status(state, "drc")
+    lvs_status = _stage_status(state, "lvs")
+    failure_reasons = _tapeout_failure_reasons(
+        rc=rc,
+        log=out,
+        drc_status=drc_status,
+        lvs_status=lvs_status,
+        klayout_gds=kl_dst,
+        magic_gds=mg_dst,
+    )
+
     summary = {
         "workflow_id": workflow_id,
         "agent": AGENT_NAME,
-        "status": "ok" if rc == 0 else "failed",
+        "status": "ok" if not failure_reasons else "failed",
         "return_code": rc,
+        "failure_reasons": failure_reasons,
+        "signoff_inputs": {
+            "drc_status": drc_status,
+            "lvs_status": lvs_status,
+            "xor_differences": _xor_difference_count(out),
+            "gds_produced": bool(kl_dst or mg_dst),
+        },
         "outputs": {
             "sdc": f"digital/tapeout/constraints/{sdc_basename}",
             "metrics_json": "digital/tapeout/metrics.json" if metrics_path else None,

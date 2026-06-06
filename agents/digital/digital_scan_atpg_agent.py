@@ -439,6 +439,34 @@ def _metric(data: dict, *names: str) -> float | int | None:
     return None
 
 
+def _metrics_show_real_atpg_result(
+    pattern_count: float | int | None,
+    stuck_at_coverage_pct: float | int | None,
+    faults_detected: float | int | None,
+    faults_undetected: float | int | None,
+    faults_aborted: float | int | None,
+) -> bool:
+    if pattern_count is not None and pattern_count > 0:
+        return True
+    if stuck_at_coverage_pct is not None:
+        return True
+    return any(value is not None and value > 0 for value in (faults_detected, faults_undetected, faults_aborted))
+
+
+def _adapter_log_has_execution_error(log: str) -> bool:
+    text = (log or "").lower()
+    return any(
+        phrase in text
+        for phrase in (
+            "no such file or directory",
+            "command not found",
+            "permission denied",
+            "not executable",
+            "syntax error",
+        )
+    )
+
+
 def run_agent(state: dict) -> dict:
     workflow_id = state.get("workflow_id", "default")
     toggles = state.get("toggles") if isinstance(state.get("toggles"), dict) else {}
@@ -539,8 +567,12 @@ def run_agent(state: dict) -> dict:
     faults_undetected = _metric(metrics, "faults_undetected", "undetected_faults")
     faults_aborted = _metric(metrics, "faults_aborted", "aborted_faults")
     if configured_atpg and rc == 0:
-        if pattern_count is not None or stuck_at_coverage_pct is not None:
+        if _adapter_log_has_execution_error(log) and not _metrics_show_real_atpg_result(pattern_count, stuck_at_coverage_pct, faults_detected, faults_undetected, faults_aborted):
+            status = "adapter_failed"
+        elif _metrics_show_real_atpg_result(pattern_count, stuck_at_coverage_pct, faults_detected, faults_undetected, faults_aborted):
             status = "patterns_generated"
+        elif metrics_file:
+            status = "adapter_completed_no_patterns"
         else:
             status = "adapter_completed_no_metrics"
     elif configured_atpg and rc not in (0, None):
@@ -594,7 +626,7 @@ def run_agent(state: dict) -> dict:
         f"- Faults undetected: `{faults_undetected if faults_undetected is not None else 'not reported'}`",
         f"- Faults aborted: `{faults_aborted if faults_aborted is not None else 'not reported'}`",
         "",
-        "A configured ATPG adapter must write `atpg_metrics.json` with real pattern and coverage metrics. Runs without that file are reported as `adapter_completed_no_metrics`.",
+        "A configured ATPG adapter must write `atpg_metrics.json` with real pattern and coverage metrics. Runs without that file are reported as `adapter_completed_no_metrics`; zero-pattern metrics are reported as `adapter_completed_no_patterns`.",
         "If status is `wrong_tool_detected`, the executable name matched but the binary is not a digital ATPG tool.",
     ]) + "\n"
     _write_text(summary_path, json.dumps(summary, indent=2))

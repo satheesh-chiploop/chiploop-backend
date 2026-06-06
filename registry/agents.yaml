@@ -3440,7 +3440,7 @@
       "name": "Digital Tapeout Agent",
       "loop_type": "digital",
       "domain": "physical_design",
-      "description": "Runs OpenLane2 streamout to GDS (KLayout.StreamOut + Magic.StreamOut + optional KLayout.XOR). Exports GDS paths + metrics.json.",
+      "description": "Runs OpenLane2 streamout to GDS (KLayout.StreamOut + Magic.StreamOut + optional KLayout.XOR). Reports failed unless DRC/LVS are clean, XOR is clean, and GDS is produced.",
       "entrypoint": "agents.digital.digital_tapeout_agent:run_agent",
       "execution_mode": "legacy_adapter",
       "inputs": [
@@ -3493,6 +3493,62 @@
       "metadata": {
         "registry_source": "DIGITAL_AGENT_FUNCTIONS",
         "variable": "digital_tapeout_agent",
+        "studio_contract_version": "v1"
+      }
+    },
+    {
+      "name": "Digital Tapeout Logic Equivalence Check Agent",
+      "loop_type": "digital",
+      "domain": "physical_design",
+      "description": "Runs post-tapeout RTL-vs-final-implementation-netlist equivalence using Yosys and writes evidence separate from synthesis LEC.",
+      "entrypoint": "agents.digital.digital_tapeout_lec_agent:run_agent",
+      "execution_mode": "legacy_adapter",
+      "inputs": [
+        "handoff/rtl/*.v",
+        "handoff/rtl/*.sv",
+        "digital/handoff/rtl/*.v",
+        "digital/handoff/rtl/*.sv",
+        "digital/tapeout/netlist/*.v",
+        "digital/route/netlist/*.v",
+        "OpenLane final implementation netlist"
+      ],
+      "outputs": [
+        "digital/tapeout_lec/yosys_tapeout_lec.ys",
+        "digital/tapeout_lec/logs/yosys_tapeout_lec.log",
+        "digital/tapeout_lec/tapeout_lec_summary.json",
+        "digital/tapeout_lec/tapeout_lec_report.md"
+      ],
+      "artifact_paths": [
+        "digital/tapeout_lec/yosys_tapeout_lec.ys",
+        "digital/tapeout_lec/logs/yosys_tapeout_lec.log",
+        "digital/tapeout_lec/tapeout_lec_summary.json",
+        "digital/tapeout_lec/tapeout_lec_report.md"
+      ],
+      "artifact_types": [
+        "implementation_artifact",
+        "report",
+        "structured_data"
+      ],
+      "required_skills": [
+        "artifact_publish",
+        "formal_equivalence"
+      ],
+      "required_tools": [
+        "python",
+        "supabase",
+        "yosys"
+      ],
+      "hooks": [
+        "pre_run_validate_inputs",
+        "post_run_collect_artifacts",
+        "post_run_update_state",
+        "on_failure_capture_traceback",
+        "on_failure_preserve_logs",
+        "artifact_publish_to_supabase"
+      ],
+      "metadata": {
+        "registry_source": "DIGITAL_AGENT_FUNCTIONS",
+        "variable": "digital_tapeout_lec_agent",
         "studio_contract_version": "v1"
       }
     },

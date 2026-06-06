@@ -346,7 +346,7 @@ docker run --rm \\
     rc, out = _run(["bash", "-lc", "./run.sh"], cwd=stage_dir, state=state)
     _write_text(os.path.join(logs_dir, "openlane_lvs.log"), out)
 
-    latest = _latest_run_dir(run_work_dir)
+    latest = _latest_run_dir(work_stage_dir)
     metrics_path = _copy_metrics(latest, stage_dir)
 
     summary = {
