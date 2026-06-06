@@ -30,6 +30,33 @@ def _read_text(path: str | None) -> str:
         return ""
 
 
+def _read_json(path: str | None) -> dict:
+    if not path:
+        return {}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _number_or_none(value: Any) -> float | int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and value == value:
+        return value
+    if isinstance(value, str) and value.strip():
+        try:
+            parsed = float(value.strip().rstrip("%"))
+        except ValueError:
+            return None
+        return int(parsed) if parsed.is_integer() else parsed
+    return None
+
+
 def _existing_path(value: Any, workflow_dir: str | None = None) -> str | None:
     if not isinstance(value, str) or not value.strip():
         return None
@@ -97,7 +124,7 @@ def _is_wrong_fault_tool(log: str) -> bool:
     )
 
 
-def _run_detected_tool(state: dict, tool_name: str, stage_dir: str, netlist_path: str) -> tuple[int | None, str]:
+def _run_detected_tool(state: dict, tool_name: str, stage_dir: str, netlist_path: str, metrics_path: str) -> tuple[int | None, str]:
     # Open-source ATPG tools do not share a stable CLI. For production use,
     # private/hybrid profiles should set CHIPLOOP_ATPG_COMMAND or map a tool
     # adapter. By default we collect tool readiness/version/help without
@@ -105,7 +132,21 @@ def _run_detected_tool(state: dict, tool_name: str, stage_dir: str, netlist_path
     configured = os.getenv("CHIPLOOP_ATPG_COMMAND", "").strip()
     if configured:
         script_path = os.path.join(stage_dir, "run_configured_atpg.sh")
-        _write_text(script_path, f"#!/usr/bin/env bash\nset -euo pipefail\n{configured}\n")
+        patterns_path = os.path.join(stage_dir, "patterns")
+        _ensure_dir(patterns_path)
+        _write_text(
+            script_path,
+            "\n".join([
+                "#!/usr/bin/env bash",
+                "set -euo pipefail",
+                f"export CHIPLOOP_ATPG_STAGE_DIR={json.dumps(stage_dir)}",
+                f"export CHIPLOOP_ATPG_INPUT_NETLIST={json.dumps(netlist_path)}",
+                f"export CHIPLOOP_ATPG_METRICS_JSON={json.dumps(metrics_path)}",
+                f"export CHIPLOOP_ATPG_PATTERNS_DIR={json.dumps(patterns_path)}",
+                configured,
+                "",
+            ]),
+        )
         proc = run_command(state, "scan_atpg", ["bash", script_path], cwd=stage_dir, timeout_sec=900)
         return proc.returncode, (proc.stdout or "") + (proc.stderr or "")
 
@@ -117,6 +158,27 @@ def _run_detected_tool(state: dict, tool_name: str, stage_dir: str, netlist_path
     log += "\n\nChipLoop did not run ATPG patterns because CHIPLOOP_ATPG_COMMAND is not configured for this tool.\n"
     log += f"Input scan/gate netlist staged at: {netlist_path}\n"
     return proc.returncode, log
+
+
+def _adapter_metrics(stage_dir: str) -> tuple[dict, str | None]:
+    candidates = [
+        os.path.join(stage_dir, "atpg_metrics.json"),
+        os.path.join(stage_dir, "metrics", "atpg_metrics.json"),
+        os.path.join(stage_dir, "reports", "atpg_metrics.json"),
+    ]
+    for path in candidates:
+        data = _read_json(path)
+        if data:
+            return data, path
+    return {}, None
+
+
+def _metric(data: dict, *names: str) -> float | int | None:
+    for name in names:
+        value = _number_or_none(data.get(name))
+        if value is not None:
+            return value
+    return None
 
 
 def run_agent(state: dict) -> dict:
@@ -168,6 +230,7 @@ def run_agent(state: dict) -> dict:
 
     netlist = _scan_netlist(state, workflow_dir)
     input_netlist = os.path.join(input_dir, "scan_or_gate_netlist.v")
+    metrics_path = os.path.join(stage_dir, "atpg_metrics.json")
     if netlist:
         _write_text(input_netlist, _read_text(netlist))
 
@@ -190,7 +253,7 @@ def run_agent(state: dict) -> dict:
             for item in tool_diagnostics:
                 log += f"- {item.get('tool')}: {item.get('status')} ({item.get('executable')})\n"
     else:
-        rc, log = _run_detected_tool(state, tool_name, stage_dir, input_netlist)
+        rc, log = _run_detected_tool(state, tool_name, stage_dir, input_netlist, metrics_path)
         if tool_name == "fault" and not configured_atpg and _is_wrong_fault_tool(log):
             status = "wrong_tool_detected"
             log += "\n\nThe detected `fault` executable is not a digital ATPG tool; it appears to be a network resilience/fault-injection CLI. Ignoring it for ATPG coverage.\n"
@@ -198,6 +261,20 @@ def run_agent(state: dict) -> dict:
             status = "adapter_ready" if configured_atpg else "tool_detected_needs_adapter_command"
         if status != "wrong_tool_detected" and rc not in (0, None) and "usage" not in log.lower() and "help" not in log.lower():
             status = "tool_probe_failed"
+
+    metrics, metrics_file = _adapter_metrics(stage_dir)
+    pattern_count = _metric(metrics, "pattern_count", "patterns", "test_patterns")
+    stuck_at_coverage_pct = _metric(metrics, "stuck_at_coverage_pct", "coverage_pct", "fault_coverage_pct", "coverage")
+    faults_detected = _metric(metrics, "faults_detected", "detected_faults")
+    faults_undetected = _metric(metrics, "faults_undetected", "undetected_faults")
+    faults_aborted = _metric(metrics, "faults_aborted", "aborted_faults")
+    if configured_atpg and rc == 0:
+        if pattern_count is not None or stuck_at_coverage_pct is not None:
+            status = "patterns_generated"
+        else:
+            status = "adapter_completed_no_metrics"
+    elif configured_atpg and rc not in (0, None):
+        status = "adapter_failed"
 
     log_path = os.path.join(logs_dir, "scan_atpg.log")
     summary_path = os.path.join(stage_dir, "atpg_summary.json")
@@ -212,12 +289,13 @@ def run_agent(state: dict) -> dict:
         "tool_executable": tool_exe,
         "return_code": rc,
         "input_netlist": os.path.basename(netlist) if netlist else None,
-        "pattern_count": None,
-        "stuck_at_coverage_pct": None,
-        "faults_detected": None,
-        "faults_undetected": None,
-        "faults_aborted": None,
-        "coverage_source": "not_reported" if status != "adapter_ready" else "configured_adapter",
+        "pattern_count": pattern_count,
+        "stuck_at_coverage_pct": stuck_at_coverage_pct,
+        "faults_detected": faults_detected,
+        "faults_undetected": faults_undetected,
+        "faults_aborted": faults_aborted,
+        "coverage_source": "configured_adapter_metrics" if status == "patterns_generated" else "not_reported",
+        "metrics_file": os.path.basename(metrics_file) if metrics_file else None,
         "tool_diagnostics": tool_diagnostics,
         "generated_at": datetime.utcnow().isoformat() + "Z",
         "artifacts": {
@@ -225,6 +303,7 @@ def run_agent(state: dict) -> dict:
             "report": "digital/atpg/atpg_report.md",
             "log": "digital/atpg/logs/scan_atpg.log",
             "input_netlist": "digital/atpg/input/scan_or_gate_netlist.v" if netlist else None,
+            "metrics": "digital/atpg/atpg_metrics.json" if metrics_file else None,
         },
     }
     report = "\n".join([
@@ -233,10 +312,13 @@ def run_agent(state: dict) -> dict:
         f"- Status: `{status}`",
         f"- Tool: `{tool_name or 'not found'}`",
         f"- Input netlist: `{os.path.basename(netlist) if netlist else 'missing'}`",
-        "- Pattern count: `not reported`",
-        "- Stuck-at coverage: `not reported`",
+        f"- Pattern count: `{pattern_count if pattern_count is not None else 'not reported'}`",
+        f"- Stuck-at coverage: `{stuck_at_coverage_pct if stuck_at_coverage_pct is not None else 'not reported'}`",
+        f"- Faults detected: `{faults_detected if faults_detected is not None else 'not reported'}`",
+        f"- Faults undetected: `{faults_undetected if faults_undetected is not None else 'not reported'}`",
+        f"- Faults aborted: `{faults_aborted if faults_aborted is not None else 'not reported'}`",
         "",
-        "This agent is adapter-ready for open-source ATPG tools. Set `CHIPLOOP_ATPG_COMMAND` to the validated command for the installed toolchain to produce real pattern and coverage reports.",
+        "A configured ATPG adapter must write `atpg_metrics.json` with real pattern and coverage metrics. Runs without that file are reported as `adapter_completed_no_metrics`.",
         "If status is `wrong_tool_detected`, the executable name matched but the binary is not a digital ATPG tool.",
     ]) + "\n"
     _write_text(summary_path, json.dumps(summary, indent=2))
@@ -244,6 +326,8 @@ def run_agent(state: dict) -> dict:
 
     if netlist:
         save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "atpg/input/scan_or_gate_netlist.v", _read_text(input_netlist))
+    if metrics_file:
+        save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "atpg/atpg_metrics.json", _read_text(metrics_file))
     save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "atpg/logs/scan_atpg.log", log)
     save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "atpg/atpg_summary.json", json.dumps(summary, indent=2))
     save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "atpg/atpg_report.md", report)
