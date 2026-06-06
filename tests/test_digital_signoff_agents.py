@@ -8,6 +8,7 @@ from agents.digital.digital_drc_agent import _drc_status
 from agents.digital.digital_logic_equivalence_agent import _generated_stdcell_model, _missing_stdcell_models, _yosys_script
 from agents.digital.digital_lvs_agent import _lvs_status
 from agents.digital.digital_scan_atpg_agent import _adapter_log_has_execution_error, _generate_full_scan_bench, _metrics_show_real_atpg_result, _pattern_count_from_file
+from agents.digital.digital_tapeout_lec_agent import PHYSICAL_ONLY_TOP_PORTS, _top_ports
 from agents.digital.digital_tapeout_agent import _blocking_xor_difference_count, _copy_xor_report, _tapeout_failure_reasons, _xor_difference_count, _xor_layer_counts
 
 
@@ -49,6 +50,24 @@ def test_lec_script_uses_configurable_induction_depth(monkeypatch):
     script = _yosys_script(["rtl.sv"], "gate.v", "top", ["cells.v"])
 
     assert "equiv_induct -undef -seq 96" in script
+
+
+def test_tapeout_lec_script_can_ignore_physical_gate_ports():
+    script = _yosys_script(["rtl.sv"], "gate.v", "top", ["cells.v"], gate_ignore_ports=["VPWR", "VGND"])
+
+    assert "delete -port w:VPWR w:VGND" in script
+    assert script.index("delete -port w:VPWR w:VGND") < script.index("rename -top gate")
+
+
+def test_tapeout_physical_only_port_detection(tmp_path):
+    rtl = tmp_path / "rtl.sv"
+    gate = tmp_path / "gate.v"
+    rtl.write_text("module top(input clk, output y); endmodule\n", encoding="utf-8")
+    gate.write_text("module top(clk, VPWR, VGND, y); input clk; inout VPWR; inout VGND; output y; endmodule\n", encoding="utf-8")
+
+    ignored = (_top_ports(str(gate), "top") - _top_ports(str(rtl), "top")) & PHYSICAL_ONLY_TOP_PORTS
+
+    assert ignored == {"VPWR", "VGND"}
 
 
 def test_tapeout_status_is_signoff_gated():
