@@ -7,8 +7,8 @@ os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-service-role-key")
 from agents.digital.digital_drc_agent import _drc_status
 from agents.digital.digital_logic_equivalence_agent import _generated_stdcell_model, _missing_stdcell_models, _yosys_script
 from agents.digital.digital_lvs_agent import _lvs_status
-from agents.digital.digital_scan_atpg_agent import _adapter_log_has_execution_error, _metrics_show_real_atpg_result, _pattern_count_from_file
-from agents.digital.digital_tapeout_agent import _copy_xor_report, _tapeout_failure_reasons, _xor_difference_count
+from agents.digital.digital_scan_atpg_agent import _adapter_log_has_execution_error, _generate_full_scan_bench, _metrics_show_real_atpg_result, _pattern_count_from_file
+from agents.digital.digital_tapeout_agent import _blocking_xor_difference_count, _copy_xor_report, _tapeout_failure_reasons, _xor_difference_count, _xor_layer_counts
 
 
 def test_atpg_zero_pattern_metrics_are_not_success():
@@ -97,6 +97,25 @@ def test_tapeout_xor_report_is_copied_to_reports(tmp_path):
     assert (stage_dir / "reports" / "xor.xml").read_text(encoding="utf-8") == "<report-database />"
 
 
+def test_boundary_only_xor_is_nonblocking(tmp_path):
+    report = tmp_path / "xor.xml"
+    report.write_text(
+        """
+<report-database>
+  <items>
+    <item><category>'235/4'</category><cell>top</cell></item>
+  </items>
+</report-database>
+""",
+        encoding="utf-8",
+    )
+
+    layer_counts = _xor_layer_counts(str(report))
+
+    assert layer_counts == {"235/4": 1}
+    assert _blocking_xor_difference_count(1, layer_counts, {"235/4"}) == 0
+
+
 def test_tapeout_lec_generated_model_covers_physical_sky130_cells(tmp_path):
     netlist = tmp_path / "gate.v"
     netlist.write_text(
@@ -106,6 +125,7 @@ module top(input A, output X);
   sky130_fd_sc_hd__decap_3 decap(.VPWR(A), .VGND(A), .VPB(A), .VNB(A));
   sky130_fd_sc_hd__fill_1 fill(.VPWR(A), .VGND(A), .VPB(A), .VNB(A));
   sky130_fd_sc_hd__dlymetal6s2s_1 dly(.A(A), .X(X), .VPWR(A), .VGND(A), .VPB(A), .VNB(A));
+  sky130_fd_sc_hd__bufinv_16 clkload(.A(A), .VPWR(A), .VGND(A), .VPB(A), .VNB(A));
 endmodule
 """,
         encoding="utf-8",
@@ -118,6 +138,7 @@ endmodule
     assert "module sky130_fd_sc_hd__tapvpwrvgnd_1" in text
     assert "module sky130_fd_sc_hd__decap_3" in text
     assert "module sky130_fd_sc_hd__fill_1" in text
+    assert "module sky130_fd_sc_hd__bufinv_16" in text
     assert "assign X = A;" in text
     assert _missing_stdcell_models(str(netlist), [model]) == []
 
@@ -132,3 +153,28 @@ def test_atpg_pattern_count_can_be_inferred_from_adapter_pattern_file(tmp_path):
     pattern_file.write_text("# atalanta\nTEST 1 0101\nTEST 2 1010\n", encoding="utf-8")
 
     assert _pattern_count_from_file(str(pattern_file)) == 2
+
+
+def test_atpg_bench_filters_unused_scan_control_inputs():
+    bench, meta = _generate_full_scan_bench(
+        """
+module top(clk, reset_n, scan_en, scan_in_0, a, y);
+  input clk;
+  input reset_n;
+  input scan_en;
+  input scan_in_0;
+  input a;
+  output y;
+  wire q;
+  sky130_fd_sc_hd__sdfrtp_1 flop(.CLK(clk), .RESET_B(reset_n), .SCE(scan_en), .D(a), .Q(q));
+  sky130_fd_sc_hd__buf_1 outbuf(.A(q), .X(y));
+endmodule
+"""
+    )
+
+    assert meta["status"] == "generated"
+    assert "INPUT(clk)" not in bench
+    assert "INPUT(reset_n)" not in bench
+    assert "INPUT(scan_en)" not in bench
+    assert "INPUT(scan_in_0)" not in bench
+    assert "INPUT(q)" in bench

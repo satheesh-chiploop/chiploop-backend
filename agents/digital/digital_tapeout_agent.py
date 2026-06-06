@@ -6,6 +6,7 @@ import subprocess
 import re
 import logging
 from datetime import datetime
+from xml.etree import ElementTree
 
 from tooling.runner import run_command
 from utils.artifact_utils import save_text_artifact_and_record
@@ -16,6 +17,11 @@ AGENT_NAME = "Digital Tapeout Agent"
 DEFAULT_PDK_VARIANT = os.getenv("CHIPLOOP_PDK_VARIANT", "sky130A")
 DEFAULT_OPENLANE_IMAGE = os.getenv("CHIPLOOP_OPENLANE_IMAGE", "ghcr.io/efabless/openlane2:2.4.0.dev1")
 DEFAULT_NUM_CORES = int(os.getenv("OPENLANE_NUM_CORES", "2"))
+DEFAULT_NONBLOCKING_XOR_LAYERS = {
+    item.strip()
+    for item in os.getenv("CHIPLOOP_XOR_NONBLOCKING_LAYERS", "235/4").split(",")
+    if item.strip()
+}
 
 
 def _ensure_dir(path: str) -> None:
@@ -83,6 +89,28 @@ def _copy_xor_report(latest: str | None, stage_dir: str) -> str | None:
     return dst
 
 
+def _xor_layer_counts(report_path: str | None) -> dict[str, int]:
+    if not report_path or not os.path.exists(report_path):
+        return {}
+    try:
+        root = ElementTree.parse(report_path).getroot()
+    except Exception:
+        return {}
+    counts: dict[str, int] = {}
+    for item in root.findall(".//item"):
+        category = (item.findtext("category") or "").strip().strip("'\"")
+        if category:
+            counts[category] = counts.get(category, 0) + 1
+    return counts
+
+
+def _blocking_xor_difference_count(total_count: int | None, layer_counts: dict[str, int], nonblocking_layers: set[str] | None = None) -> int | None:
+    if not layer_counts:
+        return total_count
+    ignored = nonblocking_layers or DEFAULT_NONBLOCKING_XOR_LAYERS
+    return sum(count for layer, count in layer_counts.items() if layer not in ignored)
+
+
 def _pick_gds(latest: str | None) -> tuple[str | None, str | None]:
     if not latest:
         return (None, None)
@@ -148,6 +176,7 @@ def _tapeout_failure_reasons(
     lvs_status: str | None,
     klayout_gds: str | None,
     magic_gds: str | None,
+    blocking_xor_count: int | None = None,
 ) -> list[str]:
     reasons: list[str] = []
     if rc != 0:
@@ -156,7 +185,7 @@ def _tapeout_failure_reasons(
         reasons.append("drc_not_clean")
     if not _stage_is_clean("lvs", lvs_status):
         reasons.append("lvs_not_clean")
-    xor_count = _xor_difference_count(log)
+    xor_count = blocking_xor_count if blocking_xor_count is not None else _xor_difference_count(log)
     if xor_count is not None and xor_count > 0:
         reasons.append("xor_differences_found")
     if not (klayout_gds or magic_gds):
@@ -483,6 +512,9 @@ docker run --rm \\
     latest = _latest_run_dir(work_stage_dir)
     metrics_path = _copy_metrics(latest, stage_dir)
     xor_report_path = _copy_xor_report(latest, stage_dir)
+    xor_layer_counts = _xor_layer_counts(xor_report_path)
+    xor_total = _xor_difference_count(out)
+    blocking_xor_count = _blocking_xor_difference_count(xor_total, xor_layer_counts)
 
     kl_src, mg_src = _pick_gds(latest)
     kl_dst = os.path.join(gds_dir, "klayout.gds") if kl_src else None
@@ -502,6 +534,7 @@ docker run --rm \\
         lvs_status=lvs_status,
         klayout_gds=kl_dst,
         magic_gds=mg_dst,
+        blocking_xor_count=blocking_xor_count,
     )
 
     summary = {
@@ -513,7 +546,10 @@ docker run --rm \\
         "signoff_inputs": {
             "drc_status": drc_status,
             "lvs_status": lvs_status,
-            "xor_differences": _xor_difference_count(out),
+            "xor_differences": blocking_xor_count,
+            "xor_differences_total": xor_total,
+            "xor_layer_counts": xor_layer_counts,
+            "xor_nonblocking_layers": sorted(DEFAULT_NONBLOCKING_XOR_LAYERS),
             "gds_produced": bool(kl_dst or mg_dst),
         },
         "outputs": {

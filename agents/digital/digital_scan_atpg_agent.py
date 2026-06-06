@@ -145,6 +145,18 @@ def _bench_gate(lines: list[str], output: str, gate: str, inputs: list[str]) -> 
     lines.append(f"{_bench_name(output)} = {gate}({', '.join(_bench_name(item) for item in inputs)})")
 
 
+def _bench_gate_signal_sets(gates: list[str]) -> tuple[set[str], set[str]]:
+    driven: set[str] = set()
+    used: set[str] = set()
+    for line in gates:
+        match = re.match(r"\s*(?P<lhs>[A-Za-z0-9_]+)\s*=\s*[A-Z]+\((?P<rhs>.*?)\)\s*$", line)
+        if not match:
+            continue
+        driven.add(match.group("lhs"))
+        used.update(item.strip() for item in match.group("rhs").split(",") if item.strip())
+    return driven, used
+
+
 def _maybe_inverted(lines: list[str], signal: str, pin: str, inst: str) -> str:
     if not pin.endswith("_N"):
         return signal
@@ -159,6 +171,9 @@ def _emit_basic_gate(lines: list[str], cell_base: str, inst: str, ports: dict[st
         return False
     if cell_base.startswith("inv"):
         _bench_gate(lines, out, "NOT", [ports.get("A", "")])
+        return True
+    if cell_base.startswith(("buf", "clkbuf", "dly")):
+        _bench_gate(lines, out, "BUFF", [ports.get("A", "")])
         return True
     gate_map = [
         ("nand", "NAND"),
@@ -296,8 +311,10 @@ def _generate_full_scan_bench(netlist_text: str) -> tuple[str, dict]:
     for match in re.finditer(r"assign\s+(?P<lhs>.*?)\s*=\s*(?P<rhs>.*?)\s*;", netlist_text):
         _bench_gate(gates, match.group("lhs"), "BUFF", [match.group("rhs")])
 
-    inputs = sorted(set(primary_inputs + scan_q_inputs))
-    outputs = sorted(set(primary_outputs + scan_d_outputs))
+    driven, used = _bench_gate_signal_sets(gates)
+    candidate_inputs = set(primary_inputs + scan_q_inputs)
+    inputs = sorted(candidate_inputs & used)
+    outputs = sorted((set(primary_outputs) & (driven | candidate_inputs)) | (set(scan_d_outputs) & driven))
     for name in inputs:
         lines.append(f"INPUT({name})")
     for name in outputs:

@@ -317,6 +317,7 @@ def _is_physical_only_cell(cell_base: str) -> bool:
         "decap",
         "tap",
         "tapvpwrvgnd",
+        "bufinv",
         "endcap",
         "diode",
         "diod",
