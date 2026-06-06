@@ -2,6 +2,7 @@ import logging
 import os
 import json
 import asyncio
+from collections import Counter
 from typing import Any, Dict
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
@@ -249,6 +250,47 @@ async def ask_chiploop_help(request: Request, _: BrowserUser = Depends(require_b
         return answer_help_question(question)
     except ValueError:
         raise HTTPException(status_code=400, detail="question_too_short")
+
+
+@router.get("/help/catalog")
+def help_catalog(_: BrowserUser = Depends(require_browser_user)):
+    registry = load_registry()
+    agents = [
+        {
+            "type": "agent",
+            "name": agent.name,
+            "loop_type": agent.loop_type,
+            "domain": agent.domain,
+            "description": agent.description,
+            "steps": None,
+        }
+        for agent in registry.agents.values()
+    ]
+    workflows = [
+        {
+            "type": "workflow",
+            "name": workflow.name,
+            "loop_type": workflow.loop_type,
+            "domain": "workflow",
+            "description": workflow.description,
+            "steps": len(workflow.agents),
+        }
+        for workflow in registry.workflows.values()
+    ]
+    agents.sort(key=lambda row: (row["loop_type"], row["name"]))
+    workflows.sort(key=lambda row: (row["loop_type"], row["name"]))
+    agent_loop_counts = Counter(row["loop_type"] or "unknown" for row in agents)
+    workflow_loop_counts = Counter(row["loop_type"] or "unknown" for row in workflows)
+    return {
+        "status": "ok",
+        "counts": {
+            "agents": len(agents),
+            "workflows": len(workflows),
+            "agents_by_loop": dict(sorted(agent_loop_counts.items())),
+            "workflows_by_loop": dict(sorted(workflow_loop_counts.items())),
+        },
+        "rows": [*agents, *workflows],
+    }
 
 
 def _trial_checkout_detail(message: str) -> Dict[str, Any]:

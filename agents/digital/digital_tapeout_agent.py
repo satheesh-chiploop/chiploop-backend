@@ -67,6 +67,22 @@ def _copy_metrics(latest: str | None, stage_dir: str) -> str | None:
     return None
 
 
+def _copy_xor_report(latest: str | None, stage_dir: str) -> str | None:
+    if not latest:
+        return None
+    candidates = sorted(glob.glob(os.path.join(latest, "**", "xor.xml"), recursive=True))
+    if not candidates:
+        candidates = sorted(glob.glob(os.path.join(latest, "**", "*xor*.xml"), recursive=True))
+    if not candidates:
+        return None
+    src = candidates[-1]
+    reports_dir = os.path.join(stage_dir, "reports")
+    _ensure_dir(reports_dir)
+    dst = os.path.join(reports_dir, "xor.xml")
+    shutil.copy2(src, dst)
+    return dst
+
+
 def _pick_gds(latest: str | None) -> tuple[str | None, str | None]:
     if not latest:
         return (None, None)
@@ -99,8 +115,21 @@ def _pick_gds(latest: str | None) -> tuple[str | None, str | None]:
 def _stage_status(state: dict, stage: str) -> str | None:
     digital = state.get("digital") if isinstance(state.get("digital"), dict) else {}
     stage_state = digital.get(stage) if isinstance(digital.get(stage), dict) else {}
-    value = stage_state.get("status")
+    if stage == "drc":
+        value = stage_state.get("drc_status") or stage_state.get("status")
+    elif stage == "lvs":
+        value = stage_state.get("lvs_status") or stage_state.get("status")
+    else:
+        value = stage_state.get("status")
     return str(value).strip().lower() if value is not None else None
+
+
+def _stage_is_clean(stage: str, status: str | None) -> bool:
+    if stage == "drc":
+        return status in {"ok", "clean", "completed"}
+    if stage == "lvs":
+        return status in {"ok", "clean", "completed"}
+    return status == "ok"
 
 
 def _xor_difference_count(log: str) -> int | None:
@@ -123,9 +152,9 @@ def _tapeout_failure_reasons(
     reasons: list[str] = []
     if rc != 0:
         reasons.append("streamout_command_failed")
-    if drc_status != "ok":
+    if not _stage_is_clean("drc", drc_status):
         reasons.append("drc_not_clean")
-    if lvs_status != "ok":
+    if not _stage_is_clean("lvs", lvs_status):
         reasons.append("lvs_not_clean")
     xor_count = _xor_difference_count(log)
     if xor_count is not None and xor_count > 0:
@@ -453,6 +482,7 @@ docker run --rm \\
 
     latest = _latest_run_dir(work_stage_dir)
     metrics_path = _copy_metrics(latest, stage_dir)
+    xor_report_path = _copy_xor_report(latest, stage_dir)
 
     kl_src, mg_src = _pick_gds(latest)
     kl_dst = os.path.join(gds_dir, "klayout.gds") if kl_src else None
@@ -489,6 +519,7 @@ docker run --rm \\
         "outputs": {
             "sdc": f"digital/tapeout/constraints/{sdc_basename}",
             "metrics_json": "digital/tapeout/metrics.json" if metrics_path else None,
+            "xor_report_xml": "digital/tapeout/reports/xor.xml" if xor_report_path else None,
             "klayout_gds": "digital/tapeout/gds/klayout.gds" if kl_dst else None,
             "magic_gds": "digital/tapeout/gds/magic.gds" if mg_dst else None,
             "log": "digital/tapeout/logs/openlane_tapeout.log",
@@ -527,6 +558,11 @@ docker run --rm \\
             with open(metrics_path, "r", encoding="utf-8") as f:
                 save_text_artifact_and_record(
                     workflow_id, AGENT_NAME, "digital", "tapeout/metrics.json", f.read()
+                )
+        if xor_report_path and os.path.exists(xor_report_path):
+            with open(xor_report_path, "r", encoding="utf-8", errors="ignore") as f:
+                save_text_artifact_and_record(
+                    workflow_id, AGENT_NAME, "digital", "tapeout/reports/xor.xml", f.read()
                 )
         # GDS is binary; keep local and record path in summary/state
     except Exception as e:

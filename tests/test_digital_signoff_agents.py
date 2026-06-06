@@ -4,9 +4,11 @@ import os
 os.environ.setdefault("SUPABASE_URL", "http://localhost")
 os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-service-role-key")
 
-from agents.digital.digital_logic_equivalence_agent import _yosys_script
-from agents.digital.digital_scan_atpg_agent import _adapter_log_has_execution_error, _metrics_show_real_atpg_result
-from agents.digital.digital_tapeout_agent import _tapeout_failure_reasons, _xor_difference_count
+from agents.digital.digital_drc_agent import _drc_status
+from agents.digital.digital_logic_equivalence_agent import _generated_stdcell_model, _missing_stdcell_models, _yosys_script
+from agents.digital.digital_lvs_agent import _lvs_status
+from agents.digital.digital_scan_atpg_agent import _adapter_log_has_execution_error, _metrics_show_real_atpg_result, _pattern_count_from_file
+from agents.digital.digital_tapeout_agent import _copy_xor_report, _tapeout_failure_reasons, _xor_difference_count
 
 
 def test_atpg_zero_pattern_metrics_are_not_success():
@@ -53,13 +55,14 @@ def test_tapeout_status_is_signoff_gated():
     reasons = _tapeout_failure_reasons(
         rc=0,
         log="Total XOR differences: 1",
-        drc_status="failed",
-        lvs_status="ok",
+        drc_status="clean",
+        lvs_status="clean",
         klayout_gds="/tmp/top.klayout.gds",
         magic_gds=None,
     )
 
-    assert "drc_not_clean" in reasons
+    assert "drc_not_clean" not in reasons
+    assert "lvs_not_clean" not in reasons
     assert "xor_differences_found" in reasons
 
 
@@ -79,3 +82,53 @@ def test_tapeout_requires_gds_output():
 def test_tapeout_xor_difference_parser():
     assert _xor_difference_count("Total XOR differences: 0") == 0
     assert _xor_difference_count("One or more deferred errors encountered: 1 XOR differences found.") == 1
+
+
+def test_tapeout_xor_report_is_copied_to_reports(tmp_path):
+    run_dir = tmp_path / "runs" / "run1" / "161-klayout-xor"
+    run_dir.mkdir(parents=True)
+    source = run_dir / "xor.xml"
+    source.write_text("<report-database />", encoding="utf-8")
+    stage_dir = tmp_path / "stage"
+
+    copied = _copy_xor_report(str(tmp_path / "runs" / "run1"), str(stage_dir))
+
+    assert copied == str(stage_dir / "reports" / "xor.xml")
+    assert (stage_dir / "reports" / "xor.xml").read_text(encoding="utf-8") == "<report-database />"
+
+
+def test_tapeout_lec_generated_model_covers_physical_sky130_cells(tmp_path):
+    netlist = tmp_path / "gate.v"
+    netlist.write_text(
+        """
+module top(input A, output X);
+  sky130_fd_sc_hd__tapvpwrvgnd_1 tap(.VPWR(A), .VGND(A), .VPB(A), .VNB(A));
+  sky130_fd_sc_hd__decap_3 decap(.VPWR(A), .VGND(A), .VPB(A), .VNB(A));
+  sky130_fd_sc_hd__fill_1 fill(.VPWR(A), .VGND(A), .VPB(A), .VNB(A));
+  sky130_fd_sc_hd__dlymetal6s2s_1 dly(.A(A), .X(X), .VPWR(A), .VGND(A), .VPB(A), .VNB(A));
+endmodule
+""",
+        encoding="utf-8",
+    )
+
+    model = _generated_stdcell_model(str(netlist), str(tmp_path))
+
+    assert model is not None
+    text = open(model, "r", encoding="utf-8").read()
+    assert "module sky130_fd_sc_hd__tapvpwrvgnd_1" in text
+    assert "module sky130_fd_sc_hd__decap_3" in text
+    assert "module sky130_fd_sc_hd__fill_1" in text
+    assert "assign X = A;" in text
+    assert _missing_stdcell_models(str(netlist), [model]) == []
+
+
+def test_drc_lvs_deferred_xor_does_not_mask_clean_check():
+    assert _drc_status(2, 0, "One or more deferred errors were encountered: 1 XOR differences found.") == "clean"
+    assert _lvs_status(2, None, "Final result:\nCircuits match uniquely.\nOne or more deferred errors were encountered: 1 XOR differences found.") == "clean"
+
+
+def test_atpg_pattern_count_can_be_inferred_from_adapter_pattern_file(tmp_path):
+    pattern_file = tmp_path / "atalanta.test"
+    pattern_file.write_text("# atalanta\nTEST 1 0101\nTEST 2 1010\n", encoding="utf-8")
+
+    assert _pattern_count_from_file(str(pattern_file)) == 2

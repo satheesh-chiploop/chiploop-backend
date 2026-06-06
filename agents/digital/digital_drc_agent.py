@@ -6,6 +6,7 @@ import subprocess
 import re
 import logging
 from datetime import datetime
+from xml.etree import ElementTree
 logger = logging.getLogger("chiploop")
 
 from tooling.runner import run_command
@@ -60,6 +61,54 @@ def _copy_metrics(latest: str | None, stage_dir: str) -> str | None:
         shutil.copy2(src, dst)
         return dst
     return None
+
+
+def _copy_drc_report(latest: str | None, stage_dir: str) -> tuple[str | None, int | None]:
+    if not latest:
+        return None, None
+    reports = sorted(glob.glob(os.path.join(latest, "**", "*drc*.xml"), recursive=True))
+    if not reports:
+        return None, None
+    src = reports[-1]
+    reports_dir = os.path.join(stage_dir, "reports")
+    _ensure_dir(reports_dir)
+    dst = os.path.join(reports_dir, os.path.basename(src))
+    shutil.copy2(src, dst)
+    return dst, _drc_violation_count(dst)
+
+
+def _drc_violation_count(report_path: str | None) -> int | None:
+    if not report_path or not os.path.exists(report_path):
+        return None
+    try:
+        root = ElementTree.parse(report_path).getroot()
+    except Exception:
+        return None
+    items = root.findall(".//item")
+    if items:
+        return len(items)
+    values = root.findall(".//value")
+    if values:
+        return len(values)
+    return 0
+
+
+def _xor_difference_count(log: str) -> int | None:
+    counts = [int(match.group(1)) for match in re.finditer(r"Total XOR differences:\s*(\d+)", log or "", flags=re.IGNORECASE)]
+    if counts:
+        return counts[-1]
+    match = re.search(r"(\d+)\s+XOR differences found", log or "", flags=re.IGNORECASE)
+    return int(match.group(1)) if match else None
+
+
+def _drc_status(rc: int, violation_count: int | None, log: str) -> str:
+    if violation_count is not None:
+        return "clean" if violation_count == 0 else "violations_found"
+    if rc == 0:
+        return "completed"
+    if _xor_difference_count(log):
+        return "completed_with_deferred_xor_error"
+    return "failed"
 
 
 def _infer_top_from_netlist(netlist_path: str) -> str | None:
@@ -221,6 +270,7 @@ def run_agent(state: dict) -> dict:
     cfg = _read_json(base_cfg_path)
     cfg.pop("SYNTH_SDC_FILE", None)
     cfg["RUN_LINTER"] = False
+    cfg["RUN_XOR"] = False
 
     run_work_dir = state.get("digital_run_work_dir") or os.path.join(workflow_dir, "digital", "run_work")
     run_work_dir = os.path.abspath(run_work_dir)
@@ -338,15 +388,22 @@ docker run --rm \\
 
     latest = _latest_run_dir(work_stage_dir)
     metrics_path = _copy_metrics(latest, stage_dir)
+    drc_report_path, drc_violations = _copy_drc_report(latest, stage_dir)
+    drc_status = _drc_status(rc, drc_violations, out)
+    xor_differences = _xor_difference_count(out)
 
     summary = {
         "workflow_id": workflow_id,
         "agent": AGENT_NAME,
-        "status": "ok" if rc == 0 else "failed",
+        "status": "ok" if drc_status in {"clean", "completed"} else drc_status,
+        "drc_status": drc_status,
+        "drc_violations": drc_violations,
+        "xor_differences": xor_differences,
         "return_code": rc,
         "outputs": {
             "sdc": f"digital/drc/constraints/{sdc_basename}",
             "metrics_json": "digital/drc/metrics.json" if metrics_path else None,
+            "drc_report_xml": f"digital/drc/reports/{os.path.basename(drc_report_path)}" if drc_report_path else None,
             "log": "digital/drc/logs/openlane_drc.log",
             "openlane_run_dir": latest,
         },
@@ -362,6 +419,14 @@ docker run --rm \\
         save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "drc/logs/openlane_drc.log", out)
         save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "drc/drc_summary.json", json.dumps(summary, indent=2))
         save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "drc/logs/drc_input_resolution.log", input_log)
+        if drc_report_path and os.path.exists(drc_report_path):
+            save_text_artifact_and_record(
+                workflow_id,
+                AGENT_NAME,
+                "digital",
+                f"drc/reports/{os.path.basename(drc_report_path)}",
+                open(drc_report_path, "r", encoding="utf-8", errors="ignore").read(),
+            )
         if metrics_path and os.path.exists(metrics_path):
             with open(metrics_path, "r", encoding="utf-8") as f:
                 save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "drc/metrics.json", f.read())
@@ -370,6 +435,9 @@ docker run --rm \\
 
     state.setdefault("digital", {})["drc"] = {
         "status": summary["status"],
+        "drc_status": drc_status,
+        "drc_violations": drc_violations,
+        "xor_differences": xor_differences,
         "stage_dir": stage_dir,
         "metrics_json": metrics_path,
         "constraints_sdc": stage_sdc,

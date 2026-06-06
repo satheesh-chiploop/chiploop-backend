@@ -295,8 +295,10 @@ def _compound_expr(cell_base: str, pins: set[str]) -> str | None:
 def _cell_assign_expr(cell_base: str, pins: set[str]) -> str | None:
     if cell_base.startswith("inv"):
         return "~A" if "A" in pins else None
-    if cell_base.startswith("buf") or cell_base.startswith("clkbuf"):
+    if cell_base.startswith("buf") or cell_base.startswith("clkbuf") or cell_base.startswith("dly"):
         return "A" if "A" in pins else None
+    if cell_base.startswith("conb"):
+        return None
     if cell_base.startswith("xor2"):
         return "(A ^ B)" if {"A", "B"}.issubset(pins) else None
     if cell_base.startswith("xnor2"):
@@ -307,6 +309,19 @@ def _cell_assign_expr(cell_base: str, pins: set[str]) -> str | None:
         if cell_base.startswith(prefix):
             return _gate_expr(prefix, _input_pins(pins))
     return _compound_expr(cell_base, pins)
+
+
+def _is_physical_only_cell(cell_base: str) -> bool:
+    return cell_base.startswith((
+        "fill",
+        "decap",
+        "tap",
+        "tapvpwrvgnd",
+        "endcap",
+        "diode",
+        "diod",
+        "welltap",
+    ))
 
 
 def _generated_stdcell_model(netlist: str | None, stage_dir: str) -> str | None:
@@ -327,7 +342,14 @@ def _generated_stdcell_model(netlist: str | None, stage_dir: str) -> str | None:
         inputs = _input_pins(pins)
         outputs = _output_pins(pins)
         if not outputs:
-            unsupported.append(cell)
+            if _is_physical_only_cell(base):
+                lines.append(f"module {cell}({', '.join(inputs)});")
+                for pin in inputs:
+                    lines.append(f"  input {pin};")
+                lines.append("endmodule")
+                lines.append("")
+            else:
+                unsupported.append(cell)
             continue
         body: list[str] = []
         decls = [f"input {pin}" for pin in inputs] + [f"output {pin}" for pin in outputs]
@@ -348,11 +370,18 @@ def _generated_stdcell_model(netlist: str | None, stage_dir: str) -> str | None:
                 if "Q_N" in pins:
                     body.append("  assign Q_N = ~q_reg;")
         else:
-            expr = _cell_assign_expr(base, pins)
+            if base.startswith("conb"):
+                if "HI" in pins:
+                    body.append("  assign HI = 1'b1;")
+                if "LO" in pins:
+                    body.append("  assign LO = 1'b0;")
+                expr = "handled"
+            else:
+                expr = _cell_assign_expr(base, pins)
             if expr is None:
                 unsupported.append(cell)
                 continue
-            else:
+            elif expr != "handled":
                 out = "X" if "X" in pins else ("Y" if "Y" in pins else outputs[0])
                 body.append(f"  assign {out} = {expr};")
                 if "Q_N" in pins and out == "Q":

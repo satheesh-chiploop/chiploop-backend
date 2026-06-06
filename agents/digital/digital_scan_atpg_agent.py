@@ -439,6 +439,50 @@ def _metric(data: dict, *names: str) -> float | int | None:
     return None
 
 
+def _safe_adapter_output_path(stage_dir: str, path: object) -> str | None:
+    if not isinstance(path, str) or not path.strip():
+        return None
+    candidate = os.path.abspath(path)
+    stage_root = os.path.abspath(stage_dir)
+    if not candidate.startswith(stage_root + os.sep):
+        return None
+    return candidate if os.path.exists(candidate) else None
+
+
+def _pattern_count_from_file(path: str | None) -> int | None:
+    if not path or not os.path.exists(path):
+        return None
+    count = 0
+    try:
+        with open(path, "r", encoding="utf-8", errors="ignore") as f:
+            for raw in f:
+                line = raw.strip()
+                if not line or line.startswith(("#", "//", "*")):
+                    continue
+                if re.match(r"^(test|pattern)\b", line, flags=re.IGNORECASE):
+                    count += 1
+                elif re.search(r"[01xX]", line) and not re.search(r"\b(fault|coverage|collapsed|detected|undetected)\b", line, flags=re.IGNORECASE):
+                    count += 1
+    except Exception:
+        return None
+    return count if count > 0 else None
+
+
+def _coverage_from_text(text: str) -> float | None:
+    for pattern in (
+        r"fault\s+coverage\s*[:=]\s*([0-9]+(?:\.[0-9]+)?)\s*%",
+        r"stuck-at\s+coverage\s*[:=]\s*([0-9]+(?:\.[0-9]+)?)\s*%",
+        r"coverage\s*[:=]\s*([0-9]+(?:\.[0-9]+)?)\s*%",
+    ):
+        match = re.search(pattern, text or "", flags=re.IGNORECASE)
+        if match:
+            try:
+                return float(match.group(1))
+            except ValueError:
+                return None
+    return None
+
+
 def _metrics_show_real_atpg_result(
     pattern_count: float | int | None,
     stuck_at_coverage_pct: float | int | None,
@@ -566,6 +610,13 @@ def run_agent(state: dict) -> dict:
     faults_detected = _metric(metrics, "faults_detected", "detected_faults")
     faults_undetected = _metric(metrics, "faults_undetected", "undetected_faults")
     faults_aborted = _metric(metrics, "faults_aborted", "aborted_faults")
+    pattern_file = _safe_adapter_output_path(stage_dir, metrics.get("pattern_file"))
+    atalanta_output = _safe_adapter_output_path(stage_dir, metrics.get("atalanta_output"))
+    inferred_pattern_count = _pattern_count_from_file(pattern_file)
+    if (pattern_count is None or pattern_count == 0) and inferred_pattern_count is not None:
+        pattern_count = inferred_pattern_count
+    if stuck_at_coverage_pct is None and atalanta_output:
+        stuck_at_coverage_pct = _coverage_from_text(_read_text(atalanta_output))
     if configured_atpg and rc == 0:
         if _adapter_log_has_execution_error(log) and not _metrics_show_real_atpg_result(pattern_count, stuck_at_coverage_pct, faults_detected, faults_undetected, faults_aborted):
             status = "adapter_failed"
@@ -611,6 +662,8 @@ def run_agent(state: dict) -> dict:
             "input_netlist": "digital/atpg/input/scan_or_gate_netlist.v" if netlist else None,
             "bench": "digital/atpg/input/full_scan_atpg.bench" if bench_meta.get("status") == "generated" else None,
             "metrics": "digital/atpg/atpg_metrics.json" if metrics_file else None,
+            "patterns": f"digital/atpg/patterns/{os.path.basename(pattern_file)}" if pattern_file else None,
+            "tool_output": f"digital/atpg/{os.path.basename(atalanta_output)}" if atalanta_output else None,
         },
     }
     report = "\n".join([
@@ -638,6 +691,10 @@ def run_agent(state: dict) -> dict:
         save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "atpg/input/full_scan_atpg.bench", _read_text(input_bench))
     if metrics_file:
         save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "atpg/atpg_metrics.json", _read_text(metrics_file))
+    if pattern_file:
+        save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", f"atpg/patterns/{os.path.basename(pattern_file)}", _read_text(pattern_file))
+    if atalanta_output:
+        save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", f"atpg/{os.path.basename(atalanta_output)}", _read_text(atalanta_output))
     save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "atpg/logs/scan_atpg.log", log)
     save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "atpg/atpg_summary.json", json.dumps(summary, indent=2))
     save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "atpg/atpg_report.md", report)

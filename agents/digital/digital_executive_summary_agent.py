@@ -34,6 +34,11 @@ def run_agent(state: dict) -> dict:
         "drc": os.path.join(workflow_dir, "digital", "drc", "metrics.json"),
         "lvs": os.path.join(workflow_dir, "digital", "lvs", "metrics.json"),
         "tapeout": os.path.join(workflow_dir, "digital", "tapeout", "metrics.json"),
+        "drc_summary": os.path.join(workflow_dir, "digital", "drc", "drc_summary.json"),
+        "lvs_summary": os.path.join(workflow_dir, "digital", "lvs", "lvs_summary.json"),
+        "tapeout_summary": os.path.join(workflow_dir, "digital", "tapeout", "tapeout_summary.json"),
+        "tapeout_lec_summary": os.path.join(workflow_dir, "digital", "tapeout_lec", "tapeout_lec_summary.json"),
+        "atpg_summary": os.path.join(workflow_dir, "digital", "atpg", "atpg_summary.json"),
     }
 
     # Load only existing metric files
@@ -51,6 +56,11 @@ def run_agent(state: dict) -> dict:
     synth_m = metrics.get("synth") or {}
     drc_m   = metrics.get("drc") or {}
     lvs_m   = metrics.get("lvs") or {}
+    drc_summary = metrics.get("drc_summary") or {}
+    lvs_summary = metrics.get("lvs_summary") or {}
+    tapeout_summary = metrics.get("tapeout_summary") or {}
+    tapeout_lec_summary = metrics.get("tapeout_lec_summary") or {}
+    atpg_summary = metrics.get("atpg_summary") or {}
 
     # Choose the "best available" STA stage for headline timing
     sta_preferred_order = ["sta_postroute", "sta_postcts", "sta_postplace", "sta_preplace"]
@@ -86,8 +96,13 @@ def run_agent(state: dict) -> dict:
         "tns": _get(sta_best_m, "tns", "timing__setup__tns"),
 
         # DRC / LVS
-        "drc_violations": _get(drc_m, "drc_violations", "klayout__drc__count", "magic__drc__count"),
-        "lvs_status": _get(lvs_m, "lvs_status", "netgen__lvs__status"),
+        "drc_violations": _get(drc_summary, "drc_violations") if _get(drc_summary, "drc_violations") is not None else _get(drc_m, "drc_violations", "klayout__drc__count", "magic__drc__count"),
+        "drc_status": _get(drc_summary, "drc_status", "status"),
+        "lvs_status": _get(lvs_summary, "lvs_status", "status") or _get(lvs_m, "lvs_status", "netgen__lvs__status"),
+        "tapeout_status": _get(tapeout_summary, "status"),
+        "tapeout_failure_reasons": _get(tapeout_summary, "failure_reasons") or [],
+        "tapeout_lec_status": _get(tapeout_lec_summary, "status"),
+        "atpg_status": _get(atpg_summary, "status"),
 
         # Per-stage STA metrics (useful for triage)
         "sta_stages": {
@@ -130,6 +145,19 @@ def run_agent(state: dict) -> dict:
             "If LVS not clean: check extraction/streamout mismatch and netlist naming."
         ]
     }
+    blocking_issues = []
+    if summary_json["tapeout_status"] not in (None, "ok"):
+        blocking_issues.append(f"tapeout:{summary_json['tapeout_status']}")
+    if summary_json["drc_status"] not in (None, "ok", "clean", "completed"):
+        blocking_issues.append(f"drc:{summary_json['drc_status']}")
+    if summary_json["lvs_status"] not in (None, "ok", "clean", "completed"):
+        blocking_issues.append(f"lvs:{summary_json['lvs_status']}")
+    if summary_json["tapeout_lec_status"] not in (None, "pass"):
+        blocking_issues.append(f"tapeout_lec:{summary_json['tapeout_lec_status']}")
+    if summary_json["atpg_status"] not in (None, "patterns_generated", "not_applicable"):
+        blocking_issues.append(f"atpg:{summary_json['atpg_status']}")
+    summary_json["blocking_issues"] = blocking_issues
+    summary_json["status"] = "failed" if blocking_issues else "ok"
 
     md = []
     md.append("# Digital Executive Summary")
@@ -145,7 +173,12 @@ def run_agent(state: dict) -> dict:
     md.append(f"- Worst slack: `{summary_json['worst_slack']}`")
     md.append(f"- TNS: `{summary_json['tns']}`")
     md.append(f"- DRC violations: `{summary_json['drc_violations']}`")
+    md.append(f"- DRC status: `{summary_json['drc_status']}`")
     md.append(f"- LVS status: `{summary_json['lvs_status']}`")
+    md.append(f"- Tapeout status: `{summary_json['tapeout_status']}`")
+    md.append(f"- Tapeout LEC status: `{summary_json['tapeout_lec_status']}`")
+    md.append(f"- ATPG status: `{summary_json['atpg_status']}`")
+    md.append(f"- Summary status: `{summary_json['status']}`")
     md.append("")
 
     md.append("## STA Stage Breakdown")
@@ -189,7 +222,7 @@ def run_agent(state: dict) -> dict:
         print(f"⚠️ upload failed: {e}")
 
     state.setdefault("digital", {})["executive_summary"] = {
-        "status": "ok",
+        "status": summary_json["status"],
         "paths": {"json": out_json_path, "md": out_md_path}
     }
     return state

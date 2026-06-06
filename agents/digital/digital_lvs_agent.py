@@ -62,6 +62,63 @@ def _copy_metrics(latest: str | None, stage_dir: str) -> str | None:
     return None
 
 
+def _copy_lvs_report(latest: str | None, stage_dir: str) -> tuple[str | None, str | None]:
+    if not latest:
+        return None, None
+    reports = sorted(glob.glob(os.path.join(latest, "**", "*lvs*.rpt"), recursive=True))
+    reports += sorted(glob.glob(os.path.join(latest, "**", "*lvs*.log"), recursive=True))
+    if not reports:
+        return None, None
+    src = reports[-1]
+    reports_dir = os.path.join(stage_dir, "reports")
+    _ensure_dir(reports_dir)
+    dst = os.path.join(reports_dir, os.path.basename(src))
+    shutil.copy2(src, dst)
+    return dst, _lvs_status_from_text(_read_text(dst))
+
+
+def _read_text(path: str | None) -> str:
+    if not path or not os.path.exists(path):
+        return ""
+    try:
+        with open(path, "r", encoding="utf-8", errors="ignore") as f:
+            return f.read()
+    except Exception:
+        return ""
+
+
+def _xor_difference_count(log: str) -> int | None:
+    counts = [int(match.group(1)) for match in re.finditer(r"Total XOR differences:\s*(\d+)", log or "", flags=re.IGNORECASE)]
+    if counts:
+        return counts[-1]
+    match = re.search(r"(\d+)\s+XOR differences found", log or "", flags=re.IGNORECASE)
+    return int(match.group(1)) if match else None
+
+
+def _lvs_status_from_text(text: str) -> str | None:
+    lower = (text or "").lower()
+    if "circuits match uniquely" in lower:
+        return "clean"
+    if "netlists match uniquely" in lower:
+        return "clean"
+    if "property errors were found" in lower or "netlists do not match" in lower or "circuits do not match" in lower:
+        return "mismatch"
+    return None
+
+
+def _lvs_status(rc: int, report_status: str | None, log: str) -> str:
+    from_log = _lvs_status_from_text(log)
+    if report_status:
+        return report_status
+    if from_log:
+        return from_log
+    if rc == 0:
+        return "completed"
+    if _xor_difference_count(log):
+        return "completed_with_deferred_xor_error"
+    return "failed"
+
+
 def _infer_top_from_netlist(netlist_path: str) -> str | None:
     try:
         txt = open(netlist_path, "r", encoding="utf-8", errors="ignore").read()
@@ -231,6 +288,7 @@ def run_agent(state: dict) -> dict:
     cfg = _read_json(base_cfg_path)
     cfg.pop("SYNTH_SDC_FILE", None)
     cfg["RUN_LINTER"] = False
+    cfg["RUN_XOR"] = False
 
     run_work_dir = state.get("digital_run_work_dir") or os.path.join(workflow_dir, "digital", "run_work")
     run_work_dir = os.path.abspath(run_work_dir)
@@ -348,15 +406,21 @@ docker run --rm \\
 
     latest = _latest_run_dir(work_stage_dir)
     metrics_path = _copy_metrics(latest, stage_dir)
+    lvs_report_path, report_lvs_status = _copy_lvs_report(latest, stage_dir)
+    lvs_status = _lvs_status(rc, report_lvs_status, out)
+    xor_differences = _xor_difference_count(out)
 
     summary = {
         "workflow_id": workflow_id,
         "agent": AGENT_NAME,
-        "status": "ok" if rc == 0 else "failed",
+        "status": "ok" if lvs_status in {"clean", "completed"} else lvs_status,
+        "lvs_status": lvs_status,
+        "xor_differences": xor_differences,
         "return_code": rc,
         "outputs": {
             "sdc": f"digital/lvs/constraints/{sdc_basename}",
             "metrics_json": "digital/lvs/metrics.json" if metrics_path else None,
+            "lvs_report": f"digital/lvs/reports/{os.path.basename(lvs_report_path)}" if lvs_report_path else None,
             "log": "digital/lvs/logs/openlane_lvs.log",
             "openlane_run_dir": latest,
         },
@@ -372,6 +436,14 @@ docker run --rm \\
         save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "lvs/logs/openlane_lvs.log", out)
         save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "lvs/lvs_summary.json", json.dumps(summary, indent=2))
         save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "lvs/logs/lvs_input_resolution.log", input_log)
+        if lvs_report_path and os.path.exists(lvs_report_path):
+            save_text_artifact_and_record(
+                workflow_id,
+                AGENT_NAME,
+                "digital",
+                f"lvs/reports/{os.path.basename(lvs_report_path)}",
+                _read_text(lvs_report_path),
+            )
         if metrics_path and os.path.exists(metrics_path):
             with open(metrics_path, "r", encoding="utf-8") as f:
                 save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "lvs/metrics.json", f.read())
@@ -380,6 +452,8 @@ docker run --rm \\
 
     state.setdefault("digital", {})["lvs"] = {
         "status": summary["status"],
+        "lvs_status": lvs_status,
+        "xor_differences": xor_differences,
         "stage_dir": stage_dir,
         "metrics_json": metrics_path,
         "constraints_sdc": stage_sdc,

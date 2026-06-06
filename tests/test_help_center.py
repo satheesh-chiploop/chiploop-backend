@@ -46,6 +46,19 @@ def test_help_ask_rejects_short_question():
     assert response.json()["detail"] == "question_too_short"
 
 
+def test_help_catalog_lists_registered_agents_and_workflows():
+    response = _client().get("/help/catalog", headers=_auth())
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "ok"
+    assert data["counts"]["agents"] == 186
+    assert data["counts"]["workflows"] == 16
+    assert data["counts"]["agents_by_loop"]["digital"] == 70
+    assert any(row["type"] == "agent" and row["name"] == "Digital Tapeout Logic Equivalence Check Agent" for row in data["rows"])
+    assert any(row["type"] == "workflow" and row["name"] == "digital_registered_agents" for row in data["rows"])
+
+
 def test_help_ask_answers_cursor_and_vscode_questions():
     response = _client().post(
         "/help/ask",
@@ -105,11 +118,26 @@ def test_help_ask_answers_dft_atpg_macro_questions():
     response = _client().post(
         "/help/ask",
         headers=_auth(),
-        json={"question": "How do DFT ATPG LEC and analog macro collateral work for tapeout?"},
+        json={"question": "How do DFT ATPG synthesis LEC tapeout LEC and analog macro collateral work for tapeout?"},
     )
 
     assert response.status_code == 200
     data = response.json()
     assert data["sources"][0]["slug"] == "digital-implementation-signoff"
     assert "ATPG" in data["answer"]
+    assert "tapeout lec" in data["answer"].lower()
     assert "macro" in data["answer"]
+
+
+def test_help_ask_answers_tapeout_signoff_gating_questions():
+    response = _client().post(
+        "/help/ask",
+        headers=_auth(),
+        json={"question": "Why did Arch2Tapeout fail when DRC LVS XOR or GDS signoff is not clean?"},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["sources"][0]["slug"] == "digital-implementation-signoff"
+    assert "DRC" in data["answer"]
+    assert "GDS" in data["answer"]
