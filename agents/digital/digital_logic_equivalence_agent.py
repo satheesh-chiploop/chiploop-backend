@@ -215,13 +215,13 @@ def _module_names_in_files(paths: list[str]) -> set[str]:
 
 
 def _referenced_sky130_cells(gate: str | None) -> list[str]:
-    return [name for name in _referenced_modules(gate) if name.startswith("sky130_fd_sc_")]
+    return [name for name in _referenced_modules(gate) if name.startswith(("sky130_fd_sc_", "sky130_ef_sc_"))]
 
 
 def _parse_sky130_instances(netlist_text: str) -> dict[str, set[str]]:
     cells: dict[str, set[str]] = {}
     pattern = re.compile(
-        r"(?P<cell>sky130_fd_sc_hd__[A-Za-z0-9_]+)\s+"
+        r"(?P<cell>sky130_(?:fd|ef)_sc_hd__[A-Za-z0-9_]+)\s+"
         r"(?P<inst>(?:\\[^\s(]+|[A-Za-z_][A-Za-z0-9_$]*))\s*"
         r"\((?P<ports>.*?)\);",
         flags=re.DOTALL,
@@ -234,7 +234,7 @@ def _parse_sky130_instances(netlist_text: str) -> dict[str, set[str]]:
 
 
 def _cell_base(cell: str) -> str:
-    return re.sub(r"_\d+$", "", cell.replace("sky130_fd_sc_hd__", ""))
+    return re.sub(r"_\d+$", "", re.sub(r"^sky130_(?:fd|ef)_sc_hd__", "", cell))
 
 
 def _output_pins(pins: set[str]) -> list[str]:

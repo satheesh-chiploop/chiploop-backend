@@ -123,6 +123,7 @@ def test_tapeout_lec_generated_model_covers_physical_sky130_cells(tmp_path):
 module top(input A, output X);
   sky130_fd_sc_hd__tapvpwrvgnd_1 tap(.VPWR(A), .VGND(A), .VPB(A), .VNB(A));
   sky130_fd_sc_hd__decap_3 decap(.VPWR(A), .VGND(A), .VPB(A), .VNB(A));
+  sky130_ef_sc_hd__decap_12 efdecap(.VPWR(A), .VGND(A), .VPB(A), .VNB(A));
   sky130_fd_sc_hd__fill_1 fill(.VPWR(A), .VGND(A), .VPB(A), .VNB(A));
   sky130_fd_sc_hd__dlymetal6s2s_1 dly(.A(A), .X(X), .VPWR(A), .VGND(A), .VPB(A), .VNB(A));
   sky130_fd_sc_hd__bufinv_16 clkload(.A(A), .VPWR(A), .VGND(A), .VPB(A), .VNB(A));
@@ -139,6 +140,7 @@ endmodule
     text = open(model, "r", encoding="utf-8").read()
     assert "module sky130_fd_sc_hd__tapvpwrvgnd_1" in text
     assert "module sky130_fd_sc_hd__decap_3" in text
+    assert "module sky130_ef_sc_hd__decap_12" in text
     assert "module sky130_fd_sc_hd__fill_1" in text
     assert "module sky130_fd_sc_hd__bufinv_16" in text
     assert "module sky130_fd_sc_hd__clkinv_2" in text
