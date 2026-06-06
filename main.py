@@ -3491,28 +3491,44 @@ def download_artifact(workflow_id: str, rel_path: str):
 
 @app.get("/apps/dashboard/artifact/{workflow_id}")
 def dashboard_json_artifact(workflow_id: str, filename: str = Query(..., min_length=1, max_length=160)):
-    if not re.fullmatch(r"[A-Za-z0-9_.-]+\.json", filename):
+    if not re.fullmatch(r"[A-Za-z0-9_./-]+\.json", filename) or ".." in filename or filename.startswith("/"):
         raise HTTPException(status_code=400, detail="invalid artifact filename")
 
     local_base = _artifacts_dir_for_workflow(workflow_id)
     if local_base.exists():
-        for path in local_base.rglob(filename):
-            if path.is_file():
-                try:
-                    return JSONResponse(json.loads(path.read_text(encoding="utf-8")))
-                except Exception:
-                    continue
+        exact = (local_base / filename).resolve()
+        if str(exact).startswith(str(local_base.resolve())) and exact.is_file():
+            try:
+                return JSONResponse(json.loads(exact.read_text(encoding="utf-8")))
+            except Exception:
+                pass
+        if "/" not in filename:
+            for path in local_base.rglob(filename):
+                if path.is_file():
+                    try:
+                        return JSONResponse(json.loads(path.read_text(encoding="utf-8")))
+                    except Exception:
+                        continue
 
     prefix = f"backend/workflows/{workflow_id}/"
+    exact_storage_path = f"{prefix}{filename}"
+    if "/" in filename:
+        try:
+            data = supabase.storage.from_(ARTIFACT_BUCKET).download(exact_storage_path)
+            text = data.decode("utf-8") if isinstance(data, (bytes, bytearray)) else str(data)
+            return JSONResponse(json.loads(text))
+        except Exception:
+            pass
 
     def find_storage_file(path_prefix: str) -> Optional[str]:
         entries = supabase.storage.from_(ARTIFACT_BUCKET).list(path_prefix) or []
+        basename = filename.rsplit("/", 1)[-1]
         for entry in entries:
             name = entry.get("name")
             if not name:
                 continue
             full_path = f"{path_prefix}{name}"
-            if name == filename:
+            if name == basename:
                 return full_path
             metadata = entry.get("metadata") or {}
             if not metadata.get("mimetype"):

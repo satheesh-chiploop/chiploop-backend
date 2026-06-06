@@ -126,6 +126,8 @@ module top(input A, output X);
   sky130_fd_sc_hd__fill_1 fill(.VPWR(A), .VGND(A), .VPB(A), .VNB(A));
   sky130_fd_sc_hd__dlymetal6s2s_1 dly(.A(A), .X(X), .VPWR(A), .VGND(A), .VPB(A), .VNB(A));
   sky130_fd_sc_hd__bufinv_16 clkload(.A(A), .VPWR(A), .VGND(A), .VPB(A), .VNB(A));
+  sky130_fd_sc_hd__clkinv_2 clkinv_load(.A(A), .VPWR(A), .VGND(A), .VPB(A), .VNB(A));
+  sky130_fd_sc_hd__clkbuf_8 clkbuf_load(.A(A), .VPWR(A), .VGND(A), .VPB(A), .VNB(A));
 endmodule
 """,
         encoding="utf-8",
@@ -139,6 +141,8 @@ endmodule
     assert "module sky130_fd_sc_hd__decap_3" in text
     assert "module sky130_fd_sc_hd__fill_1" in text
     assert "module sky130_fd_sc_hd__bufinv_16" in text
+    assert "module sky130_fd_sc_hd__clkinv_2" in text
+    assert "module sky130_fd_sc_hd__clkbuf_8" in text
     assert "assign X = A;" in text
     assert _missing_stdcell_models(str(netlist), [model]) == []
 
@@ -178,3 +182,20 @@ endmodule
     assert "INPUT(scan_en)" not in bench
     assert "INPUT(scan_in_0)" not in bench
     assert "INPUT(q)" in bench
+
+
+def test_atpg_bench_does_not_emit_undriven_primary_outputs():
+    bench, meta = _generate_full_scan_bench(
+        """
+module top(a, y, floating_out);
+  input a;
+  output y;
+  output floating_out;
+  sky130_fd_sc_hd__buf_1 outbuf(.A(a), .X(y));
+endmodule
+"""
+    )
+
+    assert meta["status"] == "generated"
+    assert "OUTPUT(y)" in bench
+    assert "OUTPUT(floating_out)" not in bench

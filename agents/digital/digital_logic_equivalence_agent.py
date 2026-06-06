@@ -318,6 +318,8 @@ def _is_physical_only_cell(cell_base: str) -> bool:
         "tap",
         "tapvpwrvgnd",
         "bufinv",
+        "clkbuf",
+        "clkinv",
         "endcap",
         "diode",
         "diod",
@@ -490,12 +492,12 @@ def _top_module(state: dict, rtl_files: list[str], netlist: str | None) -> str:
 def _lec_induct_depth() -> int:
     raw = os.getenv("CHIPLOOP_LEC_INDUCT_DEPTH", "").strip()
     if not raw:
-        return 64
+        return 256
     try:
         value = int(raw)
     except ValueError:
-        return 64
-    return max(4, min(value, 256))
+        return 256
+    return max(4, min(value, 1024))
 
 
 def _yosys_script(golden: list[str], gate: str, top: str, stdcell_verilog: list[str]) -> str:
@@ -530,7 +532,7 @@ equiv_make gold gate equiv
 hierarchy -top equiv
 equiv_simple -seq 20
 equiv_induct -undef -seq {induct_depth}
-equiv_simple -seq 20
+equiv_simple -seq 50
 equiv_status -assert
 """
 

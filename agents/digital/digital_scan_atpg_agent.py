@@ -314,7 +314,7 @@ def _generate_full_scan_bench(netlist_text: str) -> tuple[str, dict]:
     driven, used = _bench_gate_signal_sets(gates)
     candidate_inputs = set(primary_inputs + scan_q_inputs)
     inputs = sorted(candidate_inputs & used)
-    outputs = sorted((set(primary_outputs) & (driven | candidate_inputs)) | (set(scan_d_outputs) & driven))
+    outputs = sorted((set(primary_outputs) & driven) | (set(scan_d_outputs) & driven))
     for name in inputs:
         lines.append(f"INPUT({name})")
     for name in outputs:
