@@ -454,6 +454,7 @@ from agents.digital.digital_verification_handoff_ingest_agent import run_agent a
 from agents.digital.digital_verify_closure_ingest_agent import run_agent as digital_verify_closure_ingest_agent
 from agents.digital.digital_coverage_gap_analysis_agent import run_agent as digital_coverage_gap_analysis_agent
 from agents.digital.digital_failure_triage_agent import run_agent as digital_failure_triage_agent
+from agents.digital.digital_failure_debug_agent import run_agent as digital_failure_debug_agent
 from agents.digital.digital_closure_recommendation_agent import run_agent as digital_closure_recommendation_agent
 from agents.digital.digital_verification_plan_update_agent import run_agent as digital_verification_plan_update_agent
 from agents.digital.digital_coverage_plan_update_agent import run_agent as digital_coverage_plan_update_agent
@@ -494,6 +495,7 @@ DIGITAL_AGENT_FUNCTIONS: Dict[str, Any] = {
     "Digital Verify Closure Ingest Agent": digital_verify_closure_ingest_agent,
     "Digital Coverage Gap Analysis Agent": digital_coverage_gap_analysis_agent,
     "Digital Failure Triage Agent": digital_failure_triage_agent,
+    "Digital Failure Debug Agent": digital_failure_debug_agent,
     "Digital Closure Recommendation Agent": digital_closure_recommendation_agent,
     "Digital Verification Plan Update Agent": digital_verification_plan_update_agent,
     "Digital Coverage Plan Update Agent": digital_coverage_plan_update_agent,
@@ -769,6 +771,7 @@ SYSTEM_AGENT_FUNCTIONS: Dict[str,Any] = {
     "Digital Verify Closure Ingest Agent": digital_verify_closure_ingest_agent,
     "Digital Coverage Gap Analysis Agent": digital_coverage_gap_analysis_agent,
     "Digital Failure Triage Agent": digital_failure_triage_agent,
+    "Digital Failure Debug Agent": digital_failure_debug_agent,
     "Digital Closure Recommendation Agent": digital_closure_recommendation_agent,
     "Digital Verification Plan Update Agent": digital_verification_plan_update_agent,
     "Digital Coverage Plan Update Agent": digital_coverage_plan_update_agent,
@@ -996,6 +999,7 @@ DIGITAL_VERIFY_CLOSURE_DEFINITION = _linear_workflow_definition([
     "Digital Verify Closure Ingest Agent",
     "Digital Coverage Gap Analysis Agent",
     "Digital Failure Triage Agent",
+    "Digital Failure Debug Agent",
     "Digital Closure Recommendation Agent",
 ])
 
@@ -1003,6 +1007,7 @@ DIGITAL_VERIFY_CLOSURE_LOOP_DEFINITION = _linear_workflow_definition([
     "Digital Verify Closure Ingest Agent",
     "Digital Coverage Gap Analysis Agent",
     "Digital Failure Triage Agent",
+    "Digital Failure Debug Agent",
     "Digital Closure Recommendation Agent",
     "Digital Verification Plan Update Agent",
     "Digital Coverage Plan Update Agent",
@@ -2626,6 +2631,8 @@ class DigitalVerifyAppIn(BaseModel):
 
     toolchain: Optional[Dict[str, str]] = None
     run_closure_analysis: Optional[bool] = False
+    enable_failure_debug: Optional[bool] = False
+    failure_debug_options: Optional[Dict[str, Any]] = None
     toggles: Optional[Dict[str, bool]] = None  # {"enable_formal":false, "enable_golden_model":false}
     clock_constraints: Optional[Any] = None
 
@@ -2637,6 +2644,9 @@ class DigitalVerifyClosureAppIn(BaseModel):
     seed_budget: Optional[int] = None
     max_iterations: Optional[int] = 1
     rerun_mode: Optional[str] = "coverage_targeted"
+    random_vs_directed: Optional[str] = None
+    enable_failure_debug: Optional[bool] = False
+    failure_debug_options: Optional[Dict[str, Any]] = None
     approval_mode: Optional[str] = "automatic"
     toolchain: Optional[Dict[str, str]] = None
 
@@ -2915,13 +2925,51 @@ def execute_digital_app_background(
                 )
 
         # Run nodes (loop_type="digital" so it uses DIGITAL_AGENT_FUNCTIONS)
-        _run_nodes_with_shared_state(
-            workflow_id=workflow_id,
-            run_id=run_id,
-            loop_type="digital",
-            nodes=nodes,
-            shared_state=shared_state,
-        )
+        if app_name == "verify_closure_loop":
+            max_iterations = max(1, min(int(shared_state.get("max_iterations") or 1), 10))
+
+            def _node_label(node: Dict[str, Any]) -> str:
+                return ((node.get("data") or {}).get("backendLabel") or node.get("label") or "").strip()
+
+            ingest_nodes = [node for node in nodes if _node_label(node) == "Digital Verify Closure Ingest Agent"]
+            body_nodes = [node for node in nodes if _node_label(node) != "Digital Verify Closure Ingest Agent"]
+            if ingest_nodes:
+                append_log_workflow(workflow_id, "Closure loop ingest: loading baseline Verify artifacts", phase="closure_loop_ingest")
+                append_log_run(run_id, "Closure loop ingest: loading baseline Verify artifacts")
+                _run_nodes_with_shared_state(
+                    workflow_id=workflow_id,
+                    run_id=run_id,
+                    loop_type="digital",
+                    nodes=ingest_nodes,
+                    shared_state=shared_state,
+                )
+            for iteration in range(1, max_iterations + 1):
+                shared_state["closure_iteration_index"] = iteration
+                append_log_workflow(workflow_id, f"Closure loop iteration {iteration}/{max_iterations} started", phase=f"closure_loop_iteration_{iteration}")
+                append_log_run(run_id, f"Closure loop iteration {iteration}/{max_iterations} started")
+                _run_nodes_with_shared_state(
+                    workflow_id=workflow_id,
+                    run_id=run_id,
+                    loop_type="digital",
+                    nodes=body_nodes,
+                    shared_state=shared_state,
+                )
+                judgement = shared_state.get("closure_iteration_judgement") if isinstance(shared_state.get("closure_iteration_judgement"), dict) else {}
+                stop_reason = judgement.get("stop_reason") or "not_reported"
+                append_log_workflow(workflow_id, f"Closure loop iteration {iteration}/{max_iterations} completed: {stop_reason}", phase=f"closure_loop_iteration_{iteration}_done")
+                append_log_run(run_id, f"Closure loop iteration {iteration}/{max_iterations} completed: {stop_reason}")
+                if stop_reason in {"closure_achieved", "no_measurable_improvement"}:
+                    append_log_workflow(workflow_id, f"Closure loop stopped early after iteration {iteration}: {stop_reason}", phase="closure_loop_stop")
+                    append_log_run(run_id, f"Closure loop stopped early after iteration {iteration}: {stop_reason}")
+                    break
+        else:
+            _run_nodes_with_shared_state(
+                workflow_id=workflow_id,
+                run_id=run_id,
+                loop_type="digital",
+                nodes=nodes,
+                shared_state=shared_state,
+            )
 
         append_log_workflow(workflow_id, f"🎉 Digital App complete: {app_name}", status="completed", phase="done")
         append_log_run(run_id, f"🎉 Digital App complete: {app_name}", status="completed")

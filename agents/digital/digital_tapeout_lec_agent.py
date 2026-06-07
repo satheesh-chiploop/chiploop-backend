@@ -122,7 +122,13 @@ def _top_ports(netlist: str | None, top: str) -> set[str]:
     match = re.search(rf"\bmodule\s+{re.escape(top)}\s*\((?P<ports>.*?)\)\s*;", text, flags=re.DOTALL)
     if not match:
         return set()
-    return {port.strip().lstrip("\\").split()[0] for port in match.group("ports").replace("\n", " ").split(",") if port.strip()}
+    ports: set[str] = set()
+    for raw_port in match.group("ports").replace("\n", " ").split(","):
+        tokens = raw_port.strip().lstrip("\\").split()
+        if not tokens:
+            continue
+        ports.add(tokens[-1])
+    return ports
 
 
 def run_agent(state: dict) -> dict:

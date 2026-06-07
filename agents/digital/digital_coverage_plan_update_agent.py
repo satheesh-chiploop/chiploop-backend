@@ -18,14 +18,23 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     gap = state.get("coverage_gap_analysis") if isinstance(state.get("coverage_gap_analysis"), dict) else {}
     functional_gaps = [g for g in (gap.get("functional_gaps") or []) if isinstance(g, dict)]
     generic_gaps = [g for g in (gap.get("gaps") or []) if isinstance(g, dict)]
+    combined_gaps: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in [*functional_gaps, *generic_gaps]:
+        key = json.dumps({k: item.get(k) for k in ("type", "coverage_point", "signal", "actual", "target")}, sort_keys=True)
+        if key in seen:
+            continue
+        seen.add(key)
+        combined_gaps.append(item)
 
     added_points: List[Dict[str, Any]] = []
-    for idx, item in enumerate((functional_gaps or generic_gaps)[:24], start=1):
+    for idx, item in enumerate(combined_gaps[:24], start=1):
         point = str(item.get("coverage_point") or item.get("signal") or item.get("type") or f"closure_gap_{idx}")
         added_points.append({
             "id": f"COV_ITER{iteration:03d}_{idx:03d}",
             "coverage_point": point,
             "source_gap_type": item.get("type"),
+            "source": "code_coverage_gap" if str(item.get("type") or "").startswith("code_") else "functional_coverage_gap",
             "target_bins": item.get("missing_bins") or ["unhit"],
             "traceability": item,
         })

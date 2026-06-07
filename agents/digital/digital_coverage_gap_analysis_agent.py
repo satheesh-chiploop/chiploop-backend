@@ -67,7 +67,9 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     out_dir = workflow_dir / "verify_closure"
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    summary = state.get("source_simulation_summary_coverage") if isinstance(state.get("source_simulation_summary_coverage"), dict) else {}
+    summary = state.get("closure_cumulative_summary_coverage") if isinstance(state.get("closure_cumulative_summary_coverage"), dict) else {}
+    if not summary:
+        summary = state.get("source_simulation_summary_coverage") if isinstance(state.get("source_simulation_summary_coverage"), dict) else {}
     coverage = summary.get("coverage") if isinstance(summary.get("coverage"), dict) else {}
     functional = coverage.get("functional") if isinstance(coverage.get("functional"), dict) else {}
     code = coverage.get("code") if isinstance(coverage.get("code"), dict) else {}

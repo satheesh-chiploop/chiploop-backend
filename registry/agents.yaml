@@ -8686,6 +8686,53 @@
       }
     },
     {
+      "name": "Digital Failure Debug Agent",
+      "loop_type": "digital",
+      "domain": "digital",
+      "description": "Performs log-first debug of failing testcase/seed pairs, classifies root cause, recommends VCD replay only when needed, and emits proposal-only fix guidance unless auto-apply is explicitly enabled.",
+      "entrypoint": "agents.digital.digital_failure_debug_agent:run_agent",
+      "execution_mode": "native",
+      "inputs": [
+        "verify_closure/failure_triage.json",
+        "simulation_execution_summary.json",
+        "vv/tb/reports/run_logs"
+      ],
+      "outputs": [
+        "verify_closure/failure_debug.json",
+        "verify_closure/failure_debug.md"
+      ],
+      "artifact_paths": [
+        "verify_closure/failure_debug.json",
+        "verify_closure/failure_debug.md"
+      ],
+      "artifact_types": [
+        "structured_data",
+        "report"
+      ],
+      "required_skills": [
+        "verification_failure_debug",
+        "verification_closure_analysis",
+        "artifact_publish"
+      ],
+      "required_tools": [
+        "python",
+        "supabase"
+      ],
+      "hooks": [
+        "pre_run_validate_inputs",
+        "post_run_collect_artifacts",
+        "post_run_update_state",
+        "on_failure_capture_traceback",
+        "on_failure_preserve_logs",
+        "artifact_publish_to_supabase"
+      ],
+      "metadata": {
+        "registry_source": "DIGITAL_AGENT_FUNCTIONS",
+        "variable": "digital_failure_debug_agent",
+        "studio_contract_version": "v1"
+      }
+    },
+    {
       "name": "Digital Closure Recommendation Agent",
       "loop_type": "digital",
       "domain": "digital",

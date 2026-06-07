@@ -604,6 +604,7 @@
         "Digital Verify Closure Ingest Agent",
         "Digital Coverage Gap Analysis Agent",
         "Digital Failure Triage Agent",
+        "Digital Failure Debug Agent",
         "Digital Closure Recommendation Agent"
       ],
       "hooks": [
@@ -624,6 +625,7 @@
         "Digital Verify Closure Ingest Agent",
         "Digital Coverage Gap Analysis Agent",
         "Digital Failure Triage Agent",
+        "Digital Failure Debug Agent",
         "Digital Closure Recommendation Agent",
         "Digital Verification Plan Update Agent",
         "Digital Coverage Plan Update Agent",

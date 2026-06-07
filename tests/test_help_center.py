@@ -52,10 +52,11 @@ def test_help_catalog_lists_registered_agents_and_workflows():
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "ok"
-    assert data["counts"]["agents"] == 186
+    assert data["counts"]["agents"] == 187
     assert data["counts"]["workflows"] == 16
-    assert data["counts"]["agents_by_loop"]["digital"] == 70
+    assert data["counts"]["agents_by_loop"]["digital"] == 71
     assert any(row["type"] == "agent" and row["name"] == "Digital Tapeout Logic Equivalence Check Agent" for row in data["rows"])
+    assert any(row["type"] == "agent" and row["name"] == "Digital Failure Debug Agent" for row in data["rows"])
     assert any(row["type"] == "workflow" and row["name"] == "digital_registered_agents" for row in data["rows"])
 
 

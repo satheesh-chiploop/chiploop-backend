@@ -5,6 +5,7 @@ os.environ.setdefault("SUPABASE_URL", "http://localhost")
 os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-service-role-key")
 
 from agents.digital.digital_drc_agent import _drc_status
+from agents.digital.digital_failure_debug_agent import run_agent as failure_debug_agent
 from agents.digital.digital_logic_equivalence_agent import _generated_stdcell_model, _missing_stdcell_models, _yosys_script
 from agents.digital.digital_lvs_agent import _lvs_status
 from agents.digital.digital_scan_atpg_agent import _adapter_log_has_execution_error, _generate_full_scan_bench, _metrics_show_real_atpg_result, _pattern_count_from_file
@@ -20,6 +21,38 @@ def test_atpg_zero_pattern_metrics_are_not_success():
         faults_undetected=None,
         faults_aborted=None,
     )
+
+
+def test_failure_debug_is_log_first_and_proposal_only(tmp_path):
+    state = {
+        "workflow_id": "wf",
+        "workflow_dir": str(tmp_path),
+        "enable_failure_debug": True,
+        "failure_debug_options": {
+            "enabled": True,
+            "log_only_first": True,
+            "generate_vcd_if_inconclusive": True,
+            "auto_apply_rtl_fixes": False,
+        },
+        "failure_triage": {
+            "failures": [
+                {
+                    "testcase": "constrained_random_sanity",
+                    "seed": 7,
+                    "classification": "rtl_or_golden_model_mismatch",
+                    "stdout_tail": ["scoreboard mismatch expected 3 actual 2"],
+                    "stderr_tail": [],
+                }
+            ]
+        },
+    }
+
+    out = failure_debug_agent(state)
+    item = out["failure_debug"]["items"][0]
+
+    assert item["root_cause_classification"] == "rtl_or_reference_mismatch"
+    assert item["patch_policy"] == "proposal_only"
+    assert item["targeted_rerun"]["testcase"] == "constrained_random_sanity"
 
 
 def test_atpg_positive_patterns_or_coverage_are_success():

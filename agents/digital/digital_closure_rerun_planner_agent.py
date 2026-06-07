@@ -26,12 +26,16 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
 
     tests = state.get("vv_testcases") if isinstance(state.get("vv_testcases"), list) else []
     seeds = state.get("simulation_seeds") if isinstance(state.get("simulation_seeds"), list) else []
+    random_vs_directed = str(state.get("random_vs_directed") or "both").strip().lower()
+    if random_vs_directed not in {"directed", "random", "both"}:
+        random_vs_directed = "both"
     manifest = {
         "type": "closure_rerun_manifest",
         "iteration": iteration,
         "source_verify_workflow_id": state.get("source_verify_workflow_id"),
         "source_arch2rtl_workflow_id": source_arch2rtl,
         "rerun_mode": state.get("rerun_mode") or "coverage_targeted",
+        "random_vs_directed": random_vs_directed,
         "tests": tests,
         "seeds": seeds,
         "verification_plan_updated": bool(state.get("verification_plan")),
@@ -45,6 +49,6 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     state["from_workflow_id"] = source_arch2rtl
     state["source_arch2rtl_workflow_id"] = source_arch2rtl
     state["upstream_workflows"] = {"arch2rtl": source_arch2rtl, "verify": state.get("source_verify_workflow_id")}
-    state["random_vs_directed"] = "both"
+    state["random_vs_directed"] = random_vs_directed
     state["closure_rerun_manifest"] = manifest
     return state
