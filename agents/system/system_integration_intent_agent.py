@@ -803,6 +803,109 @@ def _resolve_port_dir(inst_name: str, port_name: str, inst2mod: dict, digital_si
     )
 
 
+def _port_meta_from_sigs(sig_db: dict, module_name: str, port_name: str):
+    if not isinstance(sig_db, dict) or not module_name or not port_name:
+        return {}
+
+    candidates = []
+    if module_name in sig_db and isinstance(sig_db[module_name], dict):
+        candidates.extend(sig_db[module_name].get("ports") or sig_db[module_name].get("interface") or [])
+
+    mods = sig_db.get("modules")
+    if isinstance(mods, dict) and module_name in mods and isinstance(mods[module_name], dict):
+        candidates.extend(mods[module_name].get("ports") or mods[module_name].get("interface") or [])
+
+    for p in candidates:
+        if isinstance(p, dict) and p.get("name") == port_name:
+            return p
+    return {}
+
+
+def _resolve_port_width(inst_name: str, port_name: str, inst2mod: dict, digital_sigs: dict, analog_sigs: dict):
+    if inst_name == "top":
+        return None
+    mod = inst2mod.get(inst_name)
+    if not mod:
+        return None
+    meta = _port_meta_from_sigs(digital_sigs, mod, port_name) or _port_meta_from_sigs(analog_sigs, mod, port_name)
+    return _port_width(meta)
+
+
+def _endpoint_contract(ep: str, inst2mod: dict, digital_sigs: dict, analog_sigs: dict) -> dict:
+    inst, port = _parse_ep(ep)
+    if not inst or not port:
+        return {"endpoint": ep, "valid": False}
+    return {
+        "endpoint": f"{inst}.{port}",
+        "instance": inst,
+        "module": inst2mod.get(inst) if inst != "top" else "top",
+        "port": port,
+        "direction": _resolve_port_dir(inst, port, inst2mod, digital_sigs, analog_sigs),
+        "width": _resolve_port_width(inst, port, inst2mod, digital_sigs, analog_sigs),
+        "valid": True,
+    }
+
+
+def _build_top_connectivity_contract(intent: dict, digital_sigs: dict, analog_sigs: dict) -> dict:
+    inst2mod = _instance_to_module(intent)
+    rows = []
+    top_ports = {}
+    for idx, conn in enumerate(intent.get("connections", []) or []):
+        if not isinstance(conn, dict):
+            continue
+        src = _endpoint_contract(conn.get("from"), inst2mod, digital_sigs, analog_sigs)
+        dst = _endpoint_contract(conn.get("to"), inst2mod, digital_sigs, analog_sigs)
+        if not src.get("valid") or not dst.get("valid"):
+            continue
+        width = src.get("width") or dst.get("width")
+        if src["instance"] == "top":
+            top_ports[src["port"]] = {
+                "name": src["port"],
+                "direction": "input",
+                "width": width,
+                "connected_to": dst["endpoint"],
+            }
+        if dst["instance"] == "top":
+            top_ports[dst["port"]] = {
+                "name": dst["port"],
+                "direction": "output",
+                "width": width,
+                "connected_from": src["endpoint"],
+            }
+        rows.append({
+            "id": f"CONN-{idx + 1:03d}",
+            "from": src,
+            "to": dst,
+            "width": width,
+            "basis": "validated_directional_connection",
+        })
+
+    tieoffs = []
+    for idx, tie in enumerate(intent.get("tieoffs", []) or []):
+        if not isinstance(tie, dict):
+            continue
+        ep = tie.get("signal") or (
+            f"{tie.get('instance')}.{tie.get('port')}" if tie.get("instance") and tie.get("port") else ""
+        )
+        target = _endpoint_contract(ep, inst2mod, digital_sigs, analog_sigs)
+        if target.get("valid"):
+            tieoffs.append({
+                "id": f"TIE-{idx + 1:03d}",
+                "target": target,
+                "value": tie.get("value"),
+                "basis": "validated_tieoff",
+            })
+
+    return {
+        "top": intent.get("top") if isinstance(intent.get("top"), dict) else {},
+        "instances": intent.get("instances", []) if isinstance(intent.get("instances"), list) else [],
+        "top_ports": sorted(top_ports.values(), key=lambda item: item["name"]),
+        "connections": rows,
+        "tieoffs": tieoffs,
+        "source": "system_integration_intent",
+    }
+
+
 def _sanitize_connections(intent: dict, digital_sigs: dict, analog_sigs: dict):
     """
     Keep only plausible connections:
@@ -1351,6 +1454,8 @@ Now output JSON only.
         state["system_integration_intent"] = intent
         return state
 
+    top_connectivity_contract = _build_top_connectivity_contract(intent, digital_sigs, analog_sigs)
+    intent["top_connectivity"] = top_connectivity_contract
     intent_json = json.dumps(intent, indent=2)
 
     local_intent_abs = os.path.join(workflow_dir, "system", "integration", "system_integration_intent.json")
@@ -1367,6 +1472,13 @@ Now output JSON only.
             filename="system_integration_intent.json",
             content=json.dumps(intent, indent=2),
         )
+        save_text_artifact_and_record(
+            workflow_id=workflow_id,
+            agent_name=agent_name,
+            subdir="system/integration",
+            filename="system_top_connectivity.json",
+            content=json.dumps(top_connectivity_contract, indent=2),
+        )
     except Exception as e:
         print(f"⚠️ Failed to upload system integration intent artifact: {e}")
 
@@ -1377,6 +1489,7 @@ Now output JSON only.
     print("DEBUG intent connections:", intent.get("connections"))
     print("DEBUG intent tieoffs:", intent.get("tieoffs"))
     state["system_integration_intent"] = intent
+    state["system_top_connectivity"] = top_connectivity_contract
 
     state["status"] = "✅ System integration intent generated"
     return state

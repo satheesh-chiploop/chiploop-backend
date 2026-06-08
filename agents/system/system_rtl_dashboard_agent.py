@@ -256,7 +256,10 @@ def _scope_report(scope: str, rtl_files: List[str], state: Dict[str, Any], workf
         "clock_reset": _infer_clock_reset(modules, state),
         "storage": storage,
         "timing": _timing_summary(workflow_dir, state, storage),
-        "lint": {"status": lint_status, "basis": "Compile/lint evidence from RTL generation, analog model compile, and System Top Assembly."},
+        "lint": {
+            "status": lint_status,
+            "basis": "Lint means Icarus compile plus Verilator lint for the relevant scope; System Lint is the Digital + Analog + SoC roll-up.",
+        },
     }
 
 

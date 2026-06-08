@@ -204,7 +204,7 @@ def _extract_module_ports_from_text(sv_text: str):
         body = m.group(2)
         ports = {}
         for decl in re.finditer(
-            r"\b(input|output|inout)\b\s*(?:wire|logic|reg\s*)?(?:signed\s*)?(\[[^\]]+\])?\s*([^;,\)]+)",
+            r"\b(input|output|inout)\b\s*(?:(?:wire|logic|reg)\s*)?(?:signed\s*)?(\[[^\]]+\])?\s*([^;,\)]+)",
             body,
             flags=re.DOTALL,
         ):
@@ -219,6 +219,33 @@ def _extract_module_ports_from_text(sv_text: str):
                     ports[nm] = {"dir": direction, "range": rng}
         if ports:
             out[mod] = ports
+
+    # Non-ANSI style emitted by the digital RTL agent:
+    #   module m (a, b);
+    #   input [7:0] a;
+    #   output b;
+    #   endmodule
+    module_pat = re.compile(
+        r"\bmodule\s+([a-zA-Z_][a-zA-Z0-9_$]*)\s*(?:#\s*\(.*?\))?\s*\((.*?)\)\s*;(.*?)\bendmodule\b",
+        re.DOTALL,
+    )
+    decl_pat = re.compile(
+        r"\b(input|output|inout)\b\s*(?:(?:wire|logic|reg)\s*)?(?:signed\s*)?(\[[^\]]+\])?\s*([^;]+);",
+        re.DOTALL,
+    )
+    for m in module_pat.finditer(text):
+        mod = m.group(1)
+        ports = out.setdefault(mod, {})
+        body = m.group(3)
+        for decl in decl_pat.finditer(body):
+            direction = decl.group(1)
+            rng = (decl.group(2) or "").strip()
+            for raw_name in decl.group(3).split(","):
+                nm = raw_name.strip()
+                nm = re.sub(r"\s*=.*$", "", nm).strip()
+                nm = re.sub(r"\[[^\]]+\]$", "", nm).strip()
+                if re.fullmatch(r"[a-zA-Z_][a-zA-Z0-9_$]*", nm):
+                    ports[nm] = {"dir": direction, "range": rng}
 
     return out
 

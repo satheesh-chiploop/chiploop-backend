@@ -51,7 +51,7 @@ def _try_verilator_lint(rtl_files: List[str], log_path: str, state: Dict[str, An
     if not tool_available("verilator", state):
         return {"available": False, "reason": "verilator_not_found"}
 
-    args = ["--lint-only", "-Wall"] + rtl_files
+    args = ["--lint-only", "-Wall", "-Wno-fatal"] + rtl_files
     _log(log_path, f"Running via ChipLoop tool profile: verilator {' '.join(args)}")
     try:
         p = run_tool(
@@ -94,10 +94,12 @@ def run_agent(state: dict) -> dict:
         issues.extend(_basic_lint_file(fpath))
 
     verilator = _try_verilator_lint(rtl_files, log_path, state)
+    verilator_failed = bool(verilator.get("available")) and int(verilator.get("returncode") or 0) != 0
 
     report = {
         "type": "rtl_lint_report",
         "version": "1.0",
+        "status": "fail" if verilator_failed else "pass",
         "rtl_file_count": len(rtl_files),
         "heuristic_issues": issues,
         "verilator_lint": {

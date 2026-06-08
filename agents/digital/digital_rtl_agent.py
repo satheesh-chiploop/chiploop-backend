@@ -236,6 +236,115 @@ def _sanitize_single_driver_rtl(verilog_map: Dict[str, str]) -> Dict[str, str]:
     }
 
 
+def _remove_module_header_port(code: str, port_name: str) -> str:
+    pat = re.compile(
+        r"(\bmodule\s+[A-Za-z_][A-Za-z0-9_$]*\s*\()(.*?)(\)\s*;)",
+        flags=re.DOTALL,
+    )
+
+    def repl(match: re.Match) -> str:
+        ports = [p.strip() for p in match.group(2).split(",") if p.strip()]
+        kept = [p for p in ports if p != port_name]
+        if len(kept) == len(ports):
+            return match.group(0)
+        return match.group(1) + "\n    " + ",\n    ".join(kept) + "\n" + match.group(3)
+
+    return pat.sub(repl, code, count=1)
+
+
+def _declared_input_ports(code: str) -> List[str]:
+    ports: List[str] = []
+    for decl in re.finditer(
+        r"^\s*input\b\s*(?:wire\s*)?(?:signed\s*)?(?:\[[^\]]+\]\s*)?([^;]+);",
+        code or "",
+        flags=re.MULTILINE,
+    ):
+        for raw in decl.group(1).split(","):
+            name = re.sub(r"\[[^\]]+\]", "", raw).strip()
+            if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_$]*", name or ""):
+                ports.append(name)
+    return list(dict.fromkeys(ports))
+
+
+def _expected_top_port_names(spec_json: dict, mode: str) -> set:
+    try:
+        top = spec_json if mode == "flat" else spec_json["hierarchy"]["top_module"]
+        return {
+            str(port.get("name") or "").strip()
+            for port in top.get("ports", [])
+            if isinstance(port, dict) and str(port.get("name") or "").strip()
+        }
+    except Exception:
+        return set()
+
+
+def _replace_extra_input_with_internal_driver(code: str, port_name: str) -> Tuple[str, bool]:
+    text = code or ""
+    internal_candidates = [
+        f"{port_name}_out",
+        f"{port_name}_reg",
+        f"{port_name}_q",
+    ]
+    internal = next((cand for cand in internal_candidates if re.search(rf"\b{re.escape(cand)}\b", text)), "")
+    if not internal:
+        return code, False
+
+    changed = False
+
+    def assign_repl(match: re.Match) -> str:
+        nonlocal changed
+        lhs = match.group(1)
+        rhs = match.group(2)
+        new_rhs = re.sub(rf"\b{re.escape(port_name)}\b", internal, rhs)
+        if new_rhs != rhs:
+            changed = True
+        return f"{lhs}{new_rhs};"
+
+    text = re.sub(
+        r"(\bassign\s+[A-Za-z_][A-Za-z0-9_$]*\s*=\s*)([^;]*\b"
+        + re.escape(port_name)
+        + r"\b[^;]*);",
+        assign_repl,
+        text,
+    )
+    if not changed:
+        return code, False
+
+    text = _remove_module_header_port(text, port_name)
+    text = re.sub(
+        rf"^\s*input\b\s*(?:wire\s*)?(?:signed\s*)?(?:\[[^\]]+\]\s*)?{re.escape(port_name)}\s*;\s*\n",
+        "",
+        text,
+        count=1,
+        flags=re.MULTILINE,
+    )
+    return text.rstrip(), True
+
+
+def _remove_spec_invalid_extra_control_inputs(verilog_map: Dict[str, str], spec_json: dict, mode: str) -> Dict[str, str]:
+    """
+    Spec-driven cleanup for LLM-generated hierarchical tops. If the top RTL
+    invents an extra external input that is not part of the structured top
+    module contract, and the same control exists as an internal register output
+    or state signal, use the internal signal instead. This rejects only
+    provably extra ports; it does not mask missing required ports.
+    """
+    top_file = _top_rtl_file(spec_json, mode)
+    expected_ports = _expected_top_port_names(spec_json, mode)
+    if not top_file or not expected_ports or top_file not in verilog_map:
+        return verilog_map
+
+    code = verilog_map[top_file]
+    for port in _declared_input_ports(code):
+        if port in expected_ports:
+            continue
+        code, _ = _replace_extra_input_with_internal_driver(code, port)
+
+    updated = dict(verilog_map)
+    updated[top_file] = code
+    return updated
+
+
 def _range_width(width: str) -> int:
     m = re.search(r"\[\s*(\d+)\s*:\s*(\d+)\s*\]", width or "")
     if not m:
@@ -1584,6 +1693,7 @@ def _validate_and_materialize_rtl(
     verilog_map = _normalize_emitted_rtl_filenames(verilog_map, expected_files)
     verilog_map = _align_verilog_map_to_expected_modules(verilog_map, spec_json, mode)
     verilog_map = _sanitize_single_driver_rtl(verilog_map)
+    verilog_map = _remove_spec_invalid_extra_control_inputs(verilog_map, spec_json, mode)
     artifact_list = []
 
     materialize_dir = rtl_dir if not materialize_subdir else os.path.join(rtl_dir, materialize_subdir)

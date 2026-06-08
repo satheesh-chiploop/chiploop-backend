@@ -284,11 +284,23 @@ def _match_score(requirement: str, rtl_text: str, rtl_names: Iterable[str]) -> T
     # Recognize common register-bit implementation idioms. This is still
     # evidence-based: require concrete RTL assignments, not only names.
     if "control" in req_lower and "enable" in req_lower:
-        if re.search(r"\bcontrol_\w*\s*\[\s*0\s*\]\s*<=\s*wr_data\s*\[\s*0\s*\]", rtl_text, re.I):
+        if (
+            re.search(r"\bcontrol_\w*\s*\[\s*0\s*\]\s*<=\s*wr_data\s*\[\s*0\s*\]", rtl_text, re.I)
+            or re.search(r"\benable_(?:reg|out)\s*<=\s*wr_data\s*\[\s*0\s*\]", rtl_text, re.I)
+        ):
             evidence.append("CONTROL.ENABLE stored")
     if "control" in req_lower and ("irq_enable" in req_lower or ("irq" in req_lower and "enable" in req_lower)):
-        if re.search(r"\bcontrol_\w*\s*\[\s*2\s*\]\s*<=\s*wr_data\s*\[\s*2\s*\]", rtl_text, re.I):
+        if (
+            re.search(r"\bcontrol_\w*\s*\[\s*2\s*\]\s*<=\s*wr_data\s*\[\s*2\s*\]", rtl_text, re.I)
+            or re.search(r"\birq_enable_(?:reg|out)\s*<=\s*wr_data\s*\[\s*2\s*\]", rtl_text, re.I)
+        ):
             evidence.append("CONTROL.IRQ_ENABLE stored")
+    if "sample count" in req_lower and ("completed" in req_lower or "track" in req_lower or "increment" in req_lower):
+        if re.search(r"\bsample_count\w*\s*<=\s*sample_count\w*\s*\+\s*(?:\d+'[bdh])?0*1\b", rtl_text, re.I):
+            evidence.append("sample_count_increment")
+    if "adc_valid_seen" in req_lower or ("adc" in req_lower and "valid" in req_lower and "seen" in req_lower):
+        if re.search(r"\bstatus_adc_valid_seen\w*\s*<=\s*1'b1", rtl_text, re.I):
+            evidence.append("sticky_adc_valid_seen")
     if "irq_status" in req_lower and "bit 1" in req_lower and "sample_done" in req_lower and re.search(r"\blatch", req_lower):
         if (
             re.search(r"\birq_status_sample_done\s*<=\s*1'b1", rtl_text, re.I)
@@ -355,6 +367,8 @@ def _match_score(requirement: str, rtl_text: str, rtl_names: Iterable[str]) -> T
         "first_sample_history_init",
         "enable_periodic_sample_req",
         "sample_start_priority_path",
+        "sample_count_increment",
+        "sticky_adc_valid_seen",
     }
     if semantic_hits.intersection(evidence):
         return "matched", evidence[:8]
@@ -396,11 +410,25 @@ def _register_evidence(spec: str, rtl_text: str, state: Dict[str, Any], spec_obj
         collect_registers(spec_obj.get("register_contract") or {})
     fields.extend(re.findall(r"\b([A-Za-z_][A-Za-z0-9_]*(?:_reg|_cfg|_ctrl|_status))\b", spec or "", re.I))
     unique = sorted(dict.fromkeys(f for f in fields if f.lower() not in {"reserved"}))
+    rtl_identifiers = {
+        name.lower()
+        for name in re.findall(r"\b[A-Za-z_][A-Za-z0-9_$]*\b", rtl_text or "")
+    }
+
+    def field_matched(field: str) -> bool:
+        low = field.lower()
+        if re.search(rf"\b{re.escape(field)}\b", rtl_text, re.I):
+            return True
+        if re.search(rf"\b{re.escape(low)}_(?:r|reg|q|d)\b", rtl_text, re.I):
+            return True
+        tokens = [t for t in re.split(r"[^a-zA-Z0-9]+", low) if t and t not in {"bit", "field"}]
+        if tokens and any(all(tok in ident for tok in tokens) for ident in rtl_identifiers):
+            return True
+        return False
+
     matched = [
         f for f in unique
-        if re.search(rf"\b{re.escape(f)}\b", rtl_text, re.I)
-        or re.search(rf"\b{re.escape(f.lower())}\b", rtl_text, re.I)
-        or re.search(rf"\b{re.escape(f.lower())}_(?:r|reg|q|d)\b", rtl_text, re.I)
+        if field_matched(f)
     ]
     addresses = []
     raw_reg = json.dumps(regmap or spec_obj or {})

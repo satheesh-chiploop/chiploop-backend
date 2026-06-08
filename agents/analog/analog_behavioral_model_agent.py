@@ -216,6 +216,15 @@ def _run_verilator_lint(model_path: str, state: dict | None = None) -> tuple[int
 
 
 def _is_fatal_verilator_log(log_text: str) -> bool:
+    text = log_text or ""
+    if "%Error: Exiting due to" in text and "warning(s)" in text:
+        real_error_lines = [
+            line for line in text.splitlines()
+            if "%Error" in line and "Exiting due to" not in line
+        ]
+        if not real_error_lines:
+            return False
+
     fatal_tokens = [
         "Error:",
         "%Error",
@@ -224,8 +233,7 @@ def _is_fatal_verilator_log(log_text: str) -> bool:
         "PROCASSWIRE",
         "syntax error",
     ]
-    upper = log_text or ""
-    return any(tok in upper for tok in fatal_tokens)
+    return any(tok in text for tok in fatal_tokens)
 
 def run_agent(state: dict) -> dict:
     print("\\n🧪 Running Analog Behavioral Model Agent...")
