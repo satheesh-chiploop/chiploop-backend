@@ -463,6 +463,7 @@ from agents.digital.digital_closure_rerun_planner_agent import run_agent as digi
 from agents.digital.digital_closure_iteration_judge_agent import run_agent as digital_closure_iteration_judge_agent
 from agents.digital.digital_arch2rtl_dashboard_agent import run_agent as digital_arch2rtl_dashboard_agent
 from agents.digital.digital_rtl_handoff_ingest_agent import run_agent as digital_rtl_handoff_ingest_agent
+from agents.digital.digital_spec2rtl_conformance_agent import run_agent as digital_spec2rtl_conformance_agent
 
 DIGITAL_AGENT_FUNCTIONS: Dict[str, Any] = {
     "Digital Spec Agent": digital_spec_agent,
@@ -504,6 +505,7 @@ DIGITAL_AGENT_FUNCTIONS: Dict[str, Any] = {
     "Digital Closure Iteration Judge Agent": digital_closure_iteration_judge_agent,
     "Digital Arch2RTL Dashboard Agent": digital_arch2rtl_dashboard_agent,
     "Digital RTL Handoff Ingest Agent": digital_rtl_handoff_ingest_agent,
+    "Digital Spec2RTL Conformance Agent": digital_spec2rtl_conformance_agent,
     "Digital Bug Localization Agent": digital_bug_localization_agent,
     "Digital Formal Verification Agent": digital_formal_verification_agent,
     "Digital Synthesis Readiness Agent": digital_synthesis_readiness_agent,
@@ -780,6 +782,7 @@ SYSTEM_AGENT_FUNCTIONS: Dict[str,Any] = {
     "Digital Closure Iteration Judge Agent": digital_closure_iteration_judge_agent,
     "Digital Arch2RTL Dashboard Agent": digital_arch2rtl_dashboard_agent,
     "Digital RTL Handoff Ingest Agent": digital_rtl_handoff_ingest_agent,
+    "Digital Spec2RTL Conformance Agent": digital_spec2rtl_conformance_agent,
     "Digital Bug Localization Agent": digital_bug_localization_agent,
     "Digital Formal Verification Agent": digital_formal_verification_agent,   
     "Digital Synthesis Readiness Agent": digital_synthesis_readiness_agent,
@@ -985,6 +988,11 @@ DIGITAL_ARCH2RTL_DEFINITION = _linear_workflow_definition([
     "Digital Arch2RTL Dashboard Agent",
 ])
 
+DIGITAL_SPEC2RTL_CHECK_DEFINITION = _linear_workflow_definition([
+    "Digital RTL Handoff Ingest Agent",
+    "Digital Spec2RTL Conformance Agent",
+])
+
 DIGITAL_VERIFY_DEFINITION = _linear_workflow_definition([
     "Digital Verification Handoff Ingest Agent",
     "Digital Functional Coverage Agent",
@@ -1181,6 +1189,7 @@ SYSTEM_PRODUCT_APP_BUILDER_DEFINITION = _linear_workflow_definition([
 
 LOCAL_PREBUILT_WORKFLOW_DEFINITIONS: Dict[str, Dict[str, Any]] = {
     "Digital_Arch2RTL": DIGITAL_ARCH2RTL_DEFINITION,
+    "Digital_Spec2RTL_Check": DIGITAL_SPEC2RTL_CHECK_DEFINITION,
     "Digital_Verify": DIGITAL_VERIFY_DEFINITION,
     "Digital_Verify_Closure": DIGITAL_VERIFY_CLOSURE_DEFINITION,
     "Digital_Verify_Closure_Loop": DIGITAL_VERIFY_CLOSURE_LOOP_DEFINITION,
@@ -1203,6 +1212,7 @@ LOCAL_PREBUILT_WORKFLOW_DEFINITIONS: Dict[str, Dict[str, Any]] = {
 
 LOCAL_RUNTIME_WORKFLOW_OVERRIDES = {
     "Digital_Arch2RTL",
+    "Digital_Spec2RTL_Check",
     "Digital_Verify",
     "Digital_Verify_Closure",
     "Digital_Verify_Closure_Loop",
@@ -2586,6 +2596,13 @@ class DigitalArch2TapeoutAppIn(DigitalArch2RTLAppIn, DigitalRTLSourceIn):
     stop_stage: Optional[str] = "tapeout"
 
 
+class DigitalSpec2RTLCheckAppIn(DigitalArch2RTLAppIn, DigitalRTLSourceIn):
+    """
+    Standalone Spec-to-RTL conformance check for generated or third-party RTL.
+    """
+    check_depth: Optional[str] = "standard"
+
+
 class DigitalDQAAppIn(BaseModel):
     # RTL source options
     rtl_source_mode: Optional[str] = None  # "from_arch2rtl" | "paste" | "repo_path"
@@ -2864,10 +2881,23 @@ def execute_digital_app_background(
                 node for node in nodes
                 if ((node.get("data") or {}).get("backendLabel") or node.get("label")) not in upf_agents
             ]
+        if toggles.get("run_spec2rtl_check") and app_name in {"arch2rtl", "arch2synthesis", "arch2sim", "arch2tapeout"}:
+            before_by_app = {
+                "arch2rtl": "Digital Arch2RTL Dashboard Agent",
+                "arch2synthesis": "Digital Foundry Profile Agent",
+                "arch2sim": "Digital Testbench Generator Agent",
+                "arch2tapeout": "Digital Foundry Profile Agent",
+            }
+            nodes = _insert_node_before_once(
+                nodes,
+                "Digital Spec2RTL Conformance Agent",
+                before_by_app.get(app_name, "Digital Executive Summary Agent"),
+            )
         if shared_state.get("rtl_source_mode") and app_name == "arch2synthesis":
             keep = {
                 "Digital RTL Handoff Ingest Agent",
                 "Digital IP Packaging & Handoff Agent",
+                "Digital Spec2RTL Conformance Agent",
                 "Digital Foundry Profile Agent",
                 "Digital Implementation Setup Agent",
                 "Digital Synthesis Agent",
@@ -2885,6 +2915,7 @@ def execute_digital_app_background(
             keep = {
                 "Digital RTL Handoff Ingest Agent",
                 "Digital IP Packaging & Handoff Agent",
+                "Digital Spec2RTL Conformance Agent",
                 "Digital Foundry Profile Agent",
                 "Digital Implementation Setup Agent",
                 "Digital Synthesis Agent",
@@ -3105,6 +3136,32 @@ async def apps_arch2tapeout_run(request: Request, background_tasks: BackgroundTa
         "arch2tapeout",
         "Digital_Arch2Tapeout",
         payload.dict(),
+    )
+
+    return {"ok": True, "workflow_id": workflow_id, "run_id": run_id}
+
+
+@app.post("/apps/spec2rtl/run")
+async def apps_spec2rtl_run(request: Request, background_tasks: BackgroundTasks, payload: DigitalSpec2RTLCheckAppIn):
+    user_id = _require_user_id(request)
+    workflow_id, run_id, base_dir = _create_app_workflow_and_run(user_id, "App: Spec2RTL Check", "digital")
+    artifact_dir = os.path.join(base_dir, "spec2rtl")
+    os.makedirs(artifact_dir, exist_ok=True)
+
+    payload_dict = payload.dict()
+    toggles = payload_dict.get("toggles") if isinstance(payload_dict.get("toggles"), dict) else {}
+    toggles["run_spec2rtl_check"] = True
+    payload_dict["toggles"] = toggles
+
+    background_tasks.add_task(
+        execute_digital_app_background,
+        workflow_id,
+        run_id,
+        user_id,
+        artifact_dir,
+        "spec2rtl",
+        "Digital_Spec2RTL_Check",
+        payload_dict,
     )
 
     return {"ok": True, "workflow_id": workflow_id, "run_id": run_id}

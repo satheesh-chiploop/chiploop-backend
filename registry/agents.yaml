@@ -1570,6 +1570,57 @@
       }
     },
     {
+      "name": "Digital Spec2RTL Conformance Agent",
+      "loop_type": "digital",
+      "domain": "digital",
+      "description": "Checks generated or imported RTL against a claimed specification, including top/module evidence, interfaces, register intent, reset/clock evidence, and requirement trace with matched, partial, missing, and inconclusive outcomes.",
+      "entrypoint": "agents.digital.digital_spec2rtl_conformance_agent:run_agent",
+      "execution_mode": "native",
+      "inputs": [
+        "spec_text",
+        "spec_json",
+        "rtl/*.v",
+        "rtl/*.sv",
+        "handoff/rtl/*.v",
+        "handoff/rtl/*.sv",
+        "digital_regmap.json"
+      ],
+      "outputs": [
+        "digital/spec2rtl/spec2rtl_conformance.json",
+        "digital/spec2rtl/SPEC2RTL_CONFORMANCE.md"
+      ],
+      "artifact_paths": [
+        "digital/spec2rtl/spec2rtl_conformance.json",
+        "digital/spec2rtl/SPEC2RTL_CONFORMANCE.md"
+      ],
+      "artifact_types": [
+        "structured_data",
+        "report"
+      ],
+      "required_skills": [
+        "rtl_static_analysis",
+        "requirements_traceability",
+        "artifact_publish"
+      ],
+      "required_tools": [
+        "python",
+        "supabase"
+      ],
+      "hooks": [
+        "pre_run_validate_inputs",
+        "post_run_collect_artifacts",
+        "post_run_update_state",
+        "on_failure_capture_traceback",
+        "on_failure_preserve_logs",
+        "artifact_publish_to_supabase"
+      ],
+      "metadata": {
+        "registry_source": "DIGITAL_AGENT_FUNCTIONS",
+        "variable": "digital_spec2rtl_conformance_agent",
+        "studio_contract_version": "v1"
+      }
+    },
+    {
       "name": "Digital RTL Handoff Ingest Agent",
       "loop_type": "digital",
       "domain": "digital",

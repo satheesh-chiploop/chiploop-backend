@@ -60,6 +60,7 @@
         "Digital Simulation Summary Coverage Agent",
         "Digital Smoke Executive Summary Agent",
         "Digital Smoke Preflight Agent",
+        "Digital Spec2RTL Conformance Agent",
         "Digital Spec Agent",
         "Digital Synthesis Agent",
         "Digital Synthesis Readiness Agent",
@@ -249,6 +250,7 @@
         "Digital Simulation Summary Coverage Agent",
         "Digital Smoke Executive Summary Agent",
         "Digital Smoke Preflight Agent",
+        "Digital Spec2RTL Conformance Agent",
         "Digital Spec Agent",
         "Digital Synthesis Agent",
         "Digital Synthesis Readiness Agent",
@@ -572,6 +574,23 @@
         "System Product Capability Model Agent",
         "System Product Dashboard Agent",
         "System Product Package Agent"
+      ],
+      "hooks": [
+        "pre_run_validate_inputs",
+        "post_run_collect_artifacts",
+        "post_run_update_state",
+        "on_failure_capture_traceback",
+        "on_failure_preserve_logs",
+        "artifact_publish_to_supabase"
+      ]
+    },
+    {
+      "name": "Digital_Spec2RTL_Check",
+      "loop_type": "digital",
+      "description": "Checks generated, purchased, or vendor RTL against a claimed spec and reports matched, partial, missing, and inconclusive conformance evidence.",
+      "agents": [
+        "Digital RTL Handoff Ingest Agent",
+        "Digital Spec2RTL Conformance Agent"
       ],
       "hooks": [
         "pre_run_validate_inputs",

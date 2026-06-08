@@ -6,6 +6,7 @@ os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-service-role-key")
 
 from agents.digital.digital_drc_agent import _drc_status
 from agents.digital.digital_failure_debug_agent import run_agent as failure_debug_agent
+from agents.digital import digital_spec2rtl_conformance_agent as spec2rtl_agent
 from agents.digital.digital_logic_equivalence_agent import _generated_stdcell_model, _missing_stdcell_models, _yosys_script
 from agents.digital.digital_lvs_agent import _lvs_status
 from agents.digital.digital_scan_atpg_agent import _adapter_log_has_execution_error, _generate_full_scan_bench, _metrics_show_real_atpg_result, _pattern_count_from_file
@@ -53,6 +54,44 @@ def test_failure_debug_is_log_first_and_proposal_only(tmp_path):
     assert item["root_cause_classification"] == "rtl_or_reference_mismatch"
     assert item["patch_policy"] == "proposal_only"
     assert item["targeted_rerun"]["testcase"] == "constrained_random_sanity"
+
+
+def test_spec2rtl_reports_matched_and_missing_requirements(tmp_path, monkeypatch):
+    rtl = tmp_path / "pwm_controller.sv"
+    rtl.write_text(
+        """
+module pwm_controller(input logic clk, input logic reset_n, input logic enable, input logic [7:0] duty_cycle, output logic pwm_out);
+  logic [7:0] counter_value;
+  always_ff @(posedge clk or negedge reset_n) begin
+    if (!reset_n) counter_value <= 8'd0;
+    else if (enable) counter_value <= counter_value + 1'b1;
+  end
+  assign pwm_out = counter_value < duty_cycle;
+endmodule
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(spec2rtl_agent, "save_text_artifact_and_record", lambda *args, **kwargs: "local")
+
+    out = spec2rtl_agent.run_agent({
+        "workflow_id": "wf",
+        "artifact_dir": str(tmp_path),
+        "top_module": "pwm_controller",
+        "spec_text": """
+Inputs: clk, reset_n, enable, duty_cycle[7:0]
+Outputs: pwm_out, irq
+Counter increments when enable is high.
+pwm_out is high when counter_value is less than duty_cycle.
+IRQ shall assert when period completes.
+""",
+        "rtl_files": [str(rtl)],
+    })
+
+    report = out["spec2rtl_conformance"]
+    assert report["status"] in {"partial", "issues"}
+    assert report["interface"]["missing_ports"] == ["irq"]
+    assert report["summary"]["matched"] >= 1
+    assert report["summary"]["missing"] >= 1
 
 
 def test_atpg_positive_patterns_or_coverage_are_success():
