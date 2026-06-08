@@ -1,5 +1,5 @@
--- Register System RTL Evidence Dashboard Agent and wire it into System RTL/Synthesis/PD templates.
--- Safe to re-run. Avoids ON CONFLICT because older deployments may not have unique constraints.
+-- System RTL dashboard agent and template wiring.
+-- Safe to re-run. No ON CONFLICT is used.
 
 alter table if exists public.agents
   add column if not exists agent_name text,
@@ -37,79 +37,69 @@ with agent_template as (
     'System RTL Evidence Dashboard Agent'::text as name,
     'system'::text as loop_type,
     'system'::text as domain,
-    'Builds an integrated System RTL evidence dashboard from real RTL filelists, separating digital RTL, analog macro RTL, and SoC top RTL into Arch2RTL-style interface, storage, timing, module, and file-count metrics.'::text as description,
+    'System RTL dashboard evidence.'::text as description,
     'agents.system.system_rtl_dashboard_agent:run_agent'::text as script_path,
     'agents.system.system_rtl_dashboard_agent:run_agent'::text as entrypoint,
     'native'::text as execution_mode,
-    '[
-      "system/package/system_rtl_package.json",
-      "system/integration/system_rtl_filelist_sim.txt",
-      "system/integration/system_rtl_filelist_phys.txt",
-      "system/integration/system_full_compile_summary.json"
-    ]'::jsonb as inputs,
-    '[
-      "system/dashboard/system_rtl_dashboard.json",
-      "system/dashboard/SYSTEM_RTL_DASHBOARD.md"
-    ]'::jsonb as outputs,
-    '[
-      "system/dashboard/system_rtl_dashboard.json",
-      "system/dashboard/SYSTEM_RTL_DASHBOARD.md"
-    ]'::jsonb as artifact_paths,
-    '[
-      "structured_data",
-      "report"
-    ]'::jsonb as artifact_types,
-    '[
-      "rtl_analysis",
-      "artifact_publish",
-      "dashboard_evidence"
-    ]'::jsonb as required_skills,
-    '[
-      "python",
-      "supabase"
-    ]'::jsonb as required_tools,
-    '[
-      "pre_run_validate_inputs",
-      "post_run_collect_artifacts",
-      "post_run_update_state",
-      "on_failure_capture_traceback",
-      "on_failure_preserve_logs",
-      "artifact_publish_to_supabase"
-    ]'::jsonb as hooks,
-    '{
-      "registry_source": "SYSTEM_AGENT_FUNCTIONS",
-      "variable": "system_rtl_dashboard_agent",
-      "studio_contract_version": "v1"
-    }'::jsonb as metadata,
-    '{
-      "name": "System RTL Evidence Dashboard Agent",
-      "loop_type": "system",
-      "domain": "system",
-      "entrypoint": "agents.system.system_rtl_dashboard_agent:run_agent",
-      "execution_mode": "native"
-    }'::jsonb as agent_spec
+    jsonb_build_array(
+      'system/package/system_rtl_package.json',
+      'system/integration/system_rtl_filelist_sim.txt',
+      'system/integration/system_rtl_filelist_phys.txt',
+      'system/integration/system_full_compile_summary.json'
+    ) as inputs,
+    jsonb_build_array(
+      'system/dashboard/system_rtl_dashboard.json',
+      'system/dashboard/SYSTEM_RTL_DASHBOARD.md'
+    ) as outputs,
+    jsonb_build_array(
+      'system/dashboard/system_rtl_dashboard.json',
+      'system/dashboard/SYSTEM_RTL_DASHBOARD.md'
+    ) as artifact_paths,
+    jsonb_build_array('structured_data', 'report') as artifact_types,
+    jsonb_build_array('rtl_analysis', 'artifact_publish', 'dashboard_evidence') as required_skills,
+    jsonb_build_array('python', 'supabase') as required_tools,
+    jsonb_build_array(
+      'pre_run_validate_inputs',
+      'post_run_collect_artifacts',
+      'post_run_update_state',
+      'on_failure_capture_traceback',
+      'on_failure_preserve_logs',
+      'artifact_publish_to_supabase'
+    ) as hooks,
+    jsonb_build_object(
+      'registry_source', 'SYSTEM_AGENT_FUNCTIONS',
+      'variable', 'system_rtl_dashboard_agent',
+      'studio_contract_version', 'v1'
+    ) as metadata,
+    jsonb_build_object(
+      'name', 'System RTL Evidence Dashboard Agent',
+      'loop_type', 'system',
+      'domain', 'system',
+      'entrypoint', 'agents.system.system_rtl_dashboard_agent:run_agent',
+      'execution_mode', 'native'
+    ) as agent_spec
 ),
 updated_agent as (
-  update public.agents a
-  set agent_name = t.agent_name,
-      name = t.name,
-      loop_type = t.loop_type,
-      domain = t.domain,
-      description = t.description,
-      script_path = t.script_path,
-      entrypoint = t.entrypoint,
-      execution_mode = t.execution_mode,
-      inputs = t.inputs,
-      outputs = t.outputs,
-      artifact_paths = t.artifact_paths,
-      artifact_types = t.artifact_types,
-      required_skills = t.required_skills,
-      required_tools = t.required_tools,
-      agent_spec = t.agent_spec,
-      skills = t.required_skills,
-      tools = t.required_tools,
-      hooks = t.hooks,
-      metadata = t.metadata,
+  update public.agents as agent
+  set agent_name = agent_template.agent_name,
+      name = agent_template.name,
+      loop_type = agent_template.loop_type,
+      domain = agent_template.domain,
+      description = agent_template.description,
+      script_path = agent_template.script_path,
+      entrypoint = agent_template.entrypoint,
+      execution_mode = agent_template.execution_mode,
+      inputs = agent_template.inputs,
+      outputs = agent_template.outputs,
+      artifact_paths = agent_template.artifact_paths,
+      artifact_types = agent_template.artifact_types,
+      required_skills = agent_template.required_skills,
+      required_tools = agent_template.required_tools,
+      agent_spec = agent_template.agent_spec,
+      skills = agent_template.required_skills,
+      tools = agent_template.required_tools,
+      hooks = agent_template.hooks,
+      metadata = agent_template.metadata,
       owner_id = null,
       is_custom = false,
       is_prebuilt = true,
@@ -118,101 +108,161 @@ updated_agent as (
       visibility = 'global',
       source = 'platform_registry',
       updated_at = now()
-  from agent_template t
-  where (a.agent_name = t.agent_name or a.name = t.name)
-    and a.owner_id is null
-  returning a.name
+  from agent_template
+  where (agent.agent_name = agent_template.agent_name or agent.name = agent_template.name)
+    and agent.owner_id is null
+  returning agent.name
 )
 insert into public.agents (
-  agent_name, name, loop_type, domain, description, script_path, entrypoint,
-  execution_mode, inputs, outputs, artifact_paths, artifact_types, required_skills,
-  required_tools, agent_spec, skills, tools, hooks, metadata, owner_id, is_custom,
-  is_prebuilt, is_marketplace, status, visibility, source, created_at, updated_at
+  agent_name,
+  name,
+  loop_type,
+  domain,
+  description,
+  script_path,
+  entrypoint,
+  execution_mode,
+  inputs,
+  outputs,
+  artifact_paths,
+  artifact_types,
+  required_skills,
+  required_tools,
+  agent_spec,
+  skills,
+  tools,
+  hooks,
+  metadata,
+  owner_id,
+  is_custom,
+  is_prebuilt,
+  is_marketplace,
+  status,
+  visibility,
+  source,
+  created_at,
+  updated_at
 )
 select
-  t.agent_name, t.name, t.loop_type, t.domain, t.description, t.script_path, t.entrypoint,
-  t.execution_mode, t.inputs, t.outputs, t.artifact_paths, t.artifact_types, t.required_skills,
-  t.required_tools, t.agent_spec, t.required_skills, t.required_tools, t.hooks, t.metadata,
-  null, false, true, false, 'approved', 'global', 'platform_registry', now(), now()
-from agent_template t
+  agent_template.agent_name,
+  agent_template.name,
+  agent_template.loop_type,
+  agent_template.domain,
+  agent_template.description,
+  agent_template.script_path,
+  agent_template.entrypoint,
+  agent_template.execution_mode,
+  agent_template.inputs,
+  agent_template.outputs,
+  agent_template.artifact_paths,
+  agent_template.artifact_types,
+  agent_template.required_skills,
+  agent_template.required_tools,
+  agent_template.agent_spec,
+  agent_template.required_skills,
+  agent_template.required_tools,
+  agent_template.hooks,
+  agent_template.metadata,
+  null,
+  false,
+  true,
+  false,
+  'approved',
+  'global',
+  'platform_registry',
+  now(),
+  now()
+from agent_template
 where not exists (
   select 1
-  from public.agents a
-  where (a.agent_name = t.agent_name or a.name = t.name)
-    and a.owner_id is null
+  from public.agents as agent
+  where (agent.agent_name = agent_template.agent_name or agent.name = agent_template.name)
+    and agent.owner_id is null
 );
 
 alter table if exists public.workflows
   add column if not exists is_prebuilt boolean not null default false;
 
-with templates(name, loop_type, agents) as (
+with template_agents(name, loop_type, agents) as (
   values
-    (
-      'System_RTL',
-      'system',
-      array[
-        'System Integration Intent Agent',
-        'System Top Assembly Agent',
-        'System Assertions (SVA) Agent',
-        'System RTL Handoff Package Agent',
-        'System RTL Evidence Dashboard Agent'
-      ]::text[]
-    ),
-    (
-      'System_Synthesis',
-      'system',
-      array[
-        'System Integration Intent Agent',
-        'System Top Assembly Agent',
-        'System Assertions (SVA) Agent',
-        'System RTL Handoff Package Agent',
-        'System RTL Evidence Dashboard Agent',
-        'Digital Foundry Profile Agent',
-        'Digital Implementation Setup Agent',
-        'Digital Synthesis Agent',
-        'Digital Logic Equivalence Check Agent',
-        'Digital DFT Scan Stitching Agent',
-        'Digital Scan ATPG Coverage Agent',
-        'Digital MBIST Collateral Agent'
-      ]::text[]
-    ),
-    (
-      'System_PD',
-      'system',
-      array[
-        'System Integration Intent Agent',
-        'System Top Assembly Agent',
-        'System Assertions (SVA) Agent',
-        'System RTL Handoff Package Agent',
-        'System RTL Evidence Dashboard Agent',
-        'Digital Foundry Profile Agent',
-        'Digital Implementation Setup Agent',
-        'Digital Synthesis Agent',
-        'Digital Logic Equivalence Check Agent',
-        'Digital DFT Scan Stitching Agent',
-        'Digital Scan ATPG Coverage Agent',
-        'Digital MBIST Collateral Agent',
-        'Digital STA PrePlace Agent',
-        'Digital Floorplan Agent',
-        'Digital Placement Agent',
-        'Digital STA PostPlace Agent',
-        'Digital CTS Agent',
-        'Digital STA PostCTS Agent',
-        'Digital Route Agent',
-        'Digital STA PostRoute Agent',
-        'Digital Fill Agent',
-        'Digital DRC Agent',
-        'Digital LVS Agent',
-        'Digital Tapeout Agent',
-        'Digital Tapeout Logic Equivalence Check Agent',
-        'Digital Executive Summary Agent'
-      ]::text[]
-    )
+    ('System_RTL', 'system', array[
+      'Digital Spec Agent',
+      'Digital Architecture Agent',
+      'Digital Microarchitecture Agent',
+      'Digital RTL Agent',
+      'Digital RTL Linting Agent',
+      'Digital RTL Signature Agent',
+      'Analog Spec Builder Agent',
+      'Analog Behavioral Model Agent',
+      'System Integration Intent Agent',
+      'System Top Assembly Agent',
+      'System Assertions (SVA) Agent',
+      'System RTL Handoff Package Agent',
+      'System RTL Evidence Dashboard Agent'
+    ]::text[]),
+    ('System_Synthesis', 'system', array[
+      'Digital Spec Agent',
+      'Digital Architecture Agent',
+      'Digital Microarchitecture Agent',
+      'Digital RTL Agent',
+      'Digital RTL Linting Agent',
+      'Digital RTL Signature Agent',
+      'Analog Spec Builder Agent',
+      'Analog Behavioral Model Agent',
+      'System Integration Intent Agent',
+      'System Top Assembly Agent',
+      'System Assertions (SVA) Agent',
+      'System RTL Handoff Package Agent',
+      'System RTL Evidence Dashboard Agent',
+      'Digital Foundry Profile Agent',
+      'Digital Implementation Setup Agent',
+      'Digital Synthesis Agent',
+      'Digital Logic Equivalence Check Agent',
+      'Digital DFT Scan Stitching Agent',
+      'Digital Scan ATPG Coverage Agent',
+      'Digital MBIST Collateral Agent'
+    ]::text[]),
+    ('System_PD', 'system', array[
+      'Digital Spec Agent',
+      'Digital Architecture Agent',
+      'Digital Microarchitecture Agent',
+      'Digital RTL Agent',
+      'Digital RTL Linting Agent',
+      'Digital RTL Signature Agent',
+      'Analog Spec Builder Agent',
+      'Analog Behavioral Model Agent',
+      'System Integration Intent Agent',
+      'System Top Assembly Agent',
+      'System Assertions (SVA) Agent',
+      'System RTL Handoff Package Agent',
+      'System RTL Evidence Dashboard Agent',
+      'Digital Foundry Profile Agent',
+      'Digital Implementation Setup Agent',
+      'Digital Synthesis Agent',
+      'Digital Logic Equivalence Check Agent',
+      'Digital DFT Scan Stitching Agent',
+      'Digital Scan ATPG Coverage Agent',
+      'Digital MBIST Collateral Agent',
+      'Digital STA PrePlace Agent',
+      'Digital Floorplan Agent',
+      'Digital Placement Agent',
+      'Digital STA PostPlace Agent',
+      'Digital CTS Agent',
+      'Digital STA PostCTS Agent',
+      'Digital Route Agent',
+      'Digital STA PostRoute Agent',
+      'Digital Fill Agent',
+      'Digital DRC Agent',
+      'Digital LVS Agent',
+      'Digital Tapeout Agent',
+      'Digital Tapeout Logic Equivalence Check Agent',
+      'Digital Executive Summary Agent'
+    ]::text[])
 ),
-definitions as (
+template_defs as (
   select
-    t.name,
-    t.loop_type,
+    name,
+    loop_type,
     jsonb_build_object(
       'nodes',
       (
@@ -220,72 +270,170 @@ definitions as (
           jsonb_build_object(
             'id', 'n' || ord,
             'type', 'agentNode',
-            'position', jsonb_build_object(
-              'x', 80 + (((ord - 1) % 4) * 372),
-              'y', 160 + (((ord - 1) / 4) * 210)
-            ),
-            'data', jsonb_build_object(
-              'desc', 'Auto-composed: ' || agent_name,
-              'uiLabel', agent_name,
-              'backendLabel', agent_name
-            )
+            'position', jsonb_build_object('x', 80 + ((ord - 1) % 4) * 372, 'y', 160 + floor((ord - 1) / 4) * 210),
+            'data', jsonb_build_object('uiLabel', agent, 'backendLabel', agent)
           )
           order by ord
         )
-        from unnest(t.agents) with ordinality as a(agent_name, ord)
+        from unnest(agents) with ordinality as item(agent, ord)
       ),
       'edges',
-      coalesce(
-        (
-          select jsonb_agg(
-            jsonb_build_object(
-              'id', 'e' || ord,
-              'source', 'n' || ord,
-              'target', 'n' || (ord + 1)
-            )
-            order by ord
-          )
-          from generate_series(1, greatest(array_length(t.agents, 1) - 1, 0)) as ord
-        ),
-        '[]'::jsonb
+      (
+        select coalesce(jsonb_agg(
+          jsonb_build_object('id', 'e' || (ord - 1), 'source', 'n' || (ord - 1), 'target', 'n' || ord)
+          order by ord
+        ), '[]'::jsonb)
+        from generate_series(2, array_length(agents, 1)) as item(ord)
       )
     ) as definitions
-  from templates t
-),
-updated as (
-  update public.workflows w
-  set definitions = d.definitions,
-      nodes = d.definitions->'nodes',
-      edges = d.definitions->'edges',
-      loop_type = d.loop_type,
-      is_prebuilt = true,
-      user_id = null,
-      status = 'saved',
-      updated_at = now()
-  from definitions d
-  where w.name = d.name
-    and w.user_id is null
-  returning w.name
+  from template_agents
 )
 insert into public.workflows (
-  id, user_id, name, loop_type, definitions, nodes, edges, status, is_prebuilt, created_at, updated_at
+  id,
+  user_id,
+  name,
+  loop_type,
+  definitions,
+  status,
+  is_prebuilt,
+  created_at,
+  updated_at
 )
 select
   gen_random_uuid(),
   null,
-  d.name,
-  d.loop_type,
-  d.definitions,
-  d.definitions->'nodes',
-  d.definitions->'edges',
+  template_defs.name,
+  template_defs.loop_type,
+  template_defs.definitions,
   'saved',
   true,
   now(),
   now()
-from definitions d
+from template_defs
 where not exists (
   select 1
-  from public.workflows w
-  where w.name = d.name
-    and w.user_id is null
+  from public.workflows as workflow
+  where workflow.name = template_defs.name
+    and workflow.user_id is null
 );
+
+with template_agents(name, loop_type, agents) as (
+  values
+    ('System_RTL', 'system', array[
+      'Digital Spec Agent',
+      'Digital Architecture Agent',
+      'Digital Microarchitecture Agent',
+      'Digital RTL Agent',
+      'Digital RTL Linting Agent',
+      'Digital RTL Signature Agent',
+      'Analog Spec Builder Agent',
+      'Analog Behavioral Model Agent',
+      'System Integration Intent Agent',
+      'System Top Assembly Agent',
+      'System Assertions (SVA) Agent',
+      'System RTL Handoff Package Agent',
+      'System RTL Evidence Dashboard Agent'
+    ]::text[]),
+    ('System_Synthesis', 'system', array[
+      'Digital Spec Agent',
+      'Digital Architecture Agent',
+      'Digital Microarchitecture Agent',
+      'Digital RTL Agent',
+      'Digital RTL Linting Agent',
+      'Digital RTL Signature Agent',
+      'Analog Spec Builder Agent',
+      'Analog Behavioral Model Agent',
+      'System Integration Intent Agent',
+      'System Top Assembly Agent',
+      'System Assertions (SVA) Agent',
+      'System RTL Handoff Package Agent',
+      'System RTL Evidence Dashboard Agent',
+      'Digital Foundry Profile Agent',
+      'Digital Implementation Setup Agent',
+      'Digital Synthesis Agent',
+      'Digital Logic Equivalence Check Agent',
+      'Digital DFT Scan Stitching Agent',
+      'Digital Scan ATPG Coverage Agent',
+      'Digital MBIST Collateral Agent'
+    ]::text[]),
+    ('System_PD', 'system', array[
+      'Digital Spec Agent',
+      'Digital Architecture Agent',
+      'Digital Microarchitecture Agent',
+      'Digital RTL Agent',
+      'Digital RTL Linting Agent',
+      'Digital RTL Signature Agent',
+      'Analog Spec Builder Agent',
+      'Analog Behavioral Model Agent',
+      'System Integration Intent Agent',
+      'System Top Assembly Agent',
+      'System Assertions (SVA) Agent',
+      'System RTL Handoff Package Agent',
+      'System RTL Evidence Dashboard Agent',
+      'Digital Foundry Profile Agent',
+      'Digital Implementation Setup Agent',
+      'Digital Synthesis Agent',
+      'Digital Logic Equivalence Check Agent',
+      'Digital DFT Scan Stitching Agent',
+      'Digital Scan ATPG Coverage Agent',
+      'Digital MBIST Collateral Agent',
+      'Digital STA PrePlace Agent',
+      'Digital Floorplan Agent',
+      'Digital Placement Agent',
+      'Digital STA PostPlace Agent',
+      'Digital CTS Agent',
+      'Digital STA PostCTS Agent',
+      'Digital Route Agent',
+      'Digital STA PostRoute Agent',
+      'Digital Fill Agent',
+      'Digital DRC Agent',
+      'Digital LVS Agent',
+      'Digital Tapeout Agent',
+      'Digital Tapeout Logic Equivalence Check Agent',
+      'Digital Executive Summary Agent'
+    ]::text[])
+),
+template_defs as (
+  select
+    name,
+    loop_type,
+    jsonb_build_object(
+      'nodes',
+      (
+        select jsonb_agg(
+          jsonb_build_object(
+            'id', 'n' || ord,
+            'type', 'agentNode',
+            'position', jsonb_build_object('x', 80 + ((ord - 1) % 4) * 372, 'y', 160 + floor((ord - 1) / 4) * 210),
+            'data', jsonb_build_object('uiLabel', agent, 'backendLabel', agent)
+          )
+          order by ord
+        )
+        from unnest(agents) with ordinality as item(agent, ord)
+      ),
+      'edges',
+      (
+        select coalesce(jsonb_agg(
+          jsonb_build_object('id', 'e' || (ord - 1), 'source', 'n' || (ord - 1), 'target', 'n' || ord)
+          order by ord
+        ), '[]'::jsonb)
+        from generate_series(2, array_length(agents, 1)) as item(ord)
+      )
+    ) as definitions
+  from template_agents
+)
+update public.workflows as workflow
+set loop_type = template_defs.loop_type,
+    definitions = template_defs.definitions,
+    nodes = template_defs.definitions->'nodes',
+    edges = template_defs.definitions->'edges',
+    status = 'saved',
+    is_prebuilt = true,
+    updated_at = now()
+from template_defs
+where workflow.name = template_defs.name
+  and workflow.user_id is null;
+
+create index if not exists idx_workflows_prebuilt_name
+  on public.workflows (name)
+  where is_prebuilt = true;

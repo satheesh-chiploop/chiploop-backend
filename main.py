@@ -1183,6 +1183,14 @@ SYSTEM_SOFTWARE_VALIDATION_L2_DEFINITION = _linear_workflow_definition([
 ])
 
 SYSTEM_SYNTHESIS_DEFINITION = _linear_workflow_definition([
+    "Digital Spec Agent",
+    "Digital Architecture Agent",
+    "Digital Microarchitecture Agent",
+    "Digital RTL Agent",
+    "Digital RTL Linting Agent",
+    "Digital RTL Signature Agent",
+    "Analog Spec Builder Agent",
+    "Analog Behavioral Model Agent",
     "System Integration Intent Agent",
     "System Top Assembly Agent",
     "System Assertions (SVA) Agent",
@@ -1198,6 +1206,14 @@ SYSTEM_SYNTHESIS_DEFINITION = _linear_workflow_definition([
 ])
 
 SYSTEM_PD_DEFINITION = _linear_workflow_definition([
+    "Digital Spec Agent",
+    "Digital Architecture Agent",
+    "Digital Microarchitecture Agent",
+    "Digital RTL Agent",
+    "Digital RTL Linting Agent",
+    "Digital RTL Signature Agent",
+    "Analog Spec Builder Agent",
+    "Analog Behavioral Model Agent",
     "System Integration Intent Agent",
     "System Top Assembly Agent",
     "System Assertions (SVA) Agent",
@@ -1226,6 +1242,22 @@ SYSTEM_PD_DEFINITION = _linear_workflow_definition([
     "Digital Executive Summary Agent",
 ])
 
+SYSTEM_RTL_DEFINITION = _linear_workflow_definition([
+    "Digital Spec Agent",
+    "Digital Architecture Agent",
+    "Digital Microarchitecture Agent",
+    "Digital RTL Agent",
+    "Digital RTL Linting Agent",
+    "Digital RTL Signature Agent",
+    "Analog Spec Builder Agent",
+    "Analog Behavioral Model Agent",
+    "System Integration Intent Agent",
+    "System Top Assembly Agent",
+    "System Assertions (SVA) Agent",
+    "System RTL Handoff Package Agent",
+    "System RTL Evidence Dashboard Agent",
+])
+
 SYSTEM_PRODUCT_APP_BUILDER_DEFINITION = _linear_workflow_definition([
     "System Product Collateral Ingest Agent",
     "System Product Capability Model Agent",
@@ -1251,6 +1283,7 @@ LOCAL_PREBUILT_WORKFLOW_DEFINITIONS: Dict[str, Dict[str, Any]] = {
     "System_Memory_Bottleneck": SYSTEM_ARCHITECTURE_EXPLORER_DEFINITION,
     "System_CPU_Model": SYSTEM_ARCHITECTURE_EXPLORER_DEFINITION,
     "Embedded_Run": EMBEDDED_RUN_DEFINITION,
+    "System_RTL": SYSTEM_RTL_DEFINITION,
     "System_Synthesis": SYSTEM_SYNTHESIS_DEFINITION,
     "System_PD": SYSTEM_PD_DEFINITION,
     "System_Software": SYSTEM_SOFTWARE_DEFINITION,
@@ -1271,6 +1304,7 @@ LOCAL_RUNTIME_WORKFLOW_OVERRIDES = {
     "Digital_Smoke",
     "Digital_Integrate",
     "Embedded_Run",
+    "System_RTL",
     "System_Synthesis",
     "System_PD",
     "System_Software",
@@ -1640,11 +1674,44 @@ def _run_nodes_with_shared_state(
 
     agent_map_norm = {_norm(k): v for k, v in agent_map.items()}
 
+    def _prepare_scoped_agent_state(label: str) -> None:
+        if label.startswith("Digital "):
+            digital_text = shared_state.get("digital_spec_text") or shared_state.get("digital_spec") or ""
+            if isinstance(digital_text, str) and digital_text.strip():
+                shared_state["spec_text"] = digital_text.strip()
+                shared_state["spec"] = digital_text.strip()
+        elif label.startswith("Analog "):
+            analog_text = (
+                shared_state.get("analog_spec_text")
+                or shared_state.get("analog_datasheet")
+                or shared_state.get("datasheet_text")
+                or ""
+            )
+            if isinstance(analog_text, str) and analog_text.strip():
+                shared_state["datasheet_text"] = analog_text.strip()
+                shared_state["analog_datasheet"] = analog_text.strip()
+                shared_state["spec_text"] = analog_text.strip()
+                shared_state["spec"] = analog_text.strip()
+        elif label.startswith("System "):
+            soc_text = (
+                shared_state.get("soc_integration_spec_text")
+                or shared_state.get("system_integration_description")
+                or shared_state.get("soc_integration_description")
+                or shared_state.get("integration_description")
+                or ""
+            )
+            if isinstance(soc_text, str) and soc_text.strip():
+                shared_state["system_integration_description"] = soc_text.strip()
+                shared_state["soc_integration_description"] = soc_text.strip()
+                shared_state["integration_description"] = soc_text.strip()
+
     for node in (nodes or []):
         label = (node or {}).get("label") or ""
         label = label.strip()
         if not label:
             continue
+        if loop_type == "system":
+            _prepare_scoped_agent_state(label)
 
         append_log_workflow(workflow_id, f"⚙️ Running {label}")
         append_log_run(run_id, f"⚙️ Running {label}")
