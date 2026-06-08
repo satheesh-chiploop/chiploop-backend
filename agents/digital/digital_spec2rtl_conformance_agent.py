@@ -8,6 +8,20 @@ from utils.artifact_utils import save_text_artifact_and_record
 
 AGENT_NAME = "Digital Spec2RTL Conformance Agent"
 RTL_EXTENSIONS = {".v", ".sv", ".vh", ".svh"}
+GENERIC_PORT_WORDS = {
+    "all", "and", "are", "bit", "bits", "clear", "cleared", "clock", "controlled", "cycle", "data",
+    "every", "from", "high", "including", "interface", "is", "low", "map", "memory", "mapped", "nonzero",
+    "output", "outputs", "read", "readback", "register", "registers", "reset", "return", "returns", "status",
+    "the", "through", "to", "value", "when", "while", "write", "zero",
+}
+GENERIC_REQUIREMENT_WORDS = {
+    "all", "and", "are", "assert", "based", "bit", "bits", "clear", "cleared", "clock", "configuration",
+    "counter", "current", "cycle", "data", "decode", "decoded", "design", "edge", "every", "from", "generate",
+    "high", "including", "input", "interface", "internal", "less", "live", "low", "mapped", "memory", "module",
+    "must", "next", "nonzero", "operation", "output", "outputs", "programmed", "read", "readback", "register",
+    "registers", "reset", "return", "returns", "shall", "should", "status", "than", "the", "through", "value",
+    "when", "whenever", "while", "with", "write", "writes", "zero",
+}
 
 
 def _read_text(path: str) -> str:
@@ -15,6 +29,46 @@ def _read_text(path: str) -> str:
         return Path(path).read_text(encoding="utf-8", errors="ignore")
     except Exception:
         return ""
+
+
+def _load_json_value(value: Any) -> Optional[Dict[str, Any]]:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str) and value.strip() and Path(value).exists():
+        try:
+            parsed = json.loads(_read_text(value))
+            return parsed if isinstance(parsed, dict) else None
+        except Exception:
+            return None
+    return None
+
+
+def _load_spec_json(state: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    for key in ("spec_json", "digital_spec_json", "spec_json_path", "digital_spec_json_path"):
+        parsed = _load_json_value(state.get(key))
+        if parsed:
+            return parsed
+    workflow_dir = Path(str(state.get("workflow_dir") or ""))
+    if workflow_dir.exists():
+        for path in sorted((workflow_dir / "spec").glob("*_spec.json")):
+            parsed = _load_json_value(str(path))
+            if parsed:
+                return parsed
+    return None
+
+
+def _load_regmap_json(state: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    for key in ("regmap_json", "digital_regmap_json", "digital_regmap", "regmap_json_path"):
+        parsed = _load_json_value(state.get(key))
+        if parsed:
+            return parsed
+    workflow_dir = Path(str(state.get("workflow_dir") or ""))
+    if workflow_dir.exists():
+        for rel in ("digital/digital_regmap.json", "regmap/digital_regmap.json"):
+            parsed = _load_json_value(str(workflow_dir / rel))
+            if parsed:
+                return parsed
+    return None
 
 
 def _strip_comments(text: str) -> str:
@@ -58,7 +112,7 @@ def _collect_rtl_files(state: Dict[str, Any]) -> List[str]:
 
 def _spec_text(state: Dict[str, Any]) -> str:
     parts: List[str] = []
-    for key in ("spec_text", "spec", "requirements", "test_intent"):
+    for key in ("spec_text", "digital_spec_text", "digital_spec", "spec", "requirements", "test_intent"):
         value = state.get(key)
         if isinstance(value, str) and value.strip():
             parts.append(value.strip())
@@ -66,11 +120,50 @@ def _spec_text(state: Dict[str, Any]) -> str:
         value = state.get(key)
         if isinstance(value, dict):
             parts.append(json.dumps(value, indent=2))
+        elif isinstance(value, str) and Path(value).exists():
+            parts.append(_read_text(value))
     for key in ("spec_json_path", "digital_spec_json_path"):
         value = state.get(key)
         if isinstance(value, str) and Path(value).exists():
             parts.append(_read_text(value))
     return "\n\n".join(dict.fromkeys(parts))
+
+
+def _top_spec_module(spec_obj: Optional[Dict[str, Any]], top_module: str = "") -> Optional[Dict[str, Any]]:
+    if not isinstance(spec_obj, dict):
+        return None
+    hierarchy = spec_obj.get("hierarchy")
+    if isinstance(hierarchy, dict):
+        top = hierarchy.get("top_module")
+        if isinstance(top, dict):
+            return top
+    if spec_obj.get("name") or spec_obj.get("ports"):
+        return spec_obj
+    return None
+
+
+def _structured_spec_modules(spec_obj: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    if not isinstance(spec_obj, dict):
+        return []
+    hierarchy = spec_obj.get("hierarchy")
+    if isinstance(hierarchy, dict):
+        mods = []
+        if isinstance(hierarchy.get("top_module"), dict):
+            mods.append(hierarchy["top_module"])
+        mods.extend(m for m in hierarchy.get("modules", []) if isinstance(m, dict))
+        return mods
+    return [spec_obj] if isinstance(spec_obj.get("ports"), list) else []
+
+
+def _expected_top_ports(spec_obj: Optional[Dict[str, Any]], spec: str) -> List[str]:
+    top = _top_spec_module(spec_obj)
+    if top and isinstance(top.get("ports"), list):
+        return sorted({
+            str(p.get("name")).strip()
+            for p in top.get("ports", [])
+            if isinstance(p, dict) and str(p.get("name") or "").strip()
+        })
+    return _extract_spec_ports(spec)
 
 
 def _extract_modules(rtl_files: List[str]) -> List[Dict[str, Any]]:
@@ -147,43 +240,167 @@ def _extract_spec_ports(spec: str) -> List[str]:
     for match in re.finditer(r"\b(?:input|output|inout)s?\s*:?\s*([^.\n]+)", spec or "", re.I):
         segment = match.group(1)
         for name in re.findall(r"[A-Za-z_][A-Za-z0-9_]*", segment):
-            if name.lower() not in {"input", "output", "inout", "wire", "logic", "reg"}:
+            if name.lower() not in GENERIC_PORT_WORDS and name.lower() not in {"input", "output", "inout", "wire", "logic", "reg"}:
                 ports.add(name)
     for name in re.findall(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*(?:\[[^\]]+\])", spec or ""):
-        ports.add(name)
+        if name.lower() not in GENERIC_PORT_WORDS:
+            ports.add(name)
     return sorted(ports)
 
 
 def _match_score(requirement: str, rtl_text: str, rtl_names: Iterable[str]) -> Tuple[str, List[str]]:
+    req_lower = requirement.lower()
     words = [
         w.lower()
         for w in re.findall(r"[A-Za-z_][A-Za-z0-9_]{2,}", requirement)
-        if w.lower() not in {"shall", "must", "should", "when", "input", "output", "register", "behavior"}
+        if w.lower() not in GENERIC_REQUIREMENT_WORDS
     ]
     names = {n.lower() for n in rtl_names}
-    evidence = [w for w in dict.fromkeys(words) if w in names or re.search(rf"\b{re.escape(w)}\b", rtl_text, re.I)]
-    if len(evidence) >= max(2, min(5, len(set(words)) // 2)):
+    unique_words = list(dict.fromkeys(words))
+    evidence = [w for w in unique_words if w in names or re.search(rf"\b{re.escape(w)}\b", rtl_text, re.I)]
+    for name in sorted(names):
+        if "_" not in name or len(name) < 5:
+            continue
+        parts = [p for p in name.split("_") if p and p not in GENERIC_REQUIREMENT_WORDS]
+        if parts and all(re.search(rf"\b{re.escape(part)}\b", req_lower) for part in parts):
+            evidence.append(name)
+    if re.search(r"\bread", req_lower) and {"rd_en", "rd_addr", "rd_data"} & names:
+        evidence.append("read_path")
+    if re.search(r"\bread|readback", req_lower) and "rd_data" in names:
+        evidence.append("rd_data")
+    if re.search(r"\bwrite", req_lower) and {"wr_en", "wr_addr", "wr_data"} & names:
+        evidence.append("write_path")
+    if "counter" in req_lower and ("counter_value" in names or re.search(r"\bcounter_value", rtl_text, re.I)):
+        evidence.append("counter_value")
+    if "reset" in req_lower and re.search(r"\breset_n\b", rtl_text, re.I) and re.search(r"<=\s*(?:\d+'h00|\d+'d0|1'b0|0)\b", rtl_text, re.I):
+        evidence.append("reset_zero")
+    if re.search(r"\bincrement", req_lower) and re.search(r"\+\s*(?:\d+'[bdh])?0*1\b|\+\s*1'b1\b", rtl_text, re.I):
+        evidence.append("increment_logic")
+    if re.search(r"\bwrap", req_lower) and re.search(r">=|==", rtl_text) and re.search(r"<=\s*(?:\d+'h00|\d+'d0|0)\b", rtl_text, re.I):
+        evidence.append("wrap_logic")
+    if "unmapped" in req_lower and re.search(r"\bdefault\s*:", rtl_text, re.I) and re.search(r"default\s*:\s*[A-Za-z_][A-Za-z0-9_$]*\s*<=\s*(?:\d+'h00|\d+'d0|0)", rtl_text, re.I):
+        evidence.append("default_zero")
+    addresses = re.findall(r"0x([0-9a-fA-F]+)", requirement)
+    for addr in addresses:
+        addr_int = int(addr, 16)
+        addr_patterns = [
+            rf"\b\d+'h0*{addr_int:x}\b",
+            rf"\b\d+'h0*{addr_int:X}\b",
+            rf"\b0x0*{addr_int:x}\b",
+            rf"\b0x0*{addr_int:X}\b",
+        ]
+        if any(re.search(pat, rtl_text, re.I) for pat in addr_patterns):
+            evidence.append(f"0x{addr.upper()}")
+    evidence = list(dict.fromkeys(evidence))
+    if not unique_words and not addresses:
+        return "inconclusive", []
+    if addresses and not any(item.startswith("0x") for item in evidence):
+        return ("partial", evidence[:8]) if evidence else ("missing", [])
+    if addresses and any(item.startswith("0x") for item in evidence) and len(evidence) >= 2:
+        return "matched", evidence[:8]
+    if len(evidence) >= 2 or (len(evidence) == 1 and (len(unique_words) <= 2 or "_" in evidence[0])):
         return "matched", evidence[:8]
     if evidence:
         return "partial", evidence[:8]
     return "missing", []
 
 
-def _register_evidence(spec: str, rtl_text: str, state: Dict[str, Any]) -> Dict[str, Any]:
-    regmap = state.get("regmap_json") or state.get("digital_regmap_json")
+def _register_evidence(spec: str, rtl_text: str, state: Dict[str, Any], spec_obj: Optional[Dict[str, Any]], regmap: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     fields: List[str] = []
+    registers: List[Tuple[str, Optional[str]]] = []
+
+    def collect_registers(container: Any) -> None:
+        if not isinstance(container, dict):
+            return
+        raw_regs = container.get("registers")
+        if not isinstance(raw_regs, list):
+            raw_regs = ((container.get("regmap") or {}).get("registers") if isinstance(container.get("regmap"), dict) else [])
+        for reg in raw_regs or []:
+            if not isinstance(reg, dict):
+                continue
+            reg_name = str(reg.get("name") or "").strip()
+            address = str(reg.get("offset") or reg.get("address") or "").strip() or None
+            if reg_name:
+                registers.append((reg_name, address))
+            for field in reg.get("fields") or []:
+                if isinstance(field, dict) and str(field.get("name") or "").strip():
+                    fields.append(str(field["name"]).strip())
+
     if isinstance(regmap, dict):
-        raw = json.dumps(regmap)
-        fields.extend(re.findall(r'"(?:name|field|field_name|register)"\s*:\s*"([A-Za-z_][A-Za-z0-9_]*)"', raw))
+        collect_registers(regmap.get("regmap") if isinstance(regmap.get("regmap"), dict) else regmap)
+    if isinstance(spec_obj, dict):
+        collect_registers(spec_obj.get("register_contract") or {})
     fields.extend(re.findall(r"\b([A-Za-z_][A-Za-z0-9_]*(?:_reg|_cfg|_ctrl|_status))\b", spec or "", re.I))
-    unique = sorted(dict.fromkeys(fields))
-    matched = [f for f in unique if re.search(rf"\b{re.escape(f)}\b", rtl_text, re.I)]
+    unique = sorted(dict.fromkeys(f for f in fields if f.lower() not in {"reserved"}))
+    matched = [
+        f for f in unique
+        if re.search(rf"\b{re.escape(f)}\b", rtl_text, re.I)
+        or re.search(rf"\b{re.escape(f.lower())}\b", rtl_text, re.I)
+        or re.search(rf"\b{re.escape(f.lower())}_(?:r|reg|q|d)\b", rtl_text, re.I)
+    ]
+    addresses = []
+    raw_reg = json.dumps(regmap or spec_obj or {})
+    for value in re.findall(r'"(?:offset|address)"\s*:\s*"(0x[0-9a-fA-F]+)"', raw_reg):
+        addresses.append(value)
+    matched_addresses = []
+    for value in sorted(dict.fromkeys(addresses)):
+        addr_int = int(value, 16)
+        if re.search(rf"\b\d+'h0*{addr_int:x}\b", rtl_text, re.I) or re.search(rf"\b{re.escape(value)}\b", rtl_text, re.I):
+            matched_addresses.append(value)
+    matched_registers = []
+    missing_registers = []
+    for reg_name, address in sorted(dict.fromkeys(registers)):
+        address_matched = bool(address and address in matched_addresses)
+        name_matched = bool(re.search(rf"\b{re.escape(reg_name)}\b", rtl_text, re.I) or re.search(rf"\b{re.escape(reg_name.lower())}\b", rtl_text, re.I))
+        if address_matched or name_matched:
+            matched_registers.append(reg_name)
+        else:
+            missing_registers.append(reg_name)
+    missing_fields = [f for f in unique if f not in matched]
+    missing_addresses = [a for a in sorted(dict.fromkeys(addresses)) if a not in matched_addresses]
     return {
         "expected": unique,
         "matched": matched,
-        "missing": [f for f in unique if f not in matched],
-        "status": "pass" if unique and len(matched) == len(unique) else ("not_applicable" if not unique else "issues"),
+        "expected_registers": [r[0] for r in sorted(dict.fromkeys(registers))],
+        "matched_registers": matched_registers,
+        "expected_addresses": sorted(dict.fromkeys(addresses)),
+        "matched_addresses": matched_addresses,
+        "missing": missing_fields,
+        "missing_registers": missing_registers,
+        "missing_addresses": missing_addresses,
+        "status": "pass" if (unique or addresses or registers) and not missing_fields and not missing_addresses and not missing_registers else ("not_applicable" if not unique and not addresses and not registers else "issues"),
     }
+
+
+def _structured_requirements(spec_obj: Optional[Dict[str, Any]], spec: str) -> List[str]:
+    reqs: List[str] = []
+    for mod in _structured_spec_modules(spec_obj):
+        for key in ("responsibilities", "behavior_rules", "must_drive", "must_receive"):
+            values = mod.get(key)
+            if isinstance(values, list):
+                reqs.extend(str(v).strip() for v in values if str(v).strip())
+        for key in ("reset_behavior",):
+            if isinstance(mod.get(key), str) and mod[key].strip():
+                reqs.append(mod[key].strip())
+    if reqs:
+        return list(dict.fromkeys(r[:240] for r in reqs if len(r) >= 8))[:80]
+    return _extract_requirements(spec)
+
+
+def _add_check(counts: Dict[str, int], status: str) -> None:
+    if status == "not_applicable":
+        return
+    bucket = {
+        "pass": "matched",
+        "matched": "matched",
+        "partial": "partial",
+        "issues": "missing",
+        "missing": "missing",
+        "inconclusive": "inconclusive",
+        "setup_issue": "inconclusive",
+    }.get(status, "inconclusive")
+    counts["checked"] += 1
+    counts[bucket] += 1
 
 
 def _clock_reset_evidence(spec: str, modules: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -216,6 +433,8 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     artifact_dir = Path(str(state.get("artifact_dir") or "."))
     artifact_dir.mkdir(parents=True, exist_ok=True)
 
+    spec_obj = _load_spec_json(state)
+    regmap_obj = _load_regmap_json(state)
     spec = _spec_text(state)
     rtl_files = _collect_rtl_files(state)
     modules = _extract_modules(rtl_files)
@@ -234,22 +453,29 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     module_names = [m["name"] for m in modules]
     top_status = "pass" if top_module and top_module in module_names else ("inconclusive" if not top_module else "issues")
 
-    spec_ports = _extract_spec_ports(spec)
+    spec_ports = _expected_top_ports(spec_obj, spec)
+    top_module_ports = {
+        p["name"]
+        for m in modules
+        if not top_module or m["name"] == top_module
+        for p in m.get("ports", [])
+    }
     rtl_ports = {p["name"] for m in modules for p in m.get("ports", [])}
-    matched_ports = [p for p in spec_ports if p in rtl_ports]
-    missing_ports = [p for p in spec_ports if p not in rtl_ports]
+    comparison_ports = top_module_ports or rtl_ports
+    matched_ports = [p for p in spec_ports if p in comparison_ports]
+    missing_ports = [p for p in spec_ports if p not in comparison_ports]
     interface_status = "pass" if spec_ports and not missing_ports else ("inconclusive" if not spec_ports else "issues")
 
-    requirements = _extract_requirements(spec)
+    requirements = _structured_requirements(spec_obj, spec)
     requirement_results = []
     counts = {"checked": 0, "matched": 0, "partial": 0, "missing": 0, "inconclusive": 0}
     if setup_issues:
-        counts["inconclusive"] = len(requirements)
+        for _ in requirements:
+            _add_check(counts, "inconclusive")
     else:
         for idx, requirement in enumerate(requirements, start=1):
             status, evidence = _match_score(requirement, rtl_text, rtl_names)
-            counts["checked"] += 1
-            counts[status] += 1
+            _add_check(counts, status)
             requirement_results.append({
                 "id": f"REQ-{idx:03d}",
                 "requirement": requirement,
@@ -257,14 +483,12 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
                 "evidence_tokens": evidence,
             })
 
-    register_check = _register_evidence(spec, rtl_text, state)
+    register_check = _register_evidence(spec, rtl_text, state, spec_obj, regmap_obj)
     clock_reset_check = _clock_reset_evidence(spec, modules)
-    if top_status == "issues":
-        counts["missing"] += 1
-        counts["checked"] += 1
-    if interface_status == "issues":
-        counts["missing"] += len(missing_ports)
-        counts["checked"] += max(1, len(spec_ports))
+    _add_check(counts, top_status)
+    _add_check(counts, interface_status)
+    _add_check(counts, register_check["status"])
+    _add_check(counts, clock_reset_check["status"])
 
     status = _overall_status(counts, setup_issues)
     report = {

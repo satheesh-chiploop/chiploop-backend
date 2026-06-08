@@ -1180,6 +1180,48 @@ SYSTEM_SOFTWARE_VALIDATION_L2_DEFINITION = _linear_workflow_definition([
     "System Software Validation Summary (L2)",
 ])
 
+SYSTEM_SYNTHESIS_DEFINITION = _linear_workflow_definition([
+    "System Integration Intent Agent",
+    "System Top Assembly Agent",
+    "System Assertions (SVA) Agent",
+    "System RTL Handoff Package Agent",
+    "Digital Foundry Profile Agent",
+    "Digital Implementation Setup Agent",
+    "Digital Synthesis Agent",
+    "Digital Logic Equivalence Check Agent",
+    "Digital DFT Scan Stitching Agent",
+    "Digital Scan ATPG Coverage Agent",
+    "Digital MBIST Collateral Agent",
+])
+
+SYSTEM_PD_DEFINITION = _linear_workflow_definition([
+    "System Integration Intent Agent",
+    "System Top Assembly Agent",
+    "System Assertions (SVA) Agent",
+    "System RTL Handoff Package Agent",
+    "Digital Foundry Profile Agent",
+    "Digital Implementation Setup Agent",
+    "Digital Synthesis Agent",
+    "Digital Logic Equivalence Check Agent",
+    "Digital DFT Scan Stitching Agent",
+    "Digital Scan ATPG Coverage Agent",
+    "Digital MBIST Collateral Agent",
+    "Digital STA PrePlace Agent",
+    "Digital Floorplan Agent",
+    "Digital Placement Agent",
+    "Digital STA PostPlace Agent",
+    "Digital CTS Agent",
+    "Digital STA PostCTS Agent",
+    "Digital Route Agent",
+    "Digital STA PostRoute Agent",
+    "Digital Fill Agent",
+    "Digital DRC Agent",
+    "Digital LVS Agent",
+    "Digital Tapeout Agent",
+    "Digital Tapeout Logic Equivalence Check Agent",
+    "Digital Executive Summary Agent",
+])
+
 SYSTEM_PRODUCT_APP_BUILDER_DEFINITION = _linear_workflow_definition([
     "System Product Collateral Ingest Agent",
     "System Product Capability Model Agent",
@@ -1205,6 +1247,8 @@ LOCAL_PREBUILT_WORKFLOW_DEFINITIONS: Dict[str, Dict[str, Any]] = {
     "System_Memory_Bottleneck": SYSTEM_ARCHITECTURE_EXPLORER_DEFINITION,
     "System_CPU_Model": SYSTEM_ARCHITECTURE_EXPLORER_DEFINITION,
     "Embedded_Run": EMBEDDED_RUN_DEFINITION,
+    "System_Synthesis": SYSTEM_SYNTHESIS_DEFINITION,
+    "System_PD": SYSTEM_PD_DEFINITION,
     "System_Software": SYSTEM_SOFTWARE_DEFINITION,
     "System_Software_Validation_L2": SYSTEM_SOFTWARE_VALIDATION_L2_DEFINITION,
     "System_Product_App_Builder": SYSTEM_PRODUCT_APP_BUILDER_DEFINITION,
@@ -1223,6 +1267,8 @@ LOCAL_RUNTIME_WORKFLOW_OVERRIDES = {
     "Digital_Smoke",
     "Digital_Integrate",
     "Embedded_Run",
+    "System_Synthesis",
+    "System_PD",
     "System_Software",
     "System_Software_Validation_L2",
     "System_Product_App_Builder",
@@ -2432,6 +2478,21 @@ class SystemAppIn(BaseModel):
     digital_spec_text: str
     analog_spec_text: str
     soc_integration_spec_text: str
+    system_rtl_workflow_id: Optional[str] = None
+    foundry: Optional[str] = None
+    pdk: Optional[str] = None
+    toolchain: Optional[str] = None
+    target_frequency_mhz: Optional[float] = None
+    constraints_sdc: Optional[str] = None
+    clock_constraints: Optional[Any] = None
+    effort: Optional[str] = "balanced"
+    run_fill: Optional[bool] = True
+    run_drc: Optional[bool] = True
+    run_lvs: Optional[bool] = True
+    system_sim_testcases: Optional[List[str]] = None
+    system_sim_seeds: Optional[List[int]] = None
+    system_sim_num_iters: Optional[int] = None
+    toggles: Optional[Dict[str, Any]] = None
 
 
 class SystemArchitectureAppIn(BaseModel):
@@ -6104,6 +6165,7 @@ def execute_system_app_background(
             "workflow_id": workflow_id,
             "run_id": run_id,
             "artifact_dir": artifact_dir,
+            "workflow_dir": os.path.dirname(artifact_dir),
             "supabase_client": supabase,
             "user_id": user_id,
             "_fail_fast_on_agent_error": template_workflow_name in {
@@ -6214,6 +6276,18 @@ def execute_system_app_background(
             force_platform_definition=True,
         )
         nodes = _definition_to_executor_nodes(defn)
+        toggles = shared_state.get("toggles") if isinstance(shared_state.get("toggles"), dict) else {}
+        if template_workflow_name in {"System_RTL", "System_Synthesis", "System_PD"} and toggles.get("run_spec2rtl_check"):
+            labels = [str(node.get("label") or node.get("name") or "") for node in nodes]
+            if "Digital Spec2RTL Conformance Agent" not in labels:
+                insert_after = "System RTL Handoff Package Agent" if "System RTL Handoff Package Agent" in labels else "System Top Assembly Agent"
+                insert_at = next(
+                    (idx + 1 for idx, label in enumerate(labels) if label == insert_after),
+                    len(nodes),
+                )
+                nodes.insert(insert_at, {"label": "Digital Spec2RTL Conformance Agent"})
+                append_log_workflow(workflow_id, f"{template_workflow_name}: added Spec2RTL conformance check", phase="system_spec2rtl")
+                append_log_run(run_id, f"{template_workflow_name}: added Spec2RTL conformance check")
 
         # Execute using system loop map
         _run_nodes_with_shared_state(
@@ -6422,6 +6496,20 @@ async def apps_system_rtl(
         "System_RTL"
     )
 
+
+@app.post("/apps/system/synthesis/run")
+async def apps_system_synthesis(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    payload: SystemAppIn
+):
+    return _start_system_app(
+        background_tasks,
+        request,
+        payload,
+        "App: System Synthesis",
+        "System_Synthesis"
+    )
 
 
 @app.post("/apps/system/pd/run")

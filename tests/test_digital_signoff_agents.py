@@ -1,4 +1,5 @@
 import os
+import json
 
 
 os.environ.setdefault("SUPABASE_URL", "http://localhost")
@@ -92,6 +93,120 @@ IRQ shall assert when period completes.
     assert report["interface"]["missing_ports"] == ["irq"]
     assert report["summary"]["matched"] >= 1
     assert report["summary"]["missing"] >= 1
+    assert report["summary"]["checked"] == (
+        report["summary"]["matched"]
+        + report["summary"]["partial"]
+        + report["summary"]["missing"]
+        + report["summary"]["inconclusive"]
+    )
+
+
+def test_spec2rtl_uses_structured_spec_and_regmap_without_prose_port_false_misses(tmp_path, monkeypatch):
+    spec_dir = tmp_path / "spec"
+    digital_dir = tmp_path / "digital"
+    rtl_dir = tmp_path / "rtl"
+    spec_dir.mkdir()
+    digital_dir.mkdir()
+    rtl_dir.mkdir()
+    spec_path = spec_dir / "pwm_controller_spec.json"
+    regmap_path = digital_dir / "digital_regmap.json"
+    spec_path.write_text(json.dumps({
+        "hierarchy": {
+            "top_module": {
+                "name": "pwm_controller",
+                "ports": [
+                    {"name": "clk", "direction": "input", "width": 1},
+                    {"name": "reset_n", "direction": "input", "width": 1},
+                    {"name": "wr_en", "direction": "input", "width": 1},
+                    {"name": "wr_addr", "direction": "input", "width": 8},
+                    {"name": "wr_data", "direction": "input", "width": 8},
+                    {"name": "rd_en", "direction": "input", "width": 1},
+                    {"name": "rd_addr", "direction": "input", "width": 8},
+                    {"name": "rd_data", "direction": "output", "width": 8},
+                    {"name": "pwm_out", "direction": "output", "width": 1},
+                    {"name": "counter_value", "direction": "output", "width": 8},
+                ],
+                "responsibilities": [
+                    "Accept memory-mapped register write and read transactions.",
+                    "Return addressed register values on rd_data.",
+                ],
+                "behavior_rules": [
+                    "Reads to 0x00 return CONTROL with bit 0 reflecting ENABLE and other bits zero.",
+                    "Reads to 0x0C return the live counter_value.",
+                    "Reads to unmapped addresses return zero.",
+                ],
+                "must_drive": ["rd_data", "pwm_out", "counter_value"],
+                "must_receive": ["clk", "reset_n", "wr_en", "wr_addr", "wr_data", "rd_en", "rd_addr"],
+                "reset_behavior": "All registers and outputs reset to zero when reset_n is low.",
+                "rtl_output_file": "pwm_controller.v",
+            },
+            "modules": [],
+        },
+        "register_contract": {
+            "registers": [
+                {"name": "CONTROL", "address": "0x00", "fields": [{"name": "ENABLE"}]},
+                {"name": "COUNTER_VALUE", "address": "0x0C", "fields": [{"name": "counter_value"}]},
+            ]
+        },
+    }), encoding="utf-8")
+    regmap_path.write_text(json.dumps({
+        "regmap": {
+            "registers": [
+                {"name": "CONTROL", "offset": "0x00", "fields": [{"name": "ENABLE"}]},
+                {"name": "COUNTER_VALUE", "offset": "0x0C", "fields": [{"name": "counter_value"}]},
+            ]
+        }
+    }), encoding="utf-8")
+    rtl = rtl_dir / "pwm_controller.v"
+    rtl.write_text(
+        """
+module pwm_controller(input clk, input reset_n, input wr_en, input [7:0] wr_addr, input [7:0] wr_data,
+  input rd_en, input [7:0] rd_addr, output [7:0] rd_data, output pwm_out, output [7:0] counter_value);
+reg enable_r;
+reg [7:0] rd_data_r;
+reg [7:0] counter_value_r;
+assign rd_data = rd_data_r;
+assign counter_value = counter_value_r;
+assign pwm_out = enable_r && (counter_value_r < 8'h04);
+always @(posedge clk or negedge reset_n) begin
+  if (!reset_n) begin
+    enable_r <= 1'b0;
+    rd_data_r <= 8'h00;
+    counter_value_r <= 8'h00;
+  end else begin
+    if (wr_en && wr_addr == 8'h00) enable_r <= wr_data[0];
+    counter_value_r <= counter_value_r + 8'h01;
+    if (rd_en) begin
+      case (rd_addr)
+        8'h00: rd_data_r <= {7'b0000000, enable_r};
+        8'h0C: rd_data_r <= counter_value_r;
+        default: rd_data_r <= 8'h00;
+      endcase
+    end
+  end
+end
+endmodule
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(spec2rtl_agent, "save_text_artifact_and_record", lambda *args, **kwargs: "local")
+
+    out = spec2rtl_agent.run_agent({
+        "workflow_id": "wf",
+        "workflow_dir": str(tmp_path),
+        "artifact_dir": str(digital_dir),
+        "top_module": "pwm_controller",
+        "spec_json": str(spec_path),
+        "digital_regmap_json": str(regmap_path),
+        "rtl_files": [str(rtl)],
+        "spec_text": "All registers and outputs reset to zero when reset_n is low.",
+    })
+
+    report = out["spec2rtl_conformance"]
+    assert report["status"] == "pass"
+    assert report["interface"]["missing_ports"] == []
+    assert report["register_map"]["missing"] == []
+    assert report["summary"]["checked"] == report["summary"]["matched"]
 
 
 def test_atpg_positive_patterns_or_coverage_are_success():
