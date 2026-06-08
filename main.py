@@ -716,6 +716,7 @@ from agents.system.system_software_mock_runtime_validation_agent import run_agen
 from agents.system.system_software_package_audit_agent import run_agent as system_software_package_audit_agent
 from agents.system.system_software_validation_summary_agent import run_agent as system_software_validation_summary_agent
 from agents.system.system_rtl_handoff_package_agent import run_agent as system_rtl_handoff_package_agent
+from agents.system.system_rtl_dashboard_agent import run_agent as system_rtl_dashboard_agent
 from agents.system.system_cosim_ingest_agent import run_agent as system_cosim_ingest_agent
 from agents.system.system_cosim_contract_agent import run_agent as system_cosim_contract_agent
 from agents.system.system_cosim_scenario_generator_agent import run_agent as system_cosim_scenario_generator_agent
@@ -907,6 +908,7 @@ SYSTEM_AGENT_FUNCTIONS: Dict[str,Any] = {
     "System Software Package Audit Agent": system_software_package_audit_agent,
     "System Software Validation Summary Agent": system_software_validation_summary_agent,
     "System RTL Handoff Package Agent": system_rtl_handoff_package_agent,
+    "System RTL Evidence Dashboard Agent": system_rtl_dashboard_agent,
     "System CoSim Ingest Agent": system_cosim_ingest_agent,
     "System CoSim Contract Agent": system_cosim_contract_agent,
     "System CoSim Scenario Generator Agent": system_cosim_scenario_generator_agent,
@@ -1185,6 +1187,7 @@ SYSTEM_SYNTHESIS_DEFINITION = _linear_workflow_definition([
     "System Top Assembly Agent",
     "System Assertions (SVA) Agent",
     "System RTL Handoff Package Agent",
+    "System RTL Evidence Dashboard Agent",
     "Digital Foundry Profile Agent",
     "Digital Implementation Setup Agent",
     "Digital Synthesis Agent",
@@ -1199,6 +1202,7 @@ SYSTEM_PD_DEFINITION = _linear_workflow_definition([
     "System Top Assembly Agent",
     "System Assertions (SVA) Agent",
     "System RTL Handoff Package Agent",
+    "System RTL Evidence Dashboard Agent",
     "Digital Foundry Profile Agent",
     "Digital Implementation Setup Agent",
     "Digital Synthesis Agent",
@@ -6312,6 +6316,17 @@ def execute_system_app_background(
         )
         nodes = _definition_to_executor_nodes(defn)
         toggles = shared_state.get("toggles") if isinstance(shared_state.get("toggles"), dict) else {}
+        if template_workflow_name in {"System_RTL", "System_Synthesis", "System_PD"}:
+            labels = [str(node.get("label") or node.get("name") or "") for node in nodes]
+            if "System RTL Evidence Dashboard Agent" not in labels:
+                insert_after = "System RTL Handoff Package Agent" if "System RTL Handoff Package Agent" in labels else "System Top Assembly Agent"
+                insert_at = next(
+                    (idx + 1 for idx, label in enumerate(labels) if label == insert_after),
+                    len(nodes),
+                )
+                nodes.insert(insert_at, {"label": "System RTL Evidence Dashboard Agent"})
+                append_log_workflow(workflow_id, f"{template_workflow_name}: added System RTL evidence dashboard", phase="system_rtl_dashboard")
+                append_log_run(run_id, f"{template_workflow_name}: added System RTL evidence dashboard")
         if template_workflow_name in {"System_RTL", "System_Synthesis", "System_PD"} and toggles.get("run_spec2rtl_check"):
             labels = [str(node.get("label") or node.get("name") or "") for node in nodes]
             if "Digital Spec2RTL Conformance Agent" not in labels:

@@ -5681,6 +5681,54 @@
       }
     },
     {
+      "name": "System RTL Evidence Dashboard Agent",
+      "loop_type": "system",
+      "domain": "system",
+      "description": "Builds an integrated System RTL evidence dashboard from real RTL filelists, separating digital RTL, analog macro RTL, and SoC top RTL into Arch2RTL-style interface, storage, timing, module, and file-count metrics.",
+      "entrypoint": "agents.system.system_rtl_dashboard_agent:run_agent",
+      "execution_mode": "legacy_adapter",
+      "inputs": [
+        "system/package/system_rtl_package.json",
+        "system/integration/system_rtl_filelist_sim.txt(optional)",
+        "system/integration/system_rtl_filelist_phys.txt(optional)",
+        "system/integration/system_full_compile_summary.json(optional)"
+      ],
+      "outputs": [
+        "system/dashboard/system_rtl_dashboard.json",
+        "system/dashboard/SYSTEM_RTL_DASHBOARD.md"
+      ],
+      "artifact_paths": [
+        "system/dashboard/system_rtl_dashboard.json",
+        "system/dashboard/SYSTEM_RTL_DASHBOARD.md"
+      ],
+      "artifact_types": [
+        "report",
+        "structured_data"
+      ],
+      "required_skills": [
+        "rtl_analysis",
+        "artifact_publish",
+        "dashboard_evidence"
+      ],
+      "required_tools": [
+        "python",
+        "supabase"
+      ],
+      "hooks": [
+        "pre_run_validate_inputs",
+        "post_run_collect_artifacts",
+        "post_run_update_state",
+        "on_failure_capture_traceback",
+        "on_failure_preserve_logs",
+        "artifact_publish_to_supabase"
+      ],
+      "metadata": {
+        "registry_source": "SYSTEM_AGENT_FUNCTIONS",
+        "variable": "system_rtl_dashboard_agent",
+        "studio_contract_version": "v1"
+      }
+    },
+    {
       "name": "System Simulation Control Agent",
       "loop_type": "system",
       "domain": "system",

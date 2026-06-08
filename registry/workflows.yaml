@@ -305,6 +305,7 @@
         "System Product Dashboard Agent",
         "System Product Package Agent",
         "System RTL Handoff Package Agent",
+        "System RTL Evidence Dashboard Agent",
         "System Simulation Control Agent",
         "System Simulation Coverage Summary Agent",
         "System Simulation Execution Agent",
