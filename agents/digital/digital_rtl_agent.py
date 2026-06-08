@@ -194,6 +194,48 @@ def _align_verilog_map_to_expected_modules(verilog_map: Dict[str, str], spec_jso
     return {fname: code for fname, code in aligned.items() if fname in expected_files}
 
 
+def _remove_comb_blocking_assigns_to_sequential_regs(code: str) -> str:
+    seq_targets = {
+        re.sub(r"\[[^\]]+\]", "", name).strip()
+        for name in re.findall(r"\b([A-Za-z_][A-Za-z0-9_$]*(?:\[[^\]]+\])?)\s*<=", code or "")
+    }
+    seq_targets.discard("")
+    if not seq_targets:
+        return code
+
+    out: List[str] = []
+    in_comb = False
+    depth = 0
+    assign_pat = re.compile(
+        rf"^\s*({'|'.join(re.escape(name) for name in sorted(seq_targets))})(?:\s*\[[^\]]+\])?\s*=\s*[^=].*;\s*$"
+    )
+
+    for line in (code or "").splitlines():
+        starts_comb = bool(re.search(r"\balways\s*@\s*\(\s*\*\s*\)", line))
+        if starts_comb and not in_comb:
+            in_comb = True
+            depth = 0
+
+        skip_line = in_comb and bool(assign_pat.match(line))
+        if not skip_line:
+            out.append(line)
+
+        if in_comb:
+            depth += len(re.findall(r"\bbegin\b", line))
+            depth -= len(re.findall(r"\bend\b", line))
+            if depth <= 0 and not starts_comb:
+                in_comb = False
+
+    return "\n".join(out).rstrip()
+
+
+def _sanitize_single_driver_rtl(verilog_map: Dict[str, str]) -> Dict[str, str]:
+    return {
+        fname: _remove_comb_blocking_assigns_to_sequential_regs(code)
+        for fname, code in verilog_map.items()
+    }
+
+
 def _range_width(width: str) -> int:
     m = re.search(r"\[\s*(\d+)\s*:\s*(\d+)\s*\]", width or "")
     if not m:
@@ -744,6 +786,9 @@ Every combinational always @(*) block must:
 - Illegal example: ({{1'b0, a}} + {{1'b0, b}})[12:1].
 - Legal pattern: assign the expression to a named wire/reg first, then select from that named signal.
 - Every declared output must have exactly one legal driver.
+- A register assigned with nonblocking <= in a clocked always block must not be assigned with blocking = anywhere else.
+- Do not use always @(*) blocks to write stored configuration registers, status registers, interrupt-clear registers, threshold registers, or rd_data registers that are also written in clocked logic.
+- For register-file readback, either make rd_data a combinational wire driven from a separate read_mux, or make rd_data_r purely sequential; do not implement both styles for rd_data_r.
 - In structural top modules, outputs may be exposed through wiring from the owning child module.
 - Do not force procedural driving at the top unless the top module owns the signal.
 - Use DIGITAL_SPEC_JSON module functionality, responsibilities, must_drive, must_receive, must_not_drive, reset_behavior, and behavior_rules as hard requirements.
@@ -1264,6 +1309,7 @@ TARGETED REPAIR PROCEDURE FOR FATAL LINT / COMPILE ERRORS
 6. If Verilator reports BLKANDNBLK, the repair is incomplete unless every reported signal has only one assignment style in the final RTL.
 7. If Verilator reports MULTIDRIVEN or multiple procedural drivers, the repair is incomplete unless all duplicate drivers are removed from the final RTL.
 8. If Icarus or Verilator reports unexpected '[' after an arithmetic/parenthesized expression, move that expression into a named wire/reg first and select bits from the named signal.
+9. If BLKANDNBLK reports a register-file signal, remove the combinational blocking assignment to that stored register; keep the clocked nonblocking assignment, or introduce a separate *_next/read_mux signal.
 
 MANDATORY REPAIR OVERRIDE
 If the previous RTL uses an illegal ownership pattern, you MUST rewrite the affected block structure enough to eliminate the illegal drivers.
@@ -1537,6 +1583,7 @@ def _validate_and_materialize_rtl(
     expected_files = _collect_expected_rtl_files(spec_json, mode)
     verilog_map = _normalize_emitted_rtl_filenames(verilog_map, expected_files)
     verilog_map = _align_verilog_map_to_expected_modules(verilog_map, spec_json, mode)
+    verilog_map = _sanitize_single_driver_rtl(verilog_map)
     artifact_list = []
 
     materialize_dir = rtl_dir if not materialize_subdir else os.path.join(rtl_dir, materialize_subdir)

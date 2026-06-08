@@ -65,6 +65,10 @@ def _basename(path: str) -> str:
     return Path(path).name.lower()
 
 
+def _path_parts(path: str) -> List[str]:
+    return [part for part in path.replace("\\", "/").lower().split("/") if part]
+
+
 def _is_soc_file(path: str) -> bool:
     name = _basename(path)
     return name.startswith("soc_top") or "system/integration/soc_top" in path.replace("\\", "/").lower()
@@ -73,9 +77,8 @@ def _is_soc_file(path: str) -> bool:
 def _is_analog_file(path: str) -> bool:
     text = path.replace("\\", "/").lower()
     name = _basename(path)
-    if "/digital/" in text or "\\digital\\" in text:
-        return False
-    if "/analog/" in text or "\\analog\\" in text:
+    parts = _path_parts(path)
+    if "analog" in parts:
         return True
     analog_tokens = (
         "analog",
@@ -95,9 +98,9 @@ def _is_analog_file(path: str) -> bool:
 
 
 def _is_digital_file(path: str) -> bool:
-    text = path.replace("\\", "/").lower()
     name = _basename(path)
-    if "/digital/" in text or "\\digital\\" in text:
+    parts = _path_parts(path)
+    if "rtl" in parts or "digital" in parts:
         return True
     digital_tokens = ("digital", "controller", "ctrl", "regs", "filter", "irq", "monitor")
     return any(token in name for token in digital_tokens)
@@ -106,8 +109,8 @@ def _is_digital_file(path: str) -> bool:
 def _scope_files(filelists: Dict[str, List[str]]) -> Dict[str, List[str]]:
     merged = sorted(dict.fromkeys(filelists.get("sim", []) + filelists.get("phys", [])))
     soc = [path for path in merged if _is_soc_file(path)]
-    digital = [path for path in merged if path not in soc and _is_digital_file(path)]
-    analog = [path for path in merged if path not in soc and path not in digital and _is_analog_file(path)]
+    analog = [path for path in merged if path not in soc and _is_analog_file(path)]
+    digital = [path for path in merged if path not in soc and path not in analog and _is_digital_file(path)]
     digital.extend(path for path in merged if path not in soc and path not in analog and path not in digital)
     digital = sorted(dict.fromkeys(digital))
     return {
@@ -147,6 +150,81 @@ def _compile_status(state: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _read_json(path: Path) -> Dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8", errors="ignore"))
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _digital_lint_status(workflow_dir: str) -> str:
+    summary = Path(workflow_dir) / "rtl" / "rtl_agent_summary.txt"
+    if summary.exists():
+        text = summary.read_text(encoding="utf-8", errors="ignore").lower()
+        if "verilator lint: pass" in text and "icarus compile: pass" in text:
+            return "pass"
+        if "verilator lint: fail" in text or "icarus compile: fail" in text:
+            return "fail"
+
+    lint_reports = [
+        Path(workflow_dir) / "rtl_lint_report.json",
+        Path(workflow_dir) / "digital" / "rtl_lint_report.json",
+    ]
+    for report_path in lint_reports:
+        report = _read_json(report_path)
+        if not report:
+            continue
+        status = str(report.get("status") or report.get("lint") or "").lower()
+        if status in {"pass", "clean"}:
+            return "pass"
+        if status in {"fail", "failed", "error"}:
+            return "fail"
+
+    return "not produced"
+
+
+def _analog_lint_status(workflow_dir: str) -> str:
+    analog_dir = Path(workflow_dir) / "analog"
+    summaries = sorted(analog_dir.glob("*_compile_summary.json")) if analog_dir.exists() else []
+    if not summaries:
+        return "not produced"
+    saw_clean = False
+    for summary_path in summaries:
+        summary = _read_json(summary_path)
+        if not summary:
+            continue
+        failed = bool(summary.get("iverilog_failed")) or bool(summary.get("verilator_fatal")) or int(summary.get("issue_count") or 0) > 0
+        if failed:
+            return "fail"
+        saw_clean = True
+    return "pass" if saw_clean else "not produced"
+
+
+def _lint_summary(state: Dict[str, Any], workflow_dir: str) -> Dict[str, str]:
+    compile_status = _compile_status(state)
+    digital = _digital_lint_status(workflow_dir)
+    analog = _analog_lint_status(workflow_dir)
+    soc = compile_status["sim"]
+    parts = [digital, analog, soc]
+    if any(status == "fail" for status in parts):
+        system = "fail"
+    elif all(status == "pass" for status in parts):
+        system = "pass"
+    elif any(status == "not produced" for status in parts):
+        system = "not produced"
+    else:
+        system = "partial"
+    return {
+        "digital": digital,
+        "analog": analog,
+        "soc": soc,
+        "system": system,
+    }
+
+
 def _scope_report(scope: str, rtl_files: List[str], state: Dict[str, Any], workflow_dir: str) -> Dict[str, Any]:
     modules = _parse_modules(rtl_files)
     top_name = _top_for_scope(scope, modules, state)
@@ -162,8 +240,8 @@ def _scope_report(scope: str, rtl_files: List[str], state: Dict[str, Any], workf
         "count_basis": "bits",
         "ports": top_module.get("ports") or [],
     }
-    compile_status = _compile_status(state)
-    lint_status = compile_status["sim"] if scope == "system" else "covered by generation compile"
+    lint_statuses = _lint_summary(state, workflow_dir)
+    lint_status = lint_statuses.get(scope, lint_statuses.get("system", "not produced"))
     return {
         "scope": scope,
         "top_module": top_name,
@@ -174,7 +252,7 @@ def _scope_report(scope: str, rtl_files: List[str], state: Dict[str, Any], workf
         "clock_reset": _infer_clock_reset(modules, state),
         "storage": storage,
         "timing": _timing_summary(workflow_dir, state, storage),
-        "lint": {"status": lint_status, "basis": "Compile/lint evidence from RTL generation and System Top Assembly."},
+        "lint": {"status": lint_status, "basis": "Compile/lint evidence from RTL generation, analog model compile, and System Top Assembly."},
     }
 
 
@@ -221,6 +299,7 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
             "phys_count": len(filelists["phys"]),
         },
         "compile": _compile_status(state),
+        "lint_summary": _lint_summary(state, workflow_dir),
         "scopes": scopes,
         "classification": {
             "basis": "filelist path/module-name classification; SoC tops separated from analog macro and digital RTL files",

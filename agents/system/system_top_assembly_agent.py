@@ -28,35 +28,36 @@ def _parse_endpoint(ep: str):
 
 def _normalize_sv_literal(val: str, port_range: str = "") -> str:
     s = str(val).strip()
+    width = _range_width(port_range)
 
     # Already looks like a legal SV literal
     if "'" in s:
+        m = re.fullmatch(r"\d+'\s*([dDhHbBoO])\s*([0-9a-fA-F_xXzZ]+)", s)
+        if m and width:
+            return f"{width}'{m.group(1)}{m.group(2)}"
         return s
 
     # Hex style: 0x1234 -> 32'h1234, or sized by port range when obvious
     if re.fullmatch(r"0[xX][0-9a-fA-F]+", s):
         hex_digits = s[2:]
-        if port_range:
-            m = re.fullmatch(r"\[(\d+):(\d+)\]", port_range.strip())
-            if m:
-                msb = int(m.group(1))
-                lsb = int(m.group(2))
-                width = abs(msb - lsb) + 1
-                return f"{width}'h{hex_digits}"
+        if width:
+            return f"{width}'h{hex_digits}"
         return f"32'h{hex_digits}"
 
     # Binary/decimal convenience
     if s in ("0", "1"):
-        if port_range:
-            m = re.fullmatch(r"\[(\d+):(\d+)\]", port_range.strip())
-            if m:
-                msb = int(m.group(1))
-                lsb = int(m.group(2))
-                width = abs(msb - lsb) + 1
-                return f"{width}'d{s}"
+        if width:
+            return f"{width}'d{s}"
         return f"1'b{s}"
 
     return s
+
+
+def _range_width(port_range: str) -> int:
+    m = re.fullmatch(r"\[(\d+):(\d+)\]", (port_range or "").strip())
+    if not m:
+        return 0
+    return abs(int(m.group(1)) - int(m.group(2))) + 1
 
 
 def _split_port_and_range(port: str):
@@ -125,6 +126,8 @@ def _collect_module_files(workflow_dir: str):
         return rels
 
     candidate_roots = [
+        os.path.join(workflow_dir, "rtl"),
+        os.path.join(workflow_dir, "digital", "rtl"),
         os.path.join(workflow_dir, "digital", "rtl_refactored"),
         os.path.join(workflow_dir, "analog"),
         os.path.join(workflow_dir, "system"),
