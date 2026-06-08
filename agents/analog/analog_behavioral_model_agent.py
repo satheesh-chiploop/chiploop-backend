@@ -64,6 +64,38 @@ def _sanitize_verilog2005_model(model_text: str) -> str:
         out,
     )
 
+    nonblocking_lhs = set(
+        re.findall(r"\b([A-Za-z_][A-Za-z0-9_$]*)\s*<=", out)
+    )
+
+    def clean_comb_block(match: re.Match) -> str:
+        block = match.group(0)
+        targets = set(re.findall(r"\b([A-Za-z_][A-Za-z0-9_$]*)\s*=", block))
+        overlapping = targets & nonblocking_lhs
+        if not overlapping:
+            return block
+        lines = []
+        removed_any = False
+        for line in block.splitlines():
+            if any(re.search(rf"\b{re.escape(name)}\s*=", line) for name in overlapping):
+                removed_any = True
+                continue
+            lines.append(line)
+        if not removed_any:
+            return block
+        body_text = "\n".join(lines)
+        # If the block no longer has any procedural assignments, remove it.
+        if not re.search(r"\b[A-Za-z_][A-Za-z0-9_$]*\s*=", body_text):
+            return ""
+        return body_text
+
+    out = re.sub(
+        r"always\s*@\s*\(\s*\*\s*\)\s*begin\b.*?end",
+        clean_comb_block,
+        out,
+        flags=re.DOTALL,
+    )
+
     if out and not out.endswith("\n"):
         out += "\n"
     return out

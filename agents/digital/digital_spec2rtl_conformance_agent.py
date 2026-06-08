@@ -295,6 +295,17 @@ def _match_score(requirement: str, rtl_text: str, rtl_names: Iterable[str]) -> T
             and re.search(r"\birq_status_\w*\s*\[\s*1\s*\]\s*<=\s*irq_status_sample_done", rtl_text, re.I)
         ):
             evidence.append("IRQ_STATUS.sample_done latch")
+        if (
+            re.search(r"\bstatus_\w*\s*\[\s*0\s*\]\s*<=\s*1'b1", rtl_text, re.I)
+            and re.search(r"\birq_status_\w*\s*\[\s*1\s*\]\s*<=\s*1'b1", rtl_text, re.I)
+        ):
+            evidence.append("STATUS/IRQ_STATUS.sample_done latch")
+    if "status.sample_done" in req_lower and "irq_status.sample_done" in req_lower and re.search(r"\blatch", req_lower):
+        if (
+            re.search(r"\bstatus_\w*\s*\[\s*0\s*\]\s*<=\s*1'b1", rtl_text, re.I)
+            and re.search(r"\birq_status_\w*\s*\[\s*1\s*\]\s*<=\s*1'b1", rtl_text, re.I)
+        ):
+            evidence.append("STATUS/IRQ_STATUS.sample_done latch")
     if "irq_clear" in req_lower and "bit 1" in req_lower and "sample_done" in req_lower and re.search(r"\bclear", req_lower):
         if (
             re.search(r"\bwr_addr\s*==\s*\d+'h0*18", rtl_text, re.I)
@@ -303,6 +314,23 @@ def _match_score(requirement: str, rtl_text: str, rtl_names: Iterable[str]) -> T
             and re.search(r"\bstatus_sample_done\s*<=\s*1'b0", rtl_text, re.I)
         ):
             evidence.append("IRQ_CLEAR.sample_done clear")
+        if (
+            re.search(r"\bwr_addr\s*==\s*\d+'h0*18", rtl_text, re.I)
+            and re.search(r"\bwr_data\s*\[\s*1\s*\]", rtl_text, re.I)
+            and re.search(r"\birq_status_\w*\s*\[\s*1\s*\]\s*<=\s*1'b0", rtl_text, re.I)
+            and re.search(r"\bstatus_\w*\s*\[\s*0\s*\]\s*<=\s*1'b0", rtl_text, re.I)
+        ):
+            evidence.append("IRQ_CLEAR.sample_done clear")
+    if "first sample" in req_lower and ("history" in req_lower or "observed sample" in req_lower):
+        if re.search(r"\bprev_sample_valid\b", rtl_text, re.I) and re.search(r"\?\s*\([^;]+prev_sample[^;]+:\s*adc_code", rtl_text, re.I):
+            evidence.append("first_sample_history_init")
+        elif re.search(r"\bprev_sample_valid\b", rtl_text, re.I) and re.search(r"else\s+begin\s+[^;]*temp_code\s*<=\s*adc_code", rtl_text, re.I | re.DOTALL):
+            evidence.append("first_sample_history_init")
+    if "periodic sample request" in req_lower or ("enable is set" in req_lower and "sample_start" in req_lower):
+        if re.search(r"\bcontrol_\w*\s*\[\s*0\s*\]", rtl_text, re.I) and re.search(r"\bsample_req\s*<=\s*1'b1", rtl_text, re.I):
+            evidence.append("enable_periodic_sample_req")
+        if re.search(r"\bwr_data\s*\[\s*1\s*\]", rtl_text, re.I) and re.search(r"\bsample_req\s*<=\s*1'b1", rtl_text, re.I):
+            evidence.append("sample_start_priority_path")
 
     addresses = re.findall(r"0x([0-9a-fA-F]+)", requirement)
     for addr in addresses:
@@ -322,7 +350,11 @@ def _match_score(requirement: str, rtl_text: str, rtl_names: Iterable[str]) -> T
         "CONTROL.ENABLE stored",
         "CONTROL.IRQ_ENABLE stored",
         "IRQ_STATUS.sample_done latch",
+        "STATUS/IRQ_STATUS.sample_done latch",
         "IRQ_CLEAR.sample_done clear",
+        "first_sample_history_init",
+        "enable_periodic_sample_req",
+        "sample_start_priority_path",
     }
     if semantic_hits.intersection(evidence):
         return "matched", evidence[:8]

@@ -71,7 +71,11 @@ def _path_parts(path: str) -> List[str]:
 
 def _is_soc_file(path: str) -> bool:
     name = _basename(path)
-    return name.startswith("soc_top") or "system/integration/soc_top" in path.replace("\\", "/").lower()
+    text = path.replace("\\", "/").lower()
+    parts = _path_parts(path)
+    if "system" in parts and "integration" in parts and name.endswith((".sv", ".v")):
+        return True
+    return name.startswith("soc_top") or "system/integration/soc_top" in text
 
 
 def _is_analog_file(path: str) -> bool:
