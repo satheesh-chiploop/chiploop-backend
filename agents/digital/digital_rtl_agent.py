@@ -159,6 +159,41 @@ def _normalize_emitted_rtl_filenames(verilog_map: Dict[str, str], expected_files
     return normalized
 
 
+def _extract_verilog_modules(code: str) -> Dict[str, str]:
+    modules: Dict[str, str] = {}
+    text = _strip_verilog_comments(code or "")
+    for match in re.finditer(
+        r"\bmodule\s+([A-Za-z_][A-Za-z0-9_$]*)\b.*?\bendmodule\b",
+        text,
+        flags=re.DOTALL,
+    ):
+        modules[match.group(1)] = match.group(0).strip()
+    return modules
+
+
+def _align_verilog_map_to_expected_modules(verilog_map: Dict[str, str], spec_json: dict, mode: str) -> Dict[str, str]:
+    module_to_file = {
+        str(module.get("name") or "").strip(): str(module.get("rtl_output_file") or "").strip()
+        for module in _collect_expected_modules(spec_json, mode)
+        if module.get("name") and module.get("rtl_output_file")
+    }
+    if not module_to_file:
+        return verilog_map
+
+    expected_files = set(module_to_file.values())
+    aligned = dict(verilog_map)
+    extracted_by_module: Dict[str, str] = {}
+    for code in verilog_map.values():
+        extracted_by_module.update(_extract_verilog_modules(code))
+
+    for module_name, rtl_file in module_to_file.items():
+        module_code = extracted_by_module.get(module_name)
+        if module_code:
+            aligned[rtl_file] = module_code
+
+    return {fname: code for fname, code in aligned.items() if fname in expected_files}
+
+
 def _range_width(width: str) -> int:
     m = re.search(r"\[\s*(\d+)\s*:\s*(\d+)\s*\]", width or "")
     if not m:
@@ -705,6 +740,9 @@ Every combinational always @(*) block must:
 - No undeclared identifiers.
 - No TODOs.
 - No empty shells.
+- Do not take a part-select or bit-select from an expression, function call, concatenation, or parenthesized arithmetic expression.
+- Illegal example: ({{1'b0, a}} + {{1'b0, b}})[12:1].
+- Legal pattern: assign the expression to a named wire/reg first, then select from that named signal.
 - Every declared output must have exactly one legal driver.
 - In structural top modules, outputs may be exposed through wiring from the owning child module.
 - Do not force procedural driving at the top unless the top module owns the signal.
@@ -1225,6 +1263,7 @@ TARGETED REPAIR PROCEDURE FOR FATAL LINT / COMPILE ERRORS
 5. If a signal is owned by a child module or by explicit signal_ownership, do not also reset, assign, or procedurally drive it in the parent/top.
 6. If Verilator reports BLKANDNBLK, the repair is incomplete unless every reported signal has only one assignment style in the final RTL.
 7. If Verilator reports MULTIDRIVEN or multiple procedural drivers, the repair is incomplete unless all duplicate drivers are removed from the final RTL.
+8. If Icarus or Verilator reports unexpected '[' after an arithmetic/parenthesized expression, move that expression into a named wire/reg first and select bits from the named signal.
 
 MANDATORY REPAIR OVERRIDE
 If the previous RTL uses an illegal ownership pattern, you MUST rewrite the affected block structure enough to eliminate the illegal drivers.
@@ -1497,6 +1536,7 @@ def _validate_and_materialize_rtl(
 
     expected_files = _collect_expected_rtl_files(spec_json, mode)
     verilog_map = _normalize_emitted_rtl_filenames(verilog_map, expected_files)
+    verilog_map = _align_verilog_map_to_expected_modules(verilog_map, spec_json, mode)
     artifact_list = []
 
     materialize_dir = rtl_dir if not materialize_subdir else os.path.join(rtl_dir, materialize_subdir)

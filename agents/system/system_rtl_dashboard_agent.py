@@ -73,6 +73,10 @@ def _is_soc_file(path: str) -> bool:
 def _is_analog_file(path: str) -> bool:
     text = path.replace("\\", "/").lower()
     name = _basename(path)
+    if "/digital/" in text or "\\digital\\" in text:
+        return False
+    if "/analog/" in text or "\\analog\\" in text:
+        return True
     analog_tokens = (
         "analog",
         "macro",
@@ -90,11 +94,22 @@ def _is_analog_file(path: str) -> bool:
     return any(token in text or token in name for token in analog_tokens)
 
 
+def _is_digital_file(path: str) -> bool:
+    text = path.replace("\\", "/").lower()
+    name = _basename(path)
+    if "/digital/" in text or "\\digital\\" in text:
+        return True
+    digital_tokens = ("digital", "controller", "ctrl", "regs", "filter", "irq", "monitor")
+    return any(token in name for token in digital_tokens)
+
+
 def _scope_files(filelists: Dict[str, List[str]]) -> Dict[str, List[str]]:
     merged = sorted(dict.fromkeys(filelists.get("sim", []) + filelists.get("phys", [])))
     soc = [path for path in merged if _is_soc_file(path)]
-    analog = [path for path in merged if not _is_soc_file(path) and _is_analog_file(path)]
-    digital = [path for path in merged if path not in soc and path not in analog]
+    digital = [path for path in merged if path not in soc and _is_digital_file(path)]
+    analog = [path for path in merged if path not in soc and path not in digital and _is_analog_file(path)]
+    digital.extend(path for path in merged if path not in soc and path not in analog and path not in digital)
+    digital = sorted(dict.fromkeys(digital))
     return {
         "system": merged,
         "soc": soc,
@@ -147,6 +162,8 @@ def _scope_report(scope: str, rtl_files: List[str], state: Dict[str, Any], workf
         "count_basis": "bits",
         "ports": top_module.get("ports") or [],
     }
+    compile_status = _compile_status(state)
+    lint_status = compile_status["sim"] if scope == "system" else "covered by generation compile"
     return {
         "scope": scope,
         "top_module": top_name,
@@ -157,7 +174,7 @@ def _scope_report(scope: str, rtl_files: List[str], state: Dict[str, Any], workf
         "clock_reset": _infer_clock_reset(modules, state),
         "storage": storage,
         "timing": _timing_summary(workflow_dir, state, storage),
-        "lint": {"status": "not run", "basis": "System dashboard uses compile evidence from System Top Assembly; no extra lint run here."},
+        "lint": {"status": lint_status, "basis": "Compile/lint evidence from RTL generation and System Top Assembly."},
     }
 
 
