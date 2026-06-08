@@ -25,6 +25,19 @@ def _read_json_if_exists(v):
     return None
 
 
+def _find_fallback_spec_json(workflow_dir: str):
+    spec_dir = os.path.join(workflow_dir, "spec")
+    if not os.path.isdir(spec_dir):
+        return None
+    candidates = [
+        os.path.join(spec_dir, name)
+        for name in os.listdir(spec_dir)
+        if name.endswith("_spec.json")
+    ]
+    candidates.sort()
+    return candidates[0] if candidates else None
+
+
 def _normalize_spec(spec_obj: dict):
     if not isinstance(spec_obj, dict):
         raise ValueError("digital spec must be a JSON object")
@@ -75,6 +88,12 @@ def run_agent(state: dict) -> dict:
         _read_json_if_exists(state.get("digital_spec_json"))
         or _read_json_if_exists(state.get("spec_json"))
     )
+    if not spec_obj:
+        fallback_spec = _find_fallback_spec_json(workflow_dir)
+        spec_obj = _read_json_if_exists(fallback_spec)
+        if spec_obj and fallback_spec:
+            state["digital_spec_json"] = fallback_spec
+            state["spec_json"] = fallback_spec
 
     if not spec_obj:
         state["status"] = "❌ Missing digital spec JSON for architecture generation."

@@ -6281,6 +6281,9 @@ def execute_system_app_background(
                 "System_Memory_Bottleneck",
                 "System_CPU_Model",
                 "System_Architecture_to_RTL_Delivery",
+                "System_RTL",
+                "System_Synthesis",
+                "System_PD",
             },
         }
 
