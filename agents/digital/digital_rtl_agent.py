@@ -496,6 +496,10 @@ You are a senior ASIC RTL engineer.
 
 The input DIGITAL_SPEC_JSON is the single source of truth.
 You must implement it exactly.
+The top-level module name is {_top_module_name(spec_json, mode)}.
+The top-level RTL file is {_top_rtl_file(spec_json, mode)}.
+Child/internal modules may use wrapper or interface suffixes when they are present in DIGITAL_SPEC_JSON.
+The declared top-level module must still be exactly {_top_module_name(spec_json, mode)}.
 Do NOT redesign architecture.
 Do NOT rename modules.
 Do NOT rename ports.

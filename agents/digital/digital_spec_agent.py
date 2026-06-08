@@ -1,5 +1,6 @@
 import os
 import json
+import re
 from utils.artifact_utils import save_text_artifact_and_record
 from model_gateway import complete_text
 import logging
@@ -10,6 +11,72 @@ PORTKEY_API_KEY = os.getenv("PORTKEY_API_KEY")
 
 
 logger = logging.getLogger("chiploop")
+
+
+_VERILOG_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_$]*$")
+
+
+def _requested_top_module(state: dict) -> str:
+    top = str(state.get("top_module") or "").strip()
+    if not top:
+        return ""
+    if not _VERILOG_IDENTIFIER_RE.match(top):
+        raise ValueError(f"Requested top_module '{top}' is not a valid Verilog identifier.")
+    return top
+
+
+def _replace_endpoint_module(endpoint: str, old: str, new: str) -> str:
+    if isinstance(endpoint, str) and endpoint.startswith(f"{old}."):
+        return f"{new}.{endpoint.split('.', 1)[1]}"
+    return endpoint
+
+
+def _apply_requested_top_module(spec_json: dict, mode: str, requested_top: str) -> dict:
+    if not requested_top:
+        return spec_json
+
+    if mode == "flat":
+        old_top = str(spec_json.get("name") or "").strip()
+        if old_top == requested_top:
+            return spec_json
+        ext = os.path.splitext(str(spec_json.get("rtl_output_file") or ""))[1] or ".v"
+        spec_json["name"] = requested_top
+        spec_json["rtl_output_file"] = f"{requested_top}{ext}"
+        return spec_json
+
+    hier = spec_json["hierarchy"]
+    top = hier["top_module"]
+    old_top = str(top.get("name") or "").strip()
+    if old_top == requested_top:
+        return spec_json
+
+    for mod in hier.get("modules", []):
+        if mod.get("name") == requested_top:
+            raise ValueError(
+                f"Requested top_module '{requested_top}' conflicts with an existing child module name."
+            )
+
+    ext = os.path.splitext(str(top.get("rtl_output_file") or ""))[1] or ".v"
+    top["name"] = requested_top
+    top["rtl_output_file"] = f"{requested_top}{ext}"
+    spec_json["design_name"] = requested_top
+
+    if old_top:
+        for conn in spec_json.get("top_level_connections", []):
+            conn["connected_to"] = [
+                _replace_endpoint_module(dst, old_top, requested_top)
+                for dst in conn.get("connected_to", [])
+            ]
+        for sig in spec_json.get("inter_module_signals", []):
+            sig["source"] = _replace_endpoint_module(sig.get("source"), old_top, requested_top)
+            sig["destinations"] = [
+                _replace_endpoint_module(dst, old_top, requested_top)
+                for dst in sig.get("destinations", [])
+            ]
+        for own in spec_json.get("signal_ownership", []):
+            own["owner"] = _replace_endpoint_module(own.get("owner"), old_top, requested_top)
+
+    return spec_json
 
 
 def _is_truncated_model_response(exc: Exception) -> bool:
@@ -502,7 +569,7 @@ REPAIR RULES:
 """.strip()
 
 
-def _compile_spec_contract(llm_output: str, spec_dir: str, suffix: str = ""):
+def _compile_spec_contract(llm_output: str, spec_dir: str, suffix: str = "", requested_top: str = ""):
     logger.info(f"🔍 Digital Spec Agent compile start suffix='{suffix or 'pass1'}'")
     raw_name = f"llm_raw_output{suffix}.txt"
     raw_output_path = os.path.join(spec_dir, raw_name)
@@ -513,6 +580,14 @@ def _compile_spec_contract(llm_output: str, spec_dir: str, suffix: str = ""):
     logger.info(f"🔍 Digital Spec Agent JSON parsed suffix='{suffix or 'pass1'}'")
     spec_json, mode = _normalize_spec_json(parsed_json)
     logger.info(f"🔍 Digital Spec Agent normalized mode={mode} suffix='{suffix or 'pass1'}'")
+    spec_json = _apply_requested_top_module(spec_json, mode, requested_top)
+    if requested_top:
+        logger.info(
+            "Digital Spec Agent enforced requested top_module=%s suffix='%s'",
+            requested_top,
+            suffix or "pass1",
+        )
+
     if mode == "hierarchical":
         spec_json = _ensure_hierarchical_port_closure(spec_json)
         logger.info(f"🔍 Digital Spec Agent hierarchical port closure done suffix='{suffix or 'pass1'}'")
@@ -572,6 +647,26 @@ def run_agent(state: dict) -> dict:
         or state.get("description")
         or ""
     ).strip()
+    try:
+        requested_top = _requested_top_module(state)
+    except ValueError as e:
+        log_path = os.path.join(spec_dir, "spec_agent_contract.log")
+        summary_path = os.path.join(spec_dir, "spec_agent_summary.txt")
+
+        _write_text(log_path, f"Digital Spec Agent aborted: {e}\n")
+        _write_text(summary_path, f"Digital Spec Agent failed.\n\nReason: {e}\n")
+
+        state.update({
+            "status": f"Spec input invalid: {e}",
+            "artifact": None,
+            "artifact_list": [],
+            "artifact_log": log_path,
+            "workflow_dir": workflow_dir,
+            "workflow_id": workflow_id,
+            "issues": [str(e)],
+        })
+        _upload_spec_debug_artifacts(workflow_id, agent_name, spec_dir)
+        return state
 
     input_snapshot = os.path.join(spec_dir, "spec_agent_input.txt")
     _write_text(input_snapshot, user_prompt if user_prompt else "<EMPTY>")
@@ -599,6 +694,9 @@ def run_agent(state: dict) -> dict:
     prompt = f"""
 USER DIGITAL SPECIFICATION:
 {user_prompt}
+
+REQUESTED_TOP_MODULE:
+{requested_top or "null"}
 
 You are a professional ASIC digital architect.
 
@@ -740,6 +838,10 @@ RULES
 - If the design is truly just one module, output the flat single-module form.
 - If the design has internal hierarchy, output the hierarchical form.
 - Define exact module names.
+- If REQUESTED_TOP_MODULE is not null, the top-level module name MUST be exactly that value.
+- Suffixes such as _mmio, _wrapper, or _rtl are allowed for child/internal modules when useful.
+- If the design needs an MMIO/register/bus wrapper and REQUESTED_TOP_MODULE is not null, keep REQUESTED_TOP_MODULE as the top-level module and place any suffixed wrapper below it or fold the wrapper behavior into that top.
+- If REQUESTED_TOP_MODULE is not null, the top-level rtl_output_file MUST be REQUESTED_TOP_MODULE plus a Verilog extension.
 - Define exact ports.
 - Define exact rtl_output_file names.
 - Every port must include name, direction, width.
@@ -998,6 +1100,7 @@ Return JSON only.
             llm_output=llm_output,
             spec_dir=spec_dir,
             suffix="",
+            requested_top=requested_top,
         )
     except Exception as e:
         pass1_error = e
@@ -1056,6 +1159,7 @@ Return JSON only.
                 llm_output=llm_output_pass2,
                 spec_dir=spec_dir,
                 suffix="_pass2",
+                requested_top=requested_top,
             )
             raw_output_path = raw_output_path_pass2
             
