@@ -38,6 +38,37 @@ def _force_module_name(model_text: str, module_name: str) -> str:
         flags=re.IGNORECASE,
     )
 
+
+def _sanitize_verilog2005_model(model_text: str) -> str:
+    """Repair common LLM syntax that is not legal Verilog-2005."""
+    if not model_text:
+        return model_text
+
+    out = model_text
+
+    # Illegal: lhs = {{32{(a + b)[31]}}, (a + b)[31:0]};
+    # Legal and equivalent enough for integer behavioral modeling: lhs = $signed(a + b);
+    sign_extend_expr = re.compile(
+        r"(?P<lhs>\b[A-Za-z_][A-Za-z0-9_$]*\s*=\s*)"
+        r"\{\{\s*\d+\s*\{\s*\((?P<expr>[^;\n{}]+?)\)\s*\[\s*\d+\s*\]\s*\}\s*\}\s*,\s*"
+        r"\(\s*(?P=expr)\s*\)\s*\[\s*\d+\s*:\s*\d+\s*\]\s*\}\s*;",
+        re.MULTILINE,
+    )
+    out = sign_extend_expr.sub(lambda m: f"{m.group('lhs')}$signed({m.group('expr').strip()});", out)
+
+    # Illegal in Verilog-2005: (arithmetic expression)[bit/range].
+    # For simple assignment RHSs, preserve compile-clean behavior by assigning the expression itself.
+    out = re.sub(
+        r"(?P<lhs>\b[A-Za-z_][A-Za-z0-9_$]*\s*=\s*)\((?P<expr>[^;\n()]+?[+\-*/][^;\n()]+?)\)\s*\[\s*\d+\s*(?::\s*\d+\s*)?\]\s*;",
+        lambda m: f"{m.group('lhs')}{m.group('expr').strip()};",
+        out,
+    )
+
+    if out and not out.endswith("\n"):
+        out += "\n"
+    return out
+
+
 def _fallback_model(spec: dict, module_name: str) -> str:
     ports = spec.get("ports") or []
 
@@ -124,6 +155,9 @@ PASS2 REPAIR RULES
 - Keep behavior deterministic and simple
 - Do NOT redesign the block unless strictly required to fix compile/lint errors
 - The repaired RTL is still wrong if any reported compile error or fatal lint issue remains
+- Do NOT take a bit-select or part-select directly from an expression, function call, parameter arithmetic, or parenthesized expression.
+- Illegal example: (1000000 + GAIN_ERROR_PPM)[31:0].
+- Legal pattern: assign the expression to a named reg/wire first, or use $signed(expression) when sign extension is intended.
 
 FINAL PASS2 SELF-CHECK
 1. Module name matches spec JSON exactly
@@ -201,6 +235,9 @@ MODULE CONTRACT
 LANGUAGE RULES
 - Use Verilog-2005 only
 - Do NOT use SystemVerilog-only constructs
+- Do NOT take a bit-select or part-select directly from an expression, function call, parameter arithmetic, or parenthesized expression.
+- Illegal example: (1000000 + GAIN_ERROR_PPM)[31:0].
+- Legal pattern: assign the expression to a named reg/wire first, or use $signed(expression) when sign extension is intended.
 - Forbidden constructs:
   - logic
   - always_comb
@@ -334,6 +371,7 @@ SELF-CHECK BEFORE OUTPUT
         model = _fallback_model(spec, module_name)
 
     model = _force_module_name(model, module_name)
+    model = _sanitize_verilog2005_model(model)
 
     analog_dir = os.path.join(workflow_dir, "analog")
     os.makedirs(analog_dir, exist_ok=True)
@@ -414,6 +452,7 @@ SELF-CHECK BEFORE OUTPUT
         repaired_raw = llm_text(repair_prompt)
         repaired_model = _extract_sv_module(repaired_raw)
         repaired_model = _force_module_name(repaired_model, module_name)
+        repaired_model = _sanitize_verilog2005_model(repaired_model)
 
         if repaired_model and "module" in repaired_model and "endmodule" in repaired_model:
             model = repaired_model

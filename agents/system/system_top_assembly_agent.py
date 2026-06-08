@@ -783,7 +783,14 @@ def run_agent(state: dict) -> dict:
 
     top_cfg = top_intent.get("top", {}) if isinstance(top_intent, dict) else {}
 
-    top_base = (top_cfg.get("base_name") or state.get("soc_top_name") or state.get("top_module") or "soc_top").strip()
+    top_base = (
+        state.get("system_requested_top_module")
+        or state.get("system_top_module")
+        or top_cfg.get("base_name")
+        or state.get("soc_top_name")
+        or state.get("top_module")
+        or "soc_top"
+    ).strip()
     top_sim = (top_cfg.get("sim_module") or f"{top_base}_sim").strip()
     top_phys = (top_cfg.get("phys_module") or f"{top_base}_phys").strip()
 

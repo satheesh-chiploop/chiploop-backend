@@ -2546,6 +2546,7 @@ async def apps_validation_run(request: Request, background_tasks: BackgroundTask
 
 class SystemAppIn(BaseModel):
     project_name: Optional[str] = None
+    top_module: Optional[str] = None
     digital_spec_text: str
     analog_spec_text: str
     soc_integration_spec_text: str
@@ -6294,6 +6295,59 @@ def execute_system_app_background(
             if v is not None:
                 shared_state[k] = v
 
+        requested_system_top = str(
+            shared_state.get("top_module")
+            or shared_state.get("system_top_module")
+            or shared_state.get("soc_top_name")
+            or ""
+        ).strip()
+        if requested_system_top:
+            if not re.match(r"^[A-Za-z_][A-Za-z0-9_$]*$", requested_system_top):
+                raise ValueError(f"Requested System RTL top_module '{requested_system_top}' is not a valid Verilog identifier.")
+            shared_state["system_requested_top_module"] = requested_system_top
+            shared_state["system_top_module"] = requested_system_top
+            shared_state["soc_top_name"] = requested_system_top
+            # In System RTL this field means SoC wrapper top, not the digital IP top.
+            # Avoid forcing Digital Spec Agent to rename the digital block.
+            shared_state.pop("top_module", None)
+
+        if shared_state.get("system_rtl_workflow_id") and not shared_state.get("from_workflow_id"):
+            shared_state["from_workflow_id"] = shared_state.get("system_rtl_workflow_id")
+        if shared_state.get("system_rtl_workflow_id"):
+            shared_state.setdefault("source_rtl_workflow_id", shared_state.get("system_rtl_workflow_id"))
+            shared_state.setdefault("source_system_rtl_workflow_id", shared_state.get("system_rtl_workflow_id"))
+            try:
+                source_run = (
+                    supabase.table("runs")
+                    .select("artifacts_path,created_at")
+                    .eq("workflow_id", shared_state.get("system_rtl_workflow_id"))
+                    .order("created_at", desc=True)
+                    .limit(1)
+                    .execute()
+                )
+                rows = source_run.data or []
+                source_workflow_dir = str((rows[0] or {}).get("artifacts_path") or "").strip() if rows else ""
+                if not source_workflow_dir:
+                    source_workflow_dir = os.path.join("backend", "workflows", str(shared_state.get("system_rtl_workflow_id")))
+                if source_workflow_dir:
+                    shared_state["source_system_rtl_workflow_dir"] = source_workflow_dir
+                    source_filelist = os.path.join(source_workflow_dir, "system", "integration", "system_rtl_filelist_sim.txt")
+                    source_soc_top = os.path.join(source_workflow_dir, "system", "integration", "soc_top_sim.sv")
+                    source_intent = os.path.join(source_workflow_dir, "system", "integration", "system_integration_intent.json")
+                    if os.path.exists(source_filelist):
+                        shared_state["system_rtl_filelist_sim"] = source_filelist
+                    if os.path.exists(source_soc_top):
+                        shared_state["soc_top_sim_path"] = source_soc_top
+                        shared_state["system_top_sim_path"] = source_soc_top
+                    if os.path.exists(source_intent):
+                        shared_state["system_integration_intent_json"] = source_intent
+            except Exception as source_exc:
+                append_log_workflow(
+                    workflow_id,
+                    f"System RTL source lookup warning: {source_exc}",
+                    phase="system_rtl_source",
+                )
+
         # ---------------------------------------------------------
         # 2) Canonical domain-specific normalization
         #    Keep these three as the source of truth.
@@ -6386,6 +6440,37 @@ def execute_system_app_background(
         )
         nodes = _definition_to_executor_nodes(defn)
         toggles = shared_state.get("toggles") if isinstance(shared_state.get("toggles"), dict) else {}
+        if template_workflow_name in {"System_Sim", "System_Firmware", "System_Synthesis", "System_PD"} and shared_state.get("system_rtl_workflow_id"):
+            skip_labels = {
+                "Digital Spec Agent",
+                "Digital Architecture Agent",
+                "Digital Microarchitecture Agent",
+                "Digital RTL Agent",
+                "Digital RTL Linting Agent",
+                "Digital RTL Signature Agent",
+                "Analog Spec Builder Agent",
+                "Analog Behavioral Model Agent",
+                "System Integration Intent Agent",
+                "System Top Assembly Agent",
+                "System Assertions (SVA) Agent",
+                "System RTL Handoff Package Agent",
+                "System RTL Evidence Dashboard Agent",
+                "Digital Spec2RTL Conformance Agent",
+            }
+            original_count = len(nodes)
+            nodes = [
+                node for node in nodes
+                if str((node.get("data") or {}).get("backendLabel") or node.get("label") or node.get("name") or "") not in skip_labels
+            ]
+            append_log_workflow(
+                workflow_id,
+                f"{template_workflow_name}: using source System RTL workflow {shared_state.get('system_rtl_workflow_id')}; skipped {original_count - len(nodes)} System RTL generation/dashboard nodes",
+                phase="system_rtl_source",
+            )
+            append_log_run(
+                run_id,
+                f"{template_workflow_name}: using source System RTL workflow {shared_state.get('system_rtl_workflow_id')}; skipped {original_count - len(nodes)} System RTL generation/dashboard nodes",
+            )
         if template_workflow_name in {"System_RTL", "System_Synthesis", "System_PD"}:
             labels = [str(node.get("label") or node.get("name") or "") for node in nodes]
             if "System RTL Evidence Dashboard Agent" not in labels:

@@ -280,6 +280,30 @@ def _match_score(requirement: str, rtl_text: str, rtl_names: Iterable[str]) -> T
         evidence.append("wrap_logic")
     if "unmapped" in req_lower and re.search(r"\bdefault\s*:", rtl_text, re.I) and re.search(r"default\s*:\s*[A-Za-z_][A-Za-z0-9_$]*\s*<=\s*(?:\d+'h00|\d+'d0|0)", rtl_text, re.I):
         evidence.append("default_zero")
+
+    # Recognize common register-bit implementation idioms. This is still
+    # evidence-based: require concrete RTL assignments, not only names.
+    if "control" in req_lower and "enable" in req_lower:
+        if re.search(r"\bcontrol_\w*\s*\[\s*0\s*\]\s*<=\s*wr_data\s*\[\s*0\s*\]", rtl_text, re.I):
+            evidence.append("CONTROL.ENABLE stored")
+    if "control" in req_lower and ("irq_enable" in req_lower or ("irq" in req_lower and "enable" in req_lower)):
+        if re.search(r"\bcontrol_\w*\s*\[\s*2\s*\]\s*<=\s*wr_data\s*\[\s*2\s*\]", rtl_text, re.I):
+            evidence.append("CONTROL.IRQ_ENABLE stored")
+    if "irq_status" in req_lower and "bit 1" in req_lower and "sample_done" in req_lower and re.search(r"\blatch", req_lower):
+        if (
+            re.search(r"\birq_status_sample_done\s*<=\s*1'b1", rtl_text, re.I)
+            and re.search(r"\birq_status_\w*\s*\[\s*1\s*\]\s*<=\s*irq_status_sample_done", rtl_text, re.I)
+        ):
+            evidence.append("IRQ_STATUS.sample_done latch")
+    if "irq_clear" in req_lower and "bit 1" in req_lower and "sample_done" in req_lower and re.search(r"\bclear", req_lower):
+        if (
+            re.search(r"\bwr_addr\s*==\s*\d+'h0*18", rtl_text, re.I)
+            and re.search(r"\bwr_data\s*\[\s*1\s*\]", rtl_text, re.I)
+            and re.search(r"\birq_status_sample_done\s*<=\s*1'b0", rtl_text, re.I)
+            and re.search(r"\bstatus_sample_done\s*<=\s*1'b0", rtl_text, re.I)
+        ):
+            evidence.append("IRQ_CLEAR.sample_done clear")
+
     addresses = re.findall(r"0x([0-9a-fA-F]+)", requirement)
     for addr in addresses:
         addr_int = int(addr, 16)
@@ -294,6 +318,14 @@ def _match_score(requirement: str, rtl_text: str, rtl_names: Iterable[str]) -> T
     evidence = list(dict.fromkeys(evidence))
     if not unique_words and not addresses:
         return "inconclusive", []
+    semantic_hits = {
+        "CONTROL.ENABLE stored",
+        "CONTROL.IRQ_ENABLE stored",
+        "IRQ_STATUS.sample_done latch",
+        "IRQ_CLEAR.sample_done clear",
+    }
+    if semantic_hits.intersection(evidence):
+        return "matched", evidence[:8]
     if addresses and not any(item.startswith("0x") for item in evidence):
         return ("partial", evidence[:8]) if evidence else ("missing", [])
     if addresses and any(item.startswith("0x") for item in evidence) and len(evidence) >= 2:

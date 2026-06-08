@@ -932,7 +932,13 @@ def run_agent(state: dict) -> dict:
         return state
 
     # Top module base name (we will produce *_sim and *_phys)
-    top_base = (state.get("top_module") or state.get("soc_top_name") or "soc_top").strip()
+    top_base = (
+        state.get("system_requested_top_module")
+        or state.get("system_top_module")
+        or state.get("soc_top_name")
+        or state.get("top_module")
+        or "soc_top"
+    ).strip()
 
     # Signatures (best-effort)
     # digital/analog signature agents may store differently; accept multiple keys.
@@ -1217,9 +1223,11 @@ Now output JSON only.
         intent.setdefault("variants", {})
 
         if isinstance(intent["top"], dict):
-            intent["top"].setdefault("base_name", top_base)
-            intent["top"].setdefault("sim_module", f"{top_base}_sim")
-            intent["top"].setdefault("phys_module", f"{top_base}_phys")
+            # The requested System RTL top is a hard user constraint. Do not
+            # let LLM output drift to a different SoC wrapper name.
+            intent["top"]["base_name"] = top_base
+            intent["top"]["sim_module"] = f"{top_base}_sim"
+            intent["top"]["phys_module"] = f"{top_base}_phys"
 
         if not intent["instances"]:
             intent["instances"] = [

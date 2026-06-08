@@ -80,13 +80,13 @@ def _is_analog_file(path: str) -> bool:
     parts = _path_parts(path)
     if "analog" in parts:
         return True
+    if "rtl" in parts or "digital" in parts or _is_digital_file(path):
+        return False
     analog_tokens = (
         "analog",
         "macro",
         "ams",
         "behavioral",
-        "sensor",
-        "temp",
         "adc",
         "dac",
         "pll",
