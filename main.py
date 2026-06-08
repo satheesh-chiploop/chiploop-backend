@@ -2479,6 +2479,19 @@ class SystemAppIn(BaseModel):
     analog_spec_text: str
     soc_integration_spec_text: str
     system_rtl_workflow_id: Optional[str] = None
+    from_workflow_id: Optional[str] = None
+    test_intent: Optional[str] = None
+    verification_plan: Optional[str] = None
+    monitor_checker_plan: Optional[str] = None
+    random_vs_directed: Optional[str] = None
+    coverage_targets: Optional[str] = None
+    coverage_plan: Optional[str] = None
+    simulator_type: Optional[str] = None
+    seed_count: Optional[int] = None
+    toolchain: Optional[Dict[str, str]] = None
+    run_closure_analysis: Optional[bool] = False
+    enable_failure_debug: Optional[bool] = False
+    failure_debug_options: Optional[Dict[str, Any]] = None
     foundry: Optional[str] = None
     pdk: Optional[str] = None
     toolchain: Optional[str] = None
@@ -2883,6 +2896,9 @@ def execute_digital_app_background(
         for k, v in (payload or {}).items():
             if v is not None:
                 shared_state[k] = v
+        if shared_state.get("system_rtl_workflow_id") and not shared_state.get("from_workflow_id"):
+            shared_state["from_workflow_id"] = shared_state.get("system_rtl_workflow_id")
+            shared_state["source_arch2rtl_workflow_id"] = shared_state.get("system_rtl_workflow_id")
 
         upstream = shared_state.get("upstream_workflows") if isinstance(shared_state.get("upstream_workflows"), dict) else {}
         source_arch2rtl_workflow_id = (
@@ -2933,6 +2949,26 @@ def execute_digital_app_background(
         )
         nodes = _definition_to_executor_nodes(defn)
         toggles = shared_state.get("toggles") if isinstance(shared_state.get("toggles"), dict) else {}
+        if template_workflow_name in {"System_Sim", "System_Firmware", "System_Synthesis", "System_PD"} and shared_state.get("system_rtl_workflow_id"):
+            skip_labels = {
+                "System Integration Intent Agent",
+                "System Top Assembly Agent",
+                "System Assertions (SVA) Agent",
+            }
+            original_count = len(nodes)
+            nodes = [
+                node for node in nodes
+                if str(node.get("label") or node.get("name") or "") not in skip_labels
+            ]
+            append_log_workflow(
+                workflow_id,
+                f"{template_workflow_name}: using source System RTL workflow {shared_state.get('system_rtl_workflow_id')}; skipped {original_count - len(nodes)} System RTL generation nodes",
+                phase="system_rtl_source",
+            )
+            append_log_run(
+                run_id,
+                f"{template_workflow_name}: using source System RTL workflow {shared_state.get('system_rtl_workflow_id')}; skipped {original_count - len(nodes)} System RTL generation nodes",
+            )
         if toggles.get("gen_upf_lite") is False:
             upf_agents = {
                 "Digital Power Intent (UPF-lite) Agent",
