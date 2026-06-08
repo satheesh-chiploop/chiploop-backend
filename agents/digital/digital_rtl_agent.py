@@ -229,9 +229,69 @@ def _remove_comb_blocking_assigns_to_sequential_regs(code: str) -> str:
     return "\n".join(out).rstrip()
 
 
+def _remove_reset_only_seq_assigns_for_comb_targets(code: str) -> str:
+    """
+    Verilator BLKANDNBLK is common when generated RTL models a combinational
+    readback mux as a reg but also resets the same reg in the clocked block.
+    If the only nonblocking assignments to that target are reset-zero style,
+    keep the combinational mux and remove the redundant clocked reset writes.
+    """
+    text = code or ""
+    comb_targets = set()
+    in_comb = False
+    depth = 0
+    for line in text.splitlines():
+        starts_comb = bool(re.search(r"\balways\s*@\s*\(\s*\*\s*\)", line))
+        if starts_comb and not in_comb:
+            in_comb = True
+            depth = 0
+
+        if in_comb:
+            for lhs in re.findall(
+                r"(?:^|:\s*)\s*([A-Za-z_][A-Za-z0-9_$]*)(?:\s*\[[^\]]+\])?\s*=\s*[^=]",
+                line,
+            ):
+                comb_targets.add(lhs)
+
+            depth += len(re.findall(r"\bbegin\b", line))
+            depth -= len(re.findall(r"\bend\b", line))
+            if depth <= 0 and not starts_comb:
+                in_comb = False
+
+    if not comb_targets:
+        return code
+
+    nb_by_target: Dict[str, List[str]] = {}
+    nb_pat = re.compile(
+        r"^\s*([A-Za-z_][A-Za-z0-9_$]*)(?:\s*\[[^\]]+\])?\s*<=\s*(.+?)\s*;\s*$"
+    )
+    for line in text.splitlines():
+        m = nb_pat.match(line)
+        if m and m.group(1) in comb_targets:
+            nb_by_target.setdefault(m.group(1), []).append(m.group(2).strip())
+
+    reset_only_targets = {
+        target
+        for target, rhs_values in nb_by_target.items()
+        if rhs_values and all(re.fullmatch(r"(?:\d+'[bdh])?0+", rhs.replace("_", ""), re.I) for rhs in rhs_values)
+    }
+    if not reset_only_targets:
+        return code
+
+    out = []
+    for line in text.splitlines():
+        m = nb_pat.match(line)
+        if m and m.group(1) in reset_only_targets:
+            continue
+        out.append(line)
+    return "\n".join(out).rstrip()
+
+
 def _sanitize_single_driver_rtl(verilog_map: Dict[str, str]) -> Dict[str, str]:
     return {
-        fname: _remove_comb_blocking_assigns_to_sequential_regs(code)
+        fname: _remove_reset_only_seq_assigns_for_comb_targets(
+            _remove_comb_blocking_assigns_to_sequential_regs(code)
+        )
         for fname, code in verilog_map.items()
     }
 
@@ -1745,7 +1805,7 @@ def _validate_and_materialize_rtl(
     ]
     spec_text = json.dumps(spec_json)
     for name in suspicious_grouped_buses:
-        if name in full_text and name not in spec_text:
+        if re.search(rf"\b{re.escape(name)}\b", full_text) and not re.search(rf"\b{re.escape(name)}\b", spec_text):
             issues.append(f"❌ Invented grouped bus '{name}' found in RTL but not declared in spec.")
 
 
