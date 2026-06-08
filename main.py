@@ -2488,13 +2488,12 @@ class SystemAppIn(BaseModel):
     coverage_plan: Optional[str] = None
     simulator_type: Optional[str] = None
     seed_count: Optional[int] = None
-    toolchain: Optional[Dict[str, str]] = None
+    toolchain: Optional[Any] = None
     run_closure_analysis: Optional[bool] = False
     enable_failure_debug: Optional[bool] = False
     failure_debug_options: Optional[Dict[str, Any]] = None
     foundry: Optional[str] = None
     pdk: Optional[str] = None
-    toolchain: Optional[str] = None
     target_frequency_mhz: Optional[float] = None
     constraints_sdc: Optional[str] = None
     clock_constraints: Optional[Any] = None
