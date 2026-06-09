@@ -64,9 +64,93 @@ def _sanitize_verilog2005_model(model_text: str) -> str:
         out,
     )
 
-    nonblocking_lhs = set(
-        re.findall(r"\b([A-Za-z_][A-Za-z0-9_$]*)\s*<=", out)
-    )
+    nonblocking_lhs = set(re.findall(r"\b([A-Za-z_][A-Za-z0-9_$]*)\s*<=", out))
+
+    def strip_comb_blocking_assigns_to_sequential_regs(text: str, sequential_names: set[str]) -> str:
+        """Remove blocking assignments in always @(*) to regs driven by <= elsewhere.
+
+        A regex-only always-block match is fragile once generated code contains
+        nested if/else begin/end blocks. This line scanner keeps the nested
+        block structure intact and removes only the conflicting assignment
+        statements, avoiding Verilator BLKANDNBLK without rewriting the model.
+        """
+        if not sequential_names:
+            return text
+
+        lines = text.splitlines()
+        out_lines = []
+        in_comb = False
+        depth = 0
+        comb_start = re.compile(r"\balways\s*@\s*\(\s*\*\s*\)", re.I)
+        begin_re = re.compile(r"\bbegin\b", re.I)
+        end_re = re.compile(r"\bend\b", re.I)
+        blocking_assign_re = re.compile(r"\b([A-Za-z_][A-Za-z0-9_$]*)\s*=(?!=)")
+
+        for line in lines:
+            if not in_comb and comb_start.search(line):
+                in_comb = True
+                depth = len(begin_re.findall(line)) - len(end_re.findall(line))
+                out_lines.append(line)
+                if depth <= 0:
+                    in_comb = False
+                continue
+
+            if in_comb:
+                lhs = blocking_assign_re.search(line)
+                if lhs and lhs.group(1) in sequential_names:
+                    depth += len(begin_re.findall(line)) - len(end_re.findall(line))
+                    if depth <= 0:
+                        in_comb = False
+                    continue
+
+                out_lines.append(line)
+                depth += len(begin_re.findall(line)) - len(end_re.findall(line))
+                if depth <= 0:
+                    in_comb = False
+                continue
+
+            out_lines.append(line)
+
+        return "\n".join(out_lines)
+
+    def convert_initial_blocking_assigns_to_sequential_regs(text: str, sequential_names: set[str]) -> str:
+        """Keep initial defaults, but avoid mixed assignment styles per reg."""
+        if not sequential_names:
+            return text
+
+        lines = text.splitlines()
+        out_lines = []
+        in_initial = False
+        depth = 0
+        initial_re = re.compile(r"\binitial\b", re.I)
+        begin_re = re.compile(r"\bbegin\b", re.I)
+        end_re = re.compile(r"\bend\b", re.I)
+        assign_re = re.compile(r"(?P<prefix>\b)(?P<name>[A-Za-z_][A-Za-z0-9_$]*)(?P<space>\s*)=(?!=)")
+
+        for line in lines:
+            if not in_initial and initial_re.search(line):
+                in_initial = True
+                depth = len(begin_re.findall(line)) - len(end_re.findall(line))
+                out_lines.append(line)
+                if depth <= 0:
+                    in_initial = False
+                continue
+
+            if in_initial:
+                def repl(match: re.Match) -> str:
+                    if match.group("name") in sequential_names:
+                        return f"{match.group('prefix')}{match.group('name')}{match.group('space')}<="
+                    return match.group(0)
+
+                out_lines.append(assign_re.sub(repl, line))
+                depth += len(begin_re.findall(line)) - len(end_re.findall(line))
+                if depth <= 0:
+                    in_initial = False
+                continue
+
+            out_lines.append(line)
+
+        return "\n".join(out_lines)
 
     def clean_comb_block(match: re.Match) -> str:
         block = match.group(0)
@@ -95,6 +179,8 @@ def _sanitize_verilog2005_model(model_text: str) -> str:
         out,
         flags=re.DOTALL,
     )
+    out = strip_comb_blocking_assigns_to_sequential_regs(out, nonblocking_lhs)
+    out = convert_initial_blocking_assigns_to_sequential_regs(out, nonblocking_lhs)
 
     if out and not out.endswith("\n"):
         out += "\n"

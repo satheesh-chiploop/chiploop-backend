@@ -326,22 +326,43 @@ def _match_score(requirement: str, rtl_text: str, rtl_names: Iterable[str]) -> T
         if re.search(r"\bstatus_adc_valid_seen\w*\s*<=\s*1'b1", rtl_text, re.I):
             evidence.append("sticky_adc_valid_seen")
     if "irq_status" in req_lower and "bit 1" in req_lower and "sample_done" in req_lower and re.search(r"\blatch", req_lower):
+        scalar_sample_done_set = bool(re.search(r"\birq_status_sample_done\s*<=\s*1'b1", rtl_text, re.I))
+        scalar_sample_done_clear = bool(re.search(r"\birq_status_sample_done\s*<=\s*1'b0", rtl_text, re.I))
         if (
-            re.search(r"\birq_status_sample_done\s*<=\s*1'b1", rtl_text, re.I)
+            scalar_sample_done_set
             and re.search(r"\birq_status_\w*\s*\[\s*1\s*\]\s*<=\s*irq_status_sample_done", rtl_text, re.I)
         ):
             evidence.append("IRQ_STATUS.sample_done latch")
+        if scalar_sample_done_set and scalar_sample_done_clear:
+            evidence.append("IRQ_STATUS.sample_done scalar latch")
         if (
             re.search(r"\bstatus_\w*\s*\[\s*0\s*\]\s*<=\s*1'b1", rtl_text, re.I)
             and re.search(r"\birq_status_\w*\s*\[\s*1\s*\]\s*<=\s*1'b1", rtl_text, re.I)
         ):
             evidence.append("STATUS/IRQ_STATUS.sample_done latch")
     if "status.sample_done" in req_lower and "irq_status.sample_done" in req_lower and re.search(r"\blatch", req_lower):
+        scalar_status_set = bool(re.search(r"\bstatus_sample_done\s*<=\s*1'b1", rtl_text, re.I))
+        scalar_status_clear = bool(re.search(r"\bstatus_sample_done\s*<=\s*1'b0", rtl_text, re.I))
+        scalar_irq_set = bool(re.search(r"\birq_status_sample_done\s*<=\s*1'b1", rtl_text, re.I))
+        scalar_irq_clear = bool(re.search(r"\birq_status_sample_done\s*<=\s*1'b0", rtl_text, re.I))
         if (
             re.search(r"\bstatus_\w*\s*\[\s*0\s*\]\s*<=\s*1'b1", rtl_text, re.I)
             and re.search(r"\birq_status_\w*\s*\[\s*1\s*\]\s*<=\s*1'b1", rtl_text, re.I)
         ):
             evidence.append("STATUS/IRQ_STATUS.sample_done latch")
+        if scalar_status_set and scalar_status_clear and scalar_irq_set and scalar_irq_clear:
+            evidence.append("STATUS/IRQ_STATUS.sample_done scalar latch")
+    if "sticky" in req_lower and "status" in req_lower and "irq_status" in req_lower:
+        status_sticky = bool(re.search(r"\bstatus_(?:sample_done|alert_pending|adc_valid_seen)\w*\s*<=\s*1'b1", rtl_text, re.I))
+        irq_sticky = bool(re.search(r"\birq_status_(?:sample_done|alert)\w*\s*<=\s*1'b1", rtl_text, re.I))
+        independent_clear = bool(
+            re.search(r"\bwr_data\s*\[\s*0\s*\]", rtl_text, re.I)
+            and re.search(r"\bwr_data\s*\[\s*1\s*\]", rtl_text, re.I)
+            and re.search(r"\bstatus_(?:sample_done|alert_pending)\w*\s*<=\s*1'b0", rtl_text, re.I)
+            and re.search(r"\birq_status_(?:sample_done|alert)\w*\s*<=\s*1'b0", rtl_text, re.I)
+        )
+        if status_sticky and irq_sticky and independent_clear:
+            evidence.append("sticky STATUS/IRQ_STATUS independent clears")
     if "irq_clear" in req_lower and "bit 1" in req_lower and "sample_done" in req_lower and re.search(r"\bclear", req_lower):
         if (
             re.search(r"\bwr_addr\s*==\s*\d+'h0*18", rtl_text, re.I)
