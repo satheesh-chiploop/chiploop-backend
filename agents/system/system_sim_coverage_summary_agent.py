@@ -105,11 +105,21 @@ def run_agent(state: dict) -> dict:
             state.get("formal_report_json"),
             os.path.join(workflow_dir, "vv", "formal", "formal_report.json"),
         ])
+        golden_path = _first_existing([
+            state.get("system_golden_model_report_json"),
+            os.path.join(workflow_dir, "vv", "tb", "golden_model_generation_report.json"),
+        ])
+        scoreboard_path = _first_existing([
+            state.get("scoreboard_report_json"),
+            os.path.join(reports_dir, "scoreboard_report.json"),
+        ])
 
         _log(log_path, f"simulation_execution_summary_json={sim_path}")
         _log(log_path, f"functional_coverage_summary_json={cov_path}")
         _log(log_path, f"code_coverage_summary_json={code_cov_path}")
         _log(log_path, f"formal_report_json={formal_path}")
+        _log(log_path, f"golden_model_generation_report_json={golden_path}")
+        _log(log_path, f"scoreboard_report_json={scoreboard_path}")
 
         sim_exists = bool(sim_path and os.path.exists(sim_path))
         cov_exists = bool(cov_path and os.path.exists(cov_path))
@@ -120,11 +130,15 @@ def run_agent(state: dict) -> dict:
         cov = _safe_read_json(cov_path)
         code_cov = _safe_read_json(code_cov_path)
         formal = _safe_read_json(formal_path)
+        golden = _safe_read_json(golden_path)
+        scoreboard = _safe_read_json(scoreboard_path)
 
         sim_loaded = bool(sim)
         cov_loaded = bool(cov)
         code_cov_loaded = bool(code_cov)
         formal_loaded = bool(formal)
+        golden_loaded = bool(golden)
+        scoreboard_loaded = bool(scoreboard)
 
         if not cov_exists:
             coverage_status = "missing"
@@ -154,6 +168,17 @@ def run_agent(state: dict) -> dict:
             formal_status = "tool_unavailable"
         else:
             formal_status = "generated"
+
+        if scoreboard_loaded:
+            mismatch_count = scoreboard.get("mismatch_count")
+            if isinstance(mismatch_count, (int, float)) and mismatch_count > 0:
+                golden_status = "fail"
+            else:
+                golden_status = str(scoreboard.get("status") or "pass")
+        elif golden_loaded:
+            golden_status = str(golden.get("status") or "generated")
+        else:
+            golden_status = "not_enabled"
 
         functional_pct = cov.get("functional_coverage_pct")
         bins_hit = cov.get("bins_hit")
@@ -225,13 +250,21 @@ def run_agent(state: dict) -> dict:
                 "blocked_reason": formal_run.get("blocked_reason"),
                 "inconclusive": formal_run.get("inconclusive"),
             },
-            "golden_model": {"status": "not_enabled"},
+            "golden_model": {
+                "status": golden_status,
+                "model": golden.get("model") or scoreboard.get("model"),
+                "top_module": golden.get("top_module") or scoreboard.get("top_module"),
+                "samples": scoreboard.get("samples"),
+                "mismatch_count": scoreboard.get("mismatch_count"),
+                "report_json": golden_path,
+                "scoreboard_report_json": scoreboard_path,
+            },
             "toolchain": {
                 "simulator": ((sim.get("toolchain") or {}).get("simulator") if isinstance(sim.get("toolchain"), dict) else None) or sim.get("simulator") or "verilator",
                 "code_coverage": code_cov.get("tool") or ((sim.get("toolchain") or {}).get("code_coverage") if isinstance(sim.get("toolchain"), dict) else None) or "verilator_coverage",
                 "formal": ((formal.get("toolchain") or {}).get("formal") if isinstance(formal.get("toolchain"), dict) else None) or ("symbiyosys" if formal_status not in {"not_enabled"} else "none"),
                 "formal_solver": ((formal.get("toolchain") or {}).get("formal_solver") if isinstance(formal.get("toolchain"), dict) else None),
-                "golden_model": "none",
+                "golden_model": golden.get("model") or scoreboard.get("model") or ("chiploop_python_scoreboard" if golden_loaded or scoreboard_loaded else "none"),
             },
             "waveforms": sim.get("waveforms") or [],
         }
@@ -244,9 +277,12 @@ def run_agent(state: dict) -> dict:
         _log_kv(log_path, "cov_loaded", cov_loaded)
         _log_kv(log_path, "code_cov_loaded", code_cov_loaded)
         _log_kv(log_path, "formal_loaded", formal_loaded)
+        _log_kv(log_path, "golden_loaded", golden_loaded)
+        _log_kv(log_path, "scoreboard_loaded", scoreboard_loaded)
         _log_kv(log_path, "coverage_status", coverage_status)
         _log_kv(log_path, "code_coverage_status", code_coverage_status)
         _log_kv(log_path, "formal_status", formal_status)
+        _log_kv(log_path, "golden_status", golden_status)
 
         summary_txt = json.dumps(summary, indent=2)
 
@@ -270,6 +306,7 @@ def run_agent(state: dict) -> dict:
             f"- Assertions total: {summary['simulation']['assertions_total']}",
             f"- Assertion failures: {summary['simulation']['assertion_failures_total']}",
             f"- Formal status: {summary['formal']['status']}",
+            f"- Golden model status: {summary['golden_model']['status']}",
         ]
         if summary["waveforms"]:
             md_lines.extend(["", "## Waveforms"])

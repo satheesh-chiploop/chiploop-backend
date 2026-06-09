@@ -251,6 +251,10 @@ def _port_decl_for_logic(name: str, width: Any) -> str:
     return f"  input logic [{w}-1:0] {name}"
 
 
+def _is_scalar_width(width: Any) -> bool:
+    return _normalize_width_token(width) == "1"
+
+
 
 def _parse_top_module_name_from_sv(text: str) -> Optional[str]:
     m = re.search(r"\bmodule\s+([a-zA-Z_][a-zA-Z0-9_$]*)\s*\(", text)
@@ -580,16 +584,18 @@ def _default_sva_module(module_name: str, sva_spec: Dict[str, Any]) -> str:
 
     # Generic stability check for outputs that look like status/irq/fault/ready indicators.
     indicator_outputs = [
-        str(p["name"])
+        p
         for p in outputs
         if re.search(r"(irq|fault|ready|err|done|valid)", str(p.get("name", "")), re.IGNORECASE)
     ]
-    for nm in indicator_outputs[:8]:
+    for p in indicator_outputs[:8]:
+        nm = str(p["name"])
+        known_expr = nm if _is_scalar_width(p.get("width", "1")) else f"{nm}[0]"
         if primary_clock and disable_iff:
             prop_blocks.append(
                 f"""  property p_{nm}_single_bit_known;
     @(posedge {clocking_expr}) {disable_iff}
-      !$isunknown({nm}[0]);
+      !$isunknown({known_expr});
   endproperty
 
   a_{nm}_single_bit_known: assert property(p_{nm}_single_bit_known)

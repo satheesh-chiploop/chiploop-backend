@@ -525,6 +525,77 @@ def _load_optional_json_artifact(
     return {}
 
 
+def _load_json_by_filename_from_workflow(
+    state: Dict[str, Any],
+    source_workflow_id: Optional[str],
+    filenames: List[str],
+) -> Tuple[Dict[str, Any], str]:
+    if not source_workflow_id:
+        return {}, ""
+    wanted = {name.lower() for name in filenames if name}
+    if not wanted:
+        return {}, ""
+    try:
+        supabase = _get_supabase(state)
+        wf_row = _workflow_row(supabase, str(source_workflow_id))
+        prefixes = _workflow_storage_prefixes(state, str(source_workflow_id), wf_row)
+        indexed = _storage_paths_from_artifacts((wf_row or {}).get("artifacts") or {})
+        listed: List[str] = []
+        for prefix in prefixes:
+            listed.extend(_list_storage_tree(supabase, prefix.rstrip("/")))
+        for path in list(dict.fromkeys(indexed + listed)):
+            name = os.path.basename(_norm_path(path)).lower()
+            if name not in wanted:
+                continue
+            data = _load_json_from_absolute_storage_path(supabase, path)
+            if data:
+                return data, path
+    except Exception:
+        return {}, ""
+    return {}, ""
+
+
+def _derive_semantic_assets(
+    rtl_pkg: Dict[str, Any],
+    register_map_spec: Dict[str, Any],
+    top_sim: Optional[str],
+) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    top_name = str(top_sim or ((rtl_pkg.get("top") or {}).get("sim") if isinstance(rtl_pkg.get("top"), dict) else "") or "system_top")
+    filelist = _normalize_filelist(((rtl_pkg.get("filelists") or {}).get("sim")))
+    registers = []
+    if isinstance(register_map_spec, dict):
+        raw = register_map_spec.get("registers")
+        if isinstance(raw, list):
+            registers = raw
+        elif isinstance(register_map_spec.get("regmap"), dict) and isinstance(register_map_spec["regmap"].get("registers"), list):
+            registers = register_map_spec["regmap"]["registers"]
+
+    digital_spec = {
+        "package_type": "derived_digital_spec_from_cosim_assets",
+        "source": "rtl_package_and_register_map",
+        "top_module": {"name": top_name},
+        "registers": registers,
+        "register_map": register_map_spec or {},
+        "notes": [
+            "Derived because upstream RTL package did not include an explicit digital spec JSON.",
+            "Uses actual RTL package top/filelist and firmware register map evidence.",
+        ],
+    }
+    integration_intent = {
+        "package_type": "derived_integration_intent_from_cosim_assets",
+        "source": "rtl_package",
+        "top": {"sim_module": top_name, "phys_module": top_name},
+        "instances": [{"name": top_name, "module": top_name}],
+        "connections": [],
+        "rtl_file_count": len(filelist),
+        "notes": [
+            "Derived single-boundary integration intent from exported RTL package for L2 validation.",
+            "No invented connectivity is added when explicit System RTL integration intent is unavailable.",
+        ],
+    }
+    return digital_spec, integration_intent
+
+
 def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     workflow_id = str(state.get("workflow_id") or "default")
     workflow_dir = str(state.get("workflow_dir") or "")
@@ -634,6 +705,18 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
             prefixes=rtl_dbg.get("storage_prefixes") or [],
             rel_or_abs=digital_spec_path,
         )
+    if not digital_spec_json:
+        digital_spec_json, found_path = _load_json_by_filename_from_workflow(
+            state,
+            state.get("system_rtl_workflow_id"),
+            [
+                "digital_subsystem_spec.json",
+                "spec.json",
+                "digital_spec.json",
+            ],
+        )
+        if found_path:
+            digital_spec_path = found_path
 
     integration_intent_path = rtl_pkg.get("integration_intent_path") or "system/integration/system_integration_intent.json"
     integration_intent_json = rtl_pkg.get("integration_intent") if isinstance(rtl_pkg.get("integration_intent"), dict) else {}
@@ -644,6 +727,29 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
             prefixes=rtl_dbg.get("storage_prefixes") or [],
             rel_or_abs=integration_intent_path,
         )
+    if not integration_intent_json:
+        integration_intent_json, found_path = _load_json_by_filename_from_workflow(
+            state,
+            state.get("system_rtl_workflow_id"),
+            [
+                "system_integration_intent.json",
+                "integration_intent.json",
+                "system_rtl_package.json",
+            ],
+        )
+        if found_path:
+            integration_intent_path = found_path
+            if integration_intent_json.get("package_type") == "system_rtl" and isinstance(integration_intent_json.get("integration_intent"), dict):
+                integration_intent_json = integration_intent_json["integration_intent"]
+
+    if not digital_spec_json or not integration_intent_json:
+        derived_spec, derived_intent = _derive_semantic_assets(rtl_pkg, register_map_spec, top_sim)
+        if not digital_spec_json:
+            digital_spec_json = derived_spec
+            digital_spec_path = "derived:rtl_package_and_register_map"
+        if not integration_intent_json:
+            integration_intent_json = derived_intent
+            integration_intent_path = "derived:rtl_package"
 
     validation_spec = {
         "software": {

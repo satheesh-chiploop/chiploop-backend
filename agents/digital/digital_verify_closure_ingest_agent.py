@@ -153,6 +153,84 @@ def _storage_text_by_filename(source_workflow_id: str, filename: str) -> tuple[s
     return None, ""
 
 
+def _storage_text_by_suffix(source_workflow_id: str, suffix: str) -> tuple[str | None, str]:
+    wanted = suffix.strip().replace("\\", "/").lstrip("/")
+    if not wanted:
+        return None, ""
+    for path in _indexed_storage_paths_for_workflow(source_workflow_id):
+        norm = path.replace("\\", "/")
+        if norm.endswith(wanted) or Path(norm).name == Path(wanted).name:
+            text = _download_text(path)
+            if text:
+                return path, text
+    return None, ""
+
+
+def _read_filelist_paths(filelist_path: Path) -> list[str]:
+    out: list[str] = []
+    try:
+        for raw in filelist_path.read_text(encoding="utf-8", errors="ignore").splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#") or line.startswith("+"):
+                continue
+            if line.startswith("-"):
+                continue
+            out.append(line)
+    except Exception:
+        pass
+    return list(dict.fromkeys(out))
+
+
+def _materialize_storage_text(path: Path, content: str) -> Path | None:
+    if not content:
+        return None
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+        return path
+    except Exception:
+        return None
+
+
+def _materialize_system_rtl_from_storage(
+    source_workflow_id: str,
+    workflow_dir: Path,
+    filelist_text: str,
+) -> tuple[Path | None, list[str], dict[str, str]]:
+    if not filelist_text:
+        return None, [], {}
+
+    integration_dir = workflow_dir / "system" / "integration"
+    imported_dir = workflow_dir / "system" / "imported_rtl"
+    integration_dir.mkdir(parents=True, exist_ok=True)
+    imported_dir.mkdir(parents=True, exist_ok=True)
+
+    materialized: list[str] = []
+    source_paths: dict[str, str] = {}
+    resolved_lines: list[str] = []
+    for raw in filelist_text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or line.startswith("+") or line.startswith("-"):
+            continue
+        suffix = line.replace("\\", "/").lstrip("/")
+        storage_path, rtl_text = _storage_text_by_suffix(source_workflow_id, suffix)
+        if not rtl_text:
+            storage_path, rtl_text = _storage_text_by_filename(source_workflow_id, Path(suffix).name)
+        if rtl_text:
+            dest = imported_dir / Path(suffix).name
+            written = _materialize_storage_text(dest, rtl_text)
+            if written:
+                materialized.append(str(written))
+                source_paths[str(written)] = storage_path or ""
+                resolved_lines.append(str(written))
+                continue
+        resolved_lines.append(line)
+
+    filelist_path = integration_dir / "system_rtl_filelist_sim.txt"
+    _materialize_storage_text(filelist_path, "\n".join(resolved_lines) + ("\n" if resolved_lines else ""))
+    return filelist_path, materialized, source_paths
+
+
 def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     workflow_id = str(state.get("workflow_id") or "default")
     workflow_dir = Path(str(state.get("workflow_dir") or f"backend/workflows/{workflow_id}"))
@@ -215,9 +293,39 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
 
     system_rtl_filelist = _find(source_dir, "system_rtl_filelist_sim.txt")
     system_top_sim = _find(source_dir, "soc_top_sim.sv")
+    storage_system_rtl_filelist: str | None = None
+    storage_soc_top_sim: str | None = None
+    materialized_rtl_files: list[str] = []
+    materialized_rtl_sources: dict[str, str] = {}
+
+    if not system_rtl_filelist:
+        storage_system_rtl_filelist, filelist_text = _storage_text_by_filename(source_workflow_id, "system_rtl_filelist_sim.txt")
+        if filelist_text:
+            system_rtl_filelist, materialized_rtl_files, materialized_rtl_sources = _materialize_system_rtl_from_storage(
+                source_workflow_id,
+                workflow_dir,
+                filelist_text,
+            )
+
+    if not system_top_sim:
+        storage_soc_top_sim, soc_top_text = _storage_text_by_filename(source_workflow_id, "soc_top_sim.sv")
+        if soc_top_text:
+            system_top_sim = _materialize_storage_text(
+                workflow_dir / "system" / "integration" / "soc_top_sim.sv",
+                soc_top_text,
+            )
+
     if system_rtl_filelist:
         state["system_rtl_filelist_sim"] = str(system_rtl_filelist)
         state["source_system_rtl_filelist_sim"] = str(system_rtl_filelist)
+        rtl_from_filelist = [
+            str((system_rtl_filelist.parent / p).resolve()) if not Path(p).is_absolute() else str(Path(p))
+            for p in _read_filelist_paths(system_rtl_filelist)
+        ]
+        rtl_from_filelist = [p for p in rtl_from_filelist if p]
+        if rtl_from_filelist:
+            state["system_rtl_files"] = rtl_from_filelist
+            state["rtl_inputs"] = rtl_from_filelist
     if system_top_sim:
         state["soc_top_sim_path"] = str(system_top_sim)
         state["source_soc_top_sim_path"] = str(system_top_sim)
@@ -232,6 +340,10 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
         "found_text_storage_files": text_storage_files,
         "system_rtl_filelist_sim": str(system_rtl_filelist) if system_rtl_filelist else None,
         "soc_top_sim_path": str(system_top_sim) if system_top_sim else None,
+        "storage_system_rtl_filelist_sim": storage_system_rtl_filelist,
+        "storage_soc_top_sim_path": storage_soc_top_sim,
+        "materialized_rtl_files": materialized_rtl_files,
+        "materialized_rtl_sources": materialized_rtl_sources,
         "coverage_targets": state.get("coverage_targets"),
         "seed_count": state.get("seed_count"),
         "toolchain": state.get("toolchain") if isinstance(state.get("toolchain"), dict) else {},

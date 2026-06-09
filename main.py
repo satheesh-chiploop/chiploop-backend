@@ -691,6 +691,7 @@ from agents.system.system_testbench_generator_agent import run_agent as system_t
 from agents.system.system_sva_assertions_agent import run_agent as system_sva_assertions_agent
 from agents.system.system_formal_verification_agent import run_agent as system_formal_verification_agent
 from agents.system.system_functional_coverage_agent import run_agent as system_functional_coverage_agent
+from agents.system.system_golden_model_comparison_agent import run_agent as system_golden_model_comparison_agent
 from agents.system.system_simulation_control_agent import run_agent as system_simulation_control_agent
 from agents.system.system_implementation_setup_agent import run_agent as system_implementation_setup_agent
 from agents.system.system_software_handoff_package_agent import run_agent as system_software_handoff_package_agent
@@ -881,6 +882,7 @@ SYSTEM_AGENT_FUNCTIONS: Dict[str,Any] = {
     "System Assertions (SVA) Agent": system_sva_assertions_agent,
     "System Formal Verification Agent": system_formal_verification_agent,
     "System Functional Coverage Agent": system_functional_coverage_agent,
+    "System Golden Model Comparison Agent": system_golden_model_comparison_agent,
     "System Simulation Control Agent": system_simulation_control_agent,
     "System Simulation Execution Agent": system_sim_execution_agent,
     "System Simulation Coverage Summary Agent": system_sim_coverage_summary_agent,
@@ -7206,6 +7208,15 @@ def execute_system_app_background(
                     "System Formal Verification Agent",
                     canonical_labels[-1],
                 ]
+            if template_workflow_name == "System_Sim" and toggles.get("enable_golden_model"):
+                insert_before = "System Simulation Control Agent"
+                if "System Golden Model Comparison Agent" not in canonical_labels:
+                    insert_at = canonical_labels.index(insert_before) if insert_before in canonical_labels else len(canonical_labels)
+                    canonical_labels = [
+                        *canonical_labels[:insert_at],
+                        "System Golden Model Comparison Agent",
+                        *canonical_labels[insert_at:],
+                    ]
             original_count = len(nodes)
             nodes = [
                 node
@@ -7279,6 +7290,22 @@ def execute_system_app_background(
                 append_log_workflow(workflow_id, f"{template_workflow_name}: added Spec2RTL conformance check", phase="system_spec2rtl")
                 append_log_run(run_id, f"{template_workflow_name}: added Spec2RTL conformance check")
 
+        if template_workflow_name == "System_Sim":
+            labels = [str(node.get("label") or node.get("name") or "") for node in nodes]
+            if toggles.get("enable_formal") and "System Formal Verification Agent" not in labels:
+                insert_before = "System Simulation Coverage Summary Agent"
+                insert_at = labels.index(insert_before) if insert_before in labels else len(nodes)
+                nodes.insert(insert_at, {"label": "System Formal Verification Agent"})
+                labels.insert(insert_at, "System Formal Verification Agent")
+                append_log_workflow(workflow_id, "System_Sim: added formal verification", phase="system_formal")
+                append_log_run(run_id, "System_Sim: added formal verification")
+            if toggles.get("enable_golden_model") and "System Golden Model Comparison Agent" not in labels:
+                insert_before = "System Simulation Control Agent"
+                insert_at = labels.index(insert_before) if insert_before in labels else len(nodes)
+                nodes.insert(insert_at, {"label": "System Golden Model Comparison Agent"})
+                append_log_workflow(workflow_id, "System_Sim: added golden model comparison", phase="system_golden_model")
+                append_log_run(run_id, "System_Sim: added golden model comparison")
+
         # Execute using system loop map
         if template_workflow_name == "System_Sim_Closure_Loop":
             max_iterations = max(1, min(int(shared_state.get("max_iterations") or 1), 10))
@@ -7288,6 +7315,18 @@ def execute_system_app_background(
 
             ingest_nodes = [node for node in nodes if _node_label(node) == "System Sim Closure Ingest Agent"]
             body_nodes = [node for node in nodes if _node_label(node) != "System Sim Closure Ingest Agent"]
+            body_labels = [_node_label(node) for node in body_nodes]
+            toolchain = shared_state.get("toolchain") if isinstance(shared_state.get("toolchain"), dict) else {}
+            if str(toolchain.get("formal") or "").lower() not in {"", "none", "disabled"} and "System Formal Verification Agent" not in body_labels:
+                insert_before = "System Simulation Coverage Summary Agent"
+                insert_at = body_labels.index(insert_before) if insert_before in body_labels else len(body_nodes)
+                body_nodes.insert(insert_at, {"label": "System Formal Verification Agent"})
+                body_labels.insert(insert_at, "System Formal Verification Agent")
+            if str(toolchain.get("golden_model") or "").lower() not in {"", "none", "disabled"} and "System Golden Model Comparison Agent" not in body_labels:
+                insert_before = "System Simulation Control Agent"
+                insert_at = body_labels.index(insert_before) if insert_before in body_labels else len(body_nodes)
+                body_nodes.insert(insert_at, {"label": "System Golden Model Comparison Agent"})
+                body_labels.insert(insert_at, "System Golden Model Comparison Agent")
             if ingest_nodes:
                 append_log_workflow(workflow_id, "System Sim closure loop ingest: loading baseline System Sim artifacts", phase="closure_loop_ingest")
                 append_log_run(run_id, "System Sim closure loop ingest: loading baseline System Sim artifacts")
