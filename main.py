@@ -2547,9 +2547,14 @@ async def apps_validation_run(request: Request, background_tasks: BackgroundTask
 class SystemAppIn(BaseModel):
     project_name: Optional[str] = None
     top_module: Optional[str] = None
-    digital_spec_text: str
-    analog_spec_text: str
-    soc_integration_spec_text: str
+    digital_spec_text: str = ""
+    analog_spec_text: str = ""
+    soc_integration_spec_text: str = ""
+    rtl_source_mode: Optional[str] = None
+    repo_path: Optional[str] = None
+    repo_ref: Optional[str] = None
+    repo_subdir: Optional[str] = None
+    pasted_rtl_files: Optional[Any] = None
     system_rtl_workflow_id: Optional[str] = None
     from_workflow_id: Optional[str] = None
     test_intent: Optional[str] = None
@@ -3020,7 +3025,9 @@ def execute_digital_app_background(
         )
         nodes = _definition_to_executor_nodes(defn)
         toggles = shared_state.get("toggles") if isinstance(shared_state.get("toggles"), dict) else {}
-        if template_workflow_name in {"System_Sim", "System_Firmware", "System_Synthesis", "System_PD"} and shared_state.get("system_rtl_workflow_id"):
+        rtl_source_mode = str(shared_state.get("rtl_source_mode") or "").strip().lower()
+        using_existing_system_rtl = bool(shared_state.get("system_rtl_workflow_id")) or rtl_source_mode in {"paste", "repo_path"}
+        if template_workflow_name in {"System_Sim", "System_Firmware", "System_Synthesis", "System_PD"} and using_existing_system_rtl:
             skip_labels = {
                 "System Integration Intent Agent",
                 "System Top Assembly Agent",
@@ -6295,6 +6302,16 @@ def execute_system_app_background(
             if v is not None:
                 shared_state[k] = v
 
+        rtl_source_mode = str(shared_state.get("rtl_source_mode") or "").strip().lower()
+        if rtl_source_mode in {"from_system_rtl", "from_workflow", "workflow"}:
+            source_id = str(shared_state.get("system_rtl_workflow_id") or shared_state.get("from_workflow_id") or "").strip()
+            if source_id:
+                shared_state["system_rtl_workflow_id"] = source_id
+        elif shared_state.get("system_rtl_workflow_id") and not rtl_source_mode:
+            rtl_source_mode = "from_system_rtl"
+        if rtl_source_mode:
+            shared_state["rtl_source_mode"] = rtl_source_mode
+
         requested_system_top = str(
             shared_state.get("top_module")
             or shared_state.get("system_top_module")
@@ -6310,6 +6327,96 @@ def execute_system_app_background(
             # In System RTL this field means SoC wrapper top, not the digital IP top.
             # Avoid forcing Digital Spec Agent to rename the digital block.
             shared_state.pop("top_module", None)
+
+        def _find_first_existing_file(candidates: List[str]) -> str:
+            for candidate in candidates:
+                if candidate and os.path.exists(candidate):
+                    return candidate
+            return ""
+
+        def _resolve_filelist_lines(filelist_path: str, roots: List[str]) -> List[str]:
+            lines: List[str] = []
+            try:
+                with open(filelist_path, "r", encoding="utf-8", errors="ignore") as fh:
+                    raw_lines = [ln.strip() for ln in fh if ln.strip() and not ln.strip().startswith("#")]
+            except Exception:
+                raw_lines = []
+            search_roots = list(dict.fromkeys([os.path.dirname(filelist_path), *[r for r in roots if r]]))
+            for raw in raw_lines:
+                expanded = os.path.expandvars(raw)
+                if os.path.isabs(expanded):
+                    lines.append(os.path.abspath(expanded))
+                    continue
+                resolved = ""
+                for root in search_roots:
+                    candidate = os.path.abspath(os.path.join(root, expanded))
+                    if os.path.exists(candidate):
+                        resolved = candidate
+                        break
+                lines.append(resolved or os.path.abspath(os.path.join(os.path.dirname(filelist_path), expanded)))
+            return list(dict.fromkeys(lines))
+
+        def _materialize_system_rtl_import(filelist_lines: List[str], source_soc_top: str = "", source_intent: str = "") -> None:
+            integration_dir = os.path.join(shared_state["workflow_dir"], "system", "integration")
+            os.makedirs(integration_dir, exist_ok=True)
+            normalized = [os.path.abspath(p) for p in filelist_lines if isinstance(p, str) and p.strip()]
+            local_filelist = os.path.join(integration_dir, "system_rtl_filelist_sim.txt")
+            with open(local_filelist, "w", encoding="utf-8") as fh:
+                fh.write("\n".join(normalized) + ("\n" if normalized else ""))
+            shared_state["system_rtl_filelist_sim"] = local_filelist
+            shared_state["system_rtl_files"] = normalized
+            shared_state["rtl_inputs"] = normalized
+            if source_soc_top and os.path.exists(source_soc_top):
+                shared_state["soc_top_sim_path"] = os.path.abspath(source_soc_top)
+                shared_state["system_top_sim_path"] = os.path.abspath(source_soc_top)
+            if source_intent and os.path.exists(source_intent):
+                shared_state["system_integration_intent_json"] = os.path.abspath(source_intent)
+
+        def _materialize_pasted_system_rtl() -> None:
+            pasted = shared_state.get("pasted_rtl_files")
+            if not isinstance(pasted, list) or not pasted:
+                return
+            import_dir = os.path.join(shared_state["workflow_dir"], "system", "imported_rtl")
+            os.makedirs(import_dir, exist_ok=True)
+            written: List[str] = []
+            for idx, item in enumerate(pasted):
+                if not isinstance(item, dict):
+                    continue
+                content = str(item.get("content") or "")
+                if not content.strip():
+                    continue
+                raw_path = str(item.get("path") or f"rtl/system_pasted_{idx}.sv").replace("\\", "/")
+                safe_name = os.path.basename(raw_path) or f"system_pasted_{idx}.sv"
+                if not safe_name.lower().endswith((".v", ".sv", ".vh", ".svh")):
+                    safe_name = f"{safe_name}.sv"
+                path = os.path.join(import_dir, safe_name)
+                with open(path, "w", encoding="utf-8") as fh:
+                    fh.write(content)
+                written.append(os.path.abspath(path))
+            if written:
+                soc_top = next((p for p in written if "soc" in os.path.basename(p).lower() or "top" in os.path.basename(p).lower()), written[-1])
+                _materialize_system_rtl_import(written, source_soc_top=soc_top)
+                append_log_workflow(workflow_id, f"System RTL source: imported {len(written)} pasted RTL files", phase="system_rtl_source")
+                append_log_run(run_id, f"System RTL source: imported {len(written)} pasted RTL files")
+
+        def _materialize_repo_system_rtl() -> None:
+            repo_path = str(shared_state.get("repo_path") or "").strip()
+            if not repo_path:
+                return
+            repo_root = os.path.abspath(os.path.expanduser(repo_path))
+            if not os.path.isdir(repo_root):
+                return
+            rtl_files: List[str] = []
+            for root, _, files in os.walk(repo_root):
+                for fn in files:
+                    if fn.lower().endswith((".v", ".sv", ".vh", ".svh")):
+                        rtl_files.append(os.path.abspath(os.path.join(root, fn)))
+            rtl_files = sorted(set(rtl_files))
+            if rtl_files:
+                soc_top = next((p for p in rtl_files if "soc" in os.path.basename(p).lower() or "top" in os.path.basename(p).lower()), rtl_files[-1])
+                _materialize_system_rtl_import(rtl_files, source_soc_top=soc_top)
+                append_log_workflow(workflow_id, f"System RTL source: imported {len(rtl_files)} RTL files from repo/path", phase="system_rtl_source")
+                append_log_run(run_id, f"System RTL source: imported {len(rtl_files)} RTL files from repo/path")
 
         if shared_state.get("system_rtl_workflow_id") and not shared_state.get("from_workflow_id"):
             shared_state["from_workflow_id"] = shared_state.get("system_rtl_workflow_id")
@@ -6331,22 +6438,70 @@ def execute_system_app_background(
                     source_workflow_dir = os.path.join("backend", "workflows", str(shared_state.get("system_rtl_workflow_id")))
                 if source_workflow_dir:
                     shared_state["source_system_rtl_workflow_dir"] = source_workflow_dir
-                    source_filelist = os.path.join(source_workflow_dir, "system", "integration", "system_rtl_filelist_sim.txt")
-                    source_soc_top = os.path.join(source_workflow_dir, "system", "integration", "soc_top_sim.sv")
-                    source_intent = os.path.join(source_workflow_dir, "system", "integration", "system_integration_intent.json")
-                    if os.path.exists(source_filelist):
-                        shared_state["system_rtl_filelist_sim"] = source_filelist
-                    if os.path.exists(source_soc_top):
-                        shared_state["soc_top_sim_path"] = source_soc_top
-                        shared_state["system_top_sim_path"] = source_soc_top
-                    if os.path.exists(source_intent):
-                        shared_state["system_integration_intent_json"] = source_intent
+                    base = os.path.abspath(source_workflow_dir)
+                    roots = list(dict.fromkeys([
+                        base,
+                        os.path.dirname(base),
+                        os.path.join(base, "system"),
+                        os.path.join(base, "digital"),
+                        os.path.join(os.path.dirname(base), "system"),
+                        os.path.join(os.path.dirname(base), "digital"),
+                    ]))
+                    source_filelist = _find_first_existing_file([
+                        os.path.join(root, rel)
+                        for root in roots
+                        for rel in (
+                            "system/integration/system_rtl_filelist_sim.txt",
+                            "integration/system_rtl_filelist_sim.txt",
+                            "digital/system/integration/system_rtl_filelist_sim.txt",
+                            "system_rtl_filelist_sim.txt",
+                        )
+                    ])
+                    source_soc_top = _find_first_existing_file([
+                        os.path.join(root, rel)
+                        for root in roots
+                        for rel in (
+                            "system/integration/soc_top_sim.sv",
+                            "integration/soc_top_sim.sv",
+                            "digital/system/integration/soc_top_sim.sv",
+                            "soc_top_sim.sv",
+                        )
+                    ])
+                    source_intent = _find_first_existing_file([
+                        os.path.join(root, rel)
+                        for root in roots
+                        for rel in (
+                            "system/integration/system_integration_intent.json",
+                            "integration/system_integration_intent.json",
+                            "digital/system/integration/system_integration_intent.json",
+                            "system_integration_intent.json",
+                        )
+                    ])
+                    if source_filelist:
+                        _materialize_system_rtl_import(
+                            _resolve_filelist_lines(source_filelist, roots),
+                            source_soc_top=source_soc_top,
+                            source_intent=source_intent,
+                        )
+                        append_log_workflow(
+                            workflow_id,
+                            f"System RTL source: hydrated filelist from workflow {shared_state.get('system_rtl_workflow_id')}",
+                            phase="system_rtl_source",
+                        )
+                        append_log_run(
+                            run_id,
+                            f"System RTL source: hydrated filelist from workflow {shared_state.get('system_rtl_workflow_id')}",
+                        )
             except Exception as source_exc:
                 append_log_workflow(
                     workflow_id,
                     f"System RTL source lookup warning: {source_exc}",
                     phase="system_rtl_source",
                 )
+        elif rtl_source_mode == "paste":
+            _materialize_pasted_system_rtl()
+        elif rtl_source_mode == "repo_path":
+            _materialize_repo_system_rtl()
 
         # ---------------------------------------------------------
         # 2) Canonical domain-specific normalization
@@ -6440,7 +6595,8 @@ def execute_system_app_background(
         )
         nodes = _definition_to_executor_nodes(defn)
         toggles = shared_state.get("toggles") if isinstance(shared_state.get("toggles"), dict) else {}
-        if template_workflow_name in {"System_Sim", "System_Firmware", "System_Synthesis", "System_PD"} and shared_state.get("system_rtl_workflow_id"):
+        using_existing_system_rtl = bool(shared_state.get("system_rtl_workflow_id")) or rtl_source_mode in {"paste", "repo_path"}
+        if template_workflow_name in {"System_Sim", "System_Firmware", "System_Synthesis", "System_PD"} and using_existing_system_rtl:
             skip_labels = {
                 "Digital Spec Agent",
                 "Digital Architecture Agent",
@@ -6464,12 +6620,12 @@ def execute_system_app_background(
             ]
             append_log_workflow(
                 workflow_id,
-                f"{template_workflow_name}: using source System RTL workflow {shared_state.get('system_rtl_workflow_id')}; skipped {original_count - len(nodes)} System RTL generation/dashboard nodes",
+                f"{template_workflow_name}: using existing System RTL source ({rtl_source_mode or 'from_system_rtl'}); skipped {original_count - len(nodes)} System RTL generation/dashboard nodes",
                 phase="system_rtl_source",
             )
             append_log_run(
                 run_id,
-                f"{template_workflow_name}: using source System RTL workflow {shared_state.get('system_rtl_workflow_id')}; skipped {original_count - len(nodes)} System RTL generation/dashboard nodes",
+                f"{template_workflow_name}: using existing System RTL source ({rtl_source_mode or 'from_system_rtl'}); skipped {original_count - len(nodes)} System RTL generation/dashboard nodes",
             )
         if template_workflow_name in {"System_RTL", "System_Synthesis", "System_PD"}:
             labels = [str(node.get("label") or node.get("name") or "") for node in nodes]

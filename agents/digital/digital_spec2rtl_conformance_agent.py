@@ -142,6 +142,13 @@ def _top_spec_module(spec_obj: Optional[Dict[str, Any]], top_module: str = "") -
     return None
 
 
+def _top_spec_module_name(spec_obj: Optional[Dict[str, Any]]) -> str:
+    top = _top_spec_module(spec_obj)
+    if isinstance(top, dict):
+        return str(top.get("name") or "").strip()
+    return ""
+
+
 def _structured_spec_modules(spec_obj: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
     if not isinstance(spec_obj, dict):
         return []
@@ -281,6 +288,23 @@ def _match_score(requirement: str, rtl_text: str, rtl_names: Iterable[str]) -> T
     if "unmapped" in req_lower and re.search(r"\bdefault\s*:", rtl_text, re.I) and re.search(r"default\s*:\s*[A-Za-z_][A-Za-z0-9_$]*\s*<=\s*(?:\d+'h00|\d+'d0|0)", rtl_text, re.I):
         evidence.append("default_zero")
 
+    if (
+        ("ownership" in req_lower or "architectural" in req_lower or "contract" in req_lower)
+        and ("internal" in req_lower or "state" in req_lower or "register" in req_lower or "sticky" in req_lower)
+    ):
+        declared_state = re.findall(
+            r"\b(?:reg|logic)\b\s*(?:signed\s*)?(?:\[[^\]]+\]\s*)?([A-Za-z_][A-Za-z0-9_$]*)\s*;",
+            rtl_text,
+            re.I,
+        )
+        state_like = [
+            name for name in declared_state
+            if re.search(r"(state|status|count|counter|control|ctrl|irq|valid|busy|temp|threshold|sticky|flag|enable)", name, re.I)
+        ]
+        has_behavior = bool(re.search(r"\balways\s*@\s*\(", rtl_text, re.I))
+        if len(set(state_like)) >= 3 and has_behavior:
+            evidence.append("internal_state_contract")
+
     # Recognize common register-bit implementation idioms. This is still
     # evidence-based: require concrete RTL assignments, not only names.
     if "control" in req_lower and "enable" in req_lower:
@@ -369,6 +393,7 @@ def _match_score(requirement: str, rtl_text: str, rtl_names: Iterable[str]) -> T
         "sample_start_priority_path",
         "sample_count_increment",
         "sticky_adc_valid_seen",
+        "internal_state_contract",
     }
     if semantic_hits.intersection(evidence):
         return "matched", evidence[:8]
@@ -541,9 +566,9 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     if not modules:
         setup_issues.append("no_parseable_modules")
 
-    top_module = str(state.get("top_module") or "").strip()
+    top_module = str(state.get("top_module") or _top_spec_module_name(spec_obj) or "").strip()
     module_names = [m["name"] for m in modules]
-    top_status = "pass" if top_module and top_module in module_names else ("inconclusive" if not top_module else "issues")
+    top_status = "pass" if top_module and top_module in module_names else ("not_applicable" if not top_module else "issues")
 
     spec_ports = _expected_top_ports(spec_obj, spec)
     top_module_ports = {

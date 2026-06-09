@@ -41,6 +41,13 @@ def _safe_read_json(path: Optional[str]) -> Dict[str, Any]:
         pass
     return {}
 
+
+def _first_existing(candidates: list[Optional[str]]) -> Optional[str]:
+    for path in candidates:
+        if path and os.path.exists(path):
+            return path
+    return None
+
 def _write_file(path: str, content: str) -> None:
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
@@ -80,10 +87,14 @@ def run_agent(state: dict) -> dict:
             or state.get("system_sim_execution_json")
             or os.path.join(system_sim_dir, "system_sim_execution.json")
         )
-        cov_path = (
-            state.get("functional_coverage_summary_json")
-            or os.path.join(reports_dir, "functional_coverage_summary.json")
-        )
+        cov_path = _first_existing([
+            state.get("functional_coverage_summary_json"),
+            state.get("system_functional_coverage_summary_json"),
+            os.path.join(reports_dir, "functional_coverage_summary.json"),
+            os.path.join(workflow_dir, "vv", "tb", "functional_coverage_summary.json"),
+            os.path.join(workflow_dir, "vv", "tb", "coverage_generation_report.json"),
+            os.path.join(workflow_dir, "vv", "tb", "coverage_spec.json"),
+        ]) or os.path.join(reports_dir, "functional_coverage_summary.json")
 
         _log(log_path, f"simulation_execution_summary_json={sim_path}")
         _log(log_path, f"functional_coverage_summary_json={cov_path}")
