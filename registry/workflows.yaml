@@ -290,6 +290,7 @@
         "Embedded Validation Report Agent",
         "Embedded Verilator Build Agent",
         "System Assertions (SVA) Agent",
+        "System Formal Verification Agent",
         "System CoSim Contract Agent",
         "System CoSim Ingest Agent",
         "System CoSim Integration Agent",

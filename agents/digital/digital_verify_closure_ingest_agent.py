@@ -26,6 +26,14 @@ def _find(parent_dir: Path, filename: str) -> Path | None:
     return None
 
 
+def _find_any(parent_dir: Path, filenames: list[str]) -> Path | None:
+    for filename in filenames:
+        found = _find(parent_dir, filename)
+        if found:
+            return found
+    return None
+
+
 def _write(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
@@ -89,6 +97,14 @@ def _storage_json_by_filename(source_workflow_id: str, filename: str) -> tuple[s
     return None, {}
 
 
+def _storage_json_by_filenames(source_workflow_id: str, filenames: list[str]) -> tuple[str | None, Dict[str, Any]]:
+    for filename in filenames:
+        path, obj = _storage_json_by_filename(source_workflow_id, filename)
+        if obj:
+            return path, obj
+    return None, {}
+
+
 def _storage_text_by_filename(source_workflow_id: str, filename: str) -> tuple[str | None, str]:
     prefix = f"backend/workflows/{source_workflow_id}"
     for path in _list_storage_tree(prefix):
@@ -110,9 +126,18 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
         raise RuntimeError("source_verify_workflow_id is required for Verify closure analysis")
 
     source_dir = Path("backend") / "workflows" / source_workflow_id
+    file_candidates = {
+        "simulation_summary_coverage": ["simulation_summary_coverage.json", "system_sim_dashboard.json"],
+        "simulation_execution_summary": ["simulation_execution_summary.json", "system_sim_execution.json"],
+        "functional_coverage_summary": ["functional_coverage_summary.json"],
+        "code_coverage_summary": ["code_coverage_summary.json"],
+        "coverage_spec": ["coverage_spec.json"],
+        "testcases": ["testcases.json"],
+        "verification_source_handoff": ["verification_source_handoff.json"],
+    }
     files = {
-        "simulation_summary_coverage": _find(source_dir, "simulation_summary_coverage.json"),
-        "simulation_execution_summary": _find(source_dir, "simulation_execution_summary.json"),
+        "simulation_summary_coverage": _find_any(source_dir, file_candidates["simulation_summary_coverage"]),
+        "simulation_execution_summary": _find_any(source_dir, file_candidates["simulation_execution_summary"]),
         "functional_coverage_summary": _find(source_dir, "functional_coverage_summary.json"),
         "code_coverage_summary": _find(source_dir, "code_coverage_summary.json"),
         "coverage_spec": _find(source_dir, "coverage_spec.json"),
@@ -123,18 +148,10 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
         "coverage_point_plan": _find(source_dir, "coverage_point_plan.md"),
     }
     storage_files: Dict[str, str | None] = {}
-    filename_by_key = {
-        "simulation_summary_coverage": "simulation_summary_coverage.json",
-        "simulation_execution_summary": "simulation_execution_summary.json",
-        "functional_coverage_summary": "functional_coverage_summary.json",
-        "code_coverage_summary": "code_coverage_summary.json",
-        "coverage_spec": "coverage_spec.json",
-        "testcases": "testcases.json",
-        "verification_source_handoff": "verification_source_handoff.json",
-    }
+    filename_by_key = {key: filenames[0] for key, filenames in file_candidates.items()}
     loaded: Dict[str, Dict[str, Any]] = {}
     for key, filename in filename_by_key.items():
-        storage_path, obj = _storage_json_by_filename(source_workflow_id, filename)
+        storage_path, obj = _storage_json_by_filenames(source_workflow_id, file_candidates.get(key, [filename]))
         storage_files[key] = storage_path
         if obj:
             loaded[key] = obj

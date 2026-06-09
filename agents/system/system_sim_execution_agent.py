@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional
 
 from utils.artifact_utils import save_text_artifact_and_record
 from tooling.runner import run_command, tool_path
+from agents.digital.digital_simulation_execution_agent import _collect_code_coverage
 
 def _now() -> str:
     return datetime.now().isoformat()
@@ -171,6 +172,14 @@ def _rel_to_workflow(workflow_dir: str, path: Optional[str]) -> Optional[str]:
         return os.path.relpath(os.path.abspath(path), os.path.abspath(workflow_dir)).replace("\\", "/")
     except Exception:
         return os.path.basename(path).replace("\\", "/")
+
+
+def _workflow_path(workflow_dir: str, path: Optional[str]) -> Optional[str]:
+    if not path or not isinstance(path, str):
+        return path
+    if os.path.isabs(path):
+        return path
+    return os.path.join(workflow_dir, path)
 
 def run_agent(state: dict) -> dict:
     agent_name = "System Simulation Execution Agent"
@@ -366,18 +375,23 @@ def run_agent(state: dict) -> dict:
 
     coverage_candidates = _find_coverage_candidates(workflow_dir) if any_pass else {"json": [], "md": [], "dat": [], "logs": []}
 
-    coverage_json_path = (
+    coverage_json_path = _workflow_path(workflow_dir, (
         manifest.get("functional_coverage_summary_json")
         or state.get("functional_coverage_summary_json")
         or os.path.join(reports_dir, "functional_coverage_summary.json")
-    )
-    coverage_md_path = (
+    ))
+    coverage_md_path = _workflow_path(workflow_dir, (
         manifest.get("functional_coverage_md")
         or state.get("functional_coverage_md")
         or os.path.join(reports_dir, "COVERAGE.md")
-    )
+    ))
     coverage_json_present = os.path.exists(coverage_json_path)
     coverage_md_present = os.path.exists(coverage_md_path)
+    toolchain = state.get("toolchain") if isinstance(state.get("toolchain"), dict) else {}
+    code_coverage = _collect_code_coverage(state, tb_root, reports_dir, log_path, toolchain)
+    code_coverage_path = os.path.join(reports_dir, "code_coverage_summary.json")
+    code_coverage_txt = json.dumps(code_coverage, indent=2)
+    _write(code_coverage_path, code_coverage_txt)
 
     ui_results = []
     for r in results:
@@ -433,6 +447,13 @@ def run_agent(state: dict) -> dict:
         "functional_coverage_md": _rel_to_workflow(workflow_dir, coverage_md_path),
         "coverage_json_present": coverage_json_present,
         "coverage_md_present": coverage_md_present,
+        "code_coverage_json_present": os.path.exists(code_coverage_path),
+        "code_coverage_json_path": _rel_to_workflow(workflow_dir, code_coverage_path),
+        "code_coverage": code_coverage,
+        "toolchain": {
+            "simulator": "verilator",
+            "code_coverage": code_coverage.get("tool") or toolchain.get("code_coverage") or "verilator_coverage",
+        },
         "assertions_total": total_assertions,
         "assertion_failures_total": sum(int(r.get("assertion_failures") or 0) for r in results),
         "notes": [] if any_pass else ["No simulation run passed; coverage candidates intentionally suppressed."],
@@ -485,6 +506,9 @@ def run_agent(state: dict) -> dict:
     artifacts["system_sim_execution_md"] = _record(
         workflow_id, agent_name, "system/sim", "system_sim_execution.md", exec_md
     )
+    artifacts["code_coverage_summary"] = _record(
+        workflow_id, agent_name, "vv/tb/reports", "code_coverage_summary.json", code_coverage_txt
+    )
 
 
     if coverage_json_present:
@@ -532,5 +556,6 @@ def run_agent(state: dict) -> dict:
     state["system_sim_execution"] = summary
     state["system_sim_execution_json"] = system_exec_json_path
     state["simulation_execution_summary_json"] = summary_alias_json_path
+    state["code_coverage_summary_json"] = code_coverage_path
     state["status"] = f"✅ System simulation executed: {tests_passed}/{len(results)} runs passed"
     return state

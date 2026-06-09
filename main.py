@@ -689,6 +689,7 @@ from agents.system.system_firmware_cosim_execution_agent import run_agent as sys
 from agents.system.system_firmware_coverage_summary_agent import run_agent as system_firmware_coverage_summary_agent
 from agents.system.system_testbench_generator_agent import run_agent as system_testbench_generator_agent
 from agents.system.system_sva_assertions_agent import run_agent as system_sva_assertions_agent
+from agents.system.system_formal_verification_agent import run_agent as system_formal_verification_agent
 from agents.system.system_functional_coverage_agent import run_agent as system_functional_coverage_agent
 from agents.system.system_simulation_control_agent import run_agent as system_simulation_control_agent
 from agents.system.system_implementation_setup_agent import run_agent as system_implementation_setup_agent
@@ -878,6 +879,7 @@ SYSTEM_AGENT_FUNCTIONS: Dict[str,Any] = {
     "System Testbench Generator Agent": system_testbench_generator_agent,
     "System Implementation Setup Agent": system_implementation_setup_agent,
     "System Assertions (SVA) Agent": system_sva_assertions_agent,
+    "System Formal Verification Agent": system_formal_verification_agent,
     "System Functional Coverage Agent": system_functional_coverage_agent,
     "System Simulation Control Agent": system_simulation_control_agent,
     "System Simulation Execution Agent": system_sim_execution_agent,
@@ -6722,6 +6724,35 @@ def execute_system_app_background(
             if top_sim:
                 shared_state["top_module"] = top_sim
                 shared_state["soc_top_sim_module"] = top_sim
+            regmap_text, regmap_storage_path = _download_first([
+                (storage_obj.get("digital_regmap") if isinstance(storage_obj, dict) else ""),
+                "digital/digital_regmap.json",
+                "digital_regmap.json",
+                "handoff/docs/regmap/digital_regmap.json",
+                "handoff/digital_subsystem_ip_package/docs/regmap/digital_regmap.json",
+            ])
+            if regmap_text:
+                try:
+                    regmap_obj = json.loads(regmap_text)
+                    if isinstance(regmap_obj, dict):
+                        regmap_local = os.path.join(shared_state["workflow_dir"], "digital", "digital_regmap.json")
+                        os.makedirs(os.path.dirname(regmap_local), exist_ok=True)
+                        with open(regmap_local, "w", encoding="utf-8") as fh:
+                            fh.write(json.dumps(regmap_obj, indent=2))
+                        shared_state["digital_regmap"] = regmap_obj
+                        shared_state["digital_regmap_path"] = "digital/digital_regmap.json"
+                        shared_state["digital_register_map_path"] = "digital/digital_regmap.json"
+                        shared_state["digital_regmap_json"] = regmap_local
+                        digital_block = shared_state.setdefault("digital", {})
+                        if isinstance(digital_block, dict):
+                            digital_block["digital_regmap"] = regmap_obj
+                            digital_block["regmap"] = regmap_obj
+                            digital_block["digital_regmap_path"] = "digital/digital_regmap.json"
+                            digital_block["register_map_path"] = "digital/digital_regmap.json"
+                        if package_obj:
+                            package_obj.setdefault("storage", {})["digital_regmap"] = regmap_storage_path
+                except Exception:
+                    pass
             intent_text, _ = _download_first([
                 "system/integration/system_integration_intent.json",
                 "digital/system/integration/system_integration_intent.json",
@@ -7010,6 +7041,7 @@ def execute_system_app_background(
         canonical_system_downstream_nodes = {
             "System_Sim": [
                 "System CoSim Ingest Agent",
+                "System Assertions (SVA) Agent",
                 "System Testbench Generator Agent",
                 "System Functional Coverage Agent",
                 "System Simulation Control Agent",
@@ -7041,6 +7073,12 @@ def execute_system_app_background(
                 for node in nodes
             }
             canonical_labels = canonical_system_downstream_nodes[template_workflow_name]
+            if template_workflow_name == "System_Sim" and toggles.get("enable_formal"):
+                canonical_labels = [
+                    *canonical_labels[:-1],
+                    "System Formal Verification Agent",
+                    canonical_labels[-1],
+                ]
             original_count = len(nodes)
             nodes = [
                 node

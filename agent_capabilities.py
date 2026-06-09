@@ -1363,6 +1363,24 @@ AGENT_CAPABILITIES = {
         "requires": [],
     },
 
+    "System Formal Verification Agent": {
+        "domain": "system",
+        "inputs": [
+            "system/integration/soc_top_sim.sv",
+            "system/integration/system_rtl_filelist_sim.txt",
+            "vv/tb/sva_spec.json(optional)",
+            "*.v",
+            "*.sv"
+        ],
+        "outputs": [
+            "vv/formal/formal_report.json",
+            "vv/formal/*.sby",
+            "vv/system_formal_verification_agent.log"
+        ],
+        "description": "Runs optional system-level SymbiYosys formal setup against hydrated System RTL and reports real tool availability, pass/fail, and generated formal artifacts.",
+        "requires": ["sby", "yosys"],
+    },
+
     "System Functional Coverage Agent": {
         "domain": "system",
         "inputs": [

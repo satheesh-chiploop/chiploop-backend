@@ -1,0 +1,222 @@
+import json
+import os
+import re
+from datetime import datetime
+from typing import Any, Dict, List, Optional
+
+from tooling.runner import run_command, tool_path
+from utils.artifact_utils import save_text_artifact_and_record
+
+AGENT_NAME = "System Formal Verification Agent"
+
+
+def _now() -> str:
+    return datetime.now().isoformat()
+
+
+def _write(path: str, content: str) -> None:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(content)
+
+
+def _record(workflow_id: str, subdir: str, filename: str, content: str) -> Optional[str]:
+    try:
+        return save_text_artifact_and_record(
+            workflow_id=workflow_id,
+            agent_name=AGENT_NAME,
+            subdir=subdir,
+            filename=filename,
+            content=content,
+        )
+    except Exception:
+        return None
+
+
+def _toolchain(state: Dict[str, Any]) -> Dict[str, Any]:
+    return state.get("toolchain") if isinstance(state.get("toolchain"), dict) else {}
+
+
+def _solver(state: Dict[str, Any]) -> str:
+    raw = str(_toolchain(state).get("formal_solver") or state.get("formal_solver") or "z3").strip().lower()
+    return raw if raw in {"z3", "boolector"} else "z3"
+
+
+def _formal_tool(state: Dict[str, Any]) -> str:
+    return str(_toolchain(state).get("formal") or state.get("formal_tool") or "none").strip().lower()
+
+
+def _module_names(path: str) -> List[str]:
+    try:
+        with open(path, "r", encoding="utf-8", errors="ignore") as f:
+            text = f.read()
+    except Exception:
+        return []
+    return re.findall(r"\bmodule\s+([A-Za-z_][A-Za-z0-9_$]*)\b", text)
+
+
+def _rtl_files(state: Dict[str, Any], workflow_dir: str) -> List[str]:
+    direct = state.get("rtl_files")
+    if isinstance(direct, list) and direct:
+        files = [str(p) for p in direct if str(p).strip()]
+    else:
+        pkg = state.get("system_rtl_package") if isinstance(state.get("system_rtl_package"), dict) else {}
+        filelists = pkg.get("filelists") if isinstance(pkg.get("filelists"), dict) else {}
+        files = [str(p) for p in (filelists.get("sim") or []) if str(p).strip()]
+    if not files:
+        for root, _, names in os.walk(os.path.join(workflow_dir, "system")):
+            for name in names:
+                if name.lower().endswith((".v", ".sv")):
+                    files.append(os.path.join(root, name))
+    out: List[str] = []
+    for path in files:
+        abs_path = path if os.path.isabs(path) else os.path.join(workflow_dir, path)
+        low = abs_path.lower().replace("\\", "/")
+        if os.path.isfile(abs_path) and not any(skip in low for skip in ("/vv/", "/tb/", "/testbench/")):
+            out.append(os.path.abspath(abs_path))
+    return list(dict.fromkeys(out))
+
+
+def _top(state: Dict[str, Any], rtl_files: List[str]) -> str:
+    for key in ("soc_top_sim_module", "system_top_module", "top_module"):
+        value = str(state.get(key) or "").strip()
+        if value:
+            return value
+    pkg = state.get("system_rtl_package") if isinstance(state.get("system_rtl_package"), dict) else {}
+    top = pkg.get("top") if isinstance(pkg.get("top"), dict) else {}
+    if str(top.get("sim") or "").strip():
+        return str(top["sim"]).strip()
+    for path in rtl_files:
+        names = _module_names(path)
+        if names:
+            return names[0]
+    return "soc_top_sim"
+
+
+def _find_clock_reset(rtl_files: List[str], top: str) -> tuple[Optional[str], Optional[str]]:
+    top_text = ""
+    for path in rtl_files:
+        try:
+            text = open(path, "r", encoding="utf-8", errors="ignore").read()
+        except Exception:
+            continue
+        if re.search(rf"\bmodule\s+{re.escape(top)}\b", text):
+            top_text = text
+            break
+    if not top_text:
+        chunks: List[str] = []
+        for path in rtl_files[:4]:
+            try:
+                with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                    chunks.append(f.read())
+            except Exception:
+                continue
+        top_text = "\n".join(chunks)
+    ports = re.findall(r"\b(?:input|output|inout)\b(?:\s+(?:wire|logic|reg))*\s*(?:\[[^\]]+\]\s*)?([A-Za-z_][A-Za-z0-9_$]*)", top_text)
+    clk = next((p for p in ports if re.search(r"(?:^|_)(clk|clock)(?:$|_)", p, re.I)), None)
+    rst = next((p for p in ports if re.search(r"(?:^|_)(rst|reset|por)(?:$|_)", p, re.I)), None)
+    return clk, rst
+
+
+def _gen_sby(top: str, rtl_files: List[str], formal_root: str, solver: str) -> str:
+    rels = [os.path.relpath(path, formal_root).replace("\\", "/") for path in rtl_files[:200]]
+    reads = "\n".join(f"read_verilog -sv {path}" for path in rels)
+    files = "\n".join(rels)
+    return f"""# Auto-generated System Sim formal setup for {top}
+
+[options]
+mode bmc
+depth 20
+multiclock on
+
+[engines]
+smtbmc {solver}
+
+[script]
+{reads}
+prep -top {top}
+
+[files]
+{files}
+"""
+
+
+def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
+    workflow_id = str(state.get("workflow_id") or "default")
+    workflow_dir = str(state.get("workflow_dir") or f"backend/workflows/{workflow_id}")
+    formal_root = os.path.join(workflow_dir, "vv", "formal")
+    os.makedirs(formal_root, exist_ok=True)
+    log_path = os.path.join("artifact", "system_formal_verification_agent.log")
+    _write(log_path, "System Formal Verification Agent Log\n")
+
+    formal_tool = _formal_tool(state)
+    solver = _solver(state)
+    rtl_files = _rtl_files(state, workflow_dir)
+    top = _top(state, rtl_files)
+    clk, rst = _find_clock_reset(rtl_files, top) if rtl_files else (None, None)
+    sby_txt = _gen_sby(top, rtl_files, formal_root, solver)
+    sby_path = os.path.join(formal_root, f"{top}.sby")
+    _write(sby_path, sby_txt)
+
+    sby_bin = tool_path("sby", state)
+    solver_bin = tool_path(solver, state)
+    run_result: Dict[str, Any] = {
+        "tool": formal_tool,
+        "solver": solver,
+        "available": bool(formal_tool == "symbiyosys" and sby_bin and solver_bin and rtl_files),
+        "attempted": False,
+    }
+    if formal_tool in {"none", "disabled", "off"}:
+        run_result["disabled"] = True
+    elif not rtl_files:
+        run_result["blocked_reason"] = "no_system_rtl_files"
+    elif not sby_bin or not solver_bin:
+        run_result["blocked_reason"] = "tool_unavailable"
+    else:
+        run_result["attempted"] = True
+        proc = run_command(state, "system_formal_verification", [sby_bin, "-f", os.path.basename(sby_path)], cwd=formal_root, timeout_sec=600)
+        run_result.update({
+            "returncode": proc.returncode,
+            "stdout_tail": (proc.stdout or "").splitlines()[-120:],
+            "stderr_tail": (proc.stderr or "").splitlines()[-120:],
+            "tool_execution": proc.to_dict(),
+        })
+
+    report = {
+        "type": "system_formal_verification",
+        "version": "1.0",
+        "generated_at": _now(),
+        "top_module": top,
+        "rtl_file_count": len(rtl_files),
+        "clock": clk,
+        "reset": rst,
+        "toolchain": {"formal": formal_tool, "formal_solver": solver},
+        "tools_detected": {
+            "sby": bool(sby_bin),
+            "yosys": bool(tool_path("yosys", state)),
+            "z3": bool(tool_path("z3", state)),
+            "boolector": bool(tool_path("boolector", state)),
+            solver: bool(solver_bin),
+        },
+        "run": run_result,
+        "artifacts": {
+            "sby": _record(workflow_id, "vv/formal", f"{top}.sby", sby_txt),
+        },
+    }
+    report_txt = json.dumps(report, indent=2)
+    _write(os.path.join(formal_root, "formal_report.json"), report_txt)
+    report["artifacts"]["report"] = _record(workflow_id, "vv/formal", "formal_report.json", report_txt)
+    try:
+        report["artifacts"]["log"] = _record(workflow_id, "vv", "system_formal_verification_agent.log", open(log_path, "r", encoding="utf-8").read())
+    except Exception:
+        report["artifacts"]["log"] = None
+
+    state.setdefault("vv", {})["formal"] = report
+    state["system_formal_report_json"] = os.path.join(formal_root, "formal_report.json")
+    state["formal_report_json"] = os.path.join(formal_root, "formal_report.json")
+    state["status"] = (
+        "System formal pass" if run_result.get("attempted") and run_result.get("returncode") == 0
+        else "System formal not run" if not run_result.get("attempted")
+        else "System formal failed"
+    )
+    return state

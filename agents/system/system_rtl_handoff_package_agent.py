@@ -223,6 +223,9 @@ def run_agent(state: dict) -> dict:
         lib_filelist_text, lib_filelist_path = _load_text_from_supabase(
             supabase, prefixes, "system/integration/system_lib_filelist_phys.txt"
         )
+        digital_regmap, digital_regmap_path = _load_json_from_supabase(
+            supabase, prefixes, "digital/digital_regmap.json"
+        )
 
         iverilog_sim_log, iverilog_sim_log_path = _load_text_from_supabase(
             supabase, prefixes, "system/integration/system_full_compile_iverilog_sim_pass1.log"
@@ -245,6 +248,7 @@ def run_agent(state: dict) -> dict:
             "system_rtl_filelist_sim_txt": sim_filelist_path,
             "system_rtl_filelist_phys_txt": phys_filelist_path,
             "system_lib_filelist_phys_txt": lib_filelist_path,
+            "digital_regmap_json": digital_regmap_path,
             "iverilog_sim_log": iverilog_sim_log_path,
             "verilator_sim_log": verilator_sim_log_path,
             "iverilog_phys_log": iverilog_phys_log_path,
@@ -313,7 +317,8 @@ def run_agent(state: dict) -> dict:
                 },
                 "integration_intent": integration_intent_path,
                 "soc_top_sim": soc_top_sim_path,
-                "soc_top_phys": soc_top_phys_path
+                "soc_top_phys": soc_top_phys_path,
+                "digital_regmap": digital_regmap_path
             },
             "compile": {
                 "sim": "pass" if sim_ok else "fail",
@@ -325,7 +330,8 @@ def run_agent(state: dict) -> dict:
                 "soc_top_phys": bool(soc_top_phys),
                 "sim_top_module": sim_top_module,
                 "phys_top_module": phys_top_module,
-                "integration_intent": bool(integration_intent)
+                "integration_intent": bool(integration_intent),
+                "digital_regmap": bool(digital_regmap)
             },
             "ready_for_cosim": bool(sim_ok and sim_filelist_ok)
         }

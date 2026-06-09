@@ -5076,6 +5076,59 @@
       }
     },
     {
+      "name": "System Formal Verification Agent",
+      "loop_type": "system",
+      "domain": "system",
+      "description": "Runs optional system-level SymbiYosys formal setup against hydrated System RTL and reports real tool availability, pass/fail, and generated formal artifacts.",
+      "entrypoint": "agents.system.system_formal_verification_agent:run_agent",
+      "execution_mode": "legacy_adapter",
+      "inputs": [
+        "system/integration/soc_top_sim.sv",
+        "system/integration/system_rtl_filelist_sim.txt",
+        "vv/tb/sva_spec.json(optional)",
+        "*.v",
+        "*.sv"
+      ],
+      "outputs": [
+        "vv/formal/formal_report.json",
+        "vv/formal/*.sby",
+        "vv/system_formal_verification_agent.log"
+      ],
+      "artifact_paths": [
+        "vv/formal/formal_report.json",
+        "vv/formal/*.sby",
+        "vv/system_formal_verification_agent.log"
+      ],
+      "artifact_types": [
+        "report",
+        "structured_data"
+      ],
+      "required_skills": [
+        "artifact_publish",
+        "formal_verification"
+      ],
+      "required_tools": [
+        "python",
+        "supabase",
+        "yosys",
+        "sby",
+        "z3"
+      ],
+      "hooks": [
+        "pre_run_validate_inputs",
+        "post_run_collect_artifacts",
+        "post_run_update_state",
+        "on_failure_capture_traceback",
+        "on_failure_preserve_logs",
+        "artifact_publish_to_supabase"
+      ],
+      "metadata": {
+        "registry_source": "SYSTEM_AGENT_FUNCTIONS",
+        "variable": "system_formal_verification_agent",
+        "studio_contract_version": "v1"
+      }
+    },
+    {
       "name": "System CoSim Contract Agent",
       "loop_type": "system",
       "domain": "system",
