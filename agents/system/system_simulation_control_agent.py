@@ -115,10 +115,22 @@ def _find_system_integration_json(workflow_dir: str) -> Optional[str]:
 
 
 def _find_soc_top_sim_path(workflow_dir: str) -> Optional[str]:
-    return _find_first_existing([
+    found = _find_first_existing([
         os.path.join(workflow_dir, "system", "integration", "soc_top_sim.sv"),
         os.path.join(workflow_dir, "soc_top_sim.sv"),
     ])
+    if found:
+        return found
+    integration_dir = os.path.join(workflow_dir, "system", "integration")
+    if os.path.isdir(integration_dir):
+        matches = sorted(
+            os.path.join(integration_dir, fn)
+            for fn in os.listdir(integration_dir)
+            if fn.lower().endswith((".sv", ".v")) and "soc" in fn.lower() and "sim" in fn.lower()
+        )
+        if matches:
+            return matches[0]
+    return None
 
 
 def _find_system_rtl_filelist(workflow_dir: str) -> Optional[str]:

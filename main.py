@@ -6372,6 +6372,217 @@ def execute_system_app_background(
             if source_intent and os.path.exists(source_intent):
                 shared_state["system_integration_intent_json"] = os.path.abspath(source_intent)
 
+        def _storage_path_candidates_from_source_path(source_path: str, indexed_paths: List[str], source_workflow_id: str) -> List[str]:
+            raw = str(source_path or "").strip().replace("\\", "/")
+            candidates: List[str] = []
+            if not raw:
+                return candidates
+            if raw.startswith("backend/workflows/") or raw.startswith("artifacts/"):
+                candidates.append(raw)
+            marker = "/artifacts/"
+            if marker in raw:
+                candidates.append("artifacts/" + raw.split(marker, 1)[1].lstrip("/"))
+            basename = os.path.basename(raw)
+            suffixes = []
+            for key in ("/digital/", "/system/", "/analog/", "/rtl/", "/vv/"):
+                if key in raw:
+                    suffixes.append(raw.split(key, 1)[1].lstrip("/"))
+                    suffixes.append(key.strip("/") + "/" + raw.split(key, 1)[1].lstrip("/"))
+            for path in indexed_paths:
+                norm = str(path or "").replace("\\", "/")
+                if not norm:
+                    continue
+                if basename and norm.endswith("/" + basename):
+                    candidates.append(norm)
+                if any(norm.endswith("/" + suffix) for suffix in suffixes if suffix):
+                    candidates.append(norm)
+                if source_workflow_id and source_workflow_id in norm and basename and norm.endswith(basename):
+                    candidates.append(norm)
+            return list(dict.fromkeys([c for c in candidates if c]))
+
+        def _materialize_system_rtl_import_from_supabase(source_workflow_id: str) -> bool:
+            try:
+                wf = (
+                    supabase.table("workflows")
+                    .select("id,user_id,artifacts")
+                    .eq("id", source_workflow_id)
+                    .single()
+                    .execute()
+                )
+                wf_row = wf.data or {}
+            except Exception:
+                wf_row = {}
+
+            indexed_paths: List[str] = []
+
+            def _collect_artifact_paths(obj: Any) -> None:
+                if isinstance(obj, dict):
+                    for value in obj.values():
+                        _collect_artifact_paths(value)
+                elif isinstance(obj, list):
+                    for value in obj:
+                        _collect_artifact_paths(value)
+                elif isinstance(obj, str):
+                    value = obj.strip().replace("\\", "/")
+                    if value:
+                        indexed_paths.append(value)
+
+            _collect_artifact_paths((wf_row or {}).get("artifacts") or {})
+            indexed_paths = list(dict.fromkeys(indexed_paths))
+            user_id_for_source = str((wf_row or {}).get("user_id") or user_id or "").strip()
+            prefixes = [
+                f"backend/workflows/{source_workflow_id}/",
+            ]
+            if user_id_for_source:
+                prefixes.extend([
+                    f"artifacts/{user_id_for_source}/{source_workflow_id}/",
+                    f"{user_id_for_source}/{source_workflow_id}/",
+                ])
+
+            def _download_text_storage(path: str) -> str:
+                try:
+                    raw = supabase.storage.from_(ARTIFACT_BUCKET).download(path)
+                    return raw.decode("utf-8") if isinstance(raw, bytes) else str(raw)
+                except Exception:
+                    return ""
+
+            def _download_first(rel_paths: List[str]) -> Tuple[str, str]:
+                candidate_paths: List[str] = []
+                for rel in rel_paths:
+                    rel = str(rel or "").strip().replace("\\", "/")
+                    if not rel:
+                        continue
+                    if rel.startswith("backend/workflows/") or rel.startswith("artifacts/"):
+                        candidate_paths.append(rel)
+                    else:
+                        candidate_paths.extend([f"{p.rstrip('/')}/{rel}" for p in prefixes])
+                        candidate_paths.append(rel)
+                for candidate in list(dict.fromkeys(candidate_paths)):
+                    text = _download_text_storage(candidate)
+                    if text:
+                        return text, candidate
+                return "", ""
+
+            package_text, package_path = _download_first([
+                "system/package/system_rtl_package.json",
+                "digital/system/package/system_rtl_package.json",
+            ])
+            package_obj: Dict[str, Any] = {}
+            if package_text:
+                try:
+                    loaded = json.loads(package_text)
+                    if isinstance(loaded, dict):
+                        package_obj = loaded
+                except Exception:
+                    package_obj = {}
+
+            filelist_paths = []
+            filelists = package_obj.get("filelists") if isinstance(package_obj.get("filelists"), dict) else {}
+            sim_from_package = filelists.get("sim") if isinstance(filelists, dict) else []
+            if isinstance(sim_from_package, list):
+                filelist_paths.extend([str(p) for p in sim_from_package if str(p).strip()])
+
+            if not filelist_paths:
+                filelist_text, _ = _download_first([
+                    "system/integration/system_rtl_filelist_sim.txt",
+                    "digital/system/integration/system_rtl_filelist_sim.txt",
+                ])
+                filelist_paths.extend([ln.strip() for ln in filelist_text.splitlines() if ln.strip()])
+
+            if not filelist_paths:
+                return False
+
+            import_dir = os.path.join(shared_state["workflow_dir"], "system", "imported_rtl")
+            os.makedirs(import_dir, exist_ok=True)
+            materialized: List[str] = []
+            for idx, source_path in enumerate(filelist_paths):
+                storage_candidates = _storage_path_candidates_from_source_path(source_path, indexed_paths, source_workflow_id)
+                content = ""
+                resolved_storage = ""
+                for candidate in storage_candidates:
+                    content = _download_text_storage(candidate)
+                    if content:
+                        resolved_storage = candidate
+                        break
+                if not content:
+                    continue
+                basename = os.path.basename(str(source_path).replace("\\", "/")) or f"system_rtl_{idx}.sv"
+                if not basename.lower().endswith((".v", ".sv", ".vh", ".svh")):
+                    basename = f"{basename}.sv"
+                local_path = os.path.abspath(os.path.join(import_dir, basename))
+                with open(local_path, "w", encoding="utf-8") as fh:
+                    fh.write(content.rstrip() + "\n")
+                materialized.append(local_path)
+
+            if not materialized:
+                return False
+
+            def _module_names_from_file(path: str) -> List[str]:
+                try:
+                    with open(path, "r", encoding="utf-8", errors="ignore") as fh:
+                        text = fh.read()
+                except Exception:
+                    return []
+                return re.findall(r"\bmodule\s+([A-Za-z_][A-Za-z0-9_$]*)\b", text)
+
+            def _contains_module(path: str, module_name: str) -> bool:
+                return module_name in _module_names_from_file(path)
+
+            top = package_obj.get("top") if isinstance(package_obj.get("top"), dict) else {}
+            top_sim = str((top or {}).get("sim") or "").strip()
+            source_soc_top = next((p for p in materialized if top_sim and _contains_module(p, top_sim)), "")
+            if not source_soc_top:
+                source_soc_top = next(
+                    (
+                        p
+                        for p in materialized
+                        if "soc" in os.path.basename(p).lower() and "sim" in os.path.basename(p).lower()
+                    ),
+                    "",
+                )
+            if source_soc_top:
+                modules = _module_names_from_file(source_soc_top)
+                if modules:
+                    top_sim = modules[0]
+            if top_sim:
+                shared_state["top_module"] = top_sim
+                shared_state["soc_top_sim_module"] = top_sim
+            intent_text, _ = _download_first([
+                "system/integration/system_integration_intent.json",
+                "digital/system/integration/system_integration_intent.json",
+            ])
+            intent_local = ""
+            if intent_text:
+                intent_local = os.path.join(shared_state["workflow_dir"], "system", "integration", "system_integration_intent.json")
+                os.makedirs(os.path.dirname(intent_local), exist_ok=True)
+                with open(intent_local, "w", encoding="utf-8") as fh:
+                    fh.write(intent_text)
+            _materialize_system_rtl_import(materialized, source_soc_top=source_soc_top, source_intent=intent_local)
+            if package_obj:
+                package_obj.setdefault("top", {})["sim"] = top_sim
+            shared_state["system_rtl_package"] = package_obj or {
+                "package_type": "system_rtl",
+                "source_workflow_id": source_workflow_id,
+                "filelists": {"sim": materialized, "phys": materialized, "libs": []},
+                "top": {"sim": top_sim or os.path.splitext(os.path.basename(source_soc_top or materialized[-1]))[0]},
+                "compile": {"sim": "imported_from_arch2rtl"},
+                "ready_for_cosim": True,
+            }
+            shared_state["system_rtl_package"]["filelists"] = {
+                **(shared_state["system_rtl_package"].get("filelists") or {}),
+                "sim": materialized,
+            }
+            append_log_workflow(
+                workflow_id,
+                f"System RTL source: materialized {len(materialized)} RTL files from Supabase workflow {source_workflow_id}",
+                phase="system_rtl_source",
+            )
+            append_log_run(
+                run_id,
+                f"System RTL source: materialized {len(materialized)} RTL files from Supabase workflow {source_workflow_id}",
+            )
+            return True
+
         def _materialize_pasted_system_rtl() -> None:
             pasted = shared_state.get("pasted_rtl_files")
             if not isinstance(pasted, list) or not pasted:
@@ -6478,8 +6689,9 @@ def execute_system_app_background(
                         )
                     ])
                     if source_filelist:
+                        resolved_source_files = _resolve_filelist_lines(source_filelist, roots)
                         _materialize_system_rtl_import(
-                            _resolve_filelist_lines(source_filelist, roots),
+                            resolved_source_files,
                             source_soc_top=source_soc_top,
                             source_intent=source_intent,
                         )
@@ -6492,6 +6704,10 @@ def execute_system_app_background(
                             run_id,
                             f"System RTL source: hydrated filelist from workflow {shared_state.get('system_rtl_workflow_id')}",
                         )
+                        if not any(os.path.exists(p) for p in resolved_source_files):
+                            _materialize_system_rtl_import_from_supabase(str(shared_state.get("system_rtl_workflow_id")))
+                    elif shared_state.get("system_rtl_workflow_id"):
+                        _materialize_system_rtl_import_from_supabase(str(shared_state.get("system_rtl_workflow_id")))
             except Exception as source_exc:
                 append_log_workflow(
                     workflow_id,

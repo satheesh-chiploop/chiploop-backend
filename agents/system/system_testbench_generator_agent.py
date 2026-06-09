@@ -160,6 +160,15 @@ def _find_soc_top_sim_path(workflow_dir: str) -> Optional[str]:
     for p in candidates:
         if os.path.exists(p):
             return p
+    integration_dir = os.path.join(workflow_dir, "system", "integration")
+    if os.path.isdir(integration_dir):
+        matches = sorted(
+            os.path.join(integration_dir, fn)
+            for fn in os.listdir(integration_dir)
+            if fn.lower().endswith((".sv", ".v")) and "soc" in fn.lower() and "sim" in fn.lower()
+        )
+        if matches:
+            return matches[0]
     return None
 
 

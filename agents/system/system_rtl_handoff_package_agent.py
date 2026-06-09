@@ -226,6 +226,8 @@ def run_agent(state: dict) -> dict:
 
         sim = compile_summary.get("sim", {}) if compile_summary else {}
         phys = compile_summary.get("phys", {}) if compile_summary else {}
+        sim_top_module = str(sim.get("top_module") or "").strip() or "soc_top_sim"
+        phys_top_module = str(phys.get("top_module") or "").strip() or "soc_top_phys"
 
         iverilog_summary = sim.get("iverilog_ok_pass1")
         verilator_summary = sim.get("verilator_ok_pass1")
@@ -255,8 +257,8 @@ def run_agent(state: dict) -> dict:
             "package_type": "system_rtl",
             "generated_at": _now(),
             "top": {
-                "sim": "soc_top_sim",
-                "phys": "soc_top_phys"
+                "sim": sim_top_module,
+                "phys": phys_top_module
             },
             "filelists": {
                 "sim": sim_filelist,
@@ -271,6 +273,8 @@ def run_agent(state: dict) -> dict:
             "artifacts": {
                 "soc_top_sim": bool(soc_top_sim),
                 "soc_top_phys": bool(soc_top_phys),
+                "sim_top_module": sim_top_module,
+                "phys_top_module": phys_top_module,
                 "integration_intent": bool(integration_intent)
             },
             "ready_for_cosim": bool(sim_ok and sim_filelist_ok)

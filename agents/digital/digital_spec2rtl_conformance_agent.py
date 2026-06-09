@@ -277,6 +277,22 @@ def _match_score(requirement: str, rtl_text: str, rtl_names: Iterable[str]) -> T
         evidence.append("rd_data")
     if re.search(r"\bwrite", req_lower) and {"wr_en", "wr_addr", "wr_data"} & names:
         evidence.append("write_path")
+    if "decode" in req_lower and "register" in req_lower and {"wr_addr", "rd_addr"} & names:
+        expected_regs = [
+            "control",
+            "status",
+            "threshold",
+            "latest_temp",
+            "sample_count",
+            "irq_status",
+            "irq_clear",
+        ]
+        reg_hits = [reg for reg in expected_regs if reg in req_lower and reg in rtl_text.lower()]
+        addr_hits = re.findall(r"\b\d+'h[0-9a-fA-F]+\b", rtl_text)
+        has_case_decode = bool(re.search(r"\bcase\s*\(\s*(?:rd_addr|wr_addr)\s*\)", rtl_text, re.I))
+        has_explicit_addr_decode = bool(re.search(r"\b(?:rd_addr|wr_addr)\s*==\s*\d+'h[0-9a-fA-F]+", rtl_text, re.I))
+        if (has_case_decode or has_explicit_addr_decode) and (len(reg_hits) >= 3 or len(set(addr_hits)) >= 4):
+            evidence.append("register_address_decode")
     if "counter" in req_lower and ("counter_value" in names or re.search(r"\bcounter_value", rtl_text, re.I)):
         evidence.append("counter_value")
     if "reset" in req_lower and re.search(r"\breset_n\b", rtl_text, re.I) and re.search(r"<=\s*(?:\d+'h00|\d+'d0|1'b0|0)\b", rtl_text, re.I):
@@ -352,7 +368,7 @@ def _match_score(requirement: str, rtl_text: str, rtl_names: Iterable[str]) -> T
             evidence.append("STATUS/IRQ_STATUS.sample_done latch")
         if scalar_status_set and scalar_status_clear and scalar_irq_set and scalar_irq_clear:
             evidence.append("STATUS/IRQ_STATUS.sample_done scalar latch")
-    if "sticky" in req_lower and "status" in req_lower and "irq_status" in req_lower:
+    if "sticky" in req_lower and "status" in req_lower and ("irq_status" in req_lower or "irq" in req_lower):
         status_sticky = bool(re.search(r"\bstatus_(?:sample_done|alert_pending|adc_valid_seen)\w*\s*<=\s*1'b1", rtl_text, re.I))
         irq_sticky = bool(re.search(r"\birq_status_(?:sample_done|alert)\w*\s*<=\s*1'b1", rtl_text, re.I))
         independent_clear = bool(
@@ -363,6 +379,20 @@ def _match_score(requirement: str, rtl_text: str, rtl_names: Iterable[str]) -> T
         )
         if status_sticky and irq_sticky and independent_clear:
             evidence.append("sticky STATUS/IRQ_STATUS independent clears")
+    if ("clear semantics" in req_lower or ("specified" in req_lower and "clear" in req_lower)) and "sticky" in req_lower:
+        clear_alert = bool(
+            re.search(r"\b(?:control_alert_clear|alert_clear|irq_clear_alert)\b", rtl_text, re.I)
+            and re.search(r"\b(?:status_alert_pending|irq_status_alert|alert_status\w*)\s*<=\s*1'b0", rtl_text, re.I)
+        )
+        clear_sample = bool(
+            re.search(r"\b(?:irq_clear_sample_done)\b", rtl_text, re.I)
+            and re.search(r"\b(?:status_sample_done|irq_status_sample_done)\s*<=\s*1'b0", rtl_text, re.I)
+        )
+        set_sticky = bool(
+            re.search(r"\b(?:status_sample_done|status_alert_pending|irq_status_sample_done|irq_status_alert)\s*<=\s*1'b1", rtl_text, re.I)
+        )
+        if clear_alert and clear_sample and set_sticky:
+            evidence.append("sticky clear semantics")
     if "irq_clear" in req_lower and "bit 1" in req_lower and "sample_done" in req_lower and re.search(r"\bclear", req_lower):
         if (
             re.search(r"\bwr_addr\s*==\s*\d+'h0*18", rtl_text, re.I)
@@ -388,6 +418,37 @@ def _match_score(requirement: str, rtl_text: str, rtl_names: Iterable[str]) -> T
             evidence.append("enable_periodic_sample_req")
         if re.search(r"\bwr_data\s*\[\s*1\s*\]", rtl_text, re.I) and re.search(r"\bsample_req\s*<=\s*1'b1", rtl_text, re.I):
             evidence.append("sample_start_priority_path")
+    if "only clear" in req_lower and "clear" in req_lower:
+        protected_regs = [
+            "latest_temp",
+            "latest_temp_reg",
+            "threshold_code",
+            "threshold_code_reg",
+            "sample_count",
+            "sample_count_reg",
+        ]
+        clear_signal_names = [
+            "control_alert_clear",
+            "alert_clear",
+            "irq_clear_alert",
+            "irq_clear_sample_done",
+        ]
+        clear_blocks = []
+        for signal in clear_signal_names:
+            for m in re.finditer(rf"\bif\s*\(\s*{re.escape(signal)}\s*\)\s*begin(?P<body>.*?)end", rtl_text, re.I | re.DOTALL):
+                clear_blocks.append(m.group("body"))
+        if clear_blocks:
+            touched_protected = any(
+                re.search(rf"\b{re.escape(reg)}\s*<=", body, re.I)
+                for body in clear_blocks
+                for reg in protected_regs
+            )
+            clears_status_only = any(
+                re.search(r"\b(?:alert_status\w*|status_alert_pending|status_sample_done|irq_status_alert|irq_status_sample_done)\s*<=\s*1'b0", body, re.I)
+                for body in clear_blocks
+            )
+            if clears_status_only and not touched_protected:
+                evidence.append("clear side effects limited to specified status bits")
 
     addresses = re.findall(r"0x([0-9a-fA-F]+)", requirement)
     for addr in addresses:
@@ -415,6 +476,10 @@ def _match_score(requirement: str, rtl_text: str, rtl_names: Iterable[str]) -> T
         "sample_count_increment",
         "sticky_adc_valid_seen",
         "internal_state_contract",
+        "register_address_decode",
+        "sticky STATUS/IRQ_STATUS independent clears",
+        "sticky clear semantics",
+        "clear side effects limited to specified status bits",
     }
     if semantic_hits.intersection(evidence):
         return "matched", evidence[:8]
