@@ -7007,6 +7007,56 @@ def execute_system_app_background(
         nodes = _definition_to_executor_nodes(defn)
         toggles = shared_state.get("toggles") if isinstance(shared_state.get("toggles"), dict) else {}
         using_existing_system_rtl = bool(shared_state.get("system_rtl_workflow_id")) or rtl_source_mode in {"paste", "repo_path"}
+        canonical_system_downstream_nodes = {
+            "System_Sim": [
+                "System CoSim Ingest Agent",
+                "System Testbench Generator Agent",
+                "System Functional Coverage Agent",
+                "System Simulation Control Agent",
+                "System Simulation Execution Agent",
+                "System Simulation Coverage Summary Agent",
+            ],
+            "System_Firmware": [
+                "Embedded Firmware Register Extract Agent",
+                "Embedded Rust Register Layer Generator Agent",
+                "Embedded Register Validation Agent",
+                "Embedded Rust Driver Scaffold Agent",
+                "Embedded Interrupt Mapping Agent",
+                "Embedded Firmware Integration Contract Agent",
+                "Embedded ELF Build Agent",
+                "Embedded Verilator Build Agent",
+                "Embedded Cocotb Harness Agent",
+                "Embedded Co Sim Runner Agent",
+                "System Firmware CoSim Execution Agent",
+                "System Firmware Coverage Summary Agent",
+                "Embedded Coverage Collector Agent",
+                "Embedded Validation Report Agent",
+                "Embedded Firmware Executive Summary Agent",
+                "System Software Handoff Package Agent",
+            ],
+        }
+        if template_workflow_name in canonical_system_downstream_nodes and using_existing_system_rtl:
+            existing_labels = {
+                str((node.get("data") or {}).get("backendLabel") or node.get("label") or node.get("name") or "")
+                for node in nodes
+            }
+            canonical_labels = canonical_system_downstream_nodes[template_workflow_name]
+            original_count = len(nodes)
+            nodes = [
+                node
+                for label in canonical_labels
+                for node in [{"label": label}]
+                if label in SYSTEM_AGENT_FUNCTIONS or label in EMBEDDED_AGENT_FUNCTIONS
+            ]
+            append_log_workflow(
+                workflow_id,
+                f"{template_workflow_name}: using canonical source-RTL downstream graph; ignored {original_count - len(existing_labels.intersection(canonical_labels))} stale template nodes",
+                phase="system_rtl_source",
+            )
+            append_log_run(
+                run_id,
+                f"{template_workflow_name}: using canonical source-RTL downstream graph; ignored stale template nodes",
+            )
         if template_workflow_name in {"System_Sim", "System_Firmware", "System_Synthesis", "System_PD"} and using_existing_system_rtl:
             skip_labels = {
                 "Digital Spec Agent",

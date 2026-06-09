@@ -294,6 +294,28 @@ with template(name, loop_type, agents) as (
         'System Simulation Execution Agent',
         'System Simulation Coverage Summary Agent'
       ]::text[]
+    ),
+    (
+      'System_Firmware',
+      'system',
+      array[
+        'Embedded Firmware Register Extract Agent',
+        'Embedded Rust Register Layer Generator Agent',
+        'Embedded Register Validation Agent',
+        'Embedded Rust Driver Scaffold Agent',
+        'Embedded Interrupt Mapping Agent',
+        'Embedded Firmware Integration Contract Agent',
+        'Embedded ELF Build Agent',
+        'Embedded Verilator Build Agent',
+        'Embedded Cocotb Harness Agent',
+        'Embedded Co Sim Runner Agent',
+        'System Firmware CoSim Execution Agent',
+        'System Firmware Coverage Summary Agent',
+        'Embedded Coverage Collector Agent',
+        'Embedded Validation Report Agent',
+        'Embedded Firmware Executive Summary Agent',
+        'System Software Handoff Package Agent'
+      ]::text[]
     )
 ),
 definitions as (
