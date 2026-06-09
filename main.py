@@ -3029,14 +3029,29 @@ def execute_digital_app_background(
         using_existing_system_rtl = bool(shared_state.get("system_rtl_workflow_id")) or rtl_source_mode in {"paste", "repo_path"}
         if template_workflow_name in {"System_Sim", "System_Firmware", "System_Synthesis", "System_PD"} and using_existing_system_rtl:
             skip_labels = {
+                "Digital Spec Agent",
+                "Digital Architecture Agent",
+                "Digital Microarchitecture Agent",
+                "Digital RTL Agent",
+                "Digital RTL Linting Agent",
+                "Digital RTL Signature Agent",
+                "Digital RTL Refactoring Agent",
+                "Digital Power Intent (UPF-lite) Agent",
+                "Digital UPF Static Check Agent",
+                "Digital IP Packaging & Handoff Agent",
+                "Analog Spec Builder Agent",
+                "Analog Behavioral Model Agent",
                 "System Integration Intent Agent",
                 "System Top Assembly Agent",
                 "System Assertions (SVA) Agent",
+                "System RTL Handoff Package Agent",
+                "System RTL Evidence Dashboard Agent",
+                "Digital Spec2RTL Conformance Agent",
             }
             original_count = len(nodes)
             nodes = [
                 node for node in nodes
-                if str(node.get("label") or node.get("name") or "") not in skip_labels
+                if str((node.get("data") or {}).get("backendLabel") or node.get("label") or node.get("name") or "") not in skip_labels
             ]
             append_log_workflow(
                 workflow_id,
@@ -6372,6 +6387,18 @@ def execute_system_app_background(
             if source_intent and os.path.exists(source_intent):
                 shared_state["system_integration_intent_json"] = os.path.abspath(source_intent)
 
+        def _materialized_system_rtl_files() -> List[str]:
+            candidates: List[str] = []
+            value = shared_state.get("system_rtl_files")
+            if isinstance(value, list):
+                candidates.extend(str(p) for p in value if str(p).strip())
+            filelist_value = shared_state.get("system_rtl_filelist_sim")
+            if isinstance(filelist_value, list):
+                candidates.extend(str(p) for p in filelist_value if str(p).strip())
+            elif isinstance(filelist_value, str) and os.path.exists(filelist_value):
+                candidates.extend(_resolve_filelist_lines(filelist_value, [shared_state["workflow_dir"]]))
+            return [os.path.abspath(p) for p in dict.fromkeys(candidates) if os.path.exists(p)]
+
         def _storage_path_candidates_from_source_path(source_path: str, indexed_paths: List[str], source_workflow_id: str) -> List[str]:
             raw = str(source_path or "").strip().replace("\\", "/")
             candidates: List[str] = []
@@ -6719,6 +6746,26 @@ def execute_system_app_background(
         elif rtl_source_mode == "repo_path":
             _materialize_repo_system_rtl()
 
+        if template_workflow_name in {"System_Sim", "System_Firmware", "System_Synthesis", "System_PD"} and (
+            shared_state.get("system_rtl_workflow_id") or rtl_source_mode in {"paste", "repo_path"}
+        ):
+            materialized_rtl = _materialized_system_rtl_files()
+            if materialized_rtl:
+                shared_state["system_rtl_files"] = materialized_rtl
+                shared_state["rtl_inputs"] = materialized_rtl
+            elif template_workflow_name == "System_Sim":
+                source_hint = (
+                    shared_state.get("system_rtl_workflow_id")
+                    or shared_state.get("source_rtl_workflow_id")
+                    or shared_state.get("source_system_rtl_workflow_id")
+                    or rtl_source_mode
+                    or "unknown"
+                )
+                raise FileNotFoundError(
+                    f"System_Sim source RTL hydration failed for source '{source_hint}'. "
+                    "No existing RTL files were materialized into system/integration/system_rtl_filelist_sim.txt."
+                )
+
         # ---------------------------------------------------------
         # 2) Canonical domain-specific normalization
         #    Keep these three as the source of truth.
@@ -6820,6 +6867,10 @@ def execute_system_app_background(
                 "Digital RTL Agent",
                 "Digital RTL Linting Agent",
                 "Digital RTL Signature Agent",
+                "Digital RTL Refactoring Agent",
+                "Digital Power Intent (UPF-lite) Agent",
+                "Digital UPF Static Check Agent",
+                "Digital IP Packaging & Handoff Agent",
                 "Analog Spec Builder Agent",
                 "Analog Behavioral Model Agent",
                 "System Integration Intent Agent",
