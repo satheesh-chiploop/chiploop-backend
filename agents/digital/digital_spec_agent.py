@@ -5,6 +5,7 @@ from utils.artifact_utils import save_text_artifact_and_record
 from model_gateway import complete_text
 import logging
 import time
+from json import JSONDecodeError
 
 
 PORTKEY_API_KEY = os.getenv("PORTKEY_API_KEY")
@@ -385,6 +386,77 @@ def _truncate_text(text: str, max_chars: int) -> str:
         + text[-tail:]
     )
 
+
+def _strip_json_wrappers(text: str) -> str:
+    text = (text or "").strip()
+    if text.startswith("```"):
+        text = re.sub(r"^\s*```(?:json)?\s*", "", text, flags=re.I)
+        text = re.sub(r"\s*```\s*$", "", text)
+    return text.strip()
+
+
+def _extract_json_object_text(text: str) -> str:
+    cleaned = _strip_json_wrappers(text)
+    if not cleaned:
+        return cleaned
+    decoder = json.JSONDecoder()
+    try:
+        _, end = decoder.raw_decode(cleaned)
+        tail = cleaned[end:].strip()
+        if not tail:
+            return cleaned[:end]
+    except JSONDecodeError:
+        pass
+
+    start = cleaned.find("{")
+    if start < 0:
+        return cleaned
+
+    in_string = False
+    escaped = False
+    depth = 0
+    for idx in range(start, len(cleaned)):
+        ch = cleaned[idx]
+        if escaped:
+            escaped = False
+            continue
+        if ch == "\\" and in_string:
+            escaped = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return cleaned[start:idx + 1].strip()
+    return cleaned[start:].strip()
+
+
+def _parse_llm_json_object(llm_output: str) -> dict:
+    candidate = _extract_json_object_text(llm_output)
+    parsed = json.loads(candidate)
+    if not isinstance(parsed, dict):
+        raise ValueError("Spec JSON root must be an object.")
+    return parsed
+
+
+def _json_error_context(text: str, err: Exception, window: int = 1600) -> str:
+    if not isinstance(err, JSONDecodeError):
+        return str(err)
+    candidate = _extract_json_object_text(text)
+    pos = max(0, min(err.pos, len(candidate)))
+    lo = max(0, pos - window)
+    hi = min(len(candidate), pos + window)
+    return (
+        f"{err.msg} at line {err.lineno} column {err.colno} char {err.pos}\n"
+        f"Context around error:\n{candidate[lo:hi]}"
+    )
+
 def _record_text_artifact_safe(workflow_id, agent_name, subdir, filename, path):
     try:
         if os.path.exists(path):
@@ -410,8 +482,12 @@ def _upload_spec_debug_artifacts(workflow_id, agent_name, spec_dir):
         "spec_agent_contract_pass2.log",
         "llm_raw_output_pass2.txt",
         "spec_agent_exception_pass2.txt",
+        "spec_agent_contract_pass3.log",
+        "llm_raw_output_pass3.txt",
+        "spec_agent_exception_pass3.txt",
         "spec_agent_normalized.json",
         "spec_agent_normalized_pass2.json",
+        "spec_agent_normalized_pass3.json",
     ]:
         _record_text_artifact_safe(
             workflow_id=workflow_id,
@@ -569,6 +645,29 @@ REPAIR RULES:
 """.strip()
 
 
+def _build_json_syntax_repair_prompt(previous_json_text: str, failure_text: str) -> str:
+    return f"""
+==============================
+JSON SYNTAX REPAIR MODE
+==============================
+
+The previous response is intended to be one JSON object but it is not parseable.
+
+Rules:
+- Return ONE complete JSON object only.
+- Do not add markdown fences, comments, explanations, or prose.
+- Preserve all keys, module names, ports, requirements, behavior rules, and numeric values.
+- Fix only JSON syntax issues such as missing commas, unterminated strings, trailing prose, bad escaping, or truncated wrapper text.
+- Do not simplify the design and do not remove requirements to make parsing easier.
+
+JSON parse failure:
+{_truncate_text(failure_text, 5000)}
+
+Previous JSON text:
+{_truncate_text(previous_json_text, 24000)}
+""".strip()
+
+
 def _compile_spec_contract(llm_output: str, spec_dir: str, suffix: str = "", requested_top: str = ""):
     logger.info(f"🔍 Digital Spec Agent compile start suffix='{suffix or 'pass1'}'")
     raw_name = f"llm_raw_output{suffix}.txt"
@@ -576,7 +675,7 @@ def _compile_spec_contract(llm_output: str, spec_dir: str, suffix: str = "", req
     with open(raw_output_path, "w", encoding="utf-8") as rf:
         rf.write(llm_output)
 
-    parsed_json = json.loads(llm_output.strip())
+    parsed_json = _parse_llm_json_object(llm_output)
     logger.info(f"🔍 Digital Spec Agent JSON parsed suffix='{suffix or 'pass1'}'")
     spec_json, mode = _normalize_spec_json(parsed_json)
     logger.info(f"🔍 Digital Spec Agent normalized mode={mode} suffix='{suffix or 'pass1'}'")
@@ -1171,21 +1270,46 @@ Return JSON only.
             _write_text(pass2_log_path, f"Digital Spec Agent parse/normalize failure:\n{e2}\n")
             _write_text(pass2_exc_path, repr(e2))
 
-            state.update({
-                "status": f"❌ JSON parse/normalize failed after pass2: {e2}",
-                "artifact": None,
-                "artifact_list": [],
-                "artifact_log": log_path,
-                "workflow_dir": workflow_dir,
-                "workflow_id": workflow_id,
-                "issues": [
-                    f"Pass1 JSON parse/normalize failed: {pass1_error}",
-                    f"Pass2 JSON parse/normalize failed: {pass2_error}",
-                ],
-            })
+            syntax_repair_prompt = _build_json_syntax_repair_prompt(
+                previous_json_text=llm_output_pass2,
+                failure_text=_json_error_context(llm_output_pass2, e2),
+            )
+            try:
+                logger.info("Digital Spec Agent invoking final JSON syntax repair flow")
+                logger.info(f"Digital Spec Agent syntax repair prompt size: {len(syntax_repair_prompt)} chars")
+                t0 = time.monotonic()
+                llm_output_pass3 = _complete_spec_generation(syntax_repair_prompt, agent_name, state, "syntax_repair")
+                logger.info(f"Digital Spec Agent syntax repair LLM elapsed: {time.monotonic() - t0:.2f}s")
+                logger.info(f"Digital Spec Agent syntax repair LLM output size: {len(llm_output_pass3)} chars")
+                spec_json, mode, raw_output_path_pass3, normalized_path_pass3 = _compile_spec_contract(
+                    llm_output=llm_output_pass3,
+                    spec_dir=spec_dir,
+                    suffix="_pass3",
+                    requested_top=requested_top,
+                )
+                raw_output_path = raw_output_path_pass3
+            except Exception as e3:
+                pass3_log_path = os.path.join(spec_dir, "spec_agent_contract_pass3.log")
+                pass3_exc_path = os.path.join(spec_dir, "spec_agent_exception_pass3.txt")
+                _write_text(pass3_log_path, f"Digital Spec Agent JSON syntax repair failure:\n{e3}\n")
+                _write_text(pass3_exc_path, repr(e3))
 
-            _upload_spec_debug_artifacts(workflow_id, agent_name, spec_dir)
-            return state
+                state.update({
+                    "status": f"❌ JSON parse/normalize failed after syntax repair: {e3}",
+                    "artifact": None,
+                    "artifact_list": [],
+                    "artifact_log": log_path,
+                    "workflow_dir": workflow_dir,
+                    "workflow_id": workflow_id,
+                    "issues": [
+                        f"Pass1 JSON parse/normalize failed: {pass1_error}",
+                        f"Pass2 JSON parse/normalize failed: {pass2_error}",
+                        f"Syntax repair JSON parse/normalize failed: {e3}",
+                    ],
+                })
+
+                _upload_spec_debug_artifacts(workflow_id, agent_name, spec_dir)
+                return state
 
     module_name = spec_json["name"] if mode == "flat" else spec_json["hierarchy"]["top_module"]["name"]
 
