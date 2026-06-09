@@ -55,6 +55,52 @@ def _module_names(path: str) -> List[str]:
     return re.findall(r"\bmodule\s+([A-Za-z_][A-Za-z0-9_$]*)\b", text)
 
 
+def _is_analog_or_macro_file(path: str) -> bool:
+    text = path.replace("\\", "/").lower()
+    name = os.path.basename(text)
+    parts = [p for p in re.split(r"[\\/]+", text) if p]
+    if "analog" in parts:
+        return True
+    if "digital" in parts or "/rtl/" in text:
+        return False
+    tokens = ("analog", "macro", "ams", "behavioral", "adc", "dac", "pll", "ldo", "bandgap", "opamp", "sensor")
+    return any(token in text or token in name for token in tokens)
+
+
+def _module_declaration_tail(path: str, module: str) -> Optional[str]:
+    try:
+        text = open(path, "r", encoding="utf-8", errors="ignore").read()
+    except Exception:
+        return None
+    m = re.search(rf"\bmodule\s+{re.escape(module)}(?P<tail>\s*(?:#\s*\(.*?\)\s*)?\(.*?\)\s*);", text, re.S)
+    return m.group("tail") if m else None
+
+
+def _formal_blackbox_stub(path: str, module: str) -> str:
+    tail = _module_declaration_tail(path, module)
+    if not tail:
+        return f"(* blackbox *) module {module}();\nendmodule\n"
+    return f"(* blackbox *) module {module}{tail};\nendmodule\n"
+
+
+def _prepare_formal_rtl(rtl_files: List[str], formal_root: str) -> tuple[List[str], List[Dict[str, Any]]]:
+    formal_files: List[str] = []
+    blackboxed: List[Dict[str, Any]] = []
+    blackbox_root = os.path.join(formal_root, "blackboxes")
+    os.makedirs(blackbox_root, exist_ok=True)
+    for path in rtl_files:
+        modules = _module_names(path)
+        if modules and _is_analog_or_macro_file(path):
+            stubs = "\n".join(_formal_blackbox_stub(path, module) for module in modules)
+            stub_path = os.path.abspath(os.path.join(blackbox_root, f"{os.path.splitext(os.path.basename(path))[0]}_formal_blackbox.sv"))
+            _write(stub_path, stubs)
+            formal_files.append(stub_path)
+            blackboxed.append({"source": path, "stub": stub_path, "modules": modules})
+        else:
+            formal_files.append(path)
+    return formal_files, blackboxed
+
+
 def _rtl_preference(path: str) -> tuple[int, str]:
     stem = os.path.splitext(os.path.basename(path))[0].lower()
     is_intermediate = bool(re.search(r"(?:^|_)pass\d+$", stem) or re.search(r"_pass\d+(?:_|$)", stem))
@@ -183,7 +229,8 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     rtl_files = _rtl_files(state, workflow_dir)
     top = _top(state, rtl_files)
     clk, rst = _find_clock_reset(rtl_files, top) if rtl_files else (None, None)
-    sby_txt = _gen_sby(top, rtl_files, formal_root, solver)
+    formal_rtl_files, blackboxed_modules = _prepare_formal_rtl(rtl_files, formal_root)
+    sby_txt = _gen_sby(top, formal_rtl_files, formal_root, solver)
     sby_path = os.path.join(formal_root, f"{top}.sby")
     _write(sby_path, sby_txt)
 
@@ -192,12 +239,12 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     run_result: Dict[str, Any] = {
         "tool": formal_tool,
         "solver": solver,
-        "available": bool(formal_tool == "symbiyosys" and sby_bin and solver_bin and rtl_files),
+        "available": bool(formal_tool == "symbiyosys" and sby_bin and solver_bin and formal_rtl_files),
         "attempted": False,
     }
     if formal_tool in {"none", "disabled", "off"}:
         run_result["disabled"] = True
-    elif not rtl_files:
+    elif not formal_rtl_files:
         run_result["blocked_reason"] = "no_system_rtl_files"
     elif not sby_bin or not solver_bin:
         run_result["blocked_reason"] = "tool_unavailable"
@@ -218,6 +265,9 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
             elif "Can't resolve task name" in combined_log or "Unsupported" in combined_log:
                 run_result["inconclusive"] = True
                 run_result["blocked_reason"] = "yosys_elaboration_unsupported_construct"
+            elif "Found logic loop" in combined_log:
+                run_result["inconclusive"] = True
+                run_result["blocked_reason"] = "yosys_formal_logic_loop"
 
     report = {
         "type": "system_formal_verification",
@@ -225,6 +275,8 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
         "generated_at": _now(),
         "top_module": top,
         "rtl_file_count": len(rtl_files),
+        "formal_rtl_file_count": len(formal_rtl_files),
+        "blackboxed_modules": blackboxed_modules,
         "clock": clk,
         "reset": rst,
         "toolchain": {"formal": formal_tool, "formal_solver": solver},

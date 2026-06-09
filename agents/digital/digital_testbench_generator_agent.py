@@ -747,6 +747,9 @@ def _gen_makefile(top: str) -> str:
 override TOPLEVEL_LANG := verilog
 override TOPLEVEL      := {top}
 override MODULE        := test_{top}
+override HDL_TOPLEVEL  := {top}
+override TEST_MODULES  := test_{top}
+override VERILATOR_TOPLEVEL := {top}
 
 unexport PYTHON_BIN
 unexport PYTHON

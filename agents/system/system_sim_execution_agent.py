@@ -229,6 +229,8 @@ def run_agent(state: dict) -> dict:
     requested_tests = (
         state.get("system_sim_testcases")
         or state.get("simulation_testcases")
+        or state.get("vv_testcases")
+        or state.get("testcases")
         or []
     )
 
@@ -306,6 +308,10 @@ def run_agent(state: dict) -> dict:
 
     env_base = os.environ.copy()
     env_base["TOPLEVEL"] = top
+    env_base["HDL_TOPLEVEL"] = top
+    env_base["VERILATOR_TOPLEVEL"] = top
+    env_base["MODULE"] = f"test_{top}"
+    env_base["TEST_MODULES"] = f"test_{top}"
     env_base["SIM"] = "verilator"
     env_base["NUM_ITERS"] = str(num_iters)
 
@@ -324,8 +330,11 @@ def run_agent(state: dict) -> dict:
                 "make",
                 f"TESTCASE={testcase}",
                 f"TOPLEVEL={top}",
+                f"HDL_TOPLEVEL={top}",
+                f"VERILATOR_TOPLEVEL={top}",
                 "TOPLEVEL_LANG=verilog",
                 f"MODULE=test_{top}",
+                f"TEST_MODULES=test_{top}",
                 f"EXTRA_ARGS={extra_args}",
             ]
 

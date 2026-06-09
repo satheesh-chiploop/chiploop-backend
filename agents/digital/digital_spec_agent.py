@@ -273,15 +273,31 @@ def _collect_module_port_names(spec_json: dict):
     return out
 
 
+def _collect_module_port_dirs(spec_json: dict):
+    hier = spec_json["hierarchy"]
+    mods = [hier["top_module"]] + list(hier.get("modules", []))
+    out = {}
+    for m in mods:
+        port_dirs = {}
+        for p in m.get("ports", []) or []:
+            if isinstance(p, dict) and p.get("name"):
+                port_dirs[str(p["name"])] = str(p.get("direction") or "").strip().lower()
+        out[m["name"]] = port_dirs
+    return out
+
+
 def _validate_hierarchical_endpoint_coverage(spec_json: dict) -> None:
     module_ports = _collect_module_port_names(spec_json)
+    module_dirs = _collect_module_port_dirs(spec_json)
     top_name = spec_json["hierarchy"]["top_module"]["name"]
     top_ports = module_ports[top_name]
+    top_dirs = module_dirs.get(top_name, {})
 
     for i, c in enumerate(spec_json.get("top_level_connections", [])):
         tp = c["top_port"]
         if tp not in top_ports:
             raise ValueError(f"top_level_connections[{i}].top_port '{tp}' is not present in top module ports.")
+        top_dir = top_dirs.get(tp)
         for dst in c.get("connected_to", []):
             if "." not in dst:
                 raise ValueError(f"top_level_connections[{i}] target '{dst}' is invalid. Expected module.port")
@@ -290,6 +306,22 @@ def _validate_hierarchical_endpoint_coverage(spec_json: dict) -> None:
                 raise ValueError(f"top_level_connections[{i}] target module '{mod}' does not exist.")
             if port not in module_ports[mod]:
                 raise ValueError(f"top_level_connections[{i}] target port '{mod}.{port}' is not present in module ports.")
+            child_dir = (module_dirs.get(mod) or {}).get(port)
+            if top_dir == "input" and child_dir not in {"input", "inout"}:
+                raise ValueError(
+                    f"top_level_connections[{i}] top input '{tp}' can only drive child input/inout endpoints; "
+                    f"target '{mod}.{port}' has direction '{child_dir}'."
+                )
+            if top_dir == "output" and child_dir not in {"output", "inout"}:
+                raise ValueError(
+                    f"top_level_connections[{i}] top output '{tp}' must be driven by child output/inout endpoint; "
+                    f"target '{mod}.{port}' has direction '{child_dir}'."
+                )
+            if top_dir == "inout" and child_dir not in {"inout"}:
+                raise ValueError(
+                    f"top_level_connections[{i}] top inout '{tp}' must connect to child inout endpoint; "
+                    f"target '{mod}.{port}' has direction '{child_dir}'."
+                )
 
     for i, s in enumerate(spec_json.get("inter_module_signals", [])):
         src = s["source"]
@@ -300,6 +332,11 @@ def _validate_hierarchical_endpoint_coverage(spec_json: dict) -> None:
             raise ValueError(f"inter_module_signals[{i}] source module '{smod}' does not exist.")
         if sport not in module_ports[smod]:
             raise ValueError(f"inter_module_signals[{i}] source port '{smod}.{sport}' is not present in module ports.")
+        src_dir = (module_dirs.get(smod) or {}).get(sport)
+        if src_dir not in {"output", "inout"}:
+            raise ValueError(
+                f"inter_module_signals[{i}] source port '{smod}.{sport}' must be output/inout, got '{src_dir}'."
+            )
 
         for dst in s.get("destinations", []):
             if "." not in dst:
@@ -309,6 +346,11 @@ def _validate_hierarchical_endpoint_coverage(spec_json: dict) -> None:
                 raise ValueError(f"inter_module_signals[{i}] destination module '{dmod}' does not exist.")
             if dport not in module_ports[dmod]:
                 raise ValueError(f"inter_module_signals[{i}] destination port '{dmod}.{dport}' is not present in module ports.")
+            dst_dir = (module_dirs.get(dmod) or {}).get(dport)
+            if dst_dir not in {"input", "inout"}:
+                raise ValueError(
+                    f"inter_module_signals[{i}] destination port '{dmod}.{dport}' must be input/inout, got '{dst_dir}'."
+                )
 
     for i, o in enumerate(spec_json.get("signal_ownership", [])):
         owner = o["owner"]
@@ -319,6 +361,11 @@ def _validate_hierarchical_endpoint_coverage(spec_json: dict) -> None:
             raise ValueError(f"signal_ownership[{i}] owner module '{omod}' does not exist.")
         if oport not in module_ports[omod]:
             raise ValueError(f"signal_ownership[{i}] owner port '{omod}.{oport}' is not present in module ports.")
+        owner_dir = (module_dirs.get(omod) or {}).get(oport)
+        if owner_dir not in {"output", "inout"}:
+            raise ValueError(
+                f"signal_ownership[{i}] owner port '{omod}.{oport}' must be output/inout, got '{owner_dir}'."
+            )
 
 
 def _validate_spec_contract(spec_json: dict, mode: str) -> None:
@@ -1139,6 +1186,10 @@ STRICT CONNECTIVITY FORMAT RULES:
 6. Do NOT summarize an interface as one grouped connection. Instead, expand it into explicit signal-level entries, one per real signal.
 7. If one module communicates multiple control/data/status signals to another module, list each signal separately in inter_module_signals with the exact producer port and consumer port.
 8. Every inter-module signal name must represent a real explicit signal, not a conceptual bundle.
+9. Every inter_module_signals[].source endpoint must be a producer port declared as output or inout.
+10. Every inter_module_signals[].destinations[] endpoint must be a consumer port declared as input or inout.
+11. Never list an output port as an inter_module_signals destination.
+12. Never list an input port as an inter_module_signals source.
 
 STRICT INTER-MODULE SIGNAL OBJECT RULES:
 1. Every object in inter_module_signals MUST include ALL of these fields:
@@ -1170,6 +1221,9 @@ STRICT TOP-LEVEL CONNECTION RULES:
 2. top_port must be the exact top-level port name.
 3. Every connected_to entry must be exactly "module.port".
 4. Do NOT connect a top-level port to a bare module name.
+5. If top_port is a top-level input, connected_to endpoints must be child input/inout ports.
+6. If top_port is a top-level output, connected_to endpoints must be child output/inout ports that drive the top output.
+7. Do NOT also list a top-level output's child driver as an inter_module_signals destination.
 
 STRICT SIGNAL OWNERSHIP RULES:
 1. Every object in signal_ownership MUST include:
@@ -1317,6 +1371,8 @@ Before emitting the JSON, verify ALL of the following:
     there must exist exactly one inter_module_signals entry that drives it.
 15. No module input port may remain "unexplained" (i.e., not connected via contract).
 16. No semantic signal (cfg_*, enable, mode, data, etc.) may be sourced from a transport bus unless explicitly defined in inter_module_signals.
+17. For every inter_module_signals entry, source direction is output/inout and every destination direction is input/inout.
+18. For every top_level_connections entry, endpoint directions match the top port direction.
 
 If the user spec is incomplete, choose the simplest valid architecture ONCE and encode it here.
 This JSON becomes the source of truth for downstream agents.

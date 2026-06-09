@@ -937,6 +937,9 @@ def _gen_makefile(top: str) -> str:
 override TOPLEVEL_LANG := verilog
 override TOPLEVEL      := {top}
 override MODULE        := test_{top}
+override HDL_TOPLEVEL  := {top}
+override TEST_MODULES  := test_{top}
+override VERILATOR_TOPLEVEL := {top}
 
 unexport PYTHON_BIN
 unexport PYTHON
@@ -1097,7 +1100,17 @@ NUM_ITERS=200 RANDOM_SEED=7 make TESTCASE=integrated_input_sanity
     artifacts["testcases_manifest"] = _record_text(workflow_id, agent_name, "vv/tb", "testcases.json", testcase_manifest_txt)
     artifacts["tb_contract"] = _record_text(workflow_id, agent_name, "vv/tb", "tb_contract.json", tb_contract_txt)
 
-    
+    rtl_artifacts: Dict[str, Any] = {}
+    for idx, rtl_path in enumerate(rtl_files):
+        try:
+            with open(rtl_path, "r", encoding="utf-8", errors="ignore") as fh:
+                rtl_text = fh.read()
+        except Exception:
+            continue
+        basename = os.path.basename(str(rtl_path).replace("\\", "/")) or f"system_rtl_{idx}.sv"
+        rtl_artifacts[basename] = _record_text(workflow_id, agent_name, "system/imported_rtl", basename, rtl_text)
+    artifacts["rtl_sources"] = rtl_artifacts
+
 
     report = {
         "type": "vv_system_testbench_generation",

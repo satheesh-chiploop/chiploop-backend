@@ -249,6 +249,8 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
         "code_coverage_summary": ["code_coverage_summary.json"],
         "coverage_spec": ["coverage_spec.json"],
         "testcases": ["testcases.json"],
+        "simulation_manifest": ["simulation_manifest.json"],
+        "tb_contract": ["tb_contract.json"],
         "verification_source_handoff": ["verification_source_handoff.json"],
     }
     files = {
@@ -258,6 +260,8 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
         "code_coverage_summary": _find(source_dir, "code_coverage_summary.json"),
         "coverage_spec": _find(source_dir, "coverage_spec.json"),
         "testcases": _find(source_dir, "testcases.json"),
+        "simulation_manifest": _find(source_dir, "simulation_manifest.json"),
+        "tb_contract": _find(source_dir, "tb_contract.json"),
         "verification_source_handoff": _find(source_dir, "verification_source_handoff.json"),
         "verification_plan": _find(source_dir, "verification_plan.md"),
         "monitor_checker_plan": _find(source_dir, "monitor_checker_plan.md"),
@@ -300,6 +304,12 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
 
     if not system_rtl_filelist:
         storage_system_rtl_filelist, filelist_text = _storage_text_by_filename(source_workflow_id, "system_rtl_filelist_sim.txt")
+        if not filelist_text:
+            manifest_rtl = loaded.get("simulation_manifest", {}).get("rtl_files")
+            contract_rtl = loaded.get("tb_contract", {}).get("rtl_files")
+            rtl_items = manifest_rtl if isinstance(manifest_rtl, list) and manifest_rtl else contract_rtl
+            if isinstance(rtl_items, list) and rtl_items:
+                filelist_text = "\n".join(str(item) for item in rtl_items if str(item).strip())
         if filelist_text:
             system_rtl_filelist, materialized_rtl_files, materialized_rtl_sources = _materialize_system_rtl_from_storage(
                 source_workflow_id,
@@ -309,6 +319,13 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
 
     if not system_top_sim:
         storage_soc_top_sim, soc_top_text = _storage_text_by_filename(source_workflow_id, "soc_top_sim.sv")
+        if not soc_top_text:
+            for key in ("simulation_manifest", "tb_contract"):
+                top_path = str(loaded.get(key, {}).get("soc_top_sim_path") or loaded.get(key, {}).get("top_sv_path") or "").strip()
+                if top_path:
+                    storage_soc_top_sim, soc_top_text = _storage_text_by_suffix(source_workflow_id, top_path)
+                    if soc_top_text:
+                        break
         if soc_top_text:
             system_top_sim = _materialize_storage_text(
                 workflow_dir / "system" / "integration" / "soc_top_sim.sv",
@@ -329,6 +346,12 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     if system_top_sim:
         state["soc_top_sim_path"] = str(system_top_sim)
         state["source_soc_top_sim_path"] = str(system_top_sim)
+    for key in ("simulation_manifest", "tb_contract"):
+        top_module = str(loaded.get(key, {}).get("top_module") or "").strip()
+        if top_module:
+            state["soc_top_sim_module"] = top_module
+            state["top_module"] = top_module
+            break
 
     out_dir = workflow_dir / "verify_closure"
     manifest = {
