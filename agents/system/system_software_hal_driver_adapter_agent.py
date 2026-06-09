@@ -308,6 +308,7 @@ pub use device_adapter::DeviceAdapter;
     written_files.append(f"{OUTPUT_SUBDIR}/{adapter_crate}/src/adapter/mod.rs")
 
     manifest = _manifest(contract, api_contract, adapter_crate, adapter_package_name)
+    manifest["files"] = list(written_files)
 
     debug_payload = {
         "agent": AGENT_NAME,

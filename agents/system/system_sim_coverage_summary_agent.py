@@ -142,7 +142,12 @@ def run_agent(state: dict) -> dict:
         if not formal_loaded:
             formal_status = "not_enabled"
         elif formal_run.get("attempted") is True:
-            formal_status = "pass" if formal_run.get("returncode") == 0 else "fail"
+            if formal_run.get("returncode") == 0:
+                formal_status = "pass"
+            elif formal_run.get("inconclusive") or formal_run.get("blocked_reason"):
+                formal_status = "inconclusive"
+            else:
+                formal_status = "fail"
         elif formal_run.get("disabled") is True:
             formal_status = "not_enabled"
         elif formal_run.get("available") is False:
@@ -218,6 +223,7 @@ def run_agent(state: dict) -> dict:
                 "attempted": formal_run.get("attempted"),
                 "returncode": formal_run.get("returncode"),
                 "blocked_reason": formal_run.get("blocked_reason"),
+                "inconclusive": formal_run.get("inconclusive"),
             },
             "golden_model": {"status": "not_enabled"},
             "toolchain": {

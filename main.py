@@ -884,6 +884,16 @@ SYSTEM_AGENT_FUNCTIONS: Dict[str,Any] = {
     "System Simulation Control Agent": system_simulation_control_agent,
     "System Simulation Execution Agent": system_sim_execution_agent,
     "System Simulation Coverage Summary Agent": system_sim_coverage_summary_agent,
+    "System Sim Closure Ingest Agent": digital_verify_closure_ingest_agent,
+    "System Sim Coverage Gap Analysis Agent": digital_coverage_gap_analysis_agent,
+    "System Sim Failure Triage Agent": digital_failure_triage_agent,
+    "System Sim Failure Debug Agent": digital_failure_debug_agent,
+    "System Sim Closure Recommendation Agent": digital_closure_recommendation_agent,
+    "System Sim Verification Plan Update Agent": digital_verification_plan_update_agent,
+    "System Sim Coverage Plan Update Agent": digital_coverage_plan_update_agent,
+    "System Sim Testcase Seed Update Agent": digital_testcase_seed_update_agent,
+    "System Sim Closure Rerun Planner Agent": digital_closure_rerun_planner_agent,
+    "System Sim Closure Iteration Judge Agent": digital_closure_iteration_judge_agent,
     "System Firmware CoSim Execution Agent": system_firmware_cosim_execution_agent,
     "System Firmware Coverage Summary Agent": system_firmware_coverage_summary_agent,
     "System Software Handoff Package Agent": system_software_handoff_package_agent,
@@ -1260,6 +1270,43 @@ SYSTEM_RTL_DEFINITION = _linear_workflow_definition([
     "System RTL Evidence Dashboard Agent",
 ])
 
+SYSTEM_SIM_DEFINITION = _linear_workflow_definition([
+    "System CoSim Ingest Agent",
+    "System Assertions (SVA) Agent",
+    "System Testbench Generator Agent",
+    "System Functional Coverage Agent",
+    "System Simulation Control Agent",
+    "System Simulation Execution Agent",
+    "System Simulation Coverage Summary Agent",
+])
+
+SYSTEM_SIM_CLOSURE_DEFINITION = _linear_workflow_definition([
+    "System Sim Closure Ingest Agent",
+    "System Sim Coverage Gap Analysis Agent",
+    "System Sim Failure Triage Agent",
+    "System Sim Failure Debug Agent",
+    "System Sim Closure Recommendation Agent",
+])
+
+SYSTEM_SIM_CLOSURE_LOOP_DEFINITION = _linear_workflow_definition([
+    "System Sim Closure Ingest Agent",
+    "System Sim Coverage Gap Analysis Agent",
+    "System Sim Failure Triage Agent",
+    "System Sim Failure Debug Agent",
+    "System Sim Closure Recommendation Agent",
+    "System Sim Verification Plan Update Agent",
+    "System Sim Coverage Plan Update Agent",
+    "System Sim Testcase Seed Update Agent",
+    "System Sim Closure Rerun Planner Agent",
+    "System Assertions (SVA) Agent",
+    "System Testbench Generator Agent",
+    "System Functional Coverage Agent",
+    "System Simulation Control Agent",
+    "System Simulation Execution Agent",
+    "System Simulation Coverage Summary Agent",
+    "System Sim Closure Iteration Judge Agent",
+])
+
 SYSTEM_PRODUCT_APP_BUILDER_DEFINITION = _linear_workflow_definition([
     "System Product Collateral Ingest Agent",
     "System Product Capability Model Agent",
@@ -1286,6 +1333,9 @@ LOCAL_PREBUILT_WORKFLOW_DEFINITIONS: Dict[str, Dict[str, Any]] = {
     "System_CPU_Model": SYSTEM_ARCHITECTURE_EXPLORER_DEFINITION,
     "Embedded_Run": EMBEDDED_RUN_DEFINITION,
     "System_RTL": SYSTEM_RTL_DEFINITION,
+    "System_Sim": SYSTEM_SIM_DEFINITION,
+    "System_Sim_Closure": SYSTEM_SIM_CLOSURE_DEFINITION,
+    "System_Sim_Closure_Loop": SYSTEM_SIM_CLOSURE_LOOP_DEFINITION,
     "System_Synthesis": SYSTEM_SYNTHESIS_DEFINITION,
     "System_PD": SYSTEM_PD_DEFINITION,
     "System_Software": SYSTEM_SOFTWARE_DEFINITION,
@@ -1307,6 +1357,9 @@ LOCAL_RUNTIME_WORKFLOW_OVERRIDES = {
     "Digital_Integrate",
     "Embedded_Run",
     "System_RTL",
+    "System_Sim",
+    "System_Sim_Closure",
+    "System_Sim_Closure_Loop",
     "System_Synthesis",
     "System_PD",
     "System_Software",
@@ -3045,7 +3098,6 @@ def execute_digital_app_background(
                 "Analog Behavioral Model Agent",
                 "System Integration Intent Agent",
                 "System Top Assembly Agent",
-                "System Assertions (SVA) Agent",
                 "System RTL Handoff Package Agent",
                 "System RTL Evidence Dashboard Agent",
                 "Digital Spec2RTL Conformance Agent",
@@ -7186,7 +7238,6 @@ def execute_system_app_background(
                 "Analog Behavioral Model Agent",
                 "System Integration Intent Agent",
                 "System Top Assembly Agent",
-                "System Assertions (SVA) Agent",
                 "System RTL Handoff Package Agent",
                 "System RTL Evidence Dashboard Agent",
                 "Digital Spec2RTL Conformance Agent",
@@ -7229,13 +7280,51 @@ def execute_system_app_background(
                 append_log_run(run_id, f"{template_workflow_name}: added Spec2RTL conformance check")
 
         # Execute using system loop map
-        _run_nodes_with_shared_state(
-            workflow_id=workflow_id,
-            run_id=run_id,
-            loop_type="system",
-            nodes=nodes,
-            shared_state=shared_state,
-        )
+        if template_workflow_name == "System_Sim_Closure_Loop":
+            max_iterations = max(1, min(int(shared_state.get("max_iterations") or 1), 10))
+
+            def _node_label(node: Dict[str, Any]) -> str:
+                return ((node.get("data") or {}).get("backendLabel") or node.get("label") or "").strip()
+
+            ingest_nodes = [node for node in nodes if _node_label(node) == "System Sim Closure Ingest Agent"]
+            body_nodes = [node for node in nodes if _node_label(node) != "System Sim Closure Ingest Agent"]
+            if ingest_nodes:
+                append_log_workflow(workflow_id, "System Sim closure loop ingest: loading baseline System Sim artifacts", phase="closure_loop_ingest")
+                append_log_run(run_id, "System Sim closure loop ingest: loading baseline System Sim artifacts")
+                _run_nodes_with_shared_state(
+                    workflow_id=workflow_id,
+                    run_id=run_id,
+                    loop_type="system",
+                    nodes=ingest_nodes,
+                    shared_state=shared_state,
+                )
+            for iteration in range(1, max_iterations + 1):
+                shared_state["closure_iteration_index"] = iteration
+                append_log_workflow(workflow_id, f"System Sim closure loop iteration {iteration}/{max_iterations} started", phase=f"closure_loop_iteration_{iteration}")
+                append_log_run(run_id, f"System Sim closure loop iteration {iteration}/{max_iterations} started")
+                _run_nodes_with_shared_state(
+                    workflow_id=workflow_id,
+                    run_id=run_id,
+                    loop_type="system",
+                    nodes=body_nodes,
+                    shared_state=shared_state,
+                )
+                judgement = shared_state.get("closure_iteration_judgement") if isinstance(shared_state.get("closure_iteration_judgement"), dict) else {}
+                stop_reason = judgement.get("stop_reason") or "not_reported"
+                append_log_workflow(workflow_id, f"System Sim closure loop iteration {iteration}/{max_iterations} completed: {stop_reason}", phase=f"closure_loop_iteration_{iteration}_done")
+                append_log_run(run_id, f"System Sim closure loop iteration {iteration}/{max_iterations} completed: {stop_reason}")
+                if stop_reason in {"closure_achieved", "no_measurable_improvement"}:
+                    append_log_workflow(workflow_id, f"System Sim closure loop stopped early after iteration {iteration}: {stop_reason}", phase="closure_loop_stop")
+                    append_log_run(run_id, f"System Sim closure loop stopped early after iteration {iteration}: {stop_reason}")
+                    break
+        else:
+            _run_nodes_with_shared_state(
+                workflow_id=workflow_id,
+                run_id=run_id,
+                loop_type="system",
+                nodes=nodes,
+                shared_state=shared_state,
+            )
 
         append_log_workflow(workflow_id, f"🎉 System App complete: {template_workflow_name}", status="completed", phase="done")
         append_log_run(run_id, f"🎉 System App complete: {template_workflow_name}", status="completed")
@@ -7307,6 +7396,59 @@ async def apps_system_sim(
         "App: System Simulation",
         "System_Sim"
     )
+
+@app.post("/apps/system/sim/closure/run")
+async def apps_system_sim_closure_run(request: Request, background_tasks: BackgroundTasks, payload: DigitalVerifyClosureAppIn):
+    user_id = _require_user_id(request)
+    workflow_id, run_id, base_dir = _create_app_workflow_and_run(user_id, "App: System Sim Closure Analysis", "system")
+    artifact_dir = os.path.join(base_dir, "system-sim-closure")
+    os.makedirs(artifact_dir, exist_ok=True)
+
+    payload_dict = payload.dict()
+    payload_dict["parent_workflow_id"] = payload.source_verify_workflow_id
+    payload_dict["source_system_sim_workflow_id"] = payload.source_verify_workflow_id
+
+    background_tasks.add_task(
+        execute_system_app_background,
+        workflow_id,
+        run_id,
+        user_id,
+        artifact_dir,
+        "System_Sim_Closure",
+        payload_dict,
+        "system_sim_closure",
+    )
+
+    return {"ok": True, "workflow_id": workflow_id, "run_id": run_id}
+
+
+@app.post("/apps/system/sim/closure-loop/run")
+async def apps_system_sim_closure_loop_run(request: Request, background_tasks: BackgroundTasks, payload: DigitalVerifyClosureAppIn):
+    user_id = _require_user_id(request)
+    workflow_id, run_id, base_dir = _create_app_workflow_and_run(user_id, "App: System Sim Closure Loop", "system")
+    artifact_dir = os.path.join(base_dir, "system-sim-closure-loop")
+    os.makedirs(artifact_dir, exist_ok=True)
+
+    payload_dict = payload.dict()
+    payload_dict["parent_workflow_id"] = payload.source_verify_workflow_id
+    payload_dict["source_system_sim_workflow_id"] = payload.source_verify_workflow_id
+    payload_dict["closure_iteration_index"] = 1
+    payload_dict["max_iterations"] = max(int(payload.max_iterations or 1), 1)
+    if not payload_dict.get("seed_budget"):
+        payload_dict["seed_budget"] = payload.seed_count or 5
+
+    background_tasks.add_task(
+        execute_system_app_background,
+        workflow_id,
+        run_id,
+        user_id,
+        artifact_dir,
+        "System_Sim_Closure_Loop",
+        payload_dict,
+        "system_sim_closure_loop",
+    )
+
+    return {"ok": True, "workflow_id": workflow_id, "run_id": run_id}
 
 
 @app.post("/apps/system/architecture/run")

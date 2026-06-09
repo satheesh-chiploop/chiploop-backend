@@ -310,6 +310,22 @@ def _required_manifest_path(manifest: Dict[str, Any], key: str) -> str:
     return value
 
 
+def _required_manifest_or_state_path(manifest: Dict[str, Any], key: str, state: Dict[str, Any], state_keys: List[str]) -> str:
+    value = _norm_path(manifest.get(key))
+    if value:
+        return value
+    value = _first_path_from_keys(state, state_keys)
+    if value:
+        return value
+    for container_key in ("firmware", "embedded", "system"):
+        container = state.get(container_key)
+        if isinstance(container, dict):
+            value = _norm_path(container.get(key))
+            if value:
+                return value
+    raise RuntimeError(f"Required manifest key missing: {key}")
+
+
 def _optional_manifest_path(manifest: Dict[str, Any], key: str) -> str:
     return _norm_path(manifest.get(key))
 
@@ -565,9 +581,24 @@ def _build_manifest(
     exec_results = (execution_summary.get("results") or {}) if isinstance(execution_summary, dict) else {}
     cov_metrics = (coverage_summary.get("coverage_metrics") or {}) if isinstance(coverage_summary, dict) else {}
 
-    register_map_path = _required_manifest_path(firmware_manifest, "register_map_path")
-    hal_path = _required_manifest_path(firmware_manifest, "hal_path")
-    driver_path = _required_manifest_path(firmware_manifest, "driver_path")
+    register_map_path = _required_manifest_or_state_path(
+        firmware_manifest,
+        "register_map_path",
+        state,
+        ["firmware_register_map_path", "system_register_map_path", "digital_register_map_path", "digital_regmap_path"],
+    )
+    hal_path = _required_manifest_or_state_path(
+        firmware_manifest,
+        "hal_path",
+        state,
+        ["firmware_hal_path", "system_hal_path", "hal_path"],
+    )
+    driver_path = _required_manifest_or_state_path(
+        firmware_manifest,
+        "driver_path",
+        state,
+        ["firmware_driver_path", "driver_scaffold_path", "system_driver_path", "driver_path"],
+    )
 
     register_dump_path = _optional_manifest_path(firmware_manifest, "register_dump_path")
     interrupt_path = _optional_manifest_path(firmware_manifest, "interrupt_map_path")
@@ -832,9 +863,24 @@ def run_agent(state: dict) -> dict:
 
         required_paths = {
             "firmware_manifest_path": firmware_manifest_path,
-            "register_map_path": _required_manifest_path(firmware_manifest, "register_map_path"),
-            "hal_path": _required_manifest_path(firmware_manifest, "hal_path"),
-            "driver_path": _required_manifest_path(firmware_manifest, "driver_path"),
+            "register_map_path": _required_manifest_or_state_path(
+                firmware_manifest,
+                "register_map_path",
+                state,
+                ["firmware_register_map_path", "system_register_map_path", "digital_register_map_path", "digital_regmap_path"],
+            ),
+            "hal_path": _required_manifest_or_state_path(
+                firmware_manifest,
+                "hal_path",
+                state,
+                ["firmware_hal_path", "system_hal_path", "hal_path"],
+            ),
+            "driver_path": _required_manifest_or_state_path(
+                firmware_manifest,
+                "driver_path",
+                state,
+                ["firmware_driver_path", "driver_scaffold_path", "system_driver_path", "driver_path"],
+            ),
         }
 
         required_artifacts = {

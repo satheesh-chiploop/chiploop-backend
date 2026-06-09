@@ -213,6 +213,15 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
         if text_value:
             text_artifacts[key] = text_value
 
+    system_rtl_filelist = _find(source_dir, "system_rtl_filelist_sim.txt")
+    system_top_sim = _find(source_dir, "soc_top_sim.sv")
+    if system_rtl_filelist:
+        state["system_rtl_filelist_sim"] = str(system_rtl_filelist)
+        state["source_system_rtl_filelist_sim"] = str(system_rtl_filelist)
+    if system_top_sim:
+        state["soc_top_sim_path"] = str(system_top_sim)
+        state["source_soc_top_sim_path"] = str(system_top_sim)
+
     out_dir = workflow_dir / "verify_closure"
     manifest = {
         "type": "verify_closure_ingest",
@@ -221,6 +230,8 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
         "found_files": {key: str(path) if path else None for key, path in files.items()},
         "found_storage_files": storage_files,
         "found_text_storage_files": text_storage_files,
+        "system_rtl_filelist_sim": str(system_rtl_filelist) if system_rtl_filelist else None,
+        "soc_top_sim_path": str(system_top_sim) if system_top_sim else None,
         "coverage_targets": state.get("coverage_targets"),
         "seed_count": state.get("seed_count"),
         "toolchain": state.get("toolchain") if isinstance(state.get("toolchain"), dict) else {},

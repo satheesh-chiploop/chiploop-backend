@@ -186,6 +186,21 @@ def _normalize_member_path(path: str, prefix: str = "system/software/") -> str:
 def _dedupe_keep_order(items: List[str]) -> List[str]:
     return list(dict.fromkeys([x for x in items if _is_nonempty_str(x)]))
 
+def _manifest_files(*manifests: Dict[str, Any]) -> set[str]:
+    files: set[str] = set()
+    for manifest in manifests:
+        if not isinstance(manifest, dict):
+            continue
+        for path in manifest.get("files") or []:
+            p = str(path or "").strip().replace("\\", "/").lstrip("/")
+            if p:
+                files.add(p)
+    return files
+
+def _declared_member_cargo_toml(member: str) -> str:
+    normalized = _normalize_member_path(member)
+    return f"system/software/{normalized}/Cargo.toml" if normalized else ""
+
 def _preferred_cargo_bin() -> str:
     preferred = "/root/.cargo/bin/cargo"
     if os.path.isfile(preferred) and os.access(preferred, os.X_OK):
@@ -217,6 +232,13 @@ def run_agent(state: dict) -> dict:
         "system_software_tools_manifest",
         "system_software_tools_manifest_path",
         "system/software/tools/system_software_tools_manifest.json",
+    )
+    services_manifest = _load_manifest(
+        state,
+        workflow_dir,
+        "system_software_core_services_manifest",
+        "system_software_core_services_manifest_path",
+        "system/software/services/system_software_core_services_manifest.json",
     )
     adapter_manifest = _load_manifest(
         state,
@@ -285,6 +307,46 @@ def run_agent(state: dict) -> dict:
         members.extend([f"../tools/{name}" for name in tool_names])
 
     members = _dedupe_keep_order(members)
+    declared_files = _manifest_files(sdk_manifest, app_manifest, tools_manifest, services_manifest, adapter_manifest)
+
+    package_name_by_member: Dict[str, str] = {
+        sdk_member: sdk_crate,
+        "services": str(
+            services_manifest.get("package_name")
+            or services_manifest.get("crate_name")
+            or services_manifest.get("service_package_name")
+            or "system_software_services"
+        ).strip(),
+        adapter_member: str(
+            adapter_manifest.get("adapter_package_name")
+            or adapter_manifest.get("adapter_crate")
+            or os.path.basename(adapter_member)
+        ).strip(),
+    }
+    for item in applications:
+        if not isinstance(item, dict):
+            continue
+        member = _normalize_member_path(item.get("path") or f"system/software/apps/{item.get('app_name', '')}")
+        if member:
+            package_name_by_member[member] = str(
+                item.get("cargo_package")
+                or item.get("package_name")
+                or item.get("binary_name")
+                or item.get("app_name")
+                or os.path.basename(member)
+            ).strip()
+    for item in tools:
+        if not isinstance(item, dict):
+            continue
+        member = _normalize_member_path(item.get("path") or f"system/software/tools/{item.get('tool_name', '')}")
+        if member:
+            package_name_by_member[member] = str(
+                item.get("cargo_package")
+                or item.get("package_name")
+                or item.get("binary_name")
+                or item.get("tool_name")
+                or os.path.basename(member)
+            ).strip()
 
     missing_members = []
     package_name_to_member = {}
@@ -301,14 +363,29 @@ def run_agent(state: dict) -> dict:
             continue
 
         if not cargo_toml_path or not os.path.isfile(cargo_toml_path):
-            missing_members.append({
-                "member": member,
-                "expected_cargo_toml": cargo_toml_path,
-                "exists": bool(cargo_toml_path and os.path.isfile(cargo_toml_path)),
-            })
+            declared_cargo = _declared_member_cargo_toml(member)
+            if declared_cargo not in declared_files:
+                missing_members.append({
+                    "member": member,
+                    "expected_cargo_toml": cargo_toml_path,
+                    "declared_cargo_toml": declared_cargo,
+                    "exists": bool(cargo_toml_path and os.path.isfile(cargo_toml_path)),
+                    "declared_in_manifest": False,
+                })
+                continue
+            pkg_name = package_name_by_member.get(member) or os.path.basename(member)
+            if pkg_name in package_name_to_member:
+                duplicates.append({
+                    "package_name": pkg_name,
+                    "members": [package_name_to_member[pkg_name], member],
+                })
+            else:
+                package_name_to_member[pkg_name] = member
             continue
 
         pkg_name = _package_name_from_cargo_toml(cargo_toml_path)
+        if not pkg_name:
+            pkg_name = package_name_by_member.get(member) or os.path.basename(member)
         if not pkg_name:
             missing_members.append({
                 "member": member,

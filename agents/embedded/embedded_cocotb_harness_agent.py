@@ -155,7 +155,61 @@ def _safe_relpath(path: str, root: str) -> str:
         return os.path.basename(str(path))
 
 
-def _index_module_definitions(workflow_dir: str) -> Dict[str, List[str]]:
+def _path_to_rel_or_abs(path: str, workflow_dir: str) -> str:
+    if not path:
+        return ""
+    abs_path = path if os.path.isabs(path) else os.path.abspath(os.path.join(workflow_dir, path))
+    try:
+        if os.path.commonpath([os.path.abspath(workflow_dir), abs_path]) == os.path.abspath(workflow_dir):
+            return _safe_relpath(abs_path, workflow_dir)
+    except Exception:
+        pass
+    return abs_path.replace("\\", "/")
+
+
+def _candidate_rtl_paths_from_state(state: dict, workflow_dir: str) -> List[str]:
+    values: List[str] = []
+    for key in ("system_rtl_files", "rtl_inputs", "rtl_files", "verilog_files", "sv_files"):
+        raw = state.get(key)
+        if isinstance(raw, list):
+            values.extend([str(v) for v in raw if str(v).strip()])
+        elif isinstance(raw, str) and raw.strip():
+            values.append(raw)
+
+    for key in ("system_rtl_filelist_sim", "rtl_filelist_path", "filelist_path"):
+        raw = state.get(key)
+        if not isinstance(raw, str) or not raw.strip():
+            continue
+        filelist_abs = raw if os.path.isabs(raw) else os.path.abspath(os.path.join(workflow_dir, raw))
+        if not os.path.isfile(filelist_abs):
+            continue
+        try:
+            with open(filelist_abs, "r", encoding="utf-8", errors="ignore") as fh:
+                for line in fh:
+                    item = line.strip()
+                    if not item or item.startswith("#"):
+                        continue
+                    if os.path.isabs(item):
+                        values.append(item)
+                    else:
+                        values.append(os.path.abspath(os.path.join(os.path.dirname(filelist_abs), item)))
+        except Exception:
+            continue
+
+    out: List[str] = []
+    seen = set()
+    for value in values:
+        abs_path = value if os.path.isabs(value) else os.path.abspath(os.path.join(workflow_dir, value))
+        if not abs_path.lower().endswith((".sv", ".v")) or not os.path.isfile(abs_path):
+            continue
+        rel_or_abs = _path_to_rel_or_abs(abs_path, workflow_dir)
+        if rel_or_abs not in seen:
+            seen.add(rel_or_abs)
+            out.append(rel_or_abs)
+    return out
+
+
+def _index_module_definitions(workflow_dir: str, extra_rtl_paths: Optional[List[str]] = None) -> Dict[str, List[str]]:
     module_to_files: Dict[str, List[str]] = {}
     if not workflow_dir or not os.path.isdir(workflow_dir):
         return module_to_files
@@ -169,6 +223,15 @@ def _index_module_definitions(workflow_dir: str) -> Dict[str, List[str]]:
                 module_to_files.setdefault(mod, [])
                 if rel_path not in module_to_files[mod]:
                     module_to_files[mod].append(rel_path)
+    for path in extra_rtl_paths or []:
+        abs_path = path if os.path.isabs(path) else os.path.abspath(os.path.join(workflow_dir, path))
+        if not os.path.isfile(abs_path):
+            continue
+        rel_or_abs = _path_to_rel_or_abs(abs_path, workflow_dir)
+        for mod in _extract_defined_modules_from_file(abs_path):
+            module_to_files.setdefault(mod, [])
+            if rel_or_abs not in module_to_files[mod]:
+                module_to_files[mod].append(rel_or_abs)
     return module_to_files
 
 
@@ -186,7 +249,9 @@ def _resolve_required_verilog_sources(workflow_dir: str, soc_top_relpath: str, s
 
     required_modules = _extract_instantiated_modules_from_top(soc_top_text)
     debug["instantiated_modules"] = list(required_modules)
-    module_to_files = _index_module_definitions(workflow_dir)
+    extra_rtl_paths = _candidate_rtl_paths_from_state(state, workflow_dir)
+    module_to_files = _index_module_definitions(workflow_dir, extra_rtl_paths=extra_rtl_paths)
+    debug["state_rtl_candidates"] = extra_rtl_paths
 
     for mod in required_modules:
         candidates = module_to_files.get(mod, [])

@@ -135,6 +135,79 @@ def _top_rtl_file(spec_json: dict, mode: str) -> str:
     return spec_json["rtl_output_file"] if mode == "flat" else spec_json["hierarchy"]["top_module"]["rtl_output_file"]
 
 
+def _module_by_name(spec_json: dict, mode: str) -> Dict[str, dict]:
+    if mode != "hierarchical":
+        return {}
+    modules = [spec_json["hierarchy"]["top_module"]] + list(spec_json["hierarchy"].get("modules", []))
+    return {
+        str(module.get("name") or "").strip(): module
+        for module in modules
+        if isinstance(module, dict) and str(module.get("name") or "").strip()
+    }
+
+
+def _set_module_port_direction(module: dict, port_name: str, direction: str) -> None:
+    if not isinstance(module, dict) or not port_name or direction not in {"input", "output", "inout"}:
+        return
+    for port in module.get("ports", []) or []:
+        if isinstance(port, dict) and str(port.get("name") or "").strip() == port_name:
+            port["direction"] = direction
+            break
+
+    if direction == "output":
+        must_drive = list(module.get("must_drive") or [])
+        if port_name not in must_drive:
+            must_drive.append(port_name)
+        module["must_drive"] = must_drive
+        module["must_receive"] = [p for p in (module.get("must_receive") or []) if p != port_name]
+        module["must_not_drive"] = [p for p in (module.get("must_not_drive") or []) if p != port_name]
+    elif direction == "input":
+        must_receive = list(module.get("must_receive") or [])
+        if port_name not in must_receive:
+            must_receive.append(port_name)
+        module["must_receive"] = must_receive
+        module["must_drive"] = [p for p in (module.get("must_drive") or []) if p != port_name]
+
+
+def _reconcile_hierarchical_signal_directions(spec_json: dict, mode: str) -> dict:
+    """
+    Make the structured contract self-consistent before prompting RTL generation.
+    Ownership/source endpoints are drivers; destination endpoints are consumers
+    unless the same endpoint is explicitly a driver elsewhere.
+    """
+    if mode != "hierarchical":
+        return spec_json
+
+    modules = _module_by_name(spec_json, mode)
+    desired: Dict[Tuple[str, str], str] = {}
+
+    def mark(endpoint: str, direction: str) -> None:
+        try:
+            module_name, port_name = _split_endpoint(str(endpoint or ""))
+        except Exception:
+            return
+        if module_name in modules and port_name:
+            key = (module_name, port_name)
+            if direction == "output" or key not in desired:
+                desired[key] = direction
+
+    for sig in spec_json.get("inter_module_signals", []) or []:
+        if not isinstance(sig, dict):
+            continue
+        mark(sig.get("source"), "output")
+        for dst in sig.get("destinations", []) or []:
+            mark(dst, "input")
+
+    for owner in spec_json.get("signal_ownership", []) or []:
+        if isinstance(owner, dict):
+            mark(owner.get("owner"), "output")
+
+    for (module_name, port_name), direction in desired.items():
+        _set_module_port_direction(modules[module_name], port_name, direction)
+
+    return spec_json
+
+
 def _parse_named_verilog_blocks(llm_output: str) -> Dict[str, str]:
     blocks = re.findall(
         r"---BEGIN\s+([A-Za-z_][\w\-]*\.s?vh?)---(.*?)---END\s+\1---",
@@ -647,6 +720,8 @@ def _validate_connectivity_contract(spec_json: dict, mode: str) -> List[str]:
             dirs = _port_dir_map(modules[sm]["ports"])
             if sp not in dirs:
                 issues.append(f"❌ inter_module_signals source port '{sm}.{sp}' does not exist.")
+            elif dirs.get(sp) not in {"output", "inout"}:
+                issues.append(f"❌ inter_module_signals source port '{sm}.{sp}' must be output/inout, got '{dirs.get(sp)}'.")
 
         for dst in sig["destinations"]:
             dm = dst["module"]
@@ -657,6 +732,20 @@ def _validate_connectivity_contract(spec_json: dict, mode: str) -> List[str]:
                 dirs = _port_dir_map(modules[dm]["ports"])
                 if dp not in dirs:
                     issues.append(f"❌ inter_module_signals destination port '{dm}.{dp}' does not exist.")
+                elif dirs.get(dp) not in {"input", "inout"}:
+                    issues.append(f"❌ inter_module_signals destination port '{dm}.{dp}' must be input/inout, got '{dirs.get(dp)}'.")
+
+    for owner in contract["ownership"]:
+        om = owner["owner"]["module"]
+        op = owner["owner"]["port"]
+        if om not in modules:
+            issues.append(f"❌ signal_ownership owner module '{om}' does not exist.")
+            continue
+        dirs = _port_dir_map(modules[om]["ports"])
+        if op not in dirs:
+            issues.append(f"❌ signal_ownership owner port '{om}.{op}' does not exist.")
+        elif dirs.get(op) not in {"output", "inout"}:
+            issues.append(f"❌ signal_ownership owner port '{om}.{op}' must be output/inout, got '{dirs.get(op)}'.")
 
     return issues
 
@@ -2068,6 +2157,7 @@ def _run(context: AgentContext) -> dict:
     try:
         _stage("normalizing_spec")
         spec_json, mode = _normalize_spec_json(spec_obj)
+        spec_json = _reconcile_hierarchical_signal_directions(spec_json, mode)
         source_spec_text = state.get("spec_text") or state.get("spec") or state.get("digital_spec_text")
         if isinstance(source_spec_text, str) and source_spec_text.strip():
             spec_json["_source_spec_text"] = source_spec_text.strip()

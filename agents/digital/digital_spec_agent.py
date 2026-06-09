@@ -662,6 +662,73 @@ def _ensure_hierarchical_port_closure(spec_json: dict) -> dict:
     return spec_json
 
 
+def _normalize_endpoint_port(endpoint: str):
+    if not isinstance(endpoint, str) or "." not in endpoint:
+        return "", ""
+    module_name, port_name = endpoint.split(".", 1)
+    port_name = re.sub(r"\[[^\]]+\]", "", port_name).strip()
+    return module_name.strip(), port_name
+
+
+def _set_reconciled_port_direction(module: dict, port_name: str, direction: str) -> None:
+    if not isinstance(module, dict) or not port_name or direction not in {"input", "output", "inout"}:
+        return
+    for port in module.get("ports", []) or []:
+        if isinstance(port, dict) and str(port.get("name") or "").strip() == port_name:
+            port["direction"] = direction
+            break
+
+    if direction == "output":
+        must_drive = list(module.get("must_drive") or [])
+        if port_name not in must_drive:
+            must_drive.append(port_name)
+        module["must_drive"] = must_drive
+        module["must_receive"] = [p for p in (module.get("must_receive") or []) if p != port_name]
+        module["must_not_drive"] = [p for p in (module.get("must_not_drive") or []) if p != port_name]
+    elif direction == "input":
+        must_receive = list(module.get("must_receive") or [])
+        if port_name not in must_receive:
+            must_receive.append(port_name)
+        module["must_receive"] = must_receive
+        module["must_drive"] = [p for p in (module.get("must_drive") or []) if p != port_name]
+
+
+def _reconcile_hierarchical_signal_directions(spec_json: dict, mode: str) -> dict:
+    if mode != "hierarchical":
+        return spec_json
+    hier = spec_json.get("hierarchy") or {}
+    modules = [hier.get("top_module") or {}] + list(hier.get("modules") or [])
+    module_map = {
+        str(module.get("name") or "").strip(): module
+        for module in modules
+        if isinstance(module, dict) and str(module.get("name") or "").strip()
+    }
+    desired = {}
+
+    def mark(endpoint: str, direction: str) -> None:
+        module_name, port_name = _normalize_endpoint_port(endpoint)
+        if module_name in module_map and port_name:
+            key = (module_name, port_name)
+            if direction == "output" or key not in desired:
+                desired[key] = direction
+
+    for sig in spec_json.get("inter_module_signals", []) or []:
+        if not isinstance(sig, dict):
+            continue
+        mark(sig.get("source"), "output")
+        for dst in sig.get("destinations", []) or []:
+            mark(dst, "input")
+
+    for owner in spec_json.get("signal_ownership", []) or []:
+        if isinstance(owner, dict):
+            mark(owner.get("owner"), "output")
+
+    for (module_name, port_name), direction in desired.items():
+        _set_reconciled_port_direction(module_map[module_name], port_name, direction)
+
+    return spec_json
+
+
 def _ensure_hierarchical_top_level_connections(spec_json: dict) -> dict:
     if not isinstance(spec_json.get("hierarchy"), dict):
         return spec_json
@@ -779,6 +846,7 @@ def _compile_spec_contract(llm_output: str, spec_dir: str, suffix: str = "", req
     if mode == "hierarchical":
         spec_json = _ensure_hierarchical_top_level_connections(spec_json)
         spec_json = _ensure_hierarchical_port_closure(spec_json)
+        spec_json = _reconcile_hierarchical_signal_directions(spec_json, mode)
         logger.info(f"🔍 Digital Spec Agent hierarchical port closure done suffix='{suffix or 'pass1'}'")
 
    

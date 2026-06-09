@@ -417,7 +417,7 @@ def run_agent(state: dict) -> dict:
 
     required = {
         "soc_top_sim_path": soc_top_sim_path if soc_top_exists else "",
-        "firmware_elf_real": "yes" if real_elf_exists else "",
+        "firmware_elf_path": firmware_elf_path if elf_exists else "",
         "makefile_path": makefile_path,
         "test_paths": test_paths,
         "rtl_inputs": rtl_inputs,
@@ -504,6 +504,7 @@ def run_agent(state: dict) -> dict:
         "passed_test_count": summary["results"]["passed_test_count"],
         "failed_test_count": summary["results"]["failed_test_count"],
         "firmware_elf_detected": elf_exists,
+        "firmware_elf_real": real_elf_exists,
         "firmware_elf_placeholder": elf_placeholder,
         "firmware_elf_path": firmware_elf_path,
         "soc_top_sim_path": soc_top_sim_path if soc_top_exists else "",

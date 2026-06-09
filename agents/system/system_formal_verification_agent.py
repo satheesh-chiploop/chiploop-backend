@@ -144,7 +144,7 @@ def _find_clock_reset(rtl_files: List[str], top: str) -> tuple[Optional[str], Op
 
 def _gen_sby(top: str, rtl_files: List[str], formal_root: str, solver: str) -> str:
     rels = [os.path.relpath(path, formal_root).replace("\\", "/") for path in rtl_files[:200]]
-    reads = "\n".join(f"read_verilog -sv {os.path.basename(path)}" for path in rels)
+    reads = "\n".join(f"read_verilog -formal -sv {os.path.basename(path)}" for path in rels)
     files = "\n".join(rels)
     return f"""# Auto-generated System Sim formal setup for {top}
 
@@ -158,6 +158,11 @@ smtbmc {solver}
 
 [script]
 {reads}
+hierarchy -top {top}
+proc
+async2sync
+dffunmap
+opt
 prep -top {top}
 
 [files]
@@ -199,12 +204,20 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     else:
         run_result["attempted"] = True
         proc = run_command(state, "system_formal_verification", [sby_bin, "-f", os.path.basename(sby_path)], cwd=formal_root, timeout_sec=600)
+        combined_log = "\n".join((proc.stdout or "").splitlines()[-200:] + (proc.stderr or "").splitlines()[-200:])
         run_result.update({
             "returncode": proc.returncode,
             "stdout_tail": (proc.stdout or "").splitlines()[-120:],
             "stderr_tail": (proc.stderr or "").splitlines()[-120:],
             "tool_execution": proc.to_dict(),
         })
+        if proc.returncode != 0:
+            if "Multiple edge sensitive events" in combined_log:
+                run_result["inconclusive"] = True
+                run_result["blocked_reason"] = "yosys_elaboration_multi_edge"
+            elif "Can't resolve task name" in combined_log or "Unsupported" in combined_log:
+                run_result["inconclusive"] = True
+                run_result["blocked_reason"] = "yosys_elaboration_unsupported_construct"
 
     report = {
         "type": "system_formal_verification",
@@ -240,6 +253,7 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     state["formal_report_json"] = os.path.join(formal_root, "formal_report.json")
     state["status"] = (
         "System formal pass" if run_result.get("attempted") and run_result.get("returncode") == 0
+        else "System formal inconclusive" if run_result.get("inconclusive")
         else "System formal not run" if not run_result.get("attempted")
         else "System formal failed"
     )

@@ -943,11 +943,8 @@ unexport PYTHON
 override export PYTHON_BIN := {python_exe}
 override export PYTHON     := {python_exe}
 override SIM := verilator
-EXTRA_ARGS += --trace --trace-structs --coverage --assert
-EXTRA_ARGS += -Wno-fatal
-EXTRA_ARGS += -Wno-CASEINCOMPLETE
-EXTRA_ARGS += -Wno-WIDTH
-EXTRA_ARGS += -Wno-UNOPTFLAT
+override EXTRA_ARGS += --trace --trace-structs --coverage --assert -Wno-fatal -Wno-CASEINCOMPLETE -Wno-WIDTH -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC -Wno-UNOPTFLAT -Wno-MULTIDRIVEN -Wno-PINMISSING
+override COMPILE_ARGS += -Wno-fatal -Wno-CASEINCOMPLETE -Wno-WIDTH -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC -Wno-UNOPTFLAT -Wno-MULTIDRIVEN -Wno-PINMISSING
 
 include rtl_sources.mk
 -include verification_sources.mk

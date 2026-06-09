@@ -369,11 +369,27 @@ def run_agent(state: dict) -> dict:
             key=os.path.basename(placeholder_elf_rel),
         )
 
+        manifest = dict(manifest or {})
+        build_manifest = dict(manifest.get("build") or {})
+        build_manifest["target_triple"] = target_triple
+        build_manifest["build_root"] = "firmware/build"
+        build_manifest["crate_root"] = "firmware/src"
+        build_manifest["hal_mod_path"] = OUTPUT_HAL_MOD_RS
+        manifest["build"] = build_manifest
+        manifest["elf_path"] = placeholder_elf_rel
+        manifest["register_map_path"] = manifest.get("register_map_path") or state.get("firmware_register_map_path") or (state.get("firmware") or {}).get("register_map_path")
+        manifest["hal_path"] = manifest.get("hal_path") or state.get("firmware_hal_path") or "firmware/hal/registers.rs"
+        manifest["driver_path"] = manifest.get("driver_path") or state.get("firmware_driver_path") or "firmware/drivers/driver_scaffold.rs"
+        manifest["register_dump_path"] = manifest.get("register_dump_path") or "firmware/diagnostics/register_dump.rs"
+        write_artifact(state, MANIFEST_PATH, json.dumps(manifest, indent=2), key=os.path.basename(MANIFEST_PATH))
+
         state["firmware_elf_path"] = placeholder_elf_rel
         state["firmware_expected_elf_path"] = placeholder_elf_rel
         state["elf_path"] = placeholder_elf_rel
         state["embedded_elf_path"] = placeholder_elf_rel
         state["firmware_elf_exists"] = True
+        state["firmware_manifest"] = manifest
+        state["firmware_manifest_path"] = MANIFEST_PATH
         return state
 
         
@@ -427,6 +443,7 @@ def run_agent(state: dict) -> dict:
     build_manifest["hal_mod_path"] = OUTPUT_HAL_MOD_RS
     manifest["build"] = build_manifest
     manifest["elf_path"] = elf_relpath
+    manifest["register_map_path"] = manifest.get("register_map_path") or state.get("firmware_register_map_path") or (state.get("firmware") or {}).get("register_map_path")
     manifest["hal_path"] = manifest.get("hal_path") or "firmware/hal/registers.rs"
     manifest["driver_path"] = manifest.get("driver_path") or "firmware/drivers/driver_scaffold.rs"
     manifest["register_dump_path"] = manifest.get("register_dump_path") or "firmware/diagnostics/register_dump.rs"
