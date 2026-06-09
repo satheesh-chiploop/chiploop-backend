@@ -151,10 +151,10 @@ def _normalize_spec_json(spec_json: dict):
                 "top_module": top,
                 "modules": modules,
             },
-            "top_level_connections": spec_json.get("top_level_connections", []),
-            "inter_module_signals": spec_json.get("inter_module_signals", []),
-            "signal_ownership": spec_json.get("signal_ownership", []),
-            "register_contract": spec_json.get("register_contract", {}),
+            "top_level_connections": spec_json.get("top_level_connections") or hier.get("top_level_connections") or [],
+            "inter_module_signals": spec_json.get("inter_module_signals") or hier.get("inter_module_signals") or [],
+            "signal_ownership": spec_json.get("signal_ownership") or hier.get("signal_ownership") or [],
+            "register_contract": spec_json.get("register_contract") or hier.get("register_contract") or {},
         }
         return norm, "hierarchical"
 
@@ -439,10 +439,51 @@ def _extract_json_object_text(text: str) -> str:
 
 def _parse_llm_json_object(llm_output: str) -> dict:
     candidate = _extract_json_object_text(llm_output)
-    parsed = json.loads(candidate)
+    try:
+        parsed = json.loads(candidate)
+    except JSONDecodeError as exc:
+        repaired = _repair_json_if_truncated_at_eof(candidate, exc)
+        if repaired == candidate:
+            raise
+        parsed = json.loads(repaired)
     if not isinstance(parsed, dict):
         raise ValueError("Spec JSON root must be an object.")
     return parsed
+
+
+def _repair_json_if_truncated_at_eof(candidate: str, exc: JSONDecodeError) -> str:
+    text = (candidate or "").strip()
+    if not text or exc.pos < len(text) - 2:
+        return candidate
+
+    stack = []
+    in_string = False
+    escaped = False
+    for ch in text:
+        if escaped:
+            escaped = False
+            continue
+        if ch == "\\" and in_string:
+            escaped = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if ch == "{":
+            stack.append("}")
+        elif ch == "[":
+            stack.append("]")
+        elif ch in ("}", "]"):
+            if stack and stack[-1] == ch:
+                stack.pop()
+            else:
+                return candidate
+
+    if in_string or not stack:
+        return candidate
+    return text + "".join(reversed(stack))
 
 
 def _json_error_context(text: str, err: Exception, window: int = 1600) -> str:
@@ -620,6 +661,50 @@ def _ensure_hierarchical_port_closure(spec_json: dict) -> dict:
 
     return spec_json
 
+
+def _ensure_hierarchical_top_level_connections(spec_json: dict) -> dict:
+    if not isinstance(spec_json.get("hierarchy"), dict):
+        return spec_json
+    if isinstance(spec_json.get("top_level_connections"), list) and spec_json["top_level_connections"]:
+        return spec_json
+
+    hier = spec_json["hierarchy"]
+    top = hier.get("top_module") if isinstance(hier.get("top_module"), dict) else {}
+    top_ports = top.get("ports") if isinstance(top.get("ports"), list) else []
+    child_modules = [m for m in hier.get("modules", []) if isinstance(m, dict)]
+    child_port_map = {
+        str(m.get("name") or ""): {
+            str(p.get("name") or "")
+            for p in (m.get("ports") or [])
+            if isinstance(p, dict)
+        }
+        for m in child_modules
+    }
+
+    connections = []
+    for port in top_ports:
+        if not isinstance(port, dict):
+            continue
+        port_name = str(port.get("name") or "").strip()
+        if not port_name:
+            continue
+        connected_to = [
+            f"{module_name}.{port_name}"
+            for module_name, ports in child_port_map.items()
+            if module_name and port_name in ports
+        ]
+        if connected_to:
+            connections.append({
+                "top_port": port_name,
+                "connected_to": connected_to,
+                "description": f"Top-level port {port_name} connected to matching child module port(s).",
+            })
+
+    if connections:
+        spec_json["top_level_connections"] = connections
+    return spec_json
+
+
 def _build_repair_prompt(base_prompt: str, previous_json_text: str, failure_log_text: str) -> str:
     return f"""
 ==============================
@@ -692,6 +777,7 @@ def _compile_spec_contract(llm_output: str, spec_dir: str, suffix: str = "", req
         )
 
     if mode == "hierarchical":
+        spec_json = _ensure_hierarchical_top_level_connections(spec_json)
         spec_json = _ensure_hierarchical_port_closure(spec_json)
         logger.info(f"🔍 Digital Spec Agent hierarchical port closure done suffix='{suffix or 'pass1'}'")
 

@@ -55,6 +55,30 @@ def _module_names(path: str) -> List[str]:
     return re.findall(r"\bmodule\s+([A-Za-z_][A-Za-z0-9_$]*)\b", text)
 
 
+def _rtl_preference(path: str) -> tuple[int, str]:
+    stem = os.path.splitext(os.path.basename(path))[0].lower()
+    is_intermediate = bool(re.search(r"(?:^|_)pass\d+$", stem) or re.search(r"_pass\d+(?:_|$)", stem))
+    return (1 if is_intermediate else 0, os.path.basename(path).lower())
+
+
+def _dedupe_rtl_by_module(files: List[str]) -> List[str]:
+    existing = [os.path.abspath(path) for path in dict.fromkeys(files) if os.path.isfile(path)]
+    modules_by_path = {path: _module_names(path) for path in existing}
+    owner_by_module: Dict[str, str] = {}
+    for path, modules in modules_by_path.items():
+        for module in modules:
+            prior = owner_by_module.get(module)
+            if not prior or _rtl_preference(path) < _rtl_preference(prior):
+                owner_by_module[module] = path
+    out: List[str] = []
+    for path in existing:
+        modules = modules_by_path.get(path) or []
+        if modules and not any(owner_by_module.get(module) == path for module in modules):
+            continue
+        out.append(path)
+    return list(dict.fromkeys(out))
+
+
 def _rtl_files(state: Dict[str, Any], workflow_dir: str) -> List[str]:
     direct = state.get("rtl_files")
     if isinstance(direct, list) and direct:
@@ -74,7 +98,7 @@ def _rtl_files(state: Dict[str, Any], workflow_dir: str) -> List[str]:
         low = abs_path.lower().replace("\\", "/")
         if os.path.isfile(abs_path) and not any(skip in low for skip in ("/vv/", "/tb/", "/testbench/")):
             out.append(os.path.abspath(abs_path))
-    return list(dict.fromkeys(out))
+    return _dedupe_rtl_by_module(out)
 
 
 def _top(state: Dict[str, Any], rtl_files: List[str]) -> str:
@@ -120,7 +144,7 @@ def _find_clock_reset(rtl_files: List[str], top: str) -> tuple[Optional[str], Op
 
 def _gen_sby(top: str, rtl_files: List[str], formal_root: str, solver: str) -> str:
     rels = [os.path.relpath(path, formal_root).replace("\\", "/") for path in rtl_files[:200]]
-    reads = "\n".join(f"read_verilog -sv {path}" for path in rels)
+    reads = "\n".join(f"read_verilog -sv {os.path.basename(path)}" for path in rels)
     files = "\n".join(rels)
     return f"""# Auto-generated System Sim formal setup for {top}
 

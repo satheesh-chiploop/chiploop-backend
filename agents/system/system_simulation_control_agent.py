@@ -164,6 +164,47 @@ def _normalize_path_list(items: Any) -> List[str]:
     return list(dict.fromkeys(out))
 
 
+def _safe_read_text(path: str) -> str:
+    try:
+        if path and os.path.isfile(path):
+            with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                return f.read()
+    except Exception:
+        pass
+    return ""
+
+
+def _module_names_from_rtl(path: str) -> List[str]:
+    text = _safe_read_text(path)
+    if not text:
+        return []
+    return re.findall(r"\bmodule\s+([A-Za-z_][A-Za-z0-9_$]*)\b", text)
+
+
+def _rtl_preference(path: str) -> Tuple[int, str]:
+    stem = os.path.splitext(os.path.basename(path))[0].lower()
+    is_intermediate = bool(re.search(r"(?:^|_)pass\d+$", stem) or re.search(r"_pass\d+(?:_|$)", stem))
+    return (1 if is_intermediate else 0, os.path.basename(path).lower())
+
+
+def _dedupe_rtl_by_module(files: List[str]) -> List[str]:
+    existing = [os.path.abspath(path) for path in dict.fromkeys(files) if os.path.isfile(path)]
+    modules_by_path = {path: _module_names_from_rtl(path) for path in existing}
+    owner_by_module: Dict[str, str] = {}
+    for path, modules in modules_by_path.items():
+        for module in modules:
+            prior = owner_by_module.get(module)
+            if not prior or _rtl_preference(path) < _rtl_preference(prior):
+                owner_by_module[module] = path
+    out: List[str] = []
+    for path in existing:
+        modules = modules_by_path.get(path) or []
+        if modules and not any(owner_by_module.get(module) == path for module in modules):
+            continue
+        out.append(path)
+    return list(dict.fromkeys(out))
+
+
 def _rel_to_workflow(workflow_dir: str, path: Optional[str]) -> Optional[str]:
     if not path or not isinstance(path, str):
         return path
@@ -200,14 +241,14 @@ def _collect_system_rtl_files(workflow_dir: str, state: Dict[str, Any]) -> List[
         candidates.extend(_normalize_path_list(filelist_path))
 
     if candidates:
-        return list(dict.fromkeys(candidates))
+        return _dedupe_rtl_by_module(candidates)
 
     # 3) Legacy fallbacks only after canonical filelist sources
     for key in ("system_rtl_files", "rtl_inputs", "rtl_files"):
         candidates.extend(_normalize_path_list(state.get(key)))
 
     if candidates:
-        return list(dict.fromkeys(candidates))
+        return _dedupe_rtl_by_module(candidates)
 
     return []
 

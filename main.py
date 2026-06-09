@@ -6373,10 +6373,46 @@ def execute_system_app_background(
                 lines.append(resolved or os.path.abspath(os.path.join(os.path.dirname(filelist_path), expanded)))
             return list(dict.fromkeys(lines))
 
+        def _module_names_from_rtl(path: str) -> List[str]:
+            try:
+                with open(path, "r", encoding="utf-8", errors="ignore") as fh:
+                    text = fh.read()
+            except Exception:
+                return []
+            return re.findall(r"\bmodule\s+([A-Za-z_][A-Za-z0-9_$]*)\b", text)
+
+        def _rtl_file_preference(path: str) -> Tuple[int, str]:
+            stem = os.path.splitext(os.path.basename(path))[0].lower()
+            is_intermediate = bool(re.search(r"(?:^|_)pass\d+$", stem) or re.search(r"_pass\d+(?:_|$)", stem))
+            return (1 if is_intermediate else 0, os.path.basename(path).lower())
+
+        def _dedupe_system_rtl_files(filelist_lines: List[str]) -> List[str]:
+            existing = [
+                os.path.abspath(p)
+                for p in dict.fromkeys(str(p) for p in filelist_lines if isinstance(p, str) and str(p).strip())
+                if os.path.exists(p)
+            ]
+            if not existing:
+                return []
+            modules_by_path = {path: _module_names_from_rtl(path) for path in existing}
+            owner_by_module: Dict[str, str] = {}
+            for path, modules in modules_by_path.items():
+                for module in modules:
+                    prior = owner_by_module.get(module)
+                    if not prior or _rtl_file_preference(path) < _rtl_file_preference(prior):
+                        owner_by_module[module] = path
+            cleaned: List[str] = []
+            for path in existing:
+                modules = modules_by_path.get(path) or []
+                if modules and not any(owner_by_module.get(module) == path for module in modules):
+                    continue
+                cleaned.append(path)
+            return list(dict.fromkeys(cleaned))
+
         def _materialize_system_rtl_import(filelist_lines: List[str], source_soc_top: str = "", source_intent: str = "") -> None:
             integration_dir = os.path.join(shared_state["workflow_dir"], "system", "integration")
             os.makedirs(integration_dir, exist_ok=True)
-            normalized = [os.path.abspath(p) for p in filelist_lines if isinstance(p, str) and p.strip()]
+            normalized = _dedupe_system_rtl_files(filelist_lines)
             local_filelist = os.path.join(integration_dir, "system_rtl_filelist_sim.txt")
             with open(local_filelist, "w", encoding="utf-8") as fh:
                 fh.write("\n".join(normalized) + ("\n" if normalized else ""))
@@ -6399,7 +6435,7 @@ def execute_system_app_background(
                 candidates.extend(str(p) for p in filelist_value if str(p).strip())
             elif isinstance(filelist_value, str) and os.path.exists(filelist_value):
                 candidates.extend(_resolve_filelist_lines(filelist_value, [shared_state["workflow_dir"]]))
-            return [os.path.abspath(p) for p in dict.fromkeys(candidates) if os.path.exists(p)]
+            return _dedupe_system_rtl_files(candidates)
 
         def _storage_path_candidates_from_source_path(source_path: str, indexed_paths: List[str], source_workflow_id: str) -> List[str]:
             raw = str(source_path or "").strip().replace("\\", "/")
@@ -6693,6 +6729,7 @@ def execute_system_app_background(
 
             if not materialized:
                 return False
+            materialized = _dedupe_system_rtl_files(materialized)
 
             def _module_names_from_file(path: str) -> List[str]:
                 try:
@@ -6894,6 +6931,44 @@ def execute_system_app_background(
                             "system_integration_intent.json",
                         )
                     ])
+                    source_regmap = _find_first_existing_file([
+                        os.path.join(root, rel)
+                        for root in roots
+                        for rel in (
+                            "digital/digital_regmap.json",
+                            "digital/regmap.json",
+                            "digital/register_map.json",
+                            "handoff/docs/regmap/digital_regmap.json",
+                            "handoff/digital_subsystem_ip_package/docs/regmap/digital_regmap.json",
+                            "digital_regmap.json",
+                            "regmap.json",
+                        )
+                    ])
+                    if source_regmap:
+                        try:
+                            with open(source_regmap, "r", encoding="utf-8") as fh:
+                                regmap_obj = json.load(fh)
+                            if isinstance(regmap_obj, dict):
+                                regmap_local = os.path.join(shared_state["workflow_dir"], "digital", "digital_regmap.json")
+                                os.makedirs(os.path.dirname(regmap_local), exist_ok=True)
+                                with open(regmap_local, "w", encoding="utf-8") as fh:
+                                    fh.write(json.dumps(regmap_obj, indent=2))
+                                shared_state["digital_regmap"] = regmap_obj
+                                shared_state["digital_regmap_path"] = "digital/digital_regmap.json"
+                                shared_state["digital_register_map_path"] = "digital/digital_regmap.json"
+                                shared_state["digital_regmap_json"] = regmap_local
+                                digital_block = shared_state.setdefault("digital", {})
+                                if isinstance(digital_block, dict):
+                                    digital_block["digital_regmap"] = regmap_obj
+                                    digital_block["regmap"] = regmap_obj
+                                    digital_block["digital_regmap_path"] = "digital/digital_regmap.json"
+                                    digital_block["register_map_path"] = "digital/digital_regmap.json"
+                        except Exception as regmap_exc:
+                            append_log_workflow(
+                                workflow_id,
+                                f"System RTL source regmap hydration warning: {regmap_exc}",
+                                phase="system_rtl_source",
+                            )
                     if source_filelist:
                         resolved_source_files = _resolve_filelist_lines(source_filelist, roots)
                         _materialize_system_rtl_import(

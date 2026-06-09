@@ -87,9 +87,48 @@ def _download_text(path: str) -> str:
         return ""
 
 
+def _indexed_storage_paths_for_workflow(source_workflow_id: str) -> list[str]:
+    paths: list[str] = []
+    user_id = ""
+    try:
+        row = (
+            supabase.table("workflows")
+            .select("id,user_id,artifacts")
+            .eq("id", source_workflow_id)
+            .single()
+            .execute()
+        ).data or {}
+        user_id = str(row.get("user_id") or "").strip()
+
+        def _collect(obj: Any) -> None:
+            if isinstance(obj, dict):
+                for value in obj.values():
+                    _collect(value)
+            elif isinstance(obj, list):
+                for value in obj:
+                    _collect(value)
+            elif isinstance(obj, str):
+                value = obj.strip().replace("\\", "/")
+                if value:
+                    paths.append(value)
+
+        _collect(row.get("artifacts") or {})
+    except Exception:
+        pass
+
+    prefixes = [f"backend/workflows/{source_workflow_id}"]
+    if user_id:
+        prefixes.extend([
+            f"artifacts/{user_id}/{source_workflow_id}",
+            f"{user_id}/{source_workflow_id}",
+        ])
+    for prefix in prefixes:
+        paths.extend(_list_storage_tree(prefix))
+    return list(dict.fromkeys(paths))
+
+
 def _storage_json_by_filename(source_workflow_id: str, filename: str) -> tuple[str | None, Dict[str, Any]]:
-    prefix = f"backend/workflows/{source_workflow_id}"
-    for path in _list_storage_tree(prefix):
+    for path in _indexed_storage_paths_for_workflow(source_workflow_id):
         if Path(path).name == filename:
             obj = _download_json(path)
             if obj:
@@ -106,8 +145,7 @@ def _storage_json_by_filenames(source_workflow_id: str, filenames: list[str]) ->
 
 
 def _storage_text_by_filename(source_workflow_id: str, filename: str) -> tuple[str | None, str]:
-    prefix = f"backend/workflows/{source_workflow_id}"
-    for path in _list_storage_tree(prefix):
+    for path in _indexed_storage_paths_for_workflow(source_workflow_id):
         if Path(path).name == filename:
             text = _download_text(path)
             if text:

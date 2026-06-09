@@ -1,5 +1,6 @@
 import json
 import os
+import re
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -113,6 +114,23 @@ def _first_local_in_roots(roots: List[Path], suffixes: tuple[str, ...]) -> tuple
     return "", b""
 
 
+def _all_local_in_roots(roots: List[Path], suffixes: tuple[str, ...]) -> List[tuple[str, bytes]]:
+    out: List[tuple[str, bytes]] = []
+    seen: set[str] = set()
+    for root in roots:
+        if not root.exists():
+            continue
+        for path in sorted(root.rglob("*")):
+            if not path.is_file() or not path.name.lower().endswith(suffixes):
+                continue
+            norm = str(path.resolve())
+            if norm in seen:
+                continue
+            seen.add(norm)
+            out.append((norm, path.read_bytes()))
+    return out
+
+
 def _read_first_text(paths: List[str]) -> str:
     for path in paths:
         try:
@@ -120,6 +138,45 @@ def _read_first_text(paths: List[str]) -> str:
         except Exception:
             continue
     return ""
+
+
+def _module_names_from_text(text: str) -> List[str]:
+    names: List[str] = []
+    for match in re.finditer(r"\bmodule\s+([A-Za-z_][A-Za-z0-9_$]*)\b", text or ""):
+        name = match.group(1)
+        if name not in names:
+            names.append(name)
+    return names
+
+
+def _rtl_preference(path: str) -> tuple[int, str]:
+    stem = Path(path).stem.lower()
+    is_intermediate = bool(re.search(r"(?:^|_)pass\d+$", stem) or re.search(r"_pass\d+(?:_|$)", stem))
+    return (1 if is_intermediate else 0, Path(path).name.lower())
+
+
+def _dedupe_downloaded_rtl(items: List[tuple[str, bytes]]) -> List[tuple[str, bytes]]:
+    unique_by_path: Dict[str, tuple[str, bytes]] = {}
+    for path, raw in items:
+        if path and raw:
+            unique_by_path.setdefault(path.replace("\\", "/"), (path, raw))
+    ordered = list(unique_by_path.values())
+    modules_by_path: Dict[str, List[str]] = {}
+    for path, raw in ordered:
+        modules_by_path[path] = _module_names_from_text(raw.decode("utf-8", errors="replace"))
+    owner_by_module: Dict[str, str] = {}
+    for path, modules in modules_by_path.items():
+        for module in modules:
+            prior = owner_by_module.get(module)
+            if not prior or _rtl_preference(path) < _rtl_preference(prior):
+                owner_by_module[module] = path
+    out: List[tuple[str, bytes]] = []
+    for path, raw in ordered:
+        modules = modules_by_path.get(path) or []
+        if modules and not any(owner_by_module.get(module) == path for module in modules):
+            continue
+        out.append((path, raw))
+    return out
 
 
 def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
@@ -165,22 +222,38 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
         if path.lower().endswith(".sdc")
     ]
 
-    rtl_source_path, rtl_raw = _first_download(client, list(dict.fromkeys(rtl_candidates)))
+    rtl_downloads: List[tuple[str, bytes]] = []
+    for candidate in list(dict.fromkeys(rtl_candidates)):
+        raw = _first_download(client, [candidate])[1]
+        if raw:
+            rtl_downloads.append((candidate, raw))
     regmap_source_path, regmap_raw = _first_download(client, list(dict.fromkeys(regmap_candidates)))
-    if not rtl_raw:
-        rtl_source_path, rtl_raw = _first_local_in_roots(
-            _source_local_roots(client, source_workflow_id), (".sv", ".v")
-        )
+    if not rtl_downloads:
+        rtl_downloads = _all_local_in_roots(_source_local_roots(client, source_workflow_id), (".sv", ".v"))
     if not regmap_raw:
         regmap_source_path, regmap_raw = _first_local(source_workflow_id, "", ("digital_regmap.json",))
-    if not rtl_raw:
+    rtl_downloads = _dedupe_downloaded_rtl(rtl_downloads)
+    if not rtl_downloads:
         raise RuntimeError(f"No generated RTL artifact found in Arch2RTL workflow {source_workflow_id}")
     if not regmap_raw:
         raise RuntimeError(f"No generated register map found in Arch2RTL workflow {source_workflow_id}")
 
-    rtl_name = os.path.basename(rtl_source_path) or f"{requested_top or 'top'}.sv"
-    source_top = requested_top or Path(rtl_name).stem
-    local_rtl = _write_local(workflow_dir, f"digital/rtl/{rtl_name}", rtl_raw)
+    local_rtl_files: List[str] = []
+    rtl_source_paths: List[str] = []
+    for idx, (rtl_source_path, rtl_raw) in enumerate(rtl_downloads):
+        rtl_name = os.path.basename(rtl_source_path) or f"{requested_top or 'rtl'}_{idx}.sv"
+        if not rtl_name.lower().endswith((".sv", ".v")):
+            rtl_name = f"{rtl_name}.sv"
+        local_rtl_files.append(_write_local(workflow_dir, f"digital/rtl/{rtl_name}", rtl_raw))
+        rtl_source_paths.append(rtl_source_path)
+    primary_rtl = next(
+        (
+            path for path in local_rtl_files
+            if requested_top and requested_top in _module_names_from_text(Path(path).read_text(encoding="utf-8", errors="replace"))
+        ),
+        local_rtl_files[0],
+    )
+    source_top = requested_top or Path(primary_rtl).stem
     local_regmap = _write_local(workflow_dir, "digital/digital_regmap.json", regmap_raw)
     local_sdc_files: List[str] = []
     for source_path in dict.fromkeys(sdc_candidates):
@@ -190,7 +263,7 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
         local_sdc_files.append(_write_local(workflow_dir, f"digital/constraints/{os.path.basename(source_path)}", sdc_raw))
         if len(local_sdc_files) >= 4:
             break
-    source_top, rtl_top_debug = resolve_rtl_top_from_files(source_top, [local_rtl])
+    source_top, rtl_top_debug = resolve_rtl_top_from_files(source_top, local_rtl_files)
     try:
         digital_regmap = json.loads(regmap_raw.decode("utf-8"))
     except Exception as exc:
@@ -198,11 +271,11 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
 
     state["top_module"] = source_top
     state["rtl_top"] = source_top
-    state["rtl_inputs"] = [local_rtl]
-    state["system_rtl_files"] = [local_rtl]
+    state["rtl_inputs"] = list(local_rtl_files)
+    state["system_rtl_files"] = list(local_rtl_files)
     state["soc_top_sim_module"] = source_top
-    state["soc_top_sim_path"] = f"digital/rtl/{rtl_name}"
-    state["system_top_sim_path"] = f"digital/rtl/{rtl_name}"
+    state["soc_top_sim_path"] = os.path.relpath(primary_rtl, workflow_dir).replace("\\", "/")
+    state["system_top_sim_path"] = os.path.relpath(primary_rtl, workflow_dir).replace("\\", "/")
     apply_resolved_top(state, source_top)
     state["digital_regmap"] = digital_regmap
     state["digital_regmap_path"] = local_regmap
@@ -211,11 +284,11 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
         "regmap": digital_regmap,
         "digital_regmap": digital_regmap,
         "digital_regmap_path": local_regmap,
-        "rtl_files": [local_rtl],
+        "rtl_files": list(local_rtl_files),
     })
     clock_intent = build_clock_intent(
         spec={},
-        rtl_files=[local_rtl],
+        rtl_files=local_rtl_files,
         sdc_text=_read_first_text(local_sdc_files),
         requested=state.get("clock_constraints") or state.get("clocks"),
     )
@@ -231,7 +304,7 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
         "source_workflow_id": source_workflow_id,
         "source_verification_workflow_id": state.get("source_verification_workflow_id"),
         "top": {"sim": source_top, "phys": source_top},
-        "filelists": {"sim": [local_rtl], "phys": [local_rtl], "libs": []},
+        "filelists": {"sim": list(local_rtl_files), "phys": list(local_rtl_files), "libs": []},
         "register_map_path": "digital/digital_regmap.json",
         "clock_intent_path": "digital/timing/clock_intent.json",
         "clock_intent": clock_intent,
@@ -242,19 +315,21 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
             "Verification evidence remains associated with source_verification_workflow_id when supplied.",
         ],
     }
-    write_artifact(state, "digital/rtl/" + rtl_name, rtl_raw.decode("utf-8", errors="replace"), key=rtl_name)
+    for local_rtl in local_rtl_files:
+        rel_rtl = os.path.relpath(local_rtl, workflow_dir).replace("\\", "/")
+        write_artifact(state, rel_rtl, Path(local_rtl).read_text(encoding="utf-8", errors="replace"), key=os.path.basename(local_rtl))
     write_artifact(state, "digital/digital_regmap.json", json.dumps(digital_regmap, indent=2), key="digital_regmap.json")
     write_artifact(state, "digital/timing/clock_intent.json", json.dumps(clock_intent, indent=2), key="clock_intent.json")
     write_artifact(state, RTL_PACKAGE_PATH, json.dumps(rtl_package, indent=2), key="system_rtl_package.json")
     write_artifact(state, DEBUG_PATH, json.dumps({
         "source_workflow_id": source_workflow_id,
         "source_verification_workflow_id": state.get("source_verification_workflow_id"),
-        "rtl_source_path": rtl_source_path,
+        "rtl_source_paths": rtl_source_paths,
         "rtl_top_resolution": rtl_top_debug,
         "regmap_source_path": regmap_source_path,
         "local_sdc_files": local_sdc_files,
         "clock_intent": clock_intent,
-        "local_rtl_path": local_rtl,
+        "local_rtl_paths": local_rtl_files,
         "local_regmap_path": local_regmap,
     }, indent=2), key="digital_handoff_ingest.json")
 

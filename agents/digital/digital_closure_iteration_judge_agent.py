@@ -18,7 +18,14 @@ def _read_json(path: Path) -> Dict[str, Any]:
 
 
 def _num(value: Any) -> Optional[float]:
-    return float(value) if isinstance(value, (int, float)) else None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value.strip().rstrip("%"))
+        except Exception:
+            return None
+    return None
 
 
 def _metrics(summary: Dict[str, Any]) -> Dict[str, Any]:
@@ -26,11 +33,11 @@ def _metrics(summary: Dict[str, Any]) -> Dict[str, Any]:
     code = cov.get("code") if isinstance(cov.get("code"), dict) else {}
     sim = summary.get("simulation") if isinstance(summary.get("simulation"), dict) else {}
     return {
-        "functional_coverage_pct": _num(cov.get("functional_coverage_pct")),
-        "code_line_coverage_pct": _num(code.get("line_coverage_pct")),
-        "code_branch_coverage_pct": _num(code.get("branch_coverage_pct")),
-        "code_condition_coverage_pct": _num(code.get("condition_coverage_pct")),
-        "code_toggle_coverage_pct": _num(code.get("toggle_coverage_pct")),
+        "functional_coverage_pct": _num(cov.get("functional_coverage_pct") or (cov.get("functional") or {}).get("coverage_pct")),
+        "code_line_coverage_pct": _num(code.get("line_coverage_pct") or cov.get("line_coverage_pct")),
+        "code_branch_coverage_pct": _num(code.get("branch_coverage_pct") or cov.get("branch_coverage_pct")),
+        "code_condition_coverage_pct": _num(code.get("condition_coverage_pct") or cov.get("condition_coverage_pct")),
+        "code_toggle_coverage_pct": _num(code.get("toggle_coverage_pct") or cov.get("toggle_coverage_pct")),
         "simulation_total": sim.get("total"),
         "simulation_pass": sim.get("pass"),
         "simulation_fail": sim.get("fail"),

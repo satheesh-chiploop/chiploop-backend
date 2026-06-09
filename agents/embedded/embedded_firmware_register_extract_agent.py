@@ -123,7 +123,7 @@ def _sort_registers(registers: List[dict]) -> List[dict]:
         registers,
         key=lambda reg: (
             _parse_intish(
-                (reg or {}).get("offset", (reg or {}).get("addr_offset", (reg or {}).get("address", 0)))
+                (reg or {}).get("offset", (reg or {}).get("addr_offset", (reg or {}).get("address", (reg or {}).get("addr", 0))))
             ),
             (reg or {}).get("name", ""),
         ),
@@ -132,6 +132,21 @@ def _sort_registers(registers: List[dict]) -> List[dict]:
 
 def _extract_register_candidates(source_obj: dict) -> List[dict]:
     candidate_regs = None
+
+    for container_key in (
+        "regmap",
+        "register_map",
+        "register_contract",
+        "csr_map",
+        "csr_register_map",
+        "address_map",
+        "memory_map",
+    ):
+        nested = source_obj.get(container_key)
+        if isinstance(nested, dict):
+            nested_regs = _extract_register_candidates(nested)
+            if nested_regs:
+                return nested_regs
 
     if isinstance(source_obj.get("registers"), list):
         candidate_regs = source_obj["registers"]
@@ -170,7 +185,7 @@ def _extract_register_candidates(source_obj: dict) -> List[dict]:
                 continue
             if not reg.get("name"):
                 continue
-            if "offset" not in reg and "addr_offset" not in reg and "address" not in reg:
+            if "offset" not in reg and "addr_offset" not in reg and "address" not in reg and "addr" not in reg:
                 continue
             out.append(reg)
     return out
@@ -178,10 +193,11 @@ def _extract_register_candidates(source_obj: dict) -> List[dict]:
 
 def _normalize_register(reg: dict) -> dict:
     fields = reg.get("fields") or reg.get("bitfields") or []
+    offset = reg.get("offset", reg.get("addr_offset", reg.get("address", reg.get("addr", 0))))
     return {
         "name": reg.get("name") or reg.get("reg_name") or "UNNAMED",
-        "offset": _fmt_hex32(reg.get("offset", reg.get("addr_offset", 0))),
-        "address": reg.get("address"),
+        "offset": _fmt_hex32(offset),
+        "address": reg.get("address", reg.get("addr")),
         "access": _normalize_access(reg.get("access") or reg.get("sw") or reg.get("mode") or "RW"),
         "reset": reg.get("reset") or reg.get("reset_value") or "0x00000000",
         "description": reg.get("description") or reg.get("desc") or "",
@@ -207,6 +223,8 @@ def _normalize_registers_from_any_shape(obj: dict) -> dict:
         obj = obj["regmap"]
     elif "register_map" in obj and isinstance(obj["register_map"], dict) and "registers" in obj["register_map"]:
         obj = obj["register_map"]
+    elif "register_contract" in obj and isinstance(obj["register_contract"], dict):
+        obj = obj["register_contract"]
 
     base_address = (
         obj.get("base_address")
