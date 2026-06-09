@@ -485,9 +485,13 @@ def _upload_spec_debug_artifacts(workflow_id, agent_name, spec_dir):
         "spec_agent_contract_pass3.log",
         "llm_raw_output_pass3.txt",
         "spec_agent_exception_pass3.txt",
+        "spec_agent_contract_pass4.log",
+        "llm_raw_output_pass4.txt",
+        "spec_agent_exception_pass4.txt",
         "spec_agent_normalized.json",
         "spec_agent_normalized_pass2.json",
         "spec_agent_normalized_pass3.json",
+        "spec_agent_normalized_pass4.json",
     ]:
         _record_text_artifact_safe(
             workflow_id=workflow_id,
@@ -1294,22 +1298,48 @@ Return JSON only.
                 _write_text(pass3_log_path, f"Digital Spec Agent JSON syntax repair failure:\n{e3}\n")
                 _write_text(pass3_exc_path, repr(e3))
 
-                state.update({
-                    "status": f"❌ JSON parse/normalize failed after syntax repair: {e3}",
-                    "artifact": None,
-                    "artifact_list": [],
-                    "artifact_log": log_path,
-                    "workflow_dir": workflow_dir,
-                    "workflow_id": workflow_id,
-                    "issues": [
-                        f"Pass1 JSON parse/normalize failed: {pass1_error}",
-                        f"Pass2 JSON parse/normalize failed: {pass2_error}",
-                        f"Syntax repair JSON parse/normalize failed: {e3}",
-                    ],
-                })
+                final_contract_repair_prompt = _build_repair_prompt(
+                    base_prompt=prompt,
+                    previous_json_text=llm_output_pass3,
+                    failure_log_text=str(e3),
+                )
+                try:
+                    logger.info("Digital Spec Agent invoking final contract repair after syntax repair")
+                    logger.info(f"Digital Spec Agent pass4 prompt size: {len(final_contract_repair_prompt)} chars")
+                    t0 = time.monotonic()
+                    llm_output_pass4 = _complete_spec_generation(final_contract_repair_prompt, agent_name, state, "contract_repair_after_syntax")
+                    logger.info(f"Digital Spec Agent pass4 LLM elapsed: {time.monotonic() - t0:.2f}s")
+                    logger.info(f"Digital Spec Agent pass4 LLM output size: {len(llm_output_pass4)} chars")
+                    spec_json, mode, raw_output_path_pass4, normalized_path_pass4 = _compile_spec_contract(
+                        llm_output=llm_output_pass4,
+                        spec_dir=spec_dir,
+                        suffix="_pass4",
+                        requested_top=requested_top,
+                    )
+                    raw_output_path = raw_output_path_pass4
+                except Exception as e4:
+                    pass4_log_path = os.path.join(spec_dir, "spec_agent_contract_pass4.log")
+                    pass4_exc_path = os.path.join(spec_dir, "spec_agent_exception_pass4.txt")
+                    _write_text(pass4_log_path, f"Digital Spec Agent final contract repair failure:\n{e4}\n")
+                    _write_text(pass4_exc_path, repr(e4))
 
-                _upload_spec_debug_artifacts(workflow_id, agent_name, spec_dir)
-                return state
+                    state.update({
+                        "status": f"❌ JSON parse/normalize failed after final contract repair: {e4}",
+                        "artifact": None,
+                        "artifact_list": [],
+                        "artifact_log": log_path,
+                        "workflow_dir": workflow_dir,
+                        "workflow_id": workflow_id,
+                        "issues": [
+                            f"Pass1 JSON parse/normalize failed: {pass1_error}",
+                            f"Pass2 JSON parse/normalize failed: {pass2_error}",
+                            f"Syntax repair JSON parse/normalize failed: {e3}",
+                            f"Final contract repair failed: {e4}",
+                        ],
+                    })
+
+                    _upload_spec_debug_artifacts(workflow_id, agent_name, spec_dir)
+                    return state
 
     module_name = spec_json["name"] if mode == "flat" else spec_json["hierarchy"]["top_module"]["name"]
 
