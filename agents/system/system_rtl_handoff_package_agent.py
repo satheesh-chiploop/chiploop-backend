@@ -142,6 +142,44 @@ def _parse_filelist(text: str) -> List[str]:
     return [x.strip() for x in text.splitlines() if x.strip() and x.strip() != "(empty)"]
 
 
+def _list_storage_folder(supabase, folder: str) -> List[str]:
+    try:
+        entries = supabase.storage.from_(ARTIFACT_BUCKET).list(folder) or []
+    except Exception:
+        return []
+    paths: List[str] = []
+    for entry in entries:
+        name = entry.get("name") if isinstance(entry, dict) else None
+        if name:
+            paths.append(f"{folder.rstrip('/')}/{name}")
+    return paths
+
+
+def _list_storage_tree(supabase, folder: str, depth: int = 0, max_depth: int = 7) -> List[str]:
+    if depth > max_depth:
+        return []
+    paths: List[str] = []
+    for path in _list_storage_folder(supabase, folder):
+        paths.append(path)
+        paths.extend(_list_storage_tree(supabase, path, depth + 1, max_depth))
+    return paths
+
+
+def _storage_rtl_paths(supabase, prefixes: List[str]) -> List[str]:
+    found: List[str] = []
+    for prefix in prefixes:
+        found.extend(_list_storage_tree(supabase, prefix.rstrip("/")))
+    out: List[str] = []
+    for path in found:
+        low = path.lower()
+        if not low.endswith((".sv", ".v", ".svh", ".vh")):
+            continue
+        if any(skip in low for skip in ("/vv/", "/tb/", "/testbench/", "/node_modules/")):
+            continue
+        out.append(path)
+    return list(dict.fromkeys(out))
+
+
 def run_agent(state: dict) -> dict:
     workflow_id = str(state.get("workflow_id") or "default")
 
@@ -216,6 +254,7 @@ def run_agent(state: dict) -> dict:
         sim_filelist = _parse_filelist(sim_filelist_text)
         phys_filelist = _parse_filelist(phys_filelist_text)
         lib_filelist = _parse_filelist(lib_filelist_text)
+        storage_rtl_files = _storage_rtl_paths(supabase, prefixes)
 
         compile_logs = {
             "iverilog_sim": bool(iverilog_sim_log),
@@ -264,6 +303,17 @@ def run_agent(state: dict) -> dict:
                 "sim": sim_filelist,
                 "phys": phys_filelist,
                 "libs": lib_filelist
+            },
+            "storage": {
+                "rtl_files": storage_rtl_files,
+                "filelists": {
+                    "sim": sim_filelist_path,
+                    "phys": phys_filelist_path,
+                    "libs": lib_filelist_path
+                },
+                "integration_intent": integration_intent_path,
+                "soc_top_sim": soc_top_sim_path,
+                "soc_top_phys": soc_top_phys_path
             },
             "compile": {
                 "sim": "pass" if sim_ok else "fail",

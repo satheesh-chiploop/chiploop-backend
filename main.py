@@ -6466,12 +6466,106 @@ def execute_system_app_background(
                     f"{user_id_for_source}/{source_workflow_id}/",
                 ])
 
+            allow_local_handoff_cache = str(os.getenv("CHIPLOOP_ALLOW_LOCAL_HANDOFF_CACHE", "")).strip().lower() in {"1", "true", "yes"}
+
+            def _source_local_roots() -> List[str]:
+                if not allow_local_handoff_cache:
+                    return []
+                roots = [os.path.abspath(os.path.join("backend", "workflows", source_workflow_id))]
+                try:
+                    response = (
+                        supabase.table("runs")
+                        .select("artifacts_path")
+                        .eq("workflow_id", source_workflow_id)
+                        .order("created_at", desc=True)
+                        .limit(5)
+                        .execute()
+                    )
+                    rows = response.data or []
+                    if isinstance(rows, dict):
+                        rows = [rows]
+                    for row in rows:
+                        if not isinstance(row, dict) or not row.get("artifacts_path"):
+                            continue
+                        root = os.path.abspath(str(row["artifacts_path"]))
+                        roots.extend([
+                            root,
+                            os.path.dirname(root),
+                            os.path.join(root, "system"),
+                            os.path.join(root, "digital"),
+                            os.path.join(os.path.dirname(root), "system"),
+                            os.path.join(os.path.dirname(root), "digital"),
+                        ])
+                except Exception:
+                    pass
+                return list(dict.fromkeys([r for r in roots if r]))
+
+            local_roots = _source_local_roots()
+
+            def _first_local_text(rel_paths: List[str]) -> Tuple[str, str]:
+                if not allow_local_handoff_cache:
+                    return "", ""
+                for rel in rel_paths:
+                    rel_norm = str(rel or "").strip().replace("\\", "/").lstrip("/")
+                    if not rel_norm:
+                        continue
+                    for root in local_roots:
+                        candidate = os.path.abspath(os.path.join(root, rel_norm))
+                        if os.path.isfile(candidate):
+                            try:
+                                with open(candidate, "r", encoding="utf-8", errors="ignore") as fh:
+                                    return fh.read(), candidate
+                            except Exception:
+                                continue
+                return "", ""
+
+            def _local_rtl_files() -> List[str]:
+                if not allow_local_handoff_cache:
+                    return []
+                found: List[str] = []
+                for root in local_roots:
+                    if not os.path.isdir(root):
+                        continue
+                    for dirpath, _, filenames in os.walk(root):
+                        norm_dir = dirpath.replace("\\", "/").lower()
+                        if any(skip in norm_dir for skip in ("/vv/", "/tb/", "/testbench/", "/node_modules/")):
+                            continue
+                        for filename in filenames:
+                            if filename.lower().endswith((".sv", ".v", ".svh", ".vh")):
+                                found.append(os.path.abspath(os.path.join(dirpath, filename)))
+                return list(dict.fromkeys(found))
+
             def _download_text_storage(path: str) -> str:
                 try:
                     raw = supabase.storage.from_(ARTIFACT_BUCKET).download(path)
                     return raw.decode("utf-8") if isinstance(raw, bytes) else str(raw)
                 except Exception:
                     return ""
+
+            def _list_storage_folder(folder: str) -> List[str]:
+                try:
+                    entries = supabase.storage.from_(ARTIFACT_BUCKET).list(folder) or []
+                except Exception:
+                    return []
+                paths: List[str] = []
+                for entry in entries:
+                    name = entry.get("name") if isinstance(entry, dict) else None
+                    if name:
+                        paths.append(f"{folder.rstrip('/')}/{name}")
+                return paths
+
+            def _list_storage_tree(folder: str, depth: int = 0, max_depth: int = 7) -> List[str]:
+                if depth > max_depth:
+                    return []
+                paths: List[str] = []
+                for path in _list_storage_folder(folder):
+                    paths.append(path)
+                    paths.extend(_list_storage_tree(path, depth + 1, max_depth))
+                return paths
+
+            for prefix in prefixes:
+                indexed_paths.extend(_list_storage_tree(prefix.rstrip("/")))
+            indexed_paths = list(dict.fromkeys(indexed_paths))
 
             def _download_first(rel_paths: List[str]) -> Tuple[str, str]:
                 candidate_paths: List[str] = []
@@ -6484,6 +6578,10 @@ def execute_system_app_background(
                     else:
                         candidate_paths.extend([f"{p.rstrip('/')}/{rel}" for p in prefixes])
                         candidate_paths.append(rel)
+                        candidate_paths.extend([
+                            path for path in indexed_paths
+                            if path.endswith("/" + rel) or path.endswith(rel)
+                        ])
                 for candidate in list(dict.fromkeys(candidate_paths)):
                     text = _download_text_storage(candidate)
                     if text:
@@ -6494,6 +6592,13 @@ def execute_system_app_background(
                 "system/package/system_rtl_package.json",
                 "digital/system/package/system_rtl_package.json",
             ])
+            if not package_text:
+                package_text, package_path = _first_local_text([
+                    "system/package/system_rtl_package.json",
+                    "digital/system/package/system_rtl_package.json",
+                    "package/system_rtl_package.json",
+                    "system_rtl_package.json",
+                ])
             package_obj: Dict[str, Any] = {}
             if package_text:
                 try:
@@ -6505,6 +6610,10 @@ def execute_system_app_background(
 
             filelist_paths = []
             filelists = package_obj.get("filelists") if isinstance(package_obj.get("filelists"), dict) else {}
+            storage_obj = package_obj.get("storage") if isinstance(package_obj.get("storage"), dict) else {}
+            storage_rtl_from_package = storage_obj.get("rtl_files") if isinstance(storage_obj, dict) else []
+            if isinstance(storage_rtl_from_package, list):
+                filelist_paths.extend([str(p) for p in storage_rtl_from_package if str(p).strip()])
             sim_from_package = filelists.get("sim") if isinstance(filelists, dict) else []
             if isinstance(sim_from_package, list):
                 filelist_paths.extend([str(p) for p in sim_from_package if str(p).strip()])
@@ -6514,7 +6623,23 @@ def execute_system_app_background(
                     "system/integration/system_rtl_filelist_sim.txt",
                     "digital/system/integration/system_rtl_filelist_sim.txt",
                 ])
+                if not filelist_text:
+                    filelist_text, _ = _first_local_text([
+                        "system/integration/system_rtl_filelist_sim.txt",
+                        "digital/system/integration/system_rtl_filelist_sim.txt",
+                        "integration/system_rtl_filelist_sim.txt",
+                        "system_rtl_filelist_sim.txt",
+                    ])
                 filelist_paths.extend([ln.strip() for ln in filelist_text.splitlines() if ln.strip()])
+
+            if not filelist_paths:
+                rtl_exts = (".sv", ".v", ".svh", ".vh")
+                filelist_paths.extend([
+                    path for path in indexed_paths
+                    if path.lower().endswith(rtl_exts)
+                    and not any(skip in path.lower() for skip in ("/vv/", "/tb/", "/testbench/"))
+                ])
+                filelist_paths.extend(_local_rtl_files())
 
             if not filelist_paths:
                 return False
@@ -6531,6 +6656,29 @@ def execute_system_app_background(
                     if content:
                         resolved_storage = candidate
                         break
+                if not content:
+                    local_candidates = []
+                    raw_source = str(source_path or "").strip()
+                    basename = os.path.basename(raw_source.replace("\\", "/"))
+                    if allow_local_handoff_cache:
+                        if raw_source:
+                            local_candidates.append(raw_source)
+                        for root in local_roots:
+                            if raw_source:
+                                local_candidates.append(os.path.join(root, raw_source))
+                            if basename:
+                                local_candidates.append(os.path.join(root, basename))
+                    for candidate in list(dict.fromkeys(local_candidates)):
+                        candidate_abs = os.path.abspath(os.path.expandvars(candidate))
+                        if not os.path.isfile(candidate_abs):
+                            continue
+                        try:
+                            with open(candidate_abs, "r", encoding="utf-8", errors="ignore") as fh:
+                                content = fh.read()
+                            resolved_storage = candidate_abs
+                            break
+                        except Exception:
+                            continue
                 if not content:
                     continue
                 basename = os.path.basename(str(source_path).replace("\\", "/")) or f"system_rtl_{idx}.sv"
@@ -6753,7 +6901,7 @@ def execute_system_app_background(
             if materialized_rtl:
                 shared_state["system_rtl_files"] = materialized_rtl
                 shared_state["rtl_inputs"] = materialized_rtl
-            elif template_workflow_name == "System_Sim":
+            elif template_workflow_name in {"System_Sim", "System_Firmware"}:
                 source_hint = (
                     shared_state.get("system_rtl_workflow_id")
                     or shared_state.get("source_rtl_workflow_id")
@@ -6762,7 +6910,7 @@ def execute_system_app_background(
                     or "unknown"
                 )
                 raise FileNotFoundError(
-                    f"System_Sim source RTL hydration failed for source '{source_hint}'. "
+                    f"{template_workflow_name} source RTL hydration failed for source '{source_hint}'. "
                     "No existing RTL files were materialized into system/integration/system_rtl_filelist_sim.txt."
                 )
 
