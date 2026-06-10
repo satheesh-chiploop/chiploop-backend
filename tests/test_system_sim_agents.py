@@ -8,17 +8,17 @@ from agents.system import system_sim_execution_agent as execution_agent
 from agents.system import system_testbench_generator_agent as tb_agent
 
 
-def test_system_tb_makefile_uses_cocotb_vtop_wrapper():
+def test_system_tb_makefile_uses_real_top_without_forced_prefix():
     text = tb_agent._gen_makefile("temp_monitor_soc_sim")
 
     assert "override TOPLEVEL      := temp_monitor_soc_sim" in text
     assert "override HDL_TOPLEVEL  := temp_monitor_soc_sim" in text
     assert "override VERILATOR_TOPLEVEL := temp_monitor_soc_sim" in text
     assert "--vpi" in text
-    assert "--prefix Vtop" in text
+    assert "--prefix Vtop" not in text
 
 
-def test_system_sim_execution_passes_vtop_wrapper_to_make(tmp_path, monkeypatch):
+def test_system_sim_execution_matches_digital_verify_make_invocation(tmp_path, monkeypatch):
     tb_root = tmp_path / "vv" / "tb"
     tb_root.mkdir(parents=True)
     (tb_root / "Makefile").write_text("all:\n\t@echo ok\n", encoding="utf-8")
