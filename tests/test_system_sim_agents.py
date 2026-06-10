@@ -14,10 +14,10 @@ def test_system_tb_makefile_links_cocotb_vpi_bootstrap():
     assert "override TOPLEVEL      := temp_monitor_soc_sim" in text
     assert "override HDL_TOPLEVEL  := temp_monitor_soc_sim" in text
     assert "override VERILATOR_TOPLEVEL := temp_monitor_soc_sim" in text
-    assert "override COCOTB_VPI_LIB :=" in text
+    assert "override VERILATOR_SOURCES += cocotb_vpi_bootstrap.cpp" in text
     assert "--vpi" in text
     assert "--prefix Vtop" in text
-    assert '-LDFLAGS "$(COCOTB_VPI_LIB)"' in text
+    assert "vlog_startup_routines_bootstrap" in tb_agent._gen_cocotb_vpi_bootstrap_cpp()
 
 
 def test_system_sim_execution_matches_digital_verify_make_invocation(tmp_path, monkeypatch):
