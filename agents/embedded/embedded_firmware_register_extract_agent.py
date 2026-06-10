@@ -169,6 +169,21 @@ def _load_regmap_from_supabase(state: dict, workflow_dir: str, candidate_paths: 
     return None, ""
 
 
+def _load_regmap_from_supabase_path(state: dict, storage_path: str) -> tuple[Optional[dict], str]:
+    client = state.get("supabase_client")
+    storage_path = str(storage_path or "").strip().replace("\\", "/")
+    if client is None or not storage_path:
+        return None, ""
+
+    try:
+        raw = client.storage.from_("artifacts").download(storage_path)
+        text = raw.decode("utf-8") if isinstance(raw, bytes) else str(raw)
+        obj = json.loads(text)
+        return (obj if isinstance(obj, dict) else None), storage_path
+    except Exception:
+        return None, ""
+
+
 def _parse_intish(value: Any, default: int = 0) -> int:
     try:
         if isinstance(value, int):
@@ -668,6 +683,35 @@ def run_agent(state: dict) -> dict:
 
     if upstream_regmap is None:
         upstream_regmap = _safe_load_json(regmap_path)
+
+    if upstream_regmap is None:
+        system_pkg = state.get("system_rtl_package") or {}
+        storage = system_pkg.get("storage") or {}
+        package_candidates = [
+            storage.get("digital_regmap"),
+            system_pkg.get("register_map_path"),
+            system_pkg.get("digital_regmap_path"),
+        ]
+        for candidate in package_candidates:
+            if not candidate:
+                continue
+            if os.path.isabs(str(candidate)) or os.path.isfile(str(candidate)):
+                upstream_regmap = _safe_load_json(str(candidate))
+                if upstream_regmap is not None:
+                    regmap_path = str(candidate)
+                    break
+            for root in candidate_roots:
+                joined = os.path.join(root, str(candidate))
+                upstream_regmap = _safe_load_json(joined)
+                if upstream_regmap is not None:
+                    regmap_path = joined
+                    break
+            if upstream_regmap is not None:
+                break
+            upstream_regmap, storage_regmap_path = _load_regmap_from_supabase_path(state, str(candidate))
+            if upstream_regmap is not None:
+                regmap_path = storage_regmap_path
+                break
 
     if upstream_regmap is None:
         upstream_regmap, supabase_regmap_path = _load_regmap_from_supabase(state, workflow_dir, candidate_paths)

@@ -307,7 +307,7 @@ def run_agent(state: dict) -> dict:
         return state
 
     env_base = os.environ.copy()
-    env_base["TOPLEVEL"] = "top"
+    env_base["TOPLEVEL"] = top
     env_base["HDL_TOPLEVEL"] = top
     env_base["VERILATOR_TOPLEVEL"] = top
     env_base["MODULE"] = f"test_{top}"
@@ -329,7 +329,7 @@ def run_agent(state: dict) -> dict:
             cmd = [
                 "make",
                 f"TESTCASE={testcase}",
-                "TOPLEVEL=top",
+                f"TOPLEVEL={top}",
                 f"HDL_TOPLEVEL={top}",
                 f"VERILATOR_TOPLEVEL={top}",
                 "TOPLEVEL_LANG=verilog",

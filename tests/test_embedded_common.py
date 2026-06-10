@@ -74,3 +74,53 @@ def test_firmware_register_extract_finds_regmap_when_workflow_dir_is_digital(tmp
     assert state["firmware_register_map"]["registers"][0]["name"] == "CTRL"
     assert state["firmware_register_map"]["__source"]["mode"] == "artifact_passthrough"
     assert (digital_dir / "firmware" / "register_map.json").is_file()
+
+
+def test_firmware_register_extract_uses_system_rtl_package_storage_regmap(tmp_path, monkeypatch):
+    monkeypatch.setattr(common, "save_text_artifact_and_record", lambda **_kwargs: None)
+    monkeypatch.setattr(embedded_firmware_register_extract_agent, "llm_chat", lambda *_args, **_kwargs: "")
+
+    regmap = b"""
+    {
+      "block_name": "temp_monitor",
+      "base_address": "0x40000000",
+      "registers": [
+        {
+          "name": "STATUS",
+          "offset": "0x4",
+          "access": "RO",
+          "fields": [{"name": "ready", "bit_offset": 0, "bit_width": 1}]
+        }
+      ]
+    }
+    """
+
+    class StorageBucket:
+        def download(self, path):
+            if path == "artifacts/source/system/package/digital_regmap.json":
+                return regmap
+            raise FileNotFoundError(path)
+
+    class Storage:
+        def from_(self, _bucket):
+            return StorageBucket()
+
+    class Client:
+        storage = Storage()
+
+    state = {
+        "workflow_id": "firmware-wf",
+        "workflow_dir": str(tmp_path),
+        "supabase_client": Client(),
+        "system_rtl_package": {
+            "storage": {
+                "digital_regmap": "artifacts/source/system/package/digital_regmap.json",
+            },
+        },
+    }
+
+    embedded_firmware_register_extract_agent.run_agent(state)
+
+    assert state["firmware_register_map"]["registers"][0]["name"] == "STATUS"
+    assert state["firmware_register_map"]["__source"]["path"] == "artifacts/source/system/package/digital_regmap.json"
+    assert (tmp_path / "firmware" / "register_map.json").is_file()

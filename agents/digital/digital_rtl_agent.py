@@ -1710,13 +1710,20 @@ def _run_verilator_lint(rtl_dir: str, verilog_files: List[str], top_module: str,
             f.write(msg)
         return False, lint_log_path, msg, {}
 
-    # When cwd=rtl_dir, pass only basenames (or absolute paths), not rtl_dir-prefixed relative paths.
     verilator_inputs = []
     for vf in verilog_files:
         if os.path.isabs(vf):
             verilator_inputs.append(vf)
         else:
-            verilator_inputs.append(os.path.basename(vf))
+            abs_vf = os.path.abspath(vf)
+            abs_rtl_dir = os.path.abspath(rtl_dir)
+            try:
+                if os.path.commonpath([abs_rtl_dir, abs_vf]) == abs_rtl_dir:
+                    verilator_inputs.append(os.path.relpath(abs_vf, abs_rtl_dir).replace("\\", "/"))
+                else:
+                    verilator_inputs.append(vf.replace("\\", "/"))
+            except Exception:
+                verilator_inputs.append(vf.replace("\\", "/"))
 
     args = [
         "--lint-only",

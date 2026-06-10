@@ -7178,6 +7178,7 @@ def execute_system_app_background(
                 "System Simulation Coverage Summary Agent",
             ],
             "System_Firmware": [
+                "Embedded Digital RTL Handoff Ingest Agent",
                 "Embedded Firmware Register Extract Agent",
                 "Embedded Rust Register Layer Generator Agent",
                 "Embedded Register Validation Agent",
