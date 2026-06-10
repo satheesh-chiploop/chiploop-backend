@@ -307,7 +307,7 @@ def run_agent(state: dict) -> dict:
         return state
 
     env_base = os.environ.copy()
-    env_base["TOPLEVEL"] = top
+    env_base["TOPLEVEL"] = "top"
     env_base["HDL_TOPLEVEL"] = top
     env_base["VERILATOR_TOPLEVEL"] = top
     env_base["MODULE"] = f"test_{top}"
@@ -315,7 +315,7 @@ def run_agent(state: dict) -> dict:
     env_base["SIM"] = "verilator"
     env_base["NUM_ITERS"] = str(num_iters)
 
-    extra_args = "--trace --trace-structs --coverage --assert"
+    extra_args = "--trace --trace-structs --coverage --assert --prefix Vtop"
 
     results: List[Dict[str, Any]] = []
     all_waveforms_before = set(_find_waveforms(workflow_dir))
@@ -329,7 +329,7 @@ def run_agent(state: dict) -> dict:
             cmd = [
                 "make",
                 f"TESTCASE={testcase}",
-                f"TOPLEVEL={top}",
+                "TOPLEVEL=top",
                 f"HDL_TOPLEVEL={top}",
                 f"VERILATOR_TOPLEVEL={top}",
                 "TOPLEVEL_LANG=verilog",

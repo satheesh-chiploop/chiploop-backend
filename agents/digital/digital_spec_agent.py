@@ -819,6 +819,107 @@ def _ensure_hierarchical_top_level_connections(spec_json: dict) -> dict:
     return spec_json
 
 
+def _sanitize_hierarchical_connectivity(spec_json: dict) -> dict:
+    if not isinstance(spec_json.get("hierarchy"), dict):
+        return spec_json
+    hier = spec_json["hierarchy"]
+    top = hier.get("top_module") if isinstance(hier.get("top_module"), dict) else {}
+    modules = [top] + [m for m in (hier.get("modules") or []) if isinstance(m, dict)]
+    module_dirs = {
+        str(m.get("name") or "").strip(): {
+            str(p.get("name") or "").strip(): str(p.get("direction") or "").strip().lower()
+            for p in (m.get("ports") or [])
+            if isinstance(p, dict) and str(p.get("name") or "").strip()
+        }
+        for m in modules
+        if str(m.get("name") or "").strip()
+    }
+    top_name = str(top.get("name") or "").strip()
+    top_dirs = module_dirs.get(top_name, {})
+
+    def endpoint_dir(endpoint: str) -> str:
+        module_name, port_name = _normalize_endpoint_port(endpoint)
+        return (module_dirs.get(module_name) or {}).get(port_name, "")
+
+    def compatible_top_endpoint(top_dir: str, child_dir: str) -> bool:
+        if top_dir == "input":
+            return child_dir in {"input", "inout"}
+        if top_dir == "output":
+            return child_dir in {"output", "inout"}
+        if top_dir == "inout":
+            return child_dir == "inout"
+        return False
+
+    sanitized_connections = []
+    for conn in spec_json.get("top_level_connections", []) or []:
+        if not isinstance(conn, dict):
+            continue
+        top_port = str(conn.get("top_port") or "").strip()
+        top_dir = top_dirs.get(top_port, "")
+        endpoints = []
+        for endpoint in conn.get("connected_to", []) or []:
+            endpoint = str(endpoint or "").strip()
+            if endpoint and compatible_top_endpoint(top_dir, endpoint_dir(endpoint)):
+                endpoints.append(endpoint)
+        if endpoints:
+            new_conn = dict(conn)
+            new_conn["connected_to"] = list(dict.fromkeys(endpoints))
+            sanitized_connections.append(new_conn)
+    spec_json["top_level_connections"] = sanitized_connections
+
+    sanitized_signals = []
+    for sig in spec_json.get("inter_module_signals", []) or []:
+        if not isinstance(sig, dict):
+            continue
+        source = str(sig.get("source") or "").strip()
+        src_mod, _ = _normalize_endpoint_port(source)
+        if endpoint_dir(source) not in {"output", "inout"}:
+            continue
+        destinations = []
+        for endpoint in sig.get("destinations", []) or []:
+            endpoint = str(endpoint or "").strip()
+            dst_mod, _ = _normalize_endpoint_port(endpoint)
+            if dst_mod == src_mod:
+                continue
+            if endpoint_dir(endpoint) in {"input", "inout"}:
+                destinations.append(endpoint)
+        if destinations:
+            new_sig = dict(sig)
+            new_sig["destinations"] = list(dict.fromkeys(destinations))
+            sanitized_signals.append(new_sig)
+    spec_json["inter_module_signals"] = sanitized_signals
+
+    ownership = []
+    seen = set()
+    for item in spec_json.get("signal_ownership", []) or []:
+        if not isinstance(item, dict):
+            continue
+        signal = str(item.get("signal") or "").strip()
+        owner = str(item.get("owner") or "").strip()
+        key = (signal, owner)
+        if signal and owner and key not in seen and endpoint_dir(owner) in {"output", "inout"}:
+            ownership.append(dict(item))
+            seen.add(key)
+    for sig in sanitized_signals:
+        signal = str(sig.get("name") or "").strip()
+        owner = str(sig.get("source") or "").strip()
+        key = (signal, owner)
+        if signal and owner and key not in seen:
+            ownership.append({"signal": signal, "owner": owner})
+            seen.add(key)
+    for conn in spec_json.get("top_level_connections", []) or []:
+        top_port = str(conn.get("top_port") or "").strip()
+        if top_dirs.get(top_port) != "output":
+            continue
+        owner = next((str(x).strip() for x in conn.get("connected_to", []) or [] if str(x).strip()), "")
+        key = (top_port, owner)
+        if top_port and owner and key not in seen:
+            ownership.append({"signal": top_port, "owner": owner})
+            seen.add(key)
+    spec_json["signal_ownership"] = ownership
+    return spec_json
+
+
 def _build_repair_prompt(base_prompt: str, previous_json_text: str, failure_log_text: str) -> str:
     return f"""
 ==============================
@@ -894,6 +995,7 @@ def _compile_spec_contract(llm_output: str, spec_dir: str, suffix: str = "", req
         spec_json = _ensure_hierarchical_top_level_connections(spec_json)
         spec_json = _ensure_hierarchical_port_closure(spec_json)
         spec_json = _reconcile_hierarchical_signal_directions(spec_json, mode)
+        spec_json = _sanitize_hierarchical_connectivity(spec_json)
         logger.info(f"🔍 Digital Spec Agent hierarchical port closure done suffix='{suffix or 'pass1'}'")
 
    

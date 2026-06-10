@@ -40,6 +40,135 @@ def _find_first_existing(workflow_dir: str, candidates: List[str]) -> str:
     return ""
 
 
+def _candidate_workflow_roots(state: dict, workflow_dir: str) -> List[str]:
+    roots: List[str] = []
+
+    def add(path: Any) -> None:
+        if not isinstance(path, str) or not path.strip():
+            return
+        expanded = os.path.abspath(os.path.expanduser(path.strip()))
+        if expanded not in roots:
+            roots.append(expanded)
+
+    add(workflow_dir)
+    if os.path.basename(os.path.abspath(workflow_dir)).lower() == "digital":
+        add(os.path.dirname(os.path.abspath(workflow_dir)))
+
+    for key in (
+        "source_system_rtl_workflow_dir",
+        "source_rtl_workflow_dir",
+        "system_rtl_workflow_dir",
+        "source_digital_workflow_dir",
+    ):
+        add(state.get(key))
+
+    for key in ("system_rtl_workflow_id", "source_system_rtl_workflow_id", "source_rtl_workflow_id", "from_workflow_id"):
+        source_id = str(state.get(key) or "").strip()
+        if source_id:
+            add(os.path.join("backend", "workflows", source_id))
+
+    out: List[str] = []
+    for root in roots:
+        for candidate in (root, os.path.dirname(root), os.path.join(root, "digital")):
+            if candidate and candidate not in out:
+                out.append(candidate)
+    return out
+
+
+def _find_first_existing_in_roots(roots: List[str], candidates: List[str]) -> str:
+    for root in roots:
+        for rel in candidates:
+            p = os.path.join(root, rel)
+            if os.path.isfile(p):
+                return p
+    return ""
+
+
+def _source_workflow_ids(state: dict) -> List[str]:
+    ids: List[str] = []
+    for key in ("system_rtl_workflow_id", "source_system_rtl_workflow_id", "source_rtl_workflow_id", "from_workflow_id"):
+        value = str(state.get(key) or "").strip()
+        if value and value not in ids:
+            ids.append(value)
+    return ids
+
+
+def _load_regmap_from_supabase(state: dict, workflow_dir: str, candidate_paths: List[str]) -> tuple[Optional[dict], str]:
+    client = state.get("supabase_client")
+    if client is None:
+        return None, ""
+
+    source_ids = _source_workflow_ids(state)
+    if not source_ids:
+        return None, ""
+
+    storage_candidates: List[str] = []
+    for source_id in source_ids:
+        for rel in candidate_paths:
+            storage_candidates.append(f"backend/workflows/{source_id}/{rel}")
+
+        try:
+            row = (
+                client.table("workflows")
+                .select("artifacts")
+                .eq("id", source_id)
+                .single()
+                .execute()
+            )
+            artifacts = (getattr(row, "data", None) or {}).get("artifacts")
+            if isinstance(artifacts, str):
+                try:
+                    artifacts = json.loads(artifacts)
+                except Exception:
+                    artifacts = {}
+
+            def collect(obj: Any) -> None:
+                if isinstance(obj, dict):
+                    for val in obj.values():
+                        collect(val)
+                elif isinstance(obj, list):
+                    for val in obj:
+                        collect(val)
+                elif isinstance(obj, str):
+                    norm = obj.strip().replace("\\", "/")
+                    if norm.lower().endswith(("digital_regmap.json", "regmap.json", "register_map.json")):
+                        storage_candidates.append(norm)
+
+            collect(artifacts)
+        except Exception:
+            pass
+
+    seen = set()
+    for storage_path in storage_candidates:
+        storage_path = storage_path.strip().replace("\\", "/")
+        if not storage_path or storage_path in seen:
+            continue
+        seen.add(storage_path)
+        try:
+            raw = client.storage.from_("artifacts").download(storage_path)
+            text = raw.decode("utf-8") if isinstance(raw, bytes) else str(raw)
+            obj = json.loads(text)
+            if isinstance(obj, dict):
+                local_path = os.path.join(workflow_dir, "digital", "digital_regmap.json")
+                os.makedirs(os.path.dirname(local_path), exist_ok=True)
+                with open(local_path, "w", encoding="utf-8") as fh:
+                    fh.write(json.dumps(obj, indent=2))
+                state["digital_regmap"] = obj
+                state["digital_regmap_path"] = "digital/digital_regmap.json"
+                state["digital_register_map_path"] = "digital/digital_regmap.json"
+                state["digital_regmap_json"] = local_path
+                digital = state.setdefault("digital", {})
+                if isinstance(digital, dict):
+                    digital["digital_regmap"] = obj
+                    digital["regmap"] = obj
+                    digital["digital_regmap_path"] = "digital/digital_regmap.json"
+                    digital["register_map_path"] = "digital/digital_regmap.json"
+                return obj, storage_path
+        except Exception:
+            continue
+    return None, ""
+
+
 def _parse_intish(value: Any, default: int = 0) -> int:
     try:
         if isinstance(value, int):
@@ -483,10 +612,12 @@ def run_agent(state: dict) -> dict:
 
     candidate_paths = [
         "digital/digital_regmap.json",
+        "digital_regmap.json",
         "digital/regmap.json",
         "digital/register_map.json",
         "regmap.json",
     ]
+    candidate_roots = _candidate_workflow_roots(state, workflow_dir)
 
     digital_state = state.get("digital") or {}
     upstream_regmap = None
@@ -508,7 +639,7 @@ def run_agent(state: dict) -> dict:
         candidate_probe.append({"rel": rel, "abs": abs_path, "exists": os.path.isfile(abs_path)})
 
     if upstream_regmap is None:
-        regmap_path = _find_first_existing(workflow_dir, candidate_paths) if workflow_dir else ""
+        regmap_path = _find_first_existing_in_roots(candidate_roots, candidate_paths) if candidate_roots else ""
 
     if upstream_regmap is None and not regmap_path:
         state_candidates = [
@@ -524,11 +655,13 @@ def run_agent(state: dict) -> dict:
             if os.path.isabs(cand) and os.path.isfile(cand):
                 regmap_path = cand
                 break
-            if workflow_dir:
-                joined = os.path.join(workflow_dir, cand)
+            for root in candidate_roots:
+                joined = os.path.join(root, cand)
                 if os.path.isfile(joined):
                     regmap_path = joined
                     break
+            if regmap_path:
+                break
             if os.path.isfile(cand):
                 regmap_path = cand
                 break
@@ -536,15 +669,22 @@ def run_agent(state: dict) -> dict:
     if upstream_regmap is None:
         upstream_regmap = _safe_load_json(regmap_path)
 
+    if upstream_regmap is None:
+        upstream_regmap, supabase_regmap_path = _load_regmap_from_supabase(state, workflow_dir, candidate_paths)
+        if upstream_regmap is not None:
+            regmap_path = supabase_regmap_path or "supabase.digital_regmap"
+
     debug_info = {
         "workflow_dir": workflow_dir,
         "candidate_paths": candidate_paths,
+        "candidate_roots": candidate_roots,
         "candidate_probe": candidate_probe,
         "state_digital_regmap_present": isinstance(state.get("digital_regmap"), dict),
         "state_digital_regmap_path": state.get("digital_regmap_path"),
         "state_digital_register_map_path": state.get("digital_register_map_path"),
         "state_digital_block_keys": list(digital_state.keys()) if isinstance(digital_state, dict) else [],
         "selected_regmap_path": regmap_path,
+        "source_workflow_ids": _source_workflow_ids(state),
         "upstream_regmap_type": type(upstream_regmap).__name__,
         "passthrough_taken": False,
         "normalization_taken": False,
