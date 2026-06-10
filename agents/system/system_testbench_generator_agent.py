@@ -946,7 +946,8 @@ unexport PYTHON
 override export PYTHON_BIN := {python_exe}
 override export PYTHON     := {python_exe}
 override SIM := verilator
-override EXTRA_ARGS += --trace --trace-structs --coverage --assert --vpi -Wno-fatal -Wno-CASEINCOMPLETE -Wno-WIDTH -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC -Wno-UNOPTFLAT -Wno-MULTIDRIVEN -Wno-PINMISSING
+override COCOTB_VPI_LIB := $(shell $(PYTHON_BIN) -m cocotb_tools.config --lib-name-path vpi verilator 2>/dev/null)
+override EXTRA_ARGS += --trace --trace-structs --coverage --assert --vpi --prefix Vtop -LDFLAGS "$(COCOTB_VPI_LIB)" -Wno-fatal -Wno-CASEINCOMPLETE -Wno-WIDTH -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC -Wno-UNOPTFLAT -Wno-MULTIDRIVEN -Wno-PINMISSING
 override COMPILE_ARGS += -Wno-fatal -Wno-CASEINCOMPLETE -Wno-WIDTH -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC -Wno-UNOPTFLAT -Wno-MULTIDRIVEN -Wno-PINMISSING
 
 include rtl_sources.mk
