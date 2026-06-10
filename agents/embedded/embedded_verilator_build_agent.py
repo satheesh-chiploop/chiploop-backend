@@ -120,6 +120,7 @@ def run_agent(state: dict) -> dict:
     rtl_filelist = _find_existing_path(
         state,
         [
+            "system_rtl_filelist_sim",
             "rtl_filelist_path",
             "system_filelist_sim_path",
             "filelist_path",
