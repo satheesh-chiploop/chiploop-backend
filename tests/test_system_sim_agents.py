@@ -14,6 +14,7 @@ def test_system_tb_makefile_uses_cocotb_vtop_wrapper():
     assert "override TOPLEVEL      := temp_monitor_soc_sim" in text
     assert "override HDL_TOPLEVEL  := temp_monitor_soc_sim" in text
     assert "override VERILATOR_TOPLEVEL := temp_monitor_soc_sim" in text
+    assert "--vpi" in text
     assert "--prefix Vtop" in text
 
 
@@ -56,8 +57,6 @@ def test_system_sim_execution_passes_vtop_wrapper_to_make(tmp_path, monkeypatch)
 
     execution_agent.run_agent(state)
 
-    assert "TOPLEVEL=temp_monitor_soc_sim" in captured["cmd"]
-    assert "HDL_TOPLEVEL=temp_monitor_soc_sim" in captured["cmd"]
-    assert any(arg == "EXTRA_ARGS=--trace --trace-structs --coverage --assert --prefix Vtop" for arg in captured["cmd"])
+    assert captured["cmd"] == ["make", "TESTCASE=system_smoke_test"]
     assert captured["env"]["TOPLEVEL"] == "temp_monitor_soc_sim"
     assert captured["env"]["HDL_TOPLEVEL"] == "temp_monitor_soc_sim"

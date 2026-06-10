@@ -315,8 +315,6 @@ def run_agent(state: dict) -> dict:
     env_base["SIM"] = "verilator"
     env_base["NUM_ITERS"] = str(num_iters)
 
-    extra_args = "--trace --trace-structs --coverage --assert --prefix Vtop"
-
     results: List[Dict[str, Any]] = []
     all_waveforms_before = set(_find_waveforms(workflow_dir))
     total_assertions = _count_assertions(workflow_dir)
@@ -326,16 +324,11 @@ def run_agent(state: dict) -> dict:
             env = dict(env_base)
             env["RANDOM_SEED"] = str(seed)
 
+            # Match Digital Verify's execution style: static simulator settings
+            # live in the generated Makefile, and each run only selects testcase.
             cmd = [
                 "make",
                 f"TESTCASE={testcase}",
-                f"TOPLEVEL={top}",
-                f"HDL_TOPLEVEL={top}",
-                f"VERILATOR_TOPLEVEL={top}",
-                "TOPLEVEL_LANG=verilog",
-                f"MODULE=test_{top}",
-                f"TEST_MODULES=test_{top}",
-                f"EXTRA_ARGS={extra_args}",
             ]
 
             run = _run(cmd, cwd=tb_root, env=env, timeout=1800)
