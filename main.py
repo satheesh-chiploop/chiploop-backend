@@ -464,6 +464,7 @@ from agents.digital.digital_closure_iteration_judge_agent import run_agent as di
 from agents.digital.digital_arch2rtl_dashboard_agent import run_agent as digital_arch2rtl_dashboard_agent
 from agents.digital.digital_rtl_handoff_ingest_agent import run_agent as digital_rtl_handoff_ingest_agent
 from agents.digital.digital_spec2rtl_conformance_agent import run_agent as digital_spec2rtl_conformance_agent
+from agents.digital.digital_dqa_summary_agent import run_agent as digital_dqa_summary_agent
 
 DIGITAL_AGENT_FUNCTIONS: Dict[str, Any] = {
     "Digital Spec Agent": digital_spec_agent,
@@ -509,6 +510,7 @@ DIGITAL_AGENT_FUNCTIONS: Dict[str, Any] = {
     "Digital Bug Localization Agent": digital_bug_localization_agent,
     "Digital Formal Verification Agent": digital_formal_verification_agent,
     "Digital Synthesis Readiness Agent": digital_synthesis_readiness_agent,
+    "Digital DQA Summary Agent": digital_dqa_summary_agent,
     "Digital Power Intent (UPF-lite) Agent": digital_power_intent_upf_agent,
     "Digital UPF Static Check Agent": digital_upf_static_check_agent,
     "Digital IP Packaging & Handoff Agent": digital_ip_packaging_handoff_agent,
@@ -801,6 +803,7 @@ SYSTEM_AGENT_FUNCTIONS: Dict[str,Any] = {
     "Digital Bug Localization Agent": digital_bug_localization_agent,
     "Digital Formal Verification Agent": digital_formal_verification_agent,   
     "Digital Synthesis Readiness Agent": digital_synthesis_readiness_agent,
+    "Digital DQA Summary Agent": digital_dqa_summary_agent,
     "Digital Power Intent (UPF-lite) Agent": digital_power_intent_upf_agent,
     "Digital UPF Static Check Agent": digital_upf_static_check_agent,
     "Digital IP Packaging & Handoff Agent": digital_ip_packaging_handoff_agent, 
@@ -1145,7 +1148,7 @@ DIGITAL_DQA_DEFINITION = _linear_workflow_definition([
     "Digital CDC Analysis Agent",
     "Digital Reset Integrity Agent",
     "Digital Synthesis Readiness Agent",
-    "Digital Executive Summary Agent",
+    "Digital DQA Summary Agent",
 ])
 
 DIGITAL_SMOKE_DEFINITION = _linear_workflow_definition([
@@ -1242,7 +1245,7 @@ SYSTEM_DQA_DEFINITION = _linear_workflow_definition([
     "Digital CDC Analysis Agent",
     "Digital Reset Integrity Agent",
     "Digital Synthesis Readiness Agent",
-    "Digital Executive Summary Agent",
+    "Digital DQA Summary Agent",
 ])
 
 SYSTEM_SYNTHESIS_DEFINITION = _linear_workflow_definition([
@@ -3123,7 +3126,6 @@ def execute_digital_app_background(
                 "Digital Architecture Agent",
                 "Digital Microarchitecture Agent",
                 "Digital RTL Agent",
-                "Digital RTL Linting Agent",
                 "Digital RTL Signature Agent",
                 "Digital RTL Refactoring Agent",
                 "Digital Power Intent (UPF-lite) Agent",
@@ -7346,7 +7348,6 @@ def execute_system_app_background(
                 "Digital Architecture Agent",
                 "Digital Microarchitecture Agent",
                 "Digital RTL Agent",
-                "Digital RTL Linting Agent",
                 "Digital RTL Signature Agent",
                 "Digital RTL Refactoring Agent",
                 "Digital Power Intent (UPF-lite) Agent",

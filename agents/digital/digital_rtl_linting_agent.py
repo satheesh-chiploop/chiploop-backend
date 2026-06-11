@@ -23,6 +23,32 @@ def _collect_rtl_files(workflow_dir: str) -> List[str]:
     return sorted(rtl)
 
 
+def _rtl_files_from_state(state: Dict[str, Any], workflow_dir: str) -> List[str]:
+    candidates: List[str] = []
+    digital = state.get("digital") if isinstance(state.get("digital"), dict) else {}
+    for value in (
+        digital.get("rtl_files"),
+        state.get("rtl_files"),
+        state.get("system_rtl_files"),
+        state.get("rtl_inputs"),
+        state.get("source_rtl_files"),
+    ):
+        if isinstance(value, list):
+            candidates.extend(str(path) for path in value if str(path).strip())
+    out = []
+    for raw in candidates:
+        path = raw if os.path.isabs(raw) else os.path.join(workflow_dir, raw)
+        path = os.path.abspath(path)
+        low = path.replace("\\", "/").lower()
+        if not path.lower().endswith((".v", ".sv")):
+            continue
+        if any(skip in low for skip in ("/vv/", "/tb/", "/testbench/", "/formal/")):
+            continue
+        if os.path.exists(path):
+            out.append(path)
+    return sorted(dict.fromkeys(out))
+
+
 def _basic_lint_file(path: str) -> List[Dict[str, Any]]:
     issues = []
     with open(path, "r", encoding="utf-8", errors="ignore") as f:
@@ -86,7 +112,7 @@ def run_agent(state: dict) -> dict:
     with open(log_path, "w", encoding="utf-8") as f:
         f.write("RTL Linting Agent Log\n")
 
-    rtl_files = _collect_rtl_files(workflow_dir)
+    rtl_files = _rtl_files_from_state(state, workflow_dir) or _collect_rtl_files(workflow_dir)
     _log(log_path, f"Discovered {len(rtl_files)} RTL files under {workflow_dir}")
 
     issues = []
@@ -140,5 +166,9 @@ def run_agent(state: dict) -> dict:
     )
 
     state["rtl_lint_report_path"] = os.path.join(workflow_dir, "digital", "rtl_lint_report.json")
+    local_report_path = state["rtl_lint_report_path"]
+    os.makedirs(os.path.dirname(local_report_path), exist_ok=True)
+    with open(local_report_path, "w", encoding="utf-8") as fh:
+        fh.write(json.dumps(report, indent=2))
     state["tool_profile"] = profile_summary(state)
     return state

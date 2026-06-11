@@ -57,9 +57,13 @@ def test_system_dqa_exists_and_reuses_system_rtl_sequence():
 
     assert "*SYSTEM_RTL_AGENT_SEQUENCE" in block
     assert block.index("*SYSTEM_RTL_AGENT_SEQUENCE") < block.index('"Digital CDC Analysis Agent"')
+    assert '"Digital DQA Summary Agent"' in block
+    assert '"Digital Executive Summary Agent"' not in block
     assert '"System_DQA": SYSTEM_DQA_DEFINITION' in text
     assert '"System_DQA",' in _between(text, "LOCAL_RUNTIME_WORKFLOW_OVERRIDES =", "# Dynamically load")
     assert '{"System_DQA", "System_Sim", "System_Firmware", "System_Synthesis", "System_PD"}' in text
+    skip_block = _between(text, 'skip_labels = {', 'original_count = len(nodes)')
+    assert '"Digital RTL Linting Agent"' not in skip_block
 
 
 def test_system_migration_is_full_chain_not_downstream_only():
@@ -77,6 +81,7 @@ def test_system_migration_is_full_chain_not_downstream_only():
     assert sql.index("'System CoSim Ingest Agent'") < sql.index("'System Testbench Generator Agent'")
     assert sql.index("'System RTL Handoff Package Agent'") < sql.index("'Embedded Digital RTL Handoff Ingest Agent'")
     assert "'System RTL Evidence Dashboard Agent'" in sql
+    assert "'Digital DQA Summary Agent'" in sql
 
 
 def test_system_pd_has_optional_analog_gds_generation_path():

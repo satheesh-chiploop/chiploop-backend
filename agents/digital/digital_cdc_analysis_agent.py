@@ -22,6 +22,22 @@ def _collect_rtl_files(workflow_dir: str) -> List[str]:
     return sorted(rtl)
 
 
+def _rtl_files_from_state(state: dict, workflow_dir: str) -> List[str]:
+    digital = state.get("digital") if isinstance(state.get("digital"), dict) else {}
+    candidates = []
+    for value in (digital.get("rtl_files"), state.get("rtl_files"), state.get("system_rtl_files"), state.get("rtl_inputs"), state.get("source_rtl_files")):
+        if isinstance(value, list):
+            candidates.extend(str(path) for path in value if str(path).strip())
+    out = []
+    for raw in candidates:
+        path = raw if os.path.isabs(raw) else os.path.join(workflow_dir, raw)
+        path = os.path.abspath(path)
+        low = path.replace("\\", "/").lower()
+        if path.lower().endswith((".v", ".sv")) and not any(skip in low for skip in ("/vv/", "/tb/", "/testbench/", "/formal/")) and os.path.exists(path):
+            out.append(path)
+    return sorted(dict.fromkeys(out))
+
+
 def _find_clock_reset_arch(workflow_dir: str, state: dict) -> Optional[dict]:
     # prefer explicit state path
     p = state.get("clock_reset_arch_path")
@@ -71,7 +87,7 @@ def run_agent(state: dict) -> dict:
     else:
         _log(log_path, "No clock/reset intent found. Using heuristic-only mode.")
 
-    rtl_files = _collect_rtl_files(workflow_dir)
+    rtl_files = _rtl_files_from_state(state, workflow_dir) or _collect_rtl_files(workflow_dir)
     _log(log_path, f"Discovered {len(rtl_files)} RTL files.")
 
     always_blocks = []
@@ -131,4 +147,8 @@ def run_agent(state: dict) -> dict:
                                   open(log_path, "r", encoding="utf-8").read())
 
     state["cdc_report_path"] = os.path.join(workflow_dir, "digital", "cdc_analysis_report.json")
+    local_report_path = os.path.join(workflow_dir, "digital", "cdc_findings.json")
+    os.makedirs(os.path.dirname(local_report_path), exist_ok=True)
+    with open(local_report_path, "w", encoding="utf-8") as fh:
+        fh.write(json.dumps(report, indent=2))
     return state

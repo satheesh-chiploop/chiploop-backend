@@ -78,7 +78,7 @@ with template(name, loop_type, agents) as (
         'Digital CDC Analysis Agent',
         'Digital Reset Integrity Agent',
         'Digital Synthesis Readiness Agent',
-        'Digital Executive Summary Agent'
+        'Digital DQA Summary Agent'
       ]::text[]
     ),
     (
@@ -324,7 +324,7 @@ with template(name, loop_type, agents) as (
         'Digital CDC Analysis Agent',
         'Digital Reset Integrity Agent',
         'Digital Synthesis Readiness Agent',
-        'Digital Executive Summary Agent'
+        'Digital DQA Summary Agent'
       ]::text[]
     ),
     (
