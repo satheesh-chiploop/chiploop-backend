@@ -2768,6 +2768,98 @@ class SystemProductBuilderAppIn(BaseModel):
     target_runtime: Optional[str] = "simulated_device"
     notes: Optional[str] = None
 
+
+class ProductCreateIn(BaseModel):
+    name: str
+    product_type: str = "digital"
+    starting_point: str = "from_specs"
+    description: Optional[str] = ""
+    reference_slug: Optional[str] = None
+    stage_config: Optional[Dict[str, Any]] = None
+
+
+class ProductUpdateIn(BaseModel):
+    name: Optional[str] = None
+    product_type: Optional[str] = None
+    starting_point: Optional[str] = None
+    description: Optional[str] = None
+    stage_config: Optional[Dict[str, Any]] = None
+    status: Optional[str] = None
+
+
+PRODUCT_REFERENCE_JOURNEYS: List[Dict[str, Any]] = [
+    {
+        "slug": "pwm-fan-controller",
+        "name": "PWM Fan Controller",
+        "product_type": "digital",
+        "summary": "Full development from PWM RTL through verification, firmware, software validation, and simulator-backed product app.",
+        "definition": {
+            "stages": [
+                {"id": "arch2rtl", "label": "RTL", "app": "Digital_Arch2RTL", "required": True},
+                {"id": "dqa", "label": "DQA", "app": "Digital_DQA", "required": True},
+                {"id": "verify", "label": "Verification", "app": "Digital_Verify", "required": True},
+                {"id": "closure", "label": "Closure", "app": "verify_closure_loop", "recommended": True},
+                {"id": "firmware", "label": "Firmware", "app": "Embedded_Run", "recommended": True},
+                {"id": "software", "label": "Software", "app": "System_Software", "recommended": True},
+                {"id": "validation", "label": "Validation", "app": "System_Software_Validation_L2", "recommended": True},
+                {"id": "product_app", "label": "Product App", "app": "System_Product_App_Builder", "recommended": True},
+            ]
+        },
+    },
+    {
+        "slug": "uart-packet-engine",
+        "name": "UART Packet Engine",
+        "product_type": "digital",
+        "summary": "UART/FIFO/interrupt journey from Arch2RTL to verification, firmware, software validation, and product app.",
+        "definition": {
+            "stages": [
+                {"id": "arch2rtl", "label": "RTL", "app": "Digital_Arch2RTL", "required": True},
+                {"id": "dqa", "label": "DQA", "app": "Digital_DQA", "required": True},
+                {"id": "verify", "label": "Verification", "app": "Digital_Verify", "required": True},
+                {"id": "closure", "label": "Closure", "app": "verify_closure_loop", "recommended": True},
+                {"id": "firmware", "label": "Firmware", "app": "Embedded_Run", "recommended": True},
+                {"id": "software", "label": "Software", "app": "System_Software", "recommended": True},
+                {"id": "product_app", "label": "Product App", "app": "System_Product_App_Builder", "recommended": True},
+            ]
+        },
+    },
+    {
+        "slug": "image-dma-pipeline",
+        "name": "Image DMA Pipeline",
+        "product_type": "digital",
+        "summary": "Large image-processing journey with DMA, line buffers, verification, firmware/software validation, and product dashboard.",
+        "definition": {
+            "stages": [
+                {"id": "arch2rtl", "label": "RTL", "app": "Digital_Arch2RTL", "required": True},
+                {"id": "dqa", "label": "DQA", "app": "Digital_DQA", "required": True},
+                {"id": "verify", "label": "Verification", "app": "Digital_Verify", "required": True},
+                {"id": "synthesis", "label": "Synthesis", "app": "Digital_Arch2Synthesis", "recommended": True},
+                {"id": "firmware", "label": "Firmware", "app": "Embedded_Run", "recommended": True},
+                {"id": "validation", "label": "Validation", "app": "System_Software_Validation_L2", "recommended": True},
+                {"id": "product_app", "label": "Product App", "app": "System_Product_App_Builder", "recommended": True},
+            ]
+        },
+    },
+    {
+        "slug": "temperature-monitor-soc",
+        "name": "Temperature Monitor SoC",
+        "product_type": "mixed_signal",
+        "summary": "Mixed-signal System RTL journey with digital, analog, SoC specs, System Sim, firmware, software, validation, and product app.",
+        "definition": {
+            "stages": [
+                {"id": "system_rtl", "label": "System RTL", "app": "System_RTL", "required": True},
+                {"id": "system_dqa", "label": "System DQA", "app": "System_DQA", "required": True},
+                {"id": "system_sim", "label": "System Sim", "app": "System_Sim", "required": True},
+                {"id": "system_firmware", "label": "Firmware", "app": "System_Firmware", "recommended": True},
+                {"id": "system_software", "label": "Software", "app": "System_Software", "recommended": True},
+                {"id": "system_validation", "label": "Validation", "app": "System_Software_Validation_L2", "recommended": True},
+                {"id": "system_pd", "label": "System PD", "app": "System_PD", "optional": True},
+                {"id": "product_app", "label": "Product App", "app": "System_Product_App_Builder", "recommended": True},
+            ]
+        },
+    },
+]
+
 # ==========================================================
 # ✅ DIGITAL APPS (Arch2RTL / DQA / Verify) — same pattern as Validation Run App
 # ==========================================================
@@ -4467,6 +4559,169 @@ async def save_custom_workflow(request: Request):
     except Exception as e:
         logger.error(f"❌ Failed to save workflow: {e}")
         return {"status": "error", "message": str(e)}
+
+
+def _request_user_id_optional(request: Request) -> Optional[str]:
+    header_user_id = (
+        request.headers.get("x-user-id")
+        or request.headers.get("x-supabase-user-id")
+        or request.headers.get("x-client-user-id")
+    )
+    if header_user_id and len(str(header_user_id)) == 36:
+        return str(header_user_id)
+    try:
+        token_data = verify_token(request)
+        sub = token_data.get("sub")
+        if sub and len(str(sub)) == 36:
+            return str(sub)
+    except Exception:
+        return None
+    return None
+
+
+def _normalize_reference_journey(row: Dict[str, Any]) -> Dict[str, Any]:
+    definition = row.get("definition") if isinstance(row.get("definition"), dict) else {}
+    return {
+        "id": row.get("id"),
+        "slug": row.get("slug"),
+        "name": row.get("name"),
+        "product_type": row.get("product_type") or "digital",
+        "summary": row.get("summary") or "",
+        "definition": definition,
+        "stage_count": len(definition.get("stages") or []),
+    }
+
+
+def _reference_journey_by_slug(slug: str) -> Optional[Dict[str, Any]]:
+    slug = str(slug or "").strip()
+    if not slug:
+        return None
+    try:
+        rows = (
+            supabase.table("product_reference_journeys")
+            .select("id,slug,name,product_type,summary,definition,is_active")
+            .eq("slug", slug)
+            .eq("is_active", True)
+            .limit(1)
+            .execute()
+        ).data or []
+        if rows:
+            return _normalize_reference_journey(rows[0])
+    except Exception:
+        pass
+    for item in PRODUCT_REFERENCE_JOURNEYS:
+        if item.get("slug") == slug:
+            return _normalize_reference_journey(item)
+    return None
+
+
+@app.get("/products/reference-journeys")
+async def list_product_reference_journeys():
+    try:
+        rows = (
+            supabase.table("product_reference_journeys")
+            .select("id,slug,name,product_type,summary,definition,is_active")
+            .eq("is_active", True)
+            .order("name")
+            .execute()
+        ).data or []
+        if rows:
+            return {"status": "ok", "reference_journeys": [_normalize_reference_journey(row) for row in rows]}
+    except Exception as exc:
+        logger.warning("Reference journey table unavailable, using built-in defaults: %s", exc)
+    return {"status": "ok", "reference_journeys": [_normalize_reference_journey(row) for row in PRODUCT_REFERENCE_JOURNEYS]}
+
+
+@app.get("/products")
+async def list_products(request: Request):
+    user_id = _request_user_id_optional(request)
+    if not user_id:
+        return {"status": "ok", "products": []}
+    try:
+        rows = (
+            supabase.table("products")
+            .select("id,name,product_type,starting_point,description,stage_config,stage_results,status,created_at,updated_at")
+            .eq("user_id", user_id)
+            .order("updated_at", desc=True)
+            .limit(100)
+            .execute()
+        ).data or []
+        return {"status": "ok", "products": rows}
+    except Exception as exc:
+        logger.error("Failed to list products: %s", exc)
+        raise HTTPException(status_code=500, detail=f"Failed to list products: {exc}")
+
+
+@app.post("/products")
+async def create_product(payload: ProductCreateIn, request: Request):
+    user_id = _request_user_id_optional(request)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Login required to create a product")
+    name = str(payload.name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Product name is required")
+
+    reference = _reference_journey_by_slug(payload.reference_slug or "") if payload.reference_slug else None
+    stage_config = payload.stage_config if isinstance(payload.stage_config, dict) else {}
+    if reference and not stage_config:
+        stage_config = {
+            "source": "reference_journey",
+            "reference_slug": reference.get("slug"),
+            "stages": reference.get("definition", {}).get("stages") or [],
+        }
+
+    record = {
+        "user_id": user_id,
+        "name": name,
+        "product_type": payload.product_type or (reference or {}).get("product_type") or "digital",
+        "starting_point": payload.starting_point or "from_specs",
+        "description": payload.description or (reference or {}).get("summary") or "",
+        "stage_config": stage_config,
+        "stage_results": {},
+        "status": "draft",
+        "created_at": datetime.utcnow().isoformat(),
+        "updated_at": datetime.utcnow().isoformat(),
+    }
+    try:
+        rows = supabase.table("products").insert(record).execute().data or []
+        product = rows[0] if rows else record
+        return {"status": "ok", "product": product}
+    except Exception as exc:
+        logger.error("Failed to create product: %s", exc)
+        raise HTTPException(status_code=500, detail=f"Failed to create product: {exc}")
+
+
+@app.patch("/products/{product_id}")
+async def update_product(product_id: str, payload: ProductUpdateIn, request: Request):
+    user_id = _request_user_id_optional(request)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Login required to update a product")
+    allowed_status = {"draft", "ready", "running", "completed", "failed", "archived"}
+    update: Dict[str, Any] = {"updated_at": datetime.utcnow().isoformat()}
+    for key in ("name", "product_type", "starting_point", "description", "stage_config"):
+        value = getattr(payload, key)
+        if value is not None:
+            update[key] = value
+    if payload.status is not None:
+        if payload.status not in allowed_status:
+            raise HTTPException(status_code=400, detail="Invalid product status")
+        update["status"] = payload.status
+    try:
+        rows = (
+            supabase.table("products")
+            .update(update)
+            .eq("id", product_id)
+            .eq("user_id", user_id)
+            .execute()
+        ).data or []
+        if not rows:
+            raise HTTPException(status_code=404, detail="Product not found")
+        return {"status": "ok", "product": rows[0]}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("Failed to update product: %s", exc)
+        raise HTTPException(status_code=500, detail=f"Failed to update product: {exc}")
 
 
 @app.post("/auto_compose_workflow")
