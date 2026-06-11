@@ -554,6 +554,12 @@ from agents.analog.analog_behavioral_coverage_agent import run_agent as analog_b
 from agents.analog.analog_correlation_agent import run_agent as analog_correlation_agent
 from agents.analog.analog_iteration_agent import run_agent as analog_iteration_agent
 from agents.analog.analog_abstract_views_agent import run_agent as analog_abstract_views_agent
+from agents.analog.analog_sky130_spice_netlist_agent import run_agent as analog_sky130_spice_netlist_agent
+from agents.analog.analog_gds_generation_agent import run_agent as analog_gds_generation_agent
+from agents.analog.analog_lef_extraction_agent import run_agent as analog_lef_extraction_agent
+from agents.analog.analog_liberty_characterization_agent import run_agent as analog_liberty_characterization_agent
+from agents.analog.analog_collateral_consistency_agent import run_agent as analog_collateral_consistency_agent
+from agents.analog.analog_physical_collateral_package_agent import run_agent as analog_physical_collateral_package_agent
 from agents.analog.analog_exec_summary_agent import run_agent as analog_exec_summary_agent
 
 ANALOG_AGENT_FUNCTIONS: Dict[str, Any] = {
@@ -567,6 +573,12 @@ ANALOG_AGENT_FUNCTIONS: Dict[str, Any] = {
     "Analog Correlation Agent": analog_correlation_agent,
     "Analog Iteration Proposal Agent": analog_iteration_agent,
     "Analog Abstract Views Agent": analog_abstract_views_agent,
+    "Analog Sky130 SPICE Netlist Agent": analog_sky130_spice_netlist_agent,
+    "Analog GDS Generation Agent": analog_gds_generation_agent,
+    "Analog LEF Extraction Agent": analog_lef_extraction_agent,
+    "Analog Liberty Characterization Agent": analog_liberty_characterization_agent,
+    "Analog Collateral Consistency Agent": analog_collateral_consistency_agent,
+    "Analog Physical Collateral Package Agent": analog_physical_collateral_package_agent,
     "Analog Executive Summary Agent": analog_exec_summary_agent,
 }
 
@@ -828,6 +840,12 @@ SYSTEM_AGENT_FUNCTIONS: Dict[str,Any] = {
     "Analog Correlation Agent": analog_correlation_agent,
     "Analog Iteration Proposal Agent": analog_iteration_agent,
     "Analog Abstract Views Agent": analog_abstract_views_agent,
+    "Analog Sky130 SPICE Netlist Agent": analog_sky130_spice_netlist_agent,
+    "Analog GDS Generation Agent": analog_gds_generation_agent,
+    "Analog LEF Extraction Agent": analog_lef_extraction_agent,
+    "Analog Liberty Characterization Agent": analog_liberty_characterization_agent,
+    "Analog Collateral Consistency Agent": analog_collateral_consistency_agent,
+    "Analog Physical Collateral Package Agent": analog_physical_collateral_package_agent,
     "Analog Executive Summary Agent": analog_exec_summary_agent,
     "Embedded Spec Agent": embedded_spec_agent,
     "Embedded Code Agent": embedded_code_agent,
@@ -1208,6 +1226,7 @@ SYSTEM_RTL_AGENT_SEQUENCE = [
     "Digital RTL Signature Agent",
     "Analog Spec Builder Agent",
     "Analog Behavioral Model Agent",
+    "Analog Abstract Views Agent",
     "System Integration Intent Agent",
     "System Top Assembly Agent",
     "System Assertions (SVA) Agent",
@@ -1246,6 +1265,12 @@ SYSTEM_PD_DEFINITION = _linear_workflow_definition([
     "Digital DFT Scan Stitching Agent",
     "Digital Scan ATPG Coverage Agent",
     "Digital MBIST Collateral Agent",
+    "Analog Sky130 SPICE Netlist Agent",
+    "Analog GDS Generation Agent",
+    "Analog LEF Extraction Agent",
+    "Analog Liberty Characterization Agent",
+    "Analog Collateral Consistency Agent",
+    "Analog Physical Collateral Package Agent",
     "Digital STA PrePlace Agent",
     "Digital Floorplan Agent",
     "Digital Placement Agent",
@@ -2638,6 +2663,11 @@ class SystemAppIn(BaseModel):
     run_fill: Optional[bool] = True
     run_drc: Optional[bool] = True
     run_lvs: Optional[bool] = True
+    analog_physical_mode: Optional[str] = "blackbox"
+    analog_pdk: Optional[str] = None
+    analog_spice_text: Optional[str] = None
+    analog_netlist_text: Optional[str] = None
+    analog_gds_path: Optional[str] = None
     system_sim_testcases: Optional[List[str]] = None
     system_sim_seeds: Optional[List[int]] = None
     system_sim_num_iters: Optional[int] = None
@@ -3101,6 +3131,7 @@ def execute_digital_app_background(
                 "Digital IP Packaging & Handoff Agent",
                 "Analog Spec Builder Agent",
                 "Analog Behavioral Model Agent",
+                "Analog Abstract Views Agent",
                 "System Integration Intent Agent",
                 "System Top Assembly Agent",
                 "System RTL Handoff Package Agent",
@@ -6642,6 +6673,13 @@ def execute_system_app_background(
                 except Exception:
                     return ""
 
+            def _download_bytes_storage(path: str) -> bytes:
+                try:
+                    raw = supabase.storage.from_(ARTIFACT_BUCKET).download(path)
+                    return raw if isinstance(raw, bytes) else str(raw).encode("utf-8")
+                except Exception:
+                    return b""
+
             def _list_storage_folder(folder: str) -> List[str]:
                 try:
                     entries = supabase.storage.from_(ARTIFACT_BUCKET).list(folder) or []
@@ -6708,9 +6746,69 @@ def execute_system_app_background(
                 except Exception:
                     package_obj = {}
 
+            def _materialize_macro_collateral(package: Dict[str, Any]) -> None:
+                storage_obj_local = package.get("storage") if isinstance(package.get("storage"), dict) else {}
+                macros = package.get("analog_macros") if isinstance(package.get("analog_macros"), dict) else {}
+
+                def _as_list(value: Any) -> List[str]:
+                    return [str(x) for x in value if str(x).strip()] if isinstance(value, list) else []
+
+                rel_groups = {
+                    "macro_lefs": _as_list(storage_obj_local.get("macro_lefs")) + _as_list(macros.get("lef_files")),
+                    "macro_libs": _as_list(storage_obj_local.get("macro_libs")) + _as_list(macros.get("lib_files")),
+                    "macro_gds": _as_list(storage_obj_local.get("macro_gds")) + _as_list(macros.get("gds_files")),
+                }
+                if not any(rel_groups.values()):
+                    return
+
+                macro_dir = os.path.join(shared_state["workflow_dir"], "system", "imported_macros")
+                os.makedirs(macro_dir, exist_ok=True)
+                materialized_groups: Dict[str, List[str]] = {"macro_lefs": [], "macro_libs": [], "macro_gds": []}
+
+                for key, paths in rel_groups.items():
+                    for idx, source_path in enumerate(list(dict.fromkeys(paths))):
+                        raw_source = str(source_path or "").strip().replace("\\", "/")
+                        if not raw_source:
+                            continue
+                        content = b""
+                        if os.path.isfile(raw_source):
+                            try:
+                                with open(raw_source, "rb") as fh:
+                                    content = fh.read()
+                            except Exception:
+                                content = b""
+                        else:
+                            candidates = _storage_path_candidates_from_source_path(raw_source, indexed_paths, source_workflow_id)
+                            for candidate in candidates or [raw_source]:
+                                content = _download_bytes_storage(candidate)
+                                if content:
+                                    break
+                        if not content:
+                            continue
+                        basename = os.path.basename(raw_source) or f"{key}_{idx}"
+                        local_path = os.path.abspath(os.path.join(macro_dir, basename))
+                        with open(local_path, "wb") as fh:
+                            fh.write(content)
+                        materialized_groups[key].append(local_path)
+
+                digital_block = shared_state.setdefault("digital", {})
+                if isinstance(digital_block, dict):
+                    for key, paths in materialized_groups.items():
+                        if paths:
+                            digital_block[key] = list(dict.fromkeys((digital_block.get(key) or []) + paths))
+                    if (digital_block.get("macro_lefs") or digital_block.get("macro_libs")) and not digital_block.get("macro_gds"):
+                        digital_block["macro_blackbox_mode"] = "lef_lib_no_gds"
+                        digital_block["macro_blackboxes"] = [
+                            os.path.splitext(os.path.basename(p))[0]
+                            for p in (digital_block.get("macro_lefs") or [])
+                        ]
+                        shared_state["physical_blackbox_macros"] = digital_block["macro_blackboxes"]
+
             filelist_paths = []
             filelists = package_obj.get("filelists") if isinstance(package_obj.get("filelists"), dict) else {}
             storage_obj = package_obj.get("storage") if isinstance(package_obj.get("storage"), dict) else {}
+            if package_obj:
+                _materialize_macro_collateral(package_obj)
             storage_rtl_from_package = storage_obj.get("rtl_files") if isinstance(storage_obj, dict) else []
             if isinstance(storage_rtl_from_package, list):
                 filelist_paths.extend([str(p) for p in storage_rtl_from_package if str(p).strip()])
@@ -7256,6 +7354,7 @@ def execute_system_app_background(
                 "Digital IP Packaging & Handoff Agent",
                 "Analog Spec Builder Agent",
                 "Analog Behavioral Model Agent",
+                "Analog Abstract Views Agent",
                 "System Integration Intent Agent",
                 "System Top Assembly Agent",
                 "System RTL Handoff Package Agent",

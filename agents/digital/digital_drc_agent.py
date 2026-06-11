@@ -233,6 +233,10 @@ def _stage_macro_inputs(state: dict, workflow_dir: str, work_stage_dir: str) -> 
 
     return staged_lefs, staged_libs, staged_gds
 
+
+def _macro_blackbox_deferred(staged_lefs: list[str], staged_libs: list[str], staged_gds: list[str]) -> bool:
+    return bool((staged_lefs or staged_libs) and not staged_gds)
+
 def run_agent(state: dict) -> dict:
     print(f"\n🏁 Running {AGENT_NAME}...")
 
@@ -341,6 +345,62 @@ def run_agent(state: dict) -> dict:
     logger.info(f"{AGENT_NAME}: staged macro LEFs -> {staged_lefs}")
     logger.info(f"{AGENT_NAME}: staged macro LIBs -> {staged_libs}")
     logger.info(f"{AGENT_NAME}: staged macro GDS -> {staged_gds}")
+
+    if _macro_blackbox_deferred(staged_lefs, staged_libs, staged_gds):
+        out = "Analog macro LEF/LIB collateral is present but macro GDS is unavailable; DRC is deferred in black-box mode.\n"
+        log_path = os.path.join(logs_dir, "openlane_drc.log")
+        _write_text(log_path, out)
+        input_resolution_log = "\n".join([
+            f"[{datetime.utcnow().isoformat()}Z] {AGENT_NAME}",
+            f"workflow_id={workflow_id}",
+            f"workflow_dir={workflow_dir}",
+            f"top_module={top_module}",
+            f"macro_lef_count={len(staged_lefs)}",
+            f"macro_lib_count={len(staged_libs)}",
+            f"macro_gds_count={len(staged_gds)}",
+            "status=blackbox_deferred",
+            "reason=analog_macro_gds_missing",
+        ]) + "\n"
+        input_resolution_log_path = os.path.join(logs_dir, "drc_input_resolution.log")
+        _write_text(input_resolution_log_path, input_resolution_log)
+        summary = {
+            "workflow_id": workflow_id,
+            "agent": AGENT_NAME,
+            "status": "blackbox_deferred",
+            "drc_status": "blackbox_deferred",
+            "drc_violations": None,
+            "xor_differences": None,
+            "return_code": 0,
+            "blackbox_macros": (state.get("digital") or {}).get("macro_blackboxes") or [],
+            "reason": "analog_macro_gds_missing",
+            "outputs": {
+                "sdc": f"digital/drc/constraints/{sdc_basename}",
+                "metrics_json": None,
+                "drc_report_xml": None,
+                "log": "digital/drc/logs/openlane_drc.log",
+                "openlane_run_dir": None,
+            },
+        }
+        _write_text(os.path.join(stage_dir, "drc_summary.json"), json.dumps(summary, indent=2))
+        _write_text(os.path.join(stage_dir, "drc_summary.md"), "# DRC (KLayout)\n\n- status: `blackbox_deferred`\n- reason: `analog_macro_gds_missing`\n")
+        try:
+            save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "drc/config.json", json.dumps(cfg, indent=2))
+            save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", f"drc/constraints/{sdc_basename}", sdc_text)
+            save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "drc/logs/openlane_drc.log", out)
+            save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "drc/logs/drc_input_resolution.log", input_resolution_log)
+            save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "drc/drc_summary.json", json.dumps(summary, indent=2))
+        except Exception as e:
+            print(f"⚠️ {AGENT_NAME} upload failed: {e}")
+        state.setdefault("digital", {})["drc"] = {
+            "status": "blackbox_deferred",
+            "drc_status": "blackbox_deferred",
+            "stage_dir": stage_dir,
+            "constraints_sdc": stage_sdc,
+            "openlane_config": config_path,
+            "input_resolution_log": input_resolution_log_path,
+            "blackbox_macros": summary["blackbox_macros"],
+        }
+        return state
 
     exec_config_path = os.path.join(work_stage_dir, "config.json")
     _write_text(exec_config_path, json.dumps(cfg, indent=2))

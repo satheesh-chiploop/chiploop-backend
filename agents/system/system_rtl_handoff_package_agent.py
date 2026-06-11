@@ -180,6 +180,35 @@ def _storage_rtl_paths(supabase, prefixes: List[str]) -> List[str]:
     return list(dict.fromkeys(out))
 
 
+def _storage_collateral_paths(supabase, prefixes: List[str], exts: Tuple[str, ...]) -> List[str]:
+    found: List[str] = []
+    for prefix in prefixes:
+        found.extend(_list_storage_tree(supabase, prefix.rstrip("/")))
+    out: List[str] = []
+    for path in found:
+        low = path.lower()
+        if not low.endswith(exts):
+            continue
+        base = os.path.basename(low)
+        if base.endswith("_llm_lef_raw.lef") or base.endswith("_raw.lef") or "debug" in base:
+            continue
+        if "/analog/abstract/" not in low and "/macros/" not in low:
+            continue
+        out.append(path)
+    return list(dict.fromkeys(out))
+
+
+def _existing_state_paths(state: Dict[str, Any], keys: Tuple[str, ...]) -> List[str]:
+    out: List[str] = []
+    for key in keys:
+        value = state.get(key)
+        if isinstance(value, str) and value.strip() and os.path.exists(value):
+            out.append(os.path.abspath(value))
+        elif isinstance(value, list):
+            out.extend(os.path.abspath(str(p)) for p in value if isinstance(p, str) and os.path.exists(p))
+    return list(dict.fromkeys(out))
+
+
 def run_agent(state: dict) -> dict:
     workflow_id = str(state.get("workflow_id") or "default")
 
@@ -259,6 +288,13 @@ def run_agent(state: dict) -> dict:
         phys_filelist = _parse_filelist(phys_filelist_text)
         lib_filelist = _parse_filelist(lib_filelist_text)
         storage_rtl_files = _storage_rtl_paths(supabase, prefixes)
+        storage_macro_lefs = _storage_collateral_paths(supabase, prefixes, (".lef",))
+        storage_macro_libs = _storage_collateral_paths(supabase, prefixes, (".lib", ".lib.gz", ".db"))
+        storage_macro_gds = _storage_collateral_paths(supabase, prefixes, (".gds", ".gds.gz"))
+        local_macro_lefs = _existing_state_paths(state, ("analog_macro_lef", "macro_lefs"))
+        local_macro_libs = _existing_state_paths(state, ("analog_macro_lib", "macro_libs"))
+        local_macro_gds = _existing_state_paths(state, ("analog_macro_gds", "macro_gds"))
+        macro_blackbox = bool((storage_macro_lefs or local_macro_lefs or storage_macro_libs or local_macro_libs) and not (storage_macro_gds or local_macro_gds))
 
         compile_logs = {
             "iverilog_sim": bool(iverilog_sim_log),
@@ -318,7 +354,17 @@ def run_agent(state: dict) -> dict:
                 "integration_intent": integration_intent_path,
                 "soc_top_sim": soc_top_sim_path,
                 "soc_top_phys": soc_top_phys_path,
-                "digital_regmap": digital_regmap_path
+                "digital_regmap": digital_regmap_path,
+                "macro_lefs": storage_macro_lefs,
+                "macro_libs": storage_macro_libs,
+                "macro_gds": storage_macro_gds
+            },
+            "analog_macros": {
+                "lef_files": local_macro_lefs or storage_macro_lefs,
+                "lib_files": local_macro_libs or storage_macro_libs,
+                "gds_files": local_macro_gds or storage_macro_gds,
+                "blackbox_for_drc_lvs": macro_blackbox,
+                "blackbox_reason": "analog_macro_gds_missing" if macro_blackbox else ""
             },
             "compile": {
                 "sim": "pass" if sim_ok else "fail",
@@ -341,6 +387,18 @@ def run_agent(state: dict) -> dict:
         _record(workflow_id, DEBUG_JSON, json.dumps(debug, indent=2))
 
         state["system_rtl_package"] = pkg
+        digital_state = state.setdefault("digital", {})
+        if isinstance(digital_state, dict):
+            digital_state["macro_lefs"] = local_macro_lefs
+            digital_state["macro_libs"] = local_macro_libs
+            digital_state["macro_gds"] = local_macro_gds
+            if macro_blackbox:
+                digital_state["macro_blackbox_mode"] = "lef_lib_no_gds"
+                digital_state["macro_blackboxes"] = [
+                    os.path.splitext(os.path.basename(p))[0]
+                    for p in (local_macro_lefs or storage_macro_lefs)
+                ]
+                state["physical_blackbox_macros"] = digital_state["macro_blackboxes"]
         state["status"] = "✅ RTL Package Ready" if pkg["ready_for_cosim"] else "⚠️ RTL Package Not Ready"
         return state
 

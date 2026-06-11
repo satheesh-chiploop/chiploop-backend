@@ -5,11 +5,11 @@ import json
 os.environ.setdefault("SUPABASE_URL", "http://localhost")
 os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-service-role-key")
 
-from agents.digital.digital_drc_agent import _drc_status
+from agents.digital.digital_drc_agent import _drc_status, _macro_blackbox_deferred as _drc_macro_blackbox_deferred
 from agents.digital.digital_failure_debug_agent import run_agent as failure_debug_agent
 from agents.digital import digital_spec2rtl_conformance_agent as spec2rtl_agent
 from agents.digital.digital_logic_equivalence_agent import _generated_stdcell_model, _missing_stdcell_models, _yosys_script
-from agents.digital.digital_lvs_agent import _lvs_status
+from agents.digital.digital_lvs_agent import _lvs_status, _macro_blackbox_deferred as _lvs_macro_blackbox_deferred
 from agents.digital.digital_scan_atpg_agent import _adapter_log_has_execution_error, _generate_full_scan_bench, _metrics_show_real_atpg_result, _pattern_count_from_file
 from agents.digital.digital_tapeout_lec_agent import PHYSICAL_ONLY_TOP_PORTS, _top_ports
 from agents.digital.digital_tapeout_agent import _blocking_xor_difference_count, _copy_xor_report, _tapeout_failure_reasons, _xor_difference_count, _xor_layer_counts
@@ -358,6 +358,12 @@ endmodule
 def test_drc_lvs_deferred_xor_does_not_mask_clean_check():
     assert _drc_status(2, 0, "One or more deferred errors were encountered: 1 XOR differences found.") == "clean"
     assert _lvs_status(2, None, "Final result:\nCircuits match uniquely.\nOne or more deferred errors were encountered: 1 XOR differences found.") == "clean"
+
+
+def test_drc_lvs_blackbox_deferred_when_macro_gds_missing():
+    assert _drc_macro_blackbox_deferred(["dir::inputs/macros/lef/ana.lef"], ["dir::inputs/macros/lib/ana.lib"], [])
+    assert _lvs_macro_blackbox_deferred(["dir::inputs/macros/lef/ana.lef"], ["dir::inputs/macros/lib/ana.lib"], [])
+    assert not _drc_macro_blackbox_deferred(["dir::inputs/macros/lef/ana.lef"], [], ["dir::inputs/macros/gds/ana.gds"])
 
 
 def test_atpg_pattern_count_can_be_inferred_from_adapter_pattern_file(tmp_path):
