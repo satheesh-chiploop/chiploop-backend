@@ -163,5 +163,8 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     state["vv_testcases"] = executable_tests
     state["testcases"] = executable_tests
     state["simulation_seeds"] = seed_plan
+    if system_context:
+        state["system_sim_testcases"] = executable_tests
+        state["system_sim_seeds"] = seed_plan
     state["seed_count"] = len(seed_plan)
     return state

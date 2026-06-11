@@ -5,6 +5,7 @@ os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-service-role-key")
 os.environ.setdefault("OPENAI_API_KEY", "test-openai-key")
 
 from agents.system import system_sim_execution_agent as execution_agent
+from agents.system import system_formal_verification_agent as formal_agent
 from agents.system import system_testbench_generator_agent as tb_agent
 
 
@@ -64,3 +65,30 @@ def test_system_sim_execution_matches_digital_verify_make_invocation(tmp_path, m
     assert captured["cmd"] == ["make", "TESTCASE=system_smoke_test"]
     assert captured["env"]["TOPLEVEL"] == "temp_monitor_soc_sim"
     assert captured["env"]["HDL_TOPLEVEL"] == "temp_monitor_soc_sim"
+
+
+def test_system_tb_parser_preserves_logic_vector_widths(tmp_path):
+    rtl = tmp_path / "soc_top_sim.sv"
+    rtl.write_text(
+        """module temp_monitor_soc_sim (
+  input logic clk,
+  input logic [7:0] wr_addr,
+  input logic [15:0] wr_data,
+  output logic [11:0] temp_code
+);
+endmodule
+""",
+        encoding="utf-8",
+    )
+
+    ports = {p["name"]: p for p in tb_agent._ports_from_top_sv(str(rtl), "temp_monitor_soc_sim")}
+
+    assert ports["wr_addr"]["width"] == "((7) - (0) + 1)"
+    assert ports["wr_data"]["width"] == "((15) - (0) + 1)"
+    assert ports["temp_code"]["width"] == "((11) - (0) + 1)"
+
+
+def test_system_formal_blackboxes_adc_models_under_workflow_digital_path():
+    path = "/tmp/artifacts/digital/system/imported_rtl/temp_sensor_adc_model.v"
+
+    assert formal_agent._is_analog_or_macro_file(path) is True

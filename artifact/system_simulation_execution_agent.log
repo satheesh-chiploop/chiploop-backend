@@ -1,0 +1,10 @@
+System Simulation Execution Agent Log
+manifest_top=temp_monitor_soc_sim
+selected_top=temp_monitor_soc_sim
+manifest_default_tests=[
+  "system_smoke_test"
+]
+requested_tests=[]
+selected_tests=[
+  "system_smoke_test"
+]

@@ -10,6 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from agents.digital import digital_closure_recommendation_agent as recommendation_agent
 from agents.digital import digital_coverage_gap_analysis_agent as gap_agent
 from agents.digital import digital_failure_triage_agent as triage_agent
+from agents.digital import digital_testcase_seed_update_agent as testcase_seed_agent
 from agents.digital import digital_verify_closure_ingest_agent as ingest_agent
 
 
@@ -18,6 +19,7 @@ def _stub_upload(monkeypatch):
     monkeypatch.setattr(gap_agent, "save_text_artifact_and_record", lambda *args, **kwargs: None)
     monkeypatch.setattr(triage_agent, "save_text_artifact_and_record", lambda *args, **kwargs: None)
     monkeypatch.setattr(recommendation_agent, "save_text_artifact_and_record", lambda *args, **kwargs: None)
+    monkeypatch.setattr(testcase_seed_agent, "save_text_artifact_and_record", lambda *args, **kwargs: None)
 
 
 def test_verify_closure_agents_generate_plan_from_parent_verify_artifacts(tmp_path, monkeypatch):
@@ -92,3 +94,29 @@ def test_verify_closure_agents_generate_plan_from_parent_verify_artifacts(tmp_pa
     assert plan["functional_gaps"][0]["missing_bins"] == ["nonzero"]
     assert plan["failure_count"] == 1
     assert any(item["id"] == "rerun_failed_seeds_with_waveform" for item in plan["recommended_actions"])
+
+
+def test_system_sim_closure_updates_system_specific_seed_keys(tmp_path, monkeypatch):
+    _stub_upload(monkeypatch)
+    monkeypatch.chdir(tmp_path)
+
+    state = {
+        "workflow_id": "closure-child",
+        "workflow_dir": str(tmp_path / "backend" / "workflows" / "closure-child"),
+        "source_system_sim_workflow_id": "system-parent",
+        "source_simulation_manifest": {
+            "top_module": "temp_monitor_soc_sim",
+            "default_tests": ["system_smoke_test", "integrated_input_sanity"],
+        },
+        "closure_added_coverage_points": [
+            {"id": "COV_ITER001_001", "source_gap_type": "functional_bin_gap", "coverage_point": "outputs.alert_irq"}
+        ],
+        "seed_budget": 4,
+        "random_vs_directed": "both",
+    }
+
+    testcase_seed_agent.run_agent(state)
+
+    assert state["system_sim_testcases"] == ["system_smoke_test"]
+    assert state["system_sim_seeds"] == [1, 2, 3, 4]
+    assert state["simulation_seeds"] == [1, 2, 3, 4]

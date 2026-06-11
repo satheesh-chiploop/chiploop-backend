@@ -59,12 +59,14 @@ def _is_analog_or_macro_file(path: str) -> bool:
     text = path.replace("\\", "/").lower()
     name = os.path.basename(text)
     parts = [p for p in re.split(r"[\\/]+", text) if p]
+    tokens = ("analog", "macro", "ams", "behavioral", "adc", "dac", "pll", "ldo", "bandgap", "opamp", "sensor")
+    if any(token in name for token in tokens):
+        return True
     if "analog" in parts:
         return True
     if "digital" in parts or "/rtl/" in text:
         return False
-    tokens = ("analog", "macro", "ams", "behavioral", "adc", "dac", "pll", "ldo", "bandgap", "opamp", "sensor")
-    return any(token in text or token in name for token in tokens)
+    return any(token in text for token in tokens)
 
 
 def _module_declaration_tail(path: str, module: str) -> Optional[str]:

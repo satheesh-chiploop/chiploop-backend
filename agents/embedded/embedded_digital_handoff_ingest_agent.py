@@ -47,6 +47,23 @@ def _first_download(client, paths: List[str]) -> tuple[str, bytes]:
     return "", b""
 
 
+def _safe_json(raw: bytes) -> Dict[str, Any]:
+    try:
+        obj = json.loads(raw.decode("utf-8") if isinstance(raw, bytes) else str(raw))
+        return obj if isinstance(obj, dict) else {}
+    except Exception:
+        return {}
+
+
+def _storage_candidates_for_reference(prefix: str, reference: Any) -> List[str]:
+    ref = str(reference or "").strip().replace("\\", "/")
+    if not ref:
+        return []
+    if ref.startswith("backend/workflows/") or ref.startswith("artifacts/"):
+        return [ref]
+    return [f"{prefix.rstrip('/')}/{ref}", ref]
+
+
 def _list_storage_folder(client: Any, folder: str) -> List[str]:
     try:
         entries = client.storage.from_(ARTIFACT_BUCKET).list(folder) or []
@@ -217,6 +234,14 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
         if path.lower().endswith("digital_regmap.json")
     ]
     regmap_candidates.append(f"{prefix}/digital/digital_regmap.json")
+    package_candidates = [
+        path for path in indexed_paths + stored_source_paths
+        if path.lower().endswith("system_rtl_package.json")
+    ]
+    package_candidates.extend([
+        f"{prefix}/system/package/system_rtl_package.json",
+        f"{prefix}/system/integration/system_rtl_package.json",
+    ])
     sdc_candidates = [
         path for path in indexed_paths + stored_source_paths
         if path.lower().endswith(".sdc")
@@ -228,6 +253,26 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
         if raw:
             rtl_downloads.append((candidate, raw))
     regmap_source_path, regmap_raw = _first_download(client, list(dict.fromkeys(regmap_candidates)))
+    if not regmap_raw:
+        package_source_path, package_raw = _first_download(client, list(dict.fromkeys(package_candidates)))
+        package = _safe_json(package_raw) if package_raw else {}
+        storage = package.get("storage") if isinstance(package.get("storage"), dict) else {}
+        for rtl_ref in storage.get("rtl_files") or []:
+            if isinstance(rtl_ref, str):
+                rtl_candidates.extend(_storage_candidates_for_reference(prefix, rtl_ref))
+        for ref in (
+            storage.get("digital_regmap"),
+            package.get("register_map_path"),
+            package.get("digital_regmap_path"),
+        ):
+            regmap_candidates.extend(_storage_candidates_for_reference(prefix, ref))
+        if not rtl_downloads:
+            for candidate in list(dict.fromkeys(rtl_candidates)):
+                raw = _first_download(client, [candidate])[1]
+                if raw:
+                    rtl_downloads.append((candidate, raw))
+        if package_source_path:
+            regmap_source_path, regmap_raw = _first_download(client, list(dict.fromkeys(regmap_candidates)))
     if not rtl_downloads:
         rtl_downloads = _all_local_in_roots(_source_local_roots(client, source_workflow_id), (".sv", ".v"))
     if not regmap_raw:

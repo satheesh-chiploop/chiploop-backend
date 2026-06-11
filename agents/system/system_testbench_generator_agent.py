@@ -323,7 +323,7 @@ def _ports_from_top_sv(top_sv_path: Optional[str], top_module: Optional[str]) ->
         if not line:
             continue
         mm = re.match(
-            r"(?P<dir>input|output|inout)\s+(?:wire|logic|reg\s+)?(?:signed\s+)?(?P<range>\[[^\]]+\]\s+)?(?P<name>[A-Za-z_][A-Za-z0-9_$]*)$",
+            r"(?P<dir>input|output|inout)\s+(?:(?:wire|logic|reg)\s+)?(?:signed\s+)?(?P<range>\[[^\]]+\]\s+)?(?P<name>[A-Za-z_][A-Za-z0-9_$]*)$",
             line,
             re.IGNORECASE,
         )

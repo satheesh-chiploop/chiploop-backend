@@ -8,6 +8,7 @@ os.environ.setdefault("OPENAI_API_KEY", "test-openai-key")
 from agents.embedded import _embedded_common as common
 from agents.embedded import embedded_cocotb_harness_agent
 from agents.embedded import embedded_co_sim_runner_agent
+from agents.embedded import embedded_digital_handoff_ingest_agent
 from agents.embedded import embedded_elf_build_agent
 from agents.embedded import embedded_firmware_executive_summary_agent
 from agents.embedded import embedded_firmware_integration_contract_agent
@@ -20,6 +21,96 @@ from agents.embedded import embedded_validation_report_agent
 from agents.embedded import embedded_verilator_build_agent
 from agents.system import system_firmware_cosim_execution_agent
 from agents.system import system_firmware_coverage_summary_agent
+
+
+def test_embedded_handoff_ingests_regmap_from_system_rtl_package(tmp_path, monkeypatch):
+    monkeypatch.setattr(common, "save_text_artifact_and_record", lambda **_kwargs: None)
+
+    source_id = "source-system-rtl"
+    package_path = f"backend/workflows/{source_id}/system/package/system_rtl_package.json"
+    rtl_path = f"backend/workflows/{source_id}/system/integration/temp_monitor_soc.sv"
+    regmap_path = f"backend/workflows/{source_id}/system/package/digital_regmap.json"
+
+    package = {
+        "storage": {
+            "rtl_files": ["system/integration/temp_monitor_soc.sv"],
+            "digital_regmap": "system/package/digital_regmap.json",
+        },
+        "ready_for_cosim": True,
+    }
+    regmap = {
+        "block_name": "temp_monitor",
+        "base_address": "0x40000000",
+        "registers": [
+            {
+                "name": "STATUS",
+                "offset": "0x4",
+                "access": "RO",
+                "fields": [{"name": "ready", "bit_offset": 0, "bit_width": 1}],
+            }
+        ],
+    }
+    rtl = b"""
+module temp_monitor_soc(input logic clk, input logic rst_n, output logic irq);
+  assign irq = rst_n;
+endmodule
+"""
+    blobs = {
+        package_path: json.dumps(package).encode("utf-8"),
+        rtl_path: rtl,
+        regmap_path: json.dumps(regmap).encode("utf-8"),
+    }
+
+    class Response:
+        def __init__(self, data):
+            self.data = data
+
+    class Query:
+        def select(self, *_args, **_kwargs):
+            return self
+
+        def eq(self, *_args, **_kwargs):
+            return self
+
+        def single(self):
+            return self
+
+        def execute(self):
+            return Response({"id": source_id, "artifacts": {"pkg": package_path}})
+
+    class Bucket:
+        def download(self, path):
+            if path in blobs:
+                return blobs[path]
+            raise FileNotFoundError(path)
+
+        def list(self, _path):
+            return []
+
+    class Storage:
+        def from_(self, _bucket):
+            return Bucket()
+
+    class Client:
+        storage = Storage()
+
+        def table(self, _name):
+            return Query()
+
+    state = {
+        "workflow_id": "firmware-wf",
+        "workflow_dir": str(tmp_path),
+        "supabase_client": Client(),
+        "from_workflow_id": source_id,
+        "top_module": "temp_monitor_soc",
+    }
+
+    embedded_digital_handoff_ingest_agent.run_agent(state)
+
+    assert state["digital_regmap"]["registers"][0]["name"] == "STATUS"
+    assert state["digital_regmap_path"].replace("\\", "/").endswith("digital/digital_regmap.json")
+    assert (tmp_path / "digital" / "digital_regmap.json").is_file()
+    assert state["system_rtl_package"]["register_map_path"] == "digital/digital_regmap.json"
 
 
 def test_system_firmware_pwm_like_chain_reaches_cosim_readiness(tmp_path, monkeypatch):

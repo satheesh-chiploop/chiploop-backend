@@ -1151,7 +1151,7 @@ DIGITAL_INTEGRATE_DEFINITION = _linear_workflow_definition([
     "Digital IP Packaging & Handoff Agent",
 ])
 
-EMBEDDED_RUN_DEFINITION = _linear_workflow_definition([
+FIRMWARE_DOWNSTREAM_DEFINITION = [
     "Embedded Digital RTL Handoff Ingest Agent",
     "Embedded Firmware Register Extract Agent",
     "Embedded Rust Register Layer Generator Agent",
@@ -1169,7 +1169,9 @@ EMBEDDED_RUN_DEFINITION = _linear_workflow_definition([
     "Embedded Validation Report Agent",
     "Embedded Firmware Executive Summary Agent",
     "System Software Handoff Package Agent",
-])
+]
+
+EMBEDDED_RUN_DEFINITION = _linear_workflow_definition(FIRMWARE_DOWNSTREAM_DEFINITION)
 
 SYSTEM_SOFTWARE_DEFINITION = _linear_workflow_definition([
     "System Software Handoff Ingest Agent",
@@ -1256,10 +1258,11 @@ SYSTEM_PD_DEFINITION = _linear_workflow_definition([
     "Digital Executive Summary Agent",
 ])
 
-SYSTEM_RTL_DEFINITION = _linear_workflow_definition([
+SYSTEM_RTL_AGENT_SEQUENCE = [
     "Digital Spec Agent",
     "Digital Architecture Agent",
     "Digital Microarchitecture Agent",
+    "Digital Register Map Agent",
     "Digital RTL Agent",
     "Digital RTL Linting Agent",
     "Digital RTL Signature Agent",
@@ -1270,9 +1273,16 @@ SYSTEM_RTL_DEFINITION = _linear_workflow_definition([
     "System Assertions (SVA) Agent",
     "System RTL Handoff Package Agent",
     "System RTL Evidence Dashboard Agent",
+]
+
+SYSTEM_RTL_DEFINITION = _linear_workflow_definition(SYSTEM_RTL_AGENT_SEQUENCE)
+
+SYSTEM_FIRMWARE_DEFINITION = _linear_workflow_definition([
+    *SYSTEM_RTL_AGENT_SEQUENCE,
+    *FIRMWARE_DOWNSTREAM_DEFINITION,
 ])
 
-SYSTEM_SIM_DEFINITION = _linear_workflow_definition([
+SYSTEM_SIM_DOWNSTREAM_DEFINITION = [
     "System CoSim Ingest Agent",
     "System Assertions (SVA) Agent",
     "System Testbench Generator Agent",
@@ -1280,6 +1290,11 @@ SYSTEM_SIM_DEFINITION = _linear_workflow_definition([
     "System Simulation Control Agent",
     "System Simulation Execution Agent",
     "System Simulation Coverage Summary Agent",
+]
+
+SYSTEM_SIM_DEFINITION = _linear_workflow_definition([
+    *SYSTEM_RTL_AGENT_SEQUENCE,
+    *SYSTEM_SIM_DOWNSTREAM_DEFINITION,
 ])
 
 SYSTEM_SIM_CLOSURE_DEFINITION = _linear_workflow_definition([
@@ -1338,6 +1353,7 @@ LOCAL_PREBUILT_WORKFLOW_DEFINITIONS: Dict[str, Dict[str, Any]] = {
     "System_Sim": SYSTEM_SIM_DEFINITION,
     "System_Sim_Closure": SYSTEM_SIM_CLOSURE_DEFINITION,
     "System_Sim_Closure_Loop": SYSTEM_SIM_CLOSURE_LOOP_DEFINITION,
+    "System_Firmware": SYSTEM_FIRMWARE_DEFINITION,
     "System_Synthesis": SYSTEM_SYNTHESIS_DEFINITION,
     "System_PD": SYSTEM_PD_DEFINITION,
     "System_Software": SYSTEM_SOFTWARE_DEFINITION,
@@ -1362,6 +1378,7 @@ LOCAL_RUNTIME_WORKFLOW_OVERRIDES = {
     "System_Sim",
     "System_Sim_Closure",
     "System_Sim_Closure_Loop",
+    "System_Firmware",
     "System_Synthesis",
     "System_PD",
     "System_Software",
