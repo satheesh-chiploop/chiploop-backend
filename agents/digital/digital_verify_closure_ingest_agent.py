@@ -181,6 +181,15 @@ def _read_filelist_paths(filelist_path: Path) -> list[str]:
     return list(dict.fromkeys(out))
 
 
+def _resolve_filelist_entry(filelist_path: Path, entry: str) -> str:
+    candidate = Path(str(entry).strip())
+    if candidate.is_absolute():
+        return str(candidate)
+    if candidate.is_file():
+        return str(candidate.resolve())
+    return str((filelist_path.parent / candidate).resolve())
+
+
 def _materialize_storage_text(path: Path, content: str) -> Path | None:
     if not content:
         return None
@@ -336,13 +345,18 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
         state["system_rtl_filelist_sim"] = str(system_rtl_filelist)
         state["source_system_rtl_filelist_sim"] = str(system_rtl_filelist)
         rtl_from_filelist = [
-            str((system_rtl_filelist.parent / p).resolve()) if not Path(p).is_absolute() else str(Path(p))
+            _resolve_filelist_entry(system_rtl_filelist, p)
             for p in _read_filelist_paths(system_rtl_filelist)
         ]
         rtl_from_filelist = [p for p in rtl_from_filelist if p]
         if rtl_from_filelist:
             state["system_rtl_files"] = rtl_from_filelist
             state["rtl_inputs"] = rtl_from_filelist
+            state["rtl_files"] = rtl_from_filelist
+            state["source_rtl_files"] = rtl_from_filelist
+            digital_state = state.setdefault("digital", {})
+            if isinstance(digital_state, dict):
+                digital_state["rtl_files"] = rtl_from_filelist
     if system_top_sim:
         state["soc_top_sim_path"] = str(system_top_sim)
         state["source_soc_top_sim_path"] = str(system_top_sim)

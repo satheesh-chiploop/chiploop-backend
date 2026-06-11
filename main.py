@@ -1198,66 +1198,6 @@ SYSTEM_SOFTWARE_VALIDATION_L2_DEFINITION = _linear_workflow_definition([
     "System Software Validation Summary (L2)",
 ])
 
-SYSTEM_SYNTHESIS_DEFINITION = _linear_workflow_definition([
-    "Digital Spec Agent",
-    "Digital Architecture Agent",
-    "Digital Microarchitecture Agent",
-    "Digital RTL Agent",
-    "Digital RTL Linting Agent",
-    "Digital RTL Signature Agent",
-    "Analog Spec Builder Agent",
-    "Analog Behavioral Model Agent",
-    "System Integration Intent Agent",
-    "System Top Assembly Agent",
-    "System Assertions (SVA) Agent",
-    "System RTL Handoff Package Agent",
-    "System RTL Evidence Dashboard Agent",
-    "Digital Foundry Profile Agent",
-    "Digital Implementation Setup Agent",
-    "Digital Synthesis Agent",
-    "Digital Logic Equivalence Check Agent",
-    "Digital DFT Scan Stitching Agent",
-    "Digital Scan ATPG Coverage Agent",
-    "Digital MBIST Collateral Agent",
-])
-
-SYSTEM_PD_DEFINITION = _linear_workflow_definition([
-    "Digital Spec Agent",
-    "Digital Architecture Agent",
-    "Digital Microarchitecture Agent",
-    "Digital RTL Agent",
-    "Digital RTL Linting Agent",
-    "Digital RTL Signature Agent",
-    "Analog Spec Builder Agent",
-    "Analog Behavioral Model Agent",
-    "System Integration Intent Agent",
-    "System Top Assembly Agent",
-    "System Assertions (SVA) Agent",
-    "System RTL Handoff Package Agent",
-    "System RTL Evidence Dashboard Agent",
-    "Digital Foundry Profile Agent",
-    "Digital Implementation Setup Agent",
-    "Digital Synthesis Agent",
-    "Digital Logic Equivalence Check Agent",
-    "Digital DFT Scan Stitching Agent",
-    "Digital Scan ATPG Coverage Agent",
-    "Digital MBIST Collateral Agent",
-    "Digital STA PrePlace Agent",
-    "Digital Floorplan Agent",
-    "Digital Placement Agent",
-    "Digital STA PostPlace Agent",
-    "Digital CTS Agent",
-    "Digital STA PostCTS Agent",
-    "Digital Route Agent",
-    "Digital STA PostRoute Agent",
-    "Digital Fill Agent",
-    "Digital DRC Agent",
-    "Digital LVS Agent",
-    "Digital Tapeout Agent",
-    "Digital Tapeout Logic Equivalence Check Agent",
-    "Digital Executive Summary Agent",
-])
-
 SYSTEM_RTL_AGENT_SEQUENCE = [
     "Digital Spec Agent",
     "Digital Architecture Agent",
@@ -1276,6 +1216,50 @@ SYSTEM_RTL_AGENT_SEQUENCE = [
 ]
 
 SYSTEM_RTL_DEFINITION = _linear_workflow_definition(SYSTEM_RTL_AGENT_SEQUENCE)
+
+SYSTEM_DQA_DEFINITION = _linear_workflow_definition([
+    *SYSTEM_RTL_AGENT_SEQUENCE,
+    "Digital RTL Linting Agent",
+    "Digital CDC Analysis Agent",
+    "Digital Reset Integrity Agent",
+    "Digital Synthesis Readiness Agent",
+    "Digital Executive Summary Agent",
+])
+
+SYSTEM_SYNTHESIS_DEFINITION = _linear_workflow_definition([
+    *SYSTEM_RTL_AGENT_SEQUENCE,
+    "Digital Foundry Profile Agent",
+    "Digital Implementation Setup Agent",
+    "Digital Synthesis Agent",
+    "Digital Logic Equivalence Check Agent",
+    "Digital DFT Scan Stitching Agent",
+    "Digital Scan ATPG Coverage Agent",
+    "Digital MBIST Collateral Agent",
+])
+
+SYSTEM_PD_DEFINITION = _linear_workflow_definition([
+    *SYSTEM_RTL_AGENT_SEQUENCE,
+    "Digital Foundry Profile Agent",
+    "Digital Implementation Setup Agent",
+    "Digital Synthesis Agent",
+    "Digital Logic Equivalence Check Agent",
+    "Digital DFT Scan Stitching Agent",
+    "Digital Scan ATPG Coverage Agent",
+    "Digital MBIST Collateral Agent",
+    "Digital STA PrePlace Agent",
+    "Digital Floorplan Agent",
+    "Digital Placement Agent",
+    "Digital STA PostPlace Agent",
+    "Digital CTS Agent",
+    "Digital STA PostCTS Agent",
+    "Digital Route Agent",
+    "Digital Fill Agent",
+    "Digital DRC Agent",
+    "Digital LVS Agent",
+    "Digital Tapeout Agent",
+    "Digital Tapeout Logic Equivalence Check Agent",
+    "Digital Executive Summary Agent",
+])
 
 SYSTEM_FIRMWARE_DEFINITION = _linear_workflow_definition([
     *SYSTEM_RTL_AGENT_SEQUENCE,
@@ -1350,6 +1334,7 @@ LOCAL_PREBUILT_WORKFLOW_DEFINITIONS: Dict[str, Dict[str, Any]] = {
     "System_CPU_Model": SYSTEM_ARCHITECTURE_EXPLORER_DEFINITION,
     "Embedded_Run": EMBEDDED_RUN_DEFINITION,
     "System_RTL": SYSTEM_RTL_DEFINITION,
+    "System_DQA": SYSTEM_DQA_DEFINITION,
     "System_Sim": SYSTEM_SIM_DEFINITION,
     "System_Sim_Closure": SYSTEM_SIM_CLOSURE_DEFINITION,
     "System_Sim_Closure_Loop": SYSTEM_SIM_CLOSURE_LOOP_DEFINITION,
@@ -1375,6 +1360,7 @@ LOCAL_RUNTIME_WORKFLOW_OVERRIDES = {
     "Digital_Integrate",
     "Embedded_Run",
     "System_RTL",
+    "System_DQA",
     "System_Sim",
     "System_Sim_Closure",
     "System_Sim_Closure_Loop",
@@ -3101,7 +3087,7 @@ def execute_digital_app_background(
         toggles = shared_state.get("toggles") if isinstance(shared_state.get("toggles"), dict) else {}
         rtl_source_mode = str(shared_state.get("rtl_source_mode") or "").strip().lower()
         using_existing_system_rtl = bool(shared_state.get("system_rtl_workflow_id")) or rtl_source_mode in {"paste", "repo_path"}
-        if template_workflow_name in {"System_Sim", "System_Firmware", "System_Synthesis", "System_PD"} and using_existing_system_rtl:
+        if template_workflow_name in {"System_DQA", "System_Sim", "System_Firmware", "System_Synthesis", "System_PD"} and using_existing_system_rtl:
             skip_labels = {
                 "Digital Spec Agent",
                 "Digital Architecture Agent",
@@ -6490,6 +6476,11 @@ def execute_system_app_background(
             shared_state["system_rtl_filelist_sim"] = local_filelist
             shared_state["system_rtl_files"] = normalized
             shared_state["rtl_inputs"] = normalized
+            shared_state["rtl_files"] = normalized
+            shared_state["source_rtl_files"] = normalized
+            digital_state = shared_state.setdefault("digital", {})
+            if isinstance(digital_state, dict):
+                digital_state["rtl_files"] = normalized
             if source_soc_top and os.path.exists(source_soc_top):
                 shared_state["soc_top_sim_path"] = os.path.abspath(source_soc_top)
                 shared_state["system_top_sim_path"] = os.path.abspath(source_soc_top)
@@ -7071,7 +7062,7 @@ def execute_system_app_background(
         elif rtl_source_mode == "repo_path":
             _materialize_repo_system_rtl()
 
-        if template_workflow_name in {"System_Sim", "System_Firmware", "System_Synthesis", "System_PD"} and (
+        if template_workflow_name in {"System_DQA", "System_Sim", "System_Firmware", "System_Synthesis", "System_PD"} and (
             shared_state.get("system_rtl_workflow_id") or rtl_source_mode in {"paste", "repo_path"}
         ):
             materialized_rtl = _materialized_system_rtl_files()
@@ -7251,7 +7242,7 @@ def execute_system_app_background(
                 run_id,
                 f"{template_workflow_name}: using canonical source-RTL downstream graph; ignored stale template nodes",
             )
-        if template_workflow_name in {"System_Sim", "System_Firmware", "System_Synthesis", "System_PD"} and using_existing_system_rtl:
+        if template_workflow_name in {"System_DQA", "System_Sim", "System_Firmware", "System_Synthesis", "System_PD"} and using_existing_system_rtl:
             skip_labels = {
                 "Digital Spec Agent",
                 "Digital Architecture Agent",
@@ -7647,6 +7638,21 @@ async def apps_system_synthesis(
         payload,
         "App: System Synthesis",
         "System_Synthesis"
+    )
+
+
+@app.post("/apps/system/dqa/run")
+async def apps_system_dqa(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    payload: SystemAppIn
+):
+    return _start_system_app(
+        background_tasks,
+        request,
+        payload,
+        "App: System DQA",
+        "System_DQA"
     )
 
 

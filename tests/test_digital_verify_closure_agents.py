@@ -120,3 +120,53 @@ def test_system_sim_closure_updates_system_specific_seed_keys(tmp_path, monkeypa
     assert state["system_sim_testcases"] == ["system_smoke_test"]
     assert state["system_sim_seeds"] == [1, 2, 3, 4]
     assert state["simulation_seeds"] == [1, 2, 3, 4]
+
+
+def test_verify_closure_ingest_exposes_materialized_rtl_to_digital_rerun(tmp_path, monkeypatch):
+    _stub_upload(monkeypatch)
+    monkeypatch.chdir(tmp_path)
+
+    source_id = "verify-parent"
+    source_root = tmp_path / "backend" / "workflows" / source_id
+    source_rtl = source_root / "verification" / "handoff" / "rtl"
+    source_tb = source_root / "vv" / "tb"
+    source_rtl.mkdir(parents=True)
+    source_tb.mkdir(parents=True)
+    (source_rtl / "pwm_controller.v").write_text("module pwm_controller(input clk); endmodule\n", encoding="utf-8")
+    (source_tb / "simulation_manifest.json").write_text(
+        json.dumps(
+            {
+                "top_module": "pwm_controller",
+                "rtl_files": [
+                    f"backend/workflows/{source_id}/verification/handoff/rtl/pwm_controller.v"
+                ],
+                "default_tests": ["smoke_test", "constrained_random_sanity"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (source_tb / "tb_contract.json").write_text(
+        json.dumps(
+            {
+                "top_module": "pwm_controller",
+                "rtl_files": [
+                    f"backend/workflows/{source_id}/verification/handoff/rtl/pwm_controller.v"
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    state = {
+        "workflow_id": "closure-child",
+        "workflow_dir": str(tmp_path / "backend" / "workflows" / "closure-child"),
+        "source_verify_workflow_id": source_id,
+    }
+
+    ingest_agent.run_agent(state)
+
+    assert [Path(path).name for path in state["rtl_files"]] == ["pwm_controller.v"]
+    assert state["rtl_inputs"] == state["rtl_files"]
+    assert state["source_rtl_files"] == state["rtl_files"]
+    assert state["digital"]["rtl_files"] == state["rtl_files"]
+    assert Path(state["rtl_files"][0]).is_file()

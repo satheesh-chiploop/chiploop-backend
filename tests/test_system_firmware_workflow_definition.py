@@ -49,12 +49,24 @@ def test_system_sim_default_builds_rtl_before_downstream_sim():
     assert downstream_block.index('"System CoSim Ingest Agent"') < downstream_block.index('"System Testbench Generator Agent"')
 
 
+def test_system_dqa_exists_and_reuses_system_rtl_sequence():
+    text = MAIN_PY.read_text(encoding="utf-8")
+    block = _between(text, "SYSTEM_DQA_DEFINITION =", "SYSTEM_SYNTHESIS_DEFINITION =")
+
+    assert "*SYSTEM_RTL_AGENT_SEQUENCE" in block
+    assert block.index("*SYSTEM_RTL_AGENT_SEQUENCE") < block.index('"Digital CDC Analysis Agent"')
+    assert '"System_DQA": SYSTEM_DQA_DEFINITION' in text
+    assert '"System_DQA",' in _between(text, "LOCAL_RUNTIME_WORKFLOW_OVERRIDES =", "# Dynamically load")
+    assert '{"System_DQA", "System_Sim", "System_Firmware", "System_Synthesis", "System_PD"}' in text
+
+
 def test_system_migration_is_full_chain_not_downstream_only():
     sql = MIGRATION_SQL.read_text(encoding="utf-8")
 
     assert "'System_RTL'" in sql
+    assert "'System_DQA'" in sql
     assert "'System_Sim'" in sql
-    assert sql.index("'System_RTL'") < sql.index("'System_Sim'") < sql.index("'System_Firmware'")
+    assert sql.index("'System_RTL'") < sql.index("'System_Sim'") < sql.index("'System_DQA'") < sql.index("'System_Synthesis'") < sql.index("'System_PD'") < sql.index("'System_Firmware'")
     assert sql.index("'Digital Spec Agent'") < sql.index("'System RTL Handoff Package Agent'")
     assert sql.index("'Digital Register Map Agent'") < sql.index("'Digital RTL Agent'")
     assert sql.index("'System RTL Handoff Package Agent'") < sql.index("'System CoSim Ingest Agent'")
