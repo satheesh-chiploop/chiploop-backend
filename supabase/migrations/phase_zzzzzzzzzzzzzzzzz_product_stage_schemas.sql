@@ -28,9 +28,17 @@ with schemas(app, schema) as (
       '{
         "note": "Spec text can be left blank only when the product description is detailed enough to use as the RTL spec.",
         "fields": [
+          {"key":"project_name","label":"Project name","type":"text","defaultValue":""},
           {"key":"top_module","label":"Top module","type":"text","defaultValue":""},
+          {"key":"design_language","label":"Design language","type":"text","defaultValue":"systemverilog"},
           {"key":"spec_text","label":"Spec text","type":"text","defaultValue":"","helper":"Used before product description fallback."},
+          {"key":"enable_regmap","label":"Generate register map","type":"boolean","defaultValue":true},
+          {"key":"enable_upf_lite","label":"Generate UPF-lite","type":"boolean","defaultValue":false},
           {"key":"enable_packaging","label":"Generate handoff package","type":"boolean","defaultValue":true}
+          ,{"key":"enable_scan_dft","label":"Enable scan/DFT intent","type":"boolean","defaultValue":false},
+          {"key":"run_spec2rtl_check","label":"Run Spec2RTL compliance check","type":"boolean","defaultValue":false},
+          {"key":"throughput_latency_targets","label":"Throughput/latency targets","type":"text","defaultValue":""},
+          {"key":"power_priority","label":"Power priority","type":"text","defaultValue":""}
         ]
       }'::jsonb
     ),
@@ -38,9 +46,25 @@ with schemas(app, schema) as (
       'Digital_Verify',
       '{
         "fields": [
-          {"key":"seed_count","label":"Seed count","type":"number","defaultValue":4},
+          {"key":"test_intent","label":"Test intent","type":"text","defaultValue":"Run smoke, reset, register access, and representative functional tests."},
+          {"key":"verification_plan","label":"Verification plan","type":"text","defaultValue":""},
+          {"key":"monitor_checker_plan","label":"Monitor/checker plan","type":"text","defaultValue":""},
+          {"key":"random_vs_directed","label":"Random vs directed","type":"text","defaultValue":"both"},
           {"key":"coverage_targets","label":"Coverage target","type":"text","defaultValue":"90% functional, 70% line"},
-          {"key":"enable_formal","label":"Formal","type":"boolean","defaultValue":false}
+          {"key":"coverage_plan","label":"Coverage plan","type":"text","defaultValue":""},
+          {"key":"simulator_type","label":"Simulator","type":"text","defaultValue":"verilator"},
+          {"key":"code_coverage_tool","label":"Code coverage tool","type":"text","defaultValue":"verilator_coverage"},
+          {"key":"formal_tool","label":"Formal tool","type":"text","defaultValue":"none"},
+          {"key":"formal_solver","label":"Formal solver","type":"text","defaultValue":"z3"},
+          {"key":"golden_model_tool","label":"Golden model tool","type":"text","defaultValue":"none"},
+          {"key":"seed_count","label":"Seed count","type":"number","defaultValue":10},
+          {"key":"run_closure_analysis","label":"Run closure analysis","type":"boolean","defaultValue":true},
+          {"key":"enable_failure_debug","label":"Run failure debug","type":"boolean","defaultValue":false},
+          {"key":"failure_debug_log_only_first","label":"Failure debug log-only first","type":"boolean","defaultValue":true},
+          {"key":"failure_debug_generate_vcd","label":"Generate VCD for failures","type":"boolean","defaultValue":true},
+          {"key":"failure_debug_auto_apply_tb","label":"Auto-apply TB fixes","type":"boolean","defaultValue":false},
+          {"key":"failure_debug_auto_apply_rtl","label":"Auto-apply RTL fixes","type":"boolean","defaultValue":false},
+          {"key":"failure_debug_rerun_failing","label":"Rerun failing tests","type":"boolean","defaultValue":true}
         ]
       }'::jsonb
     ),
@@ -62,8 +86,17 @@ with schemas(app, schema) as (
       '{
         "fields": [
           {"key":"max_iterations","label":"Max iterations","type":"number","defaultValue":1},
-          {"key":"seed_count","label":"Seed count","type":"number","defaultValue":5},
-          {"key":"coverage_targets","label":"Coverage target","type":"text","defaultValue":"90% functional, 70% line"}
+          {"key":"seed_count","label":"Seed count","type":"number","defaultValue":10},
+          {"key":"seed_budget","label":"Seed budget","type":"number","defaultValue":10},
+          {"key":"coverage_targets","label":"Coverage target","type":"text","defaultValue":"90% functional, 70% line"},
+          {"key":"rerun_mode","label":"Rerun mode","type":"text","defaultValue":"coverage_targeted"},
+          {"key":"random_vs_directed","label":"Random vs directed","type":"text","defaultValue":"both"},
+          {"key":"enable_failure_debug","label":"Run failure debug","type":"boolean","defaultValue":false},
+          {"key":"failure_debug_log_only_first","label":"Failure debug log-only first","type":"boolean","defaultValue":true},
+          {"key":"failure_debug_generate_vcd","label":"Generate VCD for failures","type":"boolean","defaultValue":true},
+          {"key":"failure_debug_auto_apply_tb","label":"Auto-apply TB fixes","type":"boolean","defaultValue":false},
+          {"key":"failure_debug_auto_apply_rtl","label":"Auto-apply RTL fixes","type":"boolean","defaultValue":false},
+          {"key":"failure_debug_rerun_failing","label":"Rerun failing tests","type":"boolean","defaultValue":true}
         ]
       }'::jsonb
     ),

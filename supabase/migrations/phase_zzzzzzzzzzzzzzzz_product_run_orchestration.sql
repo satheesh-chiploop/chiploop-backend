@@ -7,6 +7,7 @@ create table if not exists public.product_runs (
   status text not null default 'queued',
   current_stage text null,
   stage_results jsonb not null default '{}'::jsonb,
+  logs text not null default '',
   error text null,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
@@ -15,6 +16,9 @@ create table if not exists public.product_runs (
 
 create index if not exists idx_product_runs_product_updated
   on public.product_runs (product_id, updated_at desc);
+
+alter table public.product_runs
+  add column if not exists logs text not null default '';
 
 create table if not exists public.product_stage_runs (
   id uuid primary key default gen_random_uuid(),

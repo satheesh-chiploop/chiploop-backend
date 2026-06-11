@@ -2847,10 +2847,10 @@ PRODUCT_REFERENCE_JOURNEYS: List[Dict[str, Any]] = [
         },
     },
     {
-        "slug": "digital-synthesis-reference",
-        "name": "Digital Synthesis Reference",
+        "slug": "soft-digital-ip-product",
+        "name": "Soft Digital IP Product",
         "product_type": "digital",
-        "summary": "Digital product journey from Arch2RTL through DQA, synthesis readiness, verification, firmware/software, and product app handoff.",
+        "summary": "Reusable digital IP journey from specs to RTL, DQA, verification, coverage closure, synthesis readiness, and handoff collateral.",
         "definition": {
             "stages": [
                 {"id": "arch2rtl", "label": "RTL", "app": "Digital_Arch2RTL", "required": True},
@@ -2891,16 +2891,40 @@ PRODUCT_STAGE_SCHEMAS: Dict[str, Dict[str, Any]] = {
     "Digital_Arch2RTL": {
         "note": "Spec text can be left blank only when the product description is detailed enough to use as the RTL spec.",
         "fields": [
+            {"key": "project_name", "label": "Project name", "type": "text", "defaultValue": ""},
             {"key": "top_module", "label": "Top module", "type": "text", "defaultValue": ""},
+            {"key": "design_language", "label": "Design language", "type": "text", "defaultValue": "systemverilog"},
             {"key": "spec_text", "label": "Spec text", "type": "text", "defaultValue": "", "helper": "Used before product description fallback."},
+            {"key": "enable_regmap", "label": "Generate register map", "type": "boolean", "defaultValue": True},
+            {"key": "enable_upf_lite", "label": "Generate UPF-lite", "type": "boolean", "defaultValue": False},
             {"key": "enable_packaging", "label": "Generate handoff package", "type": "boolean", "defaultValue": True},
+            {"key": "enable_scan_dft", "label": "Enable scan/DFT intent", "type": "boolean", "defaultValue": False},
+            {"key": "run_spec2rtl_check", "label": "Run Spec2RTL compliance check", "type": "boolean", "defaultValue": False},
+            {"key": "throughput_latency_targets", "label": "Throughput/latency targets", "type": "text", "defaultValue": ""},
+            {"key": "power_priority", "label": "Power priority", "type": "text", "defaultValue": ""},
         ],
     },
     "Digital_Verify": {
         "fields": [
-            {"key": "seed_count", "label": "Seed count", "type": "number", "defaultValue": 4},
+            {"key": "test_intent", "label": "Test intent", "type": "text", "defaultValue": "Run smoke, reset, register access, and representative functional tests."},
+            {"key": "verification_plan", "label": "Verification plan", "type": "text", "defaultValue": ""},
+            {"key": "monitor_checker_plan", "label": "Monitor/checker plan", "type": "text", "defaultValue": ""},
+            {"key": "random_vs_directed", "label": "Random vs directed", "type": "text", "defaultValue": "both"},
             {"key": "coverage_targets", "label": "Coverage target", "type": "text", "defaultValue": "90% functional, 70% line"},
-            {"key": "enable_formal", "label": "Formal", "type": "boolean", "defaultValue": False},
+            {"key": "coverage_plan", "label": "Coverage plan", "type": "text", "defaultValue": ""},
+            {"key": "simulator_type", "label": "Simulator", "type": "text", "defaultValue": "verilator"},
+            {"key": "code_coverage_tool", "label": "Code coverage tool", "type": "text", "defaultValue": "verilator_coverage"},
+            {"key": "formal_tool", "label": "Formal tool", "type": "text", "defaultValue": "none"},
+            {"key": "formal_solver", "label": "Formal solver", "type": "text", "defaultValue": "z3"},
+            {"key": "golden_model_tool", "label": "Golden model tool", "type": "text", "defaultValue": "none"},
+            {"key": "seed_count", "label": "Seed count", "type": "number", "defaultValue": 10},
+            {"key": "run_closure_analysis", "label": "Run closure analysis", "type": "boolean", "defaultValue": True},
+            {"key": "enable_failure_debug", "label": "Run failure debug", "type": "boolean", "defaultValue": False},
+            {"key": "failure_debug_log_only_first", "label": "Failure debug log-only first", "type": "boolean", "defaultValue": True},
+            {"key": "failure_debug_generate_vcd", "label": "Generate VCD for failures", "type": "boolean", "defaultValue": True},
+            {"key": "failure_debug_auto_apply_tb", "label": "Auto-apply TB fixes", "type": "boolean", "defaultValue": False},
+            {"key": "failure_debug_auto_apply_rtl", "label": "Auto-apply RTL fixes", "type": "boolean", "defaultValue": False},
+            {"key": "failure_debug_rerun_failing", "label": "Rerun failing tests", "type": "boolean", "defaultValue": True},
         ],
     },
     "Digital_Arch2Synthesis": {
@@ -2916,8 +2940,17 @@ PRODUCT_STAGE_SCHEMAS: Dict[str, Dict[str, Any]] = {
     "verify_closure_loop": {
         "fields": [
             {"key": "max_iterations", "label": "Max iterations", "type": "number", "defaultValue": 1},
-            {"key": "seed_count", "label": "Seed count", "type": "number", "defaultValue": 5},
+            {"key": "seed_count", "label": "Seed count", "type": "number", "defaultValue": 10},
+            {"key": "seed_budget", "label": "Seed budget", "type": "number", "defaultValue": 10},
             {"key": "coverage_targets", "label": "Coverage target", "type": "text", "defaultValue": "90% functional, 70% line"},
+            {"key": "rerun_mode", "label": "Rerun mode", "type": "text", "defaultValue": "coverage_targeted"},
+            {"key": "random_vs_directed", "label": "Random vs directed", "type": "text", "defaultValue": "both"},
+            {"key": "enable_failure_debug", "label": "Run failure debug", "type": "boolean", "defaultValue": False},
+            {"key": "failure_debug_log_only_first", "label": "Failure debug log-only first", "type": "boolean", "defaultValue": True},
+            {"key": "failure_debug_generate_vcd", "label": "Generate VCD for failures", "type": "boolean", "defaultValue": True},
+            {"key": "failure_debug_auto_apply_tb", "label": "Auto-apply TB fixes", "type": "boolean", "defaultValue": False},
+            {"key": "failure_debug_auto_apply_rtl", "label": "Auto-apply RTL fixes", "type": "boolean", "defaultValue": False},
+            {"key": "failure_debug_rerun_failing", "label": "Rerun failing tests", "type": "boolean", "defaultValue": True},
         ],
     },
     "Embedded_Run": {
@@ -4906,7 +4939,7 @@ def _product_stage_enabled(stage: Dict[str, Any]) -> bool:
 def _product_run_row(product_run_id: str, user_id: str) -> Dict[str, Any]:
     row = (
         supabase.table("product_runs")
-        .select("id,product_id,user_id,status,current_stage,stage_results,error,created_at,updated_at,completed_at")
+        .select("id,product_id,user_id,status,current_stage,stage_results,logs,error,created_at,updated_at,completed_at")
         .eq("id", product_run_id)
         .eq("user_id", user_id)
         .limit(1)
@@ -4933,6 +4966,24 @@ def _update_product_run(product_run_id: str, updates: Dict[str, Any]) -> None:
         supabase.table("product_runs").update(updates).eq("id", product_run_id).execute()
     except Exception as exc:
         logger.warning("Failed to update product_run %s: %s", product_run_id, exc)
+
+
+def _append_product_run_log(product_run_id: str, line: str) -> None:
+    safe_line = str(line or "").strip()
+    if not safe_line:
+        return
+    try:
+        rows = supabase.table("product_runs").select("logs").eq("id", product_run_id).limit(1).execute().data or []
+        current = str((rows[0] if rows else {}).get("logs") or "")
+        timestamp = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+        next_logs = (current + ("\n" if current else "") + f"[{timestamp}] {safe_line}").strip()
+        next_logs = _truncate_tail(next_logs, MAX_LOG_CHARS)
+        supabase.table("product_runs").update({
+            "logs": next_logs,
+            "updated_at": datetime.utcnow().isoformat(),
+        }).eq("id", product_run_id).execute()
+    except Exception as exc:
+        logger.warning("Failed to append product_run log %s: %s", product_run_id, exc)
 
 
 def _update_product_stage_run(stage_run_id: str, updates: Dict[str, Any]) -> None:
@@ -5032,13 +5083,18 @@ def _product_stage_payload(product: Dict[str, Any], stage: Dict[str, Any], upstr
         if not spec_text.strip():
             raise RuntimeError("Arch2RTL requires a spec_text setting or product description before running.")
         return {
-            "project_name": product_name,
+            "project_name": str(_stage_setting(stage, "project_name", "") or "").strip() or product_name,
             "top_module": top_module,
+            "design_language": str(_stage_setting(stage, "design_language", "systemverilog") or "systemverilog"),
             "spec_text": spec_text,
+            "throughput_latency_targets": str(_stage_setting(stage, "throughput_latency_targets", "") or ""),
+            "power_priority": str(_stage_setting(stage, "power_priority", "") or ""),
             "toggles": {
-                "gen_regmap": True,
-                "gen_upf_lite": False,
+                "gen_regmap": bool(_stage_setting(stage, "enable_regmap", True)),
+                "gen_upf_lite": bool(_stage_setting(stage, "enable_upf_lite", False)),
                 "gen_packaging": bool(_stage_setting(stage, "enable_packaging", True)),
+                "enable_scan_dft": bool(_stage_setting(stage, "enable_scan_dft", False)),
+                "run_spec2rtl_check": bool(_stage_setting(stage, "run_spec2rtl_check", False)),
             },
         }
     if app_name == "Digital_DQA":
@@ -5059,6 +5115,9 @@ def _product_stage_payload(product: Dict[str, Any], stage: Dict[str, Any], upstr
         arch2rtl_id = upstream.get("arch2rtl")
         if not arch2rtl_id:
             raise RuntimeError("Verify requires Arch2RTL workflow output.")
+        formal_tool = str(_stage_setting(stage, "formal_tool", "none") or "none")
+        golden_model_tool = str(_stage_setting(stage, "golden_model_tool", "none") or "none")
+        failure_debug_enabled = bool(_stage_setting(stage, "enable_failure_debug", False))
         return {
             "rtl_source_mode": "from_arch2rtl",
             "from_workflow_id": arch2rtl_id,
@@ -5066,20 +5125,33 @@ def _product_stage_payload(product: Dict[str, Any], stage: Dict[str, Any], upstr
             "parent_workflow_id": upstream.get("dqa"),
             "upstream_workflows": {key: value for key, value in upstream.items() if value},
             "test_intent": str(_stage_setting(stage, "test_intent", "Run smoke, reset, register access, and representative functional tests.")),
+            "verification_plan": str(_stage_setting(stage, "verification_plan", "") or ""),
+            "monitor_checker_plan": str(_stage_setting(stage, "monitor_checker_plan", "") or ""),
             "coverage_targets": str(_stage_setting(stage, "coverage_targets", "90% functional, 70% line")),
+            "coverage_plan": str(_stage_setting(stage, "coverage_plan", "") or ""),
             "seed_count": int(_stage_setting(stage, "seed_count", 4) or 4),
             "random_vs_directed": str(_stage_setting(stage, "random_vs_directed", "both")),
             "simulator_type": str(_stage_setting(stage, "simulator_type", "verilator")),
             "toolchain": {
                 "simulator": str(_stage_setting(stage, "simulator_type", "verilator")),
-                "code_coverage": "verilator_coverage",
-                "formal": "symbiyosys" if bool(_stage_setting(stage, "enable_formal", False)) else "none",
-                "formal_solver": "z3",
-                "golden_model": "chiploop_python_scoreboard" if bool(_stage_setting(stage, "enable_golden_model", False)) else "none",
+                "code_coverage": str(_stage_setting(stage, "code_coverage_tool", "verilator_coverage")),
+                "formal": formal_tool,
+                "formal_solver": str(_stage_setting(stage, "formal_solver", "z3")),
+                "golden_model": golden_model_tool,
+            },
+            "run_closure_analysis": bool(_stage_setting(stage, "run_closure_analysis", True)) or failure_debug_enabled,
+            "enable_failure_debug": failure_debug_enabled,
+            "failure_debug_options": {
+                "enabled": failure_debug_enabled,
+                "log_only_first": bool(_stage_setting(stage, "failure_debug_log_only_first", True)),
+                "generate_vcd": bool(_stage_setting(stage, "failure_debug_generate_vcd", True)),
+                "auto_apply_testbench_fixes": bool(_stage_setting(stage, "failure_debug_auto_apply_tb", False)),
+                "auto_apply_rtl_fixes": bool(_stage_setting(stage, "failure_debug_auto_apply_rtl", False)),
+                "rerun_failing_tests": bool(_stage_setting(stage, "failure_debug_rerun_failing", True)),
             },
             "toggles": {
-                "enable_formal": bool(_stage_setting(stage, "enable_formal", False)),
-                "enable_golden_model": bool(_stage_setting(stage, "enable_golden_model", False)),
+                "enable_formal": formal_tool != "none",
+                "enable_golden_model": golden_model_tool != "none",
             },
         }
     if app_name == "Digital_Arch2Synthesis":
@@ -5115,6 +5187,21 @@ def _product_stage_payload(product: Dict[str, Any], stage: Dict[str, Any], upstr
             "rerun_mode": str(_stage_setting(stage, "rerun_mode", "coverage_targeted")),
             "random_vs_directed": str(_stage_setting(stage, "random_vs_directed", "both")),
             "enable_failure_debug": bool(_stage_setting(stage, "enable_failure_debug", False)),
+            "failure_debug_options": {
+                "enabled": bool(_stage_setting(stage, "enable_failure_debug", False)),
+                "log_only_first": bool(_stage_setting(stage, "failure_debug_log_only_first", True)),
+                "generate_vcd": bool(_stage_setting(stage, "failure_debug_generate_vcd", True)),
+                "auto_apply_testbench_fixes": bool(_stage_setting(stage, "failure_debug_auto_apply_tb", False)),
+                "auto_apply_rtl_fixes": bool(_stage_setting(stage, "failure_debug_auto_apply_rtl", False)),
+                "rerun_failing_tests": bool(_stage_setting(stage, "failure_debug_rerun_failing", True)),
+            },
+            "toolchain": {
+                "simulator": str(_stage_setting(stage, "simulator_type", "verilator")),
+                "code_coverage": str(_stage_setting(stage, "code_coverage_tool", "verilator_coverage")),
+                "formal": str(_stage_setting(stage, "formal_tool", "none") or "none"),
+                "formal_solver": str(_stage_setting(stage, "formal_solver", "z3")),
+                "golden_model": str(_stage_setting(stage, "golden_model_tool", "none") or "none"),
+            },
         }
     if app_name == "Embedded_Run":
         arch2rtl_id = upstream.get("arch2rtl")
@@ -5270,6 +5357,7 @@ def _run_product_stage(product: Dict[str, Any], product_run_id: str, stage_run: 
         **(stage_run.get("inputs") if isinstance(stage_run.get("inputs"), dict) else {}),
     }
     app_name = str(stage.get("app") or "")
+    _append_product_run_log(product_run_id, f"Running {stage.get('label') or app_name} ({app_name})")
     payload = _product_stage_payload(product, stage, upstream)
     workflow_title = f"Product: {product.get('name')} / {stage.get('label') or app_name}"
     digital_slug = {
@@ -5352,6 +5440,7 @@ def _run_product_stage(product: Dict[str, Any], product_run_id: str, stage_run: 
         "outputs": {"workflow_id": workflow_id, "run_id": run_id},
         "completed_at": datetime.utcnow().isoformat(),
     })
+    _append_product_run_log(product_run_id, f"Completed {stage.get('label') or app_name}: workflow_id={workflow_id}")
     return workflow_id
 
 
@@ -5419,6 +5508,7 @@ def execute_product_run_background(
             supported = supported[start_index:]
         supported = supported[: max(1, min(int(max_stages or 8), 8))]
         _update_product_run(product_run_id, {"status": "running", "current_stage": supported[0].get("id")})
+        _append_product_run_log(product_run_id, f"Product run started with {len(supported)} enabled stage(s).")
 
         for stage in supported:
             if _product_run_cancelled(product_run_id, user_id):
@@ -5429,7 +5519,9 @@ def execute_product_run_background(
                     "error": "Cancelled by user",
                     "completed_at": datetime.utcnow().isoformat(),
                 })
+                _append_product_run_log(product_run_id, "Product run cancelled before next stage.")
                 return
+            _append_product_run_log(product_run_id, f"Queued {stage.get('label') or stage.get('id')} ({stage.get('app')})")
             stage_record = {
                 "product_run_id": product_run_id,
                 "product_id": product_id,
@@ -5455,6 +5547,7 @@ def execute_product_run_background(
                 _update_product_run(product_run_id, {"stage_results": stage_results})
             except Exception as exc:
                 message = str(exc)
+                _append_product_run_log(product_run_id, f"Failed {stage.get('label') or stage.get('id')}: {message}")
                 _update_product_stage_run(stage_run["id"], {
                     "status": "failed",
                     "error": message,
@@ -5474,7 +5567,9 @@ def execute_product_run_background(
             "stage_results": stage_results,
             "completed_at": datetime.utcnow().isoformat(),
         })
+        _append_product_run_log(product_run_id, "Product run completed.")
     except Exception as exc:
+        _append_product_run_log(product_run_id, f"Product run failed: {exc}")
         _update_product_run(product_run_id, {
             "status": "failed",
             "error": str(exc),
@@ -5496,6 +5591,7 @@ async def start_product_run(product_id: str, payload: ProductRunStartIn, request
         "user_id": user_id,
         "status": "queued",
         "stage_results": {},
+        "logs": "Product run queued.",
         "created_at": datetime.utcnow().isoformat(),
         "updated_at": datetime.utcnow().isoformat(),
     }
@@ -5534,6 +5630,7 @@ async def cancel_product_run(product_id: str, product_run_id: str, request: Requ
         "error": "Cancelled by user",
         "completed_at": datetime.utcnow().isoformat(),
     })
+    _append_product_run_log(product_run_id, "Cancellation requested by user.")
     return {"status": "ok", "product_run": _product_run_row(product_run_id, user_id)}
 
 
@@ -5545,7 +5642,7 @@ async def list_product_runs(product_id: str, request: Request, limit: int = Quer
     try:
         rows = (
             supabase.table("product_runs")
-            .select("id,product_id,user_id,status,current_stage,stage_results,error,created_at,updated_at,completed_at")
+            .select("id,product_id,user_id,status,current_stage,stage_results,logs,error,created_at,updated_at,completed_at")
             .eq("product_id", product_id)
             .eq("user_id", user_id)
             .order("updated_at", desc=True)

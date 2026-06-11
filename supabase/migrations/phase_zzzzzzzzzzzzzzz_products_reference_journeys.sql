@@ -109,10 +109,10 @@ with refs(slug, name, product_type, summary, stages) as (
       ]'::jsonb
     ),
     (
-      'digital-synthesis-reference',
-      'Digital Synthesis Reference',
+      'soft-digital-ip-product',
+      'Soft Digital IP Product',
       'digital',
-      'Digital product journey from Arch2RTL through DQA, synthesis readiness, verification, firmware/software, and product app handoff.',
+      'Reusable digital IP journey from specs to RTL, DQA, verification, coverage closure, synthesis readiness, and handoff collateral.',
       '[
         {"id":"arch2rtl","label":"RTL","app":"Digital_Arch2RTL","required":true},
         {"id":"dqa","label":"DQA","app":"Digital_DQA","required":true},
