@@ -109,6 +109,21 @@ with refs(slug, name, product_type, summary, stages) as (
       ]'::jsonb
     ),
     (
+      'digital-synthesis-reference',
+      'Digital Synthesis Reference',
+      'digital',
+      'Digital product journey from Arch2RTL through DQA, synthesis readiness, verification, firmware/software, and product app handoff.',
+      '[
+        {"id":"arch2rtl","label":"RTL","app":"Digital_Arch2RTL","required":true},
+        {"id":"dqa","label":"DQA","app":"Digital_DQA","required":true},
+        {"id":"synthesis","label":"Synthesis","app":"Digital_Arch2Synthesis","recommended":true},
+        {"id":"verify","label":"Verification","app":"Digital_Verify","recommended":true},
+        {"id":"firmware","label":"Firmware","app":"Embedded_Run","optional":true},
+        {"id":"software","label":"Software","app":"System_Software","optional":true},
+        {"id":"product_app","label":"Product App","app":"System_Product_App_Builder","optional":true}
+      ]'::jsonb
+    ),
+    (
       'temperature-monitor-soc',
       'Temperature Monitor SoC',
       'mixed_signal',

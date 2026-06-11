@@ -2787,6 +2787,12 @@ class ProductUpdateIn(BaseModel):
     status: Optional[str] = None
 
 
+class ProductRunStartIn(BaseModel):
+    start_stage: Optional[str] = None
+    max_stages: Optional[int] = 8
+    resume_product_run_id: Optional[str] = None
+
+
 PRODUCT_REFERENCE_JOURNEYS: List[Dict[str, Any]] = [
     {
         "slug": "pwm-fan-controller",
@@ -2841,6 +2847,23 @@ PRODUCT_REFERENCE_JOURNEYS: List[Dict[str, Any]] = [
         },
     },
     {
+        "slug": "digital-synthesis-reference",
+        "name": "Digital Synthesis Reference",
+        "product_type": "digital",
+        "summary": "Digital product journey from Arch2RTL through DQA, synthesis readiness, verification, firmware/software, and product app handoff.",
+        "definition": {
+            "stages": [
+                {"id": "arch2rtl", "label": "RTL", "app": "Digital_Arch2RTL", "required": True},
+                {"id": "dqa", "label": "DQA", "app": "Digital_DQA", "required": True},
+                {"id": "synthesis", "label": "Synthesis", "app": "Digital_Arch2Synthesis", "recommended": True},
+                {"id": "verify", "label": "Verification", "app": "Digital_Verify", "recommended": True},
+                {"id": "firmware", "label": "Firmware", "app": "Embedded_Run", "optional": True},
+                {"id": "software", "label": "Software", "app": "System_Software", "optional": True},
+                {"id": "product_app", "label": "Product App", "app": "System_Product_App_Builder", "optional": True},
+            ]
+        },
+    },
+    {
         "slug": "temperature-monitor-soc",
         "name": "Temperature Monitor SoC",
         "product_type": "mixed_signal",
@@ -2863,6 +2886,108 @@ PRODUCT_REFERENCE_JOURNEYS: List[Dict[str, Any]] = [
 # ==========================================================
 # ✅ DIGITAL APPS (Arch2RTL / DQA / Verify) — same pattern as Validation Run App
 # ==========================================================
+
+PRODUCT_STAGE_SCHEMAS: Dict[str, Dict[str, Any]] = {
+    "Digital_Arch2RTL": {
+        "note": "Spec text can be left blank only when the product description is detailed enough to use as the RTL spec.",
+        "fields": [
+            {"key": "top_module", "label": "Top module", "type": "text", "defaultValue": ""},
+            {"key": "spec_text", "label": "Spec text", "type": "text", "defaultValue": "", "helper": "Used before product description fallback."},
+            {"key": "enable_packaging", "label": "Generate handoff package", "type": "boolean", "defaultValue": True},
+        ],
+    },
+    "Digital_Verify": {
+        "fields": [
+            {"key": "seed_count", "label": "Seed count", "type": "number", "defaultValue": 4},
+            {"key": "coverage_targets", "label": "Coverage target", "type": "text", "defaultValue": "90% functional, 70% line"},
+            {"key": "enable_formal", "label": "Formal", "type": "boolean", "defaultValue": False},
+        ],
+    },
+    "Digital_Arch2Synthesis": {
+        "note": "Synthesis uses the generated Arch2RTL handoff as RTL input and runs the synthesis stage directly.",
+        "fields": [
+            {"key": "foundry", "label": "Foundry", "type": "text", "defaultValue": "sky130"},
+            {"key": "pdk", "label": "PDK", "type": "text", "defaultValue": "sky130A"},
+            {"key": "toolchain", "label": "Toolchain", "type": "text", "defaultValue": "openlane2"},
+            {"key": "target_frequency_mhz", "label": "Target frequency MHz", "type": "number", "defaultValue": 100},
+            {"key": "constraints_sdc", "label": "Constraints SDC", "type": "text", "defaultValue": ""},
+        ],
+    },
+    "verify_closure_loop": {
+        "fields": [
+            {"key": "max_iterations", "label": "Max iterations", "type": "number", "defaultValue": 1},
+            {"key": "seed_count", "label": "Seed count", "type": "number", "defaultValue": 5},
+            {"key": "coverage_targets", "label": "Coverage target", "type": "text", "defaultValue": "90% functional, 70% line"},
+        ],
+    },
+    "Embedded_Run": {
+        "fields": [
+            {"key": "firmware_language", "label": "Firmware language", "type": "text", "defaultValue": "rust"},
+            {"key": "enable_cosim", "label": "Enable firmware co-sim", "type": "boolean", "defaultValue": False},
+        ],
+    },
+    "System_RTL": {
+        "note": "System RTL starts from explicit digital, analog, and SoC specs. Downstream System apps auto-bind to this generated workflow.",
+        "fields": [
+            {"key": "digital_spec", "label": "Digital spec", "type": "text", "defaultValue": "", "required": True},
+            {"key": "analog_spec", "label": "Analog spec", "type": "text", "defaultValue": "", "required": True},
+            {"key": "soc_spec", "label": "SoC spec", "type": "text", "defaultValue": "", "required": True},
+            {"key": "enable_spec2rtl", "label": "Spec2RTL check", "type": "boolean", "defaultValue": True},
+        ],
+    },
+    "System_DQA": {
+        "note": "System DQA uses the System RTL handoff and does not rerun register-map generation.",
+        "fields": [
+            {"key": "run_lint", "label": "Run lint", "type": "boolean", "defaultValue": True},
+            {"key": "run_cdc", "label": "Run CDC", "type": "boolean", "defaultValue": True},
+            {"key": "run_reset", "label": "Run reset integrity", "type": "boolean", "defaultValue": True},
+        ],
+    },
+    "System_Sim": {
+        "fields": [
+            {"key": "seed_count", "label": "Seed count", "type": "number", "defaultValue": 6},
+            {"key": "system_sim_testcases", "label": "Testcases", "type": "text", "defaultValue": "system_smoke_test, integrated_input_sanity"},
+            {"key": "system_sim_seeds", "label": "Seeds", "type": "text", "defaultValue": "1,2,3,4"},
+            {"key": "coverage_targets", "label": "Coverage target", "type": "text", "defaultValue": "90% functional"},
+            {"key": "enable_golden_model", "label": "Golden model", "type": "boolean", "defaultValue": True},
+        ],
+    },
+    "System_Firmware": {
+        "note": "Firmware auto-binds the System RTL workflow ID, including register-map and top-level handoff artifacts.",
+        "fields": [
+            {"key": "firmware_language", "label": "Firmware language", "type": "text", "defaultValue": "rust"},
+            {"key": "validate_registers", "label": "Validate registers", "type": "boolean", "defaultValue": True},
+            {"key": "enable_cosim", "label": "Enable firmware co-sim", "type": "boolean", "defaultValue": True},
+        ],
+    },
+    "System_PD": {
+        "fields": [
+            {"key": "foundry", "label": "Foundry", "type": "text", "defaultValue": "sky130"},
+            {"key": "pdk", "label": "PDK", "type": "text", "defaultValue": "sky130"},
+            {"key": "analog_physical_mode", "label": "Analog physical mode", "type": "text", "defaultValue": "blackbox"},
+            {"key": "run_drc", "label": "Run DRC", "type": "boolean", "defaultValue": True},
+            {"key": "run_lvs", "label": "Run LVS", "type": "boolean", "defaultValue": True},
+        ],
+    },
+    "System_Software": {
+        "fields": [
+            {"key": "app_names", "label": "App names", "type": "text", "defaultValue": "status_cli, product_service"},
+            {"key": "target_language", "label": "Target language", "type": "text", "defaultValue": "rust"},
+        ],
+    },
+    "System_Software_Validation_L2": {
+        "fields": [
+            {"key": "validation_mode", "label": "Validation mode", "type": "text", "defaultValue": "full_co_simulation"},
+        ],
+    },
+    "System_Product_App_Builder": {
+        "fields": [
+            {"key": "app_type", "label": "App type", "type": "text", "defaultValue": "web_dashboard"},
+            {"key": "target_runtime", "label": "Target runtime", "type": "text", "defaultValue": "simulated_device"},
+        ],
+    },
+}
+
 
 class DigitalArch2RTLAppIn(BaseModel):
     project_name: Optional[str] = None
@@ -4632,6 +4757,28 @@ async def list_product_reference_journeys():
     return {"status": "ok", "reference_journeys": [_normalize_reference_journey(row) for row in PRODUCT_REFERENCE_JOURNEYS]}
 
 
+@app.get("/products/stage-schemas")
+async def list_product_stage_schemas():
+    try:
+        rows = (
+            supabase.table("product_stage_schemas")
+            .select("app,schema,is_active")
+            .eq("is_active", True)
+            .execute()
+        ).data or []
+        if rows:
+            schemas = {
+                str(row.get("app")): row.get("schema")
+                for row in rows
+                if row.get("app") and isinstance(row.get("schema"), dict)
+            }
+            if schemas:
+                return {"status": "ok", "stage_schemas": schemas}
+    except Exception as exc:
+        logger.warning("Product stage schema table unavailable, using built-in defaults: %s", exc)
+    return {"status": "ok", "stage_schemas": PRODUCT_STAGE_SCHEMAS}
+
+
 @app.get("/products")
 async def list_products(request: Request):
     user_id = _request_user_id_optional(request)
@@ -4650,6 +4797,30 @@ async def list_products(request: Request):
     except Exception as exc:
         logger.error("Failed to list products: %s", exc)
         raise HTTPException(status_code=500, detail=f"Failed to list products: {exc}")
+
+
+@app.get("/products/{product_id}")
+async def get_product(product_id: str, request: Request):
+    user_id = _request_user_id_optional(request)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Login required to view a product")
+    try:
+        rows = (
+            supabase.table("products")
+            .select("id,name,product_type,starting_point,description,stage_config,stage_results,status,created_at,updated_at")
+            .eq("id", product_id)
+            .eq("user_id", user_id)
+            .limit(1)
+            .execute()
+        ).data or []
+        if not rows:
+            raise HTTPException(status_code=404, detail="Product not found")
+        return {"status": "ok", "product": rows[0]}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("Failed to get product: %s", exc)
+        raise HTTPException(status_code=500, detail=f"Failed to get product: {exc}")
 
 
 @app.post("/products")
@@ -4722,6 +4893,701 @@ async def update_product(product_id: str, payload: ProductUpdateIn, request: Req
     except Exception as exc:
         logger.error("Failed to update product: %s", exc)
         raise HTTPException(status_code=500, detail=f"Failed to update product: {exc}")
+
+
+def _product_stage_enabled(stage: Dict[str, Any]) -> bool:
+    if stage.get("required"):
+        return True
+    if stage.get("optional") and "enabled" not in stage:
+        return False
+    return stage.get("enabled") is not False
+
+
+def _product_run_row(product_run_id: str, user_id: str) -> Dict[str, Any]:
+    row = (
+        supabase.table("product_runs")
+        .select("id,product_id,user_id,status,current_stage,stage_results,error,created_at,updated_at,completed_at")
+        .eq("id", product_run_id)
+        .eq("user_id", user_id)
+        .limit(1)
+        .execute()
+    ).data or []
+    return row[0] if row else {}
+
+
+def _product_stage_rows(product_run_id: str, user_id: str) -> List[Dict[str, Any]]:
+    rows = (
+        supabase.table("product_stage_runs")
+        .select("id,product_run_id,product_id,stage_id,stage_label,app,status,workflow_id,run_id,inputs,outputs,error,started_at,completed_at,created_at,updated_at")
+        .eq("product_run_id", product_run_id)
+        .eq("user_id", user_id)
+        .order("created_at")
+        .execute()
+    ).data or []
+    return rows if isinstance(rows, list) else []
+
+
+def _update_product_run(product_run_id: str, updates: Dict[str, Any]) -> None:
+    updates = {**updates, "updated_at": datetime.utcnow().isoformat()}
+    try:
+        supabase.table("product_runs").update(updates).eq("id", product_run_id).execute()
+    except Exception as exc:
+        logger.warning("Failed to update product_run %s: %s", product_run_id, exc)
+
+
+def _update_product_stage_run(stage_run_id: str, updates: Dict[str, Any]) -> None:
+    updates = {**updates, "updated_at": datetime.utcnow().isoformat()}
+    try:
+        supabase.table("product_stage_runs").update(updates).eq("id", stage_run_id).execute()
+    except Exception as exc:
+        logger.warning("Failed to update product_stage_run %s: %s", stage_run_id, exc)
+
+
+def _product_run_cancelled(product_run_id: str, user_id: str) -> bool:
+    try:
+        rows = (
+            supabase.table("product_runs")
+            .select("status")
+            .eq("id", product_run_id)
+            .eq("user_id", user_id)
+            .limit(1)
+            .execute()
+        ).data or []
+        return str((rows[0] if rows else {}).get("status") or "") == "cancelled"
+    except Exception as exc:
+        logger.warning("Failed to check product_run cancellation %s: %s", product_run_id, exc)
+        return False
+
+
+def _workflow_status(workflow_id: str) -> str:
+    try:
+        rows = supabase.table("workflows").select("status").eq("id", workflow_id).limit(1).execute().data or []
+        return str((rows[0] if rows else {}).get("status") or "")
+    except Exception:
+        return ""
+
+
+def _stage_setting(stage: Dict[str, Any], key: str, default: Any = None) -> Any:
+    settings = stage.get("settings") if isinstance(stage.get("settings"), dict) else {}
+    value = settings.get(key, default)
+    return default if value is None else value
+
+
+def _product_upstream_key_for_app(app_name: str) -> Optional[str]:
+    return {
+        "Digital_Arch2RTL": "arch2rtl",
+        "Digital_DQA": "dqa",
+        "Digital_Verify": "verify",
+        "Digital_Arch2Synthesis": "arch2synthesis",
+        "verify_closure_loop": "closure",
+        "Embedded_Run": "firmware",
+        "System_Software": "software",
+        "System_Software_Validation_L2": "validation",
+        "System_Product_App_Builder": "product_app",
+        "System_RTL": "system_rtl",
+        "System_DQA": "system_dqa",
+        "System_Sim": "system_sim",
+        "System_Firmware": "system_firmware",
+        "System_PD": "system_pd",
+    }.get(app_name)
+
+
+def _seed_product_upstream_from_prior_run(
+    resume_product_run_id: Optional[str],
+    product_id: str,
+    user_id: str,
+    start_stage: Optional[str],
+) -> Dict[str, str]:
+    if not resume_product_run_id or not start_stage:
+        return {}
+    try:
+        prior = _product_run_row(str(resume_product_run_id), user_id)
+        if not prior or str(prior.get("product_id")) != str(product_id):
+            return {}
+        upstream: Dict[str, str] = {}
+        normalized_start = str(start_stage).strip()
+        for row in _product_stage_rows(str(resume_product_run_id), user_id):
+            if str(row.get("stage_id") or "") == normalized_start or str(row.get("app") or "") == normalized_start:
+                break
+            if str(row.get("status") or "") != "completed" or not row.get("workflow_id"):
+                continue
+            key = _product_upstream_key_for_app(str(row.get("app") or ""))
+            if key:
+                upstream[key] = str(row.get("workflow_id"))
+        return upstream
+    except Exception as exc:
+        logger.warning("Failed to seed product upstream from prior run %s: %s", resume_product_run_id, exc)
+        return {}
+
+
+def _product_stage_payload(product: Dict[str, Any], stage: Dict[str, Any], upstream: Dict[str, str]) -> Dict[str, Any]:
+    app_name = str(stage.get("app") or "")
+    product_name = str(product.get("name") or "product")
+    description = str(product.get("description") or "")
+    if app_name == "Digital_Arch2RTL":
+        top_module = str(_stage_setting(stage, "top_module", "") or "").strip()
+        if not top_module:
+            top_module = re.sub(r"[^a-zA-Z0-9_]+", "_", product_name.strip().lower()).strip("_") or "product_top"
+        spec_text = str(_stage_setting(stage, "spec_text", "") or "").strip() or description
+        if not spec_text.strip():
+            raise RuntimeError("Arch2RTL requires a spec_text setting or product description before running.")
+        return {
+            "project_name": product_name,
+            "top_module": top_module,
+            "spec_text": spec_text,
+            "toggles": {
+                "gen_regmap": True,
+                "gen_upf_lite": False,
+                "gen_packaging": bool(_stage_setting(stage, "enable_packaging", True)),
+            },
+        }
+    if app_name == "Digital_DQA":
+        arch2rtl_id = upstream.get("arch2rtl")
+        if not arch2rtl_id:
+            raise RuntimeError("DQA requires Arch2RTL workflow output.")
+        return {
+            "rtl_source_mode": "from_arch2rtl",
+            "from_workflow_id": arch2rtl_id,
+            "source_arch2rtl_workflow_id": arch2rtl_id,
+            "upstream_workflows": {"arch2rtl": arch2rtl_id},
+            "target": str(_stage_setting(stage, "target", "pre_verify_quality_gate")),
+            "lint_profile": str(_stage_setting(stage, "lint_profile", "default")),
+            "cdc_profile": str(_stage_setting(stage, "cdc_profile", "default")),
+            "toggles": {"enable_autofix": bool(_stage_setting(stage, "enable_autofix", False))},
+        }
+    if app_name == "Digital_Verify":
+        arch2rtl_id = upstream.get("arch2rtl")
+        if not arch2rtl_id:
+            raise RuntimeError("Verify requires Arch2RTL workflow output.")
+        return {
+            "rtl_source_mode": "from_arch2rtl",
+            "from_workflow_id": arch2rtl_id,
+            "source_arch2rtl_workflow_id": arch2rtl_id,
+            "parent_workflow_id": upstream.get("dqa"),
+            "upstream_workflows": {key: value for key, value in upstream.items() if value},
+            "test_intent": str(_stage_setting(stage, "test_intent", "Run smoke, reset, register access, and representative functional tests.")),
+            "coverage_targets": str(_stage_setting(stage, "coverage_targets", "90% functional, 70% line")),
+            "seed_count": int(_stage_setting(stage, "seed_count", 4) or 4),
+            "random_vs_directed": str(_stage_setting(stage, "random_vs_directed", "both")),
+            "simulator_type": str(_stage_setting(stage, "simulator_type", "verilator")),
+            "toolchain": {
+                "simulator": str(_stage_setting(stage, "simulator_type", "verilator")),
+                "code_coverage": "verilator_coverage",
+                "formal": "symbiyosys" if bool(_stage_setting(stage, "enable_formal", False)) else "none",
+                "formal_solver": "z3",
+                "golden_model": "chiploop_python_scoreboard" if bool(_stage_setting(stage, "enable_golden_model", False)) else "none",
+            },
+            "toggles": {
+                "enable_formal": bool(_stage_setting(stage, "enable_formal", False)),
+                "enable_golden_model": bool(_stage_setting(stage, "enable_golden_model", False)),
+            },
+        }
+    if app_name == "Digital_Arch2Synthesis":
+        arch2rtl_id = upstream.get("arch2rtl")
+        if not arch2rtl_id:
+            raise RuntimeError("Arch2Synthesis requires Arch2RTL workflow output.")
+        return {
+            "rtl_source_mode": "from_arch2rtl",
+            "from_workflow_id": arch2rtl_id,
+            "source_arch2rtl_workflow_id": arch2rtl_id,
+            "parent_workflow_id": upstream.get("verify") or upstream.get("dqa"),
+            "upstream_workflows": {key: value for key, value in upstream.items() if value},
+            "project_name": product_name,
+            "top_module": str(_stage_setting(stage, "top_module", "") or "").strip() or None,
+            "foundry": str(_stage_setting(stage, "foundry", "sky130")),
+            "pdk": str(_stage_setting(stage, "pdk", "sky130A")),
+            "toolchain": str(_stage_setting(stage, "toolchain", "openlane2")),
+            "target_frequency_mhz": float(_stage_setting(stage, "target_frequency_mhz", 100) or 100),
+            "constraints_sdc": str(_stage_setting(stage, "constraints_sdc", "") or ""),
+            "start_stage": "synth",
+            "stop_stage": "synth",
+        }
+    if app_name == "verify_closure_loop":
+        verify_id = upstream.get("verify")
+        if not verify_id:
+            raise RuntimeError("Closure loop requires Verify workflow output.")
+        return {
+            "source_verify_workflow_id": verify_id,
+            "coverage_targets": str(_stage_setting(stage, "coverage_targets", "90% functional, 70% line")),
+            "seed_count": int(_stage_setting(stage, "seed_count", 5) or 5),
+            "seed_budget": int(_stage_setting(stage, "seed_budget", _stage_setting(stage, "seed_count", 5)) or 5),
+            "max_iterations": int(_stage_setting(stage, "max_iterations", 1) or 1),
+            "rerun_mode": str(_stage_setting(stage, "rerun_mode", "coverage_targeted")),
+            "random_vs_directed": str(_stage_setting(stage, "random_vs_directed", "both")),
+            "enable_failure_debug": bool(_stage_setting(stage, "enable_failure_debug", False)),
+        }
+    if app_name == "Embedded_Run":
+        arch2rtl_id = upstream.get("arch2rtl")
+        verify_id = upstream.get("verify")
+        if not arch2rtl_id:
+            raise RuntimeError("Embedded firmware requires Arch2RTL workflow output.")
+        return {
+            "spec_text": str(_stage_setting(stage, "spec_text", "") or product.get("description") or "Generate firmware from the RTL register map and verified hardware handoff."),
+            "goal": str(_stage_setting(stage, "goal", "Generate firmware HAL, register layer, driver scaffold, and validation collateral.")),
+            "toolchain": {"language": str(_stage_setting(stage, "firmware_language", "rust"))},
+            "toggles": {"enable_cosim": bool(_stage_setting(stage, "enable_cosim", False))},
+            "from_workflow_id": arch2rtl_id,
+            "source_verification_workflow_id": verify_id,
+        }
+    if app_name == "System_Software":
+        firmware_id = upstream.get("firmware") or upstream.get("system_firmware")
+        arch2rtl_id = upstream.get("arch2rtl") or upstream.get("system_rtl")
+        if not firmware_id:
+            raise RuntimeError("System Software requires Firmware workflow output.")
+        return {
+            "project_name": f"{product_name.lower().replace(' ', '_')}_software",
+            "system_firmware_workflow_id": firmware_id,
+            "system_rtl_workflow_id": arch2rtl_id,
+            "software_goal": str(_stage_setting(stage, "software_goal", f"Build software APIs and services for {product_name}.")),
+            "app_names": [name.strip() for name in str(_stage_setting(stage, "app_names", "status_cli, product_service")).split(",") if name.strip()],
+            "target_language": str(_stage_setting(stage, "target_language", "rust")),
+            "sdk_style": str(_stage_setting(stage, "sdk_style", "rust_crate")),
+            "build_system": str(_stage_setting(stage, "build_system", "cargo")),
+            "notes": "Product run handoff from generated RTL/firmware stages.",
+        }
+    if app_name == "System_Software_Validation_L2":
+        software_id = upstream.get("software")
+        firmware_id = upstream.get("firmware") or upstream.get("system_firmware")
+        arch2rtl_id = upstream.get("arch2rtl") or upstream.get("system_rtl")
+        if not software_id:
+            raise RuntimeError("Validation requires System Software workflow output.")
+        return {
+            "system_software_workflow_id": software_id,
+            "validation_mode": str(_stage_setting(stage, "validation_mode", "full_co_simulation")),
+            "system_firmware_workflow_id": firmware_id,
+            "system_rtl_workflow_id": arch2rtl_id,
+            "goal": str(_stage_setting(stage, "goal", f"Validate {product_name} full stack from software controls through generated RTL behavior.")),
+            "notes": "Product run validation stage.",
+        }
+    if app_name == "System_Product_App_Builder":
+        software_id = upstream.get("software")
+        validation_id = upstream.get("validation")
+        if not software_id or not validation_id:
+            raise RuntimeError("Product App requires Software and Validation workflow outputs.")
+        return {
+            "arch2rtl_workflow_id": upstream.get("arch2rtl") or upstream.get("system_rtl"),
+            "verify_workflow_id": upstream.get("verify"),
+            "system_firmware_workflow_id": upstream.get("firmware") or upstream.get("system_firmware"),
+            "system_software_workflow_id": software_id,
+            "system_validation_workflow_id": validation_id,
+            "product_intent": str(_stage_setting(stage, "product_intent", product.get("description") or f"Build a simulator-backed product dashboard for {product_name}.")),
+            "app_type": str(_stage_setting(stage, "app_type", "web_dashboard")),
+            "target_runtime": str(_stage_setting(stage, "target_runtime", "simulated_device")),
+        }
+    if app_name == "System_RTL":
+        digital_spec = str(_stage_setting(stage, "digital_spec", "") or "").strip()
+        analog_spec = str(_stage_setting(stage, "analog_spec", "") or "").strip()
+        soc_spec = str(_stage_setting(stage, "soc_spec", "") or "").strip()
+        missing = [name for name, value in (("digital_spec", digital_spec), ("analog_spec", analog_spec), ("soc_spec", soc_spec)) if not value]
+        if missing:
+            raise RuntimeError(f"System RTL requires configured settings before run: {', '.join(missing)}")
+        return {
+            "project_name": product_name,
+            "top_module": str(_stage_setting(stage, "top_module", "") or "").strip() or None,
+            "digital_spec_text": digital_spec,
+            "analog_spec_text": analog_spec,
+            "soc_integration_spec_text": soc_spec,
+            "toggles": {
+                "run_spec2rtl_check": bool(_stage_setting(stage, "enable_spec2rtl", True)),
+            },
+        }
+    if app_name == "System_DQA":
+        system_rtl_id = upstream.get("system_rtl")
+        if not system_rtl_id:
+            raise RuntimeError("System DQA requires System RTL workflow output.")
+        return {
+            "rtl_source_mode": "from_system_rtl",
+            "system_rtl_workflow_id": system_rtl_id,
+            "from_workflow_id": system_rtl_id,
+            "source_system_rtl_workflow_id": system_rtl_id,
+        }
+    if app_name == "System_Sim":
+        system_rtl_id = upstream.get("system_rtl")
+        if not system_rtl_id:
+            raise RuntimeError("System Sim requires System RTL workflow output.")
+        seeds_text = str(_stage_setting(stage, "system_sim_seeds", "1,2,3,4") or "1,2,3,4")
+        seeds = [int(part.strip()) for part in seeds_text.split(",") if part.strip().isdigit()]
+        testcases_text = str(_stage_setting(stage, "system_sim_testcases", "system_smoke_test, integrated_input_sanity") or "")
+        return {
+            "rtl_source_mode": "from_system_rtl",
+            "system_rtl_workflow_id": system_rtl_id,
+            "from_workflow_id": system_rtl_id,
+            "test_intent": str(_stage_setting(stage, "test_intent", "Run integrated system smoke and register-path scenarios.")),
+            "coverage_targets": str(_stage_setting(stage, "coverage_targets", "90% functional")),
+            "random_vs_directed": str(_stage_setting(stage, "random_vs_directed", "both")),
+            "simulator_type": str(_stage_setting(stage, "simulator_type", "verilator")),
+            "seed_count": len(seeds) or int(_stage_setting(stage, "seed_count", 4) or 4),
+            "system_sim_testcases": [item.strip() for item in testcases_text.split(",") if item.strip()],
+            "system_sim_seeds": seeds or [1, 2, 3, 4],
+            "system_sim_num_iters": int(_stage_setting(stage, "system_sim_num_iters", 25) or 25),
+            "toolchain": {
+                "simulator": str(_stage_setting(stage, "simulator_type", "verilator")),
+                "code_coverage": "verilator_coverage",
+                "formal": "symbiyosys" if bool(_stage_setting(stage, "enable_formal", False)) else "none",
+                "formal_solver": "z3",
+                "golden_model": "chiploop_python_scoreboard" if bool(_stage_setting(stage, "enable_golden_model", True)) else "none",
+            },
+            "toggles": {
+                "enable_formal": bool(_stage_setting(stage, "enable_formal", False)),
+                "enable_golden_model": bool(_stage_setting(stage, "enable_golden_model", True)),
+            },
+        }
+    if app_name == "System_Firmware":
+        system_rtl_id = upstream.get("system_rtl")
+        if not system_rtl_id:
+            raise RuntimeError("System Firmware requires System RTL workflow output.")
+        return {
+            "rtl_source_mode": "from_system_rtl",
+            "system_rtl_workflow_id": system_rtl_id,
+            "from_workflow_id": system_rtl_id,
+            "toolchain": {"language": str(_stage_setting(stage, "firmware_language", "rust"))},
+            "toggles": {"enable_cosim": bool(_stage_setting(stage, "enable_cosim", True))},
+        }
+    if app_name == "System_PD":
+        system_rtl_id = upstream.get("system_rtl")
+        if not system_rtl_id:
+            raise RuntimeError("System PD requires System RTL workflow output.")
+        return {
+            "rtl_source_mode": "from_system_rtl",
+            "system_rtl_workflow_id": system_rtl_id,
+            "from_workflow_id": system_rtl_id,
+            "foundry": str(_stage_setting(stage, "foundry", "sky130")),
+            "pdk": str(_stage_setting(stage, "pdk", "sky130")),
+            "analog_physical_mode": str(_stage_setting(stage, "analog_physical_mode", "blackbox")),
+            "toggles": {
+                "run_drc": bool(_stage_setting(stage, "run_drc", True)),
+                "run_lvs": bool(_stage_setting(stage, "run_lvs", True)),
+            },
+        }
+    raise RuntimeError(f"Product run does not support stage app '{app_name}' yet.")
+
+
+def _run_product_stage(product: Dict[str, Any], product_run_id: str, stage_run: Dict[str, Any], upstream: Dict[str, str]) -> str:
+    stage = {
+        "id": stage_run["stage_id"],
+        "label": stage_run.get("stage_label"),
+        "app": stage_run.get("app"),
+        **(stage_run.get("inputs") if isinstance(stage_run.get("inputs"), dict) else {}),
+    }
+    app_name = str(stage.get("app") or "")
+    payload = _product_stage_payload(product, stage, upstream)
+    workflow_title = f"Product: {product.get('name')} / {stage.get('label') or app_name}"
+    digital_slug = {
+        "Digital_Arch2RTL": "arch2rtl",
+        "Digital_DQA": "dqa",
+        "Digital_Verify": "verify",
+        "Digital_Arch2Synthesis": "arch2synthesis",
+        "verify_closure_loop": "verify_closure_loop",
+    }.get(app_name)
+    digital_template = {
+        "Digital_Arch2RTL": "Digital_Arch2RTL",
+        "Digital_DQA": "Digital_DQA",
+        "Digital_Verify": "Digital_Verify",
+        "Digital_Arch2Synthesis": "Digital_Arch2Synthesis",
+        "verify_closure_loop": "Digital_Verify_Closure_Loop",
+    }.get(app_name)
+    embedded_template = {"Embedded_Run": "Embedded_Run"}.get(app_name)
+    system_template = {
+        "System_RTL": "System_RTL",
+        "System_DQA": "System_DQA",
+        "System_Sim": "System_Sim",
+        "System_Firmware": "System_Firmware",
+        "System_PD": "System_PD",
+        "System_Software": "System_Software",
+        "System_Software_Validation_L2": "System_Software_Validation_L2",
+        "System_Product_App_Builder": "System_Product_App_Builder",
+    }.get(app_name)
+    loop_type = "digital" if digital_slug else "embedded" if embedded_template else "system"
+    workflow_id, run_id, base_dir = _create_app_workflow_and_run(str(product.get("user_id") or ""), workflow_title, loop_type)
+    artifact_dir = os.path.join(base_dir, str(stage.get("id") or app_name).replace("_", "-"))
+    _update_product_stage_run(stage_run["id"], {
+        "status": "running",
+        "workflow_id": workflow_id,
+        "run_id": run_id,
+        "inputs": payload,
+        "started_at": datetime.utcnow().isoformat(),
+    })
+    user_id = str(product.get("user_id") or "")
+    if digital_slug and digital_template:
+        if app_name == "verify_closure_loop":
+            payload["parent_workflow_id"] = payload.get("source_verify_workflow_id")
+            payload["closure_iteration_index"] = 1
+            payload["max_iterations"] = max(int(payload.get("max_iterations") or 1), 1)
+            if not payload.get("seed_budget"):
+                payload["seed_budget"] = payload.get("seed_count") or 5
+        execute_digital_app_background(
+            workflow_id,
+            run_id,
+            user_id,
+            artifact_dir,
+            digital_slug,
+            digital_template,
+            payload,
+        )
+    elif embedded_template:
+        execute_embedded_app_background(
+            workflow_id,
+            run_id,
+            user_id,
+            artifact_dir,
+            embedded_template,
+            payload,
+        )
+    elif system_template:
+        execute_system_app_background(
+            workflow_id,
+            run_id,
+            user_id,
+            artifact_dir,
+            system_template,
+            payload,
+        )
+    else:
+        raise RuntimeError(f"Product run does not support stage app '{app_name}' yet.")
+    status = _workflow_status(workflow_id)
+    if status != "completed":
+        raise RuntimeError(f"{stage.get('label') or app_name} workflow ended with status '{status or 'unknown'}'")
+    _update_product_stage_run(stage_run["id"], {
+        "status": "completed",
+        "outputs": {"workflow_id": workflow_id, "run_id": run_id},
+        "completed_at": datetime.utcnow().isoformat(),
+    })
+    return workflow_id
+
+
+def execute_product_run_background(
+    product_id: str,
+    product_run_id: str,
+    user_id: str,
+    max_stages: int = 8,
+    start_stage: Optional[str] = None,
+    resume_product_run_id: Optional[str] = None,
+) -> None:
+    upstream: Dict[str, str] = _seed_product_upstream_from_prior_run(
+        resume_product_run_id,
+        product_id,
+        user_id,
+        start_stage,
+    )
+    stage_results: Dict[str, Any] = {}
+    try:
+        product_rows = (
+            supabase.table("products")
+            .select("id,user_id,name,product_type,starting_point,description,stage_config,status")
+            .eq("id", product_id)
+            .eq("user_id", user_id)
+            .limit(1)
+            .execute()
+        ).data or []
+        if not product_rows:
+            raise RuntimeError("Product not found")
+        product = product_rows[0]
+        stages = ((product.get("stage_config") or {}).get("stages") or []) if isinstance(product.get("stage_config"), dict) else []
+        enabled = [stage for stage in stages if isinstance(stage, dict) and _product_stage_enabled(stage)]
+        supported_apps = {
+            "Digital_Arch2RTL",
+            "Digital_DQA",
+            "Digital_Verify",
+            "Digital_Arch2Synthesis",
+            "verify_closure_loop",
+            "Embedded_Run",
+            "System_Software",
+            "System_Software_Validation_L2",
+            "System_Product_App_Builder",
+            "System_RTL",
+            "System_DQA",
+            "System_Sim",
+            "System_Firmware",
+            "System_PD",
+        }
+        supported = [stage for stage in enabled if stage.get("app") in supported_apps]
+        if not supported:
+            raise RuntimeError("No supported runnable stages found.")
+        if start_stage:
+            normalized_start_stage = str(start_stage).strip()
+            start_index = next(
+                (
+                    index
+                    for index, stage in enumerate(supported)
+                    if str(stage.get("id") or "") == normalized_start_stage
+                    or str(stage.get("app") or "") == normalized_start_stage
+                ),
+                -1,
+            )
+            if start_index < 0:
+                raise RuntimeError(f"Start stage '{normalized_start_stage}' was not found in enabled runnable stages.")
+            supported = supported[start_index:]
+        supported = supported[: max(1, min(int(max_stages or 8), 8))]
+        _update_product_run(product_run_id, {"status": "running", "current_stage": supported[0].get("id")})
+
+        for stage in supported:
+            if _product_run_cancelled(product_run_id, user_id):
+                _update_product_run(product_run_id, {
+                    "status": "cancelled",
+                    "current_stage": None,
+                    "stage_results": stage_results,
+                    "error": "Cancelled by user",
+                    "completed_at": datetime.utcnow().isoformat(),
+                })
+                return
+            stage_record = {
+                "product_run_id": product_run_id,
+                "product_id": product_id,
+                "user_id": user_id,
+                "stage_id": stage.get("id"),
+                "stage_label": stage.get("label") or stage.get("id") or "",
+                "app": stage.get("app") or "",
+                "status": "queued",
+                "inputs": stage,
+                "outputs": {},
+                "created_at": datetime.utcnow().isoformat(),
+                "updated_at": datetime.utcnow().isoformat(),
+            }
+            rows = supabase.table("product_stage_runs").insert(stage_record).execute().data or []
+            stage_run = rows[0] if rows else stage_record
+            _update_product_run(product_run_id, {"current_stage": stage.get("id")})
+            try:
+                workflow_id = _run_product_stage(product, product_run_id, stage_run, upstream)
+                upstream_key = _product_upstream_key_for_app(str(stage.get("app") or ""))
+                if upstream_key:
+                    upstream[upstream_key] = workflow_id
+                stage_results[str(stage.get("id"))] = {"status": "completed", "workflow_id": workflow_id}
+                _update_product_run(product_run_id, {"stage_results": stage_results})
+            except Exception as exc:
+                message = str(exc)
+                _update_product_stage_run(stage_run["id"], {
+                    "status": "failed",
+                    "error": message,
+                    "completed_at": datetime.utcnow().isoformat(),
+                })
+                stage_results[str(stage.get("id"))] = {"status": "failed", "error": message}
+                _update_product_run(product_run_id, {
+                    "status": "failed",
+                    "stage_results": stage_results,
+                    "error": message,
+                    "completed_at": datetime.utcnow().isoformat(),
+                })
+                return
+        _update_product_run(product_run_id, {
+            "status": "completed",
+            "current_stage": None,
+            "stage_results": stage_results,
+            "completed_at": datetime.utcnow().isoformat(),
+        })
+    except Exception as exc:
+        _update_product_run(product_run_id, {
+            "status": "failed",
+            "error": str(exc),
+            "stage_results": stage_results,
+            "completed_at": datetime.utcnow().isoformat(),
+        })
+
+
+@app.post("/products/{product_id}/run")
+async def start_product_run(product_id: str, payload: ProductRunStartIn, request: Request, background_tasks: BackgroundTasks):
+    user_id = _request_user_id_optional(request)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Login required to run a product")
+    product = await get_product(product_id, request)
+    if not product.get("product"):
+        raise HTTPException(status_code=404, detail="Product not found")
+    record = {
+        "product_id": product_id,
+        "user_id": user_id,
+        "status": "queued",
+        "stage_results": {},
+        "created_at": datetime.utcnow().isoformat(),
+        "updated_at": datetime.utcnow().isoformat(),
+    }
+    try:
+        rows = supabase.table("product_runs").insert(record).execute().data or []
+        product_run = rows[0] if rows else {**record, "id": str(uuid.uuid4())}
+    except Exception as exc:
+        logger.error("Failed to create product run: %s", exc)
+        raise HTTPException(status_code=500, detail=f"Failed to create product run: {exc}")
+    background_tasks.add_task(
+        execute_product_run_background,
+        product_id,
+        product_run["id"],
+        user_id,
+        payload.max_stages or 8,
+        payload.start_stage,
+        payload.resume_product_run_id,
+    )
+    return {"status": "ok", "product_run": product_run}
+
+
+@app.post("/products/{product_id}/runs/{product_run_id}/cancel")
+async def cancel_product_run(product_id: str, product_run_id: str, request: Request):
+    user_id = _request_user_id_optional(request)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Login required to cancel a product run")
+    run = _product_run_row(product_run_id, user_id)
+    if not run or str(run.get("product_id")) != str(product_id):
+        raise HTTPException(status_code=404, detail="Product run not found")
+    status = str(run.get("status") or "")
+    if status not in {"queued", "running"}:
+        return {"status": "ok", "product_run": run}
+    _update_product_run(product_run_id, {
+        "status": "cancelled",
+        "current_stage": None,
+        "error": "Cancelled by user",
+        "completed_at": datetime.utcnow().isoformat(),
+    })
+    return {"status": "ok", "product_run": _product_run_row(product_run_id, user_id)}
+
+
+@app.get("/products/{product_id}/runs")
+async def list_product_runs(product_id: str, request: Request, limit: int = Query(10, ge=1, le=50)):
+    user_id = _request_user_id_optional(request)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Login required to view product runs")
+    try:
+        rows = (
+            supabase.table("product_runs")
+            .select("id,product_id,user_id,status,current_stage,stage_results,error,created_at,updated_at,completed_at")
+            .eq("product_id", product_id)
+            .eq("user_id", user_id)
+            .order("updated_at", desc=True)
+            .limit(limit)
+            .execute()
+        ).data or []
+        stage_rows: List[Dict[str, Any]] = []
+        run_ids = [str(row.get("id")) for row in rows if row.get("id")]
+        if run_ids:
+            stage_rows = (
+                supabase.table("product_stage_runs")
+                .select("id,product_run_id,product_id,stage_id,stage_label,app,status,workflow_id,run_id,inputs,outputs,error,started_at,completed_at,created_at,updated_at")
+                .in_("product_run_id", run_ids)
+                .eq("user_id", user_id)
+                .order("created_at")
+                .execute()
+            ).data or []
+        stages_by_run: Dict[str, List[Dict[str, Any]]] = {}
+        for stage in stage_rows if isinstance(stage_rows, list) else []:
+            stages_by_run.setdefault(str(stage.get("product_run_id")), []).append(stage)
+        return {
+            "status": "ok",
+            "product_runs": [
+                {**row, "stage_runs": stages_by_run.get(str(row.get("id")), [])}
+                for row in rows
+            ],
+        }
+    except Exception as exc:
+        logger.error("Failed to list product runs: %s", exc)
+        raise HTTPException(status_code=500, detail=f"Failed to list product runs: {exc}")
+
+
+@app.get("/products/{product_id}/runs/{product_run_id}")
+async def get_product_run(product_id: str, product_run_id: str, request: Request):
+    user_id = _request_user_id_optional(request)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Login required to view product runs")
+    run = _product_run_row(product_run_id, user_id)
+    if not run or str(run.get("product_id")) != str(product_id):
+        raise HTTPException(status_code=404, detail="Product run not found")
+    stages = _product_stage_rows(product_run_id, user_id)
+    return {"status": "ok", "product_run": run, "stage_runs": stages}
 
 
 @app.post("/auto_compose_workflow")
