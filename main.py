@@ -556,6 +556,8 @@ from agents.analog.analog_behavioral_coverage_agent import run_agent as analog_b
 from agents.analog.analog_correlation_agent import run_agent as analog_correlation_agent
 from agents.analog.analog_iteration_agent import run_agent as analog_iteration_agent
 from agents.analog.analog_abstract_views_agent import run_agent as analog_abstract_views_agent
+from agents.analog.analog_macro_interface_contract_agent import run_agent as analog_macro_interface_contract_agent
+from agents.analog.analog_macro_interface_validation_agent import run_agent as analog_macro_interface_validation_agent
 from agents.analog.analog_sky130_spice_netlist_agent import run_agent as analog_sky130_spice_netlist_agent
 from agents.analog.analog_gds_generation_agent import run_agent as analog_gds_generation_agent
 from agents.analog.analog_lef_extraction_agent import run_agent as analog_lef_extraction_agent
@@ -575,6 +577,8 @@ ANALOG_AGENT_FUNCTIONS: Dict[str, Any] = {
     "Analog Correlation Agent": analog_correlation_agent,
     "Analog Iteration Proposal Agent": analog_iteration_agent,
     "Analog Abstract Views Agent": analog_abstract_views_agent,
+    "Analog Macro Interface Contract Agent": analog_macro_interface_contract_agent,
+    "Analog Macro Interface Validation Agent": analog_macro_interface_validation_agent,
     "Analog Sky130 SPICE Netlist Agent": analog_sky130_spice_netlist_agent,
     "Analog GDS Generation Agent": analog_gds_generation_agent,
     "Analog LEF Extraction Agent": analog_lef_extraction_agent,
@@ -843,6 +847,8 @@ SYSTEM_AGENT_FUNCTIONS: Dict[str,Any] = {
     "Analog Correlation Agent": analog_correlation_agent,
     "Analog Iteration Proposal Agent": analog_iteration_agent,
     "Analog Abstract Views Agent": analog_abstract_views_agent,
+    "Analog Macro Interface Contract Agent": analog_macro_interface_contract_agent,
+    "Analog Macro Interface Validation Agent": analog_macro_interface_validation_agent,
     "Analog Sky130 SPICE Netlist Agent": analog_sky130_spice_netlist_agent,
     "Analog GDS Generation Agent": analog_gds_generation_agent,
     "Analog LEF Extraction Agent": analog_lef_extraction_agent,
@@ -1232,6 +1238,7 @@ SYSTEM_RTL_AGENT_SEQUENCE = [
     "Analog Abstract Views Agent",
     "System Integration Intent Agent",
     "System Top Assembly Agent",
+    "Analog Macro Interface Contract Agent",
     "System Assertions (SVA) Agent",
     "System RTL Handoff Package Agent",
     "System RTL Evidence Dashboard Agent",
@@ -1261,6 +1268,7 @@ SYSTEM_SYNTHESIS_DEFINITION = _linear_workflow_definition([
 
 SYSTEM_PD_DEFINITION = _linear_workflow_definition([
     *SYSTEM_RTL_AGENT_SEQUENCE,
+    "Analog Macro Interface Validation Agent",
     "Digital Foundry Profile Agent",
     "Digital Implementation Setup Agent",
     "Digital Synthesis Agent",
@@ -3125,6 +3133,8 @@ def execute_digital_app_background(
                 "Digital Spec Agent",
                 "Digital Architecture Agent",
                 "Digital Microarchitecture Agent",
+                "Digital Register Map Agent",
+                "Digital Clock & Reset Architecture Agent",
                 "Digital RTL Agent",
                 "Digital RTL Signature Agent",
                 "Digital RTL Refactoring Agent",
@@ -3136,6 +3146,8 @@ def execute_digital_app_background(
                 "Analog Abstract Views Agent",
                 "System Integration Intent Agent",
                 "System Top Assembly Agent",
+                "Analog Macro Interface Contract Agent",
+                "System Assertions (SVA) Agent",
                 "System RTL Handoff Package Agent",
                 "System RTL Evidence Dashboard Agent",
                 "Digital Spec2RTL Conformance Agent",
@@ -6753,15 +6765,18 @@ def execute_system_app_background(
                 macros = package.get("analog_macros") if isinstance(package.get("analog_macros"), dict) else {}
 
                 def _as_list(value: Any) -> List[str]:
-                    return [str(x) for x in value if str(x).strip()] if isinstance(value, list) else []
+                    return [str(x) for x in value if x is not None and str(x).strip()] if isinstance(value, list) else []
 
                 rel_groups = {
                     "macro_lefs": _as_list(storage_obj_local.get("macro_lefs")) + _as_list(macros.get("lef_files")),
                     "macro_libs": _as_list(storage_obj_local.get("macro_libs")) + _as_list(macros.get("lib_files")),
                     "macro_gds": _as_list(storage_obj_local.get("macro_gds")) + _as_list(macros.get("gds_files")),
                 }
+                contract_paths = _as_list([storage_obj_local.get("analog_macro_interface_contract")])
                 if not any(rel_groups.values()):
-                    return
+                    rel_groups_empty = True
+                else:
+                    rel_groups_empty = False
 
                 macro_dir = os.path.join(shared_state["workflow_dir"], "system", "imported_macros")
                 os.makedirs(macro_dir, exist_ok=True)
@@ -6792,6 +6807,32 @@ def execute_system_app_background(
                         with open(local_path, "wb") as fh:
                             fh.write(content)
                         materialized_groups[key].append(local_path)
+
+                for idx, source_path in enumerate(list(dict.fromkeys(contract_paths))):
+                    raw_source = str(source_path or "").strip().replace("\\", "/")
+                    if not raw_source:
+                        continue
+                    content = b""
+                    candidates = _storage_path_candidates_from_source_path(raw_source, indexed_paths, source_workflow_id)
+                    for candidate in candidates or [raw_source]:
+                        content = _download_bytes_storage(candidate)
+                        if content:
+                            break
+                    if not content:
+                        continue
+                    local_path = os.path.abspath(os.path.join(macro_dir, "analog_macro_interface_contract.json"))
+                    with open(local_path, "wb") as fh:
+                        fh.write(content)
+                    try:
+                        loaded_contract = json.loads(content.decode("utf-8"))
+                        if isinstance(loaded_contract, dict):
+                            shared_state["analog_macro_interface_contract"] = loaded_contract
+                            shared_state["analog_macro_interface_contract_path"] = local_path
+                    except Exception:
+                        shared_state["analog_macro_interface_contract_path"] = local_path
+
+                if rel_groups_empty and not contract_paths:
+                    return
 
                 digital_block = shared_state.setdefault("digital", {})
                 if isinstance(digital_block, dict):
@@ -7276,6 +7317,13 @@ def execute_system_app_background(
         toggles = shared_state.get("toggles") if isinstance(shared_state.get("toggles"), dict) else {}
         using_existing_system_rtl = bool(shared_state.get("system_rtl_workflow_id")) or rtl_source_mode in {"paste", "repo_path"}
         canonical_system_downstream_nodes = {
+            "System_DQA": [
+                "Digital RTL Linting Agent",
+                "Digital CDC Analysis Agent",
+                "Digital Reset Integrity Agent",
+                "Digital Synthesis Readiness Agent",
+                "Digital DQA Summary Agent",
+            ],
             "System_Sim": [
                 "System CoSim Ingest Agent",
                 "System Assertions (SVA) Agent",
@@ -7331,7 +7379,7 @@ def execute_system_app_background(
                 node
                 for label in canonical_labels
                 for node in [{"label": label}]
-                if label in SYSTEM_AGENT_FUNCTIONS or label in EMBEDDED_AGENT_FUNCTIONS
+                if label in SYSTEM_AGENT_FUNCTIONS or label in EMBEDDED_AGENT_FUNCTIONS or label in DIGITAL_AGENT_FUNCTIONS
             ]
             append_log_workflow(
                 workflow_id,
@@ -7347,6 +7395,8 @@ def execute_system_app_background(
                 "Digital Spec Agent",
                 "Digital Architecture Agent",
                 "Digital Microarchitecture Agent",
+                "Digital Register Map Agent",
+                "Digital Clock & Reset Architecture Agent",
                 "Digital RTL Agent",
                 "Digital RTL Signature Agent",
                 "Digital RTL Refactoring Agent",
@@ -7358,6 +7408,8 @@ def execute_system_app_background(
                 "Analog Abstract Views Agent",
                 "System Integration Intent Agent",
                 "System Top Assembly Agent",
+                "Analog Macro Interface Contract Agent",
+                "System Assertions (SVA) Agent",
                 "System RTL Handoff Package Agent",
                 "System RTL Evidence Dashboard Agent",
                 "Digital Spec2RTL Conformance Agent",

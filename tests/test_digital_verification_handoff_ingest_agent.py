@@ -101,7 +101,7 @@ def test_imports_arch2rtl_spec_and_rtl_for_verify(tmp_path, monkeypatch):
     assert Path(result["spec_json"]).exists()
     assert [Path(path).name for path in result["rtl_files"]] == ["pwm_controller.sv"]
     assert result["verification_source_handoff"]["source_workflow_id"] == "source-wf"
-    assert len(uploads) == 3
+    assert len(uploads) == 4
 
 
 def test_imports_from_storage_when_workflow_index_has_lost_spec_path(tmp_path, monkeypatch):

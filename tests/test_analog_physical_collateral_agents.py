@@ -3,6 +3,8 @@ from agents.analog import analog_physical_collateral_package_agent as package_ag
 from agents.analog import analog_collateral_consistency_agent as consistency_agent
 from agents.analog import analog_lef_extraction_agent as lef_agent
 from agents.analog import analog_liberty_characterization_agent as lib_agent
+from agents.analog import analog_macro_interface_contract_agent as contract_agent
+from agents.analog import analog_macro_interface_validation_agent as validation_agent
 
 
 def test_sky130_spice_agent_defers_without_real_devices(tmp_path, monkeypatch):
@@ -109,3 +111,62 @@ def test_liberty_characterization_defers_without_spice(tmp_path, monkeypatch):
 
     assert state["analog_liberty_characterization"]["status"] == "deferred"
     assert state["analog_liberty_characterization"]["reason"] == "analog_spice_missing"
+
+
+def test_macro_interface_contract_and_validation_pass(tmp_path, monkeypatch):
+    monkeypatch.setattr(contract_agent, "save_text_artifact_and_record", lambda *args, **kwargs: "local")
+    monkeypatch.setattr(validation_agent, "save_text_artifact_and_record", lambda *args, **kwargs: "local")
+    model = tmp_path / "ana.sv"
+    lef = tmp_path / "ana.lef"
+    lib = tmp_path / "ana.lib"
+    model.write_text("module ana(input vin, output vout, inout avdd, inout avss); endmodule\n", encoding="utf-8")
+    lef.write_text(
+        "MACRO ana\n"
+        "  PIN vin\n    DIRECTION INPUT ;\n  END vin\n"
+        "  PIN vout\n    DIRECTION OUTPUT ;\n  END vout\n"
+        "  PIN avdd\n    DIRECTION INOUT ;\n  END avdd\n"
+        "  PIN avss\n    DIRECTION INOUT ;\n  END avss\n"
+        "END ana\n",
+        encoding="utf-8",
+    )
+    lib.write_text(
+        "library (ana) { cell (ana) { pin (vin) { direction : input; } pin (vout) { direction : output; } } }\n",
+        encoding="utf-8",
+    )
+
+    state = contract_agent.run_agent({
+        "workflow_id": "wf",
+        "workflow_dir": str(tmp_path),
+        "analog_macro_module": "ana",
+        "analog_model_path": str(model),
+        "analog_macro_lef": str(lef),
+        "analog_macro_lib": str(lib),
+    })
+    state = validation_agent.run_agent(state)
+
+    assert state["analog_macro_interface_contract"]["macro_name"] == "ana"
+    assert state["analog_macro_interface_validation"]["status"] == "pass"
+
+
+def test_macro_interface_validation_fails_on_direction_mismatch(tmp_path, monkeypatch):
+    monkeypatch.setattr(validation_agent, "save_text_artifact_and_record", lambda *args, **kwargs: "local")
+    model = tmp_path / "ana.sv"
+    lef = tmp_path / "ana.lef"
+    model.write_text("module ana(input vin); endmodule\n", encoding="utf-8")
+    lef.write_text("MACRO ana\n  PIN vin\n    DIRECTION OUTPUT ;\n  END vin\nEND ana\n", encoding="utf-8")
+    contract = {
+        "macro_name": "ana",
+        "ports": [{"name": "vin", "verilog_direction": "input", "lef_direction": "INPUT", "lib_direction": "missing"}],
+    }
+
+    state = validation_agent.run_agent({
+        "workflow_id": "wf",
+        "workflow_dir": str(tmp_path),
+        "analog_interface_fail_fast": "false",
+        "analog_macro_interface_contract": contract,
+        "analog_model_path": str(model),
+        "analog_macro_lef": str(lef),
+    })
+
+    assert state["analog_macro_interface_validation"]["status"] == "fail"
+    assert any(issue["type"] == "lef_direction_mismatch" for issue in state["analog_macro_interface_validation"]["issues"])

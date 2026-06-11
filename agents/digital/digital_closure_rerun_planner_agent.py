@@ -15,17 +15,20 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     source_handoff = state.get("source_verification_source_handoff") if isinstance(state.get("source_verification_source_handoff"), dict) else {}
-    source_system_sim = str(
-        state.get("source_system_sim_workflow_id")
-        or state.get("source_verify_workflow_id")
-        or state.get("parent_workflow_id")
-        or ""
-    ).strip()
-    is_system_sim = bool(source_system_sim and (
+    source_manifest = state.get("source_simulation_manifest") if isinstance(state.get("source_simulation_manifest"), dict) else {}
+    source_manifest_type = str(source_manifest.get("type") or "").strip().lower()
+    explicit_system_sim = bool(
         state.get("source_system_sim_workflow_id")
         or str(state.get("template_workflow_name") or "").startswith("System_")
-        or isinstance(state.get("source_simulation_manifest"), dict)
-    ))
+        or source_manifest_type.startswith("system_")
+    )
+    source_system_sim = str(
+        state.get("source_system_sim_workflow_id")
+        or (state.get("source_verify_workflow_id") if explicit_system_sim else "")
+        or (state.get("parent_workflow_id") if explicit_system_sim else "")
+        or ""
+    ).strip()
+    is_system_sim = bool(source_system_sim and explicit_system_sim)
     source_arch2rtl = str(
         state.get("source_arch2rtl_workflow_id")
         or state.get("from_workflow_id")

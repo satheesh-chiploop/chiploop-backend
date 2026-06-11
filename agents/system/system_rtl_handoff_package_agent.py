@@ -357,7 +357,12 @@ def run_agent(state: dict) -> dict:
                 "digital_regmap": digital_regmap_path,
                 "macro_lefs": storage_macro_lefs,
                 "macro_libs": storage_macro_libs,
-                "macro_gds": storage_macro_gds
+                "macro_gds": storage_macro_gds,
+                "analog_macro_interface_contract": _resolve_supabase_artifact_path(
+                    supabase,
+                    prefixes,
+                    "analog/interface/analog_macro_interface_contract.json",
+                )
             },
             "analog_macros": {
                 "lef_files": local_macro_lefs or storage_macro_lefs,

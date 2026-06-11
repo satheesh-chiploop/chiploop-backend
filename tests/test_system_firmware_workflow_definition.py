@@ -8,6 +8,12 @@ MIGRATION_SQL = (
     / "migrations"
     / "phase_zzzzzzzzzzzzz_system_firmware_package_handoff_alignment.sql"
 )
+CONTRACT_MIGRATION_SQL = (
+    Path(__file__).resolve().parents[1]
+    / "supabase"
+    / "migrations"
+    / "phase_zzzzzzzzzzzzzz_system_dqa_analog_interface_contract.sql"
+)
 
 
 def _between(text: str, start: str, end: str) -> str:
@@ -25,6 +31,8 @@ def test_system_firmware_default_starts_with_system_rtl_generation():
     assert rtl_block.index('"Digital Spec Agent"') < rtl_block.index('"System RTL Handoff Package Agent"')
     assert rtl_block.index('"Digital Register Map Agent"') < rtl_block.index('"Digital RTL Agent"')
     assert rtl_block.index('"Analog Behavioral Model Agent"') < rtl_block.index('"Analog Abstract Views Agent"')
+    assert rtl_block.index('"Analog Abstract Views Agent"') < rtl_block.index('"Analog Macro Interface Contract Agent"')
+    assert rtl_block.index('"Analog Macro Interface Contract Agent"') < rtl_block.index('"System RTL Handoff Package Agent"')
     assert rtl_block.index('"Analog Abstract Views Agent"') < rtl_block.index('"System RTL Handoff Package Agent"')
     assert block.index("*SYSTEM_RTL_AGENT_SEQUENCE") < block.index("*FIRMWARE_DOWNSTREAM_DEFINITION")
     assert '"Embedded Digital RTL Handoff Ingest Agent"' in downstream_block
@@ -59,6 +67,11 @@ def test_system_dqa_exists_and_reuses_system_rtl_sequence():
     assert block.index("*SYSTEM_RTL_AGENT_SEQUENCE") < block.index('"Digital CDC Analysis Agent"')
     assert '"Digital DQA Summary Agent"' in block
     assert '"Digital Executive Summary Agent"' not in block
+    canonical_block = _between(text, '"System_DQA": [', '"System_Sim": [')
+    assert '"Digital RTL Linting Agent"' in canonical_block
+    assert '"Digital Register Map Agent"' not in canonical_block
+    assert '"System Assertions (SVA) Agent"' not in canonical_block
+    assert "label in SYSTEM_AGENT_FUNCTIONS or label in EMBEDDED_AGENT_FUNCTIONS or label in DIGITAL_AGENT_FUNCTIONS" in text
     assert '"System_DQA": SYSTEM_DQA_DEFINITION' in text
     assert '"System_DQA",' in _between(text, "LOCAL_RUNTIME_WORKFLOW_OVERRIDES =", "# Dynamically load")
     assert '{"System_DQA", "System_Sim", "System_Firmware", "System_Synthesis", "System_PD"}' in text
@@ -82,6 +95,12 @@ def test_system_migration_is_full_chain_not_downstream_only():
     assert sql.index("'System RTL Handoff Package Agent'") < sql.index("'Embedded Digital RTL Handoff Ingest Agent'")
     assert "'System RTL Evidence Dashboard Agent'" in sql
     assert "'Digital DQA Summary Agent'" in sql
+    new_sql = CONTRACT_MIGRATION_SQL.read_text(encoding="utf-8")
+    assert "'System_DQA'" in new_sql
+    assert "'Digital DQA Summary Agent'" in new_sql
+    assert "'Analog Macro Interface Contract Agent'" in new_sql
+    assert "'Analog Macro Interface Validation Agent'" in new_sql
+    assert new_sql.index("'Analog Macro Interface Contract Agent'") < new_sql.index("'System RTL Handoff Package Agent'")
 
 
 def test_system_pd_has_optional_analog_gds_generation_path():
@@ -94,6 +113,8 @@ def test_system_pd_has_optional_analog_gds_generation_path():
     assert '"Analog Liberty Characterization Agent"' in block
     assert '"Analog Collateral Consistency Agent"' in block
     assert '"Analog Physical Collateral Package Agent"' in block
+    assert '"Analog Macro Interface Validation Agent"' in block
+    assert block.index('"Analog Macro Interface Validation Agent"') < block.index('"Digital Foundry Profile Agent"')
     assert block.index('"Digital MBIST Collateral Agent"') < block.index('"Analog Sky130 SPICE Netlist Agent"')
     assert block.index('"Analog GDS Generation Agent"') < block.index('"Analog LEF Extraction Agent"')
     assert block.index('"Analog Liberty Characterization Agent"') < block.index('"Analog Collateral Consistency Agent"')
