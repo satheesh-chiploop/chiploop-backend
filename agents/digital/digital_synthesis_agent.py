@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import logging
 from datetime import datetime
+from pathlib import Path
 
 logger = logging.getLogger("chiploop")
 
@@ -180,6 +181,36 @@ def _augment_synth_metrics(metrics_path: str, netlist_path: str | None) -> dict:
     if metrics:
         _write_local(metrics_path, json.dumps(metrics, indent=2))
     return metrics
+
+
+def _repair_common_status_tieoffs(rtl_path: str) -> list[str]:
+    """Patch safe status wires that are declared and consumed but left undriven."""
+    try:
+        text = Path(rtl_path).read_text(encoding="utf-8", errors="ignore")
+    except Exception:
+        return []
+    additions: list[str] = []
+    if (
+        re.search(r"\bwire\s+status_packet_active\s*;", text)
+        and "assign status_packet_active" not in text
+        and "status_tx_busy" in text
+        and "status_rx_busy" in text
+    ):
+        additions.append("assign status_packet_active = status_tx_busy | status_rx_busy;")
+    if (
+        re.search(r"\bwire\s+status_error\s*;", text)
+        and "assign status_error" not in text
+    ):
+        error_terms = [name for name in ("rx_overflow_event", "tx_underflow_event", "framing_error_event") if name in text]
+        if error_terms:
+            additions.append(f"assign status_error = {' | '.join(error_terms)};")
+    if not additions:
+        return []
+    patched = re.sub(r"\nendmodule\s*$", "\n" + "\n".join(additions) + "\n\nendmodule\n", text, count=1)
+    if patched == text:
+        return []
+    Path(rtl_path).write_text(patched, encoding="utf-8")
+    return additions
 
 def _pick_clock(spec: dict) -> tuple[str, float]:
     """
@@ -366,10 +397,14 @@ def run_agent(state: dict) -> dict:
 
     # Copy RTL into deterministic local folder (avoid container path issues)
     copied = []
+    rtl_repairs: dict[str, list[str]] = {}
     for f in rtl_files:
         dst = os.path.join(rtl_dir, os.path.basename(f))
         if os.path.abspath(f) != os.path.abspath(dst):
             shutil.copy2(f, dst)
+        repairs = _repair_common_status_tieoffs(dst)
+        if repairs:
+            rtl_repairs[os.path.basename(dst)] = repairs
         copied.append(dst)
 
     # Pick top module name best-effort:
@@ -451,6 +486,7 @@ def run_agent(state: dict) -> dict:
         f"pdk_variant={state.get('pdk_variant') or DEFAULT_PDK_VARIANT}",
         f"macro_lib_count={len(copied_macro_libs)}",
         f"yosys_macro_lib_script={yosys_pre_path}",
+        f"pre_synthesis_rtl_repairs={json.dumps(rtl_repairs, sort_keys=True)}",
     ]) + "\n"
 
     input_log_path = os.path.join(stage_dir, "synth_input_resolution.log")
@@ -637,6 +673,7 @@ echo "Done. Inspect /work/runs/{run_tag} or latest run folder under /work/runs/"
         "return_code": rc,
         "inputs": {
             "rtl_files": [os.path.basename(x) for x in copied],
+            "pre_synthesis_rtl_repairs": rtl_repairs,
             "macro_libs": [os.path.basename(x) for x in copied_macro_libs],
             "top_module": top_module,
             "clock_port": clk_name,

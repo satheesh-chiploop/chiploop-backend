@@ -147,6 +147,11 @@ def _detect_memories(files: list[str]) -> list[dict[str, Any]]:
             depth_match = re.search(r"\[\s*(\d+)\s*:\s*(\d+)\s*\]", depth_range)
             depth = abs(int(depth_match.group(1)) - int(depth_match.group(2))) + 1 if depth_match else None
             width = _range_width(match.group("width"))
+            estimated_bits = width * depth if depth else None
+            lowered = name.lower()
+            mbist_applicable = bool(re.search(r"(sram|ram|mem|rf)", lowered))
+            if "fifo" in lowered and not re.search(r"(sram|ram|mem|rf)", lowered):
+                mbist_applicable = False
             memories.append({
                 "name": name,
                 "kind": "inferred_register_array",
@@ -154,7 +159,9 @@ def _detect_memories(files: list[str]) -> list[dict[str, Any]]:
                 "source": os.path.basename(path),
                 "width_bits": width,
                 "depth": depth,
-                "estimated_bits": width * depth if depth else None,
+                "estimated_bits": estimated_bits,
+                "mbist_applicable": mbist_applicable,
+                "classification": "fifo_register_array" if "fifo" in lowered and not mbist_applicable else "inferred_memory_array",
             })
     deduped: dict[tuple[str, str], dict[str, Any]] = {}
     for item in memories:
@@ -312,7 +319,9 @@ def run_agent(state: dict) -> dict:
     netlist = _synth_netlist(state, workflow_dir)
     scan_files = rtl_files + ([netlist] if netlist else [])
     top = _top_module(state, scan_files)
-    memories = _detect_memories(scan_files)
+    detected_storage = _detect_memories(scan_files)
+    memories = [item for item in detected_storage if item.get("kind") == "memory_macro_instance" or item.get("mbist_applicable") is True]
+    non_mbist_storage = [item for item in detected_storage if item not in memories]
     openram = tool_path("openram", state)
     autombist = tool_path("autombist", state)
     demo_requested = bool(state.get("demo_mbist") or state.get("mbist_demo"))
@@ -332,6 +341,7 @@ def run_agent(state: dict) -> dict:
         "algorithm": "march_c_minus",
         "scope": "detected_design_memories" if memories else "demo_scratchpad_reference" if generated_demo else "not_applicable",
         "memories": memories,
+        "non_mbist_storage": non_mbist_storage,
         "demo_scratchpad": {
             "generated": generated_demo,
             "addr_width": 4,
@@ -350,6 +360,8 @@ def run_agent(state: dict) -> dict:
         "top_module": top,
         "memory_count": len(memories),
         "estimated_memory_bits": memory_bits,
+        "non_mbist_storage_count": len(non_mbist_storage),
+        "non_mbist_storage_bits": sum(int(item.get("estimated_bits") or 0) for item in non_mbist_storage),
         "algorithm": "March C-",
         "demo_scratchpad_generated": generated_demo,
         "openram_available": bool(openram),
@@ -375,12 +387,13 @@ def run_agent(state: dict) -> dict:
         f"- Top module: `{top}`",
         f"- Detected memories: `{len(memories)}`",
         f"- Estimated memory bits: `{memory_bits}`",
+        f"- Non-MBIST RTL storage arrays: `{len(non_mbist_storage)}`",
         f"- Algorithm: `March C-`",
         f"- OpenRAM available: `{bool(openram)}`",
         f"- autombist available: `{bool(autombist)}`",
         f"- Demo scratchpad generated: `{generated_demo}`",
         "",
-        "For PWM and other memoryless designs, ChipLoop does not claim MBIST was inserted into the design. MBIST is reported as not applicable unless design memories are detected or an explicit MBIST demo mode is requested.",
+        "Small inferred FIFO/register arrays are reported as RTL storage, not SRAM/MBIST memories. MBIST is reported as applicable only for memory macros or memory-like arrays unless an explicit MBIST demo mode is requested.",
         "For production MBIST/LBIST, connect this agent to customer DFT tools through a private adapter.",
     ]) + "\n"
 
