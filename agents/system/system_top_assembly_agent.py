@@ -152,7 +152,61 @@ def _collect_module_files(workflow_dir: str):
                     continue
 
                 rels.append(rel_path)
-    return rels
+    return _dedupe_rtl_variants_by_module(workflow_dir, rels)
+
+
+def _rtl_variant_rank(path: str) -> int:
+    """
+    Lower rank wins. Final RTL must beat saved repair/intermediate artifacts
+    when both define the same module.
+    """
+    base = os.path.basename(str(path).replace("\\", "/")).lower()
+    if "_pass2_candidate." in base:
+        return 30
+    if "_pass2." in base:
+        return 20
+    if "_pass1." in base:
+        return 10
+    return 0
+
+
+def _module_names_from_file(path: str) -> list[str]:
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            text = _strip_sv_comments(f.read())
+    except Exception:
+        return []
+    return re.findall(r"\bmodule\s+([a-zA-Z_][a-zA-Z0-9_$]*)\b", text)
+
+
+def _dedupe_rtl_variants_by_module(workflow_dir: str, rel_paths) -> list[str]:
+    ranked: list[tuple[str, int, int, tuple[str, ...]]] = []
+    for idx, rel_path in enumerate(rel_paths or []):
+        if not isinstance(rel_path, str) or not rel_path.strip():
+            continue
+        norm = rel_path.replace("\\", "/")
+        abs_path = norm if os.path.isabs(norm) else os.path.join(workflow_dir, norm)
+        modules = tuple(_module_names_from_file(abs_path))
+        ranked.append((norm, _rtl_variant_rank(norm), idx, modules))
+
+    best_for_module: dict[str, tuple[int, int, str]] = {}
+    for norm, rank, idx, modules in ranked:
+        for module in modules:
+            current = best_for_module.get(module)
+            candidate = (rank, idx, norm)
+            if current is None or candidate < current:
+                best_for_module[module] = candidate
+
+    out = []
+    seen_paths = set()
+    for norm, _rank, _idx, modules in ranked:
+        if norm in seen_paths:
+            continue
+        if modules and any(best_for_module.get(module, (None, None, norm))[2] != norm for module in modules):
+            continue
+        seen_paths.add(norm)
+        out.append(norm)
+    return out
 
 def _collect_lib_files(workflow_dir: str):
     """
@@ -502,9 +556,10 @@ def _filter_analog_behavioral_for_phys(rel_paths):
 def _build_system_filelists(workflow_dir: str, existing_rtl, discovered_rtl, sim_top_rel: str, phys_top_rel: str):
     existing_rtl = existing_rtl or []
     discovered_rtl = discovered_rtl or []
+    combined_rtl = _dedupe_rtl_variants_by_module(workflow_dir, existing_rtl + discovered_rtl)
 
     base_rel = []
-    for p in existing_rtl + discovered_rtl:
+    for p in combined_rtl:
         if not isinstance(p, str) or not p.strip():
             continue
         norm = p.replace("\\", "/")
