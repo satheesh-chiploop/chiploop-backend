@@ -48,12 +48,15 @@ def test_product_migration_uses_separate_product_tables_not_workflows_definition
     assert "stage_config jsonb" in sql
     assert "'soft-digital-ip-product'" in sql
     assert "'Soft Digital IP Product'" in sql
+    assert "Users can delete own products" in sql
     run_sql = RUN_MIGRATION_SQL.read_text(encoding="utf-8")
     assert "create table if not exists public.product_runs" in run_sql
     assert "create table if not exists public.product_stage_runs" in run_sql
     assert "workflow_id uuid null" in run_sql
     assert "logs text not null default ''" in run_sql
     assert "add column if not exists logs" in run_sql
+    assert "Users can delete own product runs" in run_sql
+    assert "Users can delete own product stage runs" in run_sql
 
     schema_sql = SCHEMA_MIGRATION_SQL.read_text(encoding="utf-8")
     assert "create table if not exists public.product_stage_schemas" in schema_sql
@@ -66,6 +69,10 @@ def test_product_migration_uses_separate_product_tables_not_workflows_definition
     assert '"formal_tool"' in schema_sql
     assert '"golden_model_tool"' in schema_sql
     assert '"failure_debug_generate_vcd"' in schema_sql
+    assert "'Digital_DQA'" in schema_sql
+    assert '"run_synthesis_readiness"' in schema_sql
+    assert '"generate_analog_gds"' in schema_sql
+    assert '"run_lef_lib_consistency"' in schema_sql
 
 
 def test_product_api_routes_are_registered():
@@ -77,6 +84,7 @@ def test_product_api_routes_are_registered():
     assert '@app.get("/products/{product_id}")' in source
     assert '@app.post("/products")' in source
     assert '@app.patch("/products/{product_id}")' in source
+    assert '@app.delete("/products/{product_id}")' in source
     assert '@app.post("/products/{product_id}/run")' in source
     assert '@app.get("/products/{product_id}/runs")' in source
     assert '@app.get("/products/{product_id}/runs/{product_run_id}")' in source
@@ -84,10 +92,14 @@ def test_product_api_routes_are_registered():
     assert "payload.start_stage" in source
     assert "Start stage" in source
     assert "_product_run_cancelled" in source
+    assert "_update_product_status" in source
     assert "resume_product_run_id" in source
     assert "_seed_product_upstream_from_prior_run" in source
     assert "_product_upstream_key_for_app" in source
     assert "_append_product_run_log" in source
+    assert "run_config_json" in source
+    assert 'shared_state["run_config"]' in source
+    assert '"workflow_config_schema": workflow_config_schema' in source
     assert '"logs": "Product run queued."' in source
     assert "PRODUCT_STAGE_SCHEMAS" in source
     assert 'supabase.table("product_stage_schemas")' in source
@@ -101,3 +113,6 @@ def test_product_api_routes_are_registered():
     assert '"System_DQA": "System_DQA"' in source
     assert '"System_Sim": "System_Sim"' in source
     assert '"System_Firmware": "System_Firmware"' in source
+    assert 'deleted_product_id' in source
+    assert '"dashboard_url"' in source
+    assert '"download_url"' in source

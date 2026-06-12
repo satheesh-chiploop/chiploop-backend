@@ -65,6 +65,12 @@ create policy "Users can update own product runs"
   using (auth.uid() = user_id)
   with check (auth.uid() = user_id);
 
+drop policy if exists "Users can delete own product runs" on public.product_runs;
+create policy "Users can delete own product runs"
+  on public.product_runs
+  for delete
+  using (auth.uid() = user_id);
+
 drop policy if exists "Users can read own product stage runs" on public.product_stage_runs;
 create policy "Users can read own product stage runs"
   on public.product_stage_runs
@@ -83,3 +89,9 @@ create policy "Users can update own product stage runs"
   for update
   using (auth.uid() = user_id)
   with check (auth.uid() = user_id);
+
+drop policy if exists "Users can delete own product stage runs" on public.product_stage_runs;
+create policy "Users can delete own product stage runs"
+  on public.product_stage_runs
+  for delete
+  using (auth.uid() = user_id);

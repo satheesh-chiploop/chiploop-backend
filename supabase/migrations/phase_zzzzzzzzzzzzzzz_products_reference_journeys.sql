@@ -54,6 +54,12 @@ create policy "Users can update own products"
   using (auth.uid() = user_id)
   with check (auth.uid() = user_id);
 
+drop policy if exists "Users can delete own products" on public.products;
+create policy "Users can delete own products"
+  on public.products
+  for delete
+  using (auth.uid() = user_id);
+
 drop policy if exists "Public can read active reference journeys" on public.product_reference_journeys;
 create policy "Public can read active reference journeys"
   on public.product_reference_journeys

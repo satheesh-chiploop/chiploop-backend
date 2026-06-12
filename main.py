@@ -1898,6 +1898,19 @@ async def run_workflow(
         if not isinstance(data, dict):
             raise HTTPException(status_code=400, detail="Invalid workflow payload (expected JSON object).")
 
+        run_config: Dict[str, Any] = {}
+        if run_config_json:
+            try:
+                parsed_run_config = json.loads(run_config_json)
+                if not isinstance(parsed_run_config, dict):
+                    raise ValueError("run_config_json must decode to an object")
+                run_config = parsed_run_config
+            except Exception as exc:
+                raise HTTPException(status_code=400, detail=f"Invalid run_config_json: {exc}")
+        if run_config:
+            data["run_config"] = run_config
+            data["workflow_config"] = run_config
+
         # ✅ attach instrument IDs into workflow payload so agents can read it
 
                 # ✅ attach instrument IDs into workflow payload so agents can read it
@@ -2112,6 +2125,16 @@ def execute_workflow_background(
             "run_id": run_id,
             "artifact_dir": artifact_dir,
         }
+        run_config = data.get("run_config") if isinstance(data.get("run_config"), dict) else {}
+        workflow_config = data.get("workflow_config") if isinstance(data.get("workflow_config"), dict) else run_config
+        if run_config:
+            shared_state["run_config"] = run_config
+            shared_state["workflow_config"] = workflow_config
+            for key, value in run_config.items():
+                if key not in shared_state and value is not None:
+                    shared_state[key] = value
+            append_log_workflow(workflow_id, f"[CONFIG] Applied run config keys: {', '.join(sorted(run_config.keys()))}")
+            append_log_run(run_id, f"[CONFIG] Applied run config keys: {', '.join(sorted(run_config.keys()))}")
         # ✅ inject supabase once (so WF5 services can query history)
         shared_state["supabase_client"] = supabase
         if user_id:
@@ -2904,6 +2927,18 @@ PRODUCT_STAGE_SCHEMAS: Dict[str, Dict[str, Any]] = {
             {"key": "power_priority", "label": "Power priority", "type": "text", "defaultValue": ""},
         ],
     },
+    "Digital_DQA": {
+        "note": "DQA uses the Arch2RTL handoff and does not regenerate RTL.",
+        "fields": [
+            {"key": "run_lint", "label": "Run lint", "type": "boolean", "defaultValue": True},
+            {"key": "run_cdc", "label": "Run CDC", "type": "boolean", "defaultValue": True},
+            {"key": "run_reset", "label": "Run reset integrity", "type": "boolean", "defaultValue": True},
+            {"key": "run_synthesis_readiness", "label": "Run synthesis readiness", "type": "boolean", "defaultValue": True},
+            {"key": "lint_profile", "label": "Lint profile", "type": "text", "defaultValue": "default"},
+            {"key": "cdc_profile", "label": "CDC profile", "type": "text", "defaultValue": "default"},
+            {"key": "enable_autofix", "label": "Enable autofix", "type": "boolean", "defaultValue": False},
+        ],
+    },
     "Digital_Verify": {
         "fields": [
             {"key": "test_intent", "label": "Test intent", "type": "text", "defaultValue": "Run smoke, reset, register access, and representative functional tests."},
@@ -2935,6 +2970,8 @@ PRODUCT_STAGE_SCHEMAS: Dict[str, Dict[str, Any]] = {
             {"key": "toolchain", "label": "Toolchain", "type": "text", "defaultValue": "openlane2"},
             {"key": "target_frequency_mhz", "label": "Target frequency MHz", "type": "number", "defaultValue": 100},
             {"key": "constraints_sdc", "label": "Constraints SDC", "type": "text", "defaultValue": ""},
+            {"key": "run_logic_equivalence", "label": "Run logic equivalence", "type": "boolean", "defaultValue": True},
+            {"key": "run_synthesis_readiness", "label": "Run synthesis readiness", "type": "boolean", "defaultValue": True},
         ],
     },
     "verify_closure_loop": {
@@ -2974,6 +3011,7 @@ PRODUCT_STAGE_SCHEMAS: Dict[str, Dict[str, Any]] = {
             {"key": "run_lint", "label": "Run lint", "type": "boolean", "defaultValue": True},
             {"key": "run_cdc", "label": "Run CDC", "type": "boolean", "defaultValue": True},
             {"key": "run_reset", "label": "Run reset integrity", "type": "boolean", "defaultValue": True},
+            {"key": "run_synthesis_readiness", "label": "Run synthesis readiness", "type": "boolean", "defaultValue": True},
         ],
     },
     "System_Sim": {
@@ -2982,6 +3020,9 @@ PRODUCT_STAGE_SCHEMAS: Dict[str, Dict[str, Any]] = {
             {"key": "system_sim_testcases", "label": "Testcases", "type": "text", "defaultValue": "system_smoke_test, integrated_input_sanity"},
             {"key": "system_sim_seeds", "label": "Seeds", "type": "text", "defaultValue": "1,2,3,4"},
             {"key": "coverage_targets", "label": "Coverage target", "type": "text", "defaultValue": "90% functional"},
+            {"key": "simulator_type", "label": "Simulator", "type": "text", "defaultValue": "verilator"},
+            {"key": "random_vs_directed", "label": "Random vs directed", "type": "text", "defaultValue": "both"},
+            {"key": "enable_formal", "label": "Run formal", "type": "boolean", "defaultValue": False},
             {"key": "enable_golden_model", "label": "Golden model", "type": "boolean", "defaultValue": True},
         ],
     },
@@ -2998,6 +3039,10 @@ PRODUCT_STAGE_SCHEMAS: Dict[str, Dict[str, Any]] = {
             {"key": "foundry", "label": "Foundry", "type": "text", "defaultValue": "sky130"},
             {"key": "pdk", "label": "PDK", "type": "text", "defaultValue": "sky130"},
             {"key": "analog_physical_mode", "label": "Analog physical mode", "type": "text", "defaultValue": "blackbox"},
+            {"key": "generate_analog_gds", "label": "Generate analog GDS", "type": "boolean", "defaultValue": False},
+            {"key": "regenerate_lef_lib_after_gds", "label": "Regenerate LEF/LIB after GDS", "type": "boolean", "defaultValue": True},
+            {"key": "run_lef_lib_consistency", "label": "Run LEF/LIB consistency", "type": "boolean", "defaultValue": True},
+            {"key": "run_logic_equivalence", "label": "Run logic equivalence", "type": "boolean", "defaultValue": True},
             {"key": "run_drc", "label": "Run DRC", "type": "boolean", "defaultValue": True},
             {"key": "run_lvs", "label": "Run LVS", "type": "boolean", "defaultValue": True},
         ],
@@ -4245,6 +4290,7 @@ async def sdk_v1_run_workflow(
     workflow: str = Form(...),
     file: UploadFile = File(None),
     spec_text: str = Form(None),
+    run_config_json: Optional[str] = Form(None),
     instrument_ids: Optional[str] = Form(None),
     scope_json: Optional[str] = Form(None),
     bench_id: Optional[str] = Form(None),
@@ -4259,6 +4305,7 @@ async def sdk_v1_run_workflow(
         workflow=workflow,
         file=file,
         spec_text=spec_text,
+        run_config_json=run_config_json,
         instrument_ids=instrument_ids,
         scope_json=scope_json,
         bench_id=bench_id,
@@ -4654,6 +4701,8 @@ async def save_custom_workflow(request: Request):
         loop_type = wf.get("loop_type", "system")
         nodes = wf.get("nodes") or wf.get("data", {}).get("nodes", [])
         edges = wf.get("edges") or wf.get("data", {}).get("edges", [])
+        workflow_config_schema = wf.get("workflow_config_schema") if isinstance(wf.get("workflow_config_schema"), dict) else {}
+        default_run_config = wf.get("default_run_config") if isinstance(wf.get("default_run_config"), dict) else {}
 
         logger.info(f"📦 Saving workflow: name={name}, loop_type={loop_type}, nodes={len(nodes)}, edges={len(edges)}, user={user_id}")
 
@@ -4701,6 +4750,8 @@ async def save_custom_workflow(request: Request):
             "definitions": {
               "nodes": nodes,
               "edges": edges,
+              "workflow_config_schema": workflow_config_schema,
+              "default_run_config": default_run_config,
             },
             "status": "saved",
             "created_at": datetime.utcnow().isoformat(),
@@ -4928,6 +4979,29 @@ async def update_product(product_id: str, payload: ProductUpdateIn, request: Req
         raise HTTPException(status_code=500, detail=f"Failed to update product: {exc}")
 
 
+@app.delete("/products/{product_id}")
+async def delete_product(product_id: str, request: Request):
+    user_id = _request_user_id_optional(request)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Login required to delete a product")
+    try:
+        rows = (
+            supabase.table("products")
+            .delete()
+            .eq("id", product_id)
+            .eq("user_id", user_id)
+            .execute()
+        ).data or []
+        if not rows:
+            raise HTTPException(status_code=404, detail="Product not found")
+        return {"status": "ok", "deleted_product_id": product_id}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("Failed to delete product: %s", exc)
+        raise HTTPException(status_code=500, detail=f"Failed to delete product: {exc}")
+
+
 def _product_stage_enabled(stage: Dict[str, Any]) -> bool:
     if stage.get("required"):
         return True
@@ -4992,6 +5066,19 @@ def _update_product_stage_run(stage_run_id: str, updates: Dict[str, Any]) -> Non
         supabase.table("product_stage_runs").update(updates).eq("id", stage_run_id).execute()
     except Exception as exc:
         logger.warning("Failed to update product_stage_run %s: %s", stage_run_id, exc)
+
+
+def _update_product_status(product_id: str, user_id: str, status: str, stage_results: Optional[Dict[str, Any]] = None) -> None:
+    updates: Dict[str, Any] = {
+        "status": status,
+        "updated_at": datetime.utcnow().isoformat(),
+    }
+    if stage_results is not None:
+        updates["stage_results"] = stage_results
+    try:
+        supabase.table("products").update(updates).eq("id", product_id).eq("user_id", user_id).execute()
+    except Exception as exc:
+        logger.warning("Failed to update product %s status: %s", product_id, exc)
 
 
 def _product_run_cancelled(product_run_id: str, user_id: str) -> bool:
@@ -5109,7 +5196,13 @@ def _product_stage_payload(product: Dict[str, Any], stage: Dict[str, Any], upstr
             "target": str(_stage_setting(stage, "target", "pre_verify_quality_gate")),
             "lint_profile": str(_stage_setting(stage, "lint_profile", "default")),
             "cdc_profile": str(_stage_setting(stage, "cdc_profile", "default")),
-            "toggles": {"enable_autofix": bool(_stage_setting(stage, "enable_autofix", False))},
+            "toggles": {
+                "enable_autofix": bool(_stage_setting(stage, "enable_autofix", False)),
+                "run_lint": bool(_stage_setting(stage, "run_lint", True)),
+                "run_cdc": bool(_stage_setting(stage, "run_cdc", True)),
+                "run_reset": bool(_stage_setting(stage, "run_reset", True)),
+                "run_synthesis_readiness": bool(_stage_setting(stage, "run_synthesis_readiness", True)),
+            },
         }
     if app_name == "Digital_Verify":
         arch2rtl_id = upstream.get("arch2rtl")
@@ -5171,6 +5264,10 @@ def _product_stage_payload(product: Dict[str, Any], stage: Dict[str, Any], upstr
             "toolchain": str(_stage_setting(stage, "toolchain", "openlane2")),
             "target_frequency_mhz": float(_stage_setting(stage, "target_frequency_mhz", 100) or 100),
             "constraints_sdc": str(_stage_setting(stage, "constraints_sdc", "") or ""),
+            "toggles": {
+                "run_logic_equivalence": bool(_stage_setting(stage, "run_logic_equivalence", True)),
+                "run_synthesis_readiness": bool(_stage_setting(stage, "run_synthesis_readiness", True)),
+            },
             "start_stage": "synth",
             "stop_stage": "synth",
         }
@@ -5287,6 +5384,12 @@ def _product_stage_payload(product: Dict[str, Any], stage: Dict[str, Any], upstr
             "system_rtl_workflow_id": system_rtl_id,
             "from_workflow_id": system_rtl_id,
             "source_system_rtl_workflow_id": system_rtl_id,
+            "toggles": {
+                "run_lint": bool(_stage_setting(stage, "run_lint", True)),
+                "run_cdc": bool(_stage_setting(stage, "run_cdc", True)),
+                "run_reset": bool(_stage_setting(stage, "run_reset", True)),
+                "run_synthesis_readiness": bool(_stage_setting(stage, "run_synthesis_readiness", True)),
+            },
         }
     if app_name == "System_Sim":
         system_rtl_id = upstream.get("system_rtl")
@@ -5328,7 +5431,10 @@ def _product_stage_payload(product: Dict[str, Any], stage: Dict[str, Any], upstr
             "system_rtl_workflow_id": system_rtl_id,
             "from_workflow_id": system_rtl_id,
             "toolchain": {"language": str(_stage_setting(stage, "firmware_language", "rust"))},
-            "toggles": {"enable_cosim": bool(_stage_setting(stage, "enable_cosim", True))},
+            "toggles": {
+                "enable_cosim": bool(_stage_setting(stage, "enable_cosim", True)),
+                "validate_registers": bool(_stage_setting(stage, "validate_registers", True)),
+            },
         }
     if app_name == "System_PD":
         system_rtl_id = upstream.get("system_rtl")
@@ -5344,6 +5450,10 @@ def _product_stage_payload(product: Dict[str, Any], stage: Dict[str, Any], upstr
             "toggles": {
                 "run_drc": bool(_stage_setting(stage, "run_drc", True)),
                 "run_lvs": bool(_stage_setting(stage, "run_lvs", True)),
+                "generate_analog_gds": bool(_stage_setting(stage, "generate_analog_gds", False)),
+                "regenerate_lef_lib_after_gds": bool(_stage_setting(stage, "regenerate_lef_lib_after_gds", True)),
+                "run_lef_lib_consistency": bool(_stage_setting(stage, "run_lef_lib_consistency", True)),
+                "run_logic_equivalence": bool(_stage_setting(stage, "run_logic_equivalence", True)),
             },
         }
     raise RuntimeError(f"Product run does not support stage app '{app_name}' yet.")
@@ -5435,9 +5545,16 @@ def _run_product_stage(product: Dict[str, Any], product_run_id: str, stage_run: 
     status = _workflow_status(workflow_id)
     if status != "completed":
         raise RuntimeError(f"{stage.get('label') or app_name} workflow ended with status '{status or 'unknown'}'")
+    outputs = {
+        "workflow_id": workflow_id,
+        "run_id": run_id,
+        "app": app_name,
+        "dashboard_url": f"/apps/dashboard/artifact/{workflow_id}",
+        "download_url": f"/workflow/{workflow_id}/download_zip",
+    }
     _update_product_stage_run(stage_run["id"], {
         "status": "completed",
-        "outputs": {"workflow_id": workflow_id, "run_id": run_id},
+        "outputs": outputs,
         "completed_at": datetime.utcnow().isoformat(),
     })
     _append_product_run_log(product_run_id, f"Completed {stage.get('label') or app_name}: workflow_id={workflow_id}")
@@ -5508,6 +5625,7 @@ def execute_product_run_background(
             supported = supported[start_index:]
         supported = supported[: max(1, min(int(max_stages or 8), 8))]
         _update_product_run(product_run_id, {"status": "running", "current_stage": supported[0].get("id")})
+        _update_product_status(product_id, user_id, "running")
         _append_product_run_log(product_run_id, f"Product run started with {len(supported)} enabled stage(s).")
 
         for stage in supported:
@@ -5519,6 +5637,7 @@ def execute_product_run_background(
                     "error": "Cancelled by user",
                     "completed_at": datetime.utcnow().isoformat(),
                 })
+                _update_product_status(product_id, user_id, "cancelled", stage_results)
                 _append_product_run_log(product_run_id, "Product run cancelled before next stage.")
                 return
             _append_product_run_log(product_run_id, f"Queued {stage.get('label') or stage.get('id')} ({stage.get('app')})")
@@ -5543,8 +5662,16 @@ def execute_product_run_background(
                 upstream_key = _product_upstream_key_for_app(str(stage.get("app") or ""))
                 if upstream_key:
                     upstream[upstream_key] = workflow_id
-                stage_results[str(stage.get("id"))] = {"status": "completed", "workflow_id": workflow_id}
+                stage_results[str(stage.get("id"))] = {
+                    "status": "completed",
+                    "workflow_id": workflow_id,
+                    "app": stage.get("app") or "",
+                    "label": stage.get("label") or stage.get("id") or "",
+                    "dashboard_url": f"/apps/dashboard/artifact/{workflow_id}",
+                    "download_url": f"/workflow/{workflow_id}/download_zip",
+                }
                 _update_product_run(product_run_id, {"stage_results": stage_results})
+                _update_product_status(product_id, user_id, "running", stage_results)
             except Exception as exc:
                 message = str(exc)
                 _append_product_run_log(product_run_id, f"Failed {stage.get('label') or stage.get('id')}: {message}")
@@ -5553,13 +5680,19 @@ def execute_product_run_background(
                     "error": message,
                     "completed_at": datetime.utcnow().isoformat(),
                 })
-                stage_results[str(stage.get("id"))] = {"status": "failed", "error": message}
+                stage_results[str(stage.get("id"))] = {
+                    "status": "failed",
+                    "error": message,
+                    "app": stage.get("app") or "",
+                    "label": stage.get("label") or stage.get("id") or "",
+                }
                 _update_product_run(product_run_id, {
                     "status": "failed",
                     "stage_results": stage_results,
                     "error": message,
                     "completed_at": datetime.utcnow().isoformat(),
                 })
+                _update_product_status(product_id, user_id, "failed", stage_results)
                 return
         _update_product_run(product_run_id, {
             "status": "completed",
@@ -5567,6 +5700,7 @@ def execute_product_run_background(
             "stage_results": stage_results,
             "completed_at": datetime.utcnow().isoformat(),
         })
+        _update_product_status(product_id, user_id, "completed", stage_results)
         _append_product_run_log(product_run_id, "Product run completed.")
     except Exception as exc:
         _append_product_run_log(product_run_id, f"Product run failed: {exc}")
@@ -5576,6 +5710,7 @@ def execute_product_run_background(
             "stage_results": stage_results,
             "completed_at": datetime.utcnow().isoformat(),
         })
+        _update_product_status(product_id, user_id, "failed", stage_results)
 
 
 @app.post("/products/{product_id}/run")
@@ -5598,6 +5733,7 @@ async def start_product_run(product_id: str, payload: ProductRunStartIn, request
     try:
         rows = supabase.table("product_runs").insert(record).execute().data or []
         product_run = rows[0] if rows else {**record, "id": str(uuid.uuid4())}
+        _update_product_status(product_id, user_id, "queued", {})
     except Exception as exc:
         logger.error("Failed to create product run: %s", exc)
         raise HTTPException(status_code=500, detail=f"Failed to create product run: {exc}")
@@ -5630,6 +5766,7 @@ async def cancel_product_run(product_id: str, product_run_id: str, request: Requ
         "error": "Cancelled by user",
         "completed_at": datetime.utcnow().isoformat(),
     })
+    _update_product_status(product_id, user_id, "cancelled", run.get("stage_results") if isinstance(run.get("stage_results"), dict) else None)
     _append_product_run_log(product_run_id, "Cancellation requested by user.")
     return {"status": "ok", "product_run": _product_run_row(product_run_id, user_id)}
 

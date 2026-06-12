@@ -43,6 +43,21 @@ with schemas(app, schema) as (
       }'::jsonb
     ),
     (
+      'Digital_DQA',
+      '{
+        "note": "DQA uses the Arch2RTL handoff and does not regenerate RTL.",
+        "fields": [
+          {"key":"run_lint","label":"Run lint","type":"boolean","defaultValue":true},
+          {"key":"run_cdc","label":"Run CDC","type":"boolean","defaultValue":true},
+          {"key":"run_reset","label":"Run reset integrity","type":"boolean","defaultValue":true},
+          {"key":"run_synthesis_readiness","label":"Run synthesis readiness","type":"boolean","defaultValue":true},
+          {"key":"lint_profile","label":"Lint profile","type":"text","defaultValue":"default"},
+          {"key":"cdc_profile","label":"CDC profile","type":"text","defaultValue":"default"},
+          {"key":"enable_autofix","label":"Enable autofix","type":"boolean","defaultValue":false}
+        ]
+      }'::jsonb
+    ),
+    (
       'Digital_Verify',
       '{
         "fields": [
@@ -77,7 +92,9 @@ with schemas(app, schema) as (
           {"key":"pdk","label":"PDK","type":"text","defaultValue":"sky130A"},
           {"key":"toolchain","label":"Toolchain","type":"text","defaultValue":"openlane2"},
           {"key":"target_frequency_mhz","label":"Target frequency MHz","type":"number","defaultValue":100},
-          {"key":"constraints_sdc","label":"Constraints SDC","type":"text","defaultValue":""}
+          {"key":"constraints_sdc","label":"Constraints SDC","type":"text","defaultValue":""},
+          {"key":"run_logic_equivalence","label":"Run logic equivalence","type":"boolean","defaultValue":true},
+          {"key":"run_synthesis_readiness","label":"Run synthesis readiness","type":"boolean","defaultValue":true}
         ]
       }'::jsonb
     ),
@@ -128,7 +145,8 @@ with schemas(app, schema) as (
         "fields": [
           {"key":"run_lint","label":"Run lint","type":"boolean","defaultValue":true},
           {"key":"run_cdc","label":"Run CDC","type":"boolean","defaultValue":true},
-          {"key":"run_reset","label":"Run reset integrity","type":"boolean","defaultValue":true}
+          {"key":"run_reset","label":"Run reset integrity","type":"boolean","defaultValue":true},
+          {"key":"run_synthesis_readiness","label":"Run synthesis readiness","type":"boolean","defaultValue":true}
         ]
       }'::jsonb
     ),
@@ -140,6 +158,9 @@ with schemas(app, schema) as (
           {"key":"system_sim_testcases","label":"Testcases","type":"text","defaultValue":"system_smoke_test, integrated_input_sanity"},
           {"key":"system_sim_seeds","label":"Seeds","type":"text","defaultValue":"1,2,3,4"},
           {"key":"coverage_targets","label":"Coverage target","type":"text","defaultValue":"90% functional"},
+          {"key":"simulator_type","label":"Simulator","type":"text","defaultValue":"verilator"},
+          {"key":"random_vs_directed","label":"Random vs directed","type":"text","defaultValue":"both"},
+          {"key":"enable_formal","label":"Run formal","type":"boolean","defaultValue":false},
           {"key":"enable_golden_model","label":"Golden model","type":"boolean","defaultValue":true}
         ]
       }'::jsonb
@@ -162,6 +183,10 @@ with schemas(app, schema) as (
           {"key":"foundry","label":"Foundry","type":"text","defaultValue":"sky130"},
           {"key":"pdk","label":"PDK","type":"text","defaultValue":"sky130"},
           {"key":"analog_physical_mode","label":"Analog physical mode","type":"text","defaultValue":"blackbox"},
+          {"key":"generate_analog_gds","label":"Generate analog GDS","type":"boolean","defaultValue":false},
+          {"key":"regenerate_lef_lib_after_gds","label":"Regenerate LEF/LIB after GDS","type":"boolean","defaultValue":true},
+          {"key":"run_lef_lib_consistency","label":"Run LEF/LIB consistency","type":"boolean","defaultValue":true},
+          {"key":"run_logic_equivalence","label":"Run logic equivalence","type":"boolean","defaultValue":true},
           {"key":"run_drc","label":"Run DRC","type":"boolean","defaultValue":true},
           {"key":"run_lvs","label":"Run LVS","type":"boolean","defaultValue":true}
         ]
