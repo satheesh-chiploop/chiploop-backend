@@ -17,7 +17,8 @@ def _enabled(state: dict) -> bool:
 
 
 def _module_name(state: dict) -> str:
-    return str(state.get("analog_macro_module") or "analog_macro").strip()
+    contract = state.get("analog_macro_interface_contract") if isinstance(state.get("analog_macro_interface_contract"), dict) else {}
+    return str(state.get("analog_macro_module") or contract.get("macro_name") or "analog_macro").strip()
 
 
 def run_agent(state: dict) -> dict:
@@ -42,7 +43,7 @@ def run_agent(state: dict) -> dict:
     if not _enabled(state):
         summary.update({"status": "skipped", "reason": "analog_physical_mode_not_generate_gds"})
     elif not isinstance(spice_path, str) or not os.path.exists(spice_path):
-        summary.update({"status": "deferred", "reason": "analog_spice_missing"})
+        summary.update({"status": "failed", "reason": "analog_spice_missing"})
     else:
         ngspice_bin = shutil.which("ngspice")
         deck_path = os.path.join(stage_dir, "characterize_ngspice.sp")
@@ -62,10 +63,10 @@ def run_agent(state: dict) -> dict:
 
         if not ngspice_bin:
             summary.update({
-                "status": "tool_unavailable",
+                "status": "failed",
                 "reason": "ngspice_not_installed",
                 "characterization_deck": deck_path,
-                "note": "Liberty was not regenerated. Prior abstract LIB remains provisional.",
+                "note": "Liberty characterization did not run because ngspice is not installed or not on PATH.",
             })
         else:
             cp = run_command(state, "analog_lib_char_ngspice", [ngspice_bin, "-b", deck_path], cwd=stage_dir, timeout_sec=1800)
@@ -73,14 +74,23 @@ def run_agent(state: dict) -> dict:
             log_path = os.path.join(stage_dir, "ngspice_characterization.log")
             with open(log_path, "w", encoding="utf-8", errors="ignore") as fh:
                 fh.write(log)
-            summary.update({
-                "status": "measured_pending_liberty_model",
-                "reason": "block_specific_liberty_template_required",
-                "return_code": cp.returncode,
-                "log": log_path,
-                "characterization_deck": deck_path,
-                "note": "ngspice ran, but no replacement Liberty is emitted without a block-specific timing/power arc template.",
-            })
+            if cp.returncode == 0:
+                summary.update({
+                    "status": "failed",
+                    "reason": "liberty_not_produced",
+                    "return_code": cp.returncode,
+                    "log": log_path,
+                    "characterization_deck": deck_path,
+                    "note": "ngspice ran, but no replacement Liberty was produced. The flow will not reuse a provisional abstract LIB as a generated Liberty result.",
+                })
+            else:
+                summary.update({
+                    "status": "failed",
+                    "reason": "ngspice_failed",
+                    "return_code": cp.returncode,
+                    "log": log_path,
+                    "characterization_deck": deck_path,
+                })
 
     save_text_artifact_and_record(workflow_id, AGENT_NAME, "analog/lib_char", "liberty_characterization_summary.json", json.dumps(summary, indent=2))
     if os.path.exists(os.path.join(stage_dir, "characterize_ngspice.sp")):
@@ -89,4 +99,6 @@ def run_agent(state: dict) -> dict:
 
     state["analog_liberty_characterization"] = summary
     state["status"] = f"{AGENT_NAME}: {summary['status']}"
+    if _enabled(state) and summary["status"] != "generated":
+        raise RuntimeError(f"Analog Liberty characterization failed: {summary.get('reason') or summary['status']}")
     return state

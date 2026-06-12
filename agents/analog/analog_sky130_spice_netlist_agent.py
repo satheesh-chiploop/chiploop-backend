@@ -1,8 +1,9 @@
 import json
 import os
 import re
-from typing import Any, Dict, List
+from typing import Dict, List
 
+from model_gateway import complete_text
 from utils.artifact_utils import save_text_artifact_and_record
 
 
@@ -17,10 +18,12 @@ def _enabled(state: dict) -> bool:
 
 def _module_name(state: dict) -> str:
     spec = state.get("analog_spec") if isinstance(state.get("analog_spec"), dict) else {}
+    contract = state.get("analog_macro_interface_contract") if isinstance(state.get("analog_macro_interface_contract"), dict) else {}
     return str(
         state.get("analog_macro_module")
         or spec.get("module_name")
         or spec.get("block_name")
+        or contract.get("macro_name")
         or "analog_macro"
     ).strip()
 
@@ -38,21 +41,14 @@ def _ports(state: dict) -> List[str]:
     return list(dict.fromkeys([p for p in ports if p]))
 
 
-def _port_entries(state: dict) -> List[Dict[str, Any]]:
-    spec = state.get("analog_spec") if isinstance(state.get("analog_spec"), dict) else {}
-    raw_ports = spec.get("ports") if isinstance(spec, dict) else []
-    out: List[Dict[str, Any]] = []
-    if isinstance(raw_ports, list):
-        for port in raw_ports:
-            if isinstance(port, dict) and port.get("name"):
-                out.append({
-                    "name": str(port.get("name") or "").strip(),
-                    "direction": str(port.get("direction") or "").strip().lower(),
-                    "width": port.get("width") or 1,
-                })
-            elif isinstance(port, str) and port.strip():
-                out.append({"name": port.strip(), "direction": "inout", "width": 1})
-    return [p for p in out if p.get("name")]
+def _contract_ports(state: dict) -> List[str]:
+    contract = state.get("analog_macro_interface_contract") if isinstance(state.get("analog_macro_interface_contract"), dict) else {}
+    raw_ports = contract.get("ports") if isinstance(contract.get("ports"), list) else []
+    ports = []
+    for port in raw_ports:
+        if isinstance(port, dict) and port.get("name"):
+            ports.append(str(port["name"]).strip())
+    return list(dict.fromkeys([p for p in ports if p]))
 
 
 def _candidate_texts(state: dict) -> List[tuple[str, str]]:
@@ -98,76 +94,64 @@ def _normalise_sky130_spice(text: str, module_name: str, ports: List[str]) -> st
     return body
 
 
-def _role(name: str) -> str:
-    low = name.lower()
-    if low in {"vdd", "avdd", "dvdd", "vpwr"} or "vdd" in low or "pwr" in low:
-        return "power"
-    if low in {"vss", "avss", "dvss", "gnd", "vgnd"} or "vss" in low or "gnd" in low:
-        return "ground"
-    if "clk" in low:
-        return "clock"
-    if "rst" in low or "reset" in low:
-        return "reset"
-    return "signal"
+def _strip_code_fences(text: str) -> str:
+    text = (text or "").strip()
+    if text.startswith("```"):
+        lines = text.splitlines()
+        if lines and lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        text = "\n".join(lines).strip()
+    return text
 
 
-def _safe_node(name: str) -> str:
-    cleaned = re.sub(r"[^A-Za-z0-9_$]", "_", str(name or "").strip())
-    cleaned = re.sub(r"_+", "_", cleaned).strip("_")
-    return cleaned or "n"
-
-
-def _generate_spice_from_spec(state: dict, module_name: str, ports: List[str]) -> str:
+def _generation_context(state: dict) -> dict:
     spec = state.get("analog_spec") if isinstance(state.get("analog_spec"), dict) else {}
-    spec_text = str(state.get("analog_spec_text") or state.get("analog_datasheet") or "").strip()
-    if not spec and not spec_text:
+    contract = state.get("analog_macro_interface_contract") if isinstance(state.get("analog_macro_interface_contract"), dict) else {}
+    text = str(state.get("analog_spec_text") or state.get("analog_datasheet") or "").strip()
+    return {"analog_spec": spec, "analog_macro_interface_contract": contract, "analog_spec_text": text}
+
+
+def _generate_sky130_spice_with_llm(state: dict, module_name: str, ports: List[str]) -> str:
+    ctx = _generation_context(state)
+    if not ctx["analog_spec"] and not ctx["analog_macro_interface_contract"] and not ctx["analog_spec_text"]:
         return ""
 
-    entries = _port_entries(state)
-    if not ports:
-        ports = [p["name"] for p in entries]
-    if not ports:
-        ports = ["vin", "vout", "vdd", "vss"]
-        entries = [
-            {"name": "vin", "direction": "input", "width": 1},
-            {"name": "vout", "direction": "output", "width": 1},
-            {"name": "vdd", "direction": "inout", "width": 1},
-            {"name": "vss", "direction": "inout", "width": 1},
-        ]
+    prompt = f"""
+Generate a real transistor-level Sky130 SPICE subcircuit for analog GDS generation with ALIGN.
 
-    power = next((p for p in ports if _role(p) == "power"), "vdd")
-    ground = next((p for p in ports if _role(p) == "ground"), "vss")
-    signal_inputs = [p["name"] for p in entries if p.get("direction") == "input" and _role(p["name"]) == "signal"]
-    signal_outputs = [p["name"] for p in entries if p.get("direction") == "output" and _role(p["name"]) == "signal"]
-    control = signal_inputs[0] if signal_inputs else next((p for p in ports if _role(p) == "signal"), "vin")
+Module/subckt name:
+{module_name}
 
-    lines = [
-        _sky130_include().strip(),
-        "",
-        f"* ChipLoop generated first-pass Sky130 transistor-level SPICE for {module_name}.",
-        "* This netlist is generated from the analog spec for layout exploration; replace with designer SPICE for signoff.",
-        f".subckt {module_name} {' '.join(ports)}",
-        ".param WN=1u WP=2u LMIN=0.15u",
-    ]
-    for idx, out_name in enumerate(signal_outputs or ["generated_probe"]):
-        out_node = _safe_node(out_name)
-        ctrl_node = _safe_node(control)
-        mid_node = f"n_auto_{idx}"
-        lines.extend([
-            f"* Auto-generated CMOS stage for {out_name}",
-            f"MNA{idx} {out_node} {ctrl_node} {ground} {ground} sky130_fd_pr__nfet_01v8 W={{WN}} L={{LMIN}}",
-            f"MPA{idx} {out_node} {ctrl_node} {power} {power} sky130_fd_pr__pfet_01v8 W={{WP}} L={{LMIN}}",
-            f"CLOAD{idx} {out_node} {ground} 5f",
-            f"RKEEP{idx} {out_node} {mid_node} 1Meg",
-            f"CKEEP{idx} {mid_node} {ground} 1f",
-        ])
-    if not signal_outputs:
-        lines.extend([
-            f"MNAUX {_safe_node(control)} {_safe_node(control)} {ground} {ground} sky130_fd_pr__nfet_01v8 W={{WN}} L={{LMIN}}",
-            f"MPAUX {_safe_node(control)} {_safe_node(control)} {power} {power} sky130_fd_pr__pfet_01v8 W={{WP}} L={{LMIN}}",
-        ])
-    lines.extend([f".ends {module_name}", ".end", ""])
-    return "\n".join(lines)
+Required port order:
+{json.dumps(ports, indent=2)}
+
+Available analog spec JSON:
+{json.dumps(ctx["analog_spec"], indent=2)}
+
+Available macro interface contract JSON:
+{json.dumps(ctx["analog_macro_interface_contract"], indent=2)}
+
+Analog spec text, if any:
+{ctx["analog_spec_text"]}
+
+Strict requirements:
+- Return SPICE text only. No Markdown.
+- Must include exactly one .subckt named {module_name}.
+- Must include transistor-level MOS devices using sky130_fd_pr__nfet_01v8 and/or sky130_fd_pr__pfet_01v8.
+- Preserve the required port order in the .subckt line.
+- Include explicit W and L parameters on MOS devices.
+- Do not emit placeholder comments instead of devices.
+- Do not emit only R/C/load scaffolding.
+- End with .ends {module_name}.
+"""
+    return _strip_code_fences(complete_text(
+        prompt,
+        capability="analog_generation",
+        agent_name=AGENT_NAME,
+        state=state,
+    ))
 
 
 def run_agent(state: dict) -> dict:
@@ -183,7 +167,7 @@ def run_agent(state: dict) -> dict:
         return state
 
     module_name = _module_name(state)
-    ports = _ports(state)
+    ports = _ports(state) or _contract_ports(state)
     selected_source = ""
     selected_text = ""
     for source, text in _candidate_texts(state):
@@ -192,9 +176,9 @@ def run_agent(state: dict) -> dict:
             selected_text = text
             break
     if not selected_text:
-        generated_text = _generate_spice_from_spec(state, module_name, ports)
+        generated_text = _generate_sky130_spice_with_llm(state, module_name, ports)
         if generated_text and _has_real_devices(generated_text):
-            selected_source = "generated_from_analog_spec"
+            selected_source = "generated_by_sky130_spice_agent"
             selected_text = generated_text
 
     summary: Dict[str, Any] = {
@@ -207,14 +191,14 @@ def run_agent(state: dict) -> dict:
 
     if not selected_text:
         summary.update({
-            "status": "deferred",
+            "status": "failed",
             "reason": "real_transistor_level_spice_missing",
-            "note": "Analog GDS generation requires transistor-level SPICE. No analog spec or provided real-device SPICE was available.",
+            "note": "Analog GDS generation requires real transistor-level SPICE. The SPICE generator did not produce valid device-level SPICE.",
         })
         save_text_artifact_and_record(workflow_id, AGENT_NAME, "analog/sky130", "sky130_spice_summary.json", json.dumps(summary, indent=2))
         state["analog_sky130_spice"] = summary
-        state["status"] = f"{AGENT_NAME}: deferred"
-        return state
+        state["status"] = f"{AGENT_NAME}: failed"
+        raise RuntimeError("Analog GDS generation requires real transistor-level SPICE; no valid device-level SPICE was provided.")
 
     spice = _normalise_sky130_spice(selected_text, module_name, ports)
     spice_path = os.path.join(out_dir, f"{module_name}.spice")
@@ -226,7 +210,7 @@ def run_agent(state: dict) -> dict:
         "spice": spice_path,
         "relpath": f"analog/sky130/{module_name}.spice",
         "device_level": True,
-        "generated": selected_source == "generated_from_analog_spec",
+        "generated": selected_source == "generated_by_sky130_spice_agent",
     })
     save_text_artifact_and_record(workflow_id, AGENT_NAME, "analog/sky130", f"{module_name}.spice", spice)
     save_text_artifact_and_record(workflow_id, AGENT_NAME, "analog/sky130", "sky130_spice_summary.json", json.dumps(summary, indent=2))

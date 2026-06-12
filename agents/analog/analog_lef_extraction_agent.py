@@ -9,6 +9,7 @@ from utils.artifact_utils import save_text_artifact_and_record
 
 
 AGENT_NAME = "Analog LEF Extraction Agent"
+OPENLANE_DOCKER_IMAGE = "ghcr.io/efabless/openlane2:2.4.0.dev1"
 
 
 def _enabled(state: dict) -> bool:
@@ -17,7 +18,8 @@ def _enabled(state: dict) -> bool:
 
 
 def _module_name(state: dict) -> str:
-    return str(state.get("analog_macro_module") or "analog_macro").strip()
+    contract = state.get("analog_macro_interface_contract") if isinstance(state.get("analog_macro_interface_contract"), dict) else {}
+    return str(state.get("analog_macro_module") or contract.get("macro_name") or "analog_macro").strip()
 
 
 def run_agent(state: dict) -> dict:
@@ -42,25 +44,51 @@ def run_agent(state: dict) -> dict:
     if not _enabled(state):
         summary.update({"status": "skipped", "reason": "analog_physical_mode_not_generate_gds"})
     elif not isinstance(gds_path, str) or not os.path.exists(gds_path):
-        summary.update({"status": "deferred", "reason": "analog_macro_gds_missing"})
+        summary.update({"status": "failed", "reason": "analog_macro_gds_missing"})
     else:
         magic_bin = shutil.which("magic")
+        docker_bin = shutil.which("docker")
         tcl_path = os.path.join(stage_dir, "extract_lef.tcl")
         lef_path = os.path.join(stage_dir, f"{module_name}.lef")
+        staged_gds = os.path.join(stage_dir, os.path.basename(gds_path) or f"{module_name}.gds")
+        if os.path.abspath(gds_path) != os.path.abspath(staged_gds):
+            shutil.copy2(gds_path, staged_gds)
+        gds_for_tcl = os.path.abspath(staged_gds) if magic_bin else f"/work/{os.path.basename(staged_gds)}"
+        lef_for_tcl = os.path.abspath(lef_path) if magic_bin else f"/work/{module_name}.lef"
+        tcl_for_cmd = tcl_path if magic_bin else "/work/extract_lef.tcl"
         tcl = "\n".join([
             "drc off",
-            f"gds read {os.path.abspath(gds_path)}",
+            f"gds read {gds_for_tcl}",
             f"load {module_name}",
             "select top cell",
-            f"lef write {os.path.abspath(lef_path)}",
+            f"lef write {lef_for_tcl}",
             "quit -noprompt",
             "",
         ])
         with open(tcl_path, "w", encoding="utf-8") as fh:
             fh.write(tcl)
 
-        if magic_bin:
-            cp = run_command(state, "analog_lef_extract_magic", [magic_bin, "-dnull", "-noconsole", tcl_path], cwd=stage_dir, timeout_sec=1800)
+        if magic_bin or docker_bin:
+            if magic_bin:
+                cmd = [magic_bin, "-dnull", "-noconsole", tcl_for_cmd]
+                tool_mode = "host"
+            else:
+                cmd = [
+                    docker_bin,
+                    "run",
+                    "--rm",
+                    "-v",
+                    f"{os.path.abspath(stage_dir)}:/work",
+                    "-w",
+                    "/work",
+                    OPENLANE_DOCKER_IMAGE,
+                    "magic",
+                    "-dnull",
+                    "-noconsole",
+                    tcl_for_cmd,
+                ]
+                tool_mode = "docker"
+            cp = run_command(state, "analog_lef_extract_magic", cmd, cwd=stage_dir, timeout_sec=1800)
             log = (cp.stdout or "") + (cp.stderr or "")
             log_path = os.path.join(stage_dir, "magic_lef_extract.log")
             with open(log_path, "w", encoding="utf-8", errors="ignore") as fh:
@@ -70,15 +98,29 @@ def run_agent(state: dict) -> dict:
                 digital = state.setdefault("digital", {})
                 if isinstance(digital, dict):
                     digital["macro_lefs"] = list(dict.fromkeys((digital.get("macro_lefs") or []) + [lef_path]))
-                summary.update({"status": "extracted", "lef": lef_path, "log": log_path, "return_code": cp.returncode})
+                summary.update({
+                    "status": "extracted",
+                    "lef": lef_path,
+                    "log": log_path,
+                    "return_code": cp.returncode,
+                    "tool_mode": tool_mode,
+                    "image": OPENLANE_DOCKER_IMAGE if tool_mode == "docker" else "",
+                })
             else:
-                summary.update({"status": "failed", "reason": "lef_not_produced", "log": log_path, "return_code": cp.returncode})
+                summary.update({
+                    "status": "failed",
+                    "reason": "lef_not_produced",
+                    "log": log_path,
+                    "return_code": cp.returncode,
+                    "tool_mode": tool_mode,
+                    "image": OPENLANE_DOCKER_IMAGE if tool_mode == "docker" else "",
+                })
         else:
             summary.update({
-                "status": "tool_unavailable",
+                "status": "failed",
                 "reason": "magic_not_installed",
                 "extract_script": tcl_path,
-                "note": "LEF was not regenerated from GDS. Prior abstract LEF remains provisional.",
+                "note": "LEF was not regenerated from GDS because Magic is not installed on PATH and Docker is not available.",
             })
 
     save_text_artifact_and_record(workflow_id, AGENT_NAME, "analog/lef_extract", "lef_extract_summary.json", json.dumps(summary, indent=2))
@@ -91,4 +133,6 @@ def run_agent(state: dict) -> dict:
 
     state["analog_lef_extraction"] = summary
     state["status"] = f"{AGENT_NAME}: {summary['status']}"
+    if _enabled(state) and summary["status"] != "extracted":
+        raise RuntimeError(f"Analog LEF extraction failed: {summary.get('reason') or summary['status']}")
     return state

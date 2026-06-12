@@ -13,6 +13,16 @@ def _exists(path: Any) -> str:
     return os.path.abspath(path) if isinstance(path, str) and os.path.exists(path) else ""
 
 
+def _generate_mode(state: dict) -> bool:
+    mode = str(state.get("analog_physical_mode") or "blackbox").strip().lower()
+    return mode in {"generate_sky130_gds", "sky130_gds", "generate_gds"}
+
+
+def _module_name(state: dict) -> str:
+    contract = state.get("analog_macro_interface_contract") if isinstance(state.get("analog_macro_interface_contract"), dict) else {}
+    return str(state.get("analog_macro_module") or contract.get("macro_name") or "analog_macro").strip()
+
+
 def run_agent(state: dict) -> dict:
     print(f"\nRunning {AGENT_NAME}...")
     workflow_id = state.get("workflow_id", "default")
@@ -25,6 +35,8 @@ def run_agent(state: dict) -> dict:
     gds = _exists(state.get("analog_macro_gds"))
     spice = _exists(state.get("analog_spice_path") or state.get("analog_netlist_path"))
     mode = str(state.get("analog_physical_mode") or "blackbox").strip().lower()
+    module = _module_name(state)
+    generate_mode = _generate_mode(state)
 
     package: Dict[str, Any] = {
         "workflow_id": workflow_id,
@@ -32,19 +44,38 @@ def run_agent(state: dict) -> dict:
         "generated_at": datetime.utcnow().isoformat() + "Z",
         "mode": mode,
         "pdk": state.get("analog_pdk") or state.get("pdk") or "sky130A",
-        "module": state.get("analog_macro_module") or "analog_macro",
+        "module": module,
         "lef": lef,
         "lib": lib,
         "gds": gds,
         "spice": spice,
-        "blackbox_for_drc_lvs": bool((lef or lib) and not gds),
-        "blackbox_reason": "analog_macro_gds_missing" if (lef or lib) and not gds else "",
+        "blackbox_for_drc_lvs": bool((lef or lib) and not gds and not generate_mode),
+        "blackbox_reason": "analog_macro_gds_missing" if (lef or lib) and not gds and not generate_mode else "",
         "gds_generation": state.get("analog_gds_generation") or {},
         "lef_extraction": state.get("analog_lef_extraction") or {},
         "liberty_characterization": state.get("analog_liberty_characterization") or {},
         "consistency": state.get("analog_collateral_consistency") or {},
         "spice_generation": state.get("analog_sky130_spice") or {},
     }
+
+    if generate_mode:
+        missing = []
+        if not spice:
+            missing.append("spice")
+        if not gds:
+            missing.append("gds")
+        if not lef:
+            missing.append("lef")
+        if missing:
+            package["status"] = "failed"
+            package["reason"] = "analog_physical_collateral_missing"
+            package["missing"] = missing
+        else:
+            package["status"] = "ready"
+            package["reason"] = ""
+    else:
+        package["status"] = "ready" if (lef or lib or gds) else "blackbox_deferred"
+        package["reason"] = package["blackbox_reason"]
 
     package_path = os.path.join(out_dir, "analog_physical_collateral_package.json")
     with open(package_path, "w", encoding="utf-8") as fh:
@@ -59,7 +90,7 @@ def run_agent(state: dict) -> dict:
         if gds:
             digital["macro_gds"] = list(dict.fromkeys((digital.get("macro_gds") or []) + [gds]))
             digital.pop("macro_blackbox_mode", None)
-        elif lef or lib:
+        elif (lef or lib) and not generate_mode:
             digital["macro_blackbox_mode"] = "lef_lib_no_gds"
             digital["macro_blackboxes"] = [os.path.splitext(os.path.basename(lef))[0]] if lef else []
             state["physical_blackbox_macros"] = digital["macro_blackboxes"]
@@ -73,5 +104,7 @@ def run_agent(state: dict) -> dict:
         "analog_physical_collateral_package.json",
         json.dumps(package, indent=2),
     )
-    state["status"] = f"{AGENT_NAME}: {'gds_ready' if gds else 'blackbox_deferred'}"
+    state["status"] = f"{AGENT_NAME}: {package['status']}"
+    if generate_mode and package["status"] != "ready":
+        raise RuntimeError(f"Analog physical collateral package failed: missing {', '.join(package['missing'])}")
     return state

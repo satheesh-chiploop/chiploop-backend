@@ -85,6 +85,72 @@ def _infer_top_from_netlist(netlist_path: str) -> str | None:
     return m.group(1) if m else None
 
 
+def _macro_names_from_lefs(lef_paths: list[str]) -> list[str]:
+    names = []
+    for path in lef_paths or []:
+        try:
+            text = open(path, "r", encoding="utf-8", errors="ignore").read()
+        except Exception:
+            continue
+        for match in re.finditer(r"^\s*MACRO\s+([A-Za-z_][A-Za-z0-9_$]*)\b", text, flags=re.MULTILINE):
+            name = match.group(1)
+            if name not in names:
+                names.append(name)
+    return names
+
+
+def _macro_instances_from_netlists(netlist_paths: list[str], macro_names: list[str]) -> list[str]:
+    if not macro_names:
+        return []
+    macro_re = "|".join(re.escape(name) for name in macro_names)
+    inst_re = re.compile(rf"\b(?:{macro_re})\s+([A-Za-z_\\][A-Za-z0-9_$\\.]*)\s*\(", flags=re.MULTILINE)
+    instances = []
+    for path in netlist_paths or []:
+        try:
+            text = open(path, "r", encoding="utf-8", errors="ignore").read()
+        except Exception:
+            continue
+        for match in inst_re.finditer(text):
+            inst = match.group(1).strip().lstrip("\\")
+            if inst and inst not in instances:
+                instances.append(inst)
+    return instances
+
+
+def _die_area_xy(cfg: dict) -> tuple[float, float]:
+    raw = str(cfg.get("DIE_AREA") or "").strip()
+    nums = [float(x) for x in re.findall(r"-?\d+(?:\.\d+)?", raw)]
+    if len(nums) >= 4:
+        llx, lly, urx, ury = nums[:4]
+        return (llx + max((urx - llx) * 0.15, 10.0), lly + max((ury - lly) * 0.15, 10.0))
+    return 20.0, 20.0
+
+
+def _write_macro_placement_cfg_if_needed(
+    cfg: dict,
+    work_stage_dir: str,
+    stage_netlists: list[str],
+    macro_lef_paths: list[str],
+) -> str | None:
+    if cfg.get("MACRO_PLACEMENT_CFG"):
+        return None
+    macro_names = _macro_names_from_lefs(macro_lef_paths)
+    instances = _macro_instances_from_netlists(stage_netlists, macro_names)
+    if not instances:
+        return None
+
+    placement_dir = os.path.join(work_stage_dir, "inputs", "macros")
+    _ensure_dir(placement_dir)
+    placement_path = os.path.join(placement_dir, "macro_placement.cfg")
+    x0, y0 = _die_area_xy(cfg)
+    lines = []
+    for idx, inst in enumerate(instances):
+        lines.append(f"{inst} {x0 + idx * 20.0:.3f} {y0 + idx * 20.0:.3f} N")
+    _write_text(placement_path, "\n".join(lines) + "\n")
+    cfg["MACRO_PLACEMENT_CFG"] = "dir::inputs/macros/macro_placement.cfg"
+    return placement_path
+
+
 def _resolve_sdc_from_state(state: dict, workflow_dir: str) -> str | None:
     digital = state.get("digital") or {}
     floorplan_state = digital.get("floorplan") or {}
@@ -187,9 +253,9 @@ def _resolve_macro_files_from_workflow(workflow_dir: str, exts: tuple[str, ...])
 def _stage_macro_inputs(state: dict, workflow_dir: str, work_stage_dir: str) -> tuple[list[str], list[str], list[str]]:
     digital = state.get("digital") or {}
 
-    macro_lefs = [p for p in (digital.get("macro_lefs") or []) if p and os.path.exists(p)]
-    macro_libs = [p for p in (digital.get("macro_libs") or []) if p and os.path.exists(p)]
-    macro_gds  = [p for p in (digital.get("macro_gds") or []) if p and os.path.exists(p)]
+    macro_lefs = list(dict.fromkeys(p for p in (digital.get("macro_lefs") or []) if p and os.path.exists(p)))
+    macro_libs = list(dict.fromkeys(p for p in (digital.get("macro_libs") or []) if p and os.path.exists(p)))
+    macro_gds  = list(dict.fromkeys(p for p in (digital.get("macro_gds") or []) if p and os.path.exists(p)))
 
     inputs_dir = os.path.join(work_stage_dir, "inputs", "macros")
     lef_dir = os.path.join(inputs_dir, "lef")
@@ -329,6 +395,12 @@ def run_agent(state: dict) -> dict:
 
 
     staged_lefs, staged_libs, staged_gds = _stage_macro_inputs(state, workflow_dir, work_stage_dir)
+    macro_placement_cfg = _write_macro_placement_cfg_if_needed(
+        cfg=cfg,
+        work_stage_dir=work_stage_dir,
+        stage_netlists=stage_netlists,
+        macro_lef_paths=(state.get("digital") or {}).get("macro_lefs") or [],
+    )
 
     if staged_lefs:
         cfg["EXTRA_LEFS"] = staged_lefs
@@ -386,6 +458,8 @@ def run_agent(state: dict) -> dict:
         f"macro_gds_count={len(staged_gds)}",
         f"fp_def_template={cfg.get('FP_DEF_TEMPLATE')}",
         f"pl_skip_initial_placement={cfg.get('PL_SKIP_INITIAL_PLACEMENT')}",
+        f"macro_placement_cfg={cfg.get('MACRO_PLACEMENT_CFG')}",
+        f"macro_placement_cfg_path={macro_placement_cfg}",
     ]) + "\n"
     _write_text(os.path.join(logs_dir, "placement_input_resolution.log"), input_log)
 
@@ -431,6 +505,7 @@ docker run --rm \
             "sdc": f"digital/place/constraints/{sdc_basename}",
             "metrics_json": "digital/place/metrics.json" if metrics_path else None,
             "primary_def": "digital/place/primary.def" if def_path else None,
+            "macro_placement_cfg": "digital/place/macro_placement.cfg" if macro_placement_cfg else None,
             "log": "digital/place/logs/openlane_place.log",
             "openlane_run_dir": latest,
         },
@@ -459,6 +534,9 @@ docker run --rm \
         if def_path and os.path.exists(def_path):
             with open(def_path, "r", encoding="utf-8", errors="ignore") as f:
                 save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "place/primary.def", f.read())
+        if macro_placement_cfg and os.path.exists(macro_placement_cfg):
+            with open(macro_placement_cfg, "r", encoding="utf-8", errors="ignore") as f:
+                save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "place/macro_placement.cfg", f.read())
     except Exception as e:
         print(f"⚠️ {AGENT_NAME} upload failed: {e}")
 
@@ -471,7 +549,14 @@ docker run --rm \
         "openlane_config": config_path,
         "input_resolution_log": os.path.join(logs_dir, "placement_input_resolution.log"),
         "openlane_run_dir": latest,
+        "macro_placement_cfg": macro_placement_cfg,
     }
+
+    if summary["status"] != "ok" or not def_path:
+        raise RuntimeError(
+            f"{AGENT_NAME}: placement failed before post-place STA "
+            f"(status={summary['status']}, rc={rc}, def={'present' if def_path else 'missing'})"
+        )
 
     
     return state

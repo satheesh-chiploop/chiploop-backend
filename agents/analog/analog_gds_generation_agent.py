@@ -9,6 +9,7 @@ from utils.artifact_utils import save_text_artifact_and_record
 
 
 AGENT_NAME = "Analog GDS Generation Agent"
+ALIGN_DOCKER_IMAGE = "darpaalign/align-public:latest"
 
 
 def _enabled(state: dict) -> bool:
@@ -18,7 +19,8 @@ def _enabled(state: dict) -> bool:
 
 
 def _module_name(state: dict) -> str:
-    return str(state.get("analog_macro_module") or "analog_macro").strip()
+    contract = state.get("analog_macro_interface_contract") if isinstance(state.get("analog_macro_interface_contract"), dict) else {}
+    return str(state.get("analog_macro_module") or contract.get("macro_name") or "analog_macro").strip()
 
 
 def _find_gds(root: str) -> str:
@@ -29,6 +31,10 @@ def _find_gds(root: str) -> str:
                 hits.append(os.path.join(dirpath, name))
     hits.sort(key=lambda p: os.path.getmtime(p), reverse=True)
     return hits[0] if hits else ""
+
+
+def _docker_available() -> bool:
+    return bool(shutil.which("docker"))
 
 
 def run_agent(state: dict) -> dict:
@@ -55,23 +61,33 @@ def run_agent(state: dict) -> dict:
     }
 
     if not isinstance(spice_path, str) or not os.path.exists(spice_path):
-        summary.update({"status": "deferred", "reason": "sky130_spice_missing"})
+        summary.update({"status": "failed", "reason": "sky130_spice_missing"})
         save_text_artifact_and_record(workflow_id, AGENT_NAME, "analog/gds", "analog_gds_summary.json", json.dumps(summary, indent=2))
         state["analog_gds_generation"] = summary
-        state["status"] = f"{AGENT_NAME}: deferred"
-        return state
+        state["status"] = f"{AGENT_NAME}: failed"
+        raise RuntimeError("Analog GDS generation requires a generated or provided Sky130 transistor-level SPICE netlist.")
 
     align_bin = shutil.which("schematic2layout.py") or shutil.which("align")
+    docker_bin = shutil.which("docker")
+    staged_spice = os.path.join(stage_dir, os.path.basename(spice_path) or "input.spice")
+    if os.path.abspath(spice_path) != os.path.abspath(staged_spice):
+        shutil.copy2(spice_path, staged_spice)
     run_sh = os.path.join(stage_dir, "run_align.sh")
+    if align_bin:
+        expected_cmd = f"{align_bin} {os.path.abspath(staged_spice)} -p sky130 -c {module_name}"
+    else:
+        expected_cmd = (
+            f"docker run --rm -v {os.path.abspath(stage_dir)}:/work -w /work "
+            f"{ALIGN_DOCKER_IMAGE} schematic2layout.py /work/{os.path.basename(staged_spice)} -p sky130 -c {module_name}"
+        )
     run_text = "\n".join([
         "#!/usr/bin/env bash",
         "set -euo pipefail",
         f'echo "ChipLoop {AGENT_NAME}"',
-        f'echo "SPICE={spice_path}"',
+        f'echo "SPICE={staged_spice}"',
         f'echo "TOP={module_name}"',
         f'echo "PDK=sky130A"',
-        "# Expected ALIGN command when available:",
-        f"# schematic2layout.py {os.path.abspath(spice_path)} -p sky130 -c {module_name}",
+        expected_cmd,
         "",
     ])
     with open(run_sh, "w", encoding="utf-8") as fh:
@@ -81,20 +97,40 @@ def run_agent(state: dict) -> dict:
     except Exception:
         pass
 
-    if not align_bin:
+    if not align_bin and not docker_bin:
         summary.update({
-            "status": "tool_unavailable",
+            "status": "failed",
             "reason": "align_not_installed",
             "run_script": run_sh,
-            "note": "No GDS was generated. Install ALIGN/schematic2layout.py in the runner to enable analog GDS generation.",
+            "note": "No GDS was generated. Install ALIGN/schematic2layout.py on PATH or provide Docker with darpaalign/align-public:latest.",
         })
         save_text_artifact_and_record(workflow_id, AGENT_NAME, "analog/gds", "run_align.sh", run_text)
         save_text_artifact_and_record(workflow_id, AGENT_NAME, "analog/gds", "analog_gds_summary.json", json.dumps(summary, indent=2))
         state["analog_gds_generation"] = summary
-        state["status"] = f"{AGENT_NAME}: ALIGN unavailable"
-        return state
+        state["status"] = f"{AGENT_NAME}: failed"
+        raise RuntimeError("Analog GDS generation failed: ALIGN/schematic2layout.py is not installed and Docker is not available.")
 
-    cmd = [align_bin, os.path.abspath(spice_path), "-p", "sky130", "-c", module_name]
+    if align_bin:
+        cmd = [align_bin, os.path.abspath(staged_spice), "-p", "sky130", "-c", module_name]
+        tool_mode = "host"
+    else:
+        cmd = [
+            docker_bin,
+            "run",
+            "--rm",
+            "-v",
+            f"{os.path.abspath(stage_dir)}:/work",
+            "-w",
+            "/work",
+            ALIGN_DOCKER_IMAGE,
+            "schematic2layout.py",
+            f"/work/{os.path.basename(staged_spice)}",
+            "-p",
+            "sky130",
+            "-c",
+            module_name,
+        ]
+        tool_mode = "docker"
     cp = run_command(state, "analog_align_gds", cmd, cwd=stage_dir, timeout_sec=3600)
     log = (cp.stdout or "") + (cp.stderr or "")
     log_path = os.path.join(stage_dir, "align.log")
@@ -106,7 +142,14 @@ def run_agent(state: dict) -> dict:
         final_gds = os.path.join(stage_dir, f"{module_name}.gds")
         if os.path.abspath(gds_path) != os.path.abspath(final_gds):
             shutil.copy2(gds_path, final_gds)
-        summary.update({"status": "generated", "return_code": cp.returncode, "gds": final_gds, "log": log_path})
+        summary.update({
+            "status": "generated",
+            "return_code": cp.returncode,
+            "gds": final_gds,
+            "log": log_path,
+            "tool_mode": tool_mode,
+            "image": ALIGN_DOCKER_IMAGE if tool_mode == "docker" else "",
+        })
         with open(final_gds, "rb") as fh:
             # Store a small text breadcrumb instead of trying to upload binary through text helper.
             pass
@@ -116,11 +159,20 @@ def run_agent(state: dict) -> dict:
             digital["macro_gds"] = list(dict.fromkeys((digital.get("macro_gds") or []) + [final_gds]))
             digital.pop("macro_blackbox_mode", None)
     else:
-        summary.update({"status": "failed", "return_code": cp.returncode, "reason": "align_gds_not_produced", "log": log_path})
+        summary.update({
+            "status": "failed",
+            "return_code": cp.returncode,
+            "reason": "align_gds_not_produced",
+            "log": log_path,
+            "tool_mode": tool_mode,
+            "image": ALIGN_DOCKER_IMAGE if tool_mode == "docker" else "",
+        })
 
     save_text_artifact_and_record(workflow_id, AGENT_NAME, "analog/gds", "run_align.sh", run_text)
     save_text_artifact_and_record(workflow_id, AGENT_NAME, "analog/gds", "align.log", log)
     save_text_artifact_and_record(workflow_id, AGENT_NAME, "analog/gds", "analog_gds_summary.json", json.dumps(summary, indent=2))
     state["analog_gds_generation"] = summary
     state["status"] = f"{AGENT_NAME}: {summary['status']}"
+    if summary["status"] != "generated":
+        raise RuntimeError(f"Analog GDS generation failed: {summary.get('reason') or 'gds_not_produced'}")
     return state

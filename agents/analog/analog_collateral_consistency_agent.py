@@ -47,6 +47,16 @@ def _lib_cell(text: str) -> tuple[str, List[str]]:
     return cell, pins
 
 
+def _generate_mode(state: dict) -> bool:
+    mode = str(state.get("analog_physical_mode") or "").strip().lower()
+    return mode in {"generate_sky130_gds", "sky130_gds", "generate_gds"}
+
+
+def _module_name(state: dict) -> str:
+    contract = state.get("analog_macro_interface_contract") if isinstance(state.get("analog_macro_interface_contract"), dict) else {}
+    return str(state.get("analog_macro_module") or contract.get("macro_name") or "analog_macro").strip()
+
+
 def run_agent(state: dict) -> dict:
     print(f"\nRunning {AGENT_NAME}...")
     workflow_id = state.get("workflow_id", "default")
@@ -54,7 +64,7 @@ def run_agent(state: dict) -> dict:
     out_dir = os.path.join(workflow_dir, "analog", "consistency")
     os.makedirs(out_dir, exist_ok=True)
 
-    module = str(state.get("analog_macro_module") or "analog_macro")
+    module = _module_name(state)
     spice = _read(state.get("analog_spice_path") or state.get("analog_netlist_path"))
     lef = _read(state.get("analog_macro_lef"))
     lib = _read(state.get("analog_macro_lib"))
@@ -100,4 +110,6 @@ def run_agent(state: dict) -> dict:
 
     state["analog_collateral_consistency"] = summary
     state["status"] = f"{AGENT_NAME}: {summary['status']}"
+    if _generate_mode(state) and issues:
+        raise RuntimeError(f"Analog collateral consistency failed: {', '.join(issues)}")
     return state
