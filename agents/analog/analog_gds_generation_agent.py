@@ -146,7 +146,10 @@ def run_agent(state: dict) -> dict:
 
     align_bin = shutil.which("schematic2layout.py") or shutil.which("align")
     docker_bin = shutil.which("docker")
-    staged_spice = os.path.join(stage_dir, os.path.basename(spice_path) or "input.spice")
+    spice_base = os.path.basename(spice_path) or f"{module_name}.spice"
+    spice_stem, spice_ext = os.path.splitext(spice_base)
+    align_spice_name = spice_base if spice_ext.lower() in {".sp", ".cdl"} else f"{spice_stem or module_name}.sp"
+    staged_spice = os.path.join(stage_dir, align_spice_name)
     if os.path.abspath(spice_path) != os.path.abspath(staged_spice):
         shutil.copy2(spice_path, staged_spice)
     run_sh = os.path.join(stage_dir, "run_align.sh")
