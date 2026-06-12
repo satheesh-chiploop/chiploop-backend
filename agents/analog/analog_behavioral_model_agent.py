@@ -152,6 +152,47 @@ def _sanitize_verilog2005_model(model_text: str) -> str:
 
         return "\n".join(out_lines)
 
+    def prune_empty_comb_always_blocks(text: str) -> str:
+        """Remove combinational always blocks left empty by assignment cleanup."""
+        lines = text.splitlines()
+        out_lines = []
+        in_comb = False
+        depth = 0
+        block_lines = []
+        has_assignment = False
+        comb_start = re.compile(r"\balways\s*@\s*\((?![^)]*\b(?:posedge|negedge)\b)[^)]*\)", re.I)
+        begin_re = re.compile(r"\bbegin\b", re.I)
+        end_re = re.compile(r"\bend\b", re.I)
+        assignment_re = re.compile(r"\b[A-Za-z_][A-Za-z0-9_$]*\s*(?:<=|(?<![!<>=])=(?!=)).*;")
+
+        for line in lines:
+            if not in_comb and comb_start.search(line):
+                in_comb = True
+                block_lines = [line]
+                depth = len(begin_re.findall(line)) - len(end_re.findall(line))
+                has_assignment = bool(assignment_re.search(line))
+                if depth <= 0:
+                    if has_assignment:
+                        out_lines.extend(block_lines)
+                    in_comb = False
+                continue
+
+            if in_comb:
+                block_lines.append(line)
+                has_assignment = has_assignment or bool(assignment_re.search(line))
+                depth += len(begin_re.findall(line)) - len(end_re.findall(line))
+                if depth <= 0:
+                    if has_assignment:
+                        out_lines.extend(block_lines)
+                    in_comb = False
+                continue
+
+            out_lines.append(line)
+
+        if in_comb and has_assignment:
+            out_lines.extend(block_lines)
+        return "\n".join(out_lines)
+
     def clean_comb_block(match: re.Match) -> str:
         block = match.group(0)
         targets = set(re.findall(r"\b([A-Za-z_][A-Za-z0-9_$]*)\s*=", block))
@@ -175,6 +216,7 @@ def _sanitize_verilog2005_model(model_text: str) -> str:
 
     out = strip_comb_blocking_assigns_to_sequential_regs(out, nonblocking_lhs)
     out = convert_initial_blocking_assigns_to_sequential_regs(out, nonblocking_lhs)
+    out = prune_empty_comb_always_blocks(out)
 
     if out and not out.endswith("\n"):
         out += "\n"
@@ -502,12 +544,28 @@ SELF-CHECK BEFORE OUTPUT
     compile_log_filename = f"{module_name}_compile.log"
     verilator_log_filename = f"{module_name}_verilator_lint.log"
     compile_summary_filename = f"{module_name}_compile_summary.json"
+    pass1_model_filename = f"{module_name}_pass1.v"
+    pass2_model_filename = f"{module_name}_pass2.v"
+    pass1_compile_log_filename = f"{module_name}_compile_pass1.log"
+    pass2_compile_log_filename = f"{module_name}_compile_pass2.log"
+    pass1_verilator_log_filename = f"{module_name}_verilator_lint_pass1.log"
+    pass2_verilator_log_filename = f"{module_name}_verilator_lint_pass2.log"
+    pass2_repair_prompt_filename = f"{module_name}_pass2_repair_prompt.txt"
+    pass2_llm_raw_filename = f"{module_name}_pass2_llm_raw_output.txt"
     verilator_log_path = os.path.join(analog_dir, verilator_log_filename)
     model_path = os.path.join(analog_dir, model_filename)
     params_path = os.path.join(analog_dir, params_filename)
     notes_path = os.path.join(analog_dir, notes_filename)
     compile_log_path = os.path.join(analog_dir, compile_log_filename)
     compile_summary_path = os.path.join(analog_dir, compile_summary_filename)
+    pass1_model_path = os.path.join(analog_dir, pass1_model_filename)
+    pass2_model_path = os.path.join(analog_dir, pass2_model_filename)
+    pass1_compile_log_path = os.path.join(analog_dir, pass1_compile_log_filename)
+    pass2_compile_log_path = os.path.join(analog_dir, pass2_compile_log_filename)
+    pass1_verilator_log_path = os.path.join(analog_dir, pass1_verilator_log_filename)
+    pass2_verilator_log_path = os.path.join(analog_dir, pass2_verilator_log_filename)
+    pass2_repair_prompt_path = os.path.join(analog_dir, pass2_repair_prompt_filename)
+    pass2_llm_raw_path = os.path.join(analog_dir, pass2_llm_raw_filename)
 
 
     model_params = {
@@ -521,6 +579,8 @@ SELF-CHECK BEFORE OUTPUT
     issues = []
 
     with open(model_path, "w", encoding="utf-8") as f:
+        f.write(model.rstrip() + "\n")
+    with open(pass1_model_path, "w", encoding="utf-8") as f:
         f.write(model.rstrip() + "\n")
 
     full_text = model
@@ -546,30 +606,47 @@ SELF-CHECK BEFORE OUTPUT
     compile_cmd = ["iverilog", "-g2005", "-o", os.path.join(analog_dir, "analog_model_out"), model_path]
     compile_status = "Compile not run yet."
     verilator_log = ""
+    pass1_compile_status = ""
+    pass2_compile_status = ""
+    pass1_verilator_log = ""
+    pass2_verilator_log = ""
     repair_used = False
 
     try:
         cp = run_command(state, "analog_behavioral_iverilog_compile", compile_cmd)
         compile_status = (cp.stdout or "") + "\n" + (cp.stderr or "")
+        pass1_compile_status = compile_status
         compile_failed = cp.returncode != 0
     except Exception as e:
         compile_status = f"Compile invocation failed: {e}"
+        pass1_compile_status = compile_status
         compile_failed = True
 
     fatal_lint = False
     if not compile_failed:
         try:
             vrc, verilator_log = _run_verilator_lint(model_path, state=state)
+            pass1_verilator_log = verilator_log
             fatal_lint = (vrc != 0) and _is_fatal_verilator_log(verilator_log)
         except Exception as e:
             verilator_log = f"Verilator invocation failed: {e}"
+            pass1_verilator_log = verilator_log
             fatal_lint = False
+
+    with open(pass1_compile_log_path, "w", encoding="utf-8") as f:
+        f.write((pass1_compile_status or "").strip() + "\n")
+    with open(pass1_verilator_log_path, "w", encoding="utf-8") as f:
+        f.write((pass1_verilator_log or "").strip() + "\n")
 
     if compile_failed or fatal_lint:
         repair_used = True
         failure_text = f"Icarus:\n{compile_status}\n\nVerilator:\n{verilator_log}"
         repair_prompt = _build_repair_prompt(prompt, spec, module_name, model, failure_text)
         repaired_raw = llm_text(repair_prompt)
+        with open(pass2_repair_prompt_path, "w", encoding="utf-8") as f:
+            f.write(repair_prompt)
+        with open(pass2_llm_raw_path, "w", encoding="utf-8") as f:
+            f.write(repaired_raw or "")
         repaired_model = _extract_sv_module(repaired_raw)
         repaired_model = _force_module_name(repaired_model, module_name)
         repaired_model = _sanitize_verilog2005_model(repaired_model)
@@ -578,9 +655,12 @@ SELF-CHECK BEFORE OUTPUT
             model = repaired_model
             with open(model_path, "w", encoding="utf-8") as f:
                 f.write(model.rstrip() + "\n")
+            with open(pass2_model_path, "w", encoding="utf-8") as f:
+                f.write(model.rstrip() + "\n")
 
             cp2 = run_command(state, "analog_behavioral_iverilog_compile_repair", compile_cmd)
             compile_status = (cp2.stdout or "") + "\n" + (cp2.stderr or "")
+            pass2_compile_status = compile_status
             compile_failed = cp2.returncode != 0
 
             verilator_log = ""
@@ -588,10 +668,19 @@ SELF-CHECK BEFORE OUTPUT
             if not compile_failed:
                 try:
                     vrc2, verilator_log = _run_verilator_lint(model_path, state=state)
+                    pass2_verilator_log = verilator_log
                     fatal_lint = (vrc2 != 0) and _is_fatal_verilator_log(verilator_log)
                 except Exception as e:
                     verilator_log = f"Verilator invocation failed: {e}"
+                    pass2_verilator_log = verilator_log
                     fatal_lint = False
+        if not pass2_compile_status:
+            pass2_compile_status = "Pass2 repair did not produce a valid Verilog module."
+            pass2_verilator_log = ""
+        with open(pass2_compile_log_path, "w", encoding="utf-8") as f:
+            f.write((pass2_compile_status or "").strip() + "\n")
+        with open(pass2_verilator_log_path, "w", encoding="utf-8") as f:
+            f.write((pass2_verilator_log or "").strip() + "\n")
 
     if compile_failed:
         issues.append("❌ Icarus Verilog compile failed for analog behavioral model.")
@@ -617,6 +706,16 @@ SELF-CHECK BEFORE OUTPUT
         "model_filename": model_filename,
         "compile_cmd": compile_cmd,
         "repair_used": repair_used,
+        "pass_artifacts": {
+            "pass1_model": pass1_model_filename,
+            "pass1_compile_log": pass1_compile_log_filename,
+            "pass1_verilator_log": pass1_verilator_log_filename,
+            "pass2_model": pass2_model_filename if repair_used and os.path.exists(pass2_model_path) else None,
+            "pass2_compile_log": pass2_compile_log_filename if repair_used else None,
+            "pass2_verilator_log": pass2_verilator_log_filename if repair_used else None,
+            "pass2_repair_prompt": pass2_repair_prompt_filename if repair_used else None,
+            "pass2_llm_raw_output": pass2_llm_raw_filename if repair_used else None,
+        },
         "iverilog_failed": compile_failed,
         "verilator_fatal": fatal_lint,
         "issue_count": len(issues),
@@ -639,6 +738,12 @@ SELF-CHECK BEFORE OUTPUT
 - compile_log: {compile_log_filename}
 - compile_summary: {compile_summary_filename}
 - verilator_log: {verilator_log_filename}
+- pass1_model: {pass1_model_filename}
+- pass1_compile_log: {pass1_compile_log_filename}
+- pass1_verilator_log: {pass1_verilator_log_filename}
+- pass2_model: {pass2_model_filename if repair_used and os.path.exists(pass2_model_path) else "not_used"}
+- pass2_compile_log: {pass2_compile_log_filename if repair_used else "not_used"}
+- pass2_verilator_log: {pass2_verilator_log_filename if repair_used else "not_used"}
 - repair_used: {"yes" if repair_used else "no"}
 - note: Module-scoped analog behavioral model artifact set
 - compile_status: {"clean" if not issues else "issues_found"}
@@ -651,8 +756,54 @@ SELF-CHECK BEFORE OUTPUT
 
 
     save_text_artifact_and_record(workflow_id, "Analog Behavioral Model Agent", "analog", model_filename, model)
+    save_text_artifact_and_record(workflow_id, "Analog Behavioral Model Agent", "analog", pass1_model_filename, open(pass1_model_path, "r", encoding="utf-8").read())
+    if repair_used and os.path.exists(pass2_model_path):
+        save_text_artifact_and_record(workflow_id, "Analog Behavioral Model Agent", "analog", pass2_model_filename, open(pass2_model_path, "r", encoding="utf-8").read())
     save_text_artifact_and_record(workflow_id, "Analog Behavioral Model Agent", "analog", params_filename, json.dumps(model_params, indent=2))
     save_text_artifact_and_record(workflow_id, "Analog Behavioral Model Agent", "analog", notes_filename, model_notes)
+    save_text_artifact_and_record(
+        workflow_id,
+        "Analog Behavioral Model Agent",
+        "analog",
+        pass1_compile_log_filename,
+        (pass1_compile_status or "").strip()
+    )
+    save_text_artifact_and_record(
+        workflow_id,
+        "Analog Behavioral Model Agent",
+        "analog",
+        pass1_verilator_log_filename,
+        (pass1_verilator_log or "").strip()
+    )
+    if repair_used:
+        save_text_artifact_and_record(
+            workflow_id,
+            "Analog Behavioral Model Agent",
+            "analog",
+            pass2_compile_log_filename,
+            (pass2_compile_status or "").strip()
+        )
+        save_text_artifact_and_record(
+            workflow_id,
+            "Analog Behavioral Model Agent",
+            "analog",
+            pass2_verilator_log_filename,
+            (pass2_verilator_log or "").strip()
+        )
+        save_text_artifact_and_record(
+            workflow_id,
+            "Analog Behavioral Model Agent",
+            "analog",
+            pass2_repair_prompt_filename,
+            open(pass2_repair_prompt_path, "r", encoding="utf-8").read() if os.path.exists(pass2_repair_prompt_path) else ""
+        )
+        save_text_artifact_and_record(
+            workflow_id,
+            "Analog Behavioral Model Agent",
+            "analog",
+            pass2_llm_raw_filename,
+            open(pass2_llm_raw_path, "r", encoding="utf-8").read() if os.path.exists(pass2_llm_raw_path) else ""
+        )
     save_text_artifact_and_record(
         workflow_id,
         "Analog Behavioral Model Agent",

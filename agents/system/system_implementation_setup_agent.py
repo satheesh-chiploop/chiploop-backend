@@ -103,10 +103,14 @@ def _resolve_spec_json(state: dict, workflow_dir: str) -> str | None:
 def _resolve_top_module(state: dict, profile: dict, spec: dict) -> str:
     system = state.get("system") or {}
     digital = state.get("digital") or {}
+    package = state.get("system_rtl_package") if isinstance(state.get("system_rtl_package"), dict) else {}
+    package_top = package.get("top") if isinstance(package.get("top"), dict) else {}
 
     return (
         state.get("soc_top_phys_module")
         or system.get("soc_top_phys_module")
+        or package_top.get("phys")
+        or package_top.get("phys_module")
         or state.get("top_module_phys")
         or ((state.get("system_integration_intent") or {}).get("top") or {}).get("phys_module")
         or (((spec.get("hierarchy") or {}).get("top_module") or {}).get("name"))

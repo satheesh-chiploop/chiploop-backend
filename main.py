@@ -3362,6 +3362,9 @@ def execute_digital_app_background(
             "artifact_prefix": f"backend/workflows/{workflow_id}/digital/{app_name}/{run_id}/",
             "app_name": app_name,
             "loop_type": "digital",
+            "template_workflow": template_workflow_name,
+            "template_workflow_name": template_workflow_name,
+            "workflow_name": template_workflow_name,
         }
 
         # Inject payload fields into shared_state
@@ -7756,6 +7759,11 @@ def execute_system_app_background(
             "workflow_dir": os.path.dirname(artifact_dir),
             "supabase_client": supabase,
             "user_id": user_id,
+            "app_name": app_name,
+            "loop_type": "system",
+            "template_workflow": template_workflow_name,
+            "template_workflow_name": template_workflow_name,
+            "workflow_name": template_workflow_name,
             "_fail_fast_on_agent_error": template_workflow_name in {
                 "System_Architecture_Explorer",
                 "System_Cache_Tuning",
@@ -7866,14 +7874,23 @@ def execute_system_app_background(
                 cleaned.append(path)
             return list(dict.fromkeys(cleaned))
 
-        def _materialize_system_rtl_import(filelist_lines: List[str], source_soc_top: str = "", source_intent: str = "") -> None:
+        def _materialize_system_rtl_import(
+            filelist_lines: List[str],
+            source_soc_top: str = "",
+            source_phys_top: str = "",
+            source_intent: str = "",
+        ) -> None:
             integration_dir = os.path.join(shared_state["workflow_dir"], "system", "integration")
             os.makedirs(integration_dir, exist_ok=True)
             normalized = _dedupe_system_rtl_files(filelist_lines)
             local_filelist = os.path.join(integration_dir, "system_rtl_filelist_sim.txt")
             with open(local_filelist, "w", encoding="utf-8") as fh:
                 fh.write("\n".join(normalized) + ("\n" if normalized else ""))
+            local_phys_filelist = os.path.join(integration_dir, "system_rtl_filelist_phys.txt")
+            with open(local_phys_filelist, "w", encoding="utf-8") as fh:
+                fh.write("\n".join(normalized) + ("\n" if normalized else ""))
             shared_state["system_rtl_filelist_sim"] = local_filelist
+            shared_state["system_rtl_filelist_phys"] = local_phys_filelist
             shared_state["system_rtl_files"] = normalized
             shared_state["rtl_inputs"] = normalized
             shared_state["rtl_files"] = normalized
@@ -7884,6 +7901,9 @@ def execute_system_app_background(
             if source_soc_top and os.path.exists(source_soc_top):
                 shared_state["soc_top_sim_path"] = os.path.abspath(source_soc_top)
                 shared_state["system_top_sim_path"] = os.path.abspath(source_soc_top)
+            if source_phys_top and os.path.exists(source_phys_top):
+                shared_state["soc_top_phys_path"] = os.path.abspath(source_phys_top)
+                shared_state["system_top_phys_path"] = os.path.abspath(source_phys_top)
             if source_intent and os.path.exists(source_intent):
                 shared_state["system_integration_intent_json"] = os.path.abspath(source_intent)
 
@@ -8302,7 +8322,9 @@ def execute_system_app_background(
 
             top = package_obj.get("top") if isinstance(package_obj.get("top"), dict) else {}
             top_sim = str((top or {}).get("sim") or "").strip()
+            top_phys = str((top or {}).get("phys") or "").strip()
             source_soc_top = next((p for p in materialized if top_sim and _contains_module(p, top_sim)), "")
+            source_phys_top = next((p for p in materialized if top_phys and _contains_module(p, top_phys)), "")
             if not source_soc_top:
                 source_soc_top = next(
                     (
@@ -8316,9 +8338,24 @@ def execute_system_app_background(
                 modules = _module_names_from_file(source_soc_top)
                 if modules:
                     top_sim = modules[0]
+            if not source_phys_top:
+                source_phys_top = next(
+                    (
+                        p
+                        for p in materialized
+                        if "soc" in os.path.basename(p).lower() and "phys" in os.path.basename(p).lower()
+                    ),
+                    "",
+                )
+            if source_phys_top:
+                modules = _module_names_from_file(source_phys_top)
+                if modules:
+                    top_phys = modules[0]
+            top_phys = top_phys or top_sim
             if top_sim:
-                shared_state["top_module"] = top_sim
                 shared_state["soc_top_sim_module"] = top_sim
+            if top_phys:
+                shared_state["soc_top_phys_module"] = top_phys
             regmap_text, regmap_storage_path = _download_first([
                 (storage_obj.get("digital_regmap") if isinstance(storage_obj, dict) else ""),
                 "digital/digital_regmap.json",
@@ -8358,20 +8395,41 @@ def execute_system_app_background(
                 os.makedirs(os.path.dirname(intent_local), exist_ok=True)
                 with open(intent_local, "w", encoding="utf-8") as fh:
                     fh.write(intent_text)
-            _materialize_system_rtl_import(materialized, source_soc_top=source_soc_top, source_intent=intent_local)
+            _materialize_system_rtl_import(
+                materialized,
+                source_soc_top=source_soc_top,
+                source_phys_top=source_phys_top,
+                source_intent=intent_local,
+            )
             if package_obj:
-                package_obj.setdefault("top", {})["sim"] = top_sim
+                package_top = package_obj.setdefault("top", {})
+                package_top["sim"] = package_top.get("sim") or top_sim
+                package_top["phys"] = package_top.get("phys") or top_phys
             shared_state["system_rtl_package"] = package_obj or {
                 "package_type": "system_rtl",
                 "source_workflow_id": source_workflow_id,
                 "filelists": {"sim": materialized, "phys": materialized, "libs": []},
-                "top": {"sim": top_sim or os.path.splitext(os.path.basename(source_soc_top or materialized[-1]))[0]},
+                "top": {
+                    "sim": top_sim or os.path.splitext(os.path.basename(source_soc_top or materialized[-1]))[0],
+                    "phys": top_phys or os.path.splitext(os.path.basename(source_phys_top or source_soc_top or materialized[-1]))[0],
+                },
                 "compile": {"sim": "imported_from_arch2rtl"},
                 "ready_for_cosim": True,
             }
+            package_top = shared_state["system_rtl_package"].get("top") if isinstance(shared_state["system_rtl_package"].get("top"), dict) else {}
+            if package_top.get("phys"):
+                shared_state["soc_top_phys_module"] = package_top["phys"]
+            if package_top.get("sim"):
+                shared_state["soc_top_sim_module"] = package_top["sim"]
+            active_top_kind = "phys" if template_workflow_name in {"System_Synthesis", "System_PD"} else "sim"
+            active_top = str(package_top.get(active_top_kind) or package_top.get("sim") or package_top.get("phys") or "").strip()
+            if active_top:
+                shared_state["top_module"] = active_top
+                shared_state["system_top_module"] = active_top
             shared_state["system_rtl_package"]["filelists"] = {
                 **(shared_state["system_rtl_package"].get("filelists") or {}),
                 "sim": materialized,
+                "phys": materialized,
             }
             append_log_workflow(
                 workflow_id,
@@ -8565,6 +8623,19 @@ def execute_system_app_background(
             if materialized_rtl:
                 shared_state["system_rtl_files"] = materialized_rtl
                 shared_state["rtl_inputs"] = materialized_rtl
+                pkg = shared_state.get("system_rtl_package") if isinstance(shared_state.get("system_rtl_package"), dict) else {}
+                pkg_top = pkg.get("top") if isinstance(pkg.get("top"), dict) else {}
+                top_sim = str(pkg_top.get("sim") or shared_state.get("soc_top_sim_module") or "").strip()
+                top_phys = str(pkg_top.get("phys") or shared_state.get("soc_top_phys_module") or "").strip()
+                if top_sim:
+                    shared_state["soc_top_sim_module"] = top_sim
+                if top_phys:
+                    shared_state["soc_top_phys_module"] = top_phys
+                active_top = top_phys if template_workflow_name in {"System_Synthesis", "System_PD"} else top_sim
+                active_top = active_top or top_sim or top_phys
+                if active_top:
+                    shared_state["top_module"] = active_top
+                    shared_state["system_top_module"] = active_top
             elif template_workflow_name in {"System_Sim", "System_Firmware"}:
                 source_hint = (
                     shared_state.get("system_rtl_workflow_id")

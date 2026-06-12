@@ -408,19 +408,48 @@ def run_agent(state: dict) -> dict:
             rtl_repairs[os.path.basename(dst)] = repairs
         copied.append(dst)
 
-    # Pick top module name best-effort:
-    # - If your spec later contains block.name or top_module, use it.
-
-    top_module = (
-        (state.get("digital") or {}).get("top_module")
-        or (spec.get("design_name") if isinstance(spec, dict) else None)
-        or (((spec.get("hierarchy") or {}).get("top_module") or {}).get("name") if isinstance(spec, dict) else None)
-        or (spec.get("top_module") if isinstance(spec, dict) else None)
-        or (spec.get("name") if isinstance(spec, dict) else None)
-        or ((spec.get("block") or {}).get("name") if isinstance(spec.get("block"), dict) else None)
-        or state.get("top_module")
-        or "top"
+    # Pick top module name best-effort. Digital synthesis keeps the digital top;
+    # System Synthesis/PD intentionally use the physical SoC wrapper.
+    workflow_name = str(
+        state.get("template_workflow_name")
+        or state.get("template_workflow")
+        or state.get("workflow_name")
+        or ""
     )
+    is_system_physical_flow = workflow_name in {"System_Synthesis", "System_PD"}
+    package = state.get("system_rtl_package") if isinstance(state.get("system_rtl_package"), dict) else {}
+    package_top = package.get("top") if isinstance(package.get("top"), dict) else {}
+
+    if is_system_physical_flow:
+        top_module = (
+            package_top.get("phys")
+            or package_top.get("sim")
+            or state.get("soc_top_phys_module")
+            or state.get("soc_top_sim_module")
+            or (state.get("digital") or {}).get("top_module")
+            or (spec.get("design_name") if isinstance(spec, dict) else None)
+            or (((spec.get("hierarchy") or {}).get("top_module") or {}).get("name") if isinstance(spec, dict) else None)
+            or (spec.get("top_module") if isinstance(spec, dict) else None)
+            or (spec.get("name") if isinstance(spec, dict) else None)
+            or ((spec.get("block") or {}).get("name") if isinstance(spec.get("block"), dict) else None)
+            or state.get("top_module")
+            or "top"
+        )
+    else:
+        top_module = (
+            (state.get("digital") or {}).get("top_module")
+            or (spec.get("design_name") if isinstance(spec, dict) else None)
+            or (((spec.get("hierarchy") or {}).get("top_module") or {}).get("name") if isinstance(spec, dict) else None)
+            or (spec.get("top_module") if isinstance(spec, dict) else None)
+            or (spec.get("name") if isinstance(spec, dict) else None)
+            or ((spec.get("block") or {}).get("name") if isinstance(spec.get("block"), dict) else None)
+            or state.get("top_module")
+            or package_top.get("sim")
+            or package_top.get("phys")
+            or state.get("soc_top_sim_module")
+            or state.get("soc_top_phys_module")
+            or "top"
+        )
     top_module = str(top_module).strip()
     logger.info(f"{AGENT_NAME}: top_module={top_module}")
 
@@ -777,4 +806,9 @@ echo "Done. Inspect /work/runs/{run_tag} or latest run folder under /work/runs/"
     }
     
     state["status"] = f"{AGENT_NAME}: {summary['status']}"
+    if summary["status"] != "ok" or not stable_netlist_path:
+        raise RuntimeError(
+            f"{AGENT_NAME}: synthesis failed before downstream PD stages "
+            f"(status={summary['status']}, rc={rc}, netlist={'present' if stable_netlist_path else 'missing'})"
+        )
     return state
