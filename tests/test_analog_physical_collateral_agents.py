@@ -5,12 +5,39 @@ os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-service-role-key")
 os.environ.setdefault("OPENAI_API_KEY", "test-openai-key")
 
 from agents.analog import analog_sky130_spice_netlist_agent as spice_agent
+from agents.analog import analog_abstract_views_agent as abstract_agent
 from agents.analog import analog_physical_collateral_package_agent as package_agent
 from agents.analog import analog_collateral_consistency_agent as consistency_agent
 from agents.analog import analog_lef_extraction_agent as lef_agent
 from agents.analog import analog_liberty_characterization_agent as lib_agent
 from agents.analog import analog_macro_interface_contract_agent as contract_agent
 from agents.analog import analog_macro_interface_validation_agent as validation_agent
+
+
+def test_abstract_lib_stub_is_self_contained_and_rejects_malformed_pin_syntax():
+    spec = {
+        "module_name": "temp_sensor_adc_model",
+        "clock_period_ns": 10,
+        "ports": [
+            {"name": "clk", "direction": "input", "width": 1},
+            {"name": "sample_req", "direction": "input", "width": 1},
+            {"name": "adc_valid", "direction": "output", "width": 1},
+        ],
+    }
+
+    lib = abstract_agent._build_lib_stub(spec)
+    assert "lu_table_template (delay_template_1x1)" in lib
+    assert "lu_table_template (constraint_template_1x1)" in lib
+    assert abstract_agent._lib_stub_issues(lib, spec) == []
+
+    malformed = (
+        "library (temp_sensor_adc_model_lib) { cell (temp_sensor_adc_model) { "
+        "pg_pin (VPWR) {} pg_pin (VGND) {} "
+        "lu_table_template (delay_template_1x1) {} "
+        "lu_table_template (constraint_template_1x1) {} "
+        "pin (adc_code[0]) { direction : output ; } } }"
+    )
+    assert "unquoted bus bit pin name" in abstract_agent._lib_stub_issues(malformed, spec)
 
 
 def test_sky130_spice_agent_defers_without_real_devices(tmp_path, monkeypatch):

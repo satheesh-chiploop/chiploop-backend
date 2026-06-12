@@ -1,5 +1,6 @@
 import json
 import os
+import re
 from utils.artifact_utils import save_text_artifact_and_record
 from agents.analog._analog_llm import llm_text, safe_json_load
 import logging
@@ -194,6 +195,20 @@ def _build_lib_stub(spec: dict) -> str:
         "  capacitive_load_unit(1,pf) ;",
         "  leakage_power_unit : \"1nW\" ;",
         "",
+        "  lu_table_template (delay_template_1x1) {",
+        "    variable_1 : input_net_transition ;",
+        "    variable_2 : total_output_net_capacitance ;",
+        '    index_1 ("0.100") ;',
+        '    index_2 ("0.100") ;',
+        "  }",
+        "",
+        "  lu_table_template (constraint_template_1x1) {",
+        "    variable_1 : related_pin_transition ;",
+        "    variable_2 : constrained_pin_transition ;",
+        '    index_1 ("0.100") ;',
+        '    index_2 ("0.100") ;',
+        "  }",
+        "",
         f"  cell ({module_name}) {{",
         "    area : 100.0 ;",
         "",
@@ -294,6 +309,50 @@ def _build_lib_stub(spec: dict) -> str:
 
     lines.extend(["  }", "}", ""])
     return "\n".join(lines)
+
+
+def _lib_stub_issues(lib_stub: str, spec: dict) -> list[str]:
+    text = lib_stub or ""
+    module_name = _get_module_name(spec)
+    issues = []
+    required_tokens = [
+        f"library ({module_name}_lib)",
+        f"cell ({module_name})",
+        "pg_pin (VPWR)",
+        "pg_pin (VGND)",
+        "lu_table_template (delay_template_1x1)",
+        "lu_table_template (constraint_template_1x1)",
+    ]
+    for token in required_tokens:
+        if token not in text:
+            issues.append(f"missing {token}")
+
+    if text.count("{") != text.count("}"):
+        issues.append("unbalanced braces")
+    if re.search(r"related_pin\s*:\s*\"\"\s*;", text):
+        issues.append("empty related_pin")
+    if re.search(r"\bpin\s*\([^)]*\[[^)]*\]\s*\)", text):
+        issues.append("unquoted bus bit pin name")
+    if re.search(r"\b(bus|pin)\s*\([^)]*,[^)]*\)", text):
+        issues.append("malformed pin or bus declaration")
+
+    uses_delay = any(token in text for token in (
+        "cell_rise(delay_template_1x1)",
+        "cell_fall(delay_template_1x1)",
+        "rise_transition(delay_template_1x1)",
+        "fall_transition(delay_template_1x1)",
+    ))
+    if uses_delay and "lu_table_template (delay_template_1x1)" not in text:
+        issues.append("delay template referenced but not defined")
+
+    uses_constraint = any(token in text for token in (
+        "rise_constraint(constraint_template_1x1)",
+        "fall_constraint(constraint_template_1x1)",
+    ))
+    if uses_constraint and "lu_table_template (constraint_template_1x1)" not in text:
+        issues.append("constraint template referenced but not defined")
+
+    return issues
 
 def run_agent(state: dict) -> dict:
     agent_name = "Analog Abstract Views Agent"
@@ -1096,26 +1155,15 @@ If any checklist item fails, regenerate internally and return only a corrected f
         logger.warning(f"[{agent_name}] LIB missing → building stub")
         lib_stub = _build_lib_stub(spec)
 
-    lib_issues = []
-    if "cell (" not in lib_stub:
-        lib_issues.append("missing cell block")
-    if "pg_pin (" not in lib_stub:
-        lib_issues.append("missing pg_pin")
-    if "related_pin" not in lib_stub:
-        lib_issues.append("missing related_pin")
-    if "setup_rising" not in lib_stub:
-        lib_issues.append("missing setup_rising")
-    if "hold_rising" not in lib_stub:
-        lib_issues.append("missing hold_rising")
-    if "cell_rise" not in lib_stub:
-        lib_issues.append("missing cell_rise")
-    if "cell_fall" not in lib_stub:
-        lib_issues.append("missing cell_fall")
+    lib_issues = _lib_stub_issues(lib_stub, spec)
 
     if lib_issues:
         logger.warning(f"[{agent_name}] LIB invalid: {lib_issues} → regenerating deterministic LIB stub")
         logger.info(f"[{agent_name}] rejected LLM LIB preview:\n{lib_stub[:1200]}")
-        lib_stub = _build_lib_stub(spec)    
+        lib_stub = _build_lib_stub(spec)
+        rebuilt_issues = _lib_stub_issues(lib_stub, spec)
+        if rebuilt_issues:
+            logger.warning(f"[{agent_name}] deterministic LIB stub still has issues: {rebuilt_issues}")
 
     if not notes:
         logger.warning(f"[{agent_name}] notes missing → generating default")
