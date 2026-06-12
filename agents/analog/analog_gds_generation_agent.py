@@ -77,7 +77,7 @@ def _host_align_pdk_arg(state: dict, pdk_variant: str, pdk_root_host: str) -> st
 
 def _align_docker_script(spice_name: str, module_name: str, pdk_variant: str) -> str:
     return "\n".join([
-        "set -euo pipefail",
+        "set -eu",
         "PDK_DIR=\"$(python - <<'PY'",
         "from pathlib import Path",
         "import align",

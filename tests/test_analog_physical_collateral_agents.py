@@ -231,6 +231,8 @@ def test_gds_generation_uses_align_docker_when_host_align_missing(tmp_path, monk
         assert "PDK_ROOT=/pdk" in cmd
         assert "sh" in cmd
         script = cmd[-1]
+        assert "set -eu" in script
+        assert "pipefail" not in script
         assert "schematic2layout.py /work" in script
         assert 'ALIGN_PDK_DIR=${PDK_DIR}' in script
         assert "-p \"${PDK_DIR}\"" in script
