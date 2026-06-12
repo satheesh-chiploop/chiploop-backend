@@ -8783,6 +8783,34 @@ def execute_system_app_background(
                 run_id,
                 f"{template_workflow_name}: using existing System RTL source ({rtl_source_mode or 'from_system_rtl'}); skipped {original_count - len(nodes)} System RTL generation/dashboard nodes",
             )
+        if template_workflow_name == "System_DQA":
+            dqa_toggle_agents = {
+                "run_lint": "Digital RTL Linting Agent",
+                "run_cdc": "Digital CDC Analysis Agent",
+                "run_reset": "Digital Reset Integrity Agent",
+                "run_synthesis_readiness": "Digital Synthesis Readiness Agent",
+            }
+            disabled_agents = {
+                label
+                for key, label in dqa_toggle_agents.items()
+                if toggles.get(key) is False
+            }
+            if disabled_agents:
+                original_count = len(nodes)
+                nodes = [
+                    node for node in nodes
+                    if str((node.get("data") or {}).get("backendLabel") or node.get("label") or node.get("name") or "") not in disabled_agents
+                ]
+                skipped = original_count - len(nodes)
+                append_log_workflow(
+                    workflow_id,
+                    f"System_DQA: skipped {skipped} disabled quality check agent(s): {', '.join(sorted(disabled_agents))}",
+                    phase="system_dqa_tools",
+                )
+                append_log_run(
+                    run_id,
+                    f"System_DQA: skipped {skipped} disabled quality check agent(s)",
+                )
         if template_workflow_name in {"System_RTL", "System_Synthesis", "System_PD"}:
             labels = [str(node.get("label") or node.get("name") or "") for node in nodes]
             if "System RTL Evidence Dashboard Agent" not in labels:
