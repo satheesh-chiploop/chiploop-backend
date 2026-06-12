@@ -81,7 +81,7 @@ def _sanitize_verilog2005_model(model_text: str) -> str:
         out_lines = []
         in_comb = False
         depth = 0
-        comb_start = re.compile(r"\balways\s*@\s*\(\s*\*\s*\)", re.I)
+        comb_start = re.compile(r"\balways\s*@\s*\((?![^)]*\b(?:posedge|negedge)\b)[^)]*\)", re.I)
         begin_re = re.compile(r"\bbegin\b", re.I)
         end_re = re.compile(r"\bend\b", re.I)
         blocking_assign_re = re.compile(r"\b([A-Za-z_][A-Za-z0-9_$]*)\s*=(?!=)")
@@ -173,12 +173,6 @@ def _sanitize_verilog2005_model(model_text: str) -> str:
             return ""
         return body_text
 
-    out = re.sub(
-        r"always\s*@\s*\(\s*\*\s*\)\s*begin\b.*?end",
-        clean_comb_block,
-        out,
-        flags=re.DOTALL,
-    )
     out = strip_comb_blocking_assigns_to_sequential_regs(out, nonblocking_lhs)
     out = convert_initial_blocking_assigns_to_sequential_regs(out, nonblocking_lhs)
 

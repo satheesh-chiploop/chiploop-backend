@@ -1056,12 +1056,20 @@ def run_agent(state: dict) -> dict:
                 "rtl_files": [],
                 "iverilog_ok": False,
                 "verilator_ok": False,
+                "tools": {
+                    "compile": "iverilog",
+                    "lint": "verilator",
+                },
                 "error": "No RTL files found for sim full compile"
             },
             "phys": {
                 "top_module": top_phys,
                 "rtl_files": phys_abs_list,
                 "skipped": True,
+                "tools": {
+                    "compile": "iverilog",
+                    "lint": "verilator",
+                },
                 "reason": "Sim filelist missing; phys not attempted"
             }
         }
@@ -1081,11 +1089,19 @@ def run_agent(state: dict) -> dict:
         "sim": {
             "top_module": top_sim,
             "rtl_files": sim_abs_list,
+            "tools": {
+                "compile": "iverilog",
+                "lint": "verilator",
+            },
         },
         "phys": {
             "top_module": top_phys,
             "rtl_files": phys_abs_list,
             "lib_files": phys_lib_abs_list,
+            "tools": {
+                "compile": "iverilog",
+                "lint": "verilator",
+            },
         }
     }
 
