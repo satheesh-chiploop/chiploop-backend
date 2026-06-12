@@ -239,6 +239,7 @@ def test_gds_generation_uses_align_docker_when_host_align_missing(tmp_path, monk
         assert 'ALIGN_PDK_DIR=${PDK_DIR}' in script
         assert "-p \"${PDK_DIR}\"" in script
         assert "Path('/pdk') / variant" in script
+        assert "primitive.py" in script
         assert "-f ana.sp" in script
         assert "-s ana" in script
         assert "-c" not in cmd

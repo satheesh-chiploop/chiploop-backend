@@ -70,7 +70,7 @@ def _host_align_pdk_arg(state: dict, pdk_variant: str, pdk_root_host: str) -> st
         os.path.join(pdk_root_host, "sky130"),
     ]
     for path in candidates:
-        if os.path.isdir(path):
+        if os.path.isdir(path) and os.path.exists(os.path.join(path, "primitive.py")):
             return path
     return "sky130"
 
@@ -96,10 +96,10 @@ def _align_docker_script(spice_name: str, module_name: str, pdk_variant: str) ->
         "    Path('/pdks/sky130'),",
         "]",
         "for path in candidates:",
-        "    if path.exists():",
+        "    if path.exists() and (path / 'primitive.py').exists():",
         "        print(path)",
         "        sys.exit(0)",
-        "print('ALIGN Sky130 PDK directory not found in container or mounted /pdk', file=sys.stderr)",
+        "print('ALIGN Sky130 PDK directory with primitive.py not found in container or mounted /pdk', file=sys.stderr)",
         "sys.exit(2)",
         "PY",
         ")\"",
