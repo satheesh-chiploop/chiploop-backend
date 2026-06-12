@@ -30,15 +30,38 @@ def _parse_verilog_module(text: str, preferred: str = "") -> tuple[str, List[Dic
     body_start = selected.end()
     body_end = text.find("endmodule", body_start)
     body = text[body_start:body_end if body_end >= 0 else len(text)]
-    port_order = [p.strip().split()[-1].strip(" ,") for p in header.replace("\n", " ").split(",") if p.strip()]
-    decl_text = header + "\n" + body
+    port_order = []
     decls: Dict[str, Dict[str, Any]] = {}
-    for match in re.finditer(r"\b(input|output|inout)\b\s+(?:wire|logic|reg\s+)?(\[[^\]]+\])?\s*([^;,\n)]+(?:\s*,\s*[^;,\n)]+)*)", decl_text):
+
+    current_direction = ""
+    current_width = "1"
+    for entry in [p.strip() for p in header.replace("\n", " ").split(",") if p.strip()]:
+        m_dir = re.match(r"^(input|output|inout)\b\s*(.*)$", entry)
+        rest = entry
+        if m_dir:
+            current_direction = m_dir.group(1)
+            current_width = "1"
+            rest = m_dir.group(2).strip()
+        rest = re.sub(r"^(?:wire|logic|reg|signed)\s+", "", rest).strip()
+        m_width = re.match(r"^(\[[^\]]+\])\s*(.*)$", rest)
+        if m_width:
+            current_width = m_width.group(1).strip()
+            rest = m_width.group(2).strip()
+        rest = re.sub(r"\s*=.*$", "", rest).strip()
+        name = rest.split()[-1].strip(" ,") if rest.split() else ""
+        name = re.sub(r"\[[^\]]+\]$", "", name).strip()
+        if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_$]*", name):
+            port_order.append(name)
+            if current_direction:
+                decls[name] = {"name": name, "verilog_direction": current_direction, "width": current_width}
+
+    for match in re.finditer(r"\b(input|output|inout)\b\s+(?:wire|logic|reg\s+)?(\[[^\]]+\])?\s*([^;]+);", body):
         direction = match.group(1)
         width = (match.group(2) or "1").strip()
         names = [x.strip().split()[-1] for x in match.group(3).split(",")]
         for name in names:
             if name:
+                name = re.sub(r"\[[^\]]+\]$", "", name).strip()
                 decls[name] = {"name": name, "verilog_direction": direction, "width": width}
     ports = []
     for name in port_order or sorted(decls):

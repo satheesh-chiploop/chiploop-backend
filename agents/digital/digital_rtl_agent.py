@@ -244,6 +244,25 @@ def _extract_verilog_modules(code: str) -> Dict[str, str]:
     return modules
 
 
+def _module_code_for_name(code: str, module_name: str) -> str:
+    modules = _extract_verilog_modules(code)
+    return modules.get(module_name, code or "")
+
+
+def _module_procedurally_assigns_signal(module_code: str, signal_name: str) -> bool:
+    text = _strip_verilog_comments(module_code or "")
+    for block in re.findall(
+        r"\balways(?:_ff|_comb)?\s*(?:@\s*\([^)]*\))?\s*(.*?)(?=\balways(?:_ff|_comb)?\b|\bendmodule\b)",
+        text,
+        flags=re.DOTALL,
+    ):
+        if re.search(rf"\b{re.escape(signal_name)}\s*<=", block):
+            return True
+        if re.search(rf"\b{re.escape(signal_name)}\s*(?<![=!<>])=(?!=)", block):
+            return True
+    return False
+
+
 def _align_verilog_map_to_expected_modules(verilog_map: Dict[str, str], spec_json: dict, mode: str) -> Dict[str, str]:
     module_to_file = {
         str(module.get("name") or "").strip(): str(module.get("rtl_output_file") or "").strip()
@@ -1918,9 +1937,9 @@ def _validate_and_materialize_rtl(
 
     if mode == "hierarchical":
         top_file = _top_rtl_file(spec_json, mode)
-        top_code = verilog_map.get(top_file, "")
-        owned_top_signals = []
         top_name = _top_module_name(spec_json, mode)
+        top_code = _module_code_for_name(verilog_map.get(top_file, ""), top_name)
+        owned_top_signals = []
 
         for o in spec_json.get("signal_ownership", []):
             sig = _normalize_signal_token(o.get("signal", ""))
@@ -1930,10 +1949,9 @@ def _validate_and_materialize_rtl(
                 if omod != top_name:
                     owned_top_signals.append(sig)
 
-        if re.search(r"\balways\b", top_code):
-            for sig in set(owned_top_signals):
-                if re.search(rf"\b{re.escape(sig)}\s*<=", top_code) or re.search(rf"\b{re.escape(sig)}\s*=", top_code):
-                    issues.append(f"❌ Top module appears to procedurally drive child-owned signal '{sig}'.")
+        for sig in set(owned_top_signals):
+            if _module_procedurally_assigns_signal(top_code, sig):
+                issues.append(f"❌ Top module appears to procedurally drive child-owned signal '{sig}'.")
 
         _stage(f"iverilog_compile_start_{suffix or 'pass1'}")
     compile_args = [
