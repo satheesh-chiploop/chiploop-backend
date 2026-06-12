@@ -168,6 +168,31 @@ def test_sky130_spice_agent_fails_when_generator_returns_no_real_devices(tmp_pat
     assert state["analog_sky130_spice"]["status"] == "failed"
 
 
+def test_sky130_spice_agent_rejects_x_lines_as_mos_devices(tmp_path, monkeypatch):
+    monkeypatch.setattr(spice_agent, "save_text_artifact_and_record", lambda *args, **kwargs: "local")
+    monkeypatch.setattr(
+        spice_agent,
+        "complete_text",
+        lambda *args, **kwargs: ".subckt ana vin vout vdd vss\nX1 vout vin vss vss sky130_fd_pr__nfet_01v8 W=1u L=0.15u\n.ends ana\n",
+    )
+
+    state = {
+        "workflow_id": "wf",
+        "workflow_dir": str(tmp_path),
+        "analog_physical_mode": "generate_sky130_gds",
+        "analog_pdk": "sky130A",
+        "analog_spec": {
+            "module_name": "ana",
+            "ports": [{"name": "vin", "direction": "input"}, {"name": "vout", "direction": "output"}],
+        },
+    }
+
+    with pytest.raises(RuntimeError, match="requires real transistor-level SPICE"):
+        spice_agent.run_agent(state)
+
+    assert state["analog_sky130_spice"]["status"] == "failed"
+
+
 def test_gds_generation_uses_macro_contract_name_when_module_missing(tmp_path, monkeypatch):
     monkeypatch.setattr(gds_agent, "save_text_artifact_and_record", lambda *args, **kwargs: "local")
 
@@ -201,6 +226,12 @@ def test_gds_generation_uses_align_docker_when_host_align_missing(tmp_path, monk
         assert cmd[0] == "/usr/bin/docker"
         assert gds_agent.ALIGN_DOCKER_IMAGE in cmd
         assert "schematic2layout.py" in cmd
+        assert "/work" in cmd
+        assert "-f" in cmd
+        assert "ana.spice" in cmd
+        assert "-s" in cmd
+        assert "ana" in cmd
+        assert "-c" not in cmd
         (tmp_path / "analog" / "gds" / "ana.gds").write_bytes(b"GDS")
         return SimpleNamespace(returncode=0, stdout="align ok", stderr="")
 

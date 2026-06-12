@@ -70,7 +70,11 @@ def _candidate_texts(state: dict) -> List[tuple[str, str]]:
 
 
 def _has_real_devices(text: str) -> bool:
-    device_re = re.compile(r"^\s*[mrcx][A-Za-z0-9_:$.-]*\s+", re.IGNORECASE | re.MULTILINE)
+    device_re = re.compile(
+        r"^\s*M[A-Za-z0-9_:$.-]*\s+\S+\s+\S+\s+\S+\s+\S+\s+sky130_fd_pr__(?:nfet|pfet)_\S+"
+        r"(?=.*\bW\s*=)(?=.*\bL\s*=)",
+        re.IGNORECASE | re.MULTILINE,
+    )
     return bool(device_re.search(text or ""))
 
 
@@ -139,7 +143,8 @@ Analog spec text, if any:
 Strict requirements:
 - Return SPICE text only. No Markdown.
 - Must include exactly one .subckt named {module_name}.
-- Must include transistor-level MOS devices using sky130_fd_pr__nfet_01v8 and/or sky130_fd_pr__pfet_01v8.
+- Must include transistor-level MOS device lines that start with M, using sky130_fd_pr__nfet_01v8 and/or sky130_fd_pr__pfet_01v8.
+- Do not instantiate Sky130 MOS models with X lines; X is for subcircuit calls and is not accepted as a MOS device.
 - Preserve the required port order in the .subckt line.
 - Include explicit W and L parameters on MOS devices.
 - Do not emit placeholder comments instead of devices.

@@ -37,6 +37,11 @@ def _docker_available() -> bool:
     return bool(shutil.which("docker"))
 
 
+def _tail(text: str, limit: int = 2000) -> str:
+    text = text or ""
+    return text[-limit:] if len(text) > limit else text
+
+
 def run_agent(state: dict) -> dict:
     print(f"\nRunning {AGENT_NAME}...")
     workflow_id = state.get("workflow_id", "default")
@@ -74,11 +79,11 @@ def run_agent(state: dict) -> dict:
         shutil.copy2(spice_path, staged_spice)
     run_sh = os.path.join(stage_dir, "run_align.sh")
     if align_bin:
-        expected_cmd = f"{align_bin} {os.path.abspath(staged_spice)} -p sky130 -c {module_name}"
+        expected_cmd = f"{align_bin} {os.path.abspath(stage_dir)} -p sky130 -f {os.path.basename(staged_spice)} -s {module_name}"
     else:
         expected_cmd = (
             f"docker run --rm -v {os.path.abspath(stage_dir)}:/work -w /work "
-            f"{ALIGN_DOCKER_IMAGE} schematic2layout.py /work/{os.path.basename(staged_spice)} -p sky130 -c {module_name}"
+            f"{ALIGN_DOCKER_IMAGE} schematic2layout.py /work -p sky130 -f {os.path.basename(staged_spice)} -s {module_name}"
         )
     run_text = "\n".join([
         "#!/usr/bin/env bash",
@@ -111,7 +116,16 @@ def run_agent(state: dict) -> dict:
         raise RuntimeError("Analog GDS generation failed: ALIGN/schematic2layout.py is not installed and Docker is not available.")
 
     if align_bin:
-        cmd = [align_bin, os.path.abspath(staged_spice), "-p", "sky130", "-c", module_name]
+        cmd = [
+            align_bin,
+            os.path.abspath(stage_dir),
+            "-p",
+            "sky130",
+            "-f",
+            os.path.basename(staged_spice),
+            "-s",
+            module_name,
+        ]
         tool_mode = "host"
     else:
         cmd = [
@@ -124,10 +138,12 @@ def run_agent(state: dict) -> dict:
             "/work",
             ALIGN_DOCKER_IMAGE,
             "schematic2layout.py",
-            f"/work/{os.path.basename(staged_spice)}",
+            "/work",
             "-p",
             "sky130",
-            "-c",
+            "-f",
+            os.path.basename(staged_spice),
+            "-s",
             module_name,
         ]
         tool_mode = "docker"
@@ -164,6 +180,7 @@ def run_agent(state: dict) -> dict:
             "return_code": cp.returncode,
             "reason": "align_gds_not_produced",
             "log": log_path,
+            "log_tail": _tail(log),
             "tool_mode": tool_mode,
             "image": ALIGN_DOCKER_IMAGE if tool_mode == "docker" else "",
         })
@@ -174,5 +191,9 @@ def run_agent(state: dict) -> dict:
     state["analog_gds_generation"] = summary
     state["status"] = f"{AGENT_NAME}: {summary['status']}"
     if summary["status"] != "generated":
-        raise RuntimeError(f"Analog GDS generation failed: {summary.get('reason') or 'gds_not_produced'}")
+        detail = summary.get("log_tail") or ""
+        raise RuntimeError(
+            f"Analog GDS generation failed: {summary.get('reason') or 'gds_not_produced'}"
+            + (f"\nALIGN log tail:\n{detail}" if detail else "")
+        )
     return state
