@@ -1,5 +1,6 @@
 import json
 import os
+import shlex
 import shutil
 from datetime import datetime
 from typing import Any, Dict
@@ -42,6 +43,73 @@ def _tail(text: str, limit: int = 2000) -> str:
     return text[-limit:] if len(text) > limit else text
 
 
+def _resolve_pdk_variant(state: dict) -> str:
+    return str(
+        state.get("pdk_variant")
+        or state.get("analog_pdk")
+        or state.get("pdk")
+        or os.getenv("CHIPLOOP_PDK_VARIANT")
+        or "sky130A"
+    ).strip()
+
+
+def _resolve_pdk_root_host(state: dict) -> str:
+    pdk_root = (
+        state.get("pdk_root_host")
+        or os.getenv("CHIPLOOP_PDK_ROOT_HOST")
+        or "/root/chiploop-backend/backend/pdk"
+    )
+    pdk_root = os.path.abspath(str(pdk_root))
+    state["pdk_root_host"] = pdk_root
+    return pdk_root
+
+
+def _host_align_pdk_arg(state: dict, pdk_variant: str, pdk_root_host: str) -> str:
+    candidates = [
+        os.path.join(pdk_root_host, pdk_variant),
+        os.path.join(pdk_root_host, "sky130"),
+    ]
+    for path in candidates:
+        if os.path.isdir(path):
+            return path
+    return "sky130"
+
+
+def _align_docker_script(spice_name: str, module_name: str, pdk_variant: str) -> str:
+    return "\n".join([
+        "set -euo pipefail",
+        "PDK_DIR=\"$(python - <<'PY'",
+        "from pathlib import Path",
+        "import align",
+        "import sys",
+        f"variant = {pdk_variant!r}",
+        "root = Path(align.__file__).resolve().parent",
+        "candidates = [",
+        "    Path('/pdk') / variant,",
+        "    Path('/pdk/sky130'),",
+        "    root / 'pdk' / 'sky130',",
+        "    root / 'pdks' / 'sky130',",
+        "    root.parent / 'pdks' / 'sky130',",
+        "    Path('/ALIGN-public/pdks/sky130'),",
+        "    Path('/align/pdk/sky130'),",
+        "    Path('/pdks/sky130'),",
+        "]",
+        "for path in candidates:",
+        "    if path.exists():",
+        "        print(path)",
+        "        sys.exit(0)",
+        "print('ALIGN Sky130 PDK directory not found in container or mounted /pdk', file=sys.stderr)",
+        "sys.exit(2)",
+        "PY",
+        ")\"",
+        "echo \"ALIGN_PDK_DIR=${PDK_DIR}\"",
+        (
+            "schematic2layout.py /work -p \"${PDK_DIR}\" "
+            f"-f {shlex.quote(spice_name)} -s {shlex.quote(module_name)}"
+        ),
+    ])
+
+
 def run_agent(state: dict) -> dict:
     print(f"\nRunning {AGENT_NAME}...")
     workflow_id = state.get("workflow_id", "default")
@@ -55,12 +123,15 @@ def run_agent(state: dict) -> dict:
         return state
 
     module_name = _module_name(state)
+    pdk_variant = _resolve_pdk_variant(state)
+    pdk_root_host = _resolve_pdk_root_host(state)
     spice_path = state.get("analog_spice_path") or state.get("analog_netlist_path")
     summary: Dict[str, Any] = {
         "workflow_id": workflow_id,
         "agent": AGENT_NAME,
         "generated_at": datetime.utcnow().isoformat() + "Z",
-        "pdk": "sky130A",
+        "pdk": pdk_variant,
+        "pdk_root_host": pdk_root_host,
         "module": module_name,
         "spice": spice_path,
     }
@@ -79,11 +150,13 @@ def run_agent(state: dict) -> dict:
         shutil.copy2(spice_path, staged_spice)
     run_sh = os.path.join(stage_dir, "run_align.sh")
     if align_bin:
-        expected_cmd = f"{align_bin} {os.path.abspath(stage_dir)} -p sky130 -f {os.path.basename(staged_spice)} -s {module_name}"
+        host_pdk_arg = _host_align_pdk_arg(state, pdk_variant, pdk_root_host)
+        expected_cmd = f"{align_bin} {os.path.abspath(stage_dir)} -p {host_pdk_arg} -f {os.path.basename(staged_spice)} -s {module_name}"
     else:
+        docker_script = _align_docker_script(os.path.basename(staged_spice), module_name, pdk_variant)
         expected_cmd = (
-            f"docker run --rm -v {os.path.abspath(stage_dir)}:/work -w /work "
-            f"{ALIGN_DOCKER_IMAGE} schematic2layout.py /work -p sky130 -f {os.path.basename(staged_spice)} -s {module_name}"
+            f"docker run --rm -v {pdk_root_host}:/pdk -v {os.path.abspath(stage_dir)}:/work -w /work "
+            f"{ALIGN_DOCKER_IMAGE} sh -lc {shlex.quote(docker_script)}"
         )
     run_text = "\n".join([
         "#!/usr/bin/env bash",
@@ -91,7 +164,8 @@ def run_agent(state: dict) -> dict:
         f'echo "ChipLoop {AGENT_NAME}"',
         f'echo "SPICE={staged_spice}"',
         f'echo "TOP={module_name}"',
-        f'echo "PDK=sky130A"',
+        f'echo "PDK={pdk_variant}"',
+        f'echo "PDK_ROOT_HOST={pdk_root_host}"',
         expected_cmd,
         "",
     ])
@@ -116,11 +190,12 @@ def run_agent(state: dict) -> dict:
         raise RuntimeError("Analog GDS generation failed: ALIGN/schematic2layout.py is not installed and Docker is not available.")
 
     if align_bin:
+        host_pdk_arg = _host_align_pdk_arg(state, pdk_variant, pdk_root_host)
         cmd = [
             align_bin,
             os.path.abspath(stage_dir),
             "-p",
-            "sky130",
+            host_pdk_arg,
             "-f",
             os.path.basename(staged_spice),
             "-s",
@@ -128,23 +203,25 @@ def run_agent(state: dict) -> dict:
         ]
         tool_mode = "host"
     else:
+        docker_script = _align_docker_script(os.path.basename(staged_spice), module_name, pdk_variant)
         cmd = [
             docker_bin,
             "run",
             "--rm",
             "-v",
+            f"{pdk_root_host}:/pdk",
+            "-v",
             f"{os.path.abspath(stage_dir)}:/work",
+            "-e",
+            f"PDK={pdk_variant}",
+            "-e",
+            "PDK_ROOT=/pdk",
             "-w",
             "/work",
             ALIGN_DOCKER_IMAGE,
-            "schematic2layout.py",
-            "/work",
-            "-p",
-            "sky130",
-            "-f",
-            os.path.basename(staged_spice),
-            "-s",
-            module_name,
+            "sh",
+            "-lc",
+            docker_script,
         ]
         tool_mode = "docker"
     cp = run_command(state, "analog_align_gds", cmd, cwd=stage_dir, timeout_sec=3600)

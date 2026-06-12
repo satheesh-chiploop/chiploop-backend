@@ -225,12 +225,18 @@ def test_gds_generation_uses_align_docker_when_host_align_missing(tmp_path, monk
     def fake_run_command(state, capability, cmd, cwd=None, timeout_sec=None):
         assert cmd[0] == "/usr/bin/docker"
         assert gds_agent.ALIGN_DOCKER_IMAGE in cmd
-        assert "schematic2layout.py" in cmd
-        assert "/work" in cmd
-        assert "-f" in cmd
-        assert "ana.spice" in cmd
-        assert "-s" in cmd
-        assert "ana" in cmd
+        assert any(str(part).endswith(":/pdk") for part in cmd)
+        assert "-e" in cmd
+        assert "PDK=sky130A" in cmd
+        assert "PDK_ROOT=/pdk" in cmd
+        assert "sh" in cmd
+        script = cmd[-1]
+        assert "schematic2layout.py /work" in script
+        assert 'ALIGN_PDK_DIR=${PDK_DIR}' in script
+        assert "-p \"${PDK_DIR}\"" in script
+        assert "Path('/pdk') / variant" in script
+        assert "-f ana.spice" in script
+        assert "-s ana" in script
         assert "-c" not in cmd
         (tmp_path / "analog" / "gds" / "ana.gds").write_bytes(b"GDS")
         return SimpleNamespace(returncode=0, stdout="align ok", stderr="")
