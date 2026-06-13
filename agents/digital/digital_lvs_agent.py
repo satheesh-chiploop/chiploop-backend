@@ -285,7 +285,8 @@ def _stage_macro_placement_cfg_if_needed(cfg: dict, state: dict, workflow_dir: s
         return None
     dst = os.path.join(work_stage_dir, "inputs", "macros", "macro_placement.cfg")
     _ensure_dir(os.path.dirname(dst))
-    shutil.copy2(src, dst)
+    if os.path.abspath(src) != os.path.abspath(dst):
+        shutil.copy2(src, dst)
     cfg["MACRO_PLACEMENT_CFG"] = "dir::inputs/macros/macro_placement.cfg"
     return dst
 

@@ -6,6 +6,7 @@ os.environ.setdefault("OPENAI_API_KEY", "test-openai-key")
 
 from agents.digital import digital_cts_agent as cts_agent
 from agents.digital import digital_placement_agent as agent
+from agents.digital import digital_sta_postplace_agent as postplace_agent
 
 
 def test_macro_placement_cfg_generated_from_netlist_and_lef(tmp_path):
@@ -115,3 +116,22 @@ def test_cts_stages_inherited_macro_placement_cfg(tmp_path):
     assert cfg["MACRO_PLACEMENT_CFG"] == "dir::inputs/macros/macro_placement.cfg"
     assert staged == str(work_stage / "inputs" / "macros" / "macro_placement.cfg")
     assert "u_analog" in (work_stage / "inputs" / "macros" / "macro_placement.cfg").read_text(encoding="utf-8")
+
+
+def test_macro_placement_cfg_staging_is_idempotent_when_already_local(tmp_path):
+    work_stage = tmp_path / "run_work" / "place"
+    local_cfg = work_stage / "inputs" / "macros" / "macro_placement.cfg"
+    local_cfg.parent.mkdir(parents=True)
+    local_cfg.write_text("u_analog 18.000 18.000 N\n", encoding="utf-8")
+    cfg = {"MACRO_PLACEMENT_CFG": "dir::inputs/macros/macro_placement.cfg"}
+
+    staged = postplace_agent._stage_macro_placement_cfg_if_needed(
+        cfg,
+        {"digital": {"place": {"macro_placement_cfg": str(local_cfg)}}},
+        str(tmp_path / "workflow"),
+        str(work_stage),
+    )
+
+    assert staged == str(local_cfg)
+    assert cfg["MACRO_PLACEMENT_CFG"] == "dir::inputs/macros/macro_placement.cfg"
+    assert local_cfg.read_text(encoding="utf-8").startswith("u_analog")
