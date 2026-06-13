@@ -240,6 +240,8 @@ def test_gds_generation_uses_magic_docker_by_default(tmp_path, monkeypatch):
         assert "source /pdk/sky130A/libs.tech/magic/sky130A.tcl" in tcl
         assert "magic::netlist_to_layout /work/ana.sp sky130" in tcl
         assert "gds write /work/ana.gds" in tcl
+        staged_spice = (tmp_path / "analog" / "gds" / "ana.sp").read_text(encoding="utf-8")
+        assert "W=1 L=0.15" in staged_spice
         (tmp_path / "analog" / "gds" / "ana.gds").write_bytes(b"GDS")
         return SimpleNamespace(returncode=0, stdout="magic ok", stderr="")
 
@@ -259,6 +261,43 @@ def test_gds_generation_uses_magic_docker_by_default(tmp_path, monkeypatch):
     assert state["analog_gds_generation"]["tool_mode"] == "docker_magic"
     assert state["analog_gds_generation"]["backend"] == "magic"
 
+
+def test_gds_generation_rejects_magic_placeholder_layout(tmp_path, monkeypatch):
+    monkeypatch.setattr(gds_agent, "save_text_artifact_and_record", lambda *args, **kwargs: "local")
+    monkeypatch.setattr(gds_agent.shutil, "which", lambda name: "/usr/bin/docker" if name == "docker" else None)
+    pdk_root = tmp_path / "pdk"
+    magic_dir = pdk_root / "sky130A" / "libs.tech" / "magic"
+    magic_dir.mkdir(parents=True)
+    (magic_dir / "sky130A.tech").write_text("tech\n", encoding="utf-8")
+    (magic_dir / "sky130A.tcl").write_text("proc sky130::importspice {} {}\n", encoding="utf-8")
+    spice = tmp_path / "ana.spice"
+    spice.write_text(
+        ".subckt ana vin vout vdd vss\n"
+        "M1 vout vin vss vss sky130_fd_pr__nfet_01v8 W=1u L=0.15u\n"
+        ".ends ana\n",
+        encoding="utf-8",
+    )
+
+    def fake_run_command(state, capability, cmd, cwd=None, timeout_sec=None):
+        (tmp_path / "analog" / "gds" / "ana.gds").write_bytes(b"GDS")
+        return SimpleNamespace(
+            returncode=0,
+            stdout="Root cell box:\nmicrons:   0.000 x 0.000\nMos width must be >= 0.42 um\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr(gds_agent, "run_command", fake_run_command)
+
+    with pytest.raises(RuntimeError, match="magic_device_parameter_errors"):
+        gds_agent.run_agent({
+            "workflow_id": "wf",
+            "workflow_dir": str(tmp_path),
+            "analog_physical_mode": "generate_sky130_gds",
+            "analog_pdk": "sky130A",
+            "analog_macro_module": "ana",
+            "analog_spice_path": str(spice),
+            "pdk_root_host": str(pdk_root),
+        })
 
 def test_gds_generation_uses_align_docker_when_host_align_missing(tmp_path, monkeypatch):
     monkeypatch.setattr(gds_agent, "save_text_artifact_and_record", lambda *args, **kwargs: "local")
@@ -464,7 +503,10 @@ def test_lef_extraction_uses_openlane_docker_when_host_magic_missing(tmp_path, m
         assert cmd[0] == "/usr/bin/docker"
         assert lef_agent.OPENLANE_DOCKER_IMAGE in cmd
         assert "magic" in cmd
-        (tmp_path / "analog" / "lef_extract" / "ana.lef").write_text("MACRO ana\nEND ana\n", encoding="utf-8")
+        (tmp_path / "analog" / "lef_extract" / "ana.lef").write_text(
+            "MACRO ana\n  PIN vin\n  END vin\nEND ana\n",
+            encoding="utf-8",
+        )
         return SimpleNamespace(returncode=0, stdout="magic ok", stderr="")
 
     monkeypatch.setattr(lef_agent, "run_command", fake_run_command)
@@ -481,6 +523,30 @@ def test_lef_extraction_uses_openlane_docker_when_host_magic_missing(tmp_path, m
     assert state["analog_lef_extraction"]["tool_mode"] == "docker"
 
 
+def test_lef_extraction_rejects_placeholder_without_pins(tmp_path, monkeypatch):
+    monkeypatch.setattr(lef_agent, "save_text_artifact_and_record", lambda *args, **kwargs: "local")
+    monkeypatch.setattr(lef_agent.shutil, "which", lambda name: "/usr/bin/docker" if name == "docker" else None)
+    gds = tmp_path / "ana.gds"
+    gds.write_bytes(b"GDS")
+
+    def fake_run_command(state, capability, cmd, cwd=None, timeout_sec=None):
+        (tmp_path / "analog" / "lef_extract" / "ana.lef").write_text(
+            "MACRO ana\n  SIZE 1.000 BY 1.000 ;\nEND ana\n",
+            encoding="utf-8",
+        )
+        return SimpleNamespace(returncode=0, stdout="magic ok", stderr="")
+
+    monkeypatch.setattr(lef_agent, "run_command", fake_run_command)
+
+    with pytest.raises(RuntimeError, match="lef_missing_pins|lef_placeholder_geometry"):
+        lef_agent.run_agent({
+            "workflow_id": "wf",
+            "workflow_dir": str(tmp_path),
+            "analog_physical_mode": "generate_sky130_gds",
+            "analog_macro_module": "ana",
+            "analog_macro_gds": str(gds),
+        })
+
 def test_liberty_characterization_fails_without_spice(tmp_path, monkeypatch):
     monkeypatch.setattr(lib_agent, "save_text_artifact_and_record", lambda *args, **kwargs: "local")
 
@@ -496,6 +562,35 @@ def test_liberty_characterization_fails_without_spice(tmp_path, monkeypatch):
 
     assert state["analog_liberty_characterization"]["status"] == "failed"
     assert state["analog_liberty_characterization"]["reason"] == "analog_spice_missing"
+
+
+def test_liberty_characterization_sets_pdk_root_and_uploads_ngspice_log(tmp_path, monkeypatch):
+    saved = {}
+    monkeypatch.setattr(lib_agent, "save_text_artifact_and_record", lambda wf, agent, folder, name, text: saved.setdefault(name, text) or "local")
+    monkeypatch.setattr(lib_agent.shutil, "which", lambda name: "/usr/bin/ngspice" if name == "ngspice" else None)
+    pdk_root = tmp_path / "pdk"
+    pdk_root.mkdir()
+    spice = tmp_path / "ana.spice"
+    spice.write_text(".subckt ana vin vout vdd vss\n.ends ana\n", encoding="utf-8")
+
+    def fake_run_command(state, capability, cmd, cwd=None, timeout_sec=None, env=None):
+        assert env == {"PDK_ROOT": str(pdk_root)}
+        assert cmd == ["/usr/bin/ngspice", "-b", str(tmp_path / "analog" / "lib_char" / "characterize_ngspice.sp")]
+        return SimpleNamespace(returncode=1, stdout="ngspice failed detail", stderr="")
+
+    monkeypatch.setattr(lib_agent, "run_command", fake_run_command)
+
+    with pytest.raises(RuntimeError, match="ngspice failed detail"):
+        lib_agent.run_agent({
+            "workflow_id": "wf",
+            "workflow_dir": str(tmp_path),
+            "analog_physical_mode": "generate_sky130_gds",
+            "analog_macro_module": "ana",
+            "analog_spice_path": str(spice),
+            "pdk_root_host": str(pdk_root),
+        })
+
+    assert "ngspice_characterization.log" in saved
 
 
 def test_macro_interface_contract_and_validation_pass(tmp_path, monkeypatch):

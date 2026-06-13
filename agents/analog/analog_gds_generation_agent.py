@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import shlex
 import shutil
 from datetime import datetime
@@ -35,6 +36,28 @@ def _find_gds(root: str) -> str:
     return hits[0] if hits else ""
 
 
+def _prepare_magic_spice(src: str, dst: str) -> None:
+    text = open(src, "r", encoding="utf-8", errors="ignore").read()
+
+    def repl(match: re.Match[str]) -> str:
+        key = match.group(1)
+        value = match.group(2)
+        suffix = match.group(3).lower()
+        number = float(value)
+        if suffix in {"u", "um"}:
+            number = number
+        elif suffix == "n":
+            number = number / 1000.0
+        elif suffix == "m":
+            number = number * 1000.0
+        return f"{key}={number:g}"
+
+    # Magic's Sky130 SPICE importer expects generator dimensions in microns.
+    text = re.sub(r"\b([WLwl])\s*=\s*([0-9]+(?:\.[0-9]+)?)(u|um|n|m)\b", repl, text)
+    with open(dst, "w", encoding="utf-8") as fh:
+        fh.write(text)
+
+
 def _docker_available() -> bool:
     return bool(shutil.which("docker"))
 
@@ -42,6 +65,17 @@ def _docker_available() -> bool:
 def _tail(text: str, limit: int = 2000) -> str:
     text = text or ""
     return text[-limit:] if len(text) > limit else text
+
+
+def _magic_layout_invalid(log: str) -> str:
+    lowered = (log or "").lower()
+    if "mos length must be" in lowered or "mos width must be" in lowered:
+        return "magic_device_parameter_errors"
+    if "root cell box:" in lowered and "microns:   0.000 x 0.000" in lowered:
+        return "magic_zero_area_layout"
+    if "pre-generating subcircuit" in lowered and "placeholder" in lowered and "microns:   0.000 x 0.000" in lowered:
+        return "magic_placeholder_layout"
+    return ""
 
 
 def _resolve_pdk_variant(state: dict) -> str:
@@ -293,7 +327,9 @@ def run_agent(state: dict) -> dict:
     spice_stem, spice_ext = os.path.splitext(spice_base)
     align_spice_name = spice_base if spice_ext.lower() in {".sp", ".cdl"} else f"{spice_stem or module_name}.sp"
     staged_spice = os.path.join(stage_dir, align_spice_name)
-    if os.path.abspath(spice_path) != os.path.abspath(staged_spice):
+    if backend == "magic":
+        _prepare_magic_spice(spice_path, staged_spice)
+    elif os.path.abspath(spice_path) != os.path.abspath(staged_spice):
         shutil.copy2(spice_path, staged_spice)
     run_sh = os.path.join(stage_dir, "run_gds.sh")
     if backend == "magic":
@@ -420,7 +456,8 @@ def run_agent(state: dict) -> dict:
         fh.write(log)
 
     gds_path = _find_gds(stage_dir)
-    if gds_path:
+    invalid_reason = _magic_layout_invalid(log) if backend == "magic" else ""
+    if gds_path and not invalid_reason:
         final_gds = os.path.join(stage_dir, f"{module_name}.gds")
         if os.path.abspath(gds_path) != os.path.abspath(final_gds):
             shutil.copy2(gds_path, final_gds)
@@ -441,7 +478,7 @@ def run_agent(state: dict) -> dict:
             digital["macro_gds"] = list(dict.fromkeys((digital.get("macro_gds") or []) + [final_gds]))
             digital.pop("macro_blackbox_mode", None)
     else:
-        reason = "magic_gds_not_produced" if backend == "magic" else "align_gds_not_produced"
+        reason = invalid_reason or ("magic_gds_not_produced" if backend == "magic" else "align_gds_not_produced")
         summary.update({
             "status": "failed",
             "return_code": cp.returncode,

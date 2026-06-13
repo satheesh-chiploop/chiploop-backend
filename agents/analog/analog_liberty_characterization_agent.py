@@ -21,6 +21,14 @@ def _module_name(state: dict) -> str:
     return str(state.get("analog_macro_module") or contract.get("macro_name") or "analog_macro").strip()
 
 
+def _pdk_root_host(state: dict) -> str:
+    return os.path.abspath(str(
+        state.get("pdk_root_host")
+        or os.getenv("CHIPLOOP_PDK_ROOT_HOST")
+        or "/root/chiploop-backend/backend/pdk"
+    ))
+
+
 def run_agent(state: dict) -> dict:
     print(f"\nRunning {AGENT_NAME}...")
     workflow_id = state.get("workflow_id", "default")
@@ -31,6 +39,7 @@ def run_agent(state: dict) -> dict:
     module_name = _module_name(state)
     spice_path = state.get("analog_spice_path") or state.get("analog_netlist_path")
     prior_lib = state.get("analog_macro_lib")
+    pdk_root_host = _pdk_root_host(state)
     summary: Dict[str, Any] = {
         "workflow_id": workflow_id,
         "agent": AGENT_NAME,
@@ -38,6 +47,7 @@ def run_agent(state: dict) -> dict:
         "module": module_name,
         "spice": spice_path,
         "prior_lib": prior_lib,
+        "pdk_root_host": pdk_root_host,
     }
 
     if not _enabled(state):
@@ -47,8 +57,11 @@ def run_agent(state: dict) -> dict:
     else:
         ngspice_bin = shutil.which("ngspice")
         deck_path = os.path.join(stage_dir, "characterize_ngspice.sp")
+        staged_spice = os.path.join(stage_dir, os.path.basename(spice_path) or f"{module_name}.spice")
+        if os.path.abspath(spice_path) != os.path.abspath(staged_spice):
+            shutil.copy2(spice_path, staged_spice)
         deck = "\n".join([
-            f".include {os.path.abspath(spice_path)}",
+            f'.include "{staged_spice}"',
             "* Placeholder characterization deck. Real Liberty requires block-specific stimuli and measurements.",
             ".control",
             "op",
@@ -69,7 +82,14 @@ def run_agent(state: dict) -> dict:
                 "note": "Liberty characterization did not run because ngspice is not installed or not on PATH.",
             })
         else:
-            cp = run_command(state, "analog_lib_char_ngspice", [ngspice_bin, "-b", deck_path], cwd=stage_dir, timeout_sec=1800)
+            cp = run_command(
+                state,
+                "analog_lib_char_ngspice",
+                [ngspice_bin, "-b", deck_path],
+                cwd=stage_dir,
+                timeout_sec=1800,
+                env={"PDK_ROOT": pdk_root_host},
+            )
             log = (cp.stdout or "") + (cp.stderr or "")
             log_path = os.path.join(stage_dir, "ngspice_characterization.log")
             with open(log_path, "w", encoding="utf-8", errors="ignore") as fh:
@@ -90,15 +110,23 @@ def run_agent(state: dict) -> dict:
                     "return_code": cp.returncode,
                     "log": log_path,
                     "characterization_deck": deck_path,
+                    "log_tail": log[-2000:],
                 })
 
     save_text_artifact_and_record(workflow_id, AGENT_NAME, "analog/lib_char", "liberty_characterization_summary.json", json.dumps(summary, indent=2))
     if os.path.exists(os.path.join(stage_dir, "characterize_ngspice.sp")):
         with open(os.path.join(stage_dir, "characterize_ngspice.sp"), "r", encoding="utf-8") as fh:
             save_text_artifact_and_record(workflow_id, AGENT_NAME, "analog/lib_char", "characterize_ngspice.sp", fh.read())
+    if os.path.exists(os.path.join(stage_dir, "ngspice_characterization.log")):
+        with open(os.path.join(stage_dir, "ngspice_characterization.log"), "r", encoding="utf-8", errors="ignore") as fh:
+            save_text_artifact_and_record(workflow_id, AGENT_NAME, "analog/lib_char", "ngspice_characterization.log", fh.read())
 
     state["analog_liberty_characterization"] = summary
     state["status"] = f"{AGENT_NAME}: {summary['status']}"
     if _enabled(state) and summary["status"] != "generated":
-        raise RuntimeError(f"Analog Liberty characterization failed: {summary.get('reason') or summary['status']}")
+        detail = summary.get("log_tail") or ""
+        raise RuntimeError(
+            f"Analog Liberty characterization failed: {summary.get('reason') or summary['status']}"
+            + (f"\nngspice log tail:\n{detail}" if detail else "")
+        )
     return state

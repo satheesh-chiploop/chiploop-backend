@@ -22,6 +22,17 @@ def _module_name(state: dict) -> str:
     return str(state.get("analog_macro_module") or contract.get("macro_name") or "analog_macro").strip()
 
 
+def _lef_invalid(path: str) -> str:
+    if not os.path.exists(path) or os.path.getsize(path) <= 0:
+        return "lef_not_produced"
+    text = open(path, "r", encoding="utf-8", errors="ignore").read()
+    if " PIN " not in f" {text} " and "\n  PIN " not in text:
+        return "lef_missing_pins"
+    if "SIZE 1.000 BY 1.000" in text and " PIN " not in f" {text} ":
+        return "lef_placeholder_geometry"
+    return ""
+
+
 def run_agent(state: dict) -> dict:
     print(f"\nRunning {AGENT_NAME}...")
     workflow_id = state.get("workflow_id", "default")
@@ -93,7 +104,8 @@ def run_agent(state: dict) -> dict:
             log_path = os.path.join(stage_dir, "magic_lef_extract.log")
             with open(log_path, "w", encoding="utf-8", errors="ignore") as fh:
                 fh.write(log)
-            if os.path.exists(lef_path) and os.path.getsize(lef_path) > 0:
+            invalid_reason = _lef_invalid(lef_path)
+            if not invalid_reason:
                 state["analog_macro_lef"] = lef_path
                 digital = state.setdefault("digital", {})
                 if isinstance(digital, dict):
@@ -109,7 +121,7 @@ def run_agent(state: dict) -> dict:
             else:
                 summary.update({
                     "status": "failed",
-                    "reason": "lef_not_produced",
+                    "reason": invalid_reason,
                     "log": log_path,
                     "return_code": cp.returncode,
                     "tool_mode": tool_mode,
