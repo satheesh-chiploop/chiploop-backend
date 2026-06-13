@@ -55,46 +55,61 @@ with agent_template as (
     array['artifact_publish','openlane_config_generation','sta_constraint_generation']::text[] as required_skills,
     array['openlane','openroad','python','supabase']::text[] as required_tools
 ),
-upsert_agents as (
-  insert into public.agents (
-    agent_name, name, loop_type, domain, description, script_path, entrypoint,
-    execution_mode, inputs, outputs, artifact_paths, artifact_types,
-    required_skills, required_tools, skills, tools, hooks, metadata,
-    is_custom, is_prebuilt, is_marketplace, status, visibility, source, updated_at
-  )
-  select
-    name, name, loop_type, domain, description, entrypoint, entrypoint,
-    execution_mode, to_jsonb(inputs), to_jsonb(outputs), to_jsonb(artifact_paths), to_jsonb(artifact_types),
-    to_jsonb(required_skills), to_jsonb(required_tools), to_jsonb(required_skills), to_jsonb(required_tools),
-    '["pre_run_validate_inputs","post_run_collect_artifacts","post_run_update_state","on_failure_capture_traceback","on_failure_preserve_logs","artifact_publish_to_supabase"]'::jsonb,
-    jsonb_build_object('registry_source','SYSTEM_PD_POSTFILL_STA_MIGRATION','studio_contract_version','v1'),
-    false, true, false, 'approved', 'global', 'platform_registry', now()
-  from agent_template
-  on conflict (name) do update set
-    agent_name = excluded.agent_name,
-    loop_type = excluded.loop_type,
-    domain = excluded.domain,
-    description = excluded.description,
-    script_path = excluded.script_path,
-    entrypoint = excluded.entrypoint,
-    execution_mode = excluded.execution_mode,
-    inputs = excluded.inputs,
-    outputs = excluded.outputs,
-    artifact_paths = excluded.artifact_paths,
-    artifact_types = excluded.artifact_types,
-    required_skills = excluded.required_skills,
-    required_tools = excluded.required_tools,
-    skills = excluded.skills,
-    tools = excluded.tools,
-    hooks = excluded.hooks,
-    metadata = excluded.metadata,
+updated_agents as (
+  update public.agents agent
+  set
+    agent_name = agent_template.name,
+    name = agent_template.name,
+    loop_type = agent_template.loop_type,
+    domain = agent_template.domain,
+    description = agent_template.description,
+    script_path = agent_template.entrypoint,
+    entrypoint = agent_template.entrypoint,
+    execution_mode = agent_template.execution_mode,
+    inputs = to_jsonb(agent_template.inputs),
+    outputs = to_jsonb(agent_template.outputs),
+    artifact_paths = to_jsonb(agent_template.artifact_paths),
+    artifact_types = to_jsonb(agent_template.artifact_types),
+    required_skills = to_jsonb(agent_template.required_skills),
+    required_tools = to_jsonb(agent_template.required_tools),
+    skills = to_jsonb(agent_template.required_skills),
+    tools = to_jsonb(agent_template.required_tools),
+    hooks = '["pre_run_validate_inputs","post_run_collect_artifacts","post_run_update_state","on_failure_capture_traceback","on_failure_preserve_logs","artifact_publish_to_supabase"]'::jsonb,
+    metadata = jsonb_build_object('registry_source','SYSTEM_PD_POSTFILL_STA_MIGRATION','studio_contract_version','v1'),
+    is_custom = false,
     is_prebuilt = true,
+    is_marketplace = false,
     status = 'approved',
     visibility = 'global',
     source = 'platform_registry',
     updated_at = now()
-  returning name
-),
+  from agent_template
+  where (agent.agent_name = agent_template.name or agent.name = agent_template.name)
+    and agent.owner_id is null
+  returning agent.name
+)
+insert into public.agents (
+  agent_name, name, loop_type, domain, description, script_path, entrypoint,
+  execution_mode, inputs, outputs, artifact_paths, artifact_types,
+  required_skills, required_tools, skills, tools, hooks, metadata,
+  is_custom, is_prebuilt, is_marketplace, status, visibility, source, updated_at
+)
+select
+  name, name, loop_type, domain, description, entrypoint, entrypoint,
+  execution_mode, to_jsonb(inputs), to_jsonb(outputs), to_jsonb(artifact_paths), to_jsonb(artifact_types),
+  to_jsonb(required_skills), to_jsonb(required_tools), to_jsonb(required_skills), to_jsonb(required_tools),
+  '["pre_run_validate_inputs","post_run_collect_artifacts","post_run_update_state","on_failure_capture_traceback","on_failure_preserve_logs","artifact_publish_to_supabase"]'::jsonb,
+  jsonb_build_object('registry_source','SYSTEM_PD_POSTFILL_STA_MIGRATION','studio_contract_version','v1'),
+  false, true, false, 'approved', 'global', 'platform_registry', now()
+from agent_template
+where not exists (
+  select 1
+  from public.agents agent
+  where (agent.agent_name = agent_template.name or agent.name = agent_template.name)
+    and agent.owner_id is null
+);
+
+with
 workflow_template as (
   select
     'System_PD'::text as name,
@@ -148,25 +163,42 @@ expanded as (
     select wt.agents[ord - 1] as prev_agent
   ) p on ord > 1
   group by wt.name, wt.loop_type, wt.agents
+),
+updated_workflows as (
+  update public.workflows workflow
+  set
+    loop_type = expanded.loop_type,
+    definitions = jsonb_build_object('agents', to_jsonb(expanded.agents), 'source', 'system_pd_postfill_sta_source_of_truth'),
+    nodes = expanded.nodes,
+    edges = coalesce(expanded.edges, '[]'::jsonb),
+    status = 'saved',
+    is_prebuilt = true,
+    updated_at = now()
+  from expanded
+  where workflow.name = expanded.name
+    and coalesce(workflow.is_prebuilt, false) = true
+    and (workflow.user_id is null)
+  returning workflow.name
 )
 insert into public.workflows (
-  name, loop_type, definitions, nodes, edges, status, is_prebuilt, updated_at
+  id, user_id, name, loop_type, definitions, nodes, edges, status, is_prebuilt, created_at, updated_at
 )
 select
+  gen_random_uuid(),
+  null,
   name,
   loop_type,
   jsonb_build_object('agents', to_jsonb(agents), 'source', 'system_pd_postfill_sta_source_of_truth'),
   nodes,
   coalesce(edges, '[]'::jsonb),
-  'approved',
+  'saved',
   true,
+  now(),
   now()
 from expanded
-on conflict (name) do update set
-  loop_type = excluded.loop_type,
-  definitions = excluded.definitions,
-  nodes = excluded.nodes,
-  edges = excluded.edges,
-  status = 'approved',
-  is_prebuilt = true,
-  updated_at = now();
+where not exists (
+  select 1
+  from public.workflows workflow
+  where workflow.name = expanded.name
+    and workflow.user_id is null
+);
