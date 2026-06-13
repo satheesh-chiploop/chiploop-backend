@@ -280,7 +280,7 @@ def _build_lib_stub(spec: dict) -> str:
 
         for bit_name in (_bus_pin_names(pname, width) if width > 1 else []):
             lines.extend([
-                f"      pin ({bit_name}) {{",
+                f"      pin (\"{bit_name}\") {{",
                 f"        direction : {pdir} ;",
                 *(['        function : "1" ;'] if pdir == "output" else []),
                 "      }",
@@ -377,7 +377,7 @@ def _lib_stub_issues(lib_stub: str, spec: dict) -> list[str]:
         issues.append("unbalanced braces")
     if re.search(r"related_pin\s*:\s*\"\"\s*;", text):
         issues.append("empty related_pin")
-    if re.search(r"\bpin\s*\([^)]*\[[^)]*\]\s*\)", text) and "bus (" not in text:
+    if re.search(r"\bpin\s*\(\s*[^\"')][^)]*\[[^)]*\]\s*\)", text) and "bus (" not in text:
         issues.append("unquoted bus bit pin name")
     if re.search(r"\b(bus|pin)\s*\([^)]*,[^)]*\)", text):
         issues.append("malformed pin or bus declaration")

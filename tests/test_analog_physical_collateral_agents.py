@@ -40,7 +40,7 @@ def test_abstract_lib_stub_is_self_contained_and_rejects_malformed_pin_syntax():
     assert "bus_type : sensor_temp_celsius_bus_t" in lib
     assert "type (adc_code_bus_t)" in lib
     assert "bus (adc_code)" in lib
-    assert "pin (adc_code[0])" in lib
+    assert 'pin ("adc_code[0]")' in lib
     assert abstract_agent._lib_stub_issues(lib, spec) == []
 
     malformed = (
@@ -726,6 +726,38 @@ def test_liberty_characterization_removes_duplicate_sky130_include(tmp_path, mon
     assert state["analog_liberty_characterization"]["status"] == "validated"
     assert state["analog_liberty_characterization"]["reason"] == "liberty_not_produced"
     assert state["analog_liberty_characterization"]["generated_liberty"] is False
+
+
+def test_liberty_characterization_contract_spec_collapses_bus_bit_pins():
+    spec = lib_agent._contract_spec(
+        {
+            "analog_macro_interface_contract": {
+                "macro_name": "generic_macro",
+                "ports": [
+                    {"name": "data_out", "verilog_direction": "output", "width": "[11:0]"},
+                    {"name": "data_out[0]", "lef_direction": "OUTPUT", "width": "unknown"},
+                    {"name": "data_out[11]", "lef_direction": "OUTPUT", "width": "unknown"},
+                    {"name": "sample_in", "verilog_direction": "input", "width": "[15:0]"},
+                    {"name": "sample_in[15]", "lef_direction": "INPUT", "width": "unknown"},
+                    {"name": "avdd", "verilog_direction": "inout", "width": "1"},
+                    {"name": "avss", "verilog_direction": "inout", "width": "1"},
+                ],
+            }
+        },
+        "generic_macro",
+    )
+    ports = {p["name"]: p for p in spec["ports"]}
+
+    assert ports["data_out"]["direction"] == "output"
+    assert ports["data_out"]["width"] == 12
+    assert ports["sample_in"]["direction"] == "input"
+    assert ports["sample_in"]["width"] == 16
+    assert "data_out[0]" not in ports
+
+    lib = abstract_agent._build_lib_stub(spec)
+    assert "bus (data_out)" in lib
+    assert 'pin ("data_out[11]")' in lib
+    assert "pin (data_out[11])" not in lib
 
 
 def test_macro_interface_contract_and_validation_pass(tmp_path, monkeypatch):

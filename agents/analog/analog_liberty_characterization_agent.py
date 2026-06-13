@@ -46,18 +46,65 @@ def _prepare_ngspice_spice(src: str, dst: str) -> None:
 def _contract_spec(state: dict, module_name: str) -> Dict[str, Any]:
     contract = state.get("analog_macro_interface_contract") if isinstance(state.get("analog_macro_interface_contract"), dict) else {}
     ports = contract.get("ports") if isinstance(contract.get("ports"), list) else []
-    normalized = []
+    merged: Dict[str, Dict[str, Any]] = {}
+
+    def width_value(value: Any) -> int:
+        if isinstance(value, int):
+            return max(value, 1)
+        text = str(value or "").strip()
+        if not text or text.lower() == "unknown":
+            return 1
+        if text.isdigit():
+            return max(int(text), 1)
+        match = re.fullmatch(r"\[\s*(\d+)\s*:\s*(\d+)\s*\]", text)
+        if match:
+            return abs(int(match.group(1)) - int(match.group(2))) + 1
+        return 1
+
+    def norm_direction(value: Any) -> str:
+        text = str(value or "").strip().lower()
+        if text in {"input", "output", "inout"}:
+            return text
+        text = str(value or "").strip().upper()
+        if text in {"INPUT", "OUTPUT", "INOUT"}:
+            return text.lower()
+        return ""
+
     for port in ports:
         if not isinstance(port, dict) or not port.get("name"):
             continue
-        normalized.append({
-            "name": port.get("name"),
-            "direction": port.get("verilog_direction") or port.get("lef_direction") or port.get("direction") or "input",
-            "width": port.get("width") or 1,
-        })
+        raw_name = str(port.get("name") or "").strip()
+        bit_match = re.fullmatch(r"([A-Za-z_][A-Za-z0-9_$]*)\[(\d+)\]", raw_name)
+        name = bit_match.group(1) if bit_match else raw_name
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_$]*", name):
+            continue
+        entry = merged.setdefault(name, {"name": name, "direction": "", "width": 1})
+        direction = (
+            norm_direction(port.get("verilog_direction"))
+            or norm_direction(port.get("direction"))
+            or norm_direction(port.get("lef_direction"))
+            or norm_direction(port.get("lib_direction"))
+        )
+        if direction and not entry["direction"]:
+            entry["direction"] = direction
+        if bit_match:
+            entry["width"] = max(int(entry["width"]), int(bit_match.group(2)) + 1)
+        else:
+            entry["width"] = max(int(entry["width"]), width_value(port.get("width")))
+    normalized = []
+    for item in merged.values():
+        name = str(item["name"])
+        low = name.lower()
+        if low in {"vpwr", "vdd", "avdd", "dvdd"} or "vdd" in low or "pwr" in low:
+            item["direction"] = "inout"
+        elif low in {"vgnd", "vss", "avss", "dvss", "gnd"} or "vss" in low or "gnd" in low:
+            item["direction"] = "inout"
+        elif not item["direction"]:
+            item["direction"] = "input"
+        normalized.append(item)
     return {
         "module_name": contract.get("macro_name") or module_name,
-        "ports": normalized,
+        "ports": sorted(normalized, key=lambda p: str(p.get("name") or "")),
         "clock_period_ns": 1000.0,
     }
 
