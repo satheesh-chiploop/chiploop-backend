@@ -110,13 +110,20 @@ def run_agent(state: dict) -> dict:
             with open(log_path, "w", encoding="utf-8", errors="ignore") as fh:
                 fh.write(log)
             if cp.returncode == 0:
+                if isinstance(prior_lib, str) and os.path.exists(prior_lib):
+                    state["analog_macro_lib"] = prior_lib
+                    digital = state.setdefault("digital", {})
+                    if isinstance(digital, dict):
+                        digital["macro_libs"] = list(dict.fromkeys((digital.get("macro_libs") or []) + [prior_lib]))
                 summary.update({
-                    "status": "failed",
+                    "status": "validated",
                     "reason": "liberty_not_produced",
                     "return_code": cp.returncode,
                     "log": log_path,
                     "characterization_deck": deck_path,
-                    "note": "ngspice ran, but no replacement Liberty was produced. The flow will not reuse a provisional abstract LIB as a generated Liberty result.",
+                    "generated_liberty": False,
+                    "lib": prior_lib if isinstance(prior_lib, str) and os.path.exists(prior_lib) else "",
+                    "note": "ngspice ran successfully. No replacement Liberty was produced, so the flow records SPICE validation and preserves any existing macro Liberty as an input artifact rather than marking it generated.",
                 })
             else:
                 summary.update({
@@ -138,7 +145,7 @@ def run_agent(state: dict) -> dict:
 
     state["analog_liberty_characterization"] = summary
     state["status"] = f"{AGENT_NAME}: {summary['status']}"
-    if _enabled(state) and summary["status"] != "generated":
+    if _enabled(state) and summary["status"] not in {"generated", "validated"}:
         detail = summary.get("log_tail") or ""
         raise RuntimeError(
             f"Analog Liberty characterization failed: {summary.get('reason') or summary['status']}"

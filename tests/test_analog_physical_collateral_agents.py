@@ -662,15 +662,18 @@ def test_liberty_characterization_removes_duplicate_sky130_include(tmp_path, mon
 
     monkeypatch.setattr(lib_agent, "run_command", fake_run_command)
 
-    with pytest.raises(RuntimeError, match="liberty_not_produced"):
-        lib_agent.run_agent({
-            "workflow_id": "wf",
-            "workflow_dir": str(tmp_path),
-            "analog_physical_mode": "generate_sky130_gds",
-            "analog_macro_module": "ana",
-            "analog_spice_path": str(spice),
-            "pdk_root_host": str(pdk_root),
-        })
+    state = lib_agent.run_agent({
+        "workflow_id": "wf",
+        "workflow_dir": str(tmp_path),
+        "analog_physical_mode": "generate_sky130_gds",
+        "analog_macro_module": "ana",
+        "analog_spice_path": str(spice),
+        "pdk_root_host": str(pdk_root),
+    })
+
+    assert state["analog_liberty_characterization"]["status"] == "validated"
+    assert state["analog_liberty_characterization"]["reason"] == "liberty_not_produced"
+    assert state["analog_liberty_characterization"]["generated_liberty"] is False
 
 
 def test_macro_interface_contract_and_validation_pass(tmp_path, monkeypatch):
