@@ -1,4 +1,5 @@
 import os
+import re
 from types import SimpleNamespace
 
 import pytest
@@ -623,6 +624,10 @@ def test_lef_extraction_pinizes_magic_lef_from_prior_macro_pins(tmp_path, monkey
     assert "LAYER met2" in text
     assert "LAYER met4" in text
     assert "SHAPE ABUTMENT" in text
+    avdd_block = re.search(r"PIN avdd\b(.*?)END avdd", text, flags=re.DOTALL)
+    assert avdd_block
+    block = avdd_block.group(1)
+    assert block.index("SHAPE ABUTMENT") < block.index("PORT") < block.index("LAYER met4")
     assert state["analog_lef_extraction"]["status"] == "extracted"
     assert state["analog_lef_extraction"]["pinized_from_macro_interface"] is True
     assert state["analog_lef_extraction"]["pin_count"] == 2
