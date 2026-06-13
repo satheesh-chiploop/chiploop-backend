@@ -479,6 +479,39 @@ def test_consistency_agent_fails_in_generate_mode_on_pin_mismatch(tmp_path, monk
     assert state["analog_collateral_consistency"]["status"] == "issues"
 
 
+def test_consistency_agent_accepts_bus_bits_and_warns_for_abstract_lib(tmp_path, monkeypatch):
+    monkeypatch.setattr(consistency_agent, "save_text_artifact_and_record", lambda *args, **kwargs: "local")
+    spice = tmp_path / "ana.spice"
+    lef = tmp_path / "ana.lef"
+    lib = tmp_path / "ana.lib"
+    spice.write_text(".subckt ana adc_code adc_code[0] adc_code[1] sample_req\n.ends ana\n", encoding="utf-8")
+    lef.write_text(
+        "MACRO ana\n"
+        "  PIN adc_code[0]\n  END adc_code[0]\n"
+        "  PIN adc_code[1]\n  END adc_code[1]\n"
+        "  PIN sample_req\n  END sample_req\n"
+        "END ana\n",
+        encoding="utf-8",
+    )
+    lib.write_text("library (ana) { cell (ana) { pin (sample_req) {} } }\n", encoding="utf-8")
+
+    state = consistency_agent.run_agent({
+        "workflow_id": "wf",
+        "workflow_dir": str(tmp_path),
+        "analog_physical_mode": "generate_sky130_gds",
+        "analog_macro_module": "ana",
+        "analog_spice_path": str(spice),
+        "analog_macro_lef": str(lef),
+        "analog_macro_lib": str(lib),
+        "analog_liberty_characterization": {"status": "validated", "generated_liberty": False},
+    })
+
+    report = state["analog_collateral_consistency"]
+    assert report["status"] == "warnings"
+    assert report["issues"] == []
+    assert any(w.startswith("lef_pins_missing_in_lib") for w in report["warnings"])
+
+
 def test_lef_extraction_fails_without_gds(tmp_path, monkeypatch):
     monkeypatch.setattr(lef_agent, "save_text_artifact_and_record", lambda *args, **kwargs: "local")
 

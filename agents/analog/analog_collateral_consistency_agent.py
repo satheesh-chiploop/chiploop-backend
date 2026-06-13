@@ -57,6 +57,32 @@ def _module_name(state: dict) -> str:
     return str(state.get("analog_macro_module") or contract.get("macro_name") or "analog_macro").strip()
 
 
+def _pin_base(name: str) -> str:
+    return str(name or "").split("[", 1)[0]
+
+
+def _pin_covered(pin: str, observed: List[str]) -> bool:
+    if pin in observed:
+        return True
+    base = _pin_base(pin)
+    if "[" not in pin and any(_pin_base(obs) == pin and "[" in obs for obs in observed):
+        return True
+    if "[" in pin and base in observed:
+        return True
+    return False
+
+
+def _missing_pins(expected: List[str], observed: List[str]) -> List[str]:
+    return sorted(pin for pin in set(expected) if not _pin_covered(pin, observed))
+
+
+def _lib_is_generated(state: dict) -> bool:
+    char = state.get("analog_liberty_characterization")
+    if not isinstance(char, dict):
+        return False
+    return bool(char.get("generated_liberty") or char.get("status") == "generated")
+
+
 def run_agent(state: dict) -> dict:
     print(f"\nRunning {AGENT_NAME}...")
     workflow_id = state.get("workflow_id", "default")
@@ -74,6 +100,7 @@ def run_agent(state: dict) -> dict:
     lef_name, lef_pins = _lef_macro(lef)
     lib_name, lib_pins = _lib_cell(lib)
     issues: List[str] = []
+    warnings: List[str] = []
 
     if gds_present and not lef:
         issues.append("gds_present_but_lef_missing")
@@ -82,21 +109,25 @@ def run_agent(state: dict) -> dict:
     if lib and lef and lib_name and lef_name and lib_name != lef_name:
         issues.append("lib_cell_name_differs_from_lef_macro")
     if spice_pins and lef_pins:
-        missing_in_lef = sorted(set(spice_pins) - set(lef_pins))
+        missing_in_lef = _missing_pins(spice_pins, lef_pins)
         if missing_in_lef:
             issues.append(f"spice_pins_missing_in_lef:{','.join(missing_in_lef)}")
     if lib_pins and lef_pins:
-        missing_in_lib = sorted(set(lef_pins) - set(lib_pins))
+        missing_in_lib = _missing_pins(lef_pins, lib_pins)
         if missing_in_lib:
-            issues.append(f"lef_pins_missing_in_lib:{','.join(missing_in_lib)}")
+            target = issues if _lib_is_generated(state) else warnings
+            target.append(f"lef_pins_missing_in_lib:{','.join(missing_in_lib)}")
+
+    status = "issues" if issues else "warnings" if warnings else "pass"
 
     summary: Dict[str, Any] = {
         "workflow_id": workflow_id,
         "agent": AGENT_NAME,
         "generated_at": datetime.utcnow().isoformat() + "Z",
         "module": module,
-        "status": "pass" if not issues else "issues",
+        "status": status,
         "issues": issues,
+        "warnings": warnings,
         "gds_present": gds_present,
         "spice": {"subckt": subckt_name, "pins": spice_pins},
         "lef": {"macro": lef_name, "pins": lef_pins},
