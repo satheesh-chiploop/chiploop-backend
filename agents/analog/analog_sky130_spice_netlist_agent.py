@@ -1,7 +1,7 @@
 import json
 import os
 import re
-from typing import Dict, List
+from typing import Any, Dict, List
 
 from model_gateway import complete_text
 from utils.artifact_utils import save_text_artifact_and_record
@@ -51,6 +51,91 @@ def _contract_ports(state: dict) -> List[str]:
     return list(dict.fromkeys([p for p in ports if p]))
 
 
+def _port_specs(state: dict) -> Dict[str, Dict[str, Any]]:
+    specs: Dict[str, Dict[str, Any]] = {}
+    spec = state.get("analog_spec") if isinstance(state.get("analog_spec"), dict) else {}
+    contract = state.get("analog_macro_interface_contract") if isinstance(state.get("analog_macro_interface_contract"), dict) else {}
+    for source_ports in (spec.get("ports"), contract.get("ports")):
+        if not isinstance(source_ports, list):
+            continue
+        for port in source_ports:
+            if not isinstance(port, dict) or not port.get("name"):
+                continue
+            name = str(port.get("name")).strip()
+            if not name:
+                continue
+            specs[name] = {**specs.get(name, {}), **port, "name": name}
+    return specs
+
+
+def _base_bus_name(name: str) -> str:
+    match = re.match(r"^(.+)\[\d+\]$", name or "")
+    return match.group(1) if match else name
+
+
+def _subckt_parts(text: str) -> tuple[str, List[str]]:
+    match = re.search(r"^\s*\.subckt\s+(\S+)\s+(.+)$", text or "", flags=re.IGNORECASE | re.MULTILINE)
+    if not match:
+        return "", []
+    return match.group(1), match.group(2).split()
+
+
+def _normalize_subckt_bus_pins(text: str) -> str:
+    name, pins = _subckt_parts(text)
+    if not name or not pins:
+        return text
+    bit_bases = {_base_bus_name(pin) for pin in pins if re.match(r"^.+\[\d+\]$", pin)}
+    if not bit_bases:
+        return text
+    normalized = [pin for pin in pins if not (pin in bit_bases and any(p.startswith(f"{pin}[") for p in pins))]
+    if normalized == pins:
+        return text
+    return re.sub(
+        r"^\s*\.subckt\s+\S+\s+.+$",
+        f".subckt {name} {' '.join(normalized)}",
+        text,
+        count=1,
+        flags=re.IGNORECASE | re.MULTILINE,
+    )
+
+
+def _direction_for_pin(pin: str, port_specs: Dict[str, Dict[str, Any]]) -> str:
+    spec = port_specs.get(pin) or port_specs.get(_base_bus_name(pin)) or {}
+    value = spec.get("direction") or spec.get("verilog_direction") or spec.get("lef_direction") or ""
+    return str(value).strip().lower()
+
+
+def _is_supply_pin(pin: str, port_specs: Dict[str, Dict[str, Any]]) -> bool:
+    spec = port_specs.get(pin) or port_specs.get(_base_bus_name(pin)) or {}
+    role = str(spec.get("role") or "").strip().lower()
+    lowered = (pin or "").lower()
+    if role in {"power", "ground", "supply"}:
+        return True
+    return lowered in {"vdd", "vss", "vcc", "gnd", "avdd", "avss", "dvdd", "dvss", "vpwr", "vgnd"}
+
+
+def _generated_spice_layout_issues(text: str, port_specs: Dict[str, Dict[str, Any]]) -> List[str]:
+    issues: List[str] = []
+    _subckt_name, pins = _subckt_parts(text)
+    bit_bases = {_base_bus_name(pin) for pin in pins if re.match(r"^.+\[\d+\]$", pin)}
+    duplicate_scalar_buses = sorted(pin for pin in pins if pin in bit_bases)
+    if duplicate_scalar_buses:
+        issues.append(f"duplicate_scalar_bus_pins:{','.join(duplicate_scalar_buses)}")
+
+    external_inputs = {pin for pin in pins if _direction_for_pin(pin, port_specs).startswith("input") and not _is_supply_pin(pin, port_specs)}
+    external_inputs.update(
+        pin
+        for pin in pins
+        if _direction_for_pin(_base_bus_name(pin), port_specs).startswith("input") and not _is_supply_pin(pin, port_specs)
+    )
+    for match in re.finditer(r"^\s*M\S*\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)", text or "", flags=re.IGNORECASE | re.MULTILINE):
+        drain, _gate, source, _bulk, _model = match.groups()
+        for terminal in (drain, source):
+            if terminal in external_inputs:
+                issues.append(f"input_pin_used_as_device_terminal:{terminal}")
+    return sorted(dict.fromkeys(issues))
+
+
 def _candidate_texts(state: dict) -> List[tuple[str, str]]:
     candidates: List[tuple[str, str]] = []
     for key in ("analog_spice_text", "analog_netlist_text", "spice_text"):
@@ -95,7 +180,7 @@ def _normalise_sky130_spice(text: str, module_name: str, ports: List[str]) -> st
         body = f".subckt {module_name} {pin_text}\n" + body + f".ends {module_name}\n"
     if not re.search(r"^\s*\.end\s*$", body, flags=re.IGNORECASE | re.MULTILINE):
         body += ".end\n"
-    return body
+    return _normalize_subckt_bus_pins(body)
 
 
 def _strip_code_fences(text: str) -> str:
@@ -146,6 +231,9 @@ Strict requirements:
 - Must include transistor-level MOS device lines that start with M, using sky130_fd_pr__nfet_01v8 and/or sky130_fd_pr__pfet_01v8.
 - Do not instantiate Sky130 MOS models with X lines; X is for subcircuit calls and is not accepted as a MOS device.
 - Preserve the required port order in the .subckt line.
+- If a port is a bus, use either the bus bit pins or the scalar bus port, not both.
+- Do not drive input pins from MOS drain/source terminals; input pins may drive MOS gates only.
+- Do not create internal helper devices that modify external input pins.
 - Include explicit W and L parameters on MOS devices.
 - Use Sky130 Magic-compatible dimensions: W >= 0.42u and L >= 0.15u for every MOS device.
 - Do not emit placeholder comments instead of devices.
@@ -174,6 +262,7 @@ def run_agent(state: dict) -> dict:
 
     module_name = _module_name(state)
     ports = _ports(state) or _contract_ports(state)
+    port_specs = _port_specs(state)
     selected_source = ""
     selected_text = ""
     for source, text in _candidate_texts(state):
@@ -207,6 +296,20 @@ def run_agent(state: dict) -> dict:
         raise RuntimeError("Analog GDS generation requires real transistor-level SPICE; no valid device-level SPICE was provided.")
 
     spice = _normalise_sky130_spice(selected_text, module_name, ports)
+    layout_issues = _generated_spice_layout_issues(spice, port_specs)
+    layout_blocking_issues = [issue for issue in layout_issues if not issue.startswith("duplicate_scalar_bus_pins:")]
+    if layout_blocking_issues and selected_source == "generated_by_sky130_spice_agent":
+        summary.update({
+            "status": "failed",
+            "reason": "generated_spice_not_layout_safe",
+            "layout_issues": layout_blocking_issues,
+            "note": "Generated transistor SPICE would create invalid Magic layout. Provide a real layout-safe transistor netlist or improve the analog SPICE generator.",
+        })
+        save_text_artifact_and_record(workflow_id, AGENT_NAME, "analog/sky130", "sky130_spice_summary.json", json.dumps(summary, indent=2))
+        save_text_artifact_and_record(workflow_id, AGENT_NAME, "analog/sky130", f"{module_name}_rejected.spice", spice)
+        state["analog_sky130_spice"] = summary
+        state["status"] = f"{AGENT_NAME}: failed"
+        raise RuntimeError(f"Analog Sky130 SPICE generation failed: generated_spice_not_layout_safe ({', '.join(layout_blocking_issues[:5])})")
     spice_path = os.path.join(out_dir, f"{module_name}.spice")
     with open(spice_path, "w", encoding="utf-8") as fh:
         fh.write(spice)

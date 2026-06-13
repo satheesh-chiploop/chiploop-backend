@@ -206,6 +206,72 @@ def test_sky130_spice_agent_rejects_x_lines_as_mos_devices(tmp_path, monkeypatch
     assert state["analog_sky130_spice"]["status"] == "failed"
 
 
+def test_sky130_spice_agent_removes_duplicate_scalar_bus_subckt_pins():
+    text = ".subckt ana adc_code adc_code[0] adc_code[1] sample_req\nM1 adc_code[0] sample_req avss avss sky130_fd_pr__nfet_01v8 W=1u L=0.15u\n.ends ana\n"
+
+    normalized = spice_agent._normalise_sky130_spice(text, "ana", [])
+
+    assert ".subckt ana adc_code[0] adc_code[1] sample_req" in normalized
+    assert ".subckt ana adc_code adc_code[0]" not in normalized
+
+
+def test_sky130_spice_agent_rejects_generated_spice_that_drives_input_pins(tmp_path, monkeypatch):
+    monkeypatch.setattr(spice_agent, "save_text_artifact_and_record", lambda *args, **kwargs: "local")
+    monkeypatch.setattr(
+        spice_agent,
+        "complete_text",
+        lambda *args, **kwargs: (
+            ".subckt ana sample_in data_out avdd avss\n"
+            "M1 sample_in data_out avdd avdd sky130_fd_pr__pfet_01v8 W=1u L=0.15u\n"
+            "M2 data_out sample_in avss avss sky130_fd_pr__nfet_01v8 W=1u L=0.15u\n"
+            ".ends ana\n"
+        ),
+    )
+
+    state = {
+        "workflow_id": "wf",
+        "workflow_dir": str(tmp_path),
+        "analog_physical_mode": "generate_sky130_gds",
+        "analog_pdk": "sky130A",
+        "analog_spec": {
+            "module_name": "ana",
+            "ports": [
+                {"name": "sample_in", "direction": "input"},
+                {"name": "data_out", "direction": "output"},
+                {"name": "avdd", "direction": "inout"},
+                {"name": "avss", "direction": "inout"},
+            ],
+        },
+    }
+
+    with pytest.raises(RuntimeError, match="generated_spice_not_layout_safe"):
+        spice_agent.run_agent(state)
+
+    assert state["analog_sky130_spice"]["reason"] == "generated_spice_not_layout_safe"
+    assert "input_pin_used_as_device_terminal:sample_in" in state["analog_sky130_spice"]["layout_issues"]
+
+
+def test_sky130_spice_layout_issues_catch_input_bus_bits_but_not_supplies():
+    spice = (
+        ".subckt ana sensor_temp_celsius[0] adc_code[0] avdd avss\n"
+        "M1 sensor_temp_celsius[0] adc_code[0] avdd avdd sky130_fd_pr__pfet_01v8 W=1u L=0.15u\n"
+        "M2 adc_code[0] sensor_temp_celsius[0] avss avss sky130_fd_pr__nfet_01v8 W=1u L=0.15u\n"
+        ".ends ana\n"
+    )
+    specs = {
+        "sensor_temp_celsius": {"name": "sensor_temp_celsius", "verilog_direction": "input", "width": 16},
+        "adc_code": {"name": "adc_code", "verilog_direction": "output", "width": 12},
+        "avdd": {"name": "avdd", "verilog_direction": "input", "role": "power"},
+        "avss": {"name": "avss", "verilog_direction": "input", "role": "ground"},
+    }
+
+    issues = spice_agent._generated_spice_layout_issues(spice, specs)
+
+    assert "input_pin_used_as_device_terminal:sensor_temp_celsius[0]" in issues
+    assert "input_pin_used_as_device_terminal:avdd" not in issues
+    assert "input_pin_used_as_device_terminal:avss" not in issues
+
+
 def test_gds_generation_uses_macro_contract_name_when_module_missing(tmp_path, monkeypatch):
     monkeypatch.setattr(gds_agent, "save_text_artifact_and_record", lambda *args, **kwargs: "local")
 
