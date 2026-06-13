@@ -41,10 +41,15 @@ def _write_text(path: str, content: str) -> None:
         f.write(content)
 
 def _latest_run_dir(run_work_dir: str) -> str | None:
-    runs_dir = os.path.join(run_work_dir, "runs")
-    if not os.path.isdir(runs_dir):
-        return None
-    dirs = [os.path.join(runs_dir, d) for d in os.listdir(runs_dir) if os.path.isdir(os.path.join(runs_dir, d))]
+    run_roots = [
+        os.path.join(run_work_dir, "runs"),
+        os.path.join(run_work_dir, STAGE_NAME, "runs"),
+    ]
+    dirs = []
+    for runs_dir in run_roots:
+        if not os.path.isdir(runs_dir):
+            continue
+        dirs.extend(os.path.join(runs_dir, d) for d in os.listdir(runs_dir) if os.path.isdir(os.path.join(runs_dir, d)))
     if not dirs:
         return None
     dirs.sort(key=lambda p: os.path.getmtime(p))
@@ -188,9 +193,9 @@ def _resolve_postcts_netlist(state: dict, workflow_dir: str) -> str | None:
 
 def _stage_macro_inputs(state: dict, work_stage_dir: str) -> tuple[list[str], list[str], list[str]]:
     digital = state.get("digital") or {}
-    macro_lefs = [p for p in (digital.get("macro_lefs") or []) if p and os.path.exists(p)]
-    macro_libs = [p for p in (digital.get("macro_libs") or []) if p and os.path.exists(p)]
-    macro_gds  = [p for p in (digital.get("macro_gds") or []) if p and os.path.exists(p)]
+    macro_lefs = list(dict.fromkeys(p for p in (digital.get("macro_lefs") or []) if p and os.path.exists(p)))
+    macro_libs = list(dict.fromkeys(p for p in (digital.get("macro_libs") or []) if p and os.path.exists(p)))
+    macro_gds  = list(dict.fromkeys(p for p in (digital.get("macro_gds") or []) if p and os.path.exists(p)))
 
     inputs_dir = os.path.join(work_stage_dir, "inputs", "macros")
     lef_dir = os.path.join(inputs_dir, "lef")
@@ -201,23 +206,56 @@ def _stage_macro_inputs(state: dict, work_stage_dir: str) -> tuple[list[str], li
     _ensure_dir(gds_dir)
 
     staged_lefs, staged_libs, staged_gds = [], [], []
+    seen_staged_lefs, seen_staged_libs, seen_staged_gds = set(), set(), set()
 
     for src in macro_lefs:
-        dst = os.path.join(lef_dir, os.path.basename(src))
+        basename = os.path.basename(src)
+        dst = os.path.join(lef_dir, basename)
         shutil.copy2(src, dst)
-        staged_lefs.append(f"dir::inputs/macros/lef/{os.path.basename(src)}")
+        rel = f"dir::inputs/macros/lef/{basename}"
+        if rel not in seen_staged_lefs:
+            staged_lefs.append(rel)
+            seen_staged_lefs.add(rel)
 
     for src in macro_libs:
-        dst = os.path.join(lib_dir, os.path.basename(src))
+        basename = os.path.basename(src)
+        dst = os.path.join(lib_dir, basename)
         shutil.copy2(src, dst)
-        staged_libs.append(f"dir::inputs/macros/lib/{os.path.basename(src)}")
+        rel = f"dir::inputs/macros/lib/{basename}"
+        if rel not in seen_staged_libs:
+            staged_libs.append(rel)
+            seen_staged_libs.add(rel)
 
     for src in macro_gds:
-        dst = os.path.join(gds_dir, os.path.basename(src))
+        basename = os.path.basename(src)
+        dst = os.path.join(gds_dir, basename)
         shutil.copy2(src, dst)
-        staged_gds.append(f"dir::inputs/macros/gds/{os.path.basename(src)}")
+        rel = f"dir::inputs/macros/gds/{basename}"
+        if rel not in seen_staged_gds:
+            staged_gds.append(rel)
+            seen_staged_gds.add(rel)
 
     return staged_lefs, staged_libs, staged_gds
+
+
+def _stage_macro_placement_cfg_if_needed(cfg: dict, state: dict, workflow_dir: str, work_stage_dir: str) -> str | None:
+    if not cfg.get("MACRO_PLACEMENT_CFG"):
+        return None
+    digital = state.get("digital") or {}
+    place_state = digital.get("place") or {}
+    candidates = [
+        place_state.get("macro_placement_cfg"),
+        os.path.join(workflow_dir, "digital", "place", "macro_placement.cfg"),
+    ]
+    src = next((p for p in candidates if isinstance(p, str) and os.path.exists(p)), None)
+    if not src:
+        cfg.pop("MACRO_PLACEMENT_CFG", None)
+        return None
+    dst = os.path.join(work_stage_dir, "inputs", "macros", "macro_placement.cfg")
+    _ensure_dir(os.path.dirname(dst))
+    shutil.copy2(src, dst)
+    cfg["MACRO_PLACEMENT_CFG"] = "dir::inputs/macros/macro_placement.cfg"
+    return dst
 
 def run_agent(state: dict) -> dict:
     print(f"\n🏁 Running {AGENT_NAME}...")
@@ -252,6 +290,7 @@ def run_agent(state: dict) -> dict:
     _ensure_dir(work_stage_dir)
 
     staged_lefs, staged_libs, staged_gds = _stage_macro_inputs(state, work_stage_dir)
+    macro_placement_cfg = _stage_macro_placement_cfg_if_needed(cfg, state, workflow_dir, work_stage_dir)
 
     if staged_lefs:
         cfg["EXTRA_LEFS"] = staged_lefs
@@ -349,6 +388,8 @@ def run_agent(state: dict) -> dict:
         f"macro_lef_count={len(staged_lefs)}",
         f"macro_lib_count={len(staged_libs)}",
         f"macro_gds_count={len(staged_gds)}",
+        f"macro_placement_cfg={cfg.get('MACRO_PLACEMENT_CFG')}",
+        f"macro_placement_cfg_path={macro_placement_cfg}",
     ]) + "\n"
     _write_text(os.path.join(logs_dir, "sta_postcts_input_resolution.log"), input_log)
 

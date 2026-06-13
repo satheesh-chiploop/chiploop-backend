@@ -43,10 +43,15 @@ def _run(cmd: list[str], cwd: str, state: dict | None = None) -> tuple[int, str]
 
 
 def _latest_run_dir(run_work_dir: str) -> str | None:
-    runs_dir = os.path.join(run_work_dir, "runs")
-    if not os.path.isdir(runs_dir):
-        return None
-    dirs = [os.path.join(runs_dir, d) for d in os.listdir(runs_dir) if os.path.isdir(os.path.join(runs_dir, d))]
+    run_roots = [
+        os.path.join(run_work_dir, "runs"),
+        os.path.join(run_work_dir, "floorplan", "runs"),
+    ]
+    dirs = []
+    for runs_dir in run_roots:
+        if not os.path.isdir(runs_dir):
+            continue
+        dirs.extend(os.path.join(runs_dir, d) for d in os.listdir(runs_dir) if os.path.isdir(os.path.join(runs_dir, d)))
     if not dirs:
         return None
     dirs.sort(key=lambda p: os.path.getmtime(p))
@@ -162,9 +167,9 @@ def _resolve_macro_files_from_workflow(workflow_dir: str, exts: tuple[str, ...])
 def _stage_macro_inputs(state: dict, workflow_dir: str, work_stage_dir: str) -> tuple[list[str], list[str], list[str]]:
     digital = state.get("digital") or {}
 
-    macro_lefs = [p for p in (digital.get("macro_lefs") or []) if p and os.path.exists(p)]
-    macro_libs = [p for p in (digital.get("macro_libs") or []) if p and os.path.exists(p)]
-    macro_gds  = [p for p in (digital.get("macro_gds") or []) if p and os.path.exists(p)]
+    macro_lefs = list(dict.fromkeys(p for p in (digital.get("macro_lefs") or []) if p and os.path.exists(p)))
+    macro_libs = list(dict.fromkeys(p for p in (digital.get("macro_libs") or []) if p and os.path.exists(p)))
+    macro_gds  = list(dict.fromkeys(p for p in (digital.get("macro_gds") or []) if p and os.path.exists(p)))
 
     inputs_dir = os.path.join(work_stage_dir, "inputs", "macros")
     lef_dir = os.path.join(inputs_dir, "lef")
@@ -175,24 +180,37 @@ def _stage_macro_inputs(state: dict, workflow_dir: str, work_stage_dir: str) -> 
     _ensure_dir(gds_dir)
 
     staged_lefs, staged_libs, staged_gds = [], [], []
+    seen_staged_lefs, seen_staged_libs, seen_staged_gds = set(), set(), set()
 
     for src in macro_lefs:
-        dst = os.path.join(lef_dir, os.path.basename(src))
+        basename = os.path.basename(src)
+        dst = os.path.join(lef_dir, basename)
         if os.path.abspath(src) != os.path.abspath(dst):
             shutil.copy2(src, dst)
-        staged_lefs.append(f"dir::inputs/macros/lef/{os.path.basename(src)}")
+        rel = f"dir::inputs/macros/lef/{basename}"
+        if rel not in seen_staged_lefs:
+            staged_lefs.append(rel)
+            seen_staged_lefs.add(rel)
 
     for src in macro_libs:
-        dst = os.path.join(lib_dir, os.path.basename(src))
+        basename = os.path.basename(src)
+        dst = os.path.join(lib_dir, basename)
         if os.path.abspath(src) != os.path.abspath(dst):
             shutil.copy2(src, dst)
-        staged_libs.append(f"dir::inputs/macros/lib/{os.path.basename(src)}")
+        rel = f"dir::inputs/macros/lib/{basename}"
+        if rel not in seen_staged_libs:
+            staged_libs.append(rel)
+            seen_staged_libs.add(rel)
 
     for src in macro_gds:
-        dst = os.path.join(gds_dir, os.path.basename(src))
+        basename = os.path.basename(src)
+        dst = os.path.join(gds_dir, basename)
         if os.path.abspath(src) != os.path.abspath(dst):
             shutil.copy2(src, dst)
-        staged_gds.append(f"dir::inputs/macros/gds/{os.path.basename(src)}")
+        rel = f"dir::inputs/macros/gds/{basename}"
+        if rel not in seen_staged_gds:
+            staged_gds.append(rel)
+            seen_staged_gds.add(rel)
 
     return staged_lefs, staged_libs, staged_gds
 

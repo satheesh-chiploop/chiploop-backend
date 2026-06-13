@@ -4,6 +4,7 @@ os.environ.setdefault("SUPABASE_URL", "http://localhost:54321")
 os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-service-role-key")
 os.environ.setdefault("OPENAI_API_KEY", "test-openai-key")
 
+from agents.digital import digital_cts_agent as cts_agent
 from agents.digital import digital_placement_agent as agent
 
 
@@ -93,3 +94,24 @@ def test_stage_macro_inputs_dedupes_collateral_with_same_staged_name(tmp_path):
     assert staged_gds == []
     assert "PIN VPWR" in (tmp_path / "stage" / "inputs" / "macros" / "lef" / "ana.lef").read_text(encoding="utf-8")
     assert "ana_generated" in (tmp_path / "stage" / "inputs" / "macros" / "lib" / "ana.lib").read_text(encoding="utf-8")
+
+
+def test_cts_stages_inherited_macro_placement_cfg(tmp_path):
+    workflow_dir = tmp_path / "workflow"
+    place_dir = workflow_dir / "digital" / "place"
+    work_stage = tmp_path / "run_work" / "cts"
+    place_dir.mkdir(parents=True)
+    macro_cfg = place_dir / "macro_placement.cfg"
+    macro_cfg.write_text("u_analog 18.000 18.000 N\n", encoding="utf-8")
+    cfg = {"MACRO_PLACEMENT_CFG": "dir::inputs/macros/macro_placement.cfg"}
+
+    staged = cts_agent._stage_macro_placement_cfg_if_needed(
+        cfg,
+        {"digital": {"place": {"macro_placement_cfg": str(macro_cfg)}}},
+        str(workflow_dir),
+        str(work_stage),
+    )
+
+    assert cfg["MACRO_PLACEMENT_CFG"] == "dir::inputs/macros/macro_placement.cfg"
+    assert staged == str(work_stage / "inputs" / "macros" / "macro_placement.cfg")
+    assert "u_analog" in (work_stage / "inputs" / "macros" / "macro_placement.cfg").read_text(encoding="utf-8")
