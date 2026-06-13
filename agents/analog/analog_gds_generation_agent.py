@@ -71,6 +71,8 @@ def _magic_layout_invalid(log: str) -> str:
     lowered = (log or "").lower()
     if "mos length must be" in lowered or "mos width must be" in lowered:
         return "magic_device_parameter_errors"
+    if "generating output for cell /work/" in lowered or "cell /work/" in lowered:
+        return "magic_path_qualified_top_cell"
     if "root cell box:" in lowered and "microns:   0.000 x 0.000" in lowered:
         return "magic_zero_area_layout"
     if "pre-generating subcircuit" in lowered and "placeholder" in lowered and "microns:   0.000 x 0.000" in lowered:
@@ -146,15 +148,18 @@ def _write_magic_import_tcl(
     use_docker: bool,
 ) -> str:
     tech_tcl = _magic_paths(pdk_variant)[1] if use_docker else _host_magic_paths(pdk_root_host, pdk_variant)[1]
-    spice_path = f"/work/{spice_name}" if use_docker else os.path.join(stage_dir, spice_name)
-    gds_path = f"/work/{module_name}.gds" if use_docker else os.path.join(stage_dir, f"{module_name}.gds")
-    mag_path = f"/work/{module_name}.mag" if use_docker else os.path.join(stage_dir, f"{module_name}.mag")
+    spice_path = spice_name
+    gds_path = f"{module_name}.gds" if use_docker else os.path.join(stage_dir, f"{module_name}.gds")
+    mag_path = f"{module_name}.mag" if use_docker else os.path.join(stage_dir, f"{module_name}.mag")
+    feedback_path = "magic_feedback.txt" if use_docker else os.path.join(stage_dir, "magic_feedback.txt")
     lines = [
         "drc off",
         f"source {tech_tcl}",
         f"magic::netlist_to_layout {spice_path} sky130",
-        f"catch {{load {module_name}}}",
+        f"load {module_name}",
         "select top cell",
+        "box values",
+        f"catch {{feedback save {feedback_path}}}",
         f"save {mag_path}",
         f"gds write {gds_path}",
         "quit -noprompt",
@@ -249,9 +254,6 @@ def _run_magic_gds(
     if magic_bin:
         host_tcl_text = open(tcl_path, "r", encoding="utf-8").read()
         host_tcl_text = host_tcl_text.replace(f"/pdk/{pdk_variant}/libs.tech/magic/{pdk_variant}.tcl", host_tcl)
-        host_tcl_text = host_tcl_text.replace(f"/work/{os.path.basename(staged_spice)}", os.path.abspath(staged_spice))
-        host_tcl_text = host_tcl_text.replace(f"/work/{module_name}.gds", os.path.join(stage_dir, f"{module_name}.gds"))
-        host_tcl_text = host_tcl_text.replace(f"/work/{module_name}.mag", os.path.join(stage_dir, f"{module_name}.mag"))
         with open(tcl_path, "w", encoding="utf-8") as fh:
             fh.write(host_tcl_text)
         cmd = [magic_bin, "-dnull", "-noconsole", "-T", host_tech, tcl_path]
@@ -493,6 +495,13 @@ def run_agent(state: dict) -> dict:
     if backend == "magic" and tcl_path and os.path.exists(tcl_path):
         with open(tcl_path, "r", encoding="utf-8") as fh:
             save_text_artifact_and_record(workflow_id, AGENT_NAME, "analog/gds", "magic_import_spice.tcl", fh.read())
+    if backend == "magic" and os.path.exists(staged_spice):
+        with open(staged_spice, "r", encoding="utf-8", errors="ignore") as fh:
+            save_text_artifact_and_record(workflow_id, AGENT_NAME, "analog/gds", "magic_input.sp", fh.read())
+    feedback_path = os.path.join(stage_dir, "magic_feedback.txt")
+    if backend == "magic" and os.path.exists(feedback_path):
+        with open(feedback_path, "r", encoding="utf-8", errors="ignore") as fh:
+            save_text_artifact_and_record(workflow_id, AGENT_NAME, "analog/gds", "magic_feedback.txt", fh.read())
     save_text_artifact_and_record(workflow_id, AGENT_NAME, "analog/gds", log_name, log)
     save_text_artifact_and_record(workflow_id, AGENT_NAME, "analog/gds", "analog_gds_summary.json", json.dumps(summary, indent=2))
     state["analog_gds_generation"] = summary

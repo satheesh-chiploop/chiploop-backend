@@ -238,8 +238,8 @@ def test_gds_generation_uses_magic_docker_by_default(tmp_path, monkeypatch):
         assert any(str(part).endswith(":/work") for part in cmd)
         tcl = (tmp_path / "analog" / "gds" / "magic_import_spice.tcl").read_text(encoding="utf-8")
         assert "source /pdk/sky130A/libs.tech/magic/sky130A.tcl" in tcl
-        assert "magic::netlist_to_layout /work/ana.sp sky130" in tcl
-        assert "gds write /work/ana.gds" in tcl
+        assert "magic::netlist_to_layout ana.sp sky130" in tcl
+        assert "gds write ana.gds" in tcl
         staged_spice = (tmp_path / "analog" / "gds" / "ana.sp").read_text(encoding="utf-8")
         assert "W=1 L=0.15" in staged_spice
         (tmp_path / "analog" / "gds" / "ana.gds").write_bytes(b"GDS")
