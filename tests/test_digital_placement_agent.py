@@ -33,6 +33,18 @@ def test_macro_placement_cfg_generated_from_netlist_and_lef(tmp_path):
     assert "u_analog 18.000 18.000 N" in open(path, encoding="utf-8").read()
 
 
+def test_latest_run_dir_finds_stage_local_openlane_runs(tmp_path):
+    run_work = tmp_path / "run_work"
+    old_run = run_work / "runs" / "old"
+    place_run = run_work / "place" / "runs" / "System_PD_wf"
+    old_run.mkdir(parents=True)
+    place_run.mkdir(parents=True)
+    os.utime(old_run, (1, 1))
+    os.utime(place_run, (2, 2))
+
+    assert agent._latest_run_dir(str(run_work)) == str(place_run)
+
+
 def test_stage_macro_inputs_dedupes_duplicate_collateral(tmp_path):
     lef = tmp_path / "ana.lef"
     lib = tmp_path / "ana.lib"

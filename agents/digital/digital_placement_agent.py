@@ -42,10 +42,15 @@ def _run(cmd: list[str], cwd: str, state: dict | None = None) -> tuple[int, str]
 
 
 def _latest_run_dir(run_work_dir: str) -> str | None:
-    runs_dir = os.path.join(run_work_dir, "runs")
-    if not os.path.isdir(runs_dir):
-        return None
-    dirs = [os.path.join(runs_dir, d) for d in os.listdir(runs_dir) if os.path.isdir(os.path.join(runs_dir, d))]
+    run_roots = [
+        os.path.join(run_work_dir, "runs"),
+        os.path.join(run_work_dir, "place", "runs"),
+    ]
+    dirs = []
+    for runs_dir in run_roots:
+        if not os.path.isdir(runs_dir):
+            continue
+        dirs.extend(os.path.join(runs_dir, d) for d in os.listdir(runs_dir) if os.path.isdir(os.path.join(runs_dir, d)))
     if not dirs:
         return None
     dirs.sort(key=lambda p: os.path.getmtime(p))
