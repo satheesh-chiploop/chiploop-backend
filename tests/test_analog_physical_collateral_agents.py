@@ -211,6 +211,55 @@ def test_gds_generation_uses_macro_contract_name_when_module_missing(tmp_path, m
     assert state["analog_gds_generation"]["module"] == "temp_sensor_adc_model"
 
 
+def test_gds_generation_uses_magic_docker_by_default(tmp_path, monkeypatch):
+    monkeypatch.setattr(gds_agent, "save_text_artifact_and_record", lambda *args, **kwargs: "local")
+    monkeypatch.setattr(gds_agent.shutil, "which", lambda name: "/usr/bin/docker" if name == "docker" else None)
+    pdk_root = tmp_path / "pdk"
+    magic_dir = pdk_root / "sky130A" / "libs.tech" / "magic"
+    magic_dir.mkdir(parents=True)
+    (magic_dir / "sky130A.tech").write_text("tech\n", encoding="utf-8")
+    (magic_dir / "sky130A.tcl").write_text("proc sky130::importspice {} {}\n", encoding="utf-8")
+    spice = tmp_path / "ana.spice"
+    spice.write_text(
+        ".subckt ana vin vout vdd vss\n"
+        "M1 vout vin vss vss sky130_fd_pr__nfet_01v8 W=1u L=0.15u\n"
+        ".ends ana\n",
+        encoding="utf-8",
+    )
+
+    def fake_run_command(state, capability, cmd, cwd=None, timeout_sec=None):
+        assert capability == "analog_magic_gds"
+        assert cmd[0] == "/usr/bin/docker"
+        assert gds_agent.OPENLANE_DOCKER_IMAGE in cmd
+        assert "magic" in cmd
+        assert "/pdk/sky130A/libs.tech/magic/sky130A.tech" in cmd
+        assert "/work/magic_import_spice.tcl" in cmd
+        assert f"{pdk_root}:/pdk" in cmd
+        assert any(str(part).endswith(":/work") for part in cmd)
+        tcl = (tmp_path / "analog" / "gds" / "magic_import_spice.tcl").read_text(encoding="utf-8")
+        assert "source /pdk/sky130A/libs.tech/magic/sky130A.tcl" in tcl
+        assert "magic::netlist_to_layout /work/ana.sp sky130" in tcl
+        assert "gds write /work/ana.gds" in tcl
+        (tmp_path / "analog" / "gds" / "ana.gds").write_bytes(b"GDS")
+        return SimpleNamespace(returncode=0, stdout="magic ok", stderr="")
+
+    monkeypatch.setattr(gds_agent, "run_command", fake_run_command)
+
+    state = gds_agent.run_agent({
+        "workflow_id": "wf",
+        "workflow_dir": str(tmp_path),
+        "analog_physical_mode": "generate_sky130_gds",
+        "analog_pdk": "sky130A",
+        "analog_macro_module": "ana",
+        "analog_spice_path": str(spice),
+        "pdk_root_host": str(pdk_root),
+    })
+
+    assert state["analog_gds_generation"]["status"] == "generated"
+    assert state["analog_gds_generation"]["tool_mode"] == "docker_magic"
+    assert state["analog_gds_generation"]["backend"] == "magic"
+
+
 def test_gds_generation_uses_align_docker_when_host_align_missing(tmp_path, monkeypatch):
     monkeypatch.setattr(gds_agent, "save_text_artifact_and_record", lambda *args, **kwargs: "local")
     monkeypatch.setattr(gds_agent.shutil, "which", lambda name: "/usr/bin/docker" if name == "docker" else None)
@@ -240,6 +289,7 @@ def test_gds_generation_uses_align_docker_when_host_align_missing(tmp_path, monk
         assert "-p \"${PDK_DIR}\"" in script
         assert "Path('/pdk') / variant" in script
         assert "primitive.py" in script
+        assert "rglob('primitive.py')" in script
         assert "-f ana.sp" in script
         assert "-s ana" in script
         assert "-c" not in cmd
@@ -255,10 +305,48 @@ def test_gds_generation_uses_align_docker_when_host_align_missing(tmp_path, monk
         "analog_pdk": "sky130A",
         "analog_macro_module": "ana",
         "analog_spice_path": str(spice),
+        "analog_gds_backend": "align",
     })
 
     assert state["analog_gds_generation"]["status"] == "generated"
     assert state["analog_gds_generation"]["tool_mode"] == "docker"
+
+
+def test_gds_generation_mounts_dedicated_align_pdk_when_configured(tmp_path, monkeypatch):
+    monkeypatch.setattr(gds_agent, "save_text_artifact_and_record", lambda *args, **kwargs: "local")
+    monkeypatch.setattr(gds_agent.shutil, "which", lambda name: "/usr/bin/docker" if name == "docker" else None)
+    spice = tmp_path / "ana.spice"
+    spice.write_text(
+        ".subckt ana vin vout vdd vss\n"
+        "M1 vout vin vss vss sky130_fd_pr__nfet_01v8 W=1u L=0.15u\n"
+        ".ends ana\n",
+        encoding="utf-8",
+    )
+    align_pdk = tmp_path / "align_sky130"
+    align_pdk.mkdir()
+    (align_pdk / "primitive.py").write_text("# align pdk\n", encoding="utf-8")
+
+    def fake_run_command(state, capability, cmd, cwd=None, timeout_sec=None):
+        assert f"{align_pdk}:/align_pdk" in cmd
+        assert "Path('/align_pdk')" in cmd[-1]
+        (tmp_path / "analog" / "gds" / "ana.gds").write_bytes(b"GDS")
+        return SimpleNamespace(returncode=0, stdout="align ok", stderr="")
+
+    monkeypatch.setattr(gds_agent, "run_command", fake_run_command)
+
+    state = gds_agent.run_agent({
+        "workflow_id": "wf",
+        "workflow_dir": str(tmp_path),
+        "analog_physical_mode": "generate_sky130_gds",
+        "analog_pdk": "sky130A",
+        "analog_macro_module": "ana",
+        "analog_spice_path": str(spice),
+        "analog_gds_backend": "align",
+        "align_pdk_host": str(align_pdk),
+    })
+
+    assert state["analog_gds_generation"]["align_pdk_host"] == str(align_pdk)
+    assert state["analog_gds_generation"]["status"] == "generated"
 
 
 def test_physical_package_exports_blackbox_when_not_generating_gds(tmp_path, monkeypatch):
