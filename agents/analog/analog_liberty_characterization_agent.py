@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import shutil
 from datetime import datetime
 from typing import Any, Dict
@@ -27,6 +28,18 @@ def _pdk_root_host(state: dict) -> str:
         or os.getenv("CHIPLOOP_PDK_ROOT_HOST")
         or "/root/chiploop-backend/backend/pdk"
     ))
+
+
+def _prepare_ngspice_spice(src: str, dst: str) -> None:
+    text = open(src, "r", encoding="utf-8", errors="ignore").read()
+    lines = []
+    has_sky130_lib = bool(re.search(r"^\s*\.lib\s+.*sky130\.lib\.spice\"?\s+tt\b", text, flags=re.IGNORECASE | re.MULTILINE))
+    for line in text.splitlines():
+        if has_sky130_lib and re.search(r"^\s*\.include\s+.*sky130\.lib\.spice\"?", line, flags=re.IGNORECASE):
+            continue
+        lines.append(line)
+    with open(dst, "w", encoding="utf-8") as fh:
+        fh.write("\n".join(lines).rstrip() + "\n")
 
 
 def run_agent(state: dict) -> dict:
@@ -59,7 +72,9 @@ def run_agent(state: dict) -> dict:
         deck_path = os.path.join(stage_dir, "characterize_ngspice.sp")
         staged_spice = os.path.join(stage_dir, os.path.basename(spice_path) or f"{module_name}.spice")
         if os.path.abspath(spice_path) != os.path.abspath(staged_spice):
-            shutil.copy2(spice_path, staged_spice)
+            _prepare_ngspice_spice(spice_path, staged_spice)
+        else:
+            _prepare_ngspice_spice(spice_path, staged_spice)
         deck = "\n".join([
             f'.include "{staged_spice}"',
             "* Placeholder characterization deck. Real Liberty requires block-specific stimuli and measurements.",

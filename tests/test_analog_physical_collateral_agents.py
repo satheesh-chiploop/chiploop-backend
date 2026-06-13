@@ -638,6 +638,41 @@ def test_liberty_characterization_sets_pdk_root_and_uploads_ngspice_log(tmp_path
     assert "ngspice_characterization.log" in saved
 
 
+def test_liberty_characterization_removes_duplicate_sky130_include(tmp_path, monkeypatch):
+    monkeypatch.setattr(lib_agent, "save_text_artifact_and_record", lambda *args, **kwargs: "local")
+    monkeypatch.setattr(lib_agent.shutil, "which", lambda name: "/usr/bin/ngspice" if name == "ngspice" else None)
+    pdk_root = tmp_path / "pdk"
+    pdk_root.mkdir()
+    spice = tmp_path / "ana.spice"
+    spice.write_text(
+        '.include "$PDK_ROOT/sky130A/libs.tech/ngspice/sky130.lib.spice"\n'
+        '.lib "$PDK_ROOT/sky130A/libs.tech/ngspice/sky130.lib.spice" tt\n'
+        ".subckt ana vin vout vdd vss\n"
+        "M1 vout vin vss vss sky130_fd_pr__nfet_01v8 W=0.84u L=0.15u\n"
+        ".ends ana\n",
+        encoding="utf-8",
+    )
+
+    def fake_run_command(state, capability, cmd, cwd=None, timeout_sec=None, env=None):
+        staged = tmp_path / "analog" / "lib_char" / "ana.spice"
+        text = staged.read_text(encoding="utf-8")
+        assert ".include" not in text
+        assert '.lib "$PDK_ROOT/sky130A/libs.tech/ngspice/sky130.lib.spice" tt' in text
+        return SimpleNamespace(returncode=0, stdout="ngspice ok", stderr="")
+
+    monkeypatch.setattr(lib_agent, "run_command", fake_run_command)
+
+    with pytest.raises(RuntimeError, match="liberty_not_produced"):
+        lib_agent.run_agent({
+            "workflow_id": "wf",
+            "workflow_dir": str(tmp_path),
+            "analog_physical_mode": "generate_sky130_gds",
+            "analog_macro_module": "ana",
+            "analog_spice_path": str(spice),
+            "pdk_root_host": str(pdk_root),
+        })
+
+
 def test_macro_interface_contract_and_validation_pass(tmp_path, monkeypatch):
     monkeypatch.setattr(contract_agent, "save_text_artifact_and_record", lambda *args, **kwargs: "local")
     monkeypatch.setattr(validation_agent, "save_text_artifact_and_record", lambda *args, **kwargs: "local")

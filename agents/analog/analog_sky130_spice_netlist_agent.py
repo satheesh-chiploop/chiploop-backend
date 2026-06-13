@@ -83,7 +83,7 @@ def _has_subckt(text: str) -> bool:
 
 
 def _sky130_include() -> str:
-    return '.include "$PDK_ROOT/sky130A/libs.tech/ngspice/sky130.lib.spice"\n.lib "$PDK_ROOT/sky130A/libs.tech/ngspice/sky130.lib.spice" tt\n'
+    return '.lib "$PDK_ROOT/sky130A/libs.tech/ngspice/sky130.lib.spice" tt\n'
 
 
 def _normalise_sky130_spice(text: str, module_name: str, ports: List[str]) -> str:
