@@ -73,9 +73,10 @@ def _magic_layout_invalid(log: str) -> str:
         return "magic_device_parameter_errors"
     if "generating output for cell /work/" in lowered or "cell /work/" in lowered:
         return "magic_path_qualified_top_cell"
-    if "root cell box:" in lowered and "microns:   0.000 x 0.000" in lowered:
+    final_box = re.search(r"CHIPLOOP_FINAL_BOX=([^\n\r]*)", log or "")
+    if final_box and re.search(r"\b0(?:\.0+)?\s+0(?:\.0+)?\s+0(?:\.0+)?\s+0(?:\.0+)?\b", final_box.group(1)):
         return "magic_zero_area_layout"
-    if "pre-generating subcircuit" in lowered and "placeholder" in lowered and "microns:   0.000 x 0.000" in lowered:
+    if final_box and not final_box.group(1).strip():
         return "magic_placeholder_layout"
     return ""
 
@@ -158,7 +159,8 @@ def _write_magic_import_tcl(
         f"magic::netlist_to_layout {spice_path} sky130",
         f"load {module_name}",
         "select top cell",
-        "box values",
+        "expand",
+        "puts stdout \"CHIPLOOP_FINAL_BOX=[box values]\"",
         f"catch {{feedback save {feedback_path}}}",
         f"save {mag_path}",
         f"gds write {gds_path}",

@@ -239,6 +239,7 @@ def test_gds_generation_uses_magic_docker_by_default(tmp_path, monkeypatch):
         tcl = (tmp_path / "analog" / "gds" / "magic_import_spice.tcl").read_text(encoding="utf-8")
         assert "source /pdk/sky130A/libs.tech/magic/sky130A.tcl" in tcl
         assert "magic::netlist_to_layout ana.sp sky130" in tcl
+        assert "CHIPLOOP_FINAL_BOX=[box values]" in tcl
         assert "gds write ana.gds" in tcl
         staged_spice = (tmp_path / "analog" / "gds" / "ana.sp").read_text(encoding="utf-8")
         assert "W=1 L=0.15" in staged_spice
@@ -282,13 +283,13 @@ def test_gds_generation_rejects_magic_placeholder_layout(tmp_path, monkeypatch):
         (tmp_path / "analog" / "gds" / "ana.gds").write_bytes(b"GDS")
         return SimpleNamespace(
             returncode=0,
-            stdout="Root cell box:\nmicrons:   0.000 x 0.000\nMos width must be >= 0.42 um\n",
+            stdout="CHIPLOOP_FINAL_BOX=0 0 0 0\n",
             stderr="",
         )
 
     monkeypatch.setattr(gds_agent, "run_command", fake_run_command)
 
-    with pytest.raises(RuntimeError, match="magic_device_parameter_errors"):
+    with pytest.raises(RuntimeError, match="magic_zero_area_layout"):
         gds_agent.run_agent({
             "workflow_id": "wf",
             "workflow_dir": str(tmp_path),
