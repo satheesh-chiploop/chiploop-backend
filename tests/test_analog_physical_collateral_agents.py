@@ -35,6 +35,10 @@ def test_abstract_lib_stub_is_self_contained_and_rejects_malformed_pin_syntax():
     lib = abstract_agent._build_lib_stub(spec)
     assert "lu_table_template (delay_template_1x1)" in lib
     assert "lu_table_template (constraint_template_1x1)" in lib
+    assert "input_threshold_pct_rise : 50.0 ;" in lib
+    assert "output_threshold_pct_fall : 50.0 ;" in lib
+    assert "slew_lower_threshold_pct_rise : 20.0 ;" in lib
+    assert "slew_upper_threshold_pct_fall : 80.0 ;" in lib
     assert "type (sensor_temp_celsius_bus_t)" in lib
     assert "bus (sensor_temp_celsius)" in lib
     assert "bus_type : sensor_temp_celsius_bus_t" in lib
