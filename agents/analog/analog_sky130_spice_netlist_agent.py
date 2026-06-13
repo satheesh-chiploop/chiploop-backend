@@ -147,6 +147,7 @@ Strict requirements:
 - Do not instantiate Sky130 MOS models with X lines; X is for subcircuit calls and is not accepted as a MOS device.
 - Preserve the required port order in the .subckt line.
 - Include explicit W and L parameters on MOS devices.
+- Use Sky130 Magic-compatible dimensions: W >= 0.42u and L >= 0.15u for every MOS device.
 - Do not emit placeholder comments instead of devices.
 - Do not emit only R/C/load scaffolding.
 - End with .ends {module_name}.

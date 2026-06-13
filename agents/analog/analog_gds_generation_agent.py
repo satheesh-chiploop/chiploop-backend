@@ -50,10 +50,20 @@ def _prepare_magic_spice(src: str, dst: str) -> None:
             number = number / 1000.0
         elif suffix == "m":
             number = number * 1000.0
+        if key.lower() == "w":
+            number = max(number, 0.42)
+        elif key.lower() == "l":
+            number = max(number, 0.15)
         return f"{key}={number:g}"
 
-    # Magic's Sky130 SPICE importer expects generator dimensions in microns.
+    # Magic's Sky130 SPICE importer expects generator dimensions in microns and rejects
+    # devices below Sky130 generator minima.
     text = re.sub(r"\b([WLwl])\s*=\s*([0-9]+(?:\.[0-9]+)?)(u|um|n|m)\b", repl, text)
+    text = re.sub(
+        r"\b([WLwl])\s*=\s*([0-9]+(?:\.[0-9]+)?)\b",
+        lambda m: f"{m.group(1)}={max(float(m.group(2)), 0.42 if m.group(1).lower() == 'w' else 0.15):g}",
+        text,
+    )
     with open(dst, "w", encoding="utf-8") as fh:
         fh.write(text)
 

@@ -223,6 +223,7 @@ def test_gds_generation_uses_magic_docker_by_default(tmp_path, monkeypatch):
     spice.write_text(
         ".subckt ana vin vout vdd vss\n"
         "M1 vout vin vss vss sky130_fd_pr__nfet_01v8 W=1u L=0.15u\n"
+        "M2 vout vin vss vss sky130_fd_pr__nfet_01v8 W=0.24u L=0.12u\n"
         ".ends ana\n",
         encoding="utf-8",
     )
@@ -243,6 +244,7 @@ def test_gds_generation_uses_magic_docker_by_default(tmp_path, monkeypatch):
         assert "gds write ana.gds" in tcl
         staged_spice = (tmp_path / "analog" / "gds" / "ana.sp").read_text(encoding="utf-8")
         assert "W=1 L=0.15" in staged_spice
+        assert "W=0.42 L=0.15" in staged_spice
         (tmp_path / "analog" / "gds" / "ana.gds").write_bytes(b"GDS")
         return SimpleNamespace(returncode=0, stdout="magic ok", stderr="")
 
