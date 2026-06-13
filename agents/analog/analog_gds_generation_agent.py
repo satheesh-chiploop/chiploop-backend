@@ -79,6 +79,8 @@ def _tail(text: str, limit: int = 2000) -> str:
 
 def _magic_layout_invalid(log: str) -> str:
     lowered = (log or "").lower()
+    if _magic_feedback_problem_count(log):
+        return "magic_feedback_problems"
     if "mos length must be" in lowered or "mos width must be" in lowered:
         return "magic_device_parameter_errors"
     if "generating output for cell /work/" in lowered or "cell /work/" in lowered:
@@ -89,6 +91,68 @@ def _magic_layout_invalid(log: str) -> str:
     if final_box and not final_box.group(1).strip():
         return "magic_placeholder_layout"
     return ""
+
+
+def _magic_feedback_problem_count(log: str) -> int:
+    matches = re.findall(r"(\d+)\s+problems?\s+occurred", log or "", flags=re.IGNORECASE)
+    return max((int(value) for value in matches), default=0)
+
+
+def _analog_signoff_summary(
+    summary: Dict[str, Any],
+    *,
+    log_path: str | None = None,
+    log: str = "",
+    gds_path: str | None = None,
+    invalid_reason: str = "",
+) -> Dict[str, Any]:
+    feedback_count = _magic_feedback_problem_count(log) if summary.get("backend") == "magic" else 0
+    gds_status = str(summary.get("status") or "")
+    blocked = gds_status != "generated"
+    drc_status = "blocked"
+    if not blocked:
+        drc_status = "violations_found" if feedback_count else "clean"
+    elif invalid_reason == "magic_feedback_problems" or feedback_count:
+        drc_status = "violations_found"
+
+    return {
+        "workflow_id": summary.get("workflow_id"),
+        "agent": AGENT_NAME,
+        "generated_at": datetime.utcnow().isoformat() + "Z",
+        "module": summary.get("module"),
+        "pdk": summary.get("pdk"),
+        "backend": summary.get("backend"),
+        "gds": gds_path or summary.get("gds"),
+        "log": log_path or summary.get("log"),
+        "drc": {
+            "status": drc_status,
+            "tool": "magic" if summary.get("backend") == "magic" else summary.get("backend"),
+            "feedback_problem_count": feedback_count,
+            "reason": invalid_reason or summary.get("reason") or None,
+        },
+        "lvs": {
+            "status": "blocked" if blocked else "not_run",
+            "tool": "netgen",
+            "reason": "gds_not_clean" if drc_status == "violations_found" else "analog_lvs_agent_not_configured",
+        },
+        "xor": {
+            "status": "blocked" if blocked else "not_applicable",
+            "tool": "magic/klayout",
+            "difference_count": None,
+            "reason": "gds_not_clean" if drc_status == "violations_found" else "reference_gds_missing",
+        },
+    }
+
+
+def _publish_analog_signoff(workflow_id: str, state: dict, summary: Dict[str, Any]) -> None:
+    state["analog_signoff"] = summary
+    save_text_artifact_and_record(
+        workflow_id,
+        AGENT_NAME,
+        "analog/signoff",
+        "analog_signoff_summary.json",
+        json.dumps(summary, indent=2),
+    )
 
 
 def _resolve_pdk_variant(state: dict) -> str:
@@ -330,6 +394,7 @@ def run_agent(state: dict) -> dict:
 
     if not isinstance(spice_path, str) or not os.path.exists(spice_path):
         summary.update({"status": "failed", "reason": "sky130_spice_missing"})
+        _publish_analog_signoff(workflow_id, state, _analog_signoff_summary(summary, invalid_reason="sky130_spice_missing"))
         save_text_artifact_and_record(workflow_id, AGENT_NAME, "analog/gds", "analog_gds_summary.json", json.dumps(summary, indent=2))
         state["analog_gds_generation"] = summary
         state["status"] = f"{AGENT_NAME}: failed"
@@ -388,6 +453,7 @@ def run_agent(state: dict) -> dict:
             "backend": backend,
         })
         save_text_artifact_and_record(workflow_id, AGENT_NAME, "analog/gds", "run_gds.sh", run_text)
+        _publish_analog_signoff(workflow_id, state, _analog_signoff_summary(summary, invalid_reason="unsupported_gds_backend"))
         save_text_artifact_and_record(workflow_id, AGENT_NAME, "analog/gds", "analog_gds_summary.json", json.dumps(summary, indent=2))
         state["analog_gds_generation"] = summary
         state["status"] = f"{AGENT_NAME}: failed"
@@ -401,6 +467,7 @@ def run_agent(state: dict) -> dict:
             "note": "No GDS was generated. Install ALIGN/schematic2layout.py on PATH or provide Docker with darpaalign/align-public:latest.",
         })
         save_text_artifact_and_record(workflow_id, AGENT_NAME, "analog/gds", "run_gds.sh", run_text)
+        _publish_analog_signoff(workflow_id, state, _analog_signoff_summary(summary, invalid_reason="align_not_installed"))
         save_text_artifact_and_record(workflow_id, AGENT_NAME, "analog/gds", "analog_gds_summary.json", json.dumps(summary, indent=2))
         state["analog_gds_generation"] = summary
         state["status"] = f"{AGENT_NAME}: failed"
@@ -414,6 +481,7 @@ def run_agent(state: dict) -> dict:
         except RuntimeError as exc:
             summary.update({"status": "failed", "reason": "magic_setup_failed", "error": str(exc)})
             save_text_artifact_and_record(workflow_id, AGENT_NAME, "analog/gds", "run_gds.sh", run_text)
+            _publish_analog_signoff(workflow_id, state, _analog_signoff_summary(summary, invalid_reason="magic_setup_failed"))
             save_text_artifact_and_record(workflow_id, AGENT_NAME, "analog/gds", "analog_gds_summary.json", json.dumps(summary, indent=2))
             state["analog_gds_generation"] = summary
             state["status"] = f"{AGENT_NAME}: failed"
@@ -470,6 +538,7 @@ def run_agent(state: dict) -> dict:
         fh.write(log)
 
     gds_path = _find_gds(stage_dir)
+    magic_feedback_problem_count = _magic_feedback_problem_count(log) if backend == "magic" else 0
     invalid_reason = _magic_layout_invalid(log) if backend == "magic" else ""
     if gds_path and not invalid_reason:
         final_gds = os.path.join(stage_dir, f"{module_name}.gds")
@@ -497,6 +566,7 @@ def run_agent(state: dict) -> dict:
             "status": "failed",
             "return_code": cp.returncode,
             "reason": reason,
+            "magic_feedback_problem_count": magic_feedback_problem_count,
             "log": log_path,
             "log_tail": _tail(log),
             "tool_mode": tool_mode,
@@ -515,6 +585,17 @@ def run_agent(state: dict) -> dict:
         with open(feedback_path, "r", encoding="utf-8", errors="ignore") as fh:
             save_text_artifact_and_record(workflow_id, AGENT_NAME, "analog/gds", "magic_feedback.txt", fh.read())
     save_text_artifact_and_record(workflow_id, AGENT_NAME, "analog/gds", log_name, log)
+    _publish_analog_signoff(
+        workflow_id,
+        state,
+        _analog_signoff_summary(
+            summary,
+            log_path=log_path,
+            log=log,
+            gds_path=summary.get("gds") if isinstance(summary.get("gds"), str) else gds_path,
+            invalid_reason=invalid_reason,
+        ),
+    )
     save_text_artifact_and_record(workflow_id, AGENT_NAME, "analog/gds", "analog_gds_summary.json", json.dumps(summary, indent=2))
     state["analog_gds_generation"] = summary
     state["status"] = f"{AGENT_NAME}: {summary['status']}"

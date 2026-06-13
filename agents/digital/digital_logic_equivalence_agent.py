@@ -627,10 +627,18 @@ def _lec_induct_depth() -> int:
     return max(4, min(value, 1024))
 
 
-def _yosys_script(golden: list[str], gate: str, top: str, stdcell_verilog: list[str], gate_ignore_ports: list[str] | None = None) -> str:
+def _yosys_script(
+    golden: list[str],
+    gate: str,
+    top: str,
+    stdcell_verilog: list[str],
+    gate_ignore_ports: list[str] | None = None,
+    gate_blackbox_verilog: list[str] | None = None,
+) -> str:
     induct_depth = _lec_induct_depth()
     read_golden = "\n".join(f"read_verilog -sv {json.dumps(path)}" for path in golden)
     read_models = "\n".join(f"read_verilog -sv -D FUNCTIONAL {json.dumps(path)}" for path in stdcell_verilog)
+    read_gate_blackboxes = "\n".join(f"read_verilog -sv {json.dumps(path)}" for path in (gate_blackbox_verilog or []))
     ignored_gate_ports = [port for port in (gate_ignore_ports or []) if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_$]*", port)]
     delete_gate_ports = ""
     if ignored_gate_ports:
@@ -647,6 +655,7 @@ rename -top gold
 design -stash gold
 
 {read_models}
+{read_gate_blackboxes}
 read_verilog -sv {json.dumps(gate)}
 hierarchy -check -top {top}
 proc; opt; memory; opt
@@ -755,7 +764,13 @@ def run_agent(state: dict) -> dict:
     prepared_rtl_files, golden_macro_stubs = _prepare_golden_rtl_for_yosys(rtl_files, netlist, stage_dir, top) if rtl_files and netlist else (rtl_files, [])
     has_required_inputs = bool(prepared_rtl_files and netlist and yosys and yosys_stdcell_verilog and not missing_stdcell_models)
     if rtl_files and netlist:
-        script = _yosys_script(prepared_rtl_files, netlist, top, yosys_stdcell_verilog)
+        script = _yosys_script(
+            prepared_rtl_files,
+            netlist,
+            top,
+            yosys_stdcell_verilog,
+            gate_blackbox_verilog=golden_macro_stubs,
+        )
     else:
         script = "# Missing RTL or synthesized netlist; LEC not run.\n"
     _write_text(script_path, script)

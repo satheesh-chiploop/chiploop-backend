@@ -247,6 +247,14 @@ def test_tapeout_lec_script_can_ignore_physical_gate_ports():
     assert script.index("delete -port w:VPWR w:VGND") < script.index("rename -top gate")
 
 
+def test_lec_script_reads_macro_blackbox_before_gate_netlist():
+    script = _yosys_script(["rtl.sv", "macro_blackbox.v"], "gate.v", "top", ["cells.v"], gate_blackbox_verilog=["macro_blackbox.v"])
+
+    assert script.count('read_verilog -sv "macro_blackbox.v"') == 2
+    gate_read = 'read_verilog -sv "gate.v"'
+    assert script.rindex('read_verilog -sv "macro_blackbox.v"') < script.index(gate_read)
+
+
 def test_tapeout_physical_only_port_detection(tmp_path):
     rtl = tmp_path / "rtl.sv"
     gate = tmp_path / "gate.v"

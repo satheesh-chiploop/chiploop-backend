@@ -443,6 +443,7 @@ from agents.digital.digital_sta_postcts_agent import run_agent as digital_sta_po
 from agents.digital.digital_route_agent import run_agent as digital_route_agent
 from agents.digital.digital_sta_postroute_agent import run_agent as digital_sta_postroute_agent
 from agents.digital.digital_fill_agent import run_agent as digital_fill_agent
+from agents.digital.digital_sta_postfill_agent import run_agent as digital_sta_postfill_agent
 from agents.digital.digital_drc_agent import run_agent as digital_drc_agent
 from agents.digital.digital_lvs_agent import run_agent as digital_lvs_agent
 from agents.digital.digital_tapeout_agent import run_agent as digital_tapeout_agent
@@ -535,6 +536,7 @@ DIGITAL_AGENT_FUNCTIONS: Dict[str, Any] = {
     "Digital Route Agent": digital_route_agent,
     "Digital STA PostRoute Agent": digital_sta_postroute_agent,
     "Digital Fill Agent": digital_fill_agent,
+    "Digital STA PostFill Agent": digital_sta_postfill_agent,
     "Digital DRC Agent": digital_drc_agent,
     "Digital LVS Agent": digital_lvs_agent,
     "Digital Tapeout Agent": digital_tapeout_agent,
@@ -832,6 +834,7 @@ SYSTEM_AGENT_FUNCTIONS: Dict[str,Any] = {
     "Digital Route Agent": digital_route_agent,
     "Digital STA PostRoute Agent": digital_sta_postroute_agent,
     "Digital Fill Agent": digital_fill_agent,
+    "Digital STA PostFill Agent": digital_sta_postfill_agent,
     "Digital DRC Agent": digital_drc_agent,
     "Digital LVS Agent": digital_lvs_agent,
     "Digital Tapeout Agent": digital_tapeout_agent,
@@ -1141,6 +1144,7 @@ DIGITAL_ARCH2TAPEOUT_DEFINITION = _linear_workflow_definition([
     "Digital Route Agent",
     "Digital STA PostRoute Agent",
     "Digital Fill Agent",
+    "Digital STA PostFill Agent",
     "Digital DRC Agent",
     "Digital LVS Agent",
     "Digital Tapeout Agent",
@@ -1289,7 +1293,9 @@ SYSTEM_PD_DEFINITION = _linear_workflow_definition([
     "Digital CTS Agent",
     "Digital STA PostCTS Agent",
     "Digital Route Agent",
+    "Digital STA PostRoute Agent",
     "Digital Fill Agent",
+    "Digital STA PostFill Agent",
     "Digital DRC Agent",
     "Digital LVS Agent",
     "Digital Tapeout Agent",
@@ -3525,6 +3531,7 @@ def execute_digital_app_background(
                 "Digital Route Agent",
                 "Digital STA PostRoute Agent",
                 "Digital Fill Agent",
+                "Digital STA PostFill Agent",
                 "Digital DRC Agent",
                 "Digital LVS Agent",
                 "Digital Tapeout Agent",

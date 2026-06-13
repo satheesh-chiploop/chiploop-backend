@@ -276,6 +276,8 @@ def test_gds_generation_uses_magic_docker_by_default(tmp_path, monkeypatch):
     assert state["analog_gds_generation"]["status"] == "generated"
     assert state["analog_gds_generation"]["tool_mode"] == "docker_magic"
     assert state["analog_gds_generation"]["backend"] == "magic"
+    assert state["analog_signoff"]["drc"]["status"] == "clean"
+    assert state["analog_signoff"]["drc"]["feedback_problem_count"] == 0
 
 
 def test_gds_generation_rejects_magic_placeholder_layout(tmp_path, monkeypatch):
@@ -314,6 +316,49 @@ def test_gds_generation_rejects_magic_placeholder_layout(tmp_path, monkeypatch):
             "analog_spice_path": str(spice),
             "pdk_root_host": str(pdk_root),
         })
+
+
+def test_gds_generation_rejects_magic_feedback_problems(tmp_path, monkeypatch):
+    monkeypatch.setattr(gds_agent, "save_text_artifact_and_record", lambda *args, **kwargs: "local")
+    monkeypatch.setattr(gds_agent.shutil, "which", lambda name: "/usr/bin/docker" if name == "docker" else None)
+    pdk_root = tmp_path / "pdk"
+    magic_dir = pdk_root / "sky130A" / "libs.tech" / "magic"
+    magic_dir.mkdir(parents=True)
+    (magic_dir / "sky130A.tech").write_text("tech\n", encoding="utf-8")
+    (magic_dir / "sky130A.tcl").write_text("proc sky130::importspice {} {}\n", encoding="utf-8")
+    spice = tmp_path / "ana.spice"
+    spice.write_text(
+        ".subckt ana vin vout vdd vss\n"
+        "M1 vout vin vss vss sky130_fd_pr__nfet_01v8 W=1u L=0.15u\n"
+        ".ends ana\n",
+        encoding="utf-8",
+    )
+
+    def fake_run_command(state, capability, cmd, cwd=None, timeout_sec=None):
+        (tmp_path / "analog" / "gds" / "ana.gds").write_bytes(b"GDS")
+        return SimpleNamespace(returncode=0, stdout="56 problems occurred.  See feedback entries.\n", stderr="")
+
+    monkeypatch.setattr(gds_agent, "run_command", fake_run_command)
+
+    with pytest.raises(RuntimeError, match="magic_feedback_problems"):
+        state = {
+            "workflow_id": "wf",
+            "workflow_dir": str(tmp_path),
+            "analog_physical_mode": "generate_sky130_gds",
+            "analog_pdk": "sky130A",
+            "analog_macro_module": "ana",
+            "analog_spice_path": str(spice),
+            "pdk_root_host": str(pdk_root),
+        }
+        gds_agent.run_agent(state)
+
+    problem_count = gds_agent._magic_feedback_problem_count("56 problems occurred. See feedback entries.")
+    assert problem_count == 56
+    assert state["analog_signoff"]["drc"]["status"] == "violations_found"
+    assert state["analog_signoff"]["drc"]["feedback_problem_count"] == 56
+    assert state["analog_signoff"]["lvs"]["status"] == "blocked"
+    assert state["analog_signoff"]["xor"]["status"] == "blocked"
+
 
 def test_gds_generation_uses_align_docker_when_host_align_missing(tmp_path, monkeypatch):
     monkeypatch.setattr(gds_agent, "save_text_artifact_and_record", lambda *args, **kwargs: "local")
