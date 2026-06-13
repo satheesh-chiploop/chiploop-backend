@@ -18,7 +18,17 @@ def _get_module_name(spec: dict) -> str:
 def _get_ports(spec: dict) -> list:
     ports = spec.get("ports")
     if isinstance(ports, list) and ports:
-        return ports
+        norm = []
+        for p in ports:
+            if not isinstance(p, dict):
+                continue
+            direction = p.get("direction") or p.get("verilog_direction") or p.get("lef_direction") or "input"
+            try:
+                width = int(p.get("width", 1) or 1)
+            except Exception:
+                width = 1
+            norm.append({**p, "name": p.get("name", "sig"), "direction": direction, "width": width})
+        return norm
 
     interfaces = spec.get("interfaces")
     if isinstance(interfaces, list) and interfaces:
@@ -178,13 +188,19 @@ def _build_lib_stub(spec: dict) -> str:
         return ""
 
     clk_ports = [p for p in ports if _is_clock_port(p.get("name", ""))]
-    if not clk_ports:
-        return ""
-
-    clk_name = clk_ports[0].get("name", "clk")
+    clk_name = clk_ports[0].get("name", "clk") if clk_ports else ""
     period_ns = _get_clock_period_ns(spec)
     setup_hold_ns = round(period_ns * 0.20, 3)
     clk2q_ns = round(period_ns * 0.40, 3)
+
+    bus_ports = []
+    for p in ports:
+        try:
+            width = int(p.get("width", 1) or 1)
+        except Exception:
+            width = 1
+        if width > 1:
+            bus_ports.append((str(p.get("name", "sig")), width))
 
     lines = [
         f"library ({module_name}_lib) {{",
@@ -209,10 +225,26 @@ def _build_lib_stub(spec: dict) -> str:
         '    index_2 ("0.100") ;',
         "  }",
         "",
+    ]
+
+    for name, width in bus_ports:
+        lines.extend([
+            f"  type ({name}_bus_t) {{",
+            "    base_type : array ;",
+            "    data_type : bit ;",
+            f"    bit_width : {width} ;",
+            f"    bit_from : {width - 1} ;",
+            "    bit_to : 0 ;",
+            "    downto : true ;",
+            "  }",
+            "",
+        ])
+
+    lines.extend([
         f"  cell ({module_name}) {{",
         "    area : 100.0 ;",
         "",
-    ]
+    ])
 
     lines.extend([
         "    pg_pin (VPWR) {",
@@ -230,9 +262,15 @@ def _build_lib_stub(spec: dict) -> str:
     for p in ports:
         pname = p.get("name", "sig")
         pdir = _lib_direction(p.get("direction", "input"))
+        try:
+            width = int(p.get("width", 1) or 1)
+        except Exception:
+            width = 1
+        container = "bus" if width > 1 else "pin"
         lines.extend(
             [
-                f"    pin ({pname}) {{",
+                f"    {container} ({pname}) {{",
+                *([f"      bus_type : {pname}_bus_t ;"] if width > 1 else []),
                 f"      direction : {pdir} ;",
             ]
         )
@@ -240,7 +278,15 @@ def _build_lib_stub(spec: dict) -> str:
         if _is_clock_port(pname):
             lines.append("      clock : true ;")
 
-        if pdir == "output":
+        for bit_name in (_bus_pin_names(pname, width) if width > 1 else []):
+            lines.extend([
+                f"      pin ({bit_name}) {{",
+                f"        direction : {pdir} ;",
+                *(['        function : "1" ;'] if pdir == "output" else []),
+                "      }",
+            ])
+
+        if clk_name and pdir == "output":
             lines.extend(
                 [
                     "      function : \"1\" ;",
@@ -271,7 +317,7 @@ def _build_lib_stub(spec: dict) -> str:
                 ]
             )
 
-        if pdir == "input" and not _is_clock_port(pname) and not _is_reset_port(pname):
+        if clk_name and pdir == "input" and not _is_clock_port(pname) and not _is_reset_port(pname):
             lines.extend(
                 [
                     "      timing () {",
@@ -331,10 +377,24 @@ def _lib_stub_issues(lib_stub: str, spec: dict) -> list[str]:
         issues.append("unbalanced braces")
     if re.search(r"related_pin\s*:\s*\"\"\s*;", text):
         issues.append("empty related_pin")
-    if re.search(r"\bpin\s*\([^)]*\[[^)]*\]\s*\)", text):
+    if re.search(r"\bpin\s*\([^)]*\[[^)]*\]\s*\)", text) and "bus (" not in text:
         issues.append("unquoted bus bit pin name")
     if re.search(r"\b(bus|pin)\s*\([^)]*,[^)]*\)", text):
         issues.append("malformed pin or bus declaration")
+
+    for p in _get_ports(spec):
+        name = str(p.get("name", "sig"))
+        try:
+            width = int(p.get("width", 1) or 1)
+        except Exception:
+            width = 1
+        if width > 1:
+            if f"type ({name}_bus_t)" not in text:
+                issues.append(f"missing type for bus {name}")
+            if f"bus ({name})" not in text:
+                issues.append(f"missing bus {name}")
+            if f"bus_type : {name}_bus_t" not in text:
+                issues.append(f"missing bus_type for {name}")
 
     uses_delay = any(token in text for token in (
         "cell_rise(delay_template_1x1)",

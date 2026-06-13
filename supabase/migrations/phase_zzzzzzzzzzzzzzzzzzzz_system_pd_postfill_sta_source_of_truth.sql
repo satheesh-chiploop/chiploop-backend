@@ -168,7 +168,12 @@ updated_workflows as (
   update public.workflows workflow
   set
     loop_type = expanded.loop_type,
-    definitions = jsonb_build_object('agents', to_jsonb(expanded.agents), 'source', 'system_pd_postfill_sta_source_of_truth'),
+    definitions = jsonb_build_object(
+      'agents', to_jsonb(expanded.agents),
+      'nodes', expanded.nodes,
+      'edges', coalesce(expanded.edges, '[]'::jsonb),
+      'source', 'system_pd_postfill_sta_source_of_truth'
+    ),
     nodes = expanded.nodes,
     edges = coalesce(expanded.edges, '[]'::jsonb),
     status = 'saved',
@@ -188,7 +193,12 @@ select
   null,
   name,
   loop_type,
-  jsonb_build_object('agents', to_jsonb(agents), 'source', 'system_pd_postfill_sta_source_of_truth'),
+  jsonb_build_object(
+    'agents', to_jsonb(agents),
+    'nodes', nodes,
+    'edges', coalesce(edges, '[]'::jsonb),
+    'source', 'system_pd_postfill_sta_source_of_truth'
+  ),
   nodes,
   coalesce(edges, '[]'::jsonb),
   'saved',

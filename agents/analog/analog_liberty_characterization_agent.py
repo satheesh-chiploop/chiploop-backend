@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Any, Dict
 
 from tooling.runner import run_command
+from agents.analog.analog_abstract_views_agent import _build_lib_stub
 from utils.artifact_utils import save_text_artifact_and_record
 
 
@@ -40,6 +41,25 @@ def _prepare_ngspice_spice(src: str, dst: str) -> None:
         lines.append(line)
     with open(dst, "w", encoding="utf-8") as fh:
         fh.write("\n".join(lines).rstrip() + "\n")
+
+
+def _contract_spec(state: dict, module_name: str) -> Dict[str, Any]:
+    contract = state.get("analog_macro_interface_contract") if isinstance(state.get("analog_macro_interface_contract"), dict) else {}
+    ports = contract.get("ports") if isinstance(contract.get("ports"), list) else []
+    normalized = []
+    for port in ports:
+        if not isinstance(port, dict) or not port.get("name"):
+            continue
+        normalized.append({
+            "name": port.get("name"),
+            "direction": port.get("verilog_direction") or port.get("lef_direction") or port.get("direction") or "input",
+            "width": port.get("width") or 1,
+        })
+    return {
+        "module_name": contract.get("macro_name") or module_name,
+        "ports": normalized,
+        "clock_period_ns": 1000.0,
+    }
 
 
 def run_agent(state: dict) -> dict:
@@ -110,11 +130,22 @@ def run_agent(state: dict) -> dict:
             with open(log_path, "w", encoding="utf-8", errors="ignore") as fh:
                 fh.write(log)
             if cp.returncode == 0:
-                if isinstance(prior_lib, str) and os.path.exists(prior_lib):
-                    state["analog_macro_lib"] = prior_lib
+                normalized_lib = ""
+                normalized_lib_path = ""
+                contract_spec = _contract_spec(state, module_name)
+                if contract_spec.get("ports"):
+                    normalized_lib = _build_lib_stub(contract_spec)
+                    if normalized_lib:
+                        normalized_lib_path = os.path.join(stage_dir, f"{module_name}.lib")
+                        with open(normalized_lib_path, "w", encoding="utf-8") as fh:
+                            fh.write(normalized_lib)
+
+                effective_lib = normalized_lib_path if normalized_lib_path else prior_lib
+                if isinstance(effective_lib, str) and os.path.exists(effective_lib):
+                    state["analog_macro_lib"] = effective_lib
                     digital = state.setdefault("digital", {})
                     if isinstance(digital, dict):
-                        digital["macro_libs"] = list(dict.fromkeys((digital.get("macro_libs") or []) + [prior_lib]))
+                        digital["macro_libs"] = list(dict.fromkeys((digital.get("macro_libs") or []) + [effective_lib]))
                 summary.update({
                     "status": "validated",
                     "reason": "liberty_not_produced",
@@ -122,8 +153,9 @@ def run_agent(state: dict) -> dict:
                     "log": log_path,
                     "characterization_deck": deck_path,
                     "generated_liberty": False,
-                    "lib": prior_lib if isinstance(prior_lib, str) and os.path.exists(prior_lib) else "",
-                    "note": "ngspice ran successfully. No replacement Liberty was produced, so the flow records SPICE validation and preserves any existing macro Liberty as an input artifact rather than marking it generated.",
+                    "generated_abstract_liberty": bool(normalized_lib_path),
+                    "lib": effective_lib if isinstance(effective_lib, str) and os.path.exists(effective_lib) else "",
+                    "note": "ngspice ran successfully. No measured Liberty was produced. The flow records SPICE validation and uses a conservative abstract Liberty for macro PnR if a macro interface contract is available.",
                 })
             else:
                 summary.update({
@@ -142,6 +174,10 @@ def run_agent(state: dict) -> dict:
     if os.path.exists(os.path.join(stage_dir, "ngspice_characterization.log")):
         with open(os.path.join(stage_dir, "ngspice_characterization.log"), "r", encoding="utf-8", errors="ignore") as fh:
             save_text_artifact_and_record(workflow_id, AGENT_NAME, "analog/lib_char", "ngspice_characterization.log", fh.read())
+    lib_path = summary.get("lib")
+    if isinstance(lib_path, str) and os.path.exists(lib_path) and os.path.dirname(os.path.abspath(lib_path)) == os.path.abspath(stage_dir):
+        with open(lib_path, "r", encoding="utf-8", errors="ignore") as fh:
+            save_text_artifact_and_record(workflow_id, AGENT_NAME, "analog/lib_char", os.path.basename(lib_path), fh.read())
 
     state["analog_liberty_characterization"] = summary
     state["status"] = f"{AGENT_NAME}: {summary['status']}"

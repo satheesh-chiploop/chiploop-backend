@@ -90,6 +90,8 @@ def run_agent(state: dict) -> dict:
         # Core synthesis metrics
         "cell_count": _get(synth_m, "cells", "cell_count", "design__instance__count"),
         "area": _get(synth_m, "area", "design__instance__area"),
+        "flipflop_count": _get(synth_m, "chiploop__flipflop_count", "flipflops", "ff_count", "registers", "design__instance__ff_count", "design__instance__count:flop"),
+        "latch_count": _get(synth_m, "chiploop__latch_count", "latches", "latch_count", "design__instance__latch_count"),
 
         # Headline STA timing: best available stage among postroute/postcts/postplace/preplace
         "sta_best_stage": sta_best_key,
@@ -175,6 +177,8 @@ def run_agent(state: dict) -> dict:
     md.append("## Key Metrics (best-effort parsed)")
     md.append(f"- Cell count: `{summary_json['cell_count']}`")
     md.append(f"- Area: `{summary_json['area']}`")
+    md.append(f"- Flip-flops: `{summary_json['flipflop_count']}`")
+    md.append(f"- Latches: `{summary_json['latch_count']}`")
     md.append(f"- STA stage used: `{summary_json['sta_best_stage']}`")
     md.append(f"- Worst slack: `{summary_json['worst_slack']}`")
     md.append(f"- TNS: `{summary_json['tns']}`")

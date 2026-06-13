@@ -394,6 +394,47 @@ endmodule
     assert "(* blackbox *)" in open(stubs[0], "r", encoding="utf-8").read()
 
 
+def test_lec_blackbox_stub_preserves_old_style_bus_and_gate_instance_ports(tmp_path):
+    macro_rtl = tmp_path / "temp_sensor_adc_model.v"
+    macro_rtl.write_text(
+        """
+module temp_sensor_adc_model(sample_req, sensor_temp_celsius, adc_code, avdd, avss);
+  input sample_req;
+  input [15:0] sensor_temp_celsius;
+  output [11:0] adc_code;
+  inout avdd, avss;
+endmodule
+""",
+        encoding="utf-8",
+    )
+    top_rtl = tmp_path / "top.v"
+    top_rtl.write_text("module top(input sample_req); endmodule\n", encoding="utf-8")
+    gate = tmp_path / "gate.v"
+    gate.write_text(
+        """
+module top(input sample_req, input [15:0] sensor_temp_celsius, output [11:0] adc_code, output adc_valid);
+  temp_sensor_adc_model u_analog(
+    .sample_req(sample_req),
+    .sensor_temp_celsius(sensor_temp_celsius),
+    .adc_code(adc_code),
+    .adc_valid(adc_valid),
+    .avdd(1'b1),
+    .avss(1'b0)
+  );
+endmodule
+""",
+        encoding="utf-8",
+    )
+
+    _prepared, stubs = _prepare_golden_rtl_for_yosys([str(macro_rtl), str(top_rtl)], str(gate), str(tmp_path), "top")
+    text = open(stubs[0], "r", encoding="utf-8").read()
+
+    assert "module temp_sensor_adc_model(sample_req, sensor_temp_celsius, adc_code, avdd, avss, adc_valid);" in text
+    assert "input sensor_temp_celsius;" in text
+    assert "output adc_code;" in text
+    assert "input adc_valid;" in text
+
+
 def test_drc_lvs_deferred_xor_does_not_mask_clean_check():
     assert _drc_status(2, 0, "One or more deferred errors were encountered: 1 XOR differences found.") == "clean"
     assert _lvs_status(2, None, "Final result:\nCircuits match uniquely.\nOne or more deferred errors were encountered: 1 XOR differences found.") == "clean"

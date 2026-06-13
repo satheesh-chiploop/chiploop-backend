@@ -26,6 +26,8 @@ def test_abstract_lib_stub_is_self_contained_and_rejects_malformed_pin_syntax():
         "ports": [
             {"name": "clk", "direction": "input", "width": 1},
             {"name": "sample_req", "direction": "input", "width": 1},
+            {"name": "sensor_temp_celsius", "direction": "input", "width": 16},
+            {"name": "adc_code", "direction": "output", "width": 12},
             {"name": "adc_valid", "direction": "output", "width": 1},
         ],
     }
@@ -33,6 +35,12 @@ def test_abstract_lib_stub_is_self_contained_and_rejects_malformed_pin_syntax():
     lib = abstract_agent._build_lib_stub(spec)
     assert "lu_table_template (delay_template_1x1)" in lib
     assert "lu_table_template (constraint_template_1x1)" in lib
+    assert "type (sensor_temp_celsius_bus_t)" in lib
+    assert "bus (sensor_temp_celsius)" in lib
+    assert "bus_type : sensor_temp_celsius_bus_t" in lib
+    assert "type (adc_code_bus_t)" in lib
+    assert "bus (adc_code)" in lib
+    assert "pin (adc_code[0])" in lib
     assert abstract_agent._lib_stub_issues(lib, spec) == []
 
     malformed = (

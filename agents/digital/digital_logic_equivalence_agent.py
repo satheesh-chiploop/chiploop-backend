@@ -247,25 +247,61 @@ def _module_ports_from_text(text: str, module_name: str) -> list[tuple[str, str]
     if not module_match:
         return []
     ports: dict[str, str] = {}
+    module_body = text[module_match.end():]
+    end_match = re.search(r"\bendmodule\b", module_body)
+    if end_match:
+        module_body = module_body[:end_match.start()]
+
+    def clean_port(raw: str) -> str:
+        name = re.sub(r"=.*$", "", raw).strip()
+        name = re.sub(r"\[[^\]]+\]\s*$", "", name).strip()
+        name = re.sub(r"^(?:wire|reg|logic|signed)\s+", "", name).strip()
+        name = re.sub(r"^(?:input|output|inout)\s+", "", name).strip()
+        name = re.sub(r"^(?:wire|reg|logic|signed)\s+", "", name).strip()
+        name = re.sub(r"^\[[^\]]+\]\s*", "", name).strip()
+        return name
+
     for decl in re.finditer(
-        r"\b(?P<direction>input|output|inout)\b\s*(?:wire|reg|logic)?\s*(?:\[[^\]]+\]\s*)?(?P<names>[^;,\)]+(?:\s*,\s*[^;,\)]+)*)",
-        text,
+        r"\b(?P<direction>input|output|inout)\b\s*(?:wire|reg|logic|signed|\s)*\s*(?:\[[^\]]+\]\s*)?(?P<names>[^;]+);",
+        module_body,
         flags=re.MULTILINE,
     ):
         direction = decl.group("direction")
         for raw_name in decl.group("names").split(","):
-            name = re.sub(r"=.*$", "", raw_name).strip()
-            name = re.sub(r"^(?:wire|reg|logic)\s+", "", name).strip()
+            name = clean_port(raw_name)
             if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_$]*", name):
                 ports[name] = direction
     ordered: list[tuple[str, str]] = []
     for raw_name in module_match.group("header").split(","):
         name = raw_name.strip()
-        inline_match = re.match(r"(?:(input|output|inout)\s+)?(?:wire|reg|logic\s+)?(?:\[[^\]]+\]\s*)?([A-Za-z_][A-Za-z0-9_$]*)$", name)
+        inline_match = re.match(r"(?:(input|output|inout)\s+)?(?:wire|reg|logic|signed|\s)*\s*(?:\[[^\]]+\]\s*)?([A-Za-z_][A-Za-z0-9_$]*)$", name)
         if inline_match:
-            port_name = inline_match.group(2)
-            ordered.append((port_name, inline_match.group(1) or ports.get(port_name, "input")))
+            port_name = inline_match.group(2) if inline_match.lastindex and inline_match.lastindex >= 2 else inline_match.group(1)
+            inline_direction = re.match(r"\s*(input|output|inout)\b", name)
+            ordered.append((port_name, (inline_direction.group(1) if inline_direction else ports.get(port_name, "input"))))
     return ordered
+
+
+def _module_instance_pins(gate: str | None, module_name: str) -> list[str]:
+    if not gate:
+        return []
+    try:
+        text = Path(gate).read_text(encoding="utf-8", errors="ignore")
+    except Exception:
+        text = gate
+    pins: list[str] = []
+    seen: set[str] = set()
+    pattern = re.compile(
+        rf"\b{re.escape(module_name)}\s+(?:\\[^\s(]+|[A-Za-z_][A-Za-z0-9_$]*)\s*\((?P<body>.*?)\);",
+        flags=re.DOTALL,
+    )
+    for match in pattern.finditer(text):
+        for pin in re.finditer(r"\.(?P<pin>[A-Za-z_][A-Za-z0-9_$]*)\s*\(", match.group("body")):
+            name = pin.group("pin")
+            if name not in seen:
+                seen.add(name)
+                pins.append(name)
+    return pins
 
 
 def _macro_blackbox_stubs(gate: str | None, rtl_files: list[str], stage_dir: str, top: str) -> tuple[list[str], set[str]]:
@@ -281,6 +317,11 @@ def _macro_blackbox_stubs(gate: str | None, rtl_files: list[str], stage_dir: str
         if not module_name or module_name not in macro_names:
             continue
         ports = _module_ports_from_text(_read_text(path), module_name)
+        known = {name: direction for name, direction in ports}
+        for pin in _module_instance_pins(gate, module_name):
+            if pin not in known:
+                known[pin] = "input"
+                ports.append((pin, "input"))
         port_names = [name for name, _direction in ports]
         lines = [
             "// Auto-generated blackbox stub for preserved macro LEC.",
