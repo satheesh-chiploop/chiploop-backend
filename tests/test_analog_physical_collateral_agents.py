@@ -619,7 +619,10 @@ def test_lef_extraction_pinizes_magic_lef_from_prior_macro_pins(tmp_path, monkey
     text = (tmp_path / "analog" / "lef_extract" / "ana.lef").read_text(encoding="utf-8")
     assert "PIN adc_valid" in text
     assert "PIN avdd" in text
-    assert "LAYER met1" in text
+    assert "SIZE 100.000 BY 100.000" in text
+    assert "LAYER met2" in text
+    assert "LAYER met4" in text
+    assert "SHAPE ABUTMENT" in text
     assert state["analog_lef_extraction"]["status"] == "extracted"
     assert state["analog_lef_extraction"]["pinized_from_macro_interface"] is True
     assert state["analog_lef_extraction"]["pin_count"] == 2

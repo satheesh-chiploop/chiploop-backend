@@ -48,3 +48,36 @@ def test_stage_macro_inputs_dedupes_duplicate_collateral(tmp_path):
     assert staged_lefs == ["dir::inputs/macros/lef/ana.lef"]
     assert staged_libs == ["dir::inputs/macros/lib/ana.lib"]
     assert staged_gds == []
+
+
+def test_stage_macro_inputs_dedupes_collateral_with_same_staged_name(tmp_path):
+    prior = tmp_path / "prior"
+    generated = tmp_path / "generated"
+    prior.mkdir()
+    generated.mkdir()
+    prior_lef = prior / "ana.lef"
+    generated_lef = generated / "ana.lef"
+    prior_lib = prior / "ana.lib"
+    generated_lib = generated / "ana.lib"
+    prior_lef.write_text("MACRO ana\nEND ana\n", encoding="utf-8")
+    generated_lef.write_text("MACRO ana\n  PIN VPWR\n  END VPWR\nEND ana\n", encoding="utf-8")
+    prior_lib.write_text("library (ana_prior) {}\n", encoding="utf-8")
+    generated_lib.write_text("library (ana_generated) {}\n", encoding="utf-8")
+
+    staged_lefs, staged_libs, staged_gds = agent._stage_macro_inputs(
+        {
+            "digital": {
+                "macro_lefs": [str(prior_lef), str(generated_lef)],
+                "macro_libs": [str(prior_lib), str(generated_lib)],
+                "macro_gds": [],
+            }
+        },
+        str(tmp_path),
+        str(tmp_path / "stage"),
+    )
+
+    assert staged_lefs == ["dir::inputs/macros/lef/ana.lef"]
+    assert staged_libs == ["dir::inputs/macros/lib/ana.lib"]
+    assert staged_gds == []
+    assert "PIN VPWR" in (tmp_path / "stage" / "inputs" / "macros" / "lef" / "ana.lef").read_text(encoding="utf-8")
+    assert "ana_generated" in (tmp_path / "stage" / "inputs" / "macros" / "lib" / "ana.lib").read_text(encoding="utf-8")

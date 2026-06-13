@@ -86,9 +86,17 @@ def _pin_use(name: str) -> str:
 def _pinized_lef(module_name: str, width: float, height: float, pins: Dict[str, str]) -> str:
     if width <= 0 or height <= 0 or not pins:
         return ""
-    pitch = max(height / (len(pins) + 1), 0.2)
-    pin_h = min(max(pitch * 0.35, 0.08), 0.4)
-    pin_w = min(max(width * 0.02, 0.08), 0.4)
+    signal_pins = [(name, direction) for name, direction in sorted(pins.items()) if _pin_use(name) not in {"POWER", "GROUND"}]
+    min_height = max(100.0, (len(signal_pins) + 1) * 2.5)
+    width = max(width, 100.0)
+    height = max(height, min_height)
+    signal_pitch = height / (max(len(signal_pins), 1) + 1)
+    signal_pin_h = min(max(signal_pitch * 0.45, 0.8), 2.0)
+    signal_pin_w = min(max(width * 0.03, 1.5), 4.0)
+    rail_w = min(max(width * 0.03, 2.0), 5.0)
+    rail_gap = max(rail_w * 0.5, 1.0)
+    power_rail_x = max(width - (2 * rail_w) - rail_gap, width * 0.65)
+    ground_rail_x = min(power_rail_x + rail_w + rail_gap, width - rail_w)
     lines: List[str] = [
         "VERSION 5.7 ;",
         "  NOWIREEXTENSIONATPIN ON ;",
@@ -100,20 +108,36 @@ def _pinized_lef(module_name: str, width: float, height: float, pins: Dict[str, 
         "  ORIGIN 0.000 0.000 ;",
         f"  SIZE {width:.3f} BY {height:.3f} ;",
     ]
+    signal_idx = 0
     for idx, (name, direction) in enumerate(sorted(pins.items())):
         use = _pin_use(name)
         lef_direction = "INOUT" if use in {"POWER", "GROUND"} else direction
-        y_mid = min(max((idx + 1) * pitch, pin_h / 2), height - pin_h / 2)
-        y1 = max(y_mid - pin_h / 2, 0.0)
-        y2 = min(y_mid + pin_h / 2, height)
-        x1 = 0.0 if idx % 2 == 0 else max(width - pin_w, 0.0)
-        x2 = min(x1 + pin_w, width)
+        if use == "POWER":
+            layer = "met4"
+            x1, x2 = power_rail_x, min(power_rail_x + rail_w, width)
+            y1, y2 = 0.0, height
+            shape = "      SHAPE ABUTMENT ;"
+        elif use == "GROUND":
+            layer = "met4"
+            x1, x2 = ground_rail_x, min(ground_rail_x + rail_w, width)
+            y1, y2 = 0.0, height
+            shape = "      SHAPE ABUTMENT ;"
+        else:
+            layer = "met2"
+            signal_idx += 1
+            y_mid = min(max(signal_idx * signal_pitch, signal_pin_h / 2), height - signal_pin_h / 2)
+            y1 = max(y_mid - signal_pin_h / 2, 0.0)
+            y2 = min(y_mid + signal_pin_h / 2, height)
+            x1 = 0.0 if signal_idx % 2 else max(width - signal_pin_w, 0.0)
+            x2 = min(x1 + signal_pin_w, width)
+            shape = ""
         lines.extend([
             f"  PIN {name}",
             f"    DIRECTION {lef_direction} ;",
             f"    USE {use} ;",
             "    PORT",
-            "      LAYER met1 ;",
+            f"      LAYER {layer} ;",
+            *([shape] if shape else []),
             f"        RECT {x1:.3f} {y1:.3f} {x2:.3f} {y2:.3f} ;",
             "    END",
             f"  END {name}",

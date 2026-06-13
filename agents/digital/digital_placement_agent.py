@@ -266,24 +266,37 @@ def _stage_macro_inputs(state: dict, workflow_dir: str, work_stage_dir: str) -> 
     _ensure_dir(gds_dir)
 
     staged_lefs, staged_libs, staged_gds = [], [], []
+    seen_staged_lefs, seen_staged_libs, seen_staged_gds = set(), set(), set()
 
     for src in macro_lefs:
-        dst = os.path.join(lef_dir, os.path.basename(src))
+        basename = os.path.basename(src)
+        dst = os.path.join(lef_dir, basename)
         if os.path.abspath(src) != os.path.abspath(dst):
             shutil.copy2(src, dst)
-        staged_lefs.append(f"dir::inputs/macros/lef/{os.path.basename(src)}")
+        rel = f"dir::inputs/macros/lef/{basename}"
+        if rel not in seen_staged_lefs:
+            staged_lefs.append(rel)
+            seen_staged_lefs.add(rel)
 
     for src in macro_libs:
-        dst = os.path.join(lib_dir, os.path.basename(src))
+        basename = os.path.basename(src)
+        dst = os.path.join(lib_dir, basename)
         if os.path.abspath(src) != os.path.abspath(dst):
             shutil.copy2(src, dst)
-        staged_libs.append(f"dir::inputs/macros/lib/{os.path.basename(src)}")
+        rel = f"dir::inputs/macros/lib/{basename}"
+        if rel not in seen_staged_libs:
+            staged_libs.append(rel)
+            seen_staged_libs.add(rel)
 
     for src in macro_gds:
-        dst = os.path.join(gds_dir, os.path.basename(src))
+        basename = os.path.basename(src)
+        dst = os.path.join(gds_dir, basename)
         if os.path.abspath(src) != os.path.abspath(dst):
             shutil.copy2(src, dst)
-        staged_gds.append(f"dir::inputs/macros/gds/{os.path.basename(src)}")
+        rel = f"dir::inputs/macros/gds/{basename}"
+        if rel not in seen_staged_gds:
+            staged_gds.append(rel)
+            seen_staged_gds.add(rel)
 
     return staged_lefs, staged_libs, staged_gds
 
