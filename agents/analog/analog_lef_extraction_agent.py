@@ -86,6 +86,9 @@ def _pin_use(name: str) -> str:
 def _pinized_lef(module_name: str, width: float, height: float, pins: Dict[str, str]) -> str:
     if width <= 0 or height <= 0 or not pins:
         return ""
+    def snap(value: float, grid: float = 0.005) -> float:
+        return round(round(value / grid) * grid, 3)
+
     signal_pins = [(name, direction) for name, direction in sorted(pins.items()) if _pin_use(name) not in {"POWER", "GROUND"}]
     min_height = max(100.0, (len(signal_pins) + 1) * 2.5)
     width = max(width, 100.0)
@@ -114,22 +117,22 @@ def _pinized_lef(module_name: str, width: float, height: float, pins: Dict[str, 
         lef_direction = "INOUT" if use in {"POWER", "GROUND"} else direction
         if use == "POWER":
             layer = "met4"
-            x1, x2 = power_rail_x, min(power_rail_x + rail_w, width)
-            y1, y2 = 0.0, height
+            x1, x2 = snap(power_rail_x), snap(min(power_rail_x + rail_w, width))
+            y1, y2 = 0.0, snap(height)
             shape = "      SHAPE ABUTMENT ;"
         elif use == "GROUND":
             layer = "met4"
-            x1, x2 = ground_rail_x, min(ground_rail_x + rail_w, width)
-            y1, y2 = 0.0, height
+            x1, x2 = snap(ground_rail_x), snap(min(ground_rail_x + rail_w, width))
+            y1, y2 = 0.0, snap(height)
             shape = "      SHAPE ABUTMENT ;"
         else:
             layer = "met2"
             signal_idx += 1
             y_mid = min(max(signal_idx * signal_pitch, signal_pin_h / 2), height - signal_pin_h / 2)
-            y1 = max(y_mid - signal_pin_h / 2, 0.0)
-            y2 = min(y_mid + signal_pin_h / 2, height)
-            x1 = 0.0 if signal_idx % 2 else max(width - signal_pin_w, 0.0)
-            x2 = min(x1 + signal_pin_w, width)
+            y1 = snap(max(y_mid - signal_pin_h / 2, 0.0))
+            y2 = snap(min(y_mid + signal_pin_h / 2, height))
+            x1 = 0.0 if signal_idx % 2 else snap(max(width - signal_pin_w, 0.0))
+            x2 = snap(min(x1 + signal_pin_w, width))
             shape = ""
         lines.extend([
             f"  PIN {name}",

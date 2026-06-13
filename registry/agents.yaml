@@ -2727,6 +2727,68 @@
       }
     },
     {
+      "name": "Digital STA PostFill Agent",
+      "loop_type": "digital",
+      "domain": "physical_design",
+      "description": "Runs OpenLane2 post-fill signoff STA (OpenROAD.STAPostPNR after fill). Exports metrics.json.",
+      "entrypoint": "agents.digital.digital_sta_postfill_agent:run_agent",
+      "execution_mode": "legacy_adapter",
+      "inputs": [
+        "digital/constraints/top.sdc",
+        "digital/fill/primary.def",
+        "digital/foundry/openlane/config.json"
+      ],
+      "outputs": [
+        "digital/sta_postfill/config.json",
+        "digital/sta_postfill/constraints/top.sdc",
+        "digital/sta_postfill/run.sh",
+        "digital/sta_postfill/logs/openlane_sta_postfill.log",
+        "digital/sta_postfill/metrics.json",
+        "digital/sta_postfill/sta_postfill_summary.json",
+        "digital/sta_postfill/sta_postfill_summary.md"
+      ],
+      "artifact_paths": [
+        "digital/sta_postfill/config.json",
+        "digital/sta_postfill/constraints/top.sdc",
+        "digital/sta_postfill/run.sh",
+        "digital/sta_postfill/logs/openlane_sta_postfill.log",
+        "digital/sta_postfill/metrics.json",
+        "digital/sta_postfill/sta_postfill_summary.json",
+        "digital/sta_postfill/sta_postfill_summary.md"
+      ],
+      "artifact_types": [
+        "implementation_artifact",
+        "report",
+        "structured_data"
+      ],
+      "required_skills": [
+        "artifact_publish",
+        "openlane_config_generation",
+        "sta_constraint_generation"
+      ],
+      "required_tools": [
+        "git",
+        "openlane",
+        "openroad",
+        "python",
+        "supabase",
+        "yosys"
+      ],
+      "hooks": [
+        "pre_run_validate_inputs",
+        "post_run_collect_artifacts",
+        "post_run_update_state",
+        "on_failure_capture_traceback",
+        "on_failure_preserve_logs",
+        "artifact_publish_to_supabase"
+      ],
+      "metadata": {
+        "registry_source": "DIGITAL_AGENT_FUNCTIONS",
+        "variable": "digital_sta_postfill_agent",
+        "studio_contract_version": "v1"
+      }
+    },
+    {
       "name": "Digital STA PrePlace Agent",
       "loop_type": "digital",
       "domain": "physical_design",

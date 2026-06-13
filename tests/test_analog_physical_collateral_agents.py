@@ -628,6 +628,9 @@ def test_lef_extraction_pinizes_magic_lef_from_prior_macro_pins(tmp_path, monkey
     assert avdd_block
     block = avdd_block.group(1)
     assert block.index("SHAPE ABUTMENT") < block.index("PORT") < block.index("LAYER met4")
+    for rect in re.findall(r"\bRECT\s+([0-9.]+)\s+([0-9.]+)\s+([0-9.]+)\s+([0-9.]+)\s*;", text):
+        for value in rect:
+            assert round(float(value) * 1000) % 5 == 0
     assert state["analog_lef_extraction"]["status"] == "extracted"
     assert state["analog_lef_extraction"]["pinized_from_macro_interface"] is True
     assert state["analog_lef_extraction"]["pin_count"] == 2

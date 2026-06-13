@@ -25,11 +25,12 @@ def run_agent(state: dict) -> dict:
     paths = {
         "synth": os.path.join(workflow_dir, "digital", "synth", "metrics.json"),
 
-        # STA stages (all four)
+        # STA stages
         "sta_preplace":  os.path.join(workflow_dir, "digital", "sta_preplace",  "metrics.json"),
         "sta_postplace": os.path.join(workflow_dir, "digital", "sta_postplace", "metrics.json"),
         "sta_postcts":   os.path.join(workflow_dir, "digital", "sta_postcts",   "metrics.json"),
         "sta_postroute": os.path.join(workflow_dir, "digital", "sta_postroute", "metrics.json"),
+        "sta_postfill":  os.path.join(workflow_dir, "digital", "sta_postfill",  "metrics.json"),
 
         "drc": os.path.join(workflow_dir, "digital", "drc", "metrics.json"),
         "lvs": os.path.join(workflow_dir, "digital", "lvs", "metrics.json"),
@@ -63,7 +64,7 @@ def run_agent(state: dict) -> dict:
     atpg_summary = metrics.get("atpg_summary") or {}
 
     # Choose the "best available" STA stage for headline timing
-    sta_preferred_order = ["sta_postroute", "sta_postcts", "sta_postplace", "sta_preplace"]
+    sta_preferred_order = ["sta_postfill", "sta_postroute", "sta_postcts", "sta_postplace", "sta_preplace"]
     sta_best_key = None
     for k in sta_preferred_order:
         if isinstance(metrics.get(k), dict):
@@ -122,6 +123,10 @@ def run_agent(state: dict) -> dict:
                 "worst_slack": _get(metrics.get("sta_postroute") or {}, "worst_slack", "timing__setup__ws"),
                 "tns": _get(metrics.get("sta_postroute") or {}, "tns", "timing__setup__tns"),
             },
+            "sta_postfill": {
+                "worst_slack": _get(metrics.get("sta_postfill") or {}, "worst_slack", "timing__setup__ws"),
+                "tns": _get(metrics.get("sta_postfill") or {}, "tns", "timing__setup__tns"),
+            },
         },
 
         "gds_paths": gds_paths,
@@ -133,6 +138,7 @@ def run_agent(state: dict) -> dict:
             "sta_postplace_metrics": "digital/sta_postplace/metrics.json" if os.path.exists(paths["sta_postplace"]) else None,
             "sta_postcts_metrics":   "digital/sta_postcts/metrics.json"   if os.path.exists(paths["sta_postcts"]) else None,
             "sta_postroute_metrics": "digital/sta_postroute/metrics.json" if os.path.exists(paths["sta_postroute"]) else None,
+            "sta_postfill_metrics":  "digital/sta_postfill/metrics.json"  if os.path.exists(paths["sta_postfill"]) else None,
 
             "drc_metrics": "digital/drc/metrics.json" if os.path.exists(paths["drc"]) else None,
             "lvs_metrics": "digital/lvs/metrics.json" if os.path.exists(paths["lvs"]) else None,
@@ -182,7 +188,7 @@ def run_agent(state: dict) -> dict:
     md.append("")
 
     md.append("## STA Stage Breakdown")
-    for k in ["sta_preplace", "sta_postplace", "sta_postcts", "sta_postroute"]:
+    for k in ["sta_preplace", "sta_postplace", "sta_postcts", "sta_postroute", "sta_postfill"]:
         ws = summary_json["sta_stages"][k]["worst_slack"]
         tns = summary_json["sta_stages"][k]["tns"]
         md.append(f"- {k}: worst_slack=`{ws}`, tns=`{tns}`")

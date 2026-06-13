@@ -641,6 +641,26 @@ AGENT_CAPABILITIES = {
         ],
     },
 
+    "Digital STA PostFill Agent": {
+        "domain": "digital",
+        "description": "Runs OpenLane2 post-fill signoff STA (OpenROAD.STAPostPNR after fill). Exports metrics.json.",
+        "requires": ["docker"],
+        "inputs": [
+            "digital/constraints/top.sdc",
+            "digital/fill/primary.def",
+            "digital/foundry/openlane/config.json"
+        ],
+        "outputs": [
+            "digital/sta_postfill/config.json",
+            "digital/sta_postfill/constraints/top.sdc",
+            "digital/sta_postfill/run.sh",
+            "digital/sta_postfill/logs/openlane_sta_postfill.log",
+            "digital/sta_postfill/metrics.json",
+            "digital/sta_postfill/sta_postfill_summary.json",
+            "digital/sta_postfill/sta_postfill_summary.md"
+        ],
+    },
+
     "Digital Fill Agent": {
         "domain": "digital",
         "description": "Runs OpenLane2 OpenROAD.FillInsertion. Exports DEF + metrics.json.",
@@ -747,6 +767,7 @@ AGENT_CAPABILITIES = {
         "inputs": [
             "digital/synth/metrics.json",
             "digital/sta_postroute/metrics.json",
+            "digital/sta_postfill/metrics.json",
             "digital/drc/metrics.json",
             "digital/lvs/metrics.json",
             "digital/tapeout/metrics.json"

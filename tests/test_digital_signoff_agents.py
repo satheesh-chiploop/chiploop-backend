@@ -8,7 +8,7 @@ os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-service-role-key")
 from agents.digital.digital_drc_agent import _drc_status, _macro_blackbox_deferred as _drc_macro_blackbox_deferred
 from agents.digital.digital_failure_debug_agent import run_agent as failure_debug_agent
 from agents.digital import digital_spec2rtl_conformance_agent as spec2rtl_agent
-from agents.digital.digital_logic_equivalence_agent import _generated_stdcell_model, _missing_stdcell_models, _yosys_script
+from agents.digital.digital_logic_equivalence_agent import _generated_stdcell_model, _missing_stdcell_models, _prepare_golden_rtl_for_yosys, _yosys_script
 from agents.digital.digital_lvs_agent import _lvs_status, _macro_blackbox_deferred as _lvs_macro_blackbox_deferred
 from agents.digital.digital_scan_atpg_agent import _adapter_log_has_execution_error, _generate_full_scan_bench, _metrics_show_real_atpg_result, _pattern_count_from_file
 from agents.digital.digital_tapeout_lec_agent import PHYSICAL_ONLY_TOP_PORTS, _top_ports
@@ -228,6 +228,7 @@ def test_atpg_positive_patterns_or_coverage_are_success():
 
 def test_atpg_adapter_log_execution_errors_are_failures():
     assert _adapter_log_has_execution_error("/opt/chiploop-tools/run_atalanta_atpg.sh: line 1: No such file or directory")
+    assert _adapter_log_has_execution_error("Fatal error: Error in circuit file")
     assert not _adapter_log_has_execution_error("Atalanta completed with 12 test patterns")
 
 
@@ -333,7 +334,7 @@ module top(input A, output X);
   sky130_fd_sc_hd__fill_1 fill(.VPWR(A), .VGND(A), .VPB(A), .VNB(A));
   sky130_fd_sc_hd__dlymetal6s2s_1 dly(.A(A), .X(X), .VPWR(A), .VGND(A), .VPB(A), .VNB(A));
   sky130_fd_sc_hd__bufinv_16 clkload(.A(A), .VPWR(A), .VGND(A), .VPB(A), .VNB(A));
-  sky130_fd_sc_hd__clkinv_2 clkinv_load(.A(A), .VPWR(A), .VGND(A), .VPB(A), .VNB(A));
+  sky130_fd_sc_hd__clkinv_2 clkinv_load(.A(A), .X(X), .VPWR(A), .VGND(A), .VPB(A), .VNB(A));
   sky130_fd_sc_hd__clkbuf_8 clkbuf_load(.A(A), .VPWR(A), .VGND(A), .VPB(A), .VNB(A));
 endmodule
 """,
@@ -353,6 +354,44 @@ endmodule
     assert "module sky130_fd_sc_hd__clkbuf_8" in text
     assert "assign X = A;" in text
     assert _missing_stdcell_models(str(netlist), [model]) == []
+
+
+def test_lec_replaces_preserved_macro_rtl_with_blackbox_stub(tmp_path):
+    macro_rtl = tmp_path / "analog_model.v"
+    macro_rtl.write_text(
+        """
+module analog_model(input clk, input sample_req, output adc_valid);
+  always @(posedge clk or posedge sample_req) begin
+  end
+endmodule
+""",
+        encoding="utf-8",
+    )
+    top_rtl = tmp_path / "top.v"
+    top_rtl.write_text(
+        """
+module top(input clk, input sample_req, output adc_valid);
+  analog_model u_analog(.clk(clk), .sample_req(sample_req), .adc_valid(adc_valid));
+endmodule
+""",
+        encoding="utf-8",
+    )
+    gate = tmp_path / "gate.v"
+    gate.write_text(
+        """
+module top(input clk, input sample_req, output adc_valid);
+  analog_model u_analog(.clk(clk), .sample_req(sample_req), .adc_valid(adc_valid));
+endmodule
+""",
+        encoding="utf-8",
+    )
+
+    prepared, stubs = _prepare_golden_rtl_for_yosys([str(macro_rtl), str(top_rtl)], str(gate), str(tmp_path), "top")
+
+    assert str(macro_rtl) not in prepared
+    assert str(top_rtl) in prepared
+    assert len(stubs) == 1
+    assert "(* blackbox *)" in open(stubs[0], "r", encoding="utf-8").read()
 
 
 def test_drc_lvs_deferred_xor_does_not_mask_clean_check():
@@ -396,6 +435,22 @@ endmodule
     assert "INPUT(scan_en)" not in bench
     assert "INPUT(scan_in_0)" not in bench
     assert "INPUT(q)" in bench
+
+
+def test_atpg_bench_promotes_floating_macro_outputs():
+    bench, meta = _generate_full_scan_bench(
+        """
+module top(a, y);
+  input a;
+  output y;
+  sky130_fd_sc_hd__and2_1 u0(.A(a), .B(macro_ready), .X(y));
+endmodule
+"""
+    )
+
+    assert meta["status"] == "generated"
+    assert meta["floating_inputs_promoted"] == ["macro_ready"]
+    assert "INPUT(macro_ready)" in bench
 
 
 def test_atpg_bench_does_not_emit_undriven_primary_outputs():

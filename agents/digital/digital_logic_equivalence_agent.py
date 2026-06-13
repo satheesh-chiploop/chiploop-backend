@@ -214,8 +214,94 @@ def _module_names_in_files(paths: list[str]) -> set[str]:
     return names
 
 
+def _module_name_in_file(path: str | None) -> str | None:
+    if not path:
+        return None
+    try:
+        text = Path(path).read_text(encoding="utf-8", errors="ignore")
+    except Exception:
+        return None
+    match = re.search(r"^\s*module\s+([A-Za-z_][A-Za-z0-9_$]*)\b", text, flags=re.MULTILINE)
+    return match.group(1) if match else None
+
+
 def _referenced_sky130_cells(gate: str | None) -> list[str]:
     return [name for name in _referenced_modules(gate) if name.startswith(("sky130_fd_sc_", "sky130_ef_sc_"))]
+
+
+def _referenced_non_stdcell_modules(gate: str | None, top: str) -> list[str]:
+    skip = {top, "module", "endmodule", "assign", "always", "if", "for", "generate"}
+    return [
+        name
+        for name in _referenced_modules(gate)
+        if name not in skip and not name.startswith(("sky130_fd_sc_", "sky130_ef_sc_"))
+    ]
+
+
+def _module_ports_from_text(text: str, module_name: str) -> list[tuple[str, str]]:
+    module_match = re.search(
+        rf"\bmodule\s+{re.escape(module_name)}\s*\((?P<header>.*?)\)\s*;",
+        text,
+        flags=re.DOTALL,
+    )
+    if not module_match:
+        return []
+    ports: dict[str, str] = {}
+    for decl in re.finditer(
+        r"\b(?P<direction>input|output|inout)\b\s*(?:wire|reg|logic)?\s*(?:\[[^\]]+\]\s*)?(?P<names>[^;,\)]+(?:\s*,\s*[^;,\)]+)*)",
+        text,
+        flags=re.MULTILINE,
+    ):
+        direction = decl.group("direction")
+        for raw_name in decl.group("names").split(","):
+            name = re.sub(r"=.*$", "", raw_name).strip()
+            name = re.sub(r"^(?:wire|reg|logic)\s+", "", name).strip()
+            if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_$]*", name):
+                ports[name] = direction
+    ordered: list[tuple[str, str]] = []
+    for raw_name in module_match.group("header").split(","):
+        name = raw_name.strip()
+        inline_match = re.match(r"(?:(input|output|inout)\s+)?(?:wire|reg|logic\s+)?(?:\[[^\]]+\]\s*)?([A-Za-z_][A-Za-z0-9_$]*)$", name)
+        if inline_match:
+            port_name = inline_match.group(2)
+            ordered.append((port_name, inline_match.group(1) or ports.get(port_name, "input")))
+    return ordered
+
+
+def _macro_blackbox_stubs(gate: str | None, rtl_files: list[str], stage_dir: str, top: str) -> tuple[list[str], set[str]]:
+    macro_names = set(_referenced_non_stdcell_modules(gate, top))
+    if not macro_names:
+        return [], set()
+    stubs: list[str] = []
+    replaced: set[str] = set()
+    input_dir = os.path.join(stage_dir, "input")
+    _ensure_dir(input_dir)
+    for path in rtl_files:
+        module_name = _module_name_in_file(path)
+        if not module_name or module_name not in macro_names:
+            continue
+        ports = _module_ports_from_text(_read_text(path), module_name)
+        port_names = [name for name, _direction in ports]
+        lines = [
+            "// Auto-generated blackbox stub for preserved macro LEC.",
+            "(* blackbox *)",
+            f"module {module_name}({', '.join(port_names)});",
+        ]
+        for name, direction in ports:
+            lines.append(f"  {direction} {name};")
+        lines.append("endmodule")
+        stub_path = os.path.join(input_dir, f"{module_name}_blackbox.v")
+        _write_text(stub_path, "\n".join(lines) + "\n")
+        stubs.append(stub_path)
+        replaced.add(path)
+    return stubs, replaced
+
+
+def _prepare_golden_rtl_for_yosys(rtl_files: list[str], gate: str | None, stage_dir: str, top: str) -> tuple[list[str], list[str]]:
+    stubs, replaced = _macro_blackbox_stubs(gate, rtl_files, stage_dir, top)
+    if not stubs:
+        return rtl_files, []
+    return [path for path in rtl_files if path not in replaced] + stubs, stubs
 
 
 def _parse_sky130_instances(netlist_text: str) -> dict[str, set[str]]:
@@ -293,7 +379,7 @@ def _compound_expr(cell_base: str, pins: set[str]) -> str | None:
 
 
 def _cell_assign_expr(cell_base: str, pins: set[str]) -> str | None:
-    if cell_base.startswith("inv"):
+    if cell_base.startswith(("inv", "clkinv")):
         return "~A" if "A" in pins else None
     if cell_base.startswith("buf") or cell_base.startswith("clkbuf") or cell_base.startswith("dly"):
         return "A" if "A" in pins else None
@@ -625,9 +711,10 @@ def run_agent(state: dict) -> dict:
     report_path = os.path.join(stage_dir, "lec_report.md")
     summary_path = os.path.join(stage_dir, "lec_summary.json")
 
-    has_required_inputs = bool(rtl_files and netlist and yosys and yosys_stdcell_verilog and not missing_stdcell_models)
+    prepared_rtl_files, golden_macro_stubs = _prepare_golden_rtl_for_yosys(rtl_files, netlist, stage_dir, top) if rtl_files and netlist else (rtl_files, [])
+    has_required_inputs = bool(prepared_rtl_files and netlist and yosys and yosys_stdcell_verilog and not missing_stdcell_models)
     if rtl_files and netlist:
-        script = _yosys_script(rtl_files, netlist, top, yosys_stdcell_verilog)
+        script = _yosys_script(prepared_rtl_files, netlist, top, yosys_stdcell_verilog)
     else:
         script = "# Missing RTL or synthesized netlist; LEC not run.\n"
     _write_text(script_path, script)
@@ -675,6 +762,8 @@ def run_agent(state: dict) -> dict:
         "return_code": rc,
         "top_module": top,
         "rtl_files": [os.path.basename(p) for p in rtl_files],
+        "yosys_rtl_files": [os.path.basename(p) for p in prepared_rtl_files],
+        "golden_macro_blackbox_stubs": [os.path.basename(path) for path in golden_macro_stubs],
         "synth_netlist": os.path.basename(netlist) if netlist else None,
         "liberty_files": [os.path.basename(p) for p in liberty_files],
         "liberty_file_count": len(liberty_files),
@@ -695,6 +784,7 @@ def run_agent(state: dict) -> dict:
             "summary": "digital/lec/lec_summary.json",
             "report": "digital/lec/lec_report.md",
             "generated_stdcell_model": "digital/lec/input/stdcell_functional_wrappers.v" if generated_stdcell_model else None,
+            "golden_macro_blackbox_stubs": [f"digital/lec/input/{os.path.basename(path)}" for path in golden_macro_stubs],
         },
     }
     report = "\n".join([
@@ -722,6 +812,8 @@ def run_agent(state: dict) -> dict:
 
     if generated_stdcell_model:
         save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "lec/input/stdcell_functional_wrappers.v", _read_text(generated_stdcell_model))
+    for stub_path in golden_macro_stubs:
+        save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", f"lec/input/{os.path.basename(stub_path)}", _read_text(stub_path))
     save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "lec/yosys_lec.ys", script)
     save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "lec/logs/yosys_lec.log", log)
     save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "lec/lec_summary.json", json.dumps(summary, indent=2))

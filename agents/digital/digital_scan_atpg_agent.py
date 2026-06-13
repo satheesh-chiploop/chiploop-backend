@@ -313,7 +313,8 @@ def _generate_full_scan_bench(netlist_text: str) -> tuple[str, dict]:
 
     driven, used = _bench_gate_signal_sets(gates)
     candidate_inputs = set(primary_inputs + scan_q_inputs)
-    inputs = sorted(candidate_inputs & used)
+    floating_inputs = used - driven - candidate_inputs
+    inputs = sorted((candidate_inputs & used) | floating_inputs)
     outputs = sorted((set(primary_outputs) & driven) | (set(scan_d_outputs) & driven))
     for name in inputs:
         lines.append(f"INPUT({name})")
@@ -327,6 +328,7 @@ def _generate_full_scan_bench(netlist_text: str) -> tuple[str, dict]:
         "gates": len(gates),
         "scan_state_inputs": len(set(scan_q_inputs)),
         "scan_capture_outputs": len(set(scan_d_outputs)),
+        "floating_inputs_promoted": sorted(floating_inputs),
         "unsupported_cells": sorted(set(unsupported)),
     }
     return "\n".join(lines) + "\n", meta
@@ -524,6 +526,9 @@ def _adapter_log_has_execution_error(log: str) -> bool:
             "permission denied",
             "not executable",
             "syntax error",
+            "fatal error",
+            "error in circuit file",
+            "error:",
         )
     )
 
