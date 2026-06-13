@@ -548,6 +548,48 @@ def test_lef_extraction_rejects_placeholder_without_pins(tmp_path, monkeypatch):
             "analog_macro_gds": str(gds),
         })
 
+
+def test_lef_extraction_pinizes_magic_lef_from_prior_macro_pins(tmp_path, monkeypatch):
+    monkeypatch.setattr(lef_agent, "save_text_artifact_and_record", lambda *args, **kwargs: "local")
+    monkeypatch.setattr(lef_agent.shutil, "which", lambda name: "/usr/bin/docker" if name == "docker" else None)
+    gds = tmp_path / "ana.gds"
+    prior_lef = tmp_path / "prior.lef"
+    gds.write_bytes(b"GDS")
+    prior_lef.write_text(
+        "MACRO ana\n"
+        "  PIN avdd\n    DIRECTION INOUT ;\n  END avdd\n"
+        "  PIN adc_valid\n    DIRECTION OUTPUT ;\n  END adc_valid\n"
+        "END ana\n",
+        encoding="utf-8",
+    )
+
+    def fake_run_command(state, capability, cmd, cwd=None, timeout_sec=None):
+        (tmp_path / "analog" / "lef_extract" / "ana.lef").write_text(
+            "MACRO ana\n  SIZE 10.000 BY 20.000 ;\nEND ana\n",
+            encoding="utf-8",
+        )
+        return SimpleNamespace(returncode=0, stdout="magic ok", stderr="")
+
+    monkeypatch.setattr(lef_agent, "run_command", fake_run_command)
+
+    state = lef_agent.run_agent({
+        "workflow_id": "wf",
+        "workflow_dir": str(tmp_path),
+        "analog_physical_mode": "generate_sky130_gds",
+        "analog_macro_module": "ana",
+        "analog_macro_gds": str(gds),
+        "analog_macro_lef": str(prior_lef),
+    })
+
+    text = (tmp_path / "analog" / "lef_extract" / "ana.lef").read_text(encoding="utf-8")
+    assert "PIN adc_valid" in text
+    assert "PIN avdd" in text
+    assert "LAYER met1" in text
+    assert state["analog_lef_extraction"]["status"] == "extracted"
+    assert state["analog_lef_extraction"]["pinized_from_macro_interface"] is True
+    assert state["analog_lef_extraction"]["pin_count"] == 2
+
+
 def test_liberty_characterization_fails_without_spice(tmp_path, monkeypatch):
     monkeypatch.setattr(lib_agent, "save_text_artifact_and_record", lambda *args, **kwargs: "local")
 

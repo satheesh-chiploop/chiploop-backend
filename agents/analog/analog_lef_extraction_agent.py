@@ -1,8 +1,9 @@
 import json
 import os
+import re
 import shutil
 from datetime import datetime
-from typing import Any, Dict
+from typing import Any, Dict, List, Tuple
 
 from tooling.runner import run_command
 from utils.artifact_utils import save_text_artifact_and_record
@@ -31,6 +32,94 @@ def _lef_invalid(path: str) -> str:
     if "SIZE 1.000 BY 1.000" in text and " PIN " not in f" {text} ":
         return "lef_placeholder_geometry"
     return ""
+
+
+def _parse_lef_size(text: str) -> Tuple[float, float]:
+    match = re.search(r"\bSIZE\s+([0-9.]+)\s+BY\s+([0-9.]+)\s*;", text or "", flags=re.IGNORECASE)
+    if not match:
+        return 0.0, 0.0
+    return float(match.group(1)), float(match.group(2))
+
+
+def _parse_prior_lef_pins(path: Any) -> Dict[str, str]:
+    if not isinstance(path, str) or not os.path.exists(path):
+        return {}
+    text = open(path, "r", encoding="utf-8", errors="ignore").read()
+    pins: Dict[str, str] = {}
+    for pin_match in re.finditer(r"^\s*PIN\s+(\S+)(.*?)(?=^\s*PIN\s+|\s*END\s+\1\b)", text, flags=re.IGNORECASE | re.MULTILINE | re.DOTALL):
+        direction = "INOUT"
+        d = re.search(r"\bDIRECTION\s+(\S+)", pin_match.group(2), flags=re.IGNORECASE)
+        if d:
+            direction = d.group(1).upper().rstrip(";")
+        pins[pin_match.group(1)] = direction
+    return pins
+
+
+def _contract_pins(state: dict) -> Dict[str, str]:
+    contract = state.get("analog_macro_interface_contract") if isinstance(state.get("analog_macro_interface_contract"), dict) else {}
+    pins: Dict[str, str] = {}
+    for port in contract.get("ports") if isinstance(contract.get("ports"), list) else []:
+        if not isinstance(port, dict) or not port.get("name"):
+            continue
+        direction = str(port.get("lef_direction") or port.get("verilog_direction") or "INOUT").upper()
+        if direction in {"INPUT"}:
+            direction = "INPUT"
+        elif direction in {"OUTPUT"}:
+            direction = "OUTPUT"
+        else:
+            direction = "INOUT"
+        pins[str(port["name"])] = direction
+    return pins
+
+
+def _pin_use(name: str) -> str:
+    low = name.lower()
+    if low in {"vpwr", "vdd", "avdd", "dvdd"} or "vdd" in low or "pwr" in low:
+        return "POWER"
+    if low in {"vgnd", "vss", "avss", "dvss", "gnd"} or "vss" in low or "gnd" in low:
+        return "GROUND"
+    if "clk" in low:
+        return "CLOCK"
+    return "SIGNAL"
+
+
+def _pinized_lef(module_name: str, width: float, height: float, pins: Dict[str, str]) -> str:
+    if width <= 0 or height <= 0 or not pins:
+        return ""
+    pitch = max(height / (len(pins) + 1), 0.2)
+    pin_h = min(max(pitch * 0.35, 0.08), 0.4)
+    pin_w = min(max(width * 0.02, 0.08), 0.4)
+    lines: List[str] = [
+        "VERSION 5.7 ;",
+        "  NOWIREEXTENSIONATPIN ON ;",
+        '  DIVIDERCHAR "/" ;',
+        '  BUSBITCHARS "[]" ;',
+        f"MACRO {module_name}",
+        "  CLASS BLOCK ;",
+        f"  FOREIGN {module_name} ;",
+        "  ORIGIN 0.000 0.000 ;",
+        f"  SIZE {width:.3f} BY {height:.3f} ;",
+    ]
+    for idx, (name, direction) in enumerate(sorted(pins.items())):
+        use = _pin_use(name)
+        lef_direction = "INOUT" if use in {"POWER", "GROUND"} else direction
+        y_mid = min(max((idx + 1) * pitch, pin_h / 2), height - pin_h / 2)
+        y1 = max(y_mid - pin_h / 2, 0.0)
+        y2 = min(y_mid + pin_h / 2, height)
+        x1 = 0.0 if idx % 2 == 0 else max(width - pin_w, 0.0)
+        x2 = min(x1 + pin_w, width)
+        lines.extend([
+            f"  PIN {name}",
+            f"    DIRECTION {lef_direction} ;",
+            f"    USE {use} ;",
+            "    PORT",
+            "      LAYER met1 ;",
+            f"        RECT {x1:.3f} {y1:.3f} {x2:.3f} {y2:.3f} ;",
+            "    END",
+            f"  END {name}",
+        ])
+    lines.extend([f"END {module_name}", "END LIBRARY", ""])
+    return "\n".join(lines)
 
 
 def run_agent(state: dict) -> dict:
@@ -105,6 +194,21 @@ def run_agent(state: dict) -> dict:
             with open(log_path, "w", encoding="utf-8", errors="ignore") as fh:
                 fh.write(log)
             invalid_reason = _lef_invalid(lef_path)
+            pinized = False
+            pin_source = ""
+            pin_count = 0
+            if invalid_reason == "lef_missing_pins":
+                produced_text = open(lef_path, "r", encoding="utf-8", errors="ignore").read() if os.path.exists(lef_path) else ""
+                width, height = _parse_lef_size(produced_text)
+                pins = _parse_prior_lef_pins(prior_lef) or _contract_pins(state)
+                pin_source = "prior_lef" if _parse_prior_lef_pins(prior_lef) else "macro_interface_contract"
+                pin_count = len(pins)
+                pinized_text = _pinized_lef(module_name, width, height, pins)
+                if pinized_text:
+                    with open(lef_path, "w", encoding="utf-8") as fh:
+                        fh.write(pinized_text)
+                    invalid_reason = _lef_invalid(lef_path)
+                    pinized = not invalid_reason
             if not invalid_reason:
                 state["analog_macro_lef"] = lef_path
                 digital = state.setdefault("digital", {})
@@ -117,6 +221,9 @@ def run_agent(state: dict) -> dict:
                     "return_code": cp.returncode,
                     "tool_mode": tool_mode,
                     "image": OPENLANE_DOCKER_IMAGE if tool_mode == "docker" else "",
+                    "pinized_from_macro_interface": pinized,
+                    "pin_source": pin_source,
+                    "pin_count": pin_count,
                 })
             else:
                 summary.update({
@@ -126,6 +233,9 @@ def run_agent(state: dict) -> dict:
                     "return_code": cp.returncode,
                     "tool_mode": tool_mode,
                     "image": OPENLANE_DOCKER_IMAGE if tool_mode == "docker" else "",
+                    "pinized_from_macro_interface": pinized,
+                    "pin_source": pin_source,
+                    "pin_count": pin_count,
                 })
         else:
             summary.update({
@@ -139,8 +249,14 @@ def run_agent(state: dict) -> dict:
     if os.path.exists(os.path.join(stage_dir, "extract_lef.tcl")):
         with open(os.path.join(stage_dir, "extract_lef.tcl"), "r", encoding="utf-8") as fh:
             save_text_artifact_and_record(workflow_id, AGENT_NAME, "analog/lef_extract", "extract_lef.tcl", fh.read())
+    if os.path.exists(os.path.join(stage_dir, "magic_lef_extract.log")):
+        with open(os.path.join(stage_dir, "magic_lef_extract.log"), "r", encoding="utf-8", errors="ignore") as fh:
+            save_text_artifact_and_record(workflow_id, AGENT_NAME, "analog/lef_extract", "magic_lef_extract.log", fh.read())
     if summary.get("lef") and os.path.exists(str(summary["lef"])):
         with open(str(summary["lef"]), "r", encoding="utf-8", errors="ignore") as fh:
+            save_text_artifact_and_record(workflow_id, AGENT_NAME, "analog/lef_extract", f"{module_name}.lef", fh.read())
+    elif os.path.exists(os.path.join(stage_dir, f"{module_name}.lef")):
+        with open(os.path.join(stage_dir, f"{module_name}.lef"), "r", encoding="utf-8", errors="ignore") as fh:
             save_text_artifact_and_record(workflow_id, AGENT_NAME, "analog/lef_extract", f"{module_name}.lef", fh.read())
 
     state["analog_lef_extraction"] = summary
