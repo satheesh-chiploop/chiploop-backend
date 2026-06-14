@@ -311,9 +311,9 @@ def _chart_from_plan(state: dict[str, Any], plan: dict[str, Any]) -> dict[str, A
         "tns": timing.get("tns"),
         "setup_violations": timing.get("setup_violations"),
         "lec_status": lec_evidence.get("status") or ("pass" if not lec_issue else None),
-        "lec_unproven_points": lec_evidence.get("unproven_points"),
+        "lec_unproven_points": lec_evidence.get("unproven_points") if lec_issue else 0,
         "post_dft_lec_status": post_dft_evidence.get("status") or ("pass" if not post_dft_issue else None),
-        "post_dft_lec_unproven_points": post_dft_evidence.get("unproven_points"),
+        "post_dft_lec_unproven_points": post_dft_evidence.get("unproven_points") if post_dft_issue else 0,
         "dominant_issue": plan.get("dominant_issue"),
         "selected_restart_stage": plan.get("selected_restart_stage"),
     }

@@ -635,10 +635,15 @@ def run_agent(state: dict) -> dict:
     pattern_file = _safe_adapter_output_path(stage_dir, metrics.get("pattern_file"))
     atalanta_output = _safe_adapter_output_path(stage_dir, metrics.get("atalanta_output"))
     inferred_pattern_count = _pattern_count_from_file(pattern_file)
+    pattern_count_source = "adapter_metrics" if pattern_count not in (None, 0) else None
     if (pattern_count is None or pattern_count == 0) and inferred_pattern_count is not None:
         pattern_count = inferred_pattern_count
+        pattern_count_source = "pattern_file"
+    coverage_source = "adapter_metrics" if stuck_at_coverage_pct is not None else None
     if stuck_at_coverage_pct is None and atalanta_output:
         stuck_at_coverage_pct = _coverage_from_text(_read_text(atalanta_output))
+        if stuck_at_coverage_pct is not None:
+            coverage_source = "tool_output"
     if configured_atpg and rc == 0:
         if _adapter_log_has_execution_error(log) and not _metrics_show_real_atpg_result(pattern_count, stuck_at_coverage_pct, faults_detected, faults_undetected, faults_aborted):
             status = "adapter_failed"
@@ -658,6 +663,16 @@ def run_agent(state: dict) -> dict:
     summary_path = os.path.join(stage_dir, "atpg_summary.json")
     report_path = os.path.join(stage_dir, "atpg_report.md")
     _write_text(log_path, log)
+    if metrics_file:
+        normalized_metrics = dict(metrics)
+        normalized_metrics["pattern_count"] = pattern_count
+        normalized_metrics["pattern_count_source"] = pattern_count_source or "not_reported"
+        normalized_metrics["stuck_at_coverage_pct"] = stuck_at_coverage_pct
+        normalized_metrics["coverage_source"] = coverage_source or "not_reported"
+        normalized_metrics["faults_detected"] = faults_detected
+        normalized_metrics["faults_undetected"] = faults_undetected
+        normalized_metrics["faults_aborted"] = faults_aborted
+        _write_text(metrics_file, json.dumps(normalized_metrics, indent=2))
 
     summary = {
         "workflow_id": workflow_id,
@@ -672,7 +687,8 @@ def run_agent(state: dict) -> dict:
         "faults_detected": faults_detected,
         "faults_undetected": faults_undetected,
         "faults_aborted": faults_aborted,
-        "coverage_source": "configured_adapter_metrics" if status == "patterns_generated" else "not_reported",
+        "pattern_count_source": pattern_count_source or "not_reported",
+        "coverage_source": coverage_source or ("configured_adapter_metrics" if status == "patterns_generated" else "not_reported"),
         "metrics_file": os.path.basename(metrics_file) if metrics_file else None,
         "bench_generation": bench_meta,
         "tool_diagnostics": tool_diagnostics,

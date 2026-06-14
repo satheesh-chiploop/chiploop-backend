@@ -374,6 +374,19 @@ def run_agent(state: dict) -> dict:
         requested_mhz = 0.0
     if requested_mhz > 0:
         clk_period_ns = 1000.0 / requested_mhz
+    try:
+        closure_iteration = int(state.get("synthesis_closure_iteration_index") or 0)
+    except Exception:
+        closure_iteration = 0
+    closure = state.get("synthesis_closure") if isinstance(state.get("synthesis_closure"), dict) else {}
+    timing_repair_enabled = bool(
+        closure.get("allow_synthesis_timing_repair")
+        if closure.get("allow_synthesis_timing_repair") is not None
+        else state.get("allow_synthesis_timing_repair", True)
+    )
+    if closure_iteration > 0 and timing_repair_enabled:
+        margin = max(0.70, 1.0 - (0.10 * closure_iteration))
+        clk_period_ns = max(0.1, clk_period_ns * margin)
 
     # ---------- Stage folder ----------
     stage_dir = os.path.join(workflow_dir, "digital", "synth")
@@ -708,6 +721,8 @@ echo "Done. Inspect /work/runs/{run_tag} or latest run folder under /work/runs/"
             "top_module": top_module,
             "clock_port": clk_name,
             "clock_period_ns": clk_period_ns,
+            "synthesis_closure_iteration": closure_iteration,
+            "synthesis_closure_timing_repair_enabled": timing_repair_enabled,
             "pdk_variant": pdk_variant,
             "openlane_image": openlane_image,
             "openlane_to_step": OPENLANE_SYNTH_TO_STEP,

@@ -3673,6 +3673,83 @@ def execute_digital_app_background(
                     append_log_workflow(workflow_id, f"Closure loop stopped early after iteration {iteration}: {stop_reason}", phase="closure_loop_stop")
                     append_log_run(run_id, f"Closure loop stopped early after iteration {iteration}: {stop_reason}")
                     break
+        elif app_name in {"arch2synthesis", "arch2tapeout"} and bool(shared_state.get("run_synthesis_closure_loop") or (isinstance(shared_state.get("toggles"), dict) and shared_state["toggles"].get("run_synthesis_closure_loop"))):
+            max_iterations = max(1, min(int(shared_state.get("max_synthesis_closure_iterations") or 1), 2))
+
+            def _node_label(node: Dict[str, Any]) -> str:
+                return ((node.get("data") or {}).get("backendLabel") or node.get("label") or "").strip()
+
+            labels = [_node_label(node) for node in nodes]
+            closure_label = "Digital Synthesis Closure Agent"
+            if closure_label not in labels:
+                append_log_workflow(workflow_id, "Synthesis closure loop requested but closure agent is not in this workflow.", phase="synthesis_closure_missing")
+                append_log_run(run_id, "Synthesis closure loop requested but closure agent is not in this workflow.")
+                _run_nodes_with_shared_state(workflow_id=workflow_id, run_id=run_id, loop_type="digital", nodes=nodes, shared_state=shared_state)
+            else:
+                closure_idx = labels.index(closure_label)
+                first_rerun_label = "Digital Synthesis Agent"
+                try:
+                    rerun_start_idx = labels.index(first_rerun_label)
+                except ValueError:
+                    rerun_start_idx = closure_idx
+                prefix_nodes = nodes[:closure_idx + 1]
+                rerun_nodes = nodes[rerun_start_idx:closure_idx + 1]
+                suffix_nodes = nodes[closure_idx + 1:]
+
+                append_log_workflow(workflow_id, "Synthesis closure loop baseline started", phase="synthesis_closure_baseline")
+                append_log_run(run_id, "Synthesis closure loop baseline started")
+                shared_state["synthesis_closure_iteration_index"] = 0
+                _run_nodes_with_shared_state(
+                    workflow_id=workflow_id,
+                    run_id=run_id,
+                    loop_type="digital",
+                    nodes=prefix_nodes,
+                    shared_state=shared_state,
+                )
+                closure_state = ((shared_state.get("digital") or {}).get("synthesis_closure") or {})
+                plan = closure_state.get("plan") if isinstance(closure_state, dict) else {}
+                append_log_workflow(
+                    workflow_id,
+                    f"Synthesis closure baseline completed: {plan.get('status') or 'not_reported'}",
+                    phase="synthesis_closure_baseline_done",
+                )
+                append_log_run(run_id, f"Synthesis closure baseline completed: {plan.get('status') or 'not_reported'}")
+
+                for iteration in range(1, max_iterations + 1):
+                    plan = (((shared_state.get("digital") or {}).get("synthesis_closure") or {}).get("plan") or {})
+                    if plan.get("closure_complete") is True or plan.get("status") == "clean":
+                        append_log_workflow(workflow_id, f"Synthesis closure stopped before iteration {iteration}: closure achieved", phase="synthesis_closure_stop")
+                        append_log_run(run_id, f"Synthesis closure stopped before iteration {iteration}: closure achieved")
+                        break
+                    shared_state["synthesis_closure_iteration_index"] = iteration
+                    append_log_workflow(workflow_id, f"Synthesis closure iteration {iteration}/{max_iterations} started", phase=f"synthesis_closure_iteration_{iteration}")
+                    append_log_run(run_id, f"Synthesis closure iteration {iteration}/{max_iterations} started")
+                    _run_nodes_with_shared_state(
+                        workflow_id=workflow_id,
+                        run_id=run_id,
+                        loop_type="digital",
+                        nodes=rerun_nodes,
+                        shared_state=shared_state,
+                    )
+                    plan = (((shared_state.get("digital") or {}).get("synthesis_closure") or {}).get("plan") or {})
+                    append_log_workflow(
+                        workflow_id,
+                        f"Synthesis closure iteration {iteration}/{max_iterations} completed: {plan.get('status') or 'not_reported'}",
+                        phase=f"synthesis_closure_iteration_{iteration}_done",
+                    )
+                    append_log_run(run_id, f"Synthesis closure iteration {iteration}/{max_iterations} completed: {plan.get('status') or 'not_reported'}")
+                    if plan.get("closure_complete") is True or plan.get("status") == "clean":
+                        append_log_workflow(workflow_id, f"Synthesis closure stopped after iteration {iteration}: closure achieved", phase="synthesis_closure_stop")
+                        append_log_run(run_id, f"Synthesis closure stopped after iteration {iteration}: closure achieved")
+                        break
+
+                _run_nodes_with_shared_state(
+                    workflow_id=workflow_id,
+                    run_id=run_id,
+                    loop_type="digital",
+                    nodes=suffix_nodes,
+                    shared_state=shared_state,
+                )
         else:
             _run_nodes_with_shared_state(
                 workflow_id=workflow_id,
@@ -9092,6 +9169,83 @@ def execute_system_app_background(
                     append_log_workflow(workflow_id, f"System Sim closure loop stopped early after iteration {iteration}: {stop_reason}", phase="closure_loop_stop")
                     append_log_run(run_id, f"System Sim closure loop stopped early after iteration {iteration}: {stop_reason}")
                     break
+        elif template_workflow_name in {"System_Synthesis", "System_PD"} and bool(shared_state.get("run_synthesis_closure_loop") or (isinstance(shared_state.get("toggles"), dict) and shared_state["toggles"].get("run_synthesis_closure_loop"))):
+            max_iterations = max(1, min(int(shared_state.get("max_synthesis_closure_iterations") or 1), 2))
+
+            def _node_label(node: Dict[str, Any]) -> str:
+                return ((node.get("data") or {}).get("backendLabel") or node.get("label") or node.get("name") or "").strip()
+
+            labels = [_node_label(node) for node in nodes]
+            closure_label = "System Synthesis Closure Agent"
+            if closure_label not in labels:
+                append_log_workflow(workflow_id, "System synthesis closure loop requested but closure agent is not in this workflow.", phase="synthesis_closure_missing")
+                append_log_run(run_id, "System synthesis closure loop requested but closure agent is not in this workflow.")
+                _run_nodes_with_shared_state(workflow_id=workflow_id, run_id=run_id, loop_type="system", nodes=nodes, shared_state=shared_state)
+            else:
+                closure_idx = labels.index(closure_label)
+                first_rerun_label = "Digital Synthesis Agent"
+                try:
+                    rerun_start_idx = labels.index(first_rerun_label)
+                except ValueError:
+                    rerun_start_idx = closure_idx
+                prefix_nodes = nodes[:closure_idx + 1]
+                rerun_nodes = nodes[rerun_start_idx:closure_idx + 1]
+                suffix_nodes = nodes[closure_idx + 1:]
+
+                append_log_workflow(workflow_id, "System synthesis closure loop baseline started", phase="synthesis_closure_baseline")
+                append_log_run(run_id, "System synthesis closure loop baseline started")
+                shared_state["synthesis_closure_iteration_index"] = 0
+                _run_nodes_with_shared_state(
+                    workflow_id=workflow_id,
+                    run_id=run_id,
+                    loop_type="system",
+                    nodes=prefix_nodes,
+                    shared_state=shared_state,
+                )
+                closure_state = ((shared_state.get("digital") or {}).get("synthesis_closure") or {})
+                plan = closure_state.get("plan") if isinstance(closure_state, dict) else {}
+                append_log_workflow(
+                    workflow_id,
+                    f"System synthesis closure baseline completed: {plan.get('status') or 'not_reported'}",
+                    phase="synthesis_closure_baseline_done",
+                )
+                append_log_run(run_id, f"System synthesis closure baseline completed: {plan.get('status') or 'not_reported'}")
+
+                for iteration in range(1, max_iterations + 1):
+                    plan = (((shared_state.get("digital") or {}).get("synthesis_closure") or {}).get("plan") or {})
+                    if plan.get("closure_complete") is True or plan.get("status") == "clean":
+                        append_log_workflow(workflow_id, f"System synthesis closure stopped before iteration {iteration}: closure achieved", phase="synthesis_closure_stop")
+                        append_log_run(run_id, f"System synthesis closure stopped before iteration {iteration}: closure achieved")
+                        break
+                    shared_state["synthesis_closure_iteration_index"] = iteration
+                    append_log_workflow(workflow_id, f"System synthesis closure iteration {iteration}/{max_iterations} started", phase=f"synthesis_closure_iteration_{iteration}")
+                    append_log_run(run_id, f"System synthesis closure iteration {iteration}/{max_iterations} started")
+                    _run_nodes_with_shared_state(
+                        workflow_id=workflow_id,
+                        run_id=run_id,
+                        loop_type="system",
+                        nodes=rerun_nodes,
+                        shared_state=shared_state,
+                    )
+                    plan = (((shared_state.get("digital") or {}).get("synthesis_closure") or {}).get("plan") or {})
+                    append_log_workflow(
+                        workflow_id,
+                        f"System synthesis closure iteration {iteration}/{max_iterations} completed: {plan.get('status') or 'not_reported'}",
+                        phase=f"synthesis_closure_iteration_{iteration}_done",
+                    )
+                    append_log_run(run_id, f"System synthesis closure iteration {iteration}/{max_iterations} completed: {plan.get('status') or 'not_reported'}")
+                    if plan.get("closure_complete") is True or plan.get("status") == "clean":
+                        append_log_workflow(workflow_id, f"System synthesis closure stopped after iteration {iteration}: closure achieved", phase="synthesis_closure_stop")
+                        append_log_run(run_id, f"System synthesis closure stopped after iteration {iteration}: closure achieved")
+                        break
+
+                _run_nodes_with_shared_state(
+                    workflow_id=workflow_id,
+                    run_id=run_id,
+                    loop_type="system",
+                    nodes=suffix_nodes,
+                    shared_state=shared_state,
+                )
         else:
             _run_nodes_with_shared_state(
                 workflow_id=workflow_id,
