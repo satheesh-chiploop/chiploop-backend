@@ -208,6 +208,28 @@ equiv_status -assert
 """
 
 
+def _combined_model_source(stage_dir: str, paths: list[str | None]) -> str | None:
+    texts: list[str] = []
+    seen: set[str] = set()
+    for path in paths:
+        if not path or not os.path.exists(path):
+            continue
+        ap = os.path.abspath(path)
+        if ap in seen:
+            continue
+        seen.add(ap)
+        try:
+            with open(ap, "r", encoding="utf-8", errors="ignore") as f:
+                texts.append(f.read())
+        except Exception:
+            continue
+    if not texts:
+        return None
+    out = os.path.join(stage_dir, "input", "tapeout_lec_model_source.v")
+    _write_text(out, "\n\n".join(texts))
+    return out
+
+
 def run_agent(state: dict) -> dict:
     workflow_id = state.get("workflow_id", "default")
     workflow_dir = os.path.abspath(state.get("workflow_dir") or f"backend/workflows/{workflow_id}")
@@ -295,9 +317,13 @@ def run_agent(state: dict) -> dict:
     yosys = tool_path("yosys", state)
     liberty_files = _liberty_candidates(state, workflow_dir)
     stdcell_verilog = _stdcell_verilog_candidates(state, workflow_dir)
-    generated_stdcell_model = _generated_stdcell_model(staged_netlist, stage_dir)
+    model_source_netlist = _combined_model_source(stage_dir, [staged_reference_netlist, staged_netlist]) if staged_reference_netlist else staged_netlist
+    generated_stdcell_model = _generated_stdcell_model(model_source_netlist, stage_dir)
     yosys_stdcell_verilog = [generated_stdcell_model] if generated_stdcell_model else _prepare_stdcell_models_for_yosys(stdcell_verilog, stage_dir)
-    missing_stdcell_models = _missing_stdcell_models(staged_netlist, yosys_stdcell_verilog)
+    missing_stdcell_models = sorted(set(
+        _missing_stdcell_models(staged_netlist, yosys_stdcell_verilog)
+        + (_missing_stdcell_models(staged_reference_netlist, yosys_stdcell_verilog) if staged_reference_netlist else [])
+    ))
 
     script_path = os.path.join(stage_dir, "yosys_tapeout_lec.ys")
     log_path = os.path.join(logs_dir, "yosys_tapeout_lec.log")
@@ -388,6 +414,7 @@ def run_agent(state: dict) -> dict:
         "liberty_files": [os.path.basename(path) for path in liberty_files],
         "yosys_stdcell_verilog_files": [os.path.basename(path) for path in yosys_stdcell_verilog],
         "generated_stdcell_model": os.path.basename(generated_stdcell_model) if generated_stdcell_model else None,
+        "stdcell_model_source_netlist": os.path.basename(model_source_netlist) if model_source_netlist else None,
         "ignored_gate_ports": ignored_gate_ports,
         "ignored_reference_ports": ignored_reference_ports,
         "missing_stdcell_models": missing_stdcell_models,
@@ -403,6 +430,7 @@ def run_agent(state: dict) -> dict:
             "reference_netlist": f"digital/tapeout_lec/input/{os.path.basename(staged_reference_netlist)}" if staged_reference_netlist else None,
             "tapeout_netlist": f"digital/tapeout_lec/input/{os.path.basename(staged_netlist)}" if staged_netlist else None,
             "generated_stdcell_model": "digital/tapeout_lec/input/stdcell_functional_wrappers.v" if generated_stdcell_model else None,
+            "stdcell_model_source_netlist": "digital/tapeout_lec/input/tapeout_lec_model_source.v" if model_source_netlist and os.path.basename(model_source_netlist) == "tapeout_lec_model_source.v" else None,
             "golden_macro_blackbox_stubs": [f"digital/tapeout_lec/input/{os.path.basename(path)}" for path in golden_macro_stubs],
         },
     }
@@ -435,6 +463,8 @@ def run_agent(state: dict) -> dict:
         save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", f"tapeout_lec/input/{os.path.basename(staged_reference_netlist)}", open(staged_reference_netlist, "r", encoding="utf-8", errors="ignore").read())
     if generated_stdcell_model:
         save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "tapeout_lec/input/stdcell_functional_wrappers.v", open(generated_stdcell_model, "r", encoding="utf-8", errors="ignore").read())
+    if model_source_netlist and os.path.basename(model_source_netlist) == "tapeout_lec_model_source.v":
+        save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "tapeout_lec/input/tapeout_lec_model_source.v", open(model_source_netlist, "r", encoding="utf-8", errors="ignore").read())
     for stub_path in golden_macro_stubs:
         save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", f"tapeout_lec/input/{os.path.basename(stub_path)}", open(stub_path, "r", encoding="utf-8", errors="ignore").read())
     save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "tapeout_lec/yosys_tapeout_lec.ys", script)
