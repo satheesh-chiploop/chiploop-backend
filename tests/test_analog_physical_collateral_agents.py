@@ -298,6 +298,7 @@ def test_sky130_spice_layout_issues_catch_input_bus_bits_and_supply_drains():
         "M1 sensor_temp_celsius[0] adc_code[0] avdd avdd sky130_fd_pr__pfet_01v8 W=1u L=0.15u\n"
         "M2 adc_code[0] sensor_temp_celsius[0] avss avss sky130_fd_pr__nfet_01v8 W=1u L=0.15u\n"
         "M3 avdd sensor_temp_celsius[0] adc_code[0] avdd sky130_fd_pr__pfet_01v8 W=1u L=0.15u\n"
+        "M4 adc_code[12] sensor_temp_celsius[0] avss avss sky130_fd_pr__nfet_01v8 W=1u L=0.15u\n"
         ".ends ana\n"
     )
     specs = {
@@ -313,6 +314,7 @@ def test_sky130_spice_layout_issues_catch_input_bus_bits_and_supply_drains():
     assert "input_pin_used_as_device_terminal:avdd" not in issues
     assert "input_pin_used_as_device_terminal:avss" not in issues
     assert "supply_pin_used_as_device_drain:avdd" in issues
+    assert "undeclared_external_bus_bit:adc_code[12]" in issues
 
 
 def test_gds_generation_uses_macro_contract_name_when_module_missing(tmp_path, monkeypatch):
@@ -363,6 +365,9 @@ def test_gds_generation_uses_magic_docker_by_default(tmp_path, monkeypatch):
         assert "source /pdk/sky130A/libs.tech/magic/sky130A.tcl" in tcl
         assert "magic::netlist_to_layout ana.sp sky130" in tcl
         assert "CHIPLOOP_FINAL_BOX=[box values]" in tcl
+        assert "flatten ana_flat" in tcl
+        assert "load ana_flat" in tcl
+        assert "CHIPLOOP_FLAT_BOX=[box values]" in tcl
         assert "gds write ana.gds" in tcl
         assert tcl.rfind("feedback save magic_feedback.txt") > tcl.index("gds write ana.gds")
         staged_spice = (tmp_path / "analog" / "gds" / "ana.sp").read_text(encoding="utf-8")

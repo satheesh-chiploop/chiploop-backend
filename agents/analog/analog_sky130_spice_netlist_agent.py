@@ -135,6 +135,8 @@ def _generated_spice_layout_issues(text: str, port_specs: Dict[str, Dict[str, An
     duplicate_scalar_buses = sorted(pin for pin in pins if pin in bit_bases)
     if duplicate_scalar_buses:
         issues.append(f"duplicate_scalar_bus_pins:{','.join(duplicate_scalar_buses)}")
+    pin_set = set(pins)
+    interface_bases = {_base_bus_name(pin) for pin in pins}
 
     external_inputs = {pin for pin in pins if _direction_for_pin(pin, port_specs).startswith("input") and not _is_supply_pin(pin, port_specs)}
     external_inputs.update(
@@ -146,6 +148,8 @@ def _generated_spice_layout_issues(text: str, port_specs: Dict[str, Dict[str, An
     for match in re.finditer(r"^\s*M\S*\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)", text or "", flags=re.IGNORECASE | re.MULTILINE):
         drain, _gate, source, bulk, _model = match.groups()
         for terminal in (drain, source, bulk):
+            if re.match(r"^.+\[\d+\]$", terminal) and terminal not in pin_set and _base_bus_name(terminal) in interface_bases:
+                issues.append(f"undeclared_external_bus_bit:{terminal}")
             if terminal in external_inputs:
                 issues.append(f"input_pin_used_as_device_terminal:{terminal}")
         if drain in external_supplies:
