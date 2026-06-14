@@ -40,6 +40,34 @@ def _first_number(*values: Any) -> float | int | None:
     return None
 
 
+def _numbers_for_keys(data: dict[str, Any], *needles: str) -> list[float]:
+    values: list[float] = []
+    for key, value in data.items():
+        lowered = str(key).lower()
+        if not all(needle in lowered for needle in needles):
+            continue
+        number = _first_number(value)
+        if number is not None:
+            values.append(float(number))
+    return values
+
+
+def _min_metric(data: dict[str, Any], explicit_keys: list[str], *needles: str) -> float | None:
+    explicit = [_first_number(data.get(key)) for key in explicit_keys]
+    explicit_numbers = [float(value) for value in explicit if value is not None]
+    scanned = _numbers_for_keys(data, *needles)
+    values = explicit_numbers + scanned
+    return min(values) if values else None
+
+
+def _max_metric(data: dict[str, Any], explicit_keys: list[str], *needles: str) -> float | None:
+    explicit = [_first_number(data.get(key)) for key in explicit_keys]
+    explicit_numbers = [float(value) for value in explicit if value is not None]
+    scanned = _numbers_for_keys(data, *needles)
+    values = explicit_numbers + scanned
+    return max(values) if values else None
+
+
 def _known_status(*values: Any) -> str:
     status = str(_first_present(*values) or "").strip().lower()
     return "" if status in {"", "none", "null", "not_produced", "not produced"} else status
@@ -91,18 +119,40 @@ def _timing(artifacts: dict[str, dict[str, Any]]) -> dict[str, Any]:
     synth = artifacts.get("synth_metrics") or {}
     pre = artifacts.get("sta_preplace") or {}
     pre_summary = artifacts.get("sta_preplace_summary") or {}
+    wns = _first_number(
+        pre.get("worst_slack"),
+        pre.get("wns"),
+        _min_metric(pre, ["timing__setup__ws", "timing__setup__wns"], "setup", "ws"),
+        _min_metric(pre, ["timing__setup__wns"], "setup", "wns"),
+        synth.get("chiploop__sta_preplace_wns"),
+        synth.get("worst_slack"),
+        synth.get("wns"),
+        _min_metric(synth, ["timing__setup__ws", "timing__setup__wns"], "setup", "ws"),
+        _min_metric(synth, ["timing__setup__wns"], "setup", "wns"),
+    )
+    tns = _first_number(
+        pre.get("tns"),
+        _min_metric(pre, ["timing__setup__tns"], "setup", "tns"),
+        synth.get("chiploop__sta_preplace_tns"),
+        synth.get("tns"),
+        _min_metric(synth, ["timing__setup__tns"], "setup", "tns"),
+    )
+    setup_violations = _first_number(
+        pre.get("setup_violations"),
+        pre.get("timing__setup__violation_count"),
+        pre.get("timing__setup__vio__count"),
+        pre.get("timing__setup__violating_paths"),
+        _max_metric(pre, [], "setup", "vio"),
+        synth.get("chiploop__sta_preplace_setup_violation_count"),
+        synth.get("timing_violations"),
+        synth.get("timing__setup_vio__count"),
+        _max_metric(synth, [], "setup", "vio"),
+    )
     return {
         "stage": "sta_preplace" if pre or pre_summary else "synth",
-        "wns": _first_number(pre.get("worst_slack"), pre.get("timing__setup__ws"), synth.get("chiploop__sta_preplace_wns"), synth.get("worst_slack"), synth.get("timing__setup__ws")),
-        "tns": _first_number(pre.get("tns"), pre.get("timing__setup__tns"), synth.get("chiploop__sta_preplace_tns"), synth.get("tns"), synth.get("timing__setup__tns")),
-        "setup_violations": _first_number(
-            pre.get("setup_violations"),
-            pre.get("timing__setup__violation_count"),
-            pre.get("timing__setup__vio__count"),
-            pre.get("timing__setup__violating_paths"),
-            synth.get("chiploop__sta_preplace_setup_violation_count"),
-            synth.get("timing_violations"),
-        ),
+        "wns": wns,
+        "tns": tns,
+        "setup_violations": setup_violations,
         "status": _first_present(pre_summary.get("status"), pre.get("status")),
     }
 

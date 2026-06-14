@@ -430,6 +430,7 @@ from agents.digital.digital_synthesis_agent import run_agent as digital_synthesi
 from agents.digital.digital_logic_equivalence_agent import run_agent as digital_logic_equivalence_agent
 from agents.digital.digital_synthesis_closure_agent import run_agent as digital_synthesis_closure_agent
 from agents.digital.digital_dft_scan_stitching_agent import run_agent as digital_dft_scan_stitching_agent
+from agents.digital.digital_post_dft_lec_agent import run_agent as digital_post_dft_lec_agent
 from agents.digital.digital_scan_atpg_agent import run_agent as digital_scan_atpg_agent
 from agents.digital.digital_mbist_collateral_agent import run_agent as digital_mbist_collateral_agent
 from agents.digital.digital_foundry_profile_agent import run_agent as digital_foundry_profile_agent
@@ -530,6 +531,7 @@ DIGITAL_AGENT_FUNCTIONS: Dict[str, Any] = {
     "Digital Logic Equivalence Check Agent": digital_logic_equivalence_agent,
     "Digital Synthesis Closure Agent": digital_synthesis_closure_agent,
     "Digital DFT Scan Stitching Agent": digital_dft_scan_stitching_agent,
+    "Digital Post-DFT Logic Equivalence Check Agent": digital_post_dft_lec_agent,
     "Digital Scan ATPG Coverage Agent": digital_scan_atpg_agent,
     "Digital MBIST Collateral Agent": digital_mbist_collateral_agent,
     "Digital STA PrePlace Agent": digital_sta_preplace_agent,
@@ -832,6 +834,7 @@ SYSTEM_AGENT_FUNCTIONS: Dict[str,Any] = {
     "Digital Synthesis Closure Agent": digital_synthesis_closure_agent,
     "System Synthesis Closure Agent": system_synthesis_closure_agent,
     "Digital DFT Scan Stitching Agent": digital_dft_scan_stitching_agent,
+    "Digital Post-DFT Logic Equivalence Check Agent": digital_post_dft_lec_agent,
     "Digital Scan ATPG Coverage Agent": digital_scan_atpg_agent,
     "Digital MBIST Collateral Agent": digital_mbist_collateral_agent,
     "Digital STA PrePlace Agent": digital_sta_preplace_agent,
@@ -1105,6 +1108,7 @@ DIGITAL_ARCH2SYNTHESIS_DEFINITION = _linear_workflow_definition([
     "Digital Logic Equivalence Check Agent",
     "Digital Synthesis Closure Agent",
     "Digital DFT Scan Stitching Agent",
+    "Digital Post-DFT Logic Equivalence Check Agent",
     "Digital Scan ATPG Coverage Agent",
     "Digital MBIST Collateral Agent",
 ])
@@ -1144,7 +1148,9 @@ DIGITAL_ARCH2TAPEOUT_DEFINITION = _linear_workflow_definition([
     "Digital Implementation Setup Agent",
     "Digital Synthesis Agent",
     "Digital Logic Equivalence Check Agent",
+    "Digital Synthesis Closure Agent",
     "Digital DFT Scan Stitching Agent",
+    "Digital Post-DFT Logic Equivalence Check Agent",
     "Digital Scan ATPG Coverage Agent",
     "Digital MBIST Collateral Agent",
     "Digital STA PrePlace Agent",
@@ -1280,6 +1286,7 @@ SYSTEM_SYNTHESIS_DEFINITION = _linear_workflow_definition([
     "Digital Logic Equivalence Check Agent",
     "System Synthesis Closure Agent",
     "Digital DFT Scan Stitching Agent",
+    "Digital Post-DFT Logic Equivalence Check Agent",
     "Digital Scan ATPG Coverage Agent",
     "Digital MBIST Collateral Agent",
 ])
@@ -1293,6 +1300,7 @@ SYSTEM_PD_DEFINITION = _linear_workflow_definition([
     "Digital Logic Equivalence Check Agent",
     "System Synthesis Closure Agent",
     "Digital DFT Scan Stitching Agent",
+    "Digital Post-DFT Logic Equivalence Check Agent",
     "Digital Scan ATPG Coverage Agent",
     "Digital MBIST Collateral Agent",
     "Analog Sky130 SPICE Netlist Agent",
@@ -3568,8 +3576,10 @@ def execute_digital_app_background(
                 "Digital Implementation Setup Agent",
                 "Digital Synthesis Agent",
                 "Digital Logic Equivalence Check Agent",
+                "Digital Synthesis Closure Agent",
                 "Digital UPF Static Check Agent",
                 "Digital DFT Scan Stitching Agent",
+                "Digital Post-DFT Logic Equivalence Check Agent",
                 "Digital Scan ATPG Coverage Agent",
                 "Digital MBIST Collateral Agent",
             }
@@ -3586,8 +3596,10 @@ def execute_digital_app_background(
                 "Digital Implementation Setup Agent",
                 "Digital Synthesis Agent",
                 "Digital Logic Equivalence Check Agent",
+                "Digital Synthesis Closure Agent",
                 "Digital UPF Static Check Agent",
                 "Digital DFT Scan Stitching Agent",
+                "Digital Post-DFT Logic Equivalence Check Agent",
                 "Digital Scan ATPG Coverage Agent",
                 "Digital MBIST Collateral Agent",
                 "Digital STA PrePlace Agent",
@@ -3605,6 +3617,7 @@ def execute_digital_app_background(
                 "Digital Tapeout Agent",
                 "Digital Tapeout Logic Equivalence Check Agent",
                 "Digital Executive Summary Agent",
+                "Digital PD Signoff Closure Agent",
             }
             nodes = [node for node in nodes if ((node.get("data") or {}).get("backendLabel") or node.get("label")) in keep]
         if app_name == "verify":

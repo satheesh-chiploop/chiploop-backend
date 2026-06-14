@@ -3522,6 +3522,59 @@
       }
     },
     {
+      "name": "Digital Post-DFT Logic Equivalence Check Agent",
+      "loop_type": "digital",
+      "domain": "physical_design",
+      "description": "Compares the synthesized netlist against the scan-stitched/post-DFT netlist using Yosys and reports pass, fail, or inconclusive evidence.",
+      "entrypoint": "agents.digital.digital_post_dft_lec_agent:run_agent",
+      "execution_mode": "legacy_adapter",
+      "inputs": [
+        "digital/synth/netlist/*_synth.v",
+        "digital/dft/scan_stitched_netlist.v",
+        "digital/dft/scan_summary.json"
+      ],
+      "outputs": [
+        "digital/post_dft_lec/yosys_post_dft_lec.ys",
+        "digital/post_dft_lec/logs/yosys_post_dft_lec.log",
+        "digital/post_dft_lec/post_dft_lec_summary.json",
+        "digital/post_dft_lec/post_dft_lec_report.md"
+      ],
+      "artifact_paths": [
+        "digital/post_dft_lec/yosys_post_dft_lec.ys",
+        "digital/post_dft_lec/logs/yosys_post_dft_lec.log",
+        "digital/post_dft_lec/post_dft_lec_summary.json",
+        "digital/post_dft_lec/post_dft_lec_report.md"
+      ],
+      "artifact_types": [
+        "report",
+        "structured_data",
+        "verification_log"
+      ],
+      "required_skills": [
+        "artifact_publish",
+        "logic_equivalence",
+        "dft_scan"
+      ],
+      "required_tools": [
+        "python",
+        "supabase",
+        "yosys"
+      ],
+      "hooks": [
+        "pre_run_validate_inputs",
+        "post_run_collect_artifacts",
+        "post_run_update_state",
+        "on_failure_capture_traceback",
+        "on_failure_preserve_logs",
+        "artifact_publish_to_supabase"
+      ],
+      "metadata": {
+        "registry_source": "DIGITAL_AGENT_FUNCTIONS",
+        "variable": "digital_post_dft_lec_agent",
+        "studio_contract_version": "v1"
+      }
+    },
+    {
       "name": "Digital Scan ATPG Coverage Agent",
       "loop_type": "digital",
       "domain": "physical_design",

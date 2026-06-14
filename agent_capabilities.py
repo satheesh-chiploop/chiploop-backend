@@ -427,6 +427,23 @@ AGENT_CAPABILITIES = {
         ],
     },
 
+    "Digital Post-DFT Logic Equivalence Check Agent": {
+        "domain": "digital",
+        "description": "Compares the synthesized netlist against the scan-stitched/post-DFT netlist using Yosys and reports pass/fail/inconclusive evidence.",
+        "requires": ["yosys"],
+        "inputs": [
+            "digital/synth/netlist/*_synth.v",
+            "digital/dft/scan_stitched_netlist.v",
+            "digital/dft/scan_summary.json",
+        ],
+        "outputs": [
+            "digital/post_dft_lec/yosys_post_dft_lec.ys",
+            "digital/post_dft_lec/logs/yosys_post_dft_lec.log",
+            "digital/post_dft_lec/post_dft_lec_summary.json",
+            "digital/post_dft_lec/post_dft_lec_report.md",
+        ],
+    },
+
     "Digital Scan ATPG Coverage Agent": {
         "domain": "digital",
         "description": "Stages scan/gate netlists for open-source ATPG and records tool readiness, pattern, and stuck-at coverage evidence when a configured ATPG adapter command is available.",
