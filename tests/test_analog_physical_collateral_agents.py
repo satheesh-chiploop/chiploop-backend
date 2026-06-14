@@ -299,6 +299,7 @@ def test_sky130_spice_layout_issues_catch_input_bus_bits_and_supply_drains():
         "M2 adc_code[0] sensor_temp_celsius[0] avss avss sky130_fd_pr__nfet_01v8 W=1u L=0.15u\n"
         "M3 avdd sensor_temp_celsius[0] adc_code[0] avdd sky130_fd_pr__pfet_01v8 W=1u L=0.15u\n"
         "M4 adc_code[12] sensor_temp_celsius[0] avss avss sky130_fd_pr__nfet_01v8 W=1u L=0.15u\n"
+        "M5 adc_code sensor_temp_celsius[0] avss avss sky130_fd_pr__nfet_01v8 W=1u L=0.15u\n"
         ".ends ana\n"
     )
     specs = {
@@ -315,6 +316,7 @@ def test_sky130_spice_layout_issues_catch_input_bus_bits_and_supply_drains():
     assert "input_pin_used_as_device_terminal:avss" not in issues
     assert "supply_pin_used_as_device_drain:avdd" in issues
     assert "undeclared_external_bus_bit:adc_code[12]" in issues
+    assert "undeclared_external_scalar_bus:adc_code" in issues
 
 
 def test_gds_generation_uses_macro_contract_name_when_module_missing(tmp_path, monkeypatch):
@@ -370,6 +372,9 @@ def test_gds_generation_uses_magic_docker_by_default(tmp_path, monkeypatch):
         assert "cellname rename ana_flat ana" in tcl
         assert tcl.index("cellname rename ana_flat ana") < tcl.index("gds write ana.gds")
         assert "CHIPLOOP_FLAT_BOX=[box values]" in tcl
+        assert "cif flatten true" in tcl
+        assert "catch {cif flatglob *}" in tcl
+        assert tcl.index("cif flatten true") < tcl.index("gds write ana.gds")
         assert "gds flatten true" in tcl
         assert tcl.index("gds flatten true") < tcl.index("gds write ana.gds")
         assert "catch {gds flatglob *}" in tcl

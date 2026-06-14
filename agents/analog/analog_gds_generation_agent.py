@@ -329,6 +329,8 @@ def _write_magic_import_tcl(
         "select top cell",
         "expand",
         "puts stdout \"CHIPLOOP_FLAT_BOX=[box values]\"",
+        "cif flatten true",
+        "catch {cif flatglob *}",
         "gds flatten true",
         "catch {gds flatglob *}",
         f"catch {{feedback save {feedback_path}}}",

@@ -148,6 +148,8 @@ def _generated_spice_layout_issues(text: str, port_specs: Dict[str, Dict[str, An
     for match in re.finditer(r"^\s*M\S*\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)", text or "", flags=re.IGNORECASE | re.MULTILINE):
         drain, _gate, source, bulk, _model = match.groups()
         for terminal in (drain, source, bulk):
+            if terminal not in pin_set and terminal in bit_bases:
+                issues.append(f"undeclared_external_scalar_bus:{terminal}")
             if re.match(r"^.+\[\d+\]$", terminal) and terminal not in pin_set and _base_bus_name(terminal) in interface_bases:
                 issues.append(f"undeclared_external_bus_bit:{terminal}")
             if terminal in external_inputs:
