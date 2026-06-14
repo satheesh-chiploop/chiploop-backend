@@ -1154,10 +1154,12 @@
       ],
       "outputs": [
         "digital/synthesis_closure/synthesis_closure_plan.json",
+        "digital/synthesis_closure/synthesis_closure_chart.json",
         "digital/synthesis_closure/synthesis_closure_plan.md"
       ],
       "artifact_paths": [
         "digital/synthesis_closure/synthesis_closure_plan.json",
+        "digital/synthesis_closure/synthesis_closure_chart.json",
         "digital/synthesis_closure/synthesis_closure_plan.md"
       ],
       "artifact_types": [
@@ -1201,10 +1203,12 @@
       ],
       "outputs": [
         "digital/synthesis_closure/synthesis_closure_plan.json",
+        "digital/synthesis_closure/synthesis_closure_chart.json",
         "digital/synthesis_closure/synthesis_closure_plan.md"
       ],
       "artifact_paths": [
         "digital/synthesis_closure/synthesis_closure_plan.json",
+        "digital/synthesis_closure/synthesis_closure_chart.json",
         "digital/synthesis_closure/synthesis_closure_plan.md"
       ],
       "artifact_types": [
@@ -1251,10 +1255,12 @@
       ],
       "outputs": [
         "digital/signoff_closure/signoff_closure_plan.json",
+        "digital/signoff_closure/signoff_closure_chart.json",
         "digital/signoff_closure/signoff_closure_plan.md"
       ],
       "artifact_paths": [
         "digital/signoff_closure/signoff_closure_plan.json",
+        "digital/signoff_closure/signoff_closure_chart.json",
         "digital/signoff_closure/signoff_closure_plan.md"
       ],
       "artifact_types": [
@@ -1302,10 +1308,12 @@
       ],
       "outputs": [
         "digital/signoff_closure/signoff_closure_plan.json",
+        "digital/signoff_closure/signoff_closure_chart.json",
         "digital/signoff_closure/signoff_closure_plan.md"
       ],
       "artifact_paths": [
         "digital/signoff_closure/signoff_closure_plan.json",
+        "digital/signoff_closure/signoff_closure_chart.json",
         "digital/signoff_closure/signoff_closure_plan.md"
       ],
       "artifact_types": [

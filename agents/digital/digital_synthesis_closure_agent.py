@@ -194,6 +194,44 @@ def _plan(state: dict[str, Any], artifacts: dict[str, dict[str, Any]], agent_nam
     }
 
 
+def _chart_from_plan(state: dict[str, Any], plan: dict[str, Any]) -> dict[str, Any]:
+    prior = state.get("synthesis_closure_chart") if isinstance(state.get("synthesis_closure_chart"), dict) else {}
+    prior_series = prior.get("series") if isinstance(prior.get("series"), list) else []
+    raw_iteration = _first_present(state.get("synthesis_closure_iteration_index"), state.get("closure_iteration_index"), 0)
+    try:
+        iteration = max(0, int(raw_iteration))
+    except Exception:
+        iteration = 0
+    timing = plan.get("post_synthesis_timing") if isinstance(plan.get("post_synthesis_timing"), dict) else {}
+    lec_issue = next((item for item in plan.get("issue_summary") or [] if isinstance(item, dict) and item.get("type") == "synthesis_lec"), {})
+    lec_evidence = lec_issue.get("evidence") if isinstance(lec_issue.get("evidence"), dict) else {}
+    point = {
+        "iteration": iteration,
+        "label": "baseline" if iteration == 0 else f"iteration {iteration}",
+        "wns": timing.get("wns"),
+        "tns": timing.get("tns"),
+        "setup_violations": timing.get("setup_violations"),
+        "lec_status": lec_evidence.get("status") or ("pass" if not lec_issue else None),
+        "lec_unproven_points": lec_evidence.get("unproven_points"),
+        "dominant_issue": plan.get("dominant_issue"),
+        "selected_restart_stage": plan.get("selected_restart_stage"),
+    }
+    if prior_series:
+        series = [item for item in prior_series if not (isinstance(item, dict) and item.get("iteration") == iteration)]
+        series.append(point)
+        series.sort(key=lambda item: int(item.get("iteration") or 0) if isinstance(item, dict) else 0)
+    else:
+        series = [point]
+    return {
+        "type": "digital_synthesis_closure_chart",
+        "metric_scope": "synthesis_pre_place",
+        "series": series,
+        "baseline_only": len(series) == 1,
+        "no_fake_iterations": True,
+        "downstream_policy": plan.get("downstream_policy") or {},
+    }
+
+
 def run_with_agent_name(state: dict, agent_name: str = AGENT_NAME) -> dict:
     workflow_id = state.get("workflow_id", "default")
     workflow_dir = os.path.abspath(state.get("workflow_dir") or f"backend/workflows/{workflow_id}")
@@ -209,7 +247,14 @@ def run_with_agent_name(state: dict, agent_name: str = AGENT_NAME) -> dict:
         }
     else:
         plan = _plan(state, _load(workflow_dir), agent_name)
+    chart = _chart_from_plan(state, plan) if plan.get("enabled") else {
+        "type": "digital_synthesis_closure_chart",
+        "series": [],
+        "status": "skipped",
+        "reason": plan.get("reason"),
+    }
     json_text = json.dumps(plan, indent=2)
+    chart_text = json.dumps(chart, indent=2)
     md_text = "\n".join([
         "# Digital Synthesis Closure Plan",
         "",
@@ -219,17 +264,22 @@ def run_with_agent_name(state: dict, agent_name: str = AGENT_NAME) -> dict:
     ])
     with open(os.path.join(out_dir, "synthesis_closure_plan.json"), "w", encoding="utf-8") as f:
         f.write(json_text)
+    with open(os.path.join(out_dir, "synthesis_closure_chart.json"), "w", encoding="utf-8") as f:
+        f.write(chart_text)
     with open(os.path.join(out_dir, "synthesis_closure_plan.md"), "w", encoding="utf-8") as f:
         f.write(md_text)
     try:
         save_text_artifact_and_record(workflow_id, agent_name, "digital", "synthesis_closure/synthesis_closure_plan.json", json_text)
+        save_text_artifact_and_record(workflow_id, agent_name, "digital", "synthesis_closure/synthesis_closure_chart.json", chart_text)
         save_text_artifact_and_record(workflow_id, agent_name, "digital", "synthesis_closure/synthesis_closure_plan.md", md_text)
     except Exception as exc:
         print(f"{agent_name}: artifact upload failed: {exc}")
     state.setdefault("digital", {})["synthesis_closure"] = {
         "status": plan.get("status"),
         "plan": plan,
+        "chart": chart,
     }
+    state["synthesis_closure_chart"] = chart
     return state
 
 

@@ -419,6 +419,60 @@ def _repair_action(issue_type: str) -> str:
     }.get(issue_type, "Inspect issue evidence and rerun the required signoff stage.")
 
 
+def _chart_from_plan(state: dict[str, Any], plan: dict[str, Any]) -> dict[str, Any]:
+    prior = state.get("signoff_closure_chart") if isinstance(state.get("signoff_closure_chart"), dict) else {}
+    prior_series = prior.get("series") if isinstance(prior.get("series"), list) else []
+    raw_iteration = _first_present(state.get("signoff_closure_iteration_index"), state.get("closure_iteration_index"), 0)
+    try:
+        iteration = max(0, int(raw_iteration))
+    except Exception:
+        iteration = 0
+    timing = plan.get("postfill_timing") if isinstance(plan.get("postfill_timing"), dict) else {}
+    issues = [item for item in (plan.get("issue_summary") or []) if isinstance(item, dict)]
+
+    def _evidence(issue_type: str) -> dict[str, Any]:
+        issue = next((item for item in issues if item.get("type") == issue_type), {})
+        evidence = issue.get("evidence") if isinstance(issue.get("evidence"), dict) else {}
+        return evidence
+
+    drc = _evidence("digital_drc")
+    lvs = _evidence("digital_lvs")
+    tapeout_lec = _evidence("tapeout_lec") or _evidence("tapeout_lec_blocked")
+    analog_drc = _evidence("analog_drc")
+    analog_lvs = _evidence("analog_lvs")
+    point = {
+        "iteration": iteration,
+        "label": "baseline" if iteration == 0 else f"iteration {iteration}",
+        "postfill_wns": timing.get("wns"),
+        "postfill_tns": timing.get("tns"),
+        "postfill_setup_violations": timing.get("setup_violations"),
+        "postfill_hold_violations": timing.get("hold_violations"),
+        "drc_violations": drc.get("violations"),
+        "drc_status": drc.get("status") or ("clean" if not drc else None),
+        "lvs_status": lvs.get("status") or ("clean" if not lvs else None),
+        "tapeout_lec_status": tapeout_lec.get("status"),
+        "tapeout_lec_unproven_points": tapeout_lec.get("unproven_points"),
+        "analog_drc_status": analog_drc.get("status"),
+        "analog_drc_issues": analog_drc.get("issues"),
+        "analog_lvs_status": analog_lvs.get("status"),
+        "dominant_issue": plan.get("dominant_issue"),
+        "selected_restart_stage": plan.get("selected_restart_stage"),
+    }
+    if prior_series:
+        series = [item for item in prior_series if not (isinstance(item, dict) and item.get("iteration") == iteration)]
+        series.append(point)
+        series.sort(key=lambda item: int(item.get("iteration") or 0) if isinstance(item, dict) else 0)
+    else:
+        series = [point]
+    return {
+        "type": "pd_signoff_closure_chart",
+        "metric_scope": "postfill_signoff",
+        "series": series,
+        "baseline_only": len(series) == 1,
+        "no_fake_iterations": True,
+    }
+
+
 def _markdown(plan: dict[str, Any]) -> str:
     lines = [
         "# System PD Signoff Closure Plan",
@@ -474,18 +528,28 @@ def run_with_agent_name(state: dict, agent_name: str) -> dict:
         category_counts = _drc_category_counts(workflow_dir)
         plan = _build_plan(state, artifacts, category_counts, agent_name)
         plan["status"] = "clean" if plan.get("closure_complete") else "planned"
+    chart = _chart_from_plan(state, plan) if plan.get("enabled") else {
+        "type": "pd_signoff_closure_chart",
+        "series": [],
+        "status": "skipped",
+        "reason": plan.get("reason"),
+    }
 
     json_text = json.dumps(plan, indent=2)
+    chart_text = json.dumps(chart, indent=2)
     md_text = _markdown(plan) if plan.get("enabled") else "# System PD Signoff Closure Plan\n\n- status: `skipped`\n"
     json_path = os.path.join(out_dir, "signoff_closure_plan.json")
     md_path = os.path.join(out_dir, "signoff_closure_plan.md")
     with open(json_path, "w", encoding="utf-8") as f:
         f.write(json_text)
+    with open(os.path.join(out_dir, "signoff_closure_chart.json"), "w", encoding="utf-8") as f:
+        f.write(chart_text)
     with open(md_path, "w", encoding="utf-8") as f:
         f.write(md_text)
 
     try:
         save_text_artifact_and_record(workflow_id, agent_name, "digital", "signoff_closure/signoff_closure_plan.json", json_text)
+        save_text_artifact_and_record(workflow_id, agent_name, "digital", "signoff_closure/signoff_closure_chart.json", chart_text)
         save_text_artifact_and_record(workflow_id, agent_name, "digital", "signoff_closure/signoff_closure_plan.md", md_text)
     except Exception as exc:
         print(f"{agent_name}: artifact upload failed: {exc}")
@@ -493,8 +557,10 @@ def run_with_agent_name(state: dict, agent_name: str) -> dict:
     state.setdefault("digital", {})["signoff_closure"] = {
         "status": plan.get("status"),
         "plan": plan,
+        "chart": chart,
         "paths": {"json": json_path, "md": md_path},
     }
+    state["signoff_closure_chart"] = chart
     return state
 
 

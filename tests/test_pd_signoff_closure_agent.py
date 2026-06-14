@@ -55,6 +55,10 @@ def test_signoff_closure_selects_floorplan_for_tap_drc_and_skips_later_timing(tm
     assert plan["dominant_issue"] == "digital_drc"
     assert plan["max_iterations"] == 2
     assert any(item["type"] == "setup_timing" for item in plan["skipped_repairs"])
+    chart = out["digital"]["signoff_closure"]["chart"]
+    assert chart["baseline_only"] is True
+    assert chart["series"][0]["drc_violations"] == 3
+    assert chart["series"][0]["postfill_wns"] == -0.12
 
 
 def test_digital_pd_signoff_closure_includes_lec_repair(tmp_path, monkeypatch):
@@ -117,3 +121,7 @@ def test_synthesis_closure_selects_synthesis_for_setup_violations(tmp_path, monk
     assert plan["max_iterations"] == 2
     assert plan["downstream_policy"]["continue_downstream_pd"] is True
     assert plan["downstream_policy"]["stop_on_synthesis_closure_failure"] is False
+    chart = out["digital"]["synthesis_closure"]["chart"]
+    assert chart["baseline_only"] is True
+    assert chart["series"][0]["wns"] == -0.25
+    assert chart["series"][0]["setup_violations"] == 12
