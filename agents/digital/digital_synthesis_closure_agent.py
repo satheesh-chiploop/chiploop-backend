@@ -112,6 +112,8 @@ def _load(workflow_dir: str) -> dict[str, dict[str, Any]]:
         "sta_preplace": _read_json(os.path.join(workflow_dir, "digital", "sta_preplace", "metrics.json")),
         "sta_preplace_summary": _read_json(os.path.join(workflow_dir, "digital", "sta_preplace", "sta_preplace_summary.json")),
         "lec": _read_json(os.path.join(workflow_dir, "digital", "lec", "lec_summary.json")),
+        "post_dft_lec": _read_json(os.path.join(workflow_dir, "digital", "post_dft_lec", "post_dft_lec_summary.json")),
+        "dft": _read_json(os.path.join(workflow_dir, "digital", "dft", "scan_summary.json")),
     }
 
 
@@ -161,6 +163,10 @@ def _plan(state: dict[str, Any], artifacts: dict[str, dict[str, Any]], agent_nam
     timing = _timing(artifacts)
     lec = artifacts.get("lec") or {}
     lec_status = _known_status(lec.get("status"), lec.get("lec_status"))
+    post_dft_lec = artifacts.get("post_dft_lec") or {}
+    post_dft_lec_status = _known_status(post_dft_lec.get("status"), post_dft_lec.get("lec_status"))
+    dft = artifacts.get("dft") or {}
+    dft_status = _known_status(dft.get("status"))
     synth = artifacts.get("synth_summary") or {}
     synth_metrics = artifacts.get("synth_metrics") or {}
     issues: list[dict[str, Any]] = []
@@ -192,6 +198,32 @@ def _plan(state: dict[str, Any], artifacts: dict[str, dict[str, Any]], agent_nam
             },
             "reason": "Synthesis LEC is not proven; repair LEC setup/model/netlist issue before trusting downstream PD.",
         })
+    if dft_status and dft_status not in {"pass", "ok", "clean", "scan_replace_pass"}:
+        issues.append({
+            "type": "dft_scan",
+            "restart_stage": "Digital DFT Scan Stitching Agent",
+            "severity": 78,
+            "evidence": {
+                "status": dft_status,
+                "stitched_netlist_generated": dft.get("stitched_netlist_generated"),
+                "scan_flops": dft.get("scan_flops"),
+                "scan_chains": _first_present(dft.get("actual_scan_chains"), dft.get("scan_chains")),
+            },
+            "reason": "Post-synthesis closure is based on the scan-stitched netlist; DFT must produce that netlist before ATPG/PD.",
+        })
+    if post_dft_lec_status and post_dft_lec_status not in {"pass", "ok", "clean"}:
+        issues.append({
+            "type": "post_dft_lec",
+            "restart_stage": "Digital Post-DFT Logic Equivalence Check Agent",
+            "severity": 76,
+            "evidence": {
+                "status": post_dft_lec_status,
+                "reason": _first_present(post_dft_lec.get("failure_reason"), post_dft_lec.get("reason")),
+                "unproven_points": post_dft_lec.get("unproven_points"),
+                "ignored_gate_only_ports": post_dft_lec.get("ignored_gate_only_ports"),
+            },
+            "reason": "Post-DFT LEC is not proven; repair scan/LEC settings before treating the post-DFT netlist as closed.",
+        })
     issues.sort(key=lambda item: -int(item.get("severity", 0)))
     timing_enabled = _repair_enabled(state, "allow_synthesis_timing_repair")
     lec_enabled = _repair_enabled(state, "allow_synthesis_lec_repair")
@@ -206,10 +238,19 @@ def _plan(state: dict[str, Any], artifacts: dict[str, dict[str, Any]], agent_nam
         if issue["type"] == "synthesis_lec" and not lec_enabled:
             skipped.append({"type": issue["type"], "reason": "synthesis_lec_repair_disabled"})
             continue
+        if issue["type"] == "post_dft_lec" and not lec_enabled:
+            skipped.append({"type": issue["type"], "reason": "post_dft_lec_repair_disabled"})
+            continue
         actions.append({
             "type": issue["type"],
             "restart_stage": issue["restart_stage"],
-            "action": "Rerun synthesis closure and then rerun LEC before downstream physical signoff." if issue["type"] != "synthesis_lec" else "Repair synthesis LEC setup/model/netlist and rerun LEC.",
+            "action": (
+                "Repair Post-DFT LEC setup/scan constraints and rerun Post-DFT LEC before ATPG."
+                if issue["type"] == "post_dft_lec"
+                else "Repair synthesis LEC setup/model/netlist and rerun LEC."
+                if issue["type"] == "synthesis_lec"
+                else "Rerun synthesis/DFT closure and then rerun LEC checks before downstream physical signoff."
+            ),
             "evidence": issue.get("evidence") or {},
         })
     return {
@@ -223,6 +264,11 @@ def _plan(state: dict[str, Any], artifacts: dict[str, dict[str, Any]], agent_nam
         "dominant_issue": issues[0]["type"] if issues else None,
         "selected_restart_stage": issues[0]["restart_stage"] if issues else None,
         "post_synthesis_timing": timing,
+        "post_dft_netlist": {
+            "dft_status": dft_status or None,
+            "post_dft_lec_status": post_dft_lec_status or None,
+            "post_dft_lec_failure_reason": _first_present(post_dft_lec.get("failure_reason"), post_dft_lec.get("reason")),
+        },
         "issue_summary": issues,
         "repair_actions": actions,
         "skipped_repairs": skipped,
@@ -238,6 +284,7 @@ def _plan(state: dict[str, Any], artifacts: dict[str, dict[str, Any]], agent_nam
             "bounded_iterations": "1-2",
             "setup_timing_repair_included": timing_enabled,
             "lec_repair_included": lec_enabled,
+            "post_dft_lec_repair_included": lec_enabled,
             "advisory_by_default": True,
             "no_fake_closure": True,
         },
@@ -254,7 +301,9 @@ def _chart_from_plan(state: dict[str, Any], plan: dict[str, Any]) -> dict[str, A
         iteration = 0
     timing = plan.get("post_synthesis_timing") if isinstance(plan.get("post_synthesis_timing"), dict) else {}
     lec_issue = next((item for item in plan.get("issue_summary") or [] if isinstance(item, dict) and item.get("type") == "synthesis_lec"), {})
+    post_dft_issue = next((item for item in plan.get("issue_summary") or [] if isinstance(item, dict) and item.get("type") == "post_dft_lec"), {})
     lec_evidence = lec_issue.get("evidence") if isinstance(lec_issue.get("evidence"), dict) else {}
+    post_dft_evidence = post_dft_issue.get("evidence") if isinstance(post_dft_issue.get("evidence"), dict) else {}
     point = {
         "iteration": iteration,
         "label": "baseline" if iteration == 0 else f"iteration {iteration}",
@@ -263,6 +312,8 @@ def _chart_from_plan(state: dict[str, Any], plan: dict[str, Any]) -> dict[str, A
         "setup_violations": timing.get("setup_violations"),
         "lec_status": lec_evidence.get("status") or ("pass" if not lec_issue else None),
         "lec_unproven_points": lec_evidence.get("unproven_points"),
+        "post_dft_lec_status": post_dft_evidence.get("status") or ("pass" if not post_dft_issue else None),
+        "post_dft_lec_unproven_points": post_dft_evidence.get("unproven_points"),
         "dominant_issue": plan.get("dominant_issue"),
         "selected_restart_stage": plan.get("selected_restart_stage"),
     }

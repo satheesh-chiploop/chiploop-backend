@@ -124,9 +124,9 @@ with workflow_template as (
     'Digital Implementation Setup Agent',
     'Digital Synthesis Agent',
     'Digital Logic Equivalence Check Agent',
-    'Digital Synthesis Closure Agent',
     'Digital DFT Scan Stitching Agent',
     'Digital Post-DFT Logic Equivalence Check Agent',
+    'Digital Synthesis Closure Agent',
     'Digital Scan ATPG Coverage Agent',
     'Digital MBIST Collateral Agent'
   ]::text[] as agents
@@ -146,9 +146,9 @@ with workflow_template as (
     'Digital Implementation Setup Agent',
     'Digital Synthesis Agent',
     'Digital Logic Equivalence Check Agent',
-    'Digital Synthesis Closure Agent',
     'Digital DFT Scan Stitching Agent',
     'Digital Post-DFT Logic Equivalence Check Agent',
+    'Digital Synthesis Closure Agent',
     'Digital Scan ATPG Coverage Agent',
     'Digital MBIST Collateral Agent',
     'Digital STA PrePlace Agent',
@@ -190,9 +190,9 @@ with workflow_template as (
     'Digital Implementation Setup Agent',
     'Digital Synthesis Agent',
     'Digital Logic Equivalence Check Agent',
-    'System Synthesis Closure Agent',
     'Digital DFT Scan Stitching Agent',
     'Digital Post-DFT Logic Equivalence Check Agent',
+    'System Synthesis Closure Agent',
     'Digital Scan ATPG Coverage Agent',
     'Digital MBIST Collateral Agent'
   ]::text[] as agents
@@ -219,9 +219,9 @@ with workflow_template as (
     'Digital Implementation Setup Agent',
     'Digital Synthesis Agent',
     'Digital Logic Equivalence Check Agent',
-    'System Synthesis Closure Agent',
     'Digital DFT Scan Stitching Agent',
     'Digital Post-DFT Logic Equivalence Check Agent',
+    'System Synthesis Closure Agent',
     'Digital Scan ATPG Coverage Agent',
     'Digital MBIST Collateral Agent',
     'Analog Sky130 SPICE Netlist Agent',

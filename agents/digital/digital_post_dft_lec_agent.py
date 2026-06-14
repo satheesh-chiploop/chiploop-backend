@@ -89,6 +89,16 @@ def _extra_gate_ports(golden: str | None, gate: str | None, top: str) -> list[st
     return [name for name in extras if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_$]*", name)]
 
 
+def _combined_cell_reference_netlist(golden: str | None, gate: str | None, stage_dir: str) -> str | None:
+    texts = [_read_text(path) for path in (golden, gate) if path]
+    combined = "\n".join(text for text in texts if text.strip())
+    if not combined.strip():
+        return None
+    out = os.path.join(stage_dir, "input", "cell_reference_netlists.v")
+    _write_text(out, combined)
+    return out
+
+
 def _gate_to_gate_yosys_script(
     golden: str,
     gate: str,
@@ -119,9 +129,10 @@ hierarchy -check -top {top}
 proc; opt; memory; opt
 async2sync
 flatten
+{delete_ports}\
 splitnets -ports
 opt_clean
-{delete_ports}rename -top gate
+rename -top gate
 design -stash gate
 
 design -copy-from gold -as gold gold
@@ -176,9 +187,10 @@ def run_agent(state: dict) -> dict:
     if top == "top":
         top = _module_name_in_file(golden) or _module_name_in_file(gate) or top
     yosys = tool_path("yosys", state)
-    generated = _generated_stdcell_model(gate or golden, stage_dir)
+    cell_reference = _combined_cell_reference_netlist(golden, gate, stage_dir)
+    generated = _generated_stdcell_model(cell_reference or gate or golden, stage_dir)
     stdcell_verilog = [generated] if generated else _prepare_stdcell_models_for_yosys(_stdcell_verilog_candidates(state, workflow_dir), stage_dir)
-    missing_cells = _missing_stdcell_models(gate or golden, stdcell_verilog)
+    missing_cells = _missing_stdcell_models(cell_reference or gate or golden, stdcell_verilog)
     ignored_gate_ports = _extra_gate_ports(golden, gate, top)
 
     script_path = os.path.join(stage_dir, "yosys_post_dft_lec.ys")
@@ -222,6 +234,7 @@ def run_agent(state: dict) -> dict:
         "post_dft_netlist": os.path.basename(gate) if gate else None,
         "ignored_gate_only_ports": ignored_gate_ports,
         "stdcell_model_files": [os.path.basename(path) for path in stdcell_verilog],
+        "stdcell_model_reference": os.path.basename(cell_reference) if cell_reference else None,
         "missing_stdcell_models": missing_cells[:50],
         "unproven_points": unproven,
         "failure_reason": reason,
