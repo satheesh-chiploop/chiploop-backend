@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import Any, Dict
 
 from model_gateway import complete_text
+from agents.analog.analog_sky130_spice_netlist_agent import _generated_spice_layout_issues, _port_specs
 from tooling.runner import run_command
 from utils.artifact_utils import save_text_artifact_and_record
 
@@ -122,7 +123,7 @@ Strict requirements:
 - Keep the same external macro intent and pin names.
 - If a port is a bus, use either scalar bus pins or bit pins, not both.
 - Do not use input pins as MOS drain/source/bulk terminals; input pins may drive MOS gates only.
-- Supply pins may be MOS source/bulk terminals.
+- Supply pins may be MOS source/bulk terminals, not MOS drain terminals.
 - Output pins may be MOS drain/source terminals.
 - Use only M-device Sky130 MOS lines with sky130_fd_pr__nfet_01v8 and sky130_fd_pr__pfet_01v8.
 - Do not use X lines for MOS devices.
@@ -324,6 +325,7 @@ def _write_magic_import_tcl(
         f"catch {{feedback save {feedback_path}}}",
         f"save {mag_path}",
         f"gds write {gds_path}",
+        f"catch {{feedback save {feedback_path}}}",
         "quit -noprompt",
         "",
     ]
@@ -626,6 +628,8 @@ def run_agent(state: dict) -> dict:
     repair_attempted = False
     repair_applied = False
     repair_reason = ""
+    repair_layout_issues = []
+    forced_failure_reason = ""
     pass1_feedback_problem_count = _magic_feedback_problem_count(log) if backend == "magic" else 0
     pass1_invalid_reason = _magic_layout_invalid(log) if backend == "magic" else ""
     sky130_summary = state.get("analog_sky130_spice") if isinstance(state.get("analog_sky130_spice"), dict) else {}
@@ -659,22 +663,27 @@ def run_agent(state: dict) -> dict:
         if repaired_spice:
             with open(os.path.join(stage_dir, "magic_input_repair.sp"), "w", encoding="utf-8") as fh:
                 fh.write(repaired_spice)
-            with open(staged_spice, "w", encoding="utf-8") as fh:
-                fh.write(_magic_spice_text(repaired_spice))
-            _preserve_and_clean_magic_layout_outputs(stage_dir, module_name)
-            cp, tcl_path, tool_mode, image = _run_magic_gds(
-                state, stage_dir, staged_spice, module_name, pdk_variant, pdk_root_host, docker_bin
-            )
-            log = (cp.stdout or "") + (cp.stderr or "")
-            with open(log_path, "w", encoding="utf-8", errors="ignore") as fh:
-                fh.write(log)
-            repair_applied = _magic_layout_invalid(log) == ""
+            repair_layout_issues = _generated_spice_layout_issues(repaired_spice, _port_specs(state))
+            if repair_layout_issues:
+                repair_reason = "repair_spice_not_layout_safe"
+                forced_failure_reason = repair_reason
+            else:
+                with open(staged_spice, "w", encoding="utf-8") as fh:
+                    fh.write(_magic_spice_text(repaired_spice))
+                _preserve_and_clean_magic_layout_outputs(stage_dir, module_name)
+                cp, tcl_path, tool_mode, image = _run_magic_gds(
+                    state, stage_dir, staged_spice, module_name, pdk_variant, pdk_root_host, docker_bin
+                )
+                log = (cp.stdout or "") + (cp.stderr or "")
+                with open(log_path, "w", encoding="utf-8", errors="ignore") as fh:
+                    fh.write(log)
+                repair_applied = _magic_layout_invalid(log) == ""
         else:
             repair_reason = "repair_pass_no_valid_mos_devices"
 
     gds_path = _find_gds(stage_dir)
     magic_feedback_problem_count = _magic_feedback_problem_count(log) if backend == "magic" else 0
-    invalid_reason = _magic_layout_invalid(log) if backend == "magic" else ""
+    invalid_reason = forced_failure_reason or (_magic_layout_invalid(log) if backend == "magic" else "")
     if gds_path and not invalid_reason:
         final_gds = os.path.join(stage_dir, f"{module_name}.gds")
         if os.path.abspath(gds_path) != os.path.abspath(final_gds):
@@ -712,6 +721,7 @@ def run_agent(state: dict) -> dict:
             "repair_attempted": repair_attempted,
             "repair_applied": repair_applied,
             "repair_reason": repair_reason or None,
+            "repair_layout_issues": repair_layout_issues or None,
             "pass1_magic_feedback_problem_count": pass1_feedback_problem_count if repair_attempted else None,
         })
 

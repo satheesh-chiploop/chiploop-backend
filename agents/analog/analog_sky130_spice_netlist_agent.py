@@ -128,11 +128,14 @@ def _generated_spice_layout_issues(text: str, port_specs: Dict[str, Dict[str, An
         for pin in pins
         if _direction_for_pin(_base_bus_name(pin), port_specs).startswith("input") and not _is_supply_pin(pin, port_specs)
     )
+    external_supplies = {pin for pin in pins if _is_supply_pin(pin, port_specs)}
     for match in re.finditer(r"^\s*M\S*\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)", text or "", flags=re.IGNORECASE | re.MULTILINE):
-        drain, _gate, source, _bulk, _model = match.groups()
-        for terminal in (drain, source):
+        drain, _gate, source, bulk, _model = match.groups()
+        for terminal in (drain, source, bulk):
             if terminal in external_inputs:
                 issues.append(f"input_pin_used_as_device_terminal:{terminal}")
+        if drain in external_supplies:
+            issues.append(f"supply_pin_used_as_device_drain:{drain}")
     return sorted(dict.fromkeys(issues))
 
 
