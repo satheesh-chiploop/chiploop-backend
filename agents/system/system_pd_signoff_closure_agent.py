@@ -189,10 +189,44 @@ def _sta_metrics(artifacts: dict[str, dict[str, Any]]) -> dict[str, Any]:
         postfill_summary.get("tns"),
         exec_postfill.get("tns"),
     )
+    setup_wns = _first_number(
+        postfill.get("setup_wns"),
+        postfill.get("timing__setup__wns"),
+        postfill.get("timing__setup__ws"),
+        postfill.get("worst_slack"),
+        postfill_summary.get("setup_wns"),
+        postfill_summary.get("worst_slack"),
+        exec_postfill.get("setup_wns"),
+        exec_postfill.get("worst_slack"),
+    )
+    setup_tns = _first_number(
+        postfill.get("setup_tns"),
+        postfill.get("timing__setup__tns"),
+        postfill.get("tns"),
+        postfill_summary.get("setup_tns"),
+        postfill_summary.get("tns"),
+        exec_postfill.get("setup_tns"),
+        exec_postfill.get("tns"),
+    )
+    hold_wns = _first_number(
+        postfill.get("hold_wns"),
+        postfill.get("timing__hold__wns"),
+        postfill.get("timing__hold__ws"),
+        postfill_summary.get("hold_wns"),
+        exec_postfill.get("hold_wns"),
+    )
+    hold_tns = _first_number(
+        postfill.get("hold_tns"),
+        postfill.get("timing__hold__tns"),
+        postfill_summary.get("hold_tns"),
+        exec_postfill.get("hold_tns"),
+    )
     setup_violations = _first_number(
         postfill.get("setup_violations"),
         postfill.get("timing__setup__violation_count"),
         postfill.get("timing__setup__vio__count"),
+        postfill.get("timing__setup_vio__count"),
+        postfill.get("timing__setup_r2r_vio__count"),
         postfill.get("timing__setup__violating_paths"),
         postfill.get("sta__setup__violation_count"),
         postfill_summary.get("setup_violations"),
@@ -201,17 +235,50 @@ def _sta_metrics(artifacts: dict[str, dict[str, Any]]) -> dict[str, Any]:
         postfill.get("hold_violations"),
         postfill.get("timing__hold__violation_count"),
         postfill.get("timing__hold__vio__count"),
+        postfill.get("timing__hold_vio__count"),
+        postfill.get("timing__hold_r2r_vio__count"),
         postfill.get("timing__hold__violating_paths"),
         postfill.get("sta__hold__violation_count"),
         postfill_summary.get("hold_violations"),
     )
+    status = _first_present(postfill_summary.get("status"), postfill.get("status"))
+    if setup_violations is None and _status_clean(status, {"ok", "clean", "pass", "completed", "generated"}):
+        if setup_tns == 0 or (setup_wns is not None and setup_wns >= 0):
+            setup_violations = 0
+    if hold_violations is None and _status_clean(status, {"ok", "clean", "pass", "completed", "generated"}):
+        if hold_tns == 0 or (hold_wns is not None and hold_wns >= 0):
+            hold_violations = 0
     return {
         "stage": "sta_postfill" if postfill or postfill_summary or exec_postfill else None,
         "wns": wns,
         "tns": tns,
+        "setup_wns": setup_wns,
+        "setup_tns": setup_tns,
+        "hold_wns": hold_wns,
+        "hold_tns": hold_tns,
         "setup_violations": setup_violations,
         "hold_violations": hold_violations,
-        "status": _first_present(postfill_summary.get("status"), postfill.get("status")),
+        "status": status,
+    }
+
+
+def _drc_metrics(artifacts: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    drc = artifacts.get("drc") or {}
+    status = _first_present(drc.get("drc_status"), drc.get("status"))
+    violations = _first_number(drc.get("drc_violations"), drc.get("violations"))
+    if violations is None and _status_clean(status, {"ok", "clean", "pass", "completed"}):
+        violations = 0
+    return {
+        "status": status,
+        "violations": violations,
+    }
+
+
+def _lvs_metrics(artifacts: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    lvs = artifacts.get("lvs") or {}
+    return {
+        "status": _first_present(lvs.get("lvs_status"), lvs.get("status")),
+        "reason": _first_present(lvs.get("failure_reason"), lvs.get("reason")),
     }
 
 
@@ -334,6 +401,8 @@ def _select_restart_stage(issues: list[dict[str, Any]]) -> str | None:
 
 def _build_plan(state: dict[str, Any], artifacts: dict[str, dict[str, Any]], category_counts: dict[str, int], agent_name: str) -> dict[str, Any]:
     issues, sta = _classify(artifacts, category_counts)
+    drc_info = _drc_metrics(artifacts)
+    lvs_info = _lvs_metrics(artifacts)
     restart_stage = _select_restart_stage(issues)
     restart_rank = STAGE_RANK.get(restart_stage or "", None)
     options = {
@@ -394,6 +463,8 @@ def _build_plan(state: dict[str, Any], artifacts: dict[str, dict[str, Any]], cat
         "dominant_issue": issues[0]["type"] if issues else None,
         "repair_options": options,
         "postfill_timing": sta,
+        "digital_drc": drc_info,
+        "digital_lvs": lvs_info,
         "issue_summary": issues,
         "repair_actions": repair_actions,
         "skipped_repairs": skipped_repairs,
@@ -437,6 +508,8 @@ def _chart_from_plan(state: dict[str, Any], plan: dict[str, Any]) -> dict[str, A
 
     drc = _evidence("digital_drc")
     lvs = _evidence("digital_lvs")
+    drc_info = plan.get("digital_drc") if isinstance(plan.get("digital_drc"), dict) else {}
+    lvs_info = plan.get("digital_lvs") if isinstance(plan.get("digital_lvs"), dict) else {}
     tapeout_lec = _evidence("tapeout_lec") or _evidence("tapeout_lec_blocked")
     analog_drc = _evidence("analog_drc")
     analog_lvs = _evidence("analog_lvs")
@@ -445,11 +518,15 @@ def _chart_from_plan(state: dict[str, Any], plan: dict[str, Any]) -> dict[str, A
         "label": "baseline" if iteration == 0 else f"iteration {iteration}",
         "postfill_wns": timing.get("wns"),
         "postfill_tns": timing.get("tns"),
+        "postfill_setup_wns": timing.get("setup_wns"),
+        "postfill_setup_tns": timing.get("setup_tns"),
+        "postfill_hold_wns": timing.get("hold_wns"),
+        "postfill_hold_tns": timing.get("hold_tns"),
         "postfill_setup_violations": timing.get("setup_violations"),
         "postfill_hold_violations": timing.get("hold_violations"),
-        "drc_violations": drc.get("violations"),
-        "drc_status": drc.get("status") or ("clean" if not drc else None),
-        "lvs_status": lvs.get("status") or ("clean" if not lvs else None),
+        "drc_violations": _first_present(drc.get("violations"), drc_info.get("violations")),
+        "drc_status": _first_present(drc.get("status"), drc_info.get("status"), "clean" if not drc else None),
+        "lvs_status": _first_present(lvs.get("status"), lvs_info.get("status"), "clean" if not lvs else None),
         "tapeout_lec_status": tapeout_lec.get("status"),
         "tapeout_lec_unproven_points": tapeout_lec.get("unproven_points"),
         "analog_drc_status": analog_drc.get("status"),
@@ -487,9 +564,11 @@ def _markdown(plan: dict[str, Any]) -> str:
     ]
     timing = plan.get("postfill_timing") or {}
     lines.extend([
-        f"- WNS: `{timing.get('wns')}`",
-        f"- TNS: `{timing.get('tns')}`",
+        f"- setup WNS: `{timing.get('setup_wns')}`",
+        f"- setup TNS: `{timing.get('setup_tns')}`",
         f"- setup violations: `{timing.get('setup_violations')}`",
+        f"- hold WNS: `{timing.get('hold_wns')}`",
+        f"- hold TNS: `{timing.get('hold_tns')}`",
         f"- hold violations: `{timing.get('hold_violations')}`",
         "",
         "## Repair Actions",

@@ -248,6 +248,98 @@ def _write_local(path: str, content: str) -> None:
     with open(path, "w", encoding="utf-8") as f:
         f.write(content)
 
+def _closure_bool(state: dict, closure: dict, key: str, default: bool = False) -> bool:
+    toggles = state.get("toggles") if isinstance(state.get("toggles"), dict) else {}
+    value = closure.get(key)
+    if value is None:
+        value = state.get(key)
+    if value is None:
+        value = toggles.get(key)
+    if value is None:
+        return default
+    return bool(value)
+
+def _synthesis_closure_profile(
+    state: dict,
+    closure: dict,
+    iteration: int,
+    timing_repair_enabled: bool,
+    clock_period_ns: float,
+) -> dict:
+    allow_retiming = _closure_bool(state, closure, "allow_synthesis_retiming", False)
+    allow_flattening = _closure_bool(state, closure, "allow_synthesis_hierarchy_flattening", False)
+    if iteration <= 0 or not timing_repair_enabled:
+        return {
+            "enabled": False,
+            "iteration": max(iteration, 0),
+            "clock_margin": 1.0,
+            "strategy": "AREA 0",
+            "sdc_append": "",
+            "config": {},
+            "allow_retiming": allow_retiming,
+            "allow_flattening": allow_flattening,
+            "techniques": [],
+        }
+
+    clock_margin = max(0.70, 1.0 - (0.10 * iteration))
+    critical_range = max(0.01, clock_period_ns * (0.10 if iteration == 1 else 0.15))
+    group_weight = 3 if iteration == 1 else 5
+    max_fanout = 8 if iteration == 1 else 6
+    strategy = "DELAY 0" if iteration == 1 else "DELAY 1"
+    config = {
+        "SYNTH_STRATEGY": strategy,
+        "SYNTH_BUFFERING": True,
+        "SYNTH_SIZING": True,
+        "MAX_FANOUT_CONSTRAINT": max_fanout,
+    }
+    if allow_retiming:
+        config["SYNTH_ABC_DFF"] = True
+    if allow_flattening:
+        config["SYNTH_FLAT_TOP"] = True
+
+    sdc_append = f"""
+
+# ChipLoop synthesis closure iteration {iteration}: tool-only setup repair guidance.
+# No RTL edits, ECO edits, or design-specific constraints are applied.
+if {{[llength [all_registers]] > 0}} {{
+  catch {{group_path -name chiploop_reg2reg_closure -from [all_registers] -to [all_registers] -critical_range {critical_range:.3f} -weight {group_weight}}}
+}}
+if {{[llength [all_inputs]] > 0 && [llength [all_registers]] > 0}} {{
+  catch {{group_path -name chiploop_in2reg_closure -from [all_inputs] -to [all_registers] -critical_range {critical_range:.3f} -weight 2}}
+}}
+if {{[llength [all_registers]] > 0 && [llength [all_outputs]] > 0}} {{
+  catch {{group_path -name chiploop_reg2out_closure -from [all_registers] -to [all_outputs] -critical_range {critical_range:.3f} -weight 2}}
+}}
+catch {{set_max_fanout {max_fanout} [current_design]}}
+"""
+    techniques = [
+        f"clock_period_margin_{clock_margin:.2f}",
+        f"synth_strategy_{strategy}",
+        "synth_buffering",
+        "synth_sizing",
+        f"max_fanout_{max_fanout}",
+        f"path_group_weight_{group_weight}",
+        f"critical_range_{critical_range:.3f}ns",
+    ]
+    if allow_retiming:
+        techniques.append("optional_retiming")
+    if allow_flattening:
+        techniques.append("optional_hierarchy_flattening")
+    return {
+        "enabled": True,
+        "iteration": iteration,
+        "clock_margin": clock_margin,
+        "strategy": strategy,
+        "sdc_append": sdc_append,
+        "config": config,
+        "allow_retiming": allow_retiming,
+        "allow_flattening": allow_flattening,
+        "techniques": techniques,
+        "critical_range_ns": critical_range,
+        "path_group_weight": group_weight,
+        "max_fanout": max_fanout,
+    }
+
 def _run(cmd: list[str], cwd: str | None = None, state: dict | None = None) -> tuple[int, str]:
     p = run_command(state or {}, "digital_synthesis", [str(x) for x in cmd], cwd=cwd, timeout_sec=1800)
     return p.returncode if p.returncode is not None else 1, (p.stdout or "") + (p.stderr or "")
@@ -384,9 +476,9 @@ def run_agent(state: dict) -> dict:
         if closure.get("allow_synthesis_timing_repair") is not None
         else state.get("allow_synthesis_timing_repair", True)
     )
-    if closure_iteration > 0 and timing_repair_enabled:
-        margin = max(0.70, 1.0 - (0.10 * closure_iteration))
-        clk_period_ns = max(0.1, clk_period_ns * margin)
+    closure_profile = _synthesis_closure_profile(state, closure, closure_iteration, timing_repair_enabled, clk_period_ns)
+    if closure_profile.get("enabled"):
+        clk_period_ns = max(0.1, clk_period_ns * float(closure_profile.get("clock_margin") or 1.0))
 
     # ---------- Stage folder ----------
     stage_dir = os.path.join(workflow_dir, "digital", "synth")
@@ -506,6 +598,9 @@ def run_agent(state: dict) -> dict:
  
     with open(sdc_path, "r", encoding="utf-8") as f:
        sdc_text = f.read()
+    if closure_profile.get("sdc_append"):
+        sdc_text = sdc_text.rstrip() + str(closure_profile.get("sdc_append") or "")
+        _write_local(sdc_path, sdc_text)
 
     yosys_pre_path = os.path.join(stage_dir, "yosys_macro_libs.ys")
     yosys_pre_text = "\n".join(
@@ -550,7 +645,7 @@ def run_agent(state: dict) -> dict:
         "VERILOG_FILES": verilog_sources,
         "CLOCK_PORT": clk_name,
         "CLOCK_PERIOD": clk_period_ns,
-        "SYNTH_STRATEGY": "AREA 0",
+        "SYNTH_STRATEGY": closure_profile.get("strategy") or "AREA 0",
         "SYNTH_SDC_FILE": f"constraints/{sdc_basename}",
         "PNR_SDC_FILE": f"constraints/{sdc_basename}",
 
@@ -566,6 +661,7 @@ def run_agent(state: dict) -> dict:
         # ✅ KEY FIX: Disable Verilator lint stage
         "RUN_LINTER": False
     }
+    config.update(closure_profile.get("config") or {})
 
     
     _write_local(config_path, json.dumps(config, indent=2))
@@ -723,6 +819,11 @@ echo "Done. Inspect /work/runs/{run_tag} or latest run folder under /work/runs/"
             "clock_period_ns": clk_period_ns,
             "synthesis_closure_iteration": closure_iteration,
             "synthesis_closure_timing_repair_enabled": timing_repair_enabled,
+            "synthesis_closure_optimization_profile": {
+                k: v for k, v in closure_profile.items()
+                if k not in {"sdc_append", "config"}
+            },
+            "synthesis_closure_openlane_overrides": closure_profile.get("config") or {},
             "pdk_variant": pdk_variant,
             "openlane_image": openlane_image,
             "openlane_to_step": OPENLANE_SYNTH_TO_STEP,

@@ -93,10 +93,10 @@ def _max_iterations(state: dict[str, Any]) -> int:
         return 1
 
 
-def _repair_enabled(state: dict[str, Any], key: str) -> bool:
+def _repair_enabled(state: dict[str, Any], key: str, default: bool = True) -> bool:
     toggles = state.get("toggles") if isinstance(state.get("toggles"), dict) else {}
     closure = state.get("synthesis_closure") if isinstance(state.get("synthesis_closure"), dict) else {}
-    return bool(_first_present(closure.get(key), state.get(key), toggles.get(key), True))
+    return bool(_first_present(closure.get(key), state.get(key), toggles.get(key), default))
 
 
 def _stop_enabled(state: dict[str, Any], key: str) -> bool:
@@ -227,6 +227,8 @@ def _plan(state: dict[str, Any], artifacts: dict[str, dict[str, Any]], agent_nam
     issues.sort(key=lambda item: -int(item.get("severity", 0)))
     timing_enabled = _repair_enabled(state, "allow_synthesis_timing_repair")
     lec_enabled = _repair_enabled(state, "allow_synthesis_lec_repair")
+    retiming_allowed = _repair_enabled(state, "allow_synthesis_retiming", default=False)
+    flattening_allowed = _repair_enabled(state, "allow_synthesis_hierarchy_flattening", default=False)
     stop_on_closure_failure = _stop_enabled(state, "stop_on_synthesis_closure_failure")
     stop_on_lec_failure = _stop_enabled(state, "stop_on_synthesis_lec_failure")
     actions = []
@@ -285,6 +287,11 @@ def _plan(state: dict[str, Any], artifacts: dict[str, dict[str, Any]], agent_nam
             "setup_timing_repair_included": timing_enabled,
             "lec_repair_included": lec_enabled,
             "post_dft_lec_repair_included": lec_enabled,
+            "tool_only_optimization": True,
+            "retiming_allowed": retiming_allowed,
+            "hierarchy_flattening_allowed": flattening_allowed,
+            "rtl_edits_allowed": False,
+            "eco_edits_allowed": False,
             "advisory_by_default": True,
             "no_fake_closure": True,
         },

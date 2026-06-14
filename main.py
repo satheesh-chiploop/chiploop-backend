@@ -2737,6 +2737,8 @@ class SystemAppIn(BaseModel):
     max_synthesis_closure_iterations: Optional[int] = 1
     allow_synthesis_timing_repair: Optional[bool] = True
     allow_synthesis_lec_repair: Optional[bool] = True
+    allow_synthesis_retiming: Optional[bool] = False
+    allow_synthesis_hierarchy_flattening: Optional[bool] = False
     stop_on_synthesis_closure_failure: Optional[bool] = False
     stop_on_synthesis_lec_failure: Optional[bool] = False
     analog_physical_mode: Optional[str] = "blackbox"
@@ -3018,6 +3020,8 @@ PRODUCT_STAGE_SCHEMAS: Dict[str, Dict[str, Any]] = {
             {"key": "max_synthesis_closure_iterations", "label": "Max synthesis closure iterations", "type": "number", "defaultValue": 1},
             {"key": "allow_synthesis_timing_repair", "label": "Allow synthesis setup timing repair", "type": "boolean", "defaultValue": True},
             {"key": "allow_synthesis_lec_repair", "label": "Allow synthesis LEC repair", "type": "boolean", "defaultValue": True},
+            {"key": "allow_synthesis_retiming", "label": "Allow synthesis retiming", "type": "boolean", "defaultValue": False},
+            {"key": "allow_synthesis_hierarchy_flattening", "label": "Allow synthesis hierarchy flattening", "type": "boolean", "defaultValue": False},
             {"key": "stop_on_synthesis_closure_failure", "label": "Stop downstream on synthesis closure failure", "type": "boolean", "defaultValue": False},
             {"key": "stop_on_synthesis_lec_failure", "label": "Stop downstream on synthesis LEC failure", "type": "boolean", "defaultValue": False},
             {"key": "stop_on_synthesis_closure_failure", "label": "Stop downstream on synthesis closure failure", "type": "boolean", "defaultValue": False},
@@ -3105,6 +3109,8 @@ PRODUCT_STAGE_SCHEMAS: Dict[str, Dict[str, Any]] = {
             {"key": "max_synthesis_closure_iterations", "label": "Max synthesis closure iterations", "type": "number", "defaultValue": 1},
             {"key": "allow_synthesis_timing_repair", "label": "Allow synthesis setup timing repair", "type": "boolean", "defaultValue": True},
             {"key": "allow_synthesis_lec_repair", "label": "Allow synthesis LEC repair", "type": "boolean", "defaultValue": True},
+            {"key": "allow_synthesis_retiming", "label": "Allow synthesis retiming", "type": "boolean", "defaultValue": False},
+            {"key": "allow_synthesis_hierarchy_flattening", "label": "Allow synthesis hierarchy flattening", "type": "boolean", "defaultValue": False},
             {"key": "stop_on_synthesis_closure_failure", "label": "Stop downstream on synthesis closure failure", "type": "boolean", "defaultValue": False},
             {"key": "stop_on_synthesis_lec_failure", "label": "Stop downstream on synthesis LEC failure", "type": "boolean", "defaultValue": False},
             {"key": "stop_on_synthesis_closure_failure", "label": "Stop downstream on synthesis closure failure", "type": "boolean", "defaultValue": False},
@@ -3177,6 +3183,8 @@ class DigitalArch2SynthesisAppIn(DigitalArch2RTLAppIn, DigitalRTLSourceIn):
     max_synthesis_closure_iterations: Optional[int] = 1
     allow_synthesis_timing_repair: Optional[bool] = True
     allow_synthesis_lec_repair: Optional[bool] = True
+    allow_synthesis_retiming: Optional[bool] = False
+    allow_synthesis_hierarchy_flattening: Optional[bool] = False
     stop_on_synthesis_closure_failure: Optional[bool] = False
     stop_on_synthesis_lec_failure: Optional[bool] = False
 
@@ -3216,6 +3224,8 @@ class DigitalArch2TapeoutAppIn(DigitalArch2RTLAppIn, DigitalRTLSourceIn):
     max_synthesis_closure_iterations: Optional[int] = 1
     allow_synthesis_timing_repair: Optional[bool] = True
     allow_synthesis_lec_repair: Optional[bool] = True
+    allow_synthesis_retiming: Optional[bool] = False
+    allow_synthesis_hierarchy_flattening: Optional[bool] = False
     stop_on_synthesis_closure_failure: Optional[bool] = False
     stop_on_synthesis_lec_failure: Optional[bool] = False
 
@@ -3673,6 +3683,83 @@ def execute_digital_app_background(
                     append_log_workflow(workflow_id, f"Closure loop stopped early after iteration {iteration}: {stop_reason}", phase="closure_loop_stop")
                     append_log_run(run_id, f"Closure loop stopped early after iteration {iteration}: {stop_reason}")
                     break
+        elif app_name == "arch2tapeout" and bool(shared_state.get("run_signoff_closure_loop") or (isinstance(shared_state.get("toggles"), dict) and shared_state["toggles"].get("run_signoff_closure_loop"))):
+            max_iterations = max(1, min(int(shared_state.get("max_signoff_closure_iterations") or shared_state.get("max_signoff_iterations") or 1), 2))
+
+            def _node_label(node: Dict[str, Any]) -> str:
+                return ((node.get("data") or {}).get("backendLabel") or node.get("label") or "").strip()
+
+            labels = [_node_label(node) for node in nodes]
+            closure_label = "Digital PD Signoff Closure Agent"
+            if closure_label not in labels:
+                append_log_workflow(workflow_id, "Signoff closure loop requested but closure agent is not in this workflow.", phase="signoff_closure_missing")
+                append_log_run(run_id, "Signoff closure loop requested but closure agent is not in this workflow.")
+                _run_nodes_with_shared_state(workflow_id=workflow_id, run_id=run_id, loop_type="digital", nodes=nodes, shared_state=shared_state)
+            else:
+                closure_idx = labels.index(closure_label)
+                prefix_nodes = nodes[:closure_idx + 1]
+                suffix_nodes = nodes[closure_idx + 1:]
+
+                append_log_workflow(workflow_id, "Signoff closure loop baseline started", phase="signoff_closure_baseline")
+                append_log_run(run_id, "Signoff closure loop baseline started")
+                shared_state["signoff_closure_iteration_index"] = 0
+                _run_nodes_with_shared_state(
+                    workflow_id=workflow_id,
+                    run_id=run_id,
+                    loop_type="digital",
+                    nodes=prefix_nodes,
+                    shared_state=shared_state,
+                )
+                plan = (((shared_state.get("digital") or {}).get("signoff_closure") or {}).get("plan") or {})
+                append_log_workflow(
+                    workflow_id,
+                    f"Signoff closure baseline completed: {plan.get('status') or 'not_reported'}",
+                    phase="signoff_closure_baseline_done",
+                )
+                append_log_run(run_id, f"Signoff closure baseline completed: {plan.get('status') or 'not_reported'}")
+
+                for iteration in range(1, max_iterations + 1):
+                    plan = (((shared_state.get("digital") or {}).get("signoff_closure") or {}).get("plan") or {})
+                    if plan.get("closure_complete") is True or plan.get("status") == "clean":
+                        append_log_workflow(workflow_id, f"Signoff closure stopped before iteration {iteration}: closure achieved", phase="signoff_closure_stop")
+                        append_log_run(run_id, f"Signoff closure stopped before iteration {iteration}: closure achieved")
+                        break
+                    restart_stage = str(plan.get("selected_restart_stage") or "").strip()
+                    if not restart_stage or restart_stage not in labels:
+                        append_log_workflow(workflow_id, f"Signoff closure stopped before iteration {iteration}: no runnable restart stage", phase="signoff_closure_stop")
+                        append_log_run(run_id, f"Signoff closure stopped before iteration {iteration}: no runnable restart stage")
+                        break
+                    start_idx = labels.index(restart_stage)
+                    rerun_nodes = nodes[start_idx:closure_idx + 1]
+                    shared_state["signoff_closure_iteration_index"] = iteration
+                    append_log_workflow(workflow_id, f"Signoff closure iteration {iteration}/{max_iterations} started from {restart_stage}", phase=f"signoff_closure_iteration_{iteration}")
+                    append_log_run(run_id, f"Signoff closure iteration {iteration}/{max_iterations} started from {restart_stage}")
+                    _run_nodes_with_shared_state(
+                        workflow_id=workflow_id,
+                        run_id=run_id,
+                        loop_type="digital",
+                        nodes=rerun_nodes,
+                        shared_state=shared_state,
+                    )
+                    plan = (((shared_state.get("digital") or {}).get("signoff_closure") or {}).get("plan") or {})
+                    append_log_workflow(
+                        workflow_id,
+                        f"Signoff closure iteration {iteration}/{max_iterations} completed: {plan.get('status') or 'not_reported'}",
+                        phase=f"signoff_closure_iteration_{iteration}_done",
+                    )
+                    append_log_run(run_id, f"Signoff closure iteration {iteration}/{max_iterations} completed: {plan.get('status') or 'not_reported'}")
+                    if plan.get("closure_complete") is True or plan.get("status") == "clean":
+                        append_log_workflow(workflow_id, f"Signoff closure stopped after iteration {iteration}: closure achieved", phase="signoff_closure_stop")
+                        append_log_run(run_id, f"Signoff closure stopped after iteration {iteration}: closure achieved")
+                        break
+
+                _run_nodes_with_shared_state(
+                    workflow_id=workflow_id,
+                    run_id=run_id,
+                    loop_type="digital",
+                    nodes=suffix_nodes,
+                    shared_state=shared_state,
+                )
         elif app_name in {"arch2synthesis", "arch2tapeout"} and bool(shared_state.get("run_synthesis_closure_loop") or (isinstance(shared_state.get("toggles"), dict) and shared_state["toggles"].get("run_synthesis_closure_loop"))):
             max_iterations = max(1, min(int(shared_state.get("max_synthesis_closure_iterations") or 1), 2))
 
@@ -5436,6 +5523,8 @@ def _product_stage_payload(product: Dict[str, Any], stage: Dict[str, Any], upstr
             "max_synthesis_closure_iterations": int(_stage_setting(stage, "max_synthesis_closure_iterations", 1) or 1),
             "allow_synthesis_timing_repair": bool(_stage_setting(stage, "allow_synthesis_timing_repair", True)),
             "allow_synthesis_lec_repair": bool(_stage_setting(stage, "allow_synthesis_lec_repair", True)),
+            "allow_synthesis_retiming": bool(_stage_setting(stage, "allow_synthesis_retiming", False)),
+            "allow_synthesis_hierarchy_flattening": bool(_stage_setting(stage, "allow_synthesis_hierarchy_flattening", False)),
             "stop_on_synthesis_closure_failure": bool(_stage_setting(stage, "stop_on_synthesis_closure_failure", False)),
             "stop_on_synthesis_lec_failure": bool(_stage_setting(stage, "stop_on_synthesis_lec_failure", False)),
             "toggles": {
@@ -5444,6 +5533,8 @@ def _product_stage_payload(product: Dict[str, Any], stage: Dict[str, Any], upstr
                 "run_synthesis_closure_loop": bool(_stage_setting(stage, "run_synthesis_closure_loop", False)),
                 "allow_synthesis_timing_repair": bool(_stage_setting(stage, "allow_synthesis_timing_repair", True)),
                 "allow_synthesis_lec_repair": bool(_stage_setting(stage, "allow_synthesis_lec_repair", True)),
+                "allow_synthesis_retiming": bool(_stage_setting(stage, "allow_synthesis_retiming", False)),
+                "allow_synthesis_hierarchy_flattening": bool(_stage_setting(stage, "allow_synthesis_hierarchy_flattening", False)),
                 "stop_on_synthesis_closure_failure": bool(_stage_setting(stage, "stop_on_synthesis_closure_failure", False)),
                 "stop_on_synthesis_lec_failure": bool(_stage_setting(stage, "stop_on_synthesis_lec_failure", False)),
             },
@@ -5636,6 +5727,8 @@ def _product_stage_payload(product: Dict[str, Any], stage: Dict[str, Any], upstr
             "max_synthesis_closure_iterations": int(_stage_setting(stage, "max_synthesis_closure_iterations", 1) or 1),
             "allow_synthesis_timing_repair": bool(_stage_setting(stage, "allow_synthesis_timing_repair", True)),
             "allow_synthesis_lec_repair": bool(_stage_setting(stage, "allow_synthesis_lec_repair", True)),
+            "allow_synthesis_retiming": bool(_stage_setting(stage, "allow_synthesis_retiming", False)),
+            "allow_synthesis_hierarchy_flattening": bool(_stage_setting(stage, "allow_synthesis_hierarchy_flattening", False)),
             "stop_on_synthesis_closure_failure": bool(_stage_setting(stage, "stop_on_synthesis_closure_failure", False)),
             "stop_on_synthesis_lec_failure": bool(_stage_setting(stage, "stop_on_synthesis_lec_failure", False)),
             "toggles": {
@@ -5649,6 +5742,8 @@ def _product_stage_payload(product: Dict[str, Any], stage: Dict[str, Any], upstr
                 "run_synthesis_closure_loop": bool(_stage_setting(stage, "run_synthesis_closure_loop", False)),
                 "allow_synthesis_timing_repair": bool(_stage_setting(stage, "allow_synthesis_timing_repair", True)),
                 "allow_synthesis_lec_repair": bool(_stage_setting(stage, "allow_synthesis_lec_repair", True)),
+                "allow_synthesis_retiming": bool(_stage_setting(stage, "allow_synthesis_retiming", False)),
+                "allow_synthesis_hierarchy_flattening": bool(_stage_setting(stage, "allow_synthesis_hierarchy_flattening", False)),
                 "stop_on_synthesis_closure_failure": bool(_stage_setting(stage, "stop_on_synthesis_closure_failure", False)),
                 "stop_on_synthesis_lec_failure": bool(_stage_setting(stage, "stop_on_synthesis_lec_failure", False)),
                 "generate_analog_gds": bool(_stage_setting(stage, "generate_analog_gds", False)),
@@ -9169,6 +9264,83 @@ def execute_system_app_background(
                     append_log_workflow(workflow_id, f"System Sim closure loop stopped early after iteration {iteration}: {stop_reason}", phase="closure_loop_stop")
                     append_log_run(run_id, f"System Sim closure loop stopped early after iteration {iteration}: {stop_reason}")
                     break
+        elif template_workflow_name == "System_PD" and bool(shared_state.get("run_signoff_closure_loop") or (isinstance(shared_state.get("toggles"), dict) and shared_state["toggles"].get("run_signoff_closure_loop"))):
+            max_iterations = max(1, min(int(shared_state.get("max_signoff_closure_iterations") or shared_state.get("max_signoff_iterations") or 1), 2))
+
+            def _node_label(node: Dict[str, Any]) -> str:
+                return ((node.get("data") or {}).get("backendLabel") or node.get("label") or node.get("name") or "").strip()
+
+            labels = [_node_label(node) for node in nodes]
+            closure_label = "System PD Signoff Closure Agent"
+            if closure_label not in labels:
+                append_log_workflow(workflow_id, "System signoff closure loop requested but closure agent is not in this workflow.", phase="signoff_closure_missing")
+                append_log_run(run_id, "System signoff closure loop requested but closure agent is not in this workflow.")
+                _run_nodes_with_shared_state(workflow_id=workflow_id, run_id=run_id, loop_type="system", nodes=nodes, shared_state=shared_state)
+            else:
+                closure_idx = labels.index(closure_label)
+                prefix_nodes = nodes[:closure_idx + 1]
+                suffix_nodes = nodes[closure_idx + 1:]
+
+                append_log_workflow(workflow_id, "System signoff closure loop baseline started", phase="signoff_closure_baseline")
+                append_log_run(run_id, "System signoff closure loop baseline started")
+                shared_state["signoff_closure_iteration_index"] = 0
+                _run_nodes_with_shared_state(
+                    workflow_id=workflow_id,
+                    run_id=run_id,
+                    loop_type="system",
+                    nodes=prefix_nodes,
+                    shared_state=shared_state,
+                )
+                plan = (((shared_state.get("digital") or {}).get("signoff_closure") or {}).get("plan") or {})
+                append_log_workflow(
+                    workflow_id,
+                    f"System signoff closure baseline completed: {plan.get('status') or 'not_reported'}",
+                    phase="signoff_closure_baseline_done",
+                )
+                append_log_run(run_id, f"System signoff closure baseline completed: {plan.get('status') or 'not_reported'}")
+
+                for iteration in range(1, max_iterations + 1):
+                    plan = (((shared_state.get("digital") or {}).get("signoff_closure") or {}).get("plan") or {})
+                    if plan.get("closure_complete") is True or plan.get("status") == "clean":
+                        append_log_workflow(workflow_id, f"System signoff closure stopped before iteration {iteration}: closure achieved", phase="signoff_closure_stop")
+                        append_log_run(run_id, f"System signoff closure stopped before iteration {iteration}: closure achieved")
+                        break
+                    restart_stage = str(plan.get("selected_restart_stage") or "").strip()
+                    if not restart_stage or restart_stage not in labels:
+                        append_log_workflow(workflow_id, f"System signoff closure stopped before iteration {iteration}: no runnable restart stage", phase="signoff_closure_stop")
+                        append_log_run(run_id, f"System signoff closure stopped before iteration {iteration}: no runnable restart stage")
+                        break
+                    start_idx = labels.index(restart_stage)
+                    rerun_nodes = nodes[start_idx:closure_idx + 1]
+                    shared_state["signoff_closure_iteration_index"] = iteration
+                    append_log_workflow(workflow_id, f"System signoff closure iteration {iteration}/{max_iterations} started from {restart_stage}", phase=f"signoff_closure_iteration_{iteration}")
+                    append_log_run(run_id, f"System signoff closure iteration {iteration}/{max_iterations} started from {restart_stage}")
+                    _run_nodes_with_shared_state(
+                        workflow_id=workflow_id,
+                        run_id=run_id,
+                        loop_type="system",
+                        nodes=rerun_nodes,
+                        shared_state=shared_state,
+                    )
+                    plan = (((shared_state.get("digital") or {}).get("signoff_closure") or {}).get("plan") or {})
+                    append_log_workflow(
+                        workflow_id,
+                        f"System signoff closure iteration {iteration}/{max_iterations} completed: {plan.get('status') or 'not_reported'}",
+                        phase=f"signoff_closure_iteration_{iteration}_done",
+                    )
+                    append_log_run(run_id, f"System signoff closure iteration {iteration}/{max_iterations} completed: {plan.get('status') or 'not_reported'}")
+                    if plan.get("closure_complete") is True or plan.get("status") == "clean":
+                        append_log_workflow(workflow_id, f"System signoff closure stopped after iteration {iteration}: closure achieved", phase="signoff_closure_stop")
+                        append_log_run(run_id, f"System signoff closure stopped after iteration {iteration}: closure achieved")
+                        break
+
+                _run_nodes_with_shared_state(
+                    workflow_id=workflow_id,
+                    run_id=run_id,
+                    loop_type="system",
+                    nodes=suffix_nodes,
+                    shared_state=shared_state,
+                )
         elif template_workflow_name in {"System_Synthesis", "System_PD"} and bool(shared_state.get("run_synthesis_closure_loop") or (isinstance(shared_state.get("toggles"), dict) and shared_state["toggles"].get("run_synthesis_closure_loop"))):
             max_iterations = max(1, min(int(shared_state.get("max_synthesis_closure_iterations") or 1), 2))
 

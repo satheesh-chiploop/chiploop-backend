@@ -60,6 +60,8 @@ def run_agent(state: dict) -> dict:
             "setup_violations",
             "timing__setup__violation_count",
             "timing__setup__vio__count",
+            "timing__setup_vio__count",
+            "timing__setup_r2r_vio__count",
             "timing__setup__violating_paths",
             "sta__setup__violation_count",
         )
@@ -70,6 +72,8 @@ def run_agent(state: dict) -> dict:
             "hold_violations",
             "timing__hold__violation_count",
             "timing__hold__vio__count",
+            "timing__hold_vio__count",
+            "timing__hold_r2r_vio__count",
             "timing__hold__violating_paths",
             "sta__hold__violation_count",
         )
@@ -148,6 +152,10 @@ def run_agent(state: dict) -> dict:
             "sta_postfill": {
                 "worst_slack": _get(metrics.get("sta_postfill") or {}, "worst_slack", "timing__setup__ws"),
                 "tns": _get(metrics.get("sta_postfill") or {}, "tns", "timing__setup__tns"),
+                "setup_wns": _get(metrics.get("sta_postfill") or {}, "timing__setup__wns", "timing__setup__ws", "worst_slack"),
+                "setup_tns": _get(metrics.get("sta_postfill") or {}, "timing__setup__tns", "tns"),
+                "hold_wns": _get(metrics.get("sta_postfill") or {}, "timing__hold__wns", "timing__hold__ws"),
+                "hold_tns": _get(metrics.get("sta_postfill") or {}, "timing__hold__tns"),
                 "setup_violations": _sta_setup_violations(metrics.get("sta_postfill") or {}),
                 "hold_violations": _sta_hold_violations(metrics.get("sta_postfill") or {}),
             },
