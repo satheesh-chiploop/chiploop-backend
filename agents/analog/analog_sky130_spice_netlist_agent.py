@@ -115,6 +115,7 @@ def _is_supply_pin(pin: str, port_specs: Dict[str, Dict[str, Any]]) -> bool:
 
 
 def _interface_safety_context(ports: List[str], port_specs: Dict[str, Dict[str, Any]]) -> Dict[str, List[str]]:
+    bit_bases = sorted(dict.fromkeys(_base_bus_name(pin) for pin in ports if re.match(r"^.+\[\d+\]$", pin)))
     input_pins = sorted(dict.fromkeys(
         pin for pin in ports
         if _direction_for_pin(pin, port_specs).startswith("input") and not _is_supply_pin(pin, port_specs)
@@ -125,6 +126,7 @@ def _interface_safety_context(ports: List[str], port_specs: Dict[str, Dict[str, 
         "input_pins_gate_only": input_pins,
         "supply_pins_source_or_bulk_only": supply_pins,
         "output_pins_may_be_driven": output_pins,
+        "forbidden_scalar_bus_terminals": bit_bases,
     }
 
 
@@ -235,10 +237,21 @@ Mbad1 input_sample output_code vdd vdd sky130_fd_pr__pfet_01v8 W=1u L=0.15u
 Mbad2 vdd input_sample output_code vdd sky130_fd_pr__pfet_01v8 W=1u L=0.15u
 .ends example
 
+Bad example, because data_bus is used as a scalar device terminal even though the interface uses data_bus[0] and data_bus[1]:
+.subckt example data_bus[0] data_bus[1] enable vdd vss
+Mbad3 data_bus enable vdd vdd sky130_fd_pr__pfet_01v8 W=1u L=0.15u
+.ends example
+
 Good example, because input_sample appears only on MOS gates, output_code is the driven node, and supplies are source/bulk:
 .subckt example input_sample output_code vdd vss
 Mgood1 output_code input_sample vdd vdd sky130_fd_pr__pfet_01v8 W=1u L=0.15u
 Mgood2 output_code input_sample vss vss sky130_fd_pr__nfet_01v8 W=1u L=0.15u
+.ends example
+
+Good bus example, because every bus terminal uses a declared bit pin:
+.subckt example data_bus[0] data_bus[1] enable vdd vss
+Mgood3 data_bus[0] enable vdd vdd sky130_fd_pr__pfet_01v8 W=1u L=0.15u
+Mgood4 data_bus[0] enable vss vss sky130_fd_pr__nfet_01v8 W=1u L=0.15u
 .ends example
 """.strip()
 
@@ -284,6 +297,7 @@ Strict requirements:
 - Do not create internal helper devices that modify external input pins.
 - Supply pins listed in supply_pins_source_or_bulk_only may be MOS source/bulk terminals, not MOS drain terminals.
 - Output pins listed in output_pins_may_be_driven may be MOS drain/source terminals.
+- Names listed in forbidden_scalar_bus_terminals must not appear as MOS terminals or .subckt pins when the required port order uses bit pins. Use the declared bit pins exactly.
 - Include explicit W and L parameters on MOS devices.
 - Use Sky130 Magic-compatible dimensions: W >= 0.42u and L >= 0.15u for every MOS device.
 - Do not emit placeholder comments instead of devices.
@@ -342,6 +356,7 @@ Strict requirements:
 - Do not create internal devices that drive, tie, or overwrite external input pins.
 - Output pins may be MOS drain/source terminals.
 - Supply pins listed in supply_pins_source_or_bulk_only may be MOS source/bulk terminals, not MOS drain terminals.
+- Names listed in forbidden_scalar_bus_terminals must not appear as MOS terminals or .subckt pins when the required port order uses bit pins. Replace scalar bus terminals with declared bit pins or remove those devices.
 - Use only sky130_fd_pr__nfet_01v8 and sky130_fd_pr__pfet_01v8 MOS devices with M lines.
 - Do not use X lines for MOS devices.
 - Every MOS device must have explicit W and L with W >= 0.42u and L >= 0.15u.

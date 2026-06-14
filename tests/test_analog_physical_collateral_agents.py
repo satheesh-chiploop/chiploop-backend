@@ -319,6 +319,44 @@ def test_sky130_spice_layout_issues_catch_input_bus_bits_and_supply_drains():
     assert "undeclared_external_scalar_bus:adc_code" in issues
 
 
+def test_sky130_prompt_lists_scalar_bus_names_as_forbidden(tmp_path, monkeypatch):
+    prompts = []
+    monkeypatch.setattr(spice_agent, "save_text_artifact_and_record", lambda *args, **kwargs: "local")
+
+    def fake_complete_text(prompt, *args, **kwargs):
+        prompts.append(prompt)
+        return (
+            ".subckt ana data_bus[0] data_bus[1] enable vdd vss\n"
+            "M1 data_bus[0] enable vdd vdd sky130_fd_pr__pfet_01v8 W=1u L=0.15u\n"
+            "M2 data_bus[0] enable vss vss sky130_fd_pr__nfet_01v8 W=1u L=0.15u\n"
+            ".ends ana\n"
+        )
+
+    monkeypatch.setattr(spice_agent, "complete_text", fake_complete_text)
+
+    state = spice_agent.run_agent({
+        "workflow_id": "wf",
+        "workflow_dir": str(tmp_path),
+        "analog_physical_mode": "generate_sky130_gds",
+        "analog_pdk": "sky130A",
+        "analog_spec": {
+            "module_name": "ana",
+            "ports": [
+                {"name": "data_bus[0]", "direction": "output"},
+                {"name": "data_bus[1]", "direction": "output"},
+                {"name": "enable", "direction": "input"},
+                {"name": "vdd", "direction": "input", "role": "power"},
+                {"name": "vss", "direction": "input", "role": "ground"},
+            ],
+        },
+    })
+
+    assert state["analog_sky130_spice"]["status"] == "ready"
+    assert prompts
+    assert '"forbidden_scalar_bus_terminals": [\n    "data_bus"\n  ]' in prompts[0]
+    assert "Mbad3 data_bus enable vdd vdd" in prompts[0]
+
+
 def test_gds_generation_uses_macro_contract_name_when_module_missing(tmp_path, monkeypatch):
     monkeypatch.setattr(gds_agent, "save_text_artifact_and_record", lambda *args, **kwargs: "local")
 
