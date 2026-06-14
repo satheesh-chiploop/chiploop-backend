@@ -490,7 +490,9 @@ def test_gds_generation_repairs_magic_feedback_once_and_reruns(tmp_path, monkeyp
         calls["count"] += 1
         (tmp_path / "analog" / "gds" / "ana.gds").write_bytes(b"GDS")
         if calls["count"] == 1:
+            (tmp_path / "analog" / "gds" / "sky130_fd_pr__nfet_01v8_STALE.mag").write_text("stale\n", encoding="utf-8")
             return SimpleNamespace(returncode=0, stdout="56 problems occurred.  See feedback entries.\n", stderr="")
+        assert not (tmp_path / "analog" / "gds" / "sky130_fd_pr__nfet_01v8_STALE.mag").exists()
         return SimpleNamespace(returncode=0, stdout="magic ok\n", stderr="")
 
     monkeypatch.setattr(gds_agent, "run_command", fake_run_command)
@@ -512,6 +514,7 @@ def test_gds_generation_repairs_magic_feedback_once_and_reruns(tmp_path, monkeyp
     assert state["analog_gds_generation"]["repair_applied"] is True
     assert state["analog_gds_generation"]["pass1_magic_feedback_problem_count"] == 56
     assert state["analog_signoff"]["drc"]["status"] == "clean"
+    assert (tmp_path / "analog" / "gds" / "ana_pass1.gds").exists()
 
 
 def test_gds_generation_uses_align_docker_when_host_align_missing(tmp_path, monkeypatch):

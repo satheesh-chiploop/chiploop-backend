@@ -139,6 +139,21 @@ Strict requirements:
     return repaired if _has_real_sky130_mos(repaired) else ""
 
 
+def _preserve_and_clean_magic_layout_outputs(stage_dir: str, module_name: str) -> None:
+    for name in os.listdir(stage_dir):
+        lower = name.lower()
+        if not (lower.endswith(".mag") or lower.endswith(".gds")):
+            continue
+        path = os.path.join(stage_dir, name)
+        if not os.path.isfile(path):
+            continue
+        root, ext = os.path.splitext(name)
+        preserved = os.path.join(stage_dir, f"{root}_pass1{ext}")
+        if root == module_name and not os.path.exists(preserved):
+            shutil.copy2(path, preserved)
+        os.remove(path)
+
+
 def _docker_available() -> bool:
     return bool(shutil.which("docker"))
 
@@ -646,6 +661,7 @@ def run_agent(state: dict) -> dict:
                 fh.write(repaired_spice)
             with open(staged_spice, "w", encoding="utf-8") as fh:
                 fh.write(_magic_spice_text(repaired_spice))
+            _preserve_and_clean_magic_layout_outputs(stage_dir, module_name)
             cp, tcl_path, tool_mode, image = _run_magic_gds(
                 state, stage_dir, staged_spice, module_name, pdk_variant, pdk_root_host, docker_bin
             )
