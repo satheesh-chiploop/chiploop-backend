@@ -428,6 +428,7 @@ from agents.digital.digital_implementation_setup_agent import run_agent as digit
 from agents.digital.digital_foundry_profile_agent import run_agent as digital_foundry_profile_agent
 from agents.digital.digital_synthesis_agent import run_agent as digital_synthesis_agent
 from agents.digital.digital_logic_equivalence_agent import run_agent as digital_logic_equivalence_agent
+from agents.digital.digital_synthesis_closure_agent import run_agent as digital_synthesis_closure_agent
 from agents.digital.digital_dft_scan_stitching_agent import run_agent as digital_dft_scan_stitching_agent
 from agents.digital.digital_scan_atpg_agent import run_agent as digital_scan_atpg_agent
 from agents.digital.digital_mbist_collateral_agent import run_agent as digital_mbist_collateral_agent
@@ -449,6 +450,9 @@ from agents.digital.digital_lvs_agent import run_agent as digital_lvs_agent
 from agents.digital.digital_tapeout_agent import run_agent as digital_tapeout_agent
 from agents.digital.digital_tapeout_lec_agent import run_agent as digital_tapeout_lec_agent
 from agents.digital.digital_executive_summary_agent import run_agent as digital_executive_summary_agent
+from agents.digital.digital_pd_signoff_closure_agent import run_agent as digital_pd_signoff_closure_agent
+from agents.system.system_synthesis_closure_agent import run_agent as system_synthesis_closure_agent
+from agents.system.system_pd_signoff_closure_agent import run_agent as system_pd_signoff_closure_agent
 from agents.digital.digital_simulation_execution_agent import run_agent as digital_simulation_execution_agent
 from agents.digital.digital_simulation_summary_coverage_agent import run_agent as digital_simulation_summary_coverage_agent
 from agents.digital.digital_verification_handoff_ingest_agent import run_agent as digital_verification_handoff_ingest_agent
@@ -524,6 +528,7 @@ DIGITAL_AGENT_FUNCTIONS: Dict[str, Any] = {
     "Digital Implementation Setup Agent": digital_implementation_setup_agent,
     "Digital Synthesis Agent": digital_synthesis_agent,
     "Digital Logic Equivalence Check Agent": digital_logic_equivalence_agent,
+    "Digital Synthesis Closure Agent": digital_synthesis_closure_agent,
     "Digital DFT Scan Stitching Agent": digital_dft_scan_stitching_agent,
     "Digital Scan ATPG Coverage Agent": digital_scan_atpg_agent,
     "Digital MBIST Collateral Agent": digital_mbist_collateral_agent,
@@ -542,6 +547,8 @@ DIGITAL_AGENT_FUNCTIONS: Dict[str, Any] = {
     "Digital Tapeout Agent": digital_tapeout_agent,
     "Digital Tapeout Logic Equivalence Check Agent": digital_tapeout_lec_agent,
     "Digital Executive Summary Agent": digital_executive_summary_agent,
+    "Digital PD Signoff Closure Agent": digital_pd_signoff_closure_agent,
+    "System PD Signoff Closure Agent": system_pd_signoff_closure_agent,
 }
 
 
@@ -822,6 +829,8 @@ SYSTEM_AGENT_FUNCTIONS: Dict[str,Any] = {
     "Digital Implementation Setup Agent": digital_implementation_setup_agent,
     "Digital Synthesis Agent": digital_synthesis_agent,
     "Digital Logic Equivalence Check Agent": digital_logic_equivalence_agent,
+    "Digital Synthesis Closure Agent": digital_synthesis_closure_agent,
+    "System Synthesis Closure Agent": system_synthesis_closure_agent,
     "Digital DFT Scan Stitching Agent": digital_dft_scan_stitching_agent,
     "Digital Scan ATPG Coverage Agent": digital_scan_atpg_agent,
     "Digital MBIST Collateral Agent": digital_mbist_collateral_agent,
@@ -840,6 +849,8 @@ SYSTEM_AGENT_FUNCTIONS: Dict[str,Any] = {
     "Digital Tapeout Agent": digital_tapeout_agent,
     "Digital Tapeout Logic Equivalence Check Agent": digital_tapeout_lec_agent,
     "Digital Executive Summary Agent": digital_executive_summary_agent,
+    "Digital PD Signoff Closure Agent": digital_pd_signoff_closure_agent,
+    "System PD Signoff Closure Agent": system_pd_signoff_closure_agent,
     "Analog Spec Builder Agent": analog_spec_builder_agent,
     "Analog Netlist Scaffold Agent": analog_netlist_scaffold_agent, 
     "Analog Simulation Plan Agent": analog_sim_plan_agent,
@@ -1092,6 +1103,7 @@ DIGITAL_ARCH2SYNTHESIS_DEFINITION = _linear_workflow_definition([
     "Digital Implementation Setup Agent",
     "Digital Synthesis Agent",
     "Digital Logic Equivalence Check Agent",
+    "Digital Synthesis Closure Agent",
     "Digital DFT Scan Stitching Agent",
     "Digital Scan ATPG Coverage Agent",
     "Digital MBIST Collateral Agent",
@@ -1150,6 +1162,7 @@ DIGITAL_ARCH2TAPEOUT_DEFINITION = _linear_workflow_definition([
     "Digital Tapeout Agent",
     "Digital Tapeout Logic Equivalence Check Agent",
     "Digital Executive Summary Agent",
+    "Digital PD Signoff Closure Agent",
 ])
 
 DIGITAL_DQA_DEFINITION = _linear_workflow_definition([
@@ -1265,6 +1278,7 @@ SYSTEM_SYNTHESIS_DEFINITION = _linear_workflow_definition([
     "Digital Implementation Setup Agent",
     "Digital Synthesis Agent",
     "Digital Logic Equivalence Check Agent",
+    "System Synthesis Closure Agent",
     "Digital DFT Scan Stitching Agent",
     "Digital Scan ATPG Coverage Agent",
     "Digital MBIST Collateral Agent",
@@ -1277,6 +1291,7 @@ SYSTEM_PD_DEFINITION = _linear_workflow_definition([
     "Digital Implementation Setup Agent",
     "Digital Synthesis Agent",
     "Digital Logic Equivalence Check Agent",
+    "System Synthesis Closure Agent",
     "Digital DFT Scan Stitching Agent",
     "Digital Scan ATPG Coverage Agent",
     "Digital MBIST Collateral Agent",
@@ -1301,6 +1316,7 @@ SYSTEM_PD_DEFINITION = _linear_workflow_definition([
     "Digital Tapeout Agent",
     "Digital Tapeout Logic Equivalence Check Agent",
     "Digital Executive Summary Agent",
+    "System PD Signoff Closure Agent",
 ])
 
 SYSTEM_FIRMWARE_DEFINITION = _linear_workflow_definition([
@@ -2703,6 +2719,18 @@ class SystemAppIn(BaseModel):
     run_fill: Optional[bool] = True
     run_drc: Optional[bool] = True
     run_lvs: Optional[bool] = True
+    run_signoff_closure_loop: Optional[bool] = False
+    max_signoff_closure_iterations: Optional[int] = 1
+    allow_timing_repair: Optional[bool] = True
+    allow_drc_repair: Optional[bool] = True
+    allow_lvs_repair: Optional[bool] = True
+    allow_lec_repair: Optional[bool] = True
+    run_synthesis_closure_loop: Optional[bool] = False
+    max_synthesis_closure_iterations: Optional[int] = 1
+    allow_synthesis_timing_repair: Optional[bool] = True
+    allow_synthesis_lec_repair: Optional[bool] = True
+    stop_on_synthesis_closure_failure: Optional[bool] = False
+    stop_on_synthesis_lec_failure: Optional[bool] = False
     analog_physical_mode: Optional[str] = "blackbox"
     analog_pdk: Optional[str] = None
     analog_spice_text: Optional[str] = None
@@ -2978,6 +3006,14 @@ PRODUCT_STAGE_SCHEMAS: Dict[str, Dict[str, Any]] = {
             {"key": "constraints_sdc", "label": "Constraints SDC", "type": "text", "defaultValue": ""},
             {"key": "run_logic_equivalence", "label": "Run logic equivalence", "type": "boolean", "defaultValue": True},
             {"key": "run_synthesis_readiness", "label": "Run synthesis readiness", "type": "boolean", "defaultValue": True},
+            {"key": "run_synthesis_closure_loop", "label": "Run synthesis closure loop", "type": "boolean", "defaultValue": False},
+            {"key": "max_synthesis_closure_iterations", "label": "Max synthesis closure iterations", "type": "number", "defaultValue": 1},
+            {"key": "allow_synthesis_timing_repair", "label": "Allow synthesis setup timing repair", "type": "boolean", "defaultValue": True},
+            {"key": "allow_synthesis_lec_repair", "label": "Allow synthesis LEC repair", "type": "boolean", "defaultValue": True},
+            {"key": "stop_on_synthesis_closure_failure", "label": "Stop downstream on synthesis closure failure", "type": "boolean", "defaultValue": False},
+            {"key": "stop_on_synthesis_lec_failure", "label": "Stop downstream on synthesis LEC failure", "type": "boolean", "defaultValue": False},
+            {"key": "stop_on_synthesis_closure_failure", "label": "Stop downstream on synthesis closure failure", "type": "boolean", "defaultValue": False},
+            {"key": "stop_on_synthesis_lec_failure", "label": "Stop downstream on synthesis LEC failure", "type": "boolean", "defaultValue": False},
         ],
     },
     "verify_closure_loop": {
@@ -3051,6 +3087,20 @@ PRODUCT_STAGE_SCHEMAS: Dict[str, Dict[str, Any]] = {
             {"key": "run_logic_equivalence", "label": "Run logic equivalence", "type": "boolean", "defaultValue": True},
             {"key": "run_drc", "label": "Run DRC", "type": "boolean", "defaultValue": True},
             {"key": "run_lvs", "label": "Run LVS", "type": "boolean", "defaultValue": True},
+            {"key": "run_signoff_closure_loop", "label": "Run signoff closure loop", "type": "boolean", "defaultValue": False},
+            {"key": "max_signoff_closure_iterations", "label": "Max signoff closure iterations", "type": "number", "defaultValue": 1},
+            {"key": "allow_timing_repair", "label": "Allow timing repair", "type": "boolean", "defaultValue": True},
+            {"key": "allow_drc_repair", "label": "Allow DRC repair", "type": "boolean", "defaultValue": True},
+            {"key": "allow_lvs_repair", "label": "Allow LVS repair", "type": "boolean", "defaultValue": True},
+            {"key": "allow_lec_repair", "label": "Allow LEC repair", "type": "boolean", "defaultValue": True},
+            {"key": "run_synthesis_closure_loop", "label": "Run synthesis closure loop", "type": "boolean", "defaultValue": False},
+            {"key": "max_synthesis_closure_iterations", "label": "Max synthesis closure iterations", "type": "number", "defaultValue": 1},
+            {"key": "allow_synthesis_timing_repair", "label": "Allow synthesis setup timing repair", "type": "boolean", "defaultValue": True},
+            {"key": "allow_synthesis_lec_repair", "label": "Allow synthesis LEC repair", "type": "boolean", "defaultValue": True},
+            {"key": "stop_on_synthesis_closure_failure", "label": "Stop downstream on synthesis closure failure", "type": "boolean", "defaultValue": False},
+            {"key": "stop_on_synthesis_lec_failure", "label": "Stop downstream on synthesis LEC failure", "type": "boolean", "defaultValue": False},
+            {"key": "stop_on_synthesis_closure_failure", "label": "Stop downstream on synthesis closure failure", "type": "boolean", "defaultValue": False},
+            {"key": "stop_on_synthesis_lec_failure", "label": "Stop downstream on synthesis LEC failure", "type": "boolean", "defaultValue": False},
         ],
     },
     "System_Software": {
@@ -3115,6 +3165,12 @@ class DigitalArch2SynthesisAppIn(DigitalArch2RTLAppIn, DigitalRTLSourceIn):
     target_frequency_mhz: Optional[float] = None
     constraints_sdc: Optional[str] = None
     clock_constraints: Optional[Any] = None
+    run_synthesis_closure_loop: Optional[bool] = False
+    max_synthesis_closure_iterations: Optional[int] = 1
+    allow_synthesis_timing_repair: Optional[bool] = True
+    allow_synthesis_lec_repair: Optional[bool] = True
+    stop_on_synthesis_closure_failure: Optional[bool] = False
+    stop_on_synthesis_lec_failure: Optional[bool] = False
 
     # stage control
     start_stage: Optional[str] = "arch2rtl"   # "arch2rtl" | "synth"
@@ -3142,6 +3198,18 @@ class DigitalArch2TapeoutAppIn(DigitalArch2RTLAppIn, DigitalRTLSourceIn):
     run_fill: Optional[bool] = True
     run_drc: Optional[bool] = True
     run_lvs: Optional[bool] = True
+    run_signoff_closure_loop: Optional[bool] = False
+    max_signoff_closure_iterations: Optional[int] = 1
+    allow_timing_repair: Optional[bool] = True
+    allow_drc_repair: Optional[bool] = True
+    allow_lvs_repair: Optional[bool] = True
+    allow_lec_repair: Optional[bool] = True
+    run_synthesis_closure_loop: Optional[bool] = False
+    max_synthesis_closure_iterations: Optional[int] = 1
+    allow_synthesis_timing_repair: Optional[bool] = True
+    allow_synthesis_lec_repair: Optional[bool] = True
+    stop_on_synthesis_closure_failure: Optional[bool] = False
+    stop_on_synthesis_lec_failure: Optional[bool] = False
 
     # stage control (lets users do synth->gds or floorplan->gds later)
     start_stage: Optional[str] = "arch2rtl"   # "arch2rtl" | "synth" | "floorplan"
@@ -5274,9 +5342,20 @@ def _product_stage_payload(product: Dict[str, Any], stage: Dict[str, Any], upstr
             "toolchain": str(_stage_setting(stage, "toolchain", "openlane2")),
             "target_frequency_mhz": float(_stage_setting(stage, "target_frequency_mhz", 100) or 100),
             "constraints_sdc": str(_stage_setting(stage, "constraints_sdc", "") or ""),
+            "run_synthesis_closure_loop": bool(_stage_setting(stage, "run_synthesis_closure_loop", False)),
+            "max_synthesis_closure_iterations": int(_stage_setting(stage, "max_synthesis_closure_iterations", 1) or 1),
+            "allow_synthesis_timing_repair": bool(_stage_setting(stage, "allow_synthesis_timing_repair", True)),
+            "allow_synthesis_lec_repair": bool(_stage_setting(stage, "allow_synthesis_lec_repair", True)),
+            "stop_on_synthesis_closure_failure": bool(_stage_setting(stage, "stop_on_synthesis_closure_failure", False)),
+            "stop_on_synthesis_lec_failure": bool(_stage_setting(stage, "stop_on_synthesis_lec_failure", False)),
             "toggles": {
                 "run_logic_equivalence": bool(_stage_setting(stage, "run_logic_equivalence", True)),
                 "run_synthesis_readiness": bool(_stage_setting(stage, "run_synthesis_readiness", True)),
+                "run_synthesis_closure_loop": bool(_stage_setting(stage, "run_synthesis_closure_loop", False)),
+                "allow_synthesis_timing_repair": bool(_stage_setting(stage, "allow_synthesis_timing_repair", True)),
+                "allow_synthesis_lec_repair": bool(_stage_setting(stage, "allow_synthesis_lec_repair", True)),
+                "stop_on_synthesis_closure_failure": bool(_stage_setting(stage, "stop_on_synthesis_closure_failure", False)),
+                "stop_on_synthesis_lec_failure": bool(_stage_setting(stage, "stop_on_synthesis_lec_failure", False)),
             },
             "start_stage": "synth",
             "stop_stage": "synth",
@@ -5457,9 +5536,31 @@ def _product_stage_payload(product: Dict[str, Any], stage: Dict[str, Any], upstr
             "foundry": str(_stage_setting(stage, "foundry", "sky130")),
             "pdk": str(_stage_setting(stage, "pdk", "sky130")),
             "analog_physical_mode": str(_stage_setting(stage, "analog_physical_mode", "blackbox")),
+            "run_signoff_closure_loop": bool(_stage_setting(stage, "run_signoff_closure_loop", False)),
+            "max_signoff_closure_iterations": int(_stage_setting(stage, "max_signoff_closure_iterations", 1) or 1),
+            "allow_timing_repair": bool(_stage_setting(stage, "allow_timing_repair", True)),
+            "allow_drc_repair": bool(_stage_setting(stage, "allow_drc_repair", True)),
+            "allow_lvs_repair": bool(_stage_setting(stage, "allow_lvs_repair", True)),
+            "allow_lec_repair": bool(_stage_setting(stage, "allow_lec_repair", True)),
+            "run_synthesis_closure_loop": bool(_stage_setting(stage, "run_synthesis_closure_loop", False)),
+            "max_synthesis_closure_iterations": int(_stage_setting(stage, "max_synthesis_closure_iterations", 1) or 1),
+            "allow_synthesis_timing_repair": bool(_stage_setting(stage, "allow_synthesis_timing_repair", True)),
+            "allow_synthesis_lec_repair": bool(_stage_setting(stage, "allow_synthesis_lec_repair", True)),
+            "stop_on_synthesis_closure_failure": bool(_stage_setting(stage, "stop_on_synthesis_closure_failure", False)),
+            "stop_on_synthesis_lec_failure": bool(_stage_setting(stage, "stop_on_synthesis_lec_failure", False)),
             "toggles": {
                 "run_drc": bool(_stage_setting(stage, "run_drc", True)),
                 "run_lvs": bool(_stage_setting(stage, "run_lvs", True)),
+                "run_signoff_closure_loop": bool(_stage_setting(stage, "run_signoff_closure_loop", False)),
+                "allow_timing_repair": bool(_stage_setting(stage, "allow_timing_repair", True)),
+                "allow_drc_repair": bool(_stage_setting(stage, "allow_drc_repair", True)),
+                "allow_lvs_repair": bool(_stage_setting(stage, "allow_lvs_repair", True)),
+                "allow_lec_repair": bool(_stage_setting(stage, "allow_lec_repair", True)),
+                "run_synthesis_closure_loop": bool(_stage_setting(stage, "run_synthesis_closure_loop", False)),
+                "allow_synthesis_timing_repair": bool(_stage_setting(stage, "allow_synthesis_timing_repair", True)),
+                "allow_synthesis_lec_repair": bool(_stage_setting(stage, "allow_synthesis_lec_repair", True)),
+                "stop_on_synthesis_closure_failure": bool(_stage_setting(stage, "stop_on_synthesis_closure_failure", False)),
+                "stop_on_synthesis_lec_failure": bool(_stage_setting(stage, "stop_on_synthesis_lec_failure", False)),
                 "generate_analog_gds": bool(_stage_setting(stage, "generate_analog_gds", False)),
                 "regenerate_lef_lib_after_gds": bool(_stage_setting(stage, "regenerate_lef_lib_after_gds", True)),
                 "run_lef_lib_consistency": bool(_stage_setting(stage, "run_lef_lib_consistency", True)),

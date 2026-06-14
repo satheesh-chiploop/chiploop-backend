@@ -106,7 +106,14 @@ def _lvs_status_from_text(text: str) -> str | None:
         return "clean"
     if "netlists match uniquely" in lower:
         return "clean"
-    if "property errors were found" in lower or "netlists do not match" in lower or "circuits do not match" in lower:
+    if (
+        "property errors were found" in lower
+        or "netlists do not match" in lower
+        or "circuits do not match" in lower
+        or "failed pin matching" in lower
+        or "pin matching failed" in lower
+        or "top level cell failed" in lower
+    ):
         return "mismatch"
     return None
 

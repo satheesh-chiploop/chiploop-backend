@@ -54,6 +54,26 @@ def run_agent(state: dict) -> dict:
                 return m[k]
         return None
 
+    def _sta_setup_violations(m):
+        return _get(
+            m,
+            "setup_violations",
+            "timing__setup__violation_count",
+            "timing__setup__vio__count",
+            "timing__setup__violating_paths",
+            "sta__setup__violation_count",
+        )
+
+    def _sta_hold_violations(m):
+        return _get(
+            m,
+            "hold_violations",
+            "timing__hold__violation_count",
+            "timing__hold__vio__count",
+            "timing__hold__violating_paths",
+            "sta__hold__violation_count",
+        )
+
     synth_m = metrics.get("synth") or {}
     drc_m   = metrics.get("drc") or {}
     lvs_m   = metrics.get("lvs") or {}
@@ -128,6 +148,8 @@ def run_agent(state: dict) -> dict:
             "sta_postfill": {
                 "worst_slack": _get(metrics.get("sta_postfill") or {}, "worst_slack", "timing__setup__ws"),
                 "tns": _get(metrics.get("sta_postfill") or {}, "tns", "timing__setup__tns"),
+                "setup_violations": _sta_setup_violations(metrics.get("sta_postfill") or {}),
+                "hold_violations": _sta_hold_violations(metrics.get("sta_postfill") or {}),
             },
         },
 

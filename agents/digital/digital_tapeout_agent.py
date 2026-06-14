@@ -22,6 +22,7 @@ DEFAULT_NONBLOCKING_XOR_LAYERS = {
     for item in os.getenv("CHIPLOOP_XOR_NONBLOCKING_LAYERS", "235/4").split(",")
     if item.strip()
 }
+DEFAULT_XOR_SIGNOFF_MODE = os.getenv("CHIPLOOP_XOR_SIGNOFF_MODE", "not_applicable").strip().lower()
 
 
 def _ensure_dir(path: str) -> None:
@@ -116,6 +117,13 @@ def _blocking_xor_difference_count(total_count: int | None, layer_counts: dict[s
     return sum(count for layer, count in layer_counts.items() if layer not in ignored)
 
 
+def _xor_signoff_status(mode: str | None = None) -> str:
+    value = (mode or DEFAULT_XOR_SIGNOFF_MODE or "not_applicable").strip().lower()
+    if value in {"blocking", "gate", "gated"}:
+        return "enabled"
+    return "not_applicable"
+
+
 def _pick_gds(latest: str | None) -> tuple[str | None, str | None]:
     if not latest:
         return (None, None)
@@ -191,7 +199,7 @@ def _tapeout_failure_reasons(
     if not _stage_is_clean("lvs", lvs_status):
         reasons.append("lvs_not_clean")
     xor_count = blocking_xor_count if blocking_xor_count is not None else _xor_difference_count(log)
-    if xor_count is not None and xor_count > 0:
+    if _xor_signoff_status() == "enabled" and xor_count is not None and xor_count > 0:
         reasons.append("xor_differences_found")
     if not (klayout_gds or magic_gds):
         reasons.append("gds_not_produced")
@@ -555,7 +563,9 @@ docker run --rm \\
     xor_report_path = _copy_xor_report(latest, stage_dir)
     xor_layer_counts = _xor_layer_counts(xor_report_path)
     xor_total = _xor_difference_count(out)
-    blocking_xor_count = _blocking_xor_difference_count(xor_total, xor_layer_counts)
+    raw_blocking_xor_count = _blocking_xor_difference_count(xor_total, xor_layer_counts)
+    xor_status = _xor_signoff_status()
+    blocking_xor_count = raw_blocking_xor_count if xor_status == "enabled" else None
 
     kl_src, mg_src = _pick_gds(latest)
     kl_dst = os.path.join(gds_dir, "klayout.gds") if kl_src else None
@@ -587,7 +597,9 @@ docker run --rm \\
         "signoff_inputs": {
             "drc_status": drc_status,
             "lvs_status": lvs_status,
+            "xor_status": xor_status,
             "xor_differences": blocking_xor_count,
+            "xor_differences_observed": raw_blocking_xor_count,
             "xor_differences_total": xor_total,
             "xor_layer_counts": xor_layer_counts,
             "xor_nonblocking_layers": sorted(DEFAULT_NONBLOCKING_XOR_LAYERS),

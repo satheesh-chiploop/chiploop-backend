@@ -1140,6 +1140,201 @@
       }
     },
     {
+      "name": "Digital Synthesis Closure Agent",
+      "loop_type": "digital",
+      "domain": "digital",
+      "description": "Analyzes synthesis and pre-place STA setup timing plus synthesis LEC evidence. Produces a bounded synthesis closure restart plan without faking repair success.",
+      "entrypoint": "agents.digital.digital_synthesis_closure_agent:run_agent",
+      "execution_mode": "legacy_adapter",
+      "inputs": [
+        "digital/synth/metrics.json",
+        "digital/synth/synth_summary.json",
+        "digital/sta_preplace/metrics.json",
+        "digital/lec/lec_summary.json"
+      ],
+      "outputs": [
+        "digital/synthesis_closure/synthesis_closure_plan.json",
+        "digital/synthesis_closure/synthesis_closure_plan.md"
+      ],
+      "artifact_paths": [
+        "digital/synthesis_closure/synthesis_closure_plan.json",
+        "digital/synthesis_closure/synthesis_closure_plan.md"
+      ],
+      "artifact_types": [
+        "report",
+        "structured_data"
+      ],
+      "required_skills": [
+        "artifact_publish",
+        "synthesis_timing_triage"
+      ],
+      "required_tools": [
+        "python",
+        "supabase"
+      ],
+      "hooks": [
+        "pre_run_validate_inputs",
+        "post_run_collect_artifacts",
+        "post_run_update_state",
+        "on_failure_capture_traceback",
+        "on_failure_preserve_logs",
+        "artifact_publish_to_supabase"
+      ],
+      "metadata": {
+        "registry_source": "DIGITAL_AGENT_FUNCTIONS",
+        "variable": "digital_synthesis_closure_agent",
+        "studio_contract_version": "v1"
+      }
+    },
+    {
+      "name": "System Synthesis Closure Agent",
+      "loop_type": "system",
+      "domain": "digital",
+      "description": "Analyzes System Synthesis setup timing and synthesis LEC evidence. Produces a bounded synthesis closure restart plan without faking repair success.",
+      "entrypoint": "agents.system.system_synthesis_closure_agent:run_agent",
+      "execution_mode": "legacy_adapter",
+      "inputs": [
+        "digital/synth/metrics.json",
+        "digital/synth/synth_summary.json",
+        "digital/sta_preplace/metrics.json",
+        "digital/lec/lec_summary.json"
+      ],
+      "outputs": [
+        "digital/synthesis_closure/synthesis_closure_plan.json",
+        "digital/synthesis_closure/synthesis_closure_plan.md"
+      ],
+      "artifact_paths": [
+        "digital/synthesis_closure/synthesis_closure_plan.json",
+        "digital/synthesis_closure/synthesis_closure_plan.md"
+      ],
+      "artifact_types": [
+        "report",
+        "structured_data"
+      ],
+      "required_skills": [
+        "artifact_publish",
+        "synthesis_timing_triage"
+      ],
+      "required_tools": [
+        "python",
+        "supabase"
+      ],
+      "hooks": [
+        "pre_run_validate_inputs",
+        "post_run_collect_artifacts",
+        "post_run_update_state",
+        "on_failure_capture_traceback",
+        "on_failure_preserve_logs",
+        "artifact_publish_to_supabase"
+      ],
+      "metadata": {
+        "registry_source": "SYSTEM_AGENT_FUNCTIONS",
+        "variable": "system_synthesis_closure_agent",
+        "studio_contract_version": "v1"
+      }
+    },
+    {
+      "name": "Digital PD Signoff Closure Agent",
+      "loop_type": "digital",
+      "domain": "physical_design",
+      "description": "Analyzes Arch2Tapeout signoff evidence across PostFill STA, DRC, LVS, tapeout, synthesis LEC, and tapeout LEC. Produces a bounded closure restart plan without faking repair success.",
+      "entrypoint": "agents.digital.digital_pd_signoff_closure_agent:run_agent",
+      "execution_mode": "legacy_adapter",
+      "inputs": [
+        "digital/executive_summary.json",
+        "digital/sta_postfill/metrics.json",
+        "digital/drc/drc_summary.json",
+        "digital/lvs/lvs_summary.json",
+        "digital/tapeout/tapeout_summary.json",
+        "digital/lec/lec_summary.json",
+        "digital/tapeout_lec/tapeout_lec_summary.json"
+      ],
+      "outputs": [
+        "digital/signoff_closure/signoff_closure_plan.json",
+        "digital/signoff_closure/signoff_closure_plan.md"
+      ],
+      "artifact_paths": [
+        "digital/signoff_closure/signoff_closure_plan.json",
+        "digital/signoff_closure/signoff_closure_plan.md"
+      ],
+      "artifact_types": [
+        "report",
+        "structured_data"
+      ],
+      "required_skills": [
+        "artifact_publish",
+        "signoff_triage"
+      ],
+      "required_tools": [
+        "python",
+        "supabase"
+      ],
+      "hooks": [
+        "pre_run_validate_inputs",
+        "post_run_collect_artifacts",
+        "post_run_update_state",
+        "on_failure_capture_traceback",
+        "on_failure_preserve_logs",
+        "artifact_publish_to_supabase"
+      ],
+      "metadata": {
+        "registry_source": "DIGITAL_AGENT_FUNCTIONS",
+        "variable": "digital_pd_signoff_closure_agent",
+        "studio_contract_version": "v1"
+      }
+    },
+    {
+      "name": "System PD Signoff Closure Agent",
+      "loop_type": "system",
+      "domain": "physical_design",
+      "description": "Analyzes System PD signoff evidence across analog signoff, PostFill STA, DRC, LVS, tapeout, synthesis LEC, and tapeout LEC. Produces a bounded closure restart plan without faking repair success.",
+      "entrypoint": "agents.system.system_pd_signoff_closure_agent:run_agent",
+      "execution_mode": "legacy_adapter",
+      "inputs": [
+        "analog/signoff/analog_signoff_summary.json",
+        "digital/executive_summary.json",
+        "digital/sta_postfill/metrics.json",
+        "digital/drc/drc_summary.json",
+        "digital/lvs/lvs_summary.json",
+        "digital/tapeout/tapeout_summary.json",
+        "digital/lec/lec_summary.json",
+        "digital/tapeout_lec/tapeout_lec_summary.json"
+      ],
+      "outputs": [
+        "digital/signoff_closure/signoff_closure_plan.json",
+        "digital/signoff_closure/signoff_closure_plan.md"
+      ],
+      "artifact_paths": [
+        "digital/signoff_closure/signoff_closure_plan.json",
+        "digital/signoff_closure/signoff_closure_plan.md"
+      ],
+      "artifact_types": [
+        "report",
+        "structured_data"
+      ],
+      "required_skills": [
+        "artifact_publish",
+        "signoff_triage"
+      ],
+      "required_tools": [
+        "python",
+        "supabase"
+      ],
+      "hooks": [
+        "pre_run_validate_inputs",
+        "post_run_collect_artifacts",
+        "post_run_update_state",
+        "on_failure_capture_traceback",
+        "on_failure_preserve_logs",
+        "artifact_publish_to_supabase"
+      ],
+      "metadata": {
+        "registry_source": "SYSTEM_AGENT_FUNCTIONS",
+        "variable": "system_pd_signoff_closure_agent",
+        "studio_contract_version": "v1"
+      }
+    },
+    {
       "name": "Digital Fill Agent",
       "loop_type": "digital",
       "domain": "physical_design",

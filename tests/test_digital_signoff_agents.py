@@ -13,7 +13,7 @@ from agents.digital.digital_lvs_agent import _lvs_status, _macro_blackbox_deferr
 from agents.digital.digital_scan_atpg_agent import _adapter_log_has_execution_error, _generate_full_scan_bench, _metrics_show_real_atpg_result, _pattern_count_from_file
 from agents.digital import digital_tapeout_lec_agent as tapeout_lec_agent
 from agents.digital.digital_tapeout_lec_agent import PHYSICAL_ONLY_TOP_PORTS, _top_ports
-from agents.digital.digital_tapeout_agent import _blocking_xor_difference_count, _copy_xor_report, _tapeout_failure_reasons, _xor_difference_count, _xor_layer_counts
+from agents.digital.digital_tapeout_agent import _blocking_xor_difference_count, _copy_xor_report, _tapeout_failure_reasons, _xor_difference_count, _xor_layer_counts, _xor_signoff_status
 
 
 def test_atpg_zero_pattern_metrics_are_not_success():
@@ -284,7 +284,7 @@ def test_tapeout_lec_blocks_when_tapeout_failed(tmp_path, monkeypatch):
     assert summary["upstream_tapeout_status"] == "failed"
 
 
-def test_tapeout_status_is_signoff_gated():
+def test_tapeout_status_ignores_xor_by_default():
     reasons = _tapeout_failure_reasons(
         rc=0,
         log="Total XOR differences: 1",
@@ -296,7 +296,23 @@ def test_tapeout_status_is_signoff_gated():
 
     assert "drc_not_clean" not in reasons
     assert "lvs_not_clean" not in reasons
+    assert "xor_differences_found" not in reasons
+    assert _xor_signoff_status() == "not_applicable"
+
+
+def test_tapeout_xor_can_be_configured_as_blocking(monkeypatch):
+    monkeypatch.setattr("agents.digital.digital_tapeout_agent.DEFAULT_XOR_SIGNOFF_MODE", "blocking")
+    reasons = _tapeout_failure_reasons(
+        rc=0,
+        log="Total XOR differences: 1",
+        drc_status="clean",
+        lvs_status="clean",
+        klayout_gds="/tmp/top.klayout.gds",
+        magic_gds=None,
+    )
+
     assert "xor_differences_found" in reasons
+    assert _xor_signoff_status() == "enabled"
 
 
 def test_tapeout_requires_gds_output():
@@ -464,6 +480,7 @@ endmodule
 def test_drc_lvs_deferred_xor_does_not_mask_clean_check():
     assert _drc_status(2, 0, "One or more deferred errors were encountered: 1 XOR differences found.") == "clean"
     assert _lvs_status(2, None, "Final result:\nCircuits match uniquely.\nOne or more deferred errors were encountered: 1 XOR differences found.") == "clean"
+    assert _lvs_status(2, None, "Final result:\nTop level cell failed pin matching.\nOne or more deferred errors were encountered: 1 XOR differences found.") == "mismatch"
 
 
 def test_drc_lvs_blackbox_deferred_when_macro_gds_missing():

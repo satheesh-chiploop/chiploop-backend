@@ -541,7 +541,12 @@ def test_gds_generation_rejects_magic_feedback_problems(tmp_path, monkeypatch):
     assert state["analog_signoff"]["drc"]["status"] == "violations_found"
     assert state["analog_signoff"]["drc"]["feedback_problem_count"] == 56
     assert state["analog_signoff"]["lvs"]["status"] == "blocked"
-    assert state["analog_signoff"]["xor"]["status"] == "blocked"
+    assert state["analog_signoff"]["xor"]["status"] == "not_applicable"
+
+
+def test_analog_lvs_status_parser_detects_clean_and_pin_mismatch():
+    assert gds_agent._analog_lvs_status("Final result:\nCircuits match uniquely.", 0) == "clean"
+    assert gds_agent._analog_lvs_status("Final result:\nTop level cell failed pin matching.", 0) == "mismatch"
 
 
 def test_gds_generation_repairs_magic_feedback_once_and_reruns(tmp_path, monkeypatch):

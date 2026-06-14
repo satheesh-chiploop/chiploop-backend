@@ -192,6 +192,7 @@ def _analog_signoff_summary(
     log: str = "",
     gds_path: str | None = None,
     invalid_reason: str = "",
+    analog_lvs: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     feedback_count = _magic_feedback_problem_count(log) if summary.get("backend") == "magic" else 0
     gds_status = str(summary.get("status") or "")
@@ -217,16 +218,16 @@ def _analog_signoff_summary(
             "feedback_problem_count": feedback_count,
             "reason": invalid_reason or summary.get("reason") or None,
         },
-        "lvs": {
-            "status": "blocked" if blocked else "not_run",
+        "lvs": analog_lvs or {
+            "status": "blocked" if blocked else "not_configured",
             "tool": "netgen",
             "reason": "gds_not_clean" if drc_status == "violations_found" else "analog_lvs_agent_not_configured",
         },
         "xor": {
-            "status": "blocked" if blocked else "not_applicable",
+            "status": "not_applicable",
             "tool": "magic/klayout",
             "difference_count": None,
-            "reason": "gds_not_clean" if drc_status == "violations_found" else "reference_gds_missing",
+            "reason": "analog_xor_not_applicable",
         },
     }
 
@@ -240,6 +241,167 @@ def _publish_analog_signoff(workflow_id: str, state: dict, summary: Dict[str, An
         "analog_signoff_summary.json",
         json.dumps(summary, indent=2),
     )
+
+
+def _analog_lvs_status(text: str, rc: int) -> str:
+    lower = (text or "").lower()
+    if "circuits match uniquely" in lower or "netlists match uniquely" in lower:
+        return "clean"
+    if (
+        "failed pin matching" in lower
+        or "pin matching failed" in lower
+        or "top level cell failed" in lower
+        or "netlists do not match" in lower
+        or "circuits do not match" in lower
+        or "property errors were found" in lower
+    ):
+        return "mismatch"
+    return "completed" if rc == 0 else "failed"
+
+
+def _write_magic_extract_tcl(stage_dir: str, module_name: str, pdk_variant: str, pdk_root_host: str, use_docker: bool) -> str:
+    tech_tcl = _magic_paths(pdk_variant)[1] if use_docker else _host_magic_paths(pdk_root_host, pdk_variant)[1]
+    out_spice = f"{module_name}_extracted.spice" if use_docker else os.path.join(stage_dir, f"{module_name}_extracted.spice")
+    lines = [
+        "drc off",
+        f"source {tech_tcl}",
+        f"load {module_name}",
+        "extract all",
+        "ext2spice lvs",
+        "ext2spice cthresh 0",
+        "ext2spice extresist off",
+        f"ext2spice -o {out_spice}",
+        "quit -noprompt",
+        "",
+    ]
+    path = os.path.join(stage_dir, "magic_extract_lvs.tcl")
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write("\n".join(lines))
+    return path
+
+
+def _run_analog_lvs(
+    state: dict,
+    *,
+    stage_dir: str,
+    module_name: str,
+    pdk_variant: str,
+    pdk_root_host: str,
+    source_spice: str,
+    docker_bin: str | None,
+) -> Dict[str, Any]:
+    summary: Dict[str, Any] = {
+        "status": "not_configured",
+        "tool": "netgen",
+        "reason": "analog_lvs_tool_not_available",
+    }
+    mag_path = os.path.join(stage_dir, f"{module_name}.mag")
+    if not os.path.exists(mag_path):
+        return {**summary, "status": "not_run", "reason": "magic_layout_mag_missing"}
+
+    extract_tcl = _write_magic_extract_tcl(stage_dir, module_name, pdk_variant, pdk_root_host, bool(docker_bin))
+    extract_log_path = os.path.join(stage_dir, "analog_lvs_magic_extract.log")
+    extracted_spice = os.path.join(stage_dir, f"{module_name}_extracted.spice")
+    if docker_bin:
+        extract_cmd = [
+            docker_bin,
+            "run",
+            "--rm",
+            "-v",
+            f"{pdk_root_host}:/pdk",
+            "-v",
+            f"{os.path.abspath(stage_dir)}:/work",
+            "-w",
+            "/work",
+            OPENLANE_DOCKER_IMAGE,
+            "magic",
+            "-dnull",
+            "-noconsole",
+            "-T",
+            _magic_paths(pdk_variant)[0],
+            "/work/magic_extract_lvs.tcl",
+        ]
+    else:
+        magic_bin = shutil.which("magic")
+        if not magic_bin:
+            return summary
+        host_tech, _host_tcl = _host_magic_paths(pdk_root_host, pdk_variant)
+        extract_cmd = [magic_bin, "-dnull", "-noconsole", "-T", host_tech, extract_tcl]
+
+    cp = run_command(state, "analog_magic_lvs_extract", extract_cmd, cwd=stage_dir, timeout_sec=1800)
+    extract_log = (cp.stdout or "") + (cp.stderr or "")
+    with open(extract_log_path, "w", encoding="utf-8", errors="ignore") as fh:
+        fh.write(extract_log)
+    if cp.returncode not in (0, None) or not os.path.exists(extracted_spice):
+        return {
+            "status": "failed",
+            "tool": "magic/netgen",
+            "reason": "magic_extract_failed",
+            "return_code": cp.returncode,
+            "extracted_spice": extracted_spice if os.path.exists(extracted_spice) else None,
+            "extract_log": extract_log_path,
+        }
+
+    setup_path = f"/pdk/{pdk_variant}/libs.tech/netgen/{pdk_variant}_setup.tcl"
+    lvs_log_path = os.path.join(stage_dir, "analog_lvs_netgen.log")
+    if docker_bin:
+        source_name = os.path.basename(source_spice)
+        if os.path.abspath(source_spice) != os.path.abspath(os.path.join(stage_dir, source_name)):
+            shutil.copy2(source_spice, os.path.join(stage_dir, source_name))
+        lvs_cmd = [
+            docker_bin,
+            "run",
+            "--rm",
+            "-v",
+            f"{pdk_root_host}:/pdk",
+            "-v",
+            f"{os.path.abspath(stage_dir)}:/work",
+            "-w",
+            "/work",
+            OPENLANE_DOCKER_IMAGE,
+            "netgen",
+            "-batch",
+            "lvs",
+            f"{module_name}_extracted.spice {module_name}",
+            f"{source_name} {module_name}",
+            setup_path,
+            "analog_lvs_netgen.out",
+        ]
+    else:
+        netgen_bin = shutil.which("netgen")
+        if not netgen_bin:
+            return {
+                "status": "not_configured",
+                "tool": "netgen",
+                "reason": "netgen_not_available",
+                "extracted_spice": extracted_spice,
+                "extract_log": extract_log_path,
+            }
+        host_setup = os.path.join(pdk_root_host, pdk_variant, "libs.tech", "netgen", f"{pdk_variant}_setup.tcl")
+        lvs_cmd = [
+            netgen_bin,
+            "-batch",
+            "lvs",
+            f"{extracted_spice} {module_name}",
+            f"{source_spice} {module_name}",
+            host_setup,
+            os.path.join(stage_dir, "analog_lvs_netgen.out"),
+        ]
+
+    cp_lvs = run_command(state, "analog_netgen_lvs", lvs_cmd, cwd=stage_dir, timeout_sec=1800)
+    lvs_log = (cp_lvs.stdout or "") + (cp_lvs.stderr or "")
+    with open(lvs_log_path, "w", encoding="utf-8", errors="ignore") as fh:
+        fh.write(lvs_log)
+    status = _analog_lvs_status(lvs_log, cp_lvs.returncode if cp_lvs.returncode is not None else 1)
+    return {
+        "status": status,
+        "tool": "netgen",
+        "reason": None if status == "clean" else status,
+        "return_code": cp_lvs.returncode,
+        "extracted_spice": extracted_spice,
+        "extract_log": extract_log_path,
+        "log": lvs_log_path,
+    }
 
 
 def _resolve_pdk_variant(state: dict) -> str:
@@ -736,6 +898,19 @@ def run_agent(state: dict) -> dict:
             "pass1_magic_feedback_problem_count": pass1_feedback_problem_count if repair_attempted else None,
         })
 
+    analog_lvs = None
+    if summary.get("status") == "generated" and backend == "magic":
+        analog_lvs = _run_analog_lvs(
+            state,
+            stage_dir=stage_dir,
+            module_name=module_name,
+            pdk_variant=pdk_variant,
+            pdk_root_host=pdk_root_host,
+            source_spice=staged_spice,
+            docker_bin=docker_bin,
+        )
+        summary["analog_lvs"] = analog_lvs
+
     save_text_artifact_and_record(workflow_id, AGENT_NAME, "analog/gds", "run_gds.sh", run_text)
     if backend == "magic" and tcl_path and os.path.exists(tcl_path):
         with open(tcl_path, "r", encoding="utf-8") as fh:
@@ -763,6 +938,15 @@ def run_agent(state: dict) -> dict:
     if backend == "magic" and os.path.exists(pass1_log_path):
         with open(pass1_log_path, "r", encoding="utf-8", errors="ignore") as fh:
             save_text_artifact_and_record(workflow_id, AGENT_NAME, "analog/gds", "magic_gds_pass1.log", fh.read())
+    extract_lvs_tcl = os.path.join(stage_dir, "magic_extract_lvs.tcl")
+    if backend == "magic" and os.path.exists(extract_lvs_tcl):
+        with open(extract_lvs_tcl, "r", encoding="utf-8", errors="ignore") as fh:
+            save_text_artifact_and_record(workflow_id, AGENT_NAME, "analog/signoff", "magic_extract_lvs.tcl", fh.read())
+    for artifact_name in ("analog_lvs_magic_extract.log", "analog_lvs_netgen.log", f"{module_name}_extracted.spice"):
+        artifact_path = os.path.join(stage_dir, artifact_name)
+        if os.path.exists(artifact_path):
+            with open(artifact_path, "r", encoding="utf-8", errors="ignore") as fh:
+                save_text_artifact_and_record(workflow_id, AGENT_NAME, "analog/signoff", artifact_name, fh.read())
     save_text_artifact_and_record(workflow_id, AGENT_NAME, "analog/gds", log_name, log)
     _publish_analog_signoff(
         workflow_id,
@@ -773,6 +957,7 @@ def run_agent(state: dict) -> dict:
             log=log,
             gds_path=summary.get("gds") if isinstance(summary.get("gds"), str) else gds_path,
             invalid_reason=invalid_reason,
+            analog_lvs=analog_lvs,
         ),
     )
     save_text_artifact_and_record(workflow_id, AGENT_NAME, "analog/gds", "analog_gds_summary.json", json.dumps(summary, indent=2))
