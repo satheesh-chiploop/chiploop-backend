@@ -372,6 +372,8 @@ def test_gds_generation_uses_magic_docker_by_default(tmp_path, monkeypatch):
         assert "CHIPLOOP_FLAT_BOX=[box values]" in tcl
         assert "gds flatten true" in tcl
         assert tcl.index("gds flatten true") < tcl.index("gds write ana.gds")
+        assert "catch {gds flatglob *}" in tcl
+        assert tcl.index("catch {gds flatglob *}") < tcl.index("gds write ana.gds")
         assert "gds write ana.gds" in tcl
         assert tcl.rfind("feedback save magic_feedback.txt") > tcl.index("gds write ana.gds")
         staged_spice = (tmp_path / "analog" / "gds" / "ana.sp").read_text(encoding="utf-8")
