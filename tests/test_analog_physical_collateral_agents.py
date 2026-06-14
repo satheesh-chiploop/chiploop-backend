@@ -405,6 +405,7 @@ def test_gds_generation_uses_magic_docker_by_default(tmp_path, monkeypatch):
         assert "source /pdk/sky130A/libs.tech/magic/sky130A.tcl" in tcl
         assert "magic::netlist_to_layout ana.sp sky130" in tcl
         assert "CHIPLOOP_FINAL_BOX=[box values]" in tcl
+        assert "expand *" in tcl
         assert "flatten ana_flat" in tcl
         assert "load ana_flat" in tcl
         assert "cellname rename ana_flat ana" in tcl
@@ -412,8 +413,8 @@ def test_gds_generation_uses_magic_docker_by_default(tmp_path, monkeypatch):
         assert "CHIPLOOP_FLAT_BOX=[box values]" in tcl
         assert "cif flatten true" not in tcl
         assert "catch {cif flatglob *}" not in tcl
-        assert "cellname list allcells" in tcl
-        assert 'cellname delete $chiploop_cell' in tcl
+        assert "cellname list allcells" not in tcl
+        assert "cellname delete" not in tcl
         assert "gds flatten true" in tcl
         assert tcl.index("gds flatten true") < tcl.index("gds write ana.gds")
         assert "catch {gds flatglob *}" in tcl
