@@ -6,6 +6,7 @@ import shutil
 from datetime import datetime
 from typing import Any, Dict
 
+from model_gateway import complete_text
 from tooling.runner import run_command
 from utils.artifact_utils import save_text_artifact_and_record
 
@@ -38,7 +39,12 @@ def _find_gds(root: str) -> str:
 
 def _prepare_magic_spice(src: str, dst: str) -> None:
     text = open(src, "r", encoding="utf-8", errors="ignore").read()
+    text = _magic_spice_text(text)
+    with open(dst, "w", encoding="utf-8") as fh:
+        fh.write(text)
 
+
+def _magic_spice_text(text: str) -> str:
     def repl(match: re.Match[str]) -> str:
         key = match.group(1)
         value = match.group(2)
@@ -64,8 +70,73 @@ def _prepare_magic_spice(src: str, dst: str) -> None:
         lambda m: f"{m.group(1)}={max(float(m.group(2)), 0.42 if m.group(1).lower() == 'w' else 0.15):g}",
         text,
     )
-    with open(dst, "w", encoding="utf-8") as fh:
-        fh.write(text)
+    return text
+
+
+def _strip_code_fences(text: str) -> str:
+    text = (text or "").strip()
+    if text.startswith("```"):
+        lines = text.splitlines()
+        if lines and lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        text = "\n".join(lines).strip()
+    return text
+
+
+def _has_real_sky130_mos(text: str) -> bool:
+    return bool(re.search(
+        r"^\s*M\S*\s+\S+\s+\S+\s+\S+\s+\S+\s+sky130_fd_pr__(?:nfet|pfet)_\S+(?=.*\bW\s*=)(?=.*\bL\s*=)",
+        text or "",
+        flags=re.IGNORECASE | re.MULTILINE,
+    ))
+
+
+def _repair_magic_feedback_spice(
+    state: dict,
+    *,
+    module_name: str,
+    original_spice: str,
+    magic_log: str,
+    feedback_text: str = "",
+) -> str:
+    prompt = f"""
+Repair this generated Sky130 transistor-level SPICE so Magic can generate DRC-clean analog GDS.
+
+Module/subckt name:
+{module_name}
+
+Magic log tail:
+{_tail(magic_log, 5000)}
+
+Magic feedback entries, if available:
+{_tail(feedback_text, 5000)}
+
+Original SPICE:
+{original_spice}
+
+Strict requirements:
+- Return repaired SPICE text only. No Markdown.
+- Preserve exactly one .subckt named {module_name}.
+- Keep the same external macro intent and pin names.
+- If a port is a bus, use either scalar bus pins or bit pins, not both.
+- Do not use input pins as MOS drain/source/bulk terminals; input pins may drive MOS gates only.
+- Supply pins may be MOS source/bulk terminals.
+- Output pins may be MOS drain/source terminals.
+- Use only M-device Sky130 MOS lines with sky130_fd_pr__nfet_01v8 and sky130_fd_pr__pfet_01v8.
+- Do not use X lines for MOS devices.
+- Every MOS device must have W >= 0.42u and L >= 0.15u.
+- Prefer simple inverter/buffer style topology that Magic can place without geometry feedback problems.
+- End with .ends {module_name}.
+"""
+    repaired = _strip_code_fences(complete_text(
+        prompt,
+        capability="analog_generation",
+        agent_name=AGENT_NAME,
+        state=state,
+    ))
+    return repaired if _has_real_sky130_mos(repaired) else ""
 
 
 def _docker_available() -> bool:
@@ -537,6 +608,54 @@ def run_agent(state: dict) -> dict:
     with open(log_path, "w", encoding="utf-8", errors="ignore") as fh:
         fh.write(log)
 
+    repair_attempted = False
+    repair_applied = False
+    repair_reason = ""
+    pass1_feedback_problem_count = _magic_feedback_problem_count(log) if backend == "magic" else 0
+    pass1_invalid_reason = _magic_layout_invalid(log) if backend == "magic" else ""
+    sky130_summary = state.get("analog_sky130_spice") if isinstance(state.get("analog_sky130_spice"), dict) else {}
+    can_repair_magic_spice = (
+        backend == "magic"
+        and pass1_invalid_reason == "magic_feedback_problems"
+        and sky130_summary.get("generated") is True
+    )
+    if can_repair_magic_spice:
+        repair_attempted = True
+        pass1_log_path = os.path.join(stage_dir, "magic_gds_pass1.log")
+        shutil.copy2(log_path, pass1_log_path)
+        pass1_spice_path = os.path.join(stage_dir, "magic_input_pass1.sp")
+        if os.path.exists(staged_spice):
+            shutil.copy2(staged_spice, pass1_spice_path)
+        feedback_text = ""
+        feedback_path = os.path.join(stage_dir, "magic_feedback.txt")
+        if os.path.exists(feedback_path):
+            with open(feedback_path, "r", encoding="utf-8", errors="ignore") as fh:
+                feedback_text = fh.read()
+            shutil.copy2(feedback_path, os.path.join(stage_dir, "magic_feedback_pass1.txt"))
+        with open(staged_spice, "r", encoding="utf-8", errors="ignore") as fh:
+            original_spice = fh.read()
+        repaired_spice = _repair_magic_feedback_spice(
+            state,
+            module_name=module_name,
+            original_spice=original_spice,
+            magic_log=log,
+            feedback_text=feedback_text,
+        )
+        if repaired_spice:
+            with open(os.path.join(stage_dir, "magic_input_repair.sp"), "w", encoding="utf-8") as fh:
+                fh.write(repaired_spice)
+            with open(staged_spice, "w", encoding="utf-8") as fh:
+                fh.write(_magic_spice_text(repaired_spice))
+            cp, tcl_path, tool_mode, image = _run_magic_gds(
+                state, stage_dir, staged_spice, module_name, pdk_variant, pdk_root_host, docker_bin
+            )
+            log = (cp.stdout or "") + (cp.stderr or "")
+            with open(log_path, "w", encoding="utf-8", errors="ignore") as fh:
+                fh.write(log)
+            repair_applied = _magic_layout_invalid(log) == ""
+        else:
+            repair_reason = "repair_pass_no_valid_mos_devices"
+
     gds_path = _find_gds(stage_dir)
     magic_feedback_problem_count = _magic_feedback_problem_count(log) if backend == "magic" else 0
     invalid_reason = _magic_layout_invalid(log) if backend == "magic" else ""
@@ -551,6 +670,9 @@ def run_agent(state: dict) -> dict:
             "log": log_path,
             "tool_mode": tool_mode,
             "image": image,
+            "repair_attempted": repair_attempted,
+            "repair_applied": repair_applied,
+            "pass1_magic_feedback_problem_count": pass1_feedback_problem_count if repair_attempted else None,
         })
         with open(final_gds, "rb") as fh:
             # Store a small text breadcrumb instead of trying to upload binary through text helper.
@@ -571,6 +693,10 @@ def run_agent(state: dict) -> dict:
             "log_tail": _tail(log),
             "tool_mode": tool_mode,
             "image": image,
+            "repair_attempted": repair_attempted,
+            "repair_applied": repair_applied,
+            "repair_reason": repair_reason or None,
+            "pass1_magic_feedback_problem_count": pass1_feedback_problem_count if repair_attempted else None,
         })
 
     save_text_artifact_and_record(workflow_id, AGENT_NAME, "analog/gds", "run_gds.sh", run_text)
@@ -580,10 +706,26 @@ def run_agent(state: dict) -> dict:
     if backend == "magic" and os.path.exists(staged_spice):
         with open(staged_spice, "r", encoding="utf-8", errors="ignore") as fh:
             save_text_artifact_and_record(workflow_id, AGENT_NAME, "analog/gds", "magic_input.sp", fh.read())
+    pass1_spice_path = os.path.join(stage_dir, "magic_input_pass1.sp")
+    if backend == "magic" and os.path.exists(pass1_spice_path):
+        with open(pass1_spice_path, "r", encoding="utf-8", errors="ignore") as fh:
+            save_text_artifact_and_record(workflow_id, AGENT_NAME, "analog/gds", "magic_input_pass1.sp", fh.read())
+    repair_spice_path = os.path.join(stage_dir, "magic_input_repair.sp")
+    if backend == "magic" and os.path.exists(repair_spice_path):
+        with open(repair_spice_path, "r", encoding="utf-8", errors="ignore") as fh:
+            save_text_artifact_and_record(workflow_id, AGENT_NAME, "analog/gds", "magic_input_repair.sp", fh.read())
     feedback_path = os.path.join(stage_dir, "magic_feedback.txt")
     if backend == "magic" and os.path.exists(feedback_path):
         with open(feedback_path, "r", encoding="utf-8", errors="ignore") as fh:
             save_text_artifact_and_record(workflow_id, AGENT_NAME, "analog/gds", "magic_feedback.txt", fh.read())
+    pass1_feedback_path = os.path.join(stage_dir, "magic_feedback_pass1.txt")
+    if backend == "magic" and os.path.exists(pass1_feedback_path):
+        with open(pass1_feedback_path, "r", encoding="utf-8", errors="ignore") as fh:
+            save_text_artifact_and_record(workflow_id, AGENT_NAME, "analog/gds", "magic_feedback_pass1.txt", fh.read())
+    pass1_log_path = os.path.join(stage_dir, "magic_gds_pass1.log")
+    if backend == "magic" and os.path.exists(pass1_log_path):
+        with open(pass1_log_path, "r", encoding="utf-8", errors="ignore") as fh:
+            save_text_artifact_and_record(workflow_id, AGENT_NAME, "analog/gds", "magic_gds_pass1.log", fh.read())
     save_text_artifact_and_record(workflow_id, AGENT_NAME, "analog/gds", log_name, log)
     _publish_analog_signoff(
         workflow_id,

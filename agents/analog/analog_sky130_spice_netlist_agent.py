@@ -248,6 +248,61 @@ Strict requirements:
     ))
 
 
+def _repair_generated_spice_with_llm(
+    state: dict,
+    module_name: str,
+    ports: List[str],
+    original_spice: str,
+    layout_issues: List[str],
+) -> str:
+    ctx = _generation_context(state)
+    prompt = f"""
+Repair this generated Sky130 transistor-level SPICE subcircuit so it is layout-safe for Magic GDS generation.
+
+Module/subckt name:
+{module_name}
+
+Required port order:
+{json.dumps(ports, indent=2)}
+
+Detected layout-safety issues to fix:
+{json.dumps(layout_issues, indent=2)}
+
+Available analog spec JSON:
+{json.dumps(ctx["analog_spec"], indent=2)}
+
+Available macro interface contract JSON:
+{json.dumps(ctx["analog_macro_interface_contract"], indent=2)}
+
+Original rejected SPICE:
+{original_spice}
+
+Strict requirements:
+- Return repaired SPICE text only. No Markdown.
+- Include exactly one .subckt named {module_name}.
+- Preserve the required external interface. For bus ports, use either scalar bus pins or bit pins, not both.
+- Input pins may connect only to MOS gates or passive loads. Do not use input pins as MOS drain/source/bulk terminals.
+- Do not create internal devices that drive, tie, or overwrite external input pins.
+- Output pins may be MOS drain/source terminals.
+- Supply pins may be MOS source/bulk terminals.
+- Use only sky130_fd_pr__nfet_01v8 and sky130_fd_pr__pfet_01v8 MOS devices with M lines.
+- Do not use X lines for MOS devices.
+- Every MOS device must have explicit W and L with W >= 0.42u and L >= 0.15u.
+- End with .ends {module_name}.
+"""
+    return _strip_code_fences(complete_text(
+        prompt,
+        capability="analog_generation",
+        agent_name=AGENT_NAME,
+        state=state,
+    ))
+
+
+def _blocking_layout_issues(spice: str, port_specs: Dict[str, Dict[str, Any]]) -> List[str]:
+    layout_issues = _generated_spice_layout_issues(spice, port_specs)
+    return [issue for issue in layout_issues if not issue.startswith("duplicate_scalar_bus_pins:")]
+
+
 def run_agent(state: dict) -> dict:
     print(f"\nRunning {AGENT_NAME}...")
     workflow_id = state.get("workflow_id", "default")
@@ -296,17 +351,32 @@ def run_agent(state: dict) -> dict:
         raise RuntimeError("Analog GDS generation requires real transistor-level SPICE; no valid device-level SPICE was provided.")
 
     spice = _normalise_sky130_spice(selected_text, module_name, ports)
-    layout_issues = _generated_spice_layout_issues(spice, port_specs)
-    layout_blocking_issues = [issue for issue in layout_issues if not issue.startswith("duplicate_scalar_bus_pins:")]
+    layout_blocking_issues = _blocking_layout_issues(spice, port_specs)
     if layout_blocking_issues and selected_source == "generated_by_sky130_spice_agent":
+        save_text_artifact_and_record(workflow_id, AGENT_NAME, "analog/sky130", f"{module_name}_rejected_pass1.spice", spice)
+        repaired_text = _repair_generated_spice_with_llm(state, module_name, ports, spice, layout_blocking_issues)
+        if repaired_text and _has_real_devices(repaired_text):
+            repaired_spice = _normalise_sky130_spice(repaired_text, module_name, ports)
+            repaired_issues = _blocking_layout_issues(repaired_spice, port_specs)
+            if not repaired_issues:
+                spice = repaired_spice
+                layout_blocking_issues = []
+                selected_source = "generated_by_sky130_spice_agent_repaired"
+            else:
+                save_text_artifact_and_record(workflow_id, AGENT_NAME, "analog/sky130", f"{module_name}_rejected_pass2.spice", repaired_spice)
+                layout_blocking_issues = repaired_issues
+        else:
+            layout_blocking_issues = [*layout_blocking_issues, "repair_pass_no_valid_mos_devices"]
+
+    if layout_blocking_issues and selected_source.startswith("generated_by_sky130_spice_agent"):
         summary.update({
             "status": "failed",
             "reason": "generated_spice_not_layout_safe",
             "layout_issues": layout_blocking_issues,
+            "repair_attempted": True,
             "note": "Generated transistor SPICE would create invalid Magic layout. Provide a real layout-safe transistor netlist or improve the analog SPICE generator.",
         })
         save_text_artifact_and_record(workflow_id, AGENT_NAME, "analog/sky130", "sky130_spice_summary.json", json.dumps(summary, indent=2))
-        save_text_artifact_and_record(workflow_id, AGENT_NAME, "analog/sky130", f"{module_name}_rejected.spice", spice)
         state["analog_sky130_spice"] = summary
         state["status"] = f"{AGENT_NAME}: failed"
         raise RuntimeError(f"Analog Sky130 SPICE generation failed: generated_spice_not_layout_safe ({', '.join(layout_blocking_issues[:5])})")
@@ -316,10 +386,12 @@ def run_agent(state: dict) -> dict:
 
     summary.update({
         "status": "ready",
+        "source": selected_source,
         "spice": spice_path,
         "relpath": f"analog/sky130/{module_name}.spice",
         "device_level": True,
-        "generated": selected_source == "generated_by_sky130_spice_agent",
+        "generated": selected_source.startswith("generated_by_sky130_spice_agent"),
+        "repair_applied": selected_source == "generated_by_sky130_spice_agent_repaired",
     })
     save_text_artifact_and_record(workflow_id, AGENT_NAME, "analog/sky130", f"{module_name}.spice", spice)
     save_text_artifact_and_record(workflow_id, AGENT_NAME, "analog/sky130", "sky130_spice_summary.json", json.dumps(summary, indent=2))

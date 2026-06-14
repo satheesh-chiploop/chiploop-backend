@@ -251,6 +251,47 @@ def test_sky130_spice_agent_rejects_generated_spice_that_drives_input_pins(tmp_p
     assert "input_pin_used_as_device_terminal:sample_in" in state["analog_sky130_spice"]["layout_issues"]
 
 
+def test_sky130_spice_agent_repairs_generated_spice_that_drives_input_pins(tmp_path, monkeypatch):
+    monkeypatch.setattr(spice_agent, "save_text_artifact_and_record", lambda *args, **kwargs: "local")
+    responses = iter([
+        (
+            ".subckt ana sample_in data_out avdd avss\n"
+            "M1 sample_in data_out avdd avdd sky130_fd_pr__pfet_01v8 W=1u L=0.15u\n"
+            "M2 data_out sample_in avss avss sky130_fd_pr__nfet_01v8 W=1u L=0.15u\n"
+            ".ends ana\n"
+        ),
+        (
+            ".subckt ana sample_in data_out avdd avss\n"
+            "M1 data_out sample_in avdd avdd sky130_fd_pr__pfet_01v8 W=1u L=0.15u\n"
+            "M2 data_out sample_in avss avss sky130_fd_pr__nfet_01v8 W=1u L=0.15u\n"
+            ".ends ana\n"
+        ),
+    ])
+    monkeypatch.setattr(spice_agent, "complete_text", lambda *args, **kwargs: next(responses))
+
+    state = spice_agent.run_agent({
+        "workflow_id": "wf",
+        "workflow_dir": str(tmp_path),
+        "analog_physical_mode": "generate_sky130_gds",
+        "analog_pdk": "sky130A",
+        "analog_spec": {
+            "module_name": "ana",
+            "ports": [
+                {"name": "sample_in", "direction": "input"},
+                {"name": "data_out", "direction": "output"},
+                {"name": "avdd", "direction": "inout"},
+                {"name": "avss", "direction": "inout"},
+            ],
+        },
+    })
+
+    assert state["analog_sky130_spice"]["status"] == "ready"
+    assert state["analog_sky130_spice"]["source"] == "generated_by_sky130_spice_agent_repaired"
+    assert state["analog_sky130_spice"]["repair_applied"] is True
+    text = open(state["analog_spice_path"], "r", encoding="utf-8").read()
+    assert "M1 data_out sample_in avdd avdd" in text
+
+
 def test_sky130_spice_layout_issues_catch_input_bus_bits_but_not_supplies():
     spice = (
         ".subckt ana sensor_temp_celsius[0] adc_code[0] avdd avss\n"
@@ -424,6 +465,53 @@ def test_gds_generation_rejects_magic_feedback_problems(tmp_path, monkeypatch):
     assert state["analog_signoff"]["drc"]["feedback_problem_count"] == 56
     assert state["analog_signoff"]["lvs"]["status"] == "blocked"
     assert state["analog_signoff"]["xor"]["status"] == "blocked"
+
+
+def test_gds_generation_repairs_magic_feedback_once_and_reruns(tmp_path, monkeypatch):
+    monkeypatch.setattr(gds_agent, "save_text_artifact_and_record", lambda *args, **kwargs: "local")
+    monkeypatch.setattr(gds_agent, "complete_text", lambda *args, **kwargs: ".subckt ana vin vout vdd vss\nM1 vout vin vdd vdd sky130_fd_pr__pfet_01v8 W=1u L=0.15u\nM2 vout vin vss vss sky130_fd_pr__nfet_01v8 W=1u L=0.15u\n.ends ana\n")
+    monkeypatch.setattr(gds_agent.shutil, "which", lambda name: "/usr/bin/docker" if name == "docker" else None)
+    pdk_root = tmp_path / "pdk"
+    magic_dir = pdk_root / "sky130A" / "libs.tech" / "magic"
+    magic_dir.mkdir(parents=True)
+    (magic_dir / "sky130A.tech").write_text("tech\n", encoding="utf-8")
+    (magic_dir / "sky130A.tcl").write_text("proc sky130::importspice {} {}\n", encoding="utf-8")
+    spice = tmp_path / "ana.spice"
+    spice.write_text(
+        ".subckt ana vin vout vdd vss\n"
+        "M1 vin vout vdd vdd sky130_fd_pr__pfet_01v8 W=1u L=0.15u\n"
+        "M2 vout vin vss vss sky130_fd_pr__nfet_01v8 W=1u L=0.15u\n"
+        ".ends ana\n",
+        encoding="utf-8",
+    )
+    calls = {"count": 0}
+
+    def fake_run_command(state, capability, cmd, cwd=None, timeout_sec=None):
+        calls["count"] += 1
+        (tmp_path / "analog" / "gds" / "ana.gds").write_bytes(b"GDS")
+        if calls["count"] == 1:
+            return SimpleNamespace(returncode=0, stdout="56 problems occurred.  See feedback entries.\n", stderr="")
+        return SimpleNamespace(returncode=0, stdout="magic ok\n", stderr="")
+
+    monkeypatch.setattr(gds_agent, "run_command", fake_run_command)
+
+    state = gds_agent.run_agent({
+        "workflow_id": "wf",
+        "workflow_dir": str(tmp_path),
+        "analog_physical_mode": "generate_sky130_gds",
+        "analog_pdk": "sky130A",
+        "analog_macro_module": "ana",
+        "analog_spice_path": str(spice),
+        "pdk_root_host": str(pdk_root),
+        "analog_sky130_spice": {"generated": True},
+    })
+
+    assert calls["count"] == 2
+    assert state["analog_gds_generation"]["status"] == "generated"
+    assert state["analog_gds_generation"]["repair_attempted"] is True
+    assert state["analog_gds_generation"]["repair_applied"] is True
+    assert state["analog_gds_generation"]["pass1_magic_feedback_problem_count"] == 56
+    assert state["analog_signoff"]["drc"]["status"] == "clean"
 
 
 def test_gds_generation_uses_align_docker_when_host_align_missing(tmp_path, monkeypatch):
