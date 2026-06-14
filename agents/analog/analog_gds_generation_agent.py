@@ -324,6 +324,8 @@ def _write_magic_import_tcl(
         "puts stdout \"CHIPLOOP_FINAL_BOX=[box values]\"",
         f"flatten {module_name}_flat",
         f"load {module_name}_flat",
+        f"cellname rename {module_name}_flat {module_name}",
+        f"load {module_name}",
         "select top cell",
         "expand",
         "puts stdout \"CHIPLOOP_FLAT_BOX=[box values]\"",

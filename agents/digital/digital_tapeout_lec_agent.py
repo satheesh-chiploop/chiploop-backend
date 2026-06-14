@@ -141,6 +141,61 @@ def run_agent(state: dict) -> dict:
     _ensure_dir(logs_dir)
     _ensure_dir(input_dir)
 
+    digital = state.get("digital") if isinstance(state.get("digital"), dict) else {}
+    tapeout_state = digital.get("tapeout") if isinstance(digital.get("tapeout"), dict) else {}
+    tapeout_status = str(tapeout_state.get("status") or "").strip().lower()
+    if tapeout_status and tapeout_status not in {"generated", "pass", "ok", "clean", "success"}:
+        script_path = os.path.join(stage_dir, "yosys_tapeout_lec.ys")
+        log_path = os.path.join(logs_dir, "yosys_tapeout_lec.log")
+        summary_path = os.path.join(stage_dir, "tapeout_lec_summary.json")
+        report_path = os.path.join(stage_dir, "tapeout_lec_report.md")
+        log = f"Tapeout LEC blocked because Digital Tapeout Agent status is {tapeout_status}.\n"
+        script = "# Tapeout LEC blocked because tapeout did not complete successfully.\n"
+        summary = {
+            "workflow_id": workflow_id,
+            "agent": AGENT_NAME,
+            "status": "blocked",
+            "tool": "yosys",
+            "tool_available": bool(tool_path("yosys", state)),
+            "return_code": None,
+            "comparison": "rtl_vs_tapeout_netlist",
+            "failure_reason": "blocked_by_tapeout_failure",
+            "upstream_tapeout_status": tapeout_status,
+            "generated_at": datetime.utcnow().isoformat() + "Z",
+            "artifacts": {
+                "script": "digital/tapeout_lec/yosys_tapeout_lec.ys",
+                "log": "digital/tapeout_lec/logs/yosys_tapeout_lec.log",
+                "summary": "digital/tapeout_lec/tapeout_lec_summary.json",
+                "report": "digital/tapeout_lec/tapeout_lec_report.md",
+            },
+        }
+        report = "\n".join([
+            "# Tapeout Logic Equivalence Check",
+            "",
+            "- Status: `blocked`",
+            f"- Failure reason: `{summary['failure_reason']}`",
+            f"- Upstream tapeout status: `{tapeout_status}`",
+            "",
+            "Tapeout LEC is skipped until the Digital Tapeout Agent completes successfully.",
+        ]) + "\n"
+        _write_text(script_path, script)
+        _write_text(log_path, log)
+        _write_text(summary_path, json.dumps(summary, indent=2))
+        _write_text(report_path, report)
+        save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "tapeout_lec/yosys_tapeout_lec.ys", script)
+        save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "tapeout_lec/logs/yosys_tapeout_lec.log", log)
+        save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "tapeout_lec/tapeout_lec_summary.json", json.dumps(summary, indent=2))
+        save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "tapeout_lec/tapeout_lec_report.md", report)
+        state.setdefault("digital", {})["tapeout_lec"] = {
+            "status": "blocked",
+            "summary_json": summary_path,
+            "report_md": report_path,
+            "log": log_path,
+            "netlist": None,
+        }
+        state["status"] = f"{AGENT_NAME}: blocked"
+        return state
+
     rtl_files = _rtl_sources(state, workflow_dir)
     final_netlist = _select_final_netlist(state, workflow_dir)
     staged_netlist = None

@@ -11,6 +11,7 @@ from agents.digital import digital_spec2rtl_conformance_agent as spec2rtl_agent
 from agents.digital.digital_logic_equivalence_agent import _generated_stdcell_model, _missing_stdcell_models, _prepare_golden_rtl_for_yosys, _yosys_script
 from agents.digital.digital_lvs_agent import _lvs_status, _macro_blackbox_deferred as _lvs_macro_blackbox_deferred
 from agents.digital.digital_scan_atpg_agent import _adapter_log_has_execution_error, _generate_full_scan_bench, _metrics_show_real_atpg_result, _pattern_count_from_file
+from agents.digital import digital_tapeout_lec_agent as tapeout_lec_agent
 from agents.digital.digital_tapeout_lec_agent import PHYSICAL_ONLY_TOP_PORTS, _top_ports
 from agents.digital.digital_tapeout_agent import _blocking_xor_difference_count, _copy_xor_report, _tapeout_failure_reasons, _xor_difference_count, _xor_layer_counts
 
@@ -264,6 +265,23 @@ def test_tapeout_physical_only_port_detection(tmp_path):
     ignored = (_top_ports(str(gate), "top") - _top_ports(str(rtl), "top")) & PHYSICAL_ONLY_TOP_PORTS
 
     assert ignored == {"VPWR", "VGND"}
+
+
+def test_tapeout_lec_blocks_when_tapeout_failed(tmp_path, monkeypatch):
+    monkeypatch.setattr(tapeout_lec_agent, "save_text_artifact_and_record", lambda *args, **kwargs: "local")
+    monkeypatch.setattr(tapeout_lec_agent, "run_command", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("yosys should not run")))
+    monkeypatch.setattr(tapeout_lec_agent, "tool_path", lambda name, state: "/usr/bin/yosys" if name == "yosys" else None)
+
+    state = tapeout_lec_agent.run_agent({
+        "workflow_id": "wf",
+        "workflow_dir": str(tmp_path),
+        "digital": {"tapeout": {"status": "failed"}},
+    })
+
+    summary = json.loads((tmp_path / "digital" / "tapeout_lec" / "tapeout_lec_summary.json").read_text(encoding="utf-8"))
+    assert state["digital"]["tapeout_lec"]["status"] == "blocked"
+    assert summary["failure_reason"] == "blocked_by_tapeout_failure"
+    assert summary["upstream_tapeout_status"] == "failed"
 
 
 def test_tapeout_status_is_signoff_gated():
