@@ -99,6 +99,35 @@ def _normalize_subckt_bus_pins(text: str) -> str:
     )
 
 
+def _bit_pin_replacement_map(pins: List[str]) -> Dict[str, str]:
+    by_base: Dict[str, List[tuple[int, str]]] = {}
+    for pin in pins:
+        match = re.match(r"^(.+)\[(\d+)\]$", pin or "")
+        if not match:
+            continue
+        by_base.setdefault(match.group(1), []).append((int(match.group(2)), pin))
+    return {base: sorted(values)[0][1] for base, values in by_base.items()}
+
+
+def _legalize_scalar_bus_mos_terminals(text: str) -> str:
+    _subckt_name, pins = _subckt_parts(text)
+    replacements = _bit_pin_replacement_map(pins)
+    if not replacements:
+        return text
+
+    def repl(match: re.Match) -> str:
+        prefix, drain, gate, source, bulk, suffix = match.groups()
+        terminals = [replacements.get(term, term) for term in (drain, gate, source, bulk)]
+        return f"{prefix}{terminals[0]} {terminals[1]} {terminals[2]} {terminals[3]}{suffix}"
+
+    return re.sub(
+        r"^(\s*M\S*\s+)(\S+)\s+(\S+)\s+(\S+)\s+(\S+)(\s+\S+.*)$",
+        repl,
+        text or "",
+        flags=re.IGNORECASE | re.MULTILINE,
+    )
+
+
 def _direction_for_pin(pin: str, port_specs: Dict[str, Dict[str, Any]]) -> str:
     spec = port_specs.get(pin) or port_specs.get(_base_bus_name(pin)) or {}
     value = spec.get("direction") or spec.get("verilog_direction") or spec.get("lef_direction") or ""
@@ -206,6 +235,24 @@ def _normalise_sky130_spice(text: str, module_name: str, ports: List[str]) -> st
     if not re.search(r"^\s*\.end\s*$", body, flags=re.IGNORECASE | re.MULTILINE):
         body += ".end\n"
     return _normalize_subckt_bus_pins(body)
+
+
+def _normalise_generated_sky130_spice(text: str, module_name: str, ports: List[str]) -> str:
+    return _legalize_scalar_bus_mos_terminals(_normalise_sky130_spice(text, module_name, ports))
+
+
+def _is_generated_source(source: str) -> bool:
+    return str(source or "").startswith("generated_by_sky130_spice_agent")
+
+
+def _normalise_for_source(text: str, module_name: str, ports: List[str], source: str) -> str:
+    if _is_generated_source(source):
+        return _normalise_generated_sky130_spice(text, module_name, ports)
+    return _normalise_sky130_spice(text, module_name, ports)
+
+
+def _source_has_layout_issues(source: str) -> bool:
+    return _is_generated_source(source)
 
 
 def _strip_code_fences(text: str) -> str:
@@ -422,13 +469,13 @@ def run_agent(state: dict) -> dict:
         state["status"] = f"{AGENT_NAME}: failed"
         raise RuntimeError("Analog GDS generation requires real transistor-level SPICE; no valid device-level SPICE was provided.")
 
-    spice = _normalise_sky130_spice(selected_text, module_name, ports)
+    spice = _normalise_for_source(selected_text, module_name, ports, selected_source)
     layout_blocking_issues = _blocking_layout_issues(spice, port_specs)
     if layout_blocking_issues and selected_source == "generated_by_sky130_spice_agent":
         save_text_artifact_and_record(workflow_id, AGENT_NAME, "analog/sky130", f"{module_name}_rejected_pass1.spice", spice)
         repaired_text = _repair_generated_spice_with_llm(state, module_name, ports, spice, layout_blocking_issues)
         if repaired_text and _has_real_devices(repaired_text):
-            repaired_spice = _normalise_sky130_spice(repaired_text, module_name, ports)
+            repaired_spice = _normalise_for_source(repaired_text, module_name, ports, "generated_by_sky130_spice_agent_repaired")
             repaired_issues = _blocking_layout_issues(repaired_spice, port_specs)
             if not repaired_issues:
                 spice = repaired_spice
@@ -440,7 +487,7 @@ def run_agent(state: dict) -> dict:
         else:
             layout_blocking_issues = [*layout_blocking_issues, "repair_pass_no_valid_mos_devices"]
 
-    if layout_blocking_issues and selected_source.startswith("generated_by_sky130_spice_agent"):
+    if layout_blocking_issues and _source_has_layout_issues(selected_source):
         summary.update({
             "status": "failed",
             "reason": "generated_spice_not_layout_safe",

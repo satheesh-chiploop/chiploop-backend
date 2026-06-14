@@ -319,6 +319,21 @@ def test_sky130_spice_layout_issues_catch_input_bus_bits_and_supply_drains():
     assert "undeclared_external_scalar_bus:adc_code" in issues
 
 
+def test_sky130_spice_generated_scalar_bus_terminals_are_legalized():
+    spice = (
+        ".subckt ana adc_code[0] adc_code[1] sensor_temp_celsius[0] sensor_temp_celsius[1] avdd avss\n"
+        "M1 adc_code sensor_temp_celsius avdd avdd sky130_fd_pr__pfet_01v8 W=1u L=0.15u\n"
+        "M2 adc_code sensor_temp_celsius avss avss sky130_fd_pr__nfet_01v8 W=1u L=0.15u\n"
+        ".ends ana\n"
+    )
+
+    legalized = spice_agent._legalize_scalar_bus_mos_terminals(spice)
+
+    assert "M1 adc_code[0] sensor_temp_celsius[0] avdd avdd" in legalized
+    assert "M2 adc_code[0] sensor_temp_celsius[0] avss avss" in legalized
+    assert " adc_code sensor_temp_celsius " not in legalized
+
+
 def test_sky130_prompt_lists_scalar_bus_names_as_forbidden(tmp_path, monkeypatch):
     prompts = []
     monkeypatch.setattr(spice_agent, "save_text_artifact_and_record", lambda *args, **kwargs: "local")
