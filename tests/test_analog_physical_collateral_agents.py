@@ -410,9 +410,10 @@ def test_gds_generation_uses_magic_docker_by_default(tmp_path, monkeypatch):
         assert "cellname rename ana_flat ana" in tcl
         assert tcl.index("cellname rename ana_flat ana") < tcl.index("gds write ana.gds")
         assert "CHIPLOOP_FLAT_BOX=[box values]" in tcl
-        assert "cif flatten true" in tcl
-        assert "catch {cif flatglob *}" in tcl
-        assert tcl.index("cif flatten true") < tcl.index("gds write ana.gds")
+        assert "cif flatten true" not in tcl
+        assert "catch {cif flatglob *}" not in tcl
+        assert "cellname list allcells" in tcl
+        assert 'cellname delete $chiploop_cell' in tcl
         assert "gds flatten true" in tcl
         assert tcl.index("gds flatten true") < tcl.index("gds write ana.gds")
         assert "catch {gds flatglob *}" in tcl
