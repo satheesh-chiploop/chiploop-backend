@@ -393,7 +393,11 @@ def _select_restart_stage(issues: list[dict[str, Any]]) -> str | None:
     actionable = [
         issue for issue in issues
         if not issue.get("blocked_by_upstream_signoff")
-        and STAGE_RANK.get(str(issue.get("restart_stage")), 999) >= PD_RESTART_MIN_RANK
+        and str(issue.get("restart_stage")) in STAGE_RANK
+        and (
+            str(issue.get("restart_stage")).startswith("Analog ")
+            or STAGE_RANK.get(str(issue.get("restart_stage")), 999) >= PD_RESTART_MIN_RANK
+        )
     ]
     if not actionable:
         return None
@@ -404,7 +408,112 @@ def _select_restart_stage(issues: list[dict[str, Any]]) -> str | None:
     )
 
 
-def _build_plan(state: dict[str, Any], artifacts: dict[str, dict[str, Any]], category_counts: dict[str, int], agent_name: str) -> dict[str, Any]:
+def _stage_config(workflow_dir: str, stage: str) -> dict[str, Any]:
+    return _read_json(os.path.join(workflow_dir, "digital", stage, "config.json"))
+
+
+def _die_area_scaled(value: Any, scale: float) -> str | None:
+    try:
+        parts = [float(x) for x in str(value or "").split()]
+    except Exception:
+        return None
+    if len(parts) != 4:
+        return None
+    llx, lly, urx, ury = parts
+    cx = (llx + urx) / 2.0
+    cy = (lly + ury) / 2.0
+    half_w = max((urx - llx) * scale / 2.0, 1.0)
+    half_h = max((ury - lly) * scale / 2.0, 1.0)
+    return f"{cx - half_w:g} {cy - half_h:g} {cx + half_w:g} {cy + half_h:g}"
+
+
+def _eco_profile(
+    state: dict[str, Any],
+    workflow_dir: str,
+    *,
+    issues: list[dict[str, Any]],
+    category_counts: dict[str, int],
+    sta: dict[str, Any],
+    closure_complete: bool,
+) -> dict[str, Any]:
+    if closure_complete:
+        return {"enabled": False, "reason": "signoff_clean", "config_overrides": {}, "notes": []}
+
+    raw_iteration = _first_present(state.get("signoff_closure_iteration_index"), state.get("closure_iteration_index"), 1)
+    try:
+        iteration = max(1, int(raw_iteration))
+    except Exception:
+        iteration = 1
+    severity_scale = 1.15 if iteration <= 1 else 1.30
+    names = " ".join(category_counts.keys()).lower()
+
+    floorplan_cfg = _stage_config(workflow_dir, "floorplan") or _stage_config(workflow_dir, "impl_setup")
+    route_cfg = _stage_config(workflow_dir, "route")
+
+    overrides: dict[str, dict[str, Any]] = {}
+    notes: list[str] = []
+
+    floorplan_overrides: dict[str, Any] = {}
+    if re.search(r"\b(nwell|pwell|tap|difftap|metaltap|macro|boundary|obs|obstruction|pdn|power)\b", names):
+        util = _first_number(floorplan_cfg.get("FP_CORE_UTIL"), floorplan_cfg.get("CORE_UTILIZATION"))
+        if util is not None:
+            floorplan_overrides["FP_CORE_UTIL"] = max(5, round(float(util) * (0.85 if iteration <= 1 else 0.75), 3))
+        density = _first_number(
+            floorplan_cfg.get("PL_TARGET_DENSITY"),
+            floorplan_cfg.get("PLACE_DENSITY"),
+        )
+        if density is not None:
+            floorplan_overrides["PL_TARGET_DENSITY"] = max(0.05, round(float(density) * (0.85 if iteration <= 1 else 0.75), 4))
+            floorplan_overrides["PL_TARGET_DENSITY_PCT"] = round(floorplan_overrides["PL_TARGET_DENSITY"] * 100.0, 3)
+        die_area = _die_area_scaled(floorplan_cfg.get("DIE_AREA"), severity_scale)
+        if die_area:
+            floorplan_overrides["DIE_AREA"] = die_area
+        floorplan_overrides["CHIPLOOP_SIGNOFF_CLOSURE_ECO"] = f"drc_floorplan_spacing_iter_{iteration}"
+        notes.append("DRC includes tap/well/macro/PDN-like categories; apply lower utilization/density and more die area before placement.")
+
+    route_overrides: dict[str, Any] = {}
+    if re.search(r"\b(poly|licon|mcon|contact|li|via|met[1-5]|m[1-5])\b", names):
+        route_overrides["RUN_SPEF_EXTRACTION"] = True
+        route_overrides["GRT_ALLOW_CONGESTION"] = True
+        route_overrides["CHIPLOOP_SIGNOFF_CLOSURE_ECO"] = f"drc_route_contact_metal_iter_{iteration}"
+        notes.append("DRC includes local contact/metal categories; preserve routed-state signoff and enable congestion-tolerant global routing rerun.")
+
+    setup_vios = sta.get("setup_violations") or 0
+    hold_vios = sta.get("hold_violations") or 0
+    if setup_vios or (sta.get("setup_wns") is not None and sta.get("setup_wns") < 0):
+        route_overrides["RUN_SPEF_EXTRACTION"] = True
+        route_overrides["CHIPLOOP_TIMING_CLOSURE_ECO"] = f"setup_iter_{iteration}"
+        notes.append("Post-fill setup is negative; preserve SPEF and rerun downstream timing with closure profile.")
+    if hold_vios or (sta.get("hold_wns") is not None and sta.get("hold_wns") < 0):
+        route_overrides["RUN_SPEF_EXTRACTION"] = True
+        route_overrides["CHIPLOOP_TIMING_CLOSURE_ECO"] = f"hold_iter_{iteration}"
+        notes.append("Post-fill hold is negative; CTS/route must be rerun before accepting signoff.")
+
+    if floorplan_overrides:
+        overrides["floorplan"] = floorplan_overrides
+        overrides["placement"] = dict(floorplan_overrides)
+    if route_overrides:
+        overrides["route"] = route_overrides
+        overrides["fill"] = {**route_overrides, "RUN_FILL_INSERTION": True}
+        overrides["sta_postfill"] = dict(route_overrides)
+        overrides["drc"] = dict(route_overrides)
+        overrides["lvs"] = dict(route_overrides)
+        overrides["tapeout"] = dict(route_overrides)
+
+    analog_issues = [issue for issue in issues if str(issue.get("type")) in {"analog_drc", "analog_lvs"}]
+    if analog_issues:
+        notes.append("Analog signoff has an analog-local issue; rerun analog physical collateral before trusting digital macro signoff.")
+
+    return {
+        "enabled": bool(overrides),
+        "iteration": iteration,
+        "strategy": "evidence_driven_tool_eco",
+        "config_overrides": overrides,
+        "notes": notes,
+    }
+
+
+def _build_plan(state: dict[str, Any], artifacts: dict[str, dict[str, Any]], category_counts: dict[str, int], agent_name: str, workflow_dir: str) -> dict[str, Any]:
     issues, sta = _classify(artifacts, category_counts)
     drc_info = _drc_metrics(artifacts)
     lvs_info = _lvs_metrics(artifacts)
@@ -428,7 +537,10 @@ def _build_plan(state: dict[str, Any], artifacts: dict[str, dict[str, Any]], cat
             })
             continue
         issue_stage = str(issue.get("restart_stage") or "")
-        if STAGE_RANK.get(issue_stage, 999) < PD_RESTART_MIN_RANK:
+        if issue_stage not in STAGE_RANK or (
+            not issue_stage.startswith("Analog ")
+            and STAGE_RANK.get(issue_stage, 999) < PD_RESTART_MIN_RANK
+        ):
             skipped_repairs.append({
                 "type": issue_type,
                 "reason": "Outside PD signoff closure scope; rerun synthesis closure or synthesis LEC repair first.",
@@ -461,6 +573,14 @@ def _build_plan(state: dict[str, Any], artifacts: dict[str, dict[str, Any]], cat
     closure_complete = not [issue for issue in issues if not issue.get("blocked_by_upstream_signoff")]
     if restart_stage is None and any(issue.get("blocked_by_upstream_signoff") for issue in issues):
         closure_complete = False
+    eco = _eco_profile(
+        state,
+        workflow_dir,
+        issues=issues,
+        category_counts=category_counts,
+        sta=sta,
+        closure_complete=closure_complete,
+    )
 
     return {
         "type": "system_pd_signoff_closure_plan",
@@ -479,6 +599,7 @@ def _build_plan(state: dict[str, Any], artifacts: dict[str, dict[str, Any]], cat
         "digital_lvs": lvs_info,
         "issue_summary": issues,
         "repair_actions": repair_actions,
+        "eco_profile": eco,
         "skipped_repairs": skipped_repairs,
         "policy": {
             "bounded_iterations": "1-2",
@@ -619,7 +740,7 @@ def run_with_agent_name(state: dict, agent_name: str) -> dict:
     else:
         artifacts = _load_artifacts(workflow_dir)
         category_counts = _drc_category_counts(workflow_dir)
-        plan = _build_plan(state, artifacts, category_counts, agent_name)
+        plan = _build_plan(state, artifacts, category_counts, agent_name, workflow_dir)
         plan["status"] = "clean" if plan.get("closure_complete") else "planned"
     chart = _chart_from_plan(state, plan) if plan.get("enabled") else {
         "type": "pd_signoff_closure_chart",
@@ -653,6 +774,7 @@ def run_with_agent_name(state: dict, agent_name: str) -> dict:
         "chart": chart,
         "paths": {"json": json_path, "md": md_path},
     }
+    state["signoff_closure_plan"] = plan
     state["signoff_closure_chart"] = chart
     return state
 

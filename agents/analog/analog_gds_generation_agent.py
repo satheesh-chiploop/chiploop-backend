@@ -259,6 +259,49 @@ def _analog_lvs_status(text: str, rc: int) -> str:
     return "completed" if rc == 0 else "failed"
 
 
+def _lvs_pin_name(token: str) -> str:
+    value = str(token or "").strip().strip('"').strip("'").strip("{}")
+    value = value.replace("\\[", "[").replace("\\]", "]")
+    return value
+
+
+def _prepare_lvs_source_spice(src: str, dst: str, module_name: str) -> None:
+    text = open(src, "r", encoding="utf-8", errors="ignore").read()
+    lines = text.splitlines()
+    out: list[str] = []
+    idx = 0
+    while idx < len(lines):
+        line = lines[idx]
+        stripped = line.strip()
+        if stripped.lower().startswith(".lib "):
+            idx += 1
+            continue
+        if stripped.lower().startswith(".subckt "):
+            subckt_lines = [stripped]
+            idx += 1
+            while idx < len(lines) and lines[idx].lstrip().startswith("+"):
+                subckt_lines.append(lines[idx].lstrip()[1:].strip())
+                idx += 1
+            try:
+                parts = shlex.split(" ".join(subckt_lines))
+            except Exception:
+                parts = " ".join(subckt_lines).split()
+            pins: list[str] = []
+            seen: set[str] = set()
+            for raw in parts[2:]:
+                pin = _lvs_pin_name(raw)
+                if not pin or pin in seen:
+                    continue
+                seen.add(pin)
+                pins.append(pin)
+            out.append(".subckt " + module_name + " " + " ".join(pins))
+            continue
+        out.append(line.replace('"', ""))
+        idx += 1
+    with open(dst, "w", encoding="utf-8") as fh:
+        fh.write("\n".join(out).rstrip() + "\n")
+
+
 def _write_magic_extract_tcl(stage_dir: str, module_name: str, pdk_variant: str, pdk_root_host: str, use_docker: bool) -> str:
     tech_tcl = _magic_paths(pdk_variant)[1] if use_docker else _host_magic_paths(pdk_root_host, pdk_variant)[1]
     out_spice = f"{module_name}_extracted.spice" if use_docker else os.path.join(stage_dir, f"{module_name}_extracted.spice")
@@ -268,7 +311,7 @@ def _write_magic_extract_tcl(stage_dir: str, module_name: str, pdk_variant: str,
         f"load {module_name}",
         "extract all",
         "ext2spice lvs",
-        "ext2spice cthresh 0",
+        "ext2spice cthresh 999999",
         "ext2spice extresist off",
         f"ext2spice -o {out_spice}",
         "quit -noprompt",
@@ -344,10 +387,10 @@ def _run_analog_lvs(
 
     setup_path = f"/pdk/{pdk_variant}/libs.tech/netgen/{pdk_variant}_setup.tcl"
     lvs_log_path = os.path.join(stage_dir, "analog_lvs_netgen.log")
+    lvs_source_spice = os.path.join(stage_dir, f"{module_name}_lvs_source.spice")
+    _prepare_lvs_source_spice(source_spice, lvs_source_spice, module_name)
     if docker_bin:
-        source_name = os.path.basename(source_spice)
-        if os.path.abspath(source_spice) != os.path.abspath(os.path.join(stage_dir, source_name)):
-            shutil.copy2(source_spice, os.path.join(stage_dir, source_name))
+        source_name = os.path.basename(lvs_source_spice)
         lvs_cmd = [
             docker_bin,
             "run",
@@ -383,7 +426,7 @@ def _run_analog_lvs(
             "-batch",
             "lvs",
             f"{extracted_spice} {module_name}",
-            f"{source_spice} {module_name}",
+            f"{lvs_source_spice} {module_name}",
             host_setup,
             os.path.join(stage_dir, "analog_lvs_netgen.out"),
         ]

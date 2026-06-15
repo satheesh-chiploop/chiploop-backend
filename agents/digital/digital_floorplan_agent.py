@@ -90,6 +90,33 @@ def _infer_top_from_netlist(netlist_path: str) -> str | None:
     m = re.search(r'^\s*module\s+([A-Za-z_][A-Za-z0-9_$]*)\s*\(', txt, flags=re.MULTILINE)
     return m.group(1) if m else None
 
+
+def _select_single_top_netlist(paths: list[str]) -> list[str]:
+    if len(paths) <= 1:
+        return paths
+    logical = [p for p in paths if not os.path.basename(p).endswith((".pnl.v", ".nl.v"))]
+    if logical:
+        return [sorted(logical, key=lambda p: (0 if "synth" in os.path.basename(p).lower() else 1, len(p)))[0]]
+    return [sorted(paths, key=lambda p: (0 if "synth" in os.path.basename(p).lower() else 1, len(p)))[0]]
+
+
+def _clear_stage_netlists(netlist_dir: str) -> None:
+    for old in glob.glob(os.path.join(netlist_dir, "*.v")):
+        try:
+            os.remove(old)
+        except OSError:
+            logger.warning(f"{AGENT_NAME}: could not remove stale netlist {old}")
+
+
+def _closure_overrides(state: dict, workflow_dir: str, stage: str) -> dict:
+    plan = state.get("signoff_closure_plan") if isinstance(state.get("signoff_closure_plan"), dict) else {}
+    if not plan:
+        plan = _read_json(os.path.join(workflow_dir, "digital", "signoff_closure", "signoff_closure_plan.json"))
+    eco = plan.get("eco_profile") if isinstance(plan.get("eco_profile"), dict) else {}
+    overrides = eco.get("config_overrides") if isinstance(eco.get("config_overrides"), dict) else {}
+    stage_overrides = overrides.get(stage) if isinstance(overrides.get(stage), dict) else {}
+    return dict(stage_overrides)
+
 def _resolve_sdc_from_state(state: dict, workflow_dir: str) -> str | None:
     digital = state.get("digital") or {}
 
@@ -278,10 +305,12 @@ def run_agent(state: dict) -> dict:
     if not synth_netlists:
         raise RuntimeError("No synthesized netlist found. Expected digital/synth/netlist/*.v")
 
+    synth_netlists = _select_single_top_netlist(synth_netlists)
+    _clear_stage_netlists(netlist_dir)
     for nl in synth_netlists:
        shutil.copy2(nl, os.path.join(netlist_dir, os.path.basename(nl)))
 
-    stage_netlists = sorted(glob.glob(os.path.join(netlist_dir, "*.v")))
+    stage_netlists = _select_single_top_netlist(sorted(glob.glob(os.path.join(netlist_dir, "*.v"))))
     if not stage_netlists:
        raise RuntimeError(f"No netlists copied into {netlist_dir}")
 
@@ -357,6 +386,9 @@ def run_agent(state: dict) -> dict:
         cfg.pop("MACROS", None)
         cfg.pop("FP_DEF_TEMPLATE", None)
 
+    closure_overrides = _closure_overrides(state, workflow_dir, "floorplan")
+    cfg.update(closure_overrides)
+
     logger.info(f"{AGENT_NAME}: staged macro LEFs -> {staged_lefs}")
     logger.info(f"{AGENT_NAME}: staged macro LIBs -> {staged_libs}")
     logger.info(f"{AGENT_NAME}: staged macro GDS -> {staged_gds}")
@@ -365,6 +397,7 @@ def run_agent(state: dict) -> dict:
     logger.info(f"{AGENT_NAME}: cfg['FP_DEF_TEMPLATE']={cfg.get('FP_DEF_TEMPLATE')}")
     logger.info(f"{AGENT_NAME}: cfg['PL_SKIP_INITIAL_PLACEMENT']={cfg.get('PL_SKIP_INITIAL_PLACEMENT')}")
     logger.info(f"{AGENT_NAME}: cfg['MACROS']={cfg.get('MACROS')}")
+    logger.info(f"{AGENT_NAME}: closure_overrides={closure_overrides}")
 
     # Now safe to write execution config into shared workspace
     exec_config_path = os.path.join(work_stage_dir, "config.json")
@@ -402,6 +435,7 @@ def run_agent(state: dict) -> dict:
         f"macro_lef_count={len(staged_lefs)}",
         f"macro_lib_count={len(staged_libs)}",
         f"macro_gds_count={len(staged_gds)}",
+        f"closure_overrides={json.dumps(closure_overrides, sort_keys=True)}",
     ]) + "\n"
     _write_text(os.path.join(logs_dir, "floorplan_input_resolution.log"), input_log)
 

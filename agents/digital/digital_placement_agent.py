@@ -36,6 +36,16 @@ def _write_text(path: str, content: str) -> None:
         f.write(content)
 
 
+def _closure_overrides(state: dict, workflow_dir: str, stage: str) -> dict:
+    plan = state.get("signoff_closure_plan") if isinstance(state.get("signoff_closure_plan"), dict) else {}
+    if not plan:
+        plan = _read_json(os.path.join(workflow_dir, "digital", "signoff_closure", "signoff_closure_plan.json"))
+    eco = plan.get("eco_profile") if isinstance(plan.get("eco_profile"), dict) else {}
+    overrides = eco.get("config_overrides") if isinstance(eco.get("config_overrides"), dict) else {}
+    stage_overrides = overrides.get(stage) if isinstance(overrides.get(stage), dict) else {}
+    return dict(stage_overrides)
+
+
 def _run(cmd: list[str], cwd: str, state: dict | None = None) -> tuple[int, str]:
     p = run_command(state or {}, "digital_placement", [str(x) for x in cmd], cwd=cwd, timeout_sec=1800)
     return p.returncode if p.returncode is not None else 1, (p.stdout or "") + (p.stderr or "")
@@ -434,6 +444,9 @@ def run_agent(state: dict) -> dict:
         cfg.pop("MACROS", None)
         cfg.pop("FP_DEF_TEMPLATE", None)
 
+    closure_overrides = _closure_overrides(state, workflow_dir, "placement")
+    cfg.update(closure_overrides)
+
     logger.info(f"{AGENT_NAME}: staged macro LEFs -> {staged_lefs}")
     logger.info(f"{AGENT_NAME}: staged macro LIBs -> {staged_libs}")
     logger.info(f"{AGENT_NAME}: staged macro GDS -> {staged_gds}")
@@ -478,6 +491,7 @@ def run_agent(state: dict) -> dict:
         f"pl_skip_initial_placement={cfg.get('PL_SKIP_INITIAL_PLACEMENT')}",
         f"macro_placement_cfg={cfg.get('MACRO_PLACEMENT_CFG')}",
         f"macro_placement_cfg_path={macro_placement_cfg}",
+        f"closure_overrides={json.dumps(closure_overrides, sort_keys=True)}",
     ]) + "\n"
     _write_text(os.path.join(logs_dir, "placement_input_resolution.log"), input_log)
 

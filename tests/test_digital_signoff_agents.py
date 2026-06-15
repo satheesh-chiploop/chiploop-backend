@@ -23,7 +23,7 @@ def test_physical_stage_selects_one_physical_top_netlist():
         "/work/inputs/netlist/temp_monitor_soc_phys.nl.v",
     ])
 
-    assert chosen == ["/work/inputs/netlist/temp_monitor_soc_phys.nl.v"]
+    assert chosen == ["/work/inputs/netlist/temp_monitor_soc_phys_synth.v"]
 
 
 def test_physical_stage_clears_stale_local_netlists(tmp_path):
@@ -44,7 +44,7 @@ def test_sta_postfill_sanitizes_inherited_duplicate_netlists():
         "inputs/netlist/temp_monitor_soc_phys.nl.v",
     ])
 
-    assert chosen == ["inputs/netlist/temp_monitor_soc_phys.nl.v"]
+    assert chosen == ["inputs/netlist/temp_monitor_soc_phys_synth.v"]
 
 
 def test_atpg_zero_pattern_metrics_are_not_success():

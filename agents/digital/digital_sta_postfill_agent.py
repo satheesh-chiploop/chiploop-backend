@@ -112,10 +112,23 @@ def _select_single_top_netlist_ref(entries: list[str]) -> list[str]:
     clean = [str(entry).strip() for entry in entries if str(entry).strip()]
     if len(clean) <= 1:
         return clean
+    logical = [entry for entry in clean if not os.path.basename(entry).endswith((".pnl.v", ".nl.v"))]
+    if logical:
+        return [sorted(logical, key=lambda entry: (0 if "synth" in os.path.basename(entry).lower() else 1, len(entry)))[0]]
     physical = [entry for entry in clean if os.path.basename(entry).endswith((".pnl.v", ".nl.v"))]
     if physical:
         return [sorted(physical, key=lambda entry: (0 if ".pnl." in os.path.basename(entry).lower() else 1, 0 if ".nl." in os.path.basename(entry).lower() else 1, len(entry)))[0]]
     return [sorted(clean, key=lambda entry: (0 if "synth" in os.path.basename(entry).lower() else 1, len(entry)))[0]]
+
+
+def _closure_overrides(state: dict, workflow_dir: str, stage: str) -> dict:
+    plan = state.get("signoff_closure_plan") if isinstance(state.get("signoff_closure_plan"), dict) else {}
+    if not plan:
+        plan = _read_json(os.path.join(workflow_dir, "digital", "signoff_closure", "signoff_closure_plan.json"))
+    eco = plan.get("eco_profile") if isinstance(plan.get("eco_profile"), dict) else {}
+    overrides = eco.get("config_overrides") if isinstance(eco.get("config_overrides"), dict) else {}
+    stage_overrides = overrides.get(stage) if isinstance(overrides.get(stage), dict) else {}
+    return dict(stage_overrides)
 
 
 def _first_existing(paths: list[str]) -> str | None:
@@ -485,6 +498,8 @@ def run_agent(state: dict) -> dict:
     inherited_verilog_files = _select_single_top_netlist_ref(inherited_verilog_files)
     if inherited_verilog_files:
         cfg["VERILOG_FILES"] = inherited_verilog_files
+    closure_overrides = _closure_overrides(state, workflow_dir, STAGE_NAME)
+    cfg.update(closure_overrides)
 
     _write_text(os.path.join(stage_dir, "config.json"), json.dumps(cfg, indent=2))
     _write_text(os.path.join(work_stage_dir, "config.json"), json.dumps(cfg, indent=2))
@@ -511,6 +526,7 @@ def run_agent(state: dict) -> dict:
         f"macro_gds_count={len(staged_gds)}",
         f"macro_placement_cfg={cfg.get('MACRO_PLACEMENT_CFG')}",
         f"macro_placement_cfg_path={macro_placement_cfg}",
+        f"closure_overrides={json.dumps(closure_overrides, sort_keys=True)}",
     ]) + "\n"
     _write_text(os.path.join(logs_dir, "sta_postfill_input_resolution.log"), input_log)
 

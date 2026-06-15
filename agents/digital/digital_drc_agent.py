@@ -39,6 +39,9 @@ def _write_text(path: str, content: str) -> None:
 def _select_single_top_netlist(paths: list[str]) -> list[str]:
     if len(paths) <= 1:
         return paths
+    logical = [p for p in paths if not os.path.basename(p).endswith((".pnl.v", ".nl.v"))]
+    if logical:
+        return [sorted(logical, key=lambda p: (0 if "synth" in os.path.basename(p).lower() else 1, len(p)))[0]]
     physical = [p for p in paths if os.path.basename(p).endswith((".pnl.v", ".nl.v"))]
     if physical:
         return [sorted(physical, key=lambda p: (0 if ".pnl." in os.path.basename(p).lower() else 1, 0 if ".nl." in os.path.basename(p).lower() else 1, len(p)))[0]]
@@ -51,6 +54,16 @@ def _clear_stage_netlists(netlist_dir: str) -> None:
             os.remove(old)
         except OSError:
             logger.warning(f"{AGENT_NAME}: could not remove stale netlist {old}")
+
+
+def _closure_overrides(state: dict, workflow_dir: str, stage: str) -> dict:
+    plan = state.get("signoff_closure_plan") if isinstance(state.get("signoff_closure_plan"), dict) else {}
+    if not plan:
+        plan = _read_json(os.path.join(workflow_dir, "digital", "signoff_closure", "signoff_closure_plan.json"))
+    eco = plan.get("eco_profile") if isinstance(plan.get("eco_profile"), dict) else {}
+    overrides = eco.get("config_overrides") if isinstance(eco.get("config_overrides"), dict) else {}
+    stage_overrides = overrides.get(stage) if isinstance(overrides.get(stage), dict) else {}
+    return dict(stage_overrides)
 
 
 def _run(cmd: list[str], cwd: str, state: dict | None = None) -> tuple[int, str]:
@@ -397,6 +410,9 @@ def run_agent(state: dict) -> dict:
         cfg.pop("MACROS", None)
         cfg.pop("FP_DEF_TEMPLATE", None)
 
+    closure_overrides = _closure_overrides(state, workflow_dir, "drc")
+    cfg.update(closure_overrides)
+
     logger.info(f"{AGENT_NAME}: staged macro LEFs -> {staged_lefs}")
     logger.info(f"{AGENT_NAME}: staged macro LIBs -> {staged_libs}")
     logger.info(f"{AGENT_NAME}: staged macro GDS -> {staged_gds}")
@@ -479,6 +495,7 @@ def run_agent(state: dict) -> dict:
         f"netlist_count={len(stage_netlists_local)}",
         f"macro_placement_cfg={cfg.get('MACRO_PLACEMENT_CFG')}",
         f"macro_placement_cfg_path={macro_placement_cfg}",
+        f"closure_overrides={json.dumps(closure_overrides, sort_keys=True)}",
     ]) + "\n"
     _write_text(os.path.join(logs_dir, "drc_input_resolution.log"), input_log)
 

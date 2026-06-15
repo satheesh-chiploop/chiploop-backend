@@ -65,6 +65,15 @@ def _write_text(path: str, content: str) -> None:
     with open(path, "w", encoding="utf-8") as f:
         f.write(content)
 
+def _closure_overrides(state: dict, workflow_dir: str, stage: str) -> dict:
+    plan = state.get("signoff_closure_plan") if isinstance(state.get("signoff_closure_plan"), dict) else {}
+    if not plan:
+        plan = _read_json(os.path.join(workflow_dir, "digital", "signoff_closure", "signoff_closure_plan.json"))
+    eco = plan.get("eco_profile") if isinstance(plan.get("eco_profile"), dict) else {}
+    overrides = eco.get("config_overrides") if isinstance(eco.get("config_overrides"), dict) else {}
+    stage_overrides = overrides.get(stage) if isinstance(overrides.get(stage), dict) else {}
+    return dict(stage_overrides)
+
 def _infer_top_from_netlist(netlist_path: str) -> str | None:
     try:
         txt = open(netlist_path, "r", encoding="utf-8", errors="ignore").read()
@@ -440,6 +449,9 @@ def run_agent(state: dict) -> dict:
         cfg.pop("MACROS", None)
         cfg.pop("FP_DEF_TEMPLATE", None)
 
+    closure_overrides = _closure_overrides(state, workflow_dir, "route")
+    cfg.update(closure_overrides)
+
     logger.info(f"{AGENT_NAME}: staged macro LEFs -> {staged_lefs}")
     logger.info(f"{AGENT_NAME}: staged macro LIBs -> {staged_libs}")
     logger.info(f"{AGENT_NAME}: staged macro GDS -> {staged_gds}")
@@ -463,6 +475,7 @@ def run_agent(state: dict) -> dict:
         f"verilog_files={','.join(cfg.get('VERILOG_FILES', []))}",
         f"macro_placement_cfg={cfg.get('MACRO_PLACEMENT_CFG')}",
         f"macro_placement_cfg_path={macro_placement_cfg}",
+        f"closure_overrides={json.dumps(closure_overrides, sort_keys=True)}",
     ]) + "\n"
 
     
