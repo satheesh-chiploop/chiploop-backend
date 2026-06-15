@@ -289,7 +289,7 @@ def _generate_full_scan_bench(netlist_text: str) -> tuple[str, dict]:
 
     for cell, inst, ports in _parse_instances(netlist_text):
         cell_base = re.sub(r"_\d+$", "", cell.replace("sky130_fd_sc_hd__", ""))
-        if cell_base.startswith("sdfrtp"):
+        if cell_base.startswith(("sdfrtp", "sdfxtp", "sdfrbp", "sdfxbp", "sdfstp")):
             q = ports.get("Q")
             d = ports.get("D")
             if q:

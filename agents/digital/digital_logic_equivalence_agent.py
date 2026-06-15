@@ -483,19 +483,31 @@ def _generated_stdcell_model(netlist: str | None, stage_dir: str) -> str | None:
             continue
         body: list[str] = []
         decls = [f"input {pin}" for pin in inputs] + [f"output {pin}" for pin in outputs]
-        if base.startswith(("dfrtp", "dfxtp", "sdfrtp")):
+        if base.startswith(("df", "sdf")) and ("CLK" in pins and "D" in pins and "Q" in pins):
             if "CLK" not in pins or "D" not in pins or "Q" not in pins:
                 unsupported.append(cell)
                 continue
             else:
                 body.append("  reg q_reg;")
+                d_expr = "(SCE ? SCD : D)" if "SCE" in pins and "SCD" in pins else "D"
+                async_edges: list[str] = []
                 if "RESET_B" in pins:
-                    body.append("  always @(posedge CLK or negedge RESET_B) begin")
-                    body.append("    if (!RESET_B) q_reg <= 1'b0;")
-                    body.append("    else q_reg <= D;")
+                    async_edges.append("negedge RESET_B")
+                if "SET_B" in pins:
+                    async_edges.append("negedge SET_B")
+                if async_edges:
+                    sensitivity = " or ".join(["posedge CLK", *async_edges])
+                    body.append(f"  always @({sensitivity}) begin")
+                    if "RESET_B" in pins:
+                        body.append("    if (!RESET_B) q_reg <= 1'b0;")
+                        if "SET_B" in pins:
+                            body.append("    else if (!SET_B) q_reg <= 1'b1;")
+                    elif "SET_B" in pins:
+                        body.append("    if (!SET_B) q_reg <= 1'b1;")
+                    body.append(f"    else q_reg <= {d_expr};")
                     body.append("  end")
                 else:
-                    body.append("  always @(posedge CLK) q_reg <= D;")
+                    body.append(f"  always @(posedge CLK) q_reg <= {d_expr};")
                 body.append("  assign Q = q_reg;")
                 if "Q_N" in pins:
                     body.append("  assign Q_N = ~q_reg;")

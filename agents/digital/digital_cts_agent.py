@@ -38,6 +38,15 @@ def _write_text(path: str, content: str) -> None:
     with open(path, "w", encoding="utf-8") as f:
         f.write(content)
 
+
+def _select_single_top_netlist(paths: list[str]) -> list[str]:
+    if len(paths) <= 1:
+        return paths
+    non_physical = [p for p in paths if not os.path.basename(p).endswith((".nl.v", ".pnl.v"))]
+    if non_physical:
+        return [sorted(non_physical, key=lambda p: (0 if "synth" in os.path.basename(p).lower() else 1, len(p)))[0]]
+    return [sorted(paths, key=lambda p: (0 if ".pnl." in os.path.basename(p).lower() else 1, 0 if ".nl." in os.path.basename(p).lower() else 1, len(p)))[0]]
+
 def _latest_run_dir(run_work_dir: str) -> str | None:
     run_roots = [
         os.path.join(run_work_dir, "runs"),
@@ -329,7 +338,7 @@ def run_agent(state: dict) -> dict:
     cfg["PNR_SDC_FILE"] = f"inputs/constraints/{sdc_basename}"
     cfg["RUN_LINTER"] = False
 
-    stage_netlists = sorted(glob.glob(os.path.join(netlist_dir, "*.v")))
+    stage_netlists = _select_single_top_netlist(sorted(glob.glob(os.path.join(netlist_dir, "*.v"))))
     if not stage_netlists:
         raise RuntimeError(f"No .v files present under {netlist_dir}")
     cfg["VERILOG_FILES"] = [f"inputs/netlist/{os.path.basename(p)}" for p in stage_netlists]

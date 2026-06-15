@@ -28,6 +28,7 @@ STAGE_RANK = {
     "Digital Tapeout Agent": 140,
     "Digital Tapeout Logic Equivalence Check Agent": 150,
 }
+PD_RESTART_MIN_RANK = STAGE_RANK["Digital STA PrePlace Agent"]
 
 
 def _read_json(path: str) -> dict[str, Any]:
@@ -389,7 +390,11 @@ def _classify(artifacts: dict[str, dict[str, Any]], category_counts: dict[str, i
 
 
 def _select_restart_stage(issues: list[dict[str, Any]]) -> str | None:
-    actionable = [issue for issue in issues if not issue.get("blocked_by_upstream_signoff")]
+    actionable = [
+        issue for issue in issues
+        if not issue.get("blocked_by_upstream_signoff")
+        and STAGE_RANK.get(str(issue.get("restart_stage")), 999) >= PD_RESTART_MIN_RANK
+    ]
     if not actionable:
         return None
     return min(
@@ -420,6 +425,13 @@ def _build_plan(state: dict[str, Any], artifacts: dict[str, dict[str, Any]], cat
             skipped_repairs.append({
                 "type": issue_type,
                 "reason": "Blocked by earlier signoff failure; repair the upstream physical issue first.",
+            })
+            continue
+        issue_stage = str(issue.get("restart_stage") or "")
+        if STAGE_RANK.get(issue_stage, 999) < PD_RESTART_MIN_RANK:
+            skipped_repairs.append({
+                "type": issue_type,
+                "reason": "Outside PD signoff closure scope; rerun synthesis closure or synthesis LEC repair first.",
             })
             continue
         repair_group = (
@@ -473,6 +485,8 @@ def _build_plan(state: dict[str, Any], artifacts: dict[str, dict[str, Any]], cat
             "lec_repair_included": options["lec"],
             "no_fake_closure": True,
             "restart_rule": "Choose the earliest stage required by the dominant real signoff failure; later ECOs are skipped until rerun evidence is available.",
+            "pd_scope_only": True,
+            "earliest_pd_restart_stage": "Digital STA PrePlace Agent",
         },
     }
 

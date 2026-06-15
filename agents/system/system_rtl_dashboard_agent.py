@@ -40,6 +40,24 @@ def _existing_files(paths: List[str], workflow_dir: str) -> List[str]:
     return sorted(dict.fromkeys(out))
 
 
+def _discover_rtl_files(workflow_dir: str) -> List[str]:
+    root = Path(workflow_dir)
+    search_roots = [
+        root / "system" / "imported_rtl",
+        root / "digital" / "system" / "imported_rtl",
+        root / "system" / "rtl",
+        root / "system" / "integration",
+        root / "digital" / "handoff" / "rtl",
+    ]
+    out: List[str] = []
+    for search_root in search_roots:
+        if not search_root.exists():
+            continue
+        for suffix in ("*.v", "*.sv"):
+            out.extend(str(path.resolve()) for path in search_root.rglob(suffix) if path.is_file())
+    return sorted(dict.fromkeys(out))
+
+
 def _collect_filelists(state: Dict[str, Any], workflow_dir: str) -> Dict[str, List[str]]:
     pkg = state.get("system_rtl_package") if isinstance(state.get("system_rtl_package"), dict) else {}
     filelists = pkg.get("filelists") if isinstance(pkg.get("filelists"), dict) else {}
@@ -55,9 +73,16 @@ def _collect_filelists(state: Dict[str, Any], workflow_dir: str) -> Dict[str, Li
         if fallback.exists():
             phys = [line.strip() for line in fallback.read_text(encoding="utf-8", errors="ignore").splitlines()]
 
+    sim_files = _existing_files(sim, workflow_dir)
+    phys_files = _existing_files(phys, workflow_dir)
+    if not sim_files and not phys_files:
+        discovered = _discover_rtl_files(workflow_dir)
+        sim_files = discovered
+        phys_files = discovered
+
     return {
-        "sim": _existing_files(sim, workflow_dir),
-        "phys": _existing_files(phys, workflow_dir),
+        "sim": sim_files,
+        "phys": phys_files,
     }
 
 

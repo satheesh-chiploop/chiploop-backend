@@ -61,7 +61,7 @@ def test_signoff_closure_selects_floorplan_for_tap_drc_and_skips_later_timing(tm
     assert chart["series"][0]["postfill_wns"] == -0.12
 
 
-def test_digital_pd_signoff_closure_includes_lec_repair(tmp_path, monkeypatch):
+def test_digital_pd_signoff_closure_reports_synthesis_lec_outside_pd_scope(tmp_path, monkeypatch):
     monkeypatch.setattr(system_agent, "save_text_artifact_and_record", lambda *args, **kwargs: "local")
 
     _write_json(tmp_path / "digital" / "drc" / "drc_summary.json", {"status": "clean", "drc_violations": 0})
@@ -83,8 +83,12 @@ def test_digital_pd_signoff_closure_includes_lec_repair(tmp_path, monkeypatch):
     plan = out["digital"]["signoff_closure"]["plan"]
     assert plan["agent"] == "Digital PD Signoff Closure Agent"
     assert plan["dominant_issue"] == "synthesis_lec"
-    assert plan["selected_restart_stage"] == "Digital Synthesis Agent"
-    assert any(action["type"] == "synthesis_lec" for action in plan["repair_actions"])
+    assert plan["selected_restart_stage"] is None
+    assert not any(action["type"] == "synthesis_lec" for action in plan["repair_actions"])
+    assert any(
+        item["type"] == "synthesis_lec" and "Outside PD signoff closure scope" in item["reason"]
+        for item in plan["skipped_repairs"]
+    )
 
 
 def test_signoff_closure_disabled_by_default(tmp_path, monkeypatch):

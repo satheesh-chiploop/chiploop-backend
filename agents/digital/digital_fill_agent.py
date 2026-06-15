@@ -35,6 +35,15 @@ def _write_text(path: str, content: str) -> None:
         f.write(content)
 
 
+def _select_single_top_netlist(paths: list[str]) -> list[str]:
+    if len(paths) <= 1:
+        return paths
+    physical = [p for p in paths if os.path.basename(p).endswith((".pnl.v", ".nl.v"))]
+    if physical:
+        return [sorted(physical, key=lambda p: (0 if ".pnl." in os.path.basename(p).lower() else 1, 0 if ".nl." in os.path.basename(p).lower() else 1, len(p)))[0]]
+    return [sorted(paths, key=lambda p: (0 if "synth" in os.path.basename(p).lower() else 1, len(p)))[0]]
+
+
 def _run(cmd: list[str], cwd: str, state: dict | None = None) -> tuple[int, str]:
     p = run_command(state or {}, "digital_fill", [str(x) for x in cmd], cwd=cwd, timeout_sec=1800)
     return p.returncode if p.returncode is not None else 1, (p.stdout or "") + (p.stderr or "")
@@ -296,7 +305,7 @@ def run_agent(state: dict) -> dict:
     shutil.copy2(stage_sdc, os.path.join(inputs_constraints_dir, sdc_basename))
     cfg["PNR_SDC_FILE"] = f"inputs/constraints/{sdc_basename}"
 
-    stage_netlists = sorted(glob.glob(os.path.join(inputs_netlist_dir, "*.v")))
+    stage_netlists = _select_single_top_netlist(sorted(glob.glob(os.path.join(inputs_netlist_dir, "*.v"))))
     if not stage_netlists:
         raise RuntimeError("Fill: missing run_work/inputs/netlist/*.v (synth/floorplan should populate it).")
 

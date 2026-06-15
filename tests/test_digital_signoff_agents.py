@@ -398,6 +398,26 @@ endmodule
     assert _missing_stdcell_models(str(netlist), [model]) == []
 
 
+def test_lec_generated_model_covers_scan_dff_without_reset(tmp_path):
+    netlist = tmp_path / "scan.v"
+    netlist.write_text(
+        """
+module top(input clk, input d, input scd, input sce, output q);
+  sky130_fd_sc_hd__sdfxtp_2 flop(.CLK(clk), .D(d), .SCD(scd), .SCE(sce), .Q(q));
+endmodule
+""",
+        encoding="utf-8",
+    )
+
+    model = _generated_stdcell_model(str(netlist), str(tmp_path))
+
+    assert model is not None
+    text = open(model, "r", encoding="utf-8").read()
+    assert "module sky130_fd_sc_hd__sdfxtp_2" in text
+    assert "q_reg <= (SCE ? SCD : D);" in text
+    assert _missing_stdcell_models(str(netlist), [model]) == []
+
+
 def test_lec_replaces_preserved_macro_rtl_with_blackbox_stub(tmp_path):
     macro_rtl = tmp_path / "analog_model.v"
     macro_rtl.write_text(
@@ -518,6 +538,27 @@ endmodule
     assert "INPUT(reset_n)" not in bench
     assert "INPUT(scan_en)" not in bench
     assert "INPUT(scan_in_0)" not in bench
+    assert "INPUT(q)" in bench
+
+
+def test_atpg_bench_accepts_scan_dff_without_reset():
+    bench, meta = _generate_full_scan_bench(
+        """
+module top(clk, scan_en, scan_in_0, a, y);
+  input clk;
+  input scan_en;
+  input scan_in_0;
+  input a;
+  output y;
+  wire q;
+  sky130_fd_sc_hd__sdfxtp_2 flop(.CLK(clk), .SCE(scan_en), .SCD(scan_in_0), .D(a), .Q(q));
+  sky130_fd_sc_hd__buf_1 outbuf(.A(q), .X(y));
+endmodule
+"""
+    )
+
+    assert meta["status"] == "generated"
+    assert meta["unsupported_cells"] == []
     assert "INPUT(q)" in bench
 
 
