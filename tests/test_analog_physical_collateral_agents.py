@@ -874,6 +874,37 @@ def test_consistency_agent_accepts_bus_bits_and_warns_for_abstract_lib(tmp_path,
     assert any(w.startswith("lef_pins_missing_in_lib") for w in report["warnings"])
 
 
+def test_consistency_agent_normalizes_quoted_bus_pins(tmp_path, monkeypatch):
+    monkeypatch.setattr(consistency_agent, "save_text_artifact_and_record", lambda *args, **kwargs: "local")
+    spice = tmp_path / "ana.spice"
+    lef = tmp_path / "ana.lef"
+    lib = tmp_path / "ana.lib"
+    spice.write_text('.subckt ana "adc_code[0]" "sensor_temp_celsius[0]" adc_code[0] sensor_temp_celsius[0]\n.ends ana\n', encoding="utf-8")
+    lef.write_text(
+        "MACRO ana\n"
+        "  PIN adc_code[0]\n  END adc_code[0]\n"
+        "  PIN sensor_temp_celsius[0]\n  END sensor_temp_celsius[0]\n"
+        "END ana\n",
+        encoding="utf-8",
+    )
+    lib.write_text('library (ana) { cell (ana) { pin ("adc_code[0]") {} pin ("sensor_temp_celsius[0]") {} } }\n', encoding="utf-8")
+
+    state = consistency_agent.run_agent({
+        "workflow_id": "wf",
+        "workflow_dir": str(tmp_path),
+        "analog_physical_mode": "generate_sky130_gds",
+        "analog_macro_module": "ana",
+        "analog_spice_path": str(spice),
+        "analog_macro_lef": str(lef),
+        "analog_macro_lib": str(lib),
+    })
+
+    report = state["analog_collateral_consistency"]
+    assert report["status"] == "pass"
+    assert report["spice"]["pins"] == ["adc_code[0]", "sensor_temp_celsius[0]"]
+    assert report["lib"]["pins"] == ["adc_code[0]", "sensor_temp_celsius[0]"]
+
+
 def test_lef_extraction_fails_without_gds(tmp_path, monkeypatch):
     monkeypatch.setattr(lef_agent, "save_text_artifact_and_record", lambda *args, **kwargs: "local")
 

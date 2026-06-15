@@ -414,7 +414,9 @@ endmodule
     assert model is not None
     text = open(model, "r", encoding="utf-8").read()
     assert "module sky130_fd_sc_hd__sdfxtp_2" in text
-    assert "q_reg <= (SCE ? SCD : D);" in text
+    assert "wire chiploop_d = D;" in text
+    assert "wire chiploop_d = (SCE ? SCD : D);" in text
+    assert "q_reg <= chiploop_d;" in text
     assert _missing_stdcell_models(str(netlist), [model]) == []
 
 

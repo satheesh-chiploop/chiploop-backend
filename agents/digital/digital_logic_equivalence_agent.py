@@ -490,6 +490,13 @@ def _generated_stdcell_model(netlist: str | None, stage_dir: str) -> str | None:
             else:
                 body.append("  reg q_reg;")
                 d_expr = "(SCE ? SCD : D)" if "SCE" in pins and "SCD" in pins else "D"
+                if "SCE" in pins and "SCD" in pins:
+                    body.append("`ifdef FUNCTIONAL")
+                    body.append("  wire chiploop_d = D;")
+                    body.append("`else")
+                    body.append(f"  wire chiploop_d = {d_expr};")
+                    body.append("`endif")
+                    d_expr = "chiploop_d"
                 async_edges: list[str] = []
                 if "RESET_B" in pins:
                     async_edges.append("negedge RESET_B")

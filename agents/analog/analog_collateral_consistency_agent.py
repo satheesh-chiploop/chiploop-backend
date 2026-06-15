@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import shlex
 from datetime import datetime
 from typing import Any, Dict, List
 
@@ -24,7 +25,11 @@ def _subckt(text: str) -> tuple[str, List[str]]:
     m = re.search(r"^\s*\.subckt\s+(\S+)\s+(.+)$", text or "", flags=re.IGNORECASE | re.MULTILINE)
     if not m:
         return "", []
-    return m.group(1), [p for p in m.group(2).split() if p]
+    try:
+        pins = shlex.split(m.group(2))
+    except ValueError:
+        pins = m.group(2).split()
+    return m.group(1), _normalize_pins(pins)
 
 
 def _lef_macro(text: str) -> tuple[str, List[str]]:
@@ -34,7 +39,7 @@ def _lef_macro(text: str) -> tuple[str, List[str]]:
     if m:
         macro = m.group(1)
     pins = re.findall(r"^\s*PIN\s+(\S+)", text or "", flags=re.IGNORECASE | re.MULTILINE)
-    return macro, pins
+    return macro, _normalize_pins(pins)
 
 
 def _lib_cell(text: str) -> tuple[str, List[str]]:
@@ -44,7 +49,7 @@ def _lib_cell(text: str) -> tuple[str, List[str]]:
     if m:
         cell = m.group(1)
     pins = re.findall(r"\bpin\s*\(\s*([^) ]+)\s*\)", text or "", flags=re.IGNORECASE)
-    return cell, pins
+    return cell, _normalize_pins(pins)
 
 
 def _generate_mode(state: dict) -> bool:
@@ -57,11 +62,29 @@ def _module_name(state: dict) -> str:
     return str(state.get("analog_macro_module") or contract.get("macro_name") or "analog_macro").strip()
 
 
+def _normalize_pin(name: str) -> str:
+    return str(name or "").strip().strip("\"'").strip()
+
+
+def _normalize_pins(pins: List[str]) -> List[str]:
+    out: List[str] = []
+    seen: set[str] = set()
+    for pin in pins:
+        normalized = _normalize_pin(pin)
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        out.append(normalized)
+    return out
+
+
 def _pin_base(name: str) -> str:
-    return str(name or "").split("[", 1)[0]
+    return _normalize_pin(name).split("[", 1)[0]
 
 
 def _pin_covered(pin: str, observed: List[str]) -> bool:
+    pin = _normalize_pin(pin)
+    observed = _normalize_pins(observed)
     if pin in observed:
         return True
     base = _pin_base(pin)
