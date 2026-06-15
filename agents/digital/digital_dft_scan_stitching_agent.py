@@ -345,7 +345,7 @@ def _preserve_missing_macro_instances(source_text: str, stitched_text: str) -> t
     if not blocks:
         return stitched_text, []
     insertion = "\n  // Preserved non-stdcell macro instances omitted by DFT write_verilog.\n" + "\n".join(blocks) + "\n"
-    repaired, count = re.subn(r"\nendmodule\s*$", insertion + "endmodule\n", stitched_text, count=1)
+    repaired, count = re.subn(r"\nendmodule\s*$", lambda _match: insertion + "endmodule\n", stitched_text, count=1)
     return (repaired if count else stitched_text + insertion), preserved
 
 
