@@ -108,6 +108,16 @@ def _infer_top_from_netlist(netlist_path: str) -> str | None:
     return m.group(1) if m else None
 
 
+def _select_single_top_netlist_ref(entries: list[str]) -> list[str]:
+    clean = [str(entry).strip() for entry in entries if str(entry).strip()]
+    if len(clean) <= 1:
+        return clean
+    physical = [entry for entry in clean if os.path.basename(entry).endswith((".pnl.v", ".nl.v"))]
+    if physical:
+        return [sorted(physical, key=lambda entry: (0 if ".pnl." in os.path.basename(entry).lower() else 1, 0 if ".nl." in os.path.basename(entry).lower() else 1, len(entry)))[0]]
+    return [sorted(clean, key=lambda entry: (0 if "synth" in os.path.basename(entry).lower() else 1, len(entry)))[0]]
+
+
 def _first_existing(paths: list[str]) -> str | None:
     for p in paths:
         if p and os.path.exists(p):
@@ -465,14 +475,19 @@ def run_agent(state: dict) -> dict:
         cfg.pop("MACROS", None)
         cfg.pop("FP_DEF_TEMPLATE", None)
 
-    _write_text(os.path.join(stage_dir, "config.json"), json.dumps(cfg, indent=2))
-    _write_text(os.path.join(work_stage_dir, "config.json"), json.dumps(cfg, indent=2))
-
-
-
     inherited_verilog_files = cfg.get("VERILOG_FILES", [])
     if isinstance(inherited_verilog_files, str):
         inherited_verilog_files = [inherited_verilog_files]
+    elif isinstance(inherited_verilog_files, list):
+        inherited_verilog_files = [str(entry) for entry in inherited_verilog_files]
+    else:
+        inherited_verilog_files = []
+    inherited_verilog_files = _select_single_top_netlist_ref(inherited_verilog_files)
+    if inherited_verilog_files:
+        cfg["VERILOG_FILES"] = inherited_verilog_files
+
+    _write_text(os.path.join(stage_dir, "config.json"), json.dumps(cfg, indent=2))
+    _write_text(os.path.join(work_stage_dir, "config.json"), json.dumps(cfg, indent=2))
 
     input_log = "\n".join([
         f"[{datetime.utcnow().isoformat()}Z] {AGENT_NAME}",

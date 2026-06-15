@@ -8,12 +8,43 @@ os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-service-role-key")
 from agents.digital.digital_drc_agent import _drc_status, _macro_blackbox_deferred as _drc_macro_blackbox_deferred
 from agents.digital.digital_failure_debug_agent import run_agent as failure_debug_agent
 from agents.digital import digital_spec2rtl_conformance_agent as spec2rtl_agent
+from agents.digital import digital_fill_agent, digital_sta_postfill_agent
 from agents.digital.digital_logic_equivalence_agent import _generated_stdcell_model, _missing_stdcell_models, _prepare_golden_rtl_for_yosys, _yosys_script
 from agents.digital.digital_lvs_agent import _lvs_status, _macro_blackbox_deferred as _lvs_macro_blackbox_deferred
 from agents.digital.digital_scan_atpg_agent import _adapter_log_has_execution_error, _generate_full_scan_bench, _metrics_show_real_atpg_result, _pattern_count_from_file
 from agents.digital import digital_tapeout_lec_agent as tapeout_lec_agent
 from agents.digital.digital_tapeout_lec_agent import PHYSICAL_ONLY_TOP_PORTS, _top_ports
 from agents.digital.digital_tapeout_agent import _blocking_xor_difference_count, _copy_xor_report, _tapeout_failure_reasons, _xor_difference_count, _xor_layer_counts, _xor_signoff_status
+
+
+def test_physical_stage_selects_one_physical_top_netlist():
+    chosen = digital_fill_agent._select_single_top_netlist([
+        "/work/inputs/netlist/temp_monitor_soc_phys_synth.v",
+        "/work/inputs/netlist/temp_monitor_soc_phys.nl.v",
+    ])
+
+    assert chosen == ["/work/inputs/netlist/temp_monitor_soc_phys.nl.v"]
+
+
+def test_physical_stage_clears_stale_local_netlists(tmp_path):
+    stale_a = tmp_path / "top_synth.v"
+    stale_b = tmp_path / "top.nl.v"
+    stale_a.write_text("module top(); endmodule\n", encoding="utf-8")
+    stale_b.write_text("module top(); endmodule\n", encoding="utf-8")
+
+    digital_fill_agent._clear_stage_netlists(str(tmp_path))
+
+    assert not stale_a.exists()
+    assert not stale_b.exists()
+
+
+def test_sta_postfill_sanitizes_inherited_duplicate_netlists():
+    chosen = digital_sta_postfill_agent._select_single_top_netlist_ref([
+        "inputs/netlist/temp_monitor_soc_phys_synth.v",
+        "inputs/netlist/temp_monitor_soc_phys.nl.v",
+    ])
+
+    assert chosen == ["inputs/netlist/temp_monitor_soc_phys.nl.v"]
 
 
 def test_atpg_zero_pattern_metrics_are_not_success():

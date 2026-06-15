@@ -45,6 +45,14 @@ def _select_single_top_netlist(paths: list[str]) -> list[str]:
     return [sorted(paths, key=lambda p: (0 if "synth" in os.path.basename(p).lower() else 1, len(p)))[0]]
 
 
+def _clear_stage_netlists(netlist_dir: str) -> None:
+    for old in glob.glob(os.path.join(netlist_dir, "*.v")):
+        try:
+            os.remove(old)
+        except OSError:
+            logger.warning(f"{AGENT_NAME}: could not remove stale netlist {old}")
+
+
 def _run(cmd: list[str], cwd: str, state: dict | None = None) -> tuple[int, str]:
     p = run_command(state or {}, "digital_drc", [str(x) for x in cmd], cwd=cwd, timeout_sec=1800)
     return p.returncode if p.returncode is not None else 1, (p.stdout or "") + (p.stderr or "")
@@ -342,10 +350,11 @@ def run_agent(state: dict) -> dict:
     if not stage_netlists:
         raise RuntimeError("DRC: missing run_work/inputs/netlist/*.v (synth/floorplan should populate it).")
 
+    _clear_stage_netlists(netlist_dir)
     for nl in stage_netlists:
         shutil.copy2(nl, os.path.join(netlist_dir, os.path.basename(nl)))
 
-    stage_netlists_local = sorted(glob.glob(os.path.join(netlist_dir, "*.v")))
+    stage_netlists_local = _select_single_top_netlist(sorted(glob.glob(os.path.join(netlist_dir, "*.v"))))
     cfg["VERILOG_FILES"] = [f"inputs/netlist/{os.path.basename(p)}" for p in stage_netlists_local]
 
     inferred = None
