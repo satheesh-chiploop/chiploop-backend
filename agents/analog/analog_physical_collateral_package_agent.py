@@ -90,6 +90,8 @@ def run_agent(state: dict) -> dict:
         if gds:
             digital["macro_gds"] = list(dict.fromkeys((digital.get("macro_gds") or []) + [gds]))
             digital.pop("macro_blackbox_mode", None)
+        if spice:
+            digital["macro_spice"] = list(dict.fromkeys((digital.get("macro_spice") or []) + [spice]))
         elif (lef or lib) and not generate_mode:
             digital["macro_blackbox_mode"] = "lef_lib_no_gds"
             digital["macro_blackboxes"] = [os.path.splitext(os.path.basename(lef))[0]] if lef else []
