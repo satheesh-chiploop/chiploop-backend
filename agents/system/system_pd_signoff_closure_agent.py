@@ -444,7 +444,9 @@ def _eco_profile(
         iteration = max(1, int(raw_iteration))
     except Exception:
         iteration = 1
-    severity_scale = 1.15 if iteration <= 1 else 1.30
+    total_drc = sum(int(v or 0) for v in category_counts.values())
+    severe_drc = total_drc >= 100
+    severity_scale = 1.30 if (iteration <= 1 and severe_drc) else (1.15 if iteration <= 1 else 1.30)
     names = " ".join(category_counts.keys()).lower()
 
     floorplan_cfg = _stage_config(workflow_dir, "floorplan") or _stage_config(workflow_dir, "impl_setup")
@@ -457,22 +459,25 @@ def _eco_profile(
     if re.search(r"\b(nwell|pwell|tap|difftap|metaltap|macro|boundary|obs|obstruction|pdn|power)\b", names):
         util = _first_number(floorplan_cfg.get("FP_CORE_UTIL"), floorplan_cfg.get("CORE_UTILIZATION"))
         if util is not None:
-            floorplan_overrides["FP_CORE_UTIL"] = max(5, round(float(util) * (0.85 if iteration <= 1 else 0.75), 3))
+            util_factor = 0.72 if (iteration <= 1 and severe_drc) else (0.85 if iteration <= 1 else 0.75)
+            floorplan_overrides["FP_CORE_UTIL"] = max(5, round(float(util) * util_factor, 3))
         density = _first_number(
             floorplan_cfg.get("PL_TARGET_DENSITY"),
             floorplan_cfg.get("PLACE_DENSITY"),
         )
         if density is not None:
-            floorplan_overrides["PL_TARGET_DENSITY"] = max(0.05, round(float(density) * (0.85 if iteration <= 1 else 0.75), 4))
+            density_factor = 0.72 if (iteration <= 1 and severe_drc) else (0.85 if iteration <= 1 else 0.75)
+            floorplan_overrides["PL_TARGET_DENSITY"] = max(0.05, round(float(density) * density_factor, 4))
             floorplan_overrides["PL_TARGET_DENSITY_PCT"] = round(floorplan_overrides["PL_TARGET_DENSITY"] * 100.0, 3)
         die_area = _die_area_scaled(floorplan_cfg.get("DIE_AREA"), severity_scale)
         if die_area:
             floorplan_overrides["DIE_AREA"] = die_area
         if re.search(r"\b(difftap|tap|metaltap)\b", names):
             base_tap_dist = _first_number(floorplan_cfg.get("FP_TAPCELL_DIST"), 14)
-            floorplan_overrides["FP_TAPCELL_DIST"] = max(6, round(float(base_tap_dist) * (0.75 if iteration <= 1 else 0.60), 3))
+            tap_factor = 0.60 if (iteration <= 1 and severe_drc) else (0.75 if iteration <= 1 else 0.60)
+            floorplan_overrides["FP_TAPCELL_DIST"] = max(6, round(float(base_tap_dist) * tap_factor, 3))
         if re.search(r"\b(macro|boundary|obs|obstruction|pdn|power|nwell|pwell|difftap)\b", names):
-            halo = 8 if iteration <= 1 else 12
+            halo = 12 if (iteration <= 1 and severe_drc) else (8 if iteration <= 1 else 12)
             floorplan_overrides["FP_PDN_HORIZONTAL_HALO"] = max(float(_first_number(floorplan_cfg.get("FP_PDN_HORIZONTAL_HALO"), 0) or 0), halo)
             floorplan_overrides["FP_PDN_VERTICAL_HALO"] = max(float(_first_number(floorplan_cfg.get("FP_PDN_VERTICAL_HALO"), 0) or 0), halo)
             floorplan_overrides["PL_MACRO_HALO"] = max(float(_first_number(floorplan_cfg.get("PL_MACRO_HALO"), 0) or 0), halo)
@@ -482,13 +487,8 @@ def _eco_profile(
     route_overrides: dict[str, Any] = {}
     if re.search(r"\b(poly|licon|mcon|contact|li|via|met[1-5]|m[1-5])\b", names):
         route_overrides["RUN_SPEF_EXTRACTION"] = True
-        route_overrides["GRT_ALLOW_CONGESTION"] = True
-        route_overrides["GRT_ADJUSTMENT"] = max(float(_first_number(route_cfg.get("GRT_ADJUSTMENT"), 0.30) or 0.30), 0.45 if iteration <= 1 else 0.60)
-        route_overrides["DRT_OPT_ITERS"] = max(int(_first_number(route_cfg.get("DRT_OPT_ITERS"), 64) or 64), 96 if iteration <= 1 else 128)
-        route_overrides["RUN_HEURISTIC_DIODE_INSERTION"] = True
-        route_overrides["DIODE_INSERTION_STRATEGY"] = max(int(_first_number(route_cfg.get("DIODE_INSERTION_STRATEGY"), 3) or 3), 3)
         route_overrides["CHIPLOOP_SIGNOFF_CLOSURE_ECO"] = f"drc_route_contact_metal_iter_{iteration}"
-        notes.append("DRC includes local contact/metal categories; preserve routed-state signoff and enable congestion-tolerant global routing rerun.")
+        notes.append("DRC includes local contact/metal categories; use floorplan/placement spacing first and avoid unsafe detailed-route override knobs.")
 
     setup_vios = sta.get("setup_violations") or 0
     hold_vios = sta.get("hold_violations") or 0
@@ -506,12 +506,11 @@ def _eco_profile(
         overrides["placement"] = dict(floorplan_overrides)
     if route_overrides:
         overrides["route"] = route_overrides
-        fill_overrides = {**route_overrides, "RUN_FILL_INSERTION": True}
+        fill_overrides = {"RUN_FILL_INSERTION": True}
         if re.search(r"\b(licon|difftap|li|m1)\b", names):
             fill_overrides["CHIPLOOP_FILL_DRC_REPAIR"] = f"tap_contact_fill_spacing_iter_{iteration}"
             # Let DRC prove the route before filler/decap density is treated as signoff-critical.
-            if iteration >= 2:
-                fill_overrides["RUN_FILL_INSERTION"] = False
+            fill_overrides["RUN_FILL_INSERTION"] = False
         overrides["fill"] = fill_overrides
         overrides["sta_postfill"] = dict(route_overrides)
         overrides["drc"] = dict(route_overrides)

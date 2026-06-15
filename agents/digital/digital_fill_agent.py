@@ -111,6 +111,38 @@ def _copy_primary_def(latest: str | None, stage_dir: str) -> str | None:
     return dst
 
 
+def _find_upstream_def(workflow_dir: str) -> str | None:
+    for cand in [
+        os.path.join(workflow_dir, "digital", "route", "primary.def"),
+        os.path.join(workflow_dir, "digital", "sta_postroute", "primary.def"),
+        os.path.join(workflow_dir, "digital", "cts", "primary.def"),
+        os.path.join(workflow_dir, "digital", "place", "primary.def"),
+    ]:
+        if os.path.exists(cand):
+            return cand
+    hits = glob.glob(os.path.join(workflow_dir, "digital", "run_work", "route", "runs", "**", "final", "def", "*.def"), recursive=True)
+    if hits:
+        hits.sort(key=lambda p: os.path.getmtime(p))
+        return hits[-1]
+    return None
+
+
+def _find_upstream_metrics(workflow_dir: str) -> str | None:
+    for cand in [
+        os.path.join(workflow_dir, "digital", "route", "metrics.json"),
+        os.path.join(workflow_dir, "digital", "sta_postroute", "metrics.json"),
+        os.path.join(workflow_dir, "digital", "cts", "metrics.json"),
+        os.path.join(workflow_dir, "digital", "place", "metrics.json"),
+    ]:
+        if os.path.exists(cand):
+            return cand
+    hits = glob.glob(os.path.join(workflow_dir, "digital", "run_work", "route", "runs", "**", "final", "metrics.json"), recursive=True)
+    if hits:
+        hits.sort(key=lambda p: os.path.getmtime(p))
+        return hits[-1]
+    return None
+
+
 def _infer_top_from_netlist(netlist_path: str) -> str | None:
     try:
         txt = open(netlist_path, "r", encoding="utf-8", errors="ignore").read()
@@ -380,15 +412,8 @@ def run_agent(state: dict) -> dict:
     closure_overrides = _closure_overrides(state, workflow_dir, "fill")
     cfg.update(closure_overrides)
 
-    logger.info(f"{AGENT_NAME}: staged macro LEFs -> {staged_lefs}")
-    logger.info(f"{AGENT_NAME}: staged macro LIBs -> {staged_libs}")
-    logger.info(f"{AGENT_NAME}: staged macro GDS -> {staged_gds}")
-
     config_path = os.path.join(stage_dir, "config.json")
-    _write_text(config_path, json.dumps(cfg, indent=2))
     exec_config_path = os.path.join(work_stage_dir, "config.json")
-    _write_text(exec_config_path, json.dumps(cfg, indent=2))
-
     input_log = "\n".join([
         f"[{datetime.utcnow().isoformat()}Z] {AGENT_NAME}",
         f"workflow_id={workflow_id}",
@@ -405,6 +430,62 @@ def run_agent(state: dict) -> dict:
         f"macro_placement_cfg_path={macro_placement_cfg}",
         f"closure_overrides={json.dumps(closure_overrides, sort_keys=True)}",
     ]) + "\n"
+
+    if cfg.get("RUN_FILL_INSERTION") is False:
+        upstream_def = _find_upstream_def(workflow_dir)
+        def_path = None
+        if upstream_def:
+            def_path = os.path.join(stage_dir, "primary.def")
+            shutil.copy2(upstream_def, def_path)
+        upstream_metrics = _find_upstream_metrics(workflow_dir)
+        metrics_path = None
+        if upstream_metrics:
+            metrics_path = os.path.join(stage_dir, "metrics.json")
+            shutil.copy2(upstream_metrics, metrics_path)
+        summary = {
+            "workflow_id": workflow_id,
+            "agent": AGENT_NAME,
+            "status": "skipped_disabled",
+            "return_code": 0,
+            "reason": "RUN_FILL_INSERTION=false",
+            "outputs": {
+                "sdc": f"digital/fill/constraints/{sdc_basename}",
+                "metrics_json": "digital/fill/metrics.json" if metrics_path else None,
+                "primary_def": "digital/fill/primary.def" if def_path else None,
+                "log": "digital/fill/logs/openlane_fill.log",
+                "openlane_run_dir": None,
+            },
+        }
+        _write_text(config_path, json.dumps(cfg, indent=2))
+        _write_text(exec_config_path, json.dumps(cfg, indent=2))
+        _write_text(os.path.join(logs_dir, "openlane_fill.log"), "Fill insertion skipped by signoff closure ECO (RUN_FILL_INSERTION=false).\n")
+        _write_text(os.path.join(logs_dir, "fill_input_resolution.log"), input_log)
+        _write_text(os.path.join(stage_dir, "fill_summary.json"), json.dumps(summary, indent=2))
+        try:
+            save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "fill/config.json", json.dumps(cfg, indent=2))
+            save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", f"fill/constraints/{sdc_basename}", sdc_text)
+            save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "fill/logs/openlane_fill.log", "Fill insertion skipped by signoff closure ECO (RUN_FILL_INSERTION=false).\n")
+            save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "fill/fill_summary.json", json.dumps(summary, indent=2))
+            save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "fill/logs/fill_input_resolution.log", input_log)
+            if metrics_path and os.path.exists(metrics_path):
+                with open(metrics_path, "r", encoding="utf-8") as f:
+                    save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "fill/metrics.json", f.read())
+            if def_path and os.path.exists(def_path):
+                with open(def_path, "r", encoding="utf-8", errors="ignore") as f:
+                    save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "fill/primary.def", f.read())
+        except Exception as e:
+            logger.warning(f"{AGENT_NAME}: failed to upload skipped-fill artifacts: {e}")
+        state.setdefault("digital", {})["fill"] = summary
+        state["fill_def"] = def_path or upstream_def
+        return state
+
+    logger.info(f"{AGENT_NAME}: staged macro LEFs -> {staged_lefs}")
+    logger.info(f"{AGENT_NAME}: staged macro LIBs -> {staged_libs}")
+    logger.info(f"{AGENT_NAME}: staged macro GDS -> {staged_gds}")
+
+    _write_text(config_path, json.dumps(cfg, indent=2))
+    _write_text(exec_config_path, json.dumps(cfg, indent=2))
+
     _write_text(os.path.join(logs_dir, "fill_input_resolution.log"), input_log)
 
     run_sh = f"""#!/usr/bin/env bash

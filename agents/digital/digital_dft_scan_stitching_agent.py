@@ -319,6 +319,36 @@ write_verilog {json.dumps(out_netlist)}
 """
 
 
+def _preserve_missing_macro_instances(source_text: str, stitched_text: str) -> tuple[str, list[str]]:
+    if not source_text.strip() or not stitched_text.strip():
+        return stitched_text, []
+    existing_instances = set(re.findall(r"\b(?:\\[^\s(]+|[A-Za-z_][A-Za-z0-9_$]*)\s*\(", stitched_text))
+    preserved: list[str] = []
+    blocks: list[str] = []
+    pattern = re.compile(
+        r"(?m)^\s*(?P<cell>[A-Za-z_][A-Za-z0-9_$]*)\s+"
+        r"(?P<inst>(?:\\[^\s(]+|[A-Za-z_][A-Za-z0-9_$]*))\s*"
+        r"\((?P<body>.*?)\);",
+        flags=re.DOTALL,
+    )
+    for match in pattern.finditer(source_text):
+        cell = match.group("cell")
+        inst = match.group("inst").strip()
+        if cell in {"module", "endmodule", "assign", "always", "if", "for", "generate"}:
+            continue
+        if cell.startswith(("sky130_fd_sc_", "sky130_ef_sc_")):
+            continue
+        if f"{inst}(" in existing_instances or inst in stitched_text:
+            continue
+        blocks.append(match.group(0).rstrip())
+        preserved.append(f"{cell}:{inst}")
+    if not blocks:
+        return stitched_text, []
+    insertion = "\n  // Preserved non-stdcell macro instances omitted by DFT write_verilog.\n" + "\n".join(blocks) + "\n"
+    repaired, count = re.subn(r"\nendmodule\s*$", insertion + "endmodule\n", stitched_text, count=1)
+    return (repaired if count else stitched_text + insertion), preserved
+
+
 def _classify(
     rc: int | None,
     log: str,
@@ -483,6 +513,12 @@ def run_agent(state: dict) -> dict:
     _write_text(log_path, log)
 
     stitched = os.path.exists(scan_netlist_path)
+    preserved_macros: list[str] = []
+    if stitched:
+        source_for_preserve = _read_text(scan_mapped_netlist_path) or _read_text(input_netlist_path)
+        stitched_text, preserved_macros = _preserve_missing_macro_instances(source_for_preserve, _read_text(scan_netlist_path))
+        if preserved_macros:
+            _write_text(scan_netlist_path, stitched_text)
     tool_available = bool(openroad or docker)
     status = _classify(rc, log, tool_available, netlist, flop_count, stitched)
     actual_scan_chains = _actual_scan_chain_count(log)
@@ -510,6 +546,7 @@ def run_agent(state: dict) -> dict:
         "max_chain_length_estimate": config["max_chain_length_estimate"],
         "scan_enable": config["scan_enable"],
         "stitched_netlist_generated": stitched,
+        "preserved_macro_instances": preserved_macros,
         "generated_at": datetime.utcnow().isoformat() + "Z",
         "artifacts": {
             "config": "digital/dft/scan_config.json",

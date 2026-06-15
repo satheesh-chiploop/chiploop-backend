@@ -227,7 +227,11 @@ def run_agent(state: dict) -> dict:
     ignored_gate_ports = _extra_gate_ports(golden, gate, top)
     rtl_files = _rtl_sources(state, workflow_dir)
     _prepared_rtl_files, macro_blackboxes = _prepare_golden_rtl_for_yosys(rtl_files, gate or golden, stage_dir, top) if rtl_files and (gate or golden) else (rtl_files, [])
-    macro_blackboxes = list(dict.fromkeys(macro_blackboxes + _fallback_macro_blackboxes(gate or golden, stage_dir, top, macro_blackboxes)))
+    macro_blackboxes = list(dict.fromkeys(
+        macro_blackboxes
+        + _fallback_macro_blackboxes(golden, stage_dir, top, macro_blackboxes)
+        + _fallback_macro_blackboxes(gate, stage_dir, top, macro_blackboxes)
+    ))
 
     script_path = os.path.join(stage_dir, "yosys_post_dft_lec.ys")
     log_path = os.path.join(logs_dir, "yosys_post_dft_lec.log")
