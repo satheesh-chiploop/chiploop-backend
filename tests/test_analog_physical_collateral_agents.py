@@ -378,6 +378,43 @@ def test_sky130_spice_layout_issues_reject_supply_drains_and_omitted_outputs():
     assert "output_pin_not_driven:adc_code[1]" in issues
 
 
+def test_sky130_spice_canonicalizes_unused_supply_aliases_onto_real_output_drivers():
+    spice = (
+        ".subckt ana adc_code[0] adc_code[1] adc_valid sample_req VPWR VGND avdd avss\n"
+        "Mvalidp adc_valid sample_req VPWR VPWR sky130_fd_pr__pfet_01v8 W=1u L=0.15u\n"
+        "Mvalidn adc_valid sample_req VGND VGND sky130_fd_pr__nfet_01v8 W=1u L=0.15u\n"
+        "Mcode0p adc_code[0] sample_req VPWR VPWR sky130_fd_pr__pfet_01v8 W=1u L=0.15u\n"
+        "Mcode0n adc_code[0] sample_req VGND VGND sky130_fd_pr__nfet_01v8 W=1u L=0.15u\n"
+        "Mcode1p adc_code[1] sample_req VPWR VPWR sky130_fd_pr__pfet_01v8 W=1u L=0.15u\n"
+        "Mcode1n adc_code[1] sample_req VGND VGND sky130_fd_pr__nfet_01v8 W=1u L=0.15u\n"
+        "Mbadp avdd sample_req VPWR VPWR sky130_fd_pr__pfet_01v8 W=1u L=0.15u\n"
+        "Mbadn avss sample_req VGND VGND sky130_fd_pr__nfet_01v8 W=1u L=0.15u\n"
+        ".ends ana\n"
+    )
+    specs = {
+        "adc_code": {"name": "adc_code", "verilog_direction": "output", "width": 2},
+        "adc_valid": {"name": "adc_valid", "verilog_direction": "output"},
+        "sample_req": {"name": "sample_req", "verilog_direction": "input"},
+        "VPWR": {"name": "VPWR", "verilog_direction": "input", "role": "power"},
+        "VGND": {"name": "VGND", "verilog_direction": "input", "role": "ground"},
+        "avdd": {"name": "avdd", "verilog_direction": "input", "role": "power"},
+        "avss": {"name": "avss", "verilog_direction": "input", "role": "ground"},
+    }
+
+    repaired = spice_agent._canonicalize_generated_supply_usage(spice, specs)
+    issues = spice_agent._generated_spice_layout_issues(repaired, specs)
+
+    assert "Mbadp" not in repaired
+    assert "Mbadn" not in repaired
+    assert " avdd sample_req " not in repaired
+    assert " avss sample_req " not in repaired
+    assert "supply_pin_used_as_device_drain:avdd" not in issues
+    assert "supply_pin_used_as_device_drain:avss" not in issues
+    assert "supply_pin_not_used_as_device_source:avdd" not in issues
+    assert "supply_pin_not_used_as_device_source:avss" not in issues
+    assert not issues
+
+
 def test_sky130_spice_generated_scalar_bus_terminals_are_legalized():
     spice = (
         ".subckt ana adc_code[0] adc_code[1] sensor_temp_celsius[0] sensor_temp_celsius[1] avdd avss\n"

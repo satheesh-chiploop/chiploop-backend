@@ -159,6 +159,17 @@ def _is_supply_pin(pin: str, port_specs: Dict[str, Dict[str, Any]]) -> bool:
     return lowered in {"vdd", "vss", "vcc", "gnd", "avdd", "avss", "dvdd", "dvss", "vpwr", "vgnd"}
 
 
+def _supply_kind(pin: str, port_specs: Dict[str, Dict[str, Any]]) -> str:
+    spec = port_specs.get(pin) or port_specs.get(_base_bus_name(pin)) or {}
+    role = str(spec.get("role") or "").strip().lower()
+    lowered = (pin or "").lower()
+    if role == "power" or lowered in {"vdd", "vcc", "avdd", "dvdd", "vpwr"} or lowered.endswith("vdd"):
+        return "power"
+    if role == "ground" or lowered in {"vss", "gnd", "avss", "dvss", "vgnd"} or lowered.endswith("vss"):
+        return "ground"
+    return ""
+
+
 def _interface_safety_context(ports: List[str], port_specs: Dict[str, Dict[str, Any]]) -> Dict[str, List[str]]:
     bit_bases = sorted(dict.fromkeys(_base_bus_name(pin) for pin in ports if re.match(r"^.+\[\d+\]$", pin)))
     input_pins = sorted(dict.fromkeys(
@@ -173,6 +184,69 @@ def _interface_safety_context(ports: List[str], port_specs: Dict[str, Dict[str, 
         "output_pins_may_be_driven": output_pins,
         "forbidden_scalar_bus_terminals": bit_bases,
     }
+
+
+def _canonicalize_generated_supply_usage(text: str, port_specs: Dict[str, Dict[str, Any]]) -> str:
+    _subckt_name, pins = _subckt_parts(text)
+    if not pins:
+        return text
+    supplies = {pin for pin in pins if _is_supply_pin(pin, port_specs)}
+    outputs = {
+        pin for pin in pins
+        if _direction_for_pin(pin, port_specs).startswith("output")
+        or _direction_for_pin(_base_bus_name(pin), port_specs).startswith("output")
+    }
+    if not supplies or not outputs:
+        return text
+
+    source_counts: Dict[str, int] = {pin: 0 for pin in supplies}
+    mos_line_re = re.compile(r"^(\s*M\S*\s+)(\S+)\s+(\S+)\s+(\S+)\s+(\S+)(\s+(\S+).*)$", re.IGNORECASE)
+    lines: List[str] = []
+    mos_indexes_by_kind = {"power": [], "ground": []}
+    for line in (text or "").splitlines():
+        match = mos_line_re.match(line)
+        if not match:
+            lines.append(line)
+            continue
+        prefix, drain, gate, source, bulk, suffix, model = match.groups()
+        drain = _pin_name(drain)
+        gate = _pin_name(gate)
+        source = _pin_name(source)
+        bulk = _pin_name(bulk)
+        model_lower = model.lower()
+        if drain in supplies:
+            continue
+        line_index = len(lines)
+        if source in source_counts:
+            source_counts[source] += 1
+        if drain in outputs:
+            if "pfet" in model_lower:
+                mos_indexes_by_kind["power"].append(line_index)
+            elif "nfet" in model_lower:
+                mos_indexes_by_kind["ground"].append(line_index)
+        lines.append(f"{prefix}{drain} {gate} {source} {bulk}{suffix}")
+
+    unused_by_kind = {"power": [], "ground": []}
+    for supply, count in source_counts.items():
+        kind = _supply_kind(supply, port_specs)
+        if count == 0 and kind in unused_by_kind:
+            unused_by_kind[kind].append(supply)
+
+    used_line_indexes: set[int] = set()
+    for kind, unused_supplies in unused_by_kind.items():
+        candidate_indexes = mos_indexes_by_kind[kind]
+        for supply in unused_supplies:
+            target_index = next((idx for idx in candidate_indexes if idx not in used_line_indexes), None)
+            if target_index is None:
+                continue
+            used_line_indexes.add(target_index)
+            match = mos_line_re.match(lines[target_index])
+            if not match:
+                continue
+            prefix, drain, gate, _source, _bulk, suffix, _model = match.groups()
+            lines[target_index] = f"{prefix}{_pin_name(drain)} {_pin_name(gate)} {supply} {supply}{suffix}"
+
+    return "\n".join(lines).rstrip() + ("\n" if text.endswith("\n") else "")
 
 
 def _generated_spice_layout_issues(text: str, port_specs: Dict[str, Dict[str, Any]]) -> List[str]:
@@ -592,12 +666,15 @@ def run_agent(state: dict) -> dict:
         raise RuntimeError("Analog GDS generation requires real transistor-level SPICE; no valid device-level SPICE was provided.")
 
     spice = _normalise_for_source(selected_text, module_name, ports, selected_source)
+    if selected_source.startswith("generated_by_sky130_spice_agent"):
+        spice = _canonicalize_generated_supply_usage(spice, port_specs)
     layout_blocking_issues = _blocking_layout_issues(spice, port_specs)
     if layout_blocking_issues and selected_source == "generated_by_sky130_spice_agent":
         save_text_artifact_and_record(workflow_id, AGENT_NAME, "analog/sky130", f"{module_name}_rejected_pass1.spice", spice)
         repaired_text = _repair_generated_spice_with_llm(state, module_name, ports, spice, layout_blocking_issues)
         if repaired_text and _has_real_devices(repaired_text):
             repaired_spice = _normalise_for_source(repaired_text, module_name, ports, "generated_by_sky130_spice_agent_repaired")
+            repaired_spice = _canonicalize_generated_supply_usage(repaired_spice, port_specs)
             repaired_issues = _blocking_layout_issues(repaired_spice, port_specs)
             if not repaired_issues:
                 spice = repaired_spice
