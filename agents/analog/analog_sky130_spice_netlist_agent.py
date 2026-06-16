@@ -341,6 +341,47 @@ Good bus example, because every bus terminal uses a declared bit pin:
 Mgood3 data_bus[0] enable vdd vdd sky130_fd_pr__pfet_01v8 W=1u L=0.15u
 Mgood4 data_bus[0] enable vss vss sky130_fd_pr__nfet_01v8 W=1u L=0.15u
 .ends example
+
+Bad supply-alias example, because avdd and avss are .subckt pins but are never used as MOS source terminals:
+.subckt example out in VPWR VGND avdd avss
+Mbad4 out in VPWR VPWR sky130_fd_pr__pfet_01v8 W=1u L=0.15u
+Mbad5 out in VGND VGND sky130_fd_pr__nfet_01v8 W=1u L=0.15u
+.ends example
+
+Good supply-alias example, because every supply pin is used as a source terminal at least once:
+.subckt example out0 out1 in0 in1 VPWR VGND avdd avss
+Mgood5 out0 in0 VPWR VPWR sky130_fd_pr__pfet_01v8 W=1u L=0.15u
+Mgood6 out0 in0 VGND VGND sky130_fd_pr__nfet_01v8 W=1u L=0.15u
+Mgood7 out1 in1 avdd avdd sky130_fd_pr__pfet_01v8 W=1u L=0.15u
+Mgood8 out1 in1 avss avss sky130_fd_pr__nfet_01v8 W=1u L=0.15u
+.ends example
+""".strip()
+
+
+def _layout_safe_self_check() -> str:
+    return """
+Before returning SPICE, perform this exact self-check and fix failures:
+1. .subckt interface:
+   - It must contain exactly the required external pins.
+   - If bit pins like bus[0] exist, the scalar bus name bus must not appear as a .subckt pin or MOS terminal.
+2. Inputs:
+   - Any pin listed in input_pins_gate_only may appear only as the MOS gate terminal.
+   - If an input appears as drain/source/bulk, rewrite that device so the input is the gate and an output/internal node is the drain.
+3. Outputs:
+   - For every output pin driven by a PFET, there must also be at least one NFET connected to that same output pin.
+   - For every output pin driven by an NFET, there must also be at least one PFET connected to that same output pin.
+4. Supplies:
+   - Every supply pin in the .subckt, including aliases such as VPWR, VGND, avdd, and avss, must be used as a MOS source terminal at least once.
+   - Supply pins may be source/bulk terminals, never drain terminals.
+   - If a supply alias is unused, choose a real output device and use that alias as both source and bulk for one complementary driver.
+5. Issue-to-repair mapping:
+   - supply_pin_not_used_as_device_source:X => add or rewrite at least one legal MOS with source X and bulk X.
+   - output_pin_missing_nfet_pull:Y => add an NFET for output Y with source/bulk on a ground supply.
+   - output_pin_missing_pfet_pull:Y => add a PFET for output Y with source/bulk on a power supply.
+   - input_pin_used_as_device_terminal:Z => move Z to gate only; do not use Z as drain/source/bulk.
+   - supply_pin_used_as_device_drain:X => move X to source/bulk only.
+   - undeclared_external_scalar_bus:B => replace B with a declared bit pin such as B[0].
+6. Return only the repaired SPICE. Do not explain the self-check.
 """.strip()
 
 
@@ -364,6 +405,9 @@ Layout-safe external terminal rules derived from the interface:
 
 Layout-safe topology examples:
 {_layout_safe_spice_examples()}
+
+Mandatory self-check and self-repair strategy:
+{_layout_safe_self_check()}
 
 Available analog spec JSON:
 {json.dumps(ctx["analog_spec"], indent=2)}
@@ -425,6 +469,9 @@ Layout-safe external terminal rules derived from the interface:
 
 Layout-safe topology examples:
 {_layout_safe_spice_examples()}
+
+Mandatory self-check and self-repair strategy:
+{_layout_safe_self_check()}
 
 Detected layout-safety issues to fix:
 {json.dumps(layout_issues, indent=2)}

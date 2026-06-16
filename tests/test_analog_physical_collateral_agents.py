@@ -412,6 +412,47 @@ def test_sky130_prompt_lists_scalar_bus_names_as_forbidden(tmp_path, monkeypatch
     assert "Mbad3 data_bus enable vdd vdd" in prompts[0]
 
 
+def test_sky130_prompt_includes_self_check_and_supply_alias_examples(tmp_path, monkeypatch):
+    prompts = []
+    monkeypatch.setattr(spice_agent, "save_text_artifact_and_record", lambda *args, **kwargs: "local")
+
+    def fake_complete_text(prompt, *args, **kwargs):
+        prompts.append(prompt)
+        return (
+            ".subckt ana out in VPWR VGND avdd avss\n"
+            "M1 out in VPWR VPWR sky130_fd_pr__pfet_01v8 W=1u L=0.15u\n"
+            "M2 out in VGND VGND sky130_fd_pr__nfet_01v8 W=1u L=0.15u\n"
+            ".ends ana\n"
+        )
+
+    monkeypatch.setattr(spice_agent, "complete_text", fake_complete_text)
+
+    with pytest.raises(RuntimeError, match="generated_spice_not_layout_safe"):
+        spice_agent.run_agent({
+            "workflow_id": "wf",
+            "workflow_dir": str(tmp_path),
+            "analog_physical_mode": "generate_sky130_gds",
+            "analog_pdk": "sky130A",
+            "analog_spec": {
+                "module_name": "ana",
+                "ports": [
+                    {"name": "out", "direction": "output"},
+                    {"name": "in", "direction": "input"},
+                    {"name": "VPWR", "direction": "input", "role": "power"},
+                    {"name": "VGND", "direction": "input", "role": "ground"},
+                    {"name": "avdd", "direction": "input", "role": "power"},
+                    {"name": "avss", "direction": "input", "role": "ground"},
+                ],
+            },
+        })
+
+    prompt_text = "\n".join(prompts)
+    assert "Mandatory self-check and self-repair strategy" in prompt_text
+    assert "supply_pin_not_used_as_device_source:X" in prompt_text
+    assert "Good supply-alias example" in prompt_text
+    assert "Mgood7 out1 in1 avdd avdd" in prompt_text
+
+
 def test_gds_generation_uses_macro_contract_name_when_module_missing(tmp_path, monkeypatch):
     monkeypatch.setattr(gds_agent, "save_text_artifact_and_record", lambda *args, **kwargs: "local")
 
