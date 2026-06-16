@@ -203,6 +203,15 @@ def _stage_is_clean(stage: str, status: str | None) -> bool:
     return status == "ok"
 
 
+def _signoff_blocking_reasons(drc_status: str | None, lvs_status: str | None) -> list[str]:
+    reasons: list[str] = []
+    if drc_status == "blackbox_deferred":
+        reasons.append("analog_macro_gds_missing")
+    if lvs_status == "blackbox_deferred" and "analog_macro_gds_missing" not in reasons:
+        reasons.append("analog_macro_gds_missing")
+    return reasons
+
+
 def _xor_difference_count(log: str) -> int | None:
     counts = [int(match.group(1)) for match in re.finditer(r"Total XOR differences:\s*(\d+)", log or "", flags=re.IGNORECASE)]
     if counts:
@@ -228,6 +237,7 @@ def _tapeout_failure_reasons(
         reasons.append("drc_not_clean")
     if not _stage_is_clean("lvs", lvs_status):
         reasons.append("lvs_not_clean")
+    reasons.extend(reason for reason in _signoff_blocking_reasons(drc_status, lvs_status) if reason not in reasons)
     xor_count = blocking_xor_count if blocking_xor_count is not None else _xor_difference_count(log)
     if _xor_signoff_status() == "enabled" and xor_count is not None and xor_count > 0:
         reasons.append("xor_differences_found")
@@ -687,6 +697,65 @@ def run_agent(state: dict) -> dict:
     input_log_path = os.path.join(logs_dir, "tapeout_input_resolution.log")
     _write_text(input_log_path, input_log)
 
+    drc_status = _stage_status(state, "drc")
+    lvs_status = _stage_status(state, "lvs")
+    signoff_blockers = _signoff_blocking_reasons(drc_status, lvs_status)
+    if signoff_blockers:
+        out = "Tapeout blocked before streamout because required physical signoff is deferred: " + ", ".join(signoff_blockers) + "\n"
+        log_path = os.path.join(logs_dir, "openlane_tapeout.log")
+        _write_text(log_path, out)
+        summary = {
+            "workflow_id": workflow_id,
+            "agent": AGENT_NAME,
+            "status": "blocked",
+            "return_code": 0,
+            "failure_reasons": signoff_blockers + ["drc_not_clean", "lvs_not_clean"],
+            "signoff_inputs": {
+                "drc_status": drc_status,
+                "lvs_status": lvs_status,
+                "xor_status": _xor_signoff_status(),
+                "xor_differences": None,
+                "xor_differences_observed": None,
+                "xor_differences_total": None,
+                "xor_layer_counts": {},
+                "xor_nonblocking_layers": sorted(DEFAULT_NONBLOCKING_XOR_LAYERS),
+                "gds_produced": False,
+            },
+            "outputs": {
+                "sdc": f"digital/tapeout/constraints/{sdc_basename}",
+                "metrics_json": None,
+                "xor_report_xml": None,
+                "klayout_gds": None,
+                "magic_gds": None,
+                "log": "digital/tapeout/logs/openlane_tapeout.log",
+                "input_resolution_log": "digital/tapeout/logs/tapeout_input_resolution.log",
+                "openlane_run_dir": None,
+            },
+        }
+        _write_text(os.path.join(stage_dir, "tapeout_summary.json"), json.dumps(summary, indent=2))
+        _write_text(os.path.join(stage_dir, "tapeout_summary.md"), "# Tapeout\n\n- status: `blocked`\n- reason: `analog_macro_gds_missing`\n")
+        try:
+            save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "tapeout/config.json", json.dumps(cfg, indent=2))
+            save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", f"tapeout/constraints/{sdc_basename}", sdc_text)
+            save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "tapeout/logs/openlane_tapeout.log", out)
+            save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "tapeout/logs/tapeout_input_resolution.log", input_log)
+            save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "tapeout/tapeout_summary.json", json.dumps(summary, indent=2))
+        except Exception as e:
+            print(f"âš ï¸ {AGENT_NAME} upload failed: {e}")
+        state.setdefault("digital", {})["tapeout"] = {
+            "status": summary["status"],
+            "stage_dir": stage_dir,
+            "metrics_json": None,
+            "constraints_sdc": stage_sdc,
+            "openlane_config": config_path,
+            "input_resolution_log": input_log_path,
+            "gds_klayout": None,
+            "gds_magic": None,
+            "openlane_run_dir": None,
+            "failure_reasons": summary["failure_reasons"],
+        }
+        return state
+
     run_sh = f"""#!/usr/bin/env bash
 set -euo pipefail
 
@@ -748,8 +817,6 @@ docker run --rm \\
     if mg_src and mg_dst:
         shutil.copy2(mg_src, mg_dst)
 
-    drc_status = _stage_status(state, "drc")
-    lvs_status = _stage_status(state, "lvs")
     failure_reasons = _tapeout_failure_reasons(
         rc=rc,
         log=out,

@@ -376,6 +376,21 @@ def test_tapeout_requires_gds_output():
     assert reasons == ["gds_not_produced"]
 
 
+def test_tapeout_reports_analog_macro_gds_missing_when_signoff_deferred():
+    reasons = _tapeout_failure_reasons(
+        rc=0,
+        log="",
+        drc_status="blackbox_deferred",
+        lvs_status="blackbox_deferred",
+        klayout_gds=None,
+        magic_gds=None,
+    )
+
+    assert "analog_macro_gds_missing" in reasons
+    assert "drc_not_clean" in reasons
+    assert "lvs_not_clean" in reasons
+
+
 def test_tapeout_xor_difference_parser():
     assert _xor_difference_count("Total XOR differences: 0") == 0
     assert _xor_difference_count("One or more deferred errors encountered: 1 XOR differences found.") == 1

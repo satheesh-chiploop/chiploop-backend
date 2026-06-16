@@ -126,6 +126,7 @@ def _load_artifacts(workflow_dir: str) -> dict[str, dict[str, Any]]:
         "sta_postfill": os.path.join(workflow_dir, "digital", "sta_postfill", "metrics.json"),
         "sta_postfill_summary": os.path.join(workflow_dir, "digital", "sta_postfill", "sta_postfill_summary.json"),
         "sta_postroute": os.path.join(workflow_dir, "digital", "sta_postroute", "metrics.json"),
+        "analog_physical_package": os.path.join(workflow_dir, "analog", "physical_package", "analog_physical_collateral_package.json"),
         "analog_signoff": os.path.join(workflow_dir, "analog", "signoff", "analog_signoff_summary.json"),
     }
     return {key: _read_json(path) for key, path in paths.items()}
@@ -288,6 +289,24 @@ def _classify(artifacts: dict[str, dict[str, Any]], category_counts: dict[str, i
     sta = _sta_metrics(artifacts)
 
     analog = artifacts.get("analog_signoff") or {}
+    analog_package = artifacts.get("analog_physical_package") or {}
+    if (
+        analog_package.get("blackbox_for_drc_lvs")
+        or analog_package.get("blackbox_reason") == "analog_macro_gds_missing"
+        or analog_package.get("reason") == "analog_macro_gds_missing"
+    ):
+        issues.append({
+            "type": "analog_macro_gds_missing",
+            "severity": 96,
+            "restart_stage": "Analog Physical Collateral Package Agent",
+            "evidence": {
+                "status": analog_package.get("status"),
+                "reason": _first_present(analog_package.get("blackbox_reason"), analog_package.get("reason")),
+                "gds": analog_package.get("gds"),
+                "mode": analog_package.get("mode"),
+            },
+            "reason": "Analog macro LEF/LIB are present but GDS is missing, so digital DRC/LVS cannot be trusted.",
+        })
     analog_drc = analog.get("drc") if isinstance(analog.get("drc"), dict) else {}
     analog_lvs = analog.get("lvs") if isinstance(analog.get("lvs"), dict) else {}
     if analog_drc and not _status_clean(analog_drc.get("status"), {"clean", "ok", "pass", "not_applicable"}):
@@ -322,13 +341,14 @@ def _classify(artifacts: dict[str, dict[str, Any]], category_counts: dict[str, i
     lvs_status = _known_status(lvs.get("lvs_status"), lvs.get("status"))
     if lvs_status and not _status_clean(lvs_status, {"clean", "ok", "pass", "completed"}):
         reason = str(_first_present(lvs.get("failure_reason"), lvs.get("reason"), "")).lower()
-        stage = "Digital Floorplan Agent" if "pin" in reason or lvs_status == "mismatch" else "Digital LVS Agent"
-        issues.append({
-            "type": "digital_lvs",
-            "severity": 85,
-            "restart_stage": stage,
-            "evidence": {"status": lvs_status, "reason": reason},
-        })
+        if not (lvs_status == "blackbox_deferred" and "analog_macro_gds_missing" in reason):
+            stage = "Digital Floorplan Agent" if "pin" in reason or lvs_status == "mismatch" else "Digital LVS Agent"
+            issues.append({
+                "type": "digital_lvs",
+                "severity": 85,
+                "restart_stage": stage,
+                "evidence": {"status": lvs_status, "reason": reason},
+            })
 
     if (sta.get("hold_violations") or 0) > 0:
         issues.append({
@@ -566,7 +586,7 @@ def _build_plan(state: dict[str, Any], artifacts: dict[str, dict[str, Any]], cat
         repair_group = (
             "timing" if issue_type in {"hold_timing", "setup_timing"}
             else "drc" if issue_type in {"digital_drc", "analog_drc"}
-            else "lvs" if issue_type in {"digital_lvs", "analog_lvs"}
+            else "lvs" if issue_type in {"digital_lvs", "analog_lvs", "analog_macro_gds_missing"}
             else "lec" if issue_type in {"synthesis_lec", "tapeout_lec"}
             else "other"
         )
@@ -633,6 +653,7 @@ def _repair_action(issue_type: str) -> str:
     return {
         "analog_drc": "Regenerate analog physical collateral, then rerun LEF/LIB consistency and digital physical signoff.",
         "analog_lvs": "Repair analog SPICE/GDS pin and device correspondence, then rerun analog LVS and downstream digital signoff.",
+        "analog_macro_gds_missing": "Generate real analog macro GDS/SPICE collateral, then rerun digital DRC/LVS/tapeout signoff.",
         "digital_drc": "Classify DRC categories, apply the corresponding floorplan/route/fill ECO, then rerun from the selected physical stage.",
         "digital_lvs": "Repair extracted-vs-source netlist or pin/cell mismatch, then rerun LVS and tapeout signoff.",
         "hold_timing": "Apply CTS/buffer hold ECO, then rerun route, fill, post-fill STA, DRC, LVS, tapeout, and LEC.",

@@ -101,6 +101,39 @@ def test_signoff_closure_disabled_by_default(tmp_path, monkeypatch):
     assert plan["status"] == "skipped"
 
 
+def test_signoff_closure_routes_blackbox_lvs_to_analog_gds_generation(tmp_path, monkeypatch):
+    monkeypatch.setattr(system_agent, "save_text_artifact_and_record", lambda *args, **kwargs: "local")
+
+    _write_json(tmp_path / "analog" / "physical_package" / "analog_physical_collateral_package.json", {
+        "status": "ready",
+        "mode": "blackbox",
+        "blackbox_for_drc_lvs": True,
+        "blackbox_reason": "analog_macro_gds_missing",
+        "gds": "",
+    })
+    _write_json(tmp_path / "digital" / "drc" / "drc_summary.json", {
+        "status": "blackbox_deferred",
+        "drc_status": "blackbox_deferred",
+        "reason": "analog_macro_gds_missing",
+    })
+    _write_json(tmp_path / "digital" / "lvs" / "lvs_summary.json", {
+        "status": "blackbox_deferred",
+        "lvs_status": "blackbox_deferred",
+        "reason": "analog_macro_gds_missing",
+    })
+
+    out = system_agent.run_agent({
+        "workflow_id": "wf",
+        "workflow_dir": str(tmp_path),
+        "run_signoff_closure_loop": True,
+    })
+
+    plan = out["digital"]["signoff_closure"]["plan"]
+    assert plan["dominant_issue"] == "analog_macro_gds_missing"
+    assert plan["selected_restart_stage"] == "Analog Physical Collateral Package Agent"
+    assert not any(item["type"] == "digital_lvs" for item in plan["issue_summary"])
+
+
 def test_synthesis_closure_selects_synthesis_for_setup_violations(tmp_path, monkeypatch):
     monkeypatch.setattr(synthesis_agent, "save_text_artifact_and_record", lambda *args, **kwargs: "local")
 
