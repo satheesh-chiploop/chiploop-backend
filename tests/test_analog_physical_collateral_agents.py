@@ -444,6 +444,7 @@ def test_sky130_spice_canonicalizes_excessive_shared_input_gate_fanout():
     assert "M0n adc_code[0] sensor_temp_celsius[0]" in repaired
     assert "M1p adc_code[1] sensor_temp_celsius[1]" in repaired
     assert "M1n adc_code[1] sensor_temp_celsius[1]" in repaired
+    assert "Mvp adc_valid sample_req" in repaired
     assert "input_pin_used_as_device_terminal" not in "\n".join(issues)
     assert not issues
 

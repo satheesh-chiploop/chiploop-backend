@@ -249,6 +249,24 @@ def _canonicalize_generated_supply_usage(text: str, port_specs: Dict[str, Dict[s
     return "\n".join(lines).rstrip() + ("\n" if text.endswith("\n") else "")
 
 
+def _gate_counts_for_external_inputs(text: str, port_specs: Dict[str, Dict[str, Any]]) -> Dict[str, int]:
+    _subckt_name, pins = _subckt_parts(text)
+    external_inputs = {
+        pin for pin in pins
+        if _direction_for_pin(pin, port_specs).startswith("input") and not _is_supply_pin(pin, port_specs)
+    }
+    external_inputs.update(
+        pin for pin in pins
+        if _direction_for_pin(_base_bus_name(pin), port_specs).startswith("input") and not _is_supply_pin(pin, port_specs)
+    )
+    counts: Dict[str, int] = {pin: 0 for pin in external_inputs}
+    for match in re.finditer(r"^\s*M\S*\s+\S+\s+(\S+)\s+\S+\s+\S+\s+\S+", text or "", flags=re.IGNORECASE | re.MULTILINE):
+        gate = _pin_name(match.group(1))
+        if gate in counts:
+            counts[gate] += 1
+    return counts
+
+
 def _bus_index(pin: str) -> int | None:
     match = re.match(r"^.+\[(\d+)\]$", _pin_name(pin))
     return int(match.group(1)) if match else None
@@ -302,8 +320,12 @@ def _canonicalize_generated_input_gate_fanout(text: str, port_specs: Dict[str, D
     lines = (text or "").splitlines()
     round_robin_inputs = [*input_bus_by_index.values(), *input_scalars]
     rr = 0
+    retained_scalar: set[str] = set()
     for idx, match, drain, gate in parsed:
         if gate_counts.get(gate, 0) <= max_gate_fanout:
+            continue
+        if _bus_index(gate) is None and _bus_index(drain) is None and gate not in retained_scalar:
+            retained_scalar.add(gate)
             continue
         replacement = None
         out_idx = _bus_index(drain)

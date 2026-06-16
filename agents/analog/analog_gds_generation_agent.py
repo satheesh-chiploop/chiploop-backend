@@ -8,6 +8,8 @@ from typing import Any, Dict
 
 from model_gateway import complete_text
 from agents.analog.analog_sky130_spice_netlist_agent import (
+    _canonicalize_generated_input_gate_fanout,
+    _canonicalize_generated_supply_usage,
     _generated_spice_layout_issues,
     _legalize_scalar_bus_mos_terminals,
     _normalize_subckt_bus_pins,
@@ -1270,6 +1272,9 @@ def run_agent(state: dict) -> dict:
             )
             if repaired_spice:
                 repaired_spice = _normalize_subckt_bus_pins(repaired_spice)
+                port_specs = _port_specs(state)
+                repaired_spice = _canonicalize_generated_supply_usage(repaired_spice, port_specs)
+                repaired_spice = _canonicalize_generated_input_gate_fanout(repaired_spice, port_specs)
                 with open(os.path.join(stage_dir, "magic_input_lvs_repair.sp"), "w", encoding="utf-8") as fh:
                     fh.write(repaired_spice)
                 if _material_spice_signature(repaired_spice) == _material_spice_signature(original_spice):
@@ -1281,7 +1286,7 @@ def run_agent(state: dict) -> dict:
                         "repair_reason": lvs_repair_reason,
                     }
                 else:
-                    lvs_repair_layout_issues = _generated_spice_layout_issues(repaired_spice, _port_specs(state))
+                    lvs_repair_layout_issues = _generated_spice_layout_issues(repaired_spice, port_specs)
                 if lvs_repair_layout_issues:
                     lvs_repair_reason = "lvs_repair_spice_not_layout_safe"
                     analog_lvs = {
