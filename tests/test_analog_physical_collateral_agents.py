@@ -913,6 +913,35 @@ def test_magic_import_canonicalizes_duplicate_output_driver_fragments():
     assert "M2n" not in lvs_source_text
 
 
+def test_magic_lvs_repair_detects_output_supply_short_and_removes_driver():
+    specs = {
+        "out": {"name": "out", "verilog_direction": "output"},
+        "in": {"name": "in", "verilog_direction": "input"},
+        "vdd": {"name": "vdd", "verilog_direction": "input", "role": "power"},
+        "vss": {"name": "vss", "verilog_direction": "input", "role": "ground"},
+    }
+    summary = {
+        "port_shorts": [
+            {"port_a": "out", "port_b": "vdd"},
+            {"port_a": "in", "port_b": "vss"},
+        ]
+    }
+    spice = (
+        ".subckt ana out in vdd vss\n"
+        "M0p out in vdd vdd sky130_fd_pr__pfet_01v8 W=1u L=0.15u\n"
+        "M0n out in vss vss sky130_fd_pr__nfet_01v8 W=1u L=0.15u\n"
+        ".ends ana\n"
+    )
+
+    outputs = gds_agent._port_short_output_pins(summary, specs)
+    repaired = gds_agent._remove_magic_output_driver_pins(spice, outputs)
+
+    assert outputs == ["out"]
+    assert "M0p" not in repaired
+    assert "M0n" not in repaired
+    assert ".subckt ana out in vdd vss" in repaired
+
+
 def test_magic_import_tcl_adds_isolated_scalar_input_ports(tmp_path):
     path = gds_agent._write_magic_import_tcl(
         str(tmp_path),

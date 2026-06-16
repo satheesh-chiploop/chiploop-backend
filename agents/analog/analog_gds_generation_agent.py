@@ -224,16 +224,55 @@ def _remove_subckt_pins(text: str, pins_to_remove: list[str]) -> str:
     )
 
 
-def _magic_import_and_lvs_source_spice(text: str, port_specs: Dict[str, Any]) -> tuple[str, str, list[str]]:
+def _magic_import_and_lvs_source_spice(
+    text: str,
+    port_specs: Dict[str, Any],
+    extra_isolated_pins: list[str] | None = None,
+) -> tuple[str, str, list[str]]:
     text, isolated_supply_pins = _canonicalize_magic_supply_aliases(text, port_specs)
     text = _canonicalize_magic_output_driver_pairs(text, port_specs)
     isolated_pins = _magic_scalar_input_isolation_pins(text, port_specs)
-    all_isolated_pins = list(dict.fromkeys([*isolated_pins, *isolated_supply_pins]))
+    all_isolated_pins = list(dict.fromkeys([*isolated_pins, *isolated_supply_pins, *(extra_isolated_pins or [])]))
     if not all_isolated_pins:
         return text, text, []
     lvs_source_text = _isolate_magic_scalar_input_pins(text, isolated_pins)
     import_text = _remove_subckt_pins(lvs_source_text, all_isolated_pins)
     return import_text, lvs_source_text, all_isolated_pins
+
+
+def _port_short_output_pins(lvs_summary: Dict[str, Any], port_specs: Dict[str, Any]) -> list[str]:
+    shorts = lvs_summary.get("port_shorts") if isinstance(lvs_summary, dict) else None
+    if not isinstance(shorts, list):
+        return []
+    outputs: list[str] = []
+    for short in shorts:
+        if not isinstance(short, dict):
+            continue
+        a = _pin_name(str(short.get("port_a") or ""))
+        b = _pin_name(str(short.get("port_b") or ""))
+        a_is_output = _direction_for_pin(a, port_specs).startswith("output") or _direction_for_pin(_base_bus_name(a), port_specs).startswith("output")
+        b_is_output = _direction_for_pin(b, port_specs).startswith("output") or _direction_for_pin(_base_bus_name(b), port_specs).startswith("output")
+        a_is_supply = _is_supply_pin(a, port_specs)
+        b_is_supply = _is_supply_pin(b, port_specs)
+        if a_is_output and b_is_supply:
+            outputs.append(a)
+        elif b_is_output and a_is_supply:
+            outputs.append(b)
+    return list(dict.fromkeys(outputs))
+
+
+def _remove_magic_output_driver_pins(text: str, output_pins: list[str]) -> str:
+    if not output_pins:
+        return text
+    outputs = {_pin_name(pin) for pin in output_pins}
+    mos_line_re = re.compile(r"^\s*M\S*\s+(\S+)\s+\S+\s+\S+\s+\S+\s+\S+", re.IGNORECASE)
+    lines: list[str] = []
+    for line in (text or "").splitlines():
+        match = mos_line_re.match(line)
+        if match and _pin_name(match.group(1)) in outputs:
+            continue
+        lines.append(line)
+    return "\n".join(lines).rstrip() + ("\n" if text.endswith("\n") else "")
 
 
 def _magic_spice_text(text: str) -> str:
@@ -1485,18 +1524,24 @@ def run_agent(state: dict) -> dict:
                 with open(extracted_file, "r", encoding="utf-8", errors="ignore") as fh:
                     extracted_text = fh.read()
 
-            repaired_spice = _repair_lvs_mismatch_spice(
-                state,
-                module_name=module_name,
-                original_spice=original_spice,
-                lvs_summary=analog_lvs,
-                lvs_log=lvs_log_text,
-                extract_log=extract_log_text,
-                extracted_spice=extracted_text,
-            )
+            port_specs = _port_specs(state)
+            lvs_extra_isolated_pins = _port_short_output_pins(analog_lvs, port_specs)
+            lvs_repair_strategy = ""
+            if lvs_extra_isolated_pins:
+                repaired_spice = _remove_magic_output_driver_pins(original_spice, lvs_extra_isolated_pins)
+                lvs_repair_strategy = "deterministic_output_supply_short_repair"
+            else:
+                repaired_spice = _repair_lvs_mismatch_spice(
+                    state,
+                    module_name=module_name,
+                    original_spice=original_spice,
+                    lvs_summary=analog_lvs,
+                    lvs_log=lvs_log_text,
+                    extract_log=extract_log_text,
+                    extracted_spice=extracted_text,
+                )
             if repaired_spice:
                 repaired_spice = _normalize_subckt_bus_pins(repaired_spice)
-                port_specs = _port_specs(state)
                 repaired_spice = _canonicalize_generated_supply_usage(repaired_spice, port_specs)
                 repaired_spice = _canonicalize_generated_input_gate_fanout(repaired_spice, port_specs)
                 with open(os.path.join(stage_dir, "magic_input_lvs_repair.sp"), "w", encoding="utf-8") as fh:
@@ -1511,6 +1556,9 @@ def run_agent(state: dict) -> dict:
                     }
                 else:
                     lvs_repair_layout_issues = _generated_spice_layout_issues(repaired_spice, port_specs)
+                    if lvs_extra_isolated_pins:
+                        ignored = {f"output_pin_not_driven:{pin}" for pin in lvs_extra_isolated_pins}
+                        lvs_repair_layout_issues = [issue for issue in lvs_repair_layout_issues if issue not in ignored]
                 if lvs_repair_layout_issues:
                     lvs_repair_reason = "lvs_repair_spice_not_layout_safe"
                     analog_lvs = {
@@ -1525,6 +1573,7 @@ def run_agent(state: dict) -> dict:
                     repair_import_text, repair_lvs_source_text, magic_isolated_pins = _magic_import_and_lvs_source_spice(
                         repair_import_text,
                         port_specs,
+                        lvs_extra_isolated_pins,
                     )
                     with open(staged_spice, "w", encoding="utf-8") as fh:
                         fh.write(repair_import_text)
@@ -1570,6 +1619,7 @@ def run_agent(state: dict) -> dict:
                             **analog_lvs,
                             "repair_attempted": True,
                             "repair_applied": analog_lvs.get("status") == "clean",
+                            "repair_strategy": lvs_repair_strategy or None,
                             "pass1": {
                                 "status": pass1_analog_lvs.get("status"),
                                 "counts": pass1_analog_lvs.get("counts"),
