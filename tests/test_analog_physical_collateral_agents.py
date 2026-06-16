@@ -622,7 +622,7 @@ def test_gds_generation_repairs_magic_feedback_once_and_reruns(tmp_path, monkeyp
 
 def test_gds_generation_repairs_analog_lvs_mismatch_once_and_reruns(tmp_path, monkeypatch):
     monkeypatch.setattr(gds_agent, "save_text_artifact_and_record", lambda *args, **kwargs: "local")
-    monkeypatch.setattr(gds_agent, "complete_text", lambda *args, **kwargs: ".subckt ana vin vout vdd vss\nM1 vout vin vdd vdd sky130_fd_pr__pfet_01v8 W=1u L=0.15u\nM2 vout vin vss vss sky130_fd_pr__nfet_01v8 W=1u L=0.15u\n.ends ana\n")
+    monkeypatch.setattr(gds_agent, "complete_text", lambda *args, **kwargs: ".subckt ana bus[0] vout vdd vss bus\nM1 vout bus[0] vdd vdd sky130_fd_pr__pfet_01v8 W=1u L=0.15u\nM2 vout bus[0] vss vss sky130_fd_pr__nfet_01v8 W=1u L=0.15u\n.ends ana\n")
     monkeypatch.setattr(gds_agent.shutil, "which", lambda name: "/usr/bin/docker" if name == "docker" else None)
     pdk_root = tmp_path / "pdk"
     magic_dir = pdk_root / "sky130A" / "libs.tech" / "magic"
@@ -683,7 +683,7 @@ def test_gds_generation_repairs_analog_lvs_mismatch_once_and_reruns(tmp_path, mo
         "analog_sky130_spice": {"generated": True},
         "analog_spec": {
             "ports": [
-                {"name": "vin", "direction": "input"},
+                {"name": "bus", "direction": "input", "width": 1},
                 {"name": "vout", "direction": "output"},
                 {"name": "vdd", "direction": "input", "role": "power"},
                 {"name": "vss", "direction": "input", "role": "ground"},
@@ -699,6 +699,7 @@ def test_gds_generation_repairs_analog_lvs_mismatch_once_and_reruns(tmp_path, mo
     assert state["analog_signoff"]["lvs"]["pass1"]["counts"]["source_devices"] == 58
     assert (tmp_path / "analog" / "gds" / "analog_lvs_netgen_pass1.log").exists()
     assert (tmp_path / "analog" / "gds" / "magic_input_lvs_repair.sp").exists()
+    assert " bus " not in (tmp_path / "analog" / "gds" / "magic_input_lvs_repair.sp").read_text(encoding="utf-8").splitlines()[0]
 
 
 def test_gds_generation_rejects_unsafe_repair_before_second_magic_pass(tmp_path, monkeypatch):

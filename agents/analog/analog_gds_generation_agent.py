@@ -7,7 +7,11 @@ from datetime import datetime
 from typing import Any, Dict
 
 from model_gateway import complete_text
-from agents.analog.analog_sky130_spice_netlist_agent import _generated_spice_layout_issues, _port_specs
+from agents.analog.analog_sky130_spice_netlist_agent import (
+    _generated_spice_layout_issues,
+    _normalize_subckt_bus_pins,
+    _port_specs,
+)
 from tooling.runner import run_command
 from utils.artifact_utils import save_text_artifact_and_record
 
@@ -1100,6 +1104,7 @@ def run_agent(state: dict) -> dict:
                 extracted_spice=extracted_text,
             )
             if repaired_spice:
+                repaired_spice = _normalize_subckt_bus_pins(repaired_spice)
                 with open(os.path.join(stage_dir, "magic_input_lvs_repair.sp"), "w", encoding="utf-8") as fh:
                     fh.write(repaired_spice)
                 lvs_repair_layout_issues = _generated_spice_layout_issues(repaired_spice, _port_specs(state))

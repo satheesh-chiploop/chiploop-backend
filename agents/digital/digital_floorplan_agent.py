@@ -108,6 +108,70 @@ def _clear_stage_netlists(netlist_dir: str) -> None:
             logger.warning(f"{AGENT_NAME}: could not remove stale netlist {old}")
 
 
+def _first_number(*values):
+    for value in values:
+        if value is None or value == "" or isinstance(value, bool):
+            continue
+        if isinstance(value, (int, float)):
+            return value
+        try:
+            return float(str(value).strip())
+        except Exception:
+            continue
+    return None
+
+
+def _scaled_die_area(raw: str, scale: float) -> str | None:
+    nums = [float(x) for x in re.findall(r"-?\d+(?:\.\d+)?", str(raw or ""))]
+    if len(nums) < 4:
+        return None
+    llx, lly, urx, ury = nums[:4]
+    cx = (llx + urx) / 2.0
+    cy = (lly + ury) / 2.0
+    half_w = max((urx - llx) * scale / 2.0, 1.0)
+    half_h = max((ury - lly) * scale / 2.0, 1.0)
+    return f"{cx - half_w:g} {cy - half_h:g} {cx + half_w:g} {cy + half_h:g}"
+
+
+def _severe_drc_from_plan(plan: dict) -> bool:
+    issues = plan.get("issue_summary") if isinstance(plan.get("issue_summary"), list) else []
+    for issue in issues:
+        if not isinstance(issue, dict) or issue.get("type") != "digital_drc":
+            continue
+        evidence = issue.get("evidence") if isinstance(issue.get("evidence"), dict) else {}
+        categories = evidence.get("top_categories") if isinstance(evidence.get("top_categories"), dict) else {}
+        total = sum(int(v or 0) for v in categories.values())
+        names = " ".join(str(k) for k in categories).lower()
+        if total >= 100 and re.search(r"\b(licon|difftap|tap|li|m1|nwell|pwell|pdn|macro)\b", names):
+            return True
+    return False
+
+
+def _escalate_severe_drc_overrides(plan: dict, stage_overrides: dict) -> dict:
+    if not stage_overrides or not _severe_drc_from_plan(plan):
+        return stage_overrides
+    if stage_overrides.get("CHIPLOOP_SEVERE_DRC_ECO_APPLIED"):
+        return stage_overrides
+    out = dict(stage_overrides)
+    util = _first_number(out.get("FP_CORE_UTIL"), out.get("CORE_UTILIZATION"))
+    if util is not None:
+        out["FP_CORE_UTIL"] = max(5, round(float(util) * 0.72, 3))
+    density = _first_number(out.get("PL_TARGET_DENSITY"), out.get("PLACE_DENSITY"))
+    if density is not None:
+        out["PL_TARGET_DENSITY"] = max(0.05, round(float(density) * 0.72, 4))
+        out["PL_TARGET_DENSITY_PCT"] = round(out["PL_TARGET_DENSITY"] * 100.0, 3)
+    die_area = _scaled_die_area(out.get("DIE_AREA"), 1.30)
+    if die_area:
+        out["DIE_AREA"] = die_area
+    tap = _first_number(out.get("FP_TAPCELL_DIST"))
+    if tap is not None:
+        out["FP_TAPCELL_DIST"] = max(6, round(float(tap) * 0.72, 3))
+    for key in ("FP_PDN_HORIZONTAL_HALO", "FP_PDN_VERTICAL_HALO", "PL_MACRO_HALO"):
+        out[key] = max(float(_first_number(out.get(key), 0) or 0), 12.0)
+    out["CHIPLOOP_SEVERE_DRC_ECO_APPLIED"] = True
+    return out
+
+
 def _closure_overrides(state: dict, workflow_dir: str, stage: str) -> dict:
     plan = state.get("signoff_closure_plan") if isinstance(state.get("signoff_closure_plan"), dict) else {}
     if not plan:
@@ -115,7 +179,7 @@ def _closure_overrides(state: dict, workflow_dir: str, stage: str) -> dict:
     eco = plan.get("eco_profile") if isinstance(plan.get("eco_profile"), dict) else {}
     overrides = eco.get("config_overrides") if isinstance(eco.get("config_overrides"), dict) else {}
     stage_overrides = overrides.get(stage) if isinstance(overrides.get(stage), dict) else {}
-    return dict(stage_overrides)
+    return _escalate_severe_drc_overrides(plan, dict(stage_overrides))
 
 def _resolve_sdc_from_state(state: dict, workflow_dir: str) -> str | None:
     digital = state.get("digital") or {}
