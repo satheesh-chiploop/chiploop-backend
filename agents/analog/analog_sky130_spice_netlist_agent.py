@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import shlex
 from typing import Any, Dict, List
 
 from model_gateway import complete_text
@@ -69,15 +70,24 @@ def _port_specs(state: dict) -> Dict[str, Dict[str, Any]]:
 
 
 def _base_bus_name(name: str) -> str:
-    match = re.match(r"^(.+)\[\d+\]$", name or "")
-    return match.group(1) if match else name
+    pin = _pin_name(name)
+    match = re.match(r"^(.+)\[\d+\]$", pin)
+    return match.group(1) if match else pin
+
+
+def _pin_name(token: str) -> str:
+    return str(token or "").strip().strip('"').strip("'").strip("{}")
 
 
 def _subckt_parts(text: str) -> tuple[str, List[str]]:
     match = re.search(r"^\s*\.subckt\s+(\S+)\s+(.+)$", text or "", flags=re.IGNORECASE | re.MULTILINE)
     if not match:
         return "", []
-    return match.group(1), match.group(2).split()
+    try:
+        pins = shlex.split(match.group(2))
+    except Exception:
+        pins = match.group(2).split()
+    return _pin_name(match.group(1)), [_pin_name(pin) for pin in pins if _pin_name(pin)]
 
 
 def _normalize_subckt_bus_pins(text: str) -> str:
@@ -85,10 +95,16 @@ def _normalize_subckt_bus_pins(text: str) -> str:
     if not name or not pins:
         return text
     bit_bases = {_base_bus_name(pin) for pin in pins if re.match(r"^.+\[\d+\]$", pin)}
-    if not bit_bases:
-        return text
-    normalized = [pin for pin in pins if not (pin in bit_bases and any(p.startswith(f"{pin}[") for p in pins))]
-    if normalized == pins:
+    normalized: List[str] = []
+    seen: set[str] = set()
+    for pin in pins:
+        if pin in bit_bases and any(p.startswith(f"{pin}[") for p in pins):
+            continue
+        if pin in seen:
+            continue
+        seen.add(pin)
+        normalized.append(pin)
+    if normalized == pins and '"' not in text and "'" not in text:
         return text
     return re.sub(
         r"^\s*\.subckt\s+\S+\s+.+$",
@@ -117,7 +133,7 @@ def _legalize_scalar_bus_mos_terminals(text: str) -> str:
 
     def repl(match: re.Match) -> str:
         prefix, drain, gate, source, bulk, suffix = match.groups()
-        terminals = [replacements.get(term, term) for term in (drain, gate, source, bulk)]
+        terminals = [replacements.get(_pin_name(term), _pin_name(term)) for term in (drain, gate, source, bulk)]
         return f"{prefix}{terminals[0]} {terminals[1]} {terminals[2]} {terminals[3]}{suffix}"
 
     return re.sub(
@@ -178,6 +194,9 @@ def _generated_spice_layout_issues(text: str, port_specs: Dict[str, Dict[str, An
     external_supplies = {pin for pin in pins if _is_supply_pin(pin, port_specs)}
     for match in re.finditer(r"^\s*M\S*\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)", text or "", flags=re.IGNORECASE | re.MULTILINE):
         drain, _gate, source, bulk, _model = match.groups()
+        drain = _pin_name(drain)
+        source = _pin_name(source)
+        bulk = _pin_name(bulk)
         for terminal in (drain, source, bulk):
             if terminal not in pin_set and terminal in bit_bases:
                 issues.append(f"undeclared_external_scalar_bus:{terminal}")
@@ -418,8 +437,7 @@ Strict requirements:
 
 
 def _blocking_layout_issues(spice: str, port_specs: Dict[str, Dict[str, Any]]) -> List[str]:
-    layout_issues = _generated_spice_layout_issues(spice, port_specs)
-    return [issue for issue in layout_issues if not issue.startswith("duplicate_scalar_bus_pins:")]
+    return _generated_spice_layout_issues(spice, port_specs)
 
 
 def run_agent(state: dict) -> dict:

@@ -334,6 +334,22 @@ def test_sky130_spice_generated_scalar_bus_terminals_are_legalized():
     assert " adc_code sensor_temp_celsius " not in legalized
 
 
+def test_sky130_spice_normalizes_quoted_duplicate_scalar_bus_pins():
+    spice = (
+        '.subckt ana "adc_code[0]" "adc_code[1]" adc_code "adc_code[0]" avdd avss\n'
+        'M1 "adc_code[0]" adc_code avdd avdd sky130_fd_pr__pfet_01v8 W=1u L=0.15u\n'
+        ".ends ana\n"
+    )
+
+    normalized = spice_agent._normalise_generated_sky130_spice(spice, "ana", [])
+
+    subckt = next(line for line in normalized.splitlines() if line.startswith(".subckt "))
+    assert subckt == ".subckt ana adc_code[0] adc_code[1] avdd avss"
+    assert '"adc_code[0]"' not in normalized
+    assert " adc_code avdd " not in normalized
+    assert "M1 adc_code[0] adc_code[0] avdd avdd" in normalized
+
+
 def test_sky130_prompt_lists_scalar_bus_names_as_forbidden(tmp_path, monkeypatch):
     prompts = []
     monkeypatch.setattr(spice_agent, "save_text_artifact_and_record", lambda *args, **kwargs: "local")

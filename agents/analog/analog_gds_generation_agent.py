@@ -9,6 +9,7 @@ from typing import Any, Dict
 from model_gateway import complete_text
 from agents.analog.analog_sky130_spice_netlist_agent import (
     _generated_spice_layout_issues,
+    _legalize_scalar_bus_mos_terminals,
     _normalize_subckt_bus_pins,
     _port_specs,
 )
@@ -44,6 +45,8 @@ def _find_gds(root: str) -> str:
 
 def _prepare_magic_spice(src: str, dst: str) -> None:
     text = open(src, "r", encoding="utf-8", errors="ignore").read()
+    text = _normalize_subckt_bus_pins(text)
+    text = _legalize_scalar_bus_mos_terminals(text)
     text = _magic_spice_text(text)
     with open(dst, "w", encoding="utf-8") as fh:
         fh.write(text)
