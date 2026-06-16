@@ -342,18 +342,30 @@ Mgood3 data_bus[0] enable vdd vdd sky130_fd_pr__pfet_01v8 W=1u L=0.15u
 Mgood4 data_bus[0] enable vss vss sky130_fd_pr__nfet_01v8 W=1u L=0.15u
 .ends example
 
+Bad input-bus example, because sensor_bus[0] is an input bit but is used as a MOS drain:
+.subckt example sensor_bus[0] sensor_bus[1] output_code[0] sample_req vdd vss
+Mbad4 sensor_bus[0] sample_req vdd vdd sky130_fd_pr__pfet_01v8 W=1u L=0.15u
+Mbad5 sensor_bus[0] sample_req vss vss sky130_fd_pr__nfet_01v8 W=1u L=0.15u
+.ends example
+
+Good input-bus example, because sensor_bus bits are used only as gates and only output_code[0] is driven:
+.subckt example sensor_bus[0] sensor_bus[1] output_code[0] sample_req vdd vss
+Mgood5 output_code[0] sensor_bus[0] vdd vdd sky130_fd_pr__pfet_01v8 W=1u L=0.15u
+Mgood6 output_code[0] sample_req vss vss sky130_fd_pr__nfet_01v8 W=1u L=0.15u
+.ends example
+
 Bad supply-alias example, because avdd and avss are .subckt pins but are never used as MOS source terminals:
 .subckt example out in VPWR VGND avdd avss
-Mbad4 out in VPWR VPWR sky130_fd_pr__pfet_01v8 W=1u L=0.15u
-Mbad5 out in VGND VGND sky130_fd_pr__nfet_01v8 W=1u L=0.15u
+Mbad6 out in VPWR VPWR sky130_fd_pr__pfet_01v8 W=1u L=0.15u
+Mbad7 out in VGND VGND sky130_fd_pr__nfet_01v8 W=1u L=0.15u
 .ends example
 
 Good supply-alias example, because every supply pin is used as a source terminal at least once:
 .subckt example out0 out1 in0 in1 VPWR VGND avdd avss
-Mgood5 out0 in0 VPWR VPWR sky130_fd_pr__pfet_01v8 W=1u L=0.15u
-Mgood6 out0 in0 VGND VGND sky130_fd_pr__nfet_01v8 W=1u L=0.15u
-Mgood7 out1 in1 avdd avdd sky130_fd_pr__pfet_01v8 W=1u L=0.15u
-Mgood8 out1 in1 avss avss sky130_fd_pr__nfet_01v8 W=1u L=0.15u
+Mgood7 out0 in0 VPWR VPWR sky130_fd_pr__pfet_01v8 W=1u L=0.15u
+Mgood8 out0 in0 VGND VGND sky130_fd_pr__nfet_01v8 W=1u L=0.15u
+Mgood9 out1 in1 avdd avdd sky130_fd_pr__pfet_01v8 W=1u L=0.15u
+Mgood10 out1 in1 avss avss sky130_fd_pr__nfet_01v8 W=1u L=0.15u
 .ends example
 """.strip()
 
@@ -367,6 +379,7 @@ Before returning SPICE, perform this exact self-check and fix failures:
 2. Inputs:
    - Any pin listed in input_pins_gate_only may appear only as the MOS gate terminal.
    - If an input appears as drain/source/bulk, rewrite that device so the input is the gate and an output/internal node is the drain.
+   - Never create output drivers for input bus pins. If an illegal device drives an input bit, delete that device or move its drain to a real output_pins_may_be_driven pin.
 3. Outputs:
    - For every output pin driven by a PFET, there must also be at least one NFET connected to that same output pin.
    - For every output pin driven by an NFET, there must also be at least one PFET connected to that same output pin.
@@ -427,6 +440,7 @@ Strict requirements:
 - If a port is a bus, use either the bus bit pins or the scalar bus port, not both.
 - Input pins listed in input_pins_gate_only may appear only as MOS gates. They must never appear as MOS drain, source, or bulk terminals.
 - Do not create internal helper devices that modify external input pins.
+- Do not generate output drivers for pins listed in input_pins_gate_only. Bus inputs must stay read-only external stimulus pins.
 - Supply pins listed in supply_pins_source_or_bulk_only may be MOS source/bulk terminals, not MOS drain terminals.
 - Every supply pin listed in the .subckt must be used as a MOS source terminal on at least one real MOS device; using it only as a bulk terminal is not enough for Magic LVS port extraction.
 - Output pins listed in output_pins_may_be_driven may be MOS drain/source terminals.
@@ -491,6 +505,8 @@ Strict requirements:
 - Preserve the required external interface. For bus ports, use either scalar bus pins or bit pins, not both.
 - Input pins listed in input_pins_gate_only may connect only to MOS gates or passive loads. They must never appear as MOS drain/source/bulk terminals.
 - Do not create internal devices that drive, tie, or overwrite external input pins.
+- Do not repair by moving an illegal device onto another input bit. If an illegal device drives an input, either delete it or move its driven terminal to a real output_pins_may_be_driven pin.
+- If the original SPICE already violates input_pin_used_as_device_terminal, the repaired SPICE must not contain that same device topology again.
 - Output pins may be MOS drain/source terminals.
 - Supply pins listed in supply_pins_source_or_bulk_only may be MOS source/bulk terminals, not MOS drain terminals.
 - Every supply pin listed in the .subckt must be used as a MOS source terminal on at least one real MOS device; using it only as a bulk terminal is not enough for Magic LVS port extraction.
@@ -548,6 +564,7 @@ def run_agent(state: dict) -> dict:
         "module": module_name,
         "source": selected_source,
     }
+    repair_no_progress = False
 
     if not selected_text:
         summary.update({
@@ -574,6 +591,7 @@ def run_agent(state: dict) -> dict:
                 selected_source = "generated_by_sky130_spice_agent_repaired"
             else:
                 save_text_artifact_and_record(workflow_id, AGENT_NAME, "analog/sky130", f"{module_name}_rejected_pass2.spice", repaired_spice)
+                repair_no_progress = repaired_spice.strip() == spice.strip() or repaired_issues == layout_blocking_issues
                 layout_blocking_issues = repaired_issues
         else:
             layout_blocking_issues = [*layout_blocking_issues, "repair_pass_no_valid_mos_devices"]
@@ -584,6 +602,7 @@ def run_agent(state: dict) -> dict:
             "reason": "generated_spice_not_layout_safe",
             "layout_issues": layout_blocking_issues,
             "repair_attempted": True,
+            "repair_no_progress": repair_no_progress,
             "note": "Generated transistor SPICE would create invalid Magic layout. Provide a real layout-safe transistor netlist or improve the analog SPICE generator.",
         })
         save_text_artifact_and_record(workflow_id, AGENT_NAME, "analog/sky130", "sky130_spice_summary.json", json.dumps(summary, indent=2))

@@ -450,7 +450,46 @@ def test_sky130_prompt_includes_self_check_and_supply_alias_examples(tmp_path, m
     assert "Mandatory self-check and self-repair strategy" in prompt_text
     assert "supply_pin_not_used_as_device_source:X" in prompt_text
     assert "Good supply-alias example" in prompt_text
-    assert "Mgood7 out1 in1 avdd avdd" in prompt_text
+    assert "Bad input-bus example" in prompt_text
+    assert "Never create output drivers for input bus pins" in prompt_text
+    assert "Mgood9 out1 in1 avdd avdd" in prompt_text
+
+
+def test_sky130_spice_repair_reports_no_progress_when_llm_repeats_input_driver(tmp_path, monkeypatch):
+    monkeypatch.setattr(spice_agent, "save_text_artifact_and_record", lambda *args, **kwargs: "local")
+    bad = (
+        ".subckt ana sensor_bus[0] out sample_req avdd avss\n"
+        "Mbadp sensor_bus[0] sample_req avdd avdd sky130_fd_pr__pfet_01v8 W=1u L=0.15u\n"
+        "Mbadn sensor_bus[0] sample_req avss avss sky130_fd_pr__nfet_01v8 W=1u L=0.15u\n"
+        "Moutp out sample_req avdd avdd sky130_fd_pr__pfet_01v8 W=1u L=0.15u\n"
+        "Moutn out sample_req avss avss sky130_fd_pr__nfet_01v8 W=1u L=0.15u\n"
+        ".ends ana\n"
+    )
+    responses = iter([bad, bad])
+    monkeypatch.setattr(spice_agent, "complete_text", lambda *args, **kwargs: next(responses))
+
+    state = {
+        "workflow_id": "wf",
+        "workflow_dir": str(tmp_path),
+        "analog_physical_mode": "generate_sky130_gds",
+        "analog_pdk": "sky130A",
+        "analog_spec": {
+            "module_name": "ana",
+            "ports": [
+                {"name": "sensor_bus[0]", "direction": "input"},
+                {"name": "out", "direction": "output"},
+                {"name": "sample_req", "direction": "input"},
+                {"name": "avdd", "direction": "input", "role": "power"},
+                {"name": "avss", "direction": "input", "role": "ground"},
+            ],
+        },
+    }
+
+    with pytest.raises(RuntimeError, match="generated_spice_not_layout_safe"):
+        spice_agent.run_agent(state)
+
+    assert "input_pin_used_as_device_terminal:sensor_bus[0]" in state["analog_sky130_spice"]["layout_issues"]
+    assert state["analog_sky130_spice"]["repair_no_progress"] is True
 
 
 def test_gds_generation_uses_macro_contract_name_when_module_missing(tmp_path, monkeypatch):
