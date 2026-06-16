@@ -855,8 +855,35 @@ def test_magic_import_isolates_scalar_input_controls_without_bus_hardcoding():
     assert " valid enable " not in import_text
     assert "Mvp valid enable" not in lvs_source_text
     assert "Mvn valid enable" not in lvs_source_text
+    assert "Mvp valid chiploop_iso_enable_valid vdd vdd" in lvs_source_text
+    assert "Mvn valid chiploop_iso_enable_valid vss vss" in lvs_source_text
     assert " out[0] sense[0] " in import_text
     assert " out[1] sense[1] " in import_text
+
+
+def test_magic_import_isolates_secondary_supply_aliases_generically():
+    spice = (
+        ".subckt ana out in VPWR VGND avdd avss\n"
+        "M0p out in avdd avdd sky130_fd_pr__pfet_01v8 W=1u L=0.15u\n"
+        "M0n out in avss avss sky130_fd_pr__nfet_01v8 W=1u L=0.15u\n"
+        ".ends ana\n"
+    )
+    specs = {
+        "out": {"name": "out", "verilog_direction": "output"},
+        "in": {"name": "in", "verilog_direction": "input"},
+        "VPWR": {"name": "VPWR", "verilog_direction": "input", "role": "power"},
+        "VGND": {"name": "VGND", "verilog_direction": "input", "role": "ground"},
+        "avdd": {"name": "avdd", "verilog_direction": "input", "role": "power"},
+        "avss": {"name": "avss", "verilog_direction": "input", "role": "ground"},
+    }
+
+    import_text, lvs_source_text, isolated = gds_agent._magic_import_and_lvs_source_spice(spice, specs)
+
+    assert isolated == ["in", "avdd", "avss"]
+    assert ".subckt ana out VPWR VGND" in import_text
+    assert ".subckt ana out in VPWR VGND avdd avss" in lvs_source_text
+    assert "M0p out chiploop_iso_in_out VPWR VPWR" in lvs_source_text
+    assert "M0n out chiploop_iso_in_out VGND VGND" in lvs_source_text
 
 
 def test_magic_import_tcl_adds_isolated_scalar_input_ports(tmp_path):
@@ -875,6 +902,7 @@ def test_magic_import_tcl_adds_isolated_scalar_input_ports(tmp_path):
     assert path == str(tmp_path / "magic_import_spice.tcl")
     assert "label {enable}" in text
     assert "port make" in text
+    assert "lindex $chiploop_flat_bbox 2" in text
 
 
 def test_gds_generation_repairs_magic_feedback_once_and_reruns(tmp_path, monkeypatch):

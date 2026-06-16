@@ -18,6 +18,7 @@ from agents.analog.analog_sky130_spice_netlist_agent import (
     _normalize_subckt_bus_pins,
     _pin_name,
     _port_specs,
+    _supply_kind,
     _subckt_parts,
 )
 from tooling.runner import run_command
@@ -91,13 +92,68 @@ def _isolate_magic_scalar_input_pins(text: str, pins_to_isolate: list[str]) -> s
     if not pins_to_isolate:
         return text
     isolate = set(pins_to_isolate)
+    replacements: Dict[tuple[str, str], str] = {}
     out: list[str] = []
+    mos_line_re = re.compile(r"^(\s*M\S*\s+)(\S+)\s+(\S+)\s+(\S+)\s+(\S+)(\s+\S+.*)$", re.IGNORECASE)
     for line in (text or "").splitlines():
-        match = re.match(r"^\s*M\S*\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+\S+", line, flags=re.IGNORECASE)
-        if match and _pin_name(match.group(2)) in isolate:
+        match = mos_line_re.match(line)
+        if match and _pin_name(match.group(3)) in isolate:
+            prefix, drain, gate, source, bulk, suffix = match.groups()
+            key = (_pin_name(gate), _pin_name(drain))
+            if key not in replacements:
+                safe_gate = re.sub(r"[^A-Za-z0-9_]+", "_", key[0]).strip("_") or "ctrl"
+                safe_drain = re.sub(r"[^A-Za-z0-9_]+", "_", key[1]).strip("_") or "out"
+                replacements[key] = f"chiploop_iso_{safe_gate}_{safe_drain}"
+            out.append(f"{prefix}{_pin_name(drain)} {replacements[key]} {_pin_name(source)} {_pin_name(bulk)}{suffix}")
             continue
         out.append(line)
     return "\n".join(out).rstrip() + ("\n" if text.endswith("\n") else "")
+
+
+def _preferred_magic_supply(supplies: list[str], kind: str) -> str:
+    preferred = {
+        "power": ["VPWR", "vdd", "VDD", "vcc", "VCC", "dvdd", "DVDD"],
+        "ground": ["VGND", "vss", "VSS", "gnd", "GND", "dvss", "DVSS"],
+    }.get(kind, [])
+    for candidate in preferred:
+        for supply in supplies:
+            if supply == candidate:
+                return supply
+    return supplies[0] if supplies else ""
+
+
+def _canonicalize_magic_supply_aliases(text: str, port_specs: Dict[str, Any]) -> tuple[str, list[str]]:
+    _subckt_name, pins = _subckt_parts(text)
+    by_kind: Dict[str, list[str]] = {"power": [], "ground": []}
+    for pin in pins:
+        kind = _supply_kind(pin, port_specs)
+        if kind in by_kind:
+            by_kind[kind].append(pin)
+    replacements: Dict[str, str] = {}
+    isolated: list[str] = []
+    for kind, supplies in by_kind.items():
+        if len(supplies) < 2:
+            continue
+        primary = _preferred_magic_supply(supplies, kind)
+        for supply in supplies:
+            if supply != primary:
+                replacements[supply] = primary
+                isolated.append(supply)
+    if not replacements:
+        return text, []
+
+    mos_line_re = re.compile(r"^(\s*M\S*\s+)(\S+)\s+(\S+)\s+(\S+)\s+(\S+)(\s+\S+.*)$", re.IGNORECASE)
+    lines: list[str] = []
+    for line in (text or "").splitlines():
+        match = mos_line_re.match(line)
+        if not match:
+            lines.append(line)
+            continue
+        prefix, drain, gate, source, bulk, suffix = match.groups()
+        source_name = replacements.get(_pin_name(source), _pin_name(source))
+        bulk_name = replacements.get(_pin_name(bulk), _pin_name(bulk))
+        lines.append(f"{prefix}{_pin_name(drain)} {_pin_name(gate)} {source_name} {bulk_name}{suffix}")
+    return "\n".join(lines).rstrip() + ("\n" if text.endswith("\n") else ""), isolated
 
 
 def _remove_subckt_pins(text: str, pins_to_remove: list[str]) -> str:
@@ -120,12 +176,14 @@ def _remove_subckt_pins(text: str, pins_to_remove: list[str]) -> str:
 
 
 def _magic_import_and_lvs_source_spice(text: str, port_specs: Dict[str, Any]) -> tuple[str, str, list[str]]:
+    text, isolated_supply_pins = _canonicalize_magic_supply_aliases(text, port_specs)
     isolated_pins = _magic_scalar_input_isolation_pins(text, port_specs)
-    if not isolated_pins:
+    all_isolated_pins = list(dict.fromkeys([*isolated_pins, *isolated_supply_pins]))
+    if not all_isolated_pins:
         return text, text, []
     lvs_source_text = _isolate_magic_scalar_input_pins(text, isolated_pins)
-    import_text = _remove_subckt_pins(lvs_source_text, isolated_pins)
-    return import_text, lvs_source_text, isolated_pins
+    import_text = _remove_subckt_pins(lvs_source_text, all_isolated_pins)
+    return import_text, lvs_source_text, all_isolated_pins
 
 
 def _magic_spice_text(text: str) -> str:
@@ -883,13 +941,14 @@ def _write_magic_import_tcl(
         "select top cell",
         "expand",
         "puts stdout \"CHIPLOOP_FLAT_BOX=[box values]\"",
+        "set chiploop_flat_bbox [box values]",
     ]
     for idx, pin in enumerate(isolated_pins or []):
         safe_pin = str(pin).replace('"', '').replace("'", "")
-        x0 = idx * 20
-        x1 = x0 + 4
         lines.extend([
-            f"box {x0} 20 {x1} 24",
+            f"set chiploop_port_x [expr {{[lindex $chiploop_flat_bbox 2] + 200}}]",
+            f"set chiploop_port_y [expr {{[lindex $chiploop_flat_bbox 3] + 200 + ({idx} * 80)}}]",
+            "box $chiploop_port_x $chiploop_port_y [expr {$chiploop_port_x + 40}] [expr {$chiploop_port_y + 40}]",
             "paint li",
             f"label {{{safe_pin}}} FreeSans 200 0 0 0 center li",
             "port make",
