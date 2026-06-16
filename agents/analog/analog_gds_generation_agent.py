@@ -140,6 +140,57 @@ Strict requirements:
     return repaired if _has_real_sky130_mos(repaired) else ""
 
 
+def _repair_lvs_mismatch_spice(
+    state: dict,
+    *,
+    module_name: str,
+    original_spice: str,
+    lvs_summary: Dict[str, Any],
+    lvs_log: str = "",
+    extracted_spice: str = "",
+) -> str:
+    prompt = f"""
+Repair this generated Sky130 transistor-level SPICE so Magic-generated layout can pass analog LVS.
+
+Module/subckt name:
+{module_name}
+
+LVS summary:
+{json.dumps(lvs_summary, indent=2)}
+
+Netgen LVS log tail:
+{_tail(lvs_log, 6000)}
+
+Extracted layout SPICE tail, if available:
+{_tail(extracted_spice, 4000)}
+
+Original source SPICE:
+{original_spice}
+
+Strict requirements:
+- Return repaired SPICE text only. No Markdown.
+- Preserve exactly one .subckt named {module_name}.
+- Preserve the same external macro pin names and pin order unless the source had duplicate scalar/bus aliases.
+- For buses, use one convention consistently: scalarized bit pins like data[0] data[1], not both data and data[0].
+- Every external .subckt pin must be represented by Magic as a real port/label after import.
+- Do not use input pins as MOS drain/source/bulk terminals; input pins may drive MOS gates only.
+- Supply pins may be MOS source/bulk terminals, not MOS drain terminals.
+- Output pins may be MOS drain/source terminals.
+- Use only M-device Sky130 MOS lines with sky130_fd_pr__nfet_01v8 and sky130_fd_pr__pfet_01v8.
+- Do not use X lines for MOS devices.
+- Every MOS device must have W >= 0.42u and L >= 0.15u.
+- Keep the circuit compact but do not collapse a many-device source into a placeholder.
+- End with .ends {module_name}.
+"""
+    repaired = _strip_code_fences(complete_text(
+        prompt,
+        capability="analog_generation",
+        agent_name=AGENT_NAME,
+        state=state,
+    ))
+    return repaired if _has_real_sky130_mos(repaired) else ""
+
+
 def _preserve_and_clean_magic_layout_outputs(stage_dir: str, module_name: str) -> None:
     for name in os.listdir(stage_dir):
         lower = name.lower()
@@ -257,6 +308,54 @@ def _analog_lvs_status(text: str, rc: int) -> str:
     ):
         return "mismatch"
     return "completed" if rc == 0 else "failed"
+
+
+def _analog_lvs_circuit_counts(text: str) -> Dict[str, Any]:
+    counts: Dict[str, Any] = {}
+    dev_match = re.search(
+        r"Circuit\s+1\s+contains\s+(\d+)\s+devices?,\s*Circuit\s+2\s+contains\s+(\d+)\s+devices?",
+        text or "",
+        flags=re.IGNORECASE,
+    )
+    if dev_match:
+        counts["extracted_devices"] = int(dev_match.group(1))
+        counts["source_devices"] = int(dev_match.group(2))
+    net_match = re.search(
+        r"Circuit\s+1\s+contains\s+(\d+)\s+nets?,\s*Circuit\s+2\s+contains\s+(\d+)\s+nets?",
+        text or "",
+        flags=re.IGNORECASE,
+    )
+    if net_match:
+        counts["extracted_nets"] = int(net_match.group(1))
+        counts["source_nets"] = int(net_match.group(2))
+    return counts
+
+
+def _analog_lvs_failure_class(text: str) -> str:
+    lower = (text or "").lower()
+    if "failed pin matching" in lower or "pin matching failed" in lower or "top level cell failed" in lower:
+        return "pin_mismatch"
+    counts = _analog_lvs_circuit_counts(text)
+    if counts.get("extracted_devices") is not None and counts.get("source_devices") is not None:
+        if counts["extracted_devices"] != counts["source_devices"]:
+            return "device_count_mismatch"
+    if "netlists do not match" in lower or "circuits do not match" in lower:
+        return "netlist_mismatch"
+    if "property errors were found" in lower:
+        return "property_mismatch"
+    return ""
+
+
+def _analog_lvs_should_repair(summary: Dict[str, Any]) -> bool:
+    if summary.get("status") != "mismatch":
+        return False
+    failure_class = str(summary.get("failure_class") or "")
+    if failure_class in {"pin_mismatch", "device_count_mismatch", "netlist_mismatch"}:
+        return True
+    counts = summary.get("counts") if isinstance(summary.get("counts"), dict) else {}
+    extracted = counts.get("extracted_devices")
+    source = counts.get("source_devices")
+    return isinstance(extracted, int) and isinstance(source, int) and extracted != source
 
 
 def _lvs_pin_name(token: str) -> str:
@@ -436,6 +535,8 @@ def _run_analog_lvs(
     with open(lvs_log_path, "w", encoding="utf-8", errors="ignore") as fh:
         fh.write(lvs_log)
     status = _analog_lvs_status(lvs_log, cp_lvs.returncode if cp_lvs.returncode is not None else 1)
+    counts = _analog_lvs_circuit_counts(lvs_log)
+    failure_class = _analog_lvs_failure_class(lvs_log)
     return {
         "status": status,
         "tool": "netgen",
@@ -444,6 +545,8 @@ def _run_analog_lvs(
         "extracted_spice": extracted_spice,
         "extract_log": extract_log_path,
         "log": lvs_log_path,
+        "counts": counts or None,
+        "failure_class": failure_class or None,
     }
 
 
@@ -845,6 +948,10 @@ def run_agent(state: dict) -> dict:
     repair_applied = False
     repair_reason = ""
     repair_layout_issues = []
+    lvs_repair_attempted = False
+    lvs_repair_applied = False
+    lvs_repair_reason = ""
+    lvs_repair_layout_issues = []
     forced_failure_reason = ""
     pass1_feedback_problem_count = _magic_feedback_problem_count(log) if backend == "magic" else 0
     pass1_invalid_reason = _magic_layout_invalid(log) if backend == "magic" else ""
@@ -952,7 +1059,145 @@ def run_agent(state: dict) -> dict:
             source_spice=staged_spice,
             docker_bin=docker_bin,
         )
+        pass1_analog_lvs = dict(analog_lvs) if isinstance(analog_lvs, dict) else {}
+        if _analog_lvs_should_repair(analog_lvs) and sky130_summary.get("generated") is True:
+            lvs_repair_attempted = True
+            for src_name, dst_name in (
+                ("analog_lvs_magic_extract.log", "analog_lvs_magic_extract_pass1.log"),
+                ("analog_lvs_netgen.log", "analog_lvs_netgen_pass1.log"),
+                (f"{module_name}_extracted.spice", f"{module_name}_extracted_pass1.spice"),
+                (f"{module_name}_lvs_source.spice", f"{module_name}_lvs_source_pass1.spice"),
+            ):
+                src_path = os.path.join(stage_dir, src_name)
+                if os.path.exists(src_path):
+                    shutil.copy2(src_path, os.path.join(stage_dir, dst_name))
+            pass1_log_path = os.path.join(stage_dir, "magic_gds_lvs_pass1.log")
+            if os.path.exists(log_path):
+                shutil.copy2(log_path, pass1_log_path)
+            pass1_spice_path = os.path.join(stage_dir, "magic_input_lvs_pass1.sp")
+            if os.path.exists(staged_spice):
+                shutil.copy2(staged_spice, pass1_spice_path)
+
+            with open(staged_spice, "r", encoding="utf-8", errors="ignore") as fh:
+                original_spice = fh.read()
+            lvs_log_text = ""
+            lvs_log_file = analog_lvs.get("log") if isinstance(analog_lvs, dict) else None
+            if isinstance(lvs_log_file, str) and os.path.exists(lvs_log_file):
+                with open(lvs_log_file, "r", encoding="utf-8", errors="ignore") as fh:
+                    lvs_log_text = fh.read()
+            extracted_text = ""
+            extracted_file = analog_lvs.get("extracted_spice") if isinstance(analog_lvs, dict) else None
+            if isinstance(extracted_file, str) and os.path.exists(extracted_file):
+                with open(extracted_file, "r", encoding="utf-8", errors="ignore") as fh:
+                    extracted_text = fh.read()
+
+            repaired_spice = _repair_lvs_mismatch_spice(
+                state,
+                module_name=module_name,
+                original_spice=original_spice,
+                lvs_summary=analog_lvs,
+                lvs_log=lvs_log_text,
+                extracted_spice=extracted_text,
+            )
+            if repaired_spice:
+                with open(os.path.join(stage_dir, "magic_input_lvs_repair.sp"), "w", encoding="utf-8") as fh:
+                    fh.write(repaired_spice)
+                lvs_repair_layout_issues = _generated_spice_layout_issues(repaired_spice, _port_specs(state))
+                if lvs_repair_layout_issues:
+                    lvs_repair_reason = "lvs_repair_spice_not_layout_safe"
+                    analog_lvs = {
+                        **analog_lvs,
+                        "repair_attempted": True,
+                        "repair_applied": False,
+                        "repair_reason": lvs_repair_reason,
+                        "repair_layout_issues": lvs_repair_layout_issues,
+                    }
+                else:
+                    with open(staged_spice, "w", encoding="utf-8") as fh:
+                        fh.write(_magic_spice_text(repaired_spice))
+                    _preserve_and_clean_magic_layout_outputs(stage_dir, module_name)
+                    cp, tcl_path, tool_mode, image = _run_magic_gds(
+                        state, stage_dir, staged_spice, module_name, pdk_variant, pdk_root_host, docker_bin
+                    )
+                    log = (cp.stdout or "") + (cp.stderr or "")
+                    with open(log_path, "w", encoding="utf-8", errors="ignore") as fh:
+                        fh.write(log)
+                    invalid_reason = _magic_layout_invalid(log)
+                    gds_path = _find_gds(stage_dir)
+                    if gds_path and not invalid_reason:
+                        final_gds = os.path.join(stage_dir, f"{module_name}.gds")
+                        if os.path.abspath(gds_path) != os.path.abspath(final_gds):
+                            shutil.copy2(gds_path, final_gds)
+                        summary.update({
+                            "status": "generated",
+                            "return_code": cp.returncode,
+                            "gds": final_gds,
+                            "log": log_path,
+                            "tool_mode": tool_mode,
+                            "image": image,
+                        })
+                        state["analog_macro_gds"] = final_gds
+                        digital = state.setdefault("digital", {})
+                        if isinstance(digital, dict):
+                            digital["macro_gds"] = list(dict.fromkeys((digital.get("macro_gds") or []) + [final_gds]))
+                            digital.pop("macro_blackbox_mode", None)
+                        analog_lvs = _run_analog_lvs(
+                            state,
+                            stage_dir=stage_dir,
+                            module_name=module_name,
+                            pdk_variant=pdk_variant,
+                            pdk_root_host=pdk_root_host,
+                            source_spice=staged_spice,
+                            docker_bin=docker_bin,
+                        )
+                        lvs_repair_applied = True
+                        analog_lvs = {
+                            **analog_lvs,
+                            "repair_attempted": True,
+                            "repair_applied": True,
+                            "pass1": {
+                                "status": pass1_analog_lvs.get("status"),
+                                "counts": pass1_analog_lvs.get("counts"),
+                                "failure_class": pass1_analog_lvs.get("failure_class"),
+                            },
+                        }
+                    else:
+                        lvs_repair_reason = invalid_reason or "lvs_repair_gds_not_produced"
+                        summary.update({
+                            "status": "failed",
+                            "return_code": cp.returncode,
+                            "reason": lvs_repair_reason,
+                            "magic_feedback_problem_count": _magic_feedback_problem_count(log),
+                            "log": log_path,
+                            "log_tail": _tail(log),
+                            "tool_mode": tool_mode,
+                            "image": image,
+                        })
+                        analog_lvs = {
+                            **analog_lvs,
+                            "repair_attempted": True,
+                            "repair_applied": False,
+                            "repair_reason": lvs_repair_reason,
+                        }
+            else:
+                lvs_repair_reason = "lvs_repair_pass_no_valid_mos_devices"
+                analog_lvs = {
+                    **analog_lvs,
+                    "repair_attempted": True,
+                    "repair_applied": False,
+                    "repair_reason": lvs_repair_reason,
+                }
+        elif isinstance(analog_lvs, dict):
+            analog_lvs = {
+                **analog_lvs,
+                "repair_attempted": False,
+                "repair_applied": False,
+            }
         summary["analog_lvs"] = analog_lvs
+        summary["lvs_repair_attempted"] = lvs_repair_attempted
+        summary["lvs_repair_applied"] = lvs_repair_applied
+        summary["lvs_repair_reason"] = lvs_repair_reason or None
+        summary["lvs_repair_layout_issues"] = lvs_repair_layout_issues or None
 
     save_text_artifact_and_record(workflow_id, AGENT_NAME, "analog/gds", "run_gds.sh", run_text)
     if backend == "magic" and tcl_path and os.path.exists(tcl_path):
@@ -969,6 +1214,10 @@ def run_agent(state: dict) -> dict:
     if backend == "magic" and os.path.exists(repair_spice_path):
         with open(repair_spice_path, "r", encoding="utf-8", errors="ignore") as fh:
             save_text_artifact_and_record(workflow_id, AGENT_NAME, "analog/gds", "magic_input_repair.sp", fh.read())
+    lvs_repair_spice_path = os.path.join(stage_dir, "magic_input_lvs_repair.sp")
+    if backend == "magic" and os.path.exists(lvs_repair_spice_path):
+        with open(lvs_repair_spice_path, "r", encoding="utf-8", errors="ignore") as fh:
+            save_text_artifact_and_record(workflow_id, AGENT_NAME, "analog/gds", "magic_input_lvs_repair.sp", fh.read())
     feedback_path = os.path.join(stage_dir, "magic_feedback.txt")
     if backend == "magic" and os.path.exists(feedback_path):
         with open(feedback_path, "r", encoding="utf-8", errors="ignore") as fh:
@@ -981,11 +1230,24 @@ def run_agent(state: dict) -> dict:
     if backend == "magic" and os.path.exists(pass1_log_path):
         with open(pass1_log_path, "r", encoding="utf-8", errors="ignore") as fh:
             save_text_artifact_and_record(workflow_id, AGENT_NAME, "analog/gds", "magic_gds_pass1.log", fh.read())
+    pass1_lvs_gds_log_path = os.path.join(stage_dir, "magic_gds_lvs_pass1.log")
+    if backend == "magic" and os.path.exists(pass1_lvs_gds_log_path):
+        with open(pass1_lvs_gds_log_path, "r", encoding="utf-8", errors="ignore") as fh:
+            save_text_artifact_and_record(workflow_id, AGENT_NAME, "analog/gds", "magic_gds_lvs_pass1.log", fh.read())
     extract_lvs_tcl = os.path.join(stage_dir, "magic_extract_lvs.tcl")
     if backend == "magic" and os.path.exists(extract_lvs_tcl):
         with open(extract_lvs_tcl, "r", encoding="utf-8", errors="ignore") as fh:
             save_text_artifact_and_record(workflow_id, AGENT_NAME, "analog/signoff", "magic_extract_lvs.tcl", fh.read())
-    for artifact_name in ("analog_lvs_magic_extract.log", "analog_lvs_netgen.log", f"{module_name}_extracted.spice"):
+    for artifact_name in (
+        "analog_lvs_magic_extract.log",
+        "analog_lvs_magic_extract_pass1.log",
+        "analog_lvs_netgen.log",
+        "analog_lvs_netgen_pass1.log",
+        f"{module_name}_extracted.spice",
+        f"{module_name}_extracted_pass1.spice",
+        f"{module_name}_lvs_source.spice",
+        f"{module_name}_lvs_source_pass1.spice",
+    ):
         artifact_path = os.path.join(stage_dir, artifact_name)
         if os.path.exists(artifact_path):
             with open(artifact_path, "r", encoding="utf-8", errors="ignore") as fh:

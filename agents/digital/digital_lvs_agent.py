@@ -204,6 +204,27 @@ def _resolve_config_from_state(state: dict, workflow_dir: str) -> str | None:
     digital = state.get("digital") or {}
     drc_state = digital.get("drc") or {}
 
+    # LVS is a physical signoff stage; prefer latest physical configs before
+    # prior signoff/global pointers so closure ECOs are not lost.
+    for cand in [
+        os.path.join(workflow_dir, "digital", "fill", "config.json"),
+        os.path.join(workflow_dir, "digital", "sta_postfill", "config.json"),
+        os.path.join(workflow_dir, "digital", "route", "config.json"),
+        os.path.join(workflow_dir, "digital", "sta_postroute", "config.json"),
+        os.path.join(workflow_dir, "digital", "cts", "config.json"),
+        os.path.join(workflow_dir, "digital", "sta_postcts", "config.json"),
+        os.path.join(workflow_dir, "digital", "place", "config.json"),
+        os.path.join(workflow_dir, "digital", "sta_postplace", "config.json"),
+        os.path.join(workflow_dir, "digital", "floorplan", "config.json"),
+        os.path.join(workflow_dir, "digital", "drc", "config.json"),
+        os.path.join(workflow_dir, "digital", "impl_setup", "openlane", "config.json"),
+        os.path.join(workflow_dir, "digital", "synth", "config.json"),
+        os.path.join(workflow_dir, "digital", "foundry", "openlane", "config.json"),
+    ]:
+        if os.path.exists(cand):
+            logger.info(f"{AGENT_NAME}: selected config fallback -> {cand}")
+            return cand
+
     cand = drc_state.get("openlane_config")
     if cand and os.path.exists(cand):
         logger.info(f"{AGENT_NAME}: selected config from state.digital.drc -> {cand}")
@@ -213,20 +234,6 @@ def _resolve_config_from_state(state: dict, workflow_dir: str) -> str | None:
     if cand and os.path.exists(cand):
         logger.info(f"{AGENT_NAME}: selected config from state.digital -> {cand}")
         return cand
-
-    for cand in [
-        os.path.join(workflow_dir, "digital", "drc", "config.json"),
-        os.path.join(workflow_dir, "digital", "fill", "config.json"),
-        os.path.join(workflow_dir, "digital", "route", "config.json"),
-        os.path.join(workflow_dir, "digital", "cts", "config.json"),
-        os.path.join(workflow_dir, "digital", "place", "config.json"),
-        os.path.join(workflow_dir, "digital", "impl_setup", "openlane", "config.json"),
-        os.path.join(workflow_dir, "digital", "synth", "config.json"),
-        os.path.join(workflow_dir, "digital", "foundry", "openlane", "config.json"),
-    ]:
-        if os.path.exists(cand):
-            logger.info(f"{AGENT_NAME}: selected config fallback -> {cand}")
-            return cand
 
     logger.warning(f"{AGENT_NAME}: no OpenLane config found")
     return None

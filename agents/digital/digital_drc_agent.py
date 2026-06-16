@@ -185,16 +185,19 @@ def _resolve_config_from_state(state: dict, workflow_dir: str) -> str | None:
         logger.info(f"{AGENT_NAME}: selected config from state.digital.fill -> {cand}")
         return cand
 
-    cand = digital.get("openlane_config")
-    if cand and os.path.exists(cand):
-        logger.info(f"{AGENT_NAME}: selected config from state.digital -> {cand}")
-        return cand
-
+    # Signoff must use the latest physical-stage config.  The global
+    # digital.openlane_config often still points at impl_setup and would
+    # silently discard closure-loop ECOs, macro placement, and route/fill state.
     for cand in [
         os.path.join(workflow_dir, "digital", "fill", "config.json"),
+        os.path.join(workflow_dir, "digital", "sta_postfill", "config.json"),
         os.path.join(workflow_dir, "digital", "route", "config.json"),
+        os.path.join(workflow_dir, "digital", "sta_postroute", "config.json"),
         os.path.join(workflow_dir, "digital", "cts", "config.json"),
+        os.path.join(workflow_dir, "digital", "sta_postcts", "config.json"),
         os.path.join(workflow_dir, "digital", "place", "config.json"),
+        os.path.join(workflow_dir, "digital", "sta_postplace", "config.json"),
+        os.path.join(workflow_dir, "digital", "floorplan", "config.json"),
         os.path.join(workflow_dir, "digital", "impl_setup", "openlane", "config.json"),
         os.path.join(workflow_dir, "digital", "synth", "config.json"),
         os.path.join(workflow_dir, "digital", "foundry", "openlane", "config.json"),
@@ -202,6 +205,11 @@ def _resolve_config_from_state(state: dict, workflow_dir: str) -> str | None:
         if os.path.exists(cand):
             logger.info(f"{AGENT_NAME}: selected config fallback -> {cand}")
             return cand
+
+    cand = digital.get("openlane_config")
+    if cand and os.path.exists(cand):
+        logger.info(f"{AGENT_NAME}: selected config from state.digital -> {cand}")
+        return cand
 
     logger.warning(f"{AGENT_NAME}: no OpenLane config found")
     return None

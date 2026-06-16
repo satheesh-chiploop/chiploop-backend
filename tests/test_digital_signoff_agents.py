@@ -5,6 +5,7 @@ import json
 os.environ.setdefault("SUPABASE_URL", "http://localhost")
 os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-service-role-key")
 
+from agents.digital import digital_drc_agent, digital_lvs_agent, digital_tapeout_agent
 from agents.digital.digital_drc_agent import _drc_status, _macro_blackbox_deferred as _drc_macro_blackbox_deferred
 from agents.digital.digital_failure_debug_agent import run_agent as failure_debug_agent
 from agents.digital import digital_spec2rtl_conformance_agent as spec2rtl_agent
@@ -45,6 +46,22 @@ def test_sta_postfill_sanitizes_inherited_duplicate_netlists():
     ])
 
     assert chosen == ["inputs/netlist/temp_monitor_soc_phys_synth.v"]
+
+
+def test_signoff_config_resolution_prefers_latest_physical_config_over_global(tmp_path):
+    workflow_dir = tmp_path
+    impl_cfg = workflow_dir / "digital" / "impl_setup" / "openlane" / "config.json"
+    fill_cfg = workflow_dir / "digital" / "fill" / "config.json"
+    impl_cfg.parent.mkdir(parents=True)
+    fill_cfg.parent.mkdir(parents=True)
+    impl_cfg.write_text(json.dumps({"FP_CORE_UTIL": 20}), encoding="utf-8")
+    fill_cfg.write_text(json.dumps({"FP_CORE_UTIL": 10, "MACRO_PLACEMENT_CFG": "dir::inputs/macros/macro_placement.cfg"}), encoding="utf-8")
+
+    state = {"digital": {"openlane_config": str(impl_cfg)}}
+
+    assert digital_drc_agent._resolve_config_from_state(state, str(workflow_dir)) == str(fill_cfg)
+    assert digital_lvs_agent._resolve_config_from_state(state, str(workflow_dir)) == str(fill_cfg)
+    assert digital_tapeout_agent._resolve_config_from_state(state, str(workflow_dir)) == str(fill_cfg)
 
 
 def test_atpg_zero_pattern_metrics_are_not_success():

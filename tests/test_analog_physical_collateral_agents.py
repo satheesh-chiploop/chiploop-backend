@@ -549,6 +549,27 @@ def test_analog_lvs_status_parser_detects_clean_and_pin_mismatch():
     assert gds_agent._analog_lvs_status("Final result:\nTop level cell failed pin matching.", 0) == "mismatch"
 
 
+def test_analog_lvs_classifies_device_and_pin_mismatch():
+    log = (
+        "Circuit 1 contains 3 devices, Circuit 2 contains 58 devices. *** MISMATCH ***\n"
+        "Circuit 1 contains 22 nets,    Circuit 2 contains 266 nets. *** MISMATCH ***\n"
+        "Top level cell failed pin matching.\n"
+    )
+
+    assert gds_agent._analog_lvs_circuit_counts(log) == {
+        "extracted_devices": 3,
+        "source_devices": 58,
+        "extracted_nets": 22,
+        "source_nets": 266,
+    }
+    assert gds_agent._analog_lvs_failure_class(log) == "pin_mismatch"
+    assert gds_agent._analog_lvs_should_repair({
+        "status": "mismatch",
+        "failure_class": "pin_mismatch",
+        "counts": gds_agent._analog_lvs_circuit_counts(log),
+    })
+
+
 def test_gds_generation_repairs_magic_feedback_once_and_reruns(tmp_path, monkeypatch):
     monkeypatch.setattr(gds_agent, "save_text_artifact_and_record", lambda *args, **kwargs: "local")
     monkeypatch.setattr(gds_agent, "complete_text", lambda *args, **kwargs: ".subckt ana vin vout vdd vss\nM1 vout vin vdd vdd sky130_fd_pr__pfet_01v8 W=1u L=0.15u\nM2 vout vin vss vss sky130_fd_pr__nfet_01v8 W=1u L=0.15u\n.ends ana\n")
@@ -597,6 +618,87 @@ def test_gds_generation_repairs_magic_feedback_once_and_reruns(tmp_path, monkeyp
     assert state["analog_gds_generation"]["pass1_magic_feedback_problem_count"] == 56
     assert state["analog_signoff"]["drc"]["status"] == "clean"
     assert (tmp_path / "analog" / "gds" / "ana_pass1.gds").exists()
+
+
+def test_gds_generation_repairs_analog_lvs_mismatch_once_and_reruns(tmp_path, monkeypatch):
+    monkeypatch.setattr(gds_agent, "save_text_artifact_and_record", lambda *args, **kwargs: "local")
+    monkeypatch.setattr(gds_agent, "complete_text", lambda *args, **kwargs: ".subckt ana vin vout vdd vss\nM1 vout vin vdd vdd sky130_fd_pr__pfet_01v8 W=1u L=0.15u\nM2 vout vin vss vss sky130_fd_pr__nfet_01v8 W=1u L=0.15u\n.ends ana\n")
+    monkeypatch.setattr(gds_agent.shutil, "which", lambda name: "/usr/bin/docker" if name == "docker" else None)
+    pdk_root = tmp_path / "pdk"
+    magic_dir = pdk_root / "sky130A" / "libs.tech" / "magic"
+    magic_dir.mkdir(parents=True)
+    (magic_dir / "sky130A.tech").write_text("tech\n", encoding="utf-8")
+    (magic_dir / "sky130A.tcl").write_text("proc sky130::importspice {} {}\n", encoding="utf-8")
+    spice = tmp_path / "ana.spice"
+    spice.write_text(
+        ".subckt ana vin vout vdd vss\n"
+        "M1 vout vin vdd vdd sky130_fd_pr__pfet_01v8 W=1u L=0.15u\n"
+        "M2 vout vin vss vss sky130_fd_pr__nfet_01v8 W=1u L=0.15u\n"
+        ".ends ana\n",
+        encoding="utf-8",
+    )
+    calls = {"gds": 0, "extract": 0, "lvs": 0}
+
+    def fake_run_command(state, capability, cmd, cwd=None, timeout_sec=None):
+        stage_dir = tmp_path / "analog" / "gds"
+        if capability == "analog_magic_gds":
+            calls["gds"] += 1
+            (stage_dir / "ana.gds").write_bytes(b"GDS")
+            (stage_dir / "ana.mag").write_text("mag\n", encoding="utf-8")
+            return SimpleNamespace(returncode=0, stdout="magic ok\n", stderr="")
+        if capability == "analog_magic_lvs_extract":
+            calls["extract"] += 1
+            (stage_dir / "ana_extracted.spice").write_text(
+                ".subckt ana vin vout vdd vss\n"
+                "M1 vout vin vss vss sky130_fd_pr__nfet_01v8 W=1u L=0.15u\n"
+                ".ends ana\n",
+                encoding="utf-8",
+            )
+            return SimpleNamespace(returncode=0, stdout="extract ok\n", stderr="")
+        if capability == "analog_netgen_lvs":
+            calls["lvs"] += 1
+            if calls["lvs"] == 1:
+                return SimpleNamespace(
+                    returncode=0,
+                    stdout=(
+                        "Circuit 1 contains 3 devices, Circuit 2 contains 58 devices. *** MISMATCH ***\n"
+                        "Circuit 1 contains 22 nets,    Circuit 2 contains 266 nets. *** MISMATCH ***\n"
+                        "Top level cell failed pin matching.\n"
+                    ),
+                    stderr="",
+                )
+            return SimpleNamespace(returncode=0, stdout="Final result:\nCircuits match uniquely.\n", stderr="")
+        raise AssertionError(capability)
+
+    monkeypatch.setattr(gds_agent, "run_command", fake_run_command)
+
+    state = gds_agent.run_agent({
+        "workflow_id": "wf",
+        "workflow_dir": str(tmp_path),
+        "analog_physical_mode": "generate_sky130_gds",
+        "analog_pdk": "sky130A",
+        "analog_macro_module": "ana",
+        "analog_spice_path": str(spice),
+        "pdk_root_host": str(pdk_root),
+        "analog_sky130_spice": {"generated": True},
+        "analog_spec": {
+            "ports": [
+                {"name": "vin", "direction": "input"},
+                {"name": "vout", "direction": "output"},
+                {"name": "vdd", "direction": "input", "role": "power"},
+                {"name": "vss", "direction": "input", "role": "ground"},
+            ]
+        },
+    })
+
+    assert calls == {"gds": 2, "extract": 2, "lvs": 2}
+    assert state["analog_gds_generation"]["lvs_repair_attempted"] is True
+    assert state["analog_gds_generation"]["lvs_repair_applied"] is True
+    assert state["analog_signoff"]["lvs"]["status"] == "clean"
+    assert state["analog_signoff"]["lvs"]["repair_attempted"] is True
+    assert state["analog_signoff"]["lvs"]["pass1"]["counts"]["source_devices"] == 58
+    assert (tmp_path / "analog" / "gds" / "analog_lvs_netgen_pass1.log").exists()
+    assert (tmp_path / "analog" / "gds" / "magic_input_lvs_repair.sp").exists()
 
 
 def test_gds_generation_rejects_unsafe_repair_before_second_magic_pass(tmp_path, monkeypatch):
