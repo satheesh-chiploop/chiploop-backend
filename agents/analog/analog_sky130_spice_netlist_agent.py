@@ -192,11 +192,20 @@ def _generated_spice_layout_issues(text: str, port_specs: Dict[str, Dict[str, An
         if _direction_for_pin(_base_bus_name(pin), port_specs).startswith("input") and not _is_supply_pin(pin, port_specs)
     )
     external_supplies = {pin for pin in pins if _is_supply_pin(pin, port_specs)}
+    external_outputs = {pin for pin in pins if _direction_for_pin(pin, port_specs).startswith("output")}
+    external_outputs.update(
+        pin
+        for pin in pins
+        if _direction_for_pin(_base_bus_name(pin), port_specs).startswith("output")
+    )
+    supply_sources: Dict[str, int] = {pin: 0 for pin in external_supplies}
+    output_drive_classes: Dict[str, set[str]] = {pin: set() for pin in external_outputs}
     for match in re.finditer(r"^\s*M\S*\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)", text or "", flags=re.IGNORECASE | re.MULTILINE):
-        drain, _gate, source, bulk, _model = match.groups()
+        drain, _gate, source, bulk, model = match.groups()
         drain = _pin_name(drain)
         source = _pin_name(source)
         bulk = _pin_name(bulk)
+        model_kind = "pfet" if "pfet" in model.lower() else "nfet" if "nfet" in model.lower() else ""
         for terminal in (drain, source, bulk):
             if terminal not in pin_set and terminal in bit_bases:
                 issues.append(f"undeclared_external_scalar_bus:{terminal}")
@@ -206,6 +215,19 @@ def _generated_spice_layout_issues(text: str, port_specs: Dict[str, Dict[str, An
                 issues.append(f"input_pin_used_as_device_terminal:{terminal}")
         if drain in external_supplies:
             issues.append(f"supply_pin_used_as_device_drain:{drain}")
+        if source in supply_sources:
+            supply_sources[source] += 1
+        for terminal in (drain, source):
+            if terminal in output_drive_classes and model_kind:
+                output_drive_classes[terminal].add(model_kind)
+    for supply, count in sorted(supply_sources.items()):
+        if count == 0:
+            issues.append(f"supply_pin_not_used_as_device_source:{supply}")
+    for output, classes in sorted(output_drive_classes.items()):
+        if "pfet" in classes and "nfet" not in classes:
+            issues.append(f"output_pin_missing_nfet_pull:{output}")
+        if "nfet" in classes and "pfet" not in classes:
+            issues.append(f"output_pin_missing_pfet_pull:{output}")
     return sorted(dict.fromkeys(issues))
 
 
@@ -362,7 +384,9 @@ Strict requirements:
 - Input pins listed in input_pins_gate_only may appear only as MOS gates. They must never appear as MOS drain, source, or bulk terminals.
 - Do not create internal helper devices that modify external input pins.
 - Supply pins listed in supply_pins_source_or_bulk_only may be MOS source/bulk terminals, not MOS drain terminals.
+- Every supply pin listed in the .subckt must be used as a MOS source terminal on at least one real MOS device; using it only as a bulk terminal is not enough for Magic LVS port extraction.
 - Output pins listed in output_pins_may_be_driven may be MOS drain/source terminals.
+- Every driven output pin must have a complementary CMOS pull structure: at least one PFET path to a power source and at least one NFET path to a ground source. Do not emit PFET-only or NFET-only output drivers.
 - Names listed in forbidden_scalar_bus_terminals must not appear as MOS terminals or .subckt pins when the required port order uses bit pins. Use the declared bit pins exactly.
 - Include explicit W and L parameters on MOS devices.
 - Use Sky130 Magic-compatible dimensions: W >= 0.42u and L >= 0.15u for every MOS device.
@@ -422,6 +446,8 @@ Strict requirements:
 - Do not create internal devices that drive, tie, or overwrite external input pins.
 - Output pins may be MOS drain/source terminals.
 - Supply pins listed in supply_pins_source_or_bulk_only may be MOS source/bulk terminals, not MOS drain terminals.
+- Every supply pin listed in the .subckt must be used as a MOS source terminal on at least one real MOS device; using it only as a bulk terminal is not enough for Magic LVS port extraction.
+- Every driven output pin must have a complementary CMOS pull structure: at least one PFET path to a power source and at least one NFET path to a ground source. Do not emit PFET-only or NFET-only output drivers.
 - Names listed in forbidden_scalar_bus_terminals must not appear as MOS terminals or .subckt pins when the required port order uses bit pins. Replace scalar bus terminals with declared bit pins or remove those devices.
 - Use only sky130_fd_pr__nfet_01v8 and sky130_fd_pr__pfet_01v8 MOS devices with M lines.
 - Do not use X lines for MOS devices.

@@ -319,6 +319,30 @@ def test_sky130_spice_layout_issues_catch_input_bus_bits_and_supply_drains():
     assert "undeclared_external_scalar_bus:adc_code" in issues
 
 
+def test_sky130_spice_layout_issues_catch_unbalanced_outputs_and_unused_supply_sources():
+    spice = (
+        ".subckt ana adc_code[0] adc_code[1] sensor_temp_celsius[0] VGND VPWR avss sample_req\n"
+        "Mbit0 adc_code[0] sample_req VPWR VPWR sky130_fd_pr__pfet_01v8 W=1u L=0.15u\n"
+        "Mbit1 adc_code[1] sample_req VPWR VPWR sky130_fd_pr__pfet_01v8 W=1u L=0.15u\n"
+        "Mvaln adc_code[1] sample_req VGND avss sky130_fd_pr__nfet_01v8 W=1u L=0.15u\n"
+        ".ends ana\n"
+    )
+    specs = {
+        "sensor_temp_celsius": {"name": "sensor_temp_celsius", "verilog_direction": "input", "width": 16},
+        "adc_code": {"name": "adc_code", "verilog_direction": "output", "width": 2},
+        "sample_req": {"name": "sample_req", "verilog_direction": "input"},
+        "VPWR": {"name": "VPWR", "verilog_direction": "input", "role": "power"},
+        "VGND": {"name": "VGND", "verilog_direction": "input", "role": "ground"},
+        "avss": {"name": "avss", "verilog_direction": "input", "role": "ground"},
+    }
+
+    issues = spice_agent._generated_spice_layout_issues(spice, specs)
+
+    assert "output_pin_missing_nfet_pull:adc_code[0]" in issues
+    assert "output_pin_missing_pfet_pull:adc_code[1]" not in issues
+    assert "supply_pin_not_used_as_device_source:avss" in issues
+
+
 def test_sky130_spice_generated_scalar_bus_terminals_are_legalized():
     spice = (
         ".subckt ana adc_code[0] adc_code[1] sensor_temp_celsius[0] sensor_temp_celsius[1] avdd avss\n"
