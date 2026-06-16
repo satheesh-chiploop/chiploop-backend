@@ -408,42 +408,56 @@ def test_gds_generation_uses_magic_docker_by_default(tmp_path, monkeypatch):
     )
 
     def fake_run_command(state, capability, cmd, cwd=None, timeout_sec=None):
-        assert capability == "analog_magic_gds"
-        assert cmd[0] == "/usr/bin/docker"
-        assert gds_agent.OPENLANE_DOCKER_IMAGE in cmd
-        assert "magic" in cmd
-        assert "/pdk/sky130A/libs.tech/magic/sky130A.tech" in cmd
-        assert "/work/magic_import_spice.tcl" in cmd
-        assert f"{pdk_root}:/pdk" in cmd
-        assert any(str(part).endswith(":/work") for part in cmd)
-        tcl = (tmp_path / "analog" / "gds" / "magic_import_spice.tcl").read_text(encoding="utf-8")
-        assert "source /pdk/sky130A/libs.tech/magic/sky130A.tcl" in tcl
-        assert "magic::netlist_to_layout ana.sp sky130" in tcl
-        assert "CHIPLOOP_FINAL_BOX=[box values]" in tcl
-        assert "expand" in tcl
-        assert "expand *" not in tcl
-        assert "flatten ana_flat" in tcl
-        assert "load ana_flat" in tcl
-        assert "cellname delete ana" in tcl
-        assert "CHIPLOOP_DELETE_ORIGINAL_RESULT=$chiploop_delete_original_result" in tcl
-        assert "cellname rename ana_flat ana" in tcl
-        assert tcl.index("cellname rename ana_flat ana") < tcl.index("gds write ana.gds")
-        assert "CHIPLOOP_FLAT_BOX=[box values]" in tcl
-        assert "cif flatten true" not in tcl
-        assert "catch {cif flatglob *}" not in tcl
-        assert "cellname list allcells" not in tcl
-        assert "cellname delete $chiploop_cell" not in tcl
-        assert "gds flatten true" in tcl
-        assert tcl.index("gds flatten true") < tcl.index("gds write ana.gds")
-        assert "catch {gds flatglob *}" in tcl
-        assert tcl.index("catch {gds flatglob *}") < tcl.index("gds write ana.gds")
-        assert "gds write ana.gds" in tcl
-        assert tcl.rfind("feedback save magic_feedback.txt") > tcl.index("gds write ana.gds")
-        staged_spice = (tmp_path / "analog" / "gds" / "ana.sp").read_text(encoding="utf-8")
-        assert "W=1 L=0.15" in staged_spice
-        assert "W=0.42 L=0.15" in staged_spice
-        (tmp_path / "analog" / "gds" / "ana.gds").write_bytes(b"GDS")
-        return SimpleNamespace(returncode=0, stdout="magic ok", stderr="")
+        stage_dir = tmp_path / "analog" / "gds"
+        if capability == "analog_magic_gds":
+            assert cmd[0] == "/usr/bin/docker"
+            assert gds_agent.OPENLANE_DOCKER_IMAGE in cmd
+            assert "magic" in cmd
+            assert "/pdk/sky130A/libs.tech/magic/sky130A.tech" in cmd
+            assert "/work/magic_import_spice.tcl" in cmd
+            assert f"{pdk_root}:/pdk" in cmd
+            assert any(str(part).endswith(":/work") for part in cmd)
+            tcl = (stage_dir / "magic_import_spice.tcl").read_text(encoding="utf-8")
+            assert "source /pdk/sky130A/libs.tech/magic/sky130A.tcl" in tcl
+            assert "magic::netlist_to_layout ana.sp sky130" in tcl
+            assert "CHIPLOOP_FINAL_BOX=[box values]" in tcl
+            assert "expand" in tcl
+            assert "expand *" not in tcl
+            assert "flatten ana_flat" in tcl
+            assert "load ana_flat" in tcl
+            assert "cellname delete ana" in tcl
+            assert "CHIPLOOP_DELETE_ORIGINAL_RESULT=$chiploop_delete_original_result" in tcl
+            assert "cellname rename ana_flat ana" in tcl
+            assert tcl.index("cellname rename ana_flat ana") < tcl.index("gds write ana.gds")
+            assert "CHIPLOOP_FLAT_BOX=[box values]" in tcl
+            assert "cif flatten true" not in tcl
+            assert "catch {cif flatglob *}" not in tcl
+            assert "cellname list allcells" not in tcl
+            assert "cellname delete $chiploop_cell" not in tcl
+            assert "gds flatten true" in tcl
+            assert tcl.index("gds flatten true") < tcl.index("gds write ana.gds")
+            assert "catch {gds flatglob *}" in tcl
+            assert tcl.index("catch {gds flatglob *}") < tcl.index("gds write ana.gds")
+            assert "gds write ana.gds" in tcl
+            assert tcl.rfind("feedback save magic_feedback.txt") > tcl.index("gds write ana.gds")
+            staged_spice = (stage_dir / "ana.sp").read_text(encoding="utf-8")
+            assert "W=1 L=0.15" in staged_spice
+            assert "W=0.42 L=0.15" in staged_spice
+            (stage_dir / "ana.gds").write_bytes(b"GDS")
+            (stage_dir / "ana.mag").write_text("mag\n", encoding="utf-8")
+            return SimpleNamespace(returncode=0, stdout="magic ok", stderr="")
+        if capability == "analog_magic_lvs_extract":
+            (stage_dir / "ana_extracted.spice").write_text(
+                ".subckt ana vin vout vdd vss\n"
+                "M1 vout vin vss vss sky130_fd_pr__nfet_01v8 W=1u L=0.15u\n"
+                "M2 vout vin vss vss sky130_fd_pr__nfet_01v8 W=0.42u L=0.15u\n"
+                ".ends ana\n",
+                encoding="utf-8",
+            )
+            return SimpleNamespace(returncode=0, stdout="extract ok", stderr="")
+        if capability == "analog_netgen_lvs":
+            return SimpleNamespace(returncode=0, stdout="Final result:\nCircuits match uniquely.\n", stderr="")
+        raise AssertionError(capability)
 
     monkeypatch.setattr(gds_agent, "run_command", fake_run_command)
 
@@ -462,6 +476,8 @@ def test_gds_generation_uses_magic_docker_by_default(tmp_path, monkeypatch):
     assert state["analog_gds_generation"]["backend"] == "magic"
     assert state["analog_signoff"]["drc"]["status"] == "clean"
     assert state["analog_signoff"]["drc"]["feedback_problem_count"] == 0
+    assert state["analog_signoff"]["lvs"]["status"] == "clean"
+    assert state["digital"]["macro_gds"] == [state["analog_macro_gds"]]
 
 
 def test_gds_generation_rejects_magic_placeholder_layout(tmp_path, monkeypatch):
@@ -587,16 +603,33 @@ def test_gds_generation_repairs_magic_feedback_once_and_reruns(tmp_path, monkeyp
         ".ends ana\n",
         encoding="utf-8",
     )
-    calls = {"count": 0}
+    calls = {"gds": 0, "extract": 0, "lvs": 0}
 
     def fake_run_command(state, capability, cmd, cwd=None, timeout_sec=None):
-        calls["count"] += 1
-        (tmp_path / "analog" / "gds" / "ana.gds").write_bytes(b"GDS")
-        if calls["count"] == 1:
-            (tmp_path / "analog" / "gds" / "sky130_fd_pr__nfet_01v8_STALE.mag").write_text("stale\n", encoding="utf-8")
-            return SimpleNamespace(returncode=0, stdout="56 problems occurred.  See feedback entries.\n", stderr="")
-        assert not (tmp_path / "analog" / "gds" / "sky130_fd_pr__nfet_01v8_STALE.mag").exists()
-        return SimpleNamespace(returncode=0, stdout="magic ok\n", stderr="")
+        stage_dir = tmp_path / "analog" / "gds"
+        if capability == "analog_magic_gds":
+            calls["gds"] += 1
+            (stage_dir / "ana.gds").write_bytes(b"GDS")
+            (stage_dir / "ana.mag").write_text("mag\n", encoding="utf-8")
+            if calls["gds"] == 1:
+                (stage_dir / "sky130_fd_pr__nfet_01v8_STALE.mag").write_text("stale\n", encoding="utf-8")
+                return SimpleNamespace(returncode=0, stdout="56 problems occurred.  See feedback entries.\n", stderr="")
+            assert not (stage_dir / "sky130_fd_pr__nfet_01v8_STALE.mag").exists()
+            return SimpleNamespace(returncode=0, stdout="magic ok\n", stderr="")
+        if capability == "analog_magic_lvs_extract":
+            calls["extract"] += 1
+            (stage_dir / "ana_extracted.spice").write_text(
+                ".subckt ana vin vout vdd vss\n"
+                "M1 vout vin vdd vdd sky130_fd_pr__pfet_01v8 W=1u L=0.15u\n"
+                "M2 vout vin vss vss sky130_fd_pr__nfet_01v8 W=1u L=0.15u\n"
+                ".ends ana\n",
+                encoding="utf-8",
+            )
+            return SimpleNamespace(returncode=0, stdout="extract ok\n", stderr="")
+        if capability == "analog_netgen_lvs":
+            calls["lvs"] += 1
+            return SimpleNamespace(returncode=0, stdout="Final result:\nCircuits match uniquely.\n", stderr="")
+        raise AssertionError(capability)
 
     monkeypatch.setattr(gds_agent, "run_command", fake_run_command)
 
@@ -611,7 +644,7 @@ def test_gds_generation_repairs_magic_feedback_once_and_reruns(tmp_path, monkeyp
         "analog_sky130_spice": {"generated": True},
     })
 
-    assert calls["count"] == 2
+    assert calls == {"gds": 2, "extract": 1, "lvs": 1}
     assert state["analog_gds_generation"]["status"] == "generated"
     assert state["analog_gds_generation"]["repair_attempted"] is True
     assert state["analog_gds_generation"]["repair_applied"] is True
@@ -700,6 +733,79 @@ def test_gds_generation_repairs_analog_lvs_mismatch_once_and_reruns(tmp_path, mo
     assert (tmp_path / "analog" / "gds" / "analog_lvs_netgen_pass1.log").exists()
     assert (tmp_path / "analog" / "gds" / "magic_input_lvs_repair.sp").exists()
     assert " bus " not in (tmp_path / "analog" / "gds" / "magic_input_lvs_repair.sp").read_text(encoding="utf-8").splitlines()[0]
+
+
+def test_gds_generation_fails_and_does_not_promote_macro_gds_when_lvs_still_mismatches(tmp_path, monkeypatch):
+    monkeypatch.setattr(gds_agent, "save_text_artifact_and_record", lambda *args, **kwargs: "local")
+    monkeypatch.setattr(gds_agent, "complete_text", lambda *args, **kwargs: ".subckt ana vin vout vdd vss\nM1 vout vin vdd vdd sky130_fd_pr__pfet_01v8 W=1u L=0.15u\nM2 vout vin vss vss sky130_fd_pr__nfet_01v8 W=1u L=0.15u\n.ends ana\n")
+    monkeypatch.setattr(gds_agent.shutil, "which", lambda name: "/usr/bin/docker" if name == "docker" else None)
+    pdk_root = tmp_path / "pdk"
+    magic_dir = pdk_root / "sky130A" / "libs.tech" / "magic"
+    magic_dir.mkdir(parents=True)
+    (magic_dir / "sky130A.tech").write_text("tech\n", encoding="utf-8")
+    (magic_dir / "sky130A.tcl").write_text("proc sky130::importspice {} {}\n", encoding="utf-8")
+    spice = tmp_path / "ana.spice"
+    spice.write_text(
+        ".subckt ana vin vout vdd vss\n"
+        "M1 vout vin vdd vdd sky130_fd_pr__pfet_01v8 W=1u L=0.15u\n"
+        "M2 vout vin vss vss sky130_fd_pr__nfet_01v8 W=1u L=0.15u\n"
+        ".ends ana\n",
+        encoding="utf-8",
+    )
+    calls = {"gds": 0, "extract": 0, "lvs": 0}
+
+    def fake_run_command(state, capability, cmd, cwd=None, timeout_sec=None):
+        stage_dir = tmp_path / "analog" / "gds"
+        if capability == "analog_magic_gds":
+            calls["gds"] += 1
+            (stage_dir / "ana.gds").write_bytes(b"GDS")
+            (stage_dir / "ana.mag").write_text("mag\n", encoding="utf-8")
+            return SimpleNamespace(returncode=0, stdout="magic ok\n", stderr="")
+        if capability == "analog_magic_lvs_extract":
+            calls["extract"] += 1
+            (stage_dir / "ana_extracted.spice").write_text(
+                ".subckt ana vin vout vdd\n"
+                "M1 vout vin vdd vdd sky130_fd_pr__pfet_01v8 W=1u L=0.15u\n"
+                ".ends ana\n",
+                encoding="utf-8",
+            )
+            return SimpleNamespace(returncode=0, stdout="extract ok\n", stderr="")
+        if capability == "analog_netgen_lvs":
+            calls["lvs"] += 1
+            return SimpleNamespace(
+                returncode=0,
+                stdout=(
+                    "Circuit 1 contains 1 devices, Circuit 2 contains 2 devices. *** MISMATCH ***\n"
+                    "Circuit 1 contains 3 nets,    Circuit 2 contains 4 nets. *** MISMATCH ***\n"
+                    "Top level cell failed pin matching.\n"
+                ),
+                stderr="",
+            )
+        raise AssertionError(capability)
+
+    monkeypatch.setattr(gds_agent, "run_command", fake_run_command)
+    state = {
+        "workflow_id": "wf",
+        "workflow_dir": str(tmp_path),
+        "analog_physical_mode": "generate_sky130_gds",
+        "analog_pdk": "sky130A",
+        "analog_macro_module": "ana",
+        "analog_spice_path": str(spice),
+        "pdk_root_host": str(pdk_root),
+        "analog_sky130_spice": {"generated": True},
+    }
+
+    with pytest.raises(RuntimeError, match="analog_lvs_not_clean"):
+        gds_agent.run_agent(state)
+
+    assert calls == {"gds": 2, "extract": 2, "lvs": 2}
+    assert state["analog_gds_generation"]["status"] == "failed"
+    assert state["analog_gds_generation"]["reason"] == "analog_lvs_not_clean"
+    assert state["analog_gds_generation"]["analog_lvs"]["status"] == "mismatch"
+    assert state["analog_gds_generation"]["analog_lvs"]["pins"]["missing_extracted_pins"] == ["vss"]
+    assert "macro_gds" not in state.get("digital", {})
+    assert state["analog_signoff"]["drc"]["status"] == "clean"
+    assert state["analog_signoff"]["lvs"]["status"] == "mismatch"
 
 
 def test_gds_generation_rejects_unsafe_repair_before_second_magic_pass(tmp_path, monkeypatch):
@@ -898,6 +1004,74 @@ def test_physical_package_fails_in_generate_mode_when_gds_missing(tmp_path, monk
         package_agent.run_agent(state)
 
     assert state["analog_physical_collateral_package"]["status"] == "failed"
+
+
+def test_physical_package_fails_in_generate_mode_when_analog_lvs_mismatches(tmp_path, monkeypatch):
+    monkeypatch.setattr(package_agent, "save_text_artifact_and_record", lambda *args, **kwargs: "local")
+    lef = tmp_path / "ana.lef"
+    lib = tmp_path / "ana.lib"
+    gds = tmp_path / "ana.gds"
+    spice = tmp_path / "ana.spice"
+    lef.write_text("MACRO ana\nEND ana\n", encoding="utf-8")
+    lib.write_text("library (ana) {}\n", encoding="utf-8")
+    gds.write_bytes(b"GDS")
+    spice.write_text(".subckt ana A B\n.ends ana\n", encoding="utf-8")
+
+    state = {
+        "workflow_id": "wf",
+        "workflow_dir": str(tmp_path),
+        "analog_physical_mode": "generate_sky130_gds",
+        "analog_macro_module": "ana",
+        "analog_macro_lef": str(lef),
+        "analog_macro_lib": str(lib),
+        "analog_macro_gds": str(gds),
+        "analog_spice_path": str(spice),
+        "analog_gds_generation": {"analog_lvs": {"status": "mismatch"}},
+    }
+
+    with pytest.raises(RuntimeError, match="analog_lvs_not_clean"):
+        package_agent.run_agent(state)
+
+    package = state["analog_physical_collateral_package"]
+    assert package["status"] == "failed"
+    assert package["reason"] == "analog_lvs_not_clean"
+    assert "macro_gds" not in state.get("digital", {})
+
+
+def test_physical_package_fails_in_generate_mode_when_analog_drc_has_violations(tmp_path, monkeypatch):
+    monkeypatch.setattr(package_agent, "save_text_artifact_and_record", lambda *args, **kwargs: "local")
+    lef = tmp_path / "ana.lef"
+    lib = tmp_path / "ana.lib"
+    gds = tmp_path / "ana.gds"
+    spice = tmp_path / "ana.spice"
+    lef.write_text("MACRO ana\nEND ana\n", encoding="utf-8")
+    lib.write_text("library (ana) {}\n", encoding="utf-8")
+    gds.write_bytes(b"GDS")
+    spice.write_text(".subckt ana A B\n.ends ana\n", encoding="utf-8")
+
+    state = {
+        "workflow_id": "wf",
+        "workflow_dir": str(tmp_path),
+        "analog_physical_mode": "generate_sky130_gds",
+        "analog_macro_module": "ana",
+        "analog_macro_lef": str(lef),
+        "analog_macro_lib": str(lib),
+        "analog_macro_gds": str(gds),
+        "analog_spice_path": str(spice),
+        "analog_signoff": {
+            "drc": {"status": "violations_found", "feedback_problem_count": 4},
+            "lvs": {"status": "clean"},
+        },
+    }
+
+    with pytest.raises(RuntimeError, match="analog_drc_not_clean"):
+        package_agent.run_agent(state)
+
+    package = state["analog_physical_collateral_package"]
+    assert package["status"] == "failed"
+    assert package["reason"] == "analog_drc_not_clean"
+    assert package["analog_drc_status"] == "violations_found"
+    assert "macro_gds" not in state.get("digital", {})
 
 
 def test_consistency_agent_detects_pin_mismatch(tmp_path, monkeypatch):

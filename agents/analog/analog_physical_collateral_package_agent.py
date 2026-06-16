@@ -10,12 +10,31 @@ AGENT_NAME = "Analog Physical Collateral Package Agent"
 
 
 def _exists(path: Any) -> str:
-    return os.path.abspath(path) if isinstance(path, str) and os.path.exists(path) else ""
+    return os.path.abspath(path) if isinstance(path, str) and os.path.isfile(path) else ""
 
 
 def _generate_mode(state: dict) -> bool:
     mode = str(state.get("analog_physical_mode") or "blackbox").strip().lower()
     return mode in {"generate_sky130_gds", "sky130_gds", "generate_gds"}
+
+
+def _analog_lvs_status(state: dict) -> str:
+    gds_summary = state.get("analog_gds_generation") if isinstance(state.get("analog_gds_generation"), dict) else {}
+    lvs = gds_summary.get("analog_lvs") if isinstance(gds_summary.get("analog_lvs"), dict) else {}
+    signoff = state.get("analog_signoff") if isinstance(state.get("analog_signoff"), dict) else {}
+    signoff_lvs = signoff.get("lvs") if isinstance(signoff.get("lvs"), dict) else {}
+    return str(lvs.get("status") or signoff_lvs.get("status") or "").strip().lower()
+
+
+def _analog_drc_status(state: dict) -> str:
+    signoff = state.get("analog_signoff") if isinstance(state.get("analog_signoff"), dict) else {}
+    signoff_drc = signoff.get("drc") if isinstance(signoff.get("drc"), dict) else {}
+    gds_summary = state.get("analog_gds_generation") if isinstance(state.get("analog_gds_generation"), dict) else {}
+    if signoff_drc.get("status"):
+        return str(signoff_drc.get("status") or "").strip().lower()
+    if gds_summary.get("status") == "generated":
+        return "clean"
+    return ""
 
 
 def _module_name(state: dict) -> str:
@@ -37,6 +56,8 @@ def run_agent(state: dict) -> dict:
     mode = str(state.get("analog_physical_mode") or "blackbox").strip().lower()
     module = _module_name(state)
     generate_mode = _generate_mode(state)
+    analog_lvs_status = _analog_lvs_status(state)
+    analog_drc_status = _analog_drc_status(state)
 
     package: Dict[str, Any] = {
         "workflow_id": workflow_id,
@@ -70,6 +91,14 @@ def run_agent(state: dict) -> dict:
             package["status"] = "failed"
             package["reason"] = "analog_physical_collateral_missing"
             package["missing"] = missing
+        elif analog_drc_status and analog_drc_status not in {"clean", "ok", "pass"}:
+            package["status"] = "failed"
+            package["reason"] = "analog_drc_not_clean"
+            package["analog_drc_status"] = analog_drc_status
+        elif analog_lvs_status and analog_lvs_status not in {"clean", "ok", "pass"}:
+            package["status"] = "failed"
+            package["reason"] = "analog_lvs_not_clean"
+            package["analog_lvs_status"] = analog_lvs_status
         else:
             package["status"] = "ready"
             package["reason"] = ""
@@ -87,7 +116,7 @@ def run_agent(state: dict) -> dict:
             digital["macro_lefs"] = list(dict.fromkeys((digital.get("macro_lefs") or []) + [lef]))
         if lib:
             digital["macro_libs"] = list(dict.fromkeys((digital.get("macro_libs") or []) + [lib]))
-        if gds:
+        if gds and package["status"] == "ready":
             digital["macro_gds"] = list(dict.fromkeys((digital.get("macro_gds") or []) + [gds]))
             digital.pop("macro_blackbox_mode", None)
         if spice:
@@ -108,5 +137,7 @@ def run_agent(state: dict) -> dict:
     )
     state["status"] = f"{AGENT_NAME}: {package['status']}"
     if generate_mode and package["status"] != "ready":
-        raise RuntimeError(f"Analog physical collateral package failed: missing {', '.join(package['missing'])}")
+        if package.get("missing"):
+            raise RuntimeError(f"Analog physical collateral package failed: missing {', '.join(package['missing'])}")
+        raise RuntimeError(f"Analog physical collateral package failed: {package.get('reason')}")
     return state

@@ -54,6 +54,9 @@ def test_signoff_closure_selects_floorplan_for_tap_drc_and_skips_later_timing(tm
     assert plan["selected_restart_stage"] == "Digital Floorplan Agent"
     assert plan["dominant_issue"] == "digital_drc"
     assert plan["max_iterations"] == 2
+    fill_overrides = plan["eco_profile"]["config_overrides"]["fill"]
+    assert fill_overrides["RUN_FILL_INSERTION"] is True
+    assert fill_overrides["CHIPLOOP_FILL_DRC_REPAIR"] == "tap_contact_fill_spacing_iter_1"
     assert any(item["type"] == "setup_timing" for item in plan["skipped_repairs"])
     chart = out["digital"]["signoff_closure"]["chart"]
     assert chart["baseline_only"] is True

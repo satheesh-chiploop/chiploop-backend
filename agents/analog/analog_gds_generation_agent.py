@@ -251,7 +251,8 @@ def _analog_signoff_summary(
 ) -> Dict[str, Any]:
     feedback_count = _magic_feedback_problem_count(log) if summary.get("backend") == "magic" else 0
     gds_status = str(summary.get("status") or "")
-    blocked = gds_status != "generated"
+    lvs_only_failure = summary.get("reason") == "analog_lvs_not_clean" and bool(gds_path or summary.get("gds"))
+    blocked = gds_status != "generated" and not lvs_only_failure
     drc_status = "blocked"
     if not blocked:
         drc_status = "violations_found" if feedback_count else "clean"
@@ -366,6 +367,101 @@ def _lvs_pin_name(token: str) -> str:
     value = str(token or "").strip().strip('"').strip("'").strip("{}")
     value = value.replace("\\[", "[").replace("\\]", "]")
     return value
+
+
+def _spice_logical_lines(text: str) -> list[str]:
+    logical: list[str] = []
+    current = ""
+    for raw in (text or "").splitlines():
+        line = raw.rstrip()
+        stripped = line.strip()
+        if not stripped or stripped.startswith("*"):
+            if current:
+                logical.append(current)
+                current = ""
+            continue
+        if stripped.startswith("+"):
+            current = (current + " " + stripped[1:].strip()).strip()
+            continue
+        if current:
+            logical.append(current)
+        current = stripped
+    if current:
+        logical.append(current)
+    return logical
+
+
+def _subckt_pins_from_text(text: str, module_name: str) -> list[str]:
+    wanted = str(module_name or "").strip().lower()
+    for line in _spice_logical_lines(text):
+        if not line.lower().startswith(".subckt "):
+            continue
+        try:
+            parts = shlex.split(line)
+        except Exception:
+            parts = line.split()
+        if len(parts) < 2 or parts[1].strip().lower() != wanted:
+            continue
+        pins: list[str] = []
+        seen: set[str] = set()
+        for raw in parts[2:]:
+            pin = _lvs_pin_name(raw)
+            if not pin or pin in seen:
+                continue
+            seen.add(pin)
+            pins.append(pin)
+        return pins
+    return []
+
+
+def _subckt_pins_from_file(path: str, module_name: str) -> list[str]:
+    if not os.path.exists(path):
+        return []
+    text = open(path, "r", encoding="utf-8", errors="ignore").read()
+    return _subckt_pins_from_text(text, module_name)
+
+
+def _mos_device_count_from_text(text: str) -> int:
+    count = 0
+    for line in _spice_logical_lines(text):
+        if re.match(r"^\s*M\S+\s+", line, flags=re.IGNORECASE) and re.search(
+            r"\bsky130_fd_pr__(?:n|p)fet_", line, flags=re.IGNORECASE
+        ):
+            count += 1
+    return count
+
+
+def _lvs_pin_delta(source_pins: list[str], extracted_pins: list[str]) -> Dict[str, Any]:
+    source_set = set(source_pins)
+    extracted_set = set(extracted_pins)
+    return {
+        "source_pins": source_pins,
+        "extracted_pins": extracted_pins,
+        "missing_extracted_pins": [pin for pin in source_pins if pin not in extracted_set],
+        "extra_extracted_pins": [pin for pin in extracted_pins if pin not in source_set],
+    }
+
+
+def _promote_clean_analog_gds(state: dict, final_gds: str) -> None:
+    state["analog_macro_gds"] = final_gds
+    digital = state.setdefault("digital", {})
+    if isinstance(digital, dict):
+        digital["macro_gds"] = list(dict.fromkeys((digital.get("macro_gds") or []) + [final_gds]))
+        digital.pop("macro_blackbox_mode", None)
+
+
+def _demote_unclean_analog_gds(state: dict, final_gds: str | None = None) -> None:
+    digital = state.get("digital") if isinstance(state.get("digital"), dict) else {}
+    if isinstance(digital, dict):
+        existing = digital.get("macro_gds") or []
+        if isinstance(existing, list):
+            normalized = os.path.abspath(final_gds) if isinstance(final_gds, str) else ""
+            digital["macro_gds"] = [
+                path for path in existing
+                if not isinstance(path, str) or (normalized and os.path.abspath(path) != normalized)
+            ]
+            if not digital["macro_gds"]:
+                digital.pop("macro_gds", None)
 
 
 def _prepare_lvs_source_spice(src: str, dst: str, module_name: str) -> None:
@@ -541,6 +637,15 @@ def _run_analog_lvs(
     status = _analog_lvs_status(lvs_log, cp_lvs.returncode if cp_lvs.returncode is not None else 1)
     counts = _analog_lvs_circuit_counts(lvs_log)
     failure_class = _analog_lvs_failure_class(lvs_log)
+    source_pins = _subckt_pins_from_file(lvs_source_spice, module_name)
+    extracted_pins = _subckt_pins_from_file(extracted_spice, module_name)
+    pin_delta = _lvs_pin_delta(source_pins, extracted_pins)
+    source_text = open(lvs_source_spice, "r", encoding="utf-8", errors="ignore").read()
+    extracted_text = open(extracted_spice, "r", encoding="utf-8", errors="ignore").read()
+    source_device_count = _mos_device_count_from_text(source_text)
+    extracted_device_count = _mos_device_count_from_text(extracted_text)
+    if pin_delta["missing_extracted_pins"] or pin_delta["extra_extracted_pins"]:
+        failure_class = failure_class or "pin_mismatch"
     return {
         "status": status,
         "tool": "netgen",
@@ -550,6 +655,9 @@ def _run_analog_lvs(
         "extract_log": extract_log_path,
         "log": lvs_log_path,
         "counts": counts or None,
+        "source_device_count": source_device_count,
+        "extracted_device_count": extracted_device_count,
+        "pins": pin_delta,
         "failure_class": failure_class or None,
     }
 
@@ -1030,10 +1138,6 @@ def run_agent(state: dict) -> dict:
             # Store a small text breadcrumb instead of trying to upload binary through text helper.
             pass
         state["analog_macro_gds"] = final_gds
-        digital = state.setdefault("digital", {})
-        if isinstance(digital, dict):
-            digital["macro_gds"] = list(dict.fromkeys((digital.get("macro_gds") or []) + [final_gds]))
-            digital.pop("macro_blackbox_mode", None)
     else:
         reason = invalid_reason or ("magic_gds_not_produced" if backend == "magic" else "align_gds_not_produced")
         summary.update({
@@ -1142,10 +1246,6 @@ def run_agent(state: dict) -> dict:
                             "image": image,
                         })
                         state["analog_macro_gds"] = final_gds
-                        digital = state.setdefault("digital", {})
-                        if isinstance(digital, dict):
-                            digital["macro_gds"] = list(dict.fromkeys((digital.get("macro_gds") or []) + [final_gds]))
-                            digital.pop("macro_blackbox_mode", None)
                         analog_lvs = _run_analog_lvs(
                             state,
                             stage_dir=stage_dir,
@@ -1155,17 +1255,17 @@ def run_agent(state: dict) -> dict:
                             source_spice=staged_spice,
                             docker_bin=docker_bin,
                         )
-                        lvs_repair_applied = True
                         analog_lvs = {
                             **analog_lvs,
                             "repair_attempted": True,
-                            "repair_applied": True,
+                            "repair_applied": analog_lvs.get("status") == "clean",
                             "pass1": {
                                 "status": pass1_analog_lvs.get("status"),
                                 "counts": pass1_analog_lvs.get("counts"),
                                 "failure_class": pass1_analog_lvs.get("failure_class"),
                             },
                         }
+                        lvs_repair_applied = analog_lvs.get("status") == "clean"
                     else:
                         lvs_repair_reason = invalid_reason or "lvs_repair_gds_not_produced"
                         summary.update({
@@ -1203,6 +1303,22 @@ def run_agent(state: dict) -> dict:
         summary["lvs_repair_applied"] = lvs_repair_applied
         summary["lvs_repair_reason"] = lvs_repair_reason or None
         summary["lvs_repair_layout_issues"] = lvs_repair_layout_issues or None
+
+    if backend == "magic" and isinstance(analog_lvs, dict) and summary.get("status") == "generated":
+        final_gds = summary.get("gds") if isinstance(summary.get("gds"), str) else ""
+        lvs_status = str(analog_lvs.get("status") or "").strip().lower()
+        if lvs_status == "clean":
+            if final_gds:
+                _promote_clean_analog_gds(state, final_gds)
+            summary["lvs_gate_status"] = "clean"
+        else:
+            _demote_unclean_analog_gds(state, final_gds or None)
+            summary.update({
+                "status": "failed",
+                "reason": "analog_lvs_not_clean",
+                "lvs_gate_status": "failed",
+                "lvs_gate_reason": lvs_status or "analog_lvs_not_run",
+            })
 
     save_text_artifact_and_record(workflow_id, AGENT_NAME, "analog/gds", "run_gds.sh", run_text)
     if backend == "magic" and tcl_path and os.path.exists(tcl_path):

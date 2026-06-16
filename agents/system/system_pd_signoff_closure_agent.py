@@ -529,8 +529,6 @@ def _eco_profile(
         fill_overrides = {"RUN_FILL_INSERTION": True}
         if re.search(r"\b(licon|difftap|li|m1)\b", names):
             fill_overrides["CHIPLOOP_FILL_DRC_REPAIR"] = f"tap_contact_fill_spacing_iter_{iteration}"
-            # Let DRC prove the route before filler/decap density is treated as signoff-critical.
-            fill_overrides["RUN_FILL_INSERTION"] = False
         overrides["fill"] = fill_overrides
         overrides["sta_postfill"] = dict(route_overrides)
         overrides["drc"] = dict(route_overrides)
