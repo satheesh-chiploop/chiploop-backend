@@ -132,7 +132,14 @@ def test_sky130_spice_agent_generates_from_macro_contract_when_spec_missing(tmp_
     monkeypatch.setattr(
         spice_agent,
         "complete_text",
-        lambda *args, **kwargs: ".subckt temp_sensor_adc_model sample_req sensor_temp_celsius adc_code adc_valid avdd avss\nM1 adc_valid sample_req avss avss sky130_fd_pr__nfet_01v8 W=1u L=0.15u\nM2 adc_valid sample_req avdd avdd sky130_fd_pr__pfet_01v8 W=2u L=0.15u\n.ends temp_sensor_adc_model\n",
+        lambda *args, **kwargs: (
+            ".subckt temp_sensor_adc_model sample_req sensor_temp_celsius adc_code adc_valid avdd avss\n"
+            "M1 adc_valid sample_req avss avss sky130_fd_pr__nfet_01v8 W=1u L=0.15u\n"
+            "M2 adc_valid sample_req avdd avdd sky130_fd_pr__pfet_01v8 W=2u L=0.15u\n"
+            "M3 adc_code sample_req avss avss sky130_fd_pr__nfet_01v8 W=1u L=0.15u\n"
+            "M4 adc_code sample_req avdd avdd sky130_fd_pr__pfet_01v8 W=2u L=0.15u\n"
+            ".ends temp_sensor_adc_model\n"
+        ),
     )
 
     state = {
@@ -343,6 +350,34 @@ def test_sky130_spice_layout_issues_catch_unbalanced_outputs_and_unused_supply_s
     assert "supply_pin_not_used_as_device_source:avss" in issues
 
 
+def test_sky130_spice_layout_issues_reject_supply_drains_and_omitted_outputs():
+    spice = (
+        ".subckt ana adc_code[0] adc_code[1] adc_valid sample_req VPWR VGND avdd avss\n"
+        "Mvalidp adc_valid sample_req VPWR VPWR sky130_fd_pr__pfet_01v8 W=1u L=0.15u\n"
+        "Mvalidn adc_valid sample_req VGND VGND sky130_fd_pr__nfet_01v8 W=1u L=0.15u\n"
+        "Mcodep adc_code[0] sample_req VPWR VPWR sky130_fd_pr__pfet_01v8 W=1u L=0.15u\n"
+        "Mcoden adc_code[0] sample_req VGND VGND sky130_fd_pr__nfet_01v8 W=1u L=0.15u\n"
+        "Mbadp avdd sample_req avdd avdd sky130_fd_pr__pfet_01v8 W=1u L=0.15u\n"
+        "Mbadn avss sample_req avss avss sky130_fd_pr__nfet_01v8 W=1u L=0.15u\n"
+        ".ends ana\n"
+    )
+    specs = {
+        "adc_code": {"name": "adc_code", "verilog_direction": "output", "width": 2},
+        "adc_valid": {"name": "adc_valid", "verilog_direction": "output"},
+        "sample_req": {"name": "sample_req", "verilog_direction": "input"},
+        "VPWR": {"name": "VPWR", "verilog_direction": "input", "role": "power"},
+        "VGND": {"name": "VGND", "verilog_direction": "input", "role": "ground"},
+        "avdd": {"name": "avdd", "verilog_direction": "input", "role": "power"},
+        "avss": {"name": "avss", "verilog_direction": "input", "role": "ground"},
+    }
+
+    issues = spice_agent._generated_spice_layout_issues(spice, specs)
+
+    assert "supply_pin_used_as_device_drain:avdd" in issues
+    assert "supply_pin_used_as_device_drain:avss" in issues
+    assert "output_pin_not_driven:adc_code[1]" in issues
+
+
 def test_sky130_spice_generated_scalar_bus_terminals_are_legalized():
     spice = (
         ".subckt ana adc_code[0] adc_code[1] sensor_temp_celsius[0] sensor_temp_celsius[1] avdd avss\n"
@@ -384,6 +419,8 @@ def test_sky130_prompt_lists_scalar_bus_names_as_forbidden(tmp_path, monkeypatch
             ".subckt ana data_bus[0] data_bus[1] enable vdd vss\n"
             "M1 data_bus[0] enable vdd vdd sky130_fd_pr__pfet_01v8 W=1u L=0.15u\n"
             "M2 data_bus[0] enable vss vss sky130_fd_pr__nfet_01v8 W=1u L=0.15u\n"
+            "M3 data_bus[1] enable vdd vdd sky130_fd_pr__pfet_01v8 W=1u L=0.15u\n"
+            "M4 data_bus[1] enable vss vss sky130_fd_pr__nfet_01v8 W=1u L=0.15u\n"
             ".ends ana\n"
         )
 
@@ -450,6 +487,7 @@ def test_sky130_prompt_includes_self_check_and_supply_alias_examples(tmp_path, m
     assert "Mandatory self-check and self-repair strategy" in prompt_text
     assert "supply_pin_not_used_as_device_source:X" in prompt_text
     assert "Good supply-alias example" in prompt_text
+    assert "Bad supply-drain example" in prompt_text
     assert "Bad input-bus example" in prompt_text
     assert "Never create output drivers for input bus pins" in prompt_text
     assert "Mgood9 out1 in1 avdd avdd" in prompt_text

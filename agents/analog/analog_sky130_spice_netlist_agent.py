@@ -224,6 +224,8 @@ def _generated_spice_layout_issues(text: str, port_specs: Dict[str, Dict[str, An
         if count == 0:
             issues.append(f"supply_pin_not_used_as_device_source:{supply}")
     for output, classes in sorted(output_drive_classes.items()):
+        if not classes:
+            issues.append(f"output_pin_not_driven:{output}")
         if "pfet" in classes and "nfet" not in classes:
             issues.append(f"output_pin_missing_nfet_pull:{output}")
         if "nfet" in classes and "pfet" not in classes:
@@ -360,6 +362,12 @@ Mbad6 out in VPWR VPWR sky130_fd_pr__pfet_01v8 W=1u L=0.15u
 Mbad7 out in VGND VGND sky130_fd_pr__nfet_01v8 W=1u L=0.15u
 .ends example
 
+Bad supply-drain example, because avdd and avss are supplies but are illegally used as driven MOS drains:
+.subckt example out in VPWR VGND avdd avss
+Mbad8 avdd in avdd avdd sky130_fd_pr__pfet_01v8 W=1u L=0.15u
+Mbad9 avss in avss avss sky130_fd_pr__nfet_01v8 W=1u L=0.15u
+.ends example
+
 Good supply-alias example, because every supply pin is used as a source terminal at least once:
 .subckt example out0 out1 in0 in1 VPWR VGND avdd avss
 Mgood7 out0 in0 VPWR VPWR sky130_fd_pr__pfet_01v8 W=1u L=0.15u
@@ -381,6 +389,7 @@ Before returning SPICE, perform this exact self-check and fix failures:
    - If an input appears as drain/source/bulk, rewrite that device so the input is the gate and an output/internal node is the drain.
    - Never create output drivers for input bus pins. If an illegal device drives an input bit, delete that device or move its drain to a real output_pins_may_be_driven pin.
 3. Outputs:
+   - Every pin listed in output_pins_may_be_driven must be driven by at least one legal MOS device.
    - For every output pin driven by a PFET, there must also be at least one NFET connected to that same output pin.
    - For every output pin driven by an NFET, there must also be at least one PFET connected to that same output pin.
 4. Supplies:
@@ -389,10 +398,11 @@ Before returning SPICE, perform this exact self-check and fix failures:
    - If a supply alias is unused, choose a real output device and use that alias as both source and bulk for one complementary driver.
 5. Issue-to-repair mapping:
    - supply_pin_not_used_as_device_source:X => add or rewrite at least one legal MOS with source X and bulk X.
+   - supply_pin_used_as_device_drain:X => never drive X; remove that device or move the drain to a real output pin and keep X only as source/bulk.
+   - output_pin_not_driven:Y => add complementary PFET/NFET drivers for output Y.
    - output_pin_missing_nfet_pull:Y => add an NFET for output Y with source/bulk on a ground supply.
    - output_pin_missing_pfet_pull:Y => add a PFET for output Y with source/bulk on a power supply.
    - input_pin_used_as_device_terminal:Z => move Z to gate only; do not use Z as drain/source/bulk.
-   - supply_pin_used_as_device_drain:X => move X to source/bulk only.
    - undeclared_external_scalar_bus:B => replace B with a declared bit pin such as B[0].
 6. Return only the repaired SPICE. Do not explain the self-check.
 """.strip()
@@ -442,8 +452,10 @@ Strict requirements:
 - Do not create internal helper devices that modify external input pins.
 - Do not generate output drivers for pins listed in input_pins_gate_only. Bus inputs must stay read-only external stimulus pins.
 - Supply pins listed in supply_pins_source_or_bulk_only may be MOS source/bulk terminals, not MOS drain terminals.
+- Do not create dummy self-driven supply devices such as drain=avdd source=avdd or drain=avss source=avss. Supply pins are not outputs.
 - Every supply pin listed in the .subckt must be used as a MOS source terminal on at least one real MOS device; using it only as a bulk terminal is not enough for Magic LVS port extraction.
 - Output pins listed in output_pins_may_be_driven may be MOS drain/source terminals.
+- Every output pin listed in output_pins_may_be_driven must be represented by at least one legal MOS driver.
 - Every driven output pin must have a complementary CMOS pull structure: at least one PFET path to a power source and at least one NFET path to a ground source. Do not emit PFET-only or NFET-only output drivers.
 - Names listed in forbidden_scalar_bus_terminals must not appear as MOS terminals or .subckt pins when the required port order uses bit pins. Use the declared bit pins exactly.
 - Include explicit W and L parameters on MOS devices.
@@ -509,7 +521,9 @@ Strict requirements:
 - If the original SPICE already violates input_pin_used_as_device_terminal, the repaired SPICE must not contain that same device topology again.
 - Output pins may be MOS drain/source terminals.
 - Supply pins listed in supply_pins_source_or_bulk_only may be MOS source/bulk terminals, not MOS drain terminals.
+- Do not create dummy self-driven supply devices such as drain=avdd source=avdd or drain=avss source=avss. Supply pins are not outputs.
 - Every supply pin listed in the .subckt must be used as a MOS source terminal on at least one real MOS device; using it only as a bulk terminal is not enough for Magic LVS port extraction.
+- Every output pin listed in output_pins_may_be_driven must be represented by at least one legal MOS driver.
 - Every driven output pin must have a complementary CMOS pull structure: at least one PFET path to a power source and at least one NFET path to a ground source. Do not emit PFET-only or NFET-only output drivers.
 - Names listed in forbidden_scalar_bus_terminals must not appear as MOS terminals or .subckt pins when the required port order uses bit pins. Replace scalar bus terminals with declared bit pins or remove those devices.
 - Use only sky130_fd_pr__nfet_01v8 and sky130_fd_pr__pfet_01v8 MOS devices with M lines.
