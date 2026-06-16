@@ -827,6 +827,56 @@ def test_analog_lvs_extract_log_detects_port_shorts():
     })
 
 
+def test_magic_import_isolates_scalar_input_controls_without_bus_hardcoding():
+    spice = (
+        ".subckt ana out[0] out[1] valid enable sense[0] sense[1] vdd vss\n"
+        "M0p out[0] sense[0] vdd vdd sky130_fd_pr__pfet_01v8 W=1u L=0.15u\n"
+        "M0n out[0] sense[0] vss vss sky130_fd_pr__nfet_01v8 W=1u L=0.15u\n"
+        "M1p out[1] sense[1] vdd vdd sky130_fd_pr__pfet_01v8 W=1u L=0.15u\n"
+        "M1n out[1] sense[1] vss vss sky130_fd_pr__nfet_01v8 W=1u L=0.15u\n"
+        "Mvp valid enable vdd vdd sky130_fd_pr__pfet_01v8 W=1u L=0.15u\n"
+        "Mvn valid enable vss vss sky130_fd_pr__nfet_01v8 W=1u L=0.15u\n"
+        ".ends ana\n"
+    )
+    specs = {
+        "out": {"name": "out", "verilog_direction": "output", "width": 2},
+        "valid": {"name": "valid", "verilog_direction": "output"},
+        "enable": {"name": "enable", "verilog_direction": "input"},
+        "sense": {"name": "sense", "verilog_direction": "input", "width": 2},
+        "vdd": {"name": "vdd", "verilog_direction": "input", "role": "power"},
+        "vss": {"name": "vss", "verilog_direction": "input", "role": "ground"},
+    }
+
+    import_text, lvs_source_text, isolated = gds_agent._magic_import_and_lvs_source_spice(spice, specs)
+
+    assert isolated == ["enable"]
+    assert ".subckt ana out[0] out[1] valid sense[0] sense[1] vdd vss" in import_text
+    assert ".subckt ana out[0] out[1] valid enable sense[0] sense[1] vdd vss" in lvs_source_text
+    assert " valid enable " not in import_text
+    assert "Mvp valid enable" not in lvs_source_text
+    assert "Mvn valid enable" not in lvs_source_text
+    assert " out[0] sense[0] " in import_text
+    assert " out[1] sense[1] " in import_text
+
+
+def test_magic_import_tcl_adds_isolated_scalar_input_ports(tmp_path):
+    path = gds_agent._write_magic_import_tcl(
+        str(tmp_path),
+        "ana.sp",
+        "ana",
+        "sky130A",
+        str(tmp_path / "pdk"),
+        True,
+        ["enable"],
+    )
+
+    text = (tmp_path / "magic_import_spice.tcl").read_text(encoding="utf-8")
+
+    assert path == str(tmp_path / "magic_import_spice.tcl")
+    assert "label {enable}" in text
+    assert "port make" in text
+
+
 def test_gds_generation_repairs_magic_feedback_once_and_reruns(tmp_path, monkeypatch):
     monkeypatch.setattr(gds_agent, "save_text_artifact_and_record", lambda *args, **kwargs: "local")
     monkeypatch.setattr(gds_agent, "complete_text", lambda *args, **kwargs: ".subckt ana vin vout vdd vss\nM1 vout vin vdd vdd sky130_fd_pr__pfet_01v8 W=1u L=0.15u\nM2 vout vin vss vss sky130_fd_pr__nfet_01v8 W=1u L=0.15u\n.ends ana\n")

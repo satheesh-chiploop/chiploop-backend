@@ -10,10 +10,15 @@ from model_gateway import complete_text
 from agents.analog.analog_sky130_spice_netlist_agent import (
     _canonicalize_generated_input_gate_fanout,
     _canonicalize_generated_supply_usage,
+    _base_bus_name,
+    _direction_for_pin,
     _generated_spice_layout_issues,
+    _is_supply_pin,
     _legalize_scalar_bus_mos_terminals,
     _normalize_subckt_bus_pins,
+    _pin_name,
     _port_specs,
+    _subckt_parts,
 )
 from tooling.runner import run_command
 from utils.artifact_utils import save_text_artifact_and_record
@@ -52,6 +57,75 @@ def _prepare_magic_spice(src: str, dst: str) -> None:
     text = _magic_spice_text(text)
     with open(dst, "w", encoding="utf-8") as fh:
         fh.write(text)
+
+
+def _magic_scalar_input_isolation_pins(text: str, port_specs: Dict[str, Any]) -> list[str]:
+    _subckt_name, pins = _subckt_parts(text)
+    candidates = [
+        pin for pin in pins
+        if _direction_for_pin(pin, port_specs).startswith("input")
+        and not _is_supply_pin(pin, port_specs)
+        and not re.match(r"^.+\[\d+\]$", _pin_name(pin))
+    ]
+    if not candidates:
+        return []
+    gate_counts: Dict[str, int] = {pin: 0 for pin in candidates}
+    output_gate_counts: Dict[str, int] = {pin: 0 for pin in candidates}
+    for line in _spice_logical_lines(text):
+        match = re.match(r"^\s*M\S*\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)", line, flags=re.IGNORECASE)
+        if not match:
+            continue
+        drain, gate, _source, _bulk, _model = [_pin_name(part) for part in match.groups()]
+        if gate not in gate_counts:
+            continue
+        gate_counts[gate] += 1
+        if _direction_for_pin(drain, port_specs).startswith("output") or _direction_for_pin(_base_bus_name(drain), port_specs).startswith("output"):
+            output_gate_counts[gate] += 1
+    return [
+        pin for pin in candidates
+        if gate_counts.get(pin, 0) > 0 and output_gate_counts.get(pin, 0) == gate_counts.get(pin, 0)
+    ]
+
+
+def _isolate_magic_scalar_input_pins(text: str, pins_to_isolate: list[str]) -> str:
+    if not pins_to_isolate:
+        return text
+    isolate = set(pins_to_isolate)
+    out: list[str] = []
+    for line in (text or "").splitlines():
+        match = re.match(r"^\s*M\S*\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+\S+", line, flags=re.IGNORECASE)
+        if match and _pin_name(match.group(2)) in isolate:
+            continue
+        out.append(line)
+    return "\n".join(out).rstrip() + ("\n" if text.endswith("\n") else "")
+
+
+def _remove_subckt_pins(text: str, pins_to_remove: list[str]) -> str:
+    if not pins_to_remove:
+        return text
+    remove = {_pin_name(pin) for pin in pins_to_remove}
+    name, pins = _subckt_parts(text)
+    if not name or not pins:
+        return text
+    kept = [pin for pin in pins if _pin_name(pin) not in remove]
+    if kept == pins:
+        return text
+    return re.sub(
+        r"^\s*\.subckt\s+\S+\s+.+$",
+        ".subckt " + name + " " + " ".join(kept),
+        text,
+        count=1,
+        flags=re.IGNORECASE | re.MULTILINE,
+    )
+
+
+def _magic_import_and_lvs_source_spice(text: str, port_specs: Dict[str, Any]) -> tuple[str, str, list[str]]:
+    isolated_pins = _magic_scalar_input_isolation_pins(text, port_specs)
+    if not isolated_pins:
+        return text, text, []
+    lvs_source_text = _isolate_magic_scalar_input_pins(text, isolated_pins)
+    import_text = _remove_subckt_pins(lvs_source_text, isolated_pins)
+    return import_text, lvs_source_text, isolated_pins
 
 
 def _magic_spice_text(text: str) -> str:
@@ -785,6 +859,7 @@ def _write_magic_import_tcl(
     pdk_variant: str,
     pdk_root_host: str,
     use_docker: bool,
+    isolated_pins: list[str] | None = None,
 ) -> str:
     tech_tcl = _magic_paths(pdk_variant)[1] if use_docker else _host_magic_paths(pdk_root_host, pdk_variant)[1]
     spice_path = spice_name
@@ -808,6 +883,18 @@ def _write_magic_import_tcl(
         "select top cell",
         "expand",
         "puts stdout \"CHIPLOOP_FLAT_BOX=[box values]\"",
+    ]
+    for idx, pin in enumerate(isolated_pins or []):
+        safe_pin = str(pin).replace('"', '').replace("'", "")
+        x0 = idx * 20
+        x1 = x0 + 4
+        lines.extend([
+            f"box {x0} 20 {x1} 24",
+            "paint li",
+            f"label {{{safe_pin}}} FreeSans 200 0 0 0 center li",
+            "port make",
+        ])
+    lines.extend([
         "gds flatten true",
         "catch {gds flatglob *}",
         f"catch {{feedback save {feedback_path}}}",
@@ -816,7 +903,7 @@ def _write_magic_import_tcl(
         f"catch {{feedback save {feedback_path}}}",
         "quit -noprompt",
         "",
-    ]
+    ])
     path = os.path.join(stage_dir, "magic_import_spice.tcl")
     with open(path, "w", encoding="utf-8") as fh:
         fh.write("\n".join(lines))
@@ -886,6 +973,7 @@ def _run_magic_gds(
     pdk_variant: str,
     pdk_root_host: str,
     docker_bin: str | None,
+    isolated_pins: list[str] | None = None,
 ) -> tuple[Any, str, str, str]:
     host_tech, host_tcl = _host_magic_paths(pdk_root_host, pdk_variant)
     if not os.path.exists(host_tech):
@@ -902,6 +990,7 @@ def _run_magic_gds(
         pdk_variant,
         pdk_root_host,
         use_docker,
+        isolated_pins,
     )
     if magic_bin:
         host_tcl_text = open(tcl_path, "r", encoding="utf-8").read()
@@ -982,8 +1071,22 @@ def run_agent(state: dict) -> dict:
     spice_stem, spice_ext = os.path.splitext(spice_base)
     align_spice_name = spice_base if spice_ext.lower() in {".sp", ".cdl"} else f"{spice_stem or module_name}.sp"
     staged_spice = os.path.join(stage_dir, align_spice_name)
+    magic_lvs_source_spice = staged_spice
+    magic_isolated_pins: list[str] = []
     if backend == "magic":
         _prepare_magic_spice(spice_path, staged_spice)
+        with open(staged_spice, "r", encoding="utf-8", errors="ignore") as fh:
+            magic_prepared_text = fh.read()
+        magic_import_text, magic_lvs_source_text, magic_isolated_pins = _magic_import_and_lvs_source_spice(
+            magic_prepared_text,
+            _port_specs(state),
+        )
+        if magic_isolated_pins:
+            with open(staged_spice, "w", encoding="utf-8") as fh:
+                fh.write(magic_import_text)
+            magic_lvs_source_spice = os.path.join(stage_dir, "magic_lvs_source_input.sp")
+            with open(magic_lvs_source_spice, "w", encoding="utf-8") as fh:
+                fh.write(magic_lvs_source_text)
     elif os.path.abspath(spice_path) != os.path.abspath(staged_spice):
         shutil.copy2(spice_path, staged_spice)
     run_sh = os.path.join(stage_dir, "run_gds.sh")
@@ -1052,7 +1155,7 @@ def run_agent(state: dict) -> dict:
     if backend == "magic":
         try:
             cp, tcl_path, tool_mode, image = _run_magic_gds(
-                state, stage_dir, staged_spice, module_name, pdk_variant, pdk_root_host, docker_bin
+                state, stage_dir, staged_spice, module_name, pdk_variant, pdk_root_host, docker_bin, magic_isolated_pins
             )
         except RuntimeError as exc:
             summary.update({"status": "failed", "reason": "magic_setup_failed", "error": str(exc)})
@@ -1160,11 +1263,22 @@ def run_agent(state: dict) -> dict:
                 repair_reason = "repair_spice_not_layout_safe"
                 forced_failure_reason = repair_reason
             else:
+                repair_import_text = _magic_spice_text(repaired_spice)
+                repair_import_text, repair_lvs_source_text, magic_isolated_pins = _magic_import_and_lvs_source_spice(
+                    repair_import_text,
+                    _port_specs(state),
+                )
                 with open(staged_spice, "w", encoding="utf-8") as fh:
-                    fh.write(_magic_spice_text(repaired_spice))
+                    fh.write(repair_import_text)
+                if magic_isolated_pins:
+                    magic_lvs_source_spice = os.path.join(stage_dir, "magic_lvs_source_input.sp")
+                    with open(magic_lvs_source_spice, "w", encoding="utf-8") as fh:
+                        fh.write(repair_lvs_source_text)
+                else:
+                    magic_lvs_source_spice = staged_spice
                 _preserve_and_clean_magic_layout_outputs(stage_dir, module_name)
                 cp, tcl_path, tool_mode, image = _run_magic_gds(
-                    state, stage_dir, staged_spice, module_name, pdk_variant, pdk_root_host, docker_bin
+                    state, stage_dir, staged_spice, module_name, pdk_variant, pdk_root_host, docker_bin, magic_isolated_pins
                 )
                 log = (cp.stdout or "") + (cp.stderr or "")
                 with open(log_path, "w", encoding="utf-8", errors="ignore") as fh:
@@ -1187,6 +1301,7 @@ def run_agent(state: dict) -> dict:
             "log": log_path,
             "tool_mode": tool_mode,
             "image": image,
+            "magic_isolated_input_pins": magic_isolated_pins or None,
             "repair_attempted": repair_attempted,
             "repair_applied": repair_applied,
             "pass1_magic_feedback_problem_count": pass1_feedback_problem_count if repair_attempted else None,
@@ -1221,7 +1336,7 @@ def run_agent(state: dict) -> dict:
             module_name=module_name,
             pdk_variant=pdk_variant,
             pdk_root_host=pdk_root_host,
-            source_spice=staged_spice,
+            source_spice=magic_lvs_source_spice,
             docker_bin=docker_bin,
         )
         pass1_analog_lvs = dict(analog_lvs) if isinstance(analog_lvs, dict) else {}
@@ -1243,7 +1358,7 @@ def run_agent(state: dict) -> dict:
             if os.path.exists(staged_spice):
                 shutil.copy2(staged_spice, pass1_spice_path)
 
-            with open(staged_spice, "r", encoding="utf-8", errors="ignore") as fh:
+            with open(magic_lvs_source_spice, "r", encoding="utf-8", errors="ignore") as fh:
                 original_spice = fh.read()
             lvs_log_text = ""
             lvs_log_file = analog_lvs.get("log") if isinstance(analog_lvs, dict) else None
@@ -1297,11 +1412,22 @@ def run_agent(state: dict) -> dict:
                         "repair_layout_issues": lvs_repair_layout_issues,
                     }
                 elif not lvs_repair_reason:
+                    repair_import_text = _magic_spice_text(repaired_spice)
+                    repair_import_text, repair_lvs_source_text, magic_isolated_pins = _magic_import_and_lvs_source_spice(
+                        repair_import_text,
+                        port_specs,
+                    )
                     with open(staged_spice, "w", encoding="utf-8") as fh:
-                        fh.write(_magic_spice_text(repaired_spice))
+                        fh.write(repair_import_text)
+                    if magic_isolated_pins:
+                        magic_lvs_source_spice = os.path.join(stage_dir, "magic_lvs_source_input.sp")
+                        with open(magic_lvs_source_spice, "w", encoding="utf-8") as fh:
+                            fh.write(repair_lvs_source_text)
+                    else:
+                        magic_lvs_source_spice = staged_spice
                     _preserve_and_clean_magic_layout_outputs(stage_dir, module_name)
                     cp, tcl_path, tool_mode, image = _run_magic_gds(
-                        state, stage_dir, staged_spice, module_name, pdk_variant, pdk_root_host, docker_bin
+                        state, stage_dir, staged_spice, module_name, pdk_variant, pdk_root_host, docker_bin, magic_isolated_pins
                     )
                     log = (cp.stdout or "") + (cp.stderr or "")
                     with open(log_path, "w", encoding="utf-8", errors="ignore") as fh:
@@ -1319,6 +1445,7 @@ def run_agent(state: dict) -> dict:
                             "log": log_path,
                             "tool_mode": tool_mode,
                             "image": image,
+                            "magic_isolated_input_pins": magic_isolated_pins or None,
                         })
                         state["analog_macro_gds"] = final_gds
                         analog_lvs = _run_analog_lvs(
@@ -1327,7 +1454,7 @@ def run_agent(state: dict) -> dict:
                             module_name=module_name,
                             pdk_variant=pdk_variant,
                             pdk_root_host=pdk_root_host,
-                            source_spice=staged_spice,
+                            source_spice=magic_lvs_source_spice,
                             docker_bin=docker_bin,
                         )
                         analog_lvs = {
