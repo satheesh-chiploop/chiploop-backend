@@ -798,10 +798,12 @@ def test_gds_generation_fails_and_does_not_promote_macro_gds_when_lvs_still_mism
     with pytest.raises(RuntimeError, match="analog_lvs_not_clean"):
         gds_agent.run_agent(state)
 
-    assert calls == {"gds": 2, "extract": 2, "lvs": 2}
+    assert calls == {"gds": 1, "extract": 1, "lvs": 1}
     assert state["analog_gds_generation"]["status"] == "failed"
     assert state["analog_gds_generation"]["reason"] == "analog_lvs_not_clean"
     assert state["analog_gds_generation"]["analog_lvs"]["status"] == "mismatch"
+    assert state["analog_gds_generation"]["lvs_repair_reason"] == "lvs_repair_no_material_change"
+    assert state["analog_gds_generation"]["analog_lvs"]["repair_reason"] == "lvs_repair_no_material_change"
     assert state["analog_gds_generation"]["analog_lvs"]["pins"]["missing_extracted_pins"] == ["vss"]
     assert "macro_gds" not in state.get("digital", {})
     assert state["analog_signoff"]["drc"]["status"] == "clean"

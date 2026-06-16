@@ -90,6 +90,18 @@ def _strip_code_fences(text: str) -> str:
     return text
 
 
+def _material_spice_signature(text: str) -> str:
+    logical = []
+    for line in _spice_logical_lines(_magic_spice_text(text or "")):
+        lowered = line.lower()
+        if lowered.startswith(".lib ") or lowered.startswith(".include "):
+            continue
+        normalized = re.sub(r"\s+", " ", line.strip())
+        normalized = re.sub(r"\b([WLwl])=([0-9]+)\.0+\b", r"\1=\2", normalized)
+        logical.append(normalized)
+    return "\n".join(logical).strip()
+
+
 def _has_real_sky130_mos(text: str) -> bool:
     return bool(re.search(
         r"^\s*M\S*\s+\S+\s+\S+\s+\S+\s+\S+\s+sky130_fd_pr__(?:nfet|pfet)_\S+(?=.*\bW\s*=)(?=.*\bL\s*=)",
@@ -177,6 +189,8 @@ Strict requirements:
 - Preserve the same external macro pin names and pin order unless the source had duplicate scalar/bus aliases.
 - For buses, use one convention consistently: scalarized bit pins like data[0] data[1], not both data and data[0].
 - Every external .subckt pin must be represented by Magic as a real port/label after import.
+- Do not leave any external .subckt pin unused. Unused pins often disappear from Magic extraction and cause LVS pin mismatch.
+- If both generic and analog supply aliases exist, such as VPWR/avdd or VGND/avss, use both aliases on real MOS source/bulk terminals across the generated topology instead of leaving one alias floating.
 - Do not use input pins as MOS drain/source/bulk terminals; input pins may drive MOS gates only.
 - Supply pins may be MOS source/bulk terminals, not MOS drain terminals.
 - Output pins may be MOS drain/source terminals.
@@ -185,6 +199,22 @@ Strict requirements:
 - Every MOS device must have W >= 0.42u and L >= 0.15u.
 - Keep the circuit compact but do not collapse a many-device source into a placeholder.
 - End with .ends {module_name}.
+
+Bad example:
+.subckt macro out in VPWR VGND avdd avss
+M1 out in VPWR VPWR sky130_fd_pr__pfet_01v8 W=0.84u L=0.15u
+M2 out in VGND VGND sky130_fd_pr__nfet_01v8 W=0.84u L=0.15u
+.ends macro
+This is bad because avdd and avss are external pins but are unused, so Magic may not extract matching ports.
+
+Good example:
+.subckt macro out0 out1 in0 in1 VPWR VGND avdd avss
+M1 out0 in0 VPWR VPWR sky130_fd_pr__pfet_01v8 W=0.84u L=0.15u
+M2 out0 in0 VGND VGND sky130_fd_pr__nfet_01v8 W=0.84u L=0.15u
+M3 out1 in1 avdd avdd sky130_fd_pr__pfet_01v8 W=0.84u L=0.15u
+M4 out1 in1 avss avss sky130_fd_pr__nfet_01v8 W=0.84u L=0.15u
+.ends macro
+This is good because all pins are used in legal MOS terminal roles.
 """
     repaired = _strip_code_fences(complete_text(
         prompt,
@@ -1211,7 +1241,16 @@ def run_agent(state: dict) -> dict:
                 repaired_spice = _normalize_subckt_bus_pins(repaired_spice)
                 with open(os.path.join(stage_dir, "magic_input_lvs_repair.sp"), "w", encoding="utf-8") as fh:
                     fh.write(repaired_spice)
-                lvs_repair_layout_issues = _generated_spice_layout_issues(repaired_spice, _port_specs(state))
+                if _material_spice_signature(repaired_spice) == _material_spice_signature(original_spice):
+                    lvs_repair_reason = "lvs_repair_no_material_change"
+                    analog_lvs = {
+                        **analog_lvs,
+                        "repair_attempted": True,
+                        "repair_applied": False,
+                        "repair_reason": lvs_repair_reason,
+                    }
+                else:
+                    lvs_repair_layout_issues = _generated_spice_layout_issues(repaired_spice, _port_specs(state))
                 if lvs_repair_layout_issues:
                     lvs_repair_reason = "lvs_repair_spice_not_layout_safe"
                     analog_lvs = {
@@ -1221,7 +1260,7 @@ def run_agent(state: dict) -> dict:
                         "repair_reason": lvs_repair_reason,
                         "repair_layout_issues": lvs_repair_layout_issues,
                     }
-                else:
+                elif not lvs_repair_reason:
                     with open(staged_spice, "w", encoding="utf-8") as fh:
                         fh.write(_magic_spice_text(repaired_spice))
                     _preserve_and_clean_magic_layout_outputs(stage_dir, module_name)
