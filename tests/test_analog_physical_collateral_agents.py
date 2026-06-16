@@ -886,6 +886,33 @@ def test_magic_import_isolates_secondary_supply_aliases_generically():
     assert "M0n out chiploop_iso_in_out VGND VGND" in lvs_source_text
 
 
+def test_magic_import_canonicalizes_duplicate_output_driver_fragments():
+    spice = (
+        ".subckt ana out in0 in1 in2 vdd vss\n"
+        "M0p out in0 vdd vdd sky130_fd_pr__pfet_01v8 W=1u L=0.15u\n"
+        "M0n out in0 vss vss sky130_fd_pr__nfet_01v8 W=1u L=0.15u\n"
+        "M1p out in1 vdd vdd sky130_fd_pr__pfet_01v8 W=1u L=0.15u\n"
+        "M2n out in2 vss vss sky130_fd_pr__nfet_01v8 W=1u L=0.15u\n"
+        ".ends ana\n"
+    )
+    specs = {
+        "out": {"name": "out", "verilog_direction": "output"},
+        "in0": {"name": "in0", "verilog_direction": "input"},
+        "in1": {"name": "in1", "verilog_direction": "input"},
+        "in2": {"name": "in2", "verilog_direction": "input"},
+        "vdd": {"name": "vdd", "verilog_direction": "input", "role": "power"},
+        "vss": {"name": "vss", "verilog_direction": "input", "role": "ground"},
+    }
+
+    _import_text, lvs_source_text, isolated = gds_agent._magic_import_and_lvs_source_spice(spice, specs)
+
+    assert isolated == ["in0"]
+    assert "M0p out chiploop_iso_in0_out vdd vdd" in lvs_source_text
+    assert "M0n out chiploop_iso_in0_out vss vss" in lvs_source_text
+    assert "M1p" not in lvs_source_text
+    assert "M2n" not in lvs_source_text
+
+
 def test_magic_import_tcl_adds_isolated_scalar_input_ports(tmp_path):
     path = gds_agent._write_magic_import_tcl(
         str(tmp_path),

@@ -156,6 +156,55 @@ def _canonicalize_magic_supply_aliases(text: str, port_specs: Dict[str, Any]) ->
     return "\n".join(lines).rstrip() + ("\n" if text.endswith("\n") else ""), isolated
 
 
+def _canonicalize_magic_output_driver_pairs(text: str, port_specs: Dict[str, Any]) -> str:
+    _subckt_name, pins = _subckt_parts(text)
+    outputs = {
+        pin for pin in pins
+        if _direction_for_pin(pin, port_specs).startswith("output")
+        or _direction_for_pin(_base_bus_name(pin), port_specs).startswith("output")
+    }
+    if not outputs:
+        return text
+
+    mos_line_re = re.compile(r"^\s*M\S*\s+(\S+)\s+(\S+)\s+\S+\s+\S+\s+(\S+)", re.IGNORECASE)
+    lines = (text or "").splitlines()
+    by_output: Dict[str, list[tuple[int, str, str]]] = {}
+    for idx, line in enumerate(lines):
+        match = mos_line_re.match(line)
+        if not match:
+            continue
+        drain, gate, model = [_pin_name(part) for part in match.groups()]
+        if drain not in outputs:
+            continue
+        kind = "pfet" if "pfet" in model.lower() else "nfet" if "nfet" in model.lower() else ""
+        if not kind:
+            continue
+        by_output.setdefault(drain, []).append((idx, kind, gate))
+
+    remove_indexes: set[int] = set()
+    for _output, drivers in by_output.items():
+        pfets = [driver for driver in drivers if driver[1] == "pfet"]
+        nfets = [driver for driver in drivers if driver[1] == "nfet"]
+        if not pfets or not nfets:
+            continue
+        shared_gate = next((pfet[2] for pfet in pfets if any(nfet[2] == pfet[2] for nfet in nfets)), "")
+        keep: set[int] = set()
+        if shared_gate:
+            keep.add(next(pfet[0] for pfet in pfets if pfet[2] == shared_gate))
+            keep.add(next(nfet[0] for nfet in nfets if nfet[2] == shared_gate))
+        else:
+            keep.add(pfets[0][0])
+            keep.add(nfets[0][0])
+        for idx, _kind, _gate in drivers:
+            if idx not in keep:
+                remove_indexes.add(idx)
+
+    if not remove_indexes:
+        return text
+    kept_lines = [line for idx, line in enumerate(lines) if idx not in remove_indexes]
+    return "\n".join(kept_lines).rstrip() + ("\n" if text.endswith("\n") else "")
+
+
 def _remove_subckt_pins(text: str, pins_to_remove: list[str]) -> str:
     if not pins_to_remove:
         return text
@@ -177,6 +226,7 @@ def _remove_subckt_pins(text: str, pins_to_remove: list[str]) -> str:
 
 def _magic_import_and_lvs_source_spice(text: str, port_specs: Dict[str, Any]) -> tuple[str, str, list[str]]:
     text, isolated_supply_pins = _canonicalize_magic_supply_aliases(text, port_specs)
+    text = _canonicalize_magic_output_driver_pairs(text, port_specs)
     isolated_pins = _magic_scalar_input_isolation_pins(text, port_specs)
     all_isolated_pins = list(dict.fromkeys([*isolated_pins, *isolated_supply_pins]))
     if not all_isolated_pins:
