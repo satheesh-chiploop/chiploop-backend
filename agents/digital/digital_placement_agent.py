@@ -82,9 +82,14 @@ def _escalate_severe_drc_overrides(plan: dict, stage_overrides: dict) -> dict:
         return stage_overrides
     out = dict(stage_overrides)
     util = _first_number(out.get("FP_CORE_UTIL"), out.get("CORE_UTILIZATION"))
+    density = _first_number(out.get("PL_TARGET_DENSITY"), out.get("PLACE_DENSITY"))
+    if util is not None and float(util) <= 10.5 and density is not None and float(density) <= 0.13:
+        for key in ("FP_PDN_HORIZONTAL_HALO", "FP_PDN_VERTICAL_HALO", "PL_MACRO_HALO"):
+            out[key] = max(float(_first_number(out.get(key), 0) or 0), 12.0)
+        out["CHIPLOOP_SEVERE_DRC_ECO_APPLIED"] = True
+        return out
     if util is not None:
         out["FP_CORE_UTIL"] = max(5, round(float(util) * 0.72, 3))
-    density = _first_number(out.get("PL_TARGET_DENSITY"), out.get("PLACE_DENSITY"))
     if density is not None:
         out["PL_TARGET_DENSITY"] = max(0.05, round(float(density) * 0.72, 4))
         out["PL_TARGET_DENSITY_PCT"] = round(out["PL_TARGET_DENSITY"] * 100.0, 3)
@@ -225,7 +230,19 @@ def _die_area_xy(cfg: dict) -> tuple[float, float]:
     nums = [float(x) for x in re.findall(r"-?\d+(?:\.\d+)?", raw)]
     if len(nums) >= 4:
         llx, lly, urx, ury = nums[:4]
-        return (llx + max((urx - llx) * 0.15, 10.0), lly + max((ury - lly) * 0.15, 10.0))
+        width = max(urx - llx, 1.0)
+        height = max(ury - lly, 1.0)
+
+        def pick_coord(lo: float, hi: float, span: float) -> float:
+            margin = max(span * 0.15, 10.0)
+            coord = lo + margin
+            upper = hi - margin
+            lower = max(10.0, lo + 1.0)
+            if upper <= lower:
+                return (lo + hi) / 2.0
+            return min(max(coord, lower), upper)
+
+        return (pick_coord(llx, urx, width), pick_coord(lly, ury, height))
     return 20.0, 20.0
 
 

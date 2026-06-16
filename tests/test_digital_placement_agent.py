@@ -35,6 +35,49 @@ def test_macro_placement_cfg_generated_from_netlist_and_lef(tmp_path):
     assert "u_analog 18.000 18.000 N" in open(path, encoding="utf-8").read()
 
 
+def test_macro_placement_cfg_clamps_negative_expanded_die_area(tmp_path):
+    netlist = tmp_path / "top.v"
+    lef = tmp_path / "analog.lef"
+    work_stage = tmp_path / "run_work" / "place"
+
+    netlist.write_text("module top; analog u_analog (); endmodule\n", encoding="utf-8")
+    lef.write_text("MACRO analog\nEND analog\n", encoding="utf-8")
+
+    cfg = {"DIE_AREA": "-41.4 -41.4 161.4 161.4"}
+    path = agent._write_macro_placement_cfg_if_needed(
+        cfg=cfg,
+        work_stage_dir=str(work_stage),
+        stage_netlists=[str(netlist)],
+        macro_lef_paths=[str(lef)],
+    )
+
+    assert path is not None
+    assert "u_analog 10.000 10.000 N" in open(path, encoding="utf-8").read()
+
+
+def test_severe_drc_escalation_does_not_rescale_already_strong_plan():
+    plan = {
+        "issue_summary": [
+            {
+                "type": "digital_drc",
+                "evidence": {"top_categories": {"'licon.2'": 369, "'difftap.3'": 105}},
+            }
+        ]
+    }
+    overrides = {
+        "FP_CORE_UTIL": 7.465,
+        "PL_TARGET_DENSITY": 0.0933,
+        "DIE_AREA": "-71.82 -71.82 191.82 191.82",
+    }
+
+    out = agent._escalate_severe_drc_overrides(plan, overrides)
+
+    assert out["FP_CORE_UTIL"] == 7.465
+    assert out["PL_TARGET_DENSITY"] == 0.0933
+    assert out["DIE_AREA"] == "-71.82 -71.82 191.82 191.82"
+    assert out["CHIPLOOP_SEVERE_DRC_ECO_APPLIED"] is True
+
+
 def test_latest_run_dir_finds_stage_local_openlane_runs(tmp_path):
     run_work = tmp_path / "run_work"
     old_run = run_work / "runs" / "old"
