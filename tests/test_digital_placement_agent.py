@@ -47,6 +47,27 @@ def test_latest_run_dir_finds_stage_local_openlane_runs(tmp_path):
     assert agent._latest_run_dir(str(run_work)) == str(place_run)
 
 
+def test_cleanup_stage_run_removes_only_matching_run_tag(tmp_path):
+    work_stage = tmp_path / "run_work" / "place"
+    target = work_stage / "runs" / "System_PD_wf"
+    other = work_stage / "runs" / "other"
+    target.mkdir(parents=True)
+    other.mkdir(parents=True)
+    (target / "large.tmp").write_text("old", encoding="utf-8")
+    (other / "keep.tmp").write_text("keep", encoding="utf-8")
+
+    agent._cleanup_stage_run(str(work_stage), "System_PD_wf")
+
+    assert not target.exists()
+    assert other.exists()
+
+
+def test_placement_failure_reason_detects_no_space():
+    assert agent._failure_reason("OSError: [Errno 28] No space left on device", 1, None) == "no_space_left_on_device"
+    assert agent._failure_reason("other failure", 1, None) == "openlane_failed"
+    assert agent._failure_reason("", 0, None) == "def_missing"
+
+
 def test_stage_macro_inputs_dedupes_duplicate_collateral(tmp_path):
     lef = tmp_path / "ana.lef"
     lib = tmp_path / "ana.lib"

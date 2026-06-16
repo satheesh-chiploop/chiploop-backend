@@ -82,6 +82,19 @@ def _copy_primary_def(latest: str | None, stage_dir: str) -> str | None:
     shutil.copy2(candidates[-1], dst)
     return dst
 
+
+def _cleanup_stage_run(work_stage_dir: str, run_tag: str) -> None:
+    runs_dir = os.path.join(work_stage_dir, "runs")
+    if not os.path.isdir(runs_dir):
+        return
+    target = os.path.abspath(os.path.join(runs_dir, run_tag))
+    runs_root = os.path.abspath(runs_dir)
+    if not target.startswith(runs_root + os.sep):
+        return
+    if os.path.isdir(target):
+        shutil.rmtree(target, ignore_errors=True)
+
+
 def _infer_top_from_netlist(netlist_path: str) -> str | None:
     try:
         txt = open(netlist_path, "r", encoding="utf-8", errors="ignore").read()
@@ -431,6 +444,7 @@ def run_agent(state: dict) -> dict:
 
     work_stage_dir = os.path.join(run_work_dir, "floorplan")
     _ensure_dir(work_stage_dir)
+    _cleanup_stage_run(work_stage_dir, run_tag)
 
 
 

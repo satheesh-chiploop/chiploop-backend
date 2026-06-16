@@ -155,6 +155,30 @@ def _copy_primary_def(latest: str | None, stage_dir: str) -> str | None:
     shutil.copy2(candidates[-1], dst)
     return dst
 
+
+def _failure_reason(log_text: str, rc: int, def_path: str | None) -> str | None:
+    lower = (log_text or "").lower()
+    if "no space left on device" in lower or "errno 28" in lower:
+        return "no_space_left_on_device"
+    if rc != 0:
+        return "openlane_failed"
+    if not def_path:
+        return "def_missing"
+    return None
+
+
+def _cleanup_stage_run(work_stage_dir: str, run_tag: str) -> None:
+    runs_dir = os.path.join(work_stage_dir, "runs")
+    if not os.path.isdir(runs_dir):
+        return
+    target = os.path.abspath(os.path.join(runs_dir, run_tag))
+    runs_root = os.path.abspath(runs_dir)
+    if not target.startswith(runs_root + os.sep):
+        return
+    if os.path.isdir(target):
+        shutil.rmtree(target, ignore_errors=True)
+
+
 def _infer_top_from_netlist(netlist_path: str) -> str | None:
     try:
         txt = open(netlist_path, "r", encoding="utf-8", errors="ignore").read()
@@ -484,6 +508,7 @@ def run_agent(state: dict) -> dict:
 
     work_stage_dir = os.path.join(run_work_dir, "place")
     _ensure_dir(work_stage_dir)
+    _cleanup_stage_run(work_stage_dir, run_tag)
 
 
     staged_lefs, staged_libs, staged_gds = _stage_macro_inputs(state, workflow_dir, work_stage_dir)
@@ -591,12 +616,14 @@ docker run --rm \
     latest = _latest_run_dir(run_work_dir)
     metrics_path = _copy_metrics(latest, stage_dir)
     def_path = _copy_primary_def(latest, stage_dir)
+    failure_reason = _failure_reason(out, rc, def_path)
 
     summary = {
         "workflow_id": workflow_id,
         "agent": AGENT_NAME,
         "status": "ok" if rc == 0 else "failed",
         "return_code": rc,
+        "reason": failure_reason,
         "outputs": {
             "sdc": f"digital/place/constraints/{sdc_basename}",
             "metrics_json": "digital/place/metrics.json" if metrics_path else None,
@@ -651,7 +678,8 @@ docker run --rm \
     if summary["status"] != "ok" or not def_path:
         raise RuntimeError(
             f"{AGENT_NAME}: placement failed before post-place STA "
-            f"(status={summary['status']}, rc={rc}, def={'present' if def_path else 'missing'})"
+            f"(status={summary['status']}, rc={rc}, def={'present' if def_path else 'missing'}, "
+            f"reason={failure_reason or 'unknown'})"
         )
 
     
