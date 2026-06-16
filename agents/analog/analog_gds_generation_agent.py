@@ -166,6 +166,7 @@ def _repair_lvs_mismatch_spice(
     original_spice: str,
     lvs_summary: Dict[str, Any],
     lvs_log: str = "",
+    extract_log: str = "",
     extracted_spice: str = "",
 ) -> str:
     prompt = f"""
@@ -179,6 +180,9 @@ LVS summary:
 
 Netgen LVS log tail:
 {_tail(lvs_log, 6000)}
+
+Magic extraction log tail:
+{_tail(extract_log, 4000)}
 
 Extracted layout SPICE tail, if available:
 {_tail(extracted_spice, 4000)}
@@ -202,6 +206,9 @@ Strict requirements:
 - Every MOS device must have W >= 0.42u and L >= 0.15u.
 - Keep the circuit compact but do not collapse a many-device source into a placeholder.
 - End with .ends {module_name}.
+- If lvs_summary includes port_shorts, repair those first. No top-level signal input may be electrically shorted to a supply pin after Magic extraction.
+- For each reported port_short A/B, remove or rewrite the device pattern that places A and B on adjacent gate/source/bulk labels. Use a different legal complementary driver or a simpler topology that keeps the two ports physically and electrically separate.
+- For Magic Sky130 import, prefer source and bulk on the same supply net for each MOS device. Avoid using one supply alias as source and another alias as bulk on the same device, because Magic may not preserve that as intended.
 
 Bad example:
 .subckt macro out in VPWR VGND avdd avss
@@ -384,11 +391,22 @@ def _analog_lvs_failure_class(text: str) -> str:
     return ""
 
 
+def _magic_extract_port_shorts(text: str) -> list[dict[str, str]]:
+    shorts: list[dict[str, str]] = []
+    for match in re.finditer(
+        r'Ports\s+"([^"]+)"\s+and\s+"([^"]+)"\s+are\s+electrically\s+shorted',
+        text or "",
+        flags=re.IGNORECASE,
+    ):
+        shorts.append({"port_a": _lvs_pin_name(match.group(1)), "port_b": _lvs_pin_name(match.group(2))})
+    return shorts
+
+
 def _analog_lvs_should_repair(summary: Dict[str, Any]) -> bool:
     if summary.get("status") != "mismatch":
         return False
     failure_class = str(summary.get("failure_class") or "")
-    if failure_class in {"pin_mismatch", "device_count_mismatch", "netlist_mismatch"}:
+    if failure_class in {"port_short", "pin_mismatch", "device_count_mismatch", "netlist_mismatch"}:
         return True
     counts = summary.get("counts") if isinstance(summary.get("counts"), dict) else {}
     extracted = counts.get("extracted_devices")
@@ -670,6 +688,7 @@ def _run_analog_lvs(
     status = _analog_lvs_status(lvs_log, cp_lvs.returncode if cp_lvs.returncode is not None else 1)
     counts = _analog_lvs_circuit_counts(lvs_log)
     failure_class = _analog_lvs_failure_class(lvs_log)
+    port_shorts = _magic_extract_port_shorts(extract_log)
     source_pins = _subckt_pins_from_file(lvs_source_spice, module_name)
     extracted_pins = _subckt_pins_from_file(extracted_spice, module_name)
     pin_delta = _lvs_pin_delta(source_pins, extracted_pins)
@@ -677,6 +696,8 @@ def _run_analog_lvs(
     extracted_text = open(extracted_spice, "r", encoding="utf-8", errors="ignore").read()
     source_device_count = _mos_device_count_from_text(source_text)
     extracted_device_count = _mos_device_count_from_text(extracted_text)
+    if port_shorts:
+        failure_class = "port_short"
     if pin_delta["missing_extracted_pins"] or pin_delta["extra_extracted_pins"]:
         failure_class = failure_class or "pin_mismatch"
     return {
@@ -691,6 +712,7 @@ def _run_analog_lvs(
         "source_device_count": source_device_count,
         "extracted_device_count": extracted_device_count,
         "pins": pin_delta,
+        "port_shorts": port_shorts or None,
         "failure_class": failure_class or None,
     }
 
@@ -1226,6 +1248,11 @@ def run_agent(state: dict) -> dict:
             if isinstance(lvs_log_file, str) and os.path.exists(lvs_log_file):
                 with open(lvs_log_file, "r", encoding="utf-8", errors="ignore") as fh:
                     lvs_log_text = fh.read()
+            extract_log_text = ""
+            extract_log_file = analog_lvs.get("extract_log") if isinstance(analog_lvs, dict) else None
+            if isinstance(extract_log_file, str) and os.path.exists(extract_log_file):
+                with open(extract_log_file, "r", encoding="utf-8", errors="ignore") as fh:
+                    extract_log_text = fh.read()
             extracted_text = ""
             extracted_file = analog_lvs.get("extracted_spice") if isinstance(analog_lvs, dict) else None
             if isinstance(extracted_file, str) and os.path.exists(extracted_file):
@@ -1238,6 +1265,7 @@ def run_agent(state: dict) -> dict:
                 original_spice=original_spice,
                 lvs_summary=analog_lvs,
                 lvs_log=lvs_log_text,
+                extract_log=extract_log_text,
                 extracted_spice=extracted_text,
             )
             if repaired_spice:

@@ -667,6 +667,18 @@ def test_analog_lvs_classifies_device_and_pin_mismatch():
     })
 
 
+def test_analog_lvs_extract_log_detects_port_shorts():
+    log = 'Warning:  Ports "sample_req" and "avss" are electrically shorted.\n'
+
+    assert gds_agent._magic_extract_port_shorts(log) == [
+        {"port_a": "sample_req", "port_b": "avss"}
+    ]
+    assert gds_agent._analog_lvs_should_repair({
+        "status": "mismatch",
+        "failure_class": "port_short",
+    })
+
+
 def test_gds_generation_repairs_magic_feedback_once_and_reruns(tmp_path, monkeypatch):
     monkeypatch.setattr(gds_agent, "save_text_artifact_and_record", lambda *args, **kwargs: "local")
     monkeypatch.setattr(gds_agent, "complete_text", lambda *args, **kwargs: ".subckt ana vin vout vdd vss\nM1 vout vin vdd vdd sky130_fd_pr__pfet_01v8 W=1u L=0.15u\nM2 vout vin vss vss sky130_fd_pr__nfet_01v8 W=1u L=0.15u\n.ends ana\n")
