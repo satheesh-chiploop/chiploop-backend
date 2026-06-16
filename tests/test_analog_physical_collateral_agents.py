@@ -906,7 +906,7 @@ def test_magic_import_canonicalizes_duplicate_output_driver_fragments():
 
     _import_text, lvs_source_text, isolated = gds_agent._magic_import_and_lvs_source_spice(spice, specs)
 
-    assert isolated == ["in0"]
+    assert isolated == ["in0", "in1", "in2"]
     assert "M0p out chiploop_iso_in0_out vdd vdd" in lvs_source_text
     assert "M0n out chiploop_iso_in0_out vss vss" in lvs_source_text
     assert "M1p" not in lvs_source_text
@@ -940,6 +940,29 @@ def test_magic_lvs_repair_detects_output_supply_short_and_removes_driver():
     assert "M0p" not in repaired
     assert "M0n" not in repaired
     assert ".subckt ana out in vdd vss" in repaired
+
+
+def test_magic_import_isolates_unused_scalar_input_pins():
+    spice = (
+        ".subckt ana out unused_ctrl sense[0] vdd vss\n"
+        "M0p out sense[0] vdd vdd sky130_fd_pr__pfet_01v8 W=1u L=0.15u\n"
+        "M0n out sense[0] vss vss sky130_fd_pr__nfet_01v8 W=1u L=0.15u\n"
+        ".ends ana\n"
+    )
+    specs = {
+        "out": {"name": "out", "verilog_direction": "output"},
+        "unused_ctrl": {"name": "unused_ctrl", "verilog_direction": "input"},
+        "sense": {"name": "sense", "verilog_direction": "input", "width": 1},
+        "vdd": {"name": "vdd", "verilog_direction": "input", "role": "power"},
+        "vss": {"name": "vss", "verilog_direction": "input", "role": "ground"},
+    }
+
+    import_text, lvs_source_text, isolated = gds_agent._magic_import_and_lvs_source_spice(spice, specs)
+
+    assert isolated == ["unused_ctrl"]
+    assert ".subckt ana out sense[0] vdd vss" in import_text
+    assert ".subckt ana out unused_ctrl sense[0] vdd vss" in lvs_source_text
+    assert "M0p out sense[0]" in import_text
 
 
 def test_magic_import_tcl_adds_isolated_scalar_input_ports(tmp_path):

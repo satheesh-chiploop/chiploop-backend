@@ -84,7 +84,8 @@ def _magic_scalar_input_isolation_pins(text: str, port_specs: Dict[str, Any]) ->
             output_gate_counts[gate] += 1
     return [
         pin for pin in candidates
-        if gate_counts.get(pin, 0) > 0 and output_gate_counts.get(pin, 0) == gate_counts.get(pin, 0)
+        if gate_counts.get(pin, 0) == 0
+        or output_gate_counts.get(pin, 0) == gate_counts.get(pin, 0)
     ]
 
 
