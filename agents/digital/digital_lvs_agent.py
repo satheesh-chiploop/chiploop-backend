@@ -256,7 +256,7 @@ def _resolve_macro_files_from_workflow(workflow_dir: str, exts: tuple[str, ...])
             continue
 
         ap = os.path.abspath(p)
-        if ap in seen:
+        if ap in seen or not os.path.isfile(ap):
             continue
         seen.add(ap)
         out.append(ap)
@@ -276,7 +276,7 @@ def _resolve_stdcell_spice_models(state: dict, workflow_dir: str) -> list[str]:
         for item in values:
             if isinstance(item, str):
                 cand = item if os.path.isabs(item) else os.path.join(workflow_dir, item)
-                if os.path.exists(cand):
+                if os.path.isfile(cand):
                     explicit.append(os.path.abspath(cand))
 
     pdk_variant = state.get("pdk_variant") or state.get("pdk") or DEFAULT_PDK_VARIANT
@@ -299,7 +299,7 @@ def _resolve_stdcell_spice_models(state: dict, workflow_dir: str) -> list[str]:
     seen: set[str] = set()
     for path in explicit + discovered:
         ap = os.path.abspath(path)
-        if ap in seen or not os.path.exists(ap):
+        if ap in seen or not os.path.isfile(ap):
             continue
         seen.add(ap)
         out.append(ap)
@@ -320,7 +320,7 @@ def _resolve_macro_spice_models(state: dict, workflow_dir: str) -> list[str]:
         ):
             if isinstance(value, str):
                 cand = value if os.path.isabs(value) else os.path.join(workflow_dir, value)
-                if os.path.exists(cand):
+                if os.path.isfile(cand):
                     candidates.append(os.path.abspath(cand))
     for value in (
         state.get("analog_spice_path"),
@@ -333,7 +333,7 @@ def _resolve_macro_spice_models(state: dict, workflow_dir: str) -> list[str]:
         for item in values:
             if isinstance(item, str):
                 cand = item if os.path.isabs(item) else os.path.join(workflow_dir, item)
-                if os.path.exists(cand):
+                if os.path.isfile(cand):
                     candidates.append(os.path.abspath(cand))
     candidates.extend(_resolve_macro_files_from_workflow(workflow_dir, (".spice", ".sp", ".cdl")))
     out: list[str] = []
@@ -351,7 +351,7 @@ def _resolve_macro_spice_models(state: dict, workflow_dir: str) -> list[str]:
         ):
             continue
         ap = os.path.abspath(path)
-        if ap in seen or not os.path.exists(ap):
+        if ap in seen or not os.path.isfile(ap):
             continue
         seen.add(ap)
         out.append(ap)
@@ -366,6 +366,8 @@ def _stage_spice_models(work_stage_dir: str, stdcell_spice: list[str], macro_spi
     seen: set[str] = set()
     for bucket, srcs in ((staged_stdcell, stdcell_spice), (staged_extra, macro_spice)):
         for src in srcs:
+            if not isinstance(src, str) or not os.path.isfile(src):
+                continue
             basename = os.path.basename(src)
             dst = os.path.join(spice_dir, basename)
             if os.path.abspath(src) != os.path.abspath(dst):
@@ -380,9 +382,9 @@ def _stage_spice_models(work_stage_dir: str, stdcell_spice: list[str], macro_spi
 def _stage_macro_inputs(state: dict, workflow_dir: str, work_stage_dir: str) -> tuple[list[str], list[str], list[str]]:
     digital = state.get("digital") or {}
 
-    macro_lefs = list(dict.fromkeys(p for p in (digital.get("macro_lefs") or []) if p and os.path.exists(p)))
-    macro_libs = list(dict.fromkeys(p for p in (digital.get("macro_libs") or []) if p and os.path.exists(p)))
-    macro_gds  = list(dict.fromkeys(p for p in (digital.get("macro_gds") or []) if p and os.path.exists(p)))
+    macro_lefs = list(dict.fromkeys(p for p in (digital.get("macro_lefs") or []) if isinstance(p, str) and os.path.isfile(p)))
+    macro_libs = list(dict.fromkeys(p for p in (digital.get("macro_libs") or []) if isinstance(p, str) and os.path.isfile(p)))
+    macro_gds  = list(dict.fromkeys(p for p in (digital.get("macro_gds") or []) if isinstance(p, str) and os.path.isfile(p)))
 
     inputs_dir = os.path.join(work_stage_dir, "inputs", "macros")
     lef_dir = os.path.join(inputs_dir, "lef")
@@ -437,7 +439,7 @@ def _stage_macro_placement_cfg_if_needed(cfg: dict, state: dict, workflow_dir: s
         place_state.get("macro_placement_cfg"),
         os.path.join(workflow_dir, "digital", "place", "macro_placement.cfg"),
     ]
-    src = next((p for p in candidates if isinstance(p, str) and os.path.exists(p)), None)
+    src = next((p for p in candidates if isinstance(p, str) and os.path.isfile(p)), None)
     if not src:
         cfg.pop("MACRO_PLACEMENT_CFG", None)
         return None

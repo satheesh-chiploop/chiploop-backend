@@ -559,6 +559,46 @@ def test_drc_lvs_blackbox_deferred_when_macro_gds_missing():
     assert not _drc_macro_blackbox_deferred(["dir::inputs/macros/lef/ana.lef"], [], ["dir::inputs/macros/gds/ana.gds"])
 
 
+def test_signoff_macro_staging_ignores_directory_collateral(tmp_path):
+    bad_dir = tmp_path / "digital"
+    bad_dir.mkdir()
+    lef = tmp_path / "ana.lef"
+    lef.write_text("MACRO ana\nEND ana\n", encoding="utf-8")
+    state = {
+        "digital": {
+            "macro_lefs": [str(bad_dir), str(lef)],
+            "macro_libs": [str(bad_dir)],
+            "macro_gds": [str(bad_dir)],
+        }
+    }
+
+    for module in (digital_drc_agent, digital_lvs_agent, digital_tapeout_agent):
+        staged_lefs, staged_libs, staged_gds = module._stage_macro_inputs(
+            state,
+            str(tmp_path),
+            str(tmp_path / module.AGENT_NAME.replace(" ", "_")),
+        )
+        assert staged_lefs == ["dir::inputs/macros/lef/ana.lef"]
+        assert staged_libs == []
+        assert staged_gds == []
+
+
+def test_lvs_and_tapeout_spice_staging_ignore_directories(tmp_path):
+    bad_dir = tmp_path / "digital"
+    bad_dir.mkdir()
+    spice = tmp_path / "ana.spice"
+    spice.write_text(".subckt ana A B\n.ends ana\n", encoding="utf-8")
+
+    for module in (digital_lvs_agent, digital_tapeout_agent):
+        staged_stdcell, staged_extra = module._stage_spice_models(
+            str(tmp_path / module.AGENT_NAME.replace(" ", "_")),
+            [str(bad_dir)],
+            [str(bad_dir), str(spice)],
+        )
+        assert staged_stdcell == []
+        assert staged_extra == ["dir::inputs/spice/ana.spice"]
+
+
 def test_atpg_pattern_count_can_be_inferred_from_adapter_pattern_file(tmp_path):
     pattern_file = tmp_path / "atalanta.test"
     pattern_file.write_text("# atalanta\nTEST 1 0101\nTEST 2 1010\n", encoding="utf-8")

@@ -242,9 +242,9 @@ def _resolve_macro_files_from_workflow(workflow_dir: str, exts: tuple[str, ...])
 def _stage_macro_inputs(state: dict, workflow_dir: str, work_stage_dir: str) -> tuple[list[str], list[str], list[str]]:
     digital = state.get("digital") or {}
 
-    macro_lefs = list(dict.fromkeys(p for p in (digital.get("macro_lefs") or []) if p and os.path.exists(p)))
-    macro_libs = list(dict.fromkeys(p for p in (digital.get("macro_libs") or []) if p and os.path.exists(p)))
-    macro_gds  = list(dict.fromkeys(p for p in (digital.get("macro_gds") or []) if p and os.path.exists(p)))
+    macro_lefs = list(dict.fromkeys(p for p in (digital.get("macro_lefs") or []) if isinstance(p, str) and os.path.isfile(p)))
+    macro_libs = list(dict.fromkeys(p for p in (digital.get("macro_libs") or []) if isinstance(p, str) and os.path.isfile(p)))
+    macro_gds  = list(dict.fromkeys(p for p in (digital.get("macro_gds") or []) if isinstance(p, str) and os.path.isfile(p)))
 
     inputs_dir = os.path.join(work_stage_dir, "inputs", "macros")
     lef_dir = os.path.join(inputs_dir, "lef")
@@ -299,7 +299,7 @@ def _stage_macro_placement_cfg_if_needed(cfg: dict, state: dict, workflow_dir: s
         place_state.get("macro_placement_cfg"),
         os.path.join(workflow_dir, "digital", "place", "macro_placement.cfg"),
     ]
-    src = next((p for p in candidates if isinstance(p, str) and os.path.exists(p)), None)
+    src = next((p for p in candidates if isinstance(p, str) and os.path.isfile(p)), None)
     if not src:
         cfg.pop("MACRO_PLACEMENT_CFG", None)
         return None
