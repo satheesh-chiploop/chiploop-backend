@@ -249,6 +249,76 @@ def _canonicalize_generated_supply_usage(text: str, port_specs: Dict[str, Dict[s
     return "\n".join(lines).rstrip() + ("\n" if text.endswith("\n") else "")
 
 
+def _bus_index(pin: str) -> int | None:
+    match = re.match(r"^.+\[(\d+)\]$", _pin_name(pin))
+    return int(match.group(1)) if match else None
+
+
+def _canonicalize_generated_input_gate_fanout(text: str, port_specs: Dict[str, Dict[str, Any]], max_gate_fanout: int = 6) -> str:
+    _subckt_name, pins = _subckt_parts(text)
+    if not pins:
+        return text
+    external_inputs = [
+        pin for pin in pins
+        if _direction_for_pin(pin, port_specs).startswith("input") and not _is_supply_pin(pin, port_specs)
+    ]
+    external_inputs.extend(
+        pin for pin in pins
+        if _direction_for_pin(_base_bus_name(pin), port_specs).startswith("input") and not _is_supply_pin(pin, port_specs)
+    )
+    external_inputs = sorted(dict.fromkeys(external_inputs), key=lambda pin: (_base_bus_name(pin), _bus_index(pin) if _bus_index(pin) is not None else -1, pin))
+    if len(external_inputs) < 2:
+        return text
+    output_pins = {
+        pin for pin in pins
+        if _direction_for_pin(pin, port_specs).startswith("output")
+        or _direction_for_pin(_base_bus_name(pin), port_specs).startswith("output")
+    }
+    input_bus_by_index: Dict[int, str] = {
+        idx: pin
+        for pin in external_inputs
+        for idx in [_bus_index(pin)]
+        if idx is not None
+    }
+    input_scalars = [pin for pin in external_inputs if _bus_index(pin) is None]
+
+    mos_line_re = re.compile(r"^(\s*M\S*\s+)(\S+)\s+(\S+)\s+(\S+)\s+(\S+)(\s+\S+.*)$", re.IGNORECASE)
+    parsed: list[tuple[int, re.Match[str], str, str]] = []
+    gate_counts: Dict[str, int] = {}
+    for idx, line in enumerate((text or "").splitlines()):
+        match = mos_line_re.match(line)
+        if not match:
+            continue
+        _prefix, drain, gate, _source, _bulk, _suffix = match.groups()
+        drain = _pin_name(drain)
+        gate = _pin_name(gate)
+        if drain not in output_pins or gate not in external_inputs:
+            continue
+        parsed.append((idx, match, drain, gate))
+        gate_counts[gate] = gate_counts.get(gate, 0) + 1
+    if not any(count > max_gate_fanout for count in gate_counts.values()):
+        return text
+
+    lines = (text or "").splitlines()
+    round_robin_inputs = [*input_bus_by_index.values(), *input_scalars]
+    rr = 0
+    for idx, match, drain, gate in parsed:
+        if gate_counts.get(gate, 0) <= max_gate_fanout:
+            continue
+        replacement = None
+        out_idx = _bus_index(drain)
+        if out_idx is not None:
+            replacement = input_bus_by_index.get(out_idx)
+        if not replacement and round_robin_inputs:
+            replacement = round_robin_inputs[rr % len(round_robin_inputs)]
+            rr += 1
+        if not replacement:
+            continue
+        prefix, drain_raw, _gate_raw, source, bulk, suffix = match.groups()
+        lines[idx] = f"{prefix}{_pin_name(drain_raw)} {replacement} {_pin_name(source)} {_pin_name(bulk)}{suffix}"
+    return "\n".join(lines).rstrip() + ("\n" if text.endswith("\n") else "")
+
+
 def _generated_spice_layout_issues(text: str, port_specs: Dict[str, Dict[str, Any]]) -> List[str]:
     issues: List[str] = []
     _subckt_name, pins = _subckt_parts(text)
@@ -668,6 +738,7 @@ def run_agent(state: dict) -> dict:
     spice = _normalise_for_source(selected_text, module_name, ports, selected_source)
     if selected_source.startswith("generated_by_sky130_spice_agent"):
         spice = _canonicalize_generated_supply_usage(spice, port_specs)
+        spice = _canonicalize_generated_input_gate_fanout(spice, port_specs)
     layout_blocking_issues = _blocking_layout_issues(spice, port_specs)
     if layout_blocking_issues and selected_source == "generated_by_sky130_spice_agent":
         save_text_artifact_and_record(workflow_id, AGENT_NAME, "analog/sky130", f"{module_name}_rejected_pass1.spice", spice)
@@ -675,6 +746,7 @@ def run_agent(state: dict) -> dict:
         if repaired_text and _has_real_devices(repaired_text):
             repaired_spice = _normalise_for_source(repaired_text, module_name, ports, "generated_by_sky130_spice_agent_repaired")
             repaired_spice = _canonicalize_generated_supply_usage(repaired_spice, port_specs)
+            repaired_spice = _canonicalize_generated_input_gate_fanout(repaired_spice, port_specs)
             repaired_issues = _blocking_layout_issues(repaired_spice, port_specs)
             if not repaired_issues:
                 spice = repaired_spice

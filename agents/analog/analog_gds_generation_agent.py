@@ -1336,6 +1336,26 @@ def run_agent(state: dict) -> dict:
                             },
                         }
                         lvs_repair_applied = analog_lvs.get("status") == "clean"
+                        if not lvs_repair_applied and not lvs_repair_reason:
+                            pass1_failure = pass1_analog_lvs.get("failure_class")
+                            pass2_failure = analog_lvs.get("failure_class")
+                            pass1_counts = pass1_analog_lvs.get("counts") if isinstance(pass1_analog_lvs.get("counts"), dict) else {}
+                            pass2_counts = analog_lvs.get("counts") if isinstance(analog_lvs.get("counts"), dict) else {}
+                            if (
+                                pass1_failure == "port_short"
+                                and pass2_failure == "port_short"
+                                and pass1_counts.get("source_devices") == pass2_counts.get("source_devices")
+                                and pass1_counts.get("extracted_devices") == pass2_counts.get("extracted_devices")
+                            ):
+                                lvs_repair_reason = "magic_netlist_to_layout_port_short_not_repaired"
+                            elif pass2_failure:
+                                lvs_repair_reason = f"lvs_repair_still_{pass2_failure}"
+                            else:
+                                lvs_repair_reason = "lvs_repair_still_mismatch"
+                            analog_lvs = {
+                                **analog_lvs,
+                                "repair_reason": lvs_repair_reason,
+                            }
                     else:
                         lvs_repair_reason = invalid_reason or "lvs_repair_gds_not_produced"
                         summary.update({

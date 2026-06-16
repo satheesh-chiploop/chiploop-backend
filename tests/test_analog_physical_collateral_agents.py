@@ -415,6 +415,39 @@ def test_sky130_spice_canonicalizes_unused_supply_aliases_onto_real_output_drive
     assert not issues
 
 
+def test_sky130_spice_canonicalizes_excessive_shared_input_gate_fanout():
+    spice = (
+        ".subckt ana adc_code[0] adc_code[1] adc_valid sensor_temp_celsius[0] sensor_temp_celsius[1] sample_req VPWR VGND avdd avss\n"
+        "M0p adc_code[0] sample_req avdd avdd sky130_fd_pr__pfet_01v8 W=1u L=0.15u\n"
+        "M0n adc_code[0] sample_req avss avss sky130_fd_pr__nfet_01v8 W=1u L=0.15u\n"
+        "M1p adc_code[1] sample_req VPWR VPWR sky130_fd_pr__pfet_01v8 W=1u L=0.15u\n"
+        "M1n adc_code[1] sample_req VGND VGND sky130_fd_pr__nfet_01v8 W=1u L=0.15u\n"
+        "Mvp adc_valid sample_req VPWR VPWR sky130_fd_pr__pfet_01v8 W=1u L=0.15u\n"
+        "Mvn adc_valid sample_req VGND VGND sky130_fd_pr__nfet_01v8 W=1u L=0.15u\n"
+        ".ends ana\n"
+    )
+    specs = {
+        "adc_code": {"name": "adc_code", "verilog_direction": "output", "width": 2},
+        "adc_valid": {"name": "adc_valid", "verilog_direction": "output"},
+        "sensor_temp_celsius": {"name": "sensor_temp_celsius", "verilog_direction": "input", "width": 2},
+        "sample_req": {"name": "sample_req", "verilog_direction": "input"},
+        "VPWR": {"name": "VPWR", "verilog_direction": "input", "role": "power"},
+        "VGND": {"name": "VGND", "verilog_direction": "input", "role": "ground"},
+        "avdd": {"name": "avdd", "verilog_direction": "input", "role": "power"},
+        "avss": {"name": "avss", "verilog_direction": "input", "role": "ground"},
+    }
+
+    repaired = spice_agent._canonicalize_generated_input_gate_fanout(spice, specs, max_gate_fanout=2)
+    issues = spice_agent._generated_spice_layout_issues(repaired, specs)
+
+    assert "M0p adc_code[0] sensor_temp_celsius[0]" in repaired
+    assert "M0n adc_code[0] sensor_temp_celsius[0]" in repaired
+    assert "M1p adc_code[1] sensor_temp_celsius[1]" in repaired
+    assert "M1n adc_code[1] sensor_temp_celsius[1]" in repaired
+    assert "input_pin_used_as_device_terminal" not in "\n".join(issues)
+    assert not issues
+
+
 def test_sky130_spice_generated_scalar_bus_terminals_are_legalized():
     spice = (
         ".subckt ana adc_code[0] adc_code[1] sensor_temp_celsius[0] sensor_temp_celsius[1] avdd avss\n"
@@ -1015,6 +1048,88 @@ def test_gds_generation_fails_and_does_not_promote_macro_gds_when_lvs_still_mism
     assert "macro_gds" not in state.get("digital", {})
     assert state["analog_signoff"]["drc"]["status"] == "clean"
     assert state["analog_signoff"]["lvs"]["status"] == "mismatch"
+
+
+def test_gds_generation_reports_repeated_magic_port_short_after_lvs_repair(tmp_path, monkeypatch):
+    monkeypatch.setattr(gds_agent, "save_text_artifact_and_record", lambda *args, **kwargs: "local")
+    monkeypatch.setattr(
+        gds_agent,
+        "complete_text",
+        lambda *args, **kwargs: (
+            ".subckt ana vin vout vdd vss\n"
+            "M1 vout vin vdd vdd sky130_fd_pr__pfet_01v8 W=2u L=0.15u\n"
+            "M2 vout vin vss vss sky130_fd_pr__nfet_01v8 W=1u L=0.15u\n"
+            "M3 vout vdd vdd vdd sky130_fd_pr__pfet_01v8 W=2u L=0.15u\n"
+            ".ends ana\n"
+        ),
+    )
+    monkeypatch.setattr(gds_agent.shutil, "which", lambda name: "/usr/bin/docker" if name == "docker" else None)
+    pdk_root = tmp_path / "pdk"
+    magic_dir = pdk_root / "sky130A" / "libs.tech" / "magic"
+    magic_dir.mkdir(parents=True)
+    (magic_dir / "sky130A.tech").write_text("tech\n", encoding="utf-8")
+    (magic_dir / "sky130A.tcl").write_text("proc sky130::importspice {} {}\n", encoding="utf-8")
+    spice = tmp_path / "ana.spice"
+    spice.write_text(
+        ".subckt ana vin vout vdd vss\n"
+        "M1 vout vin vdd vdd sky130_fd_pr__pfet_01v8 W=1u L=0.15u\n"
+        "M2 vout vin vss vss sky130_fd_pr__nfet_01v8 W=1u L=0.15u\n"
+        ".ends ana\n",
+        encoding="utf-8",
+    )
+    calls = {"gds": 0, "extract": 0, "lvs": 0}
+
+    def fake_run_command(state, capability, cmd, cwd=None, timeout_sec=None):
+        stage_dir = tmp_path / "analog" / "gds"
+        if capability == "analog_magic_gds":
+            calls["gds"] += 1
+            (stage_dir / "ana.gds").write_bytes(b"GDS")
+            (stage_dir / "ana.mag").write_text("mag\n", encoding="utf-8")
+            return SimpleNamespace(returncode=0, stdout="magic ok\n", stderr="")
+        if capability == "analog_magic_lvs_extract":
+            calls["extract"] += 1
+            (stage_dir / "ana_extracted.spice").write_text(
+                ".subckt ana vin vout vdd\n"
+                "X1 vin vin vin w sky130_fd_pr__pfet_01v8 w=1 l=0.15\n"
+                ".ends ana\n",
+                encoding="utf-8",
+            )
+            return SimpleNamespace(
+                returncode=0,
+                stdout='Warning:  Ports "vin" and "vss" are electrically shorted.\n',
+                stderr="",
+            )
+        if capability == "analog_netgen_lvs":
+            calls["lvs"] += 1
+            return SimpleNamespace(
+                returncode=0,
+                stdout=(
+                    "Circuit 1 contains 3 devices, Circuit 2 contains 26 devices. *** MISMATCH ***\n"
+                    "Circuit 1 contains 22 nets,    Circuit 2 contains 122 nets. *** MISMATCH ***\n"
+                    "Top level cell failed pin matching.\n"
+                ),
+                stderr="",
+            )
+        raise AssertionError(capability)
+
+    monkeypatch.setattr(gds_agent, "run_command", fake_run_command)
+    state = {
+        "workflow_id": "wf",
+        "workflow_dir": str(tmp_path),
+        "analog_physical_mode": "generate_sky130_gds",
+        "analog_pdk": "sky130A",
+        "analog_macro_module": "ana",
+        "analog_spice_path": str(spice),
+        "pdk_root_host": str(pdk_root),
+        "analog_sky130_spice": {"generated": True},
+    }
+
+    with pytest.raises(RuntimeError, match="analog_lvs_not_clean"):
+        gds_agent.run_agent(state)
+
+    assert calls == {"gds": 2, "extract": 2, "lvs": 2}
+    assert state["analog_gds_generation"]["lvs_repair_reason"] == "magic_netlist_to_layout_port_short_not_repaired"
+    assert state["analog_gds_generation"]["analog_lvs"]["repair_reason"] == "magic_netlist_to_layout_port_short_not_repaired"
 
 
 def test_gds_generation_rejects_unsafe_repair_before_second_magic_pass(tmp_path, monkeypatch):
