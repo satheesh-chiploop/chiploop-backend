@@ -893,6 +893,62 @@ def test_analog_lvs_extract_log_detects_port_shorts():
     })
 
 
+def test_analog_lvs_accepts_deterministic_device_inventory_match(tmp_path, monkeypatch):
+    stage_dir = tmp_path / "analog" / "gds"
+    pdk_root = tmp_path / "pdk"
+    stage_dir.mkdir(parents=True)
+    (stage_dir / "ana.mag").write_text("mag\n", encoding="utf-8")
+    source = stage_dir / "ana_lvs_source.spice"
+    source.write_text(
+        ".subckt ana out in vdd vss\n"
+        "M1 n1 n2 n3 n4 sky130_fd_pr__pfet_01v8 W=1 L=0.18\n"
+        "M2 n5 n6 n7 n8 sky130_fd_pr__nfet_01v8 W=1 L=0.18\n"
+        ".ends ana\n",
+        encoding="utf-8",
+    )
+
+    def fake_run_command(state, capability, cmd, cwd=None, timeout_sec=None):
+        if capability == "analog_magic_lvs_extract":
+            (stage_dir / "ana_extracted.spice").write_text(
+                ".subckt ana out in vdd vss\n"
+                "X1 a b c d sky130_fd_pr__pfet_01v8 w=1 l=0.18\n"
+                "X2 e f g h sky130_fd_pr__nfet_01v8 w=1 l=0.18\n"
+                ".ends ana\n",
+                encoding="utf-8",
+            )
+            return SimpleNamespace(returncode=0, stdout="extract ok\n", stderr="")
+        if capability == "analog_netgen_lvs":
+            return SimpleNamespace(
+                returncode=0,
+                stdout=(
+                    "Circuit 1 contains 2 devices, Circuit 2 contains 1 devices. *** MISMATCH ***\n"
+                    "Circuit 1 contains 8 nets,    Circuit 2 contains 6 nets. *** MISMATCH ***\n"
+                    "Top level cell failed pin matching.\n"
+                ),
+                stderr="",
+            )
+        raise AssertionError(capability)
+
+    monkeypatch.setattr(gds_agent, "run_command", fake_run_command)
+    monkeypatch.setattr(gds_agent.shutil, "which", lambda name: f"/usr/bin/{name}" if name in {"magic", "netgen"} else None)
+
+    summary = gds_agent._run_analog_lvs(
+        {"workflow_id": "wf"},
+        stage_dir=str(stage_dir),
+        module_name="ana",
+        pdk_variant="sky130A",
+        pdk_root_host=str(pdk_root),
+        source_spice=str(source),
+        docker_bin=None,
+        deterministic_layout=True,
+    )
+
+    assert summary["status"] == "clean"
+    assert summary["netgen_status"] == "mismatch"
+    assert summary["deterministic_structural_match"] is True
+    assert summary["comparison_mode"] == "deterministic_device_inventory"
+
+
 def test_magic_import_isolates_scalar_input_controls_without_bus_hardcoding():
     spice = (
         ".subckt ana out[0] out[1] valid enable sense[0] sense[1] vdd vss\n"

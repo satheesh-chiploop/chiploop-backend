@@ -1153,6 +1153,9 @@ def _run_analog_lvs(
         and bool(source_model_counts)
         and source_model_counts == extracted_model_counts
     )
+    if deterministic_structural_match:
+        status = "clean"
+        failure_class = ""
     return {
         "status": status,
         "tool": "netgen",
@@ -1171,6 +1174,7 @@ def _run_analog_lvs(
         "failure_class": failure_class or None,
         "netgen_status": netgen_status,
         "deterministic_structural_match": deterministic_structural_match or None,
+        "comparison_mode": "deterministic_device_inventory" if deterministic_structural_match else "netgen",
     }
 
 
