@@ -603,6 +603,29 @@ def test_lvs_and_tapeout_prefer_analog_signoff_lvs_spice_over_raw_macro_spice(tm
     assert tapeout_models == [str(signoff.resolve())]
 
 
+def test_lvs_and_tapeout_prefer_state_lvs_spice_over_raw_macro_spice(tmp_path):
+    raw_dir = tmp_path / "analog" / "sky130"
+    runtime_dir = tmp_path / "runtime"
+    raw_dir.mkdir(parents=True)
+    runtime_dir.mkdir(parents=True)
+    raw = raw_dir / "ana.spice"
+    raw.write_text(".subckt ana bus[0] bus[10] bus[1] vdd vss\n.ends ana\n", encoding="utf-8")
+    signoff = runtime_dir / "ana_lvs_source.spice"
+    signoff.write_text(".subckt ana bus[0] bus[1] bus[10] vdd vss\n.ends ana\n", encoding="utf-8")
+    (raw_dir / "sky130_spice_summary.json").write_text(json.dumps({"spice": str(raw)}), encoding="utf-8")
+    state = {
+        "analog_lvs_source_spice": str(signoff),
+        "analog_signoff": {"lvs": {"source_spice": str(signoff)}},
+        "digital": {"macro_spice": [str(raw)]},
+    }
+
+    lvs_models = digital_lvs_agent._resolve_macro_spice_models(state, str(tmp_path))
+    tapeout_models = digital_tapeout_agent._resolve_macro_spice_models(state, str(tmp_path))
+
+    assert lvs_models == [str(signoff.resolve())]
+    assert tapeout_models == [str(signoff.resolve())]
+
+
 def test_signoff_macro_staging_ignores_directory_collateral(tmp_path):
     bad_dir = tmp_path / "digital"
     bad_dir.mkdir()

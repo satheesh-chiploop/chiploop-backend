@@ -56,6 +56,22 @@ def _lvs_source_spice(workflow_dir: str, module: str) -> str:
     return next((_exists(path) for path in candidates if _exists(path)), "")
 
 
+def _state_lvs_source_spice(state: dict) -> str:
+    gds_summary = state.get("analog_gds_generation") if isinstance(state.get("analog_gds_generation"), dict) else {}
+    gds_lvs = gds_summary.get("analog_lvs") if isinstance(gds_summary.get("analog_lvs"), dict) else {}
+    signoff = state.get("analog_signoff") if isinstance(state.get("analog_signoff"), dict) else {}
+    signoff_lvs = signoff.get("lvs") if isinstance(signoff.get("lvs"), dict) else {}
+    for value in (
+        state.get("analog_lvs_source_spice"),
+        signoff_lvs.get("source_spice"),
+        gds_lvs.get("source_spice"),
+    ):
+        found = _exists(value)
+        if found:
+            return found
+    return ""
+
+
 def run_agent(state: dict) -> dict:
     print(f"\nRunning {AGENT_NAME}...")
     workflow_id = state.get("workflow_id", "default")
@@ -69,7 +85,7 @@ def run_agent(state: dict) -> dict:
     spice = _exists(state.get("analog_spice_path") or state.get("analog_netlist_path"))
     mode = str(state.get("analog_physical_mode") or "blackbox").strip().lower()
     module = _module_name(state)
-    lvs_spice = _lvs_source_spice(workflow_dir, module)
+    lvs_spice = _state_lvs_source_spice(state) or _lvs_source_spice(workflow_dir, module)
     generate_mode = _generate_mode(state)
     analog_lvs_status = _analog_lvs_status(state)
     analog_drc_status = _analog_drc_status(state)
@@ -138,6 +154,8 @@ def run_agent(state: dict) -> dict:
         signoff_spice = lvs_spice or spice
         if signoff_spice:
             digital["macro_spice"] = list(dict.fromkeys((digital.get("macro_spice") or []) + [signoff_spice]))
+            if lvs_spice:
+                digital["macro_lvs_spice"] = list(dict.fromkeys((digital.get("macro_lvs_spice") or []) + [lvs_spice]))
         elif (lef or lib) and not generate_mode:
             digital["macro_blackbox_mode"] = "lef_lib_no_gds"
             digital["macro_blackboxes"] = [os.path.splitext(os.path.basename(lef))[0]] if lef else []

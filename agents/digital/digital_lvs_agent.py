@@ -331,6 +331,22 @@ def _resolve_stdcell_spice_models(state: dict, workflow_dir: str) -> list[str]:
 def _resolve_macro_spice_models(state: dict, workflow_dir: str) -> list[str]:
     digital = state.get("digital") if isinstance(state.get("digital"), dict) else {}
     candidates: list[str] = []
+    gds_summary = state.get("analog_gds_generation") if isinstance(state.get("analog_gds_generation"), dict) else {}
+    gds_lvs = gds_summary.get("analog_lvs") if isinstance(gds_summary.get("analog_lvs"), dict) else {}
+    signoff = state.get("analog_signoff") if isinstance(state.get("analog_signoff"), dict) else {}
+    signoff_lvs = signoff.get("lvs") if isinstance(signoff.get("lvs"), dict) else {}
+    for value in (
+        state.get("analog_lvs_source_spice"),
+        signoff_lvs.get("source_spice"),
+        gds_lvs.get("source_spice"),
+        digital.get("macro_lvs_spice"),
+    ):
+        values = value if isinstance(value, list) else [value]
+        for item in values:
+            if isinstance(item, str):
+                cand = item if os.path.isabs(item) else os.path.join(workflow_dir, item)
+                if os.path.isfile(cand):
+                    candidates.append(os.path.abspath(cand))
     candidates.extend(sorted(glob.glob(os.path.join(workflow_dir, "analog", "signoff", "*_lvs_source.spice"))))
     for summary_path in (
         os.path.join(workflow_dir, "analog", "physical_package", "analog_physical_collateral_package.json"),
@@ -338,6 +354,7 @@ def _resolve_macro_spice_models(state: dict, workflow_dir: str) -> list[str]:
     ):
         summary = _read_json(summary_path)
         for value in (
+            summary.get("lvs_spice"),
             summary.get("spice"),
             (summary.get("spice_generation") or {}).get("spice") if isinstance(summary.get("spice_generation"), dict) else None,
         ):

@@ -1698,6 +1698,42 @@ def test_physical_package_exports_signoff_lvs_spice_to_digital(tmp_path, monkeyp
     assert package["spice"] == str(raw_spice.resolve())
     assert package["lvs_spice"] == str(signoff_spice.resolve())
     assert state["digital"]["macro_spice"] == [str(signoff_spice.resolve())]
+    assert state["digital"]["macro_lvs_spice"] == [str(signoff_spice.resolve())]
+
+
+def test_physical_package_uses_state_lvs_source_when_artifact_dir_missing(tmp_path, monkeypatch):
+    monkeypatch.setattr(package_agent, "save_text_artifact_and_record", lambda *args, **kwargs: "local")
+    analog_dir = tmp_path / "runtime" / "analog"
+    analog_dir.mkdir(parents=True)
+    signoff_spice = analog_dir / "ana_lvs_source.spice"
+    signoff_spice.write_text(".subckt ana out in vdd vss\n.ends ana\n", encoding="utf-8")
+    raw_spice = analog_dir / "ana.spice"
+    raw_spice.write_text(".subckt ana in out vdd vss\n.ends ana\n", encoding="utf-8")
+    gds = tmp_path / "ana.gds"
+    lef = tmp_path / "ana.lef"
+    lib = tmp_path / "ana.lib"
+    for path in (gds, lef, lib):
+        path.write_text("x", encoding="utf-8")
+
+    state = {
+        "workflow_id": "wf",
+        "workflow_dir": str(tmp_path),
+        "analog_physical_mode": "generate_sky130_gds",
+        "analog_macro_module": "ana",
+        "analog_macro_gds": str(gds),
+        "analog_macro_lef": str(lef),
+        "analog_macro_lib": str(lib),
+        "analog_spice_path": str(raw_spice),
+        "analog_lvs_source_spice": str(signoff_spice),
+        "analog_signoff": {"lvs": {"status": "clean", "source_spice": str(signoff_spice)}, "drc": {"status": "clean"}},
+    }
+
+    package_agent.run_agent(state)
+
+    package = state["analog_physical_collateral_package"]
+    assert package["lvs_spice"] == str(signoff_spice.resolve())
+    assert state["digital"]["macro_spice"] == [str(signoff_spice.resolve())]
+    assert state["digital"]["macro_lvs_spice"] == [str(signoff_spice.resolve())]
 
 
 def test_physical_package_fails_in_generate_mode_when_gds_missing(tmp_path, monkeypatch):

@@ -653,6 +653,10 @@ def _analog_signoff_summary(
 
 def _publish_analog_signoff(workflow_id: str, state: dict, summary: Dict[str, Any]) -> None:
     state["analog_signoff"] = summary
+    lvs = summary.get("lvs") if isinstance(summary.get("lvs"), dict) else {}
+    source_spice = lvs.get("source_spice")
+    if isinstance(source_spice, str) and os.path.isfile(source_spice):
+        state["analog_lvs_source_spice"] = os.path.abspath(source_spice)
     save_text_artifact_and_record(
         workflow_id,
         AGENT_NAME,
@@ -1196,6 +1200,7 @@ def _run_analog_lvs(
         "reason": None if status == "clean" else status,
         "return_code": cp_lvs.returncode,
         "extracted_spice": extracted_spice,
+        "source_spice": lvs_source_spice,
         "extract_log": extract_log_path,
         "log": lvs_log_path,
         "counts": counts or None,
