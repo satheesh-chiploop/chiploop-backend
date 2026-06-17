@@ -1667,6 +1667,39 @@ def test_physical_package_exports_blackbox_when_not_generating_gds(tmp_path, mon
     assert state["digital"]["macro_blackbox_mode"] == "lef_lib_no_gds"
 
 
+def test_physical_package_exports_signoff_lvs_spice_to_digital(tmp_path, monkeypatch):
+    monkeypatch.setattr(package_agent, "save_text_artifact_and_record", lambda *args, **kwargs: "local")
+    lef = tmp_path / "ana.lef"
+    lib = tmp_path / "ana.lib"
+    gds = tmp_path / "ana.gds"
+    raw_spice = tmp_path / "analog" / "sky130" / "ana.spice"
+    signoff_spice = tmp_path / "analog" / "signoff" / "ana_lvs_source.spice"
+    raw_spice.parent.mkdir(parents=True)
+    signoff_spice.parent.mkdir(parents=True)
+    lef.write_text("MACRO ana\nEND ana\n", encoding="utf-8")
+    lib.write_text("library (ana) {}\n", encoding="utf-8")
+    gds.write_bytes(b"GDS")
+    raw_spice.write_text(".subckt ana bus[0] bus[10] bus[1]\n.ends ana\n", encoding="utf-8")
+    signoff_spice.write_text(".subckt ana bus[0] bus[1] bus[10]\n.ends ana\n", encoding="utf-8")
+
+    state = package_agent.run_agent({
+        "workflow_id": "wf",
+        "workflow_dir": str(tmp_path),
+        "analog_physical_mode": "generate_sky130_gds",
+        "analog_macro_module": "ana",
+        "analog_macro_lef": str(lef),
+        "analog_macro_lib": str(lib),
+        "analog_macro_gds": str(gds),
+        "analog_spice_path": str(raw_spice),
+        "analog_signoff": {"drc": {"status": "clean"}, "lvs": {"status": "clean"}},
+    })
+
+    package = state["analog_physical_collateral_package"]
+    assert package["spice"] == str(raw_spice.resolve())
+    assert package["lvs_spice"] == str(signoff_spice.resolve())
+    assert state["digital"]["macro_spice"] == [str(signoff_spice.resolve())]
+
+
 def test_physical_package_fails_in_generate_mode_when_gds_missing(tmp_path, monkeypatch):
     monkeypatch.setattr(package_agent, "save_text_artifact_and_record", lambda *args, **kwargs: "local")
     lef = tmp_path / "ana.lef"
