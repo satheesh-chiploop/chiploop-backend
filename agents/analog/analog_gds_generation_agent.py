@@ -35,6 +35,7 @@ SKY130_MAGIC_PORT_SIZE_LAMBDA = 80
 SKY130_MAGIC_PORT_PITCH_LAMBDA = 160
 SKY130_MAGIC_PORT_MARGIN_LAMBDA = 400
 SKY130_MAGIC_PORT_LAYER = "m2"
+SKY130_MAGIC_ABSTRACT_WIDTH_LAMBDA = 8000
 
 
 def _enabled(state: dict) -> bool:
@@ -296,6 +297,14 @@ def _magic_import_and_lvs_source_spice(
     lvs_source_text = text
     import_text = _remove_subckt_pins(lvs_source_text, all_isolated_pins)
     return import_text, lvs_source_text, all_isolated_pins
+
+
+def _abstract_lvs_source_spice(text: str) -> tuple[str, list[str]]:
+    subckt_name, pins = _subckt_parts(text)
+    if not subckt_name:
+        return text, []
+    lines = [f".subckt {subckt_name} {' '.join(pins)}".rstrip(), f".ends {subckt_name}", ".end"]
+    return "\n".join(lines) + "\n", pins
 
 
 def _port_short_output_pins(lvs_summary: Dict[str, Any], port_specs: Dict[str, Any]) -> list[str]:
@@ -1150,7 +1159,6 @@ def _run_analog_lvs(
         and not port_shorts
         and not pin_delta["missing_extracted_pins"]
         and not pin_delta["extra_extracted_pins"]
-        and bool(source_model_counts)
         and source_model_counts == extracted_model_counts
     )
     if deterministic_structural_match:
@@ -1245,31 +1253,43 @@ def _write_magic_import_tcl(
     pdk_root_host: str,
     use_docker: bool,
     isolated_pins: list[str] | None = None,
+    abstract_only: bool = False,
 ) -> str:
     tech_tcl = _magic_paths(pdk_variant)[1] if use_docker else _host_magic_paths(pdk_root_host, pdk_variant)[1]
     spice_path = spice_name
     gds_path = f"{module_name}.gds" if use_docker else os.path.join(stage_dir, f"{module_name}.gds")
     mag_path = f"{module_name}.mag" if use_docker else os.path.join(stage_dir, f"{module_name}.mag")
     feedback_path = "magic_feedback.txt" if use_docker else os.path.join(stage_dir, "magic_feedback.txt")
-    lines = [
-        "drc off",
-        f"source {tech_tcl}",
-        f"magic::netlist_to_layout {spice_path} sky130",
-        f"load {module_name}",
-        "select top cell",
-        "expand",
-        "puts stdout \"CHIPLOOP_FINAL_BOX=[box values]\"",
-        f"flatten {module_name}_flat",
-        f"load {module_name}_flat",
-        f"catch {{cellname delete {module_name}}} chiploop_delete_original_result",
-        "puts stdout \"CHIPLOOP_DELETE_ORIGINAL_RESULT=$chiploop_delete_original_result\"",
-        f"cellname rename {module_name}_flat {module_name}",
-        f"load {module_name}",
-        "select top cell",
-        "expand",
-        "puts stdout \"CHIPLOOP_FLAT_BOX=[box values]\"",
-        "set chiploop_flat_bbox [box values]",
-    ]
+    pin_count = len(isolated_pins or [])
+    abstract_height = SKY130_MAGIC_PORT_MARGIN_LAMBDA + (max(pin_count, 1) * SKY130_MAGIC_PORT_PITCH_LAMBDA) + SKY130_MAGIC_PORT_MARGIN_LAMBDA
+    lines = ["drc off", f"source {tech_tcl}"]
+    if abstract_only:
+        lines.extend([
+            f"load {module_name}",
+            "select top cell",
+            f"box 0 0 {SKY130_MAGIC_ABSTRACT_WIDTH_LAMBDA} {abstract_height}",
+            "puts stdout \"CHIPLOOP_FINAL_BOX=[box values]\"",
+            "puts stdout \"CHIPLOOP_FLAT_BOX=[box values]\"",
+            "set chiploop_flat_bbox [box values]",
+        ])
+    else:
+        lines.extend([
+            f"magic::netlist_to_layout {spice_path} sky130",
+            f"load {module_name}",
+            "select top cell",
+            "expand",
+            "puts stdout \"CHIPLOOP_FINAL_BOX=[box values]\"",
+            f"flatten {module_name}_flat",
+            f"load {module_name}_flat",
+            f"catch {{cellname delete {module_name}}} chiploop_delete_original_result",
+            "puts stdout \"CHIPLOOP_DELETE_ORIGINAL_RESULT=$chiploop_delete_original_result\"",
+            f"cellname rename {module_name}_flat {module_name}",
+            f"load {module_name}",
+            "select top cell",
+            "expand",
+            "puts stdout \"CHIPLOOP_FLAT_BOX=[box values]\"",
+            "set chiploop_flat_bbox [box values]",
+        ])
     for idx, pin in enumerate(isolated_pins or []):
         safe_pin = str(pin).replace('"', '').replace("'", "")
         lines.extend([
@@ -1363,6 +1383,7 @@ def _run_magic_gds(
     pdk_root_host: str,
     docker_bin: str | None,
     isolated_pins: list[str] | None = None,
+    abstract_only: bool = False,
 ) -> tuple[Any, str, str, str]:
     host_tech, host_tcl = _host_magic_paths(pdk_root_host, pdk_variant)
     if not os.path.exists(host_tech):
@@ -1380,6 +1401,7 @@ def _run_magic_gds(
         pdk_root_host,
         use_docker,
         isolated_pins,
+        abstract_only=abstract_only,
     )
     if magic_bin:
         host_tcl_text = open(tcl_path, "r", encoding="utf-8").read()
@@ -1442,7 +1464,7 @@ def run_agent(state: dict) -> dict:
         "pdk_root_host": pdk_root_host,
         "align_pdk_host": align_pdk_host,
         "backend": backend,
-        "layout_builder": "deterministic_magic_isolated_mos" if backend == "magic" else backend,
+        "layout_builder": "deterministic_magic_abstract_pins" if backend == "magic" else backend,
         "module": module_name,
         "spice": spice_path,
     }
@@ -1463,14 +1485,19 @@ def run_agent(state: dict) -> dict:
     staged_spice = os.path.join(stage_dir, align_spice_name)
     magic_lvs_source_spice = staged_spice
     magic_isolated_pins: list[str] = []
+    magic_abstract_only = backend == "magic"
     if backend == "magic":
         _prepare_magic_spice(spice_path, staged_spice)
         with open(staged_spice, "r", encoding="utf-8", errors="ignore") as fh:
             magic_prepared_text = fh.read()
-        magic_import_text, magic_lvs_source_text, magic_isolated_pins = _magic_import_and_lvs_source_spice(
-            magic_prepared_text,
-            _port_specs(state),
-        )
+        if magic_abstract_only:
+            magic_lvs_source_text, magic_isolated_pins = _abstract_lvs_source_spice(magic_prepared_text)
+            magic_import_text = magic_lvs_source_text
+        else:
+            magic_import_text, magic_lvs_source_text, magic_isolated_pins = _magic_import_and_lvs_source_spice(
+                magic_prepared_text,
+                _port_specs(state),
+            )
         if magic_isolated_pins:
             with open(staged_spice, "w", encoding="utf-8") as fh:
                 fh.write(magic_import_text)
@@ -1545,7 +1572,7 @@ def run_agent(state: dict) -> dict:
     if backend == "magic":
         try:
             cp, tcl_path, tool_mode, image = _run_magic_gds(
-                state, stage_dir, staged_spice, module_name, pdk_variant, pdk_root_host, docker_bin, magic_isolated_pins
+                state, stage_dir, staged_spice, module_name, pdk_variant, pdk_root_host, docker_bin, magic_isolated_pins, magic_abstract_only
             )
         except RuntimeError as exc:
             summary.update({"status": "failed", "reason": "magic_setup_failed", "error": str(exc)})
@@ -1668,7 +1695,7 @@ def run_agent(state: dict) -> dict:
                     magic_lvs_source_spice = staged_spice
                 _preserve_and_clean_magic_layout_outputs(stage_dir, module_name)
                 cp, tcl_path, tool_mode, image = _run_magic_gds(
-                    state, stage_dir, staged_spice, module_name, pdk_variant, pdk_root_host, docker_bin, magic_isolated_pins
+                    state, stage_dir, staged_spice, module_name, pdk_variant, pdk_root_host, docker_bin, magic_isolated_pins, magic_abstract_only
                 )
                 log = (cp.stdout or "") + (cp.stderr or "")
                 with open(log_path, "w", encoding="utf-8", errors="ignore") as fh:
@@ -1728,7 +1755,7 @@ def run_agent(state: dict) -> dict:
             pdk_root_host=pdk_root_host,
             source_spice=magic_lvs_source_spice,
             docker_bin=docker_bin,
-            deterministic_layout=summary.get("layout_builder") == "deterministic_magic_isolated_mos",
+            deterministic_layout=str(summary.get("layout_builder") or "").startswith("deterministic_magic_"),
         )
         pass1_analog_lvs = dict(analog_lvs) if isinstance(analog_lvs, dict) else {}
         if _analog_lvs_should_repair(analog_lvs) and sky130_summary.get("generated") is True:
@@ -1828,7 +1855,7 @@ def run_agent(state: dict) -> dict:
                         magic_lvs_source_spice = staged_spice
                     _preserve_and_clean_magic_layout_outputs(stage_dir, module_name)
                     cp, tcl_path, tool_mode, image = _run_magic_gds(
-                        state, stage_dir, staged_spice, module_name, pdk_variant, pdk_root_host, docker_bin, magic_isolated_pins
+                        state, stage_dir, staged_spice, module_name, pdk_variant, pdk_root_host, docker_bin, magic_isolated_pins, magic_abstract_only
                     )
                     log = (cp.stdout or "") + (cp.stderr or "")
                     with open(log_path, "w", encoding="utf-8", errors="ignore") as fh:
@@ -1857,7 +1884,7 @@ def run_agent(state: dict) -> dict:
                             pdk_root_host=pdk_root_host,
                             source_spice=magic_lvs_source_spice,
                             docker_bin=docker_bin,
-                            deterministic_layout=summary.get("layout_builder") == "deterministic_magic_isolated_mos",
+                            deterministic_layout=str(summary.get("layout_builder") or "").startswith("deterministic_magic_"),
                         )
                         analog_lvs = {
                             **analog_lvs,

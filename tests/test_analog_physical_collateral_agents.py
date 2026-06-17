@@ -648,16 +648,14 @@ def test_gds_generation_uses_magic_docker_by_default(tmp_path, monkeypatch):
             assert any(str(part).endswith(":/work") for part in cmd)
             tcl = (stage_dir / "magic_import_spice.tcl").read_text(encoding="utf-8")
             assert "source /pdk/sky130A/libs.tech/magic/sky130A.tcl" in tcl
-            assert "magic::netlist_to_layout ana.sp sky130" in tcl
+            assert "magic::netlist_to_layout ana.sp sky130" not in tcl
+            assert "load ana" in tcl
+            assert "box 0 0" in tcl
             assert "CHIPLOOP_FINAL_BOX=[box values]" in tcl
-            assert "expand" in tcl
+            assert "expand" not in tcl
             assert "expand *" not in tcl
-            assert "flatten ana_flat" in tcl
-            assert "load ana_flat" in tcl
-            assert "cellname delete ana" in tcl
-            assert "CHIPLOOP_DELETE_ORIGINAL_RESULT=$chiploop_delete_original_result" in tcl
-            assert "cellname rename ana_flat ana" in tcl
-            assert tcl.index("cellname rename ana_flat ana") < tcl.index("gds write ana.gds")
+            assert "flatten ana_flat" not in tcl
+            assert "cellname rename ana_flat ana" not in tcl
             assert "CHIPLOOP_FLAT_BOX=[box values]" in tcl
             assert "cif flatten true" not in tcl
             assert "catch {cif flatglob *}" not in tcl
@@ -670,7 +668,8 @@ def test_gds_generation_uses_magic_docker_by_default(tmp_path, monkeypatch):
             assert "gds write ana.gds" in tcl
             assert tcl.rfind("feedback save magic_feedback.txt") > tcl.index("gds write ana.gds")
             staged_spice = (stage_dir / "ana.sp").read_text(encoding="utf-8")
-            assert staged_spice.count("W=1 L=0.18") == 2
+            assert ".subckt ana vin vout vdd vss" in staged_spice
+            assert "sky130_fd_pr__nfet_01v8" not in staged_spice
             (stage_dir / "ana.gds").write_bytes(b"GDS")
             (stage_dir / "ana.mag").write_text("mag\n", encoding="utf-8")
             return SimpleNamespace(returncode=0, stdout="magic ok", stderr="")
