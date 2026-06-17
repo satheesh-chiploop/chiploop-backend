@@ -331,6 +331,7 @@ def _resolve_stdcell_spice_models(state: dict, workflow_dir: str) -> list[str]:
 def _resolve_macro_spice_models(state: dict, workflow_dir: str) -> list[str]:
     digital = state.get("digital") if isinstance(state.get("digital"), dict) else {}
     candidates: list[str] = []
+    candidates.extend(sorted(glob.glob(os.path.join(workflow_dir, "analog", "signoff", "*_lvs_source.spice"))))
     for summary_path in (
         os.path.join(workflow_dir, "analog", "physical_package", "analog_physical_collateral_package.json"),
         os.path.join(workflow_dir, "analog", "sky130", "sky130_spice_summary.json"),
@@ -360,6 +361,7 @@ def _resolve_macro_spice_models(state: dict, workflow_dir: str) -> list[str]:
     candidates.extend(_resolve_macro_files_from_workflow(workflow_dir, (".spice", ".sp", ".cdl")))
     out: list[str] = []
     seen: set[str] = set()
+    seen_subckts: set[str] = set()
     for path in candidates:
         norm = path.replace("\\", "/").lower()
         base = os.path.basename(path).lower()
@@ -367,7 +369,6 @@ def _resolve_macro_spice_models(state: dict, workflow_dir: str) -> list[str]:
             "ngspice_characterization" in base
             or "characterize_" in base
             or "_extracted" in base
-            or "/analog/signoff/" in norm
             or "/analog/lib_char/" in norm
             or "/analog/gds/" in norm
         ):
@@ -375,9 +376,18 @@ def _resolve_macro_spice_models(state: dict, workflow_dir: str) -> list[str]:
         ap = os.path.abspath(path)
         if ap in seen or not os.path.isfile(ap):
             continue
+        subckts = _spice_subckt_names(ap)
+        if subckts and seen_subckts.intersection(subckts):
+            continue
         seen.add(ap)
+        seen_subckts.update(subckts)
         out.append(ap)
     return out
+
+
+def _spice_subckt_names(path: str) -> set[str]:
+    text = _read_text(path)
+    return set(re.findall(r"^\s*\.subckt\s+(\S+)", text, flags=re.IGNORECASE | re.MULTILINE))
 
 
 def _stage_spice_models(work_stage_dir: str, stdcell_spice: list[str], macro_spice: list[str]) -> tuple[list[str], list[str]]:
