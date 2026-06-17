@@ -649,10 +649,13 @@ def _build_plan(state: dict[str, Any], artifacts: dict[str, dict[str, Any]], cat
                 "reason": f"Selected restart at {restart_stage} invalidates later-stage ECO; re-evaluate after rerun.",
             })
             continue
+        action = _repair_action(issue_type)
+        if issue_type == "digital_drc" and str(issue.get("restart_stage") or "").startswith("Analog "):
+            action = "Repair macro-local analog GDS/LEF/SPICE collateral, rerun analog DRC/LVS, then rerun downstream digital signoff."
         repair_actions.append({
             "type": issue_type,
             "restart_stage": issue.get("restart_stage"),
-            "action": _repair_action(issue_type),
+            "action": action,
             "evidence": issue.get("evidence") or {},
             "reason": issue.get("reason"),
         })

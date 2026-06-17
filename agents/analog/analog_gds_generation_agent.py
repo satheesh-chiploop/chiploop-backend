@@ -34,6 +34,7 @@ SKY130_MAGIC_SAFE_MIN_L_UM = 0.18
 SKY130_MAGIC_PORT_SIZE_LAMBDA = 80
 SKY130_MAGIC_PORT_PITCH_LAMBDA = 160
 SKY130_MAGIC_PORT_MARGIN_LAMBDA = 400
+SKY130_MAGIC_PORT_LAYER = "m2"
 
 
 def _enabled(state: dict) -> bool:
@@ -218,13 +219,7 @@ def _magic_supply_pins(text: str, port_specs: Dict[str, Any]) -> list[str]:
 
 
 def _localize_magic_device_supply_terminals(text: str, port_specs: Dict[str, Any]) -> str:
-    """Keep macro supply pins as boundary pins, but avoid Magic rail shorting.
-
-    Magic netlist_to_layout is reliable for one generated MOS device per source
-    MOS, but it has repeatedly collapsed generated top-level power rails during
-    extraction. For the Magic LVS view, use per-device internal source/bulk rails
-    and keep the external supply pins as explicit isolated boundary ports.
-    """
+    """Keep supply pins at the boundary and localize device rails for Magic."""
     mos_line_re = re.compile(r"^(\s*M(\S*)\s+)(\S+)\s+(\S+)\s+(\S+)\s+(\S+)(\s+\S+.*)$", re.IGNORECASE)
     lines: list[str] = []
     for index, line in enumerate((text or "").splitlines()):
@@ -252,15 +247,7 @@ def _localize_magic_device_supply_terminals(text: str, port_specs: Dict[str, Any
 
 
 def _deterministic_magic_layout_spice(text: str) -> str:
-    """Build a Magic-safe canonical layout source with one isolated MOS per MOS.
-
-    This deliberately separates the generated analog intent SPICE from the
-    Magic physical view. Magic's Sky130 netlist importer has repeatedly shorted
-    top-level ports when asked to preserve arbitrary generated analog
-    connectivity. The deterministic physical view keeps device count/type/size
-    while replacing every MOS terminal with a unique internal net. Top-level
-    pins are reintroduced as explicit boundary ports by the Tcl generator.
-    """
+    """Build a Magic-safe layout source with one isolated MOS per MOS."""
     lines: list[str] = []
     mos_index = 0
     mos_line_re = re.compile(r"^(\s*M(\S*)\s+)(\S+)\s+(\S+)\s+(\S+)\s+(\S+)(\s+\S+.*)$", re.IGNORECASE)
@@ -770,6 +757,10 @@ def _run_analog_klayout_drc(
             docker_bin,
             "run",
             "--rm",
+            "-e",
+            f"PDK={pdk_variant}",
+            "-e",
+            "PDK_ROOT=/pdk",
             "-v",
             f"{pdk_root_host}:/pdk",
             "-v",
@@ -788,6 +779,16 @@ def _run_analog_klayout_drc(
             "-rd",
             "thr=2",
             "-rd",
+            "feol=true",
+            "-rd",
+            "beol=true",
+            "-rd",
+            "offgrid=true",
+            "-rd",
+            "seal=false",
+            "-rd",
+            "floating_met=false",
+            "-rd",
             "report=/work/analog_klayout_drc.xml",
         ]
     else:
@@ -805,6 +806,16 @@ def _run_analog_klayout_drc(
             f"topcell={module_name}",
             "-rd",
             "thr=2",
+            "-rd",
+            "feol=true",
+            "-rd",
+            "beol=true",
+            "-rd",
+            "offgrid=true",
+            "-rd",
+            "seal=false",
+            "-rd",
+            "floating_met=false",
             "-rd",
             f"report={report_path}",
         ]
@@ -1142,17 +1153,10 @@ def _run_analog_lvs(
         and bool(source_model_counts)
         and source_model_counts == extracted_model_counts
     )
-    if deterministic_structural_match:
-        status = "clean"
-        failure_class = ""
     return {
         "status": status,
         "tool": "netgen",
-        "reason": (
-            "deterministic_structural_match_netgen_reduction_ignored"
-            if deterministic_structural_match
-            else (None if status == "clean" else status)
-        ),
+        "reason": None if status == "clean" else status,
         "return_code": cp_lvs.returncode,
         "extracted_spice": extracted_spice,
         "extract_log": extract_log_path,
@@ -1166,7 +1170,7 @@ def _run_analog_lvs(
         "port_shorts": port_shorts or None,
         "failure_class": failure_class or None,
         "netgen_status": netgen_status,
-        "netgen_reduction_ignored": deterministic_structural_match or None,
+        "deterministic_structural_match": deterministic_structural_match or None,
     }
 
 
@@ -1269,14 +1273,14 @@ def _write_magic_import_tcl(
             f"set chiploop_port_y [expr {{[lindex $chiploop_flat_bbox 3] + {SKY130_MAGIC_PORT_MARGIN_LAMBDA} + ({idx} * {SKY130_MAGIC_PORT_PITCH_LAMBDA})}}]",
             "select clear",
             f"box $chiploop_port_x $chiploop_port_y [expr {{$chiploop_port_x + {SKY130_MAGIC_PORT_SIZE_LAMBDA}}}] [expr {{$chiploop_port_y + {SKY130_MAGIC_PORT_SIZE_LAMBDA}}}]",
-            "paint li",
-            f"label {{{safe_pin}}} FreeSans 200 0 0 0 center li",
+            f"paint {SKY130_MAGIC_PORT_LAYER}",
+            f"label {{{safe_pin}}} FreeSans 200 0 0 0 center {SKY130_MAGIC_PORT_LAYER}",
             "select area labels",
             "port make",
             "select clear",
         ])
     lines.extend([
-        "gds flatten true",
+        "catch {gds flatten true}",
         "catch {gds flatglob *}",
         f"catch {{feedback save {feedback_path}}}",
         f"save {module_name}.mag",

@@ -782,6 +782,11 @@ def test_gds_generation_rejects_macro_klayout_drc_violations(tmp_path, monkeypat
         if capability == "analog_netgen_lvs":
             return SimpleNamespace(returncode=0, stdout="Final result:\nCircuits match uniquely.\n", stderr="")
         if capability == "analog_klayout_drc":
+            assert "-e" in cmd
+            assert f"PDK=sky130A" in cmd
+            assert "PDK_ROOT=/pdk" in cmd
+            for rd in ("feol=true", "beol=true", "offgrid=true", "seal=false", "floating_met=false"):
+                assert rd in cmd
             (stage_dir / "analog_klayout_drc.xml").write_text(
                 "<?xml version='1.0'?><report-database><item><category>li.3</category></item></report-database>",
                 encoding="utf-8",
@@ -1066,6 +1071,9 @@ def test_magic_import_tcl_adds_isolated_scalar_input_ports(tmp_path):
 
     assert path == str(tmp_path / "magic_import_spice.tcl")
     assert "label {enable}" in text
+    assert "paint m2" in text
+    assert "center m2" in text
+    assert "paint li" not in text
     assert "select clear" in text
     assert "select area labels" in text
     assert "port make" in text
