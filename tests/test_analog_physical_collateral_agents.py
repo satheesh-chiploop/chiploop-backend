@@ -980,6 +980,8 @@ def test_magic_import_tcl_adds_isolated_scalar_input_ports(tmp_path):
 
     assert path == str(tmp_path / "magic_import_spice.tcl")
     assert "label {enable}" in text
+    assert "select clear" in text
+    assert "select area labels" in text
     assert "port make" in text
     assert "lindex $chiploop_flat_bbox 2" in text
 

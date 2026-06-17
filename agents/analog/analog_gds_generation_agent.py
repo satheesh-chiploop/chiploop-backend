@@ -1038,10 +1038,13 @@ def _write_magic_import_tcl(
         lines.extend([
             f"set chiploop_port_x [expr {{[lindex $chiploop_flat_bbox 2] + 200}}]",
             f"set chiploop_port_y [expr {{[lindex $chiploop_flat_bbox 3] + 200 + ({idx} * 80)}}]",
+            "select clear",
             "box $chiploop_port_x $chiploop_port_y [expr {$chiploop_port_x + 40}] [expr {$chiploop_port_y + 40}]",
             "paint li",
             f"label {{{safe_pin}}} FreeSans 200 0 0 0 center li",
+            "select area labels",
             "port make",
+            "select clear",
         ])
     lines.extend([
         "gds flatten true",
