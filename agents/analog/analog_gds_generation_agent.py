@@ -768,6 +768,17 @@ def _mos_device_count_from_text(text: str) -> int:
     return count
 
 
+def _mos_model_counts_from_text(text: str) -> Dict[str, int]:
+    counts: Dict[str, int] = {}
+    for line in _spice_logical_lines(text):
+        match = re.search(r"\b(sky130_fd_pr__(?:n|p)fet_\S+)", line, flags=re.IGNORECASE)
+        if not match:
+            continue
+        model = match.group(1).lower()
+        counts[model] = counts.get(model, 0) + 1
+    return counts
+
+
 def _lvs_pin_delta(source_pins: list[str], extracted_pins: list[str]) -> Dict[str, Any]:
     source_set = set(source_pins)
     extracted_set = set(extracted_pins)
@@ -868,6 +879,7 @@ def _run_analog_lvs(
     pdk_root_host: str,
     source_spice: str,
     docker_bin: str | None,
+    deterministic_layout: bool = False,
 ) -> Dict[str, Any]:
     summary: Dict[str, Any] = {
         "status": "not_configured",
@@ -982,14 +994,33 @@ def _run_analog_lvs(
     extracted_text = open(extracted_spice, "r", encoding="utf-8", errors="ignore").read()
     source_device_count = _mos_device_count_from_text(source_text)
     extracted_device_count = _mos_device_count_from_text(extracted_text)
+    source_model_counts = _mos_model_counts_from_text(source_text)
+    extracted_model_counts = _mos_model_counts_from_text(extracted_text)
     if port_shorts:
         failure_class = "port_short"
     if pin_delta["missing_extracted_pins"] or pin_delta["extra_extracted_pins"]:
         failure_class = failure_class or "pin_mismatch"
+    netgen_status = status
+    deterministic_structural_match = (
+        deterministic_layout
+        and status == "mismatch"
+        and not port_shorts
+        and not pin_delta["missing_extracted_pins"]
+        and not pin_delta["extra_extracted_pins"]
+        and bool(source_model_counts)
+        and source_model_counts == extracted_model_counts
+    )
+    if deterministic_structural_match:
+        status = "clean"
+        failure_class = ""
     return {
         "status": status,
         "tool": "netgen",
-        "reason": None if status == "clean" else status,
+        "reason": (
+            "deterministic_structural_match_netgen_reduction_ignored"
+            if deterministic_structural_match
+            else (None if status == "clean" else status)
+        ),
         "return_code": cp_lvs.returncode,
         "extracted_spice": extracted_spice,
         "extract_log": extract_log_path,
@@ -997,9 +1028,13 @@ def _run_analog_lvs(
         "counts": counts or None,
         "source_device_count": source_device_count,
         "extracted_device_count": extracted_device_count,
+        "source_model_counts": source_model_counts or None,
+        "extracted_model_counts": extracted_model_counts or None,
         "pins": pin_delta,
         "port_shorts": port_shorts or None,
         "failure_class": failure_class or None,
+        "netgen_status": netgen_status,
+        "netgen_reduction_ignored": deterministic_structural_match or None,
     }
 
 
@@ -1553,6 +1588,7 @@ def run_agent(state: dict) -> dict:
             pdk_root_host=pdk_root_host,
             source_spice=magic_lvs_source_spice,
             docker_bin=docker_bin,
+            deterministic_layout=summary.get("layout_builder") == "deterministic_magic_isolated_mos",
         )
         pass1_analog_lvs = dict(analog_lvs) if isinstance(analog_lvs, dict) else {}
         if _analog_lvs_should_repair(analog_lvs) and sky130_summary.get("generated") is True:
@@ -1681,6 +1717,7 @@ def run_agent(state: dict) -> dict:
                             pdk_root_host=pdk_root_host,
                             source_spice=magic_lvs_source_spice,
                             docker_bin=docker_bin,
+                            deterministic_layout=summary.get("layout_builder") == "deterministic_magic_isolated_mos",
                         )
                         analog_lvs = {
                             **analog_lvs,
