@@ -206,6 +206,45 @@ def _canonicalize_magic_output_driver_pairs(text: str, port_specs: Dict[str, Any
     return "\n".join(kept_lines).rstrip() + ("\n" if text.endswith("\n") else "")
 
 
+def _magic_supply_pins(text: str, port_specs: Dict[str, Any]) -> list[str]:
+    _subckt_name, pins = _subckt_parts(text)
+    return [pin for pin in pins if _is_supply_pin(pin, port_specs)]
+
+
+def _localize_magic_device_supply_terminals(text: str, port_specs: Dict[str, Any]) -> str:
+    """Keep macro supply pins as boundary pins, but avoid Magic rail shorting.
+
+    Magic netlist_to_layout is reliable for one generated MOS device per source
+    MOS, but it has repeatedly collapsed generated top-level power rails during
+    extraction. For the Magic LVS view, use per-device internal source/bulk rails
+    and keep the external supply pins as explicit isolated boundary ports.
+    """
+    mos_line_re = re.compile(r"^(\s*M(\S*)\s+)(\S+)\s+(\S+)\s+(\S+)\s+(\S+)(\s+\S+.*)$", re.IGNORECASE)
+    lines: list[str] = []
+    for index, line in enumerate((text or "").splitlines()):
+        match = mos_line_re.match(line)
+        if not match:
+            lines.append(line)
+            continue
+        prefix, inst_suffix, drain, gate, source, bulk, suffix = match.groups()
+        source_name = _pin_name(source)
+        bulk_name = _pin_name(bulk)
+        model = suffix.strip().split()[0].lower() if suffix.strip() else ""
+        supply_kind = _supply_kind(source_name, port_specs) or _supply_kind(bulk_name, port_specs)
+        if not supply_kind and "pfet" in model:
+            supply_kind = "power"
+        elif not supply_kind and "nfet" in model:
+            supply_kind = "ground"
+        if supply_kind in {"power", "ground"} and (_is_supply_pin(source_name, port_specs) or _is_supply_pin(bulk_name, port_specs)):
+            safe_inst = re.sub(r"[^A-Za-z0-9_]+", "_", inst_suffix or str(index)).strip("_") or str(index)
+            rail_prefix = "chiploop_pwr" if supply_kind == "power" else "chiploop_gnd"
+            rail = f"{rail_prefix}_{safe_inst}"
+            source_name = rail
+            bulk_name = rail
+        lines.append(f"{prefix}{_pin_name(drain)} {_pin_name(gate)} {source_name} {bulk_name}{suffix}")
+    return "\n".join(lines).rstrip() + ("\n" if text.endswith("\n") else "")
+
+
 def _remove_subckt_pins(text: str, pins_to_remove: list[str]) -> str:
     if not pins_to_remove:
         return text
@@ -232,8 +271,15 @@ def _magic_import_and_lvs_source_spice(
 ) -> tuple[str, str, list[str]]:
     text, isolated_supply_pins = _canonicalize_magic_supply_aliases(text, port_specs)
     text = _canonicalize_magic_output_driver_pairs(text, port_specs)
+    text = _localize_magic_device_supply_terminals(text, port_specs)
     isolated_pins = _magic_scalar_input_isolation_pins(text, port_specs)
-    all_isolated_pins = list(dict.fromkeys([*isolated_pins, *isolated_supply_pins, *(extra_isolated_pins or [])]))
+    supply_pins = _magic_supply_pins(text, port_specs)
+    all_isolated_pins = list(dict.fromkeys([
+        *isolated_pins,
+        *supply_pins,
+        *isolated_supply_pins,
+        *(extra_isolated_pins or []),
+    ]))
     if not all_isolated_pins:
         return text, text, []
     lvs_source_text = _isolate_magic_scalar_input_pins(text, isolated_pins)

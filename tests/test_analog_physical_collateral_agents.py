@@ -849,14 +849,14 @@ def test_magic_import_isolates_scalar_input_controls_without_bus_hardcoding():
 
     import_text, lvs_source_text, isolated = gds_agent._magic_import_and_lvs_source_spice(spice, specs)
 
-    assert isolated == ["enable"]
-    assert ".subckt ana out[0] out[1] valid sense[0] sense[1] vdd vss" in import_text
+    assert isolated == ["enable", "vdd", "vss"]
+    assert ".subckt ana out[0] out[1] valid sense[0] sense[1]" in import_text
     assert ".subckt ana out[0] out[1] valid enable sense[0] sense[1] vdd vss" in lvs_source_text
     assert " valid enable " not in import_text
     assert "Mvp valid enable" not in lvs_source_text
     assert "Mvn valid enable" not in lvs_source_text
-    assert "Mvp valid chiploop_iso_enable_valid vdd vdd" in lvs_source_text
-    assert "Mvn valid chiploop_iso_enable_valid vss vss" in lvs_source_text
+    assert "Mvp valid chiploop_iso_enable_valid chiploop_pwr_vp chiploop_pwr_vp" in lvs_source_text
+    assert "Mvn valid chiploop_iso_enable_valid chiploop_gnd_vn chiploop_gnd_vn" in lvs_source_text
     assert " out[0] sense[0] " in import_text
     assert " out[1] sense[1] " in import_text
 
@@ -879,11 +879,11 @@ def test_magic_import_isolates_secondary_supply_aliases_generically():
 
     import_text, lvs_source_text, isolated = gds_agent._magic_import_and_lvs_source_spice(spice, specs)
 
-    assert isolated == ["in", "avdd", "avss"]
-    assert ".subckt ana out VPWR VGND" in import_text
+    assert isolated == ["in", "VPWR", "VGND", "avdd", "avss"]
+    assert ".subckt ana out" in import_text
     assert ".subckt ana out in VPWR VGND avdd avss" in lvs_source_text
-    assert "M0p out chiploop_iso_in_out VPWR VPWR" in lvs_source_text
-    assert "M0n out chiploop_iso_in_out VGND VGND" in lvs_source_text
+    assert "M0p out chiploop_iso_in_out chiploop_pwr_0p chiploop_pwr_0p" in lvs_source_text
+    assert "M0n out chiploop_iso_in_out chiploop_gnd_0n chiploop_gnd_0n" in lvs_source_text
 
 
 def test_magic_import_canonicalizes_duplicate_output_driver_fragments():
@@ -906,9 +906,9 @@ def test_magic_import_canonicalizes_duplicate_output_driver_fragments():
 
     _import_text, lvs_source_text, isolated = gds_agent._magic_import_and_lvs_source_spice(spice, specs)
 
-    assert isolated == ["in0", "in1", "in2"]
-    assert "M0p out chiploop_iso_in0_out vdd vdd" in lvs_source_text
-    assert "M0n out chiploop_iso_in0_out vss vss" in lvs_source_text
+    assert isolated == ["in0", "in1", "in2", "vdd", "vss"]
+    assert "M0p out chiploop_iso_in0_out chiploop_pwr_0p chiploop_pwr_0p" in lvs_source_text
+    assert "M0n out chiploop_iso_in0_out chiploop_gnd_0n chiploop_gnd_0n" in lvs_source_text
     assert "M1p" not in lvs_source_text
     assert "M2n" not in lvs_source_text
 
@@ -959,8 +959,8 @@ def test_magic_import_isolates_unused_scalar_input_pins():
 
     import_text, lvs_source_text, isolated = gds_agent._magic_import_and_lvs_source_spice(spice, specs)
 
-    assert isolated == ["unused_ctrl"]
-    assert ".subckt ana out sense[0] vdd vss" in import_text
+    assert isolated == ["unused_ctrl", "vdd", "vss"]
+    assert ".subckt ana out sense[0]" in import_text
     assert ".subckt ana out unused_ctrl sense[0] vdd vss" in lvs_source_text
     assert "M0p out sense[0]" in import_text
 
@@ -1198,12 +1198,12 @@ def test_gds_generation_fails_and_does_not_promote_macro_gds_when_lvs_still_mism
     with pytest.raises(RuntimeError, match="analog_lvs_not_clean"):
         gds_agent.run_agent(state)
 
-    assert calls == {"gds": 1, "extract": 1, "lvs": 1}
+    assert calls == {"gds": 2, "extract": 2, "lvs": 2}
     assert state["analog_gds_generation"]["status"] == "failed"
     assert state["analog_gds_generation"]["reason"] == "analog_lvs_not_clean"
     assert state["analog_gds_generation"]["analog_lvs"]["status"] == "mismatch"
-    assert state["analog_gds_generation"]["lvs_repair_reason"] == "lvs_repair_no_material_change"
-    assert state["analog_gds_generation"]["analog_lvs"]["repair_reason"] == "lvs_repair_no_material_change"
+    assert state["analog_gds_generation"]["lvs_repair_reason"] == "lvs_repair_still_pin_mismatch"
+    assert state["analog_gds_generation"]["analog_lvs"]["repair_reason"] == "lvs_repair_still_pin_mismatch"
     assert state["analog_gds_generation"]["analog_lvs"]["pins"]["missing_extracted_pins"] == ["vss"]
     assert "macro_gds" not in state.get("digital", {})
     assert state["analog_signoff"]["drc"]["status"] == "clean"
