@@ -948,6 +948,44 @@ def test_analog_lvs_accepts_deterministic_device_inventory_match(tmp_path, monke
     assert summary["comparison_mode"] == "deterministic_device_inventory"
 
 
+def test_analog_lvs_accepts_abstract_pin_only_completed_status(tmp_path, monkeypatch):
+    stage_dir = tmp_path / "analog" / "gds"
+    pdk_root = tmp_path / "pdk"
+    stage_dir.mkdir(parents=True)
+    (stage_dir / "ana.mag").write_text("mag\n", encoding="utf-8")
+    source = stage_dir / "ana_lvs_source.spice"
+    source.write_text(".subckt ana out in vdd vss\n.ends ana\n", encoding="utf-8")
+
+    def fake_run_command(state, capability, cmd, cwd=None, timeout_sec=None):
+        if capability == "analog_magic_lvs_extract":
+            (stage_dir / "ana_extracted.spice").write_text(
+                ".subckt ana out in vdd vss\n.ends ana\n",
+                encoding="utf-8",
+            )
+            return SimpleNamespace(returncode=0, stdout="extract ok\n", stderr="")
+        if capability == "analog_netgen_lvs":
+            return SimpleNamespace(returncode=0, stdout="LVS Done.\n", stderr="")
+        raise AssertionError(capability)
+
+    monkeypatch.setattr(gds_agent, "run_command", fake_run_command)
+    monkeypatch.setattr(gds_agent.shutil, "which", lambda name: f"/usr/bin/{name}" if name in {"magic", "netgen"} else None)
+
+    summary = gds_agent._run_analog_lvs(
+        {"workflow_id": "wf"},
+        stage_dir=str(stage_dir),
+        module_name="ana",
+        pdk_variant="sky130A",
+        pdk_root_host=str(pdk_root),
+        source_spice=str(source),
+        docker_bin=None,
+        deterministic_layout=True,
+    )
+
+    assert summary["status"] == "clean"
+    assert summary["netgen_status"] == "completed"
+    assert summary["comparison_mode"] == "deterministic_device_inventory"
+
+
 def test_magic_import_isolates_scalar_input_controls_without_bus_hardcoding():
     spice = (
         ".subckt ana out[0] out[1] valid enable sense[0] sense[1] vdd vss\n"

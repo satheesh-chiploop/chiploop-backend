@@ -1155,7 +1155,7 @@ def _run_analog_lvs(
     netgen_status = status
     deterministic_structural_match = (
         deterministic_layout
-        and status == "mismatch"
+        and status in {"mismatch", "completed"}
         and not port_shorts
         and not pin_delta["missing_extracted_pins"]
         and not pin_delta["extra_extracted_pins"]
