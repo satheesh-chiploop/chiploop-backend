@@ -282,6 +282,154 @@ def _module_ports_from_text(text: str, module_name: str) -> list[tuple[str, str]
     return ordered
 
 
+def _parse_range(text: str | None) -> tuple[int, int] | None:
+    if not text:
+        return None
+    match = re.fullmatch(r"\[\s*(\d+)\s*:\s*(\d+)\s*\]", text.strip())
+    if not match:
+        return None
+    return int(match.group(1)), int(match.group(2))
+
+
+def _range_width(port_range: tuple[int, int] | None) -> int:
+    if not port_range:
+        return 1
+    return abs(port_range[0] - port_range[1]) + 1
+
+
+def _merge_range(a: tuple[int, int] | None, b: tuple[int, int] | None) -> tuple[int, int] | None:
+    if _range_width(b) > _range_width(a):
+        return b
+    return a
+
+
+def _module_port_ranges_from_text(text: str, module_name: str) -> dict[str, tuple[int, int]]:
+    module_match = re.search(
+        rf"\bmodule\s+{re.escape(module_name)}\s*\((?P<header>.*?)\)\s*;",
+        text,
+        flags=re.DOTALL,
+    )
+    if not module_match:
+        return {}
+    ranges: dict[str, tuple[int, int]] = {}
+    module_body = text[module_match.end():]
+    end_match = re.search(r"\bendmodule\b", module_body)
+    if end_match:
+        module_body = module_body[:end_match.start()]
+
+    last_direction = None
+    last_range: tuple[int, int] | None = None
+    for raw in module_match.group("header").split(","):
+        item = raw.strip()
+        match = re.match(
+            r"(?:(?P<direction>input|output|inout)\s+)?(?:wire|reg|logic|signed|\s)*\s*(?P<range>\[[^\]]+\])?\s*(?P<name>[A-Za-z_][A-Za-z0-9_$]*)$",
+            item,
+        )
+        if not match:
+            continue
+        if match.group("direction"):
+            last_direction = match.group("direction")
+            last_range = _parse_range(match.group("range"))
+        port_range = _parse_range(match.group("range")) or (last_range if last_direction else None)
+        if port_range:
+            ranges[match.group("name")] = port_range
+
+    for decl in re.finditer(
+        r"\b(?:input|output|inout)\b\s*(?:wire|reg|logic|signed|\s)*\s*(?P<range>\[[^\]]+\])?\s*(?P<names>[^;]+);",
+        module_body,
+        flags=re.MULTILINE,
+    ):
+        port_range = _parse_range(decl.group("range"))
+        if not port_range:
+            continue
+        for raw_name in decl.group("names").split(","):
+            name = re.sub(r"=.*$", "", raw_name).strip()
+            name = re.sub(r"\[[^\]]+\]\s*$", "", name).strip()
+            name = re.sub(r"^(?:wire|reg|logic|signed)\s+", "", name).strip()
+            if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_$]*", name):
+                ranges[name] = port_range
+    return ranges
+
+
+def _module_signal_ranges_from_text(text: str, module_name: str) -> dict[str, tuple[int, int]]:
+    ranges = dict(_module_port_ranges_from_text(text, module_name))
+    module_match = re.search(
+        rf"\bmodule\s+{re.escape(module_name)}\s*\((?P<header>.*?)\)\s*;",
+        text,
+        flags=re.DOTALL,
+    )
+    if not module_match:
+        return ranges
+    module_body = text[module_match.end():]
+    end_match = re.search(r"\bendmodule\b", module_body)
+    if end_match:
+        module_body = module_body[:end_match.start()]
+    for decl in re.finditer(
+        r"\b(?:wire|reg|logic)\b\s*(?:signed|\s)*\s*(?P<range>\[[^\]]+\])\s*(?P<names>[^;]+);",
+        module_body,
+        flags=re.MULTILINE,
+    ):
+        signal_range = _parse_range(decl.group("range"))
+        if not signal_range:
+            continue
+        for raw_name in decl.group("names").split(","):
+            name = re.sub(r"=.*$", "", raw_name).strip()
+            if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_$]*", name):
+                ranges[name] = signal_range
+    return ranges
+
+
+def _expr_range(expr: str, signal_ranges: dict[str, tuple[int, int]]) -> tuple[int, int] | None:
+    expr = expr.strip()
+    if not expr:
+        return None
+    if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_$]*", expr):
+        return signal_ranges.get(expr)
+    part = re.fullmatch(r"[A-Za-z_][A-Za-z0-9_$]*\s*\[\s*(\d+)\s*:\s*(\d+)\s*\]", expr)
+    if part:
+        return int(part.group(1)), int(part.group(2))
+    bit = re.fullmatch(r"[A-Za-z_][A-Za-z0-9_$]*\s*\[\s*\d+\s*\]", expr)
+    if bit:
+        return None
+    const = re.fullmatch(r"(\d+)'[bhdBHD][0-9a-fA-F_xzXZ]+", expr)
+    if const:
+        width = int(const.group(1))
+        return (width - 1, 0) if width > 1 else None
+    if expr.startswith("{") and expr.endswith("}"):
+        total = 0
+        for item in expr[1:-1].split(","):
+            total += _range_width(_expr_range(item.strip(), signal_ranges))
+        return (total - 1, 0) if total > 1 else None
+    return None
+
+
+def _module_instance_pin_ranges(gate: str | None, module_name: str, top: str) -> dict[str, tuple[int, int]]:
+    if not gate:
+        return {}
+    try:
+        text = Path(gate).read_text(encoding="utf-8", errors="ignore")
+    except Exception:
+        text = gate
+    signal_ranges = _module_signal_ranges_from_text(text, top)
+    ranges: dict[str, tuple[int, int]] = {}
+    pattern = re.compile(
+        rf"\b{re.escape(module_name)}\s+(?:\\[^\s(]+|[A-Za-z_][A-Za-z0-9_$]*)\s*\((?P<body>.*?)\);",
+        flags=re.DOTALL,
+    )
+    for match in pattern.finditer(text):
+        for pin in re.finditer(r"\.(?P<pin>[A-Za-z_][A-Za-z0-9_$]*)\s*\((?P<expr>.*?)\)", match.group("body"), flags=re.DOTALL):
+            port_range = _expr_range(pin.group("expr"), signal_ranges)
+            if port_range:
+                ranges[pin.group("pin")] = _merge_range(ranges.get(pin.group("pin")), port_range)
+    return ranges
+
+
+def _format_port_decl(direction: str, name: str, port_range: tuple[int, int] | None) -> str:
+    if port_range:
+        return f"  {direction} [{port_range[0]}:{port_range[1]}] {name};"
+    return f"  {direction} {name};"
+
+
 def _module_instance_pins(gate: str | None, module_name: str) -> list[str]:
     if not gate:
         return []
@@ -316,7 +464,10 @@ def _macro_blackbox_stubs(gate: str | None, rtl_files: list[str], stage_dir: str
         module_name = _module_name_in_file(path)
         if not module_name or module_name not in macro_names:
             continue
-        ports = _module_ports_from_text(_read_text(path), module_name)
+        rtl_text = _read_text(path)
+        ports = _module_ports_from_text(rtl_text, module_name)
+        port_ranges = _module_port_ranges_from_text(rtl_text, module_name)
+        instance_ranges = _module_instance_pin_ranges(gate, module_name, top)
         known = {name: direction for name, direction in ports}
         for pin in _module_instance_pins(gate, module_name):
             if pin not in known:
@@ -329,7 +480,7 @@ def _macro_blackbox_stubs(gate: str | None, rtl_files: list[str], stage_dir: str
             f"module {module_name}({', '.join(port_names)});",
         ]
         for name, direction in ports:
-            lines.append(f"  {direction} {name};")
+            lines.append(_format_port_decl(direction, name, _merge_range(port_ranges.get(name), instance_ranges.get(name))))
         lines.append("endmodule")
         stub_path = os.path.join(input_dir, f"{module_name}_blackbox.v")
         _write_text(stub_path, "\n".join(lines) + "\n")

@@ -130,6 +130,28 @@ def _xor_difference_count(log: str) -> int | None:
     return int(match.group(1)) if match else None
 
 
+def _lvs_failure_details(text: str) -> dict[str, object]:
+    bus_mismatches: list[str] = []
+    implicit_pins: list[str] = []
+    for line in (text or "").splitlines():
+        if "bus width" in line and "does not match port" in line:
+            bus_mismatches.append(line.strip())
+        match = re.search(r"Implicit pin\s+(.+?)\s+in instance\s+(.+?)\s+of\s+(.+?)\s+in cell\s+(.+)", line)
+        if match:
+            implicit_pins.append(match.group(1).strip())
+    if bus_mismatches or implicit_pins:
+        return {
+            "failure_reason": "macro_bus_width_mismatch",
+            "bus_width_mismatches": bus_mismatches[:20],
+            "implicit_pins": implicit_pins[:50],
+        }
+    if "Top level cell failed pin matching" in (text or ""):
+        return {"failure_reason": "top_level_pin_mismatch"}
+    if "Final result: Netlists do not match" in (text or ""):
+        return {"failure_reason": "netlists_do_not_match"}
+    return {}
+
+
 def _lvs_status_from_text(text: str) -> str | None:
     lower = (text or "").lower()
     if "circuits match uniquely" in lower:
@@ -689,6 +711,8 @@ docker run --rm \\
     lvs_report_path, report_lvs_status = _copy_lvs_report(latest, stage_dir)
     lvs_status = _lvs_status(rc, report_lvs_status, out)
     xor_differences = _xor_difference_count(out)
+    report_text = _read_text(lvs_report_path) if lvs_report_path else ""
+    failure_details = _lvs_failure_details("\n".join([out or "", report_text or ""]))
 
     summary = {
         "workflow_id": workflow_id,
@@ -705,6 +729,8 @@ docker run --rm \\
             "openlane_run_dir": latest,
         },
     }
+    if lvs_status not in {"clean", "completed"}:
+        summary.update(failure_details)
 
     _write_text(os.path.join(stage_dir, "lvs_summary.json"), json.dumps(summary, indent=2))
     _write_text(os.path.join(stage_dir, "lvs_summary.md"), f"# LVS (Netgen)\n\n- status: `{summary['status']}` (rc={rc})\n")

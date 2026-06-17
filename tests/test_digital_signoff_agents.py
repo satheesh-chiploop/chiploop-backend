@@ -11,7 +11,7 @@ from agents.digital.digital_failure_debug_agent import run_agent as failure_debu
 from agents.digital import digital_spec2rtl_conformance_agent as spec2rtl_agent
 from agents.digital import digital_fill_agent, digital_sta_postfill_agent
 from agents.digital.digital_logic_equivalence_agent import _generated_stdcell_model, _missing_stdcell_models, _prepare_golden_rtl_for_yosys, _yosys_script
-from agents.digital.digital_lvs_agent import _lvs_status, _macro_blackbox_deferred as _lvs_macro_blackbox_deferred
+from agents.digital.digital_lvs_agent import _lvs_failure_details, _lvs_status, _macro_blackbox_deferred as _lvs_macro_blackbox_deferred
 from agents.digital.digital_scan_atpg_agent import _adapter_log_has_execution_error, _generate_full_scan_bench, _metrics_show_real_atpg_result, _pattern_count_from_file
 from agents.digital import digital_tapeout_lec_agent as tapeout_lec_agent
 from agents.digital.digital_tapeout_lec_agent import PHYSICAL_ONLY_TOP_PORTS, _top_ports
@@ -557,8 +557,8 @@ endmodule
     text = open(stubs[0], "r", encoding="utf-8").read()
 
     assert "module temp_sensor_adc_model(sample_req, sensor_temp_celsius, adc_code, avdd, avss, adc_valid);" in text
-    assert "input sensor_temp_celsius;" in text
-    assert "output adc_code;" in text
+    assert "input [15:0] sensor_temp_celsius;" in text
+    assert "output [11:0] adc_code;" in text
     assert "input adc_valid;" in text
 
 
@@ -572,6 +572,16 @@ def test_drc_lvs_blackbox_deferred_when_macro_gds_missing():
     assert _drc_macro_blackbox_deferred(["dir::inputs/macros/lef/ana.lef"], ["dir::inputs/macros/lib/ana.lib"], [])
     assert _lvs_macro_blackbox_deferred(["dir::inputs/macros/lef/ana.lef"], ["dir::inputs/macros/lib/ana.lib"], [])
     assert not _drc_macro_blackbox_deferred(["dir::inputs/macros/lef/ana.lef"], [], ["dir::inputs/macros/gds/ana.gds"])
+
+
+def test_lvs_failure_details_classifies_macro_bus_width_mismatch():
+    details = _lvs_failure_details(
+        "Warning: Net {a[1],a[0]} bus width (2) does not match port a bus width (1).\n"
+        "Note:  Implicit pin a[1] in instance u_ana of ana in cell top\n"
+    )
+
+    assert details["failure_reason"] == "macro_bus_width_mismatch"
+    assert details["implicit_pins"] == ["a[1]"]
 
 
 def test_signoff_macro_staging_ignores_directory_collateral(tmp_path):

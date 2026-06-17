@@ -1018,6 +1018,15 @@ def test_magic_import_isolates_scalar_input_controls_without_bus_hardcoding():
     assert " out[1] sense[1] " not in import_text
 
 
+def test_abstract_lvs_source_orders_bus_pins_numerically():
+    text, pins = gds_agent._abstract_lvs_source_spice(
+        ".subckt ana adc_code[0] adc_code[10] adc_code[11] adc_code[1] sensor[0] sensor[2] sensor[1] avdd avss\n.ends ana\n"
+    )
+
+    assert ".subckt ana adc_code[0] adc_code[1] adc_code[10] adc_code[11] sensor[0] sensor[1] sensor[2] avdd avss" in text
+    assert pins[:4] == ["adc_code[0]", "adc_code[1]", "adc_code[10]", "adc_code[11]"]
+
+
 def test_magic_import_isolates_secondary_supply_aliases_generically():
     spice = (
         ".subckt ana out in VPWR VGND avdd avss\n"

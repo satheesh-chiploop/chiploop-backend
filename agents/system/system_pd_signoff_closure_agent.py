@@ -378,7 +378,7 @@ def _classify(artifacts: dict[str, dict[str, Any]], category_counts: dict[str, i
     if lvs_status and not _status_clean(lvs_status, {"clean", "ok", "pass", "completed"}):
         reason = str(_first_present(lvs.get("failure_reason"), lvs.get("reason"), "")).lower()
         if not (lvs_status == "blackbox_deferred" and "analog_macro_gds_missing" in reason):
-            stage = "Digital Floorplan Agent" if "pin" in reason or lvs_status == "mismatch" else "Digital LVS Agent"
+            stage = "Digital LVS Agent" if "macro_bus_width_mismatch" in reason else ("Digital Floorplan Agent" if "pin" in reason or lvs_status == "mismatch" else "Digital LVS Agent")
             issues.append({
                 "type": "digital_lvs",
                 "severity": 85,
@@ -446,6 +446,7 @@ def _classify(artifacts: dict[str, dict[str, Any]], category_counts: dict[str, i
 
 
 def _select_restart_stage(issues: list[dict[str, Any]]) -> str | None:
+    dominant_type = next((str(issue.get("type") or "") for issue in issues if not issue.get("blocked_by_upstream_signoff")), "")
     actionable = [
         issue for issue in issues
         if not issue.get("blocked_by_upstream_signoff")
@@ -455,6 +456,10 @@ def _select_restart_stage(issues: list[dict[str, Any]]) -> str | None:
             or STAGE_RANK.get(str(issue.get("restart_stage")), 999) >= PD_RESTART_MIN_RANK
         )
     ]
+    if dominant_type not in {"setup_timing", "hold_timing"}:
+        non_timing = [issue for issue in actionable if str(issue.get("type") or "") not in {"setup_timing", "hold_timing"}]
+        if non_timing:
+            actionable = non_timing
     if not actionable:
         return None
     return min(
@@ -462,6 +467,11 @@ def _select_restart_stage(issues: list[dict[str, Any]]) -> str | None:
         key=lambda stage: STAGE_RANK.get(stage, 999),
         default=None,
     )
+
+
+def _restart_reruns_timing(stage: str | None) -> bool:
+    rank = STAGE_RANK.get(str(stage or ""), 999)
+    return PD_RESTART_MIN_RANK <= rank <= STAGE_RANK["Digital Route Agent"]
 
 
 def _stage_config(workflow_dir: str, stage: str) -> dict[str, Any]:
@@ -516,6 +526,8 @@ def _eco_profile(
     except Exception:
         iteration = 1
     total_drc = sum(int(v or 0) for v in category_counts.values())
+    dominant_issue = next((str(issue.get("type") or "") for issue in issues if not issue.get("blocked_by_upstream_signoff")), "")
+    selected_restart_stage = _select_restart_stage(issues)
     severe_drc = total_drc >= 100
     severity_scale = 1.30 if (iteration <= 1 and severe_drc) else (1.15 if iteration <= 1 else 1.30)
     names = " ".join(category_counts.keys()).lower()
@@ -563,14 +575,29 @@ def _eco_profile(
 
     setup_vios = sta.get("setup_violations") or 0
     hold_vios = sta.get("hold_violations") or 0
-    if setup_vios or (sta.get("setup_wns") is not None and sta.get("setup_wns") < 0):
+    timing_is_dominant = dominant_issue in {"setup_timing", "hold_timing"}
+    timing_can_be_bundled = timing_is_dominant or _restart_reruns_timing(selected_restart_stage)
+    if timing_can_be_bundled and (setup_vios or (sta.get("setup_wns") is not None and sta.get("setup_wns") < 0)):
         route_overrides["RUN_SPEF_EXTRACTION"] = True
         route_overrides["CHIPLOOP_TIMING_CLOSURE_ECO"] = f"setup_iter_{iteration}"
-        notes.append("Post-fill setup is negative; preserve SPEF and rerun downstream timing with closure profile.")
-    if hold_vios or (sta.get("hold_wns") is not None and sta.get("hold_wns") < 0):
+        if timing_is_dominant:
+            notes.append("Post-fill setup is negative; preserve SPEF and rerun downstream timing with closure profile.")
+        else:
+            notes.append(f"Bundle setup timing repair because {selected_restart_stage} reruns downstream timing stages.")
+    if timing_can_be_bundled and (hold_vios or (sta.get("hold_wns") is not None and sta.get("hold_wns") < 0)):
         route_overrides["RUN_SPEF_EXTRACTION"] = True
         route_overrides["CHIPLOOP_TIMING_CLOSURE_ECO"] = f"hold_iter_{iteration}"
-        notes.append("Post-fill hold is negative; CTS/route must be rerun before accepting signoff.")
+        if timing_is_dominant:
+            notes.append("Post-fill hold is negative; CTS/route must be rerun before accepting signoff.")
+        else:
+            notes.append(f"Bundle hold timing repair because {selected_restart_stage} reruns downstream timing stages.")
+    elif not timing_can_be_bundled and (
+        setup_vios
+        or hold_vios
+        or (sta.get("setup_wns") is not None and sta.get("setup_wns") < 0)
+        or (sta.get("hold_wns") is not None and sta.get("hold_wns") < 0)
+    ):
+        notes.append("Timing is not the dominant restart cause; re-evaluate timing after the earlier signoff issue is repaired.")
 
     if floorplan_overrides:
         overrides["floorplan"] = floorplan_overrides
@@ -644,6 +671,15 @@ def _build_plan(state: dict[str, Any], artifacts: dict[str, dict[str, Any]], cat
             skipped_repairs.append({"type": issue_type, "reason": f"{repair_group}_repair_disabled"})
             continue
         if restart_stage and STAGE_RANK.get(str(issue.get("restart_stage")), 999) > STAGE_RANK.get(restart_stage, 999):
+            if issue_type in {"setup_timing", "hold_timing"} and _restart_reruns_timing(restart_stage):
+                repair_actions.append({
+                    "type": issue_type,
+                    "restart_stage": restart_stage,
+                    "action": "Bundle timing ECO into the selected earlier physical restart and re-check post-fill STA downstream.",
+                    "evidence": issue.get("evidence") or {},
+                    "reason": issue.get("reason"),
+                })
+                continue
             skipped_repairs.append({
                 "type": issue_type,
                 "reason": f"Selected restart at {restart_stage} invalidates later-stage ECO; re-evaluate after rerun.",

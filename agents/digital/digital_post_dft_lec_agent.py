@@ -10,6 +10,8 @@ from agents.digital.digital_logic_equivalence_agent import (
     _missing_stdcell_models,
     _module_name_in_file,
     _module_instance_pins,
+    _module_instance_pin_ranges,
+    _format_port_decl,
     _module_ports_from_text,
     _prepare_golden_rtl_for_yosys,
     _prepare_stdcell_models_for_yosys,
@@ -104,13 +106,14 @@ def _fallback_macro_blackboxes(netlist: str | None, stage_dir: str, top: str, ex
         pins = _module_instance_pins(netlist, module_name)
         if not pins:
             continue
+        pin_ranges = _module_instance_pin_ranges(netlist, module_name, top)
         lines = [
             "// Auto-generated blackbox stub for preserved macro Post-DFT LEC.",
             "(* blackbox *)",
             f"module {module_name}({', '.join(pins)});",
         ]
         for pin in pins:
-            lines.append(f"  inout {pin};")
+            lines.append(_format_port_decl("inout", pin, pin_ranges.get(pin)))
         lines.append("endmodule")
         path = os.path.join(input_dir, f"{module_name}_blackbox.v")
         _write_text(path, "\n".join(lines) + "\n")

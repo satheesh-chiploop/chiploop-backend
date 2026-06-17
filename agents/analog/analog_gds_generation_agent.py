@@ -68,6 +68,31 @@ def _prepare_magic_spice(src: str, dst: str) -> None:
         fh.write(text)
 
 
+def _canonical_pin_order(pins: list[str]) -> list[str]:
+    grouped: Dict[str, Dict[str, Any]] = {}
+    ordered_bases: list[str] = []
+    for pin in pins:
+        match = re.fullmatch(r"(.+)\[(\d+)\]", _pin_name(pin))
+        if not match:
+            grouped.setdefault(pin, {"scalar": pin, "bits": {}})
+            ordered_bases.append(pin)
+            continue
+        base = match.group(1)
+        if base not in grouped:
+            grouped[base] = {"scalar": None, "bits": {}}
+            ordered_bases.append(base)
+        grouped[base]["bits"][int(match.group(2))] = pin
+    ordered: list[str] = []
+    for base in ordered_bases:
+        entry = grouped.get(base) or {}
+        bits = entry.get("bits") if isinstance(entry.get("bits"), dict) else {}
+        if bits:
+            ordered.extend(bits[index] for index in sorted(bits))
+        elif entry.get("scalar"):
+            ordered.append(str(entry["scalar"]))
+    return ordered
+
+
 def _magic_scalar_input_isolation_pins(text: str, port_specs: Dict[str, Any]) -> list[str]:
     _subckt_name, pins = _subckt_parts(text)
     candidates = [
@@ -303,8 +328,9 @@ def _abstract_lvs_source_spice(text: str) -> tuple[str, list[str]]:
     subckt_name, pins = _subckt_parts(text)
     if not subckt_name:
         return text, []
-    lines = [f".subckt {subckt_name} {' '.join(pins)}".rstrip(), f".ends {subckt_name}", ".end"]
-    return "\n".join(lines) + "\n", pins
+    ordered_pins = _canonical_pin_order(pins)
+    lines = [f".subckt {subckt_name} {' '.join(ordered_pins)}".rstrip(), f".ends {subckt_name}", ".end"]
+    return "\n".join(lines) + "\n", ordered_pins
 
 
 def _port_short_output_pins(lvs_summary: Dict[str, Any], port_specs: Dict[str, Any]) -> list[str]:

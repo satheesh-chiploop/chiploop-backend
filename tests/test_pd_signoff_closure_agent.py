@@ -15,7 +15,7 @@ def _write_json(path, data):
     path.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
 
-def test_signoff_closure_selects_floorplan_for_tap_drc_and_skips_later_timing(tmp_path, monkeypatch):
+def test_signoff_closure_selects_floorplan_for_tap_drc_and_bundles_timing(tmp_path, monkeypatch):
     monkeypatch.setattr(system_agent, "save_text_artifact_and_record", lambda *args, **kwargs: "local")
 
     _write_json(tmp_path / "digital" / "drc" / "drc_summary.json", {
@@ -57,7 +57,9 @@ def test_signoff_closure_selects_floorplan_for_tap_drc_and_skips_later_timing(tm
     fill_overrides = plan["eco_profile"]["config_overrides"]["fill"]
     assert fill_overrides["RUN_FILL_INSERTION"] is True
     assert fill_overrides["CHIPLOOP_FILL_DRC_REPAIR"] == "tap_contact_fill_spacing_iter_1"
-    assert any(item["type"] == "setup_timing" for item in plan["skipped_repairs"])
+    assert plan["eco_profile"]["config_overrides"]["route"]["CHIPLOOP_TIMING_CLOSURE_ECO"] == "setup_iter_1"
+    assert any(action["type"] == "setup_timing" for action in plan["repair_actions"])
+    assert not any(item["type"] == "setup_timing" for item in plan["skipped_repairs"])
     chart = out["digital"]["signoff_closure"]["chart"]
     assert chart["baseline_only"] is True
     assert chart["series"][0]["drc_violations"] == 3
@@ -171,6 +173,60 @@ def test_signoff_closure_routes_blackbox_lvs_to_analog_gds_generation(tmp_path, 
     assert plan["dominant_issue"] == "analog_macro_gds_missing"
     assert plan["selected_restart_stage"] == "Analog Physical Collateral Package Agent"
     assert not any(item["type"] == "digital_lvs" for item in plan["issue_summary"])
+
+
+def test_signoff_closure_routes_macro_bus_lvs_to_lvs_staging_and_defers_timing(tmp_path, monkeypatch):
+    monkeypatch.setattr(system_agent, "save_text_artifact_and_record", lambda *args, **kwargs: "local")
+
+    _write_json(tmp_path / "digital" / "lvs" / "lvs_summary.json", {
+        "status": "mismatch",
+        "lvs_status": "mismatch",
+        "failure_reason": "macro_bus_width_mismatch",
+    })
+    _write_json(tmp_path / "digital" / "sta_postfill" / "metrics.json", {
+        "worst_slack": -0.006,
+        "tns": -0.006,
+        "setup_violations": 1,
+    })
+
+    out = system_agent.run_agent({
+        "workflow_id": "wf",
+        "workflow_dir": str(tmp_path),
+        "run_signoff_closure_loop": True,
+    })
+
+    plan = out["digital"]["signoff_closure"]["plan"]
+    assert plan["dominant_issue"] == "digital_lvs"
+    assert plan["selected_restart_stage"] == "Digital LVS Agent"
+    assert "route" not in plan["eco_profile"]["config_overrides"]
+    assert any("Timing is not the dominant restart cause" in note for note in plan["eco_profile"]["notes"])
+
+
+def test_signoff_closure_bundles_timing_when_lvs_restart_is_physical(tmp_path, monkeypatch):
+    monkeypatch.setattr(system_agent, "save_text_artifact_and_record", lambda *args, **kwargs: "local")
+
+    _write_json(tmp_path / "digital" / "lvs" / "lvs_summary.json", {
+        "status": "mismatch",
+        "lvs_status": "mismatch",
+        "failure_reason": "top_level_pin_mismatch",
+    })
+    _write_json(tmp_path / "digital" / "sta_postfill" / "metrics.json", {
+        "worst_slack": -0.04,
+        "tns": -0.12,
+        "setup_violations": 3,
+    })
+
+    out = system_agent.run_agent({
+        "workflow_id": "wf",
+        "workflow_dir": str(tmp_path),
+        "run_signoff_closure_loop": True,
+    })
+
+    plan = out["digital"]["signoff_closure"]["plan"]
+    assert plan["dominant_issue"] == "digital_lvs"
+    assert plan["selected_restart_stage"] == "Digital Floorplan Agent"
+    assert plan["eco_profile"]["config_overrides"]["route"]["CHIPLOOP_TIMING_CLOSURE_ECO"] == "setup_iter_1"
+    assert any(action["type"] == "setup_timing" for action in plan["repair_actions"])
 
 
 def test_synthesis_closure_selects_synthesis_for_setup_violations(tmp_path, monkeypatch):
