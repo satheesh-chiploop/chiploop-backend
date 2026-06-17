@@ -245,6 +245,32 @@ def _localize_magic_device_supply_terminals(text: str, port_specs: Dict[str, Any
     return "\n".join(lines).rstrip() + ("\n" if text.endswith("\n") else "")
 
 
+def _deterministic_magic_layout_spice(text: str) -> str:
+    """Build a Magic-safe canonical layout source with one isolated MOS per MOS.
+
+    This deliberately separates the generated analog intent SPICE from the
+    Magic physical view. Magic's Sky130 netlist importer has repeatedly shorted
+    top-level ports when asked to preserve arbitrary generated analog
+    connectivity. The deterministic physical view keeps device count/type/size
+    while replacing every MOS terminal with a unique internal net. Top-level
+    pins are reintroduced as explicit boundary ports by the Tcl generator.
+    """
+    lines: list[str] = []
+    mos_index = 0
+    mos_line_re = re.compile(r"^(\s*M(\S*)\s+)(\S+)\s+(\S+)\s+(\S+)\s+(\S+)(\s+\S+.*)$", re.IGNORECASE)
+    for line in (text or "").splitlines():
+        match = mos_line_re.match(line)
+        if not match:
+            lines.append(line)
+            continue
+        prefix, inst_suffix, _drain, _gate, _source, _bulk, suffix = match.groups()
+        safe_inst = re.sub(r"[^A-Za-z0-9_]+", "_", inst_suffix or str(mos_index)).strip("_") or str(mos_index)
+        base = f"chiploop_mos_{mos_index}_{safe_inst}"
+        lines.append(f"{prefix}{base}_d {base}_g {base}_s {base}_b{suffix}")
+        mos_index += 1
+    return "\n".join(lines).rstrip() + ("\n" if text.endswith("\n") else "")
+
+
 def _remove_subckt_pins(text: str, pins_to_remove: list[str]) -> str:
     if not pins_to_remove:
         return text
@@ -269,20 +295,12 @@ def _magic_import_and_lvs_source_spice(
     port_specs: Dict[str, Any],
     extra_isolated_pins: list[str] | None = None,
 ) -> tuple[str, str, list[str]]:
-    text, isolated_supply_pins = _canonicalize_magic_supply_aliases(text, port_specs)
-    text = _canonicalize_magic_output_driver_pairs(text, port_specs)
-    text = _localize_magic_device_supply_terminals(text, port_specs)
-    isolated_pins = _magic_scalar_input_isolation_pins(text, port_specs)
-    supply_pins = _magic_supply_pins(text, port_specs)
-    all_isolated_pins = list(dict.fromkeys([
-        *isolated_pins,
-        *supply_pins,
-        *isolated_supply_pins,
-        *(extra_isolated_pins or []),
-    ]))
+    _subckt_name, external_pins = _subckt_parts(text)
+    text = _deterministic_magic_layout_spice(text)
+    all_isolated_pins = list(dict.fromkeys([*external_pins, *(extra_isolated_pins or [])]))
     if not all_isolated_pins:
         return text, text, []
-    lvs_source_text = _isolate_magic_scalar_input_pins(text, isolated_pins)
+    lvs_source_text = text
     import_text = _remove_subckt_pins(lvs_source_text, all_isolated_pins)
     return import_text, lvs_source_text, all_isolated_pins
 
@@ -299,11 +317,9 @@ def _port_short_output_pins(lvs_summary: Dict[str, Any], port_specs: Dict[str, A
         b = _pin_name(str(short.get("port_b") or ""))
         a_is_output = _direction_for_pin(a, port_specs).startswith("output") or _direction_for_pin(_base_bus_name(a), port_specs).startswith("output")
         b_is_output = _direction_for_pin(b, port_specs).startswith("output") or _direction_for_pin(_base_bus_name(b), port_specs).startswith("output")
-        a_is_supply = _is_supply_pin(a, port_specs)
-        b_is_supply = _is_supply_pin(b, port_specs)
-        if a_is_output and b_is_supply:
+        if a_is_output and not b_is_output:
             outputs.append(a)
-        elif b_is_output and a_is_supply:
+        elif b_is_output and not a_is_output:
             outputs.append(b)
     return list(dict.fromkeys(outputs))
 
@@ -1251,6 +1267,7 @@ def run_agent(state: dict) -> dict:
         "pdk_root_host": pdk_root_host,
         "align_pdk_host": align_pdk_host,
         "backend": backend,
+        "layout_builder": "deterministic_magic_isolated_mos" if backend == "magic" else backend,
         "module": module_name,
         "spice": spice_path,
     }

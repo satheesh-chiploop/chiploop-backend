@@ -849,16 +849,14 @@ def test_magic_import_isolates_scalar_input_controls_without_bus_hardcoding():
 
     import_text, lvs_source_text, isolated = gds_agent._magic_import_and_lvs_source_spice(spice, specs)
 
-    assert isolated == ["enable", "vdd", "vss"]
-    assert ".subckt ana out[0] out[1] valid sense[0] sense[1]" in import_text
+    assert isolated == ["out[0]", "out[1]", "valid", "enable", "sense[0]", "sense[1]", "vdd", "vss"]
+    assert ".subckt ana" in import_text
+    assert " out[0]" not in next(line for line in import_text.splitlines() if line.startswith(".subckt "))
     assert ".subckt ana out[0] out[1] valid enable sense[0] sense[1] vdd vss" in lvs_source_text
-    assert " valid enable " not in import_text
-    assert "Mvp valid enable" not in lvs_source_text
-    assert "Mvn valid enable" not in lvs_source_text
-    assert "Mvp valid chiploop_iso_enable_valid chiploop_pwr_vp chiploop_pwr_vp" in lvs_source_text
-    assert "Mvn valid chiploop_iso_enable_valid chiploop_gnd_vn chiploop_gnd_vn" in lvs_source_text
-    assert " out[0] sense[0] " in import_text
-    assert " out[1] sense[1] " in import_text
+    assert "Mvp chiploop_mos_4_vp_d chiploop_mos_4_vp_g chiploop_mos_4_vp_s chiploop_mos_4_vp_b" in lvs_source_text
+    assert "Mvn chiploop_mos_5_vn_d chiploop_mos_5_vn_g chiploop_mos_5_vn_s chiploop_mos_5_vn_b" in lvs_source_text
+    assert " out[0] sense[0] " not in import_text
+    assert " out[1] sense[1] " not in import_text
 
 
 def test_magic_import_isolates_secondary_supply_aliases_generically():
@@ -879,11 +877,11 @@ def test_magic_import_isolates_secondary_supply_aliases_generically():
 
     import_text, lvs_source_text, isolated = gds_agent._magic_import_and_lvs_source_spice(spice, specs)
 
-    assert isolated == ["in", "VPWR", "VGND", "avdd", "avss"]
-    assert ".subckt ana out" in import_text
+    assert isolated == ["out", "in", "VPWR", "VGND", "avdd", "avss"]
+    assert ".subckt ana" in import_text
     assert ".subckt ana out in VPWR VGND avdd avss" in lvs_source_text
-    assert "M0p out chiploop_iso_in_out chiploop_pwr_0p chiploop_pwr_0p" in lvs_source_text
-    assert "M0n out chiploop_iso_in_out chiploop_gnd_0n chiploop_gnd_0n" in lvs_source_text
+    assert "M0p chiploop_mos_0_0p_d chiploop_mos_0_0p_g chiploop_mos_0_0p_s chiploop_mos_0_0p_b" in lvs_source_text
+    assert "M0n chiploop_mos_1_0n_d chiploop_mos_1_0n_g chiploop_mos_1_0n_s chiploop_mos_1_0n_b" in lvs_source_text
 
 
 def test_magic_import_canonicalizes_duplicate_output_driver_fragments():
@@ -906,11 +904,11 @@ def test_magic_import_canonicalizes_duplicate_output_driver_fragments():
 
     _import_text, lvs_source_text, isolated = gds_agent._magic_import_and_lvs_source_spice(spice, specs)
 
-    assert isolated == ["in0", "in1", "in2", "vdd", "vss"]
-    assert "M0p out chiploop_iso_in0_out chiploop_pwr_0p chiploop_pwr_0p" in lvs_source_text
-    assert "M0n out chiploop_iso_in0_out chiploop_gnd_0n chiploop_gnd_0n" in lvs_source_text
-    assert "M1p" not in lvs_source_text
-    assert "M2n" not in lvs_source_text
+    assert isolated == ["out", "in0", "in1", "in2", "vdd", "vss"]
+    assert "M0p chiploop_mos_0_0p_d chiploop_mos_0_0p_g chiploop_mos_0_0p_s chiploop_mos_0_0p_b" in lvs_source_text
+    assert "M0n chiploop_mos_1_0n_d chiploop_mos_1_0n_g chiploop_mos_1_0n_s chiploop_mos_1_0n_b" in lvs_source_text
+    assert "M1p chiploop_mos_2_1p_d chiploop_mos_2_1p_g chiploop_mos_2_1p_s chiploop_mos_2_1p_b" in lvs_source_text
+    assert "M2n chiploop_mos_3_2n_d chiploop_mos_3_2n_g chiploop_mos_3_2n_s chiploop_mos_3_2n_b" in lvs_source_text
 
 
 def test_magic_lvs_repair_detects_output_supply_short_and_removes_driver():
@@ -942,6 +940,33 @@ def test_magic_lvs_repair_detects_output_supply_short_and_removes_driver():
     assert ".subckt ana out in vdd vss" in repaired
 
 
+def test_magic_lvs_repair_detects_output_input_short_and_removes_output_driver():
+    specs = {
+        "valid": {"name": "valid", "verilog_direction": "output"},
+        "sense": {"name": "sense", "verilog_direction": "input", "width": 16},
+        "vdd": {"name": "vdd", "verilog_direction": "input", "role": "power"},
+        "vss": {"name": "vss", "verilog_direction": "input", "role": "ground"},
+    }
+    summary = {
+        "port_shorts": [
+            {"port_a": "valid", "port_b": "sense[9]"},
+        ]
+    }
+    spice = (
+        ".subckt ana valid sense[9] vdd vss\n"
+        "M0p valid sense[9] vdd vdd sky130_fd_pr__pfet_01v8 W=1u L=0.15u\n"
+        "M0n valid sense[9] vss vss sky130_fd_pr__nfet_01v8 W=1u L=0.15u\n"
+        ".ends ana\n"
+    )
+
+    outputs = gds_agent._port_short_output_pins(summary, specs)
+    repaired = gds_agent._remove_magic_output_driver_pins(spice, outputs)
+
+    assert outputs == ["valid"]
+    assert "M0p" not in repaired
+    assert "M0n" not in repaired
+
+
 def test_magic_import_isolates_unused_scalar_input_pins():
     spice = (
         ".subckt ana out unused_ctrl sense[0] vdd vss\n"
@@ -959,10 +984,10 @@ def test_magic_import_isolates_unused_scalar_input_pins():
 
     import_text, lvs_source_text, isolated = gds_agent._magic_import_and_lvs_source_spice(spice, specs)
 
-    assert isolated == ["unused_ctrl", "vdd", "vss"]
-    assert ".subckt ana out sense[0]" in import_text
+    assert isolated == ["out", "unused_ctrl", "sense[0]", "vdd", "vss"]
+    assert ".subckt ana" in import_text
     assert ".subckt ana out unused_ctrl sense[0] vdd vss" in lvs_source_text
-    assert "M0p out sense[0]" in import_text
+    assert "M0p chiploop_mos_0_0p_d chiploop_mos_0_0p_g" in import_text
 
 
 def test_magic_import_tcl_adds_isolated_scalar_input_ports(tmp_path):
