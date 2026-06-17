@@ -106,7 +106,28 @@ def _contract_spec(state: dict, module_name: str) -> Dict[str, Any]:
         "module_name": contract.get("macro_name") or module_name,
         "ports": sorted(normalized, key=lambda p: str(p.get("name") or "")),
         "clock_period_ns": 1000.0,
+        "area_um2": _macro_area_um2(state),
     }
+
+
+def _macro_area_um2(state: dict) -> float | None:
+    for value in (
+        state.get("analog_macro_area_um2"),
+        state.get("macro_area_um2"),
+    ):
+        try:
+            if value is not None:
+                return max(float(value), 1.0)
+        except Exception:
+            pass
+    lef_path = state.get("analog_macro_lef")
+    if not isinstance(lef_path, str) or not os.path.exists(lef_path):
+        return None
+    text = open(lef_path, "r", encoding="utf-8", errors="ignore").read()
+    match = re.search(r"\bSIZE\s+([0-9]+(?:\.[0-9]+)?)\s+BY\s+([0-9]+(?:\.[0-9]+)?)\s*;", text, flags=re.IGNORECASE)
+    if not match:
+        return None
+    return max(float(match.group(1)) * float(match.group(2)), 1.0)
 
 
 def run_agent(state: dict) -> dict:

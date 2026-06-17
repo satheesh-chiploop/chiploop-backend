@@ -670,8 +670,7 @@ def test_gds_generation_uses_magic_docker_by_default(tmp_path, monkeypatch):
             assert "gds write ana.gds" in tcl
             assert tcl.rfind("feedback save magic_feedback.txt") > tcl.index("gds write ana.gds")
             staged_spice = (stage_dir / "ana.sp").read_text(encoding="utf-8")
-            assert "W=1 L=0.15" in staged_spice
-            assert "W=0.42 L=0.15" in staged_spice
+            assert staged_spice.count("W=1 L=0.18") == 2
             (stage_dir / "ana.gds").write_bytes(b"GDS")
             (stage_dir / "ana.mag").write_text("mag\n", encoding="utf-8")
             return SimpleNamespace(returncode=0, stdout="magic ok", stderr="")
@@ -745,6 +744,68 @@ def test_gds_generation_rejects_magic_placeholder_layout(tmp_path, monkeypatch):
             "analog_spice_path": str(spice),
             "pdk_root_host": str(pdk_root),
         })
+
+
+def test_gds_generation_rejects_macro_klayout_drc_violations(tmp_path, monkeypatch):
+    monkeypatch.setattr(gds_agent, "save_text_artifact_and_record", lambda *args, **kwargs: "local")
+    monkeypatch.setattr(gds_agent.shutil, "which", lambda name: "/usr/bin/docker" if name == "docker" else None)
+    pdk_root = tmp_path / "pdk"
+    magic_dir = pdk_root / "sky130A" / "libs.tech" / "magic"
+    drc_dir = pdk_root / "sky130A" / "libs.tech" / "klayout" / "drc"
+    magic_dir.mkdir(parents=True)
+    drc_dir.mkdir(parents=True)
+    (magic_dir / "sky130A.tech").write_text("tech\n", encoding="utf-8")
+    (magic_dir / "sky130A.tcl").write_text("proc sky130::importspice {} {}\n", encoding="utf-8")
+    (drc_dir / "sky130A_mr.drc").write_text("# drc\n", encoding="utf-8")
+    spice = tmp_path / "ana.spice"
+    spice.write_text(
+        ".subckt ana vin vout vdd vss\n"
+        "M1 vout vin vss vss sky130_fd_pr__nfet_01v8 W=1u L=0.15u\n"
+        ".ends ana\n",
+        encoding="utf-8",
+    )
+
+    def fake_run_command(state, capability, cmd, cwd=None, timeout_sec=None):
+        stage_dir = tmp_path / "analog" / "gds"
+        if capability == "analog_magic_gds":
+            (stage_dir / "ana.gds").write_bytes(b"GDS")
+            (stage_dir / "ana.mag").write_text("mag\n", encoding="utf-8")
+            return SimpleNamespace(returncode=0, stdout="magic ok\n", stderr="")
+        if capability == "analog_magic_lvs_extract":
+            (stage_dir / "ana_extracted.spice").write_text(
+                ".subckt ana vin vout vdd vss\n"
+                "M1 vout vin vss vss sky130_fd_pr__nfet_01v8 W=1u L=0.15u\n"
+                ".ends ana\n",
+                encoding="utf-8",
+            )
+            return SimpleNamespace(returncode=0, stdout="extract ok\n", stderr="")
+        if capability == "analog_netgen_lvs":
+            return SimpleNamespace(returncode=0, stdout="Final result:\nCircuits match uniquely.\n", stderr="")
+        if capability == "analog_klayout_drc":
+            (stage_dir / "analog_klayout_drc.xml").write_text(
+                "<?xml version='1.0'?><report-database><item><category>li.3</category></item></report-database>",
+                encoding="utf-8",
+            )
+            return SimpleNamespace(returncode=0, stdout="klayout drc\n", stderr="")
+        raise AssertionError(capability)
+
+    monkeypatch.setattr(gds_agent, "run_command", fake_run_command)
+
+    state = {
+        "workflow_id": "wf",
+        "workflow_dir": str(tmp_path),
+        "analog_physical_mode": "generate_sky130_gds",
+        "analog_pdk": "sky130A",
+        "analog_macro_module": "ana",
+        "analog_spice_path": str(spice),
+        "pdk_root_host": str(pdk_root),
+    }
+    with pytest.raises(RuntimeError, match="analog_klayout_drc_not_clean"):
+        gds_agent.run_agent(state)
+
+    assert state["analog_gds_generation"]["analog_klayout_drc"]["violations"] == 1
+    assert state["analog_signoff"]["drc"]["status"] == "violations_found"
+    assert "macro_gds" not in state.get("digital", {})
 
 
 def test_gds_generation_rejects_magic_feedback_problems(tmp_path, monkeypatch):
@@ -1009,6 +1070,9 @@ def test_magic_import_tcl_adds_isolated_scalar_input_ports(tmp_path):
     assert "select area labels" in text
     assert "port make" in text
     assert "lindex $chiploop_flat_bbox 2" in text
+    assert "+ 400" in text
+    assert "* 160" in text
+    assert "+ 80" in text
 
 
 def test_gds_generation_repairs_magic_feedback_once_and_reruns(tmp_path, monkeypatch):

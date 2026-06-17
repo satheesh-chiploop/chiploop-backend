@@ -5,6 +5,7 @@ import shlex
 import shutil
 from datetime import datetime
 from typing import Any, Dict
+from xml.etree import ElementTree
 
 from model_gateway import complete_text
 from agents.analog.analog_sky130_spice_netlist_agent import (
@@ -28,6 +29,11 @@ from utils.artifact_utils import save_text_artifact_and_record
 AGENT_NAME = "Analog GDS Generation Agent"
 ALIGN_DOCKER_IMAGE = "darpaalign/align-public:latest"
 OPENLANE_DOCKER_IMAGE = os.getenv("CHIPLOOP_OPENLANE_IMAGE", "ghcr.io/efabless/openlane2:2.4.0.dev1")
+SKY130_MAGIC_SAFE_MIN_W_UM = 1.0
+SKY130_MAGIC_SAFE_MIN_L_UM = 0.18
+SKY130_MAGIC_PORT_SIZE_LAMBDA = 80
+SKY130_MAGIC_PORT_PITCH_LAMBDA = 160
+SKY130_MAGIC_PORT_MARGIN_LAMBDA = 400
 
 
 def _enabled(state: dict) -> bool:
@@ -351,17 +357,16 @@ def _magic_spice_text(text: str) -> str:
         elif suffix == "m":
             number = number * 1000.0
         if key.lower() == "w":
-            number = max(number, 0.42)
+            number = max(number, SKY130_MAGIC_SAFE_MIN_W_UM)
         elif key.lower() == "l":
-            number = max(number, 0.15)
+            number = max(number, SKY130_MAGIC_SAFE_MIN_L_UM)
         return f"{key}={number:g}"
 
-    # Magic's Sky130 SPICE importer expects generator dimensions in microns and rejects
-    # devices below Sky130 generator minima.
+    # Keep generated Magic pcells away from fragile minimum-rule geometry.
     text = re.sub(r"\b([WLwl])\s*=\s*([0-9]+(?:\.[0-9]+)?)(u|um|n|m)\b", repl, text)
     text = re.sub(
         r"\b([WLwl])\s*=\s*([0-9]+(?:\.[0-9]+)?)\b",
-        lambda m: f"{m.group(1)}={max(float(m.group(2)), 0.42 if m.group(1).lower() == 'w' else 0.15):g}",
+        lambda m: f"{m.group(1)}={max(float(m.group(2)), SKY130_MAGIC_SAFE_MIN_W_UM if m.group(1).lower() == 'w' else SKY130_MAGIC_SAFE_MIN_L_UM):g}",
         text,
     )
     return text
@@ -576,12 +581,19 @@ def _analog_signoff_summary(
     analog_lvs: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     feedback_count = _magic_feedback_problem_count(log) if summary.get("backend") == "magic" else 0
+    klayout_drc = summary.get("analog_klayout_drc") if isinstance(summary.get("analog_klayout_drc"), dict) else {}
+    klayout_status = str(klayout_drc.get("status") or "").strip().lower()
+    klayout_violations = klayout_drc.get("violations")
     gds_status = str(summary.get("status") or "")
     lvs_only_failure = summary.get("reason") == "analog_lvs_not_clean" and bool(gds_path or summary.get("gds"))
-    blocked = gds_status != "generated" and not lvs_only_failure
+    drc_only_failure = summary.get("reason") == "analog_klayout_drc_not_clean" and bool(gds_path or summary.get("gds"))
+    blocked = gds_status != "generated" and not (lvs_only_failure or drc_only_failure)
     drc_status = "blocked"
     if not blocked:
-        drc_status = "violations_found" if feedback_count else "clean"
+        if feedback_count or klayout_status == "violations_found" or (isinstance(klayout_violations, int) and klayout_violations > 0):
+            drc_status = "violations_found"
+        else:
+            drc_status = "clean"
     elif invalid_reason == "magic_feedback_problems" or feedback_count:
         drc_status = "violations_found"
 
@@ -596,8 +608,11 @@ def _analog_signoff_summary(
         "log": log_path or summary.get("log"),
         "drc": {
             "status": drc_status,
-            "tool": "magic" if summary.get("backend") == "magic" else summary.get("backend"),
+            "tool": "magic+klayout" if summary.get("backend") == "magic" and klayout_drc else ("magic" if summary.get("backend") == "magic" else summary.get("backend")),
             "feedback_problem_count": feedback_count,
+            "klayout_status": klayout_drc.get("status"),
+            "klayout_violations": klayout_violations,
+            "klayout_report": klayout_drc.get("report"),
             "reason": invalid_reason or summary.get("reason") or None,
         },
         "lvs": analog_lvs or {
@@ -698,6 +713,123 @@ def _analog_lvs_should_repair(summary: Dict[str, Any]) -> bool:
     extracted = counts.get("extracted_devices")
     source = counts.get("source_devices")
     return isinstance(extracted, int) and isinstance(source, int) and extracted != source
+
+
+def _drc_violation_count(report_path: str | None) -> int | None:
+    if not report_path or not os.path.exists(report_path):
+        return None
+    try:
+        root = ElementTree.parse(report_path).getroot()
+    except Exception:
+        return None
+    items = root.findall(".//item")
+    if items:
+        return len(items)
+    values = root.findall(".//value")
+    if values:
+        return len(values)
+    return 0
+
+
+def _drc_category_counts(report_path: str | None) -> Dict[str, int]:
+    if not report_path or not os.path.exists(report_path):
+        return {}
+    try:
+        root = ElementTree.parse(report_path).getroot()
+    except Exception:
+        return {}
+    counts: Dict[str, int] = {}
+    for item in root.findall(".//item"):
+        category = (item.findtext("category") or "").strip()
+        if not category:
+            values = [(v.text or "").strip() for v in item.findall("value") if (v.text or "").strip()]
+            category = values[0] if values else "unknown"
+        category = category.split()[0].strip() or "unknown"
+        counts[category] = counts.get(category, 0) + 1
+    return dict(sorted(counts.items(), key=lambda kv: kv[1], reverse=True))
+
+
+def _run_analog_klayout_drc(
+    state: dict,
+    *,
+    stage_dir: str,
+    module_name: str,
+    pdk_variant: str,
+    pdk_root_host: str,
+    gds_path: str,
+    docker_bin: str | None,
+) -> Dict[str, Any]:
+    host_deck = os.path.join(pdk_root_host, pdk_variant, "libs.tech", "klayout", "drc", f"{pdk_variant}_mr.drc")
+    if not os.path.exists(host_deck):
+        return {"status": "not_configured", "tool": "klayout", "reason": "klayout_drc_deck_missing"}
+
+    report_path = os.path.join(stage_dir, "analog_klayout_drc.xml")
+    log_path = os.path.join(stage_dir, "analog_klayout_drc.log")
+    if docker_bin:
+        cmd = [
+            docker_bin,
+            "run",
+            "--rm",
+            "-v",
+            f"{pdk_root_host}:/pdk",
+            "-v",
+            f"{os.path.abspath(stage_dir)}:/work",
+            "-w",
+            "/work",
+            OPENLANE_DOCKER_IMAGE,
+            "klayout",
+            "-b",
+            "-r",
+            f"/pdk/{pdk_variant}/libs.tech/klayout/drc/{pdk_variant}_mr.drc",
+            "-rd",
+            f"input=/work/{os.path.basename(gds_path)}",
+            "-rd",
+            f"topcell={module_name}",
+            "-rd",
+            "thr=2",
+            "-rd",
+            "report=/work/analog_klayout_drc.xml",
+        ]
+    else:
+        klayout_bin = shutil.which("klayout")
+        if not klayout_bin:
+            return {"status": "not_configured", "tool": "klayout", "reason": "klayout_not_available"}
+        cmd = [
+            klayout_bin,
+            "-b",
+            "-r",
+            host_deck,
+            "-rd",
+            f"input={gds_path}",
+            "-rd",
+            f"topcell={module_name}",
+            "-rd",
+            "thr=2",
+            "-rd",
+            f"report={report_path}",
+        ]
+
+    cp = run_command(state, "analog_klayout_drc", cmd, cwd=stage_dir, timeout_sec=1800)
+    drc_log = (cp.stdout or "") + (cp.stderr or "")
+    with open(log_path, "w", encoding="utf-8", errors="ignore") as fh:
+        fh.write(drc_log)
+    violations = _drc_violation_count(report_path)
+    if violations is not None:
+        status = "clean" if violations == 0 else "violations_found"
+    elif cp.returncode == 0:
+        status = "clean"
+    else:
+        status = "failed"
+    return {
+        "status": status,
+        "tool": "klayout",
+        "return_code": cp.returncode,
+        "violations": violations,
+        "top_categories": _drc_category_counts(report_path),
+        "report": report_path if os.path.exists(report_path) else None,
+        "log": log_path,
+        "reason": None if status == "clean" else status,
+    }
 
 
 def _lvs_pin_name(token: str) -> str:
@@ -1133,10 +1265,10 @@ def _write_magic_import_tcl(
     for idx, pin in enumerate(isolated_pins or []):
         safe_pin = str(pin).replace('"', '').replace("'", "")
         lines.extend([
-            f"set chiploop_port_x [expr {{[lindex $chiploop_flat_bbox 2] + 200}}]",
-            f"set chiploop_port_y [expr {{[lindex $chiploop_flat_bbox 3] + 200 + ({idx} * 80)}}]",
+            f"set chiploop_port_x [expr {{[lindex $chiploop_flat_bbox 2] + {SKY130_MAGIC_PORT_MARGIN_LAMBDA}}}]",
+            f"set chiploop_port_y [expr {{[lindex $chiploop_flat_bbox 3] + {SKY130_MAGIC_PORT_MARGIN_LAMBDA} + ({idx} * {SKY130_MAGIC_PORT_PITCH_LAMBDA})}}]",
             "select clear",
-            "box $chiploop_port_x $chiploop_port_y [expr {$chiploop_port_x + 40}] [expr {$chiploop_port_y + 40}]",
+            f"box $chiploop_port_x $chiploop_port_y [expr {{$chiploop_port_x + {SKY130_MAGIC_PORT_SIZE_LAMBDA}}}] [expr {{$chiploop_port_y + {SKY130_MAGIC_PORT_SIZE_LAMBDA}}}]",
             "paint li",
             f"label {{{safe_pin}}} FreeSans 200 0 0 0 center li",
             "select area labels",
@@ -1805,6 +1937,28 @@ def run_agent(state: dict) -> dict:
                 "lvs_gate_reason": lvs_status or "analog_lvs_not_run",
             })
 
+    analog_klayout_drc = None
+    if backend == "magic" and summary.get("status") == "generated" and isinstance(summary.get("gds"), str):
+        analog_klayout_drc = _run_analog_klayout_drc(
+            state,
+            stage_dir=stage_dir,
+            module_name=module_name,
+            pdk_variant=pdk_variant,
+            pdk_root_host=pdk_root_host,
+            gds_path=summary["gds"],
+            docker_bin=docker_bin,
+        )
+        summary["analog_klayout_drc"] = analog_klayout_drc
+        drc_status = str(analog_klayout_drc.get("status") or "").strip().lower()
+        if drc_status in {"violations_found", "failed"} or (analog_klayout_drc.get("violations") or 0) > 0:
+            _demote_unclean_analog_gds(state, summary.get("gds"))
+            summary.update({
+                "status": "failed",
+                "reason": "analog_klayout_drc_not_clean" if drc_status == "violations_found" else "analog_klayout_drc_failed",
+                "drc_gate_status": "failed",
+                "drc_gate_reason": drc_status or "analog_klayout_drc_not_clean",
+            })
+
     save_text_artifact_and_record(workflow_id, AGENT_NAME, "analog/gds", "run_gds.sh", run_text)
     if backend == "magic" and tcl_path and os.path.exists(tcl_path):
         with open(tcl_path, "r", encoding="utf-8") as fh:
@@ -1849,6 +2003,8 @@ def run_agent(state: dict) -> dict:
         "analog_lvs_magic_extract_pass1.log",
         "analog_lvs_netgen.log",
         "analog_lvs_netgen_pass1.log",
+        "analog_klayout_drc.log",
+        "analog_klayout_drc.xml",
         f"{module_name}_extracted.spice",
         f"{module_name}_extracted_pass1.spice",
         f"{module_name}_lvs_source.spice",

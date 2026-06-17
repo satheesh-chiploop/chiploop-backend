@@ -248,9 +248,14 @@ def _build_lib_stub(spec: dict) -> str:
             "",
         ])
 
+    try:
+        area = float(spec.get("area_um2") or spec.get("macro_area_um2") or 100.0)
+    except Exception:
+        area = 100.0
+
     lines.extend([
         f"  cell ({module_name}) {{",
-        "    area : 100.0 ;",
+        f"    area : {max(area, 1.0):.6g} ;",
         "",
     ])
 

@@ -64,6 +64,42 @@ def test_signoff_closure_selects_floorplan_for_tap_drc_and_skips_later_timing(tm
     assert chart["series"][0]["postfill_wns"] == -0.12
 
 
+def test_signoff_closure_routes_macro_local_drc_to_analog_collateral(tmp_path, monkeypatch):
+    monkeypatch.setattr(system_agent, "save_text_artifact_and_record", lambda *args, **kwargs: "local")
+
+    _write_json(tmp_path / "digital" / "drc" / "drc_summary.json", {
+        "status": "violations_found",
+        "drc_violations": 2,
+    })
+    report_dir = tmp_path / "digital" / "drc" / "reports"
+    report_dir.mkdir(parents=True)
+    (report_dir / "drc.xml").write_text(
+        """
+<report-database>
+  <top-cell>soc_top</top-cell>
+  <items>
+    <item><category>licon.2</category><cell>ana_macro</cell></item>
+    <item><category>li.3</category><cell>ana_macro</cell></item>
+  </items>
+</report-database>
+""",
+        encoding="utf-8",
+    )
+
+    out = system_agent.run_agent({
+        "workflow_id": "wf",
+        "workflow_dir": str(tmp_path),
+        "run_signoff_closure_loop": True,
+    })
+
+    plan = out["digital"]["signoff_closure"]["plan"]
+    assert plan["dominant_issue"] == "digital_drc"
+    assert plan["selected_restart_stage"] == "Analog Physical Collateral Package Agent"
+    assert plan["issue_summary"][0]["evidence"]["cell_counts"] == {"ana_macro": 2}
+    assert plan["eco_profile"]["enabled"] is False
+    assert plan["eco_profile"]["reason"] == "macro_local_drc_requires_analog_collateral_repair"
+
+
 def test_digital_pd_signoff_closure_reports_synthesis_lec_outside_pd_scope(tmp_path, monkeypatch):
     monkeypatch.setattr(system_agent, "save_text_artifact_and_record", lambda *args, **kwargs: "local")
 
