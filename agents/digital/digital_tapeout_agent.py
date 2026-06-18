@@ -417,7 +417,7 @@ def _stdcell_missing_output_pins(model: str, connected_pins: set[str]) -> list[s
     expected: list[str] = []
     if "__clkbuf_" in cell or "__buf_" in cell or "__dlymetal" in cell:
         expected.append("X")
-    if "__clkinv_" in cell or "__bufinv_" in cell or "__inv_" in cell:
+    if "__clkinv_" in cell or "__clkinvlp_" in cell or "__bufinv_" in cell or "__inv_" in cell:
         expected.append("Y")
     return [pin for pin in expected if pin not in connected_pins]
 
@@ -430,6 +430,7 @@ def _sanitize_lvs_netlist_unconnected_stdcell_outputs(src: str, dst: str | None 
         text = ""
     if not text:
         if dst and os.path.abspath(dst) != os.path.abspath(src):
+            _ensure_dir(os.path.dirname(dst))
             shutil.copy2(src, dst)
             return dst, 0
         return src, 0
@@ -441,17 +442,34 @@ def _sanitize_lvs_netlist_unconnected_stdcell_outputs(src: str, dst: str | None 
         model = match.group("model")
         inst = match.group("inst")
         body = match.group("body")
-        connected = set(re.findall(r"\.\s*([A-Za-z_][A-Za-z0-9_$]*)\s*\(", body))
+        port_exprs = {
+            port: expr.strip()
+            for port, expr in re.findall(r"\.\s*([A-Za-z_][A-Za-z0-9_$]*)\s*\(\s*([^)]*?)\s*\)", body, flags=re.DOTALL)
+        }
+        connected = set(port_exprs)
         missing = _stdcell_missing_output_pins(model, connected)
-        if not missing:
+        fake_connected = [
+            pin for pin in connected
+            if pin in {"X", "Y", "Q", "Q_N"} and port_exprs.get(pin, "").startswith("_chiploop_lvs_nc_")
+        ]
+        if not missing and not fake_connected:
             return match.group(0)
+        new_body = body
+        for pin in fake_connected:
+            new_body = re.sub(
+                rf"\.\s*{re.escape(pin)}\s*\(\s*_chiploop_lvs_nc_[^)]*\)",
+                f".{pin}()",
+                new_body,
+            )
+            repairs += 1
+        if not missing:
+            return f"{model} {inst} ({new_body});"
         new_body = body.rstrip()
         if new_body and not new_body.rstrip().endswith(","):
             new_body += ","
-        safe_inst = re.sub(r"[^A-Za-z0-9_$]", "_", inst.strip("\\"))
         for pin in missing:
             repairs += 1
-            new_body += f"\n    .{pin}(_chiploop_lvs_nc_{safe_inst}_{pin})"
+            new_body += f"\n    .{pin}()"
         return f"{model} {inst} ({new_body});"
 
     pattern = re.compile(

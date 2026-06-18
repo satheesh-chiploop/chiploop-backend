@@ -604,6 +604,19 @@ def test_lvs_failure_details_classifies_stdcell_implicit_outputs_separately():
     assert details["implicit_pin_records"][0]["model"] == "sky130_fd_sc_hd__clkbuf_4"
 
 
+def test_lvs_failure_details_reports_top_level_disconnected_pin_mismatch():
+    details = _lvs_failure_details(
+        "Circuit contains 422 nets, and 7 disconnected pins.\n"
+        "Contents of circuit 2:  Circuit: 'top'\n"
+        "Circuit contains 422 nets, and 5 disconnected pins.\n"
+        "Final result:\nTop level cell failed pin matching.\n"
+    )
+
+    assert details["failure_reason"] == "top_level_disconnected_pin_mismatch"
+    assert details["source_disconnected_pins"] == 7
+    assert details["layout_disconnected_pins"] == 5
+
+
 def test_lvs_sanitizes_unconnected_stdcell_load_outputs(tmp_path):
     src = tmp_path / "top.nl.v"
     dst = tmp_path / "top_lvs.v"
@@ -612,6 +625,7 @@ def test_lvs_sanitizes_unconnected_stdcell_load_outputs(tmp_path):
 module top(input clk);
   sky130_fd_sc_hd__clkbuf_4 clkload0 (.A(clk));
   sky130_fd_sc_hd__clkinv_2 clkload1 (.A(clk));
+  sky130_fd_sc_hd__clkinvlp_4 clkload2 (.A(clk));
   sky130_fd_sc_hd__buf_1 kept (.A(clk), .X(net1));
 endmodule
 """,
@@ -621,10 +635,25 @@ endmodule
     repaired, count = digital_lvs_agent._sanitize_lvs_netlist_unconnected_stdcell_outputs(str(src), str(dst))
     text = open(repaired, "r", encoding="utf-8").read()
 
-    assert count == 2
-    assert ".X(_chiploop_lvs_nc_clkload0_X)" in text
-    assert ".Y(_chiploop_lvs_nc_clkload1_Y)" in text
+    assert count == 3
+    assert ".X()" in text
+    assert text.count(".Y()") == 2
     assert text.count("_chiploop_lvs_nc_kept") == 0
+
+
+def test_lvs_sanitizer_replaces_prior_fake_nc_outputs_with_unconnected_ports(tmp_path):
+    src = tmp_path / "top.nl.v"
+    src.write_text(
+        "module top(input clk); sky130_fd_sc_hd__clkbuf_4 clkload0 (.A(clk), .X(_chiploop_lvs_nc_clkload0_X)); endmodule\n",
+        encoding="utf-8",
+    )
+
+    repaired, count = digital_lvs_agent._sanitize_lvs_netlist_unconnected_stdcell_outputs(str(src))
+    text = open(repaired, "r", encoding="utf-8").read()
+
+    assert count == 1
+    assert ".X()" in text
+    assert "_chiploop_lvs_nc_" not in text
 
 
 def test_lvs_sanitizes_generated_openlane_run_netlists(tmp_path):
@@ -642,7 +671,7 @@ def test_lvs_sanitizes_generated_openlane_run_netlists(tmp_path):
 
     assert result["repairs"] == 1
     assert result["files"] == [str(netlist)]
-    assert ".X(_chiploop_lvs_nc_clkload0_X)" in text
+    assert ".X()" in text
 
 
 def test_lvs_and_tapeout_stdcell_spice_models_include_full_libraries_first(tmp_path):
