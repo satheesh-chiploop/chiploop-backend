@@ -27,6 +27,16 @@ def test_physical_stage_selects_one_physical_top_netlist():
     assert chosen == ["/work/inputs/netlist/temp_monitor_soc_phys_synth.v"]
 
 
+def test_lvs_and_tapeout_keep_logical_netlist_as_openlane_input():
+    candidates = [
+        "/work/inputs/netlist/top_synth.v",
+        "/work/inputs/netlist/top.nl.v",
+    ]
+
+    assert digital_lvs_agent._select_single_top_netlist(candidates) == ["/work/inputs/netlist/top_synth.v"]
+    assert digital_tapeout_agent._select_single_top_netlist(candidates) == ["/work/inputs/netlist/top_synth.v"]
+
+
 def test_physical_stage_clears_stale_local_netlists(tmp_path):
     stale_a = tmp_path / "top_synth.v"
     stale_b = tmp_path / "top.nl.v"
@@ -582,6 +592,82 @@ def test_lvs_failure_details_classifies_macro_bus_width_mismatch():
 
     assert details["failure_reason"] == "macro_bus_width_mismatch"
     assert details["implicit_pins"] == ["a[1]"]
+
+
+def test_lvs_failure_details_classifies_stdcell_implicit_outputs_separately():
+    details = _lvs_failure_details(
+        "Note:  Implicit pin X in instance clkload0 of sky130_fd_sc_hd__clkbuf_4 in cell top\n"
+    )
+
+    assert details["failure_reason"] == "physical_netlist_missing_stdcell_outputs"
+    assert details["implicit_pins"] == ["X"]
+    assert details["implicit_pin_records"][0]["model"] == "sky130_fd_sc_hd__clkbuf_4"
+
+
+def test_lvs_sanitizes_unconnected_stdcell_load_outputs(tmp_path):
+    src = tmp_path / "top.nl.v"
+    dst = tmp_path / "top_lvs.v"
+    src.write_text(
+        """
+module top(input clk);
+  sky130_fd_sc_hd__clkbuf_4 clkload0 (.A(clk));
+  sky130_fd_sc_hd__clkinv_2 clkload1 (.A(clk));
+  sky130_fd_sc_hd__buf_1 kept (.A(clk), .X(net1));
+endmodule
+""",
+        encoding="utf-8",
+    )
+
+    repaired, count = digital_lvs_agent._sanitize_lvs_netlist_unconnected_stdcell_outputs(str(src), str(dst))
+    text = open(repaired, "r", encoding="utf-8").read()
+
+    assert count == 2
+    assert ".X(_chiploop_lvs_nc_clkload0_X)" in text
+    assert ".Y(_chiploop_lvs_nc_clkload1_Y)" in text
+    assert text.count("_chiploop_lvs_nc_kept") == 0
+
+
+def test_lvs_sanitizes_generated_openlane_run_netlists(tmp_path):
+    run = tmp_path / "runs" / "run1"
+    step = run / "111-openroad-fillinsertion"
+    step.mkdir(parents=True)
+    netlist = step / "top.nl.v"
+    netlist.write_text(
+        "module top(input clk); sky130_fd_sc_hd__clkbuf_4 clkload0 (.A(clk)); endmodule\n",
+        encoding="utf-8",
+    )
+
+    result = digital_lvs_agent._sanitize_openlane_lvs_run_netlists(str(run))
+    text = netlist.read_text(encoding="utf-8")
+
+    assert result["repairs"] == 1
+    assert result["files"] == [str(netlist)]
+    assert ".X(_chiploop_lvs_nc_clkload0_X)" in text
+
+
+def test_lvs_and_tapeout_stdcell_spice_models_include_full_libraries_first(tmp_path):
+    pdk = tmp_path / "pdk" / "sky130A" / "libs.ref"
+    fd_spice = pdk / "sky130_fd_sc_hd" / "spice"
+    ef_spice = pdk / "sky130_ef_sc_hd" / "spice"
+    fd_spice.mkdir(parents=True)
+    ef_spice.mkdir(parents=True)
+    for path in [
+        fd_spice / "sky130_fd_sc_hd__fill_1.spice",
+        fd_spice / "sky130_fd_sc_hd.spice",
+        ef_spice / "sky130_ef_sc_hd__decap_12.spice",
+        ef_spice / "sky130_ef_sc_hd.spice",
+    ]:
+        path.write_text(f".subckt {path.stem} VPWR VGND\n.ends {path.stem}\n", encoding="utf-8")
+
+    state = {"pdk_root_host": str(tmp_path / "pdk")}
+
+    lvs_models = [os.path.basename(p) for p in digital_lvs_agent._resolve_stdcell_spice_models(state, str(tmp_path))]
+    tapeout_models = [os.path.basename(p) for p in digital_tapeout_agent._resolve_stdcell_spice_models(state, str(tmp_path))]
+
+    assert lvs_models[:2] == ["sky130_ef_sc_hd.spice", "sky130_fd_sc_hd.spice"] or lvs_models[:2] == ["sky130_fd_sc_hd.spice", "sky130_ef_sc_hd.spice"]
+    assert "sky130_fd_sc_hd__fill_1.spice" in lvs_models
+    assert "sky130_ef_sc_hd__decap_12.spice" in lvs_models
+    assert tapeout_models == lvs_models
 
 
 def test_lvs_and_tapeout_prefer_analog_signoff_lvs_spice_over_raw_macro_spice(tmp_path):

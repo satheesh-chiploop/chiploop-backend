@@ -132,18 +132,39 @@ def _xor_difference_count(log: str) -> int | None:
 
 def _lvs_failure_details(text: str) -> dict[str, object]:
     bus_mismatches: list[str] = []
-    implicit_pins: list[str] = []
+    implicit_pin_records: list[dict[str, str]] = []
     for line in (text or "").splitlines():
         if "bus width" in line and "does not match port" in line:
             bus_mismatches.append(line.strip())
         match = re.search(r"Implicit pin\s+(.+?)\s+in instance\s+(.+?)\s+of\s+(.+?)\s+in cell\s+(.+)", line)
         if match:
-            implicit_pins.append(match.group(1).strip())
-    if bus_mismatches or implicit_pins:
+            implicit_pin_records.append({
+                "pin": match.group(1).strip(),
+                "instance": match.group(2).strip(),
+                "model": match.group(3).strip(),
+                "cell": match.group(4).strip(),
+            })
+    implicit_pins = [item["pin"] for item in implicit_pin_records]
+    stdcell_implicit_outputs = [
+        item for item in implicit_pin_records
+        if item["model"].startswith("sky130_") and item["pin"] in {"X", "Y", "Q", "Q_N"}
+    ]
+    macro_bus_implicit = [
+        item for item in implicit_pin_records
+        if "[" in item["pin"] and "]" in item["pin"] and not item["model"].startswith("sky130_")
+    ]
+    if bus_mismatches or macro_bus_implicit:
         return {
             "failure_reason": "macro_bus_width_mismatch",
             "bus_width_mismatches": bus_mismatches[:20],
             "implicit_pins": implicit_pins[:50],
+            "implicit_pin_records": implicit_pin_records[:50],
+        }
+    if stdcell_implicit_outputs:
+        return {
+            "failure_reason": "physical_netlist_missing_stdcell_outputs",
+            "implicit_pins": implicit_pins[:50],
+            "implicit_pin_records": implicit_pin_records[:50],
         }
     if "Top level cell failed pin matching" in (text or ""):
         return {"failure_reason": "top_level_pin_mismatch"}
@@ -304,28 +325,104 @@ def _resolve_stdcell_spice_models(state: dict, workflow_dir: str) -> list[str]:
     pdk_variant = state.get("pdk_variant") or state.get("pdk") or DEFAULT_PDK_VARIANT
     pdk_root_host = state.get("pdk_root_host") or os.getenv("CHIPLOOP_PDK_ROOT_HOST") or "backend/pdk"
     pdk_root_host = os.path.abspath(pdk_root_host)
-    patterns = [
-        os.path.join(pdk_root_host, pdk_variant, "libs.ref", "sky130_fd_sc_hd", "spice", "*.spice"),
-        os.path.join(pdk_root_host, pdk_variant, "libs.ref", "sky130_fd_sc_hd", "spice", "*.sp"),
-        os.path.join(pdk_root_host, pdk_variant, "libs.ref", "sky130_fd_sc_hd", "cdl", "*.cdl"),
-        os.path.join(pdk_root_host, pdk_variant, "libs.ref", "sky130_fd_sc_hd", "**", "*.spice"),
-        os.path.join(pdk_root_host, pdk_variant, "libs.ref", "sky130_fd_sc_hd", "**", "*.sp"),
-        os.path.join(pdk_root_host, pdk_variant, "libs.ref", "sky130_fd_sc_hd", "**", "*.cdl"),
-    ]
+    lib_names = ["sky130_fd_sc_hd", "sky130_ef_sc_hd"]
+    patterns = []
+    for lib_name in lib_names:
+        patterns.extend([
+            os.path.join(pdk_root_host, pdk_variant, "libs.ref", lib_name, "spice", "*.spice"),
+            os.path.join(pdk_root_host, pdk_variant, "libs.ref", lib_name, "spice", "*.sp"),
+            os.path.join(pdk_root_host, pdk_variant, "libs.ref", lib_name, "cdl", "*.cdl"),
+            os.path.join(pdk_root_host, pdk_variant, "libs.ref", lib_name, "**", "*.spice"),
+            os.path.join(pdk_root_host, pdk_variant, "libs.ref", lib_name, "**", "*.sp"),
+            os.path.join(pdk_root_host, pdk_variant, "libs.ref", lib_name, "**", "*.cdl"),
+        ])
     discovered: list[str] = []
     for pattern in patterns:
         discovered.extend(glob.glob(pattern, recursive=True))
-        if discovered:
-            break
+    discovered = sorted(discovered, key=_stdcell_spice_sort_key)
     out: list[str] = []
     seen: set[str] = set()
-    for path in explicit + discovered:
+    for path in sorted(explicit + discovered, key=_stdcell_spice_sort_key):
         ap = os.path.abspath(path)
         if ap in seen or not os.path.isfile(ap):
             continue
         seen.add(ap)
         out.append(ap)
     return out
+
+
+def _stdcell_spice_sort_key(path: str) -> tuple[int, int, str]:
+    base = os.path.basename(path).lower()
+    aggregate = base in {"sky130_fd_sc_hd.spice", "sky130_fd_sc_hd.sp", "sky130_fd_sc_hd.cdl", "sky130_ef_sc_hd.spice", "sky130_ef_sc_hd.sp", "sky130_ef_sc_hd.cdl"}
+    ext_rank = 0 if base.endswith(".spice") else 1 if base.endswith(".sp") else 2
+    return (0 if aggregate else 1, ext_rank, base)
+
+
+def _stdcell_missing_output_pins(model: str, connected_pins: set[str]) -> list[str]:
+    cell = model.lower()
+    expected: list[str] = []
+    if "__clkbuf_" in cell or "__buf_" in cell or "__dlymetal" in cell:
+        expected.append("X")
+    if "__clkinv_" in cell or "__bufinv_" in cell or "__inv_" in cell:
+        expected.append("Y")
+    return [pin for pin in expected if pin not in connected_pins]
+
+
+def _sanitize_lvs_netlist_unconnected_stdcell_outputs(src: str, dst: str | None = None) -> tuple[str, int]:
+    text = _read_text(src)
+    if not text:
+        if dst and os.path.abspath(dst) != os.path.abspath(src):
+            shutil.copy2(src, dst)
+            return dst, 0
+        return src, 0
+
+    repairs = 0
+
+    def repl(match: re.Match) -> str:
+        nonlocal repairs
+        model = match.group("model")
+        inst = match.group("inst")
+        body = match.group("body")
+        connected = set(re.findall(r"\.\s*([A-Za-z_][A-Za-z0-9_$]*)\s*\(", body))
+        missing = _stdcell_missing_output_pins(model, connected)
+        if not missing:
+            return match.group(0)
+        new_body = body.rstrip()
+        if new_body and not new_body.rstrip().endswith(","):
+            new_body += ","
+        safe_inst = re.sub(r"[^A-Za-z0-9_$]", "_", inst.strip("\\"))
+        for pin in missing:
+            repairs += 1
+            new_body += f"\n    .{pin}(_chiploop_lvs_nc_{safe_inst}_{pin})"
+        return f"{model} {inst} ({new_body});"
+
+    pattern = re.compile(
+        r"(?P<model>sky130_(?:fd|ef)_sc_hd__\S+)\s+(?P<inst>\S+)\s*\((?P<body>.*?)\);",
+        flags=re.DOTALL,
+    )
+    repaired = pattern.sub(repl, text)
+    out = dst or src
+    if repairs or (dst and os.path.abspath(dst) != os.path.abspath(src)):
+        _write_text(out, repaired)
+    return out, repairs
+
+
+def _sanitize_openlane_lvs_run_netlists(latest: str | None) -> dict[str, object]:
+    if not latest or not os.path.isdir(latest):
+        return {"repairs": 0, "files": []}
+    touched: list[str] = []
+    repairs = 0
+    for path in sorted(glob.glob(os.path.join(latest, "**", "*.nl.v"), recursive=True)):
+        _out, count = _sanitize_lvs_netlist_unconnected_stdcell_outputs(path)
+        if count:
+            repairs += count
+            touched.append(path)
+    for path in sorted(glob.glob(os.path.join(latest, "**", "*.pnl.v"), recursive=True)):
+        _out, count = _sanitize_lvs_netlist_unconnected_stdcell_outputs(path)
+        if count:
+            repairs += count
+            touched.append(path)
+    return {"repairs": repairs, "files": touched[:100]}
 
 
 def _resolve_macro_spice_models(state: dict, workflow_dir: str) -> list[str]:
@@ -561,10 +658,19 @@ def run_agent(state: dict) -> dict:
         raise RuntimeError("LVS: missing run_work/inputs/netlist/*.v (synth/floorplan should populate it).")
 
     _clear_stage_netlists(netlist_dir)
+    sanitized_stage_netlists: list[str] = []
+    lvs_netlist_repairs = 0
     for nl in stage_netlists:
-        shutil.copy2(nl, os.path.join(netlist_dir, os.path.basename(nl)))
+        base, ext = os.path.splitext(os.path.basename(nl))
+        sanitized_base = f"{base}_lvs{ext}" if not base.endswith("_lvs") else f"{base}{ext}"
+        inputs_sanitized = os.path.join(inputs_netlist_dir, sanitized_base)
+        _sanitized, repairs = _sanitize_lvs_netlist_unconnected_stdcell_outputs(nl, inputs_sanitized)
+        lvs_netlist_repairs += repairs
+        stage_copy = os.path.join(netlist_dir, sanitized_base)
+        shutil.copy2(inputs_sanitized, stage_copy)
+        sanitized_stage_netlists.append(stage_copy)
 
-    stage_netlists_local = _select_single_top_netlist(sorted(glob.glob(os.path.join(netlist_dir, "*.v"))))
+    stage_netlists_local = _select_single_top_netlist(sanitized_stage_netlists)
     cfg["VERILOG_FILES"] = [f"inputs/netlist/{os.path.basename(p)}" for p in stage_netlists_local]
 
     inferred = None
@@ -700,6 +806,7 @@ def run_agent(state: dict) -> dict:
         f"run_tag={run_tag}",
         f"top_module={top_module}",
         f"netlist_count={len(stage_netlists_local)}",
+        f"lvs_netlist_repairs={lvs_netlist_repairs}",
         f"macro_placement_cfg={cfg.get('MACRO_PLACEMENT_CFG')}",
         f"macro_placement_cfg_path={macro_placement_cfg}",
         f"cell_spice_count={len(staged_cell_spice)}",
@@ -740,6 +847,52 @@ docker run --rm \\
     xor_differences = _xor_difference_count(out)
     report_text = _read_text(lvs_report_path) if lvs_report_path else ""
     failure_details = _lvs_failure_details("\n".join([out or "", report_text or ""]))
+    lvs_repair: dict[str, object] = {"attempted": False}
+
+    if lvs_status not in {"clean", "completed"} and failure_details.get("failure_reason") == "physical_netlist_missing_stdcell_outputs":
+        sanitation = _sanitize_openlane_lvs_run_netlists(latest)
+        repair_count = int(sanitation.get("repairs") or 0)
+        lvs_repair = {
+            "attempted": repair_count > 0,
+            "reason": "physical_netlist_missing_stdcell_outputs",
+            "netlist_repairs": repair_count,
+            "files": sanitation.get("files") or [],
+        }
+        if repair_count > 0:
+            repair_sh = f"""#!/usr/bin/env bash
+set -euo pipefail
+
+echo "== ChipLoop: {AGENT_NAME} repaired Netgen LVS retry =="
+export OPENLANE_NUM_CORES={DEFAULT_NUM_CORES}
+
+docker run --rm \\
+  -v "{pdk_root_host}":/pdk \\
+  -v "{run_work_dir}":/work \\
+  -e PDK={pdk_variant} \\
+  -e PDK_ROOT=/pdk \\
+  {openlane_image} \\
+  bash -lc 'set -e; cd /work && openlane --flow Classic --run-tag {run_tag} --override-config RUN_LINTER=False --from Netgen.LVS --to Netgen.LVS lvs/config.json'
+"""
+            repair_sh_path = os.path.join(stage_dir, "run_lvs_repair.sh")
+            _write_text(repair_sh_path, repair_sh)
+            os.chmod(repair_sh_path, 0o755)
+            repair_rc, repair_out = _run(["bash", "-lc", "./run_lvs_repair.sh"], cwd=stage_dir, state=state)
+            _write_text(os.path.join(logs_dir, "openlane_lvs_repair.log"), repair_out)
+            out = "\n".join([out, "\n== ChipLoop LVS repair retry ==\n", repair_out])
+            _write_text(os.path.join(logs_dir, "openlane_lvs.log"), out)
+            latest = _latest_run_dir(work_stage_dir)
+            metrics_path = _copy_metrics(latest, stage_dir) or metrics_path
+            lvs_report_path, report_lvs_status = _copy_lvs_report(latest, stage_dir)
+            report_text = _read_text(lvs_report_path) if lvs_report_path else ""
+            lvs_status = _lvs_status(repair_rc, report_lvs_status, repair_out)
+            rc = repair_rc
+            xor_differences = _xor_difference_count(repair_out) or xor_differences
+            failure_details = _lvs_failure_details("\n".join([repair_out or "", report_text or ""]))
+            lvs_repair.update({
+                "return_code": repair_rc,
+                "status_after_repair": lvs_status,
+                "log": "digital/lvs/logs/openlane_lvs_repair.log",
+            })
 
     summary = {
         "workflow_id": workflow_id,
@@ -756,6 +909,8 @@ docker run --rm \\
             "openlane_run_dir": latest,
         },
     }
+    if lvs_repair.get("attempted"):
+        summary["lvs_repair"] = lvs_repair
     if lvs_status not in {"clean", "completed"}:
         summary.update(failure_details)
 
@@ -766,7 +921,13 @@ docker run --rm \\
         save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "lvs/config.json", json.dumps(cfg, indent=2))
         save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", f"lvs/constraints/{sdc_basename}", sdc_text)
         save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "lvs/run.sh", run_sh)
+        repair_sh_path = os.path.join(stage_dir, "run_lvs_repair.sh")
+        if os.path.exists(repair_sh_path):
+            save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "lvs/run_lvs_repair.sh", _read_text(repair_sh_path))
         save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "lvs/logs/openlane_lvs.log", out)
+        repair_log_path = os.path.join(logs_dir, "openlane_lvs_repair.log")
+        if os.path.exists(repair_log_path):
+            save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "lvs/logs/openlane_lvs_repair.log", _read_text(repair_log_path))
         save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "lvs/lvs_summary.json", json.dumps(summary, indent=2))
         save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "lvs/logs/lvs_input_resolution.log", input_log)
         if lvs_report_path and os.path.exists(lvs_report_path):

@@ -379,28 +379,90 @@ def _resolve_stdcell_spice_models(state: dict, workflow_dir: str) -> list[str]:
     pdk_variant = state.get("pdk_variant") or state.get("pdk") or DEFAULT_PDK_VARIANT
     pdk_root_host = state.get("pdk_root_host") or os.getenv("CHIPLOOP_PDK_ROOT_HOST") or "backend/pdk"
     pdk_root_host = os.path.abspath(pdk_root_host)
-    patterns = [
-        os.path.join(pdk_root_host, pdk_variant, "libs.ref", "sky130_fd_sc_hd", "spice", "*.spice"),
-        os.path.join(pdk_root_host, pdk_variant, "libs.ref", "sky130_fd_sc_hd", "spice", "*.sp"),
-        os.path.join(pdk_root_host, pdk_variant, "libs.ref", "sky130_fd_sc_hd", "cdl", "*.cdl"),
-        os.path.join(pdk_root_host, pdk_variant, "libs.ref", "sky130_fd_sc_hd", "**", "*.spice"),
-        os.path.join(pdk_root_host, pdk_variant, "libs.ref", "sky130_fd_sc_hd", "**", "*.sp"),
-        os.path.join(pdk_root_host, pdk_variant, "libs.ref", "sky130_fd_sc_hd", "**", "*.cdl"),
-    ]
+    lib_names = ["sky130_fd_sc_hd", "sky130_ef_sc_hd"]
+    patterns = []
+    for lib_name in lib_names:
+        patterns.extend([
+            os.path.join(pdk_root_host, pdk_variant, "libs.ref", lib_name, "spice", "*.spice"),
+            os.path.join(pdk_root_host, pdk_variant, "libs.ref", lib_name, "spice", "*.sp"),
+            os.path.join(pdk_root_host, pdk_variant, "libs.ref", lib_name, "cdl", "*.cdl"),
+            os.path.join(pdk_root_host, pdk_variant, "libs.ref", lib_name, "**", "*.spice"),
+            os.path.join(pdk_root_host, pdk_variant, "libs.ref", lib_name, "**", "*.sp"),
+            os.path.join(pdk_root_host, pdk_variant, "libs.ref", lib_name, "**", "*.cdl"),
+        ])
     discovered: list[str] = []
     for pattern in patterns:
         discovered.extend(glob.glob(pattern, recursive=True))
-        if discovered:
-            break
+    discovered = sorted(discovered, key=_stdcell_spice_sort_key)
     out: list[str] = []
     seen: set[str] = set()
-    for path in explicit + discovered:
+    for path in sorted(explicit + discovered, key=_stdcell_spice_sort_key):
         ap = os.path.abspath(path)
         if ap in seen or not os.path.isfile(ap):
             continue
         seen.add(ap)
         out.append(ap)
     return out
+
+
+def _stdcell_spice_sort_key(path: str) -> tuple[int, int, str]:
+    base = os.path.basename(path).lower()
+    aggregate = base in {"sky130_fd_sc_hd.spice", "sky130_fd_sc_hd.sp", "sky130_fd_sc_hd.cdl", "sky130_ef_sc_hd.spice", "sky130_ef_sc_hd.sp", "sky130_ef_sc_hd.cdl"}
+    ext_rank = 0 if base.endswith(".spice") else 1 if base.endswith(".sp") else 2
+    return (0 if aggregate else 1, ext_rank, base)
+
+
+def _stdcell_missing_output_pins(model: str, connected_pins: set[str]) -> list[str]:
+    cell = model.lower()
+    expected: list[str] = []
+    if "__clkbuf_" in cell or "__buf_" in cell or "__dlymetal" in cell:
+        expected.append("X")
+    if "__clkinv_" in cell or "__bufinv_" in cell or "__inv_" in cell:
+        expected.append("Y")
+    return [pin for pin in expected if pin not in connected_pins]
+
+
+def _sanitize_lvs_netlist_unconnected_stdcell_outputs(src: str, dst: str | None = None) -> tuple[str, int]:
+    try:
+        with open(src, "r", encoding="utf-8", errors="ignore") as fh:
+            text = fh.read()
+    except Exception:
+        text = ""
+    if not text:
+        if dst and os.path.abspath(dst) != os.path.abspath(src):
+            shutil.copy2(src, dst)
+            return dst, 0
+        return src, 0
+
+    repairs = 0
+
+    def repl(match: re.Match) -> str:
+        nonlocal repairs
+        model = match.group("model")
+        inst = match.group("inst")
+        body = match.group("body")
+        connected = set(re.findall(r"\.\s*([A-Za-z_][A-Za-z0-9_$]*)\s*\(", body))
+        missing = _stdcell_missing_output_pins(model, connected)
+        if not missing:
+            return match.group(0)
+        new_body = body.rstrip()
+        if new_body and not new_body.rstrip().endswith(","):
+            new_body += ","
+        safe_inst = re.sub(r"[^A-Za-z0-9_$]", "_", inst.strip("\\"))
+        for pin in missing:
+            repairs += 1
+            new_body += f"\n    .{pin}(_chiploop_lvs_nc_{safe_inst}_{pin})"
+        return f"{model} {inst} ({new_body});"
+
+    pattern = re.compile(
+        r"(?P<model>sky130_(?:fd|ef)_sc_hd__\S+)\s+(?P<inst>\S+)\s*\((?P<body>.*?)\);",
+        flags=re.DOTALL,
+    )
+    repaired = pattern.sub(repl, text)
+    out = dst or src
+    if repairs or (dst and os.path.abspath(dst) != os.path.abspath(src)):
+        _write_text(out, repaired)
+    return out, repairs
 
 
 def _resolve_macro_spice_models(state: dict, workflow_dir: str) -> list[str]:
@@ -637,10 +699,19 @@ def run_agent(state: dict) -> dict:
         raise RuntimeError("Tapeout: missing run_work/inputs/netlist/*.v (synth/floorplan should populate it).")
 
     _clear_stage_netlists(netlist_dir)
+    sanitized_stage_netlists: list[str] = []
+    tapeout_netlist_repairs = 0
     for nl in upstream_netlists:
-        shutil.copy2(nl, os.path.join(netlist_dir, os.path.basename(nl)))
+        base, ext = os.path.splitext(os.path.basename(nl))
+        sanitized_base = f"{base}_lvs{ext}" if not base.endswith("_lvs") else f"{base}{ext}"
+        inputs_sanitized = os.path.join(inputs_netlist_dir, sanitized_base)
+        _sanitized, repairs = _sanitize_lvs_netlist_unconnected_stdcell_outputs(nl, inputs_sanitized)
+        tapeout_netlist_repairs += repairs
+        stage_copy = os.path.join(netlist_dir, sanitized_base)
+        shutil.copy2(inputs_sanitized, stage_copy)
+        sanitized_stage_netlists.append(stage_copy)
 
-    stage_netlists_local = _select_single_top_netlist(sorted(glob.glob(os.path.join(netlist_dir, "*.v"))))
+    stage_netlists_local = _select_single_top_netlist(sanitized_stage_netlists)
     cfg["VERILOG_FILES"] = [f"inputs/netlist/{os.path.basename(p)}" for p in stage_netlists_local]
 
     inferred = None
@@ -719,6 +790,7 @@ def run_agent(state: dict) -> dict:
         f"run_tag={run_tag}",
         f"top_module={top_module}",
         f"netlist_count={len(stage_netlists_local)}",
+        f"tapeout_netlist_repairs={tapeout_netlist_repairs}",
         f"macro_placement_cfg={cfg.get('MACRO_PLACEMENT_CFG')}",
         f"macro_placement_cfg_path={macro_placement_cfg}",
         f"cell_spice_count={len(staged_cell_spice)}",
