@@ -463,6 +463,8 @@ def _sanitize_lvs_netlist_unconnected_stdcell_outputs(src: str, dst: str | None 
     def macro_repl(match: re.Match) -> str:
         nonlocal repairs
         model = match.group("model")
+        if model.lower().startswith("sky130_"):
+            return match.group(0)
         ports = macro_ports.get(model)
         if not ports:
             return match.group(0)
@@ -617,7 +619,7 @@ def _spice_subckt_ports(paths: list[str]) -> dict[str, list[str]]:
                 merged += " " + lines[i].lstrip()[1:].strip()
                 i += 1
             parts = merged.split()
-            if len(parts) >= 2:
+            if len(parts) >= 2 and not parts[1].lower().startswith("sky130_"):
                 ports[parts[1]] = parts[2:]
     return ports
 

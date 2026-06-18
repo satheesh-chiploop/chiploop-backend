@@ -721,6 +721,33 @@ def test_lvs_sanitizer_connects_macro_supply_ports_from_ansi_header(tmp_path):
     assert ".VGND(avss)" in text
 
 
+def test_lvs_sanitizer_never_adds_macro_supply_ports_to_stdcells(tmp_path):
+    src = tmp_path / "top.nl.v"
+    polluted_spice = tmp_path / "mixed.spice"
+    src.write_text(
+        """
+module top(input wire avdd, input wire avss, input sig);
+  sky130_fd_sc_hd__decap_3 FILLER_94_557 ();
+  ana u_ana(.sig(sig));
+endmodule
+""",
+        encoding="utf-8",
+    )
+    polluted_spice.write_text(
+        ".subckt sky130_fd_sc_hd__decap_3 VPWR VGND\n.ends sky130_fd_sc_hd__decap_3\n"
+        ".subckt ana sig VPWR VGND\n.ends ana\n",
+        encoding="utf-8",
+    )
+
+    repaired, count = digital_lvs_agent._sanitize_lvs_netlist_unconnected_stdcell_outputs(str(src), None, [str(polluted_spice)])
+    text = open(repaired, "r", encoding="utf-8").read()
+
+    assert count == 2
+    assert "sky130_fd_sc_hd__decap_3 FILLER_94_557 ();" in text
+    assert ".VPWR(avdd)" in text
+    assert ".VGND(avss)" in text
+
+
 def test_lvs_sanitizes_generated_openlane_run_netlists(tmp_path):
     run = tmp_path / "runs" / "run1"
     step = run / "111-openroad-fillinsertion"
