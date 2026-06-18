@@ -38,12 +38,12 @@ def _write_text(path: str, content: str) -> None:
 def _select_single_top_netlist(paths: list[str]) -> list[str]:
     if len(paths) <= 1:
         return paths
-    logical = [p for p in paths if not os.path.basename(p).endswith((".pnl.v", ".nl.v"))]
-    if logical:
-        return [sorted(logical, key=lambda p: (0 if "synth" in os.path.basename(p).lower() else 1, len(p)))[0]]
     physical = [p for p in paths if os.path.basename(p).endswith((".pnl.v", ".nl.v"))]
     if physical:
         return [sorted(physical, key=lambda p: (0 if ".pnl." in os.path.basename(p).lower() else 1, 0 if ".nl." in os.path.basename(p).lower() else 1, len(p)))[0]]
+    logical = [p for p in paths if not os.path.basename(p).endswith((".pnl.v", ".nl.v"))]
+    if logical:
+        return [sorted(logical, key=lambda p: (0 if "synth" in os.path.basename(p).lower() else 1, len(p)))[0]]
     return [sorted(paths, key=lambda p: (0 if "synth" in os.path.basename(p).lower() else 1, len(p)))[0]]
 
 
@@ -298,6 +298,27 @@ def _resolve_config_from_state(state: dict, workflow_dir: str) -> str | None:
     logger.warning(f"{AGENT_NAME}: no OpenLane config found")
     return None
 
+
+def _resolve_physical_netlist(state: dict, workflow_dir: str) -> str | None:
+    digital = state.get("digital") if isinstance(state.get("digital"), dict) else {}
+    candidates: list[str] = []
+    for stage in ("sta_postfill", "fill", "sta_postroute", "route"):
+        stage_state = digital.get(stage) if isinstance(digital.get(stage), dict) else {}
+        for key in ("final_netlist", "netlist", "fill_netlist", "route_netlist"):
+            value = stage_state.get(key)
+            if isinstance(value, str):
+                candidates.append(value)
+    for stage in ("sta_postfill", "fill", "sta_postroute", "route"):
+        candidates.extend(sorted(glob.glob(os.path.join(workflow_dir, "digital", stage, "netlist", "*.pnl.v"))))
+        candidates.extend(sorted(glob.glob(os.path.join(workflow_dir, "digital", stage, "netlist", "*.nl.v"))))
+        candidates.extend(sorted(glob.glob(os.path.join(workflow_dir, "digital", stage, "netlist", "*.v"))))
+    for cand in candidates:
+        if isinstance(cand, str) and os.path.isfile(cand):
+            logger.info(f"{AGENT_NAME}: selected physical netlist -> {cand}")
+            return os.path.abspath(cand)
+    return None
+
+
 def _resolve_macro_files_from_workflow(workflow_dir: str, exts: tuple[str, ...]) -> list[str]:
     hits = []
     for ext in exts:
@@ -385,7 +406,7 @@ def _stdcell_missing_output_pins(model: str, connected_pins: set[str]) -> list[s
     return [pin for pin in expected if pin not in connected_pins]
 
 
-def _sanitize_lvs_netlist_unconnected_stdcell_outputs(src: str, dst: str | None = None) -> tuple[str, int]:
+def _sanitize_lvs_netlist_unconnected_stdcell_outputs(src: str, dst: str | None = None, macro_spice_models: list[str] | None = None) -> tuple[str, int]:
     text = _read_text(src)
     if not text:
         if dst and os.path.abspath(dst) != os.path.abspath(src):
@@ -395,6 +416,8 @@ def _sanitize_lvs_netlist_unconnected_stdcell_outputs(src: str, dst: str | None 
         return src, 0
 
     repairs = 0
+    macro_ports = _spice_subckt_ports(macro_spice_models or [])
+    top_ports = _verilog_declared_ports(text)
 
     def repl(match: re.Match) -> str:
         nonlocal repairs
@@ -424,36 +447,72 @@ def _sanitize_lvs_netlist_unconnected_stdcell_outputs(src: str, dst: str | None 
         if not missing:
             return f"{model} {inst} ({new_body});"
         new_body = body.rstrip()
-        if new_body and not new_body.rstrip().endswith(","):
-            new_body += ","
         for pin in missing:
+            if new_body and not new_body.rstrip().endswith(","):
+                new_body += ","
             repairs += 1
             new_body += f"\n    .{pin}()"
         return f"{model} {inst} ({new_body});"
 
-    pattern = re.compile(
+    stdcell_pattern = re.compile(
         r"(?P<model>sky130_(?:fd|ef)_sc_hd__\S+)\s+(?P<inst>\S+)\s*\((?P<body>.*?)\);",
         flags=re.DOTALL,
     )
-    repaired = pattern.sub(repl, text)
+    repaired = stdcell_pattern.sub(repl, text)
+
+    def macro_repl(match: re.Match) -> str:
+        nonlocal repairs
+        model = match.group("model")
+        ports = macro_ports.get(model)
+        if not ports:
+            return match.group(0)
+        body = match.group("body")
+        connected = {
+            port
+            for port, _expr in re.findall(r"\.\s*([A-Za-z_][A-Za-z0-9_$]*)\s*\(\s*([^)]*?)\s*\)", body, flags=re.DOTALL)
+        }
+        additions: list[tuple[str, str]] = []
+        for port in ports:
+            if port in connected or not _is_supply_port(port):
+                continue
+            net = _supply_net_for_port(port, top_ports)
+            if net:
+                additions.append((port, net))
+        if not additions:
+            return match.group(0)
+        new_body = body.rstrip()
+        for port, net in additions:
+            if new_body and not new_body.rstrip().endswith(","):
+                new_body += ","
+            repairs += 1
+            new_body += f"\n    .{port}({net})"
+        return f"{model} {match.group('inst')} ({new_body});"
+
+    if macro_ports:
+        macro_pattern = re.compile(
+            r"(?P<model>[A-Za-z_][A-Za-z0-9_$]*)\s+(?P<inst>\S+)\s*\((?P<body>.*?)\);",
+            flags=re.DOTALL,
+        )
+        repaired = macro_pattern.sub(macro_repl, repaired)
+
     out = dst or src
     if repairs or (dst and os.path.abspath(dst) != os.path.abspath(src)):
         _write_text(out, repaired)
     return out, repairs
 
 
-def _sanitize_openlane_lvs_run_netlists(latest: str | None) -> dict[str, object]:
+def _sanitize_openlane_lvs_run_netlists(latest: str | None, macro_spice_models: list[str] | None = None) -> dict[str, object]:
     if not latest or not os.path.isdir(latest):
         return {"repairs": 0, "files": []}
     touched: list[str] = []
     repairs = 0
     for path in sorted(glob.glob(os.path.join(latest, "**", "*.nl.v"), recursive=True)):
-        _out, count = _sanitize_lvs_netlist_unconnected_stdcell_outputs(path)
+        _out, count = _sanitize_lvs_netlist_unconnected_stdcell_outputs(path, None, macro_spice_models)
         if count:
             repairs += count
             touched.append(path)
     for path in sorted(glob.glob(os.path.join(latest, "**", "*.pnl.v"), recursive=True)):
-        _out, count = _sanitize_lvs_netlist_unconnected_stdcell_outputs(path)
+        _out, count = _sanitize_lvs_netlist_unconnected_stdcell_outputs(path, None, macro_spice_models)
         if count:
             repairs += count
             touched.append(path)
@@ -537,6 +596,67 @@ def _resolve_macro_spice_models(state: dict, workflow_dir: str) -> list[str]:
 def _spice_subckt_names(path: str) -> set[str]:
     text = _read_text(path)
     return set(re.findall(r"^\s*\.subckt\s+(\S+)", text, flags=re.IGNORECASE | re.MULTILINE))
+
+
+def _spice_subckt_ports(paths: list[str]) -> dict[str, list[str]]:
+    ports: dict[str, list[str]] = {}
+    for path in paths:
+        text = _read_text(path)
+        if not text:
+            continue
+        lines = text.splitlines()
+        i = 0
+        while i < len(lines):
+            line = lines[i].strip()
+            if not line.lower().startswith(".subckt "):
+                i += 1
+                continue
+            merged = line
+            i += 1
+            while i < len(lines) and lines[i].lstrip().startswith("+"):
+                merged += " " + lines[i].lstrip()[1:].strip()
+                i += 1
+            parts = merged.split()
+            if len(parts) >= 2:
+                ports[parts[1]] = parts[2:]
+    return ports
+
+
+def _verilog_declared_ports(text: str) -> set[str]:
+    ports: set[str] = set()
+    for match in re.finditer(r"^\s*(?:input|output|inout)\s+(?:wire\s+|reg\s+)?(?:\[[^\]]+\]\s*)?([^;]+);", text or "", flags=re.MULTILINE):
+        for name in match.group(1).split(","):
+            clean = name.strip().split()[-1] if name.strip() else ""
+            clean = clean.strip("\\ ")
+            if clean:
+                ports.add(clean)
+    header = re.search(r"\bmodule\s+\S+\s*\((.*?)\)\s*;", text or "", flags=re.DOTALL)
+    if header:
+        for item in header.group(1).split(","):
+            clean = re.sub(r"\b(?:input|output|inout|wire|reg|logic|signed)\b", " ", item)
+            clean = re.sub(r"\[[^\]]+\]", " ", clean).strip()
+            if clean:
+                ports.add(clean.split()[-1].strip("\\ "))
+    return ports
+
+
+def _is_supply_port(name: str) -> bool:
+    low = name.lower()
+    return low in {"vpwr", "vgnd", "vdd", "vss", "vcc", "gnd", "avdd", "avss", "dvdd", "dvss"} or "vdd" in low or "vss" in low or "pwr" in low or "gnd" in low
+
+
+def _supply_net_for_port(port: str, top_ports: set[str]) -> str | None:
+    low = port.lower()
+    power_order = [port, "VPWR", "VPB", "avdd", "dvdd", "vdd", "VDD", "vccd1", "vdda1"]
+    ground_order = [port, "VGND", "VNB", "avss", "dvss", "vss", "VSS", "gnd", "GND", "vssd1", "vssa1"]
+    order = ground_order if ("gnd" in low or "vss" in low or low in {"vgnd", "vnb"}) else power_order
+    lower_ports = {p.lower(): p for p in top_ports}
+    for cand in order:
+        if cand in top_ports:
+            return cand
+        if cand.lower() in lower_ports:
+            return lower_ports[cand.lower()]
+    return None
 
 
 def _stage_spice_models(work_stage_dir: str, stdcell_spice: list[str], macro_spice: list[str]) -> tuple[list[str], list[str]]:
@@ -688,6 +808,14 @@ def run_agent(state: dict) -> dict:
     shutil.copy2(stage_sdc, os.path.join(inputs_constraints_dir, sdc_basename))
     cfg["PNR_SDC_FILE"] = f"inputs/constraints/{sdc_basename}"
 
+    physical_netlist = _resolve_physical_netlist(state, workflow_dir)
+    if physical_netlist:
+        dst = os.path.join(inputs_netlist_dir, os.path.basename(physical_netlist))
+        if os.path.abspath(physical_netlist) != os.path.abspath(dst):
+            shutil.copy2(physical_netlist, dst)
+
+    macro_spice_models = _resolve_macro_spice_models(state, workflow_dir)
+
     stage_netlists = _select_single_top_netlist(sorted(glob.glob(os.path.join(inputs_netlist_dir, "*.v"))))
     if not stage_netlists:
         raise RuntimeError("LVS: missing run_work/inputs/netlist/*.v (synth/floorplan should populate it).")
@@ -699,7 +827,7 @@ def run_agent(state: dict) -> dict:
         base, ext = os.path.splitext(os.path.basename(nl))
         sanitized_base = f"{base}_lvs{ext}" if not base.endswith("_lvs") else f"{base}{ext}"
         inputs_sanitized = os.path.join(inputs_netlist_dir, sanitized_base)
-        _sanitized, repairs = _sanitize_lvs_netlist_unconnected_stdcell_outputs(nl, inputs_sanitized)
+        _sanitized, repairs = _sanitize_lvs_netlist_unconnected_stdcell_outputs(nl, inputs_sanitized, macro_spice_models)
         lvs_netlist_repairs += repairs
         stage_copy = os.path.join(netlist_dir, sanitized_base)
         shutil.copy2(inputs_sanitized, stage_copy)
@@ -737,7 +865,7 @@ def run_agent(state: dict) -> dict:
     staged_cell_spice, staged_extra_spice = _stage_spice_models(
         work_stage_dir,
         _resolve_stdcell_spice_models(state, workflow_dir),
-        _resolve_macro_spice_models(state, workflow_dir),
+        macro_spice_models,
     )
 
     if staged_lefs:
@@ -840,6 +968,8 @@ def run_agent(state: dict) -> dict:
         f"run_work_dir={run_work_dir}",
         f"run_tag={run_tag}",
         f"top_module={top_module}",
+        f"resolved_physical_netlist={physical_netlist}",
+        f"selected_verilog_files={cfg.get('VERILOG_FILES')}",
         f"netlist_count={len(stage_netlists_local)}",
         f"lvs_netlist_repairs={lvs_netlist_repairs}",
         f"macro_placement_cfg={cfg.get('MACRO_PLACEMENT_CFG')}",
@@ -885,7 +1015,7 @@ docker run --rm \\
     lvs_repair: dict[str, object] = {"attempted": False}
 
     if lvs_status not in {"clean", "completed"} and failure_details.get("failure_reason") == "physical_netlist_missing_stdcell_outputs":
-        sanitation = _sanitize_openlane_lvs_run_netlists(latest)
+        sanitation = _sanitize_openlane_lvs_run_netlists(latest, macro_spice_models)
         repair_count = int(sanitation.get("repairs") or 0)
         lvs_repair = {
             "attempted": repair_count > 0,

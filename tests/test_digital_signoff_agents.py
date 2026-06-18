@@ -27,14 +27,35 @@ def test_physical_stage_selects_one_physical_top_netlist():
     assert chosen == ["/work/inputs/netlist/temp_monitor_soc_phys_synth.v"]
 
 
-def test_lvs_and_tapeout_keep_logical_netlist_as_openlane_input():
+def test_lvs_and_tapeout_prefer_physical_netlist_as_openlane_input():
     candidates = [
         "/work/inputs/netlist/top_synth.v",
         "/work/inputs/netlist/top.nl.v",
     ]
 
-    assert digital_lvs_agent._select_single_top_netlist(candidates) == ["/work/inputs/netlist/top_synth.v"]
-    assert digital_tapeout_agent._select_single_top_netlist(candidates) == ["/work/inputs/netlist/top_synth.v"]
+    assert digital_lvs_agent._select_single_top_netlist(candidates) == ["/work/inputs/netlist/top.nl.v"]
+    assert digital_tapeout_agent._select_single_top_netlist(candidates) == ["/work/inputs/netlist/top.nl.v"]
+
+
+def test_lvs_and_tapeout_prefer_pnl_over_nl_netlist():
+    candidates = [
+        "/work/inputs/netlist/top_synth.v",
+        "/work/inputs/netlist/top.nl.v",
+        "/work/inputs/netlist/top.pnl.v",
+    ]
+
+    assert digital_lvs_agent._select_single_top_netlist(candidates) == ["/work/inputs/netlist/top.pnl.v"]
+    assert digital_tapeout_agent._select_single_top_netlist(candidates) == ["/work/inputs/netlist/top.pnl.v"]
+
+
+def test_lvs_and_tapeout_resolve_postfill_physical_netlist(tmp_path):
+    netlist_dir = tmp_path / "digital" / "sta_postfill" / "netlist"
+    netlist_dir.mkdir(parents=True)
+    physical = netlist_dir / "top.nl.v"
+    physical.write_text("module top; endmodule\n", encoding="utf-8")
+
+    assert digital_lvs_agent._resolve_physical_netlist({}, str(tmp_path)) == str(physical.resolve())
+    assert digital_tapeout_agent._resolve_physical_netlist({}, str(tmp_path)) == str(physical.resolve())
 
 
 def test_physical_stage_clears_stale_local_netlists(tmp_path):
@@ -654,6 +675,50 @@ def test_lvs_sanitizer_replaces_prior_fake_nc_outputs_with_unconnected_ports(tmp
     assert count == 1
     assert ".X()" in text
     assert "_chiploop_lvs_nc_" not in text
+
+
+def test_lvs_sanitizer_connects_missing_macro_supply_ports(tmp_path):
+    src = tmp_path / "top.nl.v"
+    spice = tmp_path / "ana_lvs_source.spice"
+    src.write_text(
+        """
+module top(avdd, avss, sig);
+  input avdd;
+  input avss;
+  input sig;
+  ana u_ana(.sig(sig));
+endmodule
+""",
+        encoding="utf-8",
+    )
+    spice.write_text(".subckt ana sig VGND VPWR avdd avss\n.ends ana\n", encoding="utf-8")
+
+    repaired, count = digital_lvs_agent._sanitize_lvs_netlist_unconnected_stdcell_outputs(str(src), None, [str(spice)])
+    text = open(repaired, "r", encoding="utf-8").read()
+
+    assert count == 4
+    assert ".VPWR(avdd)" in text
+    assert ".VGND(avss)" in text
+    assert ".avdd(avdd)" in text
+    assert ".avss(avss)" in text
+    assert ".VGND(avss),\n    .VPWR(avdd),\n    .avdd(avdd),\n    .avss(avss)" in text
+
+
+def test_lvs_sanitizer_connects_macro_supply_ports_from_ansi_header(tmp_path):
+    src = tmp_path / "top.nl.v"
+    spice = tmp_path / "ana_lvs_source.spice"
+    src.write_text(
+        "module top(input wire avdd, input wire avss, input sig); ana u_ana(.sig(sig)); endmodule\n",
+        encoding="utf-8",
+    )
+    spice.write_text(".subckt ana sig VPWR VGND\n.ends ana\n", encoding="utf-8")
+
+    repaired, count = digital_lvs_agent._sanitize_lvs_netlist_unconnected_stdcell_outputs(str(src), None, [str(spice)])
+    text = open(repaired, "r", encoding="utf-8").read()
+
+    assert count == 2
+    assert ".VPWR(avdd)" in text
+    assert ".VGND(avss)" in text
 
 
 def test_lvs_sanitizes_generated_openlane_run_netlists(tmp_path):
