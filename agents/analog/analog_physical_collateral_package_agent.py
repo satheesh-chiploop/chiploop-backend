@@ -90,6 +90,7 @@ def run_agent(state: dict) -> dict:
     analog_lvs_status = _analog_lvs_status(state)
     analog_drc_status = _analog_drc_status(state)
 
+    package_spice = lvs_spice or spice
     package: Dict[str, Any] = {
         "workflow_id": workflow_id,
         "agent": AGENT_NAME,
@@ -100,7 +101,8 @@ def run_agent(state: dict) -> dict:
         "lef": lef,
         "lib": lib,
         "gds": gds,
-        "spice": spice,
+        "spice": package_spice,
+        "raw_spice": spice,
         "lvs_spice": lvs_spice,
         "blackbox_for_drc_lvs": bool((lef or lib) and not gds and not generate_mode),
         "blackbox_reason": "analog_macro_gds_missing" if (lef or lib) and not gds and not generate_mode else "",

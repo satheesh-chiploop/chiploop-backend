@@ -1695,7 +1695,8 @@ def test_physical_package_exports_signoff_lvs_spice_to_digital(tmp_path, monkeyp
     })
 
     package = state["analog_physical_collateral_package"]
-    assert package["spice"] == str(raw_spice.resolve())
+    assert package["spice"] == str(signoff_spice.resolve())
+    assert package["raw_spice"] == str(raw_spice.resolve())
     assert package["lvs_spice"] == str(signoff_spice.resolve())
     assert state["digital"]["macro_spice"] == [str(signoff_spice.resolve())]
     assert state["digital"]["macro_lvs_spice"] == [str(signoff_spice.resolve())]
@@ -1731,6 +1732,8 @@ def test_physical_package_uses_state_lvs_source_when_artifact_dir_missing(tmp_pa
     package_agent.run_agent(state)
 
     package = state["analog_physical_collateral_package"]
+    assert package["spice"] == str(signoff_spice.resolve())
+    assert package["raw_spice"] == str(raw_spice.resolve())
     assert package["lvs_spice"] == str(signoff_spice.resolve())
     assert state["digital"]["macro_spice"] == [str(signoff_spice.resolve())]
     assert state["digital"]["macro_lvs_spice"] == [str(signoff_spice.resolve())]
