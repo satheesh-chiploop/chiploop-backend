@@ -229,6 +229,35 @@ def test_signoff_closure_bundles_timing_when_lvs_restart_is_physical(tmp_path, m
     assert any(action["type"] == "setup_timing" for action in plan["repair_actions"])
 
 
+def test_signoff_closure_setup_timing_restart_has_placement_eco(tmp_path, monkeypatch):
+    monkeypatch.setattr(system_agent, "save_text_artifact_and_record", lambda *args, **kwargs: "local")
+
+    _write_json(tmp_path / "digital" / "floorplan" / "config.json", {
+        "PL_TARGET_DENSITY": 0.25,
+    })
+    _write_json(tmp_path / "digital" / "sta_postfill" / "metrics.json", {
+        "worst_slack": -0.08,
+        "tns": -0.44,
+        "setup_violations": 5,
+        "hold_violations": 0,
+    })
+
+    out = system_agent.run_agent({
+        "workflow_id": "wf",
+        "workflow_dir": str(tmp_path),
+        "run_signoff_closure_loop": True,
+    })
+
+    plan = out["digital"]["signoff_closure"]["plan"]
+    overrides = plan["eco_profile"]["config_overrides"]
+    assert plan["dominant_issue"] == "setup_timing"
+    assert plan["selected_restart_stage"] == "Digital Placement Agent"
+    assert overrides["placement"]["CHIPLOOP_TIMING_CLOSURE_ECO"] == "setup_iter_1"
+    assert overrides["placement"]["PL_TARGET_DENSITY"] < 0.25
+    assert overrides["placement"]["PL_RESIZER_TIMING_OPTIMIZATIONS"] is True
+    assert overrides["route"]["GRT_RESIZER_TIMING_OPTIMIZATIONS"] is True
+
+
 def test_synthesis_closure_selects_synthesis_for_setup_violations(tmp_path, monkeypatch):
     monkeypatch.setattr(synthesis_agent, "save_text_artifact_and_record", lambda *args, **kwargs: "local")
 

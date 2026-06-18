@@ -462,7 +462,7 @@ def _resolve_macro_spice_models(state: dict, workflow_dir: str) -> list[str]:
             or "characterize_" in base
             or "_extracted" in base
             or "/analog/lib_char/" in norm
-            or "/analog/gds/" in norm
+            or ("/analog/gds/" in norm and not base.endswith("_lvs_source.spice"))
         ):
             continue
         ap = os.path.abspath(path)

@@ -577,15 +577,32 @@ def _eco_profile(
     hold_vios = sta.get("hold_violations") or 0
     timing_is_dominant = dominant_issue in {"setup_timing", "hold_timing"}
     timing_can_be_bundled = timing_is_dominant or _restart_reruns_timing(selected_restart_stage)
+    timing_placement_overrides: dict[str, Any] = {}
     if timing_can_be_bundled and (setup_vios or (sta.get("setup_wns") is not None and sta.get("setup_wns") < 0)):
+        density = _first_number(
+            floorplan_cfg.get("PL_TARGET_DENSITY"),
+            floorplan_cfg.get("PLACE_DENSITY"),
+            route_cfg.get("PL_TARGET_DENSITY"),
+            route_cfg.get("PLACE_DENSITY"),
+        )
+        if density is not None:
+            density_factor = 0.88 if iteration <= 1 else 0.80
+            timing_placement_overrides["PL_TARGET_DENSITY"] = max(0.05, round(float(density) * density_factor, 4))
+            timing_placement_overrides["PL_TARGET_DENSITY_PCT"] = round(timing_placement_overrides["PL_TARGET_DENSITY"] * 100.0, 3)
+        timing_placement_overrides["PL_RESIZER_TIMING_OPTIMIZATIONS"] = True
+        timing_placement_overrides["CHIPLOOP_TIMING_CLOSURE_ECO"] = f"setup_iter_{iteration}"
         route_overrides["RUN_SPEF_EXTRACTION"] = True
+        route_overrides["GRT_RESIZER_TIMING_OPTIMIZATIONS"] = True
         route_overrides["CHIPLOOP_TIMING_CLOSURE_ECO"] = f"setup_iter_{iteration}"
         if timing_is_dominant:
-            notes.append("Post-fill setup is negative; preserve SPEF and rerun downstream timing with closure profile.")
+            notes.append("Post-fill setup is negative; lower placement density, enable timing optimization, preserve SPEF, and rerun downstream timing.")
         else:
             notes.append(f"Bundle setup timing repair because {selected_restart_stage} reruns downstream timing stages.")
     if timing_can_be_bundled and (hold_vios or (sta.get("hold_wns") is not None and sta.get("hold_wns") < 0)):
+        timing_placement_overrides["PL_RESIZER_TIMING_OPTIMIZATIONS"] = True
+        timing_placement_overrides["CHIPLOOP_TIMING_CLOSURE_ECO"] = f"hold_iter_{iteration}"
         route_overrides["RUN_SPEF_EXTRACTION"] = True
+        route_overrides["GRT_RESIZER_TIMING_OPTIMIZATIONS"] = True
         route_overrides["CHIPLOOP_TIMING_CLOSURE_ECO"] = f"hold_iter_{iteration}"
         if timing_is_dominant:
             notes.append("Post-fill hold is negative; CTS/route must be rerun before accepting signoff.")
@@ -602,6 +619,10 @@ def _eco_profile(
     if floorplan_overrides:
         overrides["floorplan"] = floorplan_overrides
         overrides["placement"] = dict(floorplan_overrides)
+    if timing_placement_overrides:
+        placement = dict(overrides.get("placement") or {})
+        placement.update(timing_placement_overrides)
+        overrides["placement"] = placement
     if route_overrides:
         overrides["route"] = route_overrides
         fill_overrides = {"RUN_FILL_INSERTION": True}
