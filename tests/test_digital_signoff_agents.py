@@ -748,6 +748,34 @@ endmodule
     assert ".VGND(avss)" in text
 
 
+def test_lvs_and_tapeout_generate_physical_only_ef_stdcell_blackboxes(tmp_path):
+    netlist = tmp_path / "top.nl.v"
+    netlist.write_text(
+        """
+module top(input avdd, input avss);
+  sky130_ef_sc_hd__decap_12 FILLER_94_545 ();
+  sky130_ef_sc_hd__fakediode_2 ANTENNA_1 (.A(avdd), .B(avss));
+endmodule
+""",
+        encoding="utf-8",
+    )
+
+    lvs_stubs = digital_lvs_agent._write_physical_stdcell_blackbox_stubs([str(netlist)], str(tmp_path))
+    lvs_text = open(lvs_stubs[0], "r", encoding="utf-8").read()
+
+    assert "module sky130_ef_sc_hd__decap_12();" in lvs_text
+    assert "module sky130_ef_sc_hd__fakediode_2(A, B);" in lvs_text
+    assert "inout A;" in lvs_text
+    assert "inout B;" in lvs_text
+
+    tapeout_dir = tmp_path / "tapeout"
+    tapeout_dir.mkdir()
+    tapeout_stubs = digital_tapeout_agent._write_physical_stdcell_blackbox_stubs([str(netlist)], str(tapeout_dir))
+    tapeout_text = open(tapeout_stubs[0], "r", encoding="utf-8").read()
+
+    assert tapeout_text == lvs_text
+
+
 def test_lvs_sanitizes_generated_openlane_run_netlists(tmp_path):
     run = tmp_path / "runs" / "run1"
     step = run / "111-openroad-fillinsertion"

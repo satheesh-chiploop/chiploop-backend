@@ -543,6 +543,41 @@ def _sanitize_lvs_netlist_unconnected_stdcell_outputs(src: str, dst: str | None 
     return out, repairs
 
 
+def _write_physical_stdcell_blackbox_stubs(netlists: list[str], inputs_netlist_dir: str) -> list[str]:
+    cells: dict[str, set[str]] = {}
+    for path in netlists:
+        try:
+            with open(path, "r", encoding="utf-8", errors="ignore") as fh:
+                text = fh.read()
+        except Exception:
+            text = ""
+        for match in re.finditer(
+            r"(?P<model>sky130_ef_sc_hd__\S+)\s+(?P<inst>\S+)\s*\((?P<body>.*?)\);",
+            text,
+            flags=re.DOTALL,
+        ):
+            model = match.group("model")
+            body = match.group("body")
+            ports = cells.setdefault(model, set())
+            for port, _expr in re.findall(r"\.\s*([A-Za-z_][A-Za-z0-9_$]*)\s*\(\s*([^)]*?)\s*\)", body, flags=re.DOTALL):
+                ports.add(port)
+    if not cells:
+        return []
+
+    lines = ["// Auto-generated physical-only stdcell blackboxes for signoff netlists."]
+    for model in sorted(cells):
+        ports = sorted(cells[model])
+        port_list = ", ".join(ports)
+        lines.append(f"(* blackbox *) module {model}({port_list});")
+        for port in ports:
+            lines.append(f"  inout {port};")
+        lines.append("endmodule")
+        lines.append("")
+    path = os.path.join(inputs_netlist_dir, "chiploop_physical_stdcell_blackboxes.v")
+    _write_text(path, "\n".join(lines).rstrip() + "\n")
+    return [path]
+
+
 def _resolve_macro_spice_models(state: dict, workflow_dir: str) -> list[str]:
     digital = state.get("digital") if isinstance(state.get("digital"), dict) else {}
     candidates: list[str] = []
@@ -863,7 +898,11 @@ def run_agent(state: dict) -> dict:
         sanitized_stage_netlists.append(stage_copy)
 
     stage_netlists_local = _select_single_top_netlist(sanitized_stage_netlists)
-    cfg["VERILOG_FILES"] = [f"inputs/netlist/{os.path.basename(p)}" for p in stage_netlists_local]
+    physical_stdcell_stubs = _write_physical_stdcell_blackbox_stubs(stage_netlists_local, inputs_netlist_dir)
+    cfg["VERILOG_FILES"] = [
+        *[f"inputs/netlist/{os.path.basename(p)}" for p in physical_stdcell_stubs],
+        *[f"inputs/netlist/{os.path.basename(p)}" for p in stage_netlists_local],
+    ]
 
     inferred = None
     if str(cfg.get("DESIGN_NAME", "")).strip() in ["", "top"]:
@@ -944,6 +983,7 @@ def run_agent(state: dict) -> dict:
         f"selected_verilog_files={cfg.get('VERILOG_FILES')}",
         f"netlist_count={len(stage_netlists_local)}",
         f"tapeout_netlist_repairs={tapeout_netlist_repairs}",
+        f"physical_stdcell_stub_count={len(physical_stdcell_stubs)}",
         f"macro_placement_cfg={cfg.get('MACRO_PLACEMENT_CFG')}",
         f"macro_placement_cfg_path={macro_placement_cfg}",
         f"cell_spice_count={len(staged_cell_spice)}",
