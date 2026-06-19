@@ -753,8 +753,10 @@ def test_lvs_and_tapeout_generate_physical_only_ef_stdcell_blackboxes(tmp_path):
     netlist.write_text(
         """
 module top(input avdd, input avss);
+  sky130_fd_sc_hd__fill_1 FILLER_94_27 ();
   sky130_ef_sc_hd__decap_12 FILLER_94_545 ();
   sky130_ef_sc_hd__fakediode_2 ANTENNA_1 (.A(avdd), .B(avss));
+  sky130_fd_sc_hd__and2_1 U1 (.A(avdd), .B(avss), .X());
 endmodule
 """,
         encoding="utf-8",
@@ -763,8 +765,10 @@ endmodule
     lvs_stubs = digital_lvs_agent._write_physical_stdcell_blackbox_stubs([str(netlist)], str(tmp_path))
     lvs_text = open(lvs_stubs[0], "r", encoding="utf-8").read()
 
+    assert "module sky130_fd_sc_hd__fill_1();" in lvs_text
     assert "module sky130_ef_sc_hd__decap_12();" in lvs_text
     assert "module sky130_ef_sc_hd__fakediode_2(A, B);" in lvs_text
+    assert "sky130_fd_sc_hd__and2_1" not in lvs_text
     assert "inout A;" in lvs_text
     assert "inout B;" in lvs_text
 

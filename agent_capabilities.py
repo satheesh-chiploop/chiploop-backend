@@ -460,6 +460,25 @@ AGENT_CAPABILITIES = {
         ],
     },
 
+    "Digital MBIST RTL Insertion Agent": {
+        "domain": "digital",
+        "description": "Optional Arch2RTL-stage AutoMBIST flow. Detects OpenRAM/SRAM RTL, generates MBIST wrapper RTL, runs standalone AutoMBIST simulation, and stages MBIST RTL for handoff only when enabled by the user.",
+        "requires": ["autombist", "iverilog", "cocotb"],
+        "inputs": [
+            "rtl/*.v",
+            "rtl/*.sv",
+            "digital/rtl/*.v",
+            "digital/rtl/*.sv",
+        ],
+        "outputs": [
+            "digital/mbist_rtl_insertion/config.yml",
+            "digital/mbist_rtl_insertion/autombist_run.log",
+            "digital/mbist_rtl_insertion/mbist_rtl_insertion_summary.json",
+            "digital/mbist_rtl_insertion/integrated_rtl/**/*.v",
+            "digital/mbist_rtl_insertion/integrated_rtl/**/*.sv",
+        ],
+    },
+
     "Digital MBIST Collateral Agent": {
         "domain": "digital",
         "description": "Detects memory-like RTL/netlist structures and generates limited MBIST collateral. For memoryless reference designs, emits clearly labeled demo scratchpad MBIST collateral without claiming insertion into the design.",

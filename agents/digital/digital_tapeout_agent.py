@@ -552,7 +552,7 @@ def _write_physical_stdcell_blackbox_stubs(netlists: list[str], inputs_netlist_d
         except Exception:
             text = ""
         for match in re.finditer(
-            r"(?P<model>sky130_ef_sc_hd__\S+)\s+(?P<inst>\S+)\s*\((?P<body>.*?)\);",
+            r"(?P<model>sky130_(?:fd|ef)_sc_hd__(?:fill|decap|fakediode|tap|tapvpwrvgnd|endcap)\S*)\s+(?P<inst>\S+)\s*\((?P<body>.*?)\);",
             text,
             flags=re.DOTALL,
         ):

@@ -432,6 +432,7 @@ from agents.digital.digital_synthesis_closure_agent import run_agent as digital_
 from agents.digital.digital_dft_scan_stitching_agent import run_agent as digital_dft_scan_stitching_agent
 from agents.digital.digital_post_dft_lec_agent import run_agent as digital_post_dft_lec_agent
 from agents.digital.digital_scan_atpg_agent import run_agent as digital_scan_atpg_agent
+from agents.digital.digital_mbist_rtl_insertion_agent import run_agent as digital_mbist_rtl_insertion_agent
 from agents.digital.digital_mbist_collateral_agent import run_agent as digital_mbist_collateral_agent
 from agents.digital.digital_foundry_profile_agent import run_agent as digital_foundry_profile_agent
 from agents.digital.digital_implementation_setup_agent import run_agent as digital_implementation_setup_agent
@@ -533,6 +534,7 @@ DIGITAL_AGENT_FUNCTIONS: Dict[str, Any] = {
     "Digital DFT Scan Stitching Agent": digital_dft_scan_stitching_agent,
     "Digital Post-DFT Logic Equivalence Check Agent": digital_post_dft_lec_agent,
     "Digital Scan ATPG Coverage Agent": digital_scan_atpg_agent,
+    "Digital MBIST RTL Insertion Agent": digital_mbist_rtl_insertion_agent,
     "Digital MBIST Collateral Agent": digital_mbist_collateral_agent,
     "Digital STA PrePlace Agent": digital_sta_preplace_agent,
     "Digital Floorplan Agent": digital_floorplan_agent,
@@ -836,6 +838,7 @@ SYSTEM_AGENT_FUNCTIONS: Dict[str,Any] = {
     "Digital DFT Scan Stitching Agent": digital_dft_scan_stitching_agent,
     "Digital Post-DFT Logic Equivalence Check Agent": digital_post_dft_lec_agent,
     "Digital Scan ATPG Coverage Agent": digital_scan_atpg_agent,
+    "Digital MBIST RTL Insertion Agent": digital_mbist_rtl_insertion_agent,
     "Digital MBIST Collateral Agent": digital_mbist_collateral_agent,
     "Digital STA PrePlace Agent": digital_sta_preplace_agent,
     "Digital Floorplan Agent": digital_floorplan_agent,
@@ -1042,6 +1045,7 @@ DIGITAL_ARCH2RTL_DEFINITION = _linear_workflow_definition([
     "Digital Microarchitecture Agent",
     "Digital Register Map Agent",
     "Digital RTL Agent",
+    "Digital MBIST RTL Insertion Agent",
     "Digital Power Intent (UPF-lite) Agent",
     "Digital UPF Static Check Agent",
     "Digital IP Packaging & Handoff Agent",
@@ -2966,6 +2970,7 @@ PRODUCT_STAGE_SCHEMAS: Dict[str, Dict[str, Any]] = {
             {"key": "enable_upf_lite", "label": "Generate UPF-lite", "type": "boolean", "defaultValue": False},
             {"key": "enable_packaging", "label": "Generate handoff package", "type": "boolean", "defaultValue": True},
             {"key": "enable_scan_dft", "label": "Enable scan/DFT intent", "type": "boolean", "defaultValue": False},
+            {"key": "insert_mbist", "label": "Insert MBIST", "type": "boolean", "defaultValue": False},
             {"key": "run_spec2rtl_check", "label": "Run Spec2RTL compliance check", "type": "boolean", "defaultValue": False},
             {"key": "throughput_latency_targets", "label": "Throughput/latency targets", "type": "text", "defaultValue": ""},
             {"key": "power_priority", "label": "Power priority", "type": "text", "defaultValue": ""},
@@ -3564,6 +3569,11 @@ def execute_digital_app_background(
             nodes = [
                 node for node in nodes
                 if ((node.get("data") or {}).get("backendLabel") or node.get("label")) not in upf_agents
+            ]
+        if not (toggles.get("insert_mbist") or toggles.get("enable_mbist_rtl_insertion")):
+            nodes = [
+                node for node in nodes
+                if ((node.get("data") or {}).get("backendLabel") or node.get("label")) != "Digital MBIST RTL Insertion Agent"
             ]
         if toggles.get("run_spec2rtl_check") and app_name in {"arch2rtl", "arch2synthesis", "arch2sim", "arch2tapeout"}:
             before_by_app = {
@@ -5482,6 +5492,7 @@ def _product_stage_payload(product: Dict[str, Any], stage: Dict[str, Any], upstr
                 "gen_upf_lite": bool(_stage_setting(stage, "enable_upf_lite", False)),
                 "gen_packaging": bool(_stage_setting(stage, "enable_packaging", True)),
                 "enable_scan_dft": bool(_stage_setting(stage, "enable_scan_dft", False)),
+                "insert_mbist": bool(_stage_setting(stage, "insert_mbist", False)),
                 "run_spec2rtl_check": bool(_stage_setting(stage, "run_spec2rtl_check", False)),
             },
         }
@@ -9326,6 +9337,52 @@ def execute_system_app_background(
                 closure_idx = labels.index(closure_label)
                 prefix_nodes = nodes[:closure_idx + 1]
                 suffix_nodes = nodes[closure_idx + 1:]
+                if bool(shared_state.get("run_synthesis_closure_loop") or (isinstance(shared_state.get("toggles"), dict) and shared_state["toggles"].get("run_synthesis_closure_loop"))):
+                    synth_label = "System Synthesis Closure Agent"
+                    if synth_label in labels and labels.index(synth_label) < closure_idx:
+                        synth_idx = labels.index(synth_label)
+                        try:
+                            synth_start_idx = labels.index("Digital Synthesis Agent")
+                        except ValueError:
+                            synth_start_idx = synth_idx
+                        synth_max_iterations = max(1, min(int(shared_state.get("max_synthesis_closure_iterations") or 1), 2))
+                        append_log_workflow(workflow_id, "System synthesis closure loop baseline started before signoff closure", phase="synthesis_closure_baseline")
+                        append_log_run(run_id, "System synthesis closure loop baseline started before signoff closure")
+                        shared_state["synthesis_closure_iteration_index"] = 0
+                        _run_nodes_with_shared_state(
+                            workflow_id=workflow_id,
+                            run_id=run_id,
+                            loop_type="system",
+                            nodes=nodes[:synth_idx + 1],
+                            shared_state=shared_state,
+                        )
+                        plan = (((shared_state.get("digital") or {}).get("synthesis_closure") or {}).get("plan") or {})
+                        append_log_workflow(workflow_id, f"System synthesis closure baseline completed: {plan.get('status') or 'not_reported'}", phase="synthesis_closure_baseline_done")
+                        append_log_run(run_id, f"System synthesis closure baseline completed: {plan.get('status') or 'not_reported'}")
+                        for synth_iteration in range(1, synth_max_iterations + 1):
+                            plan = (((shared_state.get("digital") or {}).get("synthesis_closure") or {}).get("plan") or {})
+                            if plan.get("closure_complete") is True or plan.get("status") == "clean":
+                                append_log_workflow(workflow_id, f"System synthesis closure stopped before iteration {synth_iteration}: closure achieved", phase="synthesis_closure_stop")
+                                append_log_run(run_id, f"System synthesis closure stopped before iteration {synth_iteration}: closure achieved")
+                                break
+                            shared_state["synthesis_closure_iteration_index"] = synth_iteration
+                            append_log_workflow(workflow_id, f"System synthesis closure iteration {synth_iteration}/{synth_max_iterations} started", phase=f"synthesis_closure_iteration_{synth_iteration}")
+                            append_log_run(run_id, f"System synthesis closure iteration {synth_iteration}/{synth_max_iterations} started")
+                            _run_nodes_with_shared_state(
+                                workflow_id=workflow_id,
+                                run_id=run_id,
+                                loop_type="system",
+                                nodes=nodes[synth_start_idx:synth_idx + 1],
+                                shared_state=shared_state,
+                            )
+                            plan = (((shared_state.get("digital") or {}).get("synthesis_closure") or {}).get("plan") or {})
+                            append_log_workflow(workflow_id, f"System synthesis closure iteration {synth_iteration}/{synth_max_iterations} completed: {plan.get('status') or 'not_reported'}", phase=f"synthesis_closure_iteration_{synth_iteration}_done")
+                            append_log_run(run_id, f"System synthesis closure iteration {synth_iteration}/{synth_max_iterations} completed: {plan.get('status') or 'not_reported'}")
+                            if plan.get("closure_complete") is True or plan.get("status") == "clean":
+                                append_log_workflow(workflow_id, f"System synthesis closure stopped after iteration {synth_iteration}: closure achieved", phase="synthesis_closure_stop")
+                                append_log_run(run_id, f"System synthesis closure stopped after iteration {synth_iteration}: closure achieved")
+                                break
+                        prefix_nodes = nodes[synth_idx + 1:closure_idx + 1]
 
                 append_log_workflow(workflow_id, "System signoff closure loop baseline started", phase="signoff_closure_baseline")
                 append_log_run(run_id, "System signoff closure loop baseline started")
