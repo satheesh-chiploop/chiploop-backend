@@ -251,6 +251,16 @@ def _module_code_for_name(code: str, module_name: str) -> str:
     return modules.get(module_name, code or "")
 
 
+def _has_structural_width_warnings(tool_output: str) -> bool:
+    text = tool_output or ""
+    patterns = (
+        r"warning:\s+Port\s+\d+\s+\([^)]+\)\s+of\s+\S+\s+expects\s+\d+\s+bits,\s+got\s+\d+",
+        r"\bPadding\s+\d+\s+high bits\b",
+        r"\bPruning\s+\d+\s+high bits\b",
+    )
+    return any(re.search(pattern, text, flags=re.IGNORECASE) for pattern in patterns)
+
+
 def _module_procedurally_assigns_signal(module_code: str, signal_name: str) -> bool:
     text = _strip_verilog_comments(module_code or "")
     for block in re.findall(
@@ -1986,6 +1996,11 @@ def _validate_and_materialize_rtl(
             iverilog_failed = True
             issues.append("❌ Icarus Verilog compile failed.")
             _stage(f"iverilog_compile_failed_{suffix or 'pass1'}")
+        elif _has_structural_width_warnings(compile_status):
+            iverilog_failed = True
+            issues.append("Structural port width mismatch warnings reported by Icarus Verilog.")
+            compile_status += "\nStructural port width mismatch warnings are treated as RTL failures.\n"
+            _stage(f"iverilog_compile_width_mismatch_{suffix or 'pass1'}")
         else:
             _stage(f"iverilog_compile_passed_{suffix or 'pass1'}")
     except Exception as e:

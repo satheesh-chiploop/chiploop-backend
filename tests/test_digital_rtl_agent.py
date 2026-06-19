@@ -51,6 +51,17 @@ endmodule
     assert agent._module_procedurally_assigns_signal(procedural_top, "rd_data") is True
 
 
+def test_iverilog_port_width_warnings_are_structural_failures():
+    output = """
+top.v:47: warning: Port 4 (addr) of demo_sram_32x64_model expects 6 bits, got 1.
+top.v:47:        : Padding 5 high bits of the port.
+top.v:49: warning: Port 5 (din) of demo_sram_32x64_model expects 32 bits, got 1.
+"""
+
+    assert agent._has_structural_width_warnings(output) is True
+    assert agent._has_structural_width_warnings("Icarus compile completed cleanly.") is False
+
+
 def test_verilator_lint_preserves_pass2_relative_subdir(tmp_path, monkeypatch):
     rtl_dir = tmp_path / "rtl"
     pass2_dir = rtl_dir / "pass2"

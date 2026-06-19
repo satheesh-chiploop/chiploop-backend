@@ -299,6 +299,61 @@ def test_multiple_spec_memory_macros_merge_with_matching_rtl_instances(tmp_path)
     assert merged[1]["data_width"] == 16
 
 
+def test_spec_openram_macro_ignores_fallback_model_macro(tmp_path):
+    spec = tmp_path / "spec.json"
+    spec.write_text(
+        json.dumps({
+            "memory_macros": [
+                {"name": "demo_sram_32x64", "kind": "openram_sram", "depth": 64, "data_width": 32, "addr_width": 6},
+                {"name": "demo_sram_32x64_model", "kind": "synthesizable_sram_model", "depth": 64, "data_width": 32, "addr_width": 6},
+            ]
+        }),
+        encoding="utf-8",
+    )
+
+    macros = agent._spec_memory_macros({"digital_spec_json": str(spec)})
+
+    assert [item["cell"] for item in macros] == ["demo_sram_32x64"]
+
+
+def test_spec_openram_macro_merges_rtl_model_instance_without_second_target():
+    spec_macros = [
+        {
+            "kind": "spec_memory_macro",
+            "cell": "demo_sram_32x64",
+            "openram_cell": "demo_sram_32x64",
+            "instance": "u_sram",
+            "addr_width": 6,
+            "data_width": 32,
+            "depth": 64,
+            "ports": {"clk": "clk", "we": "web", "addr": "addr", "din": "din", "dout": "dout"},
+        }
+    ]
+    detected = [
+        {
+            "kind": "memory_instance",
+            "cell": "demo_sram_32x64_model",
+            "instance": "u_sram_model",
+            "source_file": "top.v",
+            "connections": {"clk": "clk", "addr": "addr", "din": "din", "dout": "dout"},
+            "ports": {"clk": "clk", "we": "web", "addr": "addr", "din": "din", "dout": "dout"},
+            "addr_width": 1,
+            "data_width": 1,
+            "depth": 2,
+        }
+    ]
+
+    merged = agent._merge_spec_memories_with_rtl_detection(spec_macros, detected)
+
+    assert len(merged) == 1
+    assert merged[0]["cell"] == "demo_sram_32x64"
+    assert merged[0]["openram_cell"] == "demo_sram_32x64"
+    assert merged[0]["rtl_cell"] == "demo_sram_32x64_model"
+    assert merged[0]["source_file"] == "top.v"
+    assert merged[0]["addr_width"] == 6
+    assert merged[0]["data_width"] == 32
+
+
 def test_memory_macro_cell_name_can_repeat_only_for_same_config():
     ok = [
         {"cell": "openram_sram_64x32", "depth": 64, "data_width": 32, "addr_width": 6},
@@ -324,7 +379,8 @@ def test_openram_generation_discovers_behavioral_model_and_macro_collateral(tmp_
     memory = {"cell": "demo_sram_32x64", "addr_width": 6, "data_width": 32, "depth": 64, "source_file": str(rtl_src)}
 
     def fake_run(cmd, cwd, timeout=600):
-        out_dir = Path(cmd[cmd.index("--out") + 1])
+        assert "sram_compiler.py" in cmd[1]
+        out_dir = stage_dir / "openram_out"
         out_dir.mkdir(parents=True, exist_ok=True)
         (out_dir / "demo_sram_32x64.v").write_text(
             "module demo_sram_32x64(input clk,input [5:0] addr,output reg [31:0] dout);"
@@ -337,16 +393,34 @@ def test_openram_generation_discovers_behavioral_model_and_macro_collateral(tmp_
         return 0, "ok\n"
 
     monkeypatch.setattr(agent, "_run", fake_run)
+    monkeypatch.setattr(agent, "_find_openram_compiler", lambda state: "/tools/sram_compiler.py")
 
     result = agent._generate_openram_collateral(memory, "autombist", str(project_dir), str(stage_dir), "wf1")
 
     assert result["status"] == "validated"
+    assert result["generator"] == "openram"
     assert memory["source_file"] == str(rtl_src)
     assert memory["openram_behavioral_model"].endswith("demo_sram_32x64.v")
     assert result["validation"]["status"] == "clean"
     assert result["collateral"]["lib"]
     assert result["collateral"]["lef"]
     assert result["collateral"]["gds"]
+
+
+def test_openram_generation_fails_when_compiler_missing(tmp_path, monkeypatch):
+    project_dir = tmp_path / "project"
+    stage_dir = tmp_path / "stage"
+    project_dir.mkdir()
+    stage_dir.mkdir()
+    memory = {"cell": "demo_sram_32x64", "addr_width": 6, "data_width": 32, "depth": 64}
+
+    monkeypatch.setattr(agent, "_find_openram_compiler", lambda state: None)
+
+    result = agent._generate_openram_collateral(memory, "autombist", str(project_dir), str(stage_dir), "wf1")
+
+    assert result["status"] == "failed"
+    assert result["reason"] == "openram_compiler_not_found"
+    assert result["attempts"] == []
 
 
 def test_openram_validation_rejects_partial_collateral(tmp_path):
@@ -506,6 +580,86 @@ endmodule
     assert "openram_sram_256x16_mbist u_b" in text
     assert "openram_sram_64x32 u_a" not in text
     assert "openram_sram_256x16 u_b" not in text
+
+
+def test_replaces_rtl_model_instance_with_openram_wrapper(tmp_path):
+    rtl = tmp_path / "top.sv"
+    rtl.write_text(
+        """
+module top(input logic clk);
+  logic [5:0] addr;
+  logic [31:0] din;
+  logic [31:0] dout;
+  demo_sram_32x64_model u_sram_model(.clk(clk), .addr(addr), .din(din), .dout(dout));
+endmodule
+""",
+        encoding="utf-8",
+    )
+    memory = {
+        "kind": "memory_instance",
+        "cell": "demo_sram_32x64",
+        "openram_cell": "demo_sram_32x64",
+        "rtl_cell": "demo_sram_32x64_model",
+        "instance": "u_sram_model",
+        "source_file": str(rtl),
+        "connections": {"clk": "clk", "addr": "addr", "din": "din", "dout": "dout"},
+    }
+
+    patched = agent._replace_memory_instances_with_wrappers([
+        {"memory": memory, "wrapper_module": "demo_sram_32x64_mbist", "wrapper_ports": ["clk", "addr", "din", "dout"]},
+    ], str(tmp_path / "out"))
+
+    assert len(patched) == 1
+    text = Path(patched[0]).read_text(encoding="utf-8")
+    assert "demo_sram_32x64_mbist u_sram_model" in text
+    assert "demo_sram_32x64_model u_sram_model" not in text
+
+
+def test_integrated_rtl_lint_requires_iverilog_and_verilator_pass(tmp_path, monkeypatch):
+    rtl = tmp_path / "top.v"
+    rtl.write_text("module top; endmodule\n", encoding="utf-8")
+
+    monkeypatch.setattr(agent, "tool_path", lambda tool, state: tool)
+
+    def fake_run(cmd, cwd, timeout=600):
+        if cmd[0] == "iverilog":
+            return 0, ""
+        if cmd[0] == "verilator":
+            return 0, ""
+        return 1, "unexpected"
+
+    monkeypatch.setattr(agent, "_run", fake_run)
+    monkeypatch.setattr(agent, "save_text_artifact_and_record", lambda *args, **kwargs: None)
+
+    result = agent._run_integrated_rtl_lint({}, "wf1", str(tmp_path / "stage"), [str(rtl)])
+
+    assert result["status"] == "pass"
+    assert result["iverilog"]["status"] == "pass"
+    assert result["verilator"]["status"] == "pass"
+
+
+def test_integrated_rtl_lint_fails_on_iverilog_width_warning(tmp_path, monkeypatch):
+    rtl = tmp_path / "top.v"
+    rtl.write_text("module top; endmodule\n", encoding="utf-8")
+
+    monkeypatch.setattr(agent, "tool_path", lambda tool, state: tool)
+
+    def fake_run(cmd, cwd, timeout=600):
+        if cmd[0] == "iverilog":
+            return 0, "top.v:2: warning: Port 4 (addr) of sram expects 6 bits, got 1.\n: Padding 5 high bits of the port.\n"
+        if cmd[0] == "verilator":
+            return 0, ""
+        return 1, "unexpected"
+
+    monkeypatch.setattr(agent, "_run", fake_run)
+    monkeypatch.setattr(agent, "save_text_artifact_and_record", lambda *args, **kwargs: None)
+
+    result = agent._run_integrated_rtl_lint({}, "wf1", str(tmp_path / "stage"), [str(rtl)])
+
+    assert result["status"] == "failed"
+    assert result["reason"] == "integrated_rtl_lint_failed"
+    assert result["iverilog"]["status"] == "fail"
+    assert result["iverilog"]["structural_width_warnings"] is True
 
 
 def test_autombist_fault_text_does_not_make_successful_run_fail(tmp_path):
