@@ -49,6 +49,53 @@ def _run(cmd: list[str], cwd: str, timeout: int = 600) -> tuple[int, str]:
         return 1, f"{type(exc).__name__}: {exc}\n"
 
 
+def _autombist_hardware_dirs(autombist: str) -> list[str]:
+    dirs: list[str] = []
+    real = os.path.realpath(autombist) if autombist else ""
+    if real:
+        prefix = os.path.dirname(os.path.dirname(real))
+        dirs.extend(glob.glob(os.path.join(prefix, "lib", "python*", "site-packages", "autombist", "tests", "hardware")))
+    dirs.extend(glob.glob(os.path.join(os.sep, "opt", "chiploop-dft", "lib", "python*", "site-packages", "autombist", "tests", "hardware")))
+    return sorted(dict.fromkeys(os.path.abspath(path) for path in dirs if os.path.isdir(path)))
+
+
+def _stage_memory_model_for_autombist(memory: dict[str, Any], autombist: str, stage_dir: str) -> dict[str, Any]:
+    src = str(memory.get("source_file") or "")
+    cell = str(memory.get("cell") or "").strip()
+    result: dict[str, Any] = {"status": "not_needed", "source": src, "targets": []}
+    if not src or not cell or not os.path.isfile(src):
+        result["status"] = "missing_source"
+        return result
+
+    staged_src = os.path.join(stage_dir, f"{cell}.v")
+    try:
+        shutil.copy2(src, staged_src)
+        result["workflow_copy"] = staged_src
+    except Exception as exc:
+        result["workflow_copy_error"] = f"{type(exc).__name__}: {exc}"
+
+    copied: list[str] = []
+    errors: list[str] = []
+    for hardware_dir in _autombist_hardware_dirs(autombist):
+        dst = os.path.join(hardware_dir, f"{cell}.v")
+        try:
+            if os.path.abspath(src) != os.path.abspath(dst):
+                shutil.copy2(src, dst)
+            copied.append(dst)
+        except Exception as exc:
+            errors.append(f"{dst}: {type(exc).__name__}: {exc}")
+    result["targets"] = copied
+    if copied:
+        result["status"] = "staged"
+    elif errors:
+        result["status"] = "failed"
+    else:
+        result["status"] = "autombist_hardware_dir_not_found"
+    if errors:
+        result["errors"] = errors
+    return result
+
+
 def _existing_path(value: Any, workflow_dir: str) -> str | None:
     if not isinstance(value, str) or not value.strip():
         return None
@@ -558,6 +605,21 @@ def run_agent(state: dict) -> dict:
     _write_text(config_path, patched_config)
     _write_text(os.path.join(stage_dir, "config.yml"), patched_config)
     save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital/mbist_rtl_insertion", "config.yml", patched_config)
+
+    memory_model_stage = _stage_memory_model_for_autombist(memory, autombist, stage_dir)
+    summary["memory_model_stage"] = memory_model_stage
+    save_text_artifact_and_record(
+        workflow_id,
+        AGENT_NAME,
+        "digital/mbist_rtl_insertion",
+        "memory_model_stage.json",
+        json.dumps(memory_model_stage, indent=2),
+    )
+    if memory_model_stage.get("status") not in {"staged", "not_needed"}:
+        summary["status"] = "failed"
+        summary["reason"] = "autombist_memory_model_stage_failed"
+        _write_publish_summary(workflow_id, stage_dir, summary)
+        raise RuntimeError("MBIST RTL insertion failed: could not stage SRAM model for AutoMBIST simulation.")
 
     out_dir = os.path.join(stage_dir, "autombist_out")
     rc_run, out_run = _run(

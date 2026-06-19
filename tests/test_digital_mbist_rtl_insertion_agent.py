@@ -176,6 +176,30 @@ def test_autombist_config_uses_detected_sram_ports():
     assert "  csb: csb" in config
 
 
+def test_stages_detected_memory_model_for_autombist(tmp_path):
+    prefix = tmp_path / "chiploop-dft"
+    bin_dir = prefix / "bin"
+    hardware_dir = prefix / "lib" / "python3.13" / "site-packages" / "autombist" / "tests" / "hardware"
+    bin_dir.mkdir(parents=True)
+    hardware_dir.mkdir(parents=True)
+    autombist = bin_dir / "autombist"
+    autombist.write_text("#!/bin/sh\n", encoding="utf-8")
+    src = tmp_path / "demo_sram_32x64.v"
+    src.write_text("module demo_sram_32x64; endmodule\n", encoding="utf-8")
+    stage_dir = tmp_path / "stage"
+    stage_dir.mkdir()
+
+    result = agent._stage_memory_model_for_autombist(
+        {"cell": "demo_sram_32x64", "source_file": str(src)},
+        str(autombist),
+        str(stage_dir),
+    )
+
+    assert result["status"] == "staged"
+    assert (stage_dir / "demo_sram_32x64.v").exists()
+    assert (hardware_dir / "demo_sram_32x64.v").read_text(encoding="utf-8") == "module demo_sram_32x64; endmodule\n"
+
+
 def test_replaces_openram_instance_with_wrapper(tmp_path):
     rtl = tmp_path / "top.sv"
     rtl.write_text(
