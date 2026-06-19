@@ -46,11 +46,12 @@ def _rtl_instance_cell(memory: dict[str, Any]) -> str:
     return str(memory.get("rtl_cell") or memory.get("cell") or "").strip()
 
 
-def _run(cmd: list[str], cwd: str, timeout: int = 600) -> tuple[int, str]:
+def _run(cmd: list[str], cwd: str, timeout: int = 600, env: dict[str, str] | None = None) -> tuple[int, str]:
     try:
         proc = subprocess.run(
             cmd,
             cwd=cwd,
+            env=env,
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -433,6 +434,19 @@ def _module_definition_port_map(text: str, module_name: str) -> dict[str, str]:
     return _canonical_memory_ports_from_names(list(widths), module_text)
 
 
+def _looks_like_memory_module_definition(module_name: str, body: str, ports: dict[str, str]) -> bool:
+    name = module_name.lower()
+    if "sram" not in name and "openram" not in name:
+        return False
+    required = {"clk", "we", "addr", "din", "dout"}
+    if not required.issubset(set(ports)):
+        return False
+    clean = _strip_comments(body)
+    has_memory_array = bool(re.search(r"\b(?:reg|logic)\s*(?:\[[^\]]+\]\s*)?\w+\s*\[[^\]]+\]", clean))
+    canonical_name = bool("openram" in name or re.search(r"\d+x\d+", name))
+    return has_memory_array or canonical_name
+
+
 def _detect_memory_module_definition(files: list[str]) -> dict[str, Any] | None:
     best: dict[str, Any] | None = None
     for path in files:
@@ -443,6 +457,8 @@ def _detect_memory_module_definition(files: list[str]) -> dict[str, Any] | None:
                 continue
             widths = _parse_declaration_widths(body)
             ports = _module_definition_port_map(text, module_name)
+            if not _looks_like_memory_module_definition(module_name, body, ports):
+                continue
             addr_width = widths.get(ports.get("addr", ""), 8)
             data_width = max(widths.get(ports.get("din", ""), 1), widths.get(ports.get("dout", ""), 1), 32)
             detected = {
@@ -729,10 +745,50 @@ def _openram_command_variants(openram_compiler: str, config_path: str) -> list[l
     ]
 
 
+def _resolve_pdk_root(stage_dir: str) -> str | None:
+    candidates = [
+        os.getenv("PDK_ROOT"),
+        os.getenv("CHIPLOOP_PDK_ROOT"),
+        os.getenv("OPEN_PDKS_ROOT"),
+    ]
+    current = os.path.abspath(stage_dir)
+    for _ in range(8):
+        candidates.extend([
+            os.path.join(current, "backend", "pdk"),
+            os.path.join(current, "pdk"),
+        ])
+        parent = os.path.dirname(current)
+        if parent == current:
+            break
+        current = parent
+    candidates.extend([
+        "/root/chiploop-backend/backend/pdk",
+        "/root/chiploop-backend/pdk",
+        "/pdk",
+    ])
+    for candidate in candidates:
+        if candidate and os.path.isdir(candidate):
+            return os.path.abspath(candidate)
+    return None
+
+
+def _openram_env(stage_dir: str) -> dict[str, str]:
+    env = dict(os.environ)
+    pdk_root = _resolve_pdk_root(stage_dir)
+    if pdk_root:
+        env["PDK_ROOT"] = pdk_root
+    nix_bin = "/root/.nix-profile/bin"
+    if os.path.isdir(nix_bin):
+        env["PATH"] = f"{nix_bin}{os.pathsep}{env.get('PATH', '')}"
+    return env
+
+
 def _classify_openram_failure(output: str) -> str:
     lowered = (output or "").lower()
     if "no space left on device" in lowered or "database or disk is full" in lowered:
         return "openram_no_space_left_on_device"
+    if "set pdk_root" in lowered or "unable to find open_pdks tech file" in lowered:
+        return "openram_pdk_root_not_set"
     if "nix is required" in lowered or "nix' was not found" in lowered:
         return "openram_nix_not_available"
     if "failed to initialize nix toolchain" in lowered:
@@ -828,10 +884,12 @@ def _generate_openram_collateral(
     config_path = _candidate_openram_python_config(stage_dir, memory, output_dir)
     openram_compiler = _find_openram_compiler(state or {})
     attempts = _openram_command_variants(openram_compiler, config_path) if openram_compiler else []
+    openram_env = _openram_env(stage_dir)
     result: dict[str, Any] = {
         "status": "not_run",
         "generator": "openram",
         "openram_compiler": openram_compiler,
+        "pdk_root": openram_env.get("PDK_ROOT"),
         "config": config_path,
         "output_dir": output_dir,
         "attempts": [],
@@ -851,7 +909,7 @@ def _generate_openram_collateral(
         return result
     command_failed_reason = "openram_command_failed"
     for index, cmd in enumerate(attempts, start=1):
-        rc, out = _run(cmd, cwd=stage_dir, timeout=3600)
+        rc, out = _run(cmd, cwd=stage_dir, timeout=3600, env=openram_env)
         log_name = f"openram_sram_compiler_attempt{index}.log"
         log_path = os.path.join(stage_dir, log_name)
         _write_text(log_path, out)
