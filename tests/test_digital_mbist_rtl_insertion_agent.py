@@ -77,6 +77,31 @@ endmodule
     assert detected["ports"]["csb"] == "csb"
 
 
+def test_detects_multiple_openram_instances(tmp_path):
+    rtl = tmp_path / "top.sv"
+    rtl.write_text(
+        """
+module top(input logic clk);
+  logic [5:0] addr_a;
+  logic [7:0] addr_b;
+  logic [31:0] din_a, dout_a;
+  logic [15:0] din_b, dout_b;
+  openram_sram_64x32 u_sram_a(.clk(clk), .web(1'b1), .addr(addr_a), .din(din_a), .dout(dout_a));
+  openram_sram_256x16 u_sram_b(.clk(clk), .web(1'b1), .addr(addr_b), .din(din_b), .dout(dout_b));
+endmodule
+""",
+        encoding="utf-8",
+    )
+
+    detected = agent._detect_openram_memories([str(rtl)])
+
+    assert [item["cell"] for item in detected] == ["openram_sram_64x32", "openram_sram_256x16"]
+    assert detected[0]["addr_width"] == 6
+    assert detected[0]["data_width"] == 32
+    assert detected[1]["addr_width"] == 8
+    assert detected[1]["data_width"] == 16
+
+
 def test_detects_sram_module_definition_without_splitting_name(tmp_path):
     rtl = tmp_path / "demo_sram_32x64.v"
     rtl.write_text(
@@ -255,13 +280,48 @@ def test_spec_memory_macro_contract_is_preferred_for_dimensions(tmp_path):
     assert merged["ports"]["we"] == "web"
 
 
+def test_multiple_spec_memory_macros_merge_with_matching_rtl_instances(tmp_path):
+    spec_macros = [
+        {"kind": "spec_memory_macro", "cell": "openram_sram_64x32", "instance": "u_a", "addr_width": 6, "data_width": 32, "depth": 64, "ports": {"clk": "clk", "we": "web", "addr": "addr", "din": "din", "dout": "dout"}},
+        {"kind": "spec_memory_macro", "cell": "openram_sram_128x16", "instance": "u_b", "addr_width": 7, "data_width": 16, "depth": 128, "ports": {"clk": "clk", "we": "web", "addr": "addr", "din": "din", "dout": "dout"}},
+    ]
+    detected = [
+        {"kind": "memory_instance", "cell": "openram_sram_64x32", "instance": "u_a", "source_file": "top.v", "connections": {}, "ports": {}, "addr_width": 8, "data_width": 8, "depth": 256},
+        {"kind": "memory_instance", "cell": "openram_sram_128x16", "instance": "u_b", "source_file": "top.v", "connections": {}, "ports": {}, "addr_width": 8, "data_width": 32, "depth": 256},
+    ]
+
+    merged = agent._merge_spec_memories_with_rtl_detection(spec_macros, detected)
+
+    assert len(merged) == 2
+    assert merged[0]["instance"] == "u_a"
+    assert merged[0]["addr_width"] == 6
+    assert merged[1]["instance"] == "u_b"
+    assert merged[1]["data_width"] == 16
+
+
+def test_memory_macro_cell_name_can_repeat_only_for_same_config():
+    ok = [
+        {"cell": "openram_sram_64x32", "depth": 64, "data_width": 32, "addr_width": 6},
+        {"cell": "openram_sram_64x32", "depth": 64, "data_width": 32, "addr_width": 6},
+    ]
+    bad = [
+        {"cell": "openram_sram_shared", "depth": 64, "data_width": 32, "addr_width": 6},
+        {"cell": "openram_sram_shared", "depth": 128, "data_width": 32, "addr_width": 7},
+    ]
+
+    assert agent._validate_memory_config_names(ok) == []
+    assert agent._validate_memory_config_names(bad)
+
+
 def test_openram_generation_discovers_behavioral_model_and_macro_collateral(tmp_path, monkeypatch):
     project_dir = tmp_path / "project"
     stage_dir = tmp_path / "stage"
     project_dir.mkdir()
     stage_dir.mkdir()
     (project_dir / "openram.yml").write_text("word_size: 8\nnum_words: 16\n", encoding="utf-8")
-    memory = {"cell": "demo_sram_32x64", "addr_width": 6, "data_width": 32, "depth": 64}
+    rtl_src = tmp_path / "top.v"
+    rtl_src.write_text("module top; endmodule\n", encoding="utf-8")
+    memory = {"cell": "demo_sram_32x64", "addr_width": 6, "data_width": 32, "depth": 64, "source_file": str(rtl_src)}
 
     def fake_run(cmd, cwd, timeout=600):
         out_dir = Path(cmd[cmd.index("--out") + 1])
@@ -281,7 +341,8 @@ def test_openram_generation_discovers_behavioral_model_and_macro_collateral(tmp_
     result = agent._generate_openram_collateral(memory, "autombist", str(project_dir), str(stage_dir), "wf1")
 
     assert result["status"] == "validated"
-    assert memory["source_file"].endswith("demo_sram_32x64.v")
+    assert memory["source_file"] == str(rtl_src)
+    assert memory["openram_behavioral_model"].endswith("demo_sram_32x64.v")
     assert result["validation"]["status"] == "clean"
     assert result["collateral"]["lib"]
     assert result["collateral"]["lef"]
@@ -414,6 +475,37 @@ endmodule
     assert "openram_sram_256x32_mbist u_sram" in text
     assert ".addr(addr)" in text
     assert ".bist_start(1'b0)" in text
+
+
+def test_replaces_multiple_memory_instances_in_same_source(tmp_path):
+    rtl = tmp_path / "top.sv"
+    rtl.write_text(
+        """
+module top(input logic clk);
+  logic [5:0] addr_a;
+  logic [7:0] addr_b;
+  logic [31:0] din_a, dout_a;
+  logic [15:0] din_b, dout_b;
+  openram_sram_64x32 u_a(.clk(clk), .addr(addr_a), .din(din_a), .dout(dout_a));
+  openram_sram_256x16 u_b(.clk(clk), .addr(addr_b), .din(din_b), .dout(dout_b));
+endmodule
+""",
+        encoding="utf-8",
+    )
+    memories = agent._detect_openram_memories([str(rtl)])
+    out_dir = tmp_path / "out"
+
+    patched = agent._replace_memory_instances_with_wrappers([
+        {"memory": memories[0], "wrapper_module": "openram_sram_64x32_mbist", "wrapper_ports": ["clk", "addr", "din", "dout"]},
+        {"memory": memories[1], "wrapper_module": "openram_sram_256x16_mbist", "wrapper_ports": ["clk", "addr", "din", "dout"]},
+    ], str(out_dir))
+
+    assert len(patched) == 1
+    text = Path(patched[0]).read_text(encoding="utf-8")
+    assert "openram_sram_64x32_mbist u_a" in text
+    assert "openram_sram_256x16_mbist u_b" in text
+    assert "openram_sram_64x32 u_a" not in text
+    assert "openram_sram_256x16 u_b" not in text
 
 
 def test_autombist_fault_text_does_not_make_successful_run_fail(tmp_path):
