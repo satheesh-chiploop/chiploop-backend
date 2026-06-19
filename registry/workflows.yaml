@@ -71,6 +71,7 @@
         "Digital DFT Scan Stitching Agent",
         "Digital Post-DFT Logic Equivalence Check Agent",
         "Digital Scan ATPG Coverage Agent",
+        "Digital MBIST RTL Insertion Agent",
         "Digital MBIST Collateral Agent",
         "Digital Tapeout Agent",
         "Digital Tapeout Logic Equivalence Check Agent",

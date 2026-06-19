@@ -473,6 +473,9 @@ AGENT_CAPABILITIES = {
         "outputs": [
             "digital/mbist_rtl_insertion/config.yml",
             "digital/mbist_rtl_insertion/autombist_run.log",
+            "digital/mbist_rtl_insertion/simulate.log",
+            "digital/mbist_rtl_insertion/autombist_report.txt",
+            "digital/mbist_rtl_insertion/autombist_latest.json",
             "digital/mbist_rtl_insertion/mbist_rtl_insertion_summary.json",
             "digital/mbist_rtl_insertion/integrated_rtl/**/*.v",
             "digital/mbist_rtl_insertion/integrated_rtl/**/*.sv",

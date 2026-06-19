@@ -3628,6 +3628,71 @@
       }
     },
     {
+      "name": "Digital MBIST RTL Insertion Agent",
+      "loop_type": "digital",
+      "domain": "dft",
+      "description": "Optional Arch2RTL-stage AutoMBIST flow. Detects OpenRAM/SRAM RTL, generates MBIST wrapper RTL, runs standalone AutoMBIST simulation, and updates RTL handoff only when a functional SRAM instance can be safely wrapped.",
+      "entrypoint": "agents.digital.digital_mbist_rtl_insertion_agent:run_agent",
+      "execution_mode": "legacy_adapter",
+      "inputs": [
+        "rtl/*.v",
+        "rtl/*.sv",
+        "digital/rtl/*.v",
+        "digital/rtl/*.sv"
+      ],
+      "outputs": [
+        "digital/mbist_rtl_insertion/config.yml",
+        "digital/mbist_rtl_insertion/autombist_run.log",
+        "digital/mbist_rtl_insertion/simulate.log",
+        "digital/mbist_rtl_insertion/autombist_report.txt",
+        "digital/mbist_rtl_insertion/autombist_latest.json",
+        "digital/mbist_rtl_insertion/mbist_rtl_insertion_summary.json",
+        "digital/mbist_rtl_insertion/integrated_rtl/**/*.v",
+        "digital/mbist_rtl_insertion/integrated_rtl/**/*.sv"
+      ],
+      "artifact_paths": [
+        "digital/mbist_rtl_insertion/config.yml",
+        "digital/mbist_rtl_insertion/autombist_run.log",
+        "digital/mbist_rtl_insertion/simulate.log",
+        "digital/mbist_rtl_insertion/autombist_report.txt",
+        "digital/mbist_rtl_insertion/autombist_latest.json",
+        "digital/mbist_rtl_insertion/mbist_rtl_insertion_summary.json",
+        "digital/mbist_rtl_insertion/integrated_rtl/**/*.v",
+        "digital/mbist_rtl_insertion/integrated_rtl/**/*.sv"
+      ],
+      "artifact_types": [
+        "rtl",
+        "structured_data",
+        "simulation_log"
+      ],
+      "required_skills": [
+        "artifact_publish",
+        "dft_mbist",
+        "rtl_generation"
+      ],
+      "required_tools": [
+        "python",
+        "supabase",
+        "autombist",
+        "iverilog",
+        "cocotb"
+      ],
+      "hooks": [
+        "pre_run_validate_inputs",
+        "post_run_collect_artifacts",
+        "post_run_update_state",
+        "on_failure_capture_traceback",
+        "on_failure_preserve_logs",
+        "artifact_publish_to_supabase"
+      ],
+      "metadata": {
+        "registry_source": "DIGITAL_AGENT_FUNCTIONS",
+        "variable": "digital_mbist_rtl_insertion_agent",
+        "studio_contract_version": "v1",
+        "enabled_by_toggle": "insert_mbist"
+      }
+    },
+    {
       "name": "Digital MBIST Collateral Agent",
       "loop_type": "digital",
       "domain": "physical_design",

@@ -141,6 +141,100 @@ def _extract_named_connections(conn_text: str) -> dict[str, str]:
     return conns
 
 
+def _module_blocks(text: str) -> list[tuple[str, str]]:
+    clean = _strip_comments(text)
+    blocks: list[tuple[str, str]] = []
+    pattern = re.compile(
+        r"\bmodule\s+(?P<name>[A-Za-z_][A-Za-z0-9_$]*)\b(?P<body>.*?)(?=\bendmodule\b)",
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    for match in pattern.finditer(clean):
+        blocks.append((match.group("name"), match.group("body")))
+    return blocks
+
+
+def _canonical_memory_ports_from_names(names: list[str], text: str = "") -> dict[str, str]:
+    available = {name.lower(): name for name in names}
+    ports: dict[str, str] = {}
+
+    def pick(candidates: tuple[str, ...]) -> str | None:
+        for candidate in candidates:
+            if candidate.lower() in available:
+                return available[candidate.lower()]
+        for name in names:
+            n = name.lower()
+            if any(candidate.lower() in n for candidate in candidates):
+                return name
+        return None
+
+    for key, candidates in {
+        "clk": ("clk", "clock"),
+        "csb": ("csb", "ceb", "cs_n", "cen"),
+        "we": ("web", "wen", "we", "write_enable"),
+        "addr": ("addr", "address"),
+        "din": ("din", "data_in", "wdata", "d"),
+        "dout": ("dout", "data_out", "rdata", "q"),
+    }.items():
+        value = pick(candidates)
+        if value:
+            ports[key] = value
+
+    if "addr" not in ports:
+        ports["addr"] = "addr"
+    if "din" not in ports:
+        ports["din"] = "din"
+    if "dout" not in ports:
+        ports["dout"] = "dout"
+    if "clk" not in ports:
+        ports["clk"] = "clk"
+    if "we" not in ports:
+        ports["we"] = "web" if re.search(r"\bweb\b", text) else "we"
+    if "csb" not in ports and re.search(r"\bcsb\b", text):
+        ports["csb"] = "csb"
+
+    return ports
+
+
+def _module_definition_port_map(text: str, module_name: str) -> dict[str, str]:
+    module_text = text
+    for name, body in _module_blocks(text):
+        if name == module_name:
+            module_text = body
+            break
+    widths = _parse_declaration_widths(module_text)
+    return _canonical_memory_ports_from_names(list(widths), module_text)
+
+
+def _detect_memory_module_definition(files: list[str]) -> dict[str, Any] | None:
+    best: dict[str, Any] | None = None
+    for path in files:
+        text = _read_text(path)
+        for module_name, body in _module_blocks(text):
+            name = module_name.lower()
+            if "sram" not in name and "openram" not in name:
+                continue
+            widths = _parse_declaration_widths(body)
+            ports = _module_definition_port_map(text, module_name)
+            addr_width = widths.get(ports.get("addr", ""), 8)
+            data_width = max(widths.get(ports.get("din", ""), 1), widths.get(ports.get("dout", ""), 1), 32)
+            detected = {
+                "kind": "memory_module_definition",
+                "cell": module_name,
+                "instance": None,
+                "source_file": path,
+                "connections": {},
+                "ports": ports,
+                "addr_width": int(addr_width or 8),
+                "data_width": int(data_width or 32),
+                "depth": 1 << int(addr_width or 8),
+            }
+            if best is None or not name.endswith("_model"):
+                best = detected
+            if not name.endswith("_model"):
+                return detected
+    return best
+
+
 def _detect_openram_memory(files: list[str]) -> dict[str, Any] | None:
     inst_re = re.compile(
         r"(?P<cell>[A-Za-z_][A-Za-z0-9_$]*(?:openram|sram)[A-Za-z0-9_$]*)\s*"
@@ -150,25 +244,31 @@ def _detect_openram_memory(files: list[str]) -> dict[str, Any] | None:
     for path in files:
         text = _read_text(path)
         widths = _parse_declaration_widths(text)
-        clean = _strip_comments(text)
-        for match in inst_re.finditer(clean):
-            cell = match.group("cell")
-            inst = match.group("inst")
-            conns = _extract_named_connections(match.group("conns"))
-            addr_sig = _first_signal(conns, ("addr", "address", "A", "ADDR"))
-            data_sig = _first_signal(conns, ("din", "dout", "data", "wdata", "rdata", "D", "Q", "DATA"))
-            addr_width = widths.get(addr_sig or "", 8)
-            data_width = widths.get(data_sig or "", 32)
-            return {
-                "cell": cell,
-                "instance": inst,
-                "source_file": path,
-                "connections": conns,
-                "addr_width": int(addr_width or 8),
-                "data_width": int(data_width or 32),
-                "depth": 1 << int(addr_width or 8),
-            }
-    return None
+        for _, body in _module_blocks(text):
+            header_end = body.find(";")
+            scan_body = body[header_end + 1 :] if header_end >= 0 else body
+            for match in inst_re.finditer(scan_body):
+                cell = match.group("cell")
+                inst = match.group("inst")
+                if inst.lower() in {"input", "output", "inout", "wire", "logic", "reg"}:
+                    continue
+                conns = _extract_named_connections(match.group("conns"))
+                addr_sig = _first_signal(conns, ("addr", "address", "A", "ADDR"))
+                data_sig = _first_signal(conns, ("din", "dout", "data", "wdata", "rdata", "D", "Q", "DATA"))
+                addr_width = widths.get(addr_sig or "", 8)
+                data_width = widths.get(data_sig or "", 32)
+                return {
+                    "kind": "memory_instance",
+                    "cell": cell,
+                    "instance": inst,
+                    "source_file": path,
+                    "connections": conns,
+                    "ports": _canonical_memory_ports_from_names(list(conns), match.group("conns")),
+                    "addr_width": int(addr_width or 8),
+                    "data_width": int(data_width or 32),
+                    "depth": 1 << int(addr_width or 8),
+                }
+    return _detect_memory_module_definition(files)
 
 
 def _first_signal(conns: dict[str, str], names: tuple[str, ...]) -> str | None:
@@ -200,25 +300,23 @@ def _patch_yaml_value(text: str, key_tokens: tuple[str, ...], value: str) -> tup
 
 
 def _patch_autombist_config(config_text: str, memory: dict[str, Any]) -> str:
-    text = config_text
-    patches = [
-        (("memory_name", "mem_name", "name"), str(memory["cell"])),
-        (("module", "macro", "sram"), str(memory["cell"])),
-        (("data_width", "word_size", "width"), str(memory["data_width"])),
-        (("addr_width", "address_width"), str(memory["addr_width"])),
-        (("depth", "num_words", "words"), str(memory["depth"])),
+    ports = memory.get("ports") if isinstance(memory.get("ports"), dict) else {}
+    lines = [
+        f"memory_name: {memory['cell']}",
+        f"wrapper_module_name: {memory['cell']}",
+        f"addr_width: {int(memory['addr_width'])}",
+        f"data_width: {int(memory['data_width'])}",
+        "we_active_low: true",
+        "ports:",
+        f"  clk: {ports.get('clk', 'clk')}",
+        f"  addr: {ports.get('addr', 'addr')}",
+        f"  din: {ports.get('din', 'din')}",
+        f"  dout: {ports.get('dout', 'dout')}",
+        f"  we: {ports.get('we', 'web')}",
     ]
-    changed_any = False
-    for tokens, value in patches:
-        text, changed = _patch_yaml_value(text, tokens, value)
-        changed_any = changed_any or changed
-    if changed_any:
-        return text
-    return (
-        text.rstrip()
-        + "\n\n"
-        + "memory_name: {cell}\nmodule_name: {cell}\ndata_width: {data_width}\naddr_width: {addr_width}\ndepth: {depth}\n".format(**memory)
-    )
+    if ports.get("csb"):
+        lines.append(f"  csb: {ports['csb']}")
+    return "\n".join(lines) + "\n"
 
 
 def _copy_tree_files(src_dir: str, dst_dir: str, exts: tuple[str, ...]) -> list[str]:
@@ -486,6 +584,7 @@ def run_agent(state: dict) -> dict:
         _write_publish_summary(workflow_id, stage_dir, summary)
         _publish_stage_file(workflow_id, "autombist_report.txt", os.path.join(reports_dir, "report.txt"))
         _publish_stage_file(workflow_id, "autombist_latest.json", os.path.join(reports_dir, "latest.json"))
+        _publish_stage_file(workflow_id, "simulate.log", os.path.join(generated_root, "simulate.log"))
         raise RuntimeError("MBIST RTL insertion failed: AutoMBIST standalone simulation did not pass.")
 
     final_rtl_dir = os.path.join(stage_dir, "integrated_rtl")
@@ -493,11 +592,26 @@ def run_agent(state: dict) -> dict:
     original_rtl_dir = os.path.join(final_rtl_dir, "functional_rtl")
     _ensure_dir(original_rtl_dir)
     wrapper_name, wrapper_ports = _pick_generated_wrapper(generated_rtl, str(memory["cell"]))
+    if memory.get("kind") != "memory_instance":
+        summary.update({
+            "status": "failed",
+            "reason": "mbist_insertion_requires_memory_instance",
+            "simulation": {"status": "pass", "reports_dir": reports_dir, "run_log": os.path.join(stage_dir, "autombist_run.log")},
+            "wrapper_module": wrapper_name,
+            "wrapper_ports": wrapper_ports,
+            "integration_note": (
+                "AutoMBIST standalone wrapper simulation passed, but the RTL only defines an SRAM module; "
+                "no parent SRAM instance was found to replace. Keep this as generated MBIST collateral or instantiate the SRAM in the functional top before enabling insertion."
+            ),
+        })
+        _write_publish_summary(workflow_id, stage_dir, summary)
+        raise RuntimeError("MBIST RTL insertion failed: AutoMBIST passed, but no functional SRAM instance was found to wrap.")
     patched_source = _replace_memory_instance_with_wrapper(memory, wrapper_name or "", wrapper_ports, original_rtl_dir)
     if not patched_source:
         summary.update({
             "status": "failed",
             "reason": "mbist_wrapper_parent_integration_failed",
+            "simulation": {"status": "pass", "reports_dir": reports_dir, "run_log": os.path.join(stage_dir, "autombist_run.log")},
             "wrapper_module": wrapper_name,
             "wrapper_ports": wrapper_ports,
         })
@@ -530,7 +644,7 @@ def run_agent(state: dict) -> dict:
         "",
         f"- Status: `{summary['status']}`",
         f"- Memory cell: `{memory['cell']}`",
-        f"- Memory instance: `{memory['instance']}`",
+        f"- Memory instance: `{memory.get('instance') or 'not instantiated in RTL'}`",
         f"- Data width: `{memory['data_width']}`",
         f"- Address width: `{memory['addr_width']}`",
         f"- AutoMBIST simulation: `pass`",

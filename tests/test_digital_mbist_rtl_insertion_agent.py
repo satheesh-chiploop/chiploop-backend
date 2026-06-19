@@ -57,7 +57,9 @@ module top(input logic clk);
   logic [7:0] addr;
   logic [31:0] din;
   logic [31:0] dout;
-  openram_sram_256x32 u_sram(.clk(clk), .addr(addr), .din(din), .dout(dout));
+  logic sram_web;
+  logic sram_csb;
+  openram_sram_256x32 u_sram(.clk(clk), .csb(sram_csb), .web(sram_web), .addr(addr), .din(din), .dout(dout));
 endmodule
 """,
         encoding="utf-8",
@@ -71,6 +73,107 @@ endmodule
     assert detected["addr_width"] == 8
     assert detected["data_width"] == 32
     assert detected["depth"] == 256
+    assert detected["ports"]["we"] == "web"
+    assert detected["ports"]["csb"] == "csb"
+
+
+def test_detects_sram_module_definition_without_splitting_name(tmp_path):
+    rtl = tmp_path / "demo_sram_32x64.v"
+    rtl.write_text(
+        """
+module demo_sram_32x64 (
+    clk,
+    csb,
+    web,
+    addr,
+    din,
+    dout
+);
+input clk;
+input csb;
+input web;
+input [5:0] addr;
+input [31:0] din;
+output [31:0] dout;
+endmodule
+""",
+        encoding="utf-8",
+    )
+
+    detected = agent._detect_openram_memory([str(rtl)])
+
+    assert detected is not None
+    assert detected["kind"] == "memory_module_definition"
+    assert detected["cell"] == "demo_sram_32x64"
+    assert detected["instance"] is None
+    assert detected["addr_width"] == 6
+    assert detected["data_width"] == 32
+    assert detected["depth"] == 64
+    assert detected["ports"] == {
+        "clk": "clk",
+        "csb": "csb",
+        "we": "web",
+        "addr": "addr",
+        "din": "din",
+        "dout": "dout",
+    }
+
+
+def test_sram_module_definition_widths_are_scoped_to_memory_module(tmp_path):
+    rtl = tmp_path / "combined.v"
+    rtl.write_text(
+        """
+module top(input clk);
+  wire [15:0] addr;
+  wire [63:0] din;
+  wire [63:0] dout;
+endmodule
+
+module openram_sram_64x32 (
+    clk,
+    csb,
+    web,
+    addr,
+    din,
+    dout
+);
+input clk;
+input csb;
+input web;
+input [5:0] addr;
+input [31:0] din;
+output [31:0] dout;
+endmodule
+""",
+        encoding="utf-8",
+    )
+
+    detected = agent._detect_openram_memory([str(rtl)])
+
+    assert detected is not None
+    assert detected["cell"] == "openram_sram_64x32"
+    assert detected["addr_width"] == 6
+    assert detected["data_width"] == 32
+    assert detected["depth"] == 64
+
+
+def test_autombist_config_uses_detected_sram_ports():
+    memory = {
+        "cell": "demo_sram_32x64",
+        "addr_width": 6,
+        "data_width": 32,
+        "ports": {"clk": "clk", "csb": "csb", "we": "web", "addr": "addr", "din": "din", "dout": "dout"},
+    }
+
+    config = agent._patch_autombist_config("memory_name: sample\nports:\n  clk: clk0\n", memory)
+
+    assert "memory_name: demo_sram_32x64" in config
+    assert "wrapper_module_name: demo_sram_32x64" in config
+    assert "addr_width: 6" in config
+    assert "data_width: 32" in config
+    assert "clk0" not in config
+    assert "  we: web" in config
+    assert "  csb: csb" in config
 
 
 def test_replaces_openram_instance_with_wrapper(tmp_path):
