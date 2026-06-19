@@ -59,7 +59,66 @@ def _autombist_hardware_dirs(autombist: str) -> list[str]:
     return sorted(dict.fromkeys(os.path.abspath(path) for path in dirs if os.path.isdir(path)))
 
 
-def _stage_memory_model_for_autombist(memory: dict[str, Any], autombist: str, stage_dir: str) -> dict[str, Any]:
+def _memory_source_needs_sim_model(memory: dict[str, Any]) -> bool:
+    text = _read_text(str(memory.get("source_file") or ""))
+    if not text:
+        return True
+    clean = _strip_comments(text).lower()
+    if re.search(r"\b(reg|logic)\s*(?:\[[^\]]+\]\s*)?\w+\s*\[[^\]]+\]", clean):
+        return False
+    if re.search(r"\b(always_ff|always)\b", clean) and re.search(r"\b(addr|address)\b", clean):
+        return False
+    return True
+
+
+def _behavioral_sram_model_text(memory: dict[str, Any]) -> str:
+    ports = memory.get("ports") if isinstance(memory.get("ports"), dict) else {}
+    cell = str(memory.get("cell") or "autombist_sram")
+    clk = ports.get("clk", "clk")
+    csb = ports.get("csb", "csb")
+    we = ports.get("we", "web")
+    addr = ports.get("addr", "addr")
+    din = ports.get("din", "din")
+    dout = ports.get("dout", "dout")
+    addr_width = max(1, int(memory.get("addr_width") or 8))
+    data_width = max(1, int(memory.get("data_width") or 32))
+    lines = [
+        f"module {cell}(",
+        f"    input wire {clk},",
+    ]
+    if csb:
+        lines.append(f"    input wire {csb},")
+    lines.extend([
+        f"    input wire {we},",
+        f"    input wire [{addr_width - 1}:0] {addr},",
+        f"    input wire [{data_width - 1}:0] {din},",
+        f"    output reg [{data_width - 1}:0] {dout}",
+        ");",
+        f"reg [{data_width - 1}:0] mem [0:{(1 << addr_width) - 1}];",
+        f"always @(posedge {clk}) begin",
+    ])
+    enable = f"!{csb}" if csb else "1'b1"
+    lines.extend([
+        f"  if ({enable}) begin",
+        f"    if (!{we}) begin",
+        f"      mem[{addr}] <= {din};",
+        "    end else begin",
+        f"      {dout} <= mem[{addr}];",
+        "    end",
+        "  end",
+        "end",
+        "endmodule",
+        "",
+    ])
+    return "\n".join(lines)
+
+
+def _stage_memory_model_for_autombist(
+    memory: dict[str, Any],
+    autombist: str,
+    stage_dir: str,
+    allow_generated_sim_model: bool = False,
+) -> dict[str, Any]:
     src = str(memory.get("source_file") or "")
     cell = str(memory.get("cell") or "").strip()
     result: dict[str, Any] = {"status": "not_needed", "source": src, "targets": []}
@@ -67,9 +126,24 @@ def _stage_memory_model_for_autombist(memory: dict[str, Any], autombist: str, st
         result["status"] = "missing_source"
         return result
 
+    use_generated_model = _memory_source_needs_sim_model(memory)
+    model_src = src
+    if use_generated_model:
+        if not allow_generated_sim_model:
+            result["status"] = "openram_behavioral_model_missing"
+            result["reason"] = "detected_memory_rtl_is_abstract_or_constant_shell"
+            result["simulation_model_source"] = "missing_openram_behavioral_model"
+            return result
+        model_src = os.path.join(stage_dir, f"{cell}_autombist_sim_model.v")
+        _write_text(model_src, _behavioral_sram_model_text(memory))
+        result["simulation_model"] = model_src
+        result["simulation_model_source"] = "generated_behavioral_sram"
+    else:
+        result["simulation_model_source"] = "detected_rtl_source"
+
     staged_src = os.path.join(stage_dir, f"{cell}.v")
     try:
-        shutil.copy2(src, staged_src)
+        shutil.copy2(model_src, staged_src)
         result["workflow_copy"] = staged_src
     except Exception as exc:
         result["workflow_copy_error"] = f"{type(exc).__name__}: {exc}"
@@ -79,8 +153,8 @@ def _stage_memory_model_for_autombist(memory: dict[str, Any], autombist: str, st
     for hardware_dir in _autombist_hardware_dirs(autombist):
         dst = os.path.join(hardware_dir, f"{cell}.v")
         try:
-            if os.path.abspath(src) != os.path.abspath(dst):
-                shutil.copy2(src, dst)
+            if os.path.abspath(model_src) != os.path.abspath(dst):
+                shutil.copy2(model_src, dst)
             copied.append(dst)
         except Exception as exc:
             errors.append(f"{dst}: {type(exc).__name__}: {exc}")
@@ -146,6 +220,65 @@ def _rtl_files(state: dict, workflow_dir: str) -> list[str]:
     return sorted(dict.fromkeys(os.path.abspath(path) for path in hits))
 
 
+def _load_json_value(value: Any) -> dict[str, Any] | None:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str) and value.endswith(".json") and os.path.exists(value):
+        try:
+            return json.loads(_read_text(value))
+        except Exception:
+            return None
+    return None
+
+
+def _spec_memory_macros(state: dict) -> list[dict[str, Any]]:
+    spec = (
+        _load_json_value(state.get("digital_spec_json"))
+        or _load_json_value(state.get("spec_json"))
+        or _load_json_value(state.get("digital_spec"))
+    )
+    if not isinstance(spec, dict):
+        return []
+    macros = spec.get("memory_macros")
+    if not isinstance(macros, list):
+        return []
+    out: list[dict[str, Any]] = []
+    for item in macros:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or item.get("module") or item.get("cell") or "").strip()
+        kind = str(item.get("kind") or "").lower()
+        if not name or ("sram" not in name.lower() and "openram" not in name.lower() and "sram" not in kind and "openram" not in kind):
+            continue
+        ports = item.get("ports") if isinstance(item.get("ports"), dict) else {}
+        addr_width = int(item.get("addr_width") or 0)
+        depth = int(item.get("depth") or item.get("num_words") or 0)
+        if addr_width <= 0 and depth > 0:
+            addr_width = max(1, (depth - 1).bit_length())
+        if depth <= 0 and addr_width > 0:
+            depth = 1 << addr_width
+        out.append({
+            "kind": "spec_memory_macro",
+            "cell": name,
+            "instance": item.get("instance_name") or item.get("instance"),
+            "source_file": None,
+            "connections": {},
+            "ports": {
+                "clk": ports.get("clk", "clk"),
+                "csb": ports.get("csb", "csb"),
+                "we": ports.get("we") or ports.get("web") or "web",
+                "addr": ports.get("addr", "addr"),
+                "din": ports.get("din", "din"),
+                "dout": ports.get("dout", "dout"),
+            },
+            "addr_width": addr_width or 8,
+            "data_width": int(item.get("data_width") or item.get("word_size") or 32),
+            "depth": depth or (1 << (addr_width or 8)),
+            "requires_mbist": bool(item.get("requires_mbist")),
+        })
+    return out
+
+
 def _strip_comments(text: str) -> str:
     text = re.sub(r"/\*.*?\*/", "", text, flags=re.DOTALL)
     return re.sub(r"//.*", "", text)
@@ -153,6 +286,7 @@ def _strip_comments(text: str) -> str:
 
 def _parse_declaration_widths(text: str) -> dict[str, int]:
     widths: dict[str, int] = {}
+    widths.update(_parse_ansi_port_widths(text))
     clean = _strip_comments(text)
     decl_re = re.compile(
         r"\b(?:input|output|inout|wire|logic|reg)\s+(?:wire\s+|logic\s+|reg\s+)?"
@@ -178,6 +312,36 @@ def _range_width(range_text: str | None) -> int:
     return abs(int(match.group(1)) - int(match.group(2))) + 1
 
 
+def _parse_ansi_port_widths(text: str) -> dict[str, int]:
+    widths: dict[str, int] = {}
+    clean = _strip_comments(text)
+    header = re.search(
+        r"\bmodule\s+[A-Za-z_][A-Za-z0-9_$]*\s*(?:#\s*\([^;]*?\)\s*)?\((?P<ports>.*?)\)\s*;",
+        clean,
+        flags=re.DOTALL | re.IGNORECASE,
+    )
+    if not header:
+        return widths
+    current_dir = ""
+    current_range = ""
+    for raw in header.group("ports").split(","):
+        item = raw.strip()
+        if not item:
+            continue
+        direction = re.search(r"\b(input|output|inout)\b", item, flags=re.IGNORECASE)
+        if direction:
+            current_dir = direction.group(1)
+        range_match = re.search(r"\[[^\]]+\]", item)
+        if range_match:
+            current_range = range_match.group(0)
+        item = re.sub(r"\b(input|output|inout|wire|logic|reg|signed)\b", " ", item, flags=re.IGNORECASE)
+        item = re.sub(r"\[[^\]]+\]", " ", item)
+        names = re.findall(r"\b[A-Za-z_][A-Za-z0-9_$]*\b", item)
+        if names and current_dir:
+            widths[names[-1]] = _range_width(current_range)
+    return widths
+
+
 def _extract_named_connections(conn_text: str) -> dict[str, str]:
     conns: dict[str, str] = {}
     for match in re.finditer(r"\.(?P<port>[A-Za-z_][A-Za-z0-9_$]*)\s*\(\s*(?P<sig>[^()]+?)\s*\)", conn_text):
@@ -196,7 +360,7 @@ def _module_blocks(text: str) -> list[tuple[str, str]]:
         flags=re.IGNORECASE | re.DOTALL,
     )
     for match in pattern.finditer(clean):
-        blocks.append((match.group("name"), match.group("body")))
+        blocks.append((match.group("name"), match.group(0)))
     return blocks
 
 
@@ -318,6 +482,28 @@ def _detect_openram_memory(files: list[str]) -> dict[str, Any] | None:
     return _detect_memory_module_definition(files)
 
 
+def _merge_spec_memory_with_rtl_detection(spec_macros: list[dict[str, Any]], detected: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not spec_macros:
+        return detected
+    spec = spec_macros[0]
+    if not detected:
+        return dict(spec)
+    merged = dict(detected)
+    if str(detected.get("cell") or "").lower() == str(spec.get("cell") or "").lower():
+        merged.update({
+            "cell": spec.get("cell") or detected.get("cell"),
+            "addr_width": spec.get("addr_width") or detected.get("addr_width"),
+            "data_width": spec.get("data_width") or detected.get("data_width"),
+            "depth": spec.get("depth") or detected.get("depth"),
+            "ports": spec.get("ports") or detected.get("ports"),
+            "requires_mbist": spec.get("requires_mbist"),
+            "spec_memory_macro": spec,
+        })
+        return merged
+    merged["spec_memory_macro"] = spec
+    return merged
+
+
 def _first_signal(conns: dict[str, str], names: tuple[str, ...]) -> str | None:
     lowered = {key.lower(): value for key, value in conns.items()}
     for name in names:
@@ -346,11 +532,175 @@ def _patch_yaml_value(text: str, key_tokens: tuple[str, ...], value: str) -> tup
     return "\n".join(lines) + ("\n" if text.endswith("\n") else ""), changed
 
 
+def _patch_openram_config(config_text: str, memory: dict[str, Any]) -> str:
+    text = config_text or ""
+    updates = [
+        (("memory_name", "module_name", "name"), str(memory.get("cell") or "sram")),
+        (("word_size", "data_width", "width"), str(int(memory.get("data_width") or 32))),
+        (("num_words", "depth", "words"), str(int(memory.get("depth") or (1 << int(memory.get("addr_width") or 8))))),
+        (("addr_width", "address_width"), str(int(memory.get("addr_width") or 8))),
+    ]
+    changed_keys: set[str] = set()
+    for tokens, value in updates:
+        text, changed = _patch_yaml_value(text, tokens, value)
+        if changed:
+            changed_keys.update(tokens)
+    lines = [line for line in text.splitlines() if line.strip()] if text else []
+    if not any(key in changed_keys for key in ("memory_name", "module_name", "name")):
+        lines.append(f"memory_name: {memory.get('cell') or 'sram'}")
+    if not any(key in changed_keys for key in ("word_size", "data_width", "width")):
+        lines.append(f"word_size: {int(memory.get('data_width') or 32)}")
+    if not any(key in changed_keys for key in ("num_words", "depth", "words")):
+        lines.append(f"num_words: {int(memory.get('depth') or (1 << int(memory.get('addr_width') or 8)))}")
+    if not any(key in changed_keys for key in ("addr_width", "address_width")):
+        lines.append(f"addr_width: {int(memory.get('addr_width') or 8)}")
+    return "\n".join(lines) + "\n"
+
+
+def _candidate_openram_config(project_dir: str, stage_dir: str, memory: dict[str, Any]) -> str:
+    template_path = os.path.join(project_dir, "openram.yml")
+    template = _read_text(template_path)
+    config = _patch_openram_config(template, memory)
+    if template_path:
+        _write_text(template_path, config)
+    stage_config = os.path.join(stage_dir, "openram.yml")
+    _write_text(stage_config, config)
+    return template_path if os.path.exists(template_path) else stage_config
+
+
+def _discover_openram_collateral(roots: list[str], memory: dict[str, Any]) -> dict[str, Any]:
+    cell = str(memory.get("cell") or "").strip()
+    result: dict[str, Any] = {
+        "behavioral_model": None,
+        "lib": [],
+        "lef": [],
+        "gds": [],
+        "spice": [],
+        "verilog": [],
+    }
+    seen: set[str] = set()
+    for root in roots:
+        if not os.path.isdir(root):
+            continue
+        for walk_root, _, files in os.walk(root):
+            for filename in files:
+                path = os.path.abspath(os.path.join(walk_root, filename))
+                if path in seen:
+                    continue
+                seen.add(path)
+                lower = filename.lower()
+                if lower.endswith((".v", ".sv")):
+                    result["verilog"].append(path)
+                    text = _read_text(path)
+                    if cell and re.search(rf"\bmodule\s+{re.escape(cell)}\b", text) and not _memory_source_needs_sim_model({"source_file": path}):
+                        result["behavioral_model"] = result["behavioral_model"] or path
+                elif lower.endswith(".lib"):
+                    result["lib"].append(path)
+                elif lower.endswith(".lef"):
+                    result["lef"].append(path)
+                elif lower.endswith(".gds"):
+                    result["gds"].append(path)
+                elif lower.endswith((".sp", ".spice", ".cdl")):
+                    result["spice"].append(path)
+    for key in ("lib", "lef", "gds", "spice", "verilog"):
+        result[key] = sorted(result[key])
+    return result
+
+
+def _validate_openram_collateral(collateral: dict[str, Any], memory: dict[str, Any]) -> dict[str, Any]:
+    cell = str(memory.get("cell") or "").strip()
+    checks: dict[str, Any] = {
+        "status": "clean",
+        "missing": [],
+        "issues": [],
+        "required": ["behavioral_model", "lib", "lef", "gds"],
+    }
+    behavioral = collateral.get("behavioral_model")
+    if not behavioral or not os.path.isfile(str(behavioral)):
+        checks["missing"].append("behavioral_model")
+    else:
+        text = _read_text(str(behavioral))
+        if cell and not re.search(rf"\bmodule\s+{re.escape(cell)}\b", text):
+            checks["issues"].append("behavioral_model_module_name_mismatch")
+        if _memory_source_needs_sim_model({"source_file": behavioral}):
+            checks["issues"].append("behavioral_model_has_no_memory_behavior")
+
+    for key in ("lib", "lef", "gds"):
+        paths = collateral.get(key) if isinstance(collateral.get(key), list) else []
+        existing = [path for path in paths if isinstance(path, str) and os.path.isfile(path) and os.path.getsize(path) > 0]
+        if not existing:
+            checks["missing"].append(key)
+            continue
+        if key in {"lib", "lef"} and cell:
+            has_cell = any(cell in _read_text(path) for path in existing)
+            if not has_cell:
+                checks["issues"].append(f"{key}_cell_name_not_found")
+
+    if checks["missing"] or checks["issues"]:
+        checks["status"] = "issues"
+    return checks
+
+
+def _generate_openram_collateral(
+    memory: dict[str, Any],
+    autombist: str,
+    project_dir: str,
+    stage_dir: str,
+    workflow_id: str,
+) -> dict[str, Any]:
+    config_path = _candidate_openram_config(project_dir, stage_dir, memory)
+    out_dir = os.path.join(stage_dir, "openram_out")
+    _ensure_dir(out_dir)
+    attempts = [
+        [autombist, "ram-synth", "--config", config_path, "--out", out_dir],
+        [autombist, "ram-synth", "--config", config_path],
+    ]
+    result: dict[str, Any] = {
+        "status": "not_run",
+        "config": config_path,
+        "output_dir": out_dir,
+        "attempts": [],
+        "collateral": {},
+        "validation": {},
+    }
+    for index, cmd in enumerate(attempts, start=1):
+        rc, out = _run(cmd, cwd=project_dir, timeout=1800)
+        log_name = f"openram_ram_synth_attempt{index}.log"
+        log_path = os.path.join(stage_dir, log_name)
+        _write_text(log_path, out)
+        _publish_stage_file(workflow_id, log_name, log_path)
+        attempt = {"cmd": cmd, "rc": rc, "log": log_path}
+        result["attempts"].append(attempt)
+        if rc == 0:
+            result["status"] = "command_completed"
+            break
+    collateral = _discover_openram_collateral([out_dir, project_dir, stage_dir], memory)
+    result["collateral"] = collateral
+    validation = _validate_openram_collateral(collateral, memory)
+    result["validation"] = validation
+    if validation.get("status") == "clean":
+        result["status"] = "validated"
+        memory["source_file"] = collateral["behavioral_model"]
+    elif result["status"] == "command_completed":
+        result["status"] = "collateral_validation_failed"
+    else:
+        result["status"] = "failed"
+    save_text_artifact_and_record(
+        workflow_id,
+        AGENT_NAME,
+        "digital/mbist_rtl_insertion",
+        "openram_collateral_generation.json",
+        json.dumps(result, indent=2),
+    )
+    return result
+
+
 def _patch_autombist_config(config_text: str, memory: dict[str, Any]) -> str:
     ports = memory.get("ports") if isinstance(memory.get("ports"), dict) else {}
+    wrapper_module = f"{memory['cell']}_mbist"
     lines = [
         f"memory_name: {memory['cell']}",
-        f"wrapper_module_name: {memory['cell']}",
+        f"wrapper_module_name: {wrapper_module}",
         f"addr_width: {int(memory['addr_width'])}",
         f"data_width: {int(memory['data_width'])}",
         "we_active_low: true",
@@ -557,7 +907,9 @@ def run_agent(state: dict) -> dict:
         or state.get("enable_mbist_rtl_insertion")
     )
     rtl_files = _rtl_files(state, workflow_dir)
-    memory = _detect_openram_memory(rtl_files)
+    spec_memory_macros = _spec_memory_macros(state)
+    detected_memory = _detect_openram_memory(rtl_files)
+    memory = _merge_spec_memory_with_rtl_detection(spec_memory_macros, detected_memory)
     autombist = tool_path("autombist", state)
 
     summary: dict[str, Any] = {
@@ -566,6 +918,8 @@ def run_agent(state: dict) -> dict:
         "enabled": enabled,
         "status": "disabled" if not enabled else "not_started",
         "detected_memory": memory,
+        "detected_rtl_memory": detected_memory,
+        "spec_memory_macros": spec_memory_macros,
         "autombist_executable": autombist,
         "generated_at": datetime.utcnow().isoformat() + "Z",
         "rtl_files_scanned": rtl_files,
@@ -606,8 +960,40 @@ def run_agent(state: dict) -> dict:
     _write_text(os.path.join(stage_dir, "config.yml"), patched_config)
     save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital/mbist_rtl_insertion", "config.yml", patched_config)
 
-    memory_model_stage = _stage_memory_model_for_autombist(memory, autombist, stage_dir)
+    openram_generation = _generate_openram_collateral(memory, autombist, project_dir, stage_dir, workflow_id)
+    summary["openram_collateral_generation"] = openram_generation
+    collateral = openram_generation.get("collateral") if isinstance(openram_generation.get("collateral"), dict) else {}
+    digital = state.setdefault("digital", {})
+    for state_key, collateral_key in (
+        ("macro_libs", "lib"),
+        ("macro_lefs", "lef"),
+        ("macro_gds", "gds"),
+        ("macro_spice", "spice"),
+    ):
+        existing = digital.get(state_key) if isinstance(digital.get(state_key), list) else []
+        generated = collateral.get(collateral_key) if isinstance(collateral.get(collateral_key), list) else []
+        if generated:
+            digital[state_key] = sorted(dict.fromkeys([*existing, *generated]))
+    if openram_generation.get("status") != "validated":
+        summary["status"] = "failed"
+        summary["reason"] = "openram_collateral_validation_failed"
+        _write_publish_summary(workflow_id, stage_dir, summary)
+        raise RuntimeError("MBIST RTL insertion failed: OpenRAM SRAM collateral generation/validation did not pass.")
+
+    allow_generated_sim_model = bool(
+        toggles.get("allow_mbist_sim_model_fallback")
+        or toggles.get("allow_autombist_sim_model_fallback")
+        or state.get("allow_mbist_sim_model_fallback")
+        or state.get("allow_autombist_sim_model_fallback")
+    )
+    memory_model_stage = _stage_memory_model_for_autombist(
+        memory,
+        autombist,
+        stage_dir,
+        allow_generated_sim_model=allow_generated_sim_model,
+    )
     summary["memory_model_stage"] = memory_model_stage
+    summary["allow_generated_sim_model"] = allow_generated_sim_model
     save_text_artifact_and_record(
         workflow_id,
         AGENT_NAME,
@@ -618,6 +1004,7 @@ def run_agent(state: dict) -> dict:
     if memory_model_stage.get("status") not in {"staged", "not_needed"}:
         summary["status"] = "failed"
         summary["reason"] = "autombist_memory_model_stage_failed"
+        summary["openram_status"] = openram_generation.get("status")
         _write_publish_summary(workflow_id, stage_dir, summary)
         raise RuntimeError("MBIST RTL insertion failed: could not stage SRAM model for AutoMBIST simulation.")
 

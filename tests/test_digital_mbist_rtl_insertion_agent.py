@@ -157,6 +157,32 @@ endmodule
     assert detected["depth"] == 64
 
 
+def test_sram_module_definition_parses_ansi_port_widths(tmp_path):
+    rtl = tmp_path / "demo_sram_32x64.v"
+    rtl.write_text(
+        """
+module demo_sram_32x64(
+    input wire clk,
+    input wire csb,
+    input wire web,
+    input wire [5:0] addr,
+    input wire [31:0] din,
+    output wire [31:0] dout
+);
+assign dout = 32'h0;
+endmodule
+""",
+        encoding="utf-8",
+    )
+
+    detected = agent._detect_openram_memory([str(rtl)])
+
+    assert detected is not None
+    assert detected["addr_width"] == 6
+    assert detected["data_width"] == 32
+    assert detected["depth"] == 64
+
+
 def test_autombist_config_uses_detected_sram_ports():
     memory = {
         "cell": "demo_sram_32x64",
@@ -168,7 +194,7 @@ def test_autombist_config_uses_detected_sram_ports():
     config = agent._patch_autombist_config("memory_name: sample\nports:\n  clk: clk0\n", memory)
 
     assert "memory_name: demo_sram_32x64" in config
-    assert "wrapper_module_name: demo_sram_32x64" in config
+    assert "wrapper_module_name: demo_sram_32x64_mbist" in config
     assert "addr_width: 6" in config
     assert "data_width: 32" in config
     assert "clk0" not in config
@@ -176,7 +202,113 @@ def test_autombist_config_uses_detected_sram_ports():
     assert "  csb: csb" in config
 
 
-def test_stages_detected_memory_model_for_autombist(tmp_path):
+def test_openram_config_uses_detected_memory_dimensions():
+    memory = {"cell": "demo_sram_32x64", "addr_width": 6, "data_width": 32, "depth": 64}
+
+    config = agent._patch_openram_config("word_size: 8\nnum_words: 16\n", memory)
+
+    assert "memory_name: demo_sram_32x64" in config
+    assert "word_size: 32" in config
+    assert "num_words: 64" in config
+    assert "addr_width: 6" in config
+
+
+def test_spec_memory_macro_contract_is_preferred_for_dimensions(tmp_path):
+    spec = tmp_path / "spec.json"
+    spec.write_text(
+        json.dumps({
+            "memory_macros": [
+                {
+                    "name": "openram_sram_64x32",
+                    "kind": "openram_sram",
+                    "depth": 64,
+                    "data_width": 32,
+                    "addr_width": 6,
+                    "instance_name": "u_sram",
+                    "ports": {"clk": "clk", "csb": "csb", "we": "web", "addr": "addr", "din": "din", "dout": "dout"},
+                    "requires_mbist": True,
+                }
+            ]
+        }),
+        encoding="utf-8",
+    )
+    rtl_detected = {
+        "kind": "memory_instance",
+        "cell": "openram_sram_64x32",
+        "instance": "u_sram",
+        "source_file": "top.v",
+        "connections": {"clk": "clk"},
+        "ports": {"clk": "clk"},
+        "addr_width": 8,
+        "data_width": 8,
+        "depth": 256,
+    }
+
+    macros = agent._spec_memory_macros({"digital_spec_json": str(spec)})
+    merged = agent._merge_spec_memory_with_rtl_detection(macros, rtl_detected)
+
+    assert merged["addr_width"] == 6
+    assert merged["data_width"] == 32
+    assert merged["depth"] == 64
+    assert merged["instance"] == "u_sram"
+    assert merged["source_file"] == "top.v"
+    assert merged["ports"]["we"] == "web"
+
+
+def test_openram_generation_discovers_behavioral_model_and_macro_collateral(tmp_path, monkeypatch):
+    project_dir = tmp_path / "project"
+    stage_dir = tmp_path / "stage"
+    project_dir.mkdir()
+    stage_dir.mkdir()
+    (project_dir / "openram.yml").write_text("word_size: 8\nnum_words: 16\n", encoding="utf-8")
+    memory = {"cell": "demo_sram_32x64", "addr_width": 6, "data_width": 32, "depth": 64}
+
+    def fake_run(cmd, cwd, timeout=600):
+        out_dir = Path(cmd[cmd.index("--out") + 1])
+        out_dir.mkdir(parents=True, exist_ok=True)
+        (out_dir / "demo_sram_32x64.v").write_text(
+            "module demo_sram_32x64(input clk,input [5:0] addr,output reg [31:0] dout);"
+            "reg [31:0] mem [0:63]; always @(posedge clk) dout <= mem[addr]; endmodule\n",
+            encoding="utf-8",
+        )
+        (out_dir / "demo_sram_32x64.lib").write_text("library(demo_sram_32x64) {}\n", encoding="utf-8")
+        (out_dir / "demo_sram_32x64.lef").write_text("MACRO demo_sram_32x64\nEND demo_sram_32x64\n", encoding="utf-8")
+        (out_dir / "demo_sram_32x64.gds").write_text("gds\n", encoding="utf-8")
+        return 0, "ok\n"
+
+    monkeypatch.setattr(agent, "_run", fake_run)
+
+    result = agent._generate_openram_collateral(memory, "autombist", str(project_dir), str(stage_dir), "wf1")
+
+    assert result["status"] == "validated"
+    assert memory["source_file"].endswith("demo_sram_32x64.v")
+    assert result["validation"]["status"] == "clean"
+    assert result["collateral"]["lib"]
+    assert result["collateral"]["lef"]
+    assert result["collateral"]["gds"]
+
+
+def test_openram_validation_rejects_partial_collateral(tmp_path):
+    model = tmp_path / "demo_sram_32x64.v"
+    model.write_text(
+        "module demo_sram_32x64(input clk,input [5:0] addr,output reg [31:0] dout);"
+        "reg [31:0] mem [0:63]; always @(posedge clk) dout <= mem[addr]; endmodule\n",
+        encoding="utf-8",
+    )
+    collateral = {
+        "behavioral_model": str(model),
+        "lib": [],
+        "lef": [],
+        "gds": [],
+    }
+
+    result = agent._validate_openram_collateral(collateral, {"cell": "demo_sram_32x64"})
+
+    assert result["status"] == "issues"
+    assert result["missing"] == ["lib", "lef", "gds"]
+
+
+def test_rejects_abstract_memory_shell_without_openram_behavioral_model(tmp_path):
     prefix = tmp_path / "chiploop-dft"
     bin_dir = prefix / "bin"
     hardware_dir = prefix / "lib" / "python3.13" / "site-packages" / "autombist" / "tests" / "hardware"
@@ -195,9 +327,62 @@ def test_stages_detected_memory_model_for_autombist(tmp_path):
         str(stage_dir),
     )
 
+    assert result["status"] == "openram_behavioral_model_missing"
+    assert result["simulation_model_source"] == "missing_openram_behavioral_model"
+    assert not (hardware_dir / "demo_sram_32x64.v").exists()
+
+
+def test_stages_generated_sim_model_only_when_explicitly_allowed(tmp_path):
+    prefix = tmp_path / "chiploop-dft"
+    bin_dir = prefix / "bin"
+    hardware_dir = prefix / "lib" / "python3.13" / "site-packages" / "autombist" / "tests" / "hardware"
+    bin_dir.mkdir(parents=True)
+    hardware_dir.mkdir(parents=True)
+    autombist = bin_dir / "autombist"
+    autombist.write_text("#!/bin/sh\n", encoding="utf-8")
+    src = tmp_path / "demo_sram_32x64.v"
+    src.write_text("module demo_sram_32x64; endmodule\n", encoding="utf-8")
+    stage_dir = tmp_path / "stage"
+    stage_dir.mkdir()
+
+    result = agent._stage_memory_model_for_autombist(
+        {"cell": "demo_sram_32x64", "source_file": str(src), "ports": {"clk": "clk", "addr": "addr", "din": "din", "dout": "dout", "we": "web"}, "addr_width": 6, "data_width": 32},
+        str(autombist),
+        str(stage_dir),
+        allow_generated_sim_model=True,
+    )
+
     assert result["status"] == "staged"
-    assert (stage_dir / "demo_sram_32x64.v").exists()
-    assert (hardware_dir / "demo_sram_32x64.v").read_text(encoding="utf-8") == "module demo_sram_32x64; endmodule\n"
+    assert result["simulation_model_source"] == "generated_behavioral_sram"
+    assert "reg [31:0] mem [0:63]" in (hardware_dir / "demo_sram_32x64.v").read_text(encoding="utf-8")
+
+
+def test_stages_real_memory_model_when_source_has_storage(tmp_path):
+    prefix = tmp_path / "chiploop-dft"
+    bin_dir = prefix / "bin"
+    hardware_dir = prefix / "lib" / "python3.13" / "site-packages" / "autombist" / "tests" / "hardware"
+    bin_dir.mkdir(parents=True)
+    hardware_dir.mkdir(parents=True)
+    autombist = bin_dir / "autombist"
+    autombist.write_text("#!/bin/sh\n", encoding="utf-8")
+    src = tmp_path / "demo_sram_32x64.v"
+    src.write_text(
+        "module demo_sram_32x64(input clk,input [5:0] addr,input [31:0] din,output reg [31:0] dout);"
+        "reg [31:0] mem [0:63]; always @(posedge clk) dout <= mem[addr]; endmodule\n",
+        encoding="utf-8",
+    )
+    stage_dir = tmp_path / "stage"
+    stage_dir.mkdir()
+
+    result = agent._stage_memory_model_for_autombist(
+        {"cell": "demo_sram_32x64", "source_file": str(src), "ports": {"clk": "clk", "addr": "addr", "din": "din", "dout": "dout", "we": "web"}, "addr_width": 6, "data_width": 32},
+        str(autombist),
+        str(stage_dir),
+    )
+
+    assert result["status"] == "staged"
+    assert result["simulation_model_source"] == "detected_rtl_source"
+    assert (hardware_dir / "demo_sram_32x64.v").read_text(encoding="utf-8") == src.read_text(encoding="utf-8")
 
 
 def test_replaces_openram_instance_with_wrapper(tmp_path):

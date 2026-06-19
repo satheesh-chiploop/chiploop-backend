@@ -147,6 +147,9 @@ def _normalize_spec_json(spec_json: dict):
             "design_name": spec_json.get("design_name") or top["name"],
             "design_summary": spec_json.get("design_summary", ""),
             "operating_constraints": spec_json.get("operating_constraints", {}),
+            "implementation_requirements": spec_json.get("implementation_requirements", []),
+            "verification_requirements": spec_json.get("verification_requirements", []),
+            "memory_macros": spec_json.get("memory_macros", []),
             "hierarchy": {
                 "top_module": top,
                 "modules": modules,
@@ -164,6 +167,9 @@ def _normalize_spec_json(spec_json: dict):
             "name": spec_json["name"],
             "description": spec_json.get("description", ""),
             "operating_constraints": spec_json.get("operating_constraints", {}),
+            "implementation_requirements": spec_json.get("implementation_requirements", []),
+            "verification_requirements": spec_json.get("verification_requirements", []),
+            "memory_macros": spec_json.get("memory_macros", []),
             "ports": spec_json.get("ports", []),
             "functionality": spec_json.get("functionality", ""),
             "responsibilities": spec_json.get("responsibilities", []),
@@ -1141,6 +1147,25 @@ VALID FORM A — Flat single-module form:
     ],
     "fixed_assumptions": []
   }},
+  "memory_macros": [
+    {{
+      "name": "openram_sram_64x32",
+      "kind": "openram_sram",
+      "depth": 64,
+      "data_width": 32,
+      "addr_width": 6,
+      "instance_name": "u_sram",
+      "ports": {{
+        "clk": "clk",
+        "csb": "csb",
+        "we": "web",
+        "addr": "addr",
+        "din": "din",
+        "dout": "dout"
+      }},
+      "requires_mbist": false
+    }}
+  ],
   "ports": [
     {{"name": "clk", "direction": "input", "width": 1}},
     {{"name": "reset_n", "direction": "input", "width": 1, "active_low": true}},
@@ -1178,6 +1203,25 @@ VALID FORM B — Hierarchical multi-module form:
     ],
     "fixed_assumptions": []
   }},
+  "memory_macros": [
+    {{
+      "name": "openram_sram_64x32",
+      "kind": "openram_sram",
+      "depth": 64,
+      "data_width": 32,
+      "addr_width": 6,
+      "instance_name": "u_sram",
+      "ports": {{
+        "clk": "clk",
+        "csb": "csb",
+        "we": "web",
+        "addr": "addr",
+        "din": "din",
+        "dout": "dout"
+      }},
+      "requires_mbist": false
+    }}
+  ],
   "hierarchy": {{
     "top_module": {{
       "name": "top_module_name",
@@ -1258,6 +1302,12 @@ RULES
 - Preserve exact signal ownership.
 - Preserve exact internal interface contracts.
 - Preserve exact fixed clock frequency if the user specifies it.
+- If the user asks for SRAM/OpenRAM/MBIST/memory macro behavior, include memory_macros[] with exact OpenRAM SRAM requirements.
+- memory_macros[].name must be the SRAM macro module/cell name the RTL should instantiate.
+- memory_macros[].depth, data_width, and addr_width must match the requested memory capacity.
+- memory_macros[].ports must map canonical roles clk, csb, we, addr, din, dout to real RTL port names.
+- If MBIST is requested or likely required, set memory_macros[].requires_mbist true; otherwise false.
+- Do not replace an OpenRAM SRAM requirement with a register array in the spec.
 - For hierarchical designs, top_level_connections, inter_module_signals, and signal_ownership are mandatory and must be non-empty.
 - top_level_connections must describe how top-level ports connect to submodule ports.
 - inter_module_signals must describe how submodules connect to each other.

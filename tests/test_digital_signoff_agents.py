@@ -677,7 +677,7 @@ def test_lvs_sanitizer_replaces_prior_fake_nc_outputs_with_unconnected_ports(tmp
     assert "_chiploop_lvs_nc_" not in text
 
 
-def test_lvs_sanitizer_connects_missing_macro_supply_ports(tmp_path):
+def test_lvs_sanitizer_declares_missing_macro_supply_ports_unconnected(tmp_path):
     src = tmp_path / "top.nl.v"
     spice = tmp_path / "ana_lvs_source.spice"
     src.write_text(
@@ -697,14 +697,14 @@ endmodule
     text = open(repaired, "r", encoding="utf-8").read()
 
     assert count == 4
-    assert ".VPWR(avdd)" in text
-    assert ".VGND(avss)" in text
-    assert ".avdd(avdd)" in text
-    assert ".avss(avss)" in text
-    assert ".VGND(avss),\n    .VPWR(avdd),\n    .avdd(avdd),\n    .avss(avss)" in text
+    assert ".VPWR()" in text
+    assert ".VGND()" in text
+    assert ".avdd()" in text
+    assert ".avss()" in text
+    assert ".VGND(),\n    .VPWR(),\n    .avdd(),\n    .avss()" in text
 
 
-def test_lvs_sanitizer_connects_macro_supply_ports_from_ansi_header(tmp_path):
+def test_lvs_sanitizer_declares_macro_supply_ports_from_ansi_header(tmp_path):
     src = tmp_path / "top.nl.v"
     spice = tmp_path / "ana_lvs_source.spice"
     src.write_text(
@@ -717,8 +717,33 @@ def test_lvs_sanitizer_connects_macro_supply_ports_from_ansi_header(tmp_path):
     text = open(repaired, "r", encoding="utf-8").read()
 
     assert count == 2
-    assert ".VPWR(avdd)" in text
-    assert ".VGND(avss)" in text
+    assert ".VPWR()" in text
+    assert ".VGND()" in text
+
+
+def test_lvs_sanitizer_preserves_explicit_macro_supply_connections(tmp_path):
+    src = tmp_path / "top.nl.v"
+    spice = tmp_path / "ana_lvs_source.spice"
+    src.write_text(
+        """
+module top(input wire avdd, input wire avss, input sig);
+  ana u_ana(.sig(sig), .avdd(avdd), .avss(avss));
+endmodule
+""",
+        encoding="utf-8",
+    )
+    spice.write_text(".subckt ana sig VPWR VGND avdd avss\n.ends ana\n", encoding="utf-8")
+
+    repaired, count = digital_lvs_agent._sanitize_lvs_netlist_unconnected_stdcell_outputs(str(src), None, [str(spice)])
+    text = open(repaired, "r", encoding="utf-8").read()
+
+    assert count == 2
+    assert ".avdd(avdd)" in text
+    assert ".avss(avss)" in text
+    assert ".VPWR()" in text
+    assert ".VGND()" in text
+    assert ".VPWR(avdd)" not in text
+    assert ".VGND(avss)" not in text
 
 
 def test_lvs_sanitizer_never_adds_macro_supply_ports_to_stdcells(tmp_path):
@@ -744,8 +769,8 @@ endmodule
 
     assert count == 2
     assert "sky130_fd_sc_hd__decap_3 FILLER_94_557 ();" in text
-    assert ".VPWR(avdd)" in text
-    assert ".VGND(avss)" in text
+    assert ".VPWR()" in text
+    assert ".VGND()" in text
 
 
 def test_lvs_and_tapeout_generate_physical_only_ef_stdcell_blackboxes(tmp_path):

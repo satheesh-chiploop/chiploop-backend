@@ -417,8 +417,6 @@ def _sanitize_lvs_netlist_unconnected_stdcell_outputs(src: str, dst: str | None 
 
     repairs = 0
     macro_ports = _spice_subckt_ports(macro_spice_models or [])
-    top_ports = _verilog_declared_ports(text)
-
     def repl(match: re.Match) -> str:
         nonlocal repairs
         model = match.group("model")
@@ -473,21 +471,19 @@ def _sanitize_lvs_netlist_unconnected_stdcell_outputs(src: str, dst: str | None 
             port
             for port, _expr in re.findall(r"\.\s*([A-Za-z_][A-Za-z0-9_$]*)\s*\(\s*([^)]*?)\s*\)", body, flags=re.DOTALL)
         }
-        additions: list[tuple[str, str]] = []
+        additions: list[str] = []
         for port in ports:
             if port in connected or not _is_supply_port(port):
                 continue
-            net = _supply_net_for_port(port, top_ports)
-            if net:
-                additions.append((port, net))
+            additions.append(port)
         if not additions:
             return match.group(0)
         new_body = body.rstrip()
-        for port, net in additions:
+        for port in additions:
             if new_body and not new_body.rstrip().endswith(","):
                 new_body += ","
             repairs += 1
-            new_body += f"\n    .{port}({net})"
+            new_body += f"\n    .{port}()"
         return f"{model} {match.group('inst')} ({new_body});"
 
     if macro_ports:

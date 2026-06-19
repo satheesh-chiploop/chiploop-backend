@@ -84,6 +84,7 @@ def _normalize_spec_json(spec_json: dict) -> Tuple[dict, str]:
             "design_summary": spec_json.get("design_summary", ""),
             "implementation_requirements": spec_json.get("implementation_requirements", []),
             "verification_requirements": spec_json.get("verification_requirements", []),
+            "memory_macros": spec_json.get("memory_macros", []),
             "hierarchy": {
                 "top_module": top,
                 "modules": modules,
@@ -102,6 +103,7 @@ def _normalize_spec_json(spec_json: dict) -> Tuple[dict, str]:
             "design_summary": spec_json.get("design_summary", ""),
             "implementation_requirements": spec_json.get("implementation_requirements", []),
             "verification_requirements": spec_json.get("verification_requirements", []),
+            "memory_macros": spec_json.get("memory_macros", []),
             "ports": spec_json.get("ports", []),
             "functionality": spec_json.get("functionality", ""),
             "responsibilities": spec_json.get("responsibilities", []),
@@ -1095,6 +1097,12 @@ Every combinational always @(*) block must:
 SCALE AND COMPLETENESS RULES
 - If the spec requests a rough flip-flop/register-bit target, FIFO depth, line-buffer storage, histogram counters, DMA buffers, packet buffers, shifters, or multiple pipeline stages, implement those as real Verilog storage and real sequential logic.
 - Do not satisfy a complex design by registering only outputs or by emitting a shell with comments.
+- If DIGITAL_SPEC_JSON contains memory_macros[] with kind openram_sram, instantiate the named SRAM macro cell exactly once per required instance. Do not implement that OpenRAM SRAM as a local reg array.
+- The SRAM instance module name must match memory_macros[].name, and the instance name should match memory_macros[].instance_name when provided.
+- Connect SRAM ports using memory_macros[].ports canonical roles: clk, csb, we/web, addr, din, dout.
+- The address width, data width, and depth implied by the RTL connections must match memory_macros[].addr_width, memory_macros[].data_width, and memory_macros[].depth.
+- It is acceptable to emit a simulation-only abstract SRAM module with the same macro cell name only when needed for compile, but the top/controller RTL must still instantiate that macro cell so OpenRAM/AutoMBIST can replace and validate real collateral later.
+- If Insert MBIST is enabled downstream, the SRAM macro instance is the integration point for the AutoMBIST wrapper. Do not hide the memory inside unrelated procedural logic.
 - If the spec says FIFO, implement explicit FIFO storage, pointers, levels, full/empty status, push/pop behavior, and reset.
 - If the spec says line buffer, histogram, frame buffer, or pipeline metadata, implement explicit storage arrays/counters/registers and update them in clocked logic.
 - If the spec says UART/SPI/I2C/packet engine, implement real shifter/counter/FSM state consistent with the described smoke-test behavior.
