@@ -3506,6 +3506,10 @@ def execute_digital_app_background(
             shared_state["spec"] = shared_state["spec_text"]
         if app_name == "verify":
             shared_state["_fail_fast_on_agent_error"] = True
+        if app_name == "arch2rtl":
+            toggles_for_fail_fast = shared_state.get("toggles") if isinstance(shared_state.get("toggles"), dict) else {}
+            if toggles_for_fail_fast.get("insert_mbist") or toggles_for_fail_fast.get("enable_mbist_rtl_insertion"):
+                shared_state["_fail_fast_on_agent_error"] = True
 
         append_log_workflow(workflow_id, f"🚀 Starting Digital App: {app_name}", phase="start")
         append_log_run(run_id, f"🚀 Starting Digital App: {app_name}")

@@ -329,20 +329,73 @@ def _replace_memory_instance_with_wrapper(memory: dict[str, Any], wrapper_name: 
     return os.path.abspath(dst)
 
 
-def _simulation_passed(report_dir: str, run_output: str) -> bool:
+def _explicit_json_verdict(obj: Any) -> bool | None:
+    if isinstance(obj, dict):
+        for key, value in obj.items():
+            lowered = str(key).lower()
+            if lowered in {"status", "result", "verdict", "outcome"}:
+                v = str(value).strip().lower()
+                if v in {"pass", "passed", "ok", "success", "clean"}:
+                    return True
+                if v in {"fail", "failed", "error", "timeout"}:
+                    return False
+            if lowered in {"passed", "success", "ok"} and isinstance(value, bool):
+                return value
+        for value in obj.values():
+            verdict = _explicit_json_verdict(value)
+            if verdict is not None:
+                return verdict
+    elif isinstance(obj, list):
+        verdicts = [_explicit_json_verdict(item) for item in obj]
+        verdicts = [item for item in verdicts if item is not None]
+        if verdicts:
+            return all(verdicts)
+    return None
+
+
+def _simulation_passed(report_dir: str, run_output: str, rc: int = 0) -> bool:
     latest = os.path.join(report_dir, "latest.json")
     if os.path.exists(latest):
         try:
             data = json.loads(_read_text(latest))
-            status = str(data.get("status") or data.get("result") or "").lower()
-            if status in {"pass", "passed", "ok", "success"}:
-                return True
-            if data.get("passed") is True or data.get("success") is True:
-                return True
+            verdict = _explicit_json_verdict(data)
+            if verdict is not None:
+                return verdict
         except Exception:
             pass
+    report_txt = os.path.join(report_dir, "report.txt")
+    report = _read_text(report_txt).lower()
+    if re.search(r"\b(overall|summary|simulation)\s*[:=]\s*(pass|passed|ok|success)\b", report):
+        return True
+    if re.search(r"\b(overall|summary|simulation)\s*[:=]\s*(fail|failed|error|timeout)\b", report):
+        return False
     lowered = run_output.lower()
-    return "pass" in lowered and "fail" not in lowered and "error" not in lowered
+    hard_fail_tokens = (
+        "traceback",
+        "assertionerror",
+        "syntax error",
+        "compile error",
+        "simulation failed",
+        "simulator failed",
+        "no module named",
+        "module not found",
+        "command not found",
+        "error:",
+    )
+    if any(token in lowered for token in hard_fail_tokens):
+        return False
+    return rc == 0
+
+
+def _publish_stage_file(workflow_id: str, filename: str, path: str) -> None:
+    if os.path.exists(path):
+        save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital/mbist_rtl_insertion", filename, _read_text(path))
+
+
+def _write_publish_summary(workflow_id: str, stage_dir: str, summary: dict[str, Any]) -> None:
+    content = json.dumps(summary, indent=2)
+    _write_text(os.path.join(stage_dir, "mbist_rtl_insertion_summary.json"), content)
+    save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital/mbist_rtl_insertion", "mbist_rtl_insertion_summary.json", content)
 
 
 def run_agent(state: dict) -> dict:
@@ -374,37 +427,39 @@ def run_agent(state: dict) -> dict:
     }
 
     if not enabled:
-        _write_text(os.path.join(stage_dir, "mbist_rtl_insertion_summary.json"), json.dumps(summary, indent=2))
+        _write_publish_summary(workflow_id, stage_dir, summary)
         state.setdefault("digital", {})["mbist_rtl_insertion"] = summary
         state["status"] = f"{AGENT_NAME}: disabled"
         return state
     if not memory:
         summary["status"] = "skipped_no_openram_sram_detected"
-        _write_text(os.path.join(stage_dir, "mbist_rtl_insertion_summary.json"), json.dumps(summary, indent=2))
+        _write_publish_summary(workflow_id, stage_dir, summary)
         state.setdefault("digital", {})["mbist_rtl_insertion"] = summary
         state["status"] = f"{AGENT_NAME}: no OpenRAM/SRAM memory detected"
         return state
     if not autombist:
         summary["status"] = "failed"
         summary["reason"] = "autombist_not_found"
-        _write_text(os.path.join(stage_dir, "mbist_rtl_insertion_summary.json"), json.dumps(summary, indent=2))
+        _write_publish_summary(workflow_id, stage_dir, summary)
         raise RuntimeError("MBIST RTL insertion requested but autombist was not found in tool profile/PATH.")
 
     project_dir = os.path.join(stage_dir, "autombist_project")
     _ensure_dir(project_dir)
     rc_init, out_init = _run([autombist, "init", "--out", project_dir, "--force"], cwd=stage_dir, timeout=120)
     _write_text(os.path.join(stage_dir, "autombist_init.log"), out_init)
+    _publish_stage_file(workflow_id, "autombist_init.log", os.path.join(stage_dir, "autombist_init.log"))
     config_path = os.path.join(project_dir, "config.yml")
     if rc_init != 0 or not os.path.exists(config_path):
         summary["status"] = "failed"
         summary["reason"] = "autombist_init_failed"
         summary["init_rc"] = rc_init
-        _write_text(os.path.join(stage_dir, "mbist_rtl_insertion_summary.json"), json.dumps(summary, indent=2))
+        _write_publish_summary(workflow_id, stage_dir, summary)
         raise RuntimeError("MBIST RTL insertion failed: autombist init did not produce config.yml.")
 
     patched_config = _patch_autombist_config(_read_text(config_path), memory)
     _write_text(config_path, patched_config)
     _write_text(os.path.join(stage_dir, "config.yml"), patched_config)
+    save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital/mbist_rtl_insertion", "config.yml", patched_config)
 
     out_dir = os.path.join(stage_dir, "autombist_out")
     rc_run, out_run = _run(
@@ -413,13 +468,14 @@ def run_agent(state: dict) -> dict:
         timeout=900,
     )
     _write_text(os.path.join(stage_dir, "autombist_run.log"), out_run)
+    _publish_stage_file(workflow_id, "autombist_run.log", os.path.join(stage_dir, "autombist_run.log"))
 
     generated_root = os.path.join(out_dir, str(memory["cell"]))
     if not os.path.isdir(generated_root):
         hits = [path for path in glob.glob(os.path.join(out_dir, "*")) if os.path.isdir(path)]
         generated_root = hits[0] if hits else generated_root
     reports_dir = os.path.join(generated_root, "reports")
-    sim_passed = rc_run == 0 and _simulation_passed(reports_dir, out_run)
+    sim_passed = _simulation_passed(reports_dir, out_run, rc_run)
     if not sim_passed:
         summary.update({
             "status": "failed",
@@ -427,7 +483,9 @@ def run_agent(state: dict) -> dict:
             "run_rc": rc_run,
             "run_log": os.path.join(stage_dir, "autombist_run.log"),
         })
-        _write_text(os.path.join(stage_dir, "mbist_rtl_insertion_summary.json"), json.dumps(summary, indent=2))
+        _write_publish_summary(workflow_id, stage_dir, summary)
+        _publish_stage_file(workflow_id, "autombist_report.txt", os.path.join(reports_dir, "report.txt"))
+        _publish_stage_file(workflow_id, "autombist_latest.json", os.path.join(reports_dir, "latest.json"))
         raise RuntimeError("MBIST RTL insertion failed: AutoMBIST standalone simulation did not pass.")
 
     final_rtl_dir = os.path.join(stage_dir, "integrated_rtl")
@@ -443,7 +501,7 @@ def run_agent(state: dict) -> dict:
             "wrapper_module": wrapper_name,
             "wrapper_ports": wrapper_ports,
         })
-        _write_text(os.path.join(stage_dir, "mbist_rtl_insertion_summary.json"), json.dumps(summary, indent=2))
+        _write_publish_summary(workflow_id, stage_dir, summary)
         raise RuntimeError("MBIST RTL insertion failed: generated AutoMBIST wrapper could not be safely integrated into the functional RTL top.")
     for src in rtl_files:
         if patched_source and os.path.abspath(src) == os.path.abspath(str(memory.get("source_file"))):
@@ -466,7 +524,7 @@ def run_agent(state: dict) -> dict:
         ),
     })
 
-    _write_text(os.path.join(stage_dir, "mbist_rtl_insertion_summary.json"), json.dumps(summary, indent=2))
+    _write_publish_summary(workflow_id, stage_dir, summary)
     report = "\n".join([
         "# MBIST RTL Insertion",
         "",

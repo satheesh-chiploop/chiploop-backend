@@ -102,3 +102,11 @@ endmodule
     assert "openram_sram_256x32_mbist u_sram" in text
     assert ".addr(addr)" in text
     assert ".bist_start(1'b0)" in text
+
+
+def test_autombist_fault_text_does_not_make_successful_run_fail(tmp_path):
+    reports = tmp_path / "reports"
+    reports.mkdir()
+    (reports / "report.txt").write_text("Fault injection complete. Faults detected. Simulation: PASS\n", encoding="utf-8")
+
+    assert agent._simulation_passed(str(reports), "generated fault masks; fail pin observed during test", rc=0) is True
