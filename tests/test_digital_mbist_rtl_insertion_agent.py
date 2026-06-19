@@ -423,6 +423,24 @@ def test_openram_generation_fails_when_compiler_missing(tmp_path, monkeypatch):
     assert result["attempts"] == []
 
 
+def test_openram_generation_reports_disk_full_root_cause(tmp_path, monkeypatch):
+    project_dir = tmp_path / "project"
+    stage_dir = tmp_path / "stage"
+    project_dir.mkdir()
+    stage_dir.mkdir()
+    memory = {"cell": "demo_sram_32x64", "addr_width": 6, "data_width": 32, "depth": 64}
+
+    monkeypatch.setattr(agent, "_find_openram_compiler", lambda state: "/tools/sram_compiler.py")
+    monkeypatch.setattr(agent, "_run", lambda cmd, cwd, timeout=600: (1, "error: No space left on device\n"))
+
+    result = agent._generate_openram_collateral(memory, "autombist", str(project_dir), str(stage_dir), "wf1")
+
+    assert result["status"] == "failed"
+    assert result["reason"] == "openram_no_space_left_on_device"
+    assert result["collateral"]["verilog"] == []
+    assert result["validation"]["missing"] == ["behavioral_model", "lib", "lef", "gds"]
+
+
 def test_openram_validation_rejects_partial_collateral(tmp_path):
     model = tmp_path / "demo_sram_32x64.v"
     model.write_text(

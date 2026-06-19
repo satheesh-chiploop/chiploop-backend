@@ -17,6 +17,63 @@ logger = logging.getLogger("chiploop")
 _VERILOG_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_$]*$")
 
 
+def _default_rtl_output_file(module_name: str) -> str:
+    name = str(module_name or "").strip()
+    return f"{name}.v" if name else ""
+
+
+def _memory_macro_module(macro: dict) -> dict:
+    name = str(macro.get("name") or "").strip()
+    data_width = int(macro.get("data_width") or macro.get("width") or 1)
+    addr_width = int(macro.get("addr_width") or 1)
+    port_map = macro.get("ports") if isinstance(macro.get("ports"), dict) else {}
+    semantic_ports = port_map or {
+        "clk": "clk",
+        "csb": "csb",
+        "web": "web",
+        "addr": "addr",
+        "din": "din",
+        "dout": "dout",
+    }
+
+    def port_width(role: str) -> int:
+        role_l = role.lower()
+        if role_l in {"addr", "address"}:
+            return max(addr_width, 1)
+        if role_l in {"din", "dout", "data_in", "data_out", "wdata", "rdata"}:
+            return max(data_width, 1)
+        return 1
+
+    def port_direction(role: str) -> str:
+        role_l = role.lower()
+        if role_l in {"dout", "data_out", "rdata", "q"}:
+            return "output"
+        return "input"
+
+    ports = []
+    seen = set()
+    for role, port_name in semantic_ports.items():
+        pname = str(port_name or "").strip()
+        if not pname or pname in seen:
+            continue
+        seen.add(pname)
+        ports.append({"name": pname, "direction": port_direction(str(role)), "width": port_width(str(role))})
+
+    return {
+        "name": name,
+        "description": "Memory macro interface module derived from memory_macros.",
+        "ports": ports,
+        "functionality": "Single-port memory macro abstraction.",
+        "responsibilities": ["Expose the memory macro interface for RTL generation and downstream collateral."],
+        "must_drive": [p["name"] for p in ports if p["direction"] == "output"],
+        "must_receive": [p["name"] for p in ports if p["direction"] == "input"],
+        "must_not_drive": [p["name"] for p in ports if p["direction"] == "input"],
+        "reset_behavior": "Memory macro contents are not reset by the controller reset.",
+        "behavior_rules": ["Preserve the declared memory macro port interface."],
+        "rtl_output_file": _default_rtl_output_file(name),
+    }
+
+
 def _requested_top_module(state: dict) -> str:
     top = str(state.get("top_module") or "").strip()
     if not top:
@@ -139,9 +196,44 @@ def _normalize_spec_json(spec_json: dict):
         if not top.get("name"):
             raise ValueError("hierarchy.top_module.name is required.")
         if not top.get("rtl_output_file"):
-            raise ValueError("hierarchy.top_module.rtl_output_file is required.")
+            top["rtl_output_file"] = spec_json.get("rtl_output_file") or _default_rtl_output_file(top["name"])
         if not isinstance(modules, list):
             raise ValueError("hierarchy.modules must be a list.")
+
+        referenced_modules = set()
+        for sig in spec_json.get("inter_module_signals") or hier.get("inter_module_signals") or []:
+            if isinstance(sig, dict):
+                endpoints = [sig.get("source")] + list(sig.get("destinations") or [])
+                for endpoint in endpoints:
+                    if isinstance(endpoint, str) and "." in endpoint:
+                        referenced_modules.add(endpoint.split(".", 1)[0])
+        existing_module_names = {
+            str(mod.get("name") or "").strip()
+            for mod in modules
+            if isinstance(mod, dict)
+        }
+        for macro in spec_json.get("memory_macros", []):
+            if not isinstance(macro, dict):
+                continue
+            macro_name = str(macro.get("name") or "").strip()
+            if macro_name and macro_name in referenced_modules and macro_name not in existing_module_names:
+                modules.append(_memory_macro_module(macro))
+                existing_module_names.add(macro_name)
+
+        top_name = str(top.get("name") or "").strip()
+        filtered_modules = []
+        for mod in modules:
+            if isinstance(mod, dict) and str(mod.get("name") or "").strip() == top_name:
+                for key, value in mod.items():
+                    if top.get(key) in (None, "", [], {}):
+                        top[key] = value
+                continue
+            filtered_modules.append(mod)
+        modules = filtered_modules
+
+        for mod in modules:
+            if isinstance(mod, dict) and mod.get("name") and not mod.get("rtl_output_file"):
+                mod["rtl_output_file"] = _default_rtl_output_file(mod["name"])
 
         norm = {
             "design_name": spec_json.get("design_name") or top["name"],
@@ -162,7 +254,9 @@ def _normalize_spec_json(spec_json: dict):
         return norm, "hierarchical"
 
     # Flat form
-    if spec_json.get("name") and spec_json.get("rtl_output_file"):
+    if spec_json.get("name"):
+        if not spec_json.get("rtl_output_file"):
+            spec_json["rtl_output_file"] = _default_rtl_output_file(spec_json["name"])
         norm = {
             "name": spec_json["name"],
             "description": spec_json.get("description", ""),
@@ -336,10 +430,10 @@ def _validate_hierarchical_endpoint_coverage(spec_json: dict) -> None:
         smod, sport = src.split(".", 1)
         if smod not in module_ports:
             raise ValueError(f"inter_module_signals[{i}] source module '{smod}' does not exist.")
-        if sport not in module_ports[smod]:
+        if smod != top_name and sport not in module_ports[smod]:
             raise ValueError(f"inter_module_signals[{i}] source port '{smod}.{sport}' is not present in module ports.")
         src_dir = (module_dirs.get(smod) or {}).get(sport)
-        if src_dir not in {"output", "inout"}:
+        if src_dir and src_dir not in {"output", "inout"}:
             raise ValueError(
                 f"inter_module_signals[{i}] source port '{smod}.{sport}' must be output/inout, got '{src_dir}'."
             )
@@ -350,10 +444,10 @@ def _validate_hierarchical_endpoint_coverage(spec_json: dict) -> None:
             dmod, dport = dst.split(".", 1)
             if dmod not in module_ports:
                 raise ValueError(f"inter_module_signals[{i}] destination module '{dmod}' does not exist.")
-            if dport not in module_ports[dmod]:
+            if dmod != top_name and dport not in module_ports[dmod]:
                 raise ValueError(f"inter_module_signals[{i}] destination port '{dmod}.{dport}' is not present in module ports.")
             dst_dir = (module_dirs.get(dmod) or {}).get(dport)
-            if dst_dir not in {"input", "inout"}:
+            if dst_dir and dst_dir not in {"input", "inout"}:
                 raise ValueError(
                     f"inter_module_signals[{i}] destination port '{dmod}.{dport}' must be input/inout, got '{dst_dir}'."
                 )
@@ -365,10 +459,10 @@ def _validate_hierarchical_endpoint_coverage(spec_json: dict) -> None:
         omod, oport = owner.split(".", 1)
         if omod not in module_ports:
             raise ValueError(f"signal_ownership[{i}] owner module '{omod}' does not exist.")
-        if oport not in module_ports[omod]:
+        if omod != top_name and oport not in module_ports[omod]:
             raise ValueError(f"signal_ownership[{i}] owner port '{omod}.{oport}' is not present in module ports.")
         owner_dir = (module_dirs.get(omod) or {}).get(oport)
-        if owner_dir not in {"output", "inout"}:
+        if owner_dir and owner_dir not in {"output", "inout"}:
             raise ValueError(
                 f"signal_ownership[{i}] owner port '{omod}.{oport}' must be output/inout, got '{owner_dir}'."
             )

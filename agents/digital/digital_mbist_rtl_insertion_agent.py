@@ -729,6 +729,19 @@ def _openram_command_variants(openram_compiler: str, config_path: str) -> list[l
     ]
 
 
+def _classify_openram_failure(output: str) -> str:
+    lowered = (output or "").lower()
+    if "no space left on device" in lowered or "database or disk is full" in lowered:
+        return "openram_no_space_left_on_device"
+    if "nix is required" in lowered or "nix' was not found" in lowered:
+        return "openram_nix_not_available"
+    if "failed to initialize nix toolchain" in lowered:
+        return "openram_nix_toolchain_failed"
+    if "no module named" in lowered:
+        return "openram_python_dependency_missing"
+    return "openram_command_failed"
+
+
 def _discover_openram_collateral(roots: list[str], memory: dict[str, Any]) -> dict[str, Any]:
     cell = _openram_cell(memory)
     result: dict[str, Any] = {
@@ -836,6 +849,7 @@ def _generate_openram_collateral(
             json.dumps(result, indent=2),
         )
         return result
+    command_failed_reason = "openram_command_failed"
     for index, cmd in enumerate(attempts, start=1):
         rc, out = _run(cmd, cwd=stage_dir, timeout=3600)
         log_name = f"openram_sram_compiler_attempt{index}.log"
@@ -847,7 +861,8 @@ def _generate_openram_collateral(
         if rc == 0:
             result["status"] = "command_completed"
             break
-    collateral = _discover_openram_collateral([output_dir, stage_dir], memory)
+        command_failed_reason = _classify_openram_failure(out)
+    collateral = _discover_openram_collateral([output_dir], memory)
     result["collateral"] = collateral
     validation = _validate_openram_collateral(collateral, memory)
     result["validation"] = validation
@@ -856,8 +871,10 @@ def _generate_openram_collateral(
         memory["openram_behavioral_model"] = collateral["behavioral_model"]
     elif result["status"] == "command_completed":
         result["status"] = "collateral_validation_failed"
+        result["reason"] = "openram_collateral_validation_failed"
     else:
         result["status"] = "failed"
+        result["reason"] = command_failed_reason
     save_text_artifact_and_record(
         workflow_id,
         AGENT_NAME,
@@ -1316,7 +1333,7 @@ def run_agent(state: dict) -> dict:
             if generated:
                 digital[state_key] = sorted(dict.fromkeys([*existing, *generated]))
         if openram_generation.get("status") != "validated":
-            result.update({"status": "failed", "reason": "openram_collateral_validation_failed"})
+            result.update({"status": "failed", "reason": openram_generation.get("reason") or "openram_collateral_validation_failed"})
             memory_results.append(result)
             continue
 
