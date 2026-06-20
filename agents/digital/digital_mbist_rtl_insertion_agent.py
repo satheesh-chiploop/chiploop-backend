@@ -144,15 +144,10 @@ def _stage_memory_model_for_autombist(
     use_generated_model = _memory_source_needs_sim_model(memory)
     model_src = src
     if use_generated_model:
-        if not allow_generated_sim_model:
-            result["status"] = "openram_behavioral_model_missing"
-            result["reason"] = "detected_memory_rtl_is_abstract_or_constant_shell"
-            result["simulation_model_source"] = "missing_openram_behavioral_model"
-            return result
-        model_src = os.path.join(stage_dir, f"{cell}_autombist_sim_model.v")
-        _write_text(model_src, _behavioral_sram_model_text(memory))
-        result["simulation_model"] = model_src
-        result["simulation_model_source"] = "generated_behavioral_sram"
+        result["status"] = "openram_behavioral_model_missing"
+        result["reason"] = "detected_memory_rtl_is_abstract_or_constant_shell"
+        result["simulation_model_source"] = "missing_openram_behavioral_model"
+        return result
     else:
         result["simulation_model_source"] = "detected_rtl_source"
 
@@ -502,7 +497,7 @@ def _detect_openram_memories(files: list[str]) -> list[dict[str, Any]]:
     for path in files:
         text = _read_text(path)
         widths = _parse_declaration_widths(text)
-        for _, body in _module_blocks(text):
+        for parent_module, body in _module_blocks(text):
             header_end = body.find(";")
             scan_body = body[header_end + 1 :] if header_end >= 0 else body
             for match in inst_re.finditer(scan_body):
@@ -520,6 +515,7 @@ def _detect_openram_memories(files: list[str]) -> list[dict[str, Any]]:
                     "cell": cell,
                     "instance": inst,
                     "source_file": path,
+                    "parent_module": parent_module,
                     "connections": conns,
                     "ports": _canonical_memory_ports_from_names(list(conns), match.group("conns")),
                     "addr_width": int(addr_width or 8),
@@ -1101,11 +1097,6 @@ def _generate_openram_collateral(
     else:
         result["status"] = "failed"
         result["reason"] = command_failed_reason
-        if command_failed_reason == "openram_custom_cell_spice_missing":
-            precompiled = _stage_precompiled_sram_macro_collateral(memory, stage_dir)
-            if precompiled.get("status") == "validated":
-                precompiled["openram_attempt"] = result
-                result = precompiled
     save_text_artifact_and_record(
         workflow_id,
         AGENT_NAME,
@@ -1346,6 +1337,25 @@ def _replace_memory_instances_with_wrappers(items: list[dict[str, Any]], out_dir
     return sorted(dict.fromkeys(patched_files))
 
 
+def _select_functional_wrapper_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not items:
+        return []
+    instantiated_memory_cells = {
+        str(_rtl_instance_cell(memory)).lower()
+        for item in items
+        for memory in [item.get("memory") if isinstance(item.get("memory"), dict) else {}]
+        if _rtl_instance_cell(memory)
+    }
+    selected: list[dict[str, Any]] = []
+    for item in items:
+        memory = item.get("memory") if isinstance(item.get("memory"), dict) else {}
+        parent = str(memory.get("parent_module") or "").lower()
+        if parent and parent in instantiated_memory_cells:
+            continue
+        selected.append(item)
+    return selected or items
+
+
 def _explicit_json_verdict(obj: Any) -> bool | None:
     if isinstance(obj, dict):
         for key, value in obj.items():
@@ -1555,13 +1565,9 @@ def run_agent(state: dict) -> dict:
         _write_publish_summary(workflow_id, stage_dir, summary)
         raise RuntimeError("MBIST RTL insertion requested but autombist was not found in tool profile/PATH.")
 
-    allow_generated_sim_model = bool(
-        toggles.get("allow_mbist_sim_model_fallback")
-        or toggles.get("allow_autombist_sim_model_fallback")
-        or state.get("allow_mbist_sim_model_fallback")
-        or state.get("allow_autombist_sim_model_fallback")
-    )
+    allow_generated_sim_model = False
     summary["allow_generated_sim_model"] = allow_generated_sim_model
+    summary["simulation_model_policy"] = "require_real_openram_behavioral_model"
     digital = state.setdefault("digital", {})
     openram_cache: dict[tuple[Any, ...], dict[str, Any]] = {}
     memory_results: list[dict[str, Any]] = []
@@ -1697,7 +1703,9 @@ def run_agent(state: dict) -> dict:
     final_rtl_dir = os.path.join(stage_dir, "integrated_rtl")
     original_rtl_dir = os.path.join(final_rtl_dir, "functional_rtl")
     _ensure_dir(original_rtl_dir)
-    if len(wrapper_items) != len([m for m in memories if m.get("kind") == "memory_instance"]):
+    integration_wrapper_items = _select_functional_wrapper_items(wrapper_items)
+    skipped_nested_wrapper_items = [item for item in wrapper_items if item not in integration_wrapper_items]
+    if not integration_wrapper_items:
         summary.update({
             "status": "failed",
             "reason": "mbist_insertion_requires_memory_instance",
@@ -1708,16 +1716,23 @@ def run_agent(state: dict) -> dict:
         })
         _write_publish_summary(workflow_id, stage_dir, summary)
         raise RuntimeError("MBIST RTL insertion failed: AutoMBIST passed, but no functional SRAM instance was found to wrap.")
-    patched_sources = _replace_memory_instances_with_wrappers(wrapper_items, original_rtl_dir)
-    if len(patched_sources) != len({str(item["memory"].get("source_file")) for item in wrapper_items}):
+    patched_sources = _replace_memory_instances_with_wrappers(integration_wrapper_items, original_rtl_dir)
+    if len(patched_sources) != len({str(item["memory"].get("source_file")) for item in integration_wrapper_items}):
         summary.update({
             "status": "failed",
             "reason": "mbist_wrapper_parent_integration_failed",
+            "integration_targets": integration_wrapper_items,
+            "skipped_nested_integration_targets": skipped_nested_wrapper_items,
         })
         _write_publish_summary(workflow_id, stage_dir, summary)
         raise RuntimeError("MBIST RTL insertion failed: generated AutoMBIST wrapper could not be safely integrated into the functional RTL top.")
+    wrapper_source_files = {
+        os.path.abspath(str(item["memory"].get("source_file")))
+        for item in wrapper_items
+        if isinstance(item.get("memory"), dict) and item["memory"].get("source_file")
+    }
     for src in rtl_files:
-        if any(os.path.abspath(src) == os.path.abspath(str(item["memory"].get("source_file"))) for item in wrapper_items):
+        if os.path.abspath(src) in wrapper_source_files:
             continue
         shutil.copy2(src, os.path.join(original_rtl_dir, os.path.basename(src)))
 
@@ -1744,7 +1759,9 @@ def run_agent(state: dict) -> dict:
         "simulation": {"status": "pass", "memory_count": len(memories)},
         "integration_status": integration_status,
         "integrated_rtl_lint": integrated_lint,
-        "wrapper_modules": [item.get("wrapper_module") for item in wrapper_items],
+        "wrapper_modules": [item.get("wrapper_module") for item in integration_wrapper_items],
+        "integration_targets": integration_wrapper_items,
+        "skipped_nested_integration_targets": skipped_nested_wrapper_items,
         "patched_sources": patched_sources,
         "integrated_rtl_dir": final_rtl_dir,
         "final_rtl_files": final_files,

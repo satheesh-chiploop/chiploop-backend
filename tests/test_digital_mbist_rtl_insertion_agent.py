@@ -591,7 +591,7 @@ def test_selects_precompiled_sram_macro_with_larger_depth(tmp_path, monkeypatch)
     assert selected["depth"] == 256
 
 
-def test_openram_custom_cell_failure_uses_precompiled_sram_macro(tmp_path, monkeypatch):
+def test_openram_custom_cell_failure_does_not_fallback_to_precompiled_sram_macro(tmp_path, monkeypatch):
     project_dir = tmp_path / "project"
     stage_dir = tmp_path / "stage"
     project_dir.mkdir()
@@ -608,13 +608,10 @@ def test_openram_custom_cell_failure_uses_precompiled_sram_macro(tmp_path, monke
 
     result = agent._generate_openram_collateral(memory, "autombist", str(project_dir), str(stage_dir), "wf1")
 
-    assert result["status"] == "validated"
-    assert result["generator"] == "precompiled_sram_macro"
-    assert result["selected"]["cell"] == cell
-    assert result["depth_match"] is False
-    assert memory["openram_behavioral_model"].endswith(f"{cell}.v")
-    assert memory["logical_depth"] == 64
-    assert memory["depth"] == 256
+    assert result["status"] == "failed"
+    assert result["generator"] == "openram"
+    assert result["reason"] == "openram_custom_cell_spice_missing"
+    assert "openram_behavioral_model" not in memory
 
 
 def test_precompiled_sram_macro_uses_actual_verilog_port_names(tmp_path, monkeypatch):
@@ -707,7 +704,7 @@ def test_rejects_abstract_memory_shell_without_openram_behavioral_model(tmp_path
     assert not (hardware_dir / "demo_sram_32x64.v").exists()
 
 
-def test_stages_generated_sim_model_only_when_explicitly_allowed(tmp_path):
+def test_rejects_generated_sim_model_even_when_explicitly_allowed(tmp_path):
     prefix = tmp_path / "chiploop-dft"
     bin_dir = prefix / "bin"
     hardware_dir = prefix / "lib" / "python3.13" / "site-packages" / "autombist" / "tests" / "hardware"
@@ -727,9 +724,9 @@ def test_stages_generated_sim_model_only_when_explicitly_allowed(tmp_path):
         allow_generated_sim_model=True,
     )
 
-    assert result["status"] == "staged"
-    assert result["simulation_model_source"] == "generated_behavioral_sram"
-    assert "reg [31:0] mem [0:63]" in (hardware_dir / "demo_sram_32x64.v").read_text(encoding="utf-8")
+    assert result["status"] == "openram_behavioral_model_missing"
+    assert result["simulation_model_source"] == "missing_openram_behavioral_model"
+    assert not (hardware_dir / "demo_sram_32x64.v").exists()
 
 
 def test_stages_real_memory_model_when_source_has_storage(tmp_path):
@@ -961,6 +958,51 @@ endmodule
     assert ".func_we(mem_web)" in text
     assert ".func_dout(u_sram_dout)" in text
     assert "demo_sram_32x256_wrapper u_sram" not in text
+
+
+def test_selects_outer_functional_memory_instance_for_mbist_integration():
+    items = [
+        {
+            "memory": {
+                "parent_module": "demo_sram_32x256_wrapper",
+                "rtl_cell": "sky130_sram_1kbyte_1rw1r_32x256_8",
+                "instance": "u_sram",
+                "source_file": "demo_sram_32x256_wrapper.v",
+            },
+            "wrapper_module": "sky130_sram_1kbyte_1rw1r_32x256_8_mbist",
+        },
+        {
+            "memory": {
+                "parent_module": "sram_mbist_demo_controller",
+                "rtl_cell": "demo_sram_32x256_wrapper",
+                "instance": "u_sram",
+                "source_file": "sram_mbist_demo_controller.v",
+            },
+            "wrapper_module": "sky130_sram_1kbyte_1rw1r_32x256_8_mbist",
+        },
+    ]
+
+    selected = agent._select_functional_wrapper_items(items)
+
+    assert selected == [items[1]]
+
+
+def test_detected_memory_records_parent_module(tmp_path):
+    rtl = tmp_path / "top.sv"
+    rtl.write_text(
+        """
+module top(input logic clk);
+  logic [7:0] addr;
+  logic [31:0] din, dout;
+  demo_sram_32x256_wrapper u_sram(.clk(clk), .addr(addr), .din(din), .dout(dout));
+endmodule
+""",
+        encoding="utf-8",
+    )
+
+    memories = agent._detect_openram_memories([str(rtl)])
+
+    assert memories[0]["parent_module"] == "top"
 
 
 def test_integrated_rtl_lint_requires_iverilog_and_verilator_pass(tmp_path, monkeypatch):
