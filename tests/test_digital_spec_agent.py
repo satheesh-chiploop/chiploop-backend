@@ -1,4 +1,5 @@
 import os
+import json
 import sys
 from pathlib import Path
 
@@ -168,6 +169,77 @@ def test_normalize_adds_referenced_memory_macro_module():
     assert memory_module["rtl_output_file"] == "demo_sram_32x64_model.v"
     assert {p["name"]: p["width"] for p in memory_module["ports"]}["addr"] == 6
     assert {p["name"]: p["width"] for p in memory_module["ports"]}["din"] == 32
+
+
+def test_extract_memory_macros_from_prompt_contract_lines():
+    prompt = """
+Structured memory macro contract:
+- memory_macros[0].name = sky130_sram_1kbyte_1rw1r_32x256_8
+- memory_macros[0].kind = prebuilt_sky130_sram
+- memory_macros[0].depth = 256
+- memory_macros[0].data_width = 32
+- memory_macros[0].addr_width = 8
+- memory_macros[0].instance_name = u_sram
+- memory_macros[0].requires_mbist = true
+- memory_macros[0].ports.clk = clk
+- memory_macros[0].ports.csb = csb
+- memory_macros[0].ports.we = web
+- memory_macros[0].ports.addr = addr
+- memory_macros[0].ports.din = din
+- memory_macros[0].ports.dout = dout
+"""
+
+    macros = spec_agent._extract_memory_macros_from_prompt(prompt)
+
+    assert macros == [
+        {
+            "name": "sky130_sram_1kbyte_1rw1r_32x256_8",
+            "kind": "prebuilt_sky130_sram",
+            "depth": 256,
+            "data_width": 32,
+            "addr_width": 8,
+            "instance_name": "u_sram",
+            "requires_mbist": True,
+            "ports": {
+                "clk": "clk",
+                "csb": "csb",
+                "we": "web",
+                "addr": "addr",
+                "din": "din",
+                "dout": "dout",
+            },
+        }
+    ]
+
+
+def test_compile_spec_contract_recovers_prompt_memory_macros(tmp_path):
+    llm_output = json.dumps(
+        {
+            "name": "sram_mbist_demo_controller",
+            "description": "Controller.",
+            "ports": [_port("clk", "input"), _port("ready", "output")],
+            "functionality": "Controller.",
+            "responsibilities": [],
+            "must_drive": ["ready"],
+            "must_receive": ["clk"],
+            "must_not_drive": ["clk"],
+            "reset_behavior": "",
+            "behavior_rules": [],
+        }
+    )
+    prompt = "- memory_macros[0].name = sky130_sram_1kbyte_1rw1r_32x256_8\n- memory_macros[0].depth = 256\n- memory_macros[0].data_width = 32\n- memory_macros[0].addr_width = 8\n- memory_macros[0].requires_mbist = true\n"
+
+    spec, mode, _, _ = spec_agent._compile_spec_contract(
+        llm_output,
+        str(tmp_path),
+        requested_top="sram_mbist_demo_controller",
+        source_prompt=prompt,
+    )
+
+    assert mode == "flat"
+    assert spec["memory_macros"][0]["name"] == "sky130_sram_1kbyte_1rw1r_32x256_8"
+    assert spec["memory_macros"][0]["depth"] == 256
+    assert spec["memory_macros"][0]["requires_mbist"] is True
 
 
 def test_normalize_single_module_hierarchy_defaults_contract_and_drops_self_loops():

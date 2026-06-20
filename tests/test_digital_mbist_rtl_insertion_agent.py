@@ -233,6 +233,33 @@ endmodule
     assert agent._detect_openram_memory([str(rtl)]) is None
 
 
+def test_sram_named_controller_with_internal_array_is_not_detected_as_memory_definition(tmp_path):
+    rtl = tmp_path / "sram_mbist_demo_controller.v"
+    rtl.write_text(
+        """
+module sram_mbist_demo_controller(
+  input clk,
+  input csb,
+  input web,
+  input [7:0] addr,
+  input [31:0] din,
+  output reg [31:0] dout
+);
+  reg [31:0] mem [0:255];
+  always @(posedge clk) begin
+    if (!csb) begin
+      if (!web) mem[addr] <= din;
+      dout <= mem[addr];
+    end
+  end
+endmodule
+""",
+        encoding="utf-8",
+    )
+
+    assert agent._detect_openram_memory([str(rtl)]) is None
+
+
 def test_autombist_config_uses_detected_sram_ports():
     memory = {
         "cell": "demo_sram_32x64",

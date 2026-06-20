@@ -444,6 +444,9 @@ def _looks_like_memory_module_definition(module_name: str, body: str, ports: dic
     clean = _strip_comments(body)
     has_memory_array = bool(re.search(r"\b(?:reg|logic)\s*(?:\[[^\]]+\]\s*)?\w+\s*\[[^\]]+\]", clean))
     canonical_name = bool("openram" in name or re.search(r"\d+x\d+", name))
+    control_name = bool(re.search(r"(?:^|_)(controller|ctrl|control|fabric|subsystem|top)(?:_|$)", name))
+    if control_name and not canonical_name:
+        return False
     return has_memory_array or canonical_name
 
 

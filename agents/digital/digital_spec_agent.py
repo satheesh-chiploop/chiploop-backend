@@ -74,6 +74,44 @@ def _memory_macro_module(macro: dict) -> dict:
     }
 
 
+def _coerce_prompt_value(value: str):
+    text = str(value or "").strip().rstrip(".")
+    if text.lower() == "true":
+        return True
+    if text.lower() == "false":
+        return False
+    if re.fullmatch(r"-?\d+", text):
+        try:
+            return int(text)
+        except ValueError:
+            return text
+    return text
+
+
+def _extract_memory_macros_from_prompt(prompt_text: str) -> list[dict]:
+    macros: dict[int, dict] = {}
+    pattern = re.compile(r"memory_macros\[(\d+)\]\.([A-Za-z0-9_.]+)\s*=\s*([^\r\n]+)")
+    for match in pattern.finditer(prompt_text or ""):
+        idx = int(match.group(1))
+        key_path = match.group(2).strip().split(".")
+        value = _coerce_prompt_value(match.group(3))
+        macro = macros.setdefault(idx, {})
+        target = macro
+        for key in key_path[:-1]:
+            target = target.setdefault(key, {})
+        target[key_path[-1]] = value
+    return [macros[idx] for idx in sorted(macros) if macros[idx].get("name")]
+
+
+def _merge_prompt_memory_macros(spec_json: dict, prompt_text: str) -> dict:
+    if not isinstance(spec_json, dict) or spec_json.get("memory_macros"):
+        return spec_json
+    prompt_macros = _extract_memory_macros_from_prompt(prompt_text)
+    if prompt_macros:
+        spec_json["memory_macros"] = prompt_macros
+    return spec_json
+
+
 def _ensure_module_contract_defaults(mod: dict) -> None:
     if not isinstance(mod, dict):
         return
@@ -1144,7 +1182,13 @@ Previous JSON text:
 """.strip()
 
 
-def _compile_spec_contract(llm_output: str, spec_dir: str, suffix: str = "", requested_top: str = ""):
+def _compile_spec_contract(
+    llm_output: str,
+    spec_dir: str,
+    suffix: str = "",
+    requested_top: str = "",
+    source_prompt: str = "",
+):
     logger.info(f"🔍 Digital Spec Agent compile start suffix='{suffix or 'pass1'}'")
     raw_name = f"llm_raw_output{suffix}.txt"
     raw_output_path = os.path.join(spec_dir, raw_name)
@@ -1152,6 +1196,7 @@ def _compile_spec_contract(llm_output: str, spec_dir: str, suffix: str = "", req
         rf.write(llm_output)
 
     parsed_json = _parse_llm_json_object(llm_output)
+    parsed_json = _merge_prompt_memory_macros(parsed_json, source_prompt)
     logger.info(f"🔍 Digital Spec Agent JSON parsed suffix='{suffix or 'pass1'}'")
     spec_json, mode = _normalize_spec_json(parsed_json)
     logger.info(f"🔍 Digital Spec Agent normalized mode={mode} suffix='{suffix or 'pass1'}'")
@@ -1732,6 +1777,7 @@ Return JSON only.
             spec_dir=spec_dir,
             suffix="",
             requested_top=requested_top,
+            source_prompt=user_prompt,
         )
     except Exception as e:
         pass1_error = e
@@ -1791,6 +1837,7 @@ Return JSON only.
                 spec_dir=spec_dir,
                 suffix="_pass2",
                 requested_top=requested_top,
+                source_prompt=user_prompt,
             )
             raw_output_path = raw_output_path_pass2
             
@@ -1818,6 +1865,7 @@ Return JSON only.
                     spec_dir=spec_dir,
                     suffix="_pass3",
                     requested_top=requested_top,
+                    source_prompt=user_prompt,
                 )
                 raw_output_path = raw_output_path_pass3
             except Exception as e3:
@@ -1843,6 +1891,7 @@ Return JSON only.
                         spec_dir=spec_dir,
                         suffix="_pass4",
                         requested_top=requested_top,
+                        source_prompt=user_prompt,
                     )
                     raw_output_path = raw_output_path_pass4
                 except Exception as e4:
