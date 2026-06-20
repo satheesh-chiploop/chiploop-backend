@@ -355,3 +355,37 @@ def test_requested_top_module_overrides_mmio_suffix_in_hierarchical_spec():
     assert out["top_level_connections"][0]["connected_to"] == ["pwm_controller.clk"]
     assert out["inter_module_signals"][0]["source"] == "pwm_controller.tick"
     assert out["signal_ownership"][0]["owner"] == "pwm_controller.tick"
+
+
+def test_parse_prefers_nested_hierarchy_object_over_flat_child_module():
+    raw = """
+prefix text
+{
+  "top_module": {
+    "name": "sram_mbist_demo_controller",
+    "ports": [{"name": "clk", "direction": "input", "width": 1}],
+    "rtl_output_file": "sram_mbist_demo_controller.v"
+  },
+  "modules": [
+    {
+      "name": "demo_sram_32x256_model",
+      "ports": [{"name": "dout", "direction": "output", "width": 32}],
+      "rtl_output_file": "demo_sram_32x256_model.v"
+    }
+  ],
+  "top_level_connections": [{"top_port": "clk", "connected_to": ["sram_mbist_demo_controller.clk"]}],
+  "inter_module_signals": [],
+  "signal_ownership": []
+}
+{
+  "name": "demo_sram_32x256_model",
+  "ports": [{"name": "dout", "direction": "output", "width": 32}],
+  "rtl_output_file": "demo_sram_32x256_model.v"
+}
+"""
+
+    parsed = spec_agent._parse_llm_json_object(raw)
+
+    assert "hierarchy" in parsed
+    assert parsed["hierarchy"]["top_module"]["name"] == "sram_mbist_demo_controller"
+    assert parsed["hierarchy"]["modules"][0]["name"] == "demo_sram_32x256_model"

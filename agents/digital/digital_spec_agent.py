@@ -679,6 +679,26 @@ def _parse_llm_json_object(llm_output: str) -> dict:
         if isinstance(parsed_item, dict) and parsed_item.get("hierarchy"):
             hierarchical_candidates.append(parsed_item)
             continue
+        if isinstance(parsed_item, dict) and isinstance(parsed_item.get("top_module"), dict) and isinstance(parsed_item.get("modules"), list):
+            hierarchical_candidates.append({
+                "design_name": parsed_item.get("design_name") or parsed_item["top_module"].get("name"),
+                "design_summary": parsed_item.get("design_summary", ""),
+                "operating_constraints": parsed_item.get("operating_constraints", {}),
+                "implementation_requirements": parsed_item.get("implementation_requirements", []),
+                "verification_requirements": parsed_item.get("verification_requirements", []),
+                "memory_macros": parsed_item.get("memory_macros", []),
+                "hierarchy": {
+                    "top_module": parsed_item["top_module"],
+                    "modules": parsed_item.get("modules", []),
+                },
+                "top_level_connections": parsed_item.get("top_level_connections", []),
+                "inter_module_signals": parsed_item.get("inter_module_signals", []),
+                "signal_ownership": parsed_item.get("signal_ownership", []),
+                "register_contract": parsed_item.get("register_contract", {}),
+                "verification": parsed_item.get("verification", {}),
+                "implementation_notes": parsed_item.get("implementation_notes", {}),
+            })
+            continue
         is_flat_spec = parsed_item.get("name") and (
             "functionality" in parsed_item
             or "responsibilities" in parsed_item
