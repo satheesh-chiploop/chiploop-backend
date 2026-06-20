@@ -100,3 +100,76 @@ def test_verilator_lint_preserves_pass2_relative_subdir(tmp_path, monkeypatch):
     assert captured["cwd"] == str(rtl_dir)
     assert "pass2/temp_monitor_digital.v" in captured["args"]
     assert "temp_monitor_digital.v" not in captured["args"][-1:]
+
+
+def test_sanitize_child_output_does_not_drive_parent_input():
+    code = """
+module top(
+  input [31:0] mem_dout,
+  input clk
+);
+  wire csb;
+  wire web;
+  wire [7:0] addr;
+  wire [31:0] din;
+  demo_sram_32x256_wrapper u_sram (
+    .clk(clk),
+    .csb(csb),
+    .web(web),
+    .addr(addr),
+    .din(din),
+    .dout(mem_dout)
+  );
+endmodule
+
+module demo_sram_32x256_wrapper(
+  input clk,
+  input csb,
+  input web,
+  input [7:0] addr,
+  input [31:0] din,
+  output [31:0] dout
+);
+endmodule
+"""
+
+    out = agent._sanitize_child_output_instance_connections({"top.v": code})["top.v"]
+
+    assert "wire [31:0] mem_dout_from_u_sram;" in out
+    assert ".dout(mem_dout_from_u_sram)" in out
+    assert ".dout(mem_dout)" not in out
+
+
+def test_sanitize_child_output_resizes_unused_placeholder_wire():
+    code = """
+module top(input clk);
+  wire csb;
+  wire web;
+  wire [7:0] addr;
+  wire [31:0] din;
+  wire mem_dout_unused;
+  demo_sram_32x256_wrapper u_sram (
+    .clk(clk),
+    .csb(csb),
+    .web(web),
+    .addr(addr),
+    .din(din),
+    .dout(mem_dout_unused)
+  );
+endmodule
+
+module demo_sram_32x256_wrapper(
+  input clk,
+  input csb,
+  input web,
+  input [7:0] addr,
+  input [31:0] din,
+  output [31:0] dout
+);
+endmodule
+"""
+
+    out = agent._sanitize_child_output_instance_connections({"top.v": code})["top.v"]
+
+    assert "wire [31:0] mem_dout_unused;" in out
+    assert ".dout(mem_dout_unused)" in out
