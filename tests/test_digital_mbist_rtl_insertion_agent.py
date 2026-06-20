@@ -694,6 +694,40 @@ def test_stages_real_memory_model_when_source_has_storage(tmp_path):
     assert (hardware_dir / "demo_sram_32x64.v").read_text(encoding="utf-8") == src.read_text(encoding="utf-8")
 
 
+def test_stages_openram_behavioral_model_for_spec_memory_without_source_file(tmp_path):
+    prefix = tmp_path / "chiploop-dft"
+    bin_dir = prefix / "bin"
+    hardware_dir = prefix / "lib" / "python3.13" / "site-packages" / "autombist" / "tests" / "hardware"
+    bin_dir.mkdir(parents=True)
+    hardware_dir.mkdir(parents=True)
+    autombist = bin_dir / "autombist"
+    autombist.write_text("#!/bin/sh\n", encoding="utf-8")
+    model = tmp_path / "sky130_sram_1kbyte_1rw1r_32x256_8.v"
+    model.write_text(
+        "module sky130_sram_1kbyte_1rw1r_32x256_8(input clk,input [7:0] addr,input [31:0] din,output reg [31:0] dout);"
+        "reg [31:0] mem [0:255]; always @(posedge clk) dout <= mem[addr]; endmodule\n",
+        encoding="utf-8",
+    )
+    stage_dir = tmp_path / "stage"
+    stage_dir.mkdir()
+
+    result = agent._stage_memory_model_for_autombist(
+        {
+            "cell": "sky130_sram_1kbyte_1rw1r_32x256_8",
+            "openram_behavioral_model": str(model),
+            "ports": {"clk": "clk", "addr": "addr", "din": "din", "dout": "dout", "we": "web"},
+            "addr_width": 8,
+            "data_width": 32,
+        },
+        str(autombist),
+        str(stage_dir),
+    )
+
+    assert result["status"] == "staged"
+    assert result["simulation_model_source"] == "detected_rtl_source"
+    assert (hardware_dir / "sky130_sram_1kbyte_1rw1r_32x256_8.v").read_text(encoding="utf-8") == model.read_text(encoding="utf-8")
+
+
 def test_replaces_openram_instance_with_wrapper(tmp_path):
     rtl = tmp_path / "top.sv"
     rtl.write_text(

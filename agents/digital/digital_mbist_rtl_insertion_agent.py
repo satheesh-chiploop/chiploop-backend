@@ -75,7 +75,7 @@ def _autombist_hardware_dirs(autombist: str) -> list[str]:
 
 
 def _memory_source_needs_sim_model(memory: dict[str, Any]) -> bool:
-    text = _read_text(str(memory.get("source_file") or ""))
+    text = _read_text(str(memory.get("openram_behavioral_model") or memory.get("source_file") or ""))
     if not text:
         return True
     clean = _strip_comments(text).lower()
