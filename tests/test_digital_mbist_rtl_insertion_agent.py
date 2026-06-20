@@ -889,6 +889,80 @@ endmodule
     assert "demo_sram_32x64_model u_sram_model" not in text
 
 
+def test_replaces_functional_sram_instance_with_autombist_func_ports(tmp_path):
+    rtl = tmp_path / "top.sv"
+    rtl.write_text(
+        """
+module top(input logic clk, input logic reset_n, input logic bist_start);
+  logic mem_csb;
+  logic mem_web;
+  logic [7:0] mem_addr;
+  logic [31:0] mem_din;
+  logic [31:0] u_sram_dout;
+  demo_sram_32x256_wrapper u_sram (
+    .clk(clk),
+    .csb(mem_csb),
+    .web(mem_web),
+    .addr(mem_addr),
+    .din(mem_din),
+    .dout(u_sram_dout)
+  );
+endmodule
+""",
+        encoding="utf-8",
+    )
+    memory = {
+        "kind": "memory_instance",
+        "cell": "sky130_sram_1kbyte_1rw1r_32x256_8",
+        "rtl_cell": "demo_sram_32x256_wrapper",
+        "instance": "u_sram",
+        "source_file": str(rtl),
+        "connections": {
+            "clk": "clk",
+            "csb": "mem_csb",
+            "web": "mem_web",
+            "addr": "mem_addr",
+            "din": "mem_din",
+            "dout": "u_sram_dout",
+        },
+    }
+
+    patched = agent._replace_memory_instances_with_wrappers([
+        {
+            "memory": memory,
+            "wrapper_module": "sky130_sram_1kbyte_1rw1r_32x256_8_mbist",
+            "wrapper_ports": [
+                "clk",
+                "rst_n",
+                "test_mode",
+                "bist_start",
+                "bist_done",
+                "bist_fail",
+                "func_csb",
+                "func_addr",
+                "func_din",
+                "func_we",
+                "func_dout",
+            ],
+        },
+    ], str(tmp_path / "out"))
+
+    assert len(patched) == 1
+    text = Path(patched[0]).read_text(encoding="utf-8")
+    assert "sky130_sram_1kbyte_1rw1r_32x256_8_mbist u_sram" in text
+    assert ".rst_n(reset_n)" in text
+    assert ".test_mode(1'b0)" in text
+    assert ".bist_start(bist_start)" in text
+    assert ".bist_done(mbist_u_sram_bist_done)" in text
+    assert ".bist_fail(mbist_u_sram_bist_fail)" in text
+    assert ".func_csb(mem_csb)" in text
+    assert ".func_addr(mem_addr)" in text
+    assert ".func_din(mem_din)" in text
+    assert ".func_we(mem_web)" in text
+    assert ".func_dout(u_sram_dout)" in text
+    assert "demo_sram_32x256_wrapper u_sram" not in text
+
+
 def test_integrated_rtl_lint_requires_iverilog_and_verilator_pass(tmp_path, monkeypatch):
     rtl = tmp_path / "top.v"
     rtl.write_text("module top; endmodule\n", encoding="utf-8")

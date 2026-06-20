@@ -1190,25 +1190,92 @@ def _pick_generated_wrapper(generated_rtl: list[str], memory_cell: str) -> tuple
     return best_name, best_ports
 
 
-def _fallback_signal_for_port(port: str, conns: dict[str, str], known_signals: set[str]) -> str:
+def _memory_port_role(port: str) -> str | None:
+    p = re.sub(r"[^a-z0-9_]", "", str(port).lower())
+    for prefix in ("func_", "functional_", "user_", "mem_", "memory_"):
+        if p.startswith(prefix):
+            p = p[len(prefix):]
+            break
+    if re.fullmatch(r"(clk|clock|clk\d+|clock\d+)", p):
+        return "clk"
+    if re.fullmatch(r"(csb|ceb|cen|cs_n|ce_n|csb\d+|ceb\d+)", p):
+        return "csb"
+    if re.fullmatch(r"(web|wen|we|write_enable|wr_en|web\d+|wen\d+|we\d+)", p):
+        return "we"
+    if re.fullmatch(r"(addr|address|a|addr\d+|address\d+)", p):
+        return "addr"
+    if re.fullmatch(r"(din|data_in|wdata|wd|din\d+|data_in\d+|wdata\d+)", p):
+        return "din"
+    if re.fullmatch(r"(dout|data_out|rdata|q|dout\d+|data_out\d+|rdata\d+)", p):
+        return "dout"
+    if "addr" in p:
+        return "addr"
+    if "dout" in p or "rdata" in p or "data_out" in p:
+        return "dout"
+    if "din" in p or "wdata" in p or "data_in" in p:
+        return "din"
+    if "web" in p or "wen" in p or "write" in p:
+        return "we"
+    if "csb" in p or "ceb" in p:
+        return "csb"
+    return None
+
+
+def _connection_for_role(role: str | None, conns: dict[str, str]) -> str | None:
+    if not role:
+        return None
+    for key, sig in conns.items():
+        if _memory_port_role(key) == role:
+            return sig
+    return None
+
+
+def _mbist_status_wire(instance: str, port: str) -> str:
+    return f"mbist_{_safe_name(instance)}_{_safe_name(port)}"
+
+
+def _fallback_signal_for_port(port: str, conns: dict[str, str], known_signals: set[str], instance: str = "") -> str:
     p = port.lower()
+    role_sig = _connection_for_role(_memory_port_role(port), conns)
+    if role_sig:
+        return role_sig
     for key, sig in conns.items():
         k = key.lower()
         if ("clk" in p or "clock" in p) and ("clk" in k or "clock" in k):
             return sig
         if ("rst" in p or "reset" in p) and ("rst" in k or "reset" in k):
             return sig
+    if "done" in p or "fail" in p:
+        return _mbist_status_wire(instance or "wrapper", port)
     for sig in sorted(known_signals):
         s = sig.lower()
+        if ("rst" in p or "reset" in p) and ("rst" in s or "reset" in s):
+            return sig
         if ("start" in p or "enable" in p or p.endswith("_en")) and ("bist_start" in s or "mbist_start" in s):
-            return sig
-        if "done" in p and ("bist_done" in s or "mbist_done" in s):
-            return sig
-        if "fail" in p and ("bist_fail" in s or "mbist_fail" in s):
             return sig
     if "reset" in p or "rst" in p:
         return "1'b1" if p.endswith("_n") or "reset_n" in p else "1'b0"
     return "1'b0"
+
+
+def _wrapper_instance_mapping(
+    instance: str,
+    wrapper_ports: list[str],
+    conns: dict[str, str],
+    known_signals: set[str],
+) -> tuple[list[str], list[str]]:
+    mapped: list[str] = []
+    local_wires: list[str] = []
+    for port in wrapper_ports:
+        port = str(port)
+        if port in conns:
+            sig = conns[port]
+        else:
+            sig = _fallback_signal_for_port(port, conns, known_signals, instance)
+        if re.match(r"^mbist_[A-Za-z0-9_]+$", sig):
+            local_wires.append(sig)
+        mapped.append(f".{port}({sig})")
+    return mapped, sorted(dict.fromkeys(local_wires))
 
 
 def _replace_memory_instance_with_wrapper(memory: dict[str, Any], wrapper_name: str, wrapper_ports: list[str], out_dir: str) -> str | None:
@@ -1217,20 +1284,13 @@ def _replace_memory_instance_with_wrapper(memory: dict[str, Any], wrapper_name: 
     if not text or not wrapper_name or not wrapper_ports:
         return None
     conns = memory.get("connections") if isinstance(memory.get("connections"), dict) else {}
-    original_ports = set(conns)
-    wrapper_port_set = set(wrapper_ports)
-    if not original_ports.intersection(wrapper_port_set):
+    if not conns:
         return None
 
     known_signals = set(_parse_declaration_widths(text).keys()) | {str(sig) for sig in conns.values()}
-    mapped = []
-    for port in wrapper_ports:
-        if port in conns:
-            sig = conns[port]
-        else:
-            sig = _fallback_signal_for_port(port, conns, known_signals)
-        mapped.append(f".{port}({sig})")
-    replacement = f"{wrapper_name} {memory['instance']} (\n    " + ",\n    ".join(mapped) + "\n  );"
+    mapped, local_wires = _wrapper_instance_mapping(str(memory["instance"]), wrapper_ports, conns, known_signals)
+    wire_decls = "".join(f"wire {name};\n" for name in local_wires if not re.search(rf"\b{name}\b", text))
+    replacement = wire_decls + f"{wrapper_name} {memory['instance']} (\n    " + ",\n    ".join(mapped) + "\n  );"
 
     cell = re.escape(_rtl_instance_cell(memory))
     inst = re.escape(str(memory["instance"]))
@@ -1267,17 +1327,10 @@ def _replace_memory_instances_with_wrappers(items: list[dict[str, Any]], out_dir
             conns = memory.get("connections") if isinstance(memory.get("connections"), dict) else {}
             if not wrapper_name or not wrapper_ports or not conns:
                 continue
-            original_ports = set(conns)
-            wrapper_port_set = set(str(port) for port in wrapper_ports)
-            if not original_ports.intersection(wrapper_port_set):
-                continue
             known_signals = set(_parse_declaration_widths(text).keys()) | {str(sig) for sig in conns.values()}
-            mapped = []
-            for port in wrapper_ports:
-                port = str(port)
-                sig = conns.get(port) or _fallback_signal_for_port(port, conns, known_signals)
-                mapped.append(f".{port}({sig})")
-            replacement = f"{wrapper_name} {memory['instance']} (\n    " + ",\n    ".join(mapped) + "\n  );"
+            mapped, local_wires = _wrapper_instance_mapping(str(memory["instance"]), [str(port) for port in wrapper_ports], conns, known_signals)
+            wire_decls = "".join(f"wire {name};\n" for name in local_wires if not re.search(rf"\b{name}\b", text))
+            replacement = wire_decls + f"{wrapper_name} {memory['instance']} (\n    " + ",\n    ".join(mapped) + "\n  );"
             cell = re.escape(_rtl_instance_cell(memory))
             inst = re.escape(str(memory["instance"]))
             pattern = re.compile(
