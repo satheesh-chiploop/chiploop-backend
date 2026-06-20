@@ -74,6 +74,18 @@ def _memory_macro_module(macro: dict) -> dict:
     }
 
 
+def _ensure_module_contract_defaults(mod: dict) -> None:
+    if not isinstance(mod, dict):
+        return
+    mod.setdefault("functionality", mod.get("description", ""))
+    mod.setdefault("responsibilities", [])
+    mod.setdefault("must_drive", [])
+    mod.setdefault("must_receive", [])
+    mod.setdefault("must_not_drive", [])
+    mod.setdefault("reset_behavior", "")
+    mod.setdefault("behavior_rules", [])
+
+
 def _requested_top_module(state: dict) -> str:
     top = str(state.get("top_module") or "").strip()
     if not top:
@@ -197,6 +209,7 @@ def _normalize_spec_json(spec_json: dict):
             raise ValueError("hierarchy.top_module.name is required.")
         if not top.get("rtl_output_file"):
             top["rtl_output_file"] = spec_json.get("rtl_output_file") or _default_rtl_output_file(top["name"])
+        _ensure_module_contract_defaults(top)
         if not isinstance(modules, list):
             raise ValueError("hierarchy.modules must be a list.")
 
@@ -234,6 +247,20 @@ def _normalize_spec_json(spec_json: dict):
         for mod in modules:
             if isinstance(mod, dict) and mod.get("name") and not mod.get("rtl_output_file"):
                 mod["rtl_output_file"] = _default_rtl_output_file(mod["name"])
+            _ensure_module_contract_defaults(mod)
+
+        top_level_connections = spec_json.get("top_level_connections") or hier.get("top_level_connections") or []
+        inter_module_signals = spec_json.get("inter_module_signals") or hier.get("inter_module_signals") or []
+        signal_ownership = spec_json.get("signal_ownership") or hier.get("signal_ownership") or []
+        inter_module_signals = [
+            sig for sig in inter_module_signals
+            if not (
+                isinstance(sig, dict)
+                and isinstance(sig.get("source"), str)
+                and isinstance(sig.get("destinations"), list)
+                and sig.get("destinations") == [sig.get("source")]
+            )
+        ]
 
         norm = {
             "design_name": spec_json.get("design_name") or top["name"],
@@ -246,10 +273,10 @@ def _normalize_spec_json(spec_json: dict):
                 "top_module": top,
                 "modules": modules,
             },
-            "top_level_connections": spec_json.get("top_level_connections") or hier.get("top_level_connections") or [],
-            "inter_module_signals": spec_json.get("inter_module_signals") or hier.get("inter_module_signals") or [],
-            "signal_ownership": spec_json.get("signal_ownership") or hier.get("signal_ownership") or [],
-            "register_contract": spec_json.get("register_contract") or hier.get("register_contract") or {},
+            "top_level_connections": top_level_connections,
+            "inter_module_signals": inter_module_signals,
+            "signal_ownership": signal_ownership,
+            "register_contract": spec_json.get("register_contract") or hier.get("register_contract") or spec_json.get("register_map") or {},
         }
         return norm, "hierarchical"
 
@@ -501,7 +528,7 @@ def _validate_spec_contract(spec_json: dict, mode: str) -> None:
 
     if not isinstance(tlc, list) or not tlc:
         raise ValueError("top_level_connections must be present and non-empty for hierarchical mode.")
-    if not isinstance(ims, list) or not ims:
+    if not isinstance(ims, list) or (modules and not ims):
         raise ValueError("inter_module_signals must be present and non-empty for hierarchical mode.")
     if not isinstance(own, list) or not own:
         raise ValueError("signal_ownership must be present and non-empty for hierarchical mode.")
@@ -584,7 +611,48 @@ def _extract_json_object_text(text: str) -> str:
     return cleaned[start:].strip()
 
 
+def _extract_json_object_texts(text: str) -> list[str]:
+    cleaned = _strip_json_wrappers(text)
+    if not cleaned:
+        return []
+    decoder = json.JSONDecoder()
+    out: list[str] = []
+    for idx, ch in enumerate(cleaned):
+        if ch != "{":
+            continue
+        try:
+            parsed, end = decoder.raw_decode(cleaned[idx:])
+        except JSONDecodeError:
+            continue
+        if isinstance(parsed, dict):
+            out.append(cleaned[idx:idx + end].strip())
+    return out
+
+
 def _parse_llm_json_object(llm_output: str) -> dict:
+    candidates = _extract_json_object_texts(llm_output)
+    hierarchical_candidates: list[dict] = []
+    flat_candidates: list[dict] = []
+    for item in candidates:
+        try:
+            parsed_item = json.loads(item)
+        except JSONDecodeError:
+            continue
+        if isinstance(parsed_item, dict) and parsed_item.get("hierarchy"):
+            hierarchical_candidates.append(parsed_item)
+            continue
+        is_flat_spec = parsed_item.get("name") and (
+            "functionality" in parsed_item
+            or "responsibilities" in parsed_item
+            or "rtl_output_file" in parsed_item
+        )
+        if isinstance(parsed_item, dict) and is_flat_spec:
+            flat_candidates.append(parsed_item)
+    if hierarchical_candidates:
+        return hierarchical_candidates[-1]
+    if flat_candidates:
+        return flat_candidates[-1]
+
     candidate = _extract_json_object_text(llm_output)
     try:
         parsed = json.loads(candidate)
@@ -896,17 +964,21 @@ def _ensure_hierarchical_top_level_connections(spec_json: dict) -> dict:
     }
 
     connections = []
+    top_name = str(top.get("name") or "").strip()
     for port in top_ports:
         if not isinstance(port, dict):
             continue
         port_name = str(port.get("name") or "").strip()
         if not port_name:
             continue
-        connected_to = [
-            f"{module_name}.{port_name}"
-            for module_name, ports in child_port_map.items()
-            if module_name and port_name in ports
-        ]
+        if child_port_map:
+            connected_to = [
+                f"{module_name}.{port_name}"
+                for module_name, ports in child_port_map.items()
+                if module_name and port_name in ports
+            ]
+        else:
+            connected_to = [f"{top_name}.{port_name}"] if top_name else []
         if connected_to:
             connections.append({
                 "top_port": port_name,

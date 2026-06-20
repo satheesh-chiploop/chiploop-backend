@@ -39,6 +39,19 @@ def test_normalize_flat_spec_derives_missing_rtl_output_file():
     assert out["rtl_output_file"] == "pwm_controller.v"
 
 
+def test_parse_llm_json_object_prefers_last_spec_shaped_object():
+    text = (
+        '{"design_name":"draft","hierarchy":{"top_module":{"name":"draft"}}}'
+        '\n'
+        '{"design_name":"final","hierarchy":{"top_module":{"name":"final"}},"top_level_connections":[{"top_port":"clk"}]}'
+    )
+
+    parsed = spec_agent._parse_llm_json_object(text)
+
+    assert parsed["design_name"] == "final"
+    assert parsed["top_level_connections"][0]["top_port"] == "clk"
+
+
 def test_normalize_hierarchical_spec_derives_missing_rtl_output_files():
     spec = {
         "design_name": "pwm_controller",
@@ -147,6 +160,7 @@ def test_normalize_adds_referenced_memory_macro_module():
     }
 
     out, mode = spec_agent._normalize_spec_json(spec)
+    out = spec_agent._ensure_hierarchical_top_level_connections(out)
     spec_agent._validate_spec_contract(out, mode)
 
     memory_module = out["hierarchy"]["modules"][0]
@@ -154,6 +168,72 @@ def test_normalize_adds_referenced_memory_macro_module():
     assert memory_module["rtl_output_file"] == "demo_sram_32x64_model.v"
     assert {p["name"]: p["width"] for p in memory_module["ports"]}["addr"] == 6
     assert {p["name"]: p["width"] for p in memory_module["ports"]}["din"] == 32
+
+
+def test_normalize_single_module_hierarchy_defaults_contract_and_drops_self_loops():
+    spec = {
+        "design_name": "sram_mbist_demo_controller",
+        "register_map": [{"name": "CONTROL", "offset": "0x00"}],
+        "hierarchy": {
+            "top_module": {
+                "name": "sram_mbist_demo_controller",
+                "ports": [_port("clk", "input"), _port("ready", "output")],
+                "must_drive": ["ready"],
+                "must_receive": ["clk"],
+                "functionality": "Controller.",
+            }
+        },
+        "top_level_connections": [{"top_port": "ready", "connected_to": ["sram_mbist_demo_controller.ready"]}],
+        "inter_module_signals": [
+            {
+                "name": "ready_sig",
+                "width": 1,
+                "source": "sram_mbist_demo_controller.ready",
+                "destinations": ["sram_mbist_demo_controller.ready"],
+            }
+        ],
+        "signal_ownership": [{"signal": "ready", "owner": "sram_mbist_demo_controller.ready"}],
+    }
+
+    out, mode = spec_agent._normalize_spec_json(spec)
+    spec_agent._validate_spec_contract(out, mode)
+
+    top = out["hierarchy"]["top_module"]
+    assert top["rtl_output_file"] == "sram_mbist_demo_controller.v"
+    assert top["responsibilities"] == []
+    assert top["must_not_drive"] == []
+    assert out["inter_module_signals"] == []
+    assert out["register_contract"] == [{"name": "CONTROL", "offset": "0x00"}]
+    assert out["top_level_connections"][0]["connected_to"] == ["sram_mbist_demo_controller.ready"]
+
+
+def test_single_module_hierarchy_generates_top_self_connections_when_missing():
+    spec = {
+        "hierarchy": {
+            "top_module": {
+                **_module("controller"),
+                "ports": [_port("clk", "input"), _port("ready", "output")],
+                "rtl_output_file": "controller.v",
+            },
+            "modules": [],
+        },
+        "top_level_connections": [],
+    }
+
+    out = spec_agent._ensure_hierarchical_top_level_connections(spec)
+
+    assert out["top_level_connections"] == [
+        {
+            "top_port": "clk",
+            "connected_to": ["controller.clk"],
+            "description": "Top-level port clk connected to matching child module port(s).",
+        },
+        {
+            "top_port": "ready",
+            "connected_to": ["controller.ready"],
+            "description": "Top-level port ready connected to matching child module port(s).",
+        },
+    ]
 
 
 def test_requested_top_module_overrides_mmio_suffix_in_flat_spec():

@@ -789,6 +789,8 @@ def _classify_openram_failure(output: str) -> str:
         return "openram_no_space_left_on_device"
     if "set pdk_root" in lowered or "unable to find open_pdks tech file" in lowered:
         return "openram_pdk_root_not_set"
+    if "custom cell pin names do not match spice file" in lowered and " vs []" in lowered:
+        return "openram_custom_cell_spice_missing"
     if "nix is required" in lowered or "nix' was not found" in lowered:
         return "openram_nix_not_available"
     if "failed to initialize nix toolchain" in lowered:
@@ -871,6 +873,155 @@ def _validate_openram_collateral(collateral: dict[str, Any], memory: dict[str, A
     return checks
 
 
+def _parse_sram_macro_dimensions(name: str) -> tuple[int | None, int | None]:
+    text = str(name or "")
+    match = re.search(r"(?<!\d)(?P<width>\d+)x(?P<depth>\d+)(?!\d)", text, flags=re.I)
+    if match:
+        return int(match.group("width")), int(match.group("depth"))
+    match = re.search(r"(?:^|_)(?P<width>\d+)_(?P<depth>\d+)(?:_|$)", text)
+    if match:
+        return int(match.group("width")), int(match.group("depth"))
+    return None, None
+
+
+def _precompiled_sram_roots(stage_dir: str) -> list[str]:
+    roots: list[str] = []
+    pdk_root = _resolve_pdk_root(stage_dir)
+    if pdk_root:
+        for path in glob.glob(os.path.join(pdk_root, "*", "libs.ref", "*sram*")):
+            if os.path.isdir(path):
+                roots.append(path)
+        for path in glob.glob(os.path.join(pdk_root, "*sram*")):
+            if os.path.isdir(path):
+                roots.append(path)
+    extra = os.getenv("CHIPLOOP_PRECOMPILED_SRAM_ROOTS") or os.getenv("CHIPLOOP_SRAM_MACRO_ROOTS") or ""
+    for item in re.split(r"[;:]", extra):
+        item = item.strip()
+        if item and os.path.isdir(item):
+            roots.append(item)
+    return sorted(dict.fromkeys(os.path.abspath(path) for path in roots))
+
+
+def _discover_precompiled_sram_macros(stage_dir: str) -> list[dict[str, Any]]:
+    by_cell: dict[str, dict[str, Any]] = {}
+    for root in _precompiled_sram_roots(stage_dir):
+        files: list[str] = []
+        for walk_root, _, names in os.walk(root):
+            for filename in names:
+                if filename.lower().endswith((".v", ".sv", ".lib", ".lef", ".gds", ".sp", ".spice", ".cdl")):
+                    files.append(os.path.abspath(os.path.join(walk_root, filename)))
+
+        base_cells: set[str] = set()
+        for path in files:
+            lower = path.lower()
+            if lower.endswith((".v", ".sv", ".lef", ".gds", ".sp", ".spice", ".cdl")):
+                base_cells.add(os.path.splitext(os.path.basename(path))[0])
+
+        for cell in sorted(base_cells):
+            width, depth = _parse_sram_macro_dimensions(cell)
+            if not width or not depth:
+                continue
+            item = by_cell.setdefault(
+                cell,
+                {
+                    "cell": cell,
+                    "data_width": width,
+                    "depth": depth,
+                    "addr_width": max(1, (depth - 1).bit_length()),
+                    "collateral": {"behavioral_model": None, "lib": [], "lef": [], "gds": [], "spice": [], "verilog": []},
+                    "source": "precompiled_sram_macro",
+                    "root": root,
+                },
+            )
+            collateral = item["collateral"]
+            for path in files:
+                filename = os.path.basename(path)
+                stem = os.path.splitext(filename)[0]
+                lower = filename.lower()
+                if stem == cell and lower.endswith((".v", ".sv")):
+                    collateral["verilog"].append(path)
+                    collateral["behavioral_model"] = collateral["behavioral_model"] or path
+                elif stem == cell and lower.endswith(".lef"):
+                    collateral["lef"].append(path)
+                elif stem == cell and lower.endswith(".gds"):
+                    collateral["gds"].append(path)
+                elif stem == cell and lower.endswith((".sp", ".spice", ".cdl")):
+                    collateral["spice"].append(path)
+                elif filename.startswith(f"{cell}_") and lower.endswith(".lib"):
+                    collateral["lib"].append(path)
+            for key in ("lib", "lef", "gds", "spice", "verilog"):
+                collateral[key] = sorted(dict.fromkeys(collateral[key]))
+    return sorted(by_cell.values(), key=lambda item: (item["data_width"], item["depth"], item["cell"]))
+
+
+def _select_precompiled_sram_macro(memory: dict[str, Any], stage_dir: str) -> dict[str, Any] | None:
+    req_width = int(memory.get("data_width") or 0)
+    req_depth = int(memory.get("depth") or (1 << int(memory.get("addr_width") or 0)))
+    candidates = [
+        item for item in _discover_precompiled_sram_macros(stage_dir)
+        if item.get("data_width") == req_width
+    ]
+    exact = [item for item in candidates if item.get("depth") == req_depth]
+    if exact:
+        return exact[0]
+    compatible = [item for item in candidates if int(item.get("depth") or 0) >= req_depth]
+    if compatible:
+        return sorted(compatible, key=lambda item: (int(item.get("depth") or 0), str(item.get("cell") or "")))[0]
+    return None
+
+
+def _stage_precompiled_sram_macro_collateral(
+    memory: dict[str, Any],
+    stage_dir: str,
+) -> dict[str, Any]:
+    selected = _select_precompiled_sram_macro(memory, stage_dir)
+    result: dict[str, Any] = {
+        "status": "failed",
+        "generator": "precompiled_sram_macro",
+        "requested": {
+            "cell": _openram_cell(memory),
+            "data_width": int(memory.get("data_width") or 0),
+            "depth": int(memory.get("depth") or (1 << int(memory.get("addr_width") or 0))),
+            "addr_width": int(memory.get("addr_width") or 0),
+        },
+        "selected": None,
+        "collateral": {},
+        "validation": {},
+    }
+    if not selected:
+        result["reason"] = "precompiled_sram_macro_not_found"
+        return result
+
+    collateral = selected["collateral"]
+    validation = _validate_openram_collateral(collateral, {"cell": selected["cell"]})
+    result.update({
+        "selected": {k: v for k, v in selected.items() if k != "collateral"},
+        "collateral": collateral,
+        "validation": validation,
+    })
+    if validation.get("status") != "clean":
+        result["reason"] = "precompiled_sram_collateral_validation_failed"
+        return result
+
+    requested_depth = result["requested"]["depth"]
+    selected_depth = int(selected["depth"])
+    memory["logical_cell"] = _openram_cell(memory)
+    memory["logical_depth"] = requested_depth
+    memory["logical_addr_width"] = int(memory.get("addr_width") or 0)
+    memory["cell"] = selected["cell"]
+    memory["openram_cell"] = selected["cell"]
+    memory["data_width"] = int(selected["data_width"])
+    memory["depth"] = selected_depth
+    memory["addr_width"] = int(selected["addr_width"])
+    memory["openram_behavioral_model"] = collateral["behavioral_model"]
+
+    result["status"] = "validated"
+    result["depth_match"] = selected_depth == requested_depth
+    if selected_depth != requested_depth:
+        result["note"] = "Selected a real precompiled SRAM macro with matching data width and larger depth."
+    return result
+
+
 def _generate_openram_collateral(
     memory: dict[str, Any],
     autombist: str,
@@ -933,6 +1084,11 @@ def _generate_openram_collateral(
     else:
         result["status"] = "failed"
         result["reason"] = command_failed_reason
+        if command_failed_reason == "openram_custom_cell_spice_missing":
+            precompiled = _stage_precompiled_sram_macro_collateral(memory, stage_dir)
+            if precompiled.get("status") == "validated":
+                precompiled["openram_attempt"] = result
+                result = precompiled
     save_text_artifact_and_record(
         workflow_id,
         AGENT_NAME,
