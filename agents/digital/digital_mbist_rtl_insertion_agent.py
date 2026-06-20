@@ -1532,11 +1532,6 @@ def run_agent(state: dict) -> dict:
             memory_results.append(result)
             continue
 
-        patched_config = _patch_autombist_config(_read_text(config_path), memory)
-        _write_text(config_path, patched_config)
-        _write_text(os.path.join(memory_stage_dir, "config.yml"), patched_config)
-        save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital/mbist_rtl_insertion", f"{mem_slug}/config.yml", patched_config)
-
         cache_key = (
             _openram_cell(memory),
             int(memory.get("depth") or 0),
@@ -1550,6 +1545,9 @@ def run_agent(state: dict) -> dict:
             collateral = cached.get("collateral") if isinstance(cached.get("collateral"), dict) else {}
             if collateral.get("behavioral_model"):
                 memory["openram_behavioral_model"] = collateral["behavioral_model"]
+            actual_ports = cached.get("actual_ports") if isinstance(cached.get("actual_ports"), dict) else {}
+            if actual_ports:
+                memory["ports"] = actual_ports
         openram_generation = openram_cache[cache_key]
         result["openram_collateral_generation"] = openram_generation
         collateral = openram_generation.get("collateral") if isinstance(openram_generation.get("collateral"), dict) else {}
@@ -1567,6 +1565,11 @@ def run_agent(state: dict) -> dict:
             result.update({"status": "failed", "reason": openram_generation.get("reason") or "openram_collateral_validation_failed"})
             memory_results.append(result)
             continue
+
+        patched_config = _patch_autombist_config(_read_text(config_path), memory)
+        _write_text(config_path, patched_config)
+        _write_text(os.path.join(memory_stage_dir, "config.yml"), patched_config)
+        save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital/mbist_rtl_insertion", f"{mem_slug}/config.yml", patched_config)
 
         memory_model_stage = _stage_memory_model_for_autombist(
             memory,
