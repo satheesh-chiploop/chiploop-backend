@@ -389,3 +389,60 @@ prefix text
     assert "hierarchy" in parsed
     assert parsed["hierarchy"]["top_module"]["name"] == "sram_mbist_demo_controller"
     assert parsed["hierarchy"]["modules"][0]["name"] == "demo_sram_32x256_model"
+
+
+def test_normalize_accepts_hierarchical_modules_alias_and_preserves_top_dirs():
+    spec = {
+        "design_name": "sram_mbist_demo_controller",
+        "hierarchy": {
+            "top_module": {
+                "name": "sram_mbist_demo_controller",
+                "rtl_output_file": "sram_mbist_demo_controller.v",
+                "ports": [
+                    {"name": "clk", "direction": "input", "width": 1},
+                    {"name": "rd_data", "direction": "output", "width": 32},
+                ],
+            }
+        },
+        "hierarchical_modules": [
+            {
+                "name": "demo_sram_32x256_wrapper",
+                "rtl_output_file": "demo_sram_32x256_wrapper.v",
+                "ports": [
+                    {"name": "clk", "direction": "input", "width": 1},
+                    {"name": "dout", "direction": "output", "width": 32},
+                ],
+            }
+        ],
+        "inter_module_signals": [
+            {
+                "name": "sram_clk",
+                "width": 1,
+                "source": "sram_mbist_demo_controller.clk",
+                "destinations": ["demo_sram_32x256_wrapper.clk"],
+            },
+            {
+                "name": "sram_dout",
+                "width": 32,
+                "source": "demo_sram_32x256_wrapper.dout",
+                "destinations": ["sram_mbist_demo_controller.rd_data"],
+            },
+        ],
+        "signal_ownership": [
+            {"signal": "sram_clk", "owner": "sram_mbist_demo_controller.clk"},
+            {"signal": "sram_dout", "owner": "demo_sram_32x256_wrapper.dout"},
+        ],
+        "top_level_connections": [
+            {"top_port": "clk", "connected_to": ["sram_mbist_demo_controller.clk"]},
+            {"top_port": "rd_data", "connected_to": ["sram_mbist_demo_controller.rd_data"]},
+        ],
+    }
+
+    norm, mode = spec_agent._normalize_spec_json(spec)
+    norm = spec_agent._reconcile_hierarchical_signal_directions(norm, mode)
+
+    assert [m["name"] for m in norm["hierarchy"]["modules"]] == ["demo_sram_32x256_wrapper"]
+    top_ports = {p["name"]: p["direction"] for p in norm["hierarchy"]["top_module"]["ports"]}
+    assert top_ports["clk"] == "input"
+    assert top_ports["rd_data"] == "output"
+    spec_agent._validate_spec_contract(norm, mode)

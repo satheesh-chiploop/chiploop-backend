@@ -32,6 +32,47 @@ endmodule
     assert "rd_data = 8'h00" not in top_code
 
 
+def test_align_preserves_same_file_helper_modules_needed_by_top():
+    code = """
+module sky130_sram_1kbyte_1rw1r_32x256_8(
+  input clk,
+  input csb,
+  input web,
+  input [7:0] addr,
+  input [31:0] din,
+  output reg [31:0] dout
+);
+endmodule
+
+module sram_mbist_demo_controller(input clk);
+  wire [31:0] dout;
+  sky130_sram_1kbyte_1rw1r_32x256_8 u_sram(
+    .clk(clk),
+    .csb(1'b0),
+    .web(1'b1),
+    .addr(8'h00),
+    .din(32'h0),
+    .dout(dout)
+  );
+endmodule
+"""
+    spec = {
+        "hierarchy": {
+            "top_module": {
+                "name": "sram_mbist_demo_controller",
+                "rtl_output_file": "sram_mbist_demo_controller.v",
+            },
+            "modules": [],
+        }
+    }
+
+    out = agent._align_verilog_map_to_expected_modules({"sram_mbist_demo_controller.v": code}, spec, "hierarchical")
+    text = out["sram_mbist_demo_controller.v"]
+
+    assert "module sky130_sram_1kbyte_1rw1r_32x256_8" in text
+    assert "module sram_mbist_demo_controller" in text
+
+
 def test_module_procedural_assignment_check_ignores_continuous_wiring():
     continuous_top = """
 module temp_monitor_digital(output [7:0] rd_data);

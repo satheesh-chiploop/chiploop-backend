@@ -251,6 +251,29 @@ def _module_code_for_name(code: str, module_name: str) -> str:
     return modules.get(module_name, code or "")
 
 
+def _module_code_with_local_dependencies(code: str, module_name: str) -> str:
+    modules = _extract_verilog_modules(code)
+    if module_name not in modules:
+        return code or ""
+    selected: List[str] = []
+    seen: set[str] = set()
+
+    def visit(name: str) -> None:
+        if name in seen or name not in modules:
+            return
+        seen.add(name)
+        body = modules[name]
+        for candidate in modules:
+            if candidate == name:
+                continue
+            if re.search(rf"\b{re.escape(candidate)}\s*(?:#\s*\([^;]*?\)\s*)?[A-Za-z_][A-Za-z0-9_$]*\s*\(", body):
+                visit(candidate)
+        selected.append(body)
+
+    visit(module_name)
+    return "\n\n".join(selected)
+
+
 def _has_structural_width_warnings(tool_output: str) -> bool:
     text = tool_output or ""
     patterns = (
@@ -291,7 +314,11 @@ def _align_verilog_map_to_expected_modules(verilog_map: Dict[str, str], spec_jso
         extracted_by_module.update(_extract_verilog_modules(code))
 
     for module_name, rtl_file in module_to_file.items():
-        module_code = extracted_by_module.get(module_name)
+        module_code = None
+        for code in verilog_map.values():
+            if module_name in _extract_verilog_modules(code):
+                module_code = _module_code_with_local_dependencies(code, module_name)
+                break
         if module_code:
             aligned[rtl_file] = module_code
 

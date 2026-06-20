@@ -240,6 +240,8 @@ def _normalize_spec_json(spec_json: dict):
         hier = spec_json["hierarchy"]
         top = hier.get("top_module")
         modules = hier.get("modules", [])
+        if not modules and isinstance(spec_json.get("hierarchical_modules"), list):
+            modules = spec_json.get("hierarchical_modules", [])
 
         if not isinstance(top, dict):
             raise ValueError("hierarchy.top_module must be an object.")
@@ -498,7 +500,7 @@ def _validate_hierarchical_endpoint_coverage(spec_json: dict) -> None:
         if smod != top_name and sport not in module_ports[smod]:
             raise ValueError(f"inter_module_signals[{i}] source port '{smod}.{sport}' is not present in module ports.")
         src_dir = (module_dirs.get(smod) or {}).get(sport)
-        if src_dir and src_dir not in {"output", "inout"}:
+        if smod != top_name and src_dir and src_dir not in {"output", "inout"}:
             raise ValueError(
                 f"inter_module_signals[{i}] source port '{smod}.{sport}' must be output/inout, got '{src_dir}'."
             )
@@ -512,7 +514,7 @@ def _validate_hierarchical_endpoint_coverage(spec_json: dict) -> None:
             if dmod != top_name and dport not in module_ports[dmod]:
                 raise ValueError(f"inter_module_signals[{i}] destination port '{dmod}.{dport}' is not present in module ports.")
             dst_dir = (module_dirs.get(dmod) or {}).get(dport)
-            if dst_dir and dst_dir not in {"input", "inout"}:
+            if dmod != top_name and dst_dir and dst_dir not in {"input", "inout"}:
                 raise ValueError(
                     f"inter_module_signals[{i}] destination port '{dmod}.{dport}' must be input/inout, got '{dst_dir}'."
                 )
@@ -527,7 +529,7 @@ def _validate_hierarchical_endpoint_coverage(spec_json: dict) -> None:
         if omod != top_name and oport not in module_ports[omod]:
             raise ValueError(f"signal_ownership[{i}] owner port '{omod}.{oport}' is not present in module ports.")
         owner_dir = (module_dirs.get(omod) or {}).get(oport)
-        if owner_dir and owner_dir not in {"output", "inout"}:
+        if omod != top_name and owner_dir and owner_dir not in {"output", "inout"}:
             raise ValueError(
                 f"signal_ownership[{i}] owner port '{omod}.{oport}' must be output/inout, got '{owner_dir}'."
             )
@@ -970,7 +972,14 @@ def _reconcile_hierarchical_signal_directions(spec_json: dict, mode: str) -> dic
     if mode != "hierarchical":
         return spec_json
     hier = spec_json.get("hierarchy") or {}
-    modules = [hier.get("top_module") or {}] + list(hier.get("modules") or [])
+    top_module = hier.get("top_module") or {}
+    top_name = str(top_module.get("name") or "").strip()
+    top_port_dirs = {
+        str(port.get("name") or "").strip(): str(port.get("direction") or "").strip().lower()
+        for port in (top_module.get("ports") or [])
+        if isinstance(port, dict) and str(port.get("name") or "").strip()
+    }
+    modules = [top_module] + list(hier.get("modules") or [])
     module_map = {
         str(module.get("name") or "").strip(): module
         for module in modules
@@ -981,6 +990,8 @@ def _reconcile_hierarchical_signal_directions(spec_json: dict, mode: str) -> dic
     def mark(endpoint: str, direction: str) -> None:
         module_name, port_name = _normalize_endpoint_port(endpoint)
         if module_name in module_map and port_name:
+            if module_name == top_name and top_port_dirs.get(port_name) in {"input", "output", "inout"}:
+                return
             key = (module_name, port_name)
             if direction == "output" or key not in desired:
                 desired[key] = direction
