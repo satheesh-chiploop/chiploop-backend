@@ -392,7 +392,7 @@ def _canonical_memory_ports_from_names(names: list[str], text: str = "") -> dict
                 return available[candidate.lower()]
         for name in names:
             n = name.lower()
-            if any(candidate.lower() in n for candidate in candidates):
+            if any(len(candidate) > 1 and candidate.lower() in n for candidate in candidates):
                 return name
         return None
 
@@ -432,6 +432,16 @@ def _module_definition_port_map(text: str, module_name: str) -> dict[str, str]:
             break
     widths = _parse_declaration_widths(module_text)
     return _canonical_memory_ports_from_names(list(widths), module_text)
+
+
+def _memory_ports_from_verilog_model(model_path: str, cell: str) -> dict[str, str]:
+    text = _read_text(model_path)
+    if not text or not cell:
+        return {}
+    for module_name, body in _module_blocks(text):
+        if module_name == cell:
+            return _canonical_memory_ports_from_names(list(_parse_declaration_widths(body)), body)
+    return {}
 
 
 def _looks_like_memory_module_definition(module_name: str, body: str, ports: dict[str, str]) -> bool:
@@ -565,7 +575,7 @@ def _merge_spec_memories_with_rtl_detection(spec_macros: list[dict[str, Any]], d
             det_base = det_cell[:-6] if det_cell.endswith("_model") else det_cell
             fallback_cell = det_base == spec_cell
             same_inst = bool(spec.get("instance")) and str(det.get("instance") or "") == str(spec.get("instance"))
-            if (same_cell or fallback_cell) and (same_inst or not spec.get("instance") or fallback_cell):
+            if same_cell or fallback_cell:
                 match_idx = idx
                 break
         if match_idx is None:
@@ -1017,6 +1027,10 @@ def _stage_precompiled_sram_macro_collateral(
     memory["depth"] = selected_depth
     memory["addr_width"] = int(selected["addr_width"])
     memory["openram_behavioral_model"] = collateral["behavioral_model"]
+    actual_ports = _memory_ports_from_verilog_model(collateral["behavioral_model"], selected["cell"])
+    if actual_ports:
+        memory["ports"] = actual_ports
+        result["actual_ports"] = actual_ports
 
     result["status"] = "validated"
     result["depth_match"] = selected_depth == requested_depth

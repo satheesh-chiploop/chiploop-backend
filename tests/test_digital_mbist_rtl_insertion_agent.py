@@ -406,6 +406,41 @@ def test_spec_openram_macro_merges_rtl_model_instance_without_second_target():
     assert merged[0]["data_width"] == 32
 
 
+def test_spec_macro_merges_same_physical_macro_even_when_instance_name_differs():
+    spec_macros = [
+        {
+            "kind": "spec_memory_macro",
+            "cell": "sky130_sram_1kbyte_1rw1r_32x256_8",
+            "openram_cell": "sky130_sram_1kbyte_1rw1r_32x256_8",
+            "instance": "u_sram",
+            "addr_width": 8,
+            "data_width": 32,
+            "depth": 256,
+            "ports": {"clk": "clk", "we": "web", "addr": "addr", "din": "din", "dout": "dout"},
+        }
+    ]
+    detected = [
+        {
+            "kind": "memory_instance",
+            "cell": "sky130_sram_1kbyte_1rw1r_32x256_8",
+            "instance": "u_model",
+            "source_file": "wrapper.v",
+            "connections": {},
+            "ports": {},
+            "addr_width": 8,
+            "data_width": 32,
+            "depth": 256,
+        }
+    ]
+
+    merged = agent._merge_spec_memories_with_rtl_detection(spec_macros, detected)
+
+    assert len(merged) == 1
+    assert merged[0]["cell"] == "sky130_sram_1kbyte_1rw1r_32x256_8"
+    assert merged[0]["instance"] == "u_model"
+    assert merged[0]["source_file"] == "wrapper.v"
+
+
 def test_memory_macro_cell_name_can_repeat_only_for_same_config():
     ok = [
         {"cell": "openram_sram_64x32", "depth": 64, "data_width": 32, "addr_width": 6},
@@ -580,6 +615,37 @@ def test_openram_custom_cell_failure_uses_precompiled_sram_macro(tmp_path, monke
     assert memory["openram_behavioral_model"].endswith(f"{cell}.v")
     assert memory["logical_depth"] == 64
     assert memory["depth"] == 256
+
+
+def test_precompiled_sram_macro_uses_actual_verilog_port_names(tmp_path, monkeypatch):
+    root = tmp_path / "sky130_sram_macros"
+    cell = "sky130_sram_1kbyte_1rw1r_32x256_8"
+    _write_precompiled_macro(root, cell)
+    (root / "verilog" / f"{cell}.v").write_text(
+        f"module {cell}(input clk0,input csb0,input web0,input [7:0] addr0,input [31:0] din0,output reg [31:0] dout0,"
+        "input clk1,input csb1,input [7:0] addr1,output reg [31:0] dout1);"
+        "reg [31:0] mem [0:255]; always @(posedge clk0) if (!csb0) begin if (!web0) mem[addr0] <= din0; dout0 <= mem[addr0]; end "
+        "always @(posedge clk1) if (!csb1) dout1 <= mem[addr1]; endmodule\n",
+        encoding="utf-8",
+    )
+    project_dir = tmp_path / "project"
+    stage_dir = tmp_path / "stage"
+    project_dir.mkdir()
+    stage_dir.mkdir()
+    memory = {"cell": cell, "addr_width": 8, "data_width": 32, "depth": 256, "ports": {"clk": "clk", "csb": "csb", "we": "web", "addr": "addr", "din": "din", "dout": "dout"}}
+
+    monkeypatch.setattr(agent, "_precompiled_sram_roots", lambda stage_dir_arg: [str(root)])
+    result = agent._stage_precompiled_sram_macro_collateral(memory, str(stage_dir))
+
+    assert result["status"] == "validated"
+    assert memory["ports"] == {
+        "clk": "clk0",
+        "csb": "csb0",
+        "we": "web0",
+        "addr": "addr0",
+        "din": "din0",
+        "dout": "dout0",
+    }
 
 
 def test_openram_env_infers_backend_pdk_root(tmp_path, monkeypatch):
