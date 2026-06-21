@@ -1550,12 +1550,18 @@ def _stage_behavioral_models_for_integrated_lint(memory_results: list[dict[str, 
         dst = os.path.join(final_rtl_dir, os.path.basename(model))
         if os.path.abspath(model) != os.path.abspath(dst):
             shutil.copy2(model, dst)
-        text = _read_text(dst)
-        sanitized = text.replace("%m", "scope")
-        if sanitized != text:
-            _write_text(dst, sanitized)
+        _sanitize_integrated_lint_copy(dst)
         staged.append(os.path.abspath(dst))
     return sorted(dict.fromkeys(staged))
+
+
+def _sanitize_integrated_lint_copy(path: str) -> None:
+    text = _read_text(path)
+    if not text:
+        return
+    sanitized = text.replace("%m", "scope")
+    if sanitized != text:
+        _write_text(path, sanitized)
 
 
 def _dedupe_functional_rtl_against_staged_models(
@@ -1835,6 +1841,7 @@ def run_agent(state: dict) -> dict:
         dst = os.path.join(final_rtl_dir, os.path.basename(src))
         if os.path.abspath(src) != os.path.abspath(dst):
             shutil.copy2(src, dst)
+        _sanitize_integrated_lint_copy(dst)
         copied_generated_rtl.append(os.path.abspath(dst))
     staged_behavioral_models = _stage_behavioral_models_for_integrated_lint(memory_results, final_rtl_dir)
     functional_rtl_files = sorted(dict.fromkeys([

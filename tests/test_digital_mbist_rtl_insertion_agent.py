@@ -1240,6 +1240,20 @@ def test_stages_prebuilt_behavioral_model_for_integrated_lint(tmp_path):
     assert "%m" in model.read_text(encoding="utf-8")
 
 
+def test_sanitizes_generated_integrated_lint_copy_without_touching_source(tmp_path):
+    src = tmp_path / "input_demo_8x16_scn4m.v"
+    src.write_text('module input_demo_8x16_scn4m; initial $display("read %m"); endmodule\n', encoding="utf-8")
+    dst = tmp_path / "integrated" / src.name
+    dst.parent.mkdir()
+    dst.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
+
+    agent._sanitize_integrated_lint_copy(str(dst))
+
+    assert "%m" not in dst.read_text(encoding="utf-8")
+    assert "read scope" in dst.read_text(encoding="utf-8")
+    assert "%m" in src.read_text(encoding="utf-8")
+
+
 def test_dedupes_embedded_sram_model_when_real_behavioral_model_is_staged(tmp_path):
     functional = tmp_path / "functional_rtl"
     functional.mkdir()
