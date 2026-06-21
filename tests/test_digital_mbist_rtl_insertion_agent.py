@@ -1182,7 +1182,7 @@ def test_integrated_rtl_lint_fails_on_iverilog_width_warning(tmp_path, monkeypat
 
 def test_stages_prebuilt_behavioral_model_for_integrated_lint(tmp_path):
     model = tmp_path / "sky130_sram_1kbyte_1rw1r_32x256_8.v"
-    model.write_text("module sky130_sram_1kbyte_1rw1r_32x256_8; endmodule\n", encoding="utf-8")
+    model.write_text('module sky130_sram_1kbyte_1rw1r_32x256_8; initial $display("read %m"); endmodule\n', encoding="utf-8")
     final_rtl = tmp_path / "integrated_rtl"
 
     staged = agent._stage_behavioral_models_for_integrated_lint(
@@ -1191,7 +1191,10 @@ def test_stages_prebuilt_behavioral_model_for_integrated_lint(tmp_path):
     )
 
     assert staged == [str((final_rtl / model.name).resolve())]
-    assert (final_rtl / model.name).read_text(encoding="utf-8") == model.read_text(encoding="utf-8")
+    staged_text = (final_rtl / model.name).read_text(encoding="utf-8")
+    assert "%m" not in staged_text
+    assert "read scope" in staged_text
+    assert "%m" in model.read_text(encoding="utf-8")
 
 
 def test_dedupes_embedded_sram_model_when_real_behavioral_model_is_staged(tmp_path):

@@ -1537,6 +1537,10 @@ def _stage_behavioral_models_for_integrated_lint(memory_results: list[dict[str, 
         dst = os.path.join(final_rtl_dir, os.path.basename(model))
         if os.path.abspath(model) != os.path.abspath(dst):
             shutil.copy2(model, dst)
+        text = _read_text(dst)
+        sanitized = text.replace("%m", "scope")
+        if sanitized != text:
+            _write_text(dst, sanitized)
         staged.append(os.path.abspath(dst))
     return sorted(dict.fromkeys(staged))
 
