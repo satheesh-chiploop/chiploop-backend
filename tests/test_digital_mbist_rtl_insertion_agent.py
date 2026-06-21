@@ -1194,6 +1194,36 @@ def test_stages_prebuilt_behavioral_model_for_integrated_lint(tmp_path):
     assert (final_rtl / model.name).read_text(encoding="utf-8") == model.read_text(encoding="utf-8")
 
 
+def test_dedupes_embedded_sram_model_when_real_behavioral_model_is_staged(tmp_path):
+    functional = tmp_path / "functional_rtl"
+    functional.mkdir()
+    wrapper = functional / "demo_sram_32x256_wrapper.v"
+    wrapper.write_text(
+        """
+module sky130_sram_1kbyte_1rw1r_32x256_8(input clk,input csb,input web,input [7:0] addr,input [31:0] din,output [31:0] dout);
+endmodule
+
+module demo_sram_32x256_wrapper(input clk,input csb,input web,input [7:0] addr,input [31:0] din,output [31:0] dout);
+  sky130_sram_1kbyte_1rw1r_32x256_8 u_sram_macro(.clk(clk), .csb(csb), .web(web), .addr(addr), .din(din), .dout(dout));
+endmodule
+""",
+        encoding="utf-8",
+    )
+    model = tmp_path / "sky130_sram_1kbyte_1rw1r_32x256_8.v"
+    model.write_text(
+        "module sky130_sram_1kbyte_1rw1r_32x256_8(input clk0,input csb0,input web0,input [7:0] addr0,input [31:0] din0,output [31:0] dout0); endmodule\n",
+        encoding="utf-8",
+    )
+
+    result = agent._dedupe_functional_rtl_against_staged_models([str(wrapper)], [str(model)])
+    updated = wrapper.read_text(encoding="utf-8")
+
+    assert result["files"] == [str(wrapper.resolve())]
+    assert result["removed"] == [{"file": str(wrapper.resolve()), "module": "sky130_sram_1kbyte_1rw1r_32x256_8"}]
+    assert "module demo_sram_32x256_wrapper" in updated
+    assert updated.count("module sky130_sram_1kbyte_1rw1r_32x256_8") == 0
+
+
 def test_autombist_fault_text_does_not_make_successful_run_fail(tmp_path):
     reports = tmp_path / "reports"
     reports.mkdir()

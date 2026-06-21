@@ -1541,6 +1541,43 @@ def _stage_behavioral_models_for_integrated_lint(memory_results: list[dict[str, 
     return sorted(dict.fromkeys(staged))
 
 
+def _dedupe_functional_rtl_against_staged_models(
+    functional_rtl_files: list[str],
+    staged_model_files: list[str],
+) -> dict[str, Any]:
+    staged_modules: set[str] = set()
+    for path in staged_model_files:
+        for name, _body in _module_blocks(_read_text(path)):
+            staged_modules.add(name)
+    if not staged_modules:
+        return {"files": sorted(dict.fromkeys(functional_rtl_files)), "removed": []}
+
+    removed: list[dict[str, str]] = []
+    kept_files: list[str] = []
+    module_pattern = re.compile(
+        r"(?ms)^\s*module\s+(?P<name>[A-Za-z_][A-Za-z0-9_$]*)\b.*?\bendmodule\s*",
+        flags=re.IGNORECASE,
+    )
+    for path in sorted(dict.fromkeys(functional_rtl_files)):
+        text = _read_text(path)
+        if not text:
+            continue
+
+        def replace(match: re.Match[str]) -> str:
+            name = match.group("name")
+            if name in staged_modules:
+                removed.append({"file": os.path.abspath(path), "module": name})
+                return "\n"
+            return match.group(0)
+
+        updated = module_pattern.sub(replace, text)
+        if updated != text:
+            _write_text(path, updated)
+        if _module_blocks(updated):
+            kept_files.append(os.path.abspath(path))
+    return {"files": sorted(dict.fromkeys(kept_files)), "removed": removed}
+
+
 def _write_publish_summary(workflow_id: str, stage_dir: str, summary: dict[str, Any]) -> None:
     content = json.dumps(summary, indent=2)
     _write_text(os.path.join(stage_dir, "mbist_rtl_insertion_summary.json"), content)
@@ -1783,11 +1820,15 @@ def run_agent(state: dict) -> dict:
             shutil.copy2(src, dst)
         copied_generated_rtl.append(os.path.abspath(dst))
     staged_behavioral_models = _stage_behavioral_models_for_integrated_lint(memory_results, final_rtl_dir)
+    functional_rtl_files = sorted(dict.fromkeys([
+        *glob.glob(os.path.join(original_rtl_dir, "*.v")),
+        *glob.glob(os.path.join(original_rtl_dir, "*.sv")),
+    ]))
+    deduped_functional_rtl = _dedupe_functional_rtl_against_staged_models(functional_rtl_files, staged_behavioral_models)
     final_files = sorted(dict.fromkeys([
         *copied_generated_rtl,
         *staged_behavioral_models,
-        *glob.glob(os.path.join(original_rtl_dir, "*.v")),
-        *glob.glob(os.path.join(original_rtl_dir, "*.sv")),
+        *deduped_functional_rtl.get("files", []),
     ]))
     integrated_lint = _run_integrated_rtl_lint(state, workflow_id, stage_dir, final_files)
     if integrated_lint.get("status") != "pass":
@@ -1797,6 +1838,7 @@ def run_agent(state: dict) -> dict:
             "integrated_rtl_lint": integrated_lint,
             "final_rtl_files": final_files,
             "staged_behavioral_models": staged_behavioral_models,
+            "deduped_functional_rtl": deduped_functional_rtl,
         })
         _write_publish_summary(workflow_id, stage_dir, summary)
         raise RuntimeError(f"MBIST RTL insertion failed: {summary['reason']}.")
@@ -1813,6 +1855,7 @@ def run_agent(state: dict) -> dict:
         "integrated_rtl_dir": final_rtl_dir,
         "final_rtl_files": final_files,
         "staged_behavioral_models": staged_behavioral_models,
+        "deduped_functional_rtl": deduped_functional_rtl,
         "integration_note": (
             "AutoMBIST generated and simulated wrapper RTL for each detected OpenRAM/SRAM memory. The agent replaces detected instances when wrapper ports can be mapped; "
             "otherwise it fails later at synthesis rather than claiming a fake insertion."
