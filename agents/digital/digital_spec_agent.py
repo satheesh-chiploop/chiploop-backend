@@ -187,6 +187,34 @@ def _apply_requested_top_module(spec_json: dict, mode: str, requested_top: str) 
     return spec_json
 
 
+def _flat_spec_is_memory_macro_interface(spec_json: dict) -> bool:
+    macros = spec_json.get("memory_macros") if isinstance(spec_json.get("memory_macros"), list) else []
+    ports = spec_json.get("ports") if isinstance(spec_json.get("ports"), list) else []
+    if len(macros) != 1 or not ports:
+        return False
+    macro_ports = macros[0].get("ports") if isinstance(macros[0], dict) and isinstance(macros[0].get("ports"), dict) else {}
+    if not macro_ports:
+        return False
+    spec_port_names = {str(port.get("name") or "").strip() for port in ports if isinstance(port, dict)}
+    macro_port_names = {str(name or "").strip() for name in macro_ports.values()}
+    if not spec_port_names or spec_port_names != macro_port_names:
+        return False
+    text = " ".join(str(spec_json.get(key) or "").lower() for key in ("description", "functionality"))
+    return bool(re.search(r"\b(memory|sram|macro|fallback|wrapper)\b", text))
+
+
+def _reject_requested_top_memory_interface(spec_json: dict, mode: str, requested_top: str) -> None:
+    if not requested_top or mode != "flat":
+        return
+    if str(spec_json.get("name") or "").strip() != requested_top:
+        return
+    if _flat_spec_is_memory_macro_interface(spec_json):
+        raise ValueError(
+            f"Requested top_module '{requested_top}' resolved to a memory macro interface contract. "
+            "Generate the requested controller/top-level module as the top spec and keep SRAM macros as child instances."
+        )
+
+
 def _is_truncated_model_response(exc: Exception) -> bool:
     msg = str(exc).lower()
     return "truncated" in msg and "max_completion_tokens" in msg
@@ -1238,6 +1266,7 @@ def _compile_spec_contract(
             requested_top,
             suffix or "pass1",
         )
+    _reject_requested_top_memory_interface(spec_json, mode, requested_top)
 
     if mode == "hierarchical":
         spec_json = _ensure_hierarchical_top_level_connections(spec_json)
@@ -1544,8 +1573,9 @@ RULES
 - Preserve exact signal ownership.
 - Preserve exact internal interface contracts.
 - Preserve exact fixed clock frequency if the user specifies it.
-- If the user asks for SRAM/OpenRAM/MBIST/memory macro behavior, include memory_macros[] with exact OpenRAM SRAM requirements.
+- If the user asks for SRAM/OpenRAM/prebuilt SRAM/MBIST/memory macro behavior, include memory_macros[] with exact SRAM macro requirements.
 - memory_macros[].name must be the SRAM macro module/cell name the RTL should instantiate.
+- memory_macros[].kind must distinguish intent, for example openram_sram for generated OpenRAM or prebuilt_sky130_sram/prebuilt_sram for explicit existing macro collateral.
 - memory_macros[].depth, data_width, and addr_width must match the requested memory capacity.
 - memory_macros[].ports must map canonical roles clk, csb, we, addr, din, dout to real RTL port names.
 - If MBIST is requested or likely required, set memory_macros[].requires_mbist true; otherwise false.

@@ -3,6 +3,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 os.environ.setdefault("SUPABASE_URL", "https://example.supabase.co")
 os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-service-role-key")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -389,6 +391,55 @@ prefix text
     assert "hierarchy" in parsed
     assert parsed["hierarchy"]["top_module"]["name"] == "sram_mbist_demo_controller"
     assert parsed["hierarchy"]["modules"][0]["name"] == "demo_sram_32x256_model"
+
+
+def test_requested_top_rejects_flat_memory_interface_contract(tmp_path):
+    llm_output = json.dumps(
+        {
+            "name": "demo_sram_32x256_wrapper",
+            "description": "Synthesizable fallback memory model with macro-facing wrapper interface.",
+            "memory_macros": [
+                {
+                    "name": "sky130_sram_1kbyte_1rw1r_32x256_8",
+                    "depth": 256,
+                    "data_width": 32,
+                    "addr_width": 8,
+                    "requires_mbist": True,
+                    "ports": {
+                        "clk": "clk",
+                        "csb": "csb",
+                        "we": "web",
+                        "addr": "addr",
+                        "din": "din",
+                        "dout": "dout",
+                    },
+                }
+            ],
+            "ports": [
+                _port("clk", "input"),
+                _port("csb", "input"),
+                _port("web", "input"),
+                _port("addr", "input", 8),
+                _port("din", "input", 32),
+                _port("dout", "output", 32),
+            ],
+            "functionality": "SRAM wrapper fallback model.",
+            "responsibilities": [],
+            "must_drive": ["dout"],
+            "must_receive": ["clk", "csb", "web", "addr", "din"],
+            "must_not_drive": ["clk", "csb", "web", "addr", "din"],
+            "reset_behavior": "",
+            "behavior_rules": [],
+            "rtl_output_file": "demo_sram_32x256_wrapper.v",
+        }
+    )
+
+    with pytest.raises(ValueError, match="memory macro interface contract"):
+        spec_agent._compile_spec_contract(
+            llm_output,
+            str(tmp_path),
+            requested_top="sram_mbist_demo_controller",
+        )
 
 
 def test_normalize_accepts_hierarchical_modules_alias_and_preserves_top_dirs():

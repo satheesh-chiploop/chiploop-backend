@@ -1301,7 +1301,7 @@ Every combinational always @(*) block must:
 SCALE AND COMPLETENESS RULES
 - If the spec requests a rough flip-flop/register-bit target, FIFO depth, line-buffer storage, histogram counters, DMA buffers, packet buffers, shifters, or multiple pipeline stages, implement those as real Verilog storage and real sequential logic.
 - Do not satisfy a complex design by registering only outputs or by emitting a shell with comments.
-- If DIGITAL_SPEC_JSON contains memory_macros[] with kind openram_sram, instantiate the named SRAM macro cell exactly once per required instance. Do not implement that OpenRAM SRAM as a local reg array.
+- If DIGITAL_SPEC_JSON contains memory_macros[] with kind openram_sram, prebuilt_sky130_sram, prebuilt_sram, or precompiled_sram_macro, instantiate the named SRAM macro cell exactly once per required instance. Do not implement that SRAM macro as a local reg array.
 - The SRAM instance module name must match memory_macros[].name, and the instance name should match memory_macros[].instance_name when provided.
 - Connect SRAM ports using memory_macros[].ports canonical roles: clk, csb, we/web, addr, din, dout.
 - The address width, data width, and depth implied by the RTL connections must match memory_macros[].addr_width, memory_macros[].data_width, and memory_macros[].depth.

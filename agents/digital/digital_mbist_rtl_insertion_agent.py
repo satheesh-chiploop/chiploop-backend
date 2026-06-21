@@ -1043,6 +1043,20 @@ def _generate_openram_collateral(
     workflow_id: str,
     state: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    spec_macro = memory.get("spec_memory_macro") if isinstance(memory.get("spec_memory_macro"), dict) else {}
+    kind = str(memory.get("kind") or spec_macro.get("kind") or "").lower()
+    if any(token in kind for token in ("prebuilt", "precompiled")):
+        result = _stage_precompiled_sram_macro_collateral(memory, stage_dir)
+        result["selection_policy"] = "explicit_precompiled_sram_macro"
+        save_text_artifact_and_record(
+            workflow_id,
+            AGENT_NAME,
+            "digital/mbist_rtl_insertion",
+            "openram_collateral_generation.json",
+            json.dumps(result, indent=2),
+        )
+        return result
+
     output_dir = os.path.join(stage_dir, "openram_out")
     _ensure_dir(output_dir)
     config_path = _candidate_openram_python_config(stage_dir, memory, output_dir)

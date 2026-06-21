@@ -614,6 +614,37 @@ def test_openram_custom_cell_failure_does_not_fallback_to_precompiled_sram_macro
     assert "openram_behavioral_model" not in memory
 
 
+def test_explicit_prebuilt_sram_uses_precompiled_macro_without_openram(tmp_path, monkeypatch):
+    project_dir = tmp_path / "project"
+    stage_dir = tmp_path / "stage"
+    project_dir.mkdir()
+    stage_dir.mkdir()
+    root = tmp_path / "sky130_sram_macros"
+    cell = "sky130_sram_1kbyte_1rw1r_32x256_8"
+    _write_precompiled_macro(root, cell)
+    memory = {
+        "kind": "prebuilt_sky130_sram",
+        "cell": cell,
+        "addr_width": 8,
+        "data_width": 32,
+        "depth": 256,
+    }
+
+    monkeypatch.setattr(agent, "_precompiled_sram_roots", lambda stage_dir_arg: [str(root)])
+
+    def fail_if_openram_runs(*args, **kwargs):
+        raise AssertionError("OpenRAM should not run for explicit prebuilt SRAM macro")
+
+    monkeypatch.setattr(agent, "_run", fail_if_openram_runs)
+
+    result = agent._generate_openram_collateral(memory, "autombist", str(project_dir), str(stage_dir), "wf1")
+
+    assert result["status"] == "validated"
+    assert result["generator"] == "precompiled_sram_macro"
+    assert result["selection_policy"] == "explicit_precompiled_sram_macro"
+    assert result["selected"]["cell"] == cell
+
+
 def test_precompiled_sram_macro_uses_actual_verilog_port_names(tmp_path, monkeypatch):
     root = tmp_path / "sky130_sram_macros"
     cell = "sky130_sram_1kbyte_1rw1r_32x256_8"
