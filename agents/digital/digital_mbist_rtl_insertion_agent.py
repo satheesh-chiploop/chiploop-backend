@@ -271,6 +271,7 @@ def _spec_memory_macros(state: dict) -> list[dict[str, Any]]:
             depth = 1 << addr_width
         out.append({
             "kind": "spec_memory_macro",
+            "macro_kind": kind,
             "cell": name,
             "openram_cell": name,
             "instance": item.get("instance_name") or item.get("instance"),
@@ -571,7 +572,19 @@ def _merge_spec_memories_with_rtl_detection(spec_macros: list[dict[str, Any]], d
             det_base = det_cell[:-6] if det_cell.endswith("_model") else det_cell
             fallback_cell = det_base == spec_cell
             same_inst = bool(spec.get("instance")) and str(det.get("instance") or "") == str(spec.get("instance"))
-            if same_cell or fallback_cell:
+            same_shape_fallback = (
+                any(token in det_cell for token in ("model", "fallback"))
+                and int(det.get("addr_width") or 0) == int(spec.get("addr_width") or 0)
+                and int(det.get("data_width") or 0) == int(spec.get("data_width") or 0)
+                and int(det.get("depth") or 0) == int(spec.get("depth") or 0)
+            )
+            same_instance_shape = (
+                same_inst
+                and int(det.get("addr_width") or 0) == int(spec.get("addr_width") or 0)
+                and int(det.get("data_width") or 0) == int(spec.get("data_width") or 0)
+                and int(det.get("depth") or 0) == int(spec.get("depth") or 0)
+            )
+            if same_cell or fallback_cell or same_shape_fallback or same_instance_shape:
                 match_idx = idx
                 break
         if match_idx is None:
@@ -586,12 +599,10 @@ def _merge_spec_memories_with_rtl_detection(spec_macros: list[dict[str, Any]], d
                 item["data_width"] = spec.get("data_width") or item.get("data_width")
                 item["depth"] = spec.get("depth") or item.get("depth")
                 item["ports"] = spec.get("ports") or item.get("ports")
+            item["macro_kind"] = spec.get("macro_kind")
             item["rtl_cell"] = detected[match_idx].get("cell")
             item["openram_cell"] = spec.get("openram_cell") or spec.get("cell")
             merged.append(item)
-    for idx, det in enumerate(detected):
-        if idx not in used:
-            merged.append(det)
     return merged
 
 
@@ -1044,7 +1055,7 @@ def _generate_openram_collateral(
     state: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     spec_macro = memory.get("spec_memory_macro") if isinstance(memory.get("spec_memory_macro"), dict) else {}
-    kind = str(memory.get("kind") or spec_macro.get("kind") or "").lower()
+    kind = str(memory.get("macro_kind") or spec_macro.get("macro_kind") or memory.get("kind") or spec_macro.get("kind") or "").lower()
     if any(token in kind for token in ("prebuilt", "precompiled")):
         result = _stage_precompiled_sram_macro_collateral(memory, stage_dir)
         result["selection_policy"] = "explicit_precompiled_sram_macro"

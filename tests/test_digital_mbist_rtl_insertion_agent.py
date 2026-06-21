@@ -368,6 +368,103 @@ def test_spec_openram_macro_ignores_fallback_model_macro(tmp_path):
     assert [item["cell"] for item in macros] == ["demo_sram_32x64"]
 
 
+def test_spec_memory_macro_preserves_prebuilt_kind(tmp_path):
+    spec = tmp_path / "spec.json"
+    spec.write_text(
+        json.dumps({
+            "memory_macros": [
+                {
+                    "name": "sky130_sram_1kbyte_1rw1r_32x256_8",
+                    "kind": "prebuilt_sky130_sram",
+                    "depth": 256,
+                    "data_width": 32,
+                    "addr_width": 8,
+                }
+            ]
+        }),
+        encoding="utf-8",
+    )
+
+    macros = agent._spec_memory_macros({"digital_spec_json": str(spec)})
+
+    assert macros[0]["kind"] == "spec_memory_macro"
+    assert macros[0]["macro_kind"] == "prebuilt_sky130_sram"
+
+
+def test_spec_memory_macros_merge_same_shape_fallback_models_without_second_target():
+    spec_macros = [
+        {
+            "kind": "spec_memory_macro",
+            "macro_kind": "prebuilt_sky130_sram",
+            "cell": "sky130_sram_1kbyte_1rw1r_32x256_8",
+            "openram_cell": "sky130_sram_1kbyte_1rw1r_32x256_8",
+            "instance": "u_sram",
+            "addr_width": 8,
+            "data_width": 32,
+            "depth": 256,
+            "ports": {"clk": "clk", "we": "web", "addr": "addr", "din": "din", "dout": "dout"},
+        }
+    ]
+    detected = [
+        {
+            "kind": "memory_instance",
+            "cell": "demo_sram_32x256_model",
+            "instance": "u_model",
+            "source_file": "demo_sram_32x256_wrapper.v",
+            "connections": {},
+            "ports": {},
+            "addr_width": 8,
+            "data_width": 32,
+            "depth": 256,
+        }
+    ]
+
+    merged = agent._merge_spec_memories_with_rtl_detection(spec_macros, detected)
+
+    assert len(merged) == 1
+    assert merged[0]["cell"] == "sky130_sram_1kbyte_1rw1r_32x256_8"
+    assert merged[0]["macro_kind"] == "prebuilt_sky130_sram"
+    assert merged[0]["rtl_cell"] == "demo_sram_32x256_model"
+    assert merged[0]["source_file"] == "demo_sram_32x256_wrapper.v"
+
+
+def test_spec_memory_macros_merge_same_instance_wrapper_by_shape():
+    spec_macros = [
+        {
+            "kind": "spec_memory_macro",
+            "macro_kind": "prebuilt_sky130_sram",
+            "cell": "sky130_sram_1kbyte_1rw1r_32x256_8",
+            "openram_cell": "sky130_sram_1kbyte_1rw1r_32x256_8",
+            "instance": "u_sram",
+            "addr_width": 8,
+            "data_width": 32,
+            "depth": 256,
+            "ports": {"clk": "clk", "we": "web", "addr": "addr", "din": "din", "dout": "dout"},
+        }
+    ]
+    detected = [
+        {
+            "kind": "memory_instance",
+            "cell": "generic_sram_wrapper",
+            "instance": "u_sram",
+            "source_file": "sram_mbist_demo_controller.v",
+            "connections": {"clk": "clk", "addr": "addr", "din": "din", "dout": "dout"},
+            "ports": {"clk": "clk", "we": "web", "addr": "addr", "din": "din", "dout": "dout"},
+            "addr_width": 8,
+            "data_width": 32,
+            "depth": 256,
+        }
+    ]
+
+    merged = agent._merge_spec_memories_with_rtl_detection(spec_macros, detected)
+
+    assert len(merged) == 1
+    assert merged[0]["cell"] == "sky130_sram_1kbyte_1rw1r_32x256_8"
+    assert merged[0]["rtl_cell"] == "generic_sram_wrapper"
+    assert merged[0]["instance"] == "u_sram"
+    assert merged[0]["source_file"] == "sram_mbist_demo_controller.v"
+
+
 def test_spec_openram_macro_merges_rtl_model_instance_without_second_target():
     spec_macros = [
         {
