@@ -142,6 +142,78 @@ endmodule
     assert ".we(web)" in adapter
 
 
+def test_align_repairs_expected_memory_wrapper_port_widths_from_spec():
+    code = """
+module demo_sram_32x256_wrapper (
+  input clk,
+  input csb,
+  input web,
+  input [7:0] addr,
+  input [31:0] din,
+  output dout
+);
+wire dout_int;
+assign dout = dout_int;
+endmodule
+"""
+    spec = {
+        "hierarchy": {
+            "top_module": {"name": "demo_sram_32x256_wrapper", "rtl_output_file": "demo_sram_32x256_wrapper.v"},
+            "modules": [
+                {
+                    "name": "demo_sram_32x256_wrapper",
+                    "rtl_output_file": "demo_sram_32x256_wrapper.v",
+                    "ports": [
+                        {"name": "clk", "direction": "input", "width": 1},
+                        {"name": "csb", "direction": "input", "width": 1},
+                        {"name": "web", "direction": "input", "width": 1},
+                        {"name": "addr", "direction": "input", "width": 8},
+                        {"name": "din", "direction": "input", "width": 32},
+                        {"name": "dout", "direction": "output", "width": 32},
+                    ],
+                }
+            ],
+        }
+    }
+
+    out = agent._align_verilog_map_to_expected_modules({"demo_sram_32x256_wrapper.v": code}, spec, "hierarchical")
+    text = out["demo_sram_32x256_wrapper.v"]
+
+    assert "output [31:0] dout" in text
+    assert "wire [31:0] dout_int;" in text
+    issues, _, _ = agent._validate_spec_vs_rtl(spec, "hierarchical", out)
+    assert not [issue for issue in issues if "width mismatch" in issue]
+
+
+def test_validate_catches_scalar_ansi_port_after_wide_input():
+    code = """
+module demo_sram_32x256_wrapper (
+  input [31:0] din,
+  output dout
+);
+endmodule
+"""
+    spec = {
+        "hierarchy": {
+            "top_module": {"name": "demo_sram_32x256_wrapper", "rtl_output_file": "demo_sram_32x256_wrapper.v"},
+            "modules": [
+                {
+                    "name": "demo_sram_32x256_wrapper",
+                    "rtl_output_file": "demo_sram_32x256_wrapper.v",
+                    "ports": [
+                        {"name": "din", "direction": "input", "width": 32},
+                        {"name": "dout", "direction": "output", "width": 32},
+                    ],
+                }
+            ],
+        }
+    }
+
+    issues, _, _ = agent._validate_spec_vs_rtl(spec, "hierarchical", {"demo_sram_32x256_wrapper.v": code})
+
+    assert any("port 'dout' width mismatch: spec=32, rtl=1" in issue for issue in issues)
+
+
 def test_module_procedural_assignment_check_ignores_continuous_wiring():
     continuous_top = """
 module temp_monitor_digital(output [7:0] rd_data);

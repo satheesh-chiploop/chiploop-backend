@@ -1526,6 +1526,21 @@ def _publish_stage_file(workflow_id: str, filename: str, path: str) -> None:
         save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital/mbist_rtl_insertion", filename, _read_text(path))
 
 
+def _stage_behavioral_models_for_integrated_lint(memory_results: list[dict[str, Any]], final_rtl_dir: str) -> list[str]:
+    staged: list[str] = []
+    _ensure_dir(final_rtl_dir)
+    for item in memory_results:
+        memory = item.get("memory") if isinstance(item.get("memory"), dict) else {}
+        model = str(memory.get("openram_behavioral_model") or "").strip()
+        if not model or not os.path.isfile(model):
+            continue
+        dst = os.path.join(final_rtl_dir, os.path.basename(model))
+        if os.path.abspath(model) != os.path.abspath(dst):
+            shutil.copy2(model, dst)
+        staged.append(os.path.abspath(dst))
+    return sorted(dict.fromkeys(staged))
+
+
 def _write_publish_summary(workflow_id: str, stage_dir: str, summary: dict[str, Any]) -> None:
     content = json.dumps(summary, indent=2)
     _write_text(os.path.join(stage_dir, "mbist_rtl_insertion_summary.json"), content)
@@ -1767,7 +1782,13 @@ def run_agent(state: dict) -> dict:
         if os.path.abspath(src) != os.path.abspath(dst):
             shutil.copy2(src, dst)
         copied_generated_rtl.append(os.path.abspath(dst))
-    final_files = sorted(dict.fromkeys([*copied_generated_rtl, *glob.glob(os.path.join(original_rtl_dir, "*.v")), *glob.glob(os.path.join(original_rtl_dir, "*.sv"))]))
+    staged_behavioral_models = _stage_behavioral_models_for_integrated_lint(memory_results, final_rtl_dir)
+    final_files = sorted(dict.fromkeys([
+        *copied_generated_rtl,
+        *staged_behavioral_models,
+        *glob.glob(os.path.join(original_rtl_dir, "*.v")),
+        *glob.glob(os.path.join(original_rtl_dir, "*.sv")),
+    ]))
     integrated_lint = _run_integrated_rtl_lint(state, workflow_id, stage_dir, final_files)
     if integrated_lint.get("status") != "pass":
         summary.update({
@@ -1775,6 +1796,7 @@ def run_agent(state: dict) -> dict:
             "reason": integrated_lint.get("reason") or "integrated_rtl_lint_failed",
             "integrated_rtl_lint": integrated_lint,
             "final_rtl_files": final_files,
+            "staged_behavioral_models": staged_behavioral_models,
         })
         _write_publish_summary(workflow_id, stage_dir, summary)
         raise RuntimeError(f"MBIST RTL insertion failed: {summary['reason']}.")
@@ -1790,6 +1812,7 @@ def run_agent(state: dict) -> dict:
         "patched_sources": patched_sources,
         "integrated_rtl_dir": final_rtl_dir,
         "final_rtl_files": final_files,
+        "staged_behavioral_models": staged_behavioral_models,
         "integration_note": (
             "AutoMBIST generated and simulated wrapper RTL for each detected OpenRAM/SRAM memory. The agent replaces detected instances when wrapper ports can be mapped; "
             "otherwise it fails later at synthesis rather than claiming a fake insertion."

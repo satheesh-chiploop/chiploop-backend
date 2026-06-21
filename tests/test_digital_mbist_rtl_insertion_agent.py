@@ -1180,6 +1180,20 @@ def test_integrated_rtl_lint_fails_on_iverilog_width_warning(tmp_path, monkeypat
     assert result["iverilog"]["structural_width_warnings"] is True
 
 
+def test_stages_prebuilt_behavioral_model_for_integrated_lint(tmp_path):
+    model = tmp_path / "sky130_sram_1kbyte_1rw1r_32x256_8.v"
+    model.write_text("module sky130_sram_1kbyte_1rw1r_32x256_8; endmodule\n", encoding="utf-8")
+    final_rtl = tmp_path / "integrated_rtl"
+
+    staged = agent._stage_behavioral_models_for_integrated_lint(
+        [{"memory": {"openram_behavioral_model": str(model)}}],
+        str(final_rtl),
+    )
+
+    assert staged == [str((final_rtl / model.name).resolve())]
+    assert (final_rtl / model.name).read_text(encoding="utf-8") == model.read_text(encoding="utf-8")
+
+
 def test_autombist_fault_text_does_not_make_successful_run_fail(tmp_path):
     reports = tmp_path / "reports"
     reports.mkdir()
