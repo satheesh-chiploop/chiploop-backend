@@ -5,8 +5,10 @@ import datetime
 import logging
 import shutil
 import time
+import glob
 logger = logging.getLogger("chiploop")
 from typing import Dict, List, Tuple, Optional
+from pathlib import Path
 
 from agents.runtime import RUNTIME_ACTIVE_STATE_KEY, AgentContext, execute_agent
 from model_gateway import complete_text
@@ -59,6 +61,78 @@ def _load_json_if_path(v):
         with open(v, "r", encoding="utf-8") as f:
             return json.load(f)
     return None
+
+
+def _candidate_sram_roots(rtl_dir: str) -> List[str]:
+    roots: List[str] = []
+    for key in ("CHIPLOOP_PRECOMPILED_SRAM_ROOTS", "CHIPLOOP_SRAM_MACRO_ROOTS"):
+        for item in re.split(r"[;:]", os.getenv(key, "")):
+            item = item.strip()
+            if item and os.path.isdir(item):
+                roots.append(os.path.abspath(item))
+
+    probe = os.path.abspath(rtl_dir)
+    for _ in range(8):
+        backend_pdk = os.path.join(probe, "backend", "pdk")
+        direct_pdk = os.path.join(probe, "pdk")
+        for pdk_root in (backend_pdk, direct_pdk):
+            if os.path.isdir(pdk_root):
+                for path in glob.glob(os.path.join(pdk_root, "*", "libs.ref", "*sram*")):
+                    if os.path.isdir(path):
+                        roots.append(os.path.abspath(path))
+        parent = os.path.dirname(probe)
+        if parent == probe:
+            break
+        probe = parent
+    return sorted(dict.fromkeys(roots))
+
+
+def _memory_macro_cells(spec_json: dict) -> List[str]:
+    cells: List[str] = []
+    for macro in spec_json.get("memory_macros", []) or []:
+        if not isinstance(macro, dict):
+            continue
+        kind = str(macro.get("kind") or macro.get("macro_kind") or "").lower()
+        if not any(token in kind for token in ("sram", "openram", "prebuilt", "precompiled")):
+            continue
+        cell = str(macro.get("name") or macro.get("cell") or macro.get("openram_cell") or "").strip()
+        if cell:
+            cells.append(cell)
+    return sorted(dict.fromkeys(cells))
+
+
+def _stage_memory_macro_models_for_rtl_validation(spec_json: dict, rtl_dir: str, suffix: str = "") -> List[str]:
+    staged: List[str] = []
+    cells = _memory_macro_cells(spec_json)
+    if not cells:
+        return staged
+    support_dir = os.path.join(rtl_dir, "_external_rtl_models" if not suffix else f"_external_rtl_models_{suffix}")
+    os.makedirs(support_dir, exist_ok=True)
+
+    for cell in cells:
+        found = ""
+        for root in _candidate_sram_roots(rtl_dir):
+            for ext in (".v", ".sv"):
+                candidate = os.path.join(root, "verilog", f"{cell}{ext}")
+                if os.path.isfile(candidate):
+                    found = candidate
+                    break
+                matches = glob.glob(os.path.join(root, "**", f"{cell}{ext}"), recursive=True)
+                if matches:
+                    found = matches[0]
+                    break
+            if found:
+                break
+        if not found:
+            continue
+        dst = os.path.join(support_dir, os.path.basename(found))
+        shutil.copy2(found, dst)
+        text = Path(dst).read_text(encoding="utf-8", errors="ignore")
+        sanitized = text.replace("%m", "scope")
+        if sanitized != text:
+            Path(dst).write_text(sanitized, encoding="utf-8")
+        staged.append(dst)
+    return sorted(dict.fromkeys(staged))
 
 
 def _normalize_spec_json(spec_json: dict) -> Tuple[dict, str]:
@@ -2364,6 +2438,9 @@ def _validate_and_materialize_rtl(
     if not artifact_list:
         issues.append("❌ No RTL files materialized to disk.")
 
+    external_model_files = _stage_memory_macro_models_for_rtl_validation(spec_json, rtl_dir, suffix=suffix)
+    validation_files = sorted(dict.fromkeys([*artifact_list, *external_model_files]))
+
     if mode == "hierarchical":
         top_file = _top_rtl_file(spec_json, mode)
         top_name = _top_module_name(spec_json, mode)
@@ -2387,7 +2464,7 @@ def _validate_and_materialize_rtl(
         "-g2005",
         "-o",
         os.path.join(rtl_dir, f"rtl_out{('_' + suffix) if suffix else ''}")
-    ] + artifact_list
+    ] + validation_files
 
     iverilog_failed = False
     tool_executions = []
@@ -2438,7 +2515,7 @@ def _validate_and_materialize_rtl(
     _stage(f"running_verilator_lint_{suffix or 'pass1'}")
     verilator_ok, verilator_log_path, verilator_output, verilator_result = _run_verilator_lint(
         rtl_dir=rtl_dir,
-        verilog_files=artifact_list,
+        verilog_files=validation_files,
         top_module=_top_module_name(spec_json, mode),
         suffix=suffix,
         state=state,
@@ -2483,6 +2560,8 @@ def _validate_and_materialize_rtl(
         sf.write(f"Top module: {_top_module_name(spec_json, mode)}\n")
         sf.write(f"Expected files: {expected_files}\n")
         sf.write(f"Materialized files: {[os.path.basename(p) for p in artifact_list]}\n")
+        if external_model_files:
+            sf.write(f"External validation models: {[os.path.basename(p) for p in external_model_files]}\n")
         sf.write(f"Clock ports: {sorted(set(clock_ports))}\n")
         sf.write(f"Reset ports: {sorted(set(reset_ports))}\n")
         sf.write(f"Icarus compile: {'fail' if iverilog_failed else 'pass'}\n")
@@ -2499,6 +2578,7 @@ def _validate_and_materialize_rtl(
         "message": "RTL checks passed." if len(issues) == 0 else "RTL checks failed.",
         "issues": issues,
         "artifact_list": artifact_list,
+        "external_model_files": external_model_files,
         "clock_ports": sorted(set(clock_ports)),
         "reset_ports": sorted(set(reset_ports)),
         "compile_log_path": compile_log_path,

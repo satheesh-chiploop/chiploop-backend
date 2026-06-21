@@ -142,6 +142,35 @@ endmodule
     assert ".we(web)" in adapter
 
 
+def test_stages_prebuilt_sram_model_for_rtl_validation(tmp_path, monkeypatch):
+    root = tmp_path / "sram_macros"
+    verilog = root / "verilog"
+    verilog.mkdir(parents=True)
+    model = verilog / "sky130_sram_1kbyte_1rw1r_32x256_8.v"
+    model.write_text('module sky130_sram_1kbyte_1rw1r_32x256_8; initial $display("scope %m"); endmodule\n', encoding="utf-8")
+    monkeypatch.setenv("CHIPLOOP_SRAM_MACRO_ROOTS", str(root))
+
+    spec = {
+        "memory_macros": [
+            {
+                "kind": "prebuilt_sky130_sram",
+                "name": "sky130_sram_1kbyte_1rw1r_32x256_8",
+                "depth": 256,
+                "data_width": 32,
+                "addr_width": 8,
+            }
+        ]
+    }
+
+    staged = agent._stage_memory_macro_models_for_rtl_validation(spec, str(tmp_path / "rtl"))
+
+    assert len(staged) == 1
+    staged_text = open(staged[0], encoding="utf-8").read()
+    assert "module sky130_sram_1kbyte_1rw1r_32x256_8" in staged_text
+    assert "%m" not in staged_text
+    assert "%m" in model.read_text(encoding="utf-8")
+
+
 def test_connectivity_contract_allows_top_internal_signals_to_child_memory_ports():
     spec = {
         "hierarchy": {

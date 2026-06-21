@@ -562,7 +562,7 @@ def _merge_spec_memories_with_rtl_detection(spec_macros: list[dict[str, Any]], d
     used: set[int] = set()
     merged: list[dict[str, Any]] = []
     for spec in spec_macros:
-        match_idx: int | None = None
+        scored_matches: list[tuple[int, int]] = []
         for idx, det in enumerate(detected):
             if idx in used:
                 continue
@@ -585,8 +585,21 @@ def _merge_spec_memories_with_rtl_detection(spec_macros: list[dict[str, Any]], d
                 and int(det.get("depth") or 0) == int(spec.get("depth") or 0)
             )
             if same_cell or fallback_cell or same_shape_fallback or same_instance_shape:
-                match_idx = idx
-                break
+                parent = str(det.get("parent_module") or "").lower()
+                helper_parent = any(token in parent for token in ("wrapper", "model", "macro"))
+                score = 0
+                if same_instance_shape:
+                    score += 100
+                if same_inst:
+                    score += 50
+                if same_cell:
+                    score += 30
+                if fallback_cell or same_shape_fallback:
+                    score += 10
+                if parent and not helper_parent:
+                    score += 80
+                scored_matches.append((score, idx))
+        match_idx = max(scored_matches)[1] if scored_matches else None
         if match_idx is None:
             merged.append(dict(spec))
             continue

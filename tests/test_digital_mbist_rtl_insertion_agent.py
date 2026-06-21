@@ -1115,6 +1115,49 @@ def test_selects_outer_functional_memory_instance_for_mbist_integration():
     assert selected == [items[1]]
 
 
+def test_merge_prefers_spec_named_outer_instance_over_same_cell_helper():
+    spec = {
+        "cell": "sky130_sram_1kbyte_1rw1r_32x256_8",
+        "instance": "u_sram",
+        "addr_width": 8,
+        "data_width": 32,
+        "depth": 256,
+        "ports": {"clk": "clk", "csb": "csb", "we": "web", "addr": "addr", "din": "din", "dout": "dout"},
+    }
+    detected = [
+        {
+            "cell": "sky130_sram_1kbyte_1rw1r_32x256_8",
+            "instance": "u_model",
+            "parent_module": "sky130_sram_1kbyte_1rw1r_32x256_8",
+            "addr_width": 8,
+            "data_width": 32,
+            "depth": 256,
+        },
+        {
+            "cell": "sky130_sram_1kbyte_1rw1r_32x256_8",
+            "instance": "u_sram",
+            "parent_module": "demo_sram_32x256_wrapper",
+            "addr_width": 8,
+            "data_width": 32,
+            "depth": 256,
+        },
+        {
+            "cell": "demo_sram_32x256_wrapper",
+            "instance": "u_sram",
+            "parent_module": "sram_mbist_demo_controller",
+            "addr_width": 8,
+            "data_width": 32,
+            "depth": 256,
+        },
+    ]
+
+    merged = agent._merge_spec_memories_with_rtl_detection([spec], detected)
+
+    assert len(merged) == 1
+    assert merged[0]["rtl_cell"] == "demo_sram_32x256_wrapper"
+    assert merged[0]["parent_module"] == "sram_mbist_demo_controller"
+
+
 def test_detected_memory_records_parent_module(tmp_path):
     rtl = tmp_path / "top.sv"
     rtl.write_text(
