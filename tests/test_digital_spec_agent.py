@@ -307,6 +307,30 @@ Outputs:
     assert spec["must_drive"] == ["rd_data", "ready", "bist_done", "bist_fail", "irq"]
 
 
+def test_parse_repairs_array_closed_as_object_before_next_key():
+    malformed = (
+        '{"design_name":"demo","hierarchy":{"top_module":{"name":"top","ports":[],'
+        '"behavior_rules":["rule one","rule two"},"rtl_output_file":"top.v"},"modules":[]}'
+    )
+
+    parsed = spec_agent._parse_llm_json_object(malformed)
+
+    assert parsed["hierarchy"]["top_module"]["behavior_rules"] == ["rule one", "rule two"]
+    assert parsed["hierarchy"]["top_module"]["rtl_output_file"] == "top.v"
+
+
+def test_parse_repairs_array_bracket_drift_then_eof_truncation():
+    malformed = (
+        '{"design_name":"demo","hierarchy":{"top_module":{"name":"top","ports":[],'
+        '"behavior_rules":["rule one","rule two"},"rtl_output_file":"top.v"},"modules":[]'
+    )
+
+    parsed = spec_agent._parse_llm_json_object(malformed)
+
+    assert parsed["hierarchy"]["top_module"]["behavior_rules"] == ["rule one", "rule two"]
+    assert parsed["hierarchy"]["top_module"]["rtl_output_file"] == "top.v"
+
+
 def test_compile_spec_contract_recovers_prompt_memory_macros(tmp_path):
     llm_output = json.dumps(
         {

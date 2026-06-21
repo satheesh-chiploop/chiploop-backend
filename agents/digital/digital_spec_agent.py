@@ -807,13 +807,51 @@ def _parse_llm_json_object(llm_output: str) -> dict:
     try:
         parsed = json.loads(candidate)
     except JSONDecodeError as exc:
-        repaired = _repair_json_if_truncated_at_eof(candidate, exc)
+        repaired = _repair_json_syntax_near_error(candidate, exc)
+        if repaired == candidate:
+            repaired = _repair_json_if_truncated_at_eof(candidate, exc)
         if repaired == candidate:
             raise
         parsed = json.loads(repaired)
     if not isinstance(parsed, dict):
         raise ValueError("Spec JSON root must be an object.")
     return parsed
+
+
+def _try_parse_after_eof_repair(candidate: str) -> str | None:
+    try:
+        json.loads(candidate)
+        return candidate
+    except JSONDecodeError as exc:
+        repaired = _repair_json_if_truncated_at_eof(candidate, exc)
+        if repaired == candidate:
+            return None
+        try:
+            json.loads(repaired)
+            return repaired
+        except JSONDecodeError:
+            return None
+
+
+def _repair_json_syntax_near_error(candidate: str, exc: JSONDecodeError) -> str:
+    text = (candidate or "").strip()
+    if not text:
+        return candidate
+
+    positions = [exc.pos, exc.pos - 1, exc.pos + 1]
+    replacements = {"]": "}", "}": "]"}
+    for pos in positions:
+        if pos < 0 or pos >= len(text):
+            continue
+        ch = text[pos]
+        replacement = replacements.get(ch)
+        if not replacement:
+            continue
+        probe = text[:pos] + replacement + text[pos + 1:]
+        parsed = _try_parse_after_eof_repair(probe)
+        if parsed is not None:
+            return parsed
+    return candidate
 
 
 def _repair_json_if_truncated_at_eof(candidate: str, exc: JSONDecodeError) -> str:
