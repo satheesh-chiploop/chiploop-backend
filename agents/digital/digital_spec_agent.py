@@ -103,6 +103,68 @@ def _extract_memory_macros_from_prompt(prompt_text: str) -> list[dict]:
     return [macros[idx] for idx in sorted(macros) if macros[idx].get("name")]
 
 
+def _parse_prompt_port_line(line: str, direction: str) -> dict | None:
+    item = re.sub(r"^\s*[-*]\s*", "", line or "").strip()
+    if not item:
+        return None
+    match = re.match(r"(?P<name>[A-Za-z_][A-Za-z0-9_$]*)(?:\s*\[\s*(?P<msb>\d+)\s*:\s*(?P<lsb>\d+)\s*\])?\s*$", item)
+    if not match:
+        return None
+    width = 1
+    if match.group("msb") is not None and match.group("lsb") is not None:
+        width = abs(int(match.group("msb")) - int(match.group("lsb"))) + 1
+    port = {"name": match.group("name"), "direction": direction, "width": width}
+    if port["name"].lower() in {"reset_n", "rst_n"}:
+        port["active_low"] = True
+    return port
+
+
+def _extract_top_ports_from_prompt(prompt_text: str) -> list[dict]:
+    ports: list[dict] = []
+    seen: set[str] = set()
+    current_direction: str | None = None
+    for raw in (prompt_text or "").splitlines():
+        line = raw.strip()
+        lower = line.lower()
+        if re.fullmatch(r"inputs?\s*:", lower):
+            current_direction = "input"
+            continue
+        if re.fullmatch(r"outputs?\s*:", lower):
+            current_direction = "output"
+            continue
+        if current_direction and re.match(r"^[A-Za-z][A-Za-z0-9 _/-]*:\s*$", line):
+            current_direction = None
+            continue
+        if not current_direction:
+            continue
+        port = _parse_prompt_port_line(line, current_direction)
+        if port and port["name"] not in seen:
+            ports.append(port)
+            seen.add(port["name"])
+    return ports
+
+
+def _repair_empty_top_ports_from_prompt(spec_json: dict, mode: str, source_prompt: str) -> dict:
+    prompt_ports = _extract_top_ports_from_prompt(source_prompt)
+    if not prompt_ports:
+        return spec_json
+    if mode == "flat":
+        if not spec_json.get("ports"):
+            spec_json["ports"] = prompt_ports
+            spec_json["must_receive"] = [p["name"] for p in prompt_ports if p.get("direction") == "input"]
+            spec_json["must_drive"] = [p["name"] for p in prompt_ports if p.get("direction") == "output"]
+            spec_json["must_not_drive"] = list(spec_json["must_receive"])
+    else:
+        hierarchy = spec_json.get("hierarchy") if isinstance(spec_json.get("hierarchy"), dict) else {}
+        top = hierarchy.get("top_module") if isinstance(hierarchy, dict) else None
+        if isinstance(top, dict) and not top.get("ports"):
+            top["ports"] = prompt_ports
+            top["must_receive"] = [p["name"] for p in prompt_ports if p.get("direction") == "input"]
+            top["must_drive"] = [p["name"] for p in prompt_ports if p.get("direction") == "output"]
+            top["must_not_drive"] = list(top["must_receive"])
+    return spec_json
+
+
 def _merge_prompt_memory_macros(spec_json: dict, prompt_text: str) -> dict:
     if not isinstance(spec_json, dict) or spec_json.get("memory_macros"):
         return spec_json
@@ -1260,6 +1322,7 @@ def _compile_spec_contract(
     spec_json, mode = _normalize_spec_json(parsed_json)
     logger.info(f"🔍 Digital Spec Agent normalized mode={mode} suffix='{suffix or 'pass1'}'")
     spec_json = _apply_requested_top_module(spec_json, mode, requested_top)
+    spec_json = _repair_empty_top_ports_from_prompt(spec_json, mode, source_prompt)
     if requested_top:
         logger.info(
             "Digital Spec Agent enforced requested top_module=%s suffix='%s'",

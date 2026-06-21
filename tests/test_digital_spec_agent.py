@@ -214,6 +214,99 @@ Structured memory macro contract:
     ]
 
 
+def test_extract_top_ports_from_prompt_sections():
+    prompt = """
+Top module:
+- sram_mbist_demo_controller
+
+Inputs:
+- clk
+- reset_n
+- wr_addr[7:0]
+- wr_data[31:0]
+
+Outputs:
+- rd_data[31:0]
+- ready
+
+Memory intent:
+- Use SRAM.
+"""
+
+    ports = spec_agent._extract_top_ports_from_prompt(prompt)
+
+    assert ports == [
+        {"name": "clk", "direction": "input", "width": 1},
+        {"name": "reset_n", "direction": "input", "width": 1, "active_low": True},
+        {"name": "wr_addr", "direction": "input", "width": 8},
+        {"name": "wr_data", "direction": "input", "width": 32},
+        {"name": "rd_data", "direction": "output", "width": 32},
+        {"name": "ready", "direction": "output", "width": 1},
+    ]
+
+
+def test_compile_spec_contract_repairs_empty_flat_ports_from_prompt(tmp_path):
+    llm_output = json.dumps(
+        {
+            "name": "sram_mbist_demo_controller",
+            "description": "Controller.",
+            "ports": [],
+            "functionality": "",
+            "responsibilities": [],
+            "must_drive": [],
+            "must_receive": [],
+            "must_not_drive": [],
+            "reset_behavior": "",
+            "behavior_rules": [],
+            "rtl_output_file": "sram_mbist_demo_controller.sv",
+        }
+    )
+    prompt = """
+Inputs:
+- clk
+- reset_n
+- wr_en
+- wr_addr[7:0]
+- wr_data[31:0]
+- rd_en
+- rd_addr[7:0]
+- bist_start
+
+Outputs:
+- rd_data[31:0]
+- ready
+- bist_done
+- bist_fail
+- irq
+"""
+
+    spec, mode, _, _ = spec_agent._compile_spec_contract(
+        llm_output,
+        str(tmp_path),
+        requested_top="sram_mbist_demo_controller",
+        source_prompt=prompt,
+    )
+
+    assert mode == "flat"
+    assert [p["name"] for p in spec["ports"]] == [
+        "clk",
+        "reset_n",
+        "wr_en",
+        "wr_addr",
+        "wr_data",
+        "rd_en",
+        "rd_addr",
+        "bist_start",
+        "rd_data",
+        "ready",
+        "bist_done",
+        "bist_fail",
+        "irq",
+    ]
+    assert spec["must_receive"] == ["clk", "reset_n", "wr_en", "wr_addr", "wr_data", "rd_en", "rd_addr", "bist_start"]
+    assert spec["must_drive"] == ["rd_data", "ready", "bist_done", "bist_fail", "irq"]
+
+
 def test_compile_spec_contract_recovers_prompt_memory_macros(tmp_path):
     llm_output = json.dumps(
         {
