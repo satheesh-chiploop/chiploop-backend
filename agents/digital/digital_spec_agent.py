@@ -144,24 +144,72 @@ def _extract_top_ports_from_prompt(prompt_text: str) -> list[dict]:
     return ports
 
 
-def _repair_empty_top_ports_from_prompt(spec_json: dict, mode: str, source_prompt: str) -> dict:
+def _repair_top_ports_from_prompt(spec_json: dict, mode: str, source_prompt: str) -> dict:
     prompt_ports = _extract_top_ports_from_prompt(source_prompt)
     if not prompt_ports:
         return spec_json
+    prompt_names = {p["name"] for p in prompt_ports}
     if mode == "flat":
         if not spec_json.get("ports"):
             spec_json["ports"] = prompt_ports
-            spec_json["must_receive"] = [p["name"] for p in prompt_ports if p.get("direction") == "input"]
-            spec_json["must_drive"] = [p["name"] for p in prompt_ports if p.get("direction") == "output"]
-            spec_json["must_not_drive"] = list(spec_json["must_receive"])
+        else:
+            spec_json["ports"] = [
+                {**next((p for p in spec_json.get("ports", []) if isinstance(p, dict) and p.get("name") == prompt_port["name"]), {}), **prompt_port}
+                for prompt_port in prompt_ports
+            ]
+        spec_json["must_receive"] = [p["name"] for p in prompt_ports if p.get("direction") == "input"]
+        spec_json["must_drive"] = [p["name"] for p in prompt_ports if p.get("direction") == "output"]
+        spec_json["must_not_drive"] = list(spec_json["must_receive"])
     else:
         hierarchy = spec_json.get("hierarchy") if isinstance(spec_json.get("hierarchy"), dict) else {}
         top = hierarchy.get("top_module") if isinstance(hierarchy, dict) else None
-        if isinstance(top, dict) and not top.get("ports"):
-            top["ports"] = prompt_ports
+        if isinstance(top, dict):
+            if not top.get("ports"):
+                top["ports"] = prompt_ports
+            else:
+                top["ports"] = [
+                    {**next((p for p in top.get("ports", []) if isinstance(p, dict) and p.get("name") == prompt_port["name"]), {}), **prompt_port}
+                    for prompt_port in prompt_ports
+                ]
             top["must_receive"] = [p["name"] for p in prompt_ports if p.get("direction") == "input"]
             top["must_drive"] = [p["name"] for p in prompt_ports if p.get("direction") == "output"]
             top["must_not_drive"] = list(top["must_receive"])
+            top["ports_documentation"] = [
+                p for p in top.get("ports_documentation", []) or []
+                if isinstance(p, dict) and p.get("name") in prompt_names
+            ]
+    return spec_json
+
+
+def _repair_empty_top_ports_from_prompt(spec_json: dict, mode: str, source_prompt: str) -> dict:
+    return _repair_top_ports_from_prompt(spec_json, mode, source_prompt)
+
+
+def _enforce_prompt_top_ports_after_hierarchy_repair(spec_json: dict, mode: str, source_prompt: str) -> dict:
+    prompt_ports = _extract_top_ports_from_prompt(source_prompt)
+    if mode != "hierarchical" or not prompt_ports:
+        return spec_json
+    hier = spec_json.get("hierarchy") if isinstance(spec_json.get("hierarchy"), dict) else {}
+    top = hier.get("top_module") if isinstance(hier, dict) else None
+    if not isinstance(top, dict):
+        return spec_json
+    prompt_names = {p["name"] for p in prompt_ports}
+    existing_ports = {
+        str(p.get("name") or ""): p
+        for p in (top.get("ports") or [])
+        if isinstance(p, dict) and p.get("name")
+    }
+    top["ports"] = [
+        {**existing_ports.get(prompt_port["name"], {}), **prompt_port}
+        for prompt_port in prompt_ports
+    ]
+    top["must_receive"] = [p["name"] for p in prompt_ports if p.get("direction") == "input"]
+    top["must_drive"] = [p["name"] for p in prompt_ports if p.get("direction") == "output"]
+    top["must_not_drive"] = list(top["must_receive"])
+    spec_json["top_level_connections"] = [
+        conn for conn in (spec_json.get("top_level_connections") or [])
+        if isinstance(conn, dict) and conn.get("top_port") in prompt_names
+    ]
     return spec_json
 
 
@@ -330,6 +378,10 @@ def _normalize_spec_json(spec_json: dict):
         hier = spec_json["hierarchy"]
         top = hier.get("top_module")
         modules = hier.get("modules", [])
+        if not modules and isinstance(hier.get("submodules"), list):
+            modules = hier.get("submodules", [])
+        if not modules and isinstance(spec_json.get("modules"), list):
+            modules = spec_json.get("modules", [])
         if not modules and isinstance(spec_json.get("hierarchical_modules"), list):
             modules = spec_json.get("hierarchical_modules", [])
 
@@ -1374,6 +1426,7 @@ def _compile_spec_contract(
         spec_json = _ensure_hierarchical_port_closure(spec_json)
         spec_json = _reconcile_hierarchical_signal_directions(spec_json, mode)
         spec_json = _sanitize_hierarchical_connectivity(spec_json)
+        spec_json = _enforce_prompt_top_ports_after_hierarchy_repair(spec_json, mode, source_prompt)
         logger.info(f"🔍 Digital Spec Agent hierarchical port closure done suffix='{suffix or 'pass1'}'")
 
    

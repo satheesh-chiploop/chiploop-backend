@@ -307,6 +307,76 @@ Outputs:
     assert spec["must_drive"] == ["rd_data", "ready", "bist_done", "bist_fail", "irq"]
 
 
+def test_compile_spec_contract_filters_leaked_internal_sram_top_ports_from_prompt(tmp_path):
+    llm_output = json.dumps(
+        {
+            "design_name": "sram_mbist_demo_controller",
+            "hierarchy": {
+                "top_module": {
+                    "name": "sram_mbist_demo_controller",
+                    "rtl_output_file": "sram_mbist_demo_controller.v",
+                    "ports": [
+                        {"name": "clk", "direction": "input", "width": 1},
+                        {"name": "reset_n", "direction": "input", "width": 1},
+                        {"name": "rd_data", "direction": "output", "width": 32},
+                        {"name": "sram_csb", "direction": "output", "width": 1},
+                        {"name": "sram_dout", "direction": "input", "width": 32},
+                    ],
+                },
+                "modules": [],
+            },
+        }
+    )
+    prompt = """
+Inputs:
+- clk
+- reset_n
+
+Outputs:
+- rd_data[31:0]
+"""
+
+    spec, mode, _, _ = spec_agent._compile_spec_contract(
+        llm_output,
+        str(tmp_path),
+        requested_top="sram_mbist_demo_controller",
+        source_prompt=prompt,
+    )
+
+    assert mode == "hierarchical"
+    assert [p["name"] for p in spec["hierarchy"]["top_module"]["ports"]] == ["clk", "reset_n", "rd_data"]
+    assert "sram_csb" not in spec["hierarchy"]["top_module"]["must_drive"]
+    assert "sram_dout" not in spec["hierarchy"]["top_module"]["must_receive"]
+
+
+def test_normalize_accepts_hierarchy_submodules_alias():
+    spec = {
+        "design_name": "demo",
+        "hierarchy": {
+            "top_module": {
+                "name": "top",
+                "rtl_output_file": "top.v",
+                "ports": [{"name": "clk", "direction": "input", "width": 1}],
+            },
+            "submodules": [
+                {
+                    "name": "demo_sram_32x256_wrapper",
+                    "ports": [
+                        {"name": "clk", "direction": "input", "width": 1},
+                        {"name": "dout", "direction": "output", "width": 32},
+                    ],
+                }
+            ],
+        },
+    }
+
+    norm, mode = spec_agent._normalize_spec_json(spec)
+
+    assert mode == "hierarchical"
+    assert [m["name"] for m in norm["hierarchy"]["modules"]] == ["demo_sram_32x256_wrapper"]
+    assert norm["hierarchy"]["modules"][0]["rtl_output_file"] == "demo_sram_32x256_wrapper.v"
+
+
 def test_parse_repairs_array_closed_as_object_before_next_key():
     malformed = (
         '{"design_name":"demo","hierarchy":{"top_module":{"name":"top","ports":[],'
