@@ -1114,6 +1114,7 @@ def _validate_connectivity_contract(spec_json: dict, mode: str) -> List[str]:
     contract = _build_connectivity_contract(spec_json, mode)
     modules = contract["modules"]
     top_module = spec_json["hierarchy"]["top_module"]
+    top_module_name = str(top_module.get("name") or "")
     top_port_names = {p["name"] for p in top_module.get("ports", [])}
 
     for mname, m in modules.items():
@@ -1136,7 +1137,7 @@ def _validate_connectivity_contract(spec_json: dict, mode: str) -> List[str]:
         sp = sig["source"]["port"]
         if sm not in modules:
             issues.append(f"❌ inter_module_signals source module '{sm}' does not exist.")
-        else:
+        elif sm != top_module_name:
             dirs = _port_dir_map(modules[sm]["ports"])
             if sp not in dirs:
                 issues.append(f"❌ inter_module_signals source port '{sm}.{sp}' does not exist.")
@@ -1148,7 +1149,7 @@ def _validate_connectivity_contract(spec_json: dict, mode: str) -> List[str]:
             dp = dst["port"]
             if dm not in modules:
                 issues.append(f"❌ inter_module_signals destination module '{dm}' does not exist.")
-            else:
+            elif dm != top_module_name:
                 dirs = _port_dir_map(modules[dm]["ports"])
                 if dp not in dirs:
                     issues.append(f"❌ inter_module_signals destination port '{dm}.{dp}' does not exist.")
@@ -1160,6 +1161,8 @@ def _validate_connectivity_contract(spec_json: dict, mode: str) -> List[str]:
         op = owner["owner"]["port"]
         if om not in modules:
             issues.append(f"❌ signal_ownership owner module '{om}' does not exist.")
+            continue
+        if om == top_module_name and op not in top_port_names:
             continue
         dirs = _port_dir_map(modules[om]["ports"])
         if op not in dirs:

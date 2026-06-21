@@ -142,6 +142,58 @@ endmodule
     assert ".we(web)" in adapter
 
 
+def test_connectivity_contract_allows_top_internal_signals_to_child_memory_ports():
+    spec = {
+        "hierarchy": {
+            "top_module": {
+                "name": "sram_mbist_demo_controller",
+                "rtl_output_file": "sram_mbist_demo_controller.v",
+                "ports": [
+                    {"name": "clk", "direction": "input", "width": 1},
+                    {"name": "rd_data", "direction": "output", "width": 32},
+                ],
+            },
+            "modules": [
+                {
+                    "name": "demo_sram_32x256_wrapper",
+                    "rtl_output_file": "demo_sram_32x256_wrapper.v",
+                    "ports": [
+                        {"name": "clk", "direction": "input", "width": 1},
+                        {"name": "csb", "direction": "input", "width": 1},
+                        {"name": "web", "direction": "input", "width": 1},
+                        {"name": "addr", "direction": "input", "width": 8},
+                        {"name": "din", "direction": "input", "width": 32},
+                        {"name": "dout", "direction": "output", "width": 32},
+                    ],
+                }
+            ],
+        },
+        "top_level_connections": [
+            {"top_port": "clk", "connected_to": ["demo_sram_32x256_wrapper.clk"]}
+        ],
+        "inter_module_signals": [
+            {
+                "name": "mem_csb",
+                "width": 1,
+                "source": "sram_mbist_demo_controller.mem_csb",
+                "destinations": ["demo_sram_32x256_wrapper.csb"],
+            },
+            {
+                "name": "mem_dout",
+                "width": 32,
+                "source": "demo_sram_32x256_wrapper.dout",
+                "destinations": ["sram_mbist_demo_controller.mem_dout"],
+            },
+        ],
+        "signal_ownership": [
+            {"signal": "mem_csb", "owner": "sram_mbist_demo_controller.mem_csb"},
+            {"signal": "mem_dout", "owner": "demo_sram_32x256_wrapper.dout"},
+        ],
+    }
+
+    assert agent._validate_connectivity_contract(spec, "hierarchical") == []
+
+
 def test_align_repairs_expected_memory_wrapper_port_widths_from_spec():
     code = """
 module demo_sram_32x256_wrapper (
