@@ -73,6 +73,75 @@ endmodule
     assert "module sram_mbist_demo_controller" in text
 
 
+def test_align_splits_expected_child_modules_from_bundled_output():
+    code = """
+module top(input clk);
+  child u_child(.clk(clk));
+endmodule
+
+module child(input clk);
+endmodule
+
+module helper(input clk);
+endmodule
+"""
+    spec = {
+        "hierarchy": {
+            "top_module": {"name": "top", "rtl_output_file": "top.v"},
+            "modules": [{"name": "child", "rtl_output_file": "child.v", "ports": [{"name": "clk", "direction": "input"}]}],
+        }
+    }
+
+    out = agent._align_verilog_map_to_expected_modules({"top.v": code}, spec, "hierarchical")
+
+    assert "module top" in out["top.v"]
+    assert "module child" not in out["top.v"]
+    assert "module child" in out["child.v"]
+
+
+def test_align_fills_missing_expected_sram_model_with_compatible_macro_adapter():
+    code = """
+module top(input clk);
+endmodule
+
+module sky130_sram_1kbyte_1rw1r_32x256_8(
+  input clk,
+  input csb,
+  input we,
+  input [7:0] addr,
+  input [31:0] din,
+  output [31:0] dout
+);
+endmodule
+"""
+    spec = {
+        "hierarchy": {
+            "top_module": {"name": "top", "rtl_output_file": "top.v"},
+            "modules": [
+                {
+                    "name": "demo_sram_32x256_model",
+                    "rtl_output_file": "demo_sram_32x256_model.v",
+                    "ports": [
+                        {"name": "clk", "direction": "input", "width": 1},
+                        {"name": "csb", "direction": "input", "width": 1},
+                        {"name": "web", "direction": "input", "width": 1},
+                        {"name": "addr", "direction": "input", "width": 8},
+                        {"name": "din", "direction": "input", "width": 32},
+                        {"name": "dout", "direction": "output", "width": 32},
+                    ],
+                }
+            ],
+        }
+    }
+
+    out = agent._align_verilog_map_to_expected_modules({"top.v": code}, spec, "hierarchical")
+    adapter = out["demo_sram_32x256_model.v"]
+
+    assert "module demo_sram_32x256_model" in adapter
+    assert "sky130_sram_1kbyte_1rw1r_32x256_8 u_backing_macro" in adapter
+    assert ".we(web)" in adapter
+
+
 def test_module_procedural_assignment_check_ignores_continuous_wiring():
     continuous_top = """
 module temp_monitor_digital(output [7:0] rd_data);
@@ -90,6 +159,22 @@ endmodule
 
     assert agent._module_procedurally_assigns_signal(continuous_top, "rd_data") is False
     assert agent._module_procedurally_assigns_signal(procedural_top, "rd_data") is True
+
+
+def test_sanitize_converts_procedurally_assigned_wire_to_reg():
+    code = """
+module top(output y);
+wire y;
+always @(*) begin
+  y = 1'b0;
+end
+endmodule
+"""
+
+    out = agent._sanitize_single_driver_rtl({"top.v": code})["top.v"]
+
+    assert "reg y;" in out
+    assert "wire y;" not in out
 
 
 def test_iverilog_port_width_warnings_are_structural_failures():
