@@ -49,6 +49,12 @@ def test_mbist_rtl_insertion_enabled_without_openram_skips(tmp_path):
     assert summary["detected_memory"] is None
 
 
+def test_mbist_algorithm_defaults_and_normalizes():
+    assert agent._mbist_algorithm({"toggles": {}}) == "march-c"
+    assert agent._mbist_algorithm({"toggles": {"mbist_algorithm": "march_raw"}}) == "march-raw"
+    assert agent._mbist_algorithm({"toggles": {"mbist_algorithm": "invalid"}}) == "march-c"
+
+
 def test_detects_openram_instance_and_dimensions(tmp_path):
     rtl = tmp_path / "top.sv"
     rtl.write_text(

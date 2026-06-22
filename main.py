@@ -2971,6 +2971,7 @@ PRODUCT_STAGE_SCHEMAS: Dict[str, Dict[str, Any]] = {
             {"key": "enable_packaging", "label": "Generate handoff package", "type": "boolean", "defaultValue": True},
             {"key": "enable_scan_dft", "label": "Enable scan/DFT intent", "type": "boolean", "defaultValue": False},
             {"key": "insert_mbist", "label": "Insert MBIST", "type": "boolean", "defaultValue": False},
+            {"key": "mbist_algorithm", "label": "MBIST algorithm", "type": "select", "defaultValue": "march-c", "options": ["march-c", "march-raw"]},
             {"key": "run_spec2rtl_check", "label": "Run Spec2RTL compliance check", "type": "boolean", "defaultValue": False},
             {"key": "throughput_latency_targets", "label": "Throughput/latency targets", "type": "text", "defaultValue": ""},
             {"key": "power_priority", "label": "Power priority", "type": "text", "defaultValue": ""},
@@ -5497,6 +5498,7 @@ def _product_stage_payload(product: Dict[str, Any], stage: Dict[str, Any], upstr
                 "gen_packaging": bool(_stage_setting(stage, "enable_packaging", True)),
                 "enable_scan_dft": bool(_stage_setting(stage, "enable_scan_dft", False)),
                 "insert_mbist": bool(_stage_setting(stage, "insert_mbist", False)),
+                "mbist_algorithm": str(_stage_setting(stage, "mbist_algorithm", "march-c") or "march-c"),
                 "run_spec2rtl_check": bool(_stage_setting(stage, "run_spec2rtl_check", False)),
             },
         }

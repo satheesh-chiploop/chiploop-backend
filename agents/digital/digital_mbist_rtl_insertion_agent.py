@@ -13,6 +13,14 @@ from tooling.runner import tool_path
 from utils.artifact_utils import save_text_artifact_and_record
 
 AGENT_NAME = "Digital MBIST RTL Insertion Agent"
+AUTOMBIST_ALGORITHMS = {"march-c", "march-raw"}
+
+
+def _mbist_algorithm(state: dict[str, Any]) -> str:
+    toggles = state.get("toggles") if isinstance(state.get("toggles"), dict) else {}
+    raw = toggles.get("mbist_algorithm") or state.get("mbist_algorithm") or "march-c"
+    normalized = str(raw).strip().lower().replace("_", "-")
+    return normalized if normalized in AUTOMBIST_ALGORITHMS else "march-c"
 
 
 def _ensure_dir(path: str) -> None:
@@ -1626,12 +1634,17 @@ def run_agent(state: dict) -> dict:
     memories = _merge_spec_memories_with_rtl_detection(spec_memory_macros, detected_memories)
     memory = memories[0] if memories else None
     autombist = tool_path("autombist", state)
+    algorithm = _mbist_algorithm(state)
 
     summary: dict[str, Any] = {
         "workflow_id": workflow_id,
         "agent": AGENT_NAME,
         "enabled": enabled,
         "status": "disabled" if not enabled else "not_started",
+        "algorithm": algorithm,
+        "supported_algorithms": sorted(AUTOMBIST_ALGORITHMS),
+        "memory_count": len(memories),
+        "ram_count": len(memories),
         "detected_memory": memory,
         "detected_memories": memories,
         "detected_rtl_memories": detected_memories,
@@ -1751,7 +1764,7 @@ def run_agent(state: dict) -> dict:
 
         out_dir = os.path.join(memory_stage_dir, "autombist_out")
         rc_run, out_run = _run(
-            [autombist, "run", "--config", config_path, "--out", out_dir, "--test"],
+            [autombist, "run", "--config", config_path, "--out", out_dir, "--test", "--algo", algorithm],
             cwd=memory_stage_dir,
             timeout=900,
         )
@@ -1793,6 +1806,7 @@ def run_agent(state: dict) -> dict:
         memory_results.append(result)
 
     summary["memory_results"] = memory_results
+    summary["processed_memory_count"] = len(memory_results)
     failed = [item for item in memory_results if item.get("status") == "failed"]
     if failed:
         summary["status"] = "failed"
@@ -1867,12 +1881,18 @@ def run_agent(state: dict) -> dict:
         _write_publish_summary(workflow_id, stage_dir, summary)
         raise RuntimeError(f"MBIST RTL insertion failed: {summary['reason']}.")
     integration_status = "wrapper_replaced_memory_instance"
+    wrapper_modules = [item.get("wrapper_module") for item in integration_wrapper_items if item.get("wrapper_module")]
     summary.update({
         "status": "mbist_rtl_generated_and_simulated",
         "simulation": {"status": "pass", "memory_count": len(memories)},
+        "algorithm": algorithm,
+        "memory_count": len(memories),
+        "ram_count": len(memories),
+        "mbist_controller_count": len(integration_wrapper_items),
+        "wrapper_module_count": len(set(wrapper_modules)),
         "integration_status": integration_status,
         "integrated_rtl_lint": integrated_lint,
-        "wrapper_modules": [item.get("wrapper_module") for item in integration_wrapper_items],
+        "wrapper_modules": wrapper_modules,
         "integration_targets": integration_wrapper_items,
         "skipped_nested_integration_targets": skipped_nested_wrapper_items,
         "patched_sources": patched_sources,
