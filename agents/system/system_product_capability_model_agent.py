@@ -350,6 +350,60 @@ def _safety_fault_model(lineage: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _sram_scratchpad_model(lineage: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "type": "system_product_capability_model",
+        "version": "1.0",
+        "generated_at": _now(),
+        "product_name": "SRAM Scratchpad MBIST Dashboard",
+        "device_model": "sram_scratchpad_controller",
+        "lineage": lineage,
+        "capabilities": [
+            {"id": "enable_controller", "label": "Enable controller", "kind": "boolean", "register": "CONTROL.ENABLE"},
+            {"id": "write_memory", "label": "Write scratchpad word", "kind": "memory_write", "registers": ["MEM_ADDR", "MEM_WDATA", "MEM_CONTROL.MEM_WRITE"]},
+            {"id": "read_memory", "label": "Read scratchpad word", "kind": "memory_read", "registers": ["MEM_ADDR", "MEM_CONTROL.MEM_READ", "MEM_RDATA"]},
+            {"id": "start_bist", "label": "Start MBIST", "kind": "command", "register": "BIST_CONTROL.START"},
+            {"id": "read_bist_status", "label": "Read MBIST status", "kind": "telemetry", "register": "BIST_STATUS"},
+            {"id": "clear_irq", "label": "Clear IRQ", "kind": "command", "register": "IRQ_CLEAR"},
+        ],
+        "registers": [
+            {"name": "CONTROL", "offset": "0x00", "fields": [{"name": "ENABLE", "bit": 0}, {"name": "SOFT_RESET", "bit": 1}, {"name": "IRQ_ENABLE", "bit": 2}]},
+            {"name": "STATUS", "offset": "0x04", "fields": [{"name": "ready"}, {"name": "bist_done"}, {"name": "bist_fail"}, {"name": "busy"}]},
+            {"name": "MEM_ADDR", "offset": "0x08", "fields": [{"name": "memory_address", "bits": "7:0"}]},
+            {"name": "MEM_WDATA", "offset": "0x0C", "fields": [{"name": "memory_write_data", "bits": "31:0"}]},
+            {"name": "MEM_RDATA", "offset": "0x10", "fields": [{"name": "memory_read_data", "bits": "31:0"}]},
+            {"name": "MEM_CONTROL", "offset": "0x14", "fields": [{"name": "MEM_WRITE", "bit": 0}, {"name": "MEM_READ", "bit": 1}]},
+            {"name": "BIST_CONTROL", "offset": "0x18", "fields": [{"name": "START", "bit": 0}, {"name": "CLEAR_RESULT", "bit": 1}]},
+            {"name": "BIST_STATUS", "offset": "0x1C", "fields": [{"name": "done"}, {"name": "fail"}, {"name": "running"}, {"name": "last_fail_addr", "bits": "7:0"}]},
+            {"name": "IRQ_STATUS", "offset": "0x20", "fields": [{"name": "bist_done"}, {"name": "bist_fail"}]},
+            {"name": "IRQ_CLEAR", "offset": "0x24", "fields": [{"name": "clear_done"}, {"name": "clear_fail"}]},
+        ],
+        "product_experience": _base_experience(
+            summary="Simulator-backed SRAM scratchpad controller dashboard. Software can enable the controller, write and read memory locations, start MBIST, observe BIST done/fail status, and clear interrupt state.",
+            controls={
+                "Enable controller": "Enables firmware/software access to the scratchpad control path.",
+                "Memory address": "Selects the scratchpad word address for read/write operations.",
+                "Write data": "Data word written through MEM_WDATA before issuing MEM_WRITE.",
+                "Start MBIST": "Launches the memory-test request path and updates BIST_STATUS.",
+            },
+            metrics={
+                "Read data": "Latest value returned through MEM_RDATA.",
+                "Ready": "Controller idle/readiness state.",
+                "BIST status": "Done, fail, running, and last-fail address indicators.",
+                "IRQ": "Latched BIST done/fail interrupt status visible to software.",
+            },
+            scenario_name="Run SRAM MBIST scenario",
+            scenario_steps=[
+                {"label": "Enable", "description": "Enable controller and IRQ reporting"},
+                {"label": "Write", "description": "Write a known data pattern into scratchpad memory"},
+                {"label": "Read", "description": "Read the same address back through MEM_RDATA"},
+                {"label": "MBIST", "description": "Start memory test and observe completion status"},
+            ],
+            timing_model="Simulator mode advances register and MBIST status in application ticks. Replace the adapter with board or silicon transport when hardware is available.",
+        ),
+    }
+
+
 def _generic_model(lineage: Dict[str, Any], intent: str) -> Dict[str, Any]:
     clean_intent = " ".join(str(intent or "").split())
     product_name = "Generated Device Control Dashboard"
@@ -432,6 +486,19 @@ def _registers_from_sources(contract: Dict[str, Any]) -> list[Dict[str, Any]]:
     return []
 
 
+def _looks_like_sram_scratchpad_registers(registers: list[Dict[str, Any]]) -> bool:
+    names = {
+        str(reg.get("name") or reg.get("register") or reg.get("id") or "").strip().upper()
+        for reg in registers
+        if isinstance(reg, dict)
+    }
+    return bool(
+        {"MEM_ADDR", "MEM_WDATA", "MEM_RDATA"} & names
+        or {"BIST_CONTROL", "BIST_STATUS"} & names
+        or any(name.startswith("MEM_") for name in names)
+    )
+
+
 def _model_from_registers(lineage: Dict[str, Any], intent: str, registers: list[Dict[str, Any]]) -> Dict[str, Any]:
     base = _generic_model(lineage, intent)
     normalized: list[Dict[str, Any]] = []
@@ -480,11 +547,18 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
         model = _secure_boot_model(lineage)
     elif "safety" in intent or "watchdog" in intent or "fault" in intent or "automotive" in intent or "escalation" in intent:
         model = _safety_fault_model(lineage)
+    elif "sram" in intent or "scratchpad" in intent or "mbist" in intent or "openram" in intent or "memory" in intent:
+        model = _sram_scratchpad_model(lineage)
     elif "pwm" in intent or "fan" in intent:
         model = _pwm_model(lineage)
     else:
         registers = _registers_from_sources(contract)
-        model = _model_from_registers(lineage, intent, registers) if registers else _generic_model(lineage, intent)
+        if registers and _looks_like_sram_scratchpad_registers(registers):
+            model = _sram_scratchpad_model(lineage)
+            model["registers"] = registers
+            model.setdefault("notes", []).append("SRAM scratchpad model selected from upstream MEM/BIST register collateral.")
+        else:
+            model = _model_from_registers(lineage, intent, registers) if registers else _generic_model(lineage, intent)
     _record(workflow_id, "system_product_capability_model.json", model)
     state["system_product_capability_model"] = model
     state["system_product_capability_model_path"] = f"{OUTPUT_SUBDIR}/system_product_capability_model.json"

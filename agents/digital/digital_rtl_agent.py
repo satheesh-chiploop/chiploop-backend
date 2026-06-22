@@ -1596,6 +1596,9 @@ SCALE AND COMPLETENESS RULES
 - Connect SRAM ports using memory_macros[].ports canonical roles: clk, csb, we/web, addr, din, dout.
 - The address width, data width, and depth implied by the RTL connections must match memory_macros[].addr_width, memory_macros[].data_width, and memory_macros[].depth.
 - It is acceptable to emit a simulation-only abstract SRAM module with the same macro cell name only when needed for compile, but the top/controller RTL must still instantiate that macro cell so OpenRAM/AutoMBIST can replace and validate real collateral later.
+- A declared SRAM macro used by functional requirements must be functionally reachable. Do not tie chip-select inactive, write-enable inactive, address, data, or output paths to constants unless the spec explicitly says the macro is unused.
+- If the controller has software/register/port-driven memory read or write semantics, connect those transactions to the SRAM macro csb/we/web/addr/din/dout roles with real sequential/control logic.
+- Any emitted simulation-only SRAM abstraction must implement writable/readable memory behavior for clk/csb/we-or-web/addr/din/dout. A constant-zero dout shell is allowed only for an explicitly unused placeholder macro.
 - If Insert MBIST is enabled downstream, the SRAM macro instance is the integration point for the AutoMBIST wrapper. Do not hide the memory inside unrelated procedural logic.
 - If the spec says FIFO, implement explicit FIFO storage, pointers, levels, full/empty status, push/pop behavior, and reset.
 - If the spec says line buffer, histogram, frame buffer, or pipeline metadata, implement explicit storage arrays/counters/registers and update them in clocked logic.

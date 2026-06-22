@@ -71,6 +71,14 @@ def _pick_top_module(spec: Dict[str, Any], rtl_files: List[str], state_top: Opti
     top = (spec.get("top_module") or {}).get("name")
     if isinstance(top, str) and top.strip():
         return top.strip()
+    hierarchy = spec.get("hierarchy") if isinstance(spec.get("hierarchy"), dict) else {}
+    htop = hierarchy.get("top_module")
+    if isinstance(htop, dict):
+        name = htop.get("name")
+        if isinstance(name, str) and name.strip():
+            return name.strip()
+    elif isinstance(htop, str) and htop.strip():
+        return htop.strip()
     mod_re = re.compile(r"^\s*module\s+([a-zA-Z_][a-zA-Z0-9_$]*)\b")
     for f in rtl_files:
         try:
@@ -85,7 +93,14 @@ def _pick_top_module(spec: Dict[str, Any], rtl_files: List[str], state_top: Opti
 
 
 def _ports_from_spec(spec: Dict[str, Any]) -> List[Dict[str, Any]]:
-    ports = (spec.get("ports") or [])  # expected from Digital Spec Agent
+    top = spec.get("top_module")
+    if isinstance(top, dict) and isinstance(top.get("ports"), list):
+        return [p for p in top["ports"] if isinstance(p, dict)]
+    hierarchy = spec.get("hierarchy") if isinstance(spec.get("hierarchy"), dict) else {}
+    htop = hierarchy.get("top_module")
+    if isinstance(htop, dict) and isinstance(htop.get("ports"), list):
+        return [p for p in htop["ports"] if isinstance(p, dict)]
+    ports = spec.get("ports")
     if isinstance(ports, list):
         return [p for p in ports if isinstance(p, dict)]
     return []
@@ -117,13 +132,13 @@ def _infer_clocks_resets(spec: Dict[str, Any], ports: List[Dict[str, Any]]) -> T
     if not clocks:
         for p in ports:
             nm = str(p.get("name", ""))
-            if re.search(r"\b(clk|clock)\b", nm, re.IGNORECASE):
+            if re.search(r"(?:^|_)(clk|clock)(?:$|_)", nm, re.IGNORECASE):
                 clocks.append(nm)
 
     if not resets:
         for p in ports:
             nm = str(p.get("name", ""))
-            if re.search(r"\b(rst|reset)\b", nm, re.IGNORECASE):
+            if re.search(r"(?:^|_)(rst|reset)(?:$|_)", nm, re.IGNORECASE):
                 resets.append({"name": nm})
 
     clocks = [c for c in clocks if isinstance(c, str) and c.strip()]
@@ -132,10 +147,12 @@ def _infer_clocks_resets(spec: Dict[str, Any], ports: List[Dict[str, Any]]) -> T
     norm_resets: List[Dict[str, Any]] = []
     for r in resets:
         if isinstance(r, dict) and r.get("name"):
+            name = str(r.get("name"))
             rr = {
-                "name": r.get("name"),
+                "name": name,
                 "active_low": bool(
                     r.get("active_low", False)
+                    or re.search(r"(?:^|_)(rst|reset|por)_n$", name, re.IGNORECASE)
                     or str(r.get("polarity", "")).lower() in ("active_low", "low", "0")
                 ),
                 "async": bool(
@@ -250,10 +267,13 @@ endmodule
 
 def _is_memory_macro_or_mbist_run(state: Dict[str, Any], rtl_files: List[str]) -> bool:
     handoff = state.get("verification_source_handoff")
-    if isinstance(handoff, dict) and handoff.get("mbist_integrated_rtl") is True:
-        return True
+    if isinstance(handoff, dict):
+        if handoff.get("mbist_integrated_rtl") is True:
+            return True
+        if handoff.get("mbist_integrated_rtl") is False:
+            return False
     names = " ".join(os.path.basename(str(path)).lower() for path in rtl_files)
-    if any(token in names for token in ("mbist", "sram", "openram", "memory")):
+    if any(token in names for token in ("autombist", "mbist_top", "mbist_fsm", "mbist_algo")):
         return True
     for path in rtl_files[:80]:
         try:
@@ -264,6 +284,11 @@ def _is_memory_macro_or_mbist_run(state: Dict[str, Any], rtl_files: List[str]) -
         except Exception:
             continue
     return False
+
+
+def _is_integrated_mbist_handoff(state: Dict[str, Any]) -> bool:
+    handoff = state.get("verification_source_handoff")
+    return isinstance(handoff, dict) and handoff.get("mbist_integrated_rtl") is True
 
 
 def run_agent(state: dict) -> dict:
@@ -291,6 +316,7 @@ def run_agent(state: dict) -> dict:
     formal_tool = str(toolchain.get("formal") or state.get("formal_tool") or "symbiyosys").strip().lower()
     formal_solver = _formal_solver_from_state(state)
     memory_macro_formal_limited = _is_memory_macro_or_mbist_run(state, rtl_files)
+    integrated_mbist_formal_default = _is_integrated_mbist_handoff(state)
 
     formal_root = os.path.join(workflow_dir, "vv", "formal")
     os.makedirs(formal_root, exist_ok=True)
@@ -311,7 +337,7 @@ def run_agent(state: dict) -> dict:
     }
     if formal_tool == "none":
         run_result["disabled"] = True
-    elif memory_macro_formal_limited and state.get("force_deep_formal") is not True:
+    elif memory_macro_formal_limited and not integrated_mbist_formal_default and state.get("force_deep_formal") is not True:
         run_result.update(
             {
                 "attempted": False,
@@ -365,6 +391,7 @@ def run_agent(state: dict) -> dict:
             "formal": formal_tool,
             "formal_solver": formal_solver,
         },
+        "deep_formal_default": integrated_mbist_formal_default,
         "status": run_result.get("status") or (
             "pass" if run_result.get("attempted") and run_result.get("returncode") == 0
             else "fail" if run_result.get("attempted")

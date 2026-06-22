@@ -478,6 +478,103 @@ def _build_observable_outputs(ports: List[Dict[str, Any]]) -> List[Dict[str, Any
     return arr
 
 
+def _has_port(ports: List[Dict[str, Any]], name: str, direction: Optional[str] = None) -> bool:
+    for p in ports:
+        if str(p.get("name") or "") != name:
+            continue
+        if direction and _normalize_direction(p.get("direction")) != direction:
+            continue
+        return True
+    return False
+
+
+def _detected_directed_tests(ports: List[Dict[str, Any]]) -> List[str]:
+    tests: List[str] = []
+    has_memory_access = all(
+        _has_port(ports, name, "input")
+        for name in ("wr_en", "wr_addr", "wr_data", "rd_en", "rd_addr")
+    ) and _has_port(ports, "rd_data", "output")
+    if has_memory_access:
+        tests.append("memory_write_read_directed")
+
+    has_bist = _has_port(ports, "bist_start", "input") and any(
+        _has_port(ports, name, "output") for name in ("bist_done", "bist_fail", "irq")
+    )
+    if has_bist:
+        tests.append("bist_start_directed")
+    return tests
+
+
+def _render_directed_tests(ports: List[Dict[str, Any]], observable_outputs: List[Dict[str, Any]]) -> str:
+    tests = _detected_directed_tests(ports)
+    if not tests:
+        return ""
+
+    blocks: List[str] = []
+    if "memory_write_read_directed" in tests:
+        blocks.append(
+            '''
+@cocotb.test()
+async def memory_write_read_directed(dut):
+    """Directed memory access test emitted when a simple write/read interface is present."""
+
+{clock_start}
+
+{reset_seq}
+
+    # Initialize discoverable DUT inputs from spec
+{input_init}
+
+    test_addr = int(os.getenv("DIRECTED_MEM_ADDR", "3"))
+    test_data = int(os.getenv("DIRECTED_MEM_DATA", "2779096485"))
+
+    dut.wr_addr.value = test_addr
+    dut.wr_data.value = test_data
+    dut.wr_en.value = 1
+    await _advance_time(dut)
+    dut.wr_en.value = 0
+    await _advance_time(dut)
+
+    dut.rd_addr.value = test_addr
+    dut.rd_en.value = 1
+    await _advance_time(dut)
+    await _advance_time(dut)
+    dut.rd_en.value = 0
+
+    _assert_outputs_known(dut, {observable_outputs_json})
+'''
+        )
+
+    if "bist_start_directed" in tests:
+        blocks.append(
+            '''
+@cocotb.test()
+async def bist_start_directed(dut):
+    """Directed BIST request test emitted when a BIST start/status interface is present."""
+
+{clock_start}
+
+{reset_seq}
+
+    # Initialize discoverable DUT inputs from spec
+{input_init}
+
+    dut.bist_start.value = 1
+    await _advance_time(dut)
+    dut.bist_start.value = 0
+
+    for _ in range(int(os.getenv("BIST_DIRECTED_WAIT_CYCLES", "40"))):
+        await _advance_time(dut)
+        if hasattr(dut, "bist_done") and int(dut.bist_done.value) == 1:
+            break
+
+    _assert_outputs_known(dut, {observable_outputs_json})
+'''
+        )
+
+    return "\n".join(blocks)
+
+
 def _gen_cocotb_test(
     spec: Dict[str, Any],
     top: str,
@@ -491,6 +588,7 @@ def _gen_cocotb_test(
     reset_seq = _render_reset_sequence(resets)
     randomizable_inputs = _build_randomizable_inputs(ports, clocks, resets)
     observable_outputs = _build_observable_outputs(ports)
+    directed_tests = _render_directed_tests(ports, observable_outputs)
 
     template = '''"""Auto-generated Cocotb testbench skeleton for: {top}
 
@@ -647,6 +745,7 @@ async def constrained_random_sanity(dut):
             pass
 
     
+{directed_tests}
 '''
     return template.format(
         top=top,
@@ -656,15 +755,22 @@ async def constrained_random_sanity(dut):
         input_init=input_init,
         randomizable_inputs_json=json.dumps(randomizable_inputs, indent=2),
         observable_outputs_json=json.dumps(observable_outputs, indent=2),
+        directed_tests=directed_tests.format(
+            clock_start=clock_start.rstrip(),
+            reset_seq=reset_seq.rstrip(),
+            input_init=input_init,
+            observable_outputs_json=json.dumps(observable_outputs, indent=2),
+        ) if directed_tests else "",
     )
 
-def _selected_default_tests(selection: Any) -> List[str]:
+def _selected_default_tests(selection: Any, directed_tests: Optional[List[str]] = None) -> List[str]:
     mode = str(selection or "both").strip().lower()
+    directed = list(directed_tests or [])
     if mode in {"directed", "directed_only", "smoke"}:
-        return ["smoke_test"]
+        return list(dict.fromkeys(["smoke_test", *directed]))
     if mode in {"random", "random_only", "constrained_random"}:
         return ["constrained_random_sanity"]
-    return ["smoke_test", "constrained_random_sanity"]
+    return list(dict.fromkeys(["smoke_test", "constrained_random_sanity", *directed]))
 
 
 def _build_testcases_manifest(
@@ -673,6 +779,7 @@ def _build_testcases_manifest(
     resets: List[Dict[str, Any]],
     mode: str,
     test_selection: Any = "both",
+    directed_tests: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     clock_names = list(clocks)
     reset_names = [r["name"] for r in resets]
@@ -701,6 +808,20 @@ def _build_testcases_manifest(
             "timeout_ns": 1000,
         },
     ]
+    for name in directed_tests or []:
+        tests.append(
+            {
+                "name": name,
+                "description": "Directed test generated from detected spec-declared interface semantics.",
+                "kind": "directed",
+                "top_module": top,
+                "mode": mode,
+                "clock_names": clock_names,
+                "reset_names": reset_names,
+                "tags": ["directed", "coverage"],
+                "timeout_ns": 2000,
+            }
+        )
 
     return {
         "type": "vv_testcases",
@@ -708,7 +829,7 @@ def _build_testcases_manifest(
         "top_module": top,
         "mode": mode,
         "test_selection": str(test_selection or "both"),
-        "default_tests": _selected_default_tests(test_selection),
+        "default_tests": _selected_default_tests(test_selection, directed_tests),
         "tests": tests,
     }
 
@@ -1005,6 +1126,7 @@ def run_agent(state: dict) -> dict:
 
     ports = [] if soc_mode else _ports_from_spec(spec)
     clocks, resets = _infer_clocks_resets(spec, ports)
+    directed_tests = _detected_directed_tests(ports)
 
     _log(log_path, f"resolved_mode={mode}")
     _log(log_path, f"spec_path={spec_path}")
@@ -1018,7 +1140,7 @@ def run_agent(state: dict) -> dict:
 
     test_py = _gen_cocotb_test(spec, top, clocks, resets, soc_mode=soc_mode)
     test_selection = state.get("random_vs_directed") or "both"
-    testcase_manifest = _build_testcases_manifest(top, clocks, resets, mode, test_selection)
+    testcase_manifest = _build_testcases_manifest(top, clocks, resets, mode, test_selection, directed_tests)
     closure_testcase_intents = [
         item for item in (state.get("closure_testcase_intents") or [])
         if isinstance(item, dict)
