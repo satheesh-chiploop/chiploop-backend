@@ -2,7 +2,7 @@ import json
 import os
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from agents.runtime import AgentContext, AgentResult, AgentStatus, execute_agent
 from tooling.profiles import profile_summary
@@ -62,6 +62,38 @@ def _collect_rtl_files(workflow_dir: str, state: Dict[str, Any]) -> List[str]:
             files.extend(str(p) for p in root.rglob("*") if p.suffix.lower() in {".v", ".sv"})
     existing = sorted(str(Path(p)) for p in dict.fromkeys(files) if Path(p).exists())
     return _prefer_handoff_rtl(existing)
+
+
+def _existing_rtl_files(values: Any) -> List[str]:
+    if not isinstance(values, list):
+        return []
+    files = []
+    for value in values:
+        if isinstance(value, str) and value.lower().endswith((".v", ".sv")) and Path(value).exists():
+            files.append(str(Path(value)))
+    return sorted(dict.fromkeys(files))
+
+
+def _mbist_summary(workflow_dir: str, state: Dict[str, Any]) -> Dict[str, Any]:
+    digital = state.get("digital") if isinstance(state.get("digital"), dict) else {}
+    summary = _read_json(digital.get("mbist_rtl_insertion"))
+    if summary:
+        return summary
+    path = Path(workflow_dir) / "digital" / "mbist_rtl_insertion" / "mbist_rtl_insertion_summary.json"
+    return _read_json(str(path))
+
+
+def _functional_rtl_files(workflow_dir: str, state: Dict[str, Any], mbist: Dict[str, Any]) -> List[str]:
+    deduped = mbist.get("deduped_functional_rtl") if isinstance(mbist.get("deduped_functional_rtl"), dict) else {}
+    for source in (deduped.get("files"), mbist.get("rtl_files_scanned")):
+        files = _existing_rtl_files(source)
+        if files:
+            return files
+
+    root = Path(workflow_dir) / "rtl"
+    if root.exists():
+        return sorted(str(p) for p in root.rglob("*") if p.suffix.lower() in {".v", ".sv"})
+    return []
 
 
 def _module_header(text: str, module_name: str) -> str:
@@ -153,8 +185,9 @@ def _array_count(suffix: str) -> int:
     return count
 
 
-def _declared_storage_bits(text: str) -> Dict[str, int]:
+def _declared_storage_bits(text: str) -> Tuple[Dict[str, int], Dict[str, int]]:
     decls: Dict[str, int] = {}
+    memories: Dict[str, int] = {}
     decl_pat = re.compile(r"\b(?:reg|logic)\b\s*(?:signed\s*)?(\[[^\]]+\])?\s*([^;]+);", re.IGNORECASE)
     for dm in decl_pat.finditer(text):
         packed = dm.group(1) or ""
@@ -164,8 +197,13 @@ def _declared_storage_bits(text: str) -> Dict[str, int]:
             nm = re.match(r"([A-Za-z_][A-Za-z0-9_$]*)\s*((?:\[[^\]]+\]\s*)*)$", item)
             if not nm:
                 continue
-            decls[nm.group(1)] = width * _array_count(nm.group(2))
-    return decls
+            name = nm.group(1)
+            unpacked_count = _array_count(nm.group(2))
+            bit_count = width * unpacked_count
+            decls[name] = bit_count
+            if unpacked_count > 1:
+                memories[name] = bit_count
+    return decls, memories
 
 
 def _storage_target_name(lhs: str) -> str:
@@ -175,14 +213,16 @@ def _storage_target_name(lhs: str) -> str:
 def _count_storage(rtl_files: List[str]) -> Dict[str, Any]:
     flop_targets = set()
     latch_targets = set()
+    memory_targets = set()
     flop_bits_by_target: Dict[str, int] = {}
     latch_bits_by_target: Dict[str, int] = {}
+    memory_bits_by_target: Dict[str, int] = {}
     posedge_blocks = 0
     negedge_blocks = 0
     always_comb_blocks = 0
     for path in rtl_files:
         text = _strip_comments(_read_text(path))
-        decl_bits = _declared_storage_bits(text)
+        decl_bits, memory_bits = _declared_storage_bits(text)
         for block in re.findall(r"\balways_ff\b\s*@\s*\((.*?)\)(.*?)(?=\balways|\bendmodule\b)", text, re.DOTALL):
             sens, body = block
             if re.search(r"\bposedge\b", sens):
@@ -191,6 +231,10 @@ def _count_storage(rtl_files: List[str]) -> Dict[str, Any]:
                 negedge_blocks += 1
             for lhs in re.findall(r"\b([A-Za-z_][A-Za-z0-9_$]*(?:\[[^\]]+\])?)\s*<=", body):
                 target = _storage_target_name(lhs)
+                if target in memory_bits:
+                    memory_targets.add(target)
+                    memory_bits_by_target[target] = max(memory_bits_by_target.get(target, 0), memory_bits[target])
+                    continue
                 flop_targets.add(target)
                 flop_bits_by_target[target] = max(flop_bits_by_target.get(target, 0), decl_bits.get(target, 1))
         for block in re.findall(r"\balways\s*@\s*\((.*?)\)(.*?)(?=\balways|\bendmodule\b)", text, re.DOTALL):
@@ -202,16 +246,28 @@ def _count_storage(rtl_files: List[str]) -> Dict[str, Any]:
                     negedge_blocks += 1
                 for lhs in re.findall(r"\b([A-Za-z_][A-Za-z0-9_$]*(?:\[[^\]]+\])?)\s*<=", body):
                     target = _storage_target_name(lhs)
+                    if target in memory_bits:
+                        memory_targets.add(target)
+                        memory_bits_by_target[target] = max(memory_bits_by_target.get(target, 0), memory_bits[target])
+                        continue
                     flop_targets.add(target)
                     flop_bits_by_target[target] = max(flop_bits_by_target.get(target, 0), decl_bits.get(target, 1))
             elif "<=" in body:
                 for lhs in re.findall(r"\b([A-Za-z_][A-Za-z0-9_$]*(?:\[[^\]]+\])?)\s*<=", body):
                     target = _storage_target_name(lhs)
+                    if target in memory_bits:
+                        memory_targets.add(target)
+                        memory_bits_by_target[target] = max(memory_bits_by_target.get(target, 0), memory_bits[target])
+                        continue
                     latch_targets.add(target)
                     latch_bits_by_target[target] = max(latch_bits_by_target.get(target, 0), decl_bits.get(target, 1))
         always_comb_blocks += len(re.findall(r"\balways_comb\b|\balways\s*@\s*\*", text))
         for lhs in re.findall(r"\balways_latch\b.*?\b([A-Za-z_][A-Za-z0-9_$]*)\s*<=", text, re.DOTALL):
             target = _storage_target_name(lhs)
+            if target in memory_bits:
+                memory_targets.add(target)
+                memory_bits_by_target[target] = max(memory_bits_by_target.get(target, 0), memory_bits[target])
+                continue
             latch_targets.add(target)
             latch_bits_by_target[target] = max(latch_bits_by_target.get(target, 0), decl_bits.get(target, 1))
     flop_bit_count = sum(flop_bits_by_target.values()) or len(flop_targets)
@@ -219,6 +275,8 @@ def _count_storage(rtl_files: List[str]) -> Dict[str, Any]:
     return {
         "flipflop_count": flop_bit_count,
         "latch_count": latch_bit_count,
+        "memory_bit_count": sum(memory_bits_by_target.values()),
+        "memory_target_count": len(memory_targets),
         "storage_target_count": len(flop_targets),
         "latch_target_count": len(latch_targets),
         "sequential_blocks": posedge_blocks + negedge_blocks,
@@ -227,6 +285,7 @@ def _count_storage(rtl_files: List[str]) -> Dict[str, Any]:
         "combinational_blocks": always_comb_blocks,
         "sampled_flipflop_targets": sorted(flop_targets)[:50],
         "sampled_latch_targets": sorted(latch_targets)[:50],
+        "sampled_memory_targets": sorted(memory_targets)[:50],
     }
 
 
@@ -319,6 +378,31 @@ def _regmap_summary(state: Dict[str, Any]) -> Dict[str, Any]:
     return {"register_count": len(registers), "registers": registers[:12]}
 
 
+def _scope_report(name: str, rtl_files: List[str], top_name: str, state: Dict[str, Any], workflow_dir: str) -> Dict[str, Any]:
+    modules = _parse_modules(rtl_files)
+    top_module = next((m for m in modules if m["name"] == top_name), modules[0] if modules else {})
+    storage = _count_storage(rtl_files)
+    interface = {
+        "input_count": int(top_module.get("input_count") or 0),
+        "output_count": int(top_module.get("output_count") or 0),
+        "inout_count": int(top_module.get("inout_count") or 0),
+        "input_port_count": int(top_module.get("input_port_count") or 0),
+        "output_port_count": int(top_module.get("output_port_count") or 0),
+        "inout_port_count": int(top_module.get("inout_port_count") or 0),
+        "count_basis": "bits",
+        "ports": top_module.get("ports") or [],
+    }
+    return {
+        "name": name,
+        "rtl_file_count": len(rtl_files),
+        "module_count": len(modules),
+        "modules": modules,
+        "interface": interface,
+        "storage": storage,
+        "timing": _timing_summary(workflow_dir, state, storage),
+    }
+
+
 def _markdown(report: Dict[str, Any]) -> str:
     lint = report["lint"]
     storage = report["storage"]
@@ -351,7 +435,10 @@ def _run(context: AgentContext) -> AgentResult:
     out_dir = Path(workflow_dir) / "digital"
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    rtl_files = _collect_rtl_files(workflow_dir, state)
+    package_rtl_files = _collect_rtl_files(workflow_dir, state)
+    mbist = _mbist_summary(workflow_dir, state)
+    functional_rtl_files = _functional_rtl_files(workflow_dir, state, mbist)
+    rtl_files = functional_rtl_files or package_rtl_files
     modules = _parse_modules(rtl_files)
     top_name = str(state.get("top_module") or (modules[0]["name"] if modules else "top"))
     top_module = next((m for m in modules if m["name"] == top_name), modules[0] if modules else {})
@@ -379,6 +466,15 @@ def _run(context: AgentContext) -> AgentResult:
         "storage": storage,
         "timing": _timing_summary(workflow_dir, state, storage),
         "lint": _lint_summary(rtl_files, state),
+        "scopes": {
+            "functional": _scope_report("functional", rtl_files, top_name, state, workflow_dir),
+            "complete_package": _scope_report("complete_package", package_rtl_files, top_name, state, workflow_dir),
+        },
+        "metric_policy": {
+            "primary_scope": "functional" if functional_rtl_files else "complete_package",
+            "complete_package_note": "Complete package includes generated MBIST wrappers, algorithms, saboteur/model RTL, and staged SRAM behavioral models.",
+            "storage_note": "Unpacked behavioral memory arrays are reported as memory_bit_count, not flipflop_count.",
+        },
         "tooling": {
             "tool_profile": profile_summary(state),
             "artifact_policy": profile_summary(state).get("artifact_policy"),
