@@ -3156,7 +3156,7 @@ class DigitalArch2RTLAppIn(BaseModel):
     resets: Optional[Any] = None
     power_priority: Optional[str] = None
 
-    toggles: Optional[Dict[str, bool]] = None  # {"gen_regmap":true, "gen_upf_lite":false, "gen_packaging":true, "enable_scan_dft":false}
+    toggles: Optional[Dict[str, Any]] = None  # Allows booleans plus string options such as mbist_algorithm.
 
 
 class DigitalRTLSourceIn(BaseModel):
