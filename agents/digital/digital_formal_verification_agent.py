@@ -248,6 +248,24 @@ endmodule
 """
 
 
+def _is_memory_macro_or_mbist_run(state: Dict[str, Any], rtl_files: List[str]) -> bool:
+    handoff = state.get("verification_source_handoff")
+    if isinstance(handoff, dict) and handoff.get("mbist_integrated_rtl") is True:
+        return True
+    names = " ".join(os.path.basename(str(path)).lower() for path in rtl_files)
+    if any(token in names for token in ("mbist", "sram", "openram", "memory")):
+        return True
+    for path in rtl_files[:80]:
+        try:
+            with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                text = f.read(12000).lower()
+            if any(token in text for token in ("autombist", "mbist", "sram", "openram")):
+                return True
+        except Exception:
+            continue
+    return False
+
+
 def run_agent(state: dict) -> dict:
     agent_name = "Formal Verification Agent"
     print("\n🧠 Running Formal Verification Agent (SymbiYosys)...")
@@ -272,6 +290,7 @@ def run_agent(state: dict) -> dict:
     toolchain = state.get("toolchain") if isinstance(state.get("toolchain"), dict) else {}
     formal_tool = str(toolchain.get("formal") or state.get("formal_tool") or "symbiyosys").strip().lower()
     formal_solver = _formal_solver_from_state(state)
+    memory_macro_formal_limited = _is_memory_macro_or_mbist_run(state, rtl_files)
 
     formal_root = os.path.join(workflow_dir, "vv", "formal")
     os.makedirs(formal_root, exist_ok=True)
@@ -292,6 +311,18 @@ def run_agent(state: dict) -> dict:
     }
     if formal_tool == "none":
         run_result["disabled"] = True
+    elif memory_macro_formal_limited and state.get("force_deep_formal") is not True:
+        run_result.update(
+            {
+                "attempted": False,
+                "status": "inconclusive",
+                "reason": "memory_macro_or_mbist_design",
+                "detail": (
+                    "Full-top BMC is not run by default for SRAM/MBIST macro designs. "
+                    "Use simulation, lint, and dedicated MBIST collateral checks, or enable deep formal explicitly."
+                ),
+            }
+        )
     elif sby_bin and solver_bin:
         run_result["attempted"] = True
         try:
@@ -334,6 +365,14 @@ def run_agent(state: dict) -> dict:
             "formal": formal_tool,
             "formal_solver": formal_solver,
         },
+        "status": run_result.get("status") or (
+            "pass" if run_result.get("attempted") and run_result.get("returncode") == 0
+            else "fail" if run_result.get("attempted")
+            else "disabled" if run_result.get("disabled")
+            else "inconclusive" if run_result.get("reason")
+            else "generated"
+        ),
+        "reason": run_result.get("reason"),
         "tools_detected": {
             "sby": bool(sby_bin),
             "yosys": bool(_which("yosys")),

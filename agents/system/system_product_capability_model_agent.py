@@ -407,6 +407,64 @@ def _generic_model(lineage: Dict[str, Any], intent: str) -> Dict[str, Any]:
     }
 
 
+def _source_data(contract: Dict[str, Any], key: str) -> Dict[str, Any]:
+    source = contract.get("source_artifacts") if isinstance(contract.get("source_artifacts"), dict) else {}
+    entry = source.get(key) if isinstance(source.get(key), dict) else {}
+    data = entry.get("data") if isinstance(entry.get("data"), dict) else {}
+    return data
+
+
+def _registers_from_sources(contract: Dict[str, Any]) -> list[Dict[str, Any]]:
+    for key in ("software_api", "software_package", "firmware_dashboard", "validation_summary"):
+        data = _source_data(contract, key)
+        for candidate in (
+            data.get("registers"),
+            data.get("register_map"),
+            (data.get("mmio") or {}).get("registers") if isinstance(data.get("mmio"), dict) else None,
+            (data.get("api") or {}).get("registers") if isinstance(data.get("api"), dict) else None,
+        ):
+            if isinstance(candidate, list) and candidate:
+                return [item for item in candidate if isinstance(item, dict)]
+            if isinstance(candidate, dict):
+                regs = candidate.get("registers")
+                if isinstance(regs, list) and regs:
+                    return [item for item in regs if isinstance(item, dict)]
+    return []
+
+
+def _model_from_registers(lineage: Dict[str, Any], intent: str, registers: list[Dict[str, Any]]) -> Dict[str, Any]:
+    base = _generic_model(lineage, intent)
+    normalized: list[Dict[str, Any]] = []
+    capabilities: list[Dict[str, Any]] = []
+    for idx, reg in enumerate(registers[:24]):
+        name = str(reg.get("name") or reg.get("register") or reg.get("id") or f"REG_{idx}").upper()
+        offset = reg.get("offset") or reg.get("address") or reg.get("addr")
+        fields = reg.get("fields") if isinstance(reg.get("fields"), list) else []
+        normalized.append({"name": name, "offset": offset or f"0x{idx * 4:02X}", "fields": fields})
+        lname = name.lower()
+        if any(token in lname for token in ("control", "cfg", "config", "enable", "start")):
+            kind = "configuration"
+            label = f"Configure {name}"
+        elif any(token in lname for token in ("status", "irq", "done", "fail", "error")):
+            kind = "telemetry"
+            label = f"Read {name}"
+        elif any(token in lname for token in ("data", "result", "fifo", "mem")):
+            kind = "telemetry"
+            label = f"Observe {name}"
+        else:
+            kind = "register_access"
+            label = f"Access {name}"
+        capabilities.append({"id": name.lower(), "label": label, "kind": kind, "register": name})
+    base["registers"] = normalized
+    base["capabilities"] = capabilities[:12] or base["capabilities"]
+    base["device_model"] = "register_mapped_device"
+    base["notes"] = ["Derived from upstream firmware/software register collateral."]
+    base["product_experience"]["summary"] = (
+        "Simulator-backed dashboard generated from upstream firmware/software register collateral."
+    )
+    return base
+
+
 def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     workflow_id = state.get("workflow_id") or "default"
     contract = state.get("system_product_collateral_contract") if isinstance(state.get("system_product_collateral_contract"), dict) else {}
@@ -425,7 +483,8 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     elif "pwm" in intent or "fan" in intent:
         model = _pwm_model(lineage)
     else:
-        model = _generic_model(lineage, intent)
+        registers = _registers_from_sources(contract)
+        model = _model_from_registers(lineage, intent, registers) if registers else _generic_model(lineage, intent)
     _record(workflow_id, "system_product_capability_model.json", model)
     state["system_product_capability_model"] = model
     state["system_product_capability_model_path"] = f"{OUTPUT_SUBDIR}/system_product_capability_model.json"

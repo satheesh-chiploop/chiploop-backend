@@ -237,7 +237,9 @@ def run_agent(state: dict) -> dict:
         formal_run = formal.get("run") if isinstance(formal.get("run"), dict) else {}
         formal_status = "not_enabled"
         if formal:
-            if formal_run.get("attempted") is True:
+            if formal.get("status"):
+                formal_status = str(formal.get("status"))
+            elif formal_run.get("attempted") is True:
                 formal_status = "pass" if formal_run.get("returncode") == 0 else "fail"
             elif formal_run.get("available") is False:
                 formal_status = "tool_unavailable"
@@ -312,6 +314,7 @@ def run_agent(state: dict) -> dict:
                 "available": formal_run.get("available"),
                 "attempted": formal_run.get("attempted"),
                 "returncode": formal_run.get("returncode"),
+                "reason": formal.get("reason") or formal_run.get("reason"),
             },
             "golden_model": {
                 "status": golden_status,

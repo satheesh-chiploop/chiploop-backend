@@ -223,6 +223,48 @@ def test_imports_rtl_from_arch2rtl_app_working_directory(tmp_path, monkeypatch):
     assert result["verification_source_handoff"]["rtl_source_paths"] == [str(rtl_path.resolve())]
 
 
+def test_imports_integrated_mbist_rtl_from_local_run_when_storage_index_misses_it(tmp_path, monkeypatch):
+    spec_path = "backend/workflows/source-wf/spec/sram_mbist_demo_controller_spec.json"
+    artifact_root = tmp_path / "source-run"
+    integrated_root = artifact_root / "arch2rtl" / "digital" / "mbist_rtl_insertion" / "integrated_rtl"
+    functional_root = integrated_root / "functional_rtl"
+    functional_root.mkdir(parents=True)
+    (functional_root / "sram_mbist_demo_controller.v").write_text(
+        "module sram_mbist_demo_controller; sky130_sram_mbist u_sram(); endmodule\n",
+        encoding="utf-8",
+    )
+    (integrated_root / "sky130_sram_mbist.v").write_text("module sky130_sram_mbist; endmodule\n", encoding="utf-8")
+    files = {
+        spec_path: json.dumps({
+            "name": "sram_mbist_demo_controller",
+            "rtl_output_file": "sram_mbist_demo_controller.v",
+            "ports": [],
+        }).encode(),
+    }
+    monkeypatch.setattr(agent, "save_text_artifact_and_record", lambda *args, **kwargs: None)
+    state = {
+        "workflow_id": "verify-wf",
+        "workflow_dir": str(tmp_path / "verify"),
+        "rtl_source_mode": "from_arch2rtl",
+        "from_workflow_id": "source-wf",
+        "supabase_client": _Client(
+            {"__mode": "prefix", "__prefix": "backend/workflows/source-wf/"},
+            files,
+            [{"artifacts_path": str(artifact_root)}],
+        ),
+    }
+
+    result = agent.run_agent(state)
+
+    handoff = result["verification_source_handoff"]
+    assert handoff["mbist_integrated_rtl"] is True
+    assert handoff["rtl_source_kind"] == "integrated_mbist_rtl"
+    assert {Path(path).name for path in result["rtl_files"]} == {
+        "sram_mbist_demo_controller.v",
+        "sky130_sram_mbist.v",
+    }
+
+
 def test_rejects_verify_run_without_arch2rtl_source():
     try:
         agent.run_agent({"workflow_id": "verify-wf", "rtl_source_mode": "paste"})

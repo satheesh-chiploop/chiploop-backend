@@ -112,6 +112,25 @@ def _first_local_in_roots(roots: List[Path], suffixes: tuple[str, ...]) -> tuple
     return "", b""
 
 
+def _local_integrated_mbist_rtl(roots: List[Path]) -> List[tuple[str, bytes]]:
+    found: List[tuple[str, bytes]] = []
+    for root in roots:
+        if not root.exists():
+            continue
+        for path in sorted(root.rglob("*")):
+            norm = str(path).replace("\\", "/").lower()
+            if (
+                path.is_file()
+                and path.name.lower().endswith((".sv", ".v"))
+                and "/mbist_rtl_insertion/integrated_rtl/" in norm
+            ):
+                try:
+                    found.append((str(path.resolve()), path.read_bytes()))
+                except Exception:
+                    continue
+    return found
+
+
 def _read_first_text(paths: List[str]) -> str:
     for path in paths:
         try:
@@ -282,6 +301,18 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
             workflow_id, AGENT_NAME, "verification/handoff/rtl", rtl_name,
             raw.decode("utf-8", errors="replace"),
         )
+    if not rtl_files:
+        for local_rtl_path, local_rtl_raw in _local_integrated_mbist_rtl(_source_local_roots(client, source_workflow_id)):
+            rtl_name = os.path.basename(local_rtl_path)
+            local_rtl = _write_local(workflow_dir, f"handoff/rtl/{rtl_name}", local_rtl_raw)
+            rtl_files.append(local_rtl)
+            imported_rtl_paths.append(local_rtl_path)
+            save_text_artifact_and_record(
+                workflow_id, AGENT_NAME, "verification/handoff/rtl", rtl_name,
+                local_rtl_raw.decode("utf-8", errors="replace"),
+            )
+        if rtl_files:
+            mbist_rtl_candidates = imported_rtl_paths[:]
     if not rtl_files:
         local_rtl_path, local_rtl_raw = _first_local_in_roots(
             _source_local_roots(client, source_workflow_id), (".sv", ".v")
