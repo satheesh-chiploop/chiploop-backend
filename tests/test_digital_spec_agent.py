@@ -132,6 +132,58 @@ def test_hierarchical_validation_allows_top_internal_interconnect_nets():
     spec_agent._validate_spec_contract(spec, "hierarchical")
 
 
+def test_normalize_derives_missing_inter_module_signals_for_child_ports():
+    spec = {
+        "design_name": "controller",
+        "hierarchy": {
+            "top_module": {
+                **_module("controller"),
+                "functionality": "Controller instantiates sram_wrapper.",
+                "ports": [_port("clk", "input"), _port("rd_data", "output", 32)],
+                "rtl_output_file": "controller.v",
+            },
+            "modules": [
+                {
+                    **_module("sram_wrapper"),
+                    "ports": [
+                        _port("clk", "input"),
+                        _port("csb", "input"),
+                        _port("addr", "input", 8),
+                        _port("dout", "output", 32),
+                    ],
+                    "rtl_output_file": "sram_wrapper.v",
+                },
+                {
+                    **_module("fallback_model"),
+                    "ports": [_port("clk", "input"), _port("dout", "output", 32)],
+                    "rtl_output_file": "fallback_model.v",
+                }
+            ],
+        },
+        "top_level_connections": [
+            {"top_port": "clk", "connected_to": ["sram_wrapper.clk"]},
+            {"top_port": "rd_data", "connected_to": ["sram_wrapper.dout"]},
+        ],
+        "inter_module_signals": [],
+        "signal_ownership": [],
+    }
+
+    out, mode = spec_agent._normalize_spec_json(spec)
+    out = spec_agent._ensure_hierarchical_top_level_connections(out)
+    out = spec_agent._ensure_hierarchical_inter_module_signals(out)
+    out = spec_agent._ensure_hierarchical_port_closure(out)
+    out = spec_agent._reconcile_hierarchical_signal_directions(out, mode)
+    out = spec_agent._sanitize_hierarchical_connectivity(out)
+
+    names = {sig["name"] for sig in out["inter_module_signals"]}
+    assert "sram_wrapper_csb" in names
+    assert "sram_wrapper_addr" in names
+    assert "fallback_model_dout" not in names
+    assert all(sig["name"] != "sram_wrapper_clk" for sig in out["inter_module_signals"])
+    assert all(sig["name"] != "sram_wrapper_dout" for sig in out["inter_module_signals"])
+    spec_agent._validate_spec_contract(out, mode)
+
+
 def test_normalize_adds_referenced_memory_macro_module():
     spec = {
         "design_name": "controller",
