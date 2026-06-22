@@ -122,3 +122,66 @@ endmodule
     assert package["module_count"] == 2
     assert package["storage"]["flipflop_count"] == 1
     assert package["storage"]["memory_bit_count"] == 8192
+
+
+def test_arch2rtl_dashboard_lints_complete_mbist_package(tmp_path, monkeypatch):
+    monkeypatch.setattr(dashboard_agent, "save_text_artifact_and_record", lambda *args, **kwargs: None)
+    monkeypatch.setattr(dashboard_agent, "tool_available", lambda tool, state: tool == "verilator")
+    calls = []
+
+    class DummyResult:
+        stdout = ""
+        stderr = ""
+        status = "success"
+        returncode = 0
+        profile_id = "test"
+        runner = "local"
+        command = []
+        error = None
+
+        def to_dict(self):
+            return {"status": self.status, "returncode": self.returncode}
+
+    def fake_run_tool(state, capability, tool, args, **kwargs):
+        result = DummyResult()
+        result.command = [tool] + args
+        calls.append(result.command)
+        return result
+
+    monkeypatch.setattr(dashboard_agent, "run_tool", fake_run_tool)
+    workflow_dir = tmp_path / "backend" / "workflows" / "wf"
+    rtl_dir = workflow_dir / "rtl"
+    handoff_rtl = workflow_dir / "handoff" / "pkg" / "rtl"
+    summary_dir = workflow_dir / "digital" / "mbist_rtl_insertion"
+    rtl_dir.mkdir(parents=True)
+    handoff_rtl.mkdir(parents=True)
+    summary_dir.mkdir(parents=True)
+
+    source_top = rtl_dir / "top.sv"
+    source_top.write_text("module top(input logic clk); generated_wrapper u0(); endmodule\n", encoding="utf-8")
+    (handoff_rtl / "top.sv").write_text(source_top.read_text(encoding="utf-8"), encoding="utf-8")
+    generated = handoff_rtl / "generated_wrapper.sv"
+    generated.write_text("module generated_wrapper; endmodule\n", encoding="utf-8")
+    (summary_dir / "mbist_rtl_insertion_summary.json").write_text(
+        json.dumps({
+            "status": "mbist_rtl_generated_and_simulated",
+            "deduped_functional_rtl": {"files": [str(source_top)]},
+        }),
+        encoding="utf-8",
+    )
+    state = {
+        "workflow_id": "wf",
+        "workflow_dir": str(workflow_dir),
+        "top_module": "top",
+        "rtl_files": [str(handoff_rtl / "top.sv"), str(generated)],
+    }
+
+    dashboard_agent.run_agent(state)
+
+    report = json.loads((workflow_dir / "digital" / "arch2rtl_dashboard.json").read_text(encoding="utf-8"))
+    assert report["rtl_file_count"] == 1
+    assert report["lint"]["scope"] == "complete_package"
+    assert calls
+    assert "--top-module" in calls[0]
+    assert "top" in calls[0]
+    assert str(generated) in calls[0]

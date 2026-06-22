@@ -326,17 +326,26 @@ def _timing_summary(workflow_dir: str, state: Dict[str, Any], storage: Dict[str,
     }
 
 
-def _lint_summary(rtl_files: List[str], state: Dict[str, Any]) -> Dict[str, Any]:
+def _lint_summary(
+    rtl_files: List[str],
+    state: Dict[str, Any],
+    top_module: Optional[str] = None,
+    scope: str = "primary",
+) -> Dict[str, Any]:
     verilator_available = tool_available("verilator", state)
     if not rtl_files:
         return {"status": "missing_rtl", "tool": "verilator", "available": verilator_available}
     if not verilator_available:
         return {"status": "tool_unavailable", "tool": "verilator", "available": False}
+    args = ["--lint-only", "-Wall", "-Wno-fatal"]
+    if top_module:
+        args.extend(["--top-module", top_module])
+    args.extend(rtl_files)
     result = run_tool(
         state,
         "rtl_lint",
         "verilator",
-        ["--lint-only", "-Wall", "-Wno-fatal"] + rtl_files,
+        args,
         timeout_sec=45,
         metadata={"agent": AGENT_NAME, "stage": "arch2rtl_dashboard"},
     )
@@ -353,6 +362,7 @@ def _lint_summary(rtl_files: List[str], state: Dict[str, Any]) -> Dict[str, Any]
         status = "clean"
     return {
         "status": status,
+        "scope": scope,
         "tool": "verilator",
         "available": True,
         "profile_id": result.profile_id,
@@ -444,6 +454,8 @@ def _run(context: AgentContext) -> AgentResult:
     top_module = next((m for m in modules if m["name"] == top_name), modules[0] if modules else {})
     storage = _count_storage(rtl_files)
     clock_reset = _infer_clock_reset(modules, state)
+    lint_files = package_rtl_files if mbist and package_rtl_files else rtl_files
+    lint_scope = "complete_package" if lint_files != rtl_files else "primary"
     interface = {
         "input_count": int(top_module.get("input_count") or 0),
         "output_count": int(top_module.get("output_count") or 0),
@@ -465,7 +477,7 @@ def _run(context: AgentContext) -> AgentResult:
         "clock_reset": clock_reset,
         "storage": storage,
         "timing": _timing_summary(workflow_dir, state, storage),
-        "lint": _lint_summary(rtl_files, state),
+        "lint": _lint_summary(lint_files, state, top_name, lint_scope),
         "scopes": {
             "functional": _scope_report("functional", rtl_files, top_name, state, workflow_dir),
             "complete_package": _scope_report("complete_package", package_rtl_files, top_name, state, workflow_dir),

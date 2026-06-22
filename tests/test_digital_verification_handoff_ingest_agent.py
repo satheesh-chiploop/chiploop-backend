@@ -147,6 +147,54 @@ def test_imports_rtl_from_packaged_storage_subdirectory(tmp_path, monkeypatch):
     assert result["verification_source_handoff"]["rtl_source_paths"] == [rtl_path]
 
 
+def test_imports_integrated_mbist_rtl_for_verify(tmp_path, monkeypatch):
+    spec_path = "backend/workflows/source-wf/spec/sram_mbist_demo_controller_spec.json"
+    plain_rtl_path = "backend/workflows/source-wf/handoff/rtl/sram_mbist_demo_controller.v"
+    integrated_top = "backend/workflows/source-wf/digital/mbist_rtl_insertion/integrated_rtl/functional_rtl/sram_mbist_demo_controller.v"
+    integrated_wrapper = "backend/workflows/source-wf/digital/mbist_rtl_insertion/integrated_rtl/sky130_sram_mbist.v"
+    integrated_model = "backend/workflows/source-wf/digital/mbist_rtl_insertion/integrated_rtl/sky130_sram.v"
+    summary_path = "backend/workflows/source-wf/digital/mbist_rtl_insertion/mbist_rtl_insertion_summary.json"
+    files = {
+        spec_path: json.dumps({
+            "name": "sram_mbist_demo_controller",
+            "rtl_output_file": "sram_mbist_demo_controller.v",
+            "ports": [],
+        }).encode(),
+        plain_rtl_path: b"module sram_mbist_demo_controller; endmodule\n",
+        integrated_top: b"module sram_mbist_demo_controller; sky130_sram_mbist u_sram(); endmodule\n",
+        integrated_wrapper: b"module sky130_sram_mbist; sky130_sram u_sram(); endmodule\n",
+        integrated_model: b"module sky130_sram; endmodule\n",
+        summary_path: json.dumps({
+            "status": "mbist_rtl_generated_and_simulated",
+            "final_rtl_files": [
+                "/abs/integrated_rtl/functional_rtl/sram_mbist_demo_controller.v",
+                "/abs/integrated_rtl/sky130_sram_mbist.v",
+                "/abs/integrated_rtl/sky130_sram.v",
+            ],
+        }).encode(),
+    }
+    monkeypatch.setattr(agent, "save_text_artifact_and_record", lambda *args, **kwargs: None)
+    state = {
+        "workflow_id": "verify-wf",
+        "workflow_dir": str(tmp_path),
+        "rtl_source_mode": "from_arch2rtl",
+        "from_workflow_id": "source-wf",
+        "supabase_client": _Client({"__mode": "prefix", "__prefix": "backend/workflows/source-wf/"}, files),
+    }
+
+    result = agent.run_agent(state)
+
+    handoff = result["verification_source_handoff"]
+    assert handoff["rtl_source_kind"] == "integrated_mbist_rtl"
+    assert handoff["mbist_integrated_rtl"] is True
+    assert handoff["rtl_source_paths"] == [integrated_top, integrated_wrapper, integrated_model]
+    assert [Path(path).name for path in result["rtl_files"]] == [
+        "sram_mbist_demo_controller.v",
+        "sky130_sram_mbist.v",
+        "sky130_sram.v",
+    ]
+
+
 def test_imports_rtl_from_arch2rtl_app_working_directory(tmp_path, monkeypatch):
     spec_path = "backend/workflows/source-wf/spec/pwm_controller_spec.json"
     artifact_root = tmp_path / "source-run" / "digital"

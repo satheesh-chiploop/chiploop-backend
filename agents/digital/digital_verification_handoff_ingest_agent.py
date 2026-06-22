@@ -134,6 +134,57 @@ def _expected_rtl_names(spec: Dict[str, Any]) -> List[str]:
     return list(dict.fromkeys(names))
 
 
+def _mbist_summary_candidates(paths: List[str]) -> List[str]:
+    return [
+        path for path in paths
+        if path.lower().endswith("mbist_rtl_insertion_summary.json")
+        and "/digital/mbist_rtl_insertion/" in path.lower()
+    ]
+
+
+def _load_mbist_summary(client: Any, paths: List[str]) -> Dict[str, Any]:
+    for path in _mbist_summary_candidates(paths):
+        raw = _download(client, path)
+        if not raw:
+            continue
+        try:
+            obj = json.loads(raw.decode("utf-8"))
+            if isinstance(obj, dict):
+                return obj
+        except Exception:
+            continue
+    return {}
+
+
+def _integrated_mbist_rtl_candidates(paths: List[str], summary: Dict[str, Any]) -> List[str]:
+    integrated = [
+        path for path in paths
+        if path.lower().endswith((".sv", ".v"))
+        and "/digital/mbist_rtl_insertion/integrated_rtl/" in path.lower()
+    ]
+    if not integrated:
+        return []
+
+    final_names: List[str] = []
+    for path in summary.get("final_rtl_files") or []:
+        if isinstance(path, str):
+            final_names.append(os.path.basename(path).lower())
+    if not final_names:
+        return sorted(dict.fromkeys(integrated))
+
+    by_name: Dict[str, List[str]] = {}
+    for path in integrated:
+        by_name.setdefault(os.path.basename(path).lower(), []).append(path)
+
+    ordered: List[str] = []
+    for name in final_names:
+        candidates = sorted(by_name.get(name) or [])
+        if candidates:
+            ordered.append(candidates[0])
+    ordered.extend(path for path in sorted(integrated) if path not in ordered)
+    return list(dict.fromkeys(ordered))
+
+
 def _top_module(spec: Dict[str, Any], rtl_path: str) -> str:
     hierarchy = spec.get("hierarchy")
     if isinstance(hierarchy, dict):
@@ -204,16 +255,19 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
         raise RuntimeError(f"Imported Arch2RTL digital spec is invalid JSON: {exc}") from exc
 
     available_paths = list(dict.fromkeys(indexed_paths + stored_source_paths))
+    mbist_summary = _load_mbist_summary(client, available_paths)
     expected_rtl_names = set(_expected_rtl_names(spec))
-    rtl_candidates = [
+    mbist_rtl_candidates = _integrated_mbist_rtl_candidates(available_paths, mbist_summary)
+    rtl_candidates = mbist_rtl_candidates or [
         path for path in available_paths
         if os.path.basename(path).lower() in expected_rtl_names
         and path.lower().endswith((".sv", ".v"))
     ]
-    rtl_candidates.extend([
-        path for path in available_paths
-        if path.lower().endswith((".sv", ".v")) and "/rtl/" in path.lower()
-    ])
+    if not mbist_rtl_candidates:
+        rtl_candidates.extend([
+            path for path in available_paths
+            if path.lower().endswith((".sv", ".v")) and "/rtl/" in path.lower()
+        ])
     rtl_files: List[str] = []
     imported_rtl_paths: List[str] = []
     for source_path in dict.fromkeys(rtl_candidates):
@@ -276,6 +330,8 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
         "source_workflow_id": source_workflow_id,
         "spec_source_path": spec_source_path,
         "rtl_source_paths": imported_rtl_paths,
+        "rtl_source_kind": "integrated_mbist_rtl" if mbist_rtl_candidates else "arch2rtl_rtl",
+        "mbist_integrated_rtl": bool(mbist_rtl_candidates),
         "top_module": top_module,
         "local_spec_path": local_spec,
         "local_rtl_files": rtl_files,
