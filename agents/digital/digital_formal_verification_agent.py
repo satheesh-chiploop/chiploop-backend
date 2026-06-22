@@ -215,7 +215,10 @@ def _gen_sby(
         for f in rtl_files[:200]
     ]
     files_block = "\n".join(rel_files)
-    read_cmds = "\n".join([f"read_verilog -sv {rf}" for rf in rel_files])
+    # SymbiYosys copies [files] into the generated src/ directory before
+    # running Yosys there. The script must read those local copied names, not
+    # the original paths relative to the .sby file.
+    read_cmds = "\n".join([f"read_verilog -sv {os.path.basename(rf)}" for rf in rel_files])
 
     clock_comment = f"clock {clk}" if clk else "clock <clk> (no clock detected)"
     reset_comment = ""

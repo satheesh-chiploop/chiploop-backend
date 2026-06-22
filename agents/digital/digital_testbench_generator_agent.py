@@ -507,12 +507,60 @@ def _parse_int(value: Any) -> Optional[int]:
     return None
 
 
-def _collect_register_map(spec: Dict[str, Any]) -> Dict[str, int]:
+def _normalize_register_name(name: Any) -> str:
+    reg_name = str(name or "").strip()
+    reg_name = re.sub(r"(?:_q|_d|_r|_reg)$", "", reg_name, flags=re.IGNORECASE)
+    return reg_name.upper()
+
+
+def _parse_sv_int(value: str) -> Optional[int]:
+    text = str(value or "").strip().replace("_", "")
+    try:
+        if text.lower().startswith("0x"):
+            return int(text, 16)
+        m = re.fullmatch(r"\d+'\s*([hHdDbBoO])\s*([0-9a-fA-FxXzZ]+)", text)
+        if m and not re.search(r"[xXzZ]", m.group(2)):
+            base = {"h": 16, "d": 10, "b": 2, "o": 8}[m.group(1).lower()]
+            return int(m.group(2), base)
+        return int(text, 10)
+    except Exception:
+        return None
+
+
+def _collect_register_map_from_rtl(rtl_files: List[str]) -> Dict[str, int]:
+    regs: Dict[str, int] = {}
+    addr_re = r"(?:\d+'\s*[hHdDbBoO]\s*[0-9a-fA-F_]+|0x[0-9a-fA-F_]+|\d+)"
+    case_write = re.compile(
+        rf"(?P<addr>{addr_re})\s*:\s*(?:begin\s*)?(?P<reg>[A-Za-z_][A-Za-z0-9_$]*)\s*<=",
+        re.IGNORECASE,
+    )
+    case_read = re.compile(
+        rf"(?P<addr>{addr_re})\s*:\s*rd_data\s*<=\s*(?P<reg>[A-Za-z_][A-Za-z0-9_$]*)",
+        re.IGNORECASE,
+    )
+
+    for path in rtl_files[:80]:
+        try:
+            text = open(path, "r", encoding="utf-8", errors="ignore").read()
+        except Exception:
+            continue
+        for regex in (case_write, case_read):
+            for match in regex.finditer(text):
+                reg_name = _normalize_register_name(match.group("reg"))
+                reg_offset = _parse_sv_int(match.group("addr"))
+                if reg_name and reg_offset is not None:
+                    regs.setdefault(reg_name, reg_offset)
+    return regs
+
+
+def _collect_register_map(spec: Dict[str, Any], rtl_files: Optional[List[str]] = None) -> Dict[str, int]:
     regs: Dict[str, int] = {}
 
     def add_register(name: Any, offset: Any) -> None:
-        reg_name = str(name or "").strip().upper()
+        reg_name = _normalize_register_name(name)
         reg_offset = _parse_int(offset)
+        if reg_offset is None and isinstance(offset, str):
+            reg_offset = _parse_sv_int(offset)
         if reg_name and reg_offset is not None:
             regs.setdefault(reg_name, reg_offset)
 
@@ -550,23 +598,63 @@ def _collect_register_map(spec: Dict[str, Any]) -> Dict[str, int]:
     for match in re.finditer(r"0x([0-9a-fA-F]+)\s+([A-Za-z_][A-Za-z0-9_]*)", rules_text):
         add_register(match.group(2), f"0x{match.group(1)}")
 
+    if not regs and rtl_files:
+        regs.update(_collect_register_map_from_rtl(rtl_files))
+
     return regs
 
 
-def _has_register_mapped_memory_bist_intent(spec: Dict[str, Any], ports: List[Dict[str, Any]]) -> bool:
+def _collect_register_bit_roles(spec: Dict[str, Any]) -> Dict[str, Dict[str, int]]:
+    roles: Dict[str, Dict[str, int]] = {}
+    rules: List[str] = []
+    hierarchy = spec.get("hierarchy") if isinstance(spec.get("hierarchy"), dict) else {}
+    top = hierarchy.get("top_module") if isinstance(hierarchy.get("top_module"), dict) else {}
+    for source in (spec.get("behavior_rules"), top.get("behavior_rules"), spec.get("verification_requirements")):
+        if isinstance(source, list):
+            rules.extend(str(item) for item in source)
+        elif isinstance(source, str):
+            rules.append(source)
+
+    for rule in rules:
+        reg_match = re.search(r"\b([A-Z][A-Z0-9_]*)\s+bit\s+\d+\b", rule)
+        if not reg_match:
+            continue
+        reg = _normalize_register_name(reg_match.group(1))
+        bit_matches = list(re.finditer(r"\bbit\s+(\d+)\b", rule, re.IGNORECASE))
+        for idx, match in enumerate(bit_matches):
+            bit = int(match.group(1))
+            end = bit_matches[idx + 1].start() if idx + 1 < len(bit_matches) else len(rule)
+            tail = rule[match.end():end].lower()
+            reg_roles = roles.setdefault(reg, {})
+            if "irq" in tail and any(token in tail for token in ("enable", "generation")):
+                reg_roles.setdefault("irq_enable", bit)
+            elif any(token in tail for token in ("enable", "gates")):
+                reg_roles.setdefault("enable", bit)
+            if "soft reset" in tail or "reset" in tail:
+                reg_roles.setdefault("soft_reset", bit)
+            if "write" in tail:
+                reg_roles.setdefault("write", bit)
+            if "read" in tail:
+                reg_roles.setdefault("read", bit)
+            if any(token in tail for token in ("start", "starts")):
+                reg_roles.setdefault("start", bit)
+            if any(token in tail for token in ("clear", "clears")):
+                reg_roles.setdefault("clear", bit)
+    return roles
+
+
+def _has_register_mapped_memory_bist_intent(spec: Dict[str, Any], ports: List[Dict[str, Any]], rtl_files: Optional[List[str]] = None) -> bool:
     if not all(_has_port(ports, name, "input") for name in ("wr_en", "wr_addr", "wr_data", "rd_en", "rd_addr")):
         return False
     if not _has_port(ports, "rd_data", "output"):
         return False
-    regmap = _collect_register_map(spec)
+    regmap = _collect_register_map(spec, rtl_files)
     if {"MEM_CONTROL", "MEM_ADDR", "MEM_WDATA"} & set(regmap):
         return True
-    text = _spec_text(spec)
-    register_tokens = ("mem_control", "mem_addr", "mem_wdata", "mem_rdata", "bist_control", "bist_status")
-    return any(token in text for token in register_tokens)
+    return False
 
 
-def _detected_directed_tests(ports: List[Dict[str, Any]], spec: Optional[Dict[str, Any]] = None) -> List[str]:
+def _detected_directed_tests(ports: List[Dict[str, Any]], spec: Optional[Dict[str, Any]] = None, rtl_files: Optional[List[str]] = None) -> List[str]:
     spec = spec or {}
     tests: List[str] = []
     has_memory_access = all(
@@ -581,18 +669,24 @@ def _detected_directed_tests(ports: List[Dict[str, Any]], spec: Optional[Dict[st
     )
     if has_bist:
         tests.append("bist_start_directed")
-    if _has_register_mapped_memory_bist_intent(spec, ports):
+    if _has_register_mapped_memory_bist_intent(spec, ports, rtl_files):
         tests.append("register_mapped_memory_bist_directed")
     return tests
 
 
-def _render_directed_tests(spec: Dict[str, Any], ports: List[Dict[str, Any]], observable_outputs: List[Dict[str, Any]]) -> str:
-    tests = _detected_directed_tests(ports, spec)
+def _render_directed_tests(
+    spec: Dict[str, Any],
+    ports: List[Dict[str, Any]],
+    observable_outputs: List[Dict[str, Any]],
+    rtl_files: Optional[List[str]] = None,
+) -> str:
+    tests = _detected_directed_tests(ports, spec, rtl_files)
     if not tests:
         return ""
 
     blocks: List[str] = []
-    register_map = _collect_register_map(spec)
+    register_map = _collect_register_map(spec, rtl_files)
+    register_bit_roles = _collect_register_bit_roles(spec)
     if "memory_write_read_directed" in tests:
         blocks.append(
             '''
@@ -645,7 +739,7 @@ async def bist_start_directed(dut):
     await _advance_time(dut)
     dut.bist_start.value = 0
 
-    for _ in range(int(os.getenv("BIST_DIRECTED_WAIT_CYCLES", "40"))):
+    for _ in range(int(os.getenv("BIST_DIRECTED_WAIT_CYCLES", "300"))):
         await _advance_time(dut)
         if hasattr(dut, "bist_done") and int(dut.bist_done.value) == 1:
             break
@@ -669,6 +763,16 @@ async def register_mapped_memory_bist_directed(dut):
 {input_init}
 
     register_map = {register_map_json}
+    register_bit_roles = {register_bit_roles_json}
+
+    def command_word(reg_name, *roles):
+        value = 0
+        reg_roles = register_bit_roles.get(reg_name, {{}})
+        for role in roles:
+            bit = reg_roles.get(role)
+            if bit is not None:
+                value |= 1 << int(bit)
+        return value
 
     async def write_reg(addr, data):
         dut.wr_addr.value = int(addr) & 0xFF
@@ -694,16 +798,22 @@ async def register_mapped_memory_bist_directed(dut):
     test_data = int(os.getenv("DIRECTED_MEM_DATA", "2779096485"))
 
     if "CONTROL" in register_map:
-        await write_reg(register_map["CONTROL"], 0x00000005)
+        control_word = command_word("CONTROL", "enable", "irq_enable")
+        if control_word:
+            await write_reg(register_map["CONTROL"], control_word)
     if "MEM_ADDR" in register_map:
         await write_reg(register_map["MEM_ADDR"], test_addr)
     if "MEM_WDATA" in register_map:
         await write_reg(register_map["MEM_WDATA"], test_data)
     if "MEM_CONTROL" in register_map:
-        await write_reg(register_map["MEM_CONTROL"], 0x00000001)
-        await write_reg(register_map["MEM_CONTROL"], 0x00000000)
-        await write_reg(register_map["MEM_CONTROL"], 0x00000002)
-        await write_reg(register_map["MEM_CONTROL"], 0x00000000)
+        mem_write_word = command_word("MEM_CONTROL", "write")
+        mem_read_word = command_word("MEM_CONTROL", "read")
+        if mem_write_word:
+            await write_reg(register_map["MEM_CONTROL"], mem_write_word)
+            await write_reg(register_map["MEM_CONTROL"], 0)
+        if mem_read_word:
+            await write_reg(register_map["MEM_CONTROL"], mem_read_word)
+            await write_reg(register_map["MEM_CONTROL"], 0)
 
     for reg_name in ("STATUS", "MEM_ADDR", "MEM_WDATA", "MEM_RDATA", "MEM_CONTROL"):
         if reg_name in register_map:
@@ -715,12 +825,14 @@ async def register_mapped_memory_bist_directed(dut):
                     pass
 
     if "BIST_CONTROL" in register_map:
-        await write_reg(register_map["BIST_CONTROL"], 0x00000001)
-        await write_reg(register_map["BIST_CONTROL"], 0x00000000)
+        bist_start_word = command_word("BIST_CONTROL", "start")
+        if bist_start_word:
+            await write_reg(register_map["BIST_CONTROL"], bist_start_word)
+            await write_reg(register_map["BIST_CONTROL"], 0)
     dut.bist_start.value = 1
     await _advance_time(dut)
     dut.bist_start.value = 0
-    for _ in range(int(os.getenv("BIST_DIRECTED_WAIT_CYCLES", "40"))):
+    for _ in range(int(os.getenv("BIST_DIRECTED_WAIT_CYCLES", "300"))):
         await _advance_time(dut)
         if cov:
             try:
@@ -755,6 +867,7 @@ async def register_mapped_memory_bist_directed(dut):
         input_init=_render_input_init(ports, _infer_clocks_resets(spec, ports)[0], _infer_clocks_resets(spec, ports)[1]),
         observable_outputs_json=json.dumps(observable_outputs, indent=2),
         register_map_json=json.dumps(register_map, indent=2, sort_keys=True),
+        register_bit_roles_json=json.dumps(register_bit_roles, indent=2, sort_keys=True),
     )
 
 
@@ -763,6 +876,7 @@ def _gen_cocotb_test(
     top: str,
     clocks: List[str],
     resets: List[Dict[str, Any]],
+    rtl_files: Optional[List[str]] = None,
     soc_mode: bool = False,
 ) -> str:
     ports = [] if soc_mode else _ports_from_spec(spec)
@@ -771,7 +885,7 @@ def _gen_cocotb_test(
     reset_seq = _render_reset_sequence(resets)
     randomizable_inputs = _build_randomizable_inputs(ports, clocks, resets)
     observable_outputs = _build_observable_outputs(ports)
-    directed_tests = _render_directed_tests(spec, ports, observable_outputs)
+    directed_tests = _render_directed_tests(spec, ports, observable_outputs, rtl_files)
 
     template = '''"""Auto-generated Cocotb testbench skeleton for: {top}
 
@@ -1316,7 +1430,7 @@ def run_agent(state: dict) -> dict:
     tb_root = os.path.join(workflow_dir, "vv", "tb")
     os.makedirs(tb_root, exist_ok=True)
 
-    test_py = _gen_cocotb_test(spec, top, clocks, resets, soc_mode=soc_mode)
+    test_py = _gen_cocotb_test(spec, top, clocks, resets, rtl_files=rtl_files, soc_mode=soc_mode)
     test_selection = state.get("random_vs_directed") or "both"
     testcase_manifest = _build_testcases_manifest(top, clocks, resets, mode, test_selection, directed_tests)
     closure_testcase_intents = [
