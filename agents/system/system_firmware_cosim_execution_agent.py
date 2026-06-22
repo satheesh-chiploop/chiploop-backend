@@ -1,6 +1,7 @@
 import datetime
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -179,6 +180,79 @@ def _find_verilog_inputs(state: Dict[str, Any], soc_top_path: str) -> List[str]:
     return _dedupe_keep_order([p for p in inputs if p.lower().endswith((".sv", ".v"))])
 
 
+def _module_names_from_file(path: str) -> List[str]:
+    try:
+        with open(path, "r", encoding="utf-8", errors="ignore") as f:
+            text = f.read()
+    except Exception:
+        return []
+    text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
+    text = re.sub(r"//.*", "", text)
+    return re.findall(r"(?m)^\s*module\s+([A-Za-z_][A-Za-z0-9_$]*)\b", text)
+
+
+def _desired_top_names(state: Dict[str, Any]) -> List[str]:
+    names: List[str] = []
+    keys = [
+        "soc_top_module",
+        "system_top_module",
+        "top_module",
+        "rtl_top_module",
+        "design_top",
+        "toplevel",
+    ]
+    for container in _all_state_containers(state):
+        for key in keys:
+            value = container.get(key)
+            if _is_nonempty_str(value):
+                names.append(str(value).strip())
+        hierarchy = container.get("hierarchy")
+        if isinstance(hierarchy, dict):
+            top = hierarchy.get("top_module")
+            if isinstance(top, dict) and _is_nonempty_str(top.get("name")):
+                names.append(str(top["name"]).strip())
+            elif _is_nonempty_str(top):
+                names.append(str(top).strip())
+    return _dedupe_keep_order(names)
+
+
+def _resolve_sim_top_module(state: Dict[str, Any], workflow_dir: str, soc_top_path: str, rtl_inputs: List[str]) -> str:
+    module_by_path: Dict[str, List[str]] = {}
+    for rel in rtl_inputs:
+        abs_path = _join_workflow_path(workflow_dir, rel)
+        if os.path.isfile(abs_path):
+            module_by_path[rel] = _module_names_from_file(abs_path)
+
+    modules = [name for names in module_by_path.values() for name in names]
+    desired = _desired_top_names(state)
+    for name in desired:
+        if name in modules:
+            return name
+
+    if soc_top_path:
+        for name in module_by_path.get(soc_top_path, []):
+            if name in modules:
+                return name
+
+    scored: List[tuple[int, str]] = []
+    for rel, names in module_by_path.items():
+        low_path = rel.lower()
+        for name in names:
+            low_name = name.lower()
+            score = 0
+            if "top" in low_name or "soc" in low_name or "controller" in low_name:
+                score += 40
+            if low_name.endswith("_model") or low_name.endswith("_wrapper"):
+                score -= 30
+            if "model" in low_path or "wrapper" in low_path:
+                score -= 10
+            scored.append((score, name))
+    if scored:
+        scored.sort(key=lambda item: item[0], reverse=True)
+        return scored[0][1]
+    return _basename_no_ext(soc_top_path) if soc_top_path else ""
+
+
 def _readiness(required: Dict[str, Any]) -> Dict[str, Any]:
     missing: List[str] = []
     present: List[str] = []
@@ -270,14 +344,30 @@ def _safe_read_json(path: str) -> Dict[str, Any]:
 
 
 
-def _run_cocotb_simulation(state: Dict[str, Any], workflow_dir: str, makefile_path: str, test_module: str) -> Dict[str, Any]:
+def _run_cocotb_simulation(
+    state: Dict[str, Any],
+    workflow_dir: str,
+    makefile_path: str,
+    test_module: str,
+    top_module: str,
+    rtl_inputs: List[str],
+) -> Dict[str, Any]:
     make_abs = _join_workflow_path(workflow_dir, makefile_path)
     if not os.path.isfile(make_abs):
         return {"attempted": False, "reason": "Makefile not found"}
     make_bin = tool_path("make", state)
     if not make_bin:
         return {"attempted": False, "reason": "make not available"}
+    if not top_module:
+        return {"attempted": False, "reason": "simulation top module could not be resolved"}
     make_dir = os.path.dirname(make_abs)
+    verilog_sources = [
+        _join_workflow_path(workflow_dir, rel)
+        for rel in rtl_inputs
+        if rel and os.path.isfile(_join_workflow_path(workflow_dir, rel))
+    ]
+    if not verilog_sources:
+        return {"attempted": False, "reason": "no Verilog/SystemVerilog sources found"}
     python_bin_dir = os.path.dirname(sys.executable)
     env = tool_env(state)
     env["PATH"] = os.pathsep.join(
@@ -291,7 +381,14 @@ def _run_cocotb_simulation(state: Dict[str, Any], workflow_dir: str, makefile_pa
         proc = run_command(
             state,
             "system_firmware_cosim",
-            [make_bin, "-f", make_abs, f"MODULE={test_module}"],
+            [
+                make_bin,
+                "-f",
+                make_abs,
+                f"MODULE={test_module}",
+                f"TOPLEVEL={top_module}",
+                f"VERILOG_SOURCES={' '.join(verilog_sources)}",
+            ],
             cwd=workflow_dir,
             env=env,
             timeout_sec=600,
@@ -299,6 +396,8 @@ def _run_cocotb_simulation(state: Dict[str, Any], workflow_dir: str, makefile_pa
         return {
             "attempted": True,
             "success": proc.returncode == 0,
+            "resolved_top_module": top_module,
+            "resolved_verilog_sources": [_safe_relpath(path, workflow_dir) for path in verilog_sources],
             "runtime_seconds": time.time() - start,
             "stdout": (proc.stdout or "")[-5000:],
             "stderr": (proc.stderr or "")[-5000:],
@@ -408,6 +507,7 @@ def run_agent(state: dict) -> dict:
             normalized_rtl.append(p)
 
     rtl_inputs = _dedupe_keep_order(normalized_rtl)
+    resolved_top_module = _resolve_sim_top_module(state, workflow_dir, soc_top_sim_path, rtl_inputs)
 
     
     elf_abs = _join_workflow_path(workflow_dir, firmware_elf_path) if firmware_elf_path else ""
@@ -417,6 +517,7 @@ def run_agent(state: dict) -> dict:
 
     required = {
         "soc_top_sim_path": soc_top_sim_path if soc_top_exists else "",
+        "resolved_top_module": resolved_top_module,
         "firmware_elf_path": firmware_elf_path if elf_exists else "",
         "makefile_path": makefile_path,
         "test_paths": test_paths,
@@ -424,7 +525,7 @@ def run_agent(state: dict) -> dict:
     }
     readiness = _readiness(required)
     runtime_requested = bool(state.get("execute_cosim") or state.get("run_cosim"))
-    runtime_capable = bool(makefile_path and elf_exists and soc_top_exists and test_paths)
+    runtime_capable = bool(makefile_path and elf_exists and soc_top_exists and test_paths and resolved_top_module and rtl_inputs)
 
     optional_inputs = {
         "coverage_model": coverage_model_path,
@@ -439,7 +540,7 @@ def run_agent(state: dict) -> dict:
     elif runtime_requested and runtime_capable:
         execution_mode = "runtime_execution"
         test_module = os.path.splitext(os.path.basename(test_paths[0]))[0]
-        sim_result = _run_cocotb_simulation(state, workflow_dir, makefile_path, test_module)
+        sim_result = _run_cocotb_simulation(state, workflow_dir, makefile_path, test_module, resolved_top_module, rtl_inputs)
         overall_status = "simulation_passed" if sim_result.get("success") else "simulation_failed"
     else:
         execution_mode = "artifact_readiness_only"
@@ -470,6 +571,7 @@ def run_agent(state: dict) -> dict:
             "coverage_model_path": coverage_model_path,
             "assertions_path": assertions_path,
             "rtl_inputs": rtl_inputs,
+            "resolved_top_module": resolved_top_module,
         },
         "test_matrix": test_matrix,
         "results": {
@@ -484,6 +586,8 @@ def run_agent(state: dict) -> dict:
             "runtime_capable": runtime_capable,
             "stdout_tail": sim_result.get("stdout") if sim_result else "",
             "stderr_tail": sim_result.get("stderr") if sim_result else "",
+            "resolved_top_module": sim_result.get("resolved_top_module") if sim_result else resolved_top_module,
+            "resolved_verilog_sources": sim_result.get("resolved_verilog_sources") if sim_result else rtl_inputs,
         },
         "elf_detection_source": "state_flag" if state.get("firmware_elf_exists") else "filesystem",
         "notes": _build_notes(readiness, optional_inputs, runtime_requested, runtime_capable),
@@ -513,7 +617,7 @@ def run_agent(state: dict) -> dict:
         "rtl_inputs": rtl_inputs,
         "assertions_detected": bool(assertions_path),
         "coverage_model_detected": bool(coverage_model_path),
-        "soc_top_module": _basename_no_ext(soc_top_sim_path) if soc_top_sim_path else None,
+        "soc_top_module": resolved_top_module or (_basename_no_ext(soc_top_sim_path) if soc_top_sim_path else None),
         "summary_path": f"{OUTPUT_SUBDIR}/{SUMMARY_MD}",
     }
 

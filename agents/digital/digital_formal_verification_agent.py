@@ -208,14 +208,14 @@ def _gen_sby(
     rst: Optional[Dict[str, Any]],
     solver: str = "z3",
     base_dir: Optional[str] = None,
+    depth: int = 20,
 ) -> str:
     rel_files = [
         os.path.relpath(os.path.abspath(f), os.path.abspath(base_dir)) if base_dir else os.path.relpath(f)
         for f in rtl_files[:200]
     ]
-    script_files = [os.path.basename(path) for path in rel_files]
     files_block = "\n".join(rel_files)
-    read_cmds = "\n".join([f"read_verilog -sv {rf}" for rf in script_files])
+    read_cmds = "\n".join([f"read_verilog -sv {rf}" for rf in rel_files])
 
     clock_comment = f"clock {clk}" if clk else "clock <clk> (no clock detected)"
     reset_comment = ""
@@ -226,7 +226,7 @@ def _gen_sby(
 
 [options]
 mode bmc
-depth 40
+depth {max(int(depth), 1)}
 multiclock on
 
 [engines]
@@ -291,6 +291,28 @@ def _is_integrated_mbist_handoff(state: Dict[str, Any]) -> bool:
     return isinstance(handoff, dict) and handoff.get("mbist_integrated_rtl") is True
 
 
+def _formal_depth(state: Dict[str, Any], memory_macro_formal_limited: bool) -> int:
+    raw = state.get("formal_depth") or state.get("bmc_depth")
+    try:
+        depth = int(raw)
+    except Exception:
+        depth = 12 if memory_macro_formal_limited else 40
+    if memory_macro_formal_limited:
+        return max(4, min(depth, 16))
+    return max(4, min(depth, 80))
+
+
+def _formal_timeout_sec(state: Dict[str, Any], memory_macro_formal_limited: bool) -> int:
+    raw = state.get("formal_timeout_sec")
+    try:
+        timeout = int(raw)
+    except Exception:
+        timeout = 180 if memory_macro_formal_limited else 600
+    if memory_macro_formal_limited:
+        return max(30, min(timeout, 240))
+    return max(60, min(timeout, 900))
+
+
 def run_agent(state: dict) -> dict:
     agent_name = "Formal Verification Agent"
     print("\n🧠 Running Formal Verification Agent (SymbiYosys)...")
@@ -317,11 +339,13 @@ def run_agent(state: dict) -> dict:
     formal_solver = _formal_solver_from_state(state)
     memory_macro_formal_limited = _is_memory_macro_or_mbist_run(state, rtl_files)
     integrated_mbist_formal_default = _is_integrated_mbist_handoff(state)
+    formal_depth = _formal_depth(state, memory_macro_formal_limited)
+    formal_timeout = _formal_timeout_sec(state, memory_macro_formal_limited)
 
     formal_root = os.path.join(workflow_dir, "vv", "formal")
     os.makedirs(formal_root, exist_ok=True)
 
-    sby_txt = _gen_sby(top, rtl_files, clk, rst, formal_solver, formal_root)
+    sby_txt = _gen_sby(top, rtl_files, clk, rst, formal_solver, formal_root, depth=formal_depth)
     props_sv = _gen_formal_props(top, clk, rst)
 
     _write_file(os.path.join(formal_root, f"{top}.sby"), sby_txt)
@@ -353,7 +377,7 @@ def run_agent(state: dict) -> dict:
         run_result["attempted"] = True
         try:
             cmd = ["sby", "-f", f"{top}.sby"]
-            p = run_command(state, "formal_verification", cmd, cwd=formal_root, timeout_sec=600)
+            p = run_command(state, "formal_verification", cmd, cwd=formal_root, timeout_sec=formal_timeout)
             run_result.update(
                 {
                     "returncode": p.returncode,
@@ -392,6 +416,8 @@ def run_agent(state: dict) -> dict:
             "formal_solver": formal_solver,
         },
         "deep_formal_default": integrated_mbist_formal_default,
+        "formal_depth": formal_depth,
+        "formal_timeout_sec": formal_timeout,
         "status": run_result.get("status") or (
             "pass" if run_result.get("attempted") and run_result.get("returncode") == 0
             else "fail" if run_result.get("attempted")

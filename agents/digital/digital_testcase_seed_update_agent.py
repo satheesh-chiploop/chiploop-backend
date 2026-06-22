@@ -1,6 +1,6 @@
 import json
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
 from utils.artifact_utils import save_text_artifact_and_record
 
@@ -63,6 +63,68 @@ def _allowed_tests(selection: str, state: Dict[str, Any]) -> List[str]:
     return list(dict.fromkeys(base))
 
 
+def _test_available(allowed_tests: List[str], *candidates: str) -> str:
+    allowed = set(allowed_tests)
+    for candidate in candidates:
+        if candidate in allowed:
+            return candidate
+    return allowed_tests[0] if allowed_tests else "smoke_test"
+
+
+def _classify_gap(point: Dict[str, Any]) -> Tuple[str, str]:
+    text = " ".join(
+        str(point.get(key) or "")
+        for key in ("coverage_point", "signal", "source_gap_type", "source", "id")
+    ).lower()
+    missing = " ".join(str(item) for item in point.get("target_bins") or point.get("missing_bins") or []).lower()
+    if any(token in text for token in ("bist", "irq")):
+        if "fail" in text and "nonzero" in missing:
+            return "unreachable_or_fault_injection", "BIST fail requires fault-injection or failing memory behavior; do not expect normal directed tests to hit it."
+        return "bist_status_irq", "Exercise BIST start/status and IRQ-enable register paths."
+    if any(token in text for token in ("rd_data", "mem", "sram", "addr", "din", "dout", "csb", "web", "wr_", "rd_")):
+        return "register_mapped_memory", "Exercise memory address/data/control registers and wrapper enable signals."
+    if any(token in text for token in ("toggle", "branch", "condition", "line")):
+        return "code_coverage", "Prefer semantic directed tests, then constrained random seeds for residual code coverage."
+    return "generic", "Use the best available directed/random test for the remaining coverage point."
+
+
+def _map_gap_to_test(
+    point: Dict[str, Any],
+    allowed_tests: List[str],
+    selection: str,
+    default_smoke: str,
+    default_random: str,
+) -> Tuple[str, str, str]:
+    if selection == "random":
+        return default_random, "random_only", "User selected random closure; use constrained-random seed expansion."
+
+    gap_class, rationale = _classify_gap(point)
+    if gap_class in {"bist_status_irq", "register_mapped_memory"}:
+        mapped = _test_available(
+            allowed_tests,
+            "register_mapped_memory_bist_directed",
+            "memory_write_read_directed",
+            "bist_start_directed",
+            default_random,
+        )
+        return mapped, gap_class, rationale
+    if gap_class == "unreachable_or_fault_injection":
+        mapped = _test_available(allowed_tests, "bist_start_directed", "register_mapped_memory_bist_directed", default_random)
+        return mapped, gap_class, rationale
+    if gap_class == "code_coverage":
+        mapped = _test_available(
+            allowed_tests,
+            "register_mapped_memory_bist_directed",
+            "memory_write_read_directed",
+            "bist_start_directed",
+            default_random,
+        )
+        return mapped, gap_class, rationale
+    if selection == "directed":
+        return default_smoke, gap_class, rationale
+    return default_random, gap_class, rationale
+
+
 def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     workflow_id = str(state.get("workflow_id") or "default")
     workflow_dir = Path(str(state.get("workflow_dir") or f"backend/workflows/{workflow_id}"))
@@ -84,9 +146,13 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     testcase_intents: List[Dict[str, Any]] = []
     for idx, point in enumerate(added_points[:12], start=1):
         source_gap_type = str(point.get("source_gap_type") or "")
-        mapped_test = default_smoke if selection == "directed" else default_random
-        if selection == "both" and source_gap_type in {"functional_bin_gap", "functional_coverage_below_target"}:
-            mapped_test = default_smoke
+        mapped_test, gap_class, rationale = _map_gap_to_test(
+            point,
+            allowed_tests,
+            selection,
+            default_smoke,
+            default_random,
+        )
         testcase_intents.append({
             "name": f"closure_cov_{iteration:03d}_{idx:03d}",
             "kind": "code_coverage_intent" if source_gap_type.startswith("code_") else "coverage_directed_intent",
@@ -94,6 +160,8 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
             "source": point.get("source"),
             "executable": mapped_test in allowed_tests,
             "mapped_executable_test": mapped_test if mapped_test in allowed_tests else allowed_tests[0],
+            "gap_class": gap_class,
+            "closure_rationale": rationale,
             "coverage_point": point.get("coverage_point"),
             "traceability_id": point.get("id"),
         })
@@ -138,6 +206,12 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
         "testcase_intents": testcase_intents,
         "seeds_added": len(seed_plan),
         "simulation_seeds": seed_plan,
+        "closure_strategy": {
+            "allowed_tests": allowed_tests,
+            "selected_tests": executable_tests,
+            "semantic_mapping_enabled": True,
+            "iteration_goal": "Map each unresolved coverage gap to an executable directed/random test before rerun.",
+        },
         "note": "Closure testcase intents are traceable. Rerun executes only tests with generated Cocotb functions.",
     }
     report_txt = json.dumps(report, indent=2)

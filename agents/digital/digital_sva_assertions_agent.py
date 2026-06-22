@@ -220,6 +220,38 @@ def _normalize_direction(value: Any) -> str:
     return s
 
 
+def _port_width_expr(port: Dict[str, Any]) -> str:
+    width = port.get("width")
+    msb = port.get("msb")
+    lsb = port.get("lsb")
+    rng = port.get("range")
+
+    if isinstance(width, int) and width >= 1:
+        return str(width)
+    if isinstance(width, str) and width.strip():
+        return width.strip()
+    if msb is not None and lsb is not None:
+        return f"(({msb}) - ({lsb}) + 1)"
+    if isinstance(rng, str):
+        m = re.match(r"\[\s*(.+?)\s*:\s*(.+?)\s*\]", rng.strip())
+        if m:
+            return f"(({m.group(1)}) - ({m.group(2)}) + 1)"
+    return "1"
+
+
+def _logic_decl(name: str, width_expr: Any) -> str:
+    width = str(width_expr or "1").strip()
+    try:
+        width_i = int(width)
+    except Exception:
+        width_i = 1
+    if width_i <= 1 and width in {"", "1"}:
+        return f"input logic {name}"
+    if width_i > 1:
+        return f"input logic [{width_i - 1}:0] {name}"
+    return f"input logic [(({width}) - 1):0] {name}"
+
+
 def _infer_clocks_resets(spec: Dict[str, Any], ports: List[Dict[str, Any]]) -> Tuple[List[str], List[Dict[str, Any]]]:
     clocks: List[str] = []
     resets: List[Dict[str, Any]] = []
@@ -368,6 +400,7 @@ def _build_sva_spec(spec: Dict[str, Any], top: str, soc_mode: bool = False) -> D
             {
                 "name": str(name),
                 "direction": _normalize_direction(p.get("direction")),
+                "width_expr": _port_width_expr(p),
             }
         )
 
@@ -391,6 +424,7 @@ def _default_sva_module(module_name: str, sva_spec: Dict[str, Any]) -> str:
 
     inputs = [p["name"] for p in ports if p.get("direction") == "input"]
     outputs = [p["name"] for p in ports if p.get("direction") == "output"]
+    widths = {str(p.get("name")): str(p.get("width_expr") or "1") for p in ports if p.get("name")}
 
     module_ports: List[str] = []
 
@@ -406,7 +440,7 @@ def _default_sva_module(module_name: str, sva_spec: Dict[str, Any]) -> str:
     for nm in outputs:
         all_ports.add(nm)
 
-    module_ports = [f"  input logic {nm}" for nm in sorted(all_ports)]
+    module_ports = [f"  {_logic_decl(nm, widths.get(nm, '1'))}" for nm in sorted(all_ports)]
     
     if not module_ports:
         module_ports.append("  input logic dummy_clk")

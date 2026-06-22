@@ -488,7 +488,86 @@ def _has_port(ports: List[Dict[str, Any]], name: str, direction: Optional[str] =
     return False
 
 
-def _detected_directed_tests(ports: List[Dict[str, Any]]) -> List[str]:
+def _spec_text(spec: Dict[str, Any]) -> str:
+    try:
+        return json.dumps(spec, sort_keys=True).lower()
+    except Exception:
+        return ""
+
+
+def _parse_int(value: Any) -> Optional[int]:
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        text = value.strip()
+        try:
+            return int(text, 0)
+        except Exception:
+            return None
+    return None
+
+
+def _collect_register_map(spec: Dict[str, Any]) -> Dict[str, int]:
+    regs: Dict[str, int] = {}
+
+    def add_register(name: Any, offset: Any) -> None:
+        reg_name = str(name or "").strip().upper()
+        reg_offset = _parse_int(offset)
+        if reg_name and reg_offset is not None:
+            regs.setdefault(reg_name, reg_offset)
+
+    def walk_registers(obj: Any) -> None:
+        if isinstance(obj, dict):
+            raw_regs = obj.get("registers")
+            if isinstance(raw_regs, list):
+                for item in raw_regs:
+                    if isinstance(item, dict):
+                        add_register(
+                            item.get("name") or item.get("register") or item.get("id"),
+                            item.get("offset") or item.get("address") or item.get("addr"),
+                        )
+            nested = obj.get("regmap") or obj.get("register_map") or obj.get("register_contract")
+            if isinstance(nested, (dict, list)) and nested is not obj:
+                walk_registers(nested)
+        elif isinstance(obj, list):
+            for item in obj:
+                walk_registers(item)
+
+    walk_registers(spec.get("register_contract"))
+    walk_registers(spec.get("register_map"))
+    walk_registers(spec.get("regmap"))
+
+    rules: List[str] = []
+    hierarchy = spec.get("hierarchy") if isinstance(spec.get("hierarchy"), dict) else {}
+    top = hierarchy.get("top_module") if isinstance(hierarchy.get("top_module"), dict) else {}
+    for source in (spec.get("behavior_rules"), top.get("behavior_rules")):
+        if isinstance(source, list):
+            rules.extend(str(item) for item in source)
+        elif isinstance(source, str):
+            rules.append(source)
+    rules.extend(str(item) for item in spec.get("verification_requirements", []) if item)
+    rules_text = " ".join(rules)
+    for match in re.finditer(r"0x([0-9a-fA-F]+)\s+([A-Za-z_][A-Za-z0-9_]*)", rules_text):
+        add_register(match.group(2), f"0x{match.group(1)}")
+
+    return regs
+
+
+def _has_register_mapped_memory_bist_intent(spec: Dict[str, Any], ports: List[Dict[str, Any]]) -> bool:
+    if not all(_has_port(ports, name, "input") for name in ("wr_en", "wr_addr", "wr_data", "rd_en", "rd_addr")):
+        return False
+    if not _has_port(ports, "rd_data", "output"):
+        return False
+    regmap = _collect_register_map(spec)
+    if {"MEM_CONTROL", "MEM_ADDR", "MEM_WDATA"} & set(regmap):
+        return True
+    text = _spec_text(spec)
+    register_tokens = ("mem_control", "mem_addr", "mem_wdata", "mem_rdata", "bist_control", "bist_status")
+    return any(token in text for token in register_tokens)
+
+
+def _detected_directed_tests(ports: List[Dict[str, Any]], spec: Optional[Dict[str, Any]] = None) -> List[str]:
+    spec = spec or {}
     tests: List[str] = []
     has_memory_access = all(
         _has_port(ports, name, "input")
@@ -502,15 +581,18 @@ def _detected_directed_tests(ports: List[Dict[str, Any]]) -> List[str]:
     )
     if has_bist:
         tests.append("bist_start_directed")
+    if _has_register_mapped_memory_bist_intent(spec, ports):
+        tests.append("register_mapped_memory_bist_directed")
     return tests
 
 
-def _render_directed_tests(ports: List[Dict[str, Any]], observable_outputs: List[Dict[str, Any]]) -> str:
-    tests = _detected_directed_tests(ports)
+def _render_directed_tests(spec: Dict[str, Any], ports: List[Dict[str, Any]], observable_outputs: List[Dict[str, Any]]) -> str:
+    tests = _detected_directed_tests(ports, spec)
     if not tests:
         return ""
 
     blocks: List[str] = []
+    register_map = _collect_register_map(spec)
     if "memory_write_read_directed" in tests:
         blocks.append(
             '''
@@ -572,7 +654,108 @@ async def bist_start_directed(dut):
 '''
         )
 
-    return "\n".join(blocks)
+    if "register_mapped_memory_bist_directed" in tests:
+        blocks.append(
+            '''
+@cocotb.test()
+async def register_mapped_memory_bist_directed(dut):
+    """Directed register-map SRAM/BIST test for common wr_en/rd_en MMIO-style interfaces."""
+
+{clock_start}
+
+{reset_seq}
+
+    # Initialize discoverable DUT inputs from spec
+{input_init}
+
+    register_map = {register_map_json}
+
+    async def write_reg(addr, data):
+        dut.wr_addr.value = int(addr) & 0xFF
+        dut.wr_data.value = int(data) & 0xFFFFFFFF
+        dut.wr_en.value = 1
+        await _advance_time(dut)
+        dut.wr_en.value = 0
+        await _advance_time(dut)
+
+    async def read_reg(addr):
+        dut.rd_addr.value = int(addr) & 0xFF
+        dut.rd_en.value = 1
+        await _advance_time(dut)
+        await _advance_time(dut)
+        dut.rd_en.value = 0
+        await _advance_time(dut)
+
+    cov = CoverageModel() if CoverageModel else None
+    if cov:
+        cov.start(dut)
+
+    test_addr = int(os.getenv("DIRECTED_MEM_ADDR", "3"))
+    test_data = int(os.getenv("DIRECTED_MEM_DATA", "2779096485"))
+
+    if "CONTROL" in register_map:
+        await write_reg(register_map["CONTROL"], 0x00000005)
+    if "MEM_ADDR" in register_map:
+        await write_reg(register_map["MEM_ADDR"], test_addr)
+    if "MEM_WDATA" in register_map:
+        await write_reg(register_map["MEM_WDATA"], test_data)
+    if "MEM_CONTROL" in register_map:
+        await write_reg(register_map["MEM_CONTROL"], 0x00000001)
+        await write_reg(register_map["MEM_CONTROL"], 0x00000000)
+        await write_reg(register_map["MEM_CONTROL"], 0x00000002)
+        await write_reg(register_map["MEM_CONTROL"], 0x00000000)
+
+    for reg_name in ("STATUS", "MEM_ADDR", "MEM_WDATA", "MEM_RDATA", "MEM_CONTROL"):
+        if reg_name in register_map:
+            await read_reg(register_map[reg_name])
+            if cov:
+                try:
+                    cov.sample()
+                except Exception:
+                    pass
+
+    if "BIST_CONTROL" in register_map:
+        await write_reg(register_map["BIST_CONTROL"], 0x00000001)
+        await write_reg(register_map["BIST_CONTROL"], 0x00000000)
+    dut.bist_start.value = 1
+    await _advance_time(dut)
+    dut.bist_start.value = 0
+    for _ in range(int(os.getenv("BIST_DIRECTED_WAIT_CYCLES", "40"))):
+        await _advance_time(dut)
+        if cov:
+            try:
+                cov.sample()
+            except Exception:
+                pass
+        if hasattr(dut, "bist_done") and int(dut.bist_done.value) == 1:
+            break
+    for reg_name in ("BIST_STATUS", "IRQ_STATUS"):
+        if reg_name in register_map:
+            await read_reg(register_map[reg_name])
+            if cov:
+                try:
+                    cov.sample()
+                except Exception:
+                    pass
+
+    if cov:
+        try:
+            cov.stop()
+            cov.write_reports()
+        except Exception:
+            pass
+
+    _assert_outputs_known(dut, {observable_outputs_json})
+'''
+        )
+
+    return "\n".join(blocks).format(
+        clock_start=_render_clock_start(_infer_clocks_resets(spec, ports)[0]),
+        reset_seq=_render_reset_sequence(_infer_clocks_resets(spec, ports)[1]),
+        input_init=_render_input_init(ports, _infer_clocks_resets(spec, ports)[0], _infer_clocks_resets(spec, ports)[1]),
+        observable_outputs_json=json.dumps(observable_outputs, indent=2),
+        register_map_json=json.dumps(register_map, indent=2, sort_keys=True),
+    )
 
 
 def _gen_cocotb_test(
@@ -588,7 +771,7 @@ def _gen_cocotb_test(
     reset_seq = _render_reset_sequence(resets)
     randomizable_inputs = _build_randomizable_inputs(ports, clocks, resets)
     observable_outputs = _build_observable_outputs(ports)
-    directed_tests = _render_directed_tests(ports, observable_outputs)
+    directed_tests = _render_directed_tests(spec, ports, observable_outputs)
 
     template = '''"""Auto-generated Cocotb testbench skeleton for: {top}
 
@@ -755,12 +938,7 @@ async def constrained_random_sanity(dut):
         input_init=input_init,
         randomizable_inputs_json=json.dumps(randomizable_inputs, indent=2),
         observable_outputs_json=json.dumps(observable_outputs, indent=2),
-        directed_tests=directed_tests.format(
-            clock_start=clock_start.rstrip(),
-            reset_seq=reset_seq.rstrip(),
-            input_init=input_init,
-            observable_outputs_json=json.dumps(observable_outputs, indent=2),
-        ) if directed_tests else "",
+        directed_tests=directed_tests,
     )
 
 def _selected_default_tests(selection: Any, directed_tests: Optional[List[str]] = None) -> List[str]:
@@ -1126,7 +1304,7 @@ def run_agent(state: dict) -> dict:
 
     ports = [] if soc_mode else _ports_from_spec(spec)
     clocks, resets = _infer_clocks_resets(spec, ports)
-    directed_tests = _detected_directed_tests(ports)
+    directed_tests = _detected_directed_tests(ports, spec)
 
     _log(log_path, f"resolved_mode={mode}")
     _log(log_path, f"spec_path={spec_path}")

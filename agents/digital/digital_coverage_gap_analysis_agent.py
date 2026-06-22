@@ -44,6 +44,20 @@ def _functional_gaps(cov: Dict[str, Any]) -> List[Dict[str, Any]]:
                     missing_bins.append("zero")
                 if not seen_nonzero:
                     missing_bins.append("nonzero")
+                reachable = True
+                closure_action = "directed_stimulus"
+                recommendation = (
+                    f"Add directed stimulus and checker sampling for {group}.{name}; "
+                    f"target missing bins: {', '.join(missing_bins) if missing_bins else 'unknown'}."
+                )
+                if group == "outputs" and "fail" in str(name).lower() and "nonzero" in missing_bins:
+                    reachable = False
+                    closure_action = "fault_injection_or_waiver"
+                    recommendation = (
+                        f"{group}.{name} nonzero is an error/fault bin. Hit it with explicit fault-injection "
+                        "stimulus if supported, otherwise carry it as a reviewed coverage exclusion instead of "
+                        "rerunning normal stimulus."
+                    )
                 gaps.append({
                     "type": "functional_bin_gap",
                     "signal": name,
@@ -53,10 +67,9 @@ def _functional_gaps(cov: Dict[str, Any]) -> List[Dict[str, Any]]:
                     "total_bins": total,
                     "seen_values": seen_values[:20],
                     "missing_bins": missing_bins,
-                    "recommendation": (
-                        f"Add directed stimulus and checker sampling for {group}.{name}; "
-                        f"target missing bins: {', '.join(missing_bins) if missing_bins else 'unknown'}."
-                    ),
+                    "reachable_by_normal_stimulus": reachable,
+                    "closure_action": closure_action,
+                    "recommendation": recommendation,
                 })
     return gaps
 
