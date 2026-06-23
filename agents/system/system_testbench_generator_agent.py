@@ -448,14 +448,22 @@ def _build_control_model(regmap: Dict[str, Any], ports: List[Dict[str, Any]]) ->
     regs = (rm or {}).get("registers") or []
 
     by_name: Dict[str, Dict[str, Any]] = {}
+    normalized_registers: List[Dict[str, Any]] = []
     for r in regs:
         if isinstance(r, dict) and r.get("name"):
             by_name[str(r["name"])] = r
+            normalized_registers.append({
+                "name": str(r.get("name")),
+                "offset": r.get("offset") or r.get("address") or r.get("addr"),
+                "access": str(r.get("access") or ""),
+                "fields": r.get("fields") if isinstance(r.get("fields"), list) else [],
+            })
 
     return {
         "has_regmap": bool(by_name),
         "register_count": len(by_name),
         "register_names": sorted(list(by_name.keys())),
+        "registers": normalized_registers,
         "top_input_ports": sorted([str(p.get("name")) for p in ports if _normalize_direction(p.get("direction")) in ("input", "inout")]),
         "top_output_ports": sorted([str(p.get("name")) for p in ports if _normalize_direction(p.get("direction")) in ("output", "out", "inout")]),
     }
@@ -484,6 +492,16 @@ def _system_scenarios_from_regmap(regmap: Dict[str, Any]) -> Dict[str, Any]:
         "has_regmap": bool(regs),
         "register_count": len(regs),
         "register_names": [str(r.get("name")) for r in regs if isinstance(r, dict) and r.get("name")],
+        "registers": [
+            {
+                "name": str(r.get("name")),
+                "offset": r.get("offset") or r.get("address") or r.get("addr"),
+                "access": str(r.get("access") or ""),
+                "fields": r.get("fields") if isinstance(r.get("fields"), list) else [],
+            }
+            for r in regs
+            if isinstance(r, dict) and r.get("name")
+        ],
     }
 
 # -----------------------------------------------------------------------------
@@ -738,6 +756,127 @@ def _safe_drive_random(sig, width_expr: str):
     sig.value = random.getrandbits(width)
 
 
+def _parse_int(value, default=0):
+    try:
+        if isinstance(value, int):
+            return value
+        text = str(value).strip().lower()
+        if text.startswith("0x"):
+            return int(text, 16)
+        return int(text, 10)
+    except Exception:
+        return default
+
+
+def _registers():
+    regs = CONTROL_MODEL.get("registers") or SCENARIO_MODEL.get("registers") or []
+    return [r for r in regs if isinstance(r, dict) and r.get("name")]
+
+
+def _bus_available(dut):
+    return all(hasattr(dut, name) for name in ("wr_en", "wr_addr", "wr_data", "rd_en", "rd_addr"))
+
+
+async def _write_reg(dut, reg, value, cov=None):
+    if not _bus_available(dut):
+        return False
+    offset = _parse_int(reg.get("offset") or reg.get("address") or reg.get("addr"), 0)
+    getattr(dut, "wr_addr").value = offset
+    getattr(dut, "wr_data").value = int(value) & 0xFFFF
+    getattr(dut, "wr_en").value = 1
+    await _advance_time(dut)
+    getattr(dut, "wr_en").value = 0
+    await _advance_time(dut)
+    if cov:
+        try:
+            cov.note_register_write(str(reg.get("name")), int(value))
+        except Exception:
+            pass
+    return True
+
+
+async def _read_reg(dut, reg, cov=None):
+    if not _bus_available(dut):
+        return 0
+    offset = _parse_int(reg.get("offset") or reg.get("address") or reg.get("addr"), 0)
+    getattr(dut, "rd_addr").value = offset
+    getattr(dut, "rd_en").value = 1
+    await _advance_time(dut)
+    value = 0
+    if hasattr(dut, "rd_data"):
+        try:
+            value = int(getattr(dut, "rd_data").value)
+        except Exception:
+            value = 0
+    getattr(dut, "rd_en").value = 0
+    await _advance_time(dut)
+    if cov:
+        try:
+            cov.note_register_read(str(reg.get("name")), value)
+        except Exception:
+            pass
+    return value
+
+
+def _write_value_for(reg, seed, index):
+    fields = reg.get("fields") if isinstance(reg.get("fields"), list) else []
+    value = 0
+    for field in fields:
+        try:
+            lsb = int(field.get("lsb", field.get("bit_offset", 0)) or 0)
+            msb = int(field.get("msb", lsb) or lsb)
+            width = max(msb - lsb + 1, 1)
+            value |= ((1 << min(width, 8)) - 1) << lsb
+        except Exception:
+            continue
+    if value == 0:
+        value = ((seed + 1) * (index + 3) * 17) & 0xFFFF
+    return value & 0xFFFF
+
+
+async def _exercise_register_model(dut, cov=None):
+    regs = _registers()
+    seed = _seed()
+    for index, reg in enumerate(regs):
+        access = str(reg.get("access") or "").upper()
+        if "W" in access:
+            await _write_reg(dut, reg, _write_value_for(reg, seed, index), cov)
+        if "R" in access:
+            await _read_reg(dut, reg, cov)
+        if cov:
+            try:
+                cov.sample()
+            except Exception:
+                pass
+
+
+async def _sweep_inputs_for_output_activity(dut, cov=None):
+    patterns = (0, 1, 3, 15, 85, 170, 255, 1023, 4095, 65535)
+    excluded = set({clocks_json}) | set({reset_names_json})
+    inputs = [p for p in {randomizable_inputs_json} if p.get("name") not in excluded]
+    for step, pattern in enumerate(patterns):
+        for p in inputs:
+            name = p.get("name")
+            if not name or not hasattr(dut, name):
+                continue
+            try:
+                sig = getattr(dut, name)
+                width_expr = str(p.get("width_expr", "1"))
+                try:
+                    width = max(int(width_expr), 1)
+                except Exception:
+                    width = max(len(sig.value.binstr), 1)
+                sig.value = (pattern + step + _seed()) & ((1 << min(width, 16)) - 1)
+            except Exception:
+                continue
+        await _advance_time(dut)
+        if cov:
+            try:
+                cov.sample()
+            except Exception:
+                pass
+
+
 
 
 async def apply_control_sequence(dut):
@@ -781,6 +920,7 @@ async def system_smoke_test(dut):
     # System-level smoke test should remain generic here.
     # Concrete behavior should come from LLM-derived test intent, not hardcoded register names or transport assumptions.
     await apply_control_sequence(dut)
+    await _exercise_register_model(dut, cov)
 
     for _ in range(20):
         await _advance_time(dut)
@@ -849,6 +989,67 @@ async def integrated_input_sanity(dut):
             cov.write_reports()
         except Exception:
             pass
+
+
+@cocotb.test()
+async def register_access_directed(dut):
+    """Metadata-driven register read/write test for coverage closure."""
+    random.seed(_seed())
+
+{clock_start}
+
+{reset_seq}
+
+    # Initialize discoverable DUT inputs from integrated top contract
+{input_init}
+
+    cov = CoverageModel() if CoverageModel else None
+    if cov:
+        cov.start(dut)
+
+    await _exercise_register_model(dut, cov)
+
+    for _ in range(12):
+        await _advance_time(dut)
+        if cov:
+            try:
+                cov.sample()
+            except Exception:
+                pass
+
+    if cov:
+        try:
+            cov.stop()
+            cov.write_reports()
+        except Exception:
+            pass
+
+
+@cocotb.test()
+async def output_activation_sweep(dut):
+    """Metadata-driven input sweep intended to activate output and toggle bins."""
+    random.seed(_seed())
+
+{clock_start}
+
+{reset_seq}
+
+    # Initialize discoverable DUT inputs from integrated top contract
+{input_init}
+
+    cov = CoverageModel() if CoverageModel else None
+    if cov:
+        cov.start(dut)
+
+    await _sweep_inputs_for_output_activity(dut, cov)
+    await _exercise_register_model(dut, cov)
+
+    if cov:
+        try:
+            cov.stop()
+            cov.write_reports()
+        except Exception:
+            pass
 '''
     def _to_python_literal(obj):
         return repr(obj)
@@ -862,6 +1063,7 @@ async def integrated_input_sanity(dut):
         .replace("{reset_seq}", reset_seq.rstrip())
         .replace("{input_init}", input_init)
         .replace("{randomizable_inputs_json}", json.dumps(randomizable_inputs, indent=2))
+        .replace("{reset_names_json}", json.dumps([r["name"] for r in resets], indent=2))
     )
 
 
@@ -889,6 +1091,26 @@ def _build_testcases_manifest(top: str, clocks: List[str], resets: List[Dict[str
             "reset_names": reset_names,
             "tags": ["system", "sanity", "inputs"],
             "timeout_ns": 1000,
+        },
+        {
+            "name": "register_access_directed",
+            "description": "Metadata-driven register access test generated from the discovered register map.",
+            "kind": "directed_register_access",
+            "top_module": top,
+            "clock_names": clock_names,
+            "reset_names": reset_names,
+            "tags": ["system", "directed", "registers", "coverage"],
+            "timeout_ns": 2000,
+        },
+        {
+            "name": "output_activation_sweep",
+            "description": "Metadata-driven input sweep to activate output, branch, and toggle coverage bins.",
+            "kind": "directed_output_activation",
+            "top_module": top,
+            "clock_names": clock_names,
+            "reset_names": reset_names,
+            "tags": ["system", "directed", "outputs", "coverage"],
+            "timeout_ns": 2000,
         },
     ]
 

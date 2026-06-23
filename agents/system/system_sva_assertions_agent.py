@@ -140,11 +140,21 @@ def _find_system_integration_json(workflow_dir: str) -> Optional[str]:
 def _find_soc_top_sim_path(workflow_dir: str) -> Optional[str]:
     candidates = [
         os.path.join(workflow_dir, "system", "integration", "soc_top_sim.sv"),
+        os.path.join(workflow_dir, "system", "imported_rtl", "soc_top_sim.sv"),
         os.path.join(workflow_dir, "soc_top_sim.sv"),
     ]
     for p in candidates:
         if os.path.exists(p):
             return p
+    imported_dir = os.path.join(workflow_dir, "system", "imported_rtl")
+    if os.path.isdir(imported_dir):
+        matches = sorted(
+            os.path.join(imported_dir, fn)
+            for fn in os.listdir(imported_dir)
+            if fn.lower().endswith((".sv", ".v")) and "soc" in fn.lower() and "sim" in fn.lower()
+        )
+        if matches:
+            return matches[0]
     return None
 
 
@@ -198,7 +208,9 @@ def _collect_system_rtl_files(workflow_dir: str) -> List[str]:
     exts = (".v", ".sv", ".vh", ".svh")
     scan_dirs = [
         os.path.join(workflow_dir, "system", "integration"),
+        os.path.join(workflow_dir, "system", "imported_rtl"),
         os.path.join(workflow_dir, "digital", "rtl_refactored"),
+        os.path.join(workflow_dir, "digital", "rtl"),
         os.path.join(workflow_dir, "analog"),
     ]
     out: List[str] = []

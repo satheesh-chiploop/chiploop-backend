@@ -108,7 +108,7 @@ def test_system_sim_closure_updates_system_specific_seed_keys(tmp_path, monkeypa
         "source_system_sim_workflow_id": "system-parent",
         "source_simulation_manifest": {
             "top_module": "temp_monitor_soc_sim",
-            "default_tests": ["system_smoke_test", "integrated_input_sanity"],
+            "default_tests": ["system_smoke_test", "integrated_input_sanity", "register_access_directed", "output_activation_sweep"],
         },
         "closure_added_coverage_points": [
             {"id": "COV_ITER001_001", "source_gap_type": "functional_bin_gap", "coverage_point": "outputs.alert_irq"}
@@ -119,7 +119,7 @@ def test_system_sim_closure_updates_system_specific_seed_keys(tmp_path, monkeypa
 
     testcase_seed_agent.run_agent(state)
 
-    assert state["system_sim_testcases"] == ["system_smoke_test"]
+    assert state["system_sim_testcases"] == ["register_access_directed"]
     assert state["system_sim_seeds"] == [1, 2, 3, 4]
     assert state["simulation_seeds"] == [1, 2, 3, 4]
 

@@ -1,11 +1,15 @@
 import os
+import sys
+from pathlib import Path
 
 os.environ.setdefault("SUPABASE_URL", "http://localhost:54321")
 os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-service-role-key")
 os.environ.setdefault("OPENAI_API_KEY", "test-openai-key")
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from agents.system import system_sim_execution_agent as execution_agent
 from agents.system import system_formal_verification_agent as formal_agent
+from agents.system import system_sva_assertions_agent as sva_agent
 from agents.system import system_testbench_generator_agent as tb_agent
 
 
@@ -92,3 +96,72 @@ def test_system_formal_blackboxes_adc_models_under_workflow_digital_path():
     path = "/tmp/artifacts/digital/system/imported_rtl/temp_sensor_adc_model.v"
 
     assert formal_agent._is_analog_or_macro_file(path) is True
+
+
+def test_system_formal_uses_anyseq_stub_for_analog_outputs(tmp_path):
+    rtl = tmp_path / "temp_sensor_adc_model.v"
+    rtl.write_text(
+        """module temp_sensor_adc_model (
+  input sample_req,
+  input [15:0] sensor_temp_celsius,
+  output reg [11:0] adc_code,
+  output reg adc_valid
+);
+endmodule
+""",
+        encoding="utf-8",
+    )
+
+    stub = formal_agent._formal_blackbox_stub(str(rtl), "temp_sensor_adc_model")
+
+    assert "(* blackbox *)" not in stub
+    assert "(* anyseq *) reg [11:0] adc_code_anyseq;" in stub
+    assert "assign adc_valid = adc_valid_anyseq;" in stub
+
+
+def test_system_tb_generates_directed_register_and_output_tests():
+    code = tb_agent._gen_cocotb_test(
+        "temp_monitor_soc_sim",
+        [
+            {"name": "clk", "direction": "input"},
+            {"name": "reset_n", "direction": "input"},
+            {"name": "wr_en", "direction": "input"},
+            {"name": "wr_addr", "direction": "input", "width": "8"},
+            {"name": "wr_data", "direction": "input", "width": "16"},
+            {"name": "rd_en", "direction": "input"},
+            {"name": "rd_addr", "direction": "input", "width": "8"},
+            {"name": "rd_data", "direction": "output", "width": "16"},
+        ],
+        ["clk"],
+        [{"name": "reset_n", "active_low": True}],
+        {
+            "has_regmap": True,
+            "registers": [
+                {"name": "CONTROL", "offset": "0x00", "access": "RW", "fields": [{"name": "ENABLE", "lsb": 0, "msb": 0}]},
+                {"name": "STATUS", "offset": "0x04", "access": "RO"},
+            ],
+        },
+        {},
+    )
+
+    compile(code, "generated_system_tb.py", "exec")
+    assert "async def register_access_directed" in code
+    assert "async def output_activation_sweep" in code
+    assert "cov.note_register_write" in code
+
+
+def test_system_tb_manifest_includes_directed_closure_tests():
+    manifest = tb_agent._build_testcases_manifest("temp_monitor_soc_sim", ["clk"], [{"name": "reset_n"}])
+
+    assert "register_access_directed" in manifest["default_tests"]
+    assert "output_activation_sweep" in manifest["default_tests"]
+
+
+def test_system_sva_discovers_imported_rtl_soc_top(tmp_path):
+    imported = tmp_path / "system" / "imported_rtl"
+    imported.mkdir(parents=True)
+    top = imported / "temp_monitor_soc_sim.sv"
+    top.write_text("module temp_monitor_soc_sim(input logic clk, output logic irq); endmodule\n", encoding="utf-8")
+
+    assert sva_agent._find_soc_top_sim_path(str(tmp_path)) == str(top)
+    assert str(top) in sva_agent._collect_system_rtl_files(str(tmp_path))

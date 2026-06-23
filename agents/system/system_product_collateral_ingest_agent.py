@@ -9,6 +9,36 @@ AGENT_NAME = "System Product Collateral Ingest Agent"
 OUTPUT_SUBDIR = "system/product/input"
 ARTIFACT_BUCKET = "artifacts"
 
+VALIDATION_ARTIFACT_CANDIDATES = [
+    "system_software_validation_summary_l2.json",
+    "l2_validation_summary.json",
+    "system/cosim/l2_validation_summary.json",
+    "system/validation/l2/system_software_validation_summary_l2.json",
+    "system/software_validation/cosim/summary/system_software_validation_summary_l2.json",
+    "system_cosim_trace_validation_report.json",
+    "system/validation/l2/system_cosim_trace_validation_report.json",
+    "system/software_validation/cosim/trace/system_cosim_trace_validation_report.json",
+    "system_cosim_execution_report.json",
+    "system/validation/l2/system_cosim_execution_report.json",
+    "system/software_validation/cosim/execution/system_cosim_execution_report.json",
+    "system_cosim_harness_manifest.json",
+    "system/validation/l2/system_cosim_harness_manifest.json",
+    "system/software_validation/cosim/harness/system_cosim_harness_manifest.json",
+    "system_software_validation_summary.json",
+    "system/software_validation/system_software_validation_summary.json",
+    "system/software_validation/summary/system_software_validation_summary.json",
+    "build_validation_report.json",
+    "system/software_validation/build/build_validation_report.json",
+    "test_execution_report.json",
+    "system/software_validation/test/test_execution_report.json",
+    "mock_runtime_validation_report.json",
+    "system/software_validation/mock/mock_runtime_validation_report.json",
+    "package_audit_report.json",
+    "system/software_validation/package/package_audit_report.json",
+    "contract_consistency_report.json",
+    "system/software_validation/contract/contract_consistency_report.json",
+]
+
 
 def _now() -> str:
     return datetime.datetime.now(datetime.timezone.utc).isoformat()
@@ -152,11 +182,7 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
         "validation_summary": _workflow_artifact_json(
             state,
             str(lineage.get("validation_workflow_id") or ""),
-            [
-                "system_software_validation_summary_l2.json",
-                "system_software_validation_summary.json",
-                "system/cosim/l2_validation_summary.json",
-            ],
+            VALIDATION_ARTIFACT_CANDIDATES,
         ),
     }
     contract = {

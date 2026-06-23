@@ -78,11 +78,86 @@ def _module_declaration_tail(path: str, module: str) -> Optional[str]:
     return m.group("tail") if m else None
 
 
+def _module_source(path: str, module: str) -> str:
+    try:
+        text = open(path, "r", encoding="utf-8", errors="ignore").read()
+    except Exception:
+        return ""
+    m = re.search(rf"\bmodule\s+{re.escape(module)}\b.*?\bendmodule\b", text, re.S)
+    return m.group(0) if m else ""
+
+
+def _split_port_names(blob: str) -> List[str]:
+    names: List[str] = []
+    for raw in blob.split(","):
+        token = re.sub(r"//.*", "", raw).strip()
+        token = re.sub(r"/\*.*?\*/", "", token, flags=re.S).strip()
+        if not token:
+            continue
+        token = token.split("=", 1)[0].strip()
+        token = re.sub(r"\[[^\]]+\]", "", token).strip()
+        m = re.search(r"([A-Za-z_][A-Za-z0-9_$]*)\s*$", token)
+        if m:
+            names.append(m.group(1))
+    return names
+
+
+def _parse_module_ports(path: str, module: str) -> List[Dict[str, str]]:
+    tail = _module_declaration_tail(path, module) or ""
+    m = re.search(r"\((?P<ports>.*)\)\s*$", tail, re.S)
+    if not m:
+        return []
+    ordered = _split_port_names(m.group("ports"))
+    ports: Dict[str, Dict[str, str]] = {
+        name: {"name": name, "direction": "input", "width": ""} for name in ordered
+    }
+    decl_sources = [_module_source(path, module), m.group("ports").replace(",", ";") + ";"]
+    decl_re = re.compile(
+        r"\b(?P<direction>input|output|inout)\b\s+"
+        r"(?:(?:wire|reg|logic|signed|unsigned)\s+)*"
+        r"(?P<width>\[[^\]]+\])?\s*"
+        r"(?P<names>[^;()]+);",
+        re.S,
+    )
+    for src in decl_sources:
+        for decl in decl_re.finditer(src):
+            direction = decl.group("direction")
+            width = (decl.group("width") or "").strip()
+            for name in _split_port_names(decl.group("names")):
+                if name in ports:
+                    ports[name]["direction"] = direction
+                    ports[name]["width"] = width
+    return [ports[name] for name in ordered]
+
+
 def _formal_blackbox_stub(path: str, module: str) -> str:
     tail = _module_declaration_tail(path, module)
     if not tail:
-        return f"(* blackbox *) module {module}();\nendmodule\n"
-    return f"(* blackbox *) module {module}{tail};\nendmodule\n"
+        return f"module {module}();\nendmodule\n"
+    ports = _parse_module_ports(path, module)
+    if not ports:
+        return f"module {module}{tail};\nendmodule\n"
+
+    lines = [
+        "// Auto-generated formal abstraction for non-digital or macro RTL.",
+        "// Outputs are unconstrained so SBY can elaborate the integrated system.",
+        f"module {module} (",
+    ]
+    port_lines: List[str] = []
+    for port in ports:
+        width = f" {port['width']}" if port.get("width") else ""
+        port_lines.append(f"    {port.get('direction') or 'input'}{width} {port['name']}")
+    lines.append(",\n".join(port_lines))
+    lines.append(");")
+    for port in ports:
+        if port.get("direction") != "output":
+            continue
+        width = f" {port['width']}" if port.get("width") else ""
+        internal = re.sub(r"[^A-Za-z0-9_$]", "_", f"{port['name']}_anyseq")
+        lines.append(f"  (* anyseq *) reg{width} {internal};")
+        lines.append(f"  assign {port['name']} = {internal};")
+    lines.append("endmodule")
+    return "\n".join(lines) + "\n"
 
 
 def _prepare_formal_rtl(rtl_files: List[str], formal_root: str) -> tuple[List[str], List[Dict[str, Any]]]:
@@ -97,7 +172,7 @@ def _prepare_formal_rtl(rtl_files: List[str], formal_root: str) -> tuple[List[st
             stub_path = os.path.abspath(os.path.join(blackbox_root, f"{os.path.splitext(os.path.basename(path))[0]}_formal_blackbox.sv"))
             _write(stub_path, stubs)
             formal_files.append(stub_path)
-            blackboxed.append({"source": path, "stub": stub_path, "modules": modules})
+            blackboxed.append({"source": path, "stub": stub_path, "modules": modules, "strategy": "unconstrained_anyseq_stub"})
         else:
             formal_files.append(path)
     return formal_files, blackboxed
@@ -270,6 +345,9 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
             elif "Found logic loop" in combined_log:
                 run_result["inconclusive"] = True
                 run_result["blocked_reason"] = "yosys_formal_logic_loop"
+            elif "blackbox/whitebox module" in combined_log:
+                run_result["inconclusive"] = True
+                run_result["blocked_reason"] = "yosys_blackbox_elaboration"
 
     report = {
         "type": "system_formal_verification",

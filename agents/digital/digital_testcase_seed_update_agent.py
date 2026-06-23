@@ -6,7 +6,12 @@ from utils.artifact_utils import save_text_artifact_and_record
 
 AGENT_NAME = "Digital Testcase Seed Update Agent"
 EXECUTABLE_TESTS = ["smoke_test", "constrained_random_sanity"]
-SYSTEM_EXECUTABLE_TESTS = ["system_smoke_test", "integrated_input_sanity"]
+SYSTEM_EXECUTABLE_TESTS = [
+    "system_smoke_test",
+    "integrated_input_sanity",
+    "register_access_directed",
+    "output_activation_sweep",
+]
 
 
 def _int(value: Any, default: int) -> int:
@@ -56,7 +61,7 @@ def _allowed_tests(selection: str, state: Dict[str, Any]) -> List[str]:
     base = manifest_tests or (SYSTEM_EXECUTABLE_TESTS if _is_system_sim_context(state) else EXECUTABLE_TESTS)
     if selection == "directed":
         directed = [t for t in base if any(token in t.lower() for token in ("smoke", "directed", "sanity"))]
-        return directed[:1] or base[:1]
+        return list(dict.fromkeys(directed)) or base[:1]
     if selection == "random":
         randomish = [t for t in base if any(token in t.lower() for token in ("random", "input", "sanity"))]
         return randomish[-1:] or base[-1:]
@@ -77,13 +82,13 @@ def _classify_gap(point: Dict[str, Any]) -> Tuple[str, str]:
         for key in ("coverage_point", "signal", "source_gap_type", "source", "id")
     ).lower()
     missing = " ".join(str(item) for item in point.get("target_bins") or point.get("missing_bins") or []).lower()
-    if any(token in text for token in ("bist", "irq")):
+    if any(token in text for token in ("bist", "irq", "alert")):
         if "fail" in text and "nonzero" in missing:
             return "unreachable_or_fault_injection", "BIST fail requires fault-injection or failing memory behavior; do not expect normal directed tests to hit it."
         return "bist_status_irq", "Exercise BIST start/status and IRQ-enable register paths."
     if any(token in text for token in ("rd_data", "mem", "sram", "addr", "din", "dout", "csb", "web", "wr_", "rd_")):
         return "register_mapped_memory", "Exercise memory address/data/control registers and wrapper enable signals."
-    if any(token in text for token in ("pwm", "counter", "control", "enable", "duty", "period", "threshold", "status", "config")):
+    if any(token in text for token in ("pwm", "counter", "control", "enable", "duty", "period", "threshold", "status", "config", "sample", "temp", "adc")):
         return "register_mapped_control", "Exercise control/configuration registers and wait for observable datapath or status outputs."
     if any(token in text for token in ("toggle", "branch", "condition", "line")):
         return "code_coverage", "Prefer semantic directed tests, then constrained random seeds for residual code coverage."
@@ -105,6 +110,8 @@ def _map_gap_to_test(
         mapped = _test_available(
             allowed_tests,
             "register_mapped_memory_bist_directed",
+            "register_access_directed",
+            "output_activation_sweep",
             "register_mapped_control_directed",
             "memory_write_read_directed",
             "bist_start_directed",
@@ -112,7 +119,7 @@ def _map_gap_to_test(
         )
         return mapped, gap_class, rationale
     if gap_class == "register_mapped_control":
-        mapped = _test_available(allowed_tests, "register_mapped_control_directed", "memory_write_read_directed", default_random)
+        mapped = _test_available(allowed_tests, "register_access_directed", "output_activation_sweep", "register_mapped_control_directed", "memory_write_read_directed", default_random)
         return mapped, gap_class, rationale
     if gap_class == "unreachable_or_fault_injection":
         mapped = _test_available(allowed_tests, "bist_start_directed", "register_mapped_memory_bist_directed", default_random)
@@ -121,6 +128,8 @@ def _map_gap_to_test(
         mapped = _test_available(
             allowed_tests,
             "register_mapped_control_directed",
+            "register_access_directed",
+            "output_activation_sweep",
             "register_mapped_memory_bist_directed",
             "memory_write_read_directed",
             "bist_start_directed",
