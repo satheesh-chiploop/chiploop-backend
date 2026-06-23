@@ -519,8 +519,26 @@ def _output_pins(pins: set[str]) -> list[str]:
     return [pin for pin in ("X", "Y", "Q", "Q_N") if pin in pins]
 
 
+PHYSICAL_ONLY_CELL_PINS = {
+    "VPWR",
+    "VGND",
+    "VPB",
+    "VNB",
+    "VDD",
+    "VSS",
+    "vccd1",
+    "vssd1",
+    "vdda1",
+    "vssa1",
+}
+
+
 def _input_pins(pins: set[str]) -> list[str]:
     return sorted(pin for pin in pins if pin not in set(_output_pins(pins)))
+
+
+def _logic_input_pins(pins: set[str]) -> list[str]:
+    return [pin for pin in _input_pins(pins) if pin not in PHYSICAL_ONLY_CELL_PINS]
 
 
 def _pin_expr(pin: str) -> str:
@@ -585,7 +603,7 @@ def _cell_assign_expr(cell_base: str, pins: set[str]) -> str | None:
         return "(S ? A1 : A0)" if {"A0", "A1", "S"}.issubset(pins) else None
     for prefix in ("nand", "nor", "and", "or"):
         if cell_base.startswith(prefix):
-            return _gate_expr(prefix, _input_pins(pins))
+            return _gate_expr(prefix, _logic_input_pins(pins))
     return _compound_expr(cell_base, pins)
 
 
@@ -874,6 +892,8 @@ def _classify(returncode: int | None, log: str, tool_available: bool) -> tuple[s
         return "inconclusive_unresolved_cells", unproven
     if "blackbox" in text and ("sat" in text or "equiv" in text):
         return "inconclusive_missing_sat_models", unproven
+    if unproven and ("equiv_induct" in text or "proof for induction step failed" in text):
+        return "inconclusive_bounded_sequential_proof_unproven", unproven
     return "inconclusive", unproven
 
 
@@ -890,6 +910,8 @@ def _failure_reason(verdict: str, *, rtl_files: list[str], netlist: str | None, 
         return "missing_standard_cell_verilog_models"
     if missing_cells:
         return "standard_cell_verilog_models_incomplete"
+    if verdict == "inconclusive_bounded_sequential_proof_unproven":
+        return "bounded_sequential_equivalence_points_unproven"
     if unproven:
         return "equivalence_points_unproven"
     if verdict == "inconclusive_stdcell_model_parse_error":
@@ -1029,7 +1051,7 @@ def run_agent(state: dict) -> dict:
         f"- Return code: `{rc}`",
         f"- Failure reason: `{failure_reason}`",
         "",
-        "If this is inconclusive, inspect `digital/lec/logs/yosys_lec.log` and `digital/lec/lec_summary.json` for unsupported cells, black boxes, or reset/initial-state assumptions.",
+        "If this is inconclusive, inspect `digital/lec/logs/yosys_lec.log` and `digital/lec/lec_summary.json` for unsupported cells, black boxes, reset/initial-state assumptions, or bounded sequential proof limits.",
     ]) + "\n"
     if missing_stdcell_models:
         report += "\n## Missing Standard-Cell Models\n\n" + "\n".join(f"- `{cell}`" for cell in missing_stdcell_models) + "\n"
