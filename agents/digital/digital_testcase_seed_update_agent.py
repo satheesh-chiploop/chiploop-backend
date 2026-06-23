@@ -83,6 +83,8 @@ def _classify_gap(point: Dict[str, Any]) -> Tuple[str, str]:
         return "bist_status_irq", "Exercise BIST start/status and IRQ-enable register paths."
     if any(token in text for token in ("rd_data", "mem", "sram", "addr", "din", "dout", "csb", "web", "wr_", "rd_")):
         return "register_mapped_memory", "Exercise memory address/data/control registers and wrapper enable signals."
+    if any(token in text for token in ("pwm", "counter", "control", "enable", "duty", "period", "threshold", "status", "config")):
+        return "register_mapped_control", "Exercise control/configuration registers and wait for observable datapath or status outputs."
     if any(token in text for token in ("toggle", "branch", "condition", "line")):
         return "code_coverage", "Prefer semantic directed tests, then constrained random seeds for residual code coverage."
     return "generic", "Use the best available directed/random test for the remaining coverage point."
@@ -103,10 +105,14 @@ def _map_gap_to_test(
         mapped = _test_available(
             allowed_tests,
             "register_mapped_memory_bist_directed",
+            "register_mapped_control_directed",
             "memory_write_read_directed",
             "bist_start_directed",
             default_random,
         )
+        return mapped, gap_class, rationale
+    if gap_class == "register_mapped_control":
+        mapped = _test_available(allowed_tests, "register_mapped_control_directed", "memory_write_read_directed", default_random)
         return mapped, gap_class, rationale
     if gap_class == "unreachable_or_fault_injection":
         mapped = _test_available(allowed_tests, "bist_start_directed", "register_mapped_memory_bist_directed", default_random)
@@ -114,6 +120,7 @@ def _map_gap_to_test(
     if gap_class == "code_coverage":
         mapped = _test_available(
             allowed_tests,
+            "register_mapped_control_directed",
             "register_mapped_memory_bist_directed",
             "memory_write_read_directed",
             "bist_start_directed",

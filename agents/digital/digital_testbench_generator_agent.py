@@ -558,6 +558,8 @@ def _collect_register_map(spec: Dict[str, Any], rtl_files: Optional[List[str]] =
 
     def add_register(name: Any, offset: Any) -> None:
         reg_name = _normalize_register_name(name)
+        if reg_name in {"AND", "OR", "THE", "A", "AN", "IS", "AT", "ADDRESS", "REGISTER"}:
+            return
         reg_offset = _parse_int(offset)
         if reg_offset is None and isinstance(offset, str):
             reg_offset = _parse_sv_int(offset)
@@ -597,6 +599,12 @@ def _collect_register_map(spec: Dict[str, Any], rtl_files: Optional[List[str]] =
     rules_text = " ".join(rules)
     for match in re.finditer(r"0x([0-9a-fA-F]+)\s+([A-Za-z_][A-Za-z0-9_]*)", rules_text):
         add_register(match.group(2), f"0x{match.group(1)}")
+    for match in re.finditer(
+        r"\b([A-Za-z_][A-Za-z0-9_]*)\s+(?:register\s+)?(?:is\s+)?(?:located\s+)?(?:at\s+)?(?:address\s+)?0x([0-9a-fA-F]+)",
+        rules_text,
+        re.IGNORECASE,
+    ):
+        add_register(match.group(1), f"0x{match.group(2)}")
 
     if not regs and rtl_files:
         regs.update(_collect_register_map_from_rtl(rtl_files))
@@ -654,6 +662,23 @@ def _has_register_mapped_memory_bist_intent(spec: Dict[str, Any], ports: List[Di
     return False
 
 
+def _has_register_mapped_control_intent(spec: Dict[str, Any], ports: List[Dict[str, Any]], rtl_files: Optional[List[str]] = None) -> bool:
+    if not all(_has_port(ports, name, "input") for name in ("wr_en", "wr_addr", "wr_data", "rd_en", "rd_addr")):
+        return False
+    if not _has_port(ports, "rd_data", "output"):
+        return False
+    regmap = _collect_register_map(spec, rtl_files)
+    names = {name.upper() for name in regmap}
+    if not names:
+        return False
+    control_like = any(any(token in name for token in ("CONTROL", "CTRL", "ENABLE", "START", "CONFIG", "CFG")) for name in names)
+    observable_config = any(
+        any(token in name for token in ("DUTY", "PERIOD", "COMPARE", "THRESH", "LIMIT", "TIMEOUT", "BAUD", "PACKET", "WIDTH", "HEIGHT", "STRIDE", "SAMPLE"))
+        for name in names
+    )
+    return control_like or observable_config
+
+
 def _detected_directed_tests(ports: List[Dict[str, Any]], spec: Optional[Dict[str, Any]] = None, rtl_files: Optional[List[str]] = None) -> List[str]:
     spec = spec or {}
     tests: List[str] = []
@@ -669,9 +694,52 @@ def _detected_directed_tests(ports: List[Dict[str, Any]], spec: Optional[Dict[st
     )
     if has_bist:
         tests.append("bist_start_directed")
+    if _has_register_mapped_control_intent(spec, ports, rtl_files):
+        tests.append("register_mapped_control_directed")
     if _has_register_mapped_memory_bist_intent(spec, ports, rtl_files):
         tests.append("register_mapped_memory_bist_directed")
     return tests
+
+
+def _register_write_plan(register_map: Dict[str, int], register_bit_roles: Dict[str, Dict[str, int]]) -> List[Dict[str, Any]]:
+    plan: List[Dict[str, Any]] = []
+    deferred_control: List[Dict[str, Any]] = []
+    for name, offset in sorted(register_map.items(), key=lambda item: item[1]):
+        upper = name.upper()
+        roles = register_bit_roles.get(upper, {})
+        if any(token in upper for token in ("STATUS", "RDATA", "COUNT", "IRQ", "RESULT")):
+            continue
+        value = 0
+        if any(token in upper for token in ("CONTROL", "CTRL", "ENABLE")):
+            enable_bit = roles.get("enable", 0)
+            irq_bit = roles.get("irq_enable")
+            value = 1 << int(enable_bit)
+            if irq_bit is not None:
+                value |= 1 << int(irq_bit)
+            deferred_control.append({"name": upper, "offset": offset, "value": value})
+            continue
+        if "DUTY" in upper or "COMPARE" in upper:
+            value = 3
+        elif "PERIOD" in upper or "TIMEOUT" in upper or "BAUD" in upper or "SAMPLE" in upper:
+            value = 8
+        elif "THRESH" in upper or "LIMIT" in upper:
+            value = 4
+        elif "WIDTH" in upper or "HEIGHT" in upper or "STRIDE" in upper:
+            value = 16
+        elif "MASK" in upper or "SELECT" in upper:
+            value = 7
+        elif "PACKET" in upper or "LEN" in upper:
+            value = 4
+        elif "DATA" in upper or "WDATA" in upper:
+            value = 0xA5
+        elif any(token in upper for token in ("CONFIG", "CFG", "MODE")):
+            value = 1
+        elif any(token in upper for token in ("START", "TRIGGER", "COMMAND", "CMD")):
+            value = 1
+        else:
+            continue
+        plan.append({"name": upper, "offset": offset, "value": value})
+    return plan + deferred_control
 
 
 def _render_directed_tests(
@@ -687,6 +755,7 @@ def _render_directed_tests(
     blocks: List[str] = []
     register_map = _collect_register_map(spec, rtl_files)
     register_bit_roles = _collect_register_bit_roles(spec)
+    register_write_plan = _register_write_plan(register_map, register_bit_roles)
     if "memory_write_read_directed" in tests:
         blocks.append(
             '''
@@ -704,8 +773,8 @@ async def memory_write_read_directed(dut):
     test_addr = int(os.getenv("DIRECTED_MEM_ADDR", "3"))
     test_data = int(os.getenv("DIRECTED_MEM_DATA", "2779096485"))
 
-    dut.wr_addr.value = test_addr
-    dut.wr_data.value = test_data
+    dut.wr_addr.value = _fit_to_signal(dut.wr_addr, test_addr)
+    dut.wr_data.value = _fit_to_signal(dut.wr_data, test_data)
     dut.wr_en.value = 1
     await _advance_time(dut)
     dut.wr_en.value = 0
@@ -716,6 +785,78 @@ async def memory_write_read_directed(dut):
     await _advance_time(dut)
     await _advance_time(dut)
     dut.rd_en.value = 0
+
+    _assert_outputs_known(dut, {observable_outputs_json})
+'''
+        )
+
+    if "register_mapped_control_directed" in tests:
+        blocks.append(
+            '''
+@cocotb.test()
+async def register_mapped_control_directed(dut):
+    """Directed register-control stimulus derived from discovered MMIO registers."""
+
+{clock_start}
+
+{reset_seq}
+
+    # Initialize discoverable DUT inputs from spec
+{input_init}
+
+    register_map = {register_map_json}
+    register_write_plan = {register_write_plan_json}
+
+    async def write_reg(addr, data):
+        dut.wr_addr.value = _fit_to_signal(dut.wr_addr, int(addr))
+        dut.wr_data.value = _fit_to_signal(dut.wr_data, int(data))
+        dut.wr_en.value = 1
+        await _advance_time(dut)
+        dut.wr_en.value = 0
+        await _advance_time(dut)
+
+    async def read_reg(addr):
+        dut.rd_addr.value = _fit_to_signal(dut.rd_addr, int(addr))
+        dut.rd_en.value = 1
+        await _advance_time(dut)
+        await _advance_time(dut)
+        dut.rd_en.value = 0
+        await _advance_time(dut)
+
+    cov = CoverageModel() if CoverageModel else None
+    if cov:
+        cov.start(dut)
+
+    for item in register_write_plan:
+        await write_reg(item["offset"], item["value"])
+        if cov:
+            try:
+                cov.sample()
+            except Exception:
+                pass
+
+    for _ in range(int(os.getenv("REGISTER_CONTROL_WAIT_CYCLES", "64"))):
+        await _advance_time(dut)
+        if cov:
+            try:
+                cov.sample()
+            except Exception:
+                pass
+
+    for _, addr in sorted(register_map.items(), key=lambda item: item[1]):
+        await read_reg(addr)
+        if cov:
+            try:
+                cov.sample()
+            except Exception:
+                pass
+
+    if cov:
+        try:
+            cov.stop()
+            cov.write_reports()
+        except Exception:
+            pass
 
     _assert_outputs_known(dut, {observable_outputs_json})
 '''
@@ -775,15 +916,15 @@ async def register_mapped_memory_bist_directed(dut):
         return value
 
     async def write_reg(addr, data):
-        dut.wr_addr.value = int(addr) & 0xFF
-        dut.wr_data.value = int(data) & 0xFFFFFFFF
+        dut.wr_addr.value = _fit_to_signal(dut.wr_addr, int(addr))
+        dut.wr_data.value = _fit_to_signal(dut.wr_data, int(data))
         dut.wr_en.value = 1
         await _advance_time(dut)
         dut.wr_en.value = 0
         await _advance_time(dut)
 
     async def read_reg(addr):
-        dut.rd_addr.value = int(addr) & 0xFF
+        dut.rd_addr.value = _fit_to_signal(dut.rd_addr, int(addr))
         dut.rd_en.value = 1
         await _advance_time(dut)
         await _advance_time(dut)
@@ -868,6 +1009,7 @@ async def register_mapped_memory_bist_directed(dut):
         observable_outputs_json=json.dumps(observable_outputs, indent=2),
         register_map_json=json.dumps(register_map, indent=2, sort_keys=True),
         register_bit_roles_json=json.dumps(register_bit_roles, indent=2, sort_keys=True),
+        register_write_plan_json=json.dumps(register_write_plan, indent=2, sort_keys=True),
     )
 
 
@@ -938,6 +1080,18 @@ def _safe_drive_random(sig, width_expr: str):
             width = 1
     width = max(int(width), 1)
     sig.value = random.getrandbits(width)
+
+
+def _fit_to_signal(sig, value: int) -> int:
+    try:
+        width = len(sig)
+    except Exception:
+        try:
+            width = len(sig.value.binstr)
+        except Exception:
+            width = 32
+    width = max(int(width), 1)
+    return int(value) & ((1 << width) - 1)
 
 
 def _assert_outputs_known(dut, observable_outputs):
@@ -1418,7 +1572,7 @@ def run_agent(state: dict) -> dict:
 
     ports = [] if soc_mode else _ports_from_spec(spec)
     clocks, resets = _infer_clocks_resets(spec, ports)
-    directed_tests = _detected_directed_tests(ports, spec)
+    directed_tests = _detected_directed_tests(ports, spec, rtl_files)
 
     _log(log_path, f"resolved_mode={mode}")
     _log(log_path, f"spec_path={spec_path}")
