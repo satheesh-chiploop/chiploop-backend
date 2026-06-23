@@ -698,6 +698,10 @@ def _generic_html(model: Dict[str, Any]) -> str:
         <div class="metric"><div>Capabilities</div><div id="mCaps">0</div></div>
         <div class="metric"><div>Transport</div><div>sim</div></div>
       </div>
+      <h3>Capability Map</h3>
+      <div id="capabilityMap" class="log"></div>
+      <h3>Register Map</h3>
+      <div id="registerMap" class="log"></div>
       <h3>Activity Log</h3>
       <div id="log" class="log">Ready.</div>
     </section>
@@ -733,6 +737,30 @@ function renderScenarioSteps() {{
     div.innerHTML = String(step.label || ('Step ' + (idx + 1))) + '<br />' + String(step.description || '');
     host.appendChild(div);
   }});
+}}
+function capabilityTarget(cap) {{
+  if (cap.register) return cap.register;
+  if (Array.isArray(cap.registers)) return cap.registers.join(', ');
+  if (cap.signal) return cap.signal;
+  if (Array.isArray(cap.signals)) return cap.signals.join(', ');
+  return 'software API';
+}}
+function renderCapabilityMap() {{
+  const caps = Array.isArray(model.capabilities) ? model.capabilities : [];
+  const host = document.getElementById('capabilityMap');
+  host.textContent = caps.length
+    ? caps.slice(0, 12).map(cap => String(cap.label || cap.id || 'capability') + ' -> ' + capabilityTarget(cap)).join('\\n')
+    : 'No capability map reported.';
+}}
+function renderRegisterMap() {{
+  const regs = Array.isArray(model.registers) ? model.registers : [];
+  const host = document.getElementById('registerMap');
+  host.textContent = regs.length
+    ? regs.slice(0, 16).map(reg => {{
+        const fields = Array.isArray(reg.fields) ? reg.fields.map(f => f.name || f.id || f).join(', ') : '';
+        return String(reg.offset || reg.address || '') + '  ' + String(reg.name || reg.register || reg.id || 'REG') + (fields ? ' [' + fields + ']' : '');
+      }}).join('\\n')
+    : 'No register map reported.';
 }}
 function setActiveStep(idx) {{
   document.querySelectorAll('.step').forEach(x => x.classList.remove('active'));
@@ -781,6 +809,8 @@ document.getElementById('lineage').textContent = JSON.stringify(model.lineage ||
 renderExplain('controlExplain', exp.control_explanations);
 renderExplain('metricExplain', exp.metric_explanations);
 renderScenarioSteps();
+renderCapabilityMap();
+renderRegisterMap();
 document.getElementById('scenario').textContent = exp.scenario_name || 'Run product scenario';
 document.getElementById('apply').onclick = () => {{ apply(); appendLog('settings applied'); }};
 document.getElementById('start').onclick = () => startOperation('manual operation');
@@ -817,14 +847,14 @@ render();
 def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     workflow_id = state.get("workflow_id") or "default"
     model = state.get("system_product_capability_model") if isinstance(state.get("system_product_capability_model"), dict) else {}
-    if model.get("device_model") == "image_dma_pipeline":
+    if model.get("device_model") == "pwm_controller":
+        html = _html(model)
+    elif model.get("device_model") == "image_dma_pipeline":
         html = _image_html(model)
     elif model.get("device_model") == "uart_packet_engine":
         html = _uart_html(model)
-    elif model.get("device_model") in {"generic_device_control", "smart_sensor_hub_mcu", "secure_boot_key_manager", "safety_fault_watchdog"}:
-        html = _generic_html(model)
     else:
-        html = _html(model)
+        html = _generic_html(model)
     manifest = {
         "type": "system_product_dashboard_manifest",
         "generated_at": _now(),

@@ -129,6 +129,16 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
             str(lineage.get("firmware_workflow_id") or ""),
             ["system_firmware_dashboard.json", "system/firmware/cosim/system_firmware_dashboard.json"],
         ),
+        "firmware_register_map": _workflow_artifact_json(
+            state,
+            str(lineage.get("firmware_workflow_id") or ""),
+            ["firmware/register_map.json", "register_map.json"],
+        ),
+        "software_handoff": _workflow_artifact_json(
+            state,
+            str(lineage.get("firmware_workflow_id") or ""),
+            ["system_software_handoff.json", "system/software_handoff/system_software_handoff.json"],
+        ),
         "software_api": _workflow_artifact_json(
             state,
             str(lineage.get("software_workflow_id") or ""),

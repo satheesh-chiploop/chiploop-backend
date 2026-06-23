@@ -86,7 +86,9 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     coverage = summary.get("coverage") if isinstance(summary.get("coverage"), dict) else {}
     functional = coverage.get("functional") if isinstance(coverage.get("functional"), dict) else {}
     code = coverage.get("code") if isinstance(coverage.get("code"), dict) else {}
-    functional_raw = state.get("source_functional_coverage_summary") if isinstance(state.get("source_functional_coverage_summary"), dict) else {}
+    functional_raw = state.get("closure_cumulative_functional_coverage_summary") if isinstance(state.get("closure_cumulative_functional_coverage_summary"), dict) else {}
+    if not functional_raw:
+        functional_raw = state.get("source_functional_coverage_summary") if isinstance(state.get("source_functional_coverage_summary"), dict) else {}
 
     functional_pct = _num(coverage.get("functional_coverage_pct")) or _num(functional.get("coverage_pct"))
     line_pct = _num(code.get("line_coverage_pct"))

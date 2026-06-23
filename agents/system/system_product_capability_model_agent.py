@@ -404,6 +404,59 @@ def _sram_scratchpad_model(lineage: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _temperature_monitor_model(lineage: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "type": "system_product_capability_model",
+        "version": "1.0",
+        "generated_at": _now(),
+        "product_name": "Temperature Monitor SoC Dashboard",
+        "device_model": "temperature_monitor_soc",
+        "lineage": lineage,
+        "capabilities": [
+            {"id": "configure_sampling", "label": "Configure sample period", "kind": "integer", "register": "SAMPLE_PERIOD"},
+            {"id": "set_temperature_threshold", "label": "Set temperature threshold", "kind": "integer", "register": "TEMP_THRESHOLD"},
+            {"id": "start_conversion", "label": "Start ADC conversion", "kind": "command", "register": "CONTROL.SAMPLE_START"},
+            {"id": "read_temperature", "label": "Read temperature", "kind": "telemetry", "register": "TEMP_VALUE"},
+            {"id": "read_adc_code", "label": "Read ADC code", "kind": "telemetry", "register": "ADC_CODE"},
+            {"id": "read_alert_status", "label": "Read alert status", "kind": "telemetry", "register": "ALERT_STATUS"},
+            {"id": "clear_alert", "label": "Clear alert", "kind": "command", "register": "ALERT_CLEAR"},
+        ],
+        "registers": [
+            {"name": "CONTROL", "offset": "0x000", "fields": [{"name": "ENABLE", "bit": 0}, {"name": "SAMPLE_START", "bit": 1}, {"name": "IRQ_ENABLE", "bit": 2}]},
+            {"name": "STATUS", "offset": "0x004", "fields": [{"name": "busy"}, {"name": "sample_done"}, {"name": "alert_pending"}, {"name": "adc_valid"}]},
+            {"name": "SAMPLE_PERIOD", "offset": "0x008", "fields": [{"name": "period_ticks", "bits": "31:0"}]},
+            {"name": "TEMP_THRESHOLD", "offset": "0x00C", "fields": [{"name": "threshold_c", "bits": "15:0"}]},
+            {"name": "TEMP_VALUE", "offset": "0x010", "fields": [{"name": "temperature_c", "bits": "15:0"}]},
+            {"name": "ADC_CODE", "offset": "0x014", "fields": [{"name": "adc_code", "bits": "11:0"}]},
+            {"name": "ALERT_STATUS", "offset": "0x018", "fields": [{"name": "over_temp"}, {"name": "under_temp"}, {"name": "sensor_fault"}]},
+            {"name": "ALERT_CLEAR", "offset": "0x01C", "fields": [{"name": "clear_over_temp"}, {"name": "clear_fault"}]},
+        ],
+        "product_experience": _base_experience(
+            summary="Mixed-signal temperature monitor dashboard for a sensor ADC front end and digital controller. Software configures sampling and thresholds, starts conversions, reads temperature/ADC telemetry, and handles alert interrupts.",
+            controls={
+                "Sample period": "Controls how often the digital controller requests a temperature conversion.",
+                "Temperature threshold": "Alert limit compared against converted temperature telemetry.",
+                "Start conversion": "Requests one simulator-backed ADC sample through the firmware/software path.",
+                "Clear alert": "Clears latched over-temperature or sensor-fault state.",
+            },
+            metrics={
+                "Temperature": "Latest converted temperature value visible to software.",
+                "ADC code": "Raw sensor ADC output used by the digital controller.",
+                "Alert state": "Latched threshold or sensor-fault status.",
+                "IRQ": "Interrupt state raised for alert or conversion-complete events.",
+            },
+            scenario_name="Run temperature sweep",
+            scenario_steps=[
+                {"label": "Nominal", "description": "Sample below threshold"},
+                {"label": "Warm", "description": "Approach alert threshold"},
+                {"label": "Hot", "description": "Assert over-temperature alert"},
+                {"label": "Recover", "description": "Clear alert after temperature falls"},
+            ],
+            timing_model="Simulator mode advances ADC conversion and alert state in application ticks. Replace with sensor, ADC, or board transport later.",
+        ),
+    }
+
+
 def _generic_model(lineage: Dict[str, Any], intent: str) -> Dict[str, Any]:
     clean_intent = " ".join(str(intent or "").split())
     product_name = "Generated Device Control Dashboard"
@@ -469,13 +522,22 @@ def _source_data(contract: Dict[str, Any], key: str) -> Dict[str, Any]:
 
 
 def _registers_from_sources(contract: Dict[str, Any]) -> list[Dict[str, Any]]:
-    for key in ("software_api", "software_package", "firmware_dashboard", "validation_summary"):
+    for key in (
+        "software_api",
+        "software_package",
+        "firmware_register_map",
+        "software_handoff",
+        "firmware_dashboard",
+        "validation_summary",
+    ):
         data = _source_data(contract, key)
         for candidate in (
             data.get("registers"),
             data.get("register_map"),
+            (data.get("regmap") or {}).get("registers") if isinstance(data.get("regmap"), dict) else None,
             (data.get("mmio") or {}).get("registers") if isinstance(data.get("mmio"), dict) else None,
             (data.get("api") or {}).get("registers") if isinstance(data.get("api"), dict) else None,
+            (data.get("firmware_contract") or {}).get("registers") if isinstance(data.get("firmware_contract"), dict) else None,
         ):
             if isinstance(candidate, list) and candidate:
                 return [item for item in candidate if isinstance(item, dict)]
@@ -537,7 +599,9 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     contract = state.get("system_product_collateral_contract") if isinstance(state.get("system_product_collateral_contract"), dict) else {}
     lineage = contract.get("lineage") if isinstance(contract.get("lineage"), dict) else {}
     intent = str(lineage.get("product_intent") or state.get("product_intent") or "").lower()
-    if "image" in intent or "dma" in intent or "histogram" in intent or "filter" in intent:
+    if "temperature monitor" in intent or "temp monitor" in intent or "temp_monitor" in intent or ("temperature" in intent and "adc" in intent):
+        model = _temperature_monitor_model(lineage)
+    elif "image" in intent or "dma" in intent or "histogram" in intent or "filter" in intent:
         model = _image_model(lineage)
     elif "uart" in intent or "packet" in intent or "fifo" in intent:
         model = _uart_model(lineage)
