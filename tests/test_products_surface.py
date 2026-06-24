@@ -104,7 +104,10 @@ def test_product_api_routes_are_registered():
     assert "PRODUCT_STAGE_SCHEMAS" in source
     assert 'supabase.table("product_stage_schemas")' in source
     assert '"required": True' in source
+    assert '"insert_mbist"' in source
+    assert '"mbist_algorithm"' in source
     assert '"Digital_Arch2Synthesis": "Digital_Arch2Synthesis"' in source
+    assert '"Digital_Arch2Tapeout": "Digital_Arch2Tapeout"' in source
     assert 'if stage.get("optional") and "enabled" not in stage' in source
     assert '"run_spec2rtl_check"' in source
     assert '"formal_tool"' in source
@@ -116,3 +119,11 @@ def test_product_api_routes_are_registered():
     assert 'deleted_product_id' in source
     assert '"dashboard_url"' in source
     assert '"download_url"' in source
+
+
+def test_product_stage_schema_seed_has_latest_digital_controls():
+    source = SCHEMA_MIGRATION_SQL.read_text(encoding="utf-8")
+    assert "Digital_Arch2Tapeout" in source
+    assert "insert_mbist" in source
+    assert "mbist_algorithm" in source
+    assert "run_synthesis_closure_loop" in source

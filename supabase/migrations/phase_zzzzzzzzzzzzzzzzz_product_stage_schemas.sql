@@ -36,6 +36,8 @@ with schemas(app, schema) as (
           {"key":"enable_upf_lite","label":"Generate UPF-lite","type":"boolean","defaultValue":false},
           {"key":"enable_packaging","label":"Generate handoff package","type":"boolean","defaultValue":true}
           ,{"key":"enable_scan_dft","label":"Enable scan/DFT intent","type":"boolean","defaultValue":false},
+          {"key":"insert_mbist","label":"Insert MBIST","type":"boolean","defaultValue":false},
+          {"key":"mbist_algorithm","label":"MBIST algorithm","type":"select","defaultValue":"march-c","options":["march-c","march-raw"]},
           {"key":"run_spec2rtl_check","label":"Run Spec2RTL compliance check","type":"boolean","defaultValue":false},
           {"key":"throughput_latency_targets","label":"Throughput/latency targets","type":"text","defaultValue":""},
           {"key":"power_priority","label":"Power priority","type":"text","defaultValue":""}
@@ -94,7 +96,47 @@ with schemas(app, schema) as (
           {"key":"target_frequency_mhz","label":"Target frequency MHz","type":"number","defaultValue":100},
           {"key":"constraints_sdc","label":"Constraints SDC","type":"text","defaultValue":""},
           {"key":"run_logic_equivalence","label":"Run logic equivalence","type":"boolean","defaultValue":true},
-          {"key":"run_synthesis_readiness","label":"Run synthesis readiness","type":"boolean","defaultValue":true}
+          {"key":"run_synthesis_readiness","label":"Run synthesis readiness","type":"boolean","defaultValue":true},
+          {"key":"run_synthesis_closure_loop","label":"Run synthesis closure loop","type":"boolean","defaultValue":false},
+          {"key":"max_synthesis_closure_iterations","label":"Max synthesis closure iterations","type":"number","defaultValue":1},
+          {"key":"allow_synthesis_timing_repair","label":"Allow synthesis setup timing repair","type":"boolean","defaultValue":true},
+          {"key":"allow_synthesis_lec_repair","label":"Allow synthesis LEC repair","type":"boolean","defaultValue":true},
+          {"key":"allow_synthesis_retiming","label":"Allow synthesis retiming","type":"boolean","defaultValue":false},
+          {"key":"allow_synthesis_hierarchy_flattening","label":"Allow synthesis hierarchy flattening","type":"boolean","defaultValue":false},
+          {"key":"stop_on_synthesis_closure_failure","label":"Stop downstream on synthesis closure failure","type":"boolean","defaultValue":false},
+          {"key":"stop_on_synthesis_lec_failure","label":"Stop downstream on synthesis LEC failure","type":"boolean","defaultValue":false}
+        ]
+      }'::jsonb
+    ),
+    (
+      'Digital_Arch2Tapeout',
+      '{
+        "note": "Tapeout uses the generated Arch2RTL handoff as RTL input and runs synthesis through physical signoff.",
+        "fields": [
+          {"key":"foundry","label":"Foundry","type":"text","defaultValue":"sky130"},
+          {"key":"pdk","label":"PDK","type":"text","defaultValue":"sky130A"},
+          {"key":"toolchain","label":"Toolchain","type":"text","defaultValue":"openlane2"},
+          {"key":"target_frequency_mhz","label":"Target frequency MHz","type":"number","defaultValue":100},
+          {"key":"constraints_sdc","label":"Constraints SDC","type":"text","defaultValue":""},
+          {"key":"effort","label":"Implementation effort","type":"select","defaultValue":"balanced","options":["fast","balanced","signoff"]},
+          {"key":"run_fill","label":"Run fill","type":"boolean","defaultValue":true},
+          {"key":"run_drc","label":"Run DRC","type":"boolean","defaultValue":true},
+          {"key":"run_lvs","label":"Run LVS","type":"boolean","defaultValue":true},
+          {"key":"run_logic_equivalence","label":"Run logic equivalence","type":"boolean","defaultValue":true},
+          {"key":"run_signoff_closure_loop","label":"Run signoff closure loop","type":"boolean","defaultValue":false},
+          {"key":"max_signoff_closure_iterations","label":"Max signoff closure iterations","type":"number","defaultValue":1},
+          {"key":"allow_timing_repair","label":"Allow timing repair","type":"boolean","defaultValue":true},
+          {"key":"allow_drc_repair","label":"Allow DRC repair","type":"boolean","defaultValue":true},
+          {"key":"allow_lvs_repair","label":"Allow LVS repair","type":"boolean","defaultValue":true},
+          {"key":"allow_lec_repair","label":"Allow LEC repair","type":"boolean","defaultValue":true},
+          {"key":"run_synthesis_closure_loop","label":"Run synthesis closure loop","type":"boolean","defaultValue":false},
+          {"key":"max_synthesis_closure_iterations","label":"Max synthesis closure iterations","type":"number","defaultValue":1},
+          {"key":"allow_synthesis_timing_repair","label":"Allow synthesis setup timing repair","type":"boolean","defaultValue":true},
+          {"key":"allow_synthesis_lec_repair","label":"Allow synthesis LEC repair","type":"boolean","defaultValue":true},
+          {"key":"allow_synthesis_retiming","label":"Allow synthesis retiming","type":"boolean","defaultValue":false},
+          {"key":"allow_synthesis_hierarchy_flattening","label":"Allow synthesis hierarchy flattening","type":"boolean","defaultValue":false},
+          {"key":"stop_on_synthesis_closure_failure","label":"Stop downstream on synthesis closure failure","type":"boolean","defaultValue":false},
+          {"key":"stop_on_synthesis_lec_failure","label":"Stop downstream on synthesis LEC failure","type":"boolean","defaultValue":false}
         ]
       }'::jsonb
     ),
