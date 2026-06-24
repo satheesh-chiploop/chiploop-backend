@@ -2994,14 +2994,43 @@ PRODUCT_STAGE_SCHEMAS: Dict[str, Dict[str, Any]] = {
             {"key": "test_intent", "label": "Test intent", "type": "text", "defaultValue": "Run smoke, reset, register access, and representative functional tests."},
             {"key": "verification_plan", "label": "Verification plan", "type": "text", "defaultValue": ""},
             {"key": "monitor_checker_plan", "label": "Monitor/checker plan", "type": "text", "defaultValue": ""},
-            {"key": "random_vs_directed", "label": "Random vs directed", "type": "text", "defaultValue": "both"},
+            {"key": "random_vs_directed", "label": "Random vs directed", "type": "select", "defaultValue": "both", "options": [
+                {"value": "both", "label": "Directed then random"},
+                {"value": "directed", "label": "Directed only"},
+                {"value": "random", "label": "Random only"},
+            ]},
             {"key": "coverage_targets", "label": "Coverage target", "type": "text", "defaultValue": "90% functional, 70% line"},
             {"key": "coverage_plan", "label": "Coverage plan", "type": "text", "defaultValue": ""},
-            {"key": "simulator_type", "label": "Simulator", "type": "text", "defaultValue": "verilator"},
-            {"key": "code_coverage_tool", "label": "Code coverage tool", "type": "text", "defaultValue": "verilator_coverage"},
-            {"key": "formal_tool", "label": "Formal tool", "type": "text", "defaultValue": "none"},
-            {"key": "formal_solver", "label": "Formal solver", "type": "text", "defaultValue": "z3"},
-            {"key": "golden_model_tool", "label": "Golden model tool", "type": "text", "defaultValue": "none"},
+            {"key": "simulator_type", "label": "Simulator", "type": "select", "defaultValue": "verilator", "options": [
+                {"value": "verilator", "label": "Verilator + Cocotb"},
+                {"value": "icarus", "label": "Icarus Verilog (planned)", "disabled": True},
+                {"value": "questa", "label": "Questa (planned)", "disabled": True},
+                {"value": "vcs", "label": "VCS (planned)", "disabled": True},
+                {"value": "xcelium", "label": "Xcelium (planned)", "disabled": True},
+            ]},
+            {"key": "code_coverage_tool", "label": "Code coverage tool", "type": "select", "defaultValue": "verilator_coverage", "options": [
+                {"value": "verilator_coverage", "label": "verilator_coverage"},
+                {"value": "none", "label": "Disabled"},
+                {"value": "urg", "label": "Synopsys URG (planned)", "disabled": True},
+                {"value": "imc", "label": "Cadence IMC (planned)", "disabled": True},
+                {"value": "vcover", "label": "Questa vcover (planned)", "disabled": True},
+            ]},
+            {"key": "formal_tool", "label": "Formal tool", "type": "select", "defaultValue": "none", "options": [
+                {"value": "none", "label": "Disabled"},
+                {"value": "symbiyosys", "label": "SymbiYosys (sby)"},
+                {"value": "jasper", "label": "JasperGold (planned)", "disabled": True},
+                {"value": "vc_formal", "label": "VC Formal (planned)", "disabled": True},
+            ]},
+            {"key": "formal_solver", "label": "Formal solver", "type": "select", "defaultValue": "z3", "options": [
+                {"value": "z3", "label": "Z3"},
+                {"value": "boolector", "label": "Boolector"},
+            ]},
+            {"key": "golden_model_tool", "label": "Golden model tool", "type": "select", "defaultValue": "none", "options": [
+                {"value": "none", "label": "Disabled"},
+                {"value": "chiploop_python_scoreboard", "label": "ChipLoop Python scoreboard"},
+                {"value": "custom_python", "label": "Custom Python model (planned)", "disabled": True},
+                {"value": "matlab", "label": "MATLAB reference model (planned)", "disabled": True},
+            ]},
             {"key": "seed_count", "label": "Seed count", "type": "number", "defaultValue": 10},
             {"key": "run_closure_analysis", "label": "Run closure analysis", "type": "boolean", "defaultValue": True},
             {"key": "enable_failure_debug", "label": "Run failure debug", "type": "boolean", "defaultValue": False},
@@ -3067,8 +3096,16 @@ PRODUCT_STAGE_SCHEMAS: Dict[str, Dict[str, Any]] = {
             {"key": "seed_count", "label": "Seed count", "type": "number", "defaultValue": 10},
             {"key": "seed_budget", "label": "Seed budget", "type": "number", "defaultValue": 10},
             {"key": "coverage_targets", "label": "Coverage target", "type": "text", "defaultValue": "90% functional, 70% line"},
-            {"key": "rerun_mode", "label": "Rerun mode", "type": "text", "defaultValue": "coverage_targeted"},
-            {"key": "random_vs_directed", "label": "Random vs directed", "type": "text", "defaultValue": "both"},
+            {"key": "rerun_mode", "label": "Rerun mode", "type": "select", "defaultValue": "coverage_targeted", "options": [
+                {"value": "coverage_targeted", "label": "Coverage targeted"},
+                {"value": "failed_only", "label": "Failed tests only"},
+                {"value": "full_regression", "label": "Full regression"},
+            ]},
+            {"key": "random_vs_directed", "label": "Random vs directed", "type": "select", "defaultValue": "both", "options": [
+                {"value": "both", "label": "Directed then random"},
+                {"value": "directed", "label": "Directed only"},
+                {"value": "random", "label": "Random only"},
+            ]},
             {"key": "enable_failure_debug", "label": "Run failure debug", "type": "boolean", "defaultValue": False},
             {"key": "failure_debug_log_only_first", "label": "Failure debug log-only first", "type": "boolean", "defaultValue": True},
             {"key": "failure_debug_generate_vcd", "label": "Generate VCD for failures", "type": "boolean", "defaultValue": True},
@@ -3079,7 +3116,10 @@ PRODUCT_STAGE_SCHEMAS: Dict[str, Dict[str, Any]] = {
     },
     "Embedded_Run": {
         "fields": [
-            {"key": "firmware_language", "label": "Firmware language", "type": "text", "defaultValue": "rust"},
+            {"key": "firmware_language", "label": "Firmware language", "type": "select", "defaultValue": "rust", "options": [
+                {"value": "rust", "label": "Rust"},
+                {"value": "c", "label": "C"},
+            ]},
             {"key": "enable_cosim", "label": "Enable firmware co-sim", "type": "boolean", "defaultValue": False},
         ],
     },
@@ -3107,16 +3147,40 @@ PRODUCT_STAGE_SCHEMAS: Dict[str, Dict[str, Any]] = {
             {"key": "system_sim_testcases", "label": "Testcases", "type": "text", "defaultValue": "system_smoke_test, integrated_input_sanity"},
             {"key": "system_sim_seeds", "label": "Seeds", "type": "text", "defaultValue": "1,2,3,4"},
             {"key": "coverage_targets", "label": "Coverage target", "type": "text", "defaultValue": "90% functional"},
-            {"key": "simulator_type", "label": "Simulator", "type": "text", "defaultValue": "verilator"},
-            {"key": "random_vs_directed", "label": "Random vs directed", "type": "text", "defaultValue": "both"},
-            {"key": "enable_formal", "label": "Run formal", "type": "boolean", "defaultValue": False},
-            {"key": "enable_golden_model", "label": "Golden model", "type": "boolean", "defaultValue": True},
+            {"key": "simulator_type", "label": "Simulator", "type": "select", "defaultValue": "verilator", "options": [
+                {"value": "verilator", "label": "verilator"},
+                {"value": "icarus", "label": "icarus"},
+            ]},
+            {"key": "code_coverage_tool", "label": "Code coverage", "type": "select", "defaultValue": "verilator_coverage", "options": [
+                {"value": "verilator_coverage", "label": "verilator_coverage"},
+                {"value": "none", "label": "Disabled"},
+            ]},
+            {"key": "formal_tool", "label": "Formal tool", "type": "select", "defaultValue": "none", "options": [
+                {"value": "none", "label": "Disabled"},
+                {"value": "symbiyosys", "label": "SymbiYosys (sby)"},
+            ]},
+            {"key": "formal_solver", "label": "Formal solver", "type": "select", "defaultValue": "z3", "options": [
+                {"value": "z3", "label": "Z3"},
+                {"value": "boolector", "label": "Boolector"},
+            ]},
+            {"key": "golden_model_tool", "label": "Golden model comparison", "type": "select", "defaultValue": "none", "options": [
+                {"value": "none", "label": "Disabled"},
+                {"value": "chiploop_python_scoreboard", "label": "ChipLoop Python scoreboard"},
+            ]},
+            {"key": "random_vs_directed", "label": "Random vs directed", "type": "select", "defaultValue": "both", "options": [
+                {"value": "both", "label": "Directed then random"},
+                {"value": "directed", "label": "Directed only"},
+                {"value": "random", "label": "Random only"},
+            ]},
         ],
     },
     "System_Firmware": {
         "note": "Firmware auto-binds the System RTL workflow ID, including register-map and top-level handoff artifacts.",
         "fields": [
-            {"key": "firmware_language", "label": "Firmware language", "type": "text", "defaultValue": "rust"},
+            {"key": "firmware_language", "label": "Firmware language", "type": "select", "defaultValue": "rust", "options": [
+                {"value": "rust", "label": "Rust"},
+                {"value": "c", "label": "C"},
+            ]},
             {"key": "validate_registers", "label": "Validate registers", "type": "boolean", "defaultValue": True},
             {"key": "enable_cosim", "label": "Enable firmware co-sim", "type": "boolean", "defaultValue": True},
         ],
@@ -3153,18 +3217,41 @@ PRODUCT_STAGE_SCHEMAS: Dict[str, Dict[str, Any]] = {
     "System_Software": {
         "fields": [
             {"key": "app_names", "label": "App names", "type": "text", "defaultValue": "status_cli, product_service"},
-            {"key": "target_language", "label": "Target language", "type": "text", "defaultValue": "rust"},
+            {"key": "target_language", "label": "Target language", "type": "select", "defaultValue": "rust", "options": [
+                {"value": "rust", "label": "Rust"},
+                {"value": "c", "label": "C"},
+                {"value": "mixed", "label": "Mixed C/Rust"},
+            ]},
+            {"key": "sdk_style", "label": "SDK style", "type": "select", "defaultValue": "rust_crate", "options": [
+                {"value": "rust_crate", "label": "Rust crate"},
+                {"value": "c_sdk", "label": "C SDK"},
+                {"value": "mixed", "label": "Mixed SDK"},
+            ]},
+            {"key": "build_system", "label": "Build system", "type": "select", "defaultValue": "cargo", "options": [
+                {"value": "cargo", "label": "Cargo"},
+                {"value": "cmake", "label": "CMake"},
+                {"value": "make", "label": "Make"},
+            ]},
         ],
     },
     "System_Software_Validation_L2": {
         "fields": [
-            {"key": "validation_mode", "label": "Validation mode", "type": "text", "defaultValue": "full_co_simulation"},
+            {"key": "validation_mode", "label": "Validation mode", "type": "select", "defaultValue": "full_co_simulation", "options": [
+                {"value": "full_co_simulation", "label": "Full co-simulation"},
+                {"value": "software_package_validation", "label": "Software package validation"},
+            ]},
         ],
     },
     "System_Product_App_Builder": {
         "fields": [
-            {"key": "app_type", "label": "App type", "type": "text", "defaultValue": "web_dashboard"},
-            {"key": "target_runtime", "label": "Target runtime", "type": "text", "defaultValue": "simulated_device"},
+            {"key": "app_type", "label": "App type", "type": "select", "defaultValue": "web_dashboard", "options": [
+                {"value": "web_dashboard", "label": "Web dashboard"},
+                {"value": "cli_tool", "label": "CLI tool (planned)", "disabled": True},
+            ]},
+            {"key": "target_runtime", "label": "Target runtime", "type": "select", "defaultValue": "simulated_device", "options": [
+                {"value": "simulated_device", "label": "Simulated device"},
+                {"value": "board_transport", "label": "Board transport (planned)", "disabled": True},
+            ]},
         ],
     },
 }
@@ -5374,7 +5461,58 @@ def _product_stage_rows(product_run_id: str, user_id: str) -> List[Dict[str, Any
         .order("created_at")
         .execute()
     ).data or []
-    return rows if isinstance(rows, list) else []
+    return _enrich_product_stage_rows(rows if isinstance(rows, list) else [])
+
+
+def _count_workflow_agents_from_logs(logs: Optional[str]) -> Optional[int]:
+    if not logs:
+        return None
+    agents: set[str] = set()
+    for raw_line in str(logs).splitlines():
+        line = raw_line.strip()
+        running = re.search(r"Running\s+(.+?\sAgent)\b", line, flags=re.IGNORECASE)
+        finished = re.search(r"^(.+?\sAgent)\s+(?:done|failed)\b", line, flags=re.IGNORECASE)
+        name = (running.group(1) if running else None) or (finished.group(1) if finished else None)
+        if name:
+            agents.add(name.strip())
+    return len(agents) if agents else None
+
+
+def _enrich_product_stage_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    workflow_ids = sorted({
+        str(row.get("workflow_id"))
+        for row in rows
+        if row.get("workflow_id")
+    })
+    if not workflow_ids:
+        return rows
+    logs_by_workflow: Dict[str, str] = {}
+    try:
+        workflow_rows = (
+            supabase.table("workflows")
+            .select("id,logs")
+            .in_("id", workflow_ids)
+            .execute()
+        ).data or []
+        logs_by_workflow = {
+            str(row.get("id")): str(row.get("logs") or "")
+            for row in workflow_rows
+            if row.get("id")
+        }
+    except Exception as exc:
+        logger.warning("Failed to enrich product stage agent counts: %s", exc)
+        return rows
+    enriched: List[Dict[str, Any]] = []
+    for row in rows:
+        next_row = dict(row)
+        outputs = next_row.get("outputs") if isinstance(next_row.get("outputs"), dict) else {}
+        if "agent_count" not in outputs:
+            agent_count = _count_workflow_agents_from_logs(logs_by_workflow.get(str(next_row.get("workflow_id"))))
+            if agent_count is not None:
+                outputs = {**outputs, "agent_count": agent_count}
+        next_row["outputs"] = outputs
+        enriched.append(next_row)
+    return enriched
 
 
 def _update_product_run(product_run_id: str, updates: Dict[str, Any]) -> None:
@@ -5815,6 +5953,10 @@ def _product_stage_payload(product: Dict[str, Any], stage: Dict[str, Any], upstr
         seeds_text = str(_stage_setting(stage, "system_sim_seeds", "1,2,3,4") or "1,2,3,4")
         seeds = [int(part.strip()) for part in seeds_text.split(",") if part.strip().isdigit()]
         testcases_text = str(_stage_setting(stage, "system_sim_testcases", "system_smoke_test, integrated_input_sanity") or "")
+        formal_default = "symbiyosys" if bool(_stage_setting(stage, "enable_formal", False)) else "none"
+        golden_default = "chiploop_python_scoreboard" if bool(_stage_setting(stage, "enable_golden_model", False)) else "none"
+        formal_tool = str(_stage_setting(stage, "formal_tool", formal_default) or formal_default)
+        golden_model_tool = str(_stage_setting(stage, "golden_model_tool", golden_default) or golden_default)
         return {
             "rtl_source_mode": "from_system_rtl",
             "system_rtl_workflow_id": system_rtl_id,
@@ -5829,14 +5971,14 @@ def _product_stage_payload(product: Dict[str, Any], stage: Dict[str, Any], upstr
             "system_sim_num_iters": int(_stage_setting(stage, "system_sim_num_iters", 25) or 25),
             "toolchain": {
                 "simulator": str(_stage_setting(stage, "simulator_type", "verilator")),
-                "code_coverage": "verilator_coverage",
-                "formal": "symbiyosys" if bool(_stage_setting(stage, "enable_formal", False)) else "none",
-                "formal_solver": "z3",
-                "golden_model": "chiploop_python_scoreboard" if bool(_stage_setting(stage, "enable_golden_model", True)) else "none",
+                "code_coverage": str(_stage_setting(stage, "code_coverage_tool", "verilator_coverage")),
+                "formal": formal_tool,
+                "formal_solver": str(_stage_setting(stage, "formal_solver", "z3")),
+                "golden_model": golden_model_tool,
             },
             "toggles": {
-                "enable_formal": bool(_stage_setting(stage, "enable_formal", False)),
-                "enable_golden_model": bool(_stage_setting(stage, "enable_golden_model", True)),
+                "enable_formal": formal_tool != "none",
+                "enable_golden_model": golden_model_tool != "none",
             },
         }
     if app_name == "System_Firmware":
@@ -6243,6 +6385,7 @@ async def list_product_runs(product_id: str, request: Request, limit: int = Quer
                 .order("created_at")
                 .execute()
             ).data or []
+            stage_rows = _enrich_product_stage_rows(stage_rows if isinstance(stage_rows, list) else [])
         stages_by_run: Dict[str, List[Dict[str, Any]]] = {}
         for stage in stage_rows if isinstance(stage_rows, list) else []:
             stages_by_run.setdefault(str(stage.get("product_run_id")), []).append(stage)

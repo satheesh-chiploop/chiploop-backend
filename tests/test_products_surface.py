@@ -67,7 +67,10 @@ def test_product_migration_uses_separate_product_tables_not_workflows_definition
     assert '"required":true' in schema_sql
     assert '"run_spec2rtl_check"' in schema_sql
     assert '"formal_tool"' in schema_sql
+    assert '"type":"select","defaultValue":"none","options":[{"value":"none","label":"Disabled"},{"value":"symbiyosys"' in schema_sql
+    assert '"formal_solver","label":"Formal solver","type":"select","defaultValue":"z3","options":[{"value":"z3","label":"Z3"},{"value":"boolector","label":"Boolector"}]' in schema_sql
     assert '"golden_model_tool"' in schema_sql
+    assert '"code_coverage_tool","label":"Code coverage tool","type":"select"' in schema_sql
     assert '"failure_debug_generate_vcd"' in schema_sql
     assert "'Digital_DQA'" in schema_sql
     assert '"run_synthesis_readiness"' in schema_sql
@@ -112,6 +115,10 @@ def test_product_api_routes_are_registered():
     assert '"run_spec2rtl_check"' in source
     assert '"formal_tool"' in source
     assert '"golden_model_tool"' in source
+    assert '"formal_solver", "label": "Formal solver", "type": "select"' in source
+    assert '"code_coverage_tool", "label": "Code coverage tool", "type": "select"' in source
+    assert '"app_type", "label": "App type", "type": "select"' in source
+    assert '"build_system", "label": "Build system", "type": "select"' in source
     assert '"System_RTL": "System_RTL"' in source
     assert '"System_DQA": "System_DQA"' in source
     assert '"System_Sim": "System_Sim"' in source
@@ -127,3 +134,8 @@ def test_product_stage_schema_seed_has_latest_digital_controls():
     assert "insert_mbist" in source
     assert "mbist_algorithm" in source
     assert "run_synthesis_closure_loop" in source
+    assert '"random_vs_directed","label":"Random vs directed","type":"select"' in source
+    assert '"rerun_mode","label":"Rerun mode","type":"select"' in source
+    assert '"firmware_language","label":"Firmware language","type":"select"' in source
+    assert '"sdk_style","label":"SDK style","type":"select"' in source
+    assert '"target_runtime","label":"Target runtime","type":"select"' in source

@@ -66,14 +66,14 @@ with schemas(app, schema) as (
           {"key":"test_intent","label":"Test intent","type":"text","defaultValue":"Run smoke, reset, register access, and representative functional tests."},
           {"key":"verification_plan","label":"Verification plan","type":"text","defaultValue":""},
           {"key":"monitor_checker_plan","label":"Monitor/checker plan","type":"text","defaultValue":""},
-          {"key":"random_vs_directed","label":"Random vs directed","type":"text","defaultValue":"both"},
+          {"key":"random_vs_directed","label":"Random vs directed","type":"select","defaultValue":"both","options":[{"value":"both","label":"Directed then random"},{"value":"directed","label":"Directed only"},{"value":"random","label":"Random only"}]},
           {"key":"coverage_targets","label":"Coverage target","type":"text","defaultValue":"90% functional, 70% line"},
           {"key":"coverage_plan","label":"Coverage plan","type":"text","defaultValue":""},
-          {"key":"simulator_type","label":"Simulator","type":"text","defaultValue":"verilator"},
-          {"key":"code_coverage_tool","label":"Code coverage tool","type":"text","defaultValue":"verilator_coverage"},
-          {"key":"formal_tool","label":"Formal tool","type":"text","defaultValue":"none"},
-          {"key":"formal_solver","label":"Formal solver","type":"text","defaultValue":"z3"},
-          {"key":"golden_model_tool","label":"Golden model tool","type":"text","defaultValue":"none"},
+          {"key":"simulator_type","label":"Simulator","type":"select","defaultValue":"verilator","options":[{"value":"verilator","label":"Verilator + Cocotb"},{"value":"icarus","label":"Icarus Verilog (planned)","disabled":true},{"value":"questa","label":"Questa (planned)","disabled":true},{"value":"vcs","label":"VCS (planned)","disabled":true},{"value":"xcelium","label":"Xcelium (planned)","disabled":true}]},
+          {"key":"code_coverage_tool","label":"Code coverage tool","type":"select","defaultValue":"verilator_coverage","options":[{"value":"verilator_coverage","label":"verilator_coverage"},{"value":"none","label":"Disabled"},{"value":"urg","label":"Synopsys URG (planned)","disabled":true},{"value":"imc","label":"Cadence IMC (planned)","disabled":true},{"value":"vcover","label":"Questa vcover (planned)","disabled":true}]},
+          {"key":"formal_tool","label":"Formal tool","type":"select","defaultValue":"none","options":[{"value":"none","label":"Disabled"},{"value":"symbiyosys","label":"SymbiYosys (sby)"},{"value":"jasper","label":"JasperGold (planned)","disabled":true},{"value":"vc_formal","label":"VC Formal (planned)","disabled":true}]},
+          {"key":"formal_solver","label":"Formal solver","type":"select","defaultValue":"z3","options":[{"value":"z3","label":"Z3"},{"value":"boolector","label":"Boolector"}]},
+          {"key":"golden_model_tool","label":"Golden model tool","type":"select","defaultValue":"none","options":[{"value":"none","label":"Disabled"},{"value":"chiploop_python_scoreboard","label":"ChipLoop Python scoreboard"},{"value":"custom_python","label":"Custom Python model (planned)","disabled":true},{"value":"matlab","label":"MATLAB reference model (planned)","disabled":true}]},
           {"key":"seed_count","label":"Seed count","type":"number","defaultValue":10},
           {"key":"run_closure_analysis","label":"Run closure analysis","type":"boolean","defaultValue":true},
           {"key":"enable_failure_debug","label":"Run failure debug","type":"boolean","defaultValue":false},
@@ -148,8 +148,8 @@ with schemas(app, schema) as (
           {"key":"seed_count","label":"Seed count","type":"number","defaultValue":10},
           {"key":"seed_budget","label":"Seed budget","type":"number","defaultValue":10},
           {"key":"coverage_targets","label":"Coverage target","type":"text","defaultValue":"90% functional, 70% line"},
-          {"key":"rerun_mode","label":"Rerun mode","type":"text","defaultValue":"coverage_targeted"},
-          {"key":"random_vs_directed","label":"Random vs directed","type":"text","defaultValue":"both"},
+          {"key":"rerun_mode","label":"Rerun mode","type":"select","defaultValue":"coverage_targeted","options":[{"value":"coverage_targeted","label":"Coverage targeted"},{"value":"failed_only","label":"Failed tests only"},{"value":"full_regression","label":"Full regression"}]},
+          {"key":"random_vs_directed","label":"Random vs directed","type":"select","defaultValue":"both","options":[{"value":"both","label":"Directed then random"},{"value":"directed","label":"Directed only"},{"value":"random","label":"Random only"}]},
           {"key":"enable_failure_debug","label":"Run failure debug","type":"boolean","defaultValue":false},
           {"key":"failure_debug_log_only_first","label":"Failure debug log-only first","type":"boolean","defaultValue":true},
           {"key":"failure_debug_generate_vcd","label":"Generate VCD for failures","type":"boolean","defaultValue":true},
@@ -163,7 +163,7 @@ with schemas(app, schema) as (
       'Embedded_Run',
       '{
         "fields": [
-          {"key":"firmware_language","label":"Firmware language","type":"text","defaultValue":"rust"},
+          {"key":"firmware_language","label":"Firmware language","type":"select","defaultValue":"rust","options":[{"value":"rust","label":"Rust"},{"value":"c","label":"C"}]},
           {"key":"enable_cosim","label":"Enable firmware co-sim","type":"boolean","defaultValue":false}
         ]
       }'::jsonb
@@ -200,10 +200,12 @@ with schemas(app, schema) as (
           {"key":"system_sim_testcases","label":"Testcases","type":"text","defaultValue":"system_smoke_test, integrated_input_sanity"},
           {"key":"system_sim_seeds","label":"Seeds","type":"text","defaultValue":"1,2,3,4"},
           {"key":"coverage_targets","label":"Coverage target","type":"text","defaultValue":"90% functional"},
-          {"key":"simulator_type","label":"Simulator","type":"text","defaultValue":"verilator"},
-          {"key":"random_vs_directed","label":"Random vs directed","type":"text","defaultValue":"both"},
-          {"key":"enable_formal","label":"Run formal","type":"boolean","defaultValue":false},
-          {"key":"enable_golden_model","label":"Golden model","type":"boolean","defaultValue":true}
+          {"key":"simulator_type","label":"Simulator","type":"select","defaultValue":"verilator","options":[{"value":"verilator","label":"verilator"},{"value":"icarus","label":"icarus"}]},
+          {"key":"code_coverage_tool","label":"Code coverage","type":"select","defaultValue":"verilator_coverage","options":[{"value":"verilator_coverage","label":"verilator_coverage"},{"value":"none","label":"Disabled"}]},
+          {"key":"formal_tool","label":"Formal tool","type":"select","defaultValue":"none","options":[{"value":"none","label":"Disabled"},{"value":"symbiyosys","label":"SymbiYosys (sby)"}]},
+          {"key":"formal_solver","label":"Formal solver","type":"select","defaultValue":"z3","options":[{"value":"z3","label":"Z3"},{"value":"boolector","label":"Boolector"}]},
+          {"key":"golden_model_tool","label":"Golden model comparison","type":"select","defaultValue":"none","options":[{"value":"none","label":"Disabled"},{"value":"chiploop_python_scoreboard","label":"ChipLoop Python scoreboard"}]},
+          {"key":"random_vs_directed","label":"Random vs directed","type":"select","defaultValue":"both","options":[{"value":"both","label":"Directed then random"},{"value":"directed","label":"Directed only"},{"value":"random","label":"Random only"}]}
         ]
       }'::jsonb
     ),
@@ -212,7 +214,7 @@ with schemas(app, schema) as (
       '{
         "note": "Firmware auto-binds the System RTL workflow ID, including register-map and top-level handoff artifacts.",
         "fields": [
-          {"key":"firmware_language","label":"Firmware language","type":"text","defaultValue":"rust"},
+          {"key":"firmware_language","label":"Firmware language","type":"select","defaultValue":"rust","options":[{"value":"rust","label":"Rust"},{"value":"c","label":"C"}]},
           {"key":"validate_registers","label":"Validate registers","type":"boolean","defaultValue":true},
           {"key":"enable_cosim","label":"Enable firmware co-sim","type":"boolean","defaultValue":true}
         ]
@@ -239,7 +241,9 @@ with schemas(app, schema) as (
       '{
         "fields": [
           {"key":"app_names","label":"App names","type":"text","defaultValue":"status_cli, product_service"},
-          {"key":"target_language","label":"Target language","type":"text","defaultValue":"rust"}
+          {"key":"target_language","label":"Target language","type":"select","defaultValue":"rust","options":[{"value":"rust","label":"Rust"},{"value":"c","label":"C"},{"value":"mixed","label":"Mixed C/Rust"}]},
+          {"key":"sdk_style","label":"SDK style","type":"select","defaultValue":"rust_crate","options":[{"value":"rust_crate","label":"Rust crate"},{"value":"c_sdk","label":"C SDK"},{"value":"mixed","label":"Mixed SDK"}]},
+          {"key":"build_system","label":"Build system","type":"select","defaultValue":"cargo","options":[{"value":"cargo","label":"Cargo"},{"value":"cmake","label":"CMake"},{"value":"make","label":"Make"}]}
         ]
       }'::jsonb
     ),
@@ -247,7 +251,7 @@ with schemas(app, schema) as (
       'System_Software_Validation_L2',
       '{
         "fields": [
-          {"key":"validation_mode","label":"Validation mode","type":"text","defaultValue":"full_co_simulation"}
+          {"key":"validation_mode","label":"Validation mode","type":"select","defaultValue":"full_co_simulation","options":[{"value":"full_co_simulation","label":"Full co-simulation"},{"value":"software_package_validation","label":"Software package validation"}]}
         ]
       }'::jsonb
     ),
@@ -255,8 +259,8 @@ with schemas(app, schema) as (
       'System_Product_App_Builder',
       '{
         "fields": [
-          {"key":"app_type","label":"App type","type":"text","defaultValue":"web_dashboard"},
-          {"key":"target_runtime","label":"Target runtime","type":"text","defaultValue":"simulated_device"}
+          {"key":"app_type","label":"App type","type":"select","defaultValue":"web_dashboard","options":[{"value":"web_dashboard","label":"Web dashboard"},{"value":"cli_tool","label":"CLI tool (planned)","disabled":true}]},
+          {"key":"target_runtime","label":"Target runtime","type":"select","defaultValue":"simulated_device","options":[{"value":"simulated_device","label":"Simulated device"},{"value":"board_transport","label":"Board transport (planned)","disabled":true}]}
         ]
       }'::jsonb
     )
