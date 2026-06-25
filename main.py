@@ -2860,7 +2860,7 @@ class ProductUpdateIn(BaseModel):
 
 class ProductRunStartIn(BaseModel):
     start_stage: Optional[str] = None
-    max_stages: Optional[int] = 8
+    max_stages: Optional[int] = None
     resume_product_run_id: Optional[str] = None
 
 
@@ -6283,7 +6283,7 @@ def execute_product_run_background(
     product_id: str,
     product_run_id: str,
     user_id: str,
-    max_stages: int = 8,
+    max_stages: Optional[int] = None,
     start_stage: Optional[str] = None,
     resume_product_run_id: Optional[str] = None,
 ) -> None:
@@ -6343,7 +6343,8 @@ def execute_product_run_background(
             if start_index < 0:
                 raise RuntimeError(f"Start stage '{normalized_start_stage}' was not found in enabled runnable stages.")
             supported = supported[start_index:]
-        supported = supported[: max(1, min(int(max_stages or 8), 8))]
+        if max_stages is not None:
+            supported = supported[: max(1, int(max_stages))]
         _update_product_run(product_run_id, {"status": "running", "current_stage": supported[0].get("id")})
         _update_product_status(product_id, user_id, "running")
         _append_product_run_log(product_run_id, f"Product run started with {len(supported)} enabled stage(s).")
@@ -6462,7 +6463,7 @@ async def start_product_run(product_id: str, payload: ProductRunStartIn, request
         product_id,
         product_run["id"],
         user_id,
-        payload.max_stages or 8,
+        payload.max_stages,
         payload.start_stage,
         payload.resume_product_run_id,
     )

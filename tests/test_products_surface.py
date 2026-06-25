@@ -80,6 +80,7 @@ def test_product_migration_uses_separate_product_tables_not_workflows_definition
 
 def test_product_api_routes_are_registered():
     source = MAIN_PY.read_text(encoding="utf-8")
+    frontend_source = (BACKEND_ROOT.parent / "frontend" / "app" / "products" / "[productId]" / "page.tsx").read_text(encoding="utf-8")
 
     assert '@app.get("/products/reference-journeys")' in source
     assert '@app.get("/products/stage-schemas")' in source
@@ -132,6 +133,9 @@ def test_product_api_routes_are_registered():
     assert 'deleted_product_id' in source
     assert '"dashboard_url"' in source
     assert '"download_url"' in source
+    assert "max_stages: Optional[int] = None" in source
+    assert "min(int(max_stages or 8), 8)" not in source
+    assert "max_stages: 8" not in frontend_source
 
 
 def test_product_stage_schema_seed_has_latest_digital_controls():

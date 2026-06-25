@@ -34,6 +34,44 @@ def test_repair_common_status_tieoffs_adds_safe_assignments(tmp_path):
     assert "assign status_error = rx_overflow_event | tx_underflow_event;" in text
 
 
+def test_repair_stale_input_only_interconnect_promotes_top_input(tmp_path):
+    digital = tmp_path / "digital_core.v"
+    analog = tmp_path / "analog_macro.v"
+    top = tmp_path / "soc_top_phys.sv"
+    digital.write_text("module digital_core(input sample_req); endmodule\n", encoding="utf-8")
+    analog.write_text("module analog_macro(input sample_req); endmodule\n", encoding="utf-8")
+    top.write_text(
+        """
+module soc_top_phys(input logic clk);
+  logic w_4_u_digital_sample_req_u_analog_sample_req;
+  digital_core u_digital (
+    .sample_req(w_4_u_digital_sample_req_u_analog_sample_req)
+  );
+  analog_macro u_analog (
+    .sample_req(w_4_u_digital_sample_req_u_analog_sample_req)
+  );
+endmodule
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    repairs = agent._repair_stale_input_only_interconnects(
+        [str(digital), str(analog), str(top)],
+        "soc_top_phys",
+    )
+    text = top.read_text(encoding="utf-8")
+
+    assert repairs == {
+        "soc_top_phys.sv": [
+            "promoted input-only interconnect w_4_u_digital_sample_req_u_analog_sample_req to top input sample_req"
+        ]
+    }
+    assert "input logic clk, input logic sample_req" in text
+    assert "w_4_u_digital_sample_req_u_analog_sample_req" not in text
+    assert ".sample_req(sample_req)" in text
+
+
 def test_synthesis_uses_system_package_phys_top_and_fails_before_sta_on_missing_netlist(tmp_path, monkeypatch):
     rtl = tmp_path / "temp_monitor_soc_phys.sv"
     sdc = tmp_path / "top.sdc"

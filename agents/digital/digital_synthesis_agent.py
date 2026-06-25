@@ -14,6 +14,7 @@ logger = logging.getLogger("chiploop")
 
 from tooling.runner import run_command
 from utils.artifact_utils import save_text_artifact_and_record
+from agents.system.system_top_assembly_agent import _extract_module_ports_from_text
 
 AGENT_NAME = "Digital Synthesis Agent"
 
@@ -212,6 +213,126 @@ def _repair_common_status_tieoffs(rtl_path: str) -> list[str]:
         return []
     Path(rtl_path).write_text(patched, encoding="utf-8")
     return additions
+
+
+def _file_defines_module(path: str, module_name: str) -> bool:
+    return bool(re.search(rf"\bmodule\s+{re.escape(module_name)}\b", _read_text(path)))
+
+
+def _module_port_db_from_files(paths: list[str]) -> dict:
+    db = {}
+    for path in paths or []:
+        for module, ports in _extract_module_ports_from_text(_read_text(path)).items():
+            db[module] = ports
+    return db
+
+
+def _top_internal_signal_decls(text: str) -> dict[str, str]:
+    decls = {}
+    for match in re.finditer(
+        r"^\s*(?:logic|wire|reg)\s*(?P<range>\[[^\]]+\])?\s*(?P<names>[^;]+);",
+        text,
+        flags=re.MULTILINE,
+    ):
+        rng = (match.group("range") or "").strip()
+        for raw in match.group("names").split(","):
+            name = re.sub(r"\s*=.*$", "", raw).strip()
+            name = re.sub(r"\[[^\]]+\]\s*$", "", name).strip()
+            if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_$]*", name):
+                decls[name] = rng
+    return decls
+
+
+def _top_instance_signal_uses(text: str) -> dict[str, list[dict[str, str]]]:
+    uses: dict[str, list[dict[str, str]]] = {}
+    inst_pat = re.compile(
+        r"^\s*(?P<module>[A-Za-z_][A-Za-z0-9_$]*)\s+"
+        r"(?P<inst>[A-Za-z_][A-Za-z0-9_$]*)\s*\((?P<body>.*?)\)\s*;",
+        flags=re.MULTILINE | re.DOTALL,
+    )
+    for inst in inst_pat.finditer(text):
+        module = inst.group("module")
+        if module in {"module", "if", "for", "while", "case", "assign"}:
+            continue
+        for conn in re.finditer(r"\.(?P<port>[A-Za-z_][A-Za-z0-9_$]*)\s*\(\s*(?P<sig>[A-Za-z_][A-Za-z0-9_$]*)\s*\)", inst.group("body")):
+            uses.setdefault(conn.group("sig"), []).append({
+                "module": module,
+                "instance": inst.group("inst"),
+                "port": conn.group("port"),
+            })
+    return uses
+
+
+def _top_ports_from_header(text: str, top_module: str) -> set[str]:
+    match = re.search(rf"\bmodule\s+{re.escape(top_module)}\s*\((?P<header>.*?)\)\s*;", text, flags=re.DOTALL)
+    if not match:
+        return set()
+    header = match.group("header")
+    ports = set()
+    for raw in header.split(","):
+        tokens = re.findall(r"[A-Za-z_][A-Za-z0-9_$]*", raw)
+        if tokens:
+            ports.add(tokens[-1])
+    return ports
+
+
+def _add_ansi_top_input(text: str, top_module: str, port_name: str, port_range: str) -> str:
+    if port_name in _top_ports_from_header(text, top_module):
+        return text
+    match = re.search(rf"\bmodule\s+{re.escape(top_module)}\s*\((?P<header>.*?)\)\s*;", text, flags=re.DOTALL)
+    if not match:
+        return text
+    header = match.group("header")
+    range_part = f"{port_range} " if port_range else ""
+    new_port = f"input logic {range_part}{port_name}"
+    separator = ", " if header.strip() else ""
+    return text[:match.start("header")] + header.rstrip() + separator + new_port + text[match.end("header"):]
+
+
+def _remove_single_signal_decl(text: str, signal: str) -> str:
+    return re.sub(
+        rf"^\s*(?:logic|wire|reg)\s*(?:\[[^\]]+\]\s*)?{re.escape(signal)}\s*;\r?\n",
+        "",
+        text,
+        flags=re.MULTILINE,
+    )
+
+
+def _repair_stale_input_only_interconnects(rtl_files: list[str], top_module: str) -> dict[str, list[str]]:
+    port_db = _module_port_db_from_files(rtl_files)
+    repairs = {}
+    for path in rtl_files or []:
+        if not _file_defines_module(path, top_module):
+            continue
+        text = _read_text(path)
+        decls = _top_internal_signal_decls(text)
+        uses_by_signal = _top_instance_signal_uses(text)
+        top_ports = _top_ports_from_header(text, top_module)
+        changes = []
+
+        for signal, uses in sorted(uses_by_signal.items()):
+            if signal not in decls or signal in top_ports or len(uses) < 2:
+                continue
+            directions = [
+                str((port_db.get(use["module"]) or {}).get(use["port"], {}).get("dir") or "").lower()
+                for use in uses
+            ]
+            if not directions or any(direction != "input" for direction in directions):
+                continue
+            ports = [use["port"] for use in uses]
+            promoted = ports[0] if len(set(ports)) == 1 else signal
+            if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_$]*", promoted):
+                promoted = signal
+            text = _add_ansi_top_input(text, top_module, promoted, decls.get(signal, ""))
+            text = _remove_single_signal_decl(text, signal)
+            if promoted != signal:
+                text = re.sub(rf"\b{re.escape(signal)}\b", promoted, text)
+            changes.append(f"promoted input-only interconnect {signal} to top input {promoted}")
+
+        if changes:
+            Path(path).write_text(text, encoding="utf-8")
+            repairs[os.path.basename(path)] = changes
+    return repairs
 
 def _pick_clock(spec: dict) -> tuple[str, float]:
     """
@@ -558,6 +679,9 @@ def run_agent(state: dict) -> dict:
     top_module = str(top_module).strip()
     logger.info(f"{AGENT_NAME}: top_module={top_module}")
 
+    interconnect_repairs = _repair_stale_input_only_interconnects(copied, top_module)
+    for file_name, repairs in interconnect_repairs.items():
+        rtl_repairs.setdefault(file_name, []).extend(repairs)
 
     state["design_name"] = top_module
     # ---------- SDC (single source of truth) ----------
