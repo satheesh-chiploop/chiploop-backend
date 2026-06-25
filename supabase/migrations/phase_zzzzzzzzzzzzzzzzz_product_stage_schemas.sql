@@ -196,16 +196,28 @@ with schemas(app, schema) as (
       'System_Sim',
       '{
         "fields": [
+          {"key":"test_intent","label":"Test intent","type":"text","defaultValue":"Run integrated system smoke and register-path scenarios."},
+          {"key":"verification_plan","label":"Verification plan","type":"text","defaultValue":""},
+          {"key":"monitor_checker_plan","label":"Monitor/checker plan","type":"text","defaultValue":""},
           {"key":"seed_count","label":"Seed count","type":"number","defaultValue":6},
           {"key":"system_sim_testcases","label":"Testcases","type":"text","defaultValue":"system_smoke_test, integrated_input_sanity"},
           {"key":"system_sim_seeds","label":"Seeds","type":"text","defaultValue":"1,2,3,4"},
           {"key":"coverage_targets","label":"Coverage target","type":"text","defaultValue":"90% functional"},
+          {"key":"coverage_plan","label":"Coverage point plan","type":"text","defaultValue":""},
+          {"key":"system_sim_num_iters","label":"Iteration budget","type":"number","defaultValue":25},
           {"key":"simulator_type","label":"Simulator","type":"select","defaultValue":"verilator","options":[{"value":"verilator","label":"verilator"},{"value":"icarus","label":"icarus"}]},
           {"key":"code_coverage_tool","label":"Code coverage","type":"select","defaultValue":"verilator_coverage","options":[{"value":"verilator_coverage","label":"verilator_coverage"},{"value":"none","label":"Disabled"}]},
           {"key":"formal_tool","label":"Formal tool","type":"select","defaultValue":"none","options":[{"value":"none","label":"Disabled"},{"value":"symbiyosys","label":"SymbiYosys (sby)"}]},
           {"key":"formal_solver","label":"Formal solver","type":"select","defaultValue":"z3","options":[{"value":"z3","label":"Z3"},{"value":"boolector","label":"Boolector"}]},
           {"key":"golden_model_tool","label":"Golden model comparison","type":"select","defaultValue":"none","options":[{"value":"none","label":"Disabled"},{"value":"chiploop_python_scoreboard","label":"ChipLoop Python scoreboard"}]},
-          {"key":"random_vs_directed","label":"Random vs directed","type":"select","defaultValue":"both","options":[{"value":"both","label":"Directed then random"},{"value":"directed","label":"Directed only"},{"value":"random","label":"Random only"}]}
+          {"key":"random_vs_directed","label":"Random vs directed","type":"select","defaultValue":"both","options":[{"value":"both","label":"Directed then random"},{"value":"directed","label":"Directed only"},{"value":"random","label":"Random only"}]},
+          {"key":"run_closure_analysis","label":"Run closure analysis","type":"boolean","defaultValue":false},
+          {"key":"enable_failure_debug","label":"Debug failing tests","type":"boolean","defaultValue":false},
+          {"key":"failure_debug_log_only_first","label":"Failure debug log-only first","type":"boolean","defaultValue":true},
+          {"key":"failure_debug_generate_vcd","label":"Generate VCD for failures","type":"boolean","defaultValue":true},
+          {"key":"failure_debug_auto_apply_tb","label":"Auto-apply TB fixes","type":"boolean","defaultValue":false},
+          {"key":"failure_debug_auto_apply_rtl","label":"Auto-apply RTL fixes","type":"boolean","defaultValue":false},
+          {"key":"failure_debug_rerun_failing","label":"Rerun failing tests","type":"boolean","defaultValue":true}
         ]
       }'::jsonb
     ),
@@ -221,18 +233,62 @@ with schemas(app, schema) as (
       }'::jsonb
     ),
     (
+      'System_Synthesis',
+      '{
+        "fields": [
+          {"key":"foundry","label":"Foundry","type":"text","defaultValue":"sky130"},
+          {"key":"pdk","label":"PDK","type":"text","defaultValue":"sky130A"},
+          {"key":"toolchain","label":"Toolchain","type":"text","defaultValue":"openlane2"},
+          {"key":"target_frequency_mhz","label":"Target frequency MHz","type":"number","defaultValue":100},
+          {"key":"constraints_sdc","label":"Constraints SDC","type":"text","defaultValue":""},
+          {"key":"run_spec2rtl_check","label":"Run Spec2RTL compliance check","type":"boolean","defaultValue":false},
+          {"key":"enable_scan_dft","label":"Enable scan/DFT intent","type":"boolean","defaultValue":false},
+          {"key":"run_synthesis_closure_loop","label":"Run synthesis closure loop","type":"boolean","defaultValue":false},
+          {"key":"max_synthesis_closure_iterations","label":"Max synthesis closure iterations","type":"number","defaultValue":1},
+          {"key":"allow_synthesis_timing_repair","label":"Allow synthesis setup timing repair","type":"boolean","defaultValue":true},
+          {"key":"allow_synthesis_lec_repair","label":"Allow synthesis LEC repair","type":"boolean","defaultValue":true},
+          {"key":"allow_synthesis_retiming","label":"Allow synthesis retiming","type":"boolean","defaultValue":false},
+          {"key":"allow_synthesis_hierarchy_flattening","label":"Allow synthesis hierarchy flattening","type":"boolean","defaultValue":false},
+          {"key":"stop_on_synthesis_closure_failure","label":"Stop downstream on synthesis closure failure","type":"boolean","defaultValue":false},
+          {"key":"stop_on_synthesis_lec_failure","label":"Stop downstream on synthesis LEC failure","type":"boolean","defaultValue":false}
+        ]
+      }'::jsonb
+    ),
+    (
       'System_PD',
       '{
         "fields": [
           {"key":"foundry","label":"Foundry","type":"text","defaultValue":"sky130"},
-          {"key":"pdk","label":"PDK","type":"text","defaultValue":"sky130"},
-          {"key":"analog_physical_mode","label":"Analog physical mode","type":"text","defaultValue":"blackbox"},
-          {"key":"generate_analog_gds","label":"Generate analog GDS","type":"boolean","defaultValue":false},
+          {"key":"pdk","label":"PDK","type":"text","defaultValue":"sky130A"},
+          {"key":"toolchain","label":"Toolchain","type":"text","defaultValue":"openlane2"},
+          {"key":"target_frequency_mhz","label":"Target frequency MHz","type":"number","defaultValue":100},
+          {"key":"constraints_sdc","label":"Constraints SDC","type":"text","defaultValue":""},
+          {"key":"effort","label":"Implementation effort","type":"select","defaultValue":"balanced","options":["fast","balanced","signoff"]},
+          {"key":"run_spec2rtl_check","label":"Run Spec2RTL compliance check","type":"boolean","defaultValue":false},
+          {"key":"enable_scan_dft","label":"Enable scan/DFT intent","type":"boolean","defaultValue":false},
+          {"key":"analog_physical_mode","label":"Analog physical mode","type":"select","defaultValue":"blackbox","options":[{"value":"blackbox","label":"Blackbox analog macro"},{"value":"generate_sky130_gds","label":"Generate Sky130 GDS"},{"value":"provided_gds","label":"Provided GDS/SPICE"}]},
+          {"key":"analog_pdk","label":"Analog PDK","type":"text","defaultValue":"sky130A"},
+          {"key":"analog_spice_text","label":"Provided analog SPICE/netlist","type":"text","defaultValue":""},
           {"key":"regenerate_lef_lib_after_gds","label":"Regenerate LEF/LIB after GDS","type":"boolean","defaultValue":true},
           {"key":"run_lef_lib_consistency","label":"Run LEF/LIB consistency","type":"boolean","defaultValue":true},
           {"key":"run_logic_equivalence","label":"Run logic equivalence","type":"boolean","defaultValue":true},
+          {"key":"run_fill","label":"Run fill","type":"boolean","defaultValue":true},
           {"key":"run_drc","label":"Run DRC","type":"boolean","defaultValue":true},
-          {"key":"run_lvs","label":"Run LVS","type":"boolean","defaultValue":true}
+          {"key":"run_lvs","label":"Run LVS","type":"boolean","defaultValue":true},
+          {"key":"run_signoff_closure_loop","label":"Run signoff closure loop","type":"boolean","defaultValue":false},
+          {"key":"max_signoff_closure_iterations","label":"Max signoff closure iterations","type":"number","defaultValue":1},
+          {"key":"allow_timing_repair","label":"Allow timing repair","type":"boolean","defaultValue":true},
+          {"key":"allow_drc_repair","label":"Allow DRC repair","type":"boolean","defaultValue":true},
+          {"key":"allow_lvs_repair","label":"Allow LVS repair","type":"boolean","defaultValue":true},
+          {"key":"allow_lec_repair","label":"Allow LEC repair","type":"boolean","defaultValue":true},
+          {"key":"run_synthesis_closure_loop","label":"Run synthesis closure loop","type":"boolean","defaultValue":false},
+          {"key":"max_synthesis_closure_iterations","label":"Max synthesis closure iterations","type":"number","defaultValue":1},
+          {"key":"allow_synthesis_timing_repair","label":"Allow synthesis setup timing repair","type":"boolean","defaultValue":true},
+          {"key":"allow_synthesis_lec_repair","label":"Allow synthesis LEC repair","type":"boolean","defaultValue":true},
+          {"key":"allow_synthesis_retiming","label":"Allow synthesis retiming","type":"boolean","defaultValue":false},
+          {"key":"allow_synthesis_hierarchy_flattening","label":"Allow synthesis hierarchy flattening","type":"boolean","defaultValue":false},
+          {"key":"stop_on_synthesis_closure_failure","label":"Stop downstream on synthesis closure failure","type":"boolean","defaultValue":false},
+          {"key":"stop_on_synthesis_lec_failure","label":"Stop downstream on synthesis LEC failure","type":"boolean","defaultValue":false}
         ]
       }'::jsonb
     ),

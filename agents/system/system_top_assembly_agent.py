@@ -102,6 +102,41 @@ def _top_dir_for_endpoint(is_source: bool) -> str:
     return "input" if is_source else "output"
 
 
+def _instance_port_direction(module_port_db: dict, module_name: str, port_name: str) -> str:
+    ports = module_port_db.get(module_name) or {}
+    meta = ports.get(port_name) or {}
+    return str(meta.get("dir") or "").strip().lower()
+
+
+def _top_input_name_for_instance_port(top_ports: dict, inst: str, port: str) -> str:
+    base = _sanitize_name(port)
+    if base not in top_ports or top_ports[base]["dir"] == "input":
+        return base
+    candidate = _sanitize_name(f"{inst}_{port}")
+    if candidate not in top_ports or top_ports[candidate]["dir"] == "input":
+        return candidate
+    i = 2
+    while True:
+        indexed = _sanitize_name(f"{candidate}_{i}")
+        if indexed not in top_ports or top_ports[indexed]["dir"] == "input":
+            return indexed
+        i += 1
+
+
+def _unused_wire_name(existing: set, inst: str, port: str) -> str:
+    base = _sanitize_name(f"unused_{inst}_{port}")
+    if base not in existing:
+        existing.add(base)
+        return base
+    i = 2
+    while True:
+        candidate = f"{base}_{i}"
+        if candidate not in existing:
+            existing.add(candidate)
+            return candidate
+        i += 1
+
+
 def _normalize_tieoff_entry(t: dict):
     """
     Support both:
@@ -375,6 +410,7 @@ def _assemble_top(top_module: str, intent: dict, variant: str, module_port_db: d
     top_ports = {}
     wire_meta = {}
     wire_decls = []
+    auto_wire_decls = {}
 
     driven_instance_ports = set()
     driven_top_ports = set()
@@ -447,6 +483,27 @@ def _assemble_top(top_module: str, intent: dict, variant: str, module_port_db: d
         if si == "top" and di == "top":
             continue
 
+        src_dir = _instance_port_direction(module_port_db, instance_module.get(si, ""), sp)
+        dst_dir = _instance_port_direction(module_port_db, instance_module.get(di, ""), dp)
+
+        if src_dir == "input" and dst_dir in {"output", "inout"}:
+            si, di = di, si
+            sp, dp = dp, sp
+            src_dir, dst_dir = dst_dir, src_dir
+
+        if src_dir == "input" and dst_dir == "input":
+            top_name = _top_input_name_for_instance_port(top_ports, si if sp == dp else f"{si}_{di}", sp if sp == dp else f"{sp}_{dp}")
+            top_range = width
+            if top_name in top_ports and top_ports[top_name]["dir"] != "input":
+                raise ValueError(f"Conflicting directions inferred for top port '{top_name}'")
+            existing_range = top_ports.get(top_name, {}).get("range", "")
+            top_ports[top_name] = {"dir": "input", "range": _merge_range(existing_range, top_range)}
+            if si in port_map:
+                port_map[si][sp] = top_name
+            if di in port_map:
+                port_map[di][dp] = top_name
+            continue
+
         dst_key = (di, dp)
         if dst_key in driven_instance_ports:
             raise ValueError(f"Multiple drivers detected for {di}.{dp} during top assembly.")
@@ -462,6 +519,36 @@ def _assemble_top(top_module: str, intent: dict, variant: str, module_port_db: d
     for w in sorted(wire_meta.keys()):
         rng = wire_meta[w]
         wire_decls.append(f"  logic {rng} {w};" if rng else f"  logic {w};")
+
+    existing_wire_names = set(wire_meta.keys())
+    for inst in sorted(port_map.keys()):
+        module = instance_module.get(inst, "")
+        ports = module_port_db.get(module) or {}
+        pm = port_map.get(inst, {})
+        for port in sorted(ports.keys()):
+            if port in pm:
+                continue
+            meta = ports.get(port) or {}
+            direction = str(meta.get("dir") or "").strip().lower()
+            rng = str(meta.get("range") or "").strip()
+            if direction == "input":
+                top_name = _top_input_name_for_instance_port(top_ports, inst, port)
+                if top_name in top_ports and top_ports[top_name]["dir"] != "input":
+                    raise ValueError(f"Conflicting directions inferred for top port '{top_name}'")
+                existing_range = top_ports.get(top_name, {}).get("range", "")
+                top_ports[top_name] = {"dir": "input", "range": _merge_range(existing_range, rng)}
+                pm[port] = top_name
+            elif direction == "inout":
+                top_name = _sanitize_name(port)
+                if top_name in top_ports and top_ports[top_name]["dir"] != "inout":
+                    top_name = _sanitize_name(f"{inst}_{port}")
+                existing_range = top_ports.get(top_name, {}).get("range", "")
+                top_ports[top_name] = {"dir": "inout", "range": _merge_range(existing_range, rng)}
+                pm[port] = top_name
+            elif direction == "output":
+                wire_name = _unused_wire_name(existing_wire_names, inst, port)
+                auto_wire_decls[wire_name] = rng
+                pm[port] = wire_name
 
     lines = []
     port_items = []
@@ -487,6 +574,13 @@ def _assemble_top(top_module: str, intent: dict, variant: str, module_port_db: d
     if wire_decls:
         lines.append("  // Auto-generated interconnect wires")
         lines.extend(wire_decls)
+        lines.append("")
+
+    if auto_wire_decls:
+        lines.append("  // Auto-generated sinks for unconsumed instance outputs")
+        for w in sorted(auto_wire_decls.keys()):
+            rng = auto_wire_decls[w]
+            lines.append(f"  logic {rng} {w};" if rng else f"  logic {w};")
         lines.append("")
 
     for inst in sorted(instances, key=lambda x: x.get("name", "")):

@@ -74,7 +74,7 @@ def test_product_migration_uses_separate_product_tables_not_workflows_definition
     assert '"failure_debug_generate_vcd"' in schema_sql
     assert "'Digital_DQA'" in schema_sql
     assert '"run_synthesis_readiness"' in schema_sql
-    assert '"generate_analog_gds"' in schema_sql
+    assert '"analog_physical_mode"' in schema_sql
     assert '"run_lef_lib_consistency"' in schema_sql
 
 
@@ -122,7 +122,13 @@ def test_product_api_routes_are_registered():
     assert '"System_RTL": "System_RTL"' in source
     assert '"System_DQA": "System_DQA"' in source
     assert '"System_Sim": "System_Sim"' in source
+    assert '"System_Synthesis": "System_Synthesis"' in source
     assert '"System_Firmware": "System_Firmware"' in source
+    assert '"System_PD": "System_PD"' in source
+    assert '"analog_spice_text", "label": "Provided analog SPICE/netlist"' in source
+    assert '"run_spec2rtl_check", "label": "Run Spec2RTL compliance check"' in source
+    assert '"enable_scan_dft", "label": "Enable scan/DFT intent"' in source
+    assert '"system_sim_num_iters", "label": "Iteration budget"' in source
     assert 'deleted_product_id' in source
     assert '"dashboard_url"' in source
     assert '"download_url"' in source
@@ -139,3 +145,8 @@ def test_product_stage_schema_seed_has_latest_digital_controls():
     assert '"firmware_language","label":"Firmware language","type":"select"' in source
     assert '"sdk_style","label":"SDK style","type":"select"' in source
     assert '"target_runtime","label":"Target runtime","type":"select"' in source
+    assert "'System_Synthesis'" in source
+    assert '"analog_spice_text","label":"Provided analog SPICE/netlist"' in source
+    assert '"effort","label":"Implementation effort","type":"select"' in source
+    assert '"system_sim_num_iters","label":"Iteration budget","type":"number"' in source
+    assert '"failure_debug_auto_apply_rtl","label":"Auto-apply RTL fixes"' in source

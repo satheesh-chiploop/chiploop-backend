@@ -255,6 +255,7 @@ def _reconcile_hierarchical_signal_directions(spec_json: dict, mode: str) -> dic
         return spec_json
 
     modules = _module_by_name(spec_json, mode)
+    top_name = _top_module_name(spec_json, mode)
     desired: Dict[Tuple[str, str], str] = {}
 
     def mark(endpoint: str, direction: str) -> None:
@@ -262,7 +263,7 @@ def _reconcile_hierarchical_signal_directions(spec_json: dict, mode: str) -> dic
             module_name, port_name = _split_endpoint(str(endpoint or ""))
         except Exception:
             return
-        if module_name in modules and port_name:
+        if module_name in modules and module_name != top_name and port_name:
             key = (module_name, port_name)
             if direction == "output" or key not in desired:
                 desired[key] = direction
@@ -484,6 +485,27 @@ def _repair_decl_width(code: str, kind_pattern: str, name: str, width: int) -> s
     return line_pattern.sub(repl, code)
 
 
+def _repair_decl_direction(code: str, name: str, direction: str) -> str:
+    if direction not in {"input", "output", "inout"} or not name:
+        return code
+    name_re = re.escape(name)
+
+    def repl(match: re.Match) -> str:
+        return f"{match.group('prefix')}{direction}{match.group('rest')}"
+
+    header_pattern = re.compile(
+        rf"(?P<prefix>(?:^|[,(])\s*)(?:input|output|inout)(?P<rest>\b(?:(?![(),;]).)*?\b{name_re}\b)",
+        flags=re.IGNORECASE | re.MULTILINE,
+    )
+    code = header_pattern.sub(repl, code)
+
+    line_pattern = re.compile(
+        rf"^(?P<prefix>\s*)(?:input|output|inout)(?P<rest>\b(?:(?!;).)*?\b{name_re}\b(?:(?!;).)*?;\s*)$",
+        flags=re.IGNORECASE | re.MULTILINE,
+    )
+    return line_pattern.sub(repl, code)
+
+
 def _repair_module_port_widths_from_spec(verilog_map: Dict[str, str], spec_json: dict, mode: str) -> Dict[str, str]:
     out = dict(verilog_map)
     for module in _collect_expected_modules(spec_json, mode):
@@ -502,6 +524,26 @@ def _repair_module_port_widths_from_spec(verilog_map: Dict[str, str], spec_json:
                 code = _repair_decl_width(code, r"wire|reg|logic", alias, width)
             for alias in re.findall(rf"\bassign\s+([A-Za-z_][A-Za-z0-9_$]*)\s*=\s*{re.escape(pname)}\s*;", code):
                 code = _repair_decl_width(code, r"wire|reg|logic", alias, width)
+        out[rtl_file] = code
+    return out
+
+
+def _repair_module_port_directions_from_spec(verilog_map: Dict[str, str], spec_json: dict, mode: str) -> Dict[str, str]:
+    out = dict(verilog_map)
+    for module in _collect_expected_modules(spec_json, mode):
+        rtl_file = str(module.get("rtl_output_file") or "").strip()
+        module_name = str(module.get("name") or "").strip()
+        if not rtl_file or not module_name or rtl_file not in out:
+            continue
+        code = out[rtl_file]
+        module_code = _module_code_for_name(code, module_name)
+        if not module_code:
+            continue
+        repaired = module_code
+        for pname, info in _ports_from_module_spec(module).items():
+            repaired = _repair_decl_direction(repaired, pname, str(info.get("direction") or "input").lower())
+        if repaired != module_code:
+            code = code.replace(module_code, repaired, 1)
         out[rtl_file] = code
     return out
 
@@ -1316,6 +1358,22 @@ def _validate_spec_vs_rtl(spec_json: dict, mode: str, verilog_map: Dict[str, str
 
     if mode == "hierarchical":
         contract = _build_connectivity_contract(spec_json, mode)
+
+        for s in contract["internal_signals"]:
+            sig_name = s.get("name")
+            endpoints = [str((s.get("source") or {}).get("port") or "")]
+            endpoints.extend(str((dst or {}).get("port") or "") for dst in s.get("destinations", []) or [])
+            endpoints = [name for name in endpoints if name]
+            if sig_name and sig_name not in full_text and endpoints and all(
+                re.search(rf"\b{re.escape(name)}\b", full_text) for name in endpoints
+            ):
+                s["name"] = endpoints[0]
+
+        for o in contract["ownership"]:
+            sig_name = o.get("signal")
+            owner_port = str((o.get("owner") or {}).get("port") or "")
+            if sig_name and sig_name not in full_text and owner_port and re.search(rf"\b{re.escape(owner_port)}\b", full_text):
+                o["signal"] = owner_port
 
         for c in contract["top_level_connections"]:
             tp = c["top_port"]
@@ -2372,6 +2430,7 @@ def _validate_and_materialize_rtl(
     expected_files = _collect_expected_rtl_files(spec_json, mode)
     verilog_map = _normalize_emitted_rtl_filenames(verilog_map, expected_files)
     verilog_map = _align_verilog_map_to_expected_modules(verilog_map, spec_json, mode)
+    verilog_map = _repair_module_port_directions_from_spec(verilog_map, spec_json, mode)
     verilog_map = _sanitize_single_driver_rtl(verilog_map)
     verilog_map = _remove_spec_invalid_extra_control_inputs(verilog_map, spec_json, mode)
     verilog_map = _sanitize_child_output_instance_connections(verilog_map)
