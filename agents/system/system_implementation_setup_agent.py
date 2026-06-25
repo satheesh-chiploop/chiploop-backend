@@ -3,9 +3,11 @@ import json
 import glob
 import shutil
 import logging
+import re
 from datetime import datetime
 
 from utils.artifact_utils import save_text_artifact_and_record
+from agents.system.system_top_assembly_agent import _assemble_top, _extract_module_ports_from_text
 
 logger = logging.getLogger("chiploop")
 
@@ -348,6 +350,53 @@ def _copy_inputs(src_files: list[str], dst_dir: str) -> tuple[list[str], list[st
     return copied_abs, copied_rel
 
 
+def _load_module_port_db_from_files(rtl_files: list[str]) -> dict:
+    db = {}
+    for path in rtl_files or []:
+        if not path or not os.path.exists(path):
+            continue
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                parsed = _extract_module_ports_from_text(f.read())
+        except Exception:
+            continue
+        for module, ports in parsed.items():
+            db[module] = ports
+    return db
+
+
+def _file_defines_module(path: str, module_name: str) -> bool:
+    if not path or not module_name or not os.path.exists(path):
+        return False
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            text = f.read()
+    except Exception:
+        return False
+    return bool(re.search(rf"\bmodule\s+{re.escape(module_name)}\b", text))
+
+
+def _regenerate_physical_top_from_intent(copied_rtl_abs: list[str], top_module: str, state: dict) -> list[str]:
+    intent = state.get("system_integration_intent")
+    if not isinstance(intent, dict) or not intent.get("instances"):
+        return []
+
+    module_port_db = _load_module_port_db_from_files(copied_rtl_abs)
+    if not module_port_db:
+        return []
+
+    top_paths = [path for path in copied_rtl_abs if _file_defines_module(path, top_module)]
+    if not top_paths:
+        return []
+
+    regenerated = _assemble_top(top_module, intent, variant="phys", module_port_db=module_port_db)
+    rewritten = []
+    for path in top_paths:
+        _write_text(path, regenerated)
+        rewritten.append(path)
+    return rewritten
+
+
 def run_agent(state: dict) -> dict:
     try:
         print(f"\n🏁 Running {AGENT_NAME}...")
@@ -401,6 +450,7 @@ def run_agent(state: dict) -> dict:
         upstream_sdc, sdc_source = _resolve_upstream_sdc(state, workflow_dir)
 
         copied_rtl_abs, copied_rtl_rel = _copy_inputs(rtl_files, rtl_stage_dir)
+        regenerated_top_paths = _regenerate_physical_top_from_intent(copied_rtl_abs, top_module, state)
         copied_lef_abs, copied_lef_rel = _copy_inputs(macro_lefs, macros_lef_dir)
         copied_lib_abs, copied_lib_rel = _copy_inputs(macro_libs, macros_lib_dir)
         copied_gds_abs, copied_gds_rel = _copy_inputs(macro_gds, macros_gds_dir)
@@ -491,6 +541,8 @@ def run_agent(state: dict) -> dict:
             f"clock_mhz={clk_mhz}",
             f"clock_period_ns={clock_period_ns}",
             f"rtl_count={len(copied_rtl_abs)}",
+            f"regenerated_physical_top_count={len(regenerated_top_paths)}",
+            f"regenerated_physical_top_files={json.dumps(regenerated_top_paths)}",
             f"macro_lef_count={len(copied_lef_abs)}",
             f"macro_lib_count={len(copied_lib_abs)}",
             f"macro_gds_count={len(copied_gds_abs)}",
@@ -514,6 +566,7 @@ def run_agent(state: dict) -> dict:
             f"profile_path={profile_path}",
             f"top_module={top_module}",
             f"rtl_files={len(copied_rtl_abs)}",
+            f"regenerated_physical_top_count={len(regenerated_top_paths)}",
             f"macro_lefs={len(copied_lef_abs)}",
             f"macro_libs={len(copied_lib_abs)}",
             f"macro_gds={len(copied_gds_abs)}",
@@ -541,6 +594,9 @@ def run_agent(state: dict) -> dict:
                 "openlane_config": "system/impl_setup/openlane/config.json",
                 "input_resolution_log": "system/impl_setup/logs/system_implementation_setup_input_resolution.log",
                 "setup_log": "system/impl_setup/system_implementation_setup.log",
+            },
+            "repairs": {
+                "regenerated_physical_top_from_intent": [os.path.basename(path) for path in regenerated_top_paths],
             },
         }
         summary_path = os.path.join(stage_dir, "system_implementation_setup_summary.json")
@@ -592,6 +648,7 @@ def run_agent(state: dict) -> dict:
             "macro_lef_filelist": macro_lef_filelist_path,
             "macro_lib_filelist": macro_lib_filelist_path,
             "macro_gds_filelist": macro_gds_filelist_path,
+            "regenerated_physical_top_files": regenerated_top_paths,
         }
 
         system = state.setdefault("system", {})
@@ -605,6 +662,7 @@ def run_agent(state: dict) -> dict:
             "macro_gds": copied_gds_abs,
             "openlane_config": cfg_path,
             "summary_json": summary_path,
+            "regenerated_physical_top_files": regenerated_top_paths,
         }
 
         state["top_module"] = top_module

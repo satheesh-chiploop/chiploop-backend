@@ -7,6 +7,12 @@ from tooling.profiles import profile_summary
 from tooling.runner import run_tool, tool_available
 from utils.artifact_utils import save_text_artifact_and_record
 
+SYNTHESIS_BLOCKING_VERILATOR_WARNINGS = {
+    "PINMISSING",
+    "UNDRIVEN",
+    "MULTIDRIVEN",
+}
+
 
 def _log(log_path: str, msg: str) -> None:
     print(msg)
@@ -99,6 +105,18 @@ def _try_verilator_lint(rtl_files: List[str], log_path: str, state: Dict[str, An
         return {"available": True, "returncode": -1, "stdout": "", "stderr": f"verilator_run_failed: {e}"}
 
 
+def _verilator_warning_codes(stderr: str) -> List[str]:
+    codes = []
+    for line in (stderr or "").splitlines():
+        marker = "%Warning-"
+        if marker not in line:
+            continue
+        code = line.split(marker, 1)[1].split(":", 1)[0].strip()
+        if code and code not in codes:
+            codes.append(code)
+    return codes
+
+
 def run_agent(state: dict) -> dict:
     agent_name = "RTL Linting Agent"
     print("\n🧹 Running RTL Linting Agent...")
@@ -120,21 +138,30 @@ def run_agent(state: dict) -> dict:
         issues.extend(_basic_lint_file(fpath))
 
     verilator = _try_verilator_lint(rtl_files, log_path, state)
+    warning_codes = _verilator_warning_codes(str(verilator.get("stderr") or ""))
+    blocking_warning_codes = [
+        code for code in warning_codes if code in SYNTHESIS_BLOCKING_VERILATOR_WARNINGS
+    ]
     verilator_failed = bool(verilator.get("available")) and int(verilator.get("returncode") or 0) != 0
+    structural_lint_failed = verilator_failed or bool(blocking_warning_codes)
 
     report = {
         "type": "rtl_lint_report",
         "version": "1.0",
-        "status": "fail" if verilator_failed else "pass",
+        "status": "fail" if structural_lint_failed else ("warn" if warning_codes or issues else "pass"),
         "rtl_file_count": len(rtl_files),
         "heuristic_issues": issues,
         "verilator_lint": {
             "available": verilator.get("available", False),
             "reason": verilator.get("reason"),
             "returncode": verilator.get("returncode"),
+            "warning_codes": warning_codes,
+            "blocking_warning_codes": blocking_warning_codes,
         },
         "summary": {
             "heuristic_issue_count": len(issues),
+            "verilator_warning_count": len(warning_codes),
+            "blocking_verilator_warning_count": len(blocking_warning_codes),
             "recommended_action": "Fix warnings before CDC/reset checks; keep lint clean for better downstream signal inference."
         },
         "tooling": {
