@@ -52,3 +52,30 @@ endmodule
     )
     assert status == "matched"
     assert "CONTROL.IRQ_ENABLE stored" in evidence
+
+
+def test_match_score_recognizes_irq_clear_bit1_sample_done_signal():
+    rtl = """
+module irq_ctrl(
+  input [1:0] irq_clear_pulse
+);
+  reg irq_status_sample_done;
+  reg status_sample_done;
+  always @(posedge clk) begin
+    if (irq_clear_pulse[1]) begin
+      irq_status_sample_done <= 1'b0;
+      status_sample_done <= 1'b0;
+    end
+  end
+endmodule
+"""
+    names = set(rtl.replace(";", " ").replace("(", " ").replace(")", " ").split())
+
+    status, evidence = agent._match_score(
+        "IRQ_CLEAR bit 1 clears IRQ_STATUS.sample_done and STATUS.sample_done.",
+        rtl,
+        names,
+    )
+
+    assert status == "matched"
+    assert "IRQ_CLEAR.sample_done clear" in evidence

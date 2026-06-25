@@ -24,6 +24,30 @@ def test_verilator_warning_codes_extracts_structural_warnings():
     assert blocking == ["UNDRIVEN", "MULTIDRIVEN"]
 
 
+def test_rtl_file_discovery_prefers_pass2_duplicate_modules(tmp_path):
+    rtl_dir = tmp_path / "rtl"
+    pass2_dir = rtl_dir / "pass2"
+    pass2_dir.mkdir(parents=True)
+    (rtl_dir / "top.v").write_text("module top; endmodule\n", encoding="utf-8")
+    (pass2_dir / "top.v").write_text("module top; endmodule\n", encoding="utf-8")
+    (rtl_dir / "helper.v").write_text("module helper; endmodule\n", encoding="utf-8")
+
+    selected = agent._rtl_files_from_state(
+        {
+            "rtl_files": [
+                str(rtl_dir / "top.v"),
+                str(pass2_dir / "top.v"),
+                str(rtl_dir / "helper.v"),
+            ]
+        },
+        str(tmp_path),
+    )
+
+    assert str(pass2_dir / "top.v") in selected
+    assert str(rtl_dir / "top.v") not in selected
+    assert str(rtl_dir / "helper.v") in selected
+
+
 def test_rtl_lint_status_requires_icarus_and_verilator_pass(tmp_path, monkeypatch):
     rtl_dir = tmp_path / "rtl"
     rtl_dir.mkdir()

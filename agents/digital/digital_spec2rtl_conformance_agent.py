@@ -403,19 +403,25 @@ def _match_score(requirement: str, rtl_text: str, rtl_names: Iterable[str]) -> T
         if clear_alert and clear_sample and set_sticky:
             evidence.append("sticky clear semantics")
     if "irq_clear" in req_lower and "bit 1" in req_lower and "sample_done" in req_lower and re.search(r"\bclear", req_lower):
-        if (
+        has_irq_clear_bit1_decode = bool(
             re.search(r"\bwr_addr\s*==\s*\d+'h0*18", rtl_text, re.I)
             and re.search(r"\bwr_data\s*\[\s*1\s*\]", rtl_text, re.I)
-            and re.search(r"\birq_status_sample_done\s*<=\s*1'b0", rtl_text, re.I)
-            and re.search(r"\bstatus_sample_done\s*<=\s*1'b0", rtl_text, re.I)
-        ):
-            evidence.append("IRQ_CLEAR.sample_done clear")
-        if (
-            re.search(r"\bwr_addr\s*==\s*\d+'h0*18", rtl_text, re.I)
-            and re.search(r"\bwr_data\s*\[\s*1\s*\]", rtl_text, re.I)
-            and re.search(r"\birq_status_\w*\s*\[\s*1\s*\]\s*<=\s*1'b0", rtl_text, re.I)
+        )
+        has_irq_clear_bit1_signal = bool(
+            re.search(r"\birq_clear\w*sample_done\b", rtl_text, re.I)
+            or re.search(r"\birq_clear\w*\s*\[\s*1\s*\]", rtl_text, re.I)
+        )
+        clears_scalar_sample_done = bool(
+            re.search(r"\birq_status_sample_done\w*\s*<=\s*1'b0", rtl_text, re.I)
+            and re.search(r"\bstatus_sample_done\w*\s*<=\s*1'b0", rtl_text, re.I)
+        )
+        clears_vector_sample_done = bool(
+            re.search(r"\birq_status_\w*\s*\[\s*1\s*\]\s*<=\s*1'b0", rtl_text, re.I)
             and re.search(r"\bstatus_\w*\s*\[\s*0\s*\]\s*<=\s*1'b0", rtl_text, re.I)
-        ):
+        )
+        if (has_irq_clear_bit1_decode or has_irq_clear_bit1_signal) and clears_scalar_sample_done:
+            evidence.append("IRQ_CLEAR.sample_done clear")
+        if (has_irq_clear_bit1_decode or has_irq_clear_bit1_signal) and clears_vector_sample_done:
             evidence.append("IRQ_CLEAR.sample_done clear")
     if "first sample" in req_lower and ("history" in req_lower or "observed sample" in req_lower):
         if re.search(r"\bprev_sample_valid\b", rtl_text, re.I) and re.search(r"\?\s*\([^;]+prev_sample[^;]+:\s*adc_code", rtl_text, re.I):

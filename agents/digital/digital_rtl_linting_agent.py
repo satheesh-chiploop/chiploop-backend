@@ -1,5 +1,6 @@
 import os
 import json
+import re
 from datetime import datetime
 from typing import List, Dict, Any
 
@@ -26,7 +27,48 @@ def _collect_rtl_files(workflow_dir: str) -> List[str]:
         for fn in files:
             if fn.endswith((".v", ".sv")):
                 rtl.append(os.path.join(root, fn))
-    return sorted(rtl)
+    return _dedupe_rtl_variants_by_module(rtl)
+
+
+def _rtl_variant_rank(path: str) -> tuple:
+    norm = path.replace("\\", "/").lower()
+    name = os.path.basename(norm)
+    if "/pass2/" in norm or "_pass2_candidate." in name:
+        return (0, norm)
+    if "_pass2." in name:
+        return (1, norm)
+    if "/handoff/" in norm:
+        return (2, norm)
+    return (10, norm)
+
+
+def _module_names_from_rtl(path: str) -> List[str]:
+    try:
+        with open(path, "r", encoding="utf-8", errors="ignore") as f:
+            text = f.read()
+    except OSError:
+        return []
+    text = re.sub(r"//.*?$", "", text, flags=re.MULTILINE)
+    text = re.sub(r"/\*.*?\*/", "", text, flags=re.DOTALL)
+    return re.findall(r"\bmodule\s+([A-Za-z_][A-Za-z0-9_$]*)\b", text)
+
+
+def _dedupe_rtl_variants_by_module(paths: List[str]) -> List[str]:
+    by_module: Dict[str, str] = {}
+    moduleless: Dict[str, str] = {}
+    for raw in paths:
+        path = os.path.abspath(raw)
+        modules = _module_names_from_rtl(path)
+        if not modules:
+            moduleless[path] = path
+            continue
+        for module in modules:
+            current = by_module.get(module)
+            if current is None or _rtl_variant_rank(path) < _rtl_variant_rank(current):
+                by_module[module] = path
+
+    selected = set(moduleless.values()) | set(by_module.values())
+    return sorted(selected, key=lambda p: p.replace("\\", "/").lower())
 
 
 def _rtl_files_from_state(state: Dict[str, Any], workflow_dir: str) -> List[str]:
@@ -52,7 +94,7 @@ def _rtl_files_from_state(state: Dict[str, Any], workflow_dir: str) -> List[str]
             continue
         if os.path.exists(path):
             out.append(path)
-    return sorted(dict.fromkeys(out))
+    return _dedupe_rtl_variants_by_module(list(dict.fromkeys(out)))
 
 
 def _basic_lint_file(path: str) -> List[Dict[str, Any]]:
