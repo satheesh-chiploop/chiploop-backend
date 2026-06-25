@@ -1048,6 +1048,16 @@ def _classify_reset_repair(returncode: int | None, log: str) -> str:
     return "inconclusive_reset_sequence"
 
 
+def _should_run_reset_repair(verdict: str, unproven: int, has_required_inputs: bool) -> bool:
+    if not has_required_inputs or not unproven:
+        return False
+    return verdict in {
+        "inconclusive_bounded_sequential_proof_unproven",
+        "inconclusive_missing_sat_models",
+        "inconclusive",
+    }
+
+
 def _failure_reason(verdict: str, *, rtl_files: list[str], netlist: str | None, yosys: str | None, liberty_files: list[str], stdcell_verilog: list[str], missing_cells: list[str], unproven: int) -> str:
     if verdict == "pass":
         return "equivalence_proven"
@@ -1150,7 +1160,7 @@ def run_agent(state: dict) -> dict:
     if missing_stdcell_models:
         verdict = "incomplete_stdcell_models"
     reset_repair: dict[str, Any] | None = None
-    if verdict == "inconclusive_bounded_sequential_proof_unproven" and has_required_inputs:
+    if _should_run_reset_repair(verdict, unproven, has_required_inputs):
         reset_ports = _reset_ports_for_top(prepared_rtl_files or rtl_files, top)
         if reset_ports:
             repair_script = _yosys_reset_repair_script(

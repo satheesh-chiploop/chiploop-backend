@@ -10,7 +10,7 @@ from agents.digital.digital_drc_agent import _drc_status, _macro_blackbox_deferr
 from agents.digital.digital_failure_debug_agent import run_agent as failure_debug_agent
 from agents.digital import digital_spec2rtl_conformance_agent as spec2rtl_agent
 from agents.digital import digital_fill_agent, digital_sta_postfill_agent
-from agents.digital.digital_logic_equivalence_agent import _generated_stdcell_model, _missing_stdcell_models, _prepare_golden_rtl_for_yosys, _reset_ports_for_top, _unproven_equiv_points, _yosys_reset_repair_script, _yosys_script
+from agents.digital.digital_logic_equivalence_agent import _generated_stdcell_model, _missing_stdcell_models, _prepare_golden_rtl_for_yosys, _reset_ports_for_top, _should_run_reset_repair, _unproven_equiv_points, _yosys_reset_repair_script, _yosys_script
 from agents.digital.digital_lvs_agent import _lvs_failure_details, _lvs_status, _macro_blackbox_deferred as _lvs_macro_blackbox_deferred
 from agents.digital.digital_scan_atpg_agent import _adapter_log_has_execution_error, _generate_full_scan_bench, _metrics_show_real_atpg_result, _pattern_count_from_file
 from agents.digital import digital_tapeout_lec_agent as tapeout_lec_agent
@@ -345,6 +345,12 @@ def test_lec_reset_repair_script_proves_remaining_equiv_cells_under_reset(tmp_pa
     assert "-set-at 1 reset_n 0" in script
     assert "-set-at 3 reset_n 1" in script
     assert "-prove-asserts -prove-skip 2 -verify reset_repair" in script
+
+
+def test_lec_reset_repair_runs_for_unproven_points_with_macro_sat_warnings():
+    assert _should_run_reset_repair("inconclusive_missing_sat_models", 15, True)
+    assert not _should_run_reset_repair("inconclusive_missing_sat_models", 0, True)
+    assert not _should_run_reset_repair("inconclusive_missing_sat_models", 15, False)
 
 
 def test_tapeout_lec_script_can_ignore_physical_gate_ports():
