@@ -207,9 +207,20 @@ def _digital_lint_status(workflow_dir: str) -> str:
         if not report:
             continue
         status = str(report.get("status") or report.get("lint") or "").lower()
-        if status in {"pass", "clean"}:
+        icarus = report.get("icarus_compile") if isinstance(report.get("icarus_compile"), dict) else {}
+        verilator = report.get("verilator_lint") if isinstance(report.get("verilator_lint"), dict) else {}
+        has_dual_tool_evidence = bool(icarus or verilator)
+        icarus_pass = str(icarus.get("status") or "").lower() == "pass" or (
+            icarus.get("available") is True and int(icarus.get("returncode") or 0) == 0
+        )
+        verilator_pass = str(verilator.get("status") or "").lower() == "pass" or (
+            verilator.get("available") is True
+            and int(verilator.get("returncode") or 0) == 0
+            and not (verilator.get("blocking_warning_codes") or [])
+        )
+        if status in {"pass", "clean"} and has_dual_tool_evidence and icarus_pass and verilator_pass:
             return "pass"
-        if status in {"fail", "failed", "error"}:
+        if status in {"fail", "failed", "error"} or (has_dual_tool_evidence and not (icarus_pass and verilator_pass)):
             return "fail"
 
     return "not produced"

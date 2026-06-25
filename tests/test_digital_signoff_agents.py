@@ -10,7 +10,7 @@ from agents.digital.digital_drc_agent import _drc_status, _macro_blackbox_deferr
 from agents.digital.digital_failure_debug_agent import run_agent as failure_debug_agent
 from agents.digital import digital_spec2rtl_conformance_agent as spec2rtl_agent
 from agents.digital import digital_fill_agent, digital_sta_postfill_agent
-from agents.digital.digital_logic_equivalence_agent import _generated_stdcell_model, _missing_stdcell_models, _prepare_golden_rtl_for_yosys, _yosys_script
+from agents.digital.digital_logic_equivalence_agent import _generated_stdcell_model, _missing_stdcell_models, _prepare_golden_rtl_for_yosys, _reset_ports_for_top, _unproven_equiv_points, _yosys_reset_repair_script, _yosys_script
 from agents.digital.digital_lvs_agent import _lvs_failure_details, _lvs_status, _macro_blackbox_deferred as _lvs_macro_blackbox_deferred
 from agents.digital.digital_scan_atpg_agent import _adapter_log_has_execution_error, _generate_full_scan_bench, _metrics_show_real_atpg_result, _pattern_count_from_file
 from agents.digital import digital_tapeout_lec_agent as tapeout_lec_agent
@@ -25,6 +25,17 @@ def test_physical_stage_selects_one_physical_top_netlist():
     ])
 
     assert chosen == ["/work/inputs/netlist/temp_monitor_soc_phys_synth.v"]
+
+
+def test_lec_extracts_unproven_equiv_point_names():
+    log = """
+Found 3 unproven $equiv cells (3 groups) in equiv:
+  Trying to prove $equiv for \\pwm_out: failed.
+  Trying to prove $equiv for \\rd_data[0]: failed.
+  Trying to prove $equiv for \\counter_value[0]: failed.
+"""
+
+    assert _unproven_equiv_points(log) == ["pwm_out", "rd_data[0]", "counter_value[0]"]
 
 
 def test_lvs_and_tapeout_prefer_physical_netlist_as_openlane_input():
@@ -318,6 +329,22 @@ def test_lec_script_uses_configurable_induction_depth(monkeypatch):
     script = _yosys_script(["rtl.sv"], "gate.v", "top", ["cells.v"])
 
     assert "equiv_induct -undef -seq 96" in script
+
+
+def test_lec_reset_repair_script_proves_remaining_equiv_cells_under_reset(tmp_path, monkeypatch):
+    monkeypatch.setenv("CHIPLOOP_LEC_RESET_REPAIR_DEPTH", "12")
+    rtl = tmp_path / "rtl.sv"
+    rtl.write_text("module top(input clk, input reset_n, input a, output y); assign y = a; endmodule\n", encoding="utf-8")
+
+    resets = _reset_ports_for_top([str(rtl)], "top")
+    script = _yosys_reset_repair_script([str(rtl)], "gate.v", "top", ["cells.v"], resets)
+
+    assert resets == [{"name": "reset_n", "active_low": True, "active_value": "0", "inactive_value": "1"}]
+    assert "equiv_miter -assert -undef reset_repair" in script
+    assert "sat -seq 12 -set-def-inputs" in script
+    assert "-set-at 1 reset_n 0" in script
+    assert "-set-at 3 reset_n 1" in script
+    assert "-prove-asserts -prove-skip 2 -verify reset_repair" in script
 
 
 def test_tapeout_lec_script_can_ignore_physical_gate_ports():

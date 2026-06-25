@@ -105,6 +105,35 @@ def _try_verilator_lint(rtl_files: List[str], log_path: str, state: Dict[str, An
         return {"available": True, "returncode": -1, "stdout": "", "stderr": f"verilator_run_failed: {e}"}
 
 
+def _try_iverilog_compile(rtl_files: List[str], log_path: str, state: Dict[str, Any]) -> Dict[str, Any]:
+    if not rtl_files:
+        return {"available": False, "reason": "no_rtl_files"}
+
+    if not tool_available("iverilog", state):
+        return {"available": False, "reason": "iverilog_not_found"}
+
+    args = ["-g2012", "-tnull"] + rtl_files
+    _log(log_path, f"Running via ChipLoop tool profile: iverilog {' '.join(args)}")
+    try:
+        p = run_tool(
+            state,
+            "rtl_compile",
+            "iverilog",
+            args,
+            timeout_sec=300,
+            metadata={"agent": "RTL Linting Agent"},
+        )
+        return {
+            "available": True,
+            "returncode": p.returncode,
+            "stdout": p.stdout,
+            "stderr": p.stderr,
+            "run_result": p.to_dict(),
+        }
+    except Exception as e:
+        return {"available": True, "returncode": -1, "stdout": "", "stderr": f"iverilog_run_failed: {e}"}
+
+
 def _verilator_warning_codes(stderr: str) -> List[str]:
     codes = []
     for line in (stderr or "").splitlines():
@@ -137,13 +166,15 @@ def run_agent(state: dict) -> dict:
     for fpath in rtl_files:
         issues.extend(_basic_lint_file(fpath))
 
+    iverilog = _try_iverilog_compile(rtl_files, log_path, state)
     verilator = _try_verilator_lint(rtl_files, log_path, state)
     warning_codes = _verilator_warning_codes(str(verilator.get("stderr") or ""))
     blocking_warning_codes = [
         code for code in warning_codes if code in SYNTHESIS_BLOCKING_VERILATOR_WARNINGS
     ]
-    verilator_failed = bool(verilator.get("available")) and int(verilator.get("returncode") or 0) != 0
-    structural_lint_failed = verilator_failed or bool(blocking_warning_codes)
+    iverilog_passed = bool(iverilog.get("available")) and int(iverilog.get("returncode") or 0) == 0
+    verilator_passed = bool(verilator.get("available")) and int(verilator.get("returncode") or 0) == 0
+    structural_lint_failed = (not iverilog_passed) or (not verilator_passed) or bool(blocking_warning_codes)
 
     report = {
         "type": "rtl_lint_report",
@@ -151,26 +182,42 @@ def run_agent(state: dict) -> dict:
         "status": "fail" if structural_lint_failed else ("warn" if warning_codes or issues else "pass"),
         "rtl_file_count": len(rtl_files),
         "heuristic_issues": issues,
+        "icarus_compile": {
+            "available": iverilog.get("available", False),
+            "reason": iverilog.get("reason"),
+            "returncode": iverilog.get("returncode"),
+            "status": "pass" if iverilog_passed else "fail",
+        },
         "verilator_lint": {
             "available": verilator.get("available", False),
             "reason": verilator.get("reason"),
             "returncode": verilator.get("returncode"),
+            "status": "pass" if verilator_passed and not blocking_warning_codes else "fail",
             "warning_codes": warning_codes,
             "blocking_warning_codes": blocking_warning_codes,
         },
         "summary": {
             "heuristic_issue_count": len(issues),
+            "icarus_compile_passed": iverilog_passed,
+            "verilator_lint_passed": verilator_passed and not bool(blocking_warning_codes),
             "verilator_warning_count": len(warning_codes),
             "blocking_verilator_warning_count": len(blocking_warning_codes),
-            "recommended_action": "Fix warnings before CDC/reset checks; keep lint clean for better downstream signal inference."
+            "clean_definition": "pass requires both Icarus compile and Verilator lint to pass",
+            "recommended_action": "Fix compile failures and structural lint warnings before CDC/reset checks; keep lint clean for better downstream signal inference."
         },
         "tooling": {
             "tool_profile": profile_summary(state),
-            "executions": [verilator.get("run_result")] if verilator.get("run_result") else [],
+            "executions": [
+                result for result in (iverilog.get("run_result"), verilator.get("run_result"))
+                if result
+            ],
         },
     }
 
     save_text_artifact_and_record(workflow_id, agent_name, "digital", "rtl_lint_report.json", json.dumps(report, indent=2))
+    if iverilog.get("available"):
+        save_text_artifact_and_record(workflow_id, agent_name, "digital", "iverilog_compile_stdout.txt", iverilog.get("stdout", ""))
+        save_text_artifact_and_record(workflow_id, agent_name, "digital", "iverilog_compile_stderr.txt", iverilog.get("stderr", ""))
     if verilator.get("available"):
         save_text_artifact_and_record(workflow_id, agent_name, "digital", "verilator_lint_stdout.txt", verilator.get("stdout", ""))
         save_text_artifact_and_record(workflow_id, agent_name, "digital", "verilator_lint_stderr.txt", verilator.get("stderr", ""))

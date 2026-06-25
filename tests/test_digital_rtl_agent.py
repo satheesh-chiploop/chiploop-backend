@@ -452,3 +452,40 @@ endmodule
 
     assert "wire [31:0] mem_dout_unused;" in out
     assert ".dout(mem_dout_unused)" in out
+
+
+def test_sanitize_child_output_reroutes_duplicate_child_drivers_semantically():
+    code = """
+module top(output sample_req, output alert_irq, output alert_status);
+  mmio_block u_mmio(
+    .sample_req(sample_req),
+    .alert_irq(alert_irq),
+    .alert_status(alert_status)
+  );
+  sample_ctrl u_sample_ctrl(
+    .sample_req(sample_req)
+  );
+  alert_irq_block u_alert_irq(
+    .alert_irq(alert_irq),
+    .alert_status(alert_status)
+  );
+endmodule
+
+module mmio_block(output sample_req, output alert_irq, output alert_status);
+endmodule
+
+module sample_ctrl(output sample_req);
+endmodule
+
+module alert_irq_block(output alert_irq, output alert_status);
+endmodule
+"""
+
+    out = agent._sanitize_child_output_instance_connections({"top.v": code})["top.v"]
+
+    assert ".sample_req(sample_req_unused_from_u_mmio_sample_req)" in out
+    assert ".alert_irq(alert_irq_unused_from_u_mmio_alert_irq)" in out
+    assert ".alert_status(alert_status_unused_from_u_mmio_alert_status)" in out
+    assert "wire sample_req_unused_from_u_mmio_sample_req;" in out
+    assert ".sample_req(sample_req)" in out
+    assert ".alert_irq(alert_irq)" in out

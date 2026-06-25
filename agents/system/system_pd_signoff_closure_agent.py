@@ -80,6 +80,12 @@ def _known_status(*values: Any) -> str:
     return "" if status in {"", "none", "null", "not_produced", "not produced"} else status
 
 
+def _bounded_lec_inconclusive(summary: dict[str, Any]) -> bool:
+    status = _known_status(summary.get("status"), summary.get("lec_status"))
+    reason = str(_first_present(summary.get("failure_reason"), summary.get("reason"), "")).strip().lower()
+    return status == "inconclusive_bounded_sequential_proof_unproven" or reason == "bounded_sequential_equivalence_points_unproven"
+
+
 def _enabled(state: dict[str, Any]) -> bool:
     toggles = state.get("toggles") if isinstance(state.get("toggles"), dict) else {}
     closure = state.get("signoff_closure") if isinstance(state.get("signoff_closure"), dict) else {}
@@ -405,20 +411,36 @@ def _classify(artifacts: dict[str, dict[str, Any]], category_counts: dict[str, i
 
     lec = artifacts.get("lec") or {}
     lec_status = _known_status(lec.get("status"), lec.get("lec_status"))
-    if lec_status and lec_status not in {"pass", "ok", "clean"}:
-        reason = str(_first_present(lec.get("failure_reason"), lec.get("reason"), "")).lower()
-        stage = "Digital Synthesis Agent" if re.search(r"missing|unresolved|model|parse|read_verilog", reason) else "Digital Logic Equivalence Check Agent"
-        issues.append({
-            "type": "synthesis_lec",
-            "severity": 70,
-            "restart_stage": stage,
-            "evidence": {"status": lec_status, "reason": reason, "unproven_points": lec.get("unproven_points")},
-        })
-
     tapeout = artifacts.get("tapeout") or {}
     tapeout_lec = artifacts.get("tapeout_lec") or {}
     tapeout_status = _known_status(tapeout.get("status"))
     tapeout_lec_status = _known_status(tapeout_lec.get("status"), tapeout_lec.get("lec_status"))
+    if lec_status and lec_status not in {"pass", "ok", "clean"}:
+        reason = str(_first_present(lec.get("failure_reason"), lec.get("reason"), "")).lower()
+        stage = "Digital Synthesis Agent" if re.search(r"missing|unresolved|model|parse|read_verilog", reason) else "Digital Logic Equivalence Check Agent"
+        evidence = {
+            "status": lec_status,
+            "reason": reason,
+            "unproven_points": lec.get("unproven_points"),
+            "unproven_equiv_points": lec.get("unproven_equiv_points"),
+        }
+        if _bounded_lec_inconclusive(lec) and tapeout_lec_status in {"pass", "ok", "clean"}:
+            issues.append({
+                "type": "synthesis_lec_bounded_warning",
+                "severity": 10,
+                "restart_stage": stage,
+                "evidence": evidence,
+                "advisory": True,
+                "reason": "RTL-vs-synthesis LEC hit a bounded sequential proof limit, while tapeout LEC proved the final netlist against the synthesis netlist.",
+            })
+        else:
+            issues.append({
+                "type": "synthesis_lec",
+                "severity": 70,
+                "restart_stage": stage,
+                "evidence": evidence,
+            })
+
     tapeout_lec_reason = str(_first_present(tapeout_lec.get("failure_reason"), tapeout_lec.get("reason"), "")).lower()
     if tapeout_lec_status and tapeout_lec_status not in {"pass", "ok", "clean"}:
         if tapeout_lec_status == "blocked" or "blocked_by_tapeout_failure" in tapeout_lec_reason or tapeout_status == "failed":
@@ -446,10 +468,11 @@ def _classify(artifacts: dict[str, dict[str, Any]], category_counts: dict[str, i
 
 
 def _select_restart_stage(issues: list[dict[str, Any]]) -> str | None:
-    dominant_type = next((str(issue.get("type") or "") for issue in issues if not issue.get("blocked_by_upstream_signoff")), "")
+    dominant_type = next((str(issue.get("type") or "") for issue in issues if not issue.get("blocked_by_upstream_signoff") and not issue.get("advisory")), "")
     actionable = [
         issue for issue in issues
         if not issue.get("blocked_by_upstream_signoff")
+        and not issue.get("advisory")
         and str(issue.get("restart_stage")) in STAGE_RANK
         and (
             str(issue.get("restart_stage")).startswith("Analog ")
@@ -665,6 +688,9 @@ def _build_plan(state: dict[str, Any], artifacts: dict[str, dict[str, Any]], cat
     skipped_repairs = []
     for issue in issues:
         issue_type = str(issue.get("type") or "")
+        if issue.get("advisory"):
+            skipped_repairs.append({"type": issue_type, "reason": "advisory_only_no_repair_required"})
+            continue
         if issue.get("blocked_by_upstream_signoff"):
             skipped_repairs.append({
                 "type": issue_type,
@@ -717,7 +743,8 @@ def _build_plan(state: dict[str, Any], artifacts: dict[str, dict[str, Any]], cat
             "reason": issue.get("reason"),
         })
 
-    closure_complete = not [issue for issue in issues if not issue.get("blocked_by_upstream_signoff")]
+    active_issues = [issue for issue in issues if not issue.get("blocked_by_upstream_signoff") and not issue.get("advisory")]
+    closure_complete = not active_issues
     if restart_stage is None and any(issue.get("blocked_by_upstream_signoff") for issue in issues):
         closure_complete = False
     eco = _eco_profile(
@@ -739,12 +766,13 @@ def _build_plan(state: dict[str, Any], artifacts: dict[str, dict[str, Any]], cat
         "stop_reason": "signoff_clean" if closure_complete else "repair_plan_created",
         "selected_restart_stage": restart_stage,
         "selected_restart_stage_rank": restart_rank,
-        "dominant_issue": issues[0]["type"] if issues else None,
+        "dominant_issue": active_issues[0]["type"] if active_issues else None,
         "repair_options": options,
         "postfill_timing": sta,
         "digital_drc": drc_info,
         "digital_lvs": lvs_info,
         "issue_summary": issues,
+        "advisories": [issue for issue in issues if issue.get("advisory")],
         "repair_actions": repair_actions,
         "eco_profile": eco,
         "skipped_repairs": skipped_repairs,

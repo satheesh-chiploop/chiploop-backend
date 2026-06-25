@@ -73,6 +73,16 @@ def _known_status(*values: Any) -> str:
     return "" if status in {"", "none", "null", "not_produced", "not produced"} else status
 
 
+def _clean_status(*values: Any) -> bool:
+    return _known_status(*values) in {"pass", "ok", "clean", "scan_replace_pass", "patterns_generated"}
+
+
+def _bounded_lec_inconclusive(summary: dict[str, Any]) -> bool:
+    status = _known_status(summary.get("status"), summary.get("lec_status"))
+    reason = str(_first_present(summary.get("failure_reason"), summary.get("reason"), "")).strip().lower()
+    return status == "inconclusive_bounded_sequential_proof_unproven" or reason == "bounded_sequential_equivalence_points_unproven"
+
+
 def _enabled(state: dict[str, Any]) -> bool:
     toggles = state.get("toggles") if isinstance(state.get("toggles"), dict) else {}
     closure = state.get("synthesis_closure") if isinstance(state.get("synthesis_closure"), dict) else {}
@@ -186,18 +196,30 @@ def _plan(state: dict[str, Any], artifacts: dict[str, dict[str, Any]], agent_nam
             "evidence": timing,
             "reason": "Synthesis or pre-place setup timing is not closed; rerun synthesis with timing repair before PD.",
         })
-    if lec_status and lec_status not in {"pass", "ok", "clean"}:
-        issues.append({
-            "type": "synthesis_lec",
-            "restart_stage": "Digital Logic Equivalence Check Agent",
-            "severity": 80,
-            "evidence": {
-                "status": lec_status,
-                "reason": _first_present(lec.get("failure_reason"), lec.get("reason")),
-                "unproven_points": lec.get("unproven_points"),
-            },
-            "reason": "Synthesis LEC is not proven; repair LEC setup/model/netlist issue before trusting downstream PD.",
-        })
+    if lec_status and not _clean_status(lec_status):
+        lec_evidence = {
+            "status": lec_status,
+            "reason": _first_present(lec.get("failure_reason"), lec.get("reason")),
+            "unproven_points": lec.get("unproven_points"),
+            "unproven_equiv_points": lec.get("unproven_equiv_points"),
+        }
+        if _bounded_lec_inconclusive(lec) and _clean_status(post_dft_lec_status):
+            issues.append({
+                "type": "synthesis_lec_bounded_warning",
+                "restart_stage": "Digital Logic Equivalence Check Agent",
+                "severity": 10,
+                "evidence": lec_evidence,
+                "advisory": True,
+                "reason": "Yosys bounded sequential proof left points unproven, but downstream Post-DFT LEC is proven; treat as a proof-depth limitation unless a later LEC fails.",
+            })
+        else:
+            issues.append({
+                "type": "synthesis_lec",
+                "restart_stage": "Digital Logic Equivalence Check Agent",
+                "severity": 80,
+                "evidence": lec_evidence,
+                "reason": "Synthesis LEC is not proven; repair LEC setup/model/netlist issue before trusting downstream PD.",
+            })
     if dft_status and dft_status not in {"pass", "ok", "clean", "scan_replace_pass"}:
         issues.append({
             "type": "dft_scan",
@@ -225,6 +247,7 @@ def _plan(state: dict[str, Any], artifacts: dict[str, dict[str, Any]], agent_nam
             "reason": "Post-DFT LEC is not proven; repair scan/LEC settings before treating the post-DFT netlist as closed.",
         })
     issues.sort(key=lambda item: -int(item.get("severity", 0)))
+    active_issues = [issue for issue in issues if not issue.get("advisory")]
     timing_enabled = _repair_enabled(state, "allow_synthesis_timing_repair")
     lec_enabled = _repair_enabled(state, "allow_synthesis_lec_repair")
     retiming_allowed = _repair_enabled(state, "allow_synthesis_retiming", default=False)
@@ -236,6 +259,9 @@ def _plan(state: dict[str, Any], artifacts: dict[str, dict[str, Any]], agent_nam
     for issue in issues:
         if issue["type"] == "setup_timing" and not timing_enabled:
             skipped.append({"type": issue["type"], "reason": "synthesis_timing_repair_disabled"})
+            continue
+        if issue.get("advisory"):
+            skipped.append({"type": issue["type"], "reason": "advisory_only_no_repair_required"})
             continue
         if issue["type"] == "synthesis_lec" and not lec_enabled:
             skipped.append({"type": issue["type"], "reason": "synthesis_lec_repair_disabled"})
@@ -259,12 +285,12 @@ def _plan(state: dict[str, Any], artifacts: dict[str, dict[str, Any]], agent_nam
         "type": "digital_synthesis_closure_plan",
         "agent": agent_name,
         "enabled": True,
-        "status": "clean" if not issues else "planned",
-        "closure_complete": not issues,
+        "status": "clean" if not active_issues else "planned",
+        "closure_complete": not active_issues,
         "max_iterations": _max_iterations(state),
-        "iterations_planned": 0 if not issues else 1,
-        "dominant_issue": issues[0]["type"] if issues else None,
-        "selected_restart_stage": issues[0]["restart_stage"] if issues else None,
+        "iterations_planned": 0 if not active_issues else 1,
+        "dominant_issue": next((issue["type"] for issue in issues if not issue.get("advisory")), None),
+        "selected_restart_stage": next((issue["restart_stage"] for issue in issues if not issue.get("advisory")), None),
         "post_synthesis_timing": timing,
         "post_dft_netlist": {
             "dft_status": dft_status or None,
@@ -272,11 +298,12 @@ def _plan(state: dict[str, Any], artifacts: dict[str, dict[str, Any]], agent_nam
             "post_dft_lec_failure_reason": _first_present(post_dft_lec.get("failure_reason"), post_dft_lec.get("reason")),
         },
         "issue_summary": issues,
+        "advisories": [issue for issue in issues if issue.get("advisory")],
         "repair_actions": actions,
         "skipped_repairs": skipped,
         "downstream_policy": {
-            "continue_downstream_pd": not (issues and stop_on_closure_failure) and not (
-                any(issue.get("type") == "synthesis_lec" for issue in issues) and stop_on_lec_failure
+            "continue_downstream_pd": not (active_issues and stop_on_closure_failure) and not (
+                any(issue.get("type") == "synthesis_lec" for issue in active_issues) and stop_on_lec_failure
             ),
             "stop_on_synthesis_closure_failure": stop_on_closure_failure,
             "stop_on_synthesis_lec_failure": stop_on_lec_failure,

@@ -258,6 +258,41 @@ def test_signoff_closure_setup_timing_restart_has_placement_eco(tmp_path, monkey
     assert overrides["route"]["GRT_RESIZER_TIMING_OPTIMIZATIONS"] is True
 
 
+def test_signoff_closure_treats_bounded_synthesis_lec_as_advisory_when_tapeout_lec_passes(tmp_path, monkeypatch):
+    monkeypatch.setattr(system_agent, "save_text_artifact_and_record", lambda *args, **kwargs: "local")
+
+    _write_json(tmp_path / "digital" / "drc" / "drc_summary.json", {"status": "clean", "drc_violations": 0})
+    _write_json(tmp_path / "digital" / "lvs" / "lvs_summary.json", {"status": "clean"})
+    _write_json(tmp_path / "digital" / "tapeout" / "tapeout_summary.json", {"status": "ok"})
+    _write_json(tmp_path / "digital" / "tapeout_lec" / "tapeout_lec_summary.json", {"status": "pass"})
+    _write_json(tmp_path / "digital" / "sta_postfill" / "metrics.json", {
+        "worst_slack": 2.3,
+        "tns": 0,
+        "setup_violations": 0,
+        "hold_violations": 0,
+    })
+    _write_json(tmp_path / "digital" / "lec" / "lec_summary.json", {
+        "status": "inconclusive_bounded_sequential_proof_unproven",
+        "failure_reason": "bounded_sequential_equivalence_points_unproven",
+        "unproven_points": 3,
+        "unproven_equiv_points": ["counter_value[0]", "pwm_out", "rd_data[0]"],
+    })
+
+    out = digital_agent.run_agent({
+        "workflow_id": "wf",
+        "workflow_dir": str(tmp_path),
+        "run_signoff_closure_loop": True,
+    })
+
+    plan = out["digital"]["signoff_closure"]["plan"]
+    assert plan["status"] == "clean"
+    assert plan["closure_complete"] is True
+    assert plan["dominant_issue"] is None
+    assert plan["repair_actions"] == []
+    assert plan["advisories"][0]["type"] == "synthesis_lec_bounded_warning"
+    assert plan["advisories"][0]["evidence"]["unproven_equiv_points"] == ["counter_value[0]", "pwm_out", "rd_data[0]"]
+
+
 def test_synthesis_closure_selects_synthesis_for_setup_violations(tmp_path, monkeypatch):
     monkeypatch.setattr(synthesis_agent, "save_text_artifact_and_record", lambda *args, **kwargs: "local")
 
@@ -286,3 +321,70 @@ def test_synthesis_closure_selects_synthesis_for_setup_violations(tmp_path, monk
     assert chart["baseline_only"] is True
     assert chart["series"][0]["wns"] == -0.25
     assert chart["series"][0]["setup_violations"] == 12
+
+
+def test_synthesis_closure_treats_bounded_lec_as_advisory_when_post_dft_lec_passes(tmp_path, monkeypatch):
+    monkeypatch.setattr(synthesis_agent, "save_text_artifact_and_record", lambda *args, **kwargs: "local")
+
+    _write_json(tmp_path / "digital" / "sta_preplace" / "metrics.json", {
+        "worst_slack": 1.25,
+        "tns": 0,
+        "setup_violations": 0,
+    })
+    _write_json(tmp_path / "digital" / "dft" / "scan_summary.json", {"status": "scan_replace_pass"})
+    _write_json(tmp_path / "digital" / "post_dft_lec" / "post_dft_lec_summary.json", {
+        "status": "pass",
+        "failure_reason": "equivalence_proven",
+    })
+    _write_json(tmp_path / "digital" / "lec" / "lec_summary.json", {
+        "status": "inconclusive_bounded_sequential_proof_unproven",
+        "failure_reason": "bounded_sequential_equivalence_points_unproven",
+        "unproven_points": 3,
+        "unproven_equiv_points": ["counter_value[0]", "pwm_out", "rd_data[0]"],
+    })
+
+    out = synthesis_agent.run_agent({
+        "workflow_id": "wf",
+        "workflow_dir": str(tmp_path),
+        "run_synthesis_closure_loop": True,
+        "stop_on_synthesis_closure_failure": True,
+        "stop_on_synthesis_lec_failure": True,
+    })
+
+    plan = out["digital"]["synthesis_closure"]["plan"]
+    assert plan["status"] == "clean"
+    assert plan["closure_complete"] is True
+    assert plan["dominant_issue"] is None
+    assert plan["repair_actions"] == []
+    assert plan["advisories"][0]["type"] == "synthesis_lec_bounded_warning"
+    assert plan["downstream_policy"]["continue_downstream_pd"] is True
+
+
+def test_synthesis_closure_treats_reset_sequence_repaired_lec_as_clean(tmp_path, monkeypatch):
+    monkeypatch.setattr(synthesis_agent, "save_text_artifact_and_record", lambda *args, **kwargs: "local")
+
+    _write_json(tmp_path / "digital" / "sta_preplace" / "metrics.json", {
+        "worst_slack": 1.0,
+        "tns": 0,
+        "setup_violations": 0,
+    })
+    _write_json(tmp_path / "digital" / "lec" / "lec_summary.json", {
+        "status": "pass",
+        "failure_reason": "equivalence_proven",
+        "proof_strategy": "reset_sequence_repair",
+        "primary_status": "inconclusive_bounded_sequential_proof_unproven",
+        "primary_unproven_points": 3,
+        "unproven_points": 0,
+        "reset_sequence_repair": {"status": "pass"},
+    })
+
+    out = synthesis_agent.run_agent({
+        "workflow_id": "wf",
+        "workflow_dir": str(tmp_path),
+        "run_synthesis_closure_loop": True,
+    })
+
+    plan = out["digital"]["synthesis_closure"]["plan"]
+    assert plan["status"] == "clean"
+    assert plan["closure_complete"] is True
+    assert plan["issue_summary"] == []

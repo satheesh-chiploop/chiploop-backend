@@ -886,11 +886,58 @@ def _sanitize_child_output_instance_connections(verilog_map: Dict[str, str]) -> 
         flags=re.DOTALL,
     )
 
+    def _driver_score(sig: str, cell: str, inst: str, port: str) -> tuple[int, int]:
+        tokens = {
+            tok
+            for tok in re.split(r"[^a-zA-Z0-9]+", sig.lower())
+            if len(tok) >= 3 and tok not in {"out", "output", "sig", "wire", "reg"}
+        }
+        haystack = f"{cell} {inst} {port}".lower()
+        token_hits = sum(1 for tok in tokens if tok in haystack)
+        non_generic = 0 if re.search(r"(mmio|reg|register)", f"{cell} {inst}", re.I) else 1
+        return token_hits, non_generic
+
     for fname, code in verilog_map.items():
         text = code or ""
         parent_ports = _declared_ports(text)
         signal_widths = _declared_signal_widths(text)
         wire_updates: Dict[str, int] = {}
+        duplicate_output_drivers: Dict[tuple[str, str, str], str] = {}
+        drivers_by_sig: Dict[str, list[dict]] = {}
+
+        for match in inst_re.finditer(text):
+            cell = match.group("cell")
+            inst = match.group("inst")
+            child_ports = module_defs.get(cell, {}).get("ports", {})
+            conns = _named_instance_connections(match.group("conns"))
+            for port, sig_expr in conns.items():
+                sig = re.sub(r"\[[^\]]+\]", "", sig_expr).strip()
+                child = child_ports.get(port)
+                if not child or child.get("direction") not in {"output", "inout"}:
+                    continue
+                if parent_ports.get(sig, {}).get("direction") == "input":
+                    continue
+                drivers_by_sig.setdefault(sig, []).append({
+                    "cell": cell,
+                    "inst": inst,
+                    "port": port,
+                    "width": int(child.get("width") or 1),
+                    "order": len(drivers_by_sig.get(sig, [])),
+                })
+
+        for sig, drivers in drivers_by_sig.items():
+            if len(drivers) <= 1:
+                continue
+            keep = max(
+                drivers,
+                key=lambda d: (*_driver_score(sig, d["cell"], d["inst"], d["port"]), -int(d["order"])),
+            )
+            for driver in drivers:
+                if driver is keep:
+                    continue
+                new_sig = f"{sig}_unused_from_{driver['inst']}_{driver['port']}"
+                duplicate_output_drivers[(driver["cell"], driver["inst"], driver["port"])] = new_sig
+                wire_updates[new_sig] = int(driver["width"] or 1)
 
         def repl(match: re.Match) -> str:
             cell = match.group("cell")
@@ -909,7 +956,11 @@ def _sanitize_child_output_instance_connections(verilog_map: Dict[str, str]) -> 
                 child_width = int(child.get("width") or 1)
                 parent_info = parent_ports.get(sig)
                 sig_width = int(signal_widths.get(sig, 1))
-                if parent_info and parent_info.get("direction") == "input":
+                duplicate_unused = duplicate_output_drivers.get((cell, inst, port))
+                if duplicate_unused:
+                    new_sig = duplicate_unused
+                    wire_updates[new_sig] = child_width
+                elif parent_info and parent_info.get("direction") == "input":
                     new_sig = f"{sig}_from_{inst}"
                     wire_updates[new_sig] = child_width
                 elif sig_width != child_width and sig.endswith("_unused"):
