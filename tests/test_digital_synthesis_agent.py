@@ -213,3 +213,125 @@ def test_arch2synthesis_uses_digital_top_even_when_system_package_exists(tmp_pat
     config = (tmp_path / "digital" / "synth" / "config.json").read_text(encoding="utf-8")
     assert '"top_module": "digital_top"' in summary
     assert '"DESIGN_NAME": "digital_top"' in config
+
+
+def test_synthesis_blocks_large_inferred_memory_without_macro_liberty(tmp_path, monkeypatch):
+    sram = tmp_path / "sram_model.v"
+    top = tmp_path / "top.v"
+    sdc = tmp_path / "top.sdc"
+    sram.write_text(
+        """
+module sram_model(input clk, input [7:0] addr, input [31:0] din, output reg [31:0] dout);
+  reg [31:0] mem [0:255];
+  always @(posedge clk) dout <= mem[addr];
+endmodule
+""",
+        encoding="utf-8",
+    )
+    top.write_text(
+        """
+module top(input clk, input [7:0] addr, input [31:0] din, output [31:0] dout);
+  sram_model u_sram(.clk(clk), .addr(addr), .din(din), .dout(dout));
+endmodule
+""",
+        encoding="utf-8",
+    )
+    sdc.write_text("create_clock -name clk -period 10 [get_ports clk]\n", encoding="utf-8")
+    monkeypatch.setattr(agent, "save_text_artifact_and_record", lambda *args, **kwargs: "local")
+    monkeypatch.setattr(agent, "_run", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("OpenLane should not run")))
+
+    with pytest.raises(RuntimeError, match="inferred_memory_macro_requires_real_macro_collateral"):
+        agent.run_agent({
+            "workflow_id": "wf",
+            "workflow_dir": str(tmp_path),
+            "workflow_name": "Digital_Arch2Synthesis",
+            "digital": {
+                "top_module": "top",
+                "rtl_files": [str(sram), str(top)],
+                "constraints_sdc": str(sdc),
+            },
+        })
+
+    summary = (tmp_path / "digital" / "synth" / "synth_summary.json").read_text(encoding="utf-8")
+    metrics = (tmp_path / "digital" / "synth" / "metrics.json").read_text(encoding="utf-8")
+    assert '"status": "blocked"' in summary
+    assert "inferred_memory_macro_requires_real_macro_collateral" in summary
+    assert '"inferred_memory_bit_count": 8192' in metrics
+
+
+def test_synthesis_binds_inferred_sram_to_matching_pdk_macro(tmp_path, monkeypatch):
+    sram = tmp_path / "sram_model.v"
+    top = tmp_path / "top.v"
+    sdc = tmp_path / "top.sdc"
+    pdk = tmp_path / "pdk" / "sky130A" / "libs.ref" / "sky130_sram_macros"
+    for subdir in ("lib", "lef", "gds", "spice", "verilog"):
+        (pdk / subdir).mkdir(parents=True, exist_ok=True)
+    stem = "sky130_sram_1kbyte_1rw1r_32x256_8"
+    (pdk / "lib" / f"{stem}_TT_1p8V_25C.lib").write_text(
+        f"library(test) {{ cell({stem}) {{ area: 1; }} }}\n",
+        encoding="utf-8",
+    )
+    (pdk / "lef" / f"{stem}.lef").write_text(f"MACRO {stem}\nEND {stem}\n", encoding="utf-8")
+    (pdk / "gds" / f"{stem}.gds").write_text("gds\n", encoding="utf-8")
+    (pdk / "spice" / f"{stem}.spice").write_text(f".subckt {stem} clk0 csb0 web0 wmask0 addr0 din0 dout0\n.ends\n", encoding="utf-8")
+    (pdk / "verilog" / f"{stem}.v").write_text(
+        f"""
+module {stem}(
+  input clk0,
+  input csb0,
+  input web0,
+  input [3:0] wmask0,
+  input [7:0] addr0,
+  input [31:0] din0,
+  output [31:0] dout0
+);
+endmodule
+""",
+        encoding="utf-8",
+    )
+    sram.write_text(
+        """
+module sram_model(input clk, input csb, input web, input [7:0] addr, input [31:0] din, output reg [31:0] dout);
+  reg [31:0] mem [0:255];
+  always @(posedge clk) dout <= mem[addr];
+endmodule
+""",
+        encoding="utf-8",
+    )
+    top.write_text(
+        """
+module top(input clk, input csb, input web, input [7:0] addr, input [31:0] din, output [31:0] dout);
+  sram_model u_sram(.clk(clk), .csb(csb), .web(web), .addr(addr), .din(din), .dout(dout));
+endmodule
+""",
+        encoding="utf-8",
+    )
+    sdc.write_text("create_clock -name clk -period 10 [get_ports clk]\n", encoding="utf-8")
+
+    monkeypatch.setattr(agent, "save_text_artifact_and_record", lambda *args, **kwargs: "local")
+    monkeypatch.setattr(agent, "_run", lambda *args, **kwargs: (2, "stopped after config for test\n"))
+
+    with pytest.raises(RuntimeError, match="synthesis failed before downstream PD stages"):
+        agent.run_agent({
+            "workflow_id": "wf",
+            "workflow_dir": str(tmp_path),
+            "workflow_name": "Digital_Arch2Synthesis",
+            "pdk_root_host": str(tmp_path / "pdk"),
+            "pdk_variant": "sky130A",
+            "digital": {
+                "top_module": "top",
+                "rtl_files": [str(sram), str(top)],
+                "constraints_sdc": str(sdc),
+            },
+        })
+
+    copied_sram = (tmp_path / "digital" / "synth" / "rtl" / "sram_model.v").read_text(encoding="utf-8")
+    config = (tmp_path / "digital" / "synth" / "config.json").read_text(encoding="utf-8")
+    summary = (tmp_path / "digital" / "synth" / "synth_summary.json").read_text(encoding="utf-8")
+    assert "reg [31:0] mem [0:255]" not in copied_sram
+    assert f"{stem} u_chiploop_sram_macro" in copied_sram
+    assert ".wmask0(4'b1111)" in copied_sram
+    assert f'"dir::macro_libs/{stem}_TT_1p8V_25C.lib"' in config
+    assert f'"dir::macro_lefs/{stem}.lef"' in config
+    assert f'"dir::macro_gds/{stem}.gds"' in config
+    assert f'"macro_name": "{stem}"' in summary

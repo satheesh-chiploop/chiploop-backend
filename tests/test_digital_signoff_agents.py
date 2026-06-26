@@ -547,6 +547,26 @@ endmodule
     assert _missing_stdcell_models(str(netlist), [model]) == []
 
 
+def test_lec_generated_model_covers_sky130_mux4(tmp_path):
+    netlist = tmp_path / "mux4.v"
+    netlist.write_text(
+        """
+module top(input a0, input a1, input a2, input a3, input s0, input s1, output y);
+  sky130_fd_sc_hd__mux4_2 mux(.A0(a0), .A1(a1), .A2(a2), .A3(a3), .S0(s0), .S1(s1), .X(y));
+endmodule
+""",
+        encoding="utf-8",
+    )
+
+    model = _generated_stdcell_model(str(netlist), str(tmp_path))
+
+    assert model is not None
+    text = open(model, "r", encoding="utf-8").read()
+    assert "module sky130_fd_sc_hd__mux4_2" in text
+    assert "assign X = (S1 ? (S0 ? A3 : A2) : (S0 ? A1 : A0));" in text
+    assert _missing_stdcell_models(str(netlist), [model]) == []
+
+
 def test_lec_cuts_preserved_macro_outputs_to_shared_inputs(tmp_path):
     macro_rtl = tmp_path / "analog_model.v"
     macro_rtl.write_text(

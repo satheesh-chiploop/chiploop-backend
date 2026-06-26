@@ -766,6 +766,12 @@ def _cell_assign_expr(cell_base: str, pins: set[str]) -> str | None:
         return "~(A ^ B)" if {"A", "B"}.issubset(pins) else None
     if cell_base.startswith("mux2"):
         return "(S ? A1 : A0)" if {"A0", "A1", "S"}.issubset(pins) else None
+    if cell_base.startswith("mux4"):
+        if {"A0", "A1", "A2", "A3", "S0", "S1"}.issubset(pins):
+            return "(S1 ? (S0 ? A3 : A2) : (S0 ? A1 : A0))"
+        if {"A0", "A1", "A2", "A3", "S"}.issubset(pins):
+            return "(S[1] ? (S[0] ? A3 : A2) : (S[0] ? A1 : A0))"
+        return None
     for prefix in ("nand", "nor", "and", "or"):
         if cell_base.startswith(prefix):
             return _gate_expr(prefix, _logic_input_pins(pins))

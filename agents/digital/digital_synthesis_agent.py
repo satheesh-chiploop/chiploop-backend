@@ -49,6 +49,33 @@ def _dedupe_paths(paths: list[str]) -> list[str]:
             out.append(abs_path)
     return out
 
+
+def _pdk_root_host(state: dict) -> str:
+    digital = state.get("digital") if isinstance(state.get("digital"), dict) else {}
+    foundry = digital.get("foundry") if isinstance(digital.get("foundry"), dict) else {}
+    root = (
+        state.get("pdk_root_host")
+        or state.get("pdk_root")
+        or foundry.get("pdk_root")
+        or os.getenv("CHIPLOOP_PDK_ROOT_HOST")
+        or os.getenv("PDK_ROOT")
+        or "/root/chiploop-backend/backend/pdk"
+    )
+    return os.path.abspath(str(root))
+
+
+def _pdk_variant(state: dict) -> str:
+    digital = state.get("digital") if isinstance(state.get("digital"), dict) else {}
+    foundry = digital.get("foundry") if isinstance(digital.get("foundry"), dict) else {}
+    return str(
+        state.get("pdk_variant")
+        or state.get("pdk")
+        or foundry.get("pdk")
+        or os.getenv("CHIPLOOP_PDK_VARIANT")
+        or os.getenv("PDK")
+        or DEFAULT_PDK_VARIANT
+    ).strip()
+
 def _resolve_spec_json(state: dict, workflow_dir: str) -> str | None:
     for cand in [
         (state.get("digital") or {}).get("spec_json"),
@@ -225,6 +252,282 @@ def _module_port_db_from_files(paths: list[str]) -> dict:
         for module, ports in _extract_module_ports_from_text(_read_text(path)).items():
             db[module] = ports
     return db
+
+
+def _range_width(range_text: str | None) -> int:
+    if not range_text:
+        return 1
+    match = re.search(r"\[\s*(-?\d+)\s*:\s*(-?\d+)\s*\]", range_text)
+    if not match:
+        return 1
+    left, right = int(match.group(1)), int(match.group(2))
+    return abs(left - right) + 1
+
+
+def _large_inferred_memory_arrays(rtl_files: list[str], min_bits: int = 1024) -> list[dict[str, object]]:
+    memories: list[dict[str, object]] = []
+    module_re = re.compile(
+        r"\bmodule\s+(?P<module>[A-Za-z_][A-Za-z0-9_$]*)\b(?P<body>.*?)(?:\n\s*endmodule\b)",
+        flags=re.DOTALL,
+    )
+    array_re = re.compile(
+        r"\b(?:reg|logic)\s*(?P<width>\[[^\]]+\])?\s+(?P<name>[A-Za-z_][A-Za-z0-9_$]*)\s*"
+        r"\[\s*(?P<left>\d+)\s*:\s*(?P<right>\d+)\s*\]\s*;",
+        flags=re.MULTILINE,
+    )
+    for path in rtl_files or []:
+        text = _read_text(path)
+        if not text:
+            continue
+        for module_match in module_re.finditer(text):
+            module = module_match.group("module")
+            body = module_match.group("body")
+            for arr in array_re.finditer(body):
+                width_bits = _range_width(arr.group("width"))
+                depth = abs(int(arr.group("left")) - int(arr.group("right"))) + 1
+                bits = width_bits * depth
+                if bits < min_bits:
+                    continue
+                memories.append({
+                    "file": os.path.basename(path),
+                    "path": path,
+                    "module": module,
+                    "array": arr.group("name"),
+                    "width_bits": width_bits,
+                    "depth": depth,
+                    "estimated_bits": bits,
+                })
+    return memories
+
+
+def _read_verilog_module_ports(path: str, module_name: str) -> dict[str, str]:
+    text = _read_text(path)
+    match = re.search(
+        rf"\bmodule\s+{re.escape(module_name)}\s*\((?P<header>.*?)\)\s*;",
+        text,
+        flags=re.DOTALL,
+    )
+    if not match:
+        return {}
+    header = match.group("header")
+    ports: dict[str, str] = {}
+    for decl in re.finditer(
+        r"\b(?P<dir>input|output|inout)\b\s*(?:wire|reg|logic)?\s*(?P<range>\[[^\]]+\])?\s*(?P<names>[^,;]+)",
+        header,
+        flags=re.IGNORECASE,
+    ):
+        width = (decl.group("range") or "").strip()
+        for raw in decl.group("names").split(","):
+            name = raw.strip()
+            name = re.sub(r"\s*=.*$", "", name).strip()
+            if re.match(r"^[A-Za-z_][A-Za-z0-9_$]*$", name):
+                ports[name] = width
+    if ports:
+        return ports
+
+    # Fallback for non-ANSI macro stubs.
+    body_match = re.search(
+        rf"\bmodule\s+{re.escape(module_name)}\s*\((?P<ports>.*?)\)\s*;(?P<body>.*?)(?:\n\s*endmodule\b)",
+        text,
+        flags=re.DOTALL,
+    )
+    if not body_match:
+        return {}
+    port_names = [p.strip() for p in body_match.group("ports").split(",") if p.strip()]
+    body = body_match.group("body")
+    for name in port_names:
+        decl = re.search(
+            rf"\b(?:input|output|inout)\b\s*(?:wire|reg|logic)?\s*(?P<range>\[[^\]]+\])?\s*{re.escape(name)}\b",
+            body,
+            flags=re.IGNORECASE,
+        )
+        ports[name] = (decl.group("range") if decl else "") or ""
+    return ports
+
+
+def _verilog_modules(path: str) -> list[str]:
+    return re.findall(r"^\s*module\s+([A-Za-z_][A-Za-z0-9_$]*)\b", _read_text(path), flags=re.MULTILINE)
+
+
+def _sram_geometry_from_name(name: str) -> tuple[int | None, int | None]:
+    match = re.search(r"(?P<width>\d+)\s*x\s*(?P<depth>\d+)", name, flags=re.IGNORECASE)
+    if match:
+        return int(match.group("width")), int(match.group("depth"))
+    match = re.search(r"1rw1r_(?P<width>\d+)_(?P<depth>\d+)_", name, flags=re.IGNORECASE)
+    if match:
+        return int(match.group("width")), int(match.group("depth"))
+    return None, None
+
+
+def _sram_collateral_rank(path: str) -> tuple[int, int, int, str]:
+    base = os.path.basename(path).lower()
+    tt = 0 if "_tt_" in base or "tt_" in base else 1
+    voltage = 0 if "1p8v" in base else 1
+    temp = 0 if "25c" in base else 1
+    return (tt, voltage, temp, base)
+
+
+def _discover_pdk_sram_collateral(state: dict, workflow_dir: str, memories: list[dict[str, object]]) -> list[dict[str, object]]:
+    if not memories:
+        return []
+    pdk_root = os.path.join(_pdk_root_host(state), _pdk_variant(state))
+    root_candidates = [
+        os.path.join(pdk_root, "libs.ref", "sky130_sram_macros"),
+        os.path.join(pdk_root, "libs.ref"),
+    ]
+    lib_files: list[str] = []
+    for root in root_candidates:
+        lib_files.extend(glob.glob(os.path.join(root, "**", "*.lib"), recursive=True))
+    lib_files = [p for p in _dedupe_paths(lib_files) if os.path.isfile(p)]
+    collaterals: list[dict[str, object]] = []
+    for mem in memories:
+        width = int(mem.get("width_bits") or 0)
+        depth = int(mem.get("depth") or 0)
+        matched_libs = []
+        for lib in lib_files:
+            lw, ld = _sram_geometry_from_name(os.path.basename(lib))
+            if lw == width and ld == depth:
+                matched_libs.append(lib)
+        if not matched_libs:
+            continue
+        lib = sorted(matched_libs, key=_sram_collateral_rank)[0]
+        base = os.path.basename(lib)
+        base_no_ext = re.sub(r"\.lib(?:\.gz)?$", "", base, flags=re.IGNORECASE)
+        physical_base = re.sub(r"_(?:tt|ff|ss)_\d+p\d+v_\d+c$", "", base_no_ext, flags=re.IGNORECASE)
+        physical_base = re.sub(r"_(?:TT|FF|SS)_\d+p\d+V_\d+C$", "", physical_base)
+        macro_name = physical_base
+        verilog_candidates = []
+        for root in root_candidates:
+            verilog_candidates.extend(glob.glob(os.path.join(root, "**", f"{physical_base}.v"), recursive=True))
+            verilog_candidates.extend(glob.glob(os.path.join(root, "**", f"{base_no_ext}.v"), recursive=True))
+        verilog = next((p for p in _dedupe_paths(verilog_candidates) if os.path.isfile(p)), None)
+        if verilog:
+            modules = _verilog_modules(verilog)
+            if modules:
+                macro_name = modules[0]
+        collateral = {
+            "behavioral_module": mem.get("module"),
+            "array": mem.get("array"),
+            "width_bits": width,
+            "depth": depth,
+            "estimated_bits": mem.get("estimated_bits"),
+            "macro_name": macro_name,
+            "lib": lib,
+            "verilog": verilog,
+            "lef": _first_existing_matching(root_candidates, "lef", physical_base, (".lef",)),
+            "gds": _first_existing_matching(root_candidates, "gds", physical_base, (".gds", ".gds.gz")),
+            "spice": _first_existing_matching(root_candidates, "spice", physical_base, (".spice", ".sp", ".cdl")),
+        }
+        collaterals.append(collateral)
+    return collaterals
+
+
+def _first_existing_matching(roots: list[str], subdir: str, stem: str, exts: tuple[str, ...]) -> str | None:
+    candidates: list[str] = []
+    for root in roots:
+        for ext in exts:
+            candidates.extend(glob.glob(os.path.join(root, "**", subdir, f"{stem}{ext}"), recursive=True))
+            candidates.extend(glob.glob(os.path.join(root, "**", f"{stem}{ext}"), recursive=True))
+    return next((p for p in _dedupe_paths(candidates) if os.path.isfile(p)), None)
+
+
+def _macro_connection_expr(macro_port: str, source_ports: set[str], width: str) -> str | None:
+    p = macro_port.lower()
+    if p in source_ports:
+        return macro_port
+    aliases = {
+        "clk0": ("clk", "clock"),
+        "clk1": ("clk", "clock"),
+        "csb0": ("csb", "cen", "ce_n", "chip_select_n"),
+        "csb1": ("csb", "cen", "ce_n", "chip_select_n"),
+        "web0": ("web", "wen", "we_n", "write_enable_n"),
+        "addr0": ("addr", "address"),
+        "addr1": ("addr", "address"),
+        "din0": ("din", "wdata", "write_data"),
+        "dout0": ("dout", "rdata", "read_data"),
+    }
+    for alias in aliases.get(p, ()):
+        if alias in source_ports:
+            return alias
+    if p.startswith("wmask"):
+        mask_width = _range_width(width)
+        return f"{mask_width}'b" + ("1" * mask_width)
+    if p in {"vccd1", "vccd2", "vpwr", "vdd", "vdda", "vddp", "vpb"}:
+        return "1'b1"
+    if p in {"vssd1", "vssd2", "vgnd", "vss", "vssa", "vnb"}:
+        return "1'b0"
+    if p.startswith("dout"):
+        return ""
+    if p.startswith("clk") and "clk" in source_ports:
+        return "clk"
+    if p.startswith("csb") and "csb" in source_ports:
+        return "csb"
+    if p.startswith("addr") and "addr" in source_ports:
+        return "addr"
+    return None
+
+
+def _replace_behavioral_memories_with_macros(rtl_files: list[str], collaterals: list[dict[str, object]]) -> dict[str, list[str]]:
+    replacements: dict[str, list[str]] = {}
+    by_module = {
+        str(item.get("behavioral_module")): item
+        for item in collaterals
+        if item.get("behavioral_module") and item.get("macro_name")
+    }
+    if not by_module:
+        return replacements
+    for path in rtl_files:
+        text = _read_text(path)
+        if not text:
+            continue
+        original = text
+        notes: list[str] = []
+        for module, collateral in by_module.items():
+            pattern = re.compile(
+                rf"\bmodule\s+{re.escape(module)}\s*\((?P<header>.*?)\)\s*;(?P<body>.*?)(?:\n\s*endmodule\b)",
+                flags=re.DOTALL,
+            )
+
+            def repl(match: re.Match) -> str:
+                macro_name = str(collateral.get("macro_name"))
+                macro_ports = _read_verilog_module_ports(str(collateral.get("verilog") or ""), macro_name)
+                header = match.group("header").strip()
+                source_ports = {
+                    p
+                    for p in re.findall(r"\b(?:input|output|inout)\b\s*(?:wire|reg|logic)?\s*(?:\[[^\]]+\])?\s*([A-Za-z_][A-Za-z0-9_$]*)", header)
+                }
+                if not macro_ports:
+                    macro_ports = {
+                        "clk0": "",
+                        "csb0": "",
+                        "web0": "",
+                        "wmask0": "[3:0]",
+                        "addr0": "",
+                        "din0": "",
+                        "dout0": "",
+                    }
+                conns = []
+                for macro_port, width in macro_ports.items():
+                    expr = _macro_connection_expr(macro_port, source_ports, width)
+                    if expr is None:
+                        continue
+                    conns.append(f"    .{macro_port}({expr})")
+                if not conns:
+                    return match.group(0)
+                notes.append(f"{module}->{macro_name}")
+                wrapper_header = re.sub(r"\b(output)\s+(?:reg|logic)\b", r"\1 wire", header)
+                return (
+                    f"module {module} ({wrapper_header});\n\n"
+                    f"  {macro_name} u_chiploop_sram_macro (\n"
+                    + ",\n".join(conns)
+                    + "\n  );\n\nendmodule"
+                )
+
+            text = pattern.sub(repl, text)
+        if text != original:
+            _write_local(path, text)
+            replacements[os.path.basename(path)] = notes
+    return replacements
 
 
 def _top_internal_signal_decls(text: str) -> dict[str, str]:
@@ -636,21 +939,20 @@ def run_agent(state: dict) -> dict:
     constraints_dir = os.path.join(stage_dir, "constraints")
     logs_dir = os.path.join(stage_dir, "logs")
     macro_lib_dir = os.path.join(stage_dir, "macro_libs")
+    macro_lef_dir = os.path.join(stage_dir, "macro_lefs")
+    macro_gds_dir = os.path.join(stage_dir, "macro_gds")
+    macro_spice_dir = os.path.join(stage_dir, "macro_spice")
+    macro_verilog_dir = os.path.join(stage_dir, "macro_verilog")
     _ensure_dir(rtl_dir)
     _ensure_dir(constraints_dir)
     _ensure_dir(logs_dir)
     _ensure_dir(macro_lib_dir)
+    _ensure_dir(macro_lef_dir)
+    _ensure_dir(macro_gds_dir)
+    _ensure_dir(macro_spice_dir)
+    _ensure_dir(macro_verilog_dir)
 
     macro_libs = _resolve_macro_libs_from_state(state, workflow_dir)
-    logger.info(f"{AGENT_NAME}: macro_lib_count={len(macro_libs)}")
-
-    copied_macro_libs = []
-    for f in macro_libs:
-        dst = os.path.join(macro_lib_dir, os.path.basename(f))
-        if os.path.abspath(f) != os.path.abspath(dst):
-            shutil.copy2(f, dst)
-        copied_macro_libs.append(dst)
-
     # Copy RTL into deterministic local folder (avoid container path issues)
     copied = []
     rtl_repairs: dict[str, list[str]] = {}
@@ -662,6 +964,53 @@ def run_agent(state: dict) -> dict:
         if repairs:
             rtl_repairs[os.path.basename(dst)] = repairs
         copied.append(dst)
+
+    inferred_memory_arrays = _large_inferred_memory_arrays(copied)
+    pdk_sram_collateral = _discover_pdk_sram_collateral(state, workflow_dir, inferred_memory_arrays)
+    macro_replacements = _replace_behavioral_memories_with_macros(copied, pdk_sram_collateral)
+    if macro_replacements:
+        for file_name, repairs in macro_replacements.items():
+            rtl_repairs.setdefault(file_name, []).extend([f"bound_inferred_memory_to_pdk_macro:{item}" for item in repairs])
+
+    macro_lefs = []
+    macro_gds = []
+    macro_spice = []
+    macro_verilog = []
+    for item in pdk_sram_collateral:
+        for src_key, bucket in (
+            ("lib", macro_libs),
+            ("lef", macro_lefs),
+            ("gds", macro_gds),
+            ("spice", macro_spice),
+            ("verilog", macro_verilog),
+        ):
+            value = item.get(src_key)
+            if isinstance(value, str) and value:
+                bucket.append(value)
+    macro_libs = _dedupe_paths([p for p in macro_libs if os.path.isfile(p)])
+    macro_lefs = _dedupe_paths([p for p in macro_lefs if os.path.isfile(p)])
+    macro_gds = _dedupe_paths([p for p in macro_gds if os.path.isfile(p)])
+    macro_spice = _dedupe_paths([p for p in macro_spice if os.path.isfile(p)])
+    macro_verilog = _dedupe_paths([p for p in macro_verilog if os.path.isfile(p)])
+    logger.info(
+        f"{AGENT_NAME}: macro collateral counts lib={len(macro_libs)} lef={len(macro_lefs)} "
+        f"gds={len(macro_gds)} spice={len(macro_spice)} verilog={len(macro_verilog)}"
+    )
+
+    def _copy_to_dir(srcs: list[str], dst_dir: str) -> list[str]:
+        copied_paths = []
+        for src in srcs:
+            dst = os.path.join(dst_dir, os.path.basename(src))
+            if os.path.abspath(src) != os.path.abspath(dst):
+                shutil.copy2(src, dst)
+            copied_paths.append(dst)
+        return copied_paths
+
+    copied_macro_libs = _copy_to_dir(macro_libs, macro_lib_dir)
+    copied_macro_lefs = _copy_to_dir(macro_lefs, macro_lef_dir)
+    copied_macro_gds = _copy_to_dir(macro_gds, macro_gds_dir)
+    copied_macro_spice = _copy_to_dir(macro_spice, macro_spice_dir)
+    copied_macro_verilog = _copy_to_dir(macro_verilog, macro_verilog_dir)
 
     # Pick top module name best-effort. Digital synthesis keeps the digital top;
     # System Synthesis/PD intentionally use the physical SoC wrapper.
@@ -718,6 +1067,110 @@ def run_agent(state: dict) -> dict:
         rtl_repairs.setdefault(file_name, []).extend(repairs)
 
     state["design_name"] = top_module
+
+    inferred_memory_arrays = _large_inferred_memory_arrays(copied)
+    if inferred_memory_arrays and not copied_macro_libs:
+        reason = "inferred_memory_macro_requires_real_macro_collateral"
+        msg = (
+            "Large inferred memory arrays were found in RTL, but no macro Liberty collateral was available. "
+            "Synthesis is blocked to avoid flattening SRAM/MBIST memories into standard-cell flops."
+        )
+        input_log_path = os.path.join(stage_dir, "synth_input_resolution.log")
+        exec_log_path = os.path.join(logs_dir, "openlane_synth.log")
+        summary_json_path = os.path.join(stage_dir, "synth_summary.json")
+        summary_md_path = os.path.join(stage_dir, "synth_summary.md")
+        metrics_path = os.path.join(stage_dir, "metrics.json")
+        input_log = "\n".join([
+            f"[{datetime.utcnow().isoformat()}Z] {AGENT_NAME}",
+            f"workflow_id={workflow_id}",
+            f"workflow_dir={os.path.abspath(workflow_dir)}",
+            f"spec_json={spec_json}",
+            f"top_module={top_module}",
+            f"rtl_count={len(rtl_files)}",
+            "macro_lib_count=0",
+            f"status=blocked",
+            f"reason={reason}",
+            f"inferred_memory_arrays={json.dumps(inferred_memory_arrays, sort_keys=True)}",
+        ]) + "\n"
+        summary = {
+            "workflow_id": workflow_id,
+            "agent": AGENT_NAME,
+            "status": "blocked",
+            "return_code": None,
+            "reason": reason,
+            "message": msg,
+            "inputs": {
+                "rtl_files": [os.path.basename(x) for x in copied],
+                "pre_synthesis_rtl_repairs": rtl_repairs,
+                "macro_libs": [],
+                "top_module": top_module,
+                "clock_port": clk_name,
+                "clock_period_ns": clk_period_ns,
+                "inferred_memory_arrays": inferred_memory_arrays,
+            },
+            "outputs": {
+                "stage_dir": stage_dir,
+                "config_json": None,
+                "sdc": None,
+                "run_sh": None,
+                "exec_log": exec_log_path,
+                "metrics_json": metrics_path,
+                "netlist": None,
+                "netlist_candidates": [],
+                "enriched_metrics": False,
+            },
+        }
+        md = (
+            "# Digital Synthesis Summary\n\n"
+            f"- **Status**: `blocked`\n"
+            f"- **Reason**: `{reason}`\n"
+            f"- **Top module**: `{top_module}`\n"
+            f"- **Inferred memory arrays**: `{len(inferred_memory_arrays)}`\n\n"
+            f"{msg}\n"
+        )
+        _write_local(input_log_path, input_log)
+        _write_local(exec_log_path, msg + "\n")
+        _write_local(summary_json_path, json.dumps(summary, indent=2))
+        _write_local(summary_md_path, md)
+        _write_local(metrics_path, json.dumps({
+            "status": "blocked",
+            "reason": reason,
+            "inferred_memory_array_count": len(inferred_memory_arrays),
+            "inferred_memory_bit_count": sum(int(item.get("estimated_bits") or 0) for item in inferred_memory_arrays),
+        }, indent=2))
+        digital = state.setdefault("digital", {})
+        digital["synth"] = {
+            "stage_dir": stage_dir,
+            "summary_json": summary_json_path,
+            "summary_md": summary_md_path,
+            "metrics_json": metrics_path,
+            "netlist": None,
+            "netlist_candidates": [],
+            "status": "blocked",
+            "reason": reason,
+            "input_resolution_log": input_log_path,
+            "constraints_sdc": None,
+            "upstream_constraints_sdc": None,
+            "rtl_files": rtl_files,
+            "top_module": top_module,
+            "inferred_memory_arrays": inferred_memory_arrays,
+        }
+        state["status"] = f"{AGENT_NAME}: blocked ({reason})"
+        try:
+            save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "synth/logs/openlane_synth.log", msg + "\n")
+            save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "synth/synth_summary.json", json.dumps(summary, indent=2))
+            save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "synth/synth_summary.md", md)
+            save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "synth/synth_input_resolution.log", input_log)
+            save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital", "synth/metrics.json", json.dumps({
+                "status": "blocked",
+                "reason": reason,
+                "inferred_memory_array_count": len(inferred_memory_arrays),
+                "inferred_memory_bit_count": sum(int(item.get("estimated_bits") or 0) for item in inferred_memory_arrays),
+            }, indent=2))
+        except Exception as e:
+            print(f"⚠️ Synthesis blocked artifact upload failed: {e}")
+        raise RuntimeError(f"{AGENT_NAME}: {reason}")
+
     # ---------- SDC (single source of truth) ----------
 
     upstream_sdc = _resolve_sdc_from_state(state, workflow_dir)
@@ -781,6 +1234,11 @@ def run_agent(state: dict) -> dict:
         f"state_constraints_sdc={(state.get('digital') or {}).get('constraints_sdc')}",
         f"pdk_variant={state.get('pdk_variant') or DEFAULT_PDK_VARIANT}",
         f"macro_lib_count={len(copied_macro_libs)}",
+        f"macro_lef_count={len(copied_macro_lefs)}",
+        f"macro_gds_count={len(copied_macro_gds)}",
+        f"macro_spice_count={len(copied_macro_spice)}",
+        f"macro_verilog_count={len(copied_macro_verilog)}",
+        f"pdk_sram_collateral={json.dumps([{k: (os.path.basename(v) if isinstance(v, str) else v) for k, v in item.items()} for item in pdk_sram_collateral], sort_keys=True)}",
         f"yosys_macro_lib_script={yosys_pre_path}",
         f"pre_synthesis_rtl_repairs={json.dumps(rtl_repairs, sort_keys=True)}",
     ]) + "\n"
@@ -809,12 +1267,18 @@ def run_agent(state: dict) -> dict:
 
         # Make OpenLane/Yosys aware of macro timing libs
         "EXTRA_LIBS": [f"dir::macro_libs/{os.path.basename(p)}" for p in copied_macro_libs],
+        "EXTRA_LEFS": [f"dir::macro_lefs/{os.path.basename(p)}" for p in copied_macro_lefs],
+        "EXTRA_GDS_FILES": [f"dir::macro_gds/{os.path.basename(p)}" for p in copied_macro_gds],
 
         # ChipLoop provenance (OpenLane ignores unknown top-level keys)
         "CHIPLOOP_WORKFLOW_ID": workflow_id,
         "CHIPLOOP_GENERATED_BY": AGENT_NAME,
         "CHIPLOOP_GENERATED_AT": datetime.utcnow().isoformat() + "Z",
         "CHIPLOOP_MACRO_LIBS": [f"macro_libs/{os.path.basename(p)}" for p in copied_macro_libs],
+        "CHIPLOOP_MACRO_LEFS": [f"macro_lefs/{os.path.basename(p)}" for p in copied_macro_lefs],
+        "CHIPLOOP_MACRO_GDS": [f"macro_gds/{os.path.basename(p)}" for p in copied_macro_gds],
+        "CHIPLOOP_MACRO_SPICE": [f"macro_spice/{os.path.basename(p)}" for p in copied_macro_spice],
+        "CHIPLOOP_MACRO_VERILOG": [f"macro_verilog/{os.path.basename(p)}" for p in copied_macro_verilog],
         "CHIPLOOP_YOSYS_MACRO_LIB_SCRIPT": "yosys_macro_libs.ys",
         # ✅ KEY FIX: Disable Verilator lint stage
         "RUN_LINTER": False
@@ -834,8 +1298,8 @@ def run_agent(state: dict) -> dict:
     # ---------- Docker run.sh (rerunnable contract) ----------
     # Host PDK root: your real path is backend/pdk (you already created it)
     # We keep it configurable.
-    default_pdk_host = os.getenv("CHIPLOOP_PDK_ROOT_HOST") or "/root/chiploop-backend/backend/pdk"
-    pdk_variant = state.get("pdk_variant") or DEFAULT_PDK_VARIANT
+    default_pdk_host = _pdk_root_host(state)
+    pdk_variant = _pdk_variant(state)
     openlane_image = state.get("openlane_image") or DEFAULT_OPENLANE_IMAGE
 
     # Runs folder inside stage_dir
@@ -972,6 +1436,14 @@ echo "Done. Inspect /work/runs/{run_tag} or latest run folder under /work/runs/"
             "rtl_files": [os.path.basename(x) for x in copied],
             "pre_synthesis_rtl_repairs": rtl_repairs,
             "macro_libs": [os.path.basename(x) for x in copied_macro_libs],
+            "macro_lefs": [os.path.basename(x) for x in copied_macro_lefs],
+            "macro_gds": [os.path.basename(x) for x in copied_macro_gds],
+            "macro_spice": [os.path.basename(x) for x in copied_macro_spice],
+            "macro_verilog": [os.path.basename(x) for x in copied_macro_verilog],
+            "pdk_sram_collateral": [
+                {k: (os.path.basename(v) if isinstance(v, str) else v) for k, v in item.items()}
+                for item in pdk_sram_collateral
+            ],
             "top_module": top_module,
             "clock_port": clk_name,
             "clock_period_ns": clk_period_ns,
@@ -1064,6 +1536,22 @@ echo "Done. Inspect /work/runs/{run_tag} or latest run folder under /work/runs/"
     # ---------- Update state for downstream workflow ----------
 
     digital = state.setdefault("digital", {})
+    def _existing_list(value) -> list[str]:
+        if isinstance(value, list):
+            return [str(item) for item in value if isinstance(item, str)]
+        if isinstance(value, str):
+            return [value]
+        return []
+
+    if macro_libs:
+        digital["macro_libs"] = _dedupe_paths(_existing_list(digital.get("macro_libs")) + macro_libs)
+    if macro_lefs:
+        digital["macro_lefs"] = _dedupe_paths(_existing_list(digital.get("macro_lefs")) + macro_lefs)
+    if macro_gds:
+        digital["macro_gds"] = _dedupe_paths(_existing_list(digital.get("macro_gds")) + macro_gds)
+    if macro_spice:
+        digital["macro_spice_models"] = _dedupe_paths(_existing_list(digital.get("macro_spice_models")) + macro_spice)
+        digital["macro_lvs_spice"] = _dedupe_paths(_existing_list(digital.get("macro_lvs_spice")) + macro_spice)
     digital["synth"] = {
         "stage_dir": stage_dir,
         "summary_json": summary_json_path,
@@ -1076,7 +1564,14 @@ echo "Done. Inspect /work/runs/{run_tag} or latest run folder under /work/runs/"
         "constraints_sdc": sdc_path,
         "upstream_constraints_sdc": upstream_sdc,
         "rtl_files": rtl_files,
+        "synth_rtl_files": copied,
         "top_module": top_module,
+        "macro_libs": macro_libs,
+        "macro_lefs": macro_lefs,
+        "macro_gds": macro_gds,
+        "macro_spice_models": macro_spice,
+        "macro_verilog": macro_verilog,
+        "pdk_sram_collateral": pdk_sram_collateral,
     }
     
     state["status"] = f"{AGENT_NAME}: {summary['status']}"
