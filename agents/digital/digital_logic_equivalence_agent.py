@@ -590,7 +590,8 @@ def _patch_top_macro_output_cutpoints(text: str, top: str, macro_ports: dict[str
         seen_assigns.add(key)
         assigns.append(f"assign {cutpoint['expr']} = {cutpoint['name']};")
     if assigns:
-        patched = re.sub(r"\nendmodule\s*$", "\n" + "\n".join(assigns) + "\nendmodule\n", patched, count=1)
+        insertion = "\n" + "\n".join(assigns) + "\nendmodule\n"
+        patched = re.sub(r"\nendmodule\s*$", lambda _match: insertion, patched, count=1)
     return patched, cutpoints
 
 

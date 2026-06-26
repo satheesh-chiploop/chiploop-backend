@@ -406,7 +406,12 @@ def _stdcell_missing_output_pins(model: str, connected_pins: set[str]) -> list[s
     return [pin for pin in expected if pin not in connected_pins]
 
 
-def _sanitize_lvs_netlist_unconnected_stdcell_outputs(src: str, dst: str | None = None, macro_spice_models: list[str] | None = None) -> tuple[str, int]:
+def _sanitize_lvs_netlist_unconnected_stdcell_outputs(
+    src: str,
+    dst: str | None = None,
+    macro_spice_models: list[str] | None = None,
+    macro_lefs: list[str] | None = None,
+) -> tuple[str, int]:
     text = _read_text(src)
     if not text:
         if dst and os.path.abspath(dst) != os.path.abspath(src):
@@ -417,6 +422,8 @@ def _sanitize_lvs_netlist_unconnected_stdcell_outputs(src: str, dst: str | None 
 
     repairs = 0
     macro_ports = _spice_subckt_ports(macro_spice_models or [])
+    macro_supply_aliases = _lef_supply_alias_groups(macro_lefs or [])
+    top_ports = _verilog_declared_ports(text)
     def repl(match: re.Match) -> str:
         nonlocal repairs
         model = match.group("model")
@@ -471,11 +478,12 @@ def _sanitize_lvs_netlist_unconnected_stdcell_outputs(src: str, dst: str | None 
             port
             for port, _expr in re.findall(r"\.\s*([A-Za-z_][A-Za-z0-9_$]*)\s*\(\s*([^)]*?)\s*\)", body, flags=re.DOTALL)
         }
-        additions: list[str] = []
-        for port in ports:
-            if port in connected or not _is_supply_port(port):
-                continue
-            additions.append(port)
+        additions = _macro_supply_additions(
+            ports,
+            connected,
+            top_ports,
+            macro_supply_aliases.get(model, []),
+        )
         if not additions:
             return match.group(0)
         new_body = body.rstrip()
@@ -499,18 +507,22 @@ def _sanitize_lvs_netlist_unconnected_stdcell_outputs(src: str, dst: str | None 
     return out, repairs
 
 
-def _sanitize_openlane_lvs_run_netlists(latest: str | None, macro_spice_models: list[str] | None = None) -> dict[str, object]:
+def _sanitize_openlane_lvs_run_netlists(
+    latest: str | None,
+    macro_spice_models: list[str] | None = None,
+    macro_lefs: list[str] | None = None,
+) -> dict[str, object]:
     if not latest or not os.path.isdir(latest):
         return {"repairs": 0, "files": []}
     touched: list[str] = []
     repairs = 0
     for path in sorted(glob.glob(os.path.join(latest, "**", "*.nl.v"), recursive=True)):
-        _out, count = _sanitize_lvs_netlist_unconnected_stdcell_outputs(path, None, macro_spice_models)
+        _out, count = _sanitize_lvs_netlist_unconnected_stdcell_outputs(path, None, macro_spice_models, macro_lefs)
         if count:
             repairs += count
             touched.append(path)
     for path in sorted(glob.glob(os.path.join(latest, "**", "*.pnl.v"), recursive=True)):
-        _out, count = _sanitize_lvs_netlist_unconnected_stdcell_outputs(path, None, macro_spice_models)
+        _out, count = _sanitize_lvs_netlist_unconnected_stdcell_outputs(path, None, macro_spice_models, macro_lefs)
         if count:
             repairs += count
             touched.append(path)
@@ -651,6 +663,62 @@ def _spice_subckt_ports(paths: list[str]) -> dict[str, list[str]]:
     return ports
 
 
+def _resolve_macro_lefs(state: dict, workflow_dir: str) -> list[str]:
+    digital = state.get("digital") if isinstance(state.get("digital"), dict) else {}
+    candidates: list[str] = []
+    values = digital.get("macro_lefs") if isinstance(digital.get("macro_lefs"), list) else []
+    for item in values:
+        if isinstance(item, str):
+            cand = item if os.path.isabs(item) else os.path.join(workflow_dir, item)
+            if os.path.isfile(cand):
+                candidates.append(os.path.abspath(cand))
+    candidates.extend(_resolve_macro_files_from_workflow(workflow_dir, (".lef",)))
+    out: list[str] = []
+    seen: set[str] = set()
+    for path in candidates:
+        ap = os.path.abspath(path)
+        if ap not in seen and os.path.isfile(ap):
+            seen.add(ap)
+            out.append(ap)
+    return out
+
+
+def _lef_supply_alias_groups(paths: list[str]) -> dict[str, list[set[str]]]:
+    aliases: dict[str, list[set[str]]] = {}
+    for path in paths:
+        text = _read_text(path)
+        if not text:
+            continue
+        for macro_match in re.finditer(r"\bMACRO\s+(\S+)(?P<body>.*?)(?:\n\s*END\s+\1\b)", text, flags=re.DOTALL):
+            macro = macro_match.group(1)
+            body = macro_match.group("body")
+            signatures: dict[tuple[str, tuple[str, ...]], list[str]] = {}
+            for pin_match in re.finditer(r"\bPIN\s+(\S+)(?P<body>.*?)(?:\n\s*END\s+\1\b)", body, flags=re.DOTALL):
+                pin = pin_match.group(1)
+                pin_body = pin_match.group("body")
+                use_match = re.search(r"\bUSE\s+(POWER|GROUND)\b", pin_body, flags=re.IGNORECASE)
+                if not use_match:
+                    continue
+                rects = []
+                current_layer = ""
+                for line in pin_body.splitlines():
+                    layer_match = re.search(r"\bLAYER\s+(\S+)\s*;", line, flags=re.IGNORECASE)
+                    if layer_match:
+                        current_layer = layer_match.group(1)
+                    rect_match = re.search(r"\bRECT\s+([^;]+);", line, flags=re.IGNORECASE)
+                    if rect_match:
+                        coords = " ".join(rect_match.group(1).split())
+                        rects.append(f"{current_layer}:{coords}")
+                if not rects:
+                    continue
+                key = (use_match.group(1).upper(), tuple(sorted(rects)))
+                signatures.setdefault(key, []).append(pin)
+            for ports in signatures.values():
+                if len(ports) > 1:
+                    aliases.setdefault(macro, []).append(set(ports))
+    return aliases
+
+
 def _verilog_declared_ports(text: str) -> set[str]:
     ports: set[str] = set()
     for match in re.finditer(r"^\s*(?:input|output|inout)\s+(?:wire\s+|reg\s+)?(?:\[[^\]]+\]\s*)?([^;]+);", text or "", flags=re.MULTILINE):
@@ -686,6 +754,42 @@ def _supply_net_for_port(port: str, top_ports: set[str]) -> str | None:
         if cand.lower() in lower_ports:
             return lower_ports[cand.lower()]
     return None
+
+
+def _supply_alias_representative(group: set[str], top_ports: set[str]) -> str:
+    lower_ports = {p.lower(): p for p in top_ports}
+    for port in sorted(group):
+        if port in top_ports or port.lower() in lower_ports:
+            return port
+    preferred = ["VPWR", "VGND", "VPB", "VNB", "VDD", "VSS", "avdd", "avss", "dvdd", "dvss"]
+    lower_group = {p.lower(): p for p in group}
+    for port in preferred:
+        if port.lower() in lower_group:
+            return lower_group[port.lower()]
+    return sorted(group)[0]
+
+
+def _macro_supply_additions(
+    ports: list[str],
+    connected: set[str],
+    top_ports: set[str],
+    alias_groups: list[set[str]],
+) -> list[str]:
+    additions: list[str] = []
+    seen_alias_ports: set[str] = set()
+    for group in alias_groups:
+        supply_group = {port for port in group if port in ports and _is_supply_port(port)}
+        if not supply_group:
+            continue
+        seen_alias_ports.update(supply_group)
+        if connected.intersection(supply_group):
+            continue
+        additions.append(_supply_alias_representative(supply_group, top_ports))
+    for port in ports:
+        if port in connected or port in seen_alias_ports or not _is_supply_port(port):
+            continue
+        additions.append(port)
+    return additions
 
 
 def _stage_spice_models(work_stage_dir: str, stdcell_spice: list[str], macro_spice: list[str]) -> tuple[list[str], list[str]]:
@@ -844,6 +948,7 @@ def run_agent(state: dict) -> dict:
             shutil.copy2(physical_netlist, dst)
 
     macro_spice_models = _resolve_macro_spice_models(state, workflow_dir)
+    macro_lefs_for_aliases = _resolve_macro_lefs(state, workflow_dir)
 
     stage_netlists = _select_single_top_netlist(sorted(glob.glob(os.path.join(inputs_netlist_dir, "*.v"))))
     if not stage_netlists:
@@ -856,7 +961,12 @@ def run_agent(state: dict) -> dict:
         base, ext = os.path.splitext(os.path.basename(nl))
         sanitized_base = f"{base}_lvs{ext}" if not base.endswith("_lvs") else f"{base}{ext}"
         inputs_sanitized = os.path.join(inputs_netlist_dir, sanitized_base)
-        _sanitized, repairs = _sanitize_lvs_netlist_unconnected_stdcell_outputs(nl, inputs_sanitized, macro_spice_models)
+        _sanitized, repairs = _sanitize_lvs_netlist_unconnected_stdcell_outputs(
+            nl,
+            inputs_sanitized,
+            macro_spice_models,
+            macro_lefs_for_aliases,
+        )
         lvs_netlist_repairs += repairs
         stage_copy = os.path.join(netlist_dir, sanitized_base)
         shutil.copy2(inputs_sanitized, stage_copy)
@@ -1049,7 +1159,7 @@ docker run --rm \\
     lvs_repair: dict[str, object] = {"attempted": False}
 
     if lvs_status not in {"clean", "completed"} and failure_details.get("failure_reason") == "physical_netlist_missing_stdcell_outputs":
-        sanitation = _sanitize_openlane_lvs_run_netlists(latest, macro_spice_models)
+        sanitation = _sanitize_openlane_lvs_run_netlists(latest, macro_spice_models, macro_lefs_for_aliases)
         repair_count = int(sanitation.get("repairs") or 0)
         lvs_repair = {
             "attempted": repair_count > 0,

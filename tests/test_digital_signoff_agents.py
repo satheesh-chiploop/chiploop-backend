@@ -593,6 +593,42 @@ endmodule
     assert "input adc_valid;" in stub_text
 
 
+def test_lec_cutpoint_handles_verilog_escaped_hierarchical_outputs(tmp_path):
+    macro_rtl = tmp_path / "analog_model.v"
+    macro_rtl.write_text(
+        """
+module analog_model(output [1:0] adc_code);
+endmodule
+""",
+        encoding="utf-8",
+    )
+    top_rtl = tmp_path / "top.v"
+    top_rtl.write_text(
+        """
+module top(output [1:0] adc_code);
+  analog_model u_analog(.adc_code({\\u_digital.adc_code[1] , \\u_digital.adc_code[0] }));
+endmodule
+""",
+        encoding="utf-8",
+    )
+    gate = tmp_path / "gate.v"
+    gate.write_text(top_rtl.read_text(encoding="utf-8"), encoding="utf-8")
+
+    prepared, _stubs, prepared_gate, cutpoints = _prepare_golden_rtl_for_yosys(
+        [str(macro_rtl), str(top_rtl)],
+        str(gate),
+        str(tmp_path),
+        "top",
+    )
+
+    gold_text = "\n".join(open(path, "r", encoding="utf-8").read() for path in prepared if os.path.basename(path).startswith("gold_cutpoint_"))
+    gate_text = open(prepared_gate, "r", encoding="utf-8").read()
+
+    assert len(cutpoints) == 1
+    assert "assign {\\u_digital.adc_code[1] , \\u_digital.adc_code[0] } = __chiploop_cut_u_analog_adc_code;" in gold_text
+    assert "assign {\\u_digital.adc_code[1] , \\u_digital.adc_code[0] } = __chiploop_cut_u_analog_adc_code;" in gate_text
+
+
 def test_lec_blackbox_stub_preserves_old_style_bus_and_gate_instance_ports(tmp_path):
     macro_rtl = tmp_path / "temp_sensor_adc_model.v"
     macro_rtl.write_text(
@@ -785,6 +821,85 @@ endmodule
     assert ".VGND()" in text
     assert ".VPWR(avdd)" not in text
     assert ".VGND(avss)" not in text
+
+
+def test_lvs_and_tapeout_sanitizers_collapse_lef_supply_aliases(tmp_path):
+    src = tmp_path / "top.nl.v"
+    spice = tmp_path / "ana_lvs_source.spice"
+    lef = tmp_path / "ana.lef"
+    netlist_text = """
+module top(input wire avdd, input wire avss, input sig);
+  ana u_ana(.sig(sig));
+endmodule
+"""
+    src.write_text(netlist_text, encoding="utf-8")
+    spice.write_text(".subckt ana sig VGND VPWR avdd avss\n.ends ana\n", encoding="utf-8")
+    lef.write_text(
+        """
+VERSION 5.7 ;
+MACRO ana
+  PIN VGND
+    USE GROUND ;
+    PORT
+      LAYER met4 ;
+        RECT 97.000 0.000 100.000 100.000 ;
+    END
+  END VGND
+  PIN avss
+    USE GROUND ;
+    PORT
+      LAYER met4 ;
+        RECT 97.000 0.000 100.000 100.000 ;
+    END
+  END avss
+  PIN VPWR
+    USE POWER ;
+    PORT
+      LAYER met4 ;
+        RECT 92.500 0.000 95.500 100.000 ;
+    END
+  END VPWR
+  PIN avdd
+    USE POWER ;
+    PORT
+      LAYER met4 ;
+        RECT 92.500 0.000 95.500 100.000 ;
+    END
+  END avdd
+END ana
+""",
+        encoding="utf-8",
+    )
+
+    lvs_repaired, lvs_count = digital_lvs_agent._sanitize_lvs_netlist_unconnected_stdcell_outputs(
+        str(src),
+        None,
+        [str(spice)],
+        [str(lef)],
+    )
+    lvs_text = open(lvs_repaired, "r", encoding="utf-8").read()
+
+    assert lvs_count == 2
+    assert ".avdd()" in lvs_text
+    assert ".avss()" in lvs_text
+    assert ".VPWR()" not in lvs_text
+    assert ".VGND()" not in lvs_text
+
+    tapeout_src = tmp_path / "top_tapeout.nl.v"
+    tapeout_src.write_text(netlist_text, encoding="utf-8")
+    tapeout_repaired, tapeout_count = digital_tapeout_agent._sanitize_lvs_netlist_unconnected_stdcell_outputs(
+        str(tapeout_src),
+        None,
+        [str(spice)],
+        [str(lef)],
+    )
+    tapeout_text = open(tapeout_repaired, "r", encoding="utf-8").read()
+
+    assert tapeout_count == 2
+    assert ".avdd(avdd)" in tapeout_text
+    assert ".avss(avss)" in tapeout_text
+    assert ".VPWR(" not in tapeout_text
+    assert ".VGND(" not in tapeout_text
 
 
 def test_lvs_sanitizer_never_adds_macro_supply_ports_to_stdcells(tmp_path):
