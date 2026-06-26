@@ -229,7 +229,11 @@ def run_agent(state: dict) -> dict:
     missing_cells = _missing_stdcell_models(cell_reference or gate or golden, stdcell_verilog)
     ignored_gate_ports = _extra_gate_ports(golden, gate, top)
     rtl_files = _rtl_sources(state, workflow_dir)
-    _prepared_rtl_files, macro_blackboxes = _prepare_golden_rtl_for_yosys(rtl_files, gate or golden, stage_dir, top) if rtl_files and (gate or golden) else (rtl_files, [])
+    _prepared_rtl_files, macro_blackboxes, _prepared_macro_gate, _macro_cutpoints = (
+        _prepare_golden_rtl_for_yosys(rtl_files, gate or golden, stage_dir, top)
+        if rtl_files and (gate or golden)
+        else (rtl_files, [], gate or golden, [])
+    )
     macro_blackboxes = list(dict.fromkeys(
         macro_blackboxes
         + _fallback_macro_blackboxes(golden, stage_dir, top, macro_blackboxes)

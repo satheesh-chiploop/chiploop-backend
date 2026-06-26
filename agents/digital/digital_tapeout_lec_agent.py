@@ -333,6 +333,7 @@ def run_agent(state: dict) -> dict:
     using_gate_reference = bool(staged_reference_netlist)
     prepared_rtl_files: list[str] = []
     golden_macro_stubs: list[str] = []
+    prepared_stage_netlist = staged_netlist
     if using_gate_reference:
         has_inputs = bool(staged_reference_netlist and staged_netlist and yosys and yosys_stdcell_verilog and not missing_stdcell_models)
         script = _gate_reference_yosys_script(
@@ -344,11 +345,15 @@ def run_agent(state: dict) -> dict:
             reference_ignore_ports=ignored_reference_ports,
         ) if staged_reference_netlist and staged_netlist else "# Missing reference or final tapeout netlist; post-tapeout LEC not run.\n"
     else:
-        prepared_rtl_files, golden_macro_stubs = _prepare_golden_rtl_for_yosys(rtl_files, staged_netlist, stage_dir, top) if rtl_files and staged_netlist else (rtl_files, [])
-        has_inputs = bool(prepared_rtl_files and staged_netlist and yosys and yosys_stdcell_verilog and not missing_stdcell_models)
+        prepared_rtl_files, golden_macro_stubs, prepared_stage_netlist, _macro_cutpoints = (
+            _prepare_golden_rtl_for_yosys(rtl_files, staged_netlist, stage_dir, top)
+            if rtl_files and staged_netlist
+            else (rtl_files, [], staged_netlist, [])
+        )
+        has_inputs = bool(prepared_rtl_files and prepared_stage_netlist and yosys and yosys_stdcell_verilog and not missing_stdcell_models)
         script = _yosys_script(
             prepared_rtl_files,
-            staged_netlist,
+            prepared_stage_netlist,
             top,
             yosys_stdcell_verilog,
             gate_ignore_ports=ignored_gate_ports,

@@ -489,11 +489,175 @@ def _macro_blackbox_stubs(gate: str | None, rtl_files: list[str], stage_dir: str
     return stubs, replaced
 
 
-def _prepare_golden_rtl_for_yosys(rtl_files: list[str], gate: str | None, stage_dir: str, top: str) -> tuple[list[str], list[str]]:
-    stubs, replaced = _macro_blackbox_stubs(gate, rtl_files, stage_dir, top)
-    if not stubs:
-        return rtl_files, []
-    return [path for path in rtl_files if path not in replaced] + stubs, stubs
+def _sanitize_cutpoint_name(*parts: str) -> str:
+    joined = "_".join(part.strip().lstrip("\\") for part in parts if part)
+    name = re.sub(r"[^A-Za-z0-9_$]+", "_", joined).strip("_")
+    if not name:
+        name = "macro_output"
+    if not re.match(r"[A-Za-z_]", name):
+        name = f"cp_{name}"
+    return f"__chiploop_cut_{name}"
+
+
+def _format_range(port_range: tuple[int, int] | None) -> str:
+    return f"[{port_range[0]}:{port_range[1]}]" if port_range else ""
+
+
+def _macro_port_maps(gate: str | None, rtl_files: list[str], top: str) -> dict[str, dict[str, Any]]:
+    macro_names = set(_referenced_non_stdcell_modules(gate, top))
+    out: dict[str, dict[str, Any]] = {}
+    for path in rtl_files:
+        module_name = _module_name_in_file(path)
+        if not module_name or module_name not in macro_names:
+            continue
+        text = _read_text(path)
+        ports = _module_ports_from_text(text, module_name)
+        out[module_name] = {
+            "source": path,
+            "ports": ports,
+            "directions": {name: direction for name, direction in ports},
+            "ranges": _module_port_ranges_from_text(text, module_name),
+        }
+    return out
+
+
+def _macro_instance_connections(text: str, module_name: str) -> list[dict[str, Any]]:
+    instances: list[dict[str, Any]] = []
+    pattern = re.compile(
+        rf"\b{re.escape(module_name)}\s+(?P<inst>\\[^\s(]+|[A-Za-z_][A-Za-z0-9_$]*)\s*\((?P<body>.*?)\);",
+        flags=re.DOTALL,
+    )
+    for match in pattern.finditer(text):
+        connections: dict[str, str] = {}
+        for pin in re.finditer(r"\.(?P<pin>[A-Za-z_][A-Za-z0-9_$]*)\s*\((?P<expr>.*?)\)", match.group("body"), flags=re.DOTALL):
+            connections[pin.group("pin")] = re.sub(r"\s+", " ", pin.group("expr").strip())
+        instances.append({"module": module_name, "instance": match.group("inst"), "connections": connections})
+    return instances
+
+
+def _add_cutpoint_inputs_to_top(text: str, top: str, cutpoints: list[dict[str, Any]]) -> str:
+    if not cutpoints:
+        return text
+    match = re.search(rf"\bmodule\s+{re.escape(top)}\s*\((?P<header>.*?)\)\s*;", text, flags=re.DOTALL)
+    if not match:
+        return text
+    header = match.group("header").rstrip()
+    additions = []
+    for cutpoint in cutpoints:
+        name = cutpoint["name"]
+        if re.search(rf"\b{re.escape(name)}\b", header):
+            continue
+        rng = _format_range(cutpoint.get("range"))
+        additions.append(f"input wire {rng} {name}".replace("  ", " ").strip())
+    if not additions:
+        return text
+    separator = ", " if header.strip() else ""
+    return text[:match.start("header")] + header + separator + ", ".join(additions) + text[match.end("header"):]
+
+
+def _patch_top_macro_output_cutpoints(text: str, top: str, macro_ports: dict[str, dict[str, Any]]) -> tuple[str, list[dict[str, Any]]]:
+    cutpoints: list[dict[str, Any]] = []
+    signal_ranges = _module_signal_ranges_from_text(text, top)
+    for module_name, meta in macro_ports.items():
+        directions = meta.get("directions") or {}
+        port_ranges = meta.get("ranges") or {}
+        for inst in _macro_instance_connections(text, module_name):
+            inst_name = inst["instance"]
+            for pin, expr in sorted((inst.get("connections") or {}).items()):
+                if directions.get(pin) != "output" or not expr:
+                    continue
+                if re.fullmatch(r"\d+'[bhdBHD][0-9a-fA-F_xzXZ]+", expr):
+                    continue
+                cp_name = _sanitize_cutpoint_name(inst_name, pin)
+                cp_range = _merge_range(port_ranges.get(pin), _expr_range(expr, signal_ranges))
+                cutpoints.append({
+                    "name": cp_name,
+                    "module": module_name,
+                    "instance": inst_name.lstrip("\\"),
+                    "pin": pin,
+                    "expr": expr,
+                    "range": cp_range,
+                })
+    if not cutpoints:
+        return text, []
+    patched = _add_cutpoint_inputs_to_top(text, top, cutpoints)
+    assigns = []
+    seen_assigns: set[tuple[str, str]] = set()
+    for cutpoint in cutpoints:
+        key = (cutpoint["expr"], cutpoint["name"])
+        if key in seen_assigns:
+            continue
+        seen_assigns.add(key)
+        assigns.append(f"assign {cutpoint['expr']} = {cutpoint['name']};")
+    if assigns:
+        patched = re.sub(r"\nendmodule\s*$", "\n" + "\n".join(assigns) + "\nendmodule\n", patched, count=1)
+    return patched, cutpoints
+
+
+def _write_cutpoint_macro_stubs(gate: str | None, macro_ports: dict[str, dict[str, Any]], stage_dir: str, top: str) -> list[str]:
+    input_dir = os.path.join(stage_dir, "input")
+    _ensure_dir(input_dir)
+    stubs: list[str] = []
+    for module_name, meta in sorted(macro_ports.items()):
+        ports = list(meta.get("ports") or [])
+        directions = dict(meta.get("directions") or {})
+        port_ranges = dict(meta.get("ranges") or {})
+        instance_ranges = _module_instance_pin_ranges(gate, module_name, top)
+        known = {name for name, _direction in ports}
+        for pin in _module_instance_pins(gate, module_name):
+            if pin not in known:
+                ports.append((pin, "input"))
+                directions[pin] = "input"
+                known.add(pin)
+        port_names = [name for name, _direction in ports]
+        lines = [
+            "// Auto-generated macro cutpoint stub for preserved macro LEC.",
+            "(* blackbox *)",
+            f"module {module_name}({', '.join(port_names)});",
+        ]
+        for name, direction in ports:
+            stub_direction = "input" if direction == "output" else direction
+            lines.append(_format_port_decl(stub_direction, name, _merge_range(port_ranges.get(name), instance_ranges.get(name))))
+        lines.append("endmodule")
+        stub_path = os.path.join(input_dir, f"{module_name}_cutpoint_blackbox.v")
+        _write_text(stub_path, "\n".join(lines) + "\n")
+        stubs.append(stub_path)
+    return stubs
+
+
+def _prepare_golden_rtl_for_yosys(rtl_files: list[str], gate: str | None, stage_dir: str, top: str) -> tuple[list[str], list[str], str | None, list[dict[str, Any]]]:
+    macro_ports = _macro_port_maps(gate, rtl_files, top)
+    if not macro_ports:
+        return rtl_files, [], gate, []
+    input_dir = os.path.join(stage_dir, "input")
+    _ensure_dir(input_dir)
+    cutpoint_stubs = _write_cutpoint_macro_stubs(gate, macro_ports, stage_dir, top)
+    replaced = {str(meta.get("source")) for meta in macro_ports.values() if meta.get("source")}
+    prepared: list[str] = []
+    cutpoints: list[dict[str, Any]] = []
+    for path in rtl_files:
+        if path in replaced:
+            continue
+        text = _read_text(path)
+        if re.search(rf"\bmodule\s+{re.escape(top)}\b", text):
+            patched, file_cutpoints = _patch_top_macro_output_cutpoints(text, top, macro_ports)
+            out = os.path.join(input_dir, f"gold_cutpoint_{os.path.basename(path)}")
+            _write_text(out, patched)
+            prepared.append(out)
+            cutpoints.extend(file_cutpoints)
+        else:
+            prepared.append(path)
+    prepared.extend(cutpoint_stubs)
+
+    prepared_gate = gate
+    if gate:
+        gate_text = _read_text(gate)
+        patched_gate, gate_cutpoints = _patch_top_macro_output_cutpoints(gate_text, top, macro_ports)
+        prepared_gate = os.path.join(input_dir, f"gate_cutpoint_{os.path.basename(gate)}")
+        _write_text(prepared_gate, patched_gate)
+        if not cutpoints:
+            cutpoints = gate_cutpoints
+    return prepared, cutpoint_stubs, prepared_gate, cutpoints
 
 
 def _parse_sky130_instances(netlist_text: str) -> dict[str, set[str]]:
@@ -1118,12 +1282,17 @@ def run_agent(state: dict) -> dict:
     report_path = os.path.join(stage_dir, "lec_report.md")
     summary_path = os.path.join(stage_dir, "lec_summary.json")
 
-    prepared_rtl_files, golden_macro_stubs = _prepare_golden_rtl_for_yosys(rtl_files, netlist, stage_dir, top) if rtl_files and netlist else (rtl_files, [])
-    has_required_inputs = bool(prepared_rtl_files and netlist and yosys and yosys_stdcell_verilog and not missing_stdcell_models)
+    prepared_rtl_files, golden_macro_stubs, prepared_netlist, macro_cutpoints = (
+        _prepare_golden_rtl_for_yosys(rtl_files, netlist, stage_dir, top)
+        if rtl_files and netlist
+        else (rtl_files, [], netlist, [])
+    )
+    lec_netlist = prepared_netlist or netlist
+    has_required_inputs = bool(prepared_rtl_files and lec_netlist and yosys and yosys_stdcell_verilog and not missing_stdcell_models)
     if rtl_files and netlist:
         script = _yosys_script(
             prepared_rtl_files,
-            netlist,
+            lec_netlist,
             top,
             yosys_stdcell_verilog,
             gate_blackbox_verilog=golden_macro_stubs,
@@ -1165,7 +1334,7 @@ def run_agent(state: dict) -> dict:
         if reset_ports:
             repair_script = _yosys_reset_repair_script(
                 prepared_rtl_files,
-                netlist,
+                lec_netlist,
                 top,
                 yosys_stdcell_verilog,
                 reset_ports,
@@ -1221,6 +1390,17 @@ def run_agent(state: dict) -> dict:
         "yosys_rtl_files": [os.path.basename(p) for p in prepared_rtl_files],
         "golden_macro_blackbox_stubs": [os.path.basename(path) for path in golden_macro_stubs],
         "synth_netlist": os.path.basename(netlist) if netlist else None,
+        "yosys_synth_netlist": os.path.basename(lec_netlist) if lec_netlist else None,
+        "macro_cutpoint_count": len(macro_cutpoints),
+        "macro_cutpoints": [
+            {
+                "module": item.get("module"),
+                "instance": item.get("instance"),
+                "pin": item.get("pin"),
+                "cutpoint": item.get("name"),
+            }
+            for item in macro_cutpoints
+        ],
         "liberty_files": [os.path.basename(p) for p in liberty_files],
         "liberty_file_count": len(liberty_files),
         "liberty_usage": "discovered_not_required_for_verilog_model_lec",
@@ -1248,6 +1428,7 @@ def run_agent(state: dict) -> dict:
             "reset_repair_script": "digital/lec/yosys_lec_reset_repair.ys" if reset_repair and reset_repair.get("script") else None,
             "reset_repair_log": "digital/lec/logs/yosys_lec_reset_repair.log" if reset_repair and reset_repair.get("log") else None,
             "generated_stdcell_model": "digital/lec/input/stdcell_functional_wrappers.v" if generated_stdcell_model else None,
+            "cutpoint_synth_netlist": f"digital/lec/input/{os.path.basename(lec_netlist)}" if lec_netlist and lec_netlist != netlist else None,
             "golden_macro_blackbox_stubs": [f"digital/lec/input/{os.path.basename(path)}" for path in golden_macro_stubs],
         },
     }

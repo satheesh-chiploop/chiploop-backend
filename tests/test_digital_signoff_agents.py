@@ -547,7 +547,7 @@ endmodule
     assert _missing_stdcell_models(str(netlist), [model]) == []
 
 
-def test_lec_replaces_preserved_macro_rtl_with_blackbox_stub(tmp_path):
+def test_lec_cuts_preserved_macro_outputs_to_shared_inputs(tmp_path):
     macro_rtl = tmp_path / "analog_model.v"
     macro_rtl.write_text(
         """
@@ -577,12 +577,20 @@ endmodule
         encoding="utf-8",
     )
 
-    prepared, stubs = _prepare_golden_rtl_for_yosys([str(macro_rtl), str(top_rtl)], str(gate), str(tmp_path), "top")
+    prepared, stubs, prepared_gate, cutpoints = _prepare_golden_rtl_for_yosys([str(macro_rtl), str(top_rtl)], str(gate), str(tmp_path), "top")
 
     assert str(macro_rtl) not in prepared
-    assert str(top_rtl) in prepared
     assert len(stubs) == 1
-    assert "(* blackbox *)" in open(stubs[0], "r", encoding="utf-8").read()
+    assert prepared_gate is not None and prepared_gate != str(gate)
+    assert cutpoints[0]["name"] == "__chiploop_cut_u_analog_adc_valid"
+    gold_text = "\n".join(open(path, "r", encoding="utf-8").read() for path in prepared if os.path.basename(path).startswith("gold_cutpoint_"))
+    gate_text = open(prepared_gate, "r", encoding="utf-8").read()
+    stub_text = open(stubs[0], "r", encoding="utf-8").read()
+    assert "input wire __chiploop_cut_u_analog_adc_valid" in gold_text
+    assert "assign adc_valid = __chiploop_cut_u_analog_adc_valid;" in gold_text
+    assert "input wire __chiploop_cut_u_analog_adc_valid" in gate_text
+    assert "assign adc_valid = __chiploop_cut_u_analog_adc_valid;" in gate_text
+    assert "input adc_valid;" in stub_text
 
 
 def test_lec_blackbox_stub_preserves_old_style_bus_and_gate_instance_ports(tmp_path):
@@ -617,12 +625,12 @@ endmodule
         encoding="utf-8",
     )
 
-    _prepared, stubs = _prepare_golden_rtl_for_yosys([str(macro_rtl), str(top_rtl)], str(gate), str(tmp_path), "top")
+    _prepared, stubs, _prepared_gate, _cutpoints = _prepare_golden_rtl_for_yosys([str(macro_rtl), str(top_rtl)], str(gate), str(tmp_path), "top")
     text = open(stubs[0], "r", encoding="utf-8").read()
 
     assert "module temp_sensor_adc_model(sample_req, sensor_temp_celsius, adc_code, avdd, avss, adc_valid);" in text
     assert "input [15:0] sensor_temp_celsius;" in text
-    assert "output [11:0] adc_code;" in text
+    assert "input [11:0] adc_code;" in text
     assert "input adc_valid;" in text
 
 
