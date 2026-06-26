@@ -72,6 +72,89 @@ endmodule
     assert ".sample_req(sample_req)" in text
 
 
+def test_repair_stale_input_only_interconnect_reuses_existing_top_port(tmp_path):
+    analog = tmp_path / "analog_macro.v"
+    top = tmp_path / "soc_top_phys.sv"
+    analog.write_text("module analog_macro(input sample_req); endmodule\n", encoding="utf-8")
+    top.write_text(
+        """
+module soc_top_phys(output logic sample_req);
+  logic w_4_u_digital_sample_req_u_analog_sample_req;
+  analog_macro u_analog (
+    .sample_req(w_4_u_digital_sample_req_u_analog_sample_req)
+  );
+endmodule
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    repairs = agent._repair_stale_input_only_interconnects(
+        [str(analog), str(top)],
+        "soc_top_phys",
+    )
+    text = top.read_text(encoding="utf-8")
+
+    assert repairs == {
+        "soc_top_phys.sv": [
+            "reconnected input-only interconnect w_4_u_digital_sample_req_u_analog_sample_req to top port sample_req"
+        ]
+    }
+    assert "module soc_top_phys(output logic sample_req);" in text
+    assert "w_4_u_digital_sample_req_u_analog_sample_req" not in text
+    assert ".sample_req(sample_req)" in text
+
+
+def test_regenerate_system_physical_top_from_intent_rewrites_stale_top(tmp_path):
+    digital = tmp_path / "digital_core.v"
+    analog = tmp_path / "analog_macro.v"
+    top = tmp_path / "soc_top_phys.sv"
+    digital.write_text(
+        "module digital_core(input logic clk, output logic sample_req); endmodule\n",
+        encoding="utf-8",
+    )
+    analog.write_text("module analog_macro(input logic sample_req); endmodule\n", encoding="utf-8")
+    top.write_text(
+        """
+module soc_top_phys(input logic clk);
+  logic w_4_u_digital_sample_req_u_analog_sample_req;
+  digital_core u_digital (
+    .clk(clk),
+    .sample_req(sample_req)
+  );
+  analog_macro u_analog (
+    .sample_req(w_4_u_digital_sample_req_u_analog_sample_req)
+  );
+endmodule
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    repairs = agent._regenerate_system_physical_top_from_intent(
+        [str(digital), str(analog), str(top)],
+        "soc_top_phys",
+        {
+            "system_integration_intent": {
+                "instances": [
+                    {"name": "u_digital", "module": "digital_core"},
+                    {"name": "u_analog", "module": "analog_macro"},
+                ],
+                "connections": [
+                    {"from": "top.clk", "to": "u_digital.clk"},
+                    {"from": "u_digital.sample_req", "to": "u_analog.sample_req"},
+                ],
+            }
+        },
+    )
+    text = top.read_text(encoding="utf-8")
+
+    assert repairs == {"soc_top_phys.sv": ["regenerated physical top from system integration intent"]}
+    assert "w_4_u_digital_sample_req_u_analog_sample_req" not in text
+    assert "w_1_u_digital_sample_req_u_analog_sample_req" in text
+    assert text.count(".sample_req(w_1_u_digital_sample_req_u_analog_sample_req)") == 2
+
+
 def test_synthesis_uses_system_package_phys_top_and_fails_before_sta_on_missing_netlist(tmp_path, monkeypatch):
     rtl = tmp_path / "temp_monitor_soc_phys.sv"
     sdc = tmp_path / "top.sdc"

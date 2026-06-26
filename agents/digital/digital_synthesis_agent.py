@@ -14,7 +14,7 @@ logger = logging.getLogger("chiploop")
 
 from tooling.runner import run_command
 from utils.artifact_utils import save_text_artifact_and_record
-from agents.system.system_top_assembly_agent import _extract_module_ports_from_text
+from agents.system.system_top_assembly_agent import _assemble_top, _extract_module_ports_from_text
 
 AGENT_NAME = "Digital Synthesis Agent"
 
@@ -311,7 +311,7 @@ def _repair_stale_input_only_interconnects(rtl_files: list[str], top_module: str
         changes = []
 
         for signal, uses in sorted(uses_by_signal.items()):
-            if signal not in decls or signal in top_ports or len(uses) < 2:
+            if signal not in decls or signal in top_ports:
                 continue
             directions = [
                 str((port_db.get(use["module"]) or {}).get(use["port"], {}).get("dir") or "").lower()
@@ -320,18 +320,47 @@ def _repair_stale_input_only_interconnects(rtl_files: list[str], top_module: str
             if not directions or any(direction != "input" for direction in directions):
                 continue
             ports = [use["port"] for use in uses]
-            promoted = ports[0] if len(set(ports)) == 1 else signal
+            existing_top_candidates = [port for port in ports if port in top_ports]
+            if existing_top_candidates:
+                promoted = existing_top_candidates[0]
+            elif len(uses) >= 2:
+                promoted = ports[0] if len(set(ports)) == 1 else signal
+            else:
+                continue
             if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_$]*", promoted):
                 promoted = signal
-            text = _add_ansi_top_input(text, top_module, promoted, decls.get(signal, ""))
+            if promoted not in top_ports:
+                text = _add_ansi_top_input(text, top_module, promoted, decls.get(signal, ""))
+                top_ports.add(promoted)
             text = _remove_single_signal_decl(text, signal)
             if promoted != signal:
                 text = re.sub(rf"\b{re.escape(signal)}\b", promoted, text)
-            changes.append(f"promoted input-only interconnect {signal} to top input {promoted}")
+            action = "reconnected" if existing_top_candidates else "promoted"
+            target = "top port" if existing_top_candidates else "top input"
+            changes.append(f"{action} input-only interconnect {signal} to {target} {promoted}")
 
         if changes:
             Path(path).write_text(text, encoding="utf-8")
             repairs[os.path.basename(path)] = changes
+    return repairs
+
+
+def _regenerate_system_physical_top_from_intent(rtl_files: list[str], top_module: str, state: dict) -> dict[str, list[str]]:
+    intent = state.get("system_integration_intent")
+    if not isinstance(intent, dict) or not intent.get("instances"):
+        return {}
+
+    module_port_db = _module_port_db_from_files(rtl_files)
+    if not module_port_db:
+        return {}
+
+    repairs: dict[str, list[str]] = {}
+    for path in rtl_files or []:
+        if not _file_defines_module(path, top_module):
+            continue
+        regenerated = _assemble_top(top_module, intent, variant="phys", module_port_db=module_port_db)
+        Path(path).write_text(regenerated, encoding="utf-8")
+        repairs[os.path.basename(path)] = ["regenerated physical top from system integration intent"]
     return repairs
 
 def _pick_clock(spec: dict) -> tuple[str, float]:
@@ -678,6 +707,11 @@ def run_agent(state: dict) -> dict:
         )
     top_module = str(top_module).strip()
     logger.info(f"{AGENT_NAME}: top_module={top_module}")
+
+    if is_system_physical_flow:
+        regenerated_repairs = _regenerate_system_physical_top_from_intent(copied, top_module, state)
+        for file_name, repairs in regenerated_repairs.items():
+            rtl_repairs.setdefault(file_name, []).extend(repairs)
 
     interconnect_repairs = _repair_stale_input_only_interconnects(copied, top_module)
     for file_name, repairs in interconnect_repairs.items():
