@@ -92,6 +92,7 @@ def test_product_api_routes_are_registered():
     assert '@app.post("/products/{product_id}/run")' in source
     assert '@app.get("/products/{product_id}/runs")' in source
     assert '@app.get("/products/{product_id}/runs/{product_run_id}")' in source
+    assert '@app.delete("/products/{product_id}/runs/{product_run_id}")' in source
     assert '@app.post("/products/{product_id}/runs/{product_run_id}/cancel")' in source
     assert "payload.start_stage" in source
     assert "Start stage" in source
@@ -136,6 +137,9 @@ def test_product_api_routes_are_registered():
     assert "max_stages: Optional[int] = None" in source
     assert "min(int(max_stages or 8), 8)" not in source
     assert "max_stages: 8" not in frontend_source
+    assert "deleted_product_run_id" in source
+    assert "deleteRunHistory" in frontend_source
+    assert "apiDelete<{ status: string; deleted_product_run_id: string }>" in frontend_source
 
 
 def test_product_stage_schema_seed_has_latest_digital_controls():

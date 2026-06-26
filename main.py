@@ -6546,6 +6546,22 @@ async def get_product_run(product_id: str, product_run_id: str, request: Request
     return {"status": "ok", "product_run": run, "stage_runs": stages}
 
 
+@app.delete("/products/{product_id}/runs/{product_run_id}")
+async def delete_product_run(product_id: str, product_run_id: str, request: Request):
+    user_id = _request_user_id_optional(request)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Login required to delete product runs")
+    run = _product_run_row(product_run_id, user_id)
+    if not run or str(run.get("product_id")) != str(product_id):
+        raise HTTPException(status_code=404, detail="Product run not found")
+    try:
+        supabase.table("product_runs").delete().eq("id", product_run_id).eq("product_id", product_id).eq("user_id", user_id).execute()
+        return {"status": "ok", "deleted_product_run_id": product_run_id}
+    except Exception as exc:
+        logger.error("Failed to delete product run: %s", exc)
+        raise HTTPException(status_code=500, detail=f"Failed to delete product run: {exc}")
+
+
 @app.post("/auto_compose_workflow")
 async def auto_compose_workflow(request: Request):
     """
