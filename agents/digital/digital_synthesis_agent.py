@@ -511,6 +511,59 @@ def _macro_connection_expr(macro_port: str, source_ports: set[str], width: str) 
     return None
 
 
+def _source_module_ports(header: str, body: str) -> dict[str, dict[str, str]]:
+    ports: dict[str, dict[str, str]] = {}
+    last_direction = ""
+    last_range = ""
+
+    def clean_name(raw: str) -> str:
+        name = re.sub(r"=.*$", "", raw).strip()
+        name = re.sub(r"\[[^\]]+\]\s*$", "", name).strip()
+        name = re.sub(r"^(?:input|output|inout|wire|reg|logic|signed)\s+", "", name).strip()
+        name = re.sub(r"^(?:wire|reg|logic|signed)\s+", "", name).strip()
+        name = re.sub(r"^\[[^\]]+\]\s*", "", name).strip()
+        return name
+
+    for raw in header.split(","):
+        item = raw.strip()
+        match = re.match(
+            r"(?:(?P<direction>input|output|inout)\s+)?(?:wire|reg|logic|signed|\s)*\s*(?P<range>\[[^\]]+\])?\s*(?P<name>[A-Za-z_][A-Za-z0-9_$]*)$",
+            item,
+        )
+        if not match:
+            continue
+        direction = match.group("direction") or last_direction or "input"
+        port_range = (match.group("range") or last_range or "").strip()
+        if match.group("direction"):
+            last_direction = direction
+            last_range = port_range
+        ports[match.group("name")] = {"direction": direction, "range": port_range}
+
+    for decl in re.finditer(
+        r"\b(?P<direction>input|output|inout)\b\s*(?:wire|reg|logic|signed|\s)*\s*(?P<range>\[[^\]]+\])?\s*(?P<names>[^;]+);",
+        body,
+        flags=re.MULTILINE,
+    ):
+        direction = decl.group("direction")
+        port_range = (decl.group("range") or "").strip()
+        for raw_name in decl.group("names").split(","):
+            name = clean_name(raw_name)
+            if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_$]*", name):
+                ports[name] = {"direction": direction, "range": port_range}
+    return ports
+
+
+def _non_ansi_module_header(module_name: str, ports: dict[str, dict[str, str]]) -> str:
+    names = list(ports)
+    lines = [f"module {module_name} ({', '.join(names)});"]
+    for name, meta in ports.items():
+        direction = meta.get("direction") or "input"
+        port_range = meta.get("range") or ""
+        rng = f" {port_range}" if port_range else ""
+        lines.append(f"  {direction}{rng} {name};")
+    return "\n".join(lines)
+
+
 def _replace_behavioral_memories_with_macros(rtl_files: list[str], collaterals: list[dict[str, object]]) -> dict[str, list[str]]:
     replacements: dict[str, list[str]] = {}
     by_module = {
@@ -539,10 +592,8 @@ def _replace_behavioral_memories_with_macros(rtl_files: list[str], collaterals: 
                     or _read_verilog_module_ports(str(collateral.get("verilog") or ""), macro_name)
                 )
                 header = match.group("header").strip()
-                source_ports = {
-                    p
-                    for p in re.findall(r"\b(?:input|output|inout)\b\s*(?:wire|reg|logic)?\s*(?:\[[^\]]+\])?\s*([A-Za-z_][A-Za-z0-9_$]*)", header)
-                }
+                source_port_meta = _source_module_ports(header, match.group("body"))
+                source_ports = set(source_port_meta)
                 if not macro_ports:
                     macro_ports = {
                         "clk0": "",
@@ -562,9 +613,9 @@ def _replace_behavioral_memories_with_macros(rtl_files: list[str], collaterals: 
                 if not conns:
                     return match.group(0)
                 notes.append(f"{module}->{macro_name}")
-                wrapper_header = re.sub(r"\b(output)\s+(?:reg|logic)\b", r"\1 wire", header)
+                wrapper_header = _non_ansi_module_header(module, source_port_meta)
                 return (
-                    f"module {module} ({wrapper_header});\n\n"
+                    f"{wrapper_header}\n\n"
                     f"  {macro_name} u_chiploop_sram_macro (\n"
                     + ",\n".join(conns)
                     + "\n  );\n\nendmodule"

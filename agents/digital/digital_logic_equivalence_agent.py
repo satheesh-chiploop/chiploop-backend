@@ -784,7 +784,9 @@ def _is_physical_only_cell(cell_base: str) -> bool:
         "decap",
         "tap",
         "tapvpwrvgnd",
+        "inv",
         "bufinv",
+        "buf",
         "clkbuf",
         "clkinv",
         "endcap",
@@ -945,7 +947,20 @@ def _rtl_sources(state: dict, workflow_dir: str) -> list[str]:
             "digital/rtl/**/*.sv",
         ):
             candidates.extend(glob.glob(os.path.join(workflow_dir, pattern), recursive=True))
-    return _dedupe(candidates)
+    return _dedupe_rtl_sources_by_module(_dedupe(candidates))
+
+
+def _dedupe_rtl_sources_by_module(paths: list[str]) -> list[str]:
+    out: list[str] = []
+    seen_modules: set[str] = set()
+    for path in paths:
+        modules = _module_names_in_files([path])
+        duplicate = modules and modules <= seen_modules
+        if duplicate:
+            continue
+        seen_modules.update(modules)
+        out.append(path)
+    return out
 
 
 def _synth_netlist(state: dict, workflow_dir: str) -> str | None:

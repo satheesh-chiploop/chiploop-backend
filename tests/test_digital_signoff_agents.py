@@ -639,7 +639,27 @@ def test_lec_uses_synthesis_macro_bound_rtl_and_macro_verilog(tmp_path):
 
     assert str(synth_rtl) in sources
     assert str(macro_v) in sources
-    assert str(handoff_rtl) in sources
+    assert str(handoff_rtl) not in sources
+
+
+def test_generated_stdcell_model_treats_outputless_inverter_as_physical_load(tmp_path):
+    netlist = tmp_path / "pnl.v"
+    netlist.write_text(
+        """
+module top(input clk, input VPWR, input VGND);
+  sky130_fd_sc_hd__inv_6 clkload0 (.A(clk), .VPWR(VPWR), .VGND(VGND), .VPB(VPWR), .VNB(VGND));
+endmodule
+""",
+        encoding="utf-8",
+    )
+
+    model = _generated_stdcell_model(str(netlist), str(tmp_path))
+
+    assert model is not None
+    text = open(model, "r", encoding="utf-8").read()
+    assert "module sky130_fd_sc_hd__inv_6" in text
+    assert "// - sky130_fd_sc_hd__inv_6" not in text
+    assert _missing_stdcell_models(str(netlist), [model]) == []
 
 
 def test_lec_cutpoint_handles_verilog_escaped_hierarchical_outputs(tmp_path):

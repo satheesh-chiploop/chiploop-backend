@@ -347,6 +347,8 @@ endmodule
     config = (tmp_path / "digital" / "synth" / "config.json").read_text(encoding="utf-8")
     summary = (tmp_path / "digital" / "synth" / "synth_summary.json").read_text(encoding="utf-8")
     assert "reg [31:0] mem [0:255]" not in copied_sram
+    assert "module sram_model (clk, csb, web, addr, din, dout);" in copied_sram
+    assert "output [31:0] dout;" in copied_sram
     assert f"{stem} u_chiploop_sram_macro" in copied_sram
     assert ".wmask0(4'b1111)" in copied_sram
     assert ".vssd1(" not in copied_sram
