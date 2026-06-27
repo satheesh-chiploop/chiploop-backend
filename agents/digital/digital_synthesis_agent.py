@@ -345,6 +345,50 @@ def _read_verilog_module_ports(path: str, module_name: str) -> dict[str, str]:
     return ports
 
 
+def _extract_balanced_block(text: str, start: int) -> str:
+    open_at = text.find("{", start)
+    if open_at < 0:
+        return ""
+    depth = 0
+    for idx in range(open_at, len(text)):
+        char = text[idx]
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return text[open_at + 1:idx]
+    return ""
+
+
+def _read_liberty_cell_ports(path: str, cell_name: str) -> dict[str, str]:
+    text = _read_text(path)
+    if not text:
+        return {}
+    match = re.search(rf"\bcell\s*\(\s*{re.escape(cell_name)}\s*\)\s*\{{", text)
+    if not match:
+        return {}
+    body = _extract_balanced_block(text, match.start())
+    ports: dict[str, str] = {}
+    for pin_match in re.finditer(r"\bpin\s*\(\s*([A-Za-z_][A-Za-z0-9_$]*)\s*\)\s*\{", body):
+        ports[pin_match.group(1)] = ""
+    for bus_match in re.finditer(r"\bbus\s*\(\s*([A-Za-z_][A-Za-z0-9_$]*)\s*\)\s*\{", body):
+        bus_name = bus_match.group(1)
+        bus_body = _extract_balanced_block(body, bus_match.start())
+        width = ""
+        left = re.search(r"\bbus_type\s*:\s*([A-Za-z_][A-Za-z0-9_$]*)\s*;", bus_body)
+        if left:
+            bus_type = left.group(1)
+            type_match = re.search(rf"\btype\s*\(\s*{re.escape(bus_type)}\s*\)\s*\{{", text)
+            type_body = _extract_balanced_block(text, type_match.start()) if type_match else ""
+            bit_from = re.search(r"\bbit_from\s*:\s*(-?\d+)\s*;", type_body)
+            bit_to = re.search(r"\bbit_to\s*:\s*(-?\d+)\s*;", type_body)
+            if bit_from and bit_to:
+                width = f"[{bit_from.group(1)}:{bit_to.group(1)}]"
+        ports[bus_name] = width
+    return ports
+
+
 def _verilog_modules(path: str) -> list[str]:
     return re.findall(r"^\s*module\s+([A-Za-z_][A-Za-z0-9_$]*)\b", _read_text(path), flags=re.MULTILINE)
 
@@ -490,7 +534,10 @@ def _replace_behavioral_memories_with_macros(rtl_files: list[str], collaterals: 
 
             def repl(match: re.Match) -> str:
                 macro_name = str(collateral.get("macro_name"))
-                macro_ports = _read_verilog_module_ports(str(collateral.get("verilog") or ""), macro_name)
+                macro_ports = (
+                    _read_liberty_cell_ports(str(collateral.get("lib") or ""), macro_name)
+                    or _read_verilog_module_ports(str(collateral.get("verilog") or ""), macro_name)
+                )
                 header = match.group("header").strip()
                 source_ports = {
                     p

@@ -268,7 +268,23 @@ def test_synthesis_binds_inferred_sram_to_matching_pdk_macro(tmp_path, monkeypat
         (pdk / subdir).mkdir(parents=True, exist_ok=True)
     stem = "sky130_sram_1kbyte_1rw1r_32x256_8"
     (pdk / "lib" / f"{stem}_TT_1p8V_25C.lib").write_text(
-        f"library(test) {{ cell({stem}) {{ area: 1; }} }}\n",
+        f"""
+library(test) {{
+  type(DATA) {{ bit_from : 31; bit_to : 0; }}
+  type(ADDR) {{ bit_from : 7; bit_to : 0; }}
+  type(MASK) {{ bit_from : 3; bit_to : 0; }}
+  cell({stem}) {{
+    area: 1;
+    pin(clk0) {{ direction : input; }}
+    pin(csb0) {{ direction : input; }}
+    pin(web0) {{ direction : input; }}
+    bus(wmask0) {{ bus_type : MASK; direction : input; }}
+    bus(addr0) {{ bus_type : ADDR; direction : input; }}
+    bus(din0) {{ bus_type : DATA; direction : input; }}
+    bus(dout0) {{ bus_type : DATA; direction : output; }}
+  }}
+}}
+""",
         encoding="utf-8",
     )
     (pdk / "lef" / f"{stem}.lef").write_text(f"MACRO {stem}\nEND {stem}\n", encoding="utf-8")
@@ -284,6 +300,8 @@ module {stem}(
   input [7:0] addr0,
   input [31:0] din0,
   output [31:0] dout0
+  , inout vccd1
+  , inout vssd1
 );
 endmodule
 """,
@@ -331,6 +349,8 @@ endmodule
     assert "reg [31:0] mem [0:255]" not in copied_sram
     assert f"{stem} u_chiploop_sram_macro" in copied_sram
     assert ".wmask0(4'b1111)" in copied_sram
+    assert ".vssd1(" not in copied_sram
+    assert ".vccd1(" not in copied_sram
     assert f'"dir::macro_libs/{stem}_TT_1p8V_25C.lib"' in config
     assert f'"dir::macro_lefs/{stem}.lef"' in config
     assert f'"dir::macro_gds/{stem}.gds"' in config
