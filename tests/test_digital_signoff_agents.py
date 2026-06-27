@@ -10,7 +10,7 @@ from agents.digital.digital_drc_agent import _drc_status, _macro_blackbox_deferr
 from agents.digital.digital_failure_debug_agent import run_agent as failure_debug_agent
 from agents.digital import digital_spec2rtl_conformance_agent as spec2rtl_agent
 from agents.digital import digital_fill_agent, digital_sta_postfill_agent
-from agents.digital.digital_logic_equivalence_agent import _generated_stdcell_model, _missing_stdcell_models, _prepare_golden_rtl_for_yosys, _reset_ports_for_top, _should_run_reset_repair, _unproven_equiv_points, _yosys_reset_repair_script, _yosys_script
+from agents.digital.digital_logic_equivalence_agent import _generated_stdcell_model, _missing_stdcell_models, _prepare_golden_rtl_for_yosys, _reset_ports_for_top, _rtl_sources, _should_run_reset_repair, _unproven_equiv_points, _yosys_reset_repair_script, _yosys_script
 from agents.digital.digital_lvs_agent import _lvs_failure_details, _lvs_status, _macro_blackbox_deferred as _lvs_macro_blackbox_deferred
 from agents.digital.digital_scan_atpg_agent import _adapter_log_has_execution_error, _generate_full_scan_bench, _metrics_show_real_atpg_result, _pattern_count_from_file
 from agents.digital import digital_tapeout_lec_agent as tapeout_lec_agent
@@ -611,6 +611,35 @@ endmodule
     assert "input wire __chiploop_cut_u_analog_adc_valid" in gate_text
     assert "assign adc_valid = __chiploop_cut_u_analog_adc_valid;" in gate_text
     assert "input adc_valid;" in stub_text
+
+
+def test_lec_uses_synthesis_macro_bound_rtl_and_macro_verilog(tmp_path):
+    synth_rtl = tmp_path / "digital" / "synth" / "rtl" / "sram_model.v"
+    macro_v = tmp_path / "digital" / "synth" / "macro_verilog" / "sky130_sram.v"
+    handoff_rtl = tmp_path / "digital" / "handoff" / "rtl" / "sram_model.v"
+    synth_rtl.parent.mkdir(parents=True, exist_ok=True)
+    macro_v.parent.mkdir(parents=True, exist_ok=True)
+    handoff_rtl.parent.mkdir(parents=True, exist_ok=True)
+    synth_rtl.write_text("module sram_model(output [31:0] dout); endmodule\n", encoding="utf-8")
+    macro_v.write_text("module sky130_sram(output [31:0] dout0); endmodule\n", encoding="utf-8")
+    handoff_rtl.write_text("module sram_model; reg [31:0] mem [0:255]; endmodule\n", encoding="utf-8")
+
+    sources = _rtl_sources(
+        {
+            "digital": {
+                "rtl_files": [str(handoff_rtl)],
+                "synth": {
+                    "synth_rtl_files": [str(synth_rtl)],
+                    "macro_verilog": [str(macro_v)],
+                },
+            }
+        },
+        str(tmp_path),
+    )
+
+    assert str(synth_rtl) in sources
+    assert str(macro_v) in sources
+    assert str(handoff_rtl) in sources
 
 
 def test_lec_cutpoint_handles_verilog_escaped_hierarchical_outputs(tmp_path):

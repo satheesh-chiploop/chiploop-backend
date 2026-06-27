@@ -918,15 +918,23 @@ def _prepare_stdcell_models_for_yosys(stdcell_verilog: list[str], stage_dir: str
 
 def _rtl_sources(state: dict, workflow_dir: str) -> list[str]:
     digital = state.get("digital") if isinstance(state.get("digital"), dict) else {}
+    synth = digital.get("synth") if isinstance(digital.get("synth"), dict) else {}
     candidates: list[str] = []
     for value in (
+        synth.get("synth_rtl_files"),
         state.get("rtl_files"),
         state.get("rtl_inputs"),
         state.get("source_rtl_files"),
         digital.get("rtl_files"),
+        synth.get("macro_verilog"),
+        digital.get("macro_verilog"),
     ):
         if isinstance(value, list):
             candidates.extend([p for p in (_existing_path(x, workflow_dir) for x in value) if p])
+        else:
+            path = _existing_path(value, workflow_dir)
+            if path:
+                candidates.append(path)
     if not candidates:
         for pattern in (
             "handoff/rtl/**/*.v",
@@ -937,8 +945,7 @@ def _rtl_sources(state: dict, workflow_dir: str) -> list[str]:
             "digital/rtl/**/*.sv",
         ):
             candidates.extend(glob.glob(os.path.join(workflow_dir, pattern), recursive=True))
-    synth_dir = os.path.join(workflow_dir, "digital", "synth")
-    return [p for p in _dedupe(candidates) if not os.path.abspath(p).startswith(os.path.abspath(synth_dir))]
+    return _dedupe(candidates)
 
 
 def _synth_netlist(state: dict, workflow_dir: str) -> str | None:
