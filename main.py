@@ -6045,6 +6045,8 @@ def _product_stage_payload(product: Dict[str, Any], stage: Dict[str, Any], upstr
             "rtl_source_mode": "from_system_rtl",
             "system_rtl_workflow_id": system_rtl_id,
             "from_workflow_id": system_rtl_id,
+            "execute_cosim": bool(_stage_setting(stage, "enable_cosim", True)),
+            "run_cosim": bool(_stage_setting(stage, "enable_cosim", True)),
             "toolchain": {"language": str(_stage_setting(stage, "firmware_language", "rust"))},
             "toggles": {
                 "enable_cosim": bool(_stage_setting(stage, "enable_cosim", True)),
@@ -8518,6 +8520,14 @@ def execute_system_app_background(
         for k, v in (payload or {}).items():
             if v is not None:
                 shared_state[k] = v
+
+        toggles = shared_state.get("toggles") if isinstance(shared_state.get("toggles"), dict) else {}
+        cosim_enabled = toggles.get("enable_cosim")
+        if cosim_enabled is None:
+            cosim_enabled = shared_state.get("execute_cosim", shared_state.get("run_cosim", True))
+        if template_workflow_name == "System_Firmware" and bool(cosim_enabled):
+            shared_state["execute_cosim"] = True
+            shared_state["run_cosim"] = True
 
         rtl_source_mode = str(shared_state.get("rtl_source_mode") or "").strip().lower()
         if rtl_source_mode in {"from_system_rtl", "from_workflow", "workflow"}:

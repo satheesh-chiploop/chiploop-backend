@@ -126,6 +126,8 @@ def test_product_api_routes_are_registered():
     assert '"System_Sim": "System_Sim"' in source
     assert '"System_Synthesis": "System_Synthesis"' in source
     assert '"System_Firmware": "System_Firmware"' in source
+    assert '"execute_cosim": bool(_stage_setting(stage, "enable_cosim", True))' in source
+    assert 'template_workflow_name == "System_Firmware" and bool(cosim_enabled)' in source
     assert '"System_PD": "System_PD"' in source
     assert '"analog_spice_text", "label": "Provided analog SPICE/netlist"' in source
     assert '"run_spec2rtl_check", "label": "Run Spec2RTL compliance check"' in source
