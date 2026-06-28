@@ -681,7 +681,7 @@ def _cell_base(cell: str) -> str:
 
 
 def _output_pins(pins: set[str]) -> list[str]:
-    return [pin for pin in ("X", "Y", "Q", "Q_N") if pin in pins]
+    return [pin for pin in ("X", "Y", "Q", "Q_N", "HI", "LO") if pin in pins]
 
 
 PHYSICAL_ONLY_CELL_PINS = {

@@ -547,6 +547,27 @@ endmodule
     assert _missing_stdcell_models(str(netlist), [model]) == []
 
 
+def test_lec_generated_model_covers_sky130_constant_cell(tmp_path):
+    netlist = tmp_path / "const.v"
+    netlist.write_text(
+        """
+module top(output lo, output hi);
+  sky130_fd_sc_hd__conb_1 c0(.LO(lo), .HI(hi));
+endmodule
+""",
+        encoding="utf-8",
+    )
+
+    model = _generated_stdcell_model(str(netlist), str(tmp_path))
+
+    assert model is not None
+    text = open(model, "r", encoding="utf-8").read()
+    assert "module sky130_fd_sc_hd__conb_1" in text
+    assert "assign HI = 1'b1;" in text
+    assert "assign LO = 1'b0;" in text
+    assert _missing_stdcell_models(str(netlist), [model]) == []
+
+
 def test_lec_generated_model_covers_sky130_mux4(tmp_path):
     netlist = tmp_path / "mux4.v"
     netlist.write_text(
@@ -1229,6 +1250,30 @@ endmodule
     assert meta["status"] == "generated"
     assert meta["unsupported_cells"] == []
     assert "INPUT(q)" in bench
+
+
+def test_atpg_bench_accepts_scan_set_flop_and_constant_cell():
+    bench, meta = _generate_full_scan_bench(
+        """
+module top(clk, scan_en, scan_in_0, a, y, lo);
+  input clk;
+  input scan_en;
+  input scan_in_0;
+  input a;
+  output y;
+  output lo;
+  wire q;
+  sky130_fd_sc_hd__sdfsbp_2 flop(.CLK(clk), .SET_B(a), .SCE(scan_en), .SCD(scan_in_0), .D(a), .Q(q));
+  sky130_fd_sc_hd__conb_1 c0(.LO(lo));
+  sky130_fd_sc_hd__buf_1 outbuf(.A(q), .X(y));
+endmodule
+"""
+    )
+
+    assert meta["status"] == "generated"
+    assert meta["unsupported_cells"] == []
+    assert "INPUT(q)" in bench
+    assert "lo = BUFF(chiploop_const0)" in bench
 
 
 def test_atpg_bench_promotes_floating_macro_outputs():

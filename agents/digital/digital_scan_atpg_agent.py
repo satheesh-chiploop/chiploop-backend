@@ -130,7 +130,7 @@ def _parse_instances(netlist_text: str) -> list[tuple[str, str, dict[str, str]]]
 
 
 def _out_signal(ports: dict[str, str]) -> str | None:
-    for pin in ("X", "Y", "Q"):
+    for pin in ("X", "Y", "Q", "HI", "LO"):
         if pin in ports:
             return ports[pin]
     return None
@@ -169,6 +169,12 @@ def _emit_basic_gate(lines: list[str], cell_base: str, inst: str, ports: dict[st
     out = _out_signal(ports)
     if not out:
         return False
+    if cell_base.startswith("conb"):
+        if "HI" in ports:
+            _bench_gate(lines, ports["HI"], "BUFF", ["chiploop_const1"])
+        if "LO" in ports:
+            _bench_gate(lines, ports["LO"], "BUFF", ["chiploop_const0"])
+        return True
     if cell_base.startswith("inv"):
         _bench_gate(lines, out, "NOT", [ports.get("A", "")])
         return True
@@ -289,7 +295,7 @@ def _generate_full_scan_bench(netlist_text: str) -> tuple[str, dict]:
 
     for cell, inst, ports in _parse_instances(netlist_text):
         cell_base = re.sub(r"_\d+$", "", cell.replace("sky130_fd_sc_hd__", ""))
-        if cell_base.startswith(("sdfrtp", "sdfxtp", "sdfrbp", "sdfxbp", "sdfstp")):
+        if cell_base.startswith(("sdfrtp", "sdfxtp", "sdfrbp", "sdfxbp", "sdfstp", "sdfsbp")):
             q = ports.get("Q")
             d = ports.get("D")
             if q:

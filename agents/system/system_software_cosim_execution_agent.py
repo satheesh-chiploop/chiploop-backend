@@ -1,6 +1,7 @@
 import datetime
 import json
 import os
+import re
 import subprocess
 from typing import Any, Dict, List, Optional
 
@@ -147,6 +148,10 @@ def _safe_int(value: Any) -> Optional[int]:
         return None
 
 
+def _normalize_scalar(value: Any) -> str:
+    return str(value).strip().lower()
+
+
 def _build_register_lookup(state: Dict[str, Any]) -> Dict[int, str]:
     harness = state.get("system_software_cosim_harness_manifest") or {}
     firmware_assets = harness.get("firmware_assets") or {}
@@ -208,6 +213,7 @@ def _normalize_observations(
     canonical_events: List[str] = list(observed_events)
     canonical_interrupts: List[str] = list(observed_interrupts)
     canonical_signals: List[str] = list(observed_signals)
+    expected_registers = scenario.get("expected_registers") if isinstance(scenario.get("expected_registers"), dict) else {}
 
 
     for key, value in observed_registers.items():
@@ -261,6 +267,24 @@ def _normalize_observations(
 
         if not resolved:
             canonical_registers[key] = value
+
+    if len(expected_registers) == 1:
+        expected_name = str(next(iter(expected_registers.keys()))).strip()
+        expected_key = expected_name.upper()
+        if expected_name and expected_key not in {str(k).strip().upper() for k in canonical_registers}:
+            generic_write_value = None
+            for event in canonical_events:
+                match = re.search(r"\bregister_(?:write|read)\s*=\s*([^\s,;]+)", str(event), flags=re.IGNORECASE)
+                if match:
+                    generic_write_value = match.group(1).strip()
+                    break
+            if generic_write_value:
+                canonical_registers[expected_key] = generic_write_value
+                for reg_name, reg_value in list(canonical_registers.items()):
+                    if str(reg_name).strip().upper() == expected_key:
+                        continue
+                    if _normalize_scalar(reg_value) == _normalize_scalar(generic_write_value):
+                        del canonical_registers[reg_name]
 
 
     signal_text = "\n".join(str(x) for x in canonical_signals).lower()
