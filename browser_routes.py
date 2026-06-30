@@ -453,6 +453,16 @@ def _owned_workflow_snapshot(supabase: Any, user_id: str, workflow_id: str) -> D
     return row
 
 
+def _workflow_app_contract(workflow: Dict[str, Any]) -> tuple[Dict[str, Any], Dict[str, Any]]:
+    definitions = workflow.get("definitions") if isinstance(workflow.get("definitions"), dict) else {}
+    input_schema = definitions.get("workflow_config_schema") if isinstance(definitions.get("workflow_config_schema"), dict) else {}
+    fields = input_schema.get("fields") if isinstance(input_schema, dict) else None
+    if not isinstance(fields, list) or not fields:
+        return {}, {}
+    default_config = definitions.get("default_run_config") if isinstance(definitions.get("default_run_config"), dict) else {}
+    return input_schema, default_config
+
+
 def _github_service(request: Request) -> GitHubIntegrationService:
     existing = getattr(request.app.state, "github_service", None)
     if existing is not None:
@@ -946,6 +956,13 @@ async def studio_create_user_app(
     app_config = payload.get("app_config") if isinstance(payload.get("app_config"), dict) else {}
     if "workflow_snapshot" not in app_config:
         app_config = {**app_config, "workflow_snapshot": workflow}
+    workflow_input_schema, workflow_default_config = _workflow_app_contract(workflow)
+    input_schema = payload.get("input_schema") if isinstance(payload.get("input_schema"), dict) else {}
+    if not (isinstance(input_schema.get("fields"), list) and input_schema.get("fields")):
+        input_schema = workflow_input_schema
+    default_config = payload.get("default_config") if isinstance(payload.get("default_config"), dict) else {}
+    if not default_config:
+        default_config = workflow_default_config
 
     row = {
         "owner_id": user.user_id,
@@ -956,9 +973,9 @@ async def studio_create_user_app(
         "description": str(payload.get("description") or "").strip(),
         "category": str(payload.get("category") or loop_type or "system").strip().lower(),
         "loop_type": loop_type,
-        "input_schema": payload.get("input_schema") if isinstance(payload.get("input_schema"), dict) else {},
+        "input_schema": input_schema,
         "output_schema": payload.get("output_schema") if isinstance(payload.get("output_schema"), dict) else {},
-        "default_config": payload.get("default_config") if isinstance(payload.get("default_config"), dict) else {},
+        "default_config": default_config,
         "app_config": app_config,
         "visibility": "private",
         "status": "private",
@@ -989,6 +1006,24 @@ async def studio_update_user_app(
             raise HTTPException(status_code=400, detail="app_name_required")
         patch["name"] = name
         patch["slug"] = _app_slug(name)
+    if payload.get("refresh_contract") is True:
+        existing = (
+            supabase.table("user_apps")
+            .select("id,workflow_id")
+            .eq("id", app_id)
+            .eq("owner_id", user.user_id)
+            .limit(1)
+            .execute()
+        )
+        existing_app = (getattr(existing, "data", None) or [None])[0]
+        if not existing_app:
+            raise HTTPException(status_code=404, detail="app_not_found")
+        workflow = _owned_workflow_snapshot(supabase, user.user_id, str(existing_app.get("workflow_id") or ""))
+        input_schema, default_config = _workflow_app_contract(workflow)
+        if not input_schema:
+            raise HTTPException(status_code=400, detail="workflow_input_contract_missing")
+        patch["input_schema"] = input_schema
+        patch["default_config"] = default_config
     for key in ("description", "category", "loop_type", "input_schema", "output_schema", "default_config", "app_config", "price_usd"):
         if key in payload:
             value = payload.get(key)

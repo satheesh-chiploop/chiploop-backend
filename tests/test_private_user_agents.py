@@ -390,6 +390,86 @@ def test_create_user_app_from_owned_workflow_stays_private():
     assert listed.json()["apps"][0]["name"] == "PWM App"
 
 
+def test_create_user_app_derives_contract_from_workflow_settings_when_payload_empty():
+    repo = FakeUserAgentRepository()
+    service = UserAgentService(repo)
+    supabase = FakeSupabase()
+    supabase.tables["workflows"].append(
+        {
+            "id": "workflow-contract",
+            "name": "PWM Contract Workflow",
+            "user_id": "user-1",
+            "loop_type": "digital",
+            "definitions": {
+                "nodes": [],
+                "edges": [],
+                "workflow_config_schema": {
+                    "version": 1,
+                    "fields": [{"key": "target_frequency_mhz", "label": "Target frequency", "type": "number"}],
+                },
+                "default_run_config": {"target_frequency_mhz": 100},
+            },
+        }
+    )
+    client = _client(service, supabase=supabase)
+
+    response = client.post(
+        "/studio/user-apps",
+        headers=_auth("user-1"),
+        json={"workflow_id": "workflow-contract", "name": "PWM Contract App"},
+    )
+
+    assert response.status_code == 200
+    app = response.json()["app"]
+    assert app["input_schema"]["fields"][0]["key"] == "target_frequency_mhz"
+    assert app["default_config"]["target_frequency_mhz"] == 100
+
+
+def test_refresh_user_app_contract_from_backing_workflow():
+    repo = FakeUserAgentRepository()
+    service = UserAgentService(repo)
+    supabase = FakeSupabase()
+    supabase.tables["workflows"].append(
+        {
+            "id": "workflow-contract",
+            "name": "PWM Contract Workflow",
+            "user_id": "user-1",
+            "loop_type": "digital",
+            "definitions": {
+                "nodes": [],
+                "edges": [],
+                "workflow_config_schema": {
+                    "version": 1,
+                    "fields": [{"key": "duty_cycle", "label": "Duty cycle", "type": "text"}],
+                },
+                "default_run_config": {"duty_cycle": "50%"},
+            },
+        }
+    )
+    supabase.tables["user_apps"].append(
+        {
+            "id": "app-1",
+            "owner_id": "user-1",
+            "workflow_id": "workflow-contract",
+            "name": "PWM App",
+            "slug": "pwm-app",
+            "input_schema": {},
+            "default_config": {},
+            "visibility": "private",
+            "status": "private",
+            "marketplace_status": "draft",
+        }
+    )
+    client = _client(service, supabase=supabase)
+
+    response = client.patch("/studio/user-apps/app-1", headers=_auth("user-1"), json={"refresh_contract": True})
+
+    assert response.status_code == 200
+    app = response.json()["app"]
+    assert app["input_schema"]["fields"][0]["key"] == "duty_cycle"
+    assert app["default_config"]["duty_cycle"] == "50%"
+
+
 def test_create_user_app_rejects_other_users_workflow():
     repo = FakeUserAgentRepository()
     service = UserAgentService(repo)
