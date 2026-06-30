@@ -110,6 +110,85 @@ def test_admin_approval_creates_listing_and_version():
     assert repo.submissions["sub-1"]["status"] == "approved"
 
 
+def test_admin_approval_creates_app_listing_for_workflow_submission():
+    _, repo, service = _services()
+    repo.submissions["sub-app-1"] = {
+        "id": "sub-app-1",
+        "submitted_by": "user-1",
+        "status": "pending",
+        "agent_json": None,
+        "workflow_json": {
+            "id": "app-1",
+            "owner_id": "user-1",
+            "workflow_id": "workflow-1",
+            "workflow_name": "PWM Reference Journey",
+            "name": "PWM App",
+            "description": "Packaged PWM workflow.",
+            "loop_type": "digital",
+            "input_schema": {"fields": [{"key": "frequency"}]},
+            "default_config": {"frequency": "1kHz"},
+            "app_config": {"workflow_snapshot": {"nodes": [], "edges": []}},
+            "price_usd": 19,
+        },
+    }
+
+    result = service.approve_submission("sub-app-1", "admin-1", "approved app")
+
+    assert result["ok"] is True
+    assert result["app_listing"]["status"] == "active"
+    assert result["app_listing"]["slug"] == "pwm-app"
+    assert result["app_listing"]["source_app_id"] == "app-1"
+    assert repo.app_versions[0]["version"] == "1.0.0"
+    assert repo.submissions["sub-app-1"]["status"] == "approved"
+    assert repo.submissions["sub-app-1"]["workflow_json"]["marketplace_status"] == "approved"
+
+
+def test_request_changes_updates_app_submission_status():
+    _, repo, service = _services()
+    repo.submissions["sub-app-2"] = {
+        "id": "sub-app-2",
+        "submitted_by": "user-1",
+        "status": "pending",
+        "workflow_json": {"id": "app-2", "name": "Needs Work"},
+    }
+
+    result = service.reject_submission("sub-app-2", "admin-1", "tighten description", changes_requested=True)
+
+    assert result["ok"] is True
+    assert repo.submissions["sub-app-2"]["status"] == "changes_requested"
+    assert repo.submissions["sub-app-2"]["workflow_json"]["marketplace_status"] == "changes_requested"
+
+
+def test_list_and_install_marketplace_app_creates_private_user_app():
+    _, repo, service = _services()
+    listing = repo.create_app_listing(
+        {
+            "name": "PWM App",
+            "slug": "pwm-app",
+            "description": "Install me",
+            "loop_type": "digital",
+            "category": "digital",
+            "workflow_id": "workflow-1",
+            "workflow_name": "PWM Workflow",
+            "input_schema": {"fields": [{"key": "frequency"}]},
+            "default_config": {"frequency": "1kHz"},
+            "app_config": {"entrypoint": "studio_workflow"},
+            "version": "1.0.0",
+            "status": "active",
+        }
+    )
+
+    assert service.list_apps(loop_type="digital")[0]["id"] == listing["id"]
+
+    result = service.install_app("user-1", listing["id"])
+
+    assert result["ok"] is True
+    assert result["installed_app"]["owner_id"] == "user-1"
+    assert result["installed_app"]["visibility"] == "private"
+    assert result["installed_app"]["marketplace_status"] == "installed"
+    assert result["installed_app"]["workflow_id"] == "workflow-1"
+
+
 def test_install_creates_private_workspace_agent():
     _, repo, service = _services()
     listing = repo.create_listing(
@@ -153,6 +232,7 @@ def test_browser_marketplace_and_admin_endpoints():
     client = _client(service)
 
     assert client.get("/marketplace/agents", headers=_auth()).status_code == 200
+    assert client.get("/marketplace/apps", headers=_auth()).status_code == 200
     install = client.post(f"/marketplace/agents/{listing['id']}/install", headers=_auth("user-1"))
     assert install.status_code == 200
 

@@ -677,6 +677,23 @@ def _top_ports_from_header(text: str, top_module: str) -> set[str]:
     return ports
 
 
+def _top_port_decls(text: str) -> dict[str, dict[str, str]]:
+    decls: dict[str, dict[str, str]] = {}
+    for match in re.finditer(
+        r"^\s*(?P<dir>input|output|inout)\s*(?:wire|reg|logic)?\s*(?P<range>\[[^\]]+\])?\s*(?P<names>[^;]+);",
+        text,
+        flags=re.MULTILINE | re.IGNORECASE,
+    ):
+        direction = match.group("dir").lower()
+        rng = (match.group("range") or "").strip()
+        for raw in match.group("names").split(","):
+            name = re.sub(r"\s*=.*$", "", raw).strip()
+            name = re.sub(r"\[[^\]]+\]\s*$", "", name).strip()
+            if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_$]*", name):
+                decls[name] = {"dir": direction, "range": rng}
+    return decls
+
+
 def _add_ansi_top_input(text: str, top_module: str, port_name: str, port_range: str) -> str:
     if port_name in _top_ports_from_header(text, top_module):
         return text
@@ -697,6 +714,92 @@ def _remove_single_signal_decl(text: str, signal: str) -> str:
         text,
         flags=re.MULTILINE,
     )
+
+
+def _is_simple_assign_present(text: str, lhs: str) -> bool:
+    return bool(re.search(rf"^\s*assign\s+{re.escape(lhs)}\s*=", text, flags=re.MULTILINE))
+
+
+def _append_top_assigns(text: str, assigns: list[str]) -> str:
+    if not assigns:
+        return text
+    return re.sub(r"\nendmodule\s*$", "\n" + "\n".join(assigns) + "\n\nendmodule\n", text, count=1)
+
+
+def _repair_mirrored_output_interconnects(rtl_files: list[str], top_module: str) -> dict[str, list[str]]:
+    port_db = _module_port_db_from_files(rtl_files)
+    repairs: dict[str, list[str]] = {}
+    inst_pat = re.compile(
+        r"^\s*(?P<module>[A-Za-z_][A-Za-z0-9_$]*)\s+"
+        r"(?P<inst>[A-Za-z_][A-Za-z0-9_$]*)\s*\((?P<body>.*?)\)\s*;",
+        flags=re.MULTILINE | re.DOTALL,
+    )
+
+    for path in rtl_files or []:
+        if not _file_defines_module(path, top_module):
+            continue
+        text = _read_text(path)
+        decls = _top_internal_signal_decls(text)
+        top_ports = _top_ports_from_header(text, top_module)
+        top_decls = _top_port_decls(text)
+        additions: list[str] = []
+        changes: list[str] = []
+
+        for inst in inst_pat.finditer(text):
+            module = inst.group("module")
+            if module in {"module", "if", "for", "while", "case", "assign"}:
+                continue
+            module_ports = port_db.get(module) or {}
+            instance = inst.group("inst")
+            instance_stem = re.sub(r"^u_", "", instance)
+            connections = [
+                (conn.group("port"), conn.group("sig"))
+                for conn in re.finditer(r"\.(?P<port>[A-Za-z_][A-Za-z0-9_$]*)\s*\(\s*(?P<sig>[A-Za-z_][A-Za-z0-9_$]*)\s*\)", inst.group("body"))
+            ]
+
+            for port, signal in connections:
+                direction = str((module_ports.get(port) or {}).get("dir") or "").lower()
+                if direction != "output":
+                    continue
+
+                mirror_candidates = [
+                    f"{instance_stem}_{port}",
+                    f"{module}_{port}",
+                ]
+
+                if signal in top_ports:
+                    for mirror in mirror_candidates:
+                        if mirror in decls and not _is_simple_assign_present(text, mirror):
+                            stmt = f"assign {mirror} = {signal};"
+                            if stmt not in additions:
+                                additions.append(stmt)
+                                changes.append(f"connected mirrored output wire {mirror} from top output {signal}")
+                            break
+                    continue
+
+                if signal not in decls:
+                    continue
+                top_candidates = [port]
+                if port.endswith("_out"):
+                    top_candidates.append(port[:-4])
+                for top_candidate in top_candidates:
+                    if (
+                        top_candidate in top_ports
+                        and top_decls.get(top_candidate, {}).get("dir") == "output"
+                        and not _is_simple_assign_present(text, top_candidate)
+                    ):
+                        stmt = f"assign {top_candidate} = {signal};"
+                        if stmt not in additions:
+                            additions.append(stmt)
+                            changes.append(f"connected top output {top_candidate} from mirrored output wire {signal}")
+                        break
+
+        if additions:
+            patched = _append_top_assigns(text, additions)
+            if patched != text:
+                Path(path).write_text(patched, encoding="utf-8")
+                repairs[os.path.basename(path)] = changes
+    return repairs
 
 
 def _repair_stale_input_only_interconnects(rtl_files: list[str], top_module: str) -> dict[str, list[str]]:
@@ -1159,6 +1262,10 @@ def run_agent(state: dict) -> dict:
         regenerated_repairs = _regenerate_system_physical_top_from_intent(copied, top_module, state)
         for file_name, repairs in regenerated_repairs.items():
             rtl_repairs.setdefault(file_name, []).extend(repairs)
+
+    mirrored_output_repairs = _repair_mirrored_output_interconnects(copied, top_module)
+    for file_name, repairs in mirrored_output_repairs.items():
+        rtl_repairs.setdefault(file_name, []).extend(repairs)
 
     interconnect_repairs = _repair_stale_input_only_interconnects(copied, top_module)
     for file_name, repairs in interconnect_repairs.items():

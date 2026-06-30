@@ -6185,6 +6185,113 @@ def _run_product_stage(product: Dict[str, Any], product_run_id: str, stage_run: 
     }
     app_name = str(stage.get("app") or "")
     _append_product_run_log(product_run_id, f"Running {stage.get('label') or app_name} ({app_name})")
+    if app_name.startswith("User_App:"):
+        user_app_id = str((stage.get("settings") or {}).get("user_app_id") or app_name.split(":", 1)[1]).strip()
+        rows = (
+            supabase.table("user_apps")
+            .select("id,owner_id,workflow_id,workflow_name,name,loop_type,input_schema,default_config,app_config")
+            .eq("id", user_app_id)
+            .eq("owner_id", str(product.get("user_id") or ""))
+            .limit(1)
+            .execute()
+        ).data or []
+        if not rows:
+            raise RuntimeError("User app not found or not owned by product owner.")
+        user_app = rows[0]
+        source_workflow_id = str(user_app.get("workflow_id") or "").strip()
+        workflow_rows = (
+            supabase.table("workflows")
+            .select("id,name,loop_type,definitions")
+            .eq("id", source_workflow_id)
+            .limit(1)
+            .execute()
+        ).data or []
+        if not workflow_rows:
+            raise RuntimeError("User app source workflow not found.")
+        source_workflow = workflow_rows[0]
+        workflow_id = str(uuid.uuid4())
+        run_id = str(uuid.uuid4())
+        loop_type = str(user_app.get("loop_type") or source_workflow.get("loop_type") or "digital").lower()
+        definitions = source_workflow.get("definitions") if isinstance(source_workflow.get("definitions"), dict) else {}
+        run_config = {
+            **(user_app.get("default_config") if isinstance(user_app.get("default_config"), dict) else {}),
+            **(stage.get("settings") if isinstance(stage.get("settings"), dict) else {}),
+            "product_id": product.get("id"),
+            "product_run_id": product_run_id,
+            "source_user_app_id": user_app_id,
+            "source_workflow_id": source_workflow_id,
+            "upstream": upstream,
+        }
+        workflow_payload = {
+            **definitions,
+            "loop_type": loop_type,
+            "run_config": run_config,
+            "workflow_config": run_config,
+            "source_user_app_id": user_app_id,
+            "source_workflow_id": source_workflow_id,
+        }
+        now = datetime.utcnow().isoformat()
+        user_id = str(product.get("user_id") or "")
+        artifact_dir = os.path.join("artifacts", user_id or "anonymous", workflow_id)
+        os.makedirs(artifact_dir, exist_ok=True)
+        supabase.table("workflows").insert({
+            "id": workflow_id,
+            "user_id": user_id,
+            "name": f"Product: {product.get('name')} / {user_app.get('name')}",
+            "status": "running",
+            "phase": "queued",
+            "logs": "Product user app workflow queued.",
+            "created_at": now,
+            "updated_at": now,
+            "artifacts": {},
+            "loop_type": loop_type,
+            "definitions": workflow_payload,
+        }).execute()
+        supabase.table("runs").insert({
+            "id": run_id,
+            "user_id": user_id,
+            "workflow_id": workflow_id,
+            "loop_type": loop_type,
+            "status": "running",
+            "logs": "Product user app run started.",
+            "artifacts_path": artifact_dir,
+            "created_at": now,
+        }).execute()
+        _update_product_stage_run(stage_run["id"], {
+            "status": "running",
+            "workflow_id": workflow_id,
+            "run_id": run_id,
+            "inputs": workflow_payload,
+            "started_at": now,
+        })
+        execute_workflow_background(
+            workflow_id,
+            run_id,
+            user_id,
+            loop_type,
+            json.dumps(workflow_payload),
+            None,
+            None,
+            artifact_dir,
+        )
+        status = _workflow_status(workflow_id)
+        if status != "completed":
+            raise RuntimeError(f"{stage.get('label') or app_name} workflow ended with status '{status or 'unknown'}'")
+        outputs = {
+            "workflow_id": workflow_id,
+            "run_id": run_id,
+            "app": app_name,
+            "user_app_id": user_app_id,
+            "dashboard_url": f"/apps/dashboard/artifact/{workflow_id}",
+            "download_url": f"/workflow/{workflow_id}/download_zip",
+        }
+        _update_product_stage_run(stage_run["id"], {
+            "status": "completed",
+            "outputs": outputs,
+            "completed_at": datetime.utcnow().isoformat(),
+        })
+        _append_product_run_log(product_run_id, f"Completed {stage.get('label') or app_name}: workflow_id={workflow_id}")
+        return workflow_id
     payload = _product_stage_payload(product, stage, upstream)
     workflow_title = f"Product: {product.get('name')} / {stage.get('label') or app_name}"
     digital_slug = {
@@ -6328,7 +6435,10 @@ def execute_product_run_background(
             "System_Firmware",
             "System_PD",
         }
-        supported = [stage for stage in enabled if stage.get("app") in supported_apps]
+        supported = [
+            stage for stage in enabled
+            if stage.get("app") in supported_apps or str(stage.get("app") or "").startswith("User_App:")
+        ]
         if not supported:
             raise RuntimeError("No supported runnable stages found.")
         if start_stage:

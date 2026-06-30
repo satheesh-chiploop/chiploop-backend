@@ -2,7 +2,9 @@ import logging
 import os
 import json
 import asyncio
+import re
 from collections import Counter
+from datetime import datetime, timezone
 from typing import Any, Dict
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
@@ -409,6 +411,46 @@ def _marketplace_service(request: Request) -> MarketplaceService:
     if supabase is None:
         raise HTTPException(status_code=500, detail="marketplace_store_unavailable")
     return MarketplaceService(SupabaseMarketplaceRepository(supabase), _user_agent_service(request))
+
+
+USER_APP_SELECT_COLUMNS = (
+    "id,owner_id,workflow_id,workflow_name,name,slug,description,category,loop_type,"
+    "input_schema,output_schema,default_config,app_config,visibility,status,"
+    "marketplace_status,price_usd,submitted_at,reviewed_at,reviewed_by,review_notes,"
+    "created_at,updated_at"
+)
+
+
+def _user_app_store(request: Request):
+    supabase = getattr(request.app.state, "supabase", None)
+    if supabase is None:
+        raise HTTPException(status_code=500, detail="user_app_store_unavailable")
+    return supabase
+
+
+def _app_slug(name: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+    return slug or "studio-app"
+
+
+def _owned_workflow_snapshot(supabase: Any, user_id: str, workflow_id: str) -> Dict[str, Any]:
+    try:
+        res = (
+            supabase.table("workflows")
+            .select("id,name,user_id,loop_type,definitions")
+            .eq("id", workflow_id)
+            .limit(1)
+            .execute()
+        )
+    except Exception:
+        raise HTTPException(status_code=404, detail="workflow_not_found")
+    row = (getattr(res, "data", None) or [None])[0]
+    if not row:
+        raise HTTPException(status_code=404, detail="workflow_not_found")
+    owner_id = str(row.get("user_id") or "")
+    if owner_id and owner_id != user_id:
+        raise HTTPException(status_code=403, detail="workflow_access_denied")
+    return row
 
 
 def _github_service(request: Request) -> GitHubIntegrationService:
@@ -862,6 +904,203 @@ def studio_submit_user_agent(
     return _with_upgrade({"status": "ok", **result}, request, user.user_id)
 
 
+@router.get("/studio/user-apps")
+def studio_list_user_apps(
+    request: Request,
+    user: BrowserUser = Depends(require_browser_user),
+):
+    supabase = _user_app_store(request)
+    res = (
+        supabase.table("user_apps")
+        .select(USER_APP_SELECT_COLUMNS)
+        .eq("owner_id", user.user_id)
+        .order("created_at", desc=True)
+        .execute()
+    )
+    return {"status": "ok", "apps": getattr(res, "data", None) or []}
+
+
+@router.post("/studio/user-apps")
+async def studio_create_user_app(
+    request: Request,
+    user: BrowserUser = Depends(require_browser_user),
+):
+    _require_checkout(request, user.user_id)
+    data = await request.json()
+    payload = data.get("app") if isinstance(data.get("app"), dict) else data
+    workflow_id = str(payload.get("workflow_id") or "").strip()
+    name = str(payload.get("name") or "").strip()
+    if not workflow_id:
+        raise HTTPException(status_code=400, detail="workflow_id_required")
+    if not name:
+        raise HTTPException(status_code=400, detail="app_name_required")
+
+    supabase = _user_app_store(request)
+    workflow = _owned_workflow_snapshot(supabase, user.user_id, workflow_id)
+    workflow_name = str(payload.get("workflow_name") or workflow.get("name") or "").strip()
+    loop_type = str(payload.get("loop_type") or workflow.get("loop_type") or "system").strip().lower()
+    price_usd = payload.get("price_usd")
+    if price_usd in ("", None):
+        price_usd = None
+
+    app_config = payload.get("app_config") if isinstance(payload.get("app_config"), dict) else {}
+    if "workflow_snapshot" not in app_config:
+        app_config = {**app_config, "workflow_snapshot": workflow}
+
+    row = {
+        "owner_id": user.user_id,
+        "workflow_id": workflow_id,
+        "workflow_name": workflow_name,
+        "name": name,
+        "slug": _app_slug(name),
+        "description": str(payload.get("description") or "").strip(),
+        "category": str(payload.get("category") or loop_type or "system").strip().lower(),
+        "loop_type": loop_type,
+        "input_schema": payload.get("input_schema") if isinstance(payload.get("input_schema"), dict) else {},
+        "output_schema": payload.get("output_schema") if isinstance(payload.get("output_schema"), dict) else {},
+        "default_config": payload.get("default_config") if isinstance(payload.get("default_config"), dict) else {},
+        "app_config": app_config,
+        "visibility": "private",
+        "status": "private",
+        "marketplace_status": "draft",
+        "price_usd": price_usd,
+    }
+    try:
+        res = supabase.table("user_apps").insert(row).execute()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"create_app_failed: {exc}")
+    app = (getattr(res, "data", None) or [row])[0]
+    return _with_upgrade({"status": "ok", "app": app}, request, user.user_id)
+
+
+@router.patch("/studio/user-apps/{app_id}")
+async def studio_update_user_app(
+    app_id: str,
+    request: Request,
+    user: BrowserUser = Depends(require_browser_user),
+):
+    supabase = _user_app_store(request)
+    data = await request.json()
+    payload = data.get("app") if isinstance(data.get("app"), dict) else data
+    name = str(payload.get("name") or "").strip() if "name" in payload else None
+    patch: Dict[str, Any] = {"updated_at": datetime.now(timezone.utc).isoformat()}
+    if name is not None:
+        if not name:
+            raise HTTPException(status_code=400, detail="app_name_required")
+        patch["name"] = name
+        patch["slug"] = _app_slug(name)
+    for key in ("description", "category", "loop_type", "input_schema", "output_schema", "default_config", "app_config", "price_usd"):
+        if key in payload:
+            value = payload.get(key)
+            if key in {"input_schema", "output_schema", "default_config", "app_config"} and not isinstance(value, dict):
+                value = {}
+            if key in {"category", "loop_type"} and value is not None:
+                value = str(value).strip().lower()
+            patch[key] = value
+    try:
+        res = (
+            supabase.table("user_apps")
+            .update(patch)
+            .eq("id", app_id)
+            .eq("owner_id", user.user_id)
+            .execute()
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"update_app_failed: {exc}")
+    app = (getattr(res, "data", None) or [None])[0]
+    if not app:
+        raise HTTPException(status_code=404, detail="app_not_found")
+    return _with_upgrade({"status": "ok", "app": app}, request, user.user_id)
+
+
+@router.delete("/studio/user-apps/{app_id}")
+def studio_delete_user_app(
+    app_id: str,
+    request: Request,
+    user: BrowserUser = Depends(require_browser_user),
+):
+    supabase = _user_app_store(request)
+    try:
+        existing = (
+            supabase.table("user_apps")
+            .select("id")
+            .eq("id", app_id)
+            .eq("owner_id", user.user_id)
+            .limit(1)
+            .execute()
+        )
+        if not (getattr(existing, "data", None) or []):
+            raise HTTPException(status_code=404, detail="app_not_found")
+        supabase.table("user_apps").delete().eq("id", app_id).eq("owner_id", user.user_id).execute()
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"delete_app_failed: {exc}")
+    return {"status": "ok", "deleted": 1, "app_id": app_id}
+
+
+@router.post("/studio/user-apps/{app_id}/submit")
+def studio_submit_user_app(
+    app_id: str,
+    request: Request,
+    user: BrowserUser = Depends(require_browser_user),
+):
+    _enforce_feature(request, user.user_id, "marketplace_submit_enabled")
+    _deduct(request, user.user_id, "marketplace_submit", reference_id=app_id)
+    supabase = _user_app_store(request)
+    existing_res = (
+        supabase.table("user_apps")
+        .select(USER_APP_SELECT_COLUMNS)
+        .eq("id", app_id)
+        .eq("owner_id", user.user_id)
+        .limit(1)
+        .execute()
+    )
+    app = (getattr(existing_res, "data", None) or [None])[0]
+    if not app:
+        raise HTTPException(status_code=404, detail="app_not_found")
+    patch = {
+        "status": "submitted",
+        "visibility": "private",
+        "marketplace_status": "pending",
+        "submitted_at": datetime.now(timezone.utc).isoformat(),
+    }
+    updated_res = (
+        supabase.table("user_apps")
+        .update(patch)
+        .eq("id", app_id)
+        .eq("owner_id", user.user_id)
+        .execute()
+    )
+    updated_app = (getattr(updated_res, "data", None) or [{**app, **patch}])[0]
+    submission_created = False
+    submission_error = None
+    try:
+        supabase.table("marketplace_submissions").insert(
+            {
+                "agent_id": None,
+                "submitted_by": user.user_id,
+                "agent_json": None,
+                "workflow_json": updated_app,
+                "status": "pending",
+            }
+        ).execute()
+        submission_created = True
+    except Exception as exc:
+        submission_error = str(exc)
+    return _with_upgrade(
+        {
+            "status": "ok",
+            "ok": True,
+            "app": updated_app,
+            "marketplace_submission_created": submission_created,
+            "marketplace_submission_error": submission_error,
+        },
+        request,
+        user.user_id,
+    )
+
+
 @router.get("/settings/api-keys")
 def settings_list_api_keys(
     request: Request,
@@ -1259,6 +1498,18 @@ def marketplace_agents(
     return {"status": "ok", "agents": agents}
 
 
+@router.get("/marketplace/apps")
+def marketplace_apps(
+    request: Request,
+    q: str = "",
+    loop_type: str = "",
+    category: str = "",
+    _: BrowserUser = Depends(require_browser_user),
+):
+    apps = _marketplace_service(request).list_apps(query=q, loop_type=loop_type, category=category)
+    return {"status": "ok", "apps": apps}
+
+
 @router.get("/marketplace/agents/{listing_id_or_slug}")
 def marketplace_agent_detail(
     listing_id_or_slug: str,
@@ -1271,6 +1522,18 @@ def marketplace_agent_detail(
     return {"status": "ok", "agent": agent}
 
 
+@router.get("/marketplace/apps/{listing_id_or_slug}")
+def marketplace_app_detail(
+    listing_id_or_slug: str,
+    request: Request,
+    _: BrowserUser = Depends(require_browser_user),
+):
+    app = _marketplace_service(request).get_app(listing_id_or_slug)
+    if not app:
+        raise HTTPException(status_code=404, detail="marketplace_app_not_found")
+    return {"status": "ok", "app": app}
+
+
 @router.post("/marketplace/agents/{listing_id_or_slug}/install")
 def marketplace_install_agent(
     listing_id_or_slug: str,
@@ -1280,6 +1543,18 @@ def marketplace_install_agent(
     result = _marketplace_service(request).install_agent(user.user_id, listing_id_or_slug)
     if not result.get("ok"):
         raise HTTPException(status_code=404, detail=result.get("reason") or "install_failed")
+    return {"status": "ok", **result}
+
+
+@router.post("/marketplace/apps/{listing_id_or_slug}/install")
+def marketplace_install_app(
+    listing_id_or_slug: str,
+    request: Request,
+    user: BrowserUser = Depends(require_browser_user),
+):
+    result = _marketplace_service(request).install_app(user.user_id, listing_id_or_slug)
+    if not result.get("ok"):
+        raise HTTPException(status_code=404, detail=result.get("reason") or "install_app_failed")
     return {"status": "ok", **result}
 
 

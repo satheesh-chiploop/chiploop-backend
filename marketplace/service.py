@@ -23,6 +23,11 @@ def _agent_from_submission(submission: Dict[str, Any]) -> Dict[str, Any]:
     return agent if isinstance(agent, dict) else {}
 
 
+def _app_from_submission(submission: Dict[str, Any]) -> Dict[str, Any]:
+    app = submission.get("workflow_json")
+    return app if isinstance(app, dict) else {}
+
+
 class MarketplaceService:
     def __init__(self, repository: MarketplaceRepository, user_agents: UserAgentService):
         self.repository = repository
@@ -31,12 +36,18 @@ class MarketplaceService:
     def list_agents(self, query: str = "", loop_type: str = "", domain: str = "") -> List[Dict[str, Any]]:
         return self.repository.list_listings(query=query, loop_type=loop_type, domain=domain)
 
+    def list_apps(self, query: str = "", loop_type: str = "", category: str = "") -> List[Dict[str, Any]]:
+        return self.repository.list_app_listings(query=query, loop_type=loop_type, category=category)
+
     def get_agent(self, listing_id_or_slug: str) -> Dict[str, Any] | None:
         listing = self.repository.get_listing(listing_id_or_slug)
         if not listing:
             return None
         reviews = self.repository.list_reviews(str(listing["id"]))
         return {**listing, "reviews": reviews}
+
+    def get_app(self, listing_id_or_slug: str) -> Dict[str, Any] | None:
+        return self.repository.get_app_listing(listing_id_or_slug)
 
     def install_agent(self, user_id: str, listing_id_or_slug: str) -> Dict[str, Any]:
         listing = self.repository.get_listing(listing_id_or_slug)
@@ -69,6 +80,38 @@ class MarketplaceService:
             }
         )
         return {"ok": True, "listing": listing, "installed_agent": installed, "install": install}
+
+    def install_app(self, user_id: str, listing_id_or_slug: str) -> Dict[str, Any]:
+        listing = self.repository.get_app_listing(listing_id_or_slug)
+        if not listing or listing.get("status") != "active":
+            return {"ok": False, "reason": "app_listing_not_found"}
+        installed = self.repository.install_app(
+            {
+                "owner_id": user_id,
+                "workflow_id": listing.get("workflow_id") or listing.get("source_workflow_id") or "",
+                "workflow_name": listing.get("workflow_name") or listing.get("name"),
+                "name": listing.get("name"),
+                "slug": _slug(str(listing.get("name") or "marketplace-app")),
+                "description": listing.get("description") or "",
+                "category": listing.get("category") or listing.get("loop_type") or "system",
+                "loop_type": listing.get("loop_type") or listing.get("category") or "system",
+                "input_schema": listing.get("input_schema") or {},
+                "output_schema": listing.get("output_schema") or {},
+                "default_config": listing.get("default_config") or {},
+                "app_config": {
+                    **(listing.get("app_config") if isinstance(listing.get("app_config"), dict) else {}),
+                    "marketplace_listing_id": listing.get("id"),
+                    "installed_from": "marketplace",
+                },
+                "visibility": "private",
+                "status": "private",
+                "marketplace_status": "installed",
+                "price_usd": listing.get("price_usd"),
+                "created_at": _now(),
+                "updated_at": _now(),
+            }
+        )
+        return {"ok": True, "listing": listing, "installed_app": installed}
 
     def list_reviews(self, listing_id_or_slug: str) -> List[Dict[str, Any]]:
         listing = self.repository.get_listing(listing_id_or_slug)
@@ -103,6 +146,10 @@ class MarketplaceService:
         submission = self.repository.get_submission(submission_id)
         if not submission:
             return {"ok": False, "reason": "submission_not_found"}
+
+        app = _app_from_submission(submission)
+        if app:
+            return self._approve_app_submission(submission_id, submission, app, reviewer_id, notes)
 
         agent = _agent_from_submission(submission)
         name = str(agent.get("agent_name") or agent.get("name") or "Marketplace Agent")
@@ -156,6 +203,78 @@ class MarketplaceService:
             self.repository.update_agent(str(submission["agent_id"]), {"status": "approved", "reviewed_at": _now(), "reviewed_by": reviewer_id, "review_notes": notes})
         return {"ok": True, "listing": listing, "version": version}
 
+    def _approve_app_submission(
+        self,
+        submission_id: str,
+        submission: Dict[str, Any],
+        app: Dict[str, Any],
+        reviewer_id: str,
+        notes: str = "",
+    ) -> Dict[str, Any]:
+        name = str(app.get("name") or app.get("workflow_name") or "Marketplace App")
+        workflow_snapshot = app.get("app_config", {}).get("workflow_snapshot") if isinstance(app.get("app_config"), dict) else {}
+        listing = self.repository.create_app_listing(
+            {
+                "source_app_id": app.get("id"),
+                "source_workflow_id": app.get("workflow_id"),
+                "approved_submission_id": submission.get("id") or submission_id,
+                "name": name,
+                "slug": _slug(name),
+                "description": app.get("description") or "",
+                "category": app.get("category") or app.get("loop_type") or "system",
+                "loop_type": app.get("loop_type") or app.get("category") or "system",
+                "workflow_id": app.get("workflow_id"),
+                "workflow_name": app.get("workflow_name"),
+                "input_schema": app.get("input_schema") or {},
+                "output_schema": app.get("output_schema") or {},
+                "default_config": app.get("default_config") or {},
+                "app_config": app.get("app_config") or {},
+                "workflow_snapshot": workflow_snapshot if isinstance(workflow_snapshot, dict) else {},
+                "price_usd": app.get("price_usd"),
+                "publisher_user_id": app.get("owner_id") or submission.get("submitted_by"),
+                "visibility": "public",
+                "status": "active",
+                "install_count": 0,
+                "average_rating": 0,
+                "review_count": 0,
+                "created_at": _now(),
+                "updated_at": _now(),
+            }
+        )
+        version = self.repository.create_app_version(
+            {
+                "listing_id": listing["id"],
+                "version": "1.0.0",
+                "input_schema": listing.get("input_schema") or {},
+                "output_schema": listing.get("output_schema") or {},
+                "default_config": listing.get("default_config") or {},
+                "app_config": listing.get("app_config") or {},
+                "workflow_snapshot": listing.get("workflow_snapshot") or {},
+                "release_notes": notes,
+                "created_at": _now(),
+            }
+        )
+        patch = {
+            "status": "approved",
+            "reviewed_at": _now(),
+            "reviewed_by": reviewer_id,
+            "review_notes": notes,
+            "approved_listing_id": listing.get("id"),
+        }
+        self.repository.update_submission(submission_id, patch)
+        if app.get("id"):
+            self.repository.update_user_app(
+                str(app["id"]),
+                {
+                    "status": "approved",
+                    "marketplace_status": "approved",
+                    "reviewed_at": _now(),
+                    "reviewed_by": reviewer_id,
+                    "review_notes": notes,
+                },
+            )
+        return {"ok": True, "app_listing": listing, "app_version": version}
+
     def reject_submission(self, submission_id: str, reviewer_id: str, notes: str = "", *, changes_requested: bool = False) -> Dict[str, Any]:
         status = "changes_requested" if changes_requested else "rejected"
         patch = {
@@ -169,4 +288,16 @@ class MarketplaceService:
             return {"ok": False, "reason": "submission_not_found"}
         if updated.get("agent_id"):
             self.repository.update_agent(str(updated["agent_id"]), {"status": status, "reviewed_at": _now(), "reviewed_by": reviewer_id, "review_notes": notes})
+        workflow_json = updated.get("workflow_json")
+        if isinstance(workflow_json, dict) and workflow_json.get("id"):
+            self.repository.update_user_app(
+                str(workflow_json["id"]),
+                {
+                    "status": status,
+                    "marketplace_status": status,
+                    "reviewed_at": _now(),
+                    "reviewed_by": reviewer_id,
+                    "review_notes": notes,
+                },
+            )
         return {"ok": True, "submission": updated}

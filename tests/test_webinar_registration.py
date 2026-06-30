@@ -10,6 +10,9 @@ import browser_routes
 from webinar import InMemoryWebinarRegistrationRepository, WebinarRegistrationService
 
 
+FIRST_WEBINAR_SESSION_ID = "2026-07-11_09am_pst"
+
+
 def _client(repo: InMemoryWebinarRegistrationRepository | None = None) -> tuple[TestClient, InMemoryWebinarRegistrationRepository]:
     repository = repo or InMemoryWebinarRegistrationRepository()
     app = FastAPI()
@@ -28,7 +31,7 @@ def test_webinar_registration_saves_basic_details():
             "company": "ChipLoop",
             "role": "Student",
             "loop_interest": "Digital",
-            "preferred_session": "2026-06-13_09am_pt",
+            "preferred_session": FIRST_WEBINAR_SESSION_ID,
             "questions": "Will you show RTL outputs?",
         },
     )
@@ -37,7 +40,7 @@ def test_webinar_registration_saves_basic_details():
     registration_id = response.json()["registration"]["id"]
     saved = repo.records[registration_id]
     assert saved.email == "ada@example.com"
-    assert saved.preferred_session == "2026-06-13_09am_pt"
+    assert saved.preferred_session == FIRST_WEBINAR_SESSION_ID
     assert saved.loop_interest == "Digital"
 
 
@@ -58,7 +61,7 @@ def test_webinar_sessions_show_capacity():
 
     assert response.status_code == 200
     first = response.json()["sessions"][0]
-    assert first["id"] == "2026-06-13_09am_pt"
+    assert first["id"] == FIRST_WEBINAR_SESSION_ID
     assert first["capacity"] == 10
     assert first["booked"] == 0
     assert first["full"] is False
@@ -72,7 +75,7 @@ def test_webinar_session_full_rejected():
             json={
                 "name": f"User {index}",
                 "email": f"user{index}@example.com",
-                "preferred_session": "2026-06-13_09am_pt",
+                "preferred_session": FIRST_WEBINAR_SESSION_ID,
             },
         )
         assert response.status_code == 200
@@ -88,7 +91,7 @@ def test_webinar_session_full_rejected():
         json={
             "name": "Late User",
             "email": "late@example.com",
-            "preferred_session": "2026-06-13_09am_pt",
+            "preferred_session": FIRST_WEBINAR_SESSION_ID,
         },
     )
     assert response.status_code == 400

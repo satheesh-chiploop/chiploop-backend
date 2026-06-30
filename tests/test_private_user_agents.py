@@ -76,13 +76,99 @@ class FakeUserAgentRepository(UserAgentRepository):
         return {"id": f"submission-{len(self.submissions)}", **row}
 
 
-def _client(service: UserAgentService, *, default_plan_id: str = "pro") -> TestClient:
+def _client(service: UserAgentService, *, default_plan_id: str = "pro", supabase=None) -> TestClient:
     browser_auth.SUPABASE_JWT_SECRET = JWT_SECRET
     app = FastAPI()
     app.state.user_agent_service = service
+    if supabase is not None:
+        app.state.supabase = supabase
     app.state.billing_service = BillingService(InMemoryBillingRepository(default_plan_id=default_plan_id))
     app.include_router(browser_routes.router)
     return TestClient(app)
+
+
+class FakeSupabaseQuery:
+    def __init__(self, table):
+        self.table_ref = table
+        self.filters = []
+        self.insert_row = None
+        self.update_patch = None
+        self.delete_requested = False
+
+    def select(self, *_args, **_kwargs):
+        return self
+
+    def eq(self, key, value):
+        self.filters.append((key, value))
+        return self
+
+    def limit(self, *_args, **_kwargs):
+        return self
+
+    def order(self, *_args, **_kwargs):
+        return self
+
+    def insert(self, row):
+        self.insert_row = row
+        return self
+
+    def update(self, patch):
+        self.update_patch = patch
+        return self
+
+    def delete(self):
+        self.delete_requested = True
+        return self
+
+    def execute(self):
+        if self.insert_row is not None:
+            row = {"id": f"{self.table_ref.name}-{len(self.table_ref.rows) + 1}", "created_at": "2026-01-01T00:00:00Z", **self.insert_row}
+            self.table_ref.rows.append(row)
+            return type("Result", (), {"data": [row]})()
+        matches = [
+            row
+            for row in self.table_ref.rows
+            if all(row.get(key) == value for key, value in self.filters)
+        ]
+        if self.update_patch is not None:
+            for row in matches:
+                row.update(self.update_patch)
+            return type("Result", (), {"data": matches})()
+        if self.delete_requested:
+            for row in matches:
+                self.table_ref.rows.remove(row)
+            return type("Result", (), {"data": matches})()
+        return type("Result", (), {"data": matches})()
+
+
+class FakeSupabaseTable:
+    def __init__(self, name, rows):
+        self.name = name
+        self.rows = rows
+
+    def select(self, *args, **kwargs):
+        return FakeSupabaseQuery(self).select(*args, **kwargs)
+
+    def insert(self, row):
+        return FakeSupabaseQuery(self).insert(row)
+
+    def update(self, patch):
+        return FakeSupabaseQuery(self).update(patch)
+
+    def delete(self):
+        return FakeSupabaseQuery(self).delete()
+
+
+class FakeSupabase:
+    def __init__(self):
+        self.tables = {
+            "workflows": [],
+            "user_apps": [],
+            "marketplace_submissions": [],
+        }
+
+    def table(self, name):
+        return FakeSupabaseTable(name, self.tables.setdefault(name, []))
 
 
 def test_private_agent_save_stores_owner_and_private_visibility():
@@ -261,3 +347,138 @@ def test_admin_email_gets_admin_plan_summary_without_checkout():
     assert plan["is_admin"] is True
     assert plan["requires_checkout"] is False
     assert plan["can_run_workflows"] is True
+
+
+def test_create_user_app_from_owned_workflow_stays_private():
+    repo = FakeUserAgentRepository()
+    service = UserAgentService(repo)
+    supabase = FakeSupabase()
+    supabase.tables["workflows"].append(
+        {
+            "id": "workflow-1",
+            "name": "PWM Reference Journey",
+            "user_id": "user-1",
+            "loop_type": "digital",
+            "definitions": {"nodes": [], "edges": []},
+        }
+    )
+    client = _client(service, supabase=supabase)
+
+    response = client.post(
+        "/studio/user-apps",
+        headers=_auth("user-1"),
+        json={
+            "workflow_id": "workflow-1",
+            "name": "PWM App",
+            "description": "Run PWM workflow as an app.",
+            "category": "digital",
+            "input_schema": {"fields": [{"key": "frequency"}]},
+            "default_config": {"frequency": "1kHz"},
+        },
+    )
+
+    assert response.status_code == 200
+    app = response.json()["app"]
+    assert app["owner_id"] == "user-1"
+    assert app["workflow_id"] == "workflow-1"
+    assert app["visibility"] == "private"
+    assert app["status"] == "private"
+    assert app["marketplace_status"] == "draft"
+
+    listed = client.get("/studio/user-apps", headers=_auth("user-1"))
+    assert listed.status_code == 200
+    assert listed.json()["apps"][0]["name"] == "PWM App"
+
+
+def test_create_user_app_rejects_other_users_workflow():
+    repo = FakeUserAgentRepository()
+    service = UserAgentService(repo)
+    supabase = FakeSupabase()
+    supabase.tables["workflows"].append(
+        {
+            "id": "workflow-2",
+            "name": "Other Workflow",
+            "user_id": "user-2",
+            "loop_type": "system",
+            "definitions": {},
+        }
+    )
+    client = _client(service, supabase=supabase)
+
+    response = client.post(
+        "/studio/user-apps",
+        headers=_auth("user-1"),
+        json={"workflow_id": "workflow-2", "name": "Not Mine"},
+    )
+
+    assert response.status_code == 403
+
+
+def test_submit_user_app_keeps_visibility_private_and_creates_submission():
+    repo = FakeUserAgentRepository()
+    service = UserAgentService(repo)
+    supabase = FakeSupabase()
+    supabase.tables["user_apps"].append(
+        {
+            "id": "app-1",
+            "owner_id": "user-1",
+            "workflow_id": "workflow-1",
+            "workflow_name": "PWM Reference Journey",
+            "name": "PWM App",
+            "slug": "pwm-app",
+            "visibility": "private",
+            "status": "private",
+            "marketplace_status": "draft",
+        }
+    )
+    client = _client(service, supabase=supabase)
+
+    response = client.post("/studio/user-apps/app-1/submit", headers=_auth("user-1"))
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["app"]["visibility"] == "private"
+    assert body["app"]["status"] == "submitted"
+    assert body["app"]["marketplace_status"] == "pending"
+    assert body["marketplace_submission_created"] is True
+    assert supabase.tables["marketplace_submissions"][0]["workflow_json"]["id"] == "app-1"
+
+
+def test_update_and_delete_user_app_enforces_ownership():
+    repo = FakeUserAgentRepository()
+    service = UserAgentService(repo)
+    supabase = FakeSupabase()
+    supabase.tables["user_apps"].append(
+        {
+            "id": "app-1",
+            "owner_id": "user-1",
+            "workflow_id": "workflow-1",
+            "name": "Old App",
+            "slug": "old-app",
+            "description": "Old",
+            "visibility": "private",
+            "status": "private",
+            "marketplace_status": "draft",
+        }
+    )
+    client = _client(service, supabase=supabase)
+
+    forbidden = client.patch("/studio/user-apps/app-1", headers=_auth("user-2"), json={"name": "Nope"})
+    assert forbidden.status_code == 404
+
+    update = client.patch(
+        "/studio/user-apps/app-1",
+        headers=_auth("user-1"),
+        json={"name": "New App", "description": "Updated", "category": "system"},
+    )
+    assert update.status_code == 200
+    assert update.json()["app"]["name"] == "New App"
+    assert update.json()["app"]["slug"] == "new-app"
+    assert update.json()["app"]["description"] == "Updated"
+
+    other_delete = client.delete("/studio/user-apps/app-1", headers=_auth("user-2"))
+    assert other_delete.status_code == 404
+
+    delete = client.delete("/studio/user-apps/app-1", headers=_auth("user-1"))
+    assert delete.status_code == 200
+    assert supabase.tables["user_apps"] == []

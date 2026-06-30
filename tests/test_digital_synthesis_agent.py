@@ -105,6 +105,78 @@ endmodule
     assert ".sample_req(sample_req)" in text
 
 
+def test_repair_mirrored_output_interconnects_connects_top_and_internal_mirrors(tmp_path):
+    sampler = tmp_path / "sensor_hub_sampler.v"
+    top = tmp_path / "smart_sensor_hub_mcu.v"
+    sampler.write_text(
+        """
+module sensor_hub_sampler(
+  output low_power_active,
+  output [5:0] fifo_level_out,
+  output [31:0] sample_count_out,
+  output [7:0] alert_status_out
+);
+endmodule
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    top.write_text(
+        """
+module smart_sensor_hub_mcu (
+  fifo_level,
+  low_power_active,
+  sample_count,
+  alert_status
+);
+output [5:0] fifo_level;
+output low_power_active;
+output [31:0] sample_count;
+output [7:0] alert_status;
+wire sensor_hub_sampler_low_power_active_out;
+wire [5:0] sensor_hub_sampler_fifo_level_out;
+wire [31:0] sensor_hub_sampler_sample_count_out;
+wire [7:0] sensor_hub_sampler_alert_status_out;
+wire [5:0] register_file_fifo_level_in;
+wire [31:0] register_file_sample_count_in;
+wire [7:0] register_file_alert_status_in;
+
+assign register_file_fifo_level_in = sensor_hub_sampler_fifo_level_out;
+assign register_file_sample_count_in = sensor_hub_sampler_sample_count_out;
+assign register_file_alert_status_in = sensor_hub_sampler_alert_status_out;
+
+sensor_hub_sampler u_sensor_hub_sampler (
+  .low_power_active(sensor_hub_sampler_low_power_active_out),
+  .fifo_level_out(fifo_level),
+  .sample_count_out(sample_count),
+  .alert_status_out(alert_status)
+);
+endmodule
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    repairs = agent._repair_mirrored_output_interconnects(
+        [str(sampler), str(top)],
+        "smart_sensor_hub_mcu",
+    )
+    text = top.read_text(encoding="utf-8")
+
+    assert repairs == {
+        "smart_sensor_hub_mcu.v": [
+            "connected top output low_power_active from mirrored output wire sensor_hub_sampler_low_power_active_out",
+            "connected mirrored output wire sensor_hub_sampler_fifo_level_out from top output fifo_level",
+            "connected mirrored output wire sensor_hub_sampler_sample_count_out from top output sample_count",
+            "connected mirrored output wire sensor_hub_sampler_alert_status_out from top output alert_status",
+        ]
+    }
+    assert "assign low_power_active = sensor_hub_sampler_low_power_active_out;" in text
+    assert "assign sensor_hub_sampler_fifo_level_out = fifo_level;" in text
+    assert "assign sensor_hub_sampler_sample_count_out = sample_count;" in text
+    assert "assign sensor_hub_sampler_alert_status_out = alert_status;" in text
+
+
 def test_regenerate_system_physical_top_from_intent_rewrites_stale_top(tmp_path):
     digital = tmp_path / "digital_core.v"
     analog = tmp_path / "analog_macro.v"
