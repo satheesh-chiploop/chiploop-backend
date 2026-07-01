@@ -3042,8 +3042,10 @@ PRODUCT_STAGE_SCHEMAS: Dict[str, Dict[str, Any]] = {
         ],
     },
     "Digital_Arch2Synthesis": {
-        "note": "Synthesis uses the generated Arch2RTL handoff as RTL input and runs the synthesis stage directly.",
+        "note": "Synthesis uses an upstream Arch2RTL handoff when available. For an Arch2Synthesis private app that runs the full workflow, provide the digital spec text here.",
         "fields": [
+            {"key": "spec_text", "label": "Digital spec text", "type": "textarea", "defaultValue": "", "helper": "Required when this app is not using an upstream Arch2RTL handoff."},
+            {"key": "top_module", "label": "Top module", "type": "text", "defaultValue": ""},
             {"key": "foundry", "label": "Foundry", "type": "text", "defaultValue": "sky130"},
             {"key": "pdk", "label": "PDK", "type": "text", "defaultValue": "sky130A"},
             {"key": "toolchain", "label": "Toolchain", "type": "text", "defaultValue": "openlane2"},
