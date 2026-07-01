@@ -1679,8 +1679,18 @@ def _definition_to_executor_nodes(defn: Dict[str, Any]) -> List[Dict[str, Any]]:
     ordered = _toposort_nodes(defn)
     out = []
     for n in ordered:
-        data = (n or {}).get("data") or {}
-        label = (data.get("backendLabel") or data.get("uiLabel") or n.get("type") or "").strip()
+        node = n if isinstance(n, dict) else {}
+        data = node.get("data") if isinstance(node.get("data"), dict) else {}
+        label_value = (
+            data.get("backendLabel")
+            or data.get("uiLabel")
+            or node.get("label")
+            or node.get("name")
+            or node.get("agent_name")
+            or node.get("type")
+            or ""
+        )
+        label = str(label_value).strip()
         if label:
             out.append({"label": label})
     return out
@@ -2324,8 +2334,17 @@ def execute_workflow_background(
         append_log_run(run_id, "⚡ Executing workflow agents ...")
         time.sleep(0.2)
 
-        nodes = data.get("nodes", []) or []
-        missing = [n["label"] for n in nodes if n["label"] not in agent_map_norm]
+        raw_nodes = data.get("nodes", []) or []
+        nodes = _definition_to_executor_nodes(data) if raw_nodes else []
+        if raw_nodes and not nodes:
+            append_log_workflow(workflow_id, "Workflow nodes did not include executable agent labels.")
+            append_log_run(run_id, "Workflow nodes did not include executable agent labels.")
+        missing = [
+            str((n or {}).get("label") or "").strip()
+            for n in nodes
+            if str((n or {}).get("label") or "").strip()
+            and _norm_label(str((n or {}).get("label") or "")) not in agent_map_norm
+        ]
         if missing:
           append_log_workflow(workflow_id, f"⚠️ Missing agent implementations: {', '.join(missing)}")
         for node in nodes:
