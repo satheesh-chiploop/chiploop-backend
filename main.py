@@ -5629,6 +5629,27 @@ def _workflow_status(workflow_id: str) -> str:
         return ""
 
 
+def _workflow_log_tail(workflow_id: str, max_lines: int = 20) -> str:
+    try:
+        rows = supabase.table("workflows").select("logs").eq("id", workflow_id).limit(1).execute().data or []
+        logs = str((rows[0] if rows else {}).get("logs") or "")
+    except Exception:
+        return ""
+    lines = [line.strip() for line in logs.splitlines() if line.strip()]
+    return "\n".join(lines[-max_lines:])
+
+
+def _workflow_failed_message(label: str, workflow_id: str, run_id: str, status: str) -> str:
+    message = (
+        f"{label} workflow ended with status '{status or 'unknown'}' "
+        f"(workflow_id={workflow_id}, run_id={run_id})"
+    )
+    tail = _workflow_log_tail(workflow_id)
+    if tail:
+        message = f"{message}\nWorkflow log tail:\n{tail}"
+    return message
+
+
 def _stage_setting(stage: Dict[str, Any], key: str, default: Any = None) -> Any:
     settings = stage.get("settings") if isinstance(stage.get("settings"), dict) else {}
     value = settings.get(key, default)
@@ -6266,6 +6287,10 @@ def _run_product_stage(product: Dict[str, Any], product_run_id: str, stage_run: 
             "inputs": workflow_payload,
             "started_at": now,
         })
+        _append_product_run_log(
+            product_run_id,
+            f"{stage.get('label') or app_name} spawned workflow_id={workflow_id}, run_id={run_id}",
+        )
         execute_workflow_background(
             workflow_id,
             run_id,
@@ -6278,7 +6303,7 @@ def _run_product_stage(product: Dict[str, Any], product_run_id: str, stage_run: 
         )
         status = _workflow_status(workflow_id)
         if status != "completed":
-            raise RuntimeError(f"{stage.get('label') or app_name} workflow ended with status '{status or 'unknown'}'")
+            raise RuntimeError(_workflow_failed_message(str(stage.get("label") or app_name), workflow_id, run_id, status))
         outputs = {
             "workflow_id": workflow_id,
             "run_id": run_id,
@@ -6334,6 +6359,10 @@ def _run_product_stage(product: Dict[str, Any], product_run_id: str, stage_run: 
         "inputs": payload,
         "started_at": datetime.utcnow().isoformat(),
     })
+    _append_product_run_log(
+        product_run_id,
+        f"{stage.get('label') or app_name} spawned workflow_id={workflow_id}, run_id={run_id}",
+    )
     user_id = str(product.get("user_id") or "")
     if digital_slug and digital_template:
         if app_name == "verify_closure_loop":
@@ -6373,7 +6402,7 @@ def _run_product_stage(product: Dict[str, Any], product_run_id: str, stage_run: 
         raise RuntimeError(f"Product run does not support stage app '{app_name}' yet.")
     status = _workflow_status(workflow_id)
     if status != "completed":
-        raise RuntimeError(f"{stage.get('label') or app_name} workflow ended with status '{status or 'unknown'}'")
+        raise RuntimeError(_workflow_failed_message(str(stage.get("label") or app_name), workflow_id, run_id, status))
     outputs = {
         "workflow_id": workflow_id,
         "run_id": run_id,
@@ -7677,15 +7706,7 @@ def download_workflow_zip(workflow_id: str, full: bool = False):
                 out.extend(_list_all_files_recursive(full_path + "/"))
         return out
 
-    # --------------------------
-    # 1) Decide storage paths
-    # --------------------------
-    if full:
-        storage_paths = _list_all_files_recursive(prefix)
-        if not storage_paths:
-            raise HTTPException(status_code=404, detail="No artifacts found in storage for this workflow.")
-    else:
-        # Existing behavior: use artifacts JSON
+    def _storage_paths_from_artifact_index():
         row = (
             supabase.table("workflows")
             .select("artifacts")
@@ -7693,22 +7714,31 @@ def download_workflow_zip(workflow_id: str, full: bool = False):
             .single()
             .execute()
         )
-
         artifacts = (row.data or {}).get("artifacts") or {}
-        if not artifacts:
-            raise HTTPException(status_code=404, detail="No artifacts found for this workflow.")
-
         raw_paths = list(_iter_leaf_strings(artifacts))
-        storage_paths = []
+        paths = []
         seen = set()
         for p in raw_paths:
             sp = _normalize_storage_path(p)
             if not sp:
                 continue
             if sp not in seen:
-                storage_paths.append(sp)
+                paths.append(sp)
                 seen.add(sp)
+        return paths
 
+    # --------------------------
+    # 1) Decide storage paths
+    # --------------------------
+    if full:
+        storage_paths = _list_all_files_recursive(prefix)
+        if not storage_paths:
+            storage_paths = _storage_paths_from_artifact_index()
+        if not storage_paths:
+            raise HTTPException(status_code=404, detail="No artifacts found in storage or artifact index for this workflow.")
+    else:
+        # Existing behavior: use artifacts JSON
+        storage_paths = _storage_paths_from_artifact_index()
         if not storage_paths:
             raise HTTPException(status_code=404, detail="No downloadable storage paths found in artifacts JSON.")
 
