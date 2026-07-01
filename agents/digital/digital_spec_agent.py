@@ -1564,6 +1564,7 @@ def run_agent(state: dict) -> dict:
         "state_keys": sorted(list(state.keys())),
         "input_candidates": {
             "spec": state.get("spec"),
+            "spec_text": state.get("spec_text"),
             "digital_spec": state.get("digital_spec"),
             "digital_spec_text": state.get("digital_spec_text"),
             "soc_spec": state.get("soc_spec"),
@@ -1576,6 +1577,7 @@ def run_agent(state: dict) -> dict:
 
     user_prompt = (
         state.get("spec")
+        or state.get("spec_text")
         or state.get("digital_spec")
         or state.get("digital_spec_text")
         or state.get("soc_spec")

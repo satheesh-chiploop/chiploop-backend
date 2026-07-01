@@ -2220,6 +2220,12 @@ def execute_workflow_background(
         digital_text = (
             shared_state.get("digital_spec_text")
             or (data.get("digital_spec_text") if isinstance(data, dict) else None)
+            or shared_state.get("digital_spec")
+            or (data.get("digital_spec") if isinstance(data, dict) else None)
+            or shared_state.get("spec_text")
+            or (data.get("spec_text") if isinstance(data, dict) else None)
+            or shared_state.get("spec")
+            or (data.get("spec") if isinstance(data, dict) else None)
             or ""
         ).strip()
 
