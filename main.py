@@ -4696,6 +4696,33 @@ def dashboard_json_artifact(workflow_id: str, filename: str = Query(..., min_len
                     except Exception:
                         continue
 
+    basename = filename.rsplit("/", 1)[-1]
+    try:
+        row = (
+            supabase.table("workflows")
+            .select("artifacts")
+            .eq("id", workflow_id)
+            .single()
+            .execute()
+        )
+        artifacts = (row.data or {}).get("artifacts") or {}
+        candidate_paths = []
+        for raw_path in _iter_leaf_strings(artifacts):
+            storage_candidate = _normalize_storage_path(raw_path)
+            if not storage_candidate:
+                continue
+            if storage_candidate.endswith(filename) or storage_candidate.rsplit("/", 1)[-1] == basename:
+                candidate_paths.append(storage_candidate)
+        for storage_candidate in candidate_paths:
+            try:
+                raw = supabase.storage.from_(ARTIFACT_BUCKET).download(storage_candidate)
+                text = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else str(raw)
+                return JSONResponse(json.loads(text))
+            except Exception:
+                continue
+    except Exception as exc:
+        logger.warning("Dashboard artifact index lookup failed workflow=%s filename=%s error=%s", workflow_id, filename, exc)
+
     prefix = f"backend/workflows/{workflow_id}/"
     exact_storage_path = f"{prefix}{filename}"
     if "/" in filename:
@@ -5530,14 +5557,47 @@ def _count_workflow_agents_from_logs(logs: Optional[str]) -> Optional[int]:
     if not logs:
         return None
     agents: set[str] = set()
-    for raw_line in str(logs).splitlines():
-        line = raw_line.strip()
+    for line in _workflow_agent_log_lines(str(logs), max_lines=500):
         running = re.search(r"Running\s+(.+?\sAgent)\b", line, flags=re.IGNORECASE)
         finished = re.search(r"^(.+?\sAgent)\s+(?:done|failed)\b", line, flags=re.IGNORECASE)
         name = (running.group(1) if running else None) or (finished.group(1) if finished else None)
         if name:
             agents.add(name.strip())
     return len(agents) if agents else None
+
+
+def _workflow_agent_log_lines(logs: Optional[str], max_lines: int = 80) -> List[str]:
+    if not logs:
+        return []
+    patterns = (
+        "Executing workflow agents",
+        "Running ",
+        " done",
+        " failed",
+        "Missing agent implementations",
+        "No agent implementation found",
+        "Workflow crashed",
+        "Workflow complete",
+        "Run complete",
+    )
+    lines: List[str] = []
+    for raw_line in str(logs).splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if any(pattern.lower() in line.lower() for pattern in patterns):
+            lines.append(_truncate_tail(line, MAX_LOG_LINE_CHARS))
+    return lines[-max_lines:]
+
+
+def _workflow_agent_log_summary(workflow_id: str, max_lines: int = 80) -> str:
+    try:
+        rows = supabase.table("workflows").select("logs").eq("id", workflow_id).limit(1).execute().data or []
+        logs = str((rows[0] if rows else {}).get("logs") or "")
+    except Exception:
+        return ""
+    lines = _workflow_agent_log_lines(logs, max_lines=max_lines)
+    return "\n".join(lines)
 
 
 def _enrich_product_stage_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -5568,10 +5628,15 @@ def _enrich_product_stage_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any
     for row in rows:
         next_row = dict(row)
         outputs = next_row.get("outputs") if isinstance(next_row.get("outputs"), dict) else {}
+        workflow_logs = logs_by_workflow.get(str(next_row.get("workflow_id")))
         if "agent_count" not in outputs:
-            agent_count = _count_workflow_agents_from_logs(logs_by_workflow.get(str(next_row.get("workflow_id"))))
+            agent_count = _count_workflow_agents_from_logs(workflow_logs)
             if agent_count is not None:
                 outputs = {**outputs, "agent_count": agent_count}
+        if "agent_log_lines" not in outputs:
+            agent_lines = _workflow_agent_log_lines(workflow_logs, max_lines=80)
+            if agent_lines:
+                outputs = {**outputs, "agent_log_lines": agent_lines}
         next_row["outputs"] = outputs
         enriched.append(next_row)
     return enriched
@@ -5667,6 +5732,27 @@ def _workflow_failed_message(label: str, workflow_id: str, run_id: str, status: 
     if tail:
         message = f"{message}\nWorkflow log tail:\n{tail}"
     return message
+
+
+def _dashboard_stage_from_workflow_name(*values: Any) -> str:
+    text = " ".join(str(value or "") for value in values).lower()
+    if any(token in text for token in ("tapeout", "physical design", " signoff", "system_pd", "system pd")):
+        return "tapeout"
+    if any(token in text for token in ("synthesis", "arch2synthesis", "system_synthesis", "system synthesis")):
+        return "synthesis"
+    if any(token in text for token in ("verify", "verification", "system_sim", "system sim", "closure")):
+        return "verification"
+    if any(token in text for token in ("dqa", "quality")):
+        return "dqa"
+    if any(token in text for token in ("firmware", "embedded")):
+        return "embedded"
+    if "software validation" in text or "validation_l2" in text:
+        return "validation"
+    if "software" in text:
+        return "software"
+    if any(token in text for token in ("product app", "product_app", "builder")):
+        return "product"
+    return "arch2rtl"
 
 
 def _stage_setting(stage: Dict[str, Any], key: str, default: Any = None) -> Any:
@@ -6320,14 +6406,30 @@ def _run_product_stage(product: Dict[str, Any], product_run_id: str, stage_run: 
             None,
             artifact_dir,
         )
+        agent_log_summary = _workflow_agent_log_summary(workflow_id)
+        agent_log_lines = agent_log_summary.splitlines() if agent_log_summary else []
+        if agent_log_summary:
+            _append_product_run_log(
+                product_run_id,
+                f"{stage.get('label') or app_name} agent execution:\n{agent_log_summary}",
+            )
         status = _workflow_status(workflow_id)
         if status != "completed":
             raise RuntimeError(_workflow_failed_message(str(stage.get("label") or app_name), workflow_id, run_id, status))
+        dashboard_stage = _dashboard_stage_from_workflow_name(
+            source_workflow.get("name"),
+            user_app.get("workflow_name"),
+            user_app.get("name"),
+            loop_type,
+        )
         outputs = {
             "workflow_id": workflow_id,
             "run_id": run_id,
             "app": app_name,
             "user_app_id": user_app_id,
+            "dashboard_stage": dashboard_stage,
+            "agent_count": _count_workflow_agents_from_logs(agent_log_summary),
+            "agent_log_lines": agent_log_lines,
             "dashboard_url": f"/apps/dashboard/artifact/{workflow_id}",
             "download_url": f"/workflow/{workflow_id}/download_zip",
         }
@@ -6419,6 +6521,13 @@ def _run_product_stage(product: Dict[str, Any], product_run_id: str, stage_run: 
         )
     else:
         raise RuntimeError(f"Product run does not support stage app '{app_name}' yet.")
+    agent_log_summary = _workflow_agent_log_summary(workflow_id)
+    agent_log_lines = agent_log_summary.splitlines() if agent_log_summary else []
+    if agent_log_summary:
+        _append_product_run_log(
+            product_run_id,
+            f"{stage.get('label') or app_name} agent execution:\n{agent_log_summary}",
+        )
     status = _workflow_status(workflow_id)
     if status != "completed":
         raise RuntimeError(_workflow_failed_message(str(stage.get("label") or app_name), workflow_id, run_id, status))
@@ -6426,6 +6535,9 @@ def _run_product_stage(product: Dict[str, Any], product_run_id: str, stage_run: 
         "workflow_id": workflow_id,
         "run_id": run_id,
         "app": app_name,
+        "dashboard_stage": _dashboard_stage_from_workflow_name(app_name),
+        "agent_count": _count_workflow_agents_from_logs(agent_log_summary),
+        "agent_log_lines": agent_log_lines,
         "dashboard_url": f"/apps/dashboard/artifact/{workflow_id}",
         "download_url": f"/workflow/{workflow_id}/download_zip",
     }
