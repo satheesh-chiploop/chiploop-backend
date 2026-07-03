@@ -13,6 +13,7 @@ from auth_api_keys.service import get_api_key_service
 from artifact_policy import artifact_policy_summary
 from billing import BillingPaymentRequired, CreditLimitExceeded, EntitlementDenied, TrialCheckoutRequired, get_billing_service
 from browser_auth import BrowserUser, browser_user_email, is_browser_admin, require_browser_user
+from demo_requests import DemoRequestError, DemoRequestService, SupabaseDemoRequestRepository
 from deployment_modes import deployment_summary
 from github_integration import GitHubIntegrationService, GitHubNotConfiguredError, GitHubRequestError, SupabaseGitHubInstallationRepository
 from help_center import answer_help_question
@@ -558,6 +559,16 @@ def _webinar_service(request: Request) -> WebinarRegistrationService:
     return WebinarRegistrationService(SupabaseWebinarRegistrationRepository(supabase))
 
 
+def _demo_request_service(request: Request) -> DemoRequestService:
+    existing = getattr(request.app.state, "demo_request_service", None)
+    if existing is not None:
+        return existing
+    supabase = getattr(request.app.state, "supabase", None)
+    if supabase is None:
+        raise HTTPException(status_code=500, detail="demo_request_store_unavailable")
+    return DemoRequestService(SupabaseDemoRequestRepository(supabase))
+
+
 def _workshop_service(request: Request) -> WorkshopService:
     existing = getattr(request.app.state, "workshop_service", None)
     if existing is not None:
@@ -615,6 +626,23 @@ async def webinar_register(request: Request):
 @router.get("/webinar/sessions")
 def webinar_sessions(request: Request):
     return {"status": "ok", "sessions": _webinar_service(request).sessions()}
+
+
+@router.post("/demo-requests")
+async def create_demo_request(request: Request):
+    data = await request.json()
+    try:
+        demo_request = _demo_request_service(request).create(data)
+    except DemoRequestError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {
+        "status": "ok",
+        "demo_request": {
+            "id": demo_request.id,
+            "created_at": demo_request.created_at,
+            "notification_status": demo_request.notification_status,
+        },
+    }
 
 
 @router.get("/workshop/batches")
