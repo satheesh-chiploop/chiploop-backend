@@ -47,6 +47,9 @@ ARTIFACT_BUCKET = os.getenv("ARTIFACT_BUCKET_NAME", "artifacts")
 ASK_THIS_RUN_MAX_LOG_CHARS = int(os.getenv("ASK_THIS_RUN_MAX_LOG_CHARS", "8000"))
 ASK_THIS_RUN_MAX_ARTIFACT_CHARS = int(os.getenv("ASK_THIS_RUN_MAX_ARTIFACT_CHARS", "6000"))
 ASK_THIS_RUN_MAX_CONTEXT_CHARS = int(os.getenv("ASK_THIS_RUN_MAX_CONTEXT_CHARS", "24000"))
+ASK_PROJECT_MAX_FILE_CHARS = int(os.getenv("ASK_PROJECT_MAX_FILE_CHARS", "6000"))
+ASK_PROJECT_MAX_CONTEXT_CHARS = int(os.getenv("ASK_PROJECT_MAX_CONTEXT_CHARS", "36000"))
+ASK_PROJECT_MAX_FILES = int(os.getenv("ASK_PROJECT_MAX_FILES", "40"))
 
 
 def _iter_leaf_strings(obj: Any):
@@ -102,6 +105,62 @@ def _safe_text(value: Any, limit: int) -> str:
     if len(text) <= limit:
         return text
     return text[:limit] + "\n[TRUNCATED]"
+
+
+def _project_file_context(files: list[Any]) -> tuple[str, list[Dict[str, Any]]]:
+    if not files:
+        raise HTTPException(status_code=400, detail="project_files_required")
+
+    sections: list[str] = []
+    sources: list[Dict[str, Any]] = []
+    used_chars = 0
+
+    for index, item in enumerate(files[:ASK_PROJECT_MAX_FILES]):
+        if not isinstance(item, dict):
+            continue
+        path = str(item.get("path") or item.get("name") or f"file_{index + 1}").strip()[:300]
+        content = str(item.get("content") or "")
+        if not content.strip():
+            continue
+        snippet = _safe_text(content, ASK_PROJECT_MAX_FILE_CHARS)
+        section = f"FILE: {path}\n{snippet}"
+        if used_chars + len(section) > ASK_PROJECT_MAX_CONTEXT_CHARS:
+            remaining = max(ASK_PROJECT_MAX_CONTEXT_CHARS - used_chars, 0)
+            if remaining < 500:
+                break
+            section = section[:remaining] + "\n[PROJECT CONTEXT TRUNCATED]"
+        sections.append(section)
+        used_chars += len(section)
+        sources.append({"path": path, "chars": min(len(content), len(snippet))})
+        if used_chars >= ASK_PROJECT_MAX_CONTEXT_CHARS:
+            break
+
+    if not sections:
+        raise HTTPException(status_code=400, detail="project_text_required")
+    return "\n\n---\n\n".join(sections), sources
+
+
+def _build_project_ask_prompt(project_name: str, question: str, context: str) -> str:
+    return f"""You are ChipLoop Ask This Project.
+
+Answer questions about uploaded project files, code, specs, logs, reports, scripts, constraints, documentation, and configuration.
+
+Rules:
+- Use only the provided project context.
+- If the answer is not present, say what is missing and what file or evidence would help.
+- Cite relevant file paths in the answer.
+- Be direct and engineering-focused.
+- When useful, include concrete suggestions, risks, and recommended next ChipLoop workflow or app.
+- Do not invent file contents.
+
+PROJECT: {project_name or "Untitled project"}
+
+QUESTION:
+{question}
+
+PROJECT CONTEXT:
+{context}
+"""
 
 
 def _download_text_artifact(supabase: Any, path: str) -> str:
@@ -642,6 +701,38 @@ async def create_demo_request(request: Request):
             "created_at": demo_request.created_at,
             "notification_status": demo_request.notification_status,
         },
+    }
+
+
+@router.post("/project/ask")
+async def ask_project(
+    request: Request,
+    user: BrowserUser = Depends(require_browser_user),
+):
+    data = await request.json()
+    question = str(data.get("question") or "").strip()
+    if len(question) < 3:
+        raise HTTPException(status_code=400, detail="question_required")
+    files = data.get("files")
+    if not isinstance(files, list):
+        raise HTTPException(status_code=400, detail="project_files_required")
+
+    project_name = str(data.get("project_name") or "Uploaded project").strip()[:160]
+    context, sources = _project_file_context(files)
+    prompt = _build_project_ask_prompt(project_name, question[:2000], context)
+    answer = complete_text(
+        prompt,
+        capability="inspection",
+        agent_name="Ask This Project Inspector",
+        state={"user_id": user.user_id, "project_name": project_name},
+    ).strip()
+    return {
+        "status": "ok",
+        "project_name": project_name,
+        "question": question,
+        "answer": answer,
+        "sources": sources,
+        "source_count": len(sources),
     }
 
 
