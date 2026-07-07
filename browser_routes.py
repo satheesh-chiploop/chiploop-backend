@@ -1588,6 +1588,94 @@ async def settings_billing_checkout(
     return {"status": "ok", **result}
 
 
+def _handle_stripe_checkout_error(exc: Exception, service: StripeBillingService, *, context: Dict[str, Any]):
+    if isinstance(exc, ValueError):
+        raise HTTPException(status_code=400, detail=str(exc))
+    if isinstance(exc, StripeBillingConfigError):
+        raise HTTPException(status_code=503, detail=str(exc))
+    stripe_error_base = getattr(getattr(service.stripe, "error", None), "StripeError", None)
+    if stripe_error_base and isinstance(exc, stripe_error_base):
+        detail = _stripe_error_response(exc)
+        logger.warning(
+            "stripe_checkout_failed",
+            extra={
+                "stripe_error_type": detail.get("type"),
+                "stripe_error_code": detail.get("code"),
+                "stripe_error_param": detail.get("param"),
+                "stripe_request_id": detail.get("request_id"),
+                **context,
+            },
+        )
+        raise HTTPException(status_code=502, detail=detail)
+    raise HTTPException(status_code=502, detail=f"stripe_checkout_failed: {type(exc).__name__}")
+
+
+@router.post("/settings/billing/loop-checkout")
+async def settings_billing_loop_checkout(
+    request: Request,
+    user: BrowserUser = Depends(require_browser_user),
+):
+    data = await request.json()
+    loop_key = str(data.get("loop_key") or "").strip().lower()
+    addon_type = str(data.get("addon_type") or "").strip().lower()
+    if loop_key not in {"digital_design", "digital_implementation", "mixed_signal", "firmware_software", "validation"}:
+        raise HTTPException(status_code=400, detail="unsupported_loop_key")
+    if addon_type not in {"add_core", "upgrade_to_advanced", "add_advanced"}:
+        raise HTTPException(status_code=400, detail="unsupported_addon_type")
+    service = _stripe_billing_service(request)
+    try:
+        result = service.create_loop_addon_checkout_session(
+            user_id=user.user_id,
+            user_email=str(user.claims.get("email") or "") or None,
+            loop_key=loop_key,
+            addon_type=addon_type,
+        )
+    except Exception as exc:
+        _handle_stripe_checkout_error(exc, service, context={"loop_key": loop_key, "addon_type": addon_type})
+    return {"status": "ok", **result}
+
+
+@router.post("/settings/billing/credit-checkout")
+async def settings_billing_credit_checkout(
+    request: Request,
+    user: BrowserUser = Depends(require_browser_user),
+):
+    data = await request.json()
+    try:
+        credits = int(data.get("credits") or 0)
+    except (TypeError, ValueError):
+        credits = 0
+    if credits not in {500, 1500, 5000}:
+        raise HTTPException(status_code=400, detail="unsupported_credit_pack")
+    service = _stripe_billing_service(request)
+    try:
+        result = service.create_credit_checkout_session(
+            user_id=user.user_id,
+            user_email=str(user.claims.get("email") or "") or None,
+            credits=credits,
+        )
+    except Exception as exc:
+        _handle_stripe_checkout_error(exc, service, context={"credits": credits})
+    return {"status": "ok", **result}
+
+
+@router.post("/settings/billing/change-plan")
+async def settings_billing_change_plan(
+    request: Request,
+    user: BrowserUser = Depends(require_browser_user),
+):
+    data = await request.json()
+    plan_id = str(data.get("plan_id") or "").strip().lower()
+    if plan_id not in {"starter", "pro", "pro_max"}:
+        raise HTTPException(status_code=400, detail="unsupported_plan")
+    service = _stripe_billing_service(request)
+    try:
+        result = service.change_plan(user_id=user.user_id, plan_id=plan_id)
+    except Exception as exc:
+        _handle_stripe_checkout_error(exc, service, context={"plan_id": plan_id, "action": "change_plan"})
+    return {"status": "ok", **result}
+
+
 @router.post("/settings/billing/portal")
 def settings_billing_portal(
     request: Request,

@@ -150,7 +150,8 @@ class BillingService:
     def get_credit_balance(self, user_id: str) -> Dict[str, Optional[int]]:
         plan = self.get_user_plan(user_id)
         used = self.repository.get_monthly_credit_usage(user_id)
-        monthly = plan.monthly_credits
+        grants = self.repository.get_monthly_credit_grants(user_id)
+        monthly = None if plan.monthly_credits is None else plan.monthly_credits + grants
         remaining = None if monthly is None else max(monthly - used, 0)
         return {"monthly_credits": monthly, "credits_used": used, "credits_remaining": remaining}
 

@@ -36,12 +36,36 @@ class _FakeStripe:
     api_key = None
     last_checkout = None
     last_portal = None
+    last_subscription_modify = None
+    subscription = {
+        "id": "sub_123",
+        "customer": "cus_123",
+        "status": "active",
+        "metadata": {"user_id": "user-1", "plan_id": "starter"},
+        "items": {"data": [{"id": "si_base", "price": {"id": "price_starter"}}]},
+    }
 
     class checkout:
         Session = _FakeCheckoutSession
 
     class billing_portal:
         Session = _FakePortalSession
+
+    class Subscription:
+        @staticmethod
+        def retrieve(subscription_id):
+            return {**_FakeStripe.subscription, "id": subscription_id}
+
+        @staticmethod
+        def modify(subscription_id, **kwargs):
+            _FakeStripe.last_subscription_modify = {"subscription_id": subscription_id, **kwargs}
+            price_id = kwargs["items"][0]["price"]
+            return {
+                **_FakeStripe.subscription,
+                "id": subscription_id,
+                "metadata": kwargs.get("metadata") or {},
+                "items": {"data": [{"id": "si_base", "price": {"id": price_id}}]},
+            }
 
     Webhook = _FakeWebhook
 
@@ -102,6 +126,69 @@ def test_checkout_session_uses_intro_coupon_without_promotion_codes(monkeypatch)
     assert "allow_promotion_codes" not in _FakeStripe.last_checkout
 
 
+def test_checkout_session_uses_plan_specific_intro_coupon(monkeypatch):
+    monkeypatch.setenv("STRIPE_INTRO_COUPON_ID", "coupon_shared")
+    monkeypatch.setenv("STRIPE_INTRO_COUPON_PRO", "coupon_pro")
+    repo = InMemoryBillingRepository()
+    service = StripeBillingService(repo, stripe_module=_FakeStripe)
+
+    service.create_checkout_session(user_id="user-1", user_email="u@example.com", plan_id="pro")
+
+    assert _FakeStripe.last_checkout["discounts"] == [{"coupon": "coupon_pro"}]
+
+
+def test_loop_addon_checkout_uses_configured_price(monkeypatch):
+    monkeypatch.setenv("STRIPE_PRICE_LOOP_DIGITAL_DESIGN_ADVANCED", "price_loop_advanced")
+    repo = InMemoryBillingRepository()
+    repo.set_user_subscription(
+        SubscriptionRecord(user_id="user-1", plan_id="starter", stripe_customer_id="cus_123")
+    )
+    service = StripeBillingService(repo, stripe_module=_FakeStripe)
+
+    result = service.create_loop_addon_checkout_session(
+        user_id="user-1",
+        user_email="u@example.com",
+        loop_key="digital_design",
+        addon_type="add_advanced",
+    )
+
+    assert result["checkout_kind"] == "loop_addon"
+    assert _FakeStripe.last_checkout["mode"] == "subscription"
+    assert _FakeStripe.last_checkout["customer"] == "cus_123"
+    assert _FakeStripe.last_checkout["line_items"] == [{"price": "price_loop_advanced", "quantity": 1}]
+    assert _FakeStripe.last_checkout["metadata"]["loop_key"] == "digital_design"
+    assert _FakeStripe.last_checkout["metadata"]["loop_level"] == "advanced"
+
+
+def test_credit_pack_checkout_and_webhook_grants_credits(monkeypatch):
+    monkeypatch.setenv("STRIPE_PRICE_CREDITS_500", "price_credits_500")
+    repo = InMemoryBillingRepository()
+    service = StripeBillingService(repo, stripe_module=_FakeStripe)
+
+    result = service.create_credit_checkout_session(
+        user_id="user-1",
+        user_email="u@example.com",
+        credits=500,
+    )
+
+    assert result["checkout_kind"] == "credit_pack"
+    assert _FakeStripe.last_checkout["mode"] == "payment"
+    assert _FakeStripe.last_checkout["line_items"] == [{"price": "price_credits_500", "quantity": 1}]
+
+    service.handle_event({
+        "type": "checkout.session.completed",
+        "data": {"object": {
+            "id": "cs_credits",
+            "client_reference_id": "user-1",
+            "customer": "cus_123",
+            "payment_intent": "pi_123",
+            "metadata": {"checkout_kind": "credit_pack", "credits": "500"},
+        }},
+    })
+
+    assert BillingService(repo).get_credit_balance("user-1")["monthly_credits"] == 600
+
+
 def test_checkout_rejects_product_id_env(monkeypatch):
     monkeypatch.setenv("STRIPE_PRICE_STARTER", "prod_starter")
     repo = InMemoryBillingRepository()
@@ -122,6 +209,31 @@ def test_customer_portal_requires_existing_stripe_customer():
 
     assert result["url"].startswith("https://billing.stripe.test")
     assert _FakeStripe.last_portal["customer"] == "cus_123"
+
+
+def test_change_plan_updates_existing_subscription_item():
+    repo = InMemoryBillingRepository()
+    repo.set_user_subscription(
+        SubscriptionRecord(
+            id="row-1",
+            user_id="user-1",
+            plan_id="starter",
+            stripe_customer_id="cus_123",
+            stripe_subscription_id="sub_123",
+            stripe_price_id="price_starter",
+        )
+    )
+    service = StripeBillingService(repo, stripe_module=_FakeStripe)
+
+    result = service.change_plan(user_id="user-1", plan_id="pro")
+
+    assert result["changed"] is True
+    assert _FakeStripe.last_subscription_modify["subscription_id"] == "sub_123"
+    assert _FakeStripe.last_subscription_modify["items"] == [{"id": "si_base", "price": "price_pro"}]
+    assert _FakeStripe.last_subscription_modify["proration_behavior"] == "create_prorations"
+    subscription = repo.get_user_subscription("user-1")
+    assert subscription.plan_id == "pro"
+    assert subscription.stripe_price_id == "price_pro"
 
 
 def test_checkout_completed_webhook_creates_trial_subscription():

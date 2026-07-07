@@ -4,6 +4,7 @@ from typing import Any, Dict, Optional
 
 from billing.entitlements import PLAN_DEFINITIONS
 from billing.repositories import BillingRepository
+from billing.models import CreditLedgerEntry
 
 
 class StripeBillingConfigError(RuntimeError):
@@ -39,10 +40,37 @@ class StripeBillingService:
         self.trial_days = int(os.environ.get("STRIPE_TRIAL_DAYS", "3"))
         self.grace_days = int(os.environ.get("STRIPE_PAYMENT_GRACE_DAYS", "3"))
         self.coupon_id = os.environ.get("STRIPE_INTRO_COUPON_ID", "").strip() or None
+        self.coupon_ids = {
+            "starter": os.environ.get("STRIPE_INTRO_COUPON_STARTER", "").strip(),
+            "pro": os.environ.get("STRIPE_INTRO_COUPON_PRO", "").strip(),
+            "pro_max": os.environ.get("STRIPE_INTRO_COUPON_PRO_MAX", "").strip(),
+        }
         self.price_ids = {
             "starter": os.environ.get("STRIPE_PRICE_STARTER", "").strip(),
             "pro": os.environ.get("STRIPE_PRICE_PRO", "").strip(),
             "pro_max": os.environ.get("STRIPE_PRICE_PRO_MAX", "").strip(),
+        }
+        self.loop_price_ids = {
+            ("digital_design", "add_core"): os.environ.get("STRIPE_PRICE_LOOP_DIGITAL_DESIGN_CORE", "").strip(),
+            ("digital_design", "upgrade_to_advanced"): os.environ.get("STRIPE_PRICE_LOOP_DIGITAL_DESIGN_ADVANCED_UPGRADE", "").strip(),
+            ("digital_design", "add_advanced"): os.environ.get("STRIPE_PRICE_LOOP_DIGITAL_DESIGN_ADVANCED", "").strip(),
+            ("digital_implementation", "add_core"): os.environ.get("STRIPE_PRICE_LOOP_DIGITAL_IMPLEMENTATION_CORE", "").strip(),
+            ("digital_implementation", "upgrade_to_advanced"): os.environ.get("STRIPE_PRICE_LOOP_DIGITAL_IMPLEMENTATION_ADVANCED_UPGRADE", "").strip(),
+            ("digital_implementation", "add_advanced"): os.environ.get("STRIPE_PRICE_LOOP_DIGITAL_IMPLEMENTATION_ADVANCED", "").strip(),
+            ("mixed_signal", "add_core"): os.environ.get("STRIPE_PRICE_LOOP_MIXED_SIGNAL_CORE", "").strip(),
+            ("mixed_signal", "upgrade_to_advanced"): os.environ.get("STRIPE_PRICE_LOOP_MIXED_SIGNAL_ADVANCED_UPGRADE", "").strip(),
+            ("mixed_signal", "add_advanced"): os.environ.get("STRIPE_PRICE_LOOP_MIXED_SIGNAL_ADVANCED", "").strip(),
+            ("firmware_software", "add_core"): os.environ.get("STRIPE_PRICE_LOOP_FIRMWARE_SOFTWARE_CORE", "").strip(),
+            ("firmware_software", "upgrade_to_advanced"): os.environ.get("STRIPE_PRICE_LOOP_FIRMWARE_SOFTWARE_ADVANCED_UPGRADE", "").strip(),
+            ("firmware_software", "add_advanced"): os.environ.get("STRIPE_PRICE_LOOP_FIRMWARE_SOFTWARE_ADVANCED", "").strip(),
+            ("validation", "add_core"): os.environ.get("STRIPE_PRICE_LOOP_VALIDATION_CORE", "").strip(),
+            ("validation", "upgrade_to_advanced"): os.environ.get("STRIPE_PRICE_LOOP_VALIDATION_ADVANCED_UPGRADE", "").strip(),
+            ("validation", "add_advanced"): os.environ.get("STRIPE_PRICE_LOOP_VALIDATION_ADVANCED", "").strip(),
+        }
+        self.credit_price_ids = {
+            500: os.environ.get("STRIPE_PRICE_CREDITS_500", "").strip(),
+            1500: os.environ.get("STRIPE_PRICE_CREDITS_1500", "").strip(),
+            5000: os.environ.get("STRIPE_PRICE_CREDITS_5000", "").strip(),
         }
         if self.secret_key:
             self.stripe.api_key = self.secret_key
@@ -74,6 +102,18 @@ class StripeBillingService:
             )
         return price_id
 
+    def _require_price_id(self, price_id: str, env_name: str) -> str:
+        if not price_id:
+            raise StripeBillingConfigError(f"{env_name}_missing")
+        if price_id.startswith("prod_"):
+            raise StripeBillingConfigError(f"{env_name}_uses_product_id_expected_price_id")
+        if not price_id.startswith("price_"):
+            raise StripeBillingConfigError(f"{env_name}_invalid_expected_price_id")
+        return price_id
+
+    def _coupon_id(self, plan_id: str) -> Optional[str]:
+        return self.coupon_ids.get(plan_id) or self.coupon_id
+
     def create_checkout_session(
         self,
         *,
@@ -101,8 +141,9 @@ class StripeBillingService:
         }
         if user_email:
             params["customer_email"] = user_email
-        if self.coupon_id:
-            params["discounts"] = [{"coupon": self.coupon_id}]
+        coupon_id = self._coupon_id(plan_id)
+        if coupon_id:
+            params["discounts"] = [{"coupon": coupon_id}]
         else:
             params["allow_promotion_codes"] = True
         session = self.stripe.checkout.Session.create(**params)
@@ -111,6 +152,84 @@ class StripeBillingService:
             "url": session.get("url"),
             "plan_id": plan_id,
             "checkout_kind": checkout_kind,
+        }
+
+    def create_loop_addon_checkout_session(
+        self,
+        *,
+        user_id: str,
+        user_email: Optional[str],
+        loop_key: str,
+        addon_type: str,
+    ) -> Dict[str, Any]:
+        self._require_configured()
+        key = (loop_key, addon_type)
+        env_name = f"STRIPE_PRICE_LOOP_{loop_key.upper()}_{addon_type.upper()}"
+        price_id = self._require_price_id(self.loop_price_ids.get(key, ""), env_name)
+        level = "core" if addon_type == "add_core" else "advanced"
+        metadata = {
+            "user_id": user_id,
+            "checkout_kind": "loop_addon",
+            "loop_key": loop_key,
+            "loop_level": level,
+            "addon_type": addon_type,
+        }
+        params: Dict[str, Any] = {
+            "mode": "subscription",
+            "payment_method_collection": "always",
+            "line_items": [{"price": price_id, "quantity": 1}],
+            "success_url": f"{self.app_url}/settings/plan?checkout=loop_success",
+            "cancel_url": f"{self.app_url}/settings/plan?checkout=cancelled",
+            "client_reference_id": user_id,
+            "metadata": metadata,
+            "subscription_data": {"metadata": metadata},
+        }
+        subscription = self.repository.get_user_subscription(user_id)
+        if subscription and subscription.stripe_customer_id:
+            params["customer"] = subscription.stripe_customer_id
+        elif user_email:
+            params["customer_email"] = user_email
+        session = self.stripe.checkout.Session.create(**params)
+        return {
+            "checkout_session_id": session.get("id"),
+            "url": session.get("url"),
+            "checkout_kind": "loop_addon",
+            "loop_key": loop_key,
+            "addon_type": addon_type,
+        }
+
+    def create_credit_checkout_session(
+        self,
+        *,
+        user_id: str,
+        user_email: Optional[str],
+        credits: int,
+    ) -> Dict[str, Any]:
+        self._require_configured()
+        price_id = self._require_price_id(
+            self.credit_price_ids.get(credits, ""),
+            f"STRIPE_PRICE_CREDITS_{credits}",
+        )
+        metadata = {"user_id": user_id, "checkout_kind": "credit_pack", "credits": str(credits)}
+        params: Dict[str, Any] = {
+            "mode": "payment",
+            "line_items": [{"price": price_id, "quantity": 1}],
+            "success_url": f"{self.app_url}/settings/plan?checkout=credits_success",
+            "cancel_url": f"{self.app_url}/settings/plan?checkout=cancelled",
+            "client_reference_id": user_id,
+            "metadata": metadata,
+        }
+        subscription = self.repository.get_user_subscription(user_id)
+        if subscription and subscription.stripe_customer_id:
+            params["customer"] = subscription.stripe_customer_id
+        elif user_email:
+            params["customer_email"] = user_email
+        session = self.stripe.checkout.Session.create(**params)
+        return {
+            "checkout_session_id": session.get("id"),
+            "url": session.get("url"),
+            "checkout_kind": "credit_pack",
+            "credits": credits,
         }
 
     def create_portal_session(self, *, user_id: str) -> Dict[str, Any]:
@@ -123,6 +242,46 @@ class StripeBillingService:
             return_url=f"{self.app_url}/settings/plan",
         )
         return {"url": session.get("url")}
+
+    def change_plan(self, *, user_id: str, plan_id: str) -> Dict[str, Any]:
+        self._require_configured()
+        target_price_id = self._price_id(plan_id)
+        existing = self.repository.get_user_subscription(user_id)
+        if not existing or not existing.stripe_subscription_id:
+            raise ValueError("stripe_subscription_not_found")
+        if existing.plan_id == plan_id and existing.stripe_price_id == target_price_id:
+            return {"plan_id": plan_id, "changed": False, "message": "already_on_plan"}
+
+        subscription = self.stripe.Subscription.retrieve(existing.stripe_subscription_id)
+        items = ((subscription.get("items") or {}).get("data") or [])
+        base_item = self._base_subscription_item(items)
+        if not base_item:
+            raise ValueError("stripe_subscription_base_item_not_found")
+
+        metadata = {
+            **(subscription.get("metadata") or {}),
+            "user_id": user_id,
+            "plan_id": plan_id,
+            "checkout_kind": "plan_change",
+        }
+        updated = self.stripe.Subscription.modify(
+            existing.stripe_subscription_id,
+            items=[{"id": base_item.get("id"), "price": target_price_id}],
+            metadata=metadata,
+            cancel_at_period_end=False,
+            proration_behavior="create_prorations",
+        )
+        payload = self._subscription_payload(updated, user_id=user_id)
+        payload["plan_id"] = plan_id
+        payload["stripe_price_id"] = target_price_id
+        payload["plan_price_effective"] = (PLAN_DEFINITIONS.get(plan_id) or PLAN_DEFINITIONS["starter"]).price_monthly_usd
+        payload["metadata"] = {**payload.get("metadata", {}), "plan_id": plan_id, "checkout_kind": "plan_change"}
+        self.repository.upsert_user_subscription(payload)
+        return {
+            "plan_id": plan_id,
+            "changed": True,
+            "stripe_subscription_id": existing.stripe_subscription_id,
+        }
 
     def construct_event(self, payload: bytes, signature: str):
         self._require_configured()
@@ -151,8 +310,22 @@ class StripeBillingService:
                 return plan_id
         return fallback
 
+    def _base_subscription_item(self, items):
+        base_price_ids = {price_id for price_id in self.price_ids.values() if price_id}
+        for item in items:
+            price_id = (((item or {}).get("price") or {}).get("id") or "")
+            if price_id in base_price_ids:
+                return item
+        return items[0] if items else None
+
     def _subscription_payload(self, subscription: Dict[str, Any], *, user_id: Optional[str] = None) -> Dict[str, Any]:
         metadata = subscription.get("metadata") or {}
+        if metadata.get("checkout_kind") == "loop_addon":
+            return {
+                "user_id": user_id or str(metadata.get("user_id") or ""),
+                "metadata": metadata,
+                "billing_status": str(subscription.get("status") or "active"),
+            }
         plan_id = str(metadata.get("plan_id") or "starter")
         items = ((subscription.get("items") or {}).get("data") or [])
         price_id = ""
@@ -186,8 +359,14 @@ class StripeBillingService:
     def _handle_checkout_completed(self, session: Dict[str, Any]) -> Dict[str, Any]:
         user_id = str(session.get("client_reference_id") or (session.get("metadata") or {}).get("user_id") or "")
         metadata = session.get("metadata") or {}
-        plan_id = str(metadata.get("plan_id") or "starter")
         checkout_kind = str(metadata.get("checkout_kind") or "trial")
+        if checkout_kind == "loop_addon":
+            self._record_loop_addon_checkout(session, user_id, metadata)
+            return {"handled": True, "event_type": "checkout.session.completed", "user_id": user_id, "checkout_kind": checkout_kind}
+        if checkout_kind == "credit_pack":
+            self._record_credit_pack_checkout(session, user_id, metadata)
+            return {"handled": True, "event_type": "checkout.session.completed", "user_id": user_id, "checkout_kind": checkout_kind}
+        plan_id = str(metadata.get("plan_id") or "starter")
         trial = checkout_kind == "trial"
         data = {
             "user_id": user_id,
@@ -204,6 +383,23 @@ class StripeBillingService:
         return {"handled": True, "event_type": "checkout.session.completed", "user_id": user_id}
 
     def _handle_subscription_updated(self, subscription: Dict[str, Any]) -> Dict[str, Any]:
+        metadata = subscription.get("metadata") or {}
+        if metadata.get("checkout_kind") == "loop_addon":
+            user_id = str(metadata.get("user_id") or "")
+            if user_id and hasattr(self.repository, "upsert_loop_entitlement"):
+                self.repository.upsert_loop_entitlement(
+                    {
+                        "user_id": user_id,
+                        "loop_key": str(metadata.get("loop_key") or ""),
+                        "loop_level": str(metadata.get("loop_level") or "core"),
+                        "addon_type": str(metadata.get("addon_type") or ""),
+                        "status": str(subscription.get("status") or "active"),
+                        "stripe_subscription_id": str(subscription.get("id") or ""),
+                        "stripe_customer_id": str(subscription.get("customer") or ""),
+                        "metadata": metadata,
+                    }
+                )
+            return {"handled": True, "event_type": "customer.subscription.updated", "user_id": user_id, "checkout_kind": "loop_addon"}
         existing = self.repository.get_user_subscription_by_stripe_subscription(str(subscription.get("id") or ""))
         payload = self._subscription_payload(subscription, user_id=existing.user_id if existing else None)
         if not payload.get("user_id"):
@@ -251,3 +447,41 @@ class StripeBillingService:
                 },
             )
         return {"handled": True, "event_type": "invoice.payment_failed", "user_id": existing.user_id if existing else None}
+
+    def _record_loop_addon_checkout(self, session: Dict[str, Any], user_id: str, metadata: Dict[str, Any]) -> None:
+        if not user_id or not hasattr(self.repository, "upsert_loop_entitlement"):
+            return
+        self.repository.upsert_loop_entitlement(
+            {
+                "user_id": user_id,
+                "loop_key": str(metadata.get("loop_key") or ""),
+                "loop_level": str(metadata.get("loop_level") or "core"),
+                "addon_type": str(metadata.get("addon_type") or ""),
+                "status": "active",
+                "stripe_customer_id": str(session.get("customer") or ""),
+                "stripe_subscription_id": str(session.get("subscription") or ""),
+                "stripe_checkout_session_id": str(session.get("id") or ""),
+                "metadata": {"checkout_session_id": session.get("id"), **metadata},
+            }
+        )
+
+    def _record_credit_pack_checkout(self, session: Dict[str, Any], user_id: str, metadata: Dict[str, Any]) -> None:
+        if not user_id:
+            return
+        credits = int(metadata.get("credits") or 0)
+        if credits <= 0:
+            return
+        self.repository.insert_credit_entry(
+            CreditLedgerEntry(
+                user_id=user_id,
+                event_type="credit_pack_purchased",
+                credits_delta=credits,
+                reference_id=str(session.get("id") or ""),
+                metadata={
+                    "checkout_session_id": session.get("id"),
+                    "stripe_customer_id": session.get("customer"),
+                    "stripe_payment_intent_id": session.get("payment_intent"),
+                    "credits": credits,
+                },
+            )
+        )

@@ -35,7 +35,13 @@ class BillingRepository:
     def get_monthly_credit_usage(self, user_id: str) -> int:
         raise NotImplementedError
 
+    def get_monthly_credit_grants(self, user_id: str) -> int:
+        raise NotImplementedError
+
     def insert_credit_entry(self, entry: CreditLedgerEntry) -> None:
+        raise NotImplementedError
+
+    def upsert_loop_entitlement(self, data: Dict[str, Any]) -> Dict[str, Any]:
         raise NotImplementedError
 
     def count_active_api_keys(self, user_id: str) -> int:
@@ -51,6 +57,7 @@ class InMemoryBillingRepository(BillingRepository):
         self.user_plan_ids: Dict[str, str] = {}
         self.subscriptions: Dict[str, SubscriptionRecord] = {}
         self.credit_entries: List[CreditLedgerEntry] = []
+        self.loop_entitlements: Dict[tuple[str, str], Dict[str, Any]] = {}
         self.api_key_counts: Dict[str, int] = {}
         self.private_agent_counts: Dict[str, int] = {}
 
@@ -101,8 +108,16 @@ class InMemoryBillingRepository(BillingRepository):
     def get_monthly_credit_usage(self, user_id: str) -> int:
         return sum(-entry.credits_delta for entry in self.credit_entries if entry.user_id == user_id and entry.credits_delta < 0)
 
+    def get_monthly_credit_grants(self, user_id: str) -> int:
+        return sum(entry.credits_delta for entry in self.credit_entries if entry.user_id == user_id and entry.credits_delta > 0)
+
     def insert_credit_entry(self, entry: CreditLedgerEntry) -> None:
         self.credit_entries.append(entry)
+
+    def upsert_loop_entitlement(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        key = (str(data.get("user_id") or ""), str(data.get("loop_key") or ""))
+        self.loop_entitlements[key] = data
+        return data
 
     def count_active_api_keys(self, user_id: str) -> int:
         return self.api_key_counts.get(user_id, 0)
@@ -226,8 +241,50 @@ class SupabaseBillingRepository(BillingRepository):
         except Exception:
             return 0
 
+    def get_monthly_credit_grants(self, user_id: str) -> int:
+        try:
+            result = (
+                self.supabase.table("credit_ledger")
+                .select("credits_delta")
+                .eq("user_id", user_id)
+                .gte("created_at", _month_start())
+                .gt("credits_delta", 0)
+                .execute()
+            )
+            return sum(int(row.get("credits_delta") or 0) for row in (result.data or []))
+        except Exception:
+            return 0
+
     def insert_credit_entry(self, entry: CreditLedgerEntry) -> None:
         self.supabase.table("credit_ledger").insert(entry.to_dict()).execute()
+
+    def upsert_loop_entitlement(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        payload = {key: value for key, value in data.items() if value is not None}
+        try:
+            user_id = str(payload.get("user_id") or "")
+            loop_key = str(payload.get("loop_key") or "")
+            existing = (
+                self.supabase.table("user_loop_entitlements")
+                .select("*")
+                .eq("user_id", user_id)
+                .eq("loop_key", loop_key)
+                .limit(1)
+                .execute()
+            )
+            rows = existing.data or []
+            if rows:
+                result = (
+                    self.supabase.table("user_loop_entitlements")
+                    .update(payload)
+                    .eq("id", rows[0].get("id"))
+                    .execute()
+                )
+            else:
+                result = self.supabase.table("user_loop_entitlements").insert(payload).execute()
+            saved = (result.data or [payload])[0]
+            return dict(saved)
+        except Exception:
+            return payload
 
     def count_active_api_keys(self, user_id: str) -> int:
         try:
