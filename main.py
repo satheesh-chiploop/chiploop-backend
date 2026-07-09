@@ -472,6 +472,9 @@ from agents.digital.digital_arch2rtl_dashboard_agent import run_agent as digital
 from agents.digital.digital_rtl_handoff_ingest_agent import run_agent as digital_rtl_handoff_ingest_agent
 from agents.digital.digital_spec2rtl_conformance_agent import run_agent as digital_spec2rtl_conformance_agent
 from agents.digital.digital_dqa_summary_agent import run_agent as digital_dqa_summary_agent
+from agents.digital.digital_rtl_review_agent import run_agent as digital_rtl_review_agent
+from agents.digital.digital_constraint_review_agent import run_agent as digital_constraint_review_agent
+from agents.digital.digital_timing_debug_agent import run_agent as digital_timing_debug_agent
 
 DIGITAL_AGENT_FUNCTIONS: Dict[str, Any] = {
     "Digital Spec Agent": digital_spec_agent,
@@ -514,6 +517,9 @@ DIGITAL_AGENT_FUNCTIONS: Dict[str, Any] = {
     "Digital Arch2RTL Dashboard Agent": digital_arch2rtl_dashboard_agent,
     "Digital RTL Handoff Ingest Agent": digital_rtl_handoff_ingest_agent,
     "Digital Spec2RTL Conformance Agent": digital_spec2rtl_conformance_agent,
+    "Digital RTL Review Agent": digital_rtl_review_agent,
+    "Digital Constraint Review Agent": digital_constraint_review_agent,
+    "Digital Timing Debug Agent": digital_timing_debug_agent,
     "Digital Bug Localization Agent": digital_bug_localization_agent,
     "Digital Formal Verification Agent": digital_formal_verification_agent,
     "Digital Synthesis Readiness Agent": digital_synthesis_readiness_agent,
@@ -817,6 +823,9 @@ SYSTEM_AGENT_FUNCTIONS: Dict[str,Any] = {
     "Digital Arch2RTL Dashboard Agent": digital_arch2rtl_dashboard_agent,
     "Digital RTL Handoff Ingest Agent": digital_rtl_handoff_ingest_agent,
     "Digital Spec2RTL Conformance Agent": digital_spec2rtl_conformance_agent,
+    "Digital RTL Review Agent": digital_rtl_review_agent,
+    "Digital Constraint Review Agent": digital_constraint_review_agent,
+    "Digital Timing Debug Agent": digital_timing_debug_agent,
     "Digital Bug Localization Agent": digital_bug_localization_agent,
     "Digital Formal Verification Agent": digital_formal_verification_agent,   
     "Digital Synthesis Readiness Agent": digital_synthesis_readiness_agent,
@@ -3451,6 +3460,30 @@ class DigitalDQAAppIn(BaseModel):
     toggles: Optional[Dict[str, bool]] = None  # {"enable_autofix":false}
 
 
+class DigitalRTLReviewAppIn(DigitalRTLSourceIn):
+    spec_text: Optional[str] = None
+    rtl_text: Optional[str] = None
+    review_depth: Optional[str] = "standard"
+    notes: Optional[str] = None
+
+
+class DigitalConstraintReviewAppIn(DigitalRTLSourceIn):
+    constraints_sdc: Optional[str] = None
+    sdc_text: Optional[str] = None
+    rtl_text: Optional[str] = None
+    target_frequency_mhz: Optional[float] = None
+    clock_constraints: Optional[Any] = None
+    notes: Optional[str] = None
+
+
+class DigitalTimingDebugAppIn(DigitalRTLSourceIn):
+    timing_report_text: Optional[str] = None
+    source_workflow_id: Optional[str] = None
+    target_frequency_mhz: Optional[float] = None
+    stage: Optional[str] = "auto"
+    notes: Optional[str] = None
+
+
 class DigitalVerifyAppIn(BaseModel):
     rtl_source_mode: Optional[str] = None
     from_workflow_id: Optional[str] = None
@@ -4370,6 +4403,73 @@ async def apps_dqa_run(request: Request, background_tasks: BackgroundTasks, payl
         "dqa",
         "Digital_DQA",
         payload.dict(),
+    )
+
+    return {"ok": True, "workflow_id": workflow_id, "run_id": run_id}
+
+
+@app.post("/apps/rtl-review/run")
+async def apps_rtl_review_run(request: Request, background_tasks: BackgroundTasks, payload: DigitalRTLReviewAppIn):
+    user_id = _require_user_id(request)
+    workflow_id, run_id, base_dir = _create_app_workflow_and_run(user_id, "App: RTL Review", "digital")
+    artifact_dir = os.path.join(base_dir, "rtl_review")
+    os.makedirs(artifact_dir, exist_ok=True)
+
+    background_tasks.add_task(
+        execute_digital_app_background,
+        workflow_id,
+        run_id,
+        user_id,
+        artifact_dir,
+        "rtl_review",
+        "Digital_RTL_Review",
+        payload.dict(),
+    )
+
+    return {"ok": True, "workflow_id": workflow_id, "run_id": run_id}
+
+
+@app.post("/apps/constraint-review/run")
+async def apps_constraint_review_run(request: Request, background_tasks: BackgroundTasks, payload: DigitalConstraintReviewAppIn):
+    user_id = _require_user_id(request)
+    workflow_id, run_id, base_dir = _create_app_workflow_and_run(user_id, "App: Constraint Review", "digital")
+    artifact_dir = os.path.join(base_dir, "constraint_review")
+    os.makedirs(artifact_dir, exist_ok=True)
+
+    background_tasks.add_task(
+        execute_digital_app_background,
+        workflow_id,
+        run_id,
+        user_id,
+        artifact_dir,
+        "constraint_review",
+        "Digital_Constraint_Review",
+        payload.dict(),
+    )
+
+    return {"ok": True, "workflow_id": workflow_id, "run_id": run_id}
+
+
+@app.post("/apps/timing-debug/run")
+async def apps_timing_debug_run(request: Request, background_tasks: BackgroundTasks, payload: DigitalTimingDebugAppIn):
+    user_id = _require_user_id(request)
+    workflow_id, run_id, base_dir = _create_app_workflow_and_run(user_id, "App: Timing Debug", "digital")
+    artifact_dir = os.path.join(base_dir, "timing_debug")
+    os.makedirs(artifact_dir, exist_ok=True)
+
+    data = payload.dict()
+    if data.get("source_workflow_id") and not data.get("from_workflow_id"):
+        data["from_workflow_id"] = data["source_workflow_id"]
+
+    background_tasks.add_task(
+        execute_digital_app_background,
+        workflow_id,
+        run_id,
+        user_id,
+        artifact_dir,
+        "timing_debug",
+        "Digital_Timing_Debug",
+        data,
     )
 
     return {"ok": True, "workflow_id": workflow_id, "run_id": run_id}
@@ -5748,6 +5848,8 @@ def _dashboard_stage_from_workflow_name(*values: Any) -> str:
         return "synthesis"
     if any(token in text for token in ("verify", "verification", "system_sim", "system sim", "closure")):
         return "verification"
+    if any(token in text for token in ("rtl_review", "rtl review", "constraint_review", "constraint review", "timing_debug", "timing debug")):
+        return "dqa"
     if any(token in text for token in ("dqa", "quality")):
         return "dqa"
     if any(token in text for token in ("firmware", "embedded")):
@@ -5771,6 +5873,9 @@ def _product_upstream_key_for_app(app_name: str) -> Optional[str]:
     return {
         "Digital_Arch2RTL": "arch2rtl",
         "Digital_DQA": "dqa",
+        "Digital_RTL_Review": "rtl_review",
+        "Digital_Constraint_Review": "constraint_review",
+        "Digital_Timing_Debug": "timing_debug",
         "Digital_Verify": "verify",
         "Digital_Arch2Synthesis": "arch2synthesis",
         "Digital_Arch2Tapeout": "tapeout",
@@ -5863,6 +5968,55 @@ def _product_stage_payload(product: Dict[str, Any], stage: Dict[str, Any], upstr
                 "run_reset": bool(_stage_setting(stage, "run_reset", True)),
                 "run_synthesis_readiness": bool(_stage_setting(stage, "run_synthesis_readiness", True)),
             },
+        }
+    if app_name == "Digital_RTL_Review":
+        arch2rtl_id = upstream.get("arch2rtl")
+        source_mode = str(_stage_setting(stage, "rtl_source_mode", "from_arch2rtl") or "from_arch2rtl")
+        if source_mode == "from_arch2rtl" and not arch2rtl_id:
+            raise RuntimeError("RTL Review requires Arch2RTL workflow output or a pasted/repo RTL source.")
+        return {
+            "rtl_source_mode": source_mode,
+            "from_workflow_id": arch2rtl_id if source_mode == "from_arch2rtl" else str(_stage_setting(stage, "from_workflow_id", "") or ""),
+            "source_arch2rtl_workflow_id": arch2rtl_id if source_mode == "from_arch2rtl" else None,
+            "source_workflow_id": arch2rtl_id if source_mode == "from_arch2rtl" else str(_stage_setting(stage, "from_workflow_id", "") or ""),
+            "repo_path": str(_stage_setting(stage, "repo_path", "") or ""),
+            "rtl_text": str(_stage_setting(stage, "rtl_text", "") or ""),
+            "spec_text": str(_stage_setting(stage, "spec_text", "") or "") or description,
+            "review_depth": str(_stage_setting(stage, "review_depth", "standard") or "standard"),
+            "upstream_workflows": {key: value for key, value in upstream.items() if value},
+        }
+    if app_name == "Digital_Constraint_Review":
+        arch2rtl_id = upstream.get("arch2rtl")
+        source_mode = str(_stage_setting(stage, "rtl_source_mode", "from_arch2rtl") or "from_arch2rtl")
+        if source_mode == "from_arch2rtl" and not arch2rtl_id:
+            raise RuntimeError("Constraint Review requires Arch2RTL workflow output or a pasted/repo RTL source.")
+        return {
+            "rtl_source_mode": source_mode,
+            "from_workflow_id": arch2rtl_id if source_mode == "from_arch2rtl" else str(_stage_setting(stage, "from_workflow_id", "") or ""),
+            "source_arch2rtl_workflow_id": arch2rtl_id if source_mode == "from_arch2rtl" else None,
+            "source_workflow_id": arch2rtl_id if source_mode == "from_arch2rtl" else str(_stage_setting(stage, "from_workflow_id", "") or ""),
+            "repo_path": str(_stage_setting(stage, "repo_path", "") or ""),
+            "rtl_text": str(_stage_setting(stage, "rtl_text", "") or ""),
+            "constraints_sdc": str(_stage_setting(stage, "constraints_sdc", "") or ""),
+            "target_frequency_mhz": float(_stage_setting(stage, "target_frequency_mhz", 100) or 100),
+            "upstream_workflows": {key: value for key, value in upstream.items() if value},
+        }
+    if app_name == "Digital_Timing_Debug":
+        source_workflow_id = (
+            str(_stage_setting(stage, "source_workflow_id", "") or "").strip()
+            or upstream.get("arch2synthesis")
+            or upstream.get("tapeout")
+            or upstream.get("system_pd")
+        )
+        if not source_workflow_id and not str(_stage_setting(stage, "timing_report_text", "") or "").strip():
+            raise RuntimeError("Timing Debug requires a source workflow with timing artifacts or pasted timing report text.")
+        return {
+            "source_workflow_id": source_workflow_id,
+            "from_workflow_id": source_workflow_id,
+            "timing_report_text": str(_stage_setting(stage, "timing_report_text", "") or ""),
+            "stage": str(_stage_setting(stage, "stage", "auto") or "auto"),
+            "target_frequency_mhz": float(_stage_setting(stage, "target_frequency_mhz", 100) or 100),
+            "upstream_workflows": {key: value for key, value in upstream.items() if value},
         }
     if app_name == "Digital_Verify":
         arch2rtl_id = upstream.get("arch2rtl")
@@ -6451,6 +6605,9 @@ def _run_product_stage(product: Dict[str, Any], product_run_id: str, stage_run: 
     digital_slug = {
         "Digital_Arch2RTL": "arch2rtl",
         "Digital_DQA": "dqa",
+        "Digital_RTL_Review": "rtl_review",
+        "Digital_Constraint_Review": "constraint_review",
+        "Digital_Timing_Debug": "timing_debug",
         "Digital_Verify": "verify",
         "Digital_Arch2Synthesis": "arch2synthesis",
         "Digital_Arch2Tapeout": "tapeout",
@@ -6459,6 +6616,9 @@ def _run_product_stage(product: Dict[str, Any], product_run_id: str, stage_run: 
     digital_template = {
         "Digital_Arch2RTL": "Digital_Arch2RTL",
         "Digital_DQA": "Digital_DQA",
+        "Digital_RTL_Review": "Digital_RTL_Review",
+        "Digital_Constraint_Review": "Digital_Constraint_Review",
+        "Digital_Timing_Debug": "Digital_Timing_Debug",
         "Digital_Verify": "Digital_Verify",
         "Digital_Arch2Synthesis": "Digital_Arch2Synthesis",
         "Digital_Arch2Tapeout": "Digital_Arch2Tapeout",

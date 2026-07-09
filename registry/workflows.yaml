@@ -49,6 +49,9 @@
         "Digital RTL Linting Agent",
         "Digital RTL Refactoring Agent",
         "Digital RTL Signature Agent",
+        "Digital RTL Review Agent",
+        "Digital Constraint Review Agent",
+        "Digital Timing Debug Agent",
         "Digital Register Map Agent",
         "Digital Reset Integrity Agent",
         "Digital Route Agent",
@@ -606,6 +609,56 @@
       "agents": [
         "Digital RTL Handoff Ingest Agent",
         "Digital Spec2RTL Conformance Agent"
+      ],
+      "hooks": [
+        "pre_run_validate_inputs",
+        "post_run_collect_artifacts",
+        "post_run_update_state",
+        "on_failure_capture_traceback",
+        "on_failure_preserve_logs",
+        "artifact_publish_to_supabase"
+      ]
+    },
+    {
+      "name": "Digital_RTL_Review",
+      "loop_type": "digital",
+      "description": "Reviews generated, purchased, or uploaded RTL for handoff readiness, coding risks, module coverage, and review recommendations.",
+      "agents": [
+        "Digital RTL Handoff Ingest Agent",
+        "Digital RTL Review Agent"
+      ],
+      "hooks": [
+        "pre_run_validate_inputs",
+        "post_run_collect_artifacts",
+        "post_run_update_state",
+        "on_failure_capture_traceback",
+        "on_failure_preserve_logs",
+        "artifact_publish_to_supabase"
+      ]
+    },
+    {
+      "name": "Digital_Constraint_Review",
+      "loop_type": "digital",
+      "description": "Checks SDC coverage against RTL clock intent and flags missing clocks, IO timing, generated-clock, and exception risks.",
+      "agents": [
+        "Digital RTL Handoff Ingest Agent",
+        "Digital Constraint Review Agent"
+      ],
+      "hooks": [
+        "pre_run_validate_inputs",
+        "post_run_collect_artifacts",
+        "post_run_update_state",
+        "on_failure_capture_traceback",
+        "on_failure_preserve_logs",
+        "artifact_publish_to_supabase"
+      ]
+    },
+    {
+      "name": "Digital_Timing_Debug",
+      "loop_type": "digital",
+      "description": "Analyzes timing reports and STA artifacts to classify negative slack, missing constraints, fanout, setup, and hold debug next steps.",
+      "agents": [
+        "Digital Timing Debug Agent"
       ],
       "hooks": [
         "pre_run_validate_inputs",
