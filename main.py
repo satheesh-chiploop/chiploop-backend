@@ -3348,6 +3348,8 @@ class DigitalArch2RTLAppIn(BaseModel):
     power_priority: Optional[str] = None
 
     toggles: Optional[Dict[str, Any]] = None  # Allows booleans plus string options such as mbist_algorithm.
+    hem_enabled: Optional[bool] = False
+    hem_mode: Optional[str] = "fixed"  # "fixed" | "adaptive"
 
 
 class DigitalRTLSourceIn(BaseModel):
@@ -4124,6 +4126,14 @@ def execute_digital_app_background(
 
         append_log_workflow(workflow_id, f"🎉 Digital App complete: {app_name}", status="completed", phase="done")
         append_log_run(run_id, f"🎉 Digital App complete: {app_name}", status="completed")
+        if app_name == "arch2rtl" and bool(shared_state.get("hem_enabled")):
+            _hem_continue_digital_rtl_after_success(
+                parent_workflow_id=workflow_id,
+                parent_run_id=run_id,
+                user_id=user_id,
+                parent_payload=payload or {},
+                hem_mode=str(shared_state.get("hem_mode") or "fixed"),
+            )
 
     except Exception as e:
         err = f"❌ Digital App crashed ({app_name}): {type(e).__name__}: {e}\n{traceback.format_exc()}"
@@ -4166,6 +4176,229 @@ def _create_app_workflow_and_run(user_id: str, app_title: str, loop_type: str):
     }).execute()
 
     return workflow_id, run_id, artifact_dir
+
+
+def _hem_insert_run_record(
+    *,
+    user_id: str,
+    root_workflow_id: str,
+    root_run_id: str,
+    mode: str,
+    current_workflow_id: str,
+    current_run_id: str,
+    current_stage: str,
+    next_stage: Optional[str],
+    status: str,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> Optional[str]:
+    hem_run_id = str(uuid.uuid4())
+    now = datetime.utcnow().isoformat()
+    try:
+        supabase.table("hem_runs").insert({
+            "id": hem_run_id,
+            "user_id": user_id,
+            "root_workflow_id": root_workflow_id,
+            "root_run_id": root_run_id,
+            "mode": mode,
+            "policy_key": "digital_rtl_default",
+            "current_workflow_id": current_workflow_id,
+            "current_run_id": current_run_id,
+            "current_stage": current_stage,
+            "next_stage": next_stage,
+            "status": status,
+            "metadata": metadata or {},
+            "created_at": now,
+            "updated_at": now,
+        }).execute()
+        return hem_run_id
+    except Exception as exc:
+        logger.warning("HEM: could not insert hem_runs record for workflow=%s: %s", root_workflow_id, exc)
+        return None
+
+
+def _hem_update_run_record(hem_run_id: Optional[str], **patch: Any) -> None:
+    if not hem_run_id:
+        return
+    try:
+        patch["updated_at"] = datetime.utcnow().isoformat()
+        supabase.table("hem_runs").update(patch).eq("id", hem_run_id).execute()
+    except Exception as exc:
+        logger.warning("HEM: could not update hem_runs id=%s: %s", hem_run_id, exc)
+
+
+def _hem_insert_event(
+    *,
+    hem_run_id: Optional[str],
+    user_id: str,
+    workflow_id: str,
+    run_id: str,
+    stage: str,
+    event_type: str,
+    status: str,
+    message: str,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> None:
+    if not hem_run_id:
+        return
+    try:
+        supabase.table("hem_run_events").insert({
+            "hem_run_id": hem_run_id,
+            "user_id": user_id,
+            "workflow_id": workflow_id,
+            "run_id": run_id,
+            "stage": stage,
+            "event_type": event_type,
+            "status": status,
+            "message": message,
+            "metadata": metadata or {},
+            "created_at": datetime.utcnow().isoformat(),
+        }).execute()
+    except Exception as exc:
+        logger.warning("HEM: could not insert hem_run_events record for workflow=%s: %s", workflow_id, exc)
+
+
+def _hem_normalized_mode(raw_mode: str) -> str:
+    return "adaptive" if str(raw_mode or "").strip().lower() == "adaptive" else "fixed"
+
+
+def _hem_continue_digital_rtl_after_success(
+    *,
+    parent_workflow_id: str,
+    parent_run_id: str,
+    user_id: str,
+    parent_payload: Dict[str, Any],
+    hem_mode: str,
+) -> None:
+    mode = _hem_normalized_mode(hem_mode)
+    hem_run_id = _hem_insert_run_record(
+        user_id=user_id,
+        root_workflow_id=parent_workflow_id,
+        root_run_id=parent_run_id,
+        mode=mode,
+        current_workflow_id=parent_workflow_id,
+        current_run_id=parent_run_id,
+        current_stage="arch2rtl",
+        next_stage="dqa",
+        status="continuing",
+        metadata={
+            "source": "arch2rtl",
+            "policy": "arch2rtl_passed_to_dqa",
+            "adaptive_learning_enabled": mode == "adaptive",
+        },
+    )
+    msg = f"HEM Automatic Run ({mode}) queued DQA because Arch2RTL completed successfully."
+    append_log_workflow(parent_workflow_id, msg, phase="hem_queued")
+    append_log_run(parent_run_id, msg)
+    _hem_insert_event(
+        hem_run_id=hem_run_id,
+        user_id=user_id,
+        workflow_id=parent_workflow_id,
+        run_id=parent_run_id,
+        stage="arch2rtl",
+        event_type="stage_passed",
+        status="completed",
+        message="Arch2RTL completed; fixed Digital RTL policy selected DQA as the next stage.",
+        metadata={"next_stage": "dqa", "mode": mode},
+    )
+
+    child_workflow_id, child_run_id, base_dir = _create_app_workflow_and_run(user_id, "HEM: DQA", "digital")
+    child_artifact_dir = os.path.join(base_dir, "dqa")
+    os.makedirs(child_artifact_dir, exist_ok=True)
+    child_payload: Dict[str, Any] = {
+        "rtl_source_mode": "from_arch2rtl",
+        "from_workflow_id": parent_workflow_id,
+        "source_arch2rtl_workflow_id": parent_workflow_id,
+        "parent_workflow_id": parent_workflow_id,
+        "upstream_workflows": {"arch2rtl": parent_workflow_id},
+        "project_name": parent_payload.get("project_name"),
+        "top_module": parent_payload.get("top_module"),
+        "lint_profile": "default",
+        "cdc_profile": "default",
+        "hem_enabled": True,
+        "hem_mode": mode,
+        "hem_parent_workflow_id": parent_workflow_id,
+        "hem_parent_run_id": parent_run_id,
+        "hem_run_id": hem_run_id,
+    }
+    _hem_update_run_record(
+        hem_run_id,
+        current_workflow_id=child_workflow_id,
+        current_run_id=child_run_id,
+        current_stage="dqa",
+        next_stage=None,
+        status="running",
+        metadata={
+            "source": "arch2rtl",
+            "policy": "arch2rtl_passed_to_dqa",
+            "adaptive_learning_enabled": mode == "adaptive",
+            "completed": [{"stage": "arch2rtl", "workflow_id": parent_workflow_id, "run_id": parent_run_id}],
+        },
+    )
+    _hem_insert_event(
+        hem_run_id=hem_run_id,
+        user_id=user_id,
+        workflow_id=child_workflow_id,
+        run_id=child_run_id,
+        stage="dqa",
+        event_type="stage_started",
+        status="running",
+        message="HEM started DQA from the completed Arch2RTL workflow.",
+        metadata={"source_arch2rtl_workflow_id": parent_workflow_id, "mode": mode},
+    )
+    append_log_workflow(parent_workflow_id, f"HEM started DQA workflow {child_workflow_id}.", phase="hem_running")
+    append_log_run(parent_run_id, f"HEM started DQA workflow {child_workflow_id}.")
+    append_log_workflow(child_workflow_id, f"HEM started DQA from Arch2RTL workflow {parent_workflow_id}.", phase="hem_start")
+    append_log_run(child_run_id, f"HEM started DQA from Arch2RTL workflow {parent_workflow_id}.")
+
+    try:
+        execute_digital_app_background(
+            child_workflow_id,
+            child_run_id,
+            user_id,
+            child_artifact_dir,
+            "dqa",
+            "Digital_DQA",
+            child_payload,
+        )
+        child_row = supabase.table("workflows").select("status").eq("id", child_workflow_id).single().execute().data or {}
+        child_status = str(child_row.get("status") or "unknown")
+        _hem_update_run_record(
+            hem_run_id,
+            status="completed" if child_status == "completed" else "stopped",
+            current_workflow_id=child_workflow_id,
+            current_run_id=child_run_id,
+            current_stage="dqa",
+            next_stage=None,
+        )
+        _hem_insert_event(
+            hem_run_id=hem_run_id,
+            user_id=user_id,
+            workflow_id=child_workflow_id,
+            run_id=child_run_id,
+            stage="dqa",
+            event_type="stage_finished",
+            status=child_status,
+            message=f"HEM DQA finished with status {child_status}.",
+            metadata={"mode": mode},
+        )
+        append_log_workflow(parent_workflow_id, f"HEM DQA finished with status {child_status}.", phase="hem_done")
+        append_log_run(parent_run_id, f"HEM DQA finished with status {child_status}.")
+    except Exception as exc:
+        err = f"HEM DQA continuation failed: {type(exc).__name__}: {exc}"
+        _hem_update_run_record(hem_run_id, status="failed", next_stage=None, metadata={"error": err})
+        _hem_insert_event(
+            hem_run_id=hem_run_id,
+            user_id=user_id,
+            workflow_id=child_workflow_id,
+            run_id=child_run_id,
+            stage="dqa",
+            event_type="stage_failed",
+            status="failed",
+            message=err,
+            metadata={"mode": mode},
+        )
+        append_log_workflow(parent_workflow_id, err, phase="hem_error")
+        append_log_run(parent_run_id, err)
 
 
 @app.post("/apps/arch2rtl/run")
