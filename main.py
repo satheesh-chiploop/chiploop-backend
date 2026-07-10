@@ -11,7 +11,7 @@ import time;time.sleep(0.2)
 import io
 import zipfile
 from pydantic import BaseModel, Field
-from typing import Optional, Dict, Any, Literal
+from typing import Optional, Dict, Any, Literal, Tuple
 from typing import Any, Iterable
 from fastapi.responses import StreamingResponse
 from fastapi import HTTPException
@@ -3451,6 +3451,8 @@ class DigitalDQAAppIn(BaseModel):
     source_arch2rtl_workflow_id: Optional[str] = None
     parent_workflow_id: Optional[str] = None
     upstream_workflows: Optional[Dict[str, Any]] = None
+    hem_enabled: Optional[bool] = False
+    hem_mode: Optional[str] = "fixed"
 
     clocks: Optional[Any] = None
     resets: Optional[Any] = None
@@ -3496,6 +3498,8 @@ class DigitalVerifyAppIn(BaseModel):
     source_arch2rtl_workflow_id: Optional[str] = None
     parent_workflow_id: Optional[str] = None
     upstream_workflows: Optional[Dict[str, Any]] = None
+    hem_enabled: Optional[bool] = False
+    hem_mode: Optional[str] = "fixed"
 
     test_intent: Optional[str] = None
     verification_plan: Optional[str] = None
@@ -4126,10 +4130,11 @@ def execute_digital_app_background(
 
         append_log_workflow(workflow_id, f"🎉 Digital App complete: {app_name}", status="completed", phase="done")
         append_log_run(run_id, f"🎉 Digital App complete: {app_name}", status="completed")
-        if app_name == "arch2rtl" and bool(shared_state.get("hem_enabled")):
+        if app_name in {"arch2rtl", "dqa", "verify", "arch2synthesis", "arch2tapeout"} and bool(shared_state.get("hem_enabled")):
             _hem_continue_digital_rtl_after_success(
-                parent_workflow_id=workflow_id,
-                parent_run_id=run_id,
+                current_app=app_name,
+                current_workflow_id=workflow_id,
+                current_run_id=run_id,
                 user_id=user_id,
                 parent_payload=payload or {},
                 hem_mode=str(shared_state.get("hem_mode") or "fixed"),
@@ -4261,94 +4266,410 @@ def _hem_normalized_mode(raw_mode: str) -> str:
     return "adaptive" if str(raw_mode or "").strip().lower() == "adaptive" else "fixed"
 
 
+HEM_DIGITAL_RTL_FIXED_POLICY: Dict[str, Optional[str]] = {
+    "arch2rtl": "dqa",
+    "dqa": "verify",
+    "verify": "arch2synthesis",
+    "arch2synthesis": "arch2tapeout",
+    "arch2tapeout": None,
+}
+
+HEM_DIGITAL_RTL_POLICY_KEY = "digital_rtl_default"
+HEM_DEFAULT_LEARNING_RATE = 0.1
+HEM_DEFAULT_ACTIVITY = 1.0
+HEM_MIN_ADAPTIVE_ATTEMPTS = 1
+
+HEM_DIGITAL_RTL_CANDIDATE_POLICY: Dict[str, List[str]] = {
+    "arch2rtl": ["dqa"],
+    "dqa": ["verify"],
+    "verify": ["arch2synthesis"],
+    "arch2synthesis": ["arch2tapeout"],
+}
+
+HEM_DIGITAL_RTL_STAGE_META: Dict[str, Dict[str, str]] = {
+    "dqa": {"title": "HEM: DQA", "artifact": "dqa", "template": "Digital_DQA", "label": "DQA"},
+    "verify": {"title": "HEM: Verification", "artifact": "verify", "template": "Digital_Verify", "label": "Verification"},
+    "arch2synthesis": {"title": "HEM: Synthesis", "artifact": "arch2synthesis", "template": "Digital_Arch2Synthesis", "label": "Synthesis"},
+    "arch2tapeout": {"title": "HEM: Tapeout", "artifact": "arch2tapeout", "template": "Digital_Arch2Tapeout", "label": "Tapeout"},
+}
+
+
+def _hem_stage_dashboard_path(app_name: str, workflow_id: str) -> str:
+    stage = {
+        "dqa": "dqa",
+        "verify": "verification",
+        "arch2synthesis": "synthesis",
+        "arch2tapeout": "tapeout",
+    }.get(app_name, app_name)
+    return f"/dashboard/{workflow_id}?stage={stage}&app=HEM"
+
+
+def _hem_source_arch2rtl_workflow_id(current_app: str, current_workflow_id: str, parent_payload: Dict[str, Any]) -> str:
+    upstream = parent_payload.get("upstream_workflows") if isinstance(parent_payload.get("upstream_workflows"), dict) else {}
+    source = (
+        parent_payload.get("source_arch2rtl_workflow_id")
+        or parent_payload.get("from_workflow_id")
+        or upstream.get("arch2rtl")
+    )
+    return str(source or current_workflow_id)
+
+
+def _hem_policy_weight_row(user_id: str, from_stage: str, to_stage: str) -> Optional[Dict[str, Any]]:
+    try:
+        rows = (
+            supabase.table("hem_policy_weights")
+            .select("*")
+            .eq("user_id", user_id)
+            .eq("policy_key", HEM_DIGITAL_RTL_POLICY_KEY)
+            .eq("from_stage", from_stage)
+            .eq("to_stage", to_stage)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        return rows[0] if rows else None
+    except Exception as exc:
+        logger.warning("HEM: could not read adaptive policy weight %s->%s for user=%s: %s", from_stage, to_stage, user_id, exc)
+        return None
+
+
+def _hem_policy_insert_or_update(
+    *,
+    user_id: str,
+    from_stage: str,
+    to_stage: str,
+    patch: Dict[str, Any],
+    insert_defaults: Optional[Dict[str, Any]] = None,
+) -> None:
+    now = datetime.utcnow().isoformat()
+    row = _hem_policy_weight_row(user_id, from_stage, to_stage)
+    try:
+        if row:
+            supabase.table("hem_policy_weights").update({**patch, "updated_at": now}).eq("id", row["id"]).execute()
+            return
+        record = {
+            "user_id": user_id,
+            "policy_key": HEM_DIGITAL_RTL_POLICY_KEY,
+            "from_stage": from_stage,
+            "to_stage": to_stage,
+            "weight": 1.0,
+            "learning_rate": HEM_DEFAULT_LEARNING_RATE,
+            "attempt_count": 0,
+            "success_count": 0,
+            "metadata": {},
+            "created_at": now,
+            "updated_at": now,
+        }
+        record.update(insert_defaults or {})
+        record.update(patch)
+        supabase.table("hem_policy_weights").insert(record).execute()
+    except Exception as exc:
+        logger.warning("HEM: could not write adaptive policy weight %s->%s for user=%s: %s", from_stage, to_stage, user_id, exc)
+
+
+def _hem_record_transition_attempt(user_id: str, from_stage: str, to_stage: str, *, hem_run_id: Optional[str]) -> None:
+    row = _hem_policy_weight_row(user_id, from_stage, to_stage)
+    attempt_count = int((row or {}).get("attempt_count") or 0) + 1
+    metadata = dict((row or {}).get("metadata") or {})
+    metadata.update({"last_hem_run_id": hem_run_id, "last_attempted_at": datetime.utcnow().isoformat()})
+    _hem_policy_insert_or_update(
+        user_id=user_id,
+        from_stage=from_stage,
+        to_stage=to_stage,
+        patch={
+            "attempt_count": attempt_count,
+            "last_outcome": "started",
+            "metadata": metadata,
+        },
+    )
+
+
+def _hem_record_successful_transition(
+    *,
+    user_id: str,
+    from_stage: str,
+    to_stage: str,
+    hem_run_id: Optional[str],
+    from_activity: float = HEM_DEFAULT_ACTIVITY,
+    to_activity: float = HEM_DEFAULT_ACTIVITY,
+) -> Dict[str, Any]:
+    row = _hem_policy_weight_row(user_id, from_stage, to_stage) or {}
+    current_weight = float(row.get("weight") or 1.0)
+    learning_rate = float(row.get("learning_rate") or HEM_DEFAULT_LEARNING_RATE)
+    delta = learning_rate * from_activity * to_activity
+    new_weight = current_weight + delta
+    attempt_count = max(int(row.get("attempt_count") or 0), 1)
+    success_count = int(row.get("success_count") or 0) + 1
+    metadata = dict(row.get("metadata") or {})
+    metadata.update({
+        "equation": "delta_w_ij = eta * x_i * x_j",
+        "last_delta": delta,
+        "last_from_activity": from_activity,
+        "last_to_activity": to_activity,
+        "last_hem_run_id": hem_run_id,
+        "last_success_at": datetime.utcnow().isoformat(),
+    })
+    _hem_policy_insert_or_update(
+        user_id=user_id,
+        from_stage=from_stage,
+        to_stage=to_stage,
+        patch={
+            "weight": new_weight,
+            "learning_rate": learning_rate,
+            "attempt_count": attempt_count,
+            "success_count": success_count,
+            "last_outcome": "completed",
+            "metadata": metadata,
+        },
+        insert_defaults={"learning_rate": learning_rate},
+    )
+    return {
+        "from_stage": from_stage,
+        "to_stage": to_stage,
+        "previous_weight": current_weight,
+        "new_weight": new_weight,
+        "delta": delta,
+        "learning_rate": learning_rate,
+        "from_activity": from_activity,
+        "to_activity": to_activity,
+        "success_count": success_count,
+        "attempt_count": attempt_count,
+    }
+
+
+def _hem_select_next_stage(user_id: str, current_stage: str, mode: str) -> Tuple[Optional[str], Dict[str, Any]]:
+    fixed_next = HEM_DIGITAL_RTL_FIXED_POLICY.get(current_stage)
+    if mode != "adaptive":
+        return fixed_next, {"policy": "fixed", "selected": fixed_next}
+
+    candidates = HEM_DIGITAL_RTL_CANDIDATE_POLICY.get(current_stage) or []
+    if not candidates:
+        return None, {"policy": "adaptive", "selected": None, "reason": "terminal_stage"}
+
+    scored: List[Dict[str, Any]] = []
+    for candidate in candidates:
+        row = _hem_policy_weight_row(user_id, current_stage, candidate)
+        scored.append({
+            "stage": candidate,
+            "weight": float((row or {}).get("weight") or 1.0),
+            "attempt_count": int((row or {}).get("attempt_count") or 0),
+            "success_count": int((row or {}).get("success_count") or 0),
+            "learned": bool(row),
+        })
+
+    learned = [item for item in scored if item["attempt_count"] >= HEM_MIN_ADAPTIVE_ATTEMPTS]
+    selected = max(learned or scored, key=lambda item: (item["weight"], item["success_count"])) if scored else None
+    selected_stage = str(selected["stage"]) if selected else fixed_next
+    if selected_stage not in candidates:
+        selected_stage = fixed_next
+    return selected_stage, {
+        "policy": "adaptive",
+        "selected": selected_stage,
+        "fixed_fallback": fixed_next,
+        "candidates": scored,
+        "selection_basis": "learned_weight" if learned else "default_weight",
+    }
+
+
+def _hem_build_child_payload(
+    *,
+    next_app: str,
+    current_app: str,
+    current_workflow_id: str,
+    current_run_id: str,
+    source_arch2rtl_workflow_id: str,
+    parent_payload: Dict[str, Any],
+    hem_run_id: Optional[str],
+    mode: str,
+) -> Dict[str, Any]:
+    upstream = parent_payload.get("upstream_workflows") if isinstance(parent_payload.get("upstream_workflows"), dict) else {}
+    upstream = {
+        **upstream,
+        "arch2rtl": source_arch2rtl_workflow_id,
+        current_app: current_workflow_id,
+    }
+    common: Dict[str, Any] = {
+        "rtl_source_mode": "from_arch2rtl",
+        "from_workflow_id": source_arch2rtl_workflow_id,
+        "source_arch2rtl_workflow_id": source_arch2rtl_workflow_id,
+        "parent_workflow_id": current_workflow_id,
+        "upstream_workflows": upstream,
+        "project_name": parent_payload.get("project_name"),
+        "top_module": parent_payload.get("top_module"),
+        "clock_constraints": parent_payload.get("clock_constraints"),
+        "hem_enabled": True,
+        "hem_mode": mode,
+        "hem_run_id": hem_run_id,
+        "hem_root_workflow_id": parent_payload.get("hem_root_workflow_id") or current_workflow_id,
+        "hem_root_run_id": parent_payload.get("hem_root_run_id") or parent_payload.get("hem_parent_run_id") or current_run_id,
+    }
+    if next_app == "dqa":
+        return {
+            **common,
+            "lint_profile": parent_payload.get("lint_profile") or "default",
+            "cdc_profile": parent_payload.get("cdc_profile") or "default",
+            "target": parent_payload.get("target") or "asic",
+        }
+    if next_app == "verify":
+        return {
+            **common,
+            "test_intent": parent_payload.get("test_intent") or "Verify generated RTL against the design specification, reset behavior, register behavior, and major interface scenarios.",
+            "random_vs_directed": parent_payload.get("random_vs_directed") or "directed",
+            "coverage_targets": parent_payload.get("coverage_targets") or "Interface behavior, reset behavior, register access, and key functional corner cases.",
+            "simulator_type": parent_payload.get("simulator_type") or "verilator",
+            "seed_count": int(parent_payload.get("seed_count") or 4),
+        }
+    if next_app == "arch2synthesis":
+        return {
+            **common,
+            "foundry": parent_payload.get("foundry") or "sky130",
+            "pdk": parent_payload.get("pdk") or "sky130A",
+            "toolchain": parent_payload.get("toolchain") or "openlane2",
+            "target_frequency_mhz": parent_payload.get("target_frequency_mhz") or 100,
+            "constraints_sdc": parent_payload.get("constraints_sdc"),
+            "start_stage": "synth",
+            "stop_stage": "synth",
+            "run_synthesis_closure_loop": bool(parent_payload.get("run_synthesis_closure_loop") or False),
+            "max_synthesis_closure_iterations": int(parent_payload.get("max_synthesis_closure_iterations") or 1),
+        }
+    if next_app == "arch2tapeout":
+        return {
+            **common,
+            "foundry": parent_payload.get("foundry") or "sky130",
+            "pdk": parent_payload.get("pdk") or "sky130A",
+            "toolchain": parent_payload.get("toolchain") or "openlane2",
+            "target_frequency_mhz": parent_payload.get("target_frequency_mhz") or 100,
+            "constraints_sdc": parent_payload.get("constraints_sdc"),
+            "start_stage": "synth",
+            "stop_stage": "tapeout",
+            "effort": parent_payload.get("effort") or "balanced",
+            "run_fill": True,
+            "run_drc": True,
+            "run_lvs": True,
+        }
+    return common
+
+
 def _hem_continue_digital_rtl_after_success(
     *,
-    parent_workflow_id: str,
-    parent_run_id: str,
+    current_app: str,
+    current_workflow_id: str,
+    current_run_id: str,
     user_id: str,
     parent_payload: Dict[str, Any],
     hem_mode: str,
 ) -> None:
     mode = _hem_normalized_mode(hem_mode)
-    hem_run_id = _hem_insert_run_record(
-        user_id=user_id,
-        root_workflow_id=parent_workflow_id,
-        root_run_id=parent_run_id,
-        mode=mode,
-        current_workflow_id=parent_workflow_id,
-        current_run_id=parent_run_id,
-        current_stage="arch2rtl",
-        next_stage="dqa",
-        status="continuing",
-        metadata={
-            "source": "arch2rtl",
-            "policy": "arch2rtl_passed_to_dqa",
-            "adaptive_learning_enabled": mode == "adaptive",
-        },
-    )
-    msg = f"HEM Automatic Run ({mode}) queued DQA because Arch2RTL completed successfully."
-    append_log_workflow(parent_workflow_id, msg, phase="hem_queued")
-    append_log_run(parent_run_id, msg)
+    if current_app not in HEM_DIGITAL_RTL_FIXED_POLICY:
+        return
+    next_app, selection_meta = _hem_select_next_stage(user_id, current_app, mode)
+    source_arch2rtl_workflow_id = _hem_source_arch2rtl_workflow_id(current_app, current_workflow_id, parent_payload)
+    root_workflow_id = str(parent_payload.get("hem_root_workflow_id") or current_workflow_id)
+    root_run_id = str(parent_payload.get("hem_root_run_id") or parent_payload.get("hem_parent_run_id") or current_run_id)
+    hem_run_id = parent_payload.get("hem_run_id")
+    if not hem_run_id:
+        hem_run_id = _hem_insert_run_record(
+            user_id=user_id,
+            root_workflow_id=root_workflow_id,
+            root_run_id=root_run_id,
+            mode=mode,
+            current_workflow_id=current_workflow_id,
+            current_run_id=current_run_id,
+            current_stage=current_app,
+            next_stage=next_app,
+            status="continuing" if next_app else "completed",
+            metadata={
+                "source": "digital_rtl",
+                "policy": "digital_rtl_adaptive_policy" if mode == "adaptive" else "digital_rtl_fixed_policy",
+                "adaptive_learning_enabled": mode == "adaptive",
+                "selection": selection_meta,
+                "completed": [],
+            },
+        )
+
+    if not next_app:
+        msg = f"HEM Automatic Run ({mode}) completed fixed Digital RTL policy at {current_app}."
+        append_log_workflow(root_workflow_id, msg, phase="hem_complete")
+        if root_run_id:
+            append_log_run(root_run_id, msg)
+        _hem_update_run_record(
+            str(hem_run_id) if hem_run_id else None,
+            current_workflow_id=current_workflow_id,
+            current_run_id=current_run_id,
+            current_stage=current_app,
+            next_stage=None,
+            status="completed",
+        )
+        return
+
+    next_meta = HEM_DIGITAL_RTL_STAGE_META[next_app]
+    next_label = next_meta["label"]
+    msg = f"HEM Automatic Run ({mode}) queued {next_label} because {current_app} completed successfully."
+    if mode == "adaptive":
+        msg += f" Adaptive selection: {selection_meta.get('selection_basis', 'default_weight')}."
+    append_log_workflow(root_workflow_id, msg, phase="hem_queued")
+    if root_run_id:
+        append_log_run(root_run_id, msg)
     _hem_insert_event(
-        hem_run_id=hem_run_id,
+        hem_run_id=str(hem_run_id) if hem_run_id else None,
         user_id=user_id,
-        workflow_id=parent_workflow_id,
-        run_id=parent_run_id,
-        stage="arch2rtl",
+        workflow_id=current_workflow_id,
+        run_id=current_run_id,
+        stage=current_app,
         event_type="stage_passed",
         status="completed",
-        message="Arch2RTL completed; fixed Digital RTL policy selected DQA as the next stage.",
-        metadata={"next_stage": "dqa", "mode": mode},
+        message=f"{current_app} completed; HEM selected {next_app} as the next stage.",
+        metadata={"next_stage": next_app, "mode": mode, "selection": selection_meta},
     )
 
-    child_workflow_id, child_run_id, base_dir = _create_app_workflow_and_run(user_id, "HEM: DQA", "digital")
-    child_artifact_dir = os.path.join(base_dir, "dqa")
+    child_workflow_id, child_run_id, base_dir = _create_app_workflow_and_run(user_id, next_meta["title"], "digital")
+    child_artifact_dir = os.path.join(base_dir, next_meta["artifact"])
     os.makedirs(child_artifact_dir, exist_ok=True)
-    child_payload: Dict[str, Any] = {
-        "rtl_source_mode": "from_arch2rtl",
-        "from_workflow_id": parent_workflow_id,
-        "source_arch2rtl_workflow_id": parent_workflow_id,
-        "parent_workflow_id": parent_workflow_id,
-        "upstream_workflows": {"arch2rtl": parent_workflow_id},
-        "project_name": parent_payload.get("project_name"),
-        "top_module": parent_payload.get("top_module"),
-        "lint_profile": "default",
-        "cdc_profile": "default",
-        "hem_enabled": True,
-        "hem_mode": mode,
-        "hem_parent_workflow_id": parent_workflow_id,
-        "hem_parent_run_id": parent_run_id,
-        "hem_run_id": hem_run_id,
-    }
+    child_payload = _hem_build_child_payload(
+        next_app=next_app,
+        current_app=current_app,
+        current_workflow_id=current_workflow_id,
+        current_run_id=current_run_id,
+        source_arch2rtl_workflow_id=source_arch2rtl_workflow_id,
+        parent_payload=parent_payload,
+        hem_run_id=str(hem_run_id) if hem_run_id else None,
+        mode=mode,
+    )
     _hem_update_run_record(
-        hem_run_id,
+        str(hem_run_id) if hem_run_id else None,
         current_workflow_id=child_workflow_id,
         current_run_id=child_run_id,
-        current_stage="dqa",
-        next_stage=None,
+        current_stage=next_app,
+        next_stage=HEM_DIGITAL_RTL_FIXED_POLICY.get(next_app),
         status="running",
         metadata={
-            "source": "arch2rtl",
-            "policy": "arch2rtl_passed_to_dqa",
+            "source": "digital_rtl",
+            "policy": "digital_rtl_adaptive_policy" if mode == "adaptive" else "digital_rtl_fixed_policy",
             "adaptive_learning_enabled": mode == "adaptive",
-            "completed": [{"stage": "arch2rtl", "workflow_id": parent_workflow_id, "run_id": parent_run_id}],
+            "selection": selection_meta,
+            "last_completed": {"stage": current_app, "workflow_id": current_workflow_id, "run_id": current_run_id},
         },
     )
+    if mode == "adaptive":
+        _hem_record_transition_attempt(user_id, current_app, next_app, hem_run_id=str(hem_run_id) if hem_run_id else None)
     _hem_insert_event(
-        hem_run_id=hem_run_id,
+        hem_run_id=str(hem_run_id) if hem_run_id else None,
         user_id=user_id,
         workflow_id=child_workflow_id,
         run_id=child_run_id,
-        stage="dqa",
+        stage=next_app,
         event_type="stage_started",
         status="running",
-        message="HEM started DQA from the completed Arch2RTL workflow.",
-        metadata={"source_arch2rtl_workflow_id": parent_workflow_id, "mode": mode},
+        message=f"HEM started {next_label} from completed {current_app}.",
+        metadata={"source_arch2rtl_workflow_id": source_arch2rtl_workflow_id, "mode": mode, "selection": selection_meta},
     )
-    append_log_workflow(parent_workflow_id, f"HEM started DQA workflow {child_workflow_id}.", phase="hem_running")
-    append_log_run(parent_run_id, f"HEM started DQA workflow {child_workflow_id}.")
-    append_log_workflow(child_workflow_id, f"HEM started DQA from Arch2RTL workflow {parent_workflow_id}.", phase="hem_start")
-    append_log_run(child_run_id, f"HEM started DQA from Arch2RTL workflow {parent_workflow_id}.")
+    dashboard_path = _hem_stage_dashboard_path(next_app, child_workflow_id)
+    append_log_workflow(root_workflow_id, f"HEM started {next_label} workflow {child_workflow_id}. Dashboard: {dashboard_path}", phase="hem_running")
+    if root_run_id:
+        append_log_run(root_run_id, f"HEM started {next_label} workflow {child_workflow_id}. Dashboard: {dashboard_path}")
+    append_log_workflow(child_workflow_id, f"HEM started {next_label} from {current_app} workflow {current_workflow_id}.", phase="hem_start")
+    append_log_run(child_run_id, f"HEM started {next_label} from {current_app} workflow {current_workflow_id}.")
 
     try:
         execute_digital_app_background(
@@ -4356,49 +4677,68 @@ def _hem_continue_digital_rtl_after_success(
             child_run_id,
             user_id,
             child_artifact_dir,
-            "dqa",
-            "Digital_DQA",
+            next_app,
+            next_meta["template"],
             child_payload,
         )
         child_row = supabase.table("workflows").select("status").eq("id", child_workflow_id).single().execute().data or {}
         child_status = str(child_row.get("status") or "unknown")
+        learning_update = None
+        if mode == "adaptive" and child_status == "completed":
+            learning_update = _hem_record_successful_transition(
+                user_id=user_id,
+                from_stage=current_app,
+                to_stage=next_app,
+                hem_run_id=str(hem_run_id) if hem_run_id else None,
+            )
         _hem_update_run_record(
-            hem_run_id,
-            status="completed" if child_status == "completed" else "stopped",
+            str(hem_run_id) if hem_run_id else None,
+            status="running" if child_status == "completed" and HEM_DIGITAL_RTL_FIXED_POLICY.get(next_app) else ("completed" if child_status == "completed" else "stopped"),
             current_workflow_id=child_workflow_id,
             current_run_id=child_run_id,
-            current_stage="dqa",
-            next_stage=None,
+            current_stage=next_app,
+            next_stage=HEM_DIGITAL_RTL_FIXED_POLICY.get(next_app),
         )
         _hem_insert_event(
-            hem_run_id=hem_run_id,
+            hem_run_id=str(hem_run_id) if hem_run_id else None,
             user_id=user_id,
             workflow_id=child_workflow_id,
             run_id=child_run_id,
-            stage="dqa",
+            stage=next_app,
             event_type="stage_finished",
             status=child_status,
-            message=f"HEM DQA finished with status {child_status}.",
-            metadata={"mode": mode},
+            message=f"HEM {next_label} finished with status {child_status}.",
+            metadata={"mode": mode, "learning_update": learning_update},
         )
-        append_log_workflow(parent_workflow_id, f"HEM DQA finished with status {child_status}.", phase="hem_done")
-        append_log_run(parent_run_id, f"HEM DQA finished with status {child_status}.")
+        append_log_workflow(root_workflow_id, f"HEM {next_label} finished with status {child_status}.", phase="hem_done")
+        if root_run_id:
+            append_log_run(root_run_id, f"HEM {next_label} finished with status {child_status}.")
+        if learning_update:
+            learn_msg = (
+                f"HEM adaptive learning updated {current_app}->{next_app}: "
+                f"w {learning_update['previous_weight']:.3f} -> {learning_update['new_weight']:.3f} "
+                f"(delta={learning_update['delta']:.3f}, eta={learning_update['learning_rate']:.3f})."
+            )
+            append_log_workflow(root_workflow_id, learn_msg, phase="hem_learning")
+            if root_run_id:
+                append_log_run(root_run_id, learn_msg)
     except Exception as exc:
-        err = f"HEM DQA continuation failed: {type(exc).__name__}: {exc}"
-        _hem_update_run_record(hem_run_id, status="failed", next_stage=None, metadata={"error": err})
+        err = f"HEM {next_label} continuation failed: {type(exc).__name__}: {exc}"
+        _hem_update_run_record(str(hem_run_id) if hem_run_id else None, status="failed", next_stage=None, metadata={"error": err})
         _hem_insert_event(
-            hem_run_id=hem_run_id,
+            hem_run_id=str(hem_run_id) if hem_run_id else None,
             user_id=user_id,
             workflow_id=child_workflow_id,
             run_id=child_run_id,
-            stage="dqa",
+            stage=next_app,
             event_type="stage_failed",
             status="failed",
             message=err,
             metadata={"mode": mode},
         )
-        append_log_workflow(parent_workflow_id, err, phase="hem_error")
-        append_log_run(parent_run_id, err)
+        append_log_workflow(root_workflow_id, err, phase="hem_error")
+        if root_run_id:
+            append_log_run(root_run_id, err)
 
 
 @app.post("/apps/arch2rtl/run")
