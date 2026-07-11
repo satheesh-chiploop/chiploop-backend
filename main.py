@@ -4293,6 +4293,14 @@ HEM_DIGITAL_RTL_STAGE_META: Dict[str, Dict[str, str]] = {
     "arch2tapeout": {"title": "HEM: Tapeout", "artifact": "arch2tapeout", "template": "Digital_Arch2Tapeout", "label": "Tapeout"},
 }
 
+HEM_DIGITAL_RTL_COMPLETION_SUMMARY: Dict[str, List[str]] = {
+    "arch2rtl": ["Arch2RTL"],
+    "dqa": ["DQA"],
+    "verify": ["DQA", "Verification"],
+    "arch2synthesis": ["DQA", "Verification", "Synthesis"],
+    "arch2tapeout": ["DQA", "Verification", "Synthesis", "Tapeout"],
+}
+
 
 def _hem_stage_dashboard_path(app_name: str, workflow_id: str) -> str:
     stage = {
@@ -4589,7 +4597,12 @@ def _hem_continue_digital_rtl_after_success(
         )
 
     if not next_app:
-        msg = f"HEM Automatic Run ({mode}) completed fixed Digital RTL policy at {current_app}."
+        completed_stages = HEM_DIGITAL_RTL_COMPLETION_SUMMARY.get(current_app, [current_app])
+        completed_text = ", ".join(completed_stages)
+        msg = (
+            f"HEM Automatic Run ({mode}) completed with respect to Arch2RTL: "
+            f"{completed_text} completed."
+        )
         append_log_workflow(root_workflow_id, msg, phase="hem_complete")
         if root_run_id:
             append_log_run(root_run_id, msg)
@@ -4600,6 +4613,13 @@ def _hem_continue_digital_rtl_after_success(
             current_stage=current_app,
             next_stage=None,
             status="completed",
+            metadata={
+                "source": "digital_rtl",
+                "policy": "digital_rtl_adaptive_policy" if mode == "adaptive" else "digital_rtl_fixed_policy",
+                "adaptive_learning_enabled": mode == "adaptive",
+                "completed_stages": completed_stages,
+                "summary": msg,
+            },
         )
         return
 
