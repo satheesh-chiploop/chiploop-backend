@@ -2788,6 +2788,13 @@ class SystemAppIn(BaseModel):
     system_sim_seeds: Optional[List[int]] = None
     system_sim_num_iters: Optional[int] = None
     toggles: Optional[Dict[str, Any]] = None
+    hem_enabled: Optional[bool] = False
+    hem_mode: Optional[str] = "fixed"
+    hem_goal: Optional[str] = "product_demo"
+    hem_stage_toggles: Optional[Dict[str, Any]] = None
+    hem_run_id: Optional[str] = None
+    hem_root_workflow_id: Optional[str] = None
+    hem_root_run_id: Optional[str] = None
 
 
 class SystemArchitectureAppIn(BaseModel):
@@ -4301,6 +4308,70 @@ HEM_DIGITAL_RTL_COMPLETION_SUMMARY: Dict[str, List[str]] = {
     "arch2tapeout": ["DQA", "Verification", "Synthesis", "Tapeout"],
 }
 
+HEM_SYSTEM_RTL_POLICY_KEY = "system_rtl_default"
+
+HEM_SYSTEM_RTL_PATHS: Dict[str, List[str]] = {
+    "product_demo": [
+        "System_RTL",
+        "System_DQA",
+        "System_Sim",
+        "System_Firmware",
+        "System_Software",
+        "System_Software_Validation_L2",
+        "System_Product_App_Builder",
+    ],
+    "implementation": [
+        "System_RTL",
+        "System_DQA",
+        "System_Synthesis",
+        "System_PD",
+    ],
+}
+
+HEM_SYSTEM_STAGE_TOGGLE_KEYS: Dict[str, str] = {
+    "System_DQA": "system_dqa",
+    "System_Sim": "system_sim",
+    "System_Firmware": "system_firmware",
+    "System_Software": "system_software",
+    "System_Software_Validation_L2": "system_validation",
+    "System_Product_App_Builder": "system_product",
+    "System_Synthesis": "system_synthesis",
+    "System_PD": "system_pd",
+}
+
+HEM_SYSTEM_RTL_STAGE_META: Dict[str, Dict[str, str]] = {
+    "System_DQA": {"title": "HEM: System DQA", "artifact": "system", "label": "System DQA", "stage": "dqa", "app": "system"},
+    "System_Sim": {"title": "HEM: System Sim", "artifact": "system", "label": "System Sim", "stage": "verification", "app": "system"},
+    "System_Firmware": {"title": "HEM: System Firmware", "artifact": "system", "label": "Firmware", "stage": "firmware", "app": "system"},
+    "System_Software": {"title": "HEM: System Software", "artifact": "system-software", "label": "Software", "stage": "software", "app": "system-software"},
+    "System_Software_Validation_L2": {"title": "HEM: Co-simulation / Validation", "artifact": "system-software-validation", "label": "Co-simulation / Validation", "stage": "validation", "app": "system-software-validation"},
+    "System_Product_App_Builder": {"title": "HEM: Product Demo", "artifact": "system-product-builder", "label": "Product Demo", "stage": "product", "app": "system-product-builder"},
+    "System_Synthesis": {"title": "HEM: System Synthesis", "artifact": "system", "label": "System Synthesis", "stage": "synthesis", "app": "system"},
+    "System_PD": {"title": "HEM: System PD", "artifact": "system", "label": "System PD", "stage": "tapeout", "app": "system"},
+}
+
+HEM_SYSTEM_RTL_FIXED_POLICY: Dict[str, Optional[str]] = {
+    "System_RTL": "System_DQA",
+    "System_DQA": "System_Sim",
+    "System_Sim": "System_Firmware",
+    "System_Firmware": "System_Software",
+    "System_Software": "System_Software_Validation_L2",
+    "System_Software_Validation_L2": "System_Product_App_Builder",
+    "System_Product_App_Builder": None,
+    "System_Synthesis": "System_PD",
+    "System_PD": None,
+}
+
+HEM_SYSTEM_RTL_CANDIDATE_POLICY: Dict[str, List[str]] = {
+    "System_RTL": ["System_DQA"],
+    "System_DQA": ["System_Sim", "System_Synthesis"],
+    "System_Sim": ["System_Firmware"],
+    "System_Firmware": ["System_Software"],
+    "System_Software": ["System_Software_Validation_L2"],
+    "System_Software_Validation_L2": ["System_Product_App_Builder"],
+    "System_Synthesis": ["System_PD"],
+}
+
 
 def _hem_stage_dashboard_path(app_name: str, workflow_id: str) -> str:
     stage = {
@@ -4322,13 +4393,13 @@ def _hem_source_arch2rtl_workflow_id(current_app: str, current_workflow_id: str,
     return str(source or current_workflow_id)
 
 
-def _hem_policy_weight_row(user_id: str, from_stage: str, to_stage: str) -> Optional[Dict[str, Any]]:
+def _hem_policy_weight_row(user_id: str, from_stage: str, to_stage: str, policy_key: str = HEM_DIGITAL_RTL_POLICY_KEY) -> Optional[Dict[str, Any]]:
     try:
         rows = (
             supabase.table("hem_policy_weights")
             .select("*")
             .eq("user_id", user_id)
-            .eq("policy_key", HEM_DIGITAL_RTL_POLICY_KEY)
+            .eq("policy_key", policy_key)
             .eq("from_stage", from_stage)
             .eq("to_stage", to_stage)
             .limit(1)
@@ -4348,17 +4419,18 @@ def _hem_policy_insert_or_update(
     from_stage: str,
     to_stage: str,
     patch: Dict[str, Any],
+    policy_key: str = HEM_DIGITAL_RTL_POLICY_KEY,
     insert_defaults: Optional[Dict[str, Any]] = None,
 ) -> None:
     now = datetime.utcnow().isoformat()
-    row = _hem_policy_weight_row(user_id, from_stage, to_stage)
+    row = _hem_policy_weight_row(user_id, from_stage, to_stage, policy_key)
     try:
         if row:
             supabase.table("hem_policy_weights").update({**patch, "updated_at": now}).eq("id", row["id"]).execute()
             return
         record = {
             "user_id": user_id,
-            "policy_key": HEM_DIGITAL_RTL_POLICY_KEY,
+            "policy_key": policy_key,
             "from_stage": from_stage,
             "to_stage": to_stage,
             "weight": 1.0,
@@ -4376,8 +4448,15 @@ def _hem_policy_insert_or_update(
         logger.warning("HEM: could not write adaptive policy weight %s->%s for user=%s: %s", from_stage, to_stage, user_id, exc)
 
 
-def _hem_record_transition_attempt(user_id: str, from_stage: str, to_stage: str, *, hem_run_id: Optional[str]) -> None:
-    row = _hem_policy_weight_row(user_id, from_stage, to_stage)
+def _hem_record_transition_attempt(
+    user_id: str,
+    from_stage: str,
+    to_stage: str,
+    *,
+    hem_run_id: Optional[str],
+    policy_key: str = HEM_DIGITAL_RTL_POLICY_KEY,
+) -> None:
+    row = _hem_policy_weight_row(user_id, from_stage, to_stage, policy_key)
     attempt_count = int((row or {}).get("attempt_count") or 0) + 1
     metadata = dict((row or {}).get("metadata") or {})
     metadata.update({"last_hem_run_id": hem_run_id, "last_attempted_at": datetime.utcnow().isoformat()})
@@ -4390,6 +4469,7 @@ def _hem_record_transition_attempt(user_id: str, from_stage: str, to_stage: str,
             "last_outcome": "started",
             "metadata": metadata,
         },
+        policy_key=policy_key,
     )
 
 
@@ -4399,10 +4479,11 @@ def _hem_record_successful_transition(
     from_stage: str,
     to_stage: str,
     hem_run_id: Optional[str],
+    policy_key: str = HEM_DIGITAL_RTL_POLICY_KEY,
     from_activity: float = HEM_DEFAULT_ACTIVITY,
     to_activity: float = HEM_DEFAULT_ACTIVITY,
 ) -> Dict[str, Any]:
-    row = _hem_policy_weight_row(user_id, from_stage, to_stage) or {}
+    row = _hem_policy_weight_row(user_id, from_stage, to_stage, policy_key) or {}
     current_weight = float(row.get("weight") or 1.0)
     learning_rate = float(row.get("learning_rate") or HEM_DEFAULT_LEARNING_RATE)
     delta = learning_rate * from_activity * to_activity
@@ -4430,6 +4511,7 @@ def _hem_record_successful_transition(
             "last_outcome": "completed",
             "metadata": metadata,
         },
+        policy_key=policy_key,
         insert_defaults={"learning_rate": learning_rate},
     )
     return {
@@ -4446,18 +4528,28 @@ def _hem_record_successful_transition(
     }
 
 
-def _hem_select_next_stage(user_id: str, current_stage: str, mode: str) -> Tuple[Optional[str], Dict[str, Any]]:
-    fixed_next = HEM_DIGITAL_RTL_FIXED_POLICY.get(current_stage)
+def _hem_select_next_stage(
+    user_id: str,
+    current_stage: str,
+    mode: str,
+    *,
+    fixed_policy: Optional[Dict[str, Optional[str]]] = None,
+    candidate_policy: Optional[Dict[str, List[str]]] = None,
+    policy_key: str = HEM_DIGITAL_RTL_POLICY_KEY,
+) -> Tuple[Optional[str], Dict[str, Any]]:
+    fixed_policy = fixed_policy or HEM_DIGITAL_RTL_FIXED_POLICY
+    candidate_policy = candidate_policy or HEM_DIGITAL_RTL_CANDIDATE_POLICY
+    fixed_next = fixed_policy.get(current_stage)
     if mode != "adaptive":
         return fixed_next, {"policy": "fixed", "selected": fixed_next}
 
-    candidates = HEM_DIGITAL_RTL_CANDIDATE_POLICY.get(current_stage) or []
+    candidates = candidate_policy.get(current_stage) or []
     if not candidates:
         return None, {"policy": "adaptive", "selected": None, "reason": "terminal_stage"}
 
     scored: List[Dict[str, Any]] = []
     for candidate in candidates:
-        row = _hem_policy_weight_row(user_id, current_stage, candidate)
+        row = _hem_policy_weight_row(user_id, current_stage, candidate, policy_key)
         scored.append({
             "stage": candidate,
             "weight": float((row or {}).get("weight") or 1.0),
@@ -4751,6 +4843,460 @@ def _hem_continue_digital_rtl_after_success(
             workflow_id=child_workflow_id,
             run_id=child_run_id,
             stage=next_app,
+            event_type="stage_failed",
+            status="failed",
+            message=err,
+            metadata={"mode": mode},
+        )
+        append_log_workflow(root_workflow_id, err, phase="hem_error")
+        if root_run_id:
+            append_log_run(root_run_id, err)
+
+
+def _hem_system_source_rtl_workflow_id(current_template: str, current_workflow_id: str, parent_payload: Dict[str, Any]) -> str:
+    upstream = parent_payload.get("upstream_workflows") if isinstance(parent_payload.get("upstream_workflows"), dict) else {}
+    source = (
+        parent_payload.get("system_rtl_workflow_id")
+        or parent_payload.get("source_system_rtl_workflow_id")
+        or parent_payload.get("from_workflow_id")
+        or upstream.get("system_rtl")
+    )
+    return str(source or current_workflow_id)
+
+
+def _hem_system_dashboard_path(template_workflow_name: str, workflow_id: str) -> str:
+    stage = HEM_SYSTEM_RTL_STAGE_META.get(template_workflow_name, {}).get("stage") or template_workflow_name.lower()
+    return f"/dashboard/{workflow_id}?stage={stage}&app=HEM"
+
+
+def _hem_normalized_system_goal(current_template: str, parent_payload: Dict[str, Any]) -> str:
+    requested = str(parent_payload.get("hem_goal") or "").strip().lower().replace("-", "_")
+    if requested in HEM_SYSTEM_RTL_PATHS:
+        return requested
+    if current_template in {"System_Synthesis", "System_PD"}:
+        return "implementation"
+    return "product_demo"
+
+
+def _hem_stage_enabled(template_name: str, parent_payload: Dict[str, Any]) -> bool:
+    toggles = parent_payload.get("hem_stage_toggles")
+    if not isinstance(toggles, dict):
+        return True
+    key = HEM_SYSTEM_STAGE_TOGGLE_KEYS.get(template_name)
+    if not key:
+        return True
+    return bool(toggles.get(key, True))
+
+
+def _hem_system_path_for_goal(current_template: str, parent_payload: Dict[str, Any]) -> Tuple[str, List[str]]:
+    goal = _hem_normalized_system_goal(current_template, parent_payload)
+    path = list(HEM_SYSTEM_RTL_PATHS[goal])
+    if current_template not in path and current_template in HEM_SYSTEM_RTL_PATHS["implementation"]:
+        goal = "implementation"
+        path = list(HEM_SYSTEM_RTL_PATHS[goal])
+    if current_template not in path and current_template in HEM_SYSTEM_RTL_PATHS["product_demo"]:
+        goal = "product_demo"
+        path = list(HEM_SYSTEM_RTL_PATHS[goal])
+    if current_template not in path:
+        return goal, []
+    current_index = path.index(current_template)
+    enabled_path = path[: current_index + 1]
+    for stage in path[current_index + 1 :]:
+        if not _hem_stage_enabled(stage, parent_payload):
+            continue
+        if stage == "System_Software" and "System_Firmware" not in enabled_path:
+            continue
+        if stage == "System_Software_Validation_L2" and not {"System_Firmware", "System_Software"}.issubset(set(enabled_path)):
+            continue
+        if stage == "System_Product_App_Builder" and not {"System_Software", "System_Software_Validation_L2"}.issubset(set(enabled_path)):
+            continue
+        enabled_path.append(stage)
+    return goal, enabled_path
+
+
+def _hem_system_policies_for_path(path: List[str]) -> Tuple[Dict[str, Optional[str]], Dict[str, List[str]]]:
+    fixed: Dict[str, Optional[str]] = {}
+    candidate: Dict[str, List[str]] = {}
+    for index, stage in enumerate(path):
+        next_stage = path[index + 1] if index + 1 < len(path) else None
+        fixed[stage] = next_stage
+        if next_stage:
+            candidate[stage] = [next_stage]
+    return fixed, candidate
+
+
+def _hem_system_completed_labels(path: List[str], current_template: str) -> List[str]:
+    if current_template not in path:
+        return [HEM_SYSTEM_RTL_STAGE_META.get(current_template, {}).get("label") or current_template]
+    labels: List[str] = []
+    for stage in path[1 : path.index(current_template) + 1]:
+        labels.append(HEM_SYSTEM_RTL_STAGE_META.get(stage, {}).get("label") or stage)
+    return labels or [HEM_SYSTEM_RTL_STAGE_META.get(current_template, {}).get("label") or current_template]
+
+
+def _hem_build_system_child_payload(
+    *,
+    next_template: str,
+    current_template: str,
+    current_workflow_id: str,
+    current_run_id: str,
+    source_system_rtl_workflow_id: str,
+    parent_payload: Dict[str, Any],
+    hem_run_id: Optional[str],
+    mode: str,
+) -> Dict[str, Any]:
+    upstream = parent_payload.get("upstream_workflows") if isinstance(parent_payload.get("upstream_workflows"), dict) else {}
+    upstream = {
+        **upstream,
+        "system_rtl": source_system_rtl_workflow_id,
+        current_template: current_workflow_id,
+    }
+    if current_template == "System_Firmware":
+        upstream["firmware"] = current_workflow_id
+        upstream["system_firmware"] = current_workflow_id
+    elif current_template == "System_Software":
+        upstream["software"] = current_workflow_id
+        upstream["system_software"] = current_workflow_id
+    elif current_template == "System_Software_Validation_L2":
+        upstream["validation"] = current_workflow_id
+        upstream["system_validation"] = current_workflow_id
+    elif current_template == "System_DQA":
+        upstream["system_dqa"] = current_workflow_id
+    elif current_template == "System_Sim":
+        upstream["system_sim"] = current_workflow_id
+    elif current_template == "System_Synthesis":
+        upstream["system_synthesis"] = current_workflow_id
+    common: Dict[str, Any] = {
+        "project_name": parent_payload.get("project_name"),
+        "rtl_source_mode": "from_system_rtl",
+        "system_rtl_workflow_id": source_system_rtl_workflow_id,
+        "source_system_rtl_workflow_id": source_system_rtl_workflow_id,
+        "from_workflow_id": source_system_rtl_workflow_id,
+        "parent_workflow_id": current_workflow_id,
+        "upstream_workflows": upstream,
+        "digital_spec_text": parent_payload.get("digital_spec_text") or "",
+        "analog_spec_text": parent_payload.get("analog_spec_text") or "",
+        "soc_integration_spec_text": parent_payload.get("soc_integration_spec_text") or "",
+        "clock_constraints": parent_payload.get("clock_constraints"),
+        "foundry": parent_payload.get("foundry") or "sky130",
+        "pdk": parent_payload.get("pdk") or "sky130A",
+        "toolchain": parent_payload.get("toolchain") or "openlane2",
+        "target_frequency_mhz": parent_payload.get("target_frequency_mhz") or 100,
+        "constraints_sdc": parent_payload.get("constraints_sdc"),
+        "hem_enabled": True,
+        "hem_mode": mode,
+        "hem_goal": _hem_normalized_system_goal(current_template, parent_payload),
+        "hem_stage_toggles": parent_payload.get("hem_stage_toggles") if isinstance(parent_payload.get("hem_stage_toggles"), dict) else {},
+        "hem_run_id": hem_run_id,
+        "hem_root_workflow_id": parent_payload.get("hem_root_workflow_id") or current_workflow_id,
+        "hem_root_run_id": parent_payload.get("hem_root_run_id") or current_run_id,
+    }
+    if next_template == "System_DQA":
+        return {
+            **common,
+            "toggles": {
+                **(parent_payload.get("toggles") if isinstance(parent_payload.get("toggles"), dict) else {}),
+                "run_lint": True,
+                "run_cdc": True,
+                "run_reset": True,
+                "run_synthesis_readiness": True,
+            },
+        }
+    if next_template == "System_Sim":
+        return {
+            **common,
+            "test_intent": parent_payload.get("test_intent") or "Run smoke and integration verification on System RTL handoff.",
+            "random_vs_directed": parent_payload.get("random_vs_directed") or "both",
+            "coverage_targets": parent_payload.get("coverage_targets") or "SoC integration, analog macro hookup, reset behavior, register access, and system-level smoke scenarios.",
+            "simulator_type": parent_payload.get("simulator_type") or "verilator",
+            "seed_count": int(parent_payload.get("seed_count") or 4),
+        }
+    if next_template == "System_Synthesis":
+        return {
+            **common,
+            "run_synthesis_closure_loop": bool(parent_payload.get("run_synthesis_closure_loop") or False),
+            "max_synthesis_closure_iterations": int(parent_payload.get("max_synthesis_closure_iterations") or 1),
+            "toggles": {
+                **(parent_payload.get("toggles") if isinstance(parent_payload.get("toggles"), dict) else {}),
+                "enable_scan_dft": bool(parent_payload.get("enable_scan_dft") or False),
+            },
+        }
+    if next_template == "System_Firmware":
+        return {
+            **common,
+            "execute_cosim": bool(parent_payload.get("execute_cosim") if "execute_cosim" in parent_payload else True),
+            "run_cosim": bool(parent_payload.get("run_cosim") if "run_cosim" in parent_payload else True),
+            "toolchain": parent_payload.get("toolchain") if isinstance(parent_payload.get("toolchain"), dict) else {"language": "rust"},
+            "toggles": {
+                **(parent_payload.get("toggles") if isinstance(parent_payload.get("toggles"), dict) else {}),
+                "enable_cosim": True,
+                "validate_registers": True,
+            },
+        }
+    if next_template == "System_Software":
+        firmware_id = upstream.get("firmware") or upstream.get("system_firmware") or parent_payload.get("system_firmware_workflow_id")
+        return {
+            **common,
+            "system_firmware_workflow_id": firmware_id,
+            "software_goal": parent_payload.get("software_goal") or "Build software control, diagnostics, and demo services for the generated system.",
+            "app_names": parent_payload.get("app_names") or ["control_service", "diagnostics", "demo_cli"],
+            "toolchain": parent_payload.get("software_toolchain") or {"language": "python"},
+        }
+    if next_template == "System_Software_Validation_L2":
+        firmware_id = upstream.get("firmware") or upstream.get("system_firmware") or parent_payload.get("system_firmware_workflow_id")
+        software_id = upstream.get("software") or upstream.get("system_software") or parent_payload.get("system_software_workflow_id")
+        return {
+            **common,
+            "system_firmware_workflow_id": firmware_id,
+            "system_software_workflow_id": software_id,
+            "source_firmware_workflow_id": firmware_id,
+            "source_software_workflow_id": software_id,
+            "source_rtl_workflow_id": source_system_rtl_workflow_id,
+            "validation_mode": parent_payload.get("validation_mode") or "full_co_simulation",
+            "app_name": "system_software_validation",
+            "validation_scope": "full_stack",
+            "co_sim_enabled": True,
+            "goal": parent_payload.get("goal") or "Validate software controls through generated RTL behavior.",
+            "notes": "HEM product-demo continuation.",
+        }
+    if next_template == "System_Product_App_Builder":
+        firmware_id = upstream.get("firmware") or upstream.get("system_firmware") or parent_payload.get("system_firmware_workflow_id")
+        software_id = upstream.get("software") or upstream.get("system_software") or parent_payload.get("system_software_workflow_id")
+        validation_id = upstream.get("validation") or upstream.get("system_validation") or parent_payload.get("system_validation_workflow_id")
+        return {
+            **common,
+            "arch2rtl_workflow_id": source_system_rtl_workflow_id,
+            "system_firmware_workflow_id": firmware_id,
+            "system_software_workflow_id": software_id,
+            "system_validation_workflow_id": validation_id,
+            "product_intent": parent_payload.get("product_intent") or "Build a simulator-backed product demo from the completed system workflow.",
+            "app_type": parent_payload.get("app_type") or "web_dashboard",
+            "target_runtime": parent_payload.get("target_runtime") or "simulated_device",
+        }
+    if next_template == "System_PD":
+        return {
+            **common,
+            "effort": parent_payload.get("effort") or "balanced",
+            "run_fill": True,
+            "run_drc": True,
+            "run_lvs": True,
+            "run_synthesis_closure_loop": bool(parent_payload.get("run_synthesis_closure_loop") or False),
+            "max_synthesis_closure_iterations": int(parent_payload.get("max_synthesis_closure_iterations") or 1),
+            "run_signoff_closure_loop": bool(parent_payload.get("run_signoff_closure_loop") or False),
+            "max_signoff_closure_iterations": int(parent_payload.get("max_signoff_closure_iterations") or 1),
+            "analog_physical_mode": parent_payload.get("analog_physical_mode") or "blackbox",
+            "analog_pdk": parent_payload.get("analog_pdk") or parent_payload.get("pdk") or "sky130A",
+        }
+    return common
+
+
+def _hem_continue_system_rtl_after_success(
+    *,
+    current_template: str,
+    current_workflow_id: str,
+    current_run_id: str,
+    user_id: str,
+    parent_payload: Dict[str, Any],
+    hem_mode: str,
+) -> None:
+    mode = _hem_normalized_mode(hem_mode)
+    goal, system_path = _hem_system_path_for_goal(current_template, parent_payload)
+    if current_template not in system_path:
+        return
+    fixed_policy, candidate_policy = _hem_system_policies_for_path(system_path)
+    next_template, selection_meta = _hem_select_next_stage(
+        user_id,
+        current_template,
+        mode,
+        fixed_policy=fixed_policy,
+        candidate_policy=candidate_policy,
+        policy_key=HEM_SYSTEM_RTL_POLICY_KEY,
+    )
+    source_system_rtl_workflow_id = _hem_system_source_rtl_workflow_id(current_template, current_workflow_id, parent_payload)
+    root_workflow_id = str(parent_payload.get("hem_root_workflow_id") or current_workflow_id)
+    root_run_id = str(parent_payload.get("hem_root_run_id") or current_run_id)
+    hem_run_id = parent_payload.get("hem_run_id")
+    if not hem_run_id:
+        hem_run_id = _hem_insert_run_record(
+            user_id=user_id,
+            root_workflow_id=root_workflow_id,
+            root_run_id=root_run_id,
+            mode=mode,
+            current_workflow_id=current_workflow_id,
+            current_run_id=current_run_id,
+            current_stage=current_template,
+            next_stage=next_template,
+            status="continuing" if next_template else "completed",
+            metadata={
+                "source": "system_rtl",
+                "goal": goal,
+                "path": system_path,
+                "policy": f"system_rtl_{goal}_adaptive_policy" if mode == "adaptive" else f"system_rtl_{goal}_fixed_policy",
+                "adaptive_learning_enabled": mode == "adaptive",
+                "selection": selection_meta,
+            },
+        )
+
+    if not next_template:
+        completed_stages = _hem_system_completed_labels(system_path, current_template)
+        msg = f"HEM Automatic Run ({mode}) completed with respect to System RTL: {', '.join(completed_stages)} completed."
+        append_log_workflow(root_workflow_id, msg, phase="hem_complete")
+        if root_run_id:
+            append_log_run(root_run_id, msg)
+        _hem_update_run_record(
+            str(hem_run_id) if hem_run_id else None,
+            current_workflow_id=current_workflow_id,
+            current_run_id=current_run_id,
+            current_stage=current_template,
+            next_stage=None,
+            status="completed",
+            metadata={
+                "source": "system_rtl",
+                "goal": goal,
+                "path": system_path,
+                "policy": f"system_rtl_{goal}_adaptive_policy" if mode == "adaptive" else f"system_rtl_{goal}_fixed_policy",
+                "completed_stages": completed_stages,
+                "summary": msg,
+            },
+        )
+        return
+
+    next_meta = HEM_SYSTEM_RTL_STAGE_META[next_template]
+    next_label = next_meta["label"]
+    msg = f"HEM Automatic Run ({mode}) queued {next_label} because {current_template} completed successfully."
+    if mode == "adaptive":
+        msg += f" Adaptive selection: {selection_meta.get('selection_basis', 'default_weight')}."
+    append_log_workflow(root_workflow_id, msg, phase="hem_queued")
+    if root_run_id:
+        append_log_run(root_run_id, msg)
+    _hem_insert_event(
+        hem_run_id=str(hem_run_id) if hem_run_id else None,
+        user_id=user_id,
+        workflow_id=current_workflow_id,
+        run_id=current_run_id,
+        stage=current_template,
+        event_type="stage_passed",
+        status="completed",
+        message=f"{current_template} completed; HEM selected {next_template} as the next stage.",
+        metadata={"next_stage": next_template, "mode": mode, "selection": selection_meta},
+    )
+
+    child_workflow_id, child_run_id, base_dir = _create_app_workflow_and_run(user_id, next_meta["title"], "system")
+    child_artifact_dir = os.path.join(base_dir, next_meta["artifact"])
+    os.makedirs(child_artifact_dir, exist_ok=True)
+    child_payload = _hem_build_system_child_payload(
+        next_template=next_template,
+        current_template=current_template,
+        current_workflow_id=current_workflow_id,
+        current_run_id=current_run_id,
+        source_system_rtl_workflow_id=source_system_rtl_workflow_id,
+        parent_payload=parent_payload,
+        hem_run_id=str(hem_run_id) if hem_run_id else None,
+        mode=mode,
+    )
+    _hem_update_run_record(
+        str(hem_run_id) if hem_run_id else None,
+        current_workflow_id=child_workflow_id,
+        current_run_id=child_run_id,
+        current_stage=next_template,
+        next_stage=fixed_policy.get(next_template),
+        status="running",
+        metadata={
+            "source": "system_rtl",
+            "goal": goal,
+            "path": system_path,
+            "policy": f"system_rtl_{goal}_adaptive_policy" if mode == "adaptive" else f"system_rtl_{goal}_fixed_policy",
+            "selection": selection_meta,
+            "last_completed": {"stage": current_template, "workflow_id": current_workflow_id, "run_id": current_run_id},
+        },
+    )
+    if mode == "adaptive":
+        _hem_record_transition_attempt(
+            user_id,
+            current_template,
+            next_template,
+            hem_run_id=str(hem_run_id) if hem_run_id else None,
+            policy_key=HEM_SYSTEM_RTL_POLICY_KEY,
+        )
+    _hem_insert_event(
+        hem_run_id=str(hem_run_id) if hem_run_id else None,
+        user_id=user_id,
+        workflow_id=child_workflow_id,
+        run_id=child_run_id,
+        stage=next_template,
+        event_type="stage_started",
+        status="running",
+        message=f"HEM started {next_label} from completed {current_template}.",
+        metadata={"source_system_rtl_workflow_id": source_system_rtl_workflow_id, "mode": mode, "selection": selection_meta},
+    )
+    dashboard_path = _hem_system_dashboard_path(next_template, child_workflow_id)
+    append_log_workflow(root_workflow_id, f"HEM started {next_label} workflow {child_workflow_id}. Dashboard: {dashboard_path}", phase="hem_running")
+    if root_run_id:
+        append_log_run(root_run_id, f"HEM started {next_label} workflow {child_workflow_id}. Dashboard: {dashboard_path}")
+    append_log_workflow(child_workflow_id, f"HEM started {next_label} from {current_template} workflow {current_workflow_id}.", phase="hem_start")
+    append_log_run(child_run_id, f"HEM started {next_label} from {current_template} workflow {current_workflow_id}.")
+
+    try:
+        execute_system_app_background(
+            child_workflow_id,
+            child_run_id,
+            user_id,
+            child_artifact_dir,
+            next_template,
+            child_payload,
+            next_meta.get("app") or next_template.lower(),
+        )
+        child_row = supabase.table("workflows").select("status").eq("id", child_workflow_id).single().execute().data or {}
+        child_status = str(child_row.get("status") or "unknown")
+        learning_update = None
+        if mode == "adaptive" and child_status == "completed":
+            learning_update = _hem_record_successful_transition(
+                user_id=user_id,
+                from_stage=current_template,
+                to_stage=next_template,
+                hem_run_id=str(hem_run_id) if hem_run_id else None,
+                policy_key=HEM_SYSTEM_RTL_POLICY_KEY,
+            )
+        _hem_update_run_record(
+            str(hem_run_id) if hem_run_id else None,
+            status="running" if child_status == "completed" and fixed_policy.get(next_template) else ("completed" if child_status == "completed" else "stopped"),
+            current_workflow_id=child_workflow_id,
+            current_run_id=child_run_id,
+            current_stage=next_template,
+            next_stage=fixed_policy.get(next_template),
+        )
+        _hem_insert_event(
+            hem_run_id=str(hem_run_id) if hem_run_id else None,
+            user_id=user_id,
+            workflow_id=child_workflow_id,
+            run_id=child_run_id,
+            stage=next_template,
+            event_type="stage_finished",
+            status=child_status,
+            message=f"HEM {next_label} finished with status {child_status}.",
+            metadata={"mode": mode, "learning_update": learning_update},
+        )
+        append_log_workflow(root_workflow_id, f"HEM {next_label} finished with status {child_status}.", phase="hem_done")
+        if root_run_id:
+            append_log_run(root_run_id, f"HEM {next_label} finished with status {child_status}.")
+        if learning_update:
+            learn_msg = (
+                f"HEM adaptive learning updated {current_template}->{next_template}: "
+                f"w {learning_update['previous_weight']:.3f} -> {learning_update['new_weight']:.3f} "
+                f"(delta={learning_update['delta']:.3f}, eta={learning_update['learning_rate']:.3f})."
+            )
+            append_log_workflow(root_workflow_id, learn_msg, phase="hem_learning")
+            if root_run_id:
+                append_log_run(root_run_id, learn_msg)
+    except Exception as exc:
+        err = f"HEM {next_label} continuation failed: {type(exc).__name__}: {exc}"
+        _hem_update_run_record(str(hem_run_id) if hem_run_id else None, status="failed", next_stage=None, metadata={"error": err})
+        _hem_insert_event(
+            hem_run_id=str(hem_run_id) if hem_run_id else None,
+            user_id=user_id,
+            workflow_id=child_workflow_id,
+            run_id=child_run_id,
+            stage=next_template,
             event_type="stage_failed",
             status="failed",
             message=err,
@@ -10959,6 +11505,15 @@ def execute_system_app_background(
 
         append_log_workflow(workflow_id, f"🎉 System App complete: {template_workflow_name}", status="completed", phase="done")
         append_log_run(run_id, f"🎉 System App complete: {template_workflow_name}", status="completed")
+        if template_workflow_name in HEM_SYSTEM_RTL_FIXED_POLICY and bool(shared_state.get("hem_enabled")):
+            _hem_continue_system_rtl_after_success(
+                current_template=template_workflow_name,
+                current_workflow_id=workflow_id,
+                current_run_id=run_id,
+                user_id=user_id,
+                parent_payload=payload or {},
+                hem_mode=str(shared_state.get("hem_mode") or "fixed"),
+            )
 
     except Exception as e:
         err = f"❌ System App crashed ({template_workflow_name}): {type(e).__name__}: {e}\n{traceback.format_exc()}"
