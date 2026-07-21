@@ -4888,6 +4888,14 @@ def _hem_continue_digital_rtl_after_success(
         append_log_workflow(root_workflow_id, f"HEM {next_label} finished with status {child_status}.", phase="hem_done")
         if root_run_id:
             append_log_run(root_run_id, f"HEM {next_label} finished with status {child_status}.")
+        if child_status != "completed":
+            inspect_msg = (
+                f"HEM Smart Context available for {next_label}: open the child dashboard and use Ask This Run "
+                f"to inspect the failed stage logs, reports, artifacts, and upstream handoff."
+            )
+            append_log_workflow(root_workflow_id, inspect_msg, phase="hem_inspection")
+            if root_run_id:
+                append_log_run(root_run_id, inspect_msg)
         if learning_update:
             learn_msg = (
                 f"HEM adaptive learning updated {current_app}->{next_app}: "
@@ -4914,6 +4922,13 @@ def _hem_continue_digital_rtl_after_success(
         append_log_workflow(root_workflow_id, err, phase="hem_error")
         if root_run_id:
             append_log_run(root_run_id, err)
+        inspect_msg = (
+            f"HEM Smart Context available for {next_label}: open the child dashboard and use Ask This Run "
+            f"to inspect the failed stage logs, reports, artifacts, and upstream handoff."
+        )
+        append_log_workflow(root_workflow_id, inspect_msg, phase="hem_inspection")
+        if root_run_id:
+            append_log_run(root_run_id, inspect_msg)
 
 
 def _hem_system_source_rtl_workflow_id(current_template: str, current_workflow_id: str, parent_payload: Dict[str, Any]) -> str:
@@ -5342,6 +5357,14 @@ def _hem_continue_system_rtl_after_success(
         append_log_workflow(root_workflow_id, f"HEM {next_label} finished with status {child_status}.", phase="hem_done")
         if root_run_id:
             append_log_run(root_run_id, f"HEM {next_label} finished with status {child_status}.")
+        if child_status != "completed":
+            inspect_msg = (
+                f"HEM Smart Context available for {next_label}: open the child dashboard and use Ask This Run "
+                f"to inspect the failed stage logs, reports, artifacts, and upstream handoff."
+            )
+            append_log_workflow(root_workflow_id, inspect_msg, phase="hem_inspection")
+            if root_run_id:
+                append_log_run(root_run_id, inspect_msg)
         if learning_update:
             learn_msg = (
                 f"HEM adaptive learning updated {current_template}->{next_template}: "
@@ -5368,6 +5391,13 @@ def _hem_continue_system_rtl_after_success(
         append_log_workflow(root_workflow_id, err, phase="hem_error")
         if root_run_id:
             append_log_run(root_run_id, err)
+        inspect_msg = (
+            f"HEM Smart Context available for {next_label}: open the child dashboard and use Ask This Run "
+            f"to inspect the failed stage logs, reports, artifacts, and upstream handoff."
+        )
+        append_log_workflow(root_workflow_id, inspect_msg, phase="hem_inspection")
+        if root_run_id:
+            append_log_run(root_run_id, inspect_msg)
 
 
 @app.post("/apps/arch2rtl/run")

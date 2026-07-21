@@ -50,6 +50,7 @@ ASK_THIS_RUN_MAX_CONTEXT_CHARS = int(os.getenv("ASK_THIS_RUN_MAX_CONTEXT_CHARS",
 ASK_PROJECT_MAX_FILE_CHARS = int(os.getenv("ASK_PROJECT_MAX_FILE_CHARS", "6000"))
 ASK_PROJECT_MAX_CONTEXT_CHARS = int(os.getenv("ASK_PROJECT_MAX_CONTEXT_CHARS", "36000"))
 ASK_PROJECT_MAX_FILES = int(os.getenv("ASK_PROJECT_MAX_FILES", "40"))
+ASK_SMART_CONTEXT_CHARS = int(os.getenv("ASK_SMART_CONTEXT_CHARS", "16000"))
 
 
 def _iter_leaf_strings(obj: Any):
@@ -107,13 +108,66 @@ def _safe_text(value: Any, limit: int) -> str:
     return text[:limit] + "\n[TRUNCATED]"
 
 
-def _project_file_context(files: list[Any]) -> tuple[str, list[Dict[str, Any]]]:
+def _estimate_tokens(text_or_chars: Any) -> int:
+    if isinstance(text_or_chars, int):
+        chars = text_or_chars
+    else:
+        chars = len(str(text_or_chars or ""))
+    return max(1, int((chars + 3) / 4))
+
+
+def _normalize_context_mode(value: Any) -> str:
+    return "full" if str(value or "").strip().lower() == "full" else "smart"
+
+
+def _keyword_score(text: str, question: str) -> int:
+    haystack = text.lower()
+    words = {
+        word
+        for word in re.findall(r"[a-zA-Z0-9_]{3,}", question.lower())
+        if word not in {"this", "that", "with", "from", "what", "where", "when", "which", "should", "could", "would"}
+    }
+    score = sum(2 for word in words if word in haystack)
+    if any(term in haystack for term in ("error", "failed", "failure", "warning", "critical", "traceback")):
+        score += 4
+    if any(term in haystack for term in ("summary", "dashboard", "report", "handoff", "manifest", "readme")):
+        score += 3
+    return score
+
+
+def _context_summary(
+    *,
+    mode: str,
+    full_chars: int,
+    smart_chars: int,
+    considered_count: int,
+    included_count: int,
+    included_evidence: list[Dict[str, str]],
+) -> Dict[str, Any]:
+    full_tokens = _estimate_tokens(full_chars)
+    smart_tokens = _estimate_tokens(smart_chars)
+    reduction = 0
+    if full_tokens > 0:
+        reduction = max(0, min(99, round((1 - (smart_tokens / full_tokens)) * 100)))
+    return {
+        "mode": mode,
+        "full_tokens_estimate": full_tokens,
+        "smart_tokens_estimate": smart_tokens,
+        "active_tokens_estimate": smart_tokens if mode == "smart" else full_tokens,
+        "reduction_percent": reduction,
+        "considered_count": considered_count,
+        "included_count": included_count,
+        "skipped_count": max(0, considered_count - included_count),
+        "included_evidence": included_evidence[:8],
+    }
+
+
+def _project_file_context(files: list[Any], question: str = "", mode: str = "smart") -> tuple[str, list[Dict[str, Any]], Dict[str, Any]]:
     if not files:
         raise HTTPException(status_code=400, detail="project_files_required")
 
-    sections: list[str] = []
-    sources: list[Dict[str, Any]] = []
-    used_chars = 0
+    candidates: list[Dict[str, Any]] = []
+    full_chars = 0
 
     for index, item in enumerate(files[:ASK_PROJECT_MAX_FILES]):
         if not isinstance(item, dict):
@@ -122,22 +176,50 @@ def _project_file_context(files: list[Any]) -> tuple[str, list[Dict[str, Any]]]:
         content = str(item.get("content") or "")
         if not content.strip():
             continue
+        full_chars += len(content)
+        score = _keyword_score(f"{path}\n{content[:4000]}", question)
+        candidates.append({"path": path, "content": content, "score": score})
+
+    if not candidates:
+        raise HTTPException(status_code=400, detail="project_text_required")
+
+    ordered = candidates
+    max_context_chars = ASK_PROJECT_MAX_CONTEXT_CHARS
+    if mode == "smart":
+        ordered = sorted(candidates, key=lambda item: (item["score"], item["path"].lower()), reverse=True)
+        max_context_chars = min(ASK_PROJECT_MAX_CONTEXT_CHARS, ASK_SMART_CONTEXT_CHARS)
+
+    sections: list[str] = []
+    sources: list[Dict[str, Any]] = []
+    used_chars = 0
+
+    for item in ordered:
+        path = item["path"]
+        content = item["content"]
         snippet = _safe_text(content, ASK_PROJECT_MAX_FILE_CHARS)
         section = f"FILE: {path}\n{snippet}"
-        if used_chars + len(section) > ASK_PROJECT_MAX_CONTEXT_CHARS:
-            remaining = max(ASK_PROJECT_MAX_CONTEXT_CHARS - used_chars, 0)
+        if used_chars + len(section) > max_context_chars:
+            remaining = max(max_context_chars - used_chars, 0)
             if remaining < 500:
                 break
             section = section[:remaining] + "\n[PROJECT CONTEXT TRUNCATED]"
         sections.append(section)
         used_chars += len(section)
         sources.append({"path": path, "chars": min(len(content), len(snippet))})
-        if used_chars >= ASK_PROJECT_MAX_CONTEXT_CHARS:
+        if used_chars >= max_context_chars:
             break
 
     if not sections:
         raise HTTPException(status_code=400, detail="project_text_required")
-    return "\n\n---\n\n".join(sections), sources
+    summary = _context_summary(
+        mode=mode,
+        full_chars=full_chars,
+        smart_chars=used_chars,
+        considered_count=len(candidates),
+        included_count=len(sources),
+        included_evidence=[{"label": "Project file", "detail": source["path"]} for source in sources],
+    )
+    return "\n\n---\n\n".join(sections), sources, summary
 
 
 def _build_project_ask_prompt(project_name: str, question: str, context: str) -> str:
@@ -191,7 +273,7 @@ def _inspection_probe_paths(workflow: Dict[str, Any]) -> list[str]:
     ]
 
 
-def _collect_run_inspection_context(supabase: Any, workflow: Dict[str, Any]) -> tuple[str, list[Dict[str, str]]]:
+def _collect_run_inspection_context(supabase: Any, workflow: Dict[str, Any], question: str = "", mode: str = "smart") -> tuple[str, list[Dict[str, str]], Dict[str, Any]]:
     sources: list[Dict[str, str]] = []
     sections: list[str] = [
         "RUN METADATA",
@@ -207,7 +289,8 @@ def _collect_run_inspection_context(supabase: Any, workflow: Dict[str, Any]) -> 
         ),
     ]
 
-    logs = _safe_text(workflow.get("logs") or "", ASK_THIS_RUN_MAX_LOG_CHARS)
+    raw_logs = str(workflow.get("logs") or "")
+    logs = _safe_text(raw_logs, ASK_THIS_RUN_MAX_LOG_CHARS if mode == "full" else min(ASK_THIS_RUN_MAX_LOG_CHARS, 5000))
     if logs:
         sections.extend(["WORKFLOW LOGS", logs])
         sources.append({"type": "logs", "path": "workflows.logs"})
@@ -218,6 +301,7 @@ def _collect_run_inspection_context(supabase: Any, workflow: Dict[str, Any]) -> 
         sections.extend(["ARTIFACT INDEX", artifact_index])
         sources.append({"type": "artifact_index", "path": "workflows.artifacts"})
 
+    artifact_candidates: list[Dict[str, Any]] = []
     seen: set[str] = set()
     for raw_path in list(_iter_leaf_strings(artifacts)) + _inspection_probe_paths(workflow):
         path = _normalize_storage_path(raw_path)
@@ -225,21 +309,54 @@ def _collect_run_inspection_context(supabase: Any, workflow: Dict[str, Any]) -> 
             continue
         seen.add(path)
         try:
-            content = _safe_text(_download_text_artifact(supabase, path), ASK_THIS_RUN_MAX_ARTIFACT_CHARS)
+            raw_content = _download_text_artifact(supabase, path)
         except Exception as exc:
             logger.info("ask_this_run: skipped artifact %s: %s", path, exc)
             continue
-        if not content:
+        if not raw_content:
             continue
+        artifact_candidates.append({
+            "path": path,
+            "content": raw_content,
+            "score": _keyword_score(f"{path}\n{raw_content[:4000]}", question),
+        })
+
+    if mode == "smart":
+        artifact_candidates = sorted(
+            artifact_candidates,
+            key=lambda item: (item["score"], item["path"].lower()),
+            reverse=True,
+        )
+        max_context_chars = min(ASK_THIS_RUN_MAX_CONTEXT_CHARS, ASK_SMART_CONTEXT_CHARS)
+        max_artifact_chars = min(ASK_THIS_RUN_MAX_ARTIFACT_CHARS, 4000)
+    else:
+        max_context_chars = ASK_THIS_RUN_MAX_CONTEXT_CHARS
+        max_artifact_chars = ASK_THIS_RUN_MAX_ARTIFACT_CHARS
+
+    for item in artifact_candidates:
+        path = item["path"]
+        content = _safe_text(item["content"], max_artifact_chars)
         sections.extend([f"ARTIFACT: {path}", content])
         sources.append({"type": "artifact", "path": path})
-        if len("\n\n".join(sections)) >= ASK_THIS_RUN_MAX_CONTEXT_CHARS:
+        if len("\n\n".join(sections)) >= max_context_chars:
             break
 
     context = "\n\n".join(sections)
-    if len(context) > ASK_THIS_RUN_MAX_CONTEXT_CHARS:
-        context = context[:ASK_THIS_RUN_MAX_CONTEXT_CHARS] + "\n[CONTEXT TRUNCATED]"
-    return context, sources
+    if len(context) > max_context_chars:
+        context = context[:max_context_chars] + "\n[CONTEXT TRUNCATED]"
+    full_chars = len(raw_logs) + len(artifact_index) + sum(len(item["content"]) for item in artifact_candidates) + 2000
+    summary = _context_summary(
+        mode=mode,
+        full_chars=full_chars,
+        smart_chars=len(context),
+        considered_count=len(artifact_candidates) + 2,
+        included_count=len(sources),
+        included_evidence=[
+            {"label": "Run source", "detail": source["path"]}
+            for source in sources
+        ],
+    )
+    return context, sources, summary
 
 
 async def _run_inspection_llm(prompt: str) -> str:
@@ -718,7 +835,8 @@ async def ask_project(
         raise HTTPException(status_code=400, detail="project_files_required")
 
     project_name = str(data.get("project_name") or "Uploaded project").strip()[:160]
-    context, sources = _project_file_context(files)
+    context_mode = _normalize_context_mode(data.get("context_mode"))
+    context, sources, context_summary = _project_file_context(files, question=question[:2000], mode=context_mode)
     prompt = _build_project_ask_prompt(project_name, question[:2000], context)
     answer = complete_text(
         prompt,
@@ -733,6 +851,7 @@ async def ask_project(
         "answer": answer,
         "sources": sources,
         "source_count": len(sources),
+        "context_summary": context_summary,
     }
 
 
@@ -809,7 +928,8 @@ async def ask_this_run(workflow_id: str, request: Request, user: BrowserUser = D
     if owner_id and owner_id != user.user_id:
         raise HTTPException(status_code=403, detail="workflow_access_denied")
 
-    context, sources = _collect_run_inspection_context(supabase, workflow)
+    context_mode = _normalize_context_mode(data.get("context_mode"))
+    context, sources, context_summary = _collect_run_inspection_context(supabase, workflow, question=question, mode=context_mode)
     if not context.strip():
         raise HTTPException(status_code=400, detail="run_context_empty")
 
@@ -841,6 +961,7 @@ Run context:
         "answer": answer,
         "sources": sources[:20],
         "source_count": len(sources),
+        "context_summary": context_summary,
     }
 
 
