@@ -3357,6 +3357,7 @@ class DigitalArch2RTLAppIn(BaseModel):
     toggles: Optional[Dict[str, Any]] = None  # Allows booleans plus string options such as mbist_algorithm.
     hem_enabled: Optional[bool] = False
     hem_mode: Optional[str] = "fixed"  # "fixed" | "adaptive"
+    hem_stage_toggles: Optional[Dict[str, Any]] = None
 
 
 class DigitalRTLSourceIn(BaseModel):
@@ -3460,6 +3461,7 @@ class DigitalDQAAppIn(BaseModel):
     upstream_workflows: Optional[Dict[str, Any]] = None
     hem_enabled: Optional[bool] = False
     hem_mode: Optional[str] = "fixed"
+    hem_stage_toggles: Optional[Dict[str, Any]] = None
 
     clocks: Optional[Any] = None
     resets: Optional[Any] = None
@@ -3507,6 +3509,7 @@ class DigitalVerifyAppIn(BaseModel):
     upstream_workflows: Optional[Dict[str, Any]] = None
     hem_enabled: Optional[bool] = False
     hem_mode: Optional[str] = "fixed"
+    hem_stage_toggles: Optional[Dict[str, Any]] = None
 
     test_intent: Optional[str] = None
     verification_plan: Optional[str] = None
@@ -4281,6 +4284,14 @@ HEM_DIGITAL_RTL_FIXED_POLICY: Dict[str, Optional[str]] = {
     "arch2tapeout": None,
 }
 
+HEM_DIGITAL_RTL_PATH = ["arch2rtl", "dqa", "verify", "arch2synthesis", "arch2tapeout"]
+HEM_DIGITAL_STAGE_TOGGLE_KEYS: Dict[str, str] = {
+    "dqa": "dqa",
+    "verify": "verify",
+    "arch2synthesis": "synthesis",
+    "arch2tapeout": "tapeout",
+}
+
 HEM_DIGITAL_RTL_POLICY_KEY = "digital_rtl_default"
 HEM_DEFAULT_LEARNING_RATE = 0.1
 HEM_DEFAULT_ACTIVITY = 1.0
@@ -4307,6 +4318,45 @@ HEM_DIGITAL_RTL_COMPLETION_SUMMARY: Dict[str, List[str]] = {
     "arch2synthesis": ["DQA", "Verification", "Synthesis"],
     "arch2tapeout": ["DQA", "Verification", "Synthesis", "Tapeout"],
 }
+
+
+def _hem_digital_stage_enabled(stage: str, parent_payload: Dict[str, Any]) -> bool:
+    toggles = parent_payload.get("hem_stage_toggles")
+    if not isinstance(toggles, dict):
+        return True
+    key = HEM_DIGITAL_STAGE_TOGGLE_KEYS.get(stage)
+    if not key:
+        return True
+    return bool(toggles.get(key, True))
+
+
+def _hem_digital_path_for_current(current_app: str, parent_payload: Dict[str, Any]) -> List[str]:
+    if current_app not in HEM_DIGITAL_RTL_PATH:
+        return []
+    current_index = HEM_DIGITAL_RTL_PATH.index(current_app)
+    enabled_path = HEM_DIGITAL_RTL_PATH[: current_index + 1]
+    enabled_path.extend(stage for stage in HEM_DIGITAL_RTL_PATH[current_index + 1 :] if _hem_digital_stage_enabled(stage, parent_payload))
+    return enabled_path
+
+
+def _hem_digital_policies_for_path(path: List[str]) -> Tuple[Dict[str, Optional[str]], Dict[str, List[str]]]:
+    fixed: Dict[str, Optional[str]] = {}
+    candidate: Dict[str, List[str]] = {}
+    for index, stage in enumerate(path):
+        next_stage = path[index + 1] if index + 1 < len(path) else None
+        fixed[stage] = next_stage
+        if next_stage:
+            candidate[stage] = [next_stage]
+    return fixed, candidate
+
+
+def _hem_digital_completed_labels(path: List[str], current_app: str) -> List[str]:
+    if current_app not in path:
+        return HEM_DIGITAL_RTL_COMPLETION_SUMMARY.get(current_app, [current_app])
+    labels: List[str] = []
+    for stage in path[1 : path.index(current_app) + 1]:
+        labels.append(HEM_DIGITAL_RTL_STAGE_META.get(stage, {}).get("label") or stage)
+    return labels or HEM_DIGITAL_RTL_COMPLETION_SUMMARY.get(current_app, [current_app])
 
 HEM_SYSTEM_RTL_POLICY_KEY = "system_rtl_default"
 
@@ -4600,6 +4650,7 @@ def _hem_build_child_payload(
         "clock_constraints": parent_payload.get("clock_constraints"),
         "hem_enabled": True,
         "hem_mode": mode,
+        "hem_stage_toggles": parent_payload.get("hem_stage_toggles") if isinstance(parent_payload.get("hem_stage_toggles"), dict) else {},
         "hem_run_id": hem_run_id,
         "hem_root_workflow_id": parent_payload.get("hem_root_workflow_id") or current_workflow_id,
         "hem_root_run_id": parent_payload.get("hem_root_run_id") or parent_payload.get("hem_parent_run_id") or current_run_id,
@@ -4661,9 +4712,18 @@ def _hem_continue_digital_rtl_after_success(
     hem_mode: str,
 ) -> None:
     mode = _hem_normalized_mode(hem_mode)
-    if current_app not in HEM_DIGITAL_RTL_FIXED_POLICY:
+    digital_path = _hem_digital_path_for_current(current_app, parent_payload)
+    if current_app not in digital_path:
         return
-    next_app, selection_meta = _hem_select_next_stage(user_id, current_app, mode)
+    fixed_policy, candidate_policy = _hem_digital_policies_for_path(digital_path)
+    next_app, selection_meta = _hem_select_next_stage(
+        user_id,
+        current_app,
+        mode,
+        fixed_policy=fixed_policy,
+        candidate_policy=candidate_policy,
+        policy_key=HEM_DIGITAL_RTL_POLICY_KEY,
+    )
     source_arch2rtl_workflow_id = _hem_source_arch2rtl_workflow_id(current_app, current_workflow_id, parent_payload)
     root_workflow_id = str(parent_payload.get("hem_root_workflow_id") or current_workflow_id)
     root_run_id = str(parent_payload.get("hem_root_run_id") or parent_payload.get("hem_parent_run_id") or current_run_id)
@@ -4684,12 +4744,13 @@ def _hem_continue_digital_rtl_after_success(
                 "policy": "digital_rtl_adaptive_policy" if mode == "adaptive" else "digital_rtl_fixed_policy",
                 "adaptive_learning_enabled": mode == "adaptive",
                 "selection": selection_meta,
+                "path": digital_path,
                 "completed": [],
             },
         )
 
     if not next_app:
-        completed_stages = HEM_DIGITAL_RTL_COMPLETION_SUMMARY.get(current_app, [current_app])
+        completed_stages = _hem_digital_completed_labels(digital_path, current_app)
         completed_text = ", ".join(completed_stages)
         msg = (
             f"HEM Automatic Run ({mode}) completed with respect to Arch2RTL: "
@@ -4709,6 +4770,7 @@ def _hem_continue_digital_rtl_after_success(
                 "source": "digital_rtl",
                 "policy": "digital_rtl_adaptive_policy" if mode == "adaptive" else "digital_rtl_fixed_policy",
                 "adaptive_learning_enabled": mode == "adaptive",
+                "path": digital_path,
                 "completed_stages": completed_stages,
                 "summary": msg,
             },
@@ -4753,13 +4815,14 @@ def _hem_continue_digital_rtl_after_success(
         current_workflow_id=child_workflow_id,
         current_run_id=child_run_id,
         current_stage=next_app,
-        next_stage=HEM_DIGITAL_RTL_FIXED_POLICY.get(next_app),
+        next_stage=fixed_policy.get(next_app),
         status="running",
         metadata={
             "source": "digital_rtl",
             "policy": "digital_rtl_adaptive_policy" if mode == "adaptive" else "digital_rtl_fixed_policy",
             "adaptive_learning_enabled": mode == "adaptive",
             "selection": selection_meta,
+            "path": digital_path,
             "last_completed": {"stage": current_app, "workflow_id": current_workflow_id, "run_id": current_run_id},
         },
     )
@@ -4805,11 +4868,11 @@ def _hem_continue_digital_rtl_after_success(
             )
         _hem_update_run_record(
             str(hem_run_id) if hem_run_id else None,
-            status="running" if child_status == "completed" and HEM_DIGITAL_RTL_FIXED_POLICY.get(next_app) else ("completed" if child_status == "completed" else "stopped"),
+            status="running" if child_status == "completed" and fixed_policy.get(next_app) else ("completed" if child_status == "completed" else "stopped"),
             current_workflow_id=child_workflow_id,
             current_run_id=child_run_id,
             current_stage=next_app,
-            next_stage=HEM_DIGITAL_RTL_FIXED_POLICY.get(next_app),
+            next_stage=fixed_policy.get(next_app),
         )
         _hem_insert_event(
             hem_run_id=str(hem_run_id) if hem_run_id else None,
