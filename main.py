@@ -6177,6 +6177,13 @@ def _estimated_usage_rows_from_llm_artifacts(workflow_id: str) -> List[Dict[str,
         paths = _list_storage_tree_for_main(prefix, max_depth=6)
     except Exception:
         paths = []
+    paths = list(dict.fromkeys(paths + [
+        f"{prefix}spec/llm_raw_output.txt",
+        f"{prefix}digital/digital_architecture_raw_output.txt",
+        f"{prefix}digital/digital_microarchitecture_raw_output.txt",
+        f"{prefix}digital/digital_regmap_raw_output.txt",
+        f"{prefix}rtl/rtl_llm_raw_output.txt",
+    ]))
     grouped: Dict[str, Dict[str, Any]] = {}
     seen = set()
     for path in paths:
@@ -6221,6 +6228,7 @@ def _estimated_usage_rows_from_llm_artifacts(workflow_id: str) -> List[Dict[str,
 
 @app.get("/apps/dashboard/token_heatmap/{workflow_id}")
 def workflow_token_heatmap(workflow_id: str):
+    rows: List[Dict[str, Any]] = []
     try:
         result = (
             supabase.table("model_usage_events")
@@ -6230,24 +6238,10 @@ def workflow_token_heatmap(workflow_id: str):
             .limit(1000)
             .execute()
         )
+        rows = result.data or []
     except Exception as exc:
         logger.warning("Token heatmap lookup failed workflow=%s error=%s", workflow_id, exc)
-        return {
-            "workflow_id": workflow_id,
-            "available": False,
-            "agents": [],
-            "summary": {
-                "agent_count": 0,
-                "input_tokens": 0,
-                "output_tokens": 0,
-                "total_tokens": 0,
-                "estimated_cost_usd": None,
-                "estimated_credits": 0,
-                "event_count": 0,
-            },
-        }
 
-    rows = result.data or []
     artifact_rows = _model_usage_artifact_rows(workflow_id)
     if artifact_rows:
         rows = rows + artifact_rows
