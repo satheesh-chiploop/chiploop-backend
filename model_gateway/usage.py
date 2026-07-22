@@ -2,11 +2,13 @@ import math
 import os
 import time
 import logging
+import json
 from typing import Any, Dict, Optional
 
 from platform_adapters import get_platform_client
 
 logger = logging.getLogger("chiploop.model_gateway.usage")
+ARTIFACT_BUCKET = os.getenv("ARTIFACT_BUCKET_NAME", "artifacts")
 
 
 def _int_or_none(value: Any) -> Optional[int]:
@@ -116,6 +118,35 @@ def model_key_owner(profile: Dict[str, Any], state: Optional[Dict[str, Any]], mo
     return "chiploop" if mode == "chiploop_managed" else "customer"
 
 
+def _append_usage_artifact(row: Dict[str, Any]) -> None:
+    workflow_id = row.get("workflow_id")
+    if not workflow_id:
+        return
+    storage_path = f"backend/workflows/{workflow_id}/metrics/model_usage_events.jsonl"
+    try:
+        client = get_platform_client()
+        bucket = client.storage.from_(ARTIFACT_BUCKET)
+        try:
+            existing_raw = bucket.download(storage_path)
+            existing = existing_raw.decode("utf-8", errors="replace") if isinstance(existing_raw, (bytes, bytearray)) else str(existing_raw or "")
+        except Exception:
+            existing = ""
+        line = json.dumps(row, default=str, separators=(",", ":"))
+        content = (existing.rstrip("\n") + "\n" + line + "\n") if existing.strip() else (line + "\n")
+        try:
+            bucket.upload(storage_path, content.encode("utf-8"), {"content-type": "application/jsonl"})
+        except Exception:
+            bucket.update(storage_path, content.encode("utf-8"), {"content-type": "application/jsonl"})
+    except Exception as exc:
+        logger.warning(
+            "model_usage.artifact_failed workflow_id=%s run_id=%s agent=%s error=%s",
+            row.get("workflow_id"),
+            row.get("run_id"),
+            row.get("agent_name"),
+            exc,
+        )
+
+
 def record_model_usage(
     *,
     state: Optional[Dict[str, Any]],
@@ -171,6 +202,7 @@ def record_model_usage(
         },
     }
     row = {k: v for k, v in row.items() if v is not None}
+    _append_usage_artifact(row)
     try:
         client = get_platform_client()
         result = client.table("model_usage_events").insert(row).execute()

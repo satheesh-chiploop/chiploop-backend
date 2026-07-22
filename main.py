@@ -6134,12 +6134,89 @@ def _token_delta_percent(current: int, previous: int) -> Optional[int]:
     return int(round(((current - previous) / previous) * 100))
 
 
+def _model_usage_artifact_rows(workflow_id: str) -> List[Dict[str, Any]]:
+    path = f"backend/workflows/{workflow_id}/metrics/model_usage_events.jsonl"
+    text = _download_text_for_main(path, max_bytes=2_000_000)
+    rows: List[Dict[str, Any]] = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            row = json.loads(line)
+        except Exception:
+            continue
+        if isinstance(row, dict):
+            row.setdefault("workflow_id", workflow_id)
+            rows.append(row)
+    return rows
+
+
+def _agent_name_from_llm_artifact_path(path: str) -> str:
+    lowered = path.lower().replace("\\", "/")
+    name = os.path.basename(lowered)
+    if "/spec/" in lowered or name in {"llm_raw_output.txt", "spec_agent_raw_output.txt"}:
+        return "Digital Spec Agent"
+    if "digital_architecture_raw_output" in name:
+        return "Digital Architecture Agent"
+    if "digital_microarchitecture_raw_output" in name:
+        return "Digital Microarchitecture Agent"
+    if "digital_regmap_raw_output" in name:
+        return "Digital Register Map Agent"
+    if "rtl_llm_raw_output" in name:
+        return "Digital RTL Agent"
+    if "raw_output" in name:
+        cleaned = name.replace("_raw_output.txt", "").replace("_", " ").strip().title()
+        return f"{cleaned} Agent" if cleaned else "Unassigned model call"
+    return "Unassigned model call"
+
+
+def _estimated_usage_rows_from_llm_artifacts(workflow_id: str) -> List[Dict[str, Any]]:
+    prefix = f"backend/workflows/{workflow_id}"
+    try:
+        paths = _list_storage_tree_for_main(prefix, max_depth=6)
+    except Exception:
+        paths = []
+    rows: List[Dict[str, Any]] = []
+    seen = set()
+    for path in paths:
+        lowered = path.lower()
+        if path in seen or not lowered.endswith(".txt"):
+            continue
+        if "raw_output" not in lowered and not lowered.endswith("/spec/llm_raw_output.txt"):
+            continue
+        seen.add(path)
+        text = _download_text_for_main(path, max_bytes=1_000_000)
+        if not text:
+            continue
+        output_tokens = max(1, (len(text) + 3) // 4)
+        rows.append({
+            "workflow_id": workflow_id,
+            "agent_name": _agent_name_from_llm_artifact_path(path),
+            "capability": "artifact_estimate",
+            "provider": "artifact",
+            "model": "estimated-from-artifacts",
+            "input_tokens": 0,
+            "output_tokens": output_tokens,
+            "total_tokens": output_tokens,
+            "estimated_cost_usd": None,
+            "estimated_credits": 0,
+            "status": "ok",
+            "metadata": {
+                "estimated_tokens": True,
+                "estimated_from_artifact": path,
+                "context_mode": "artifact-estimate",
+            },
+        })
+    return rows
+
+
 @app.get("/apps/dashboard/token_heatmap/{workflow_id}")
 def workflow_token_heatmap(workflow_id: str):
     try:
         result = (
             supabase.table("model_usage_events")
-            .select("agent_name,capability,provider,model,input_tokens,output_tokens,total_tokens,estimated_cost_usd,estimated_credits,status,metadata,created_at")
+            .select("user_id,agent_name,capability,provider,model,input_tokens,output_tokens,total_tokens,estimated_cost_usd,estimated_credits,status,metadata,created_at")
             .eq("workflow_id", workflow_id)
             .order("created_at", desc=False)
             .limit(1000)
@@ -6163,6 +6240,11 @@ def workflow_token_heatmap(workflow_id: str):
         }
 
     rows = result.data or []
+    artifact_rows = _model_usage_artifact_rows(workflow_id)
+    if artifact_rows:
+        rows = rows + artifact_rows
+    if not rows:
+        rows = _estimated_usage_rows_from_llm_artifacts(workflow_id)
     current_usage = _aggregate_usage_rows(rows)
     grouped: Dict[str, Dict[str, Any]] = {}
 
