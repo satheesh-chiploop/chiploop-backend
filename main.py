@@ -6098,6 +6098,241 @@ def dashboard_json_artifact(workflow_id: str, filename: str = Query(..., min_len
         logger.warning("Dashboard artifact load failed workflow=%s filename=%s path=%s error=%s", workflow_id, filename, storage_path, exc)
         raise HTTPException(status_code=404, detail=f"artifact not found: {filename}") from exc
 
+
+def _usage_number(value: Any) -> float:
+    try:
+        if value is None or value == "":
+            return 0.0
+        return float(value)
+    except Exception:
+        return 0.0
+
+
+def _usage_int(value: Any) -> int:
+    return int(round(_usage_number(value)))
+
+
+def _aggregate_usage_rows(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+    return {
+        "input_tokens": sum(_usage_int(row.get("input_tokens")) for row in rows),
+        "output_tokens": sum(_usage_int(row.get("output_tokens")) for row in rows),
+        "total_tokens": sum(_usage_int(row.get("total_tokens")) for row in rows),
+        "estimated_cost_usd": round(sum(_usage_number(row.get("estimated_cost_usd")) for row in rows), 6),
+        "estimated_credits": sum(_usage_int(row.get("estimated_credits")) for row in rows),
+        "event_count": len(rows),
+    }
+
+
+def _token_delta_percent(current: int, previous: int) -> Optional[int]:
+    if previous <= 0:
+        return None
+    return int(round(((current - previous) / previous) * 100))
+
+
+@app.get("/apps/dashboard/token_heatmap/{workflow_id}")
+def workflow_token_heatmap(workflow_id: str):
+    try:
+        result = (
+            supabase.table("model_usage_events")
+            .select("agent_name,capability,provider,model,input_tokens,output_tokens,total_tokens,estimated_cost_usd,estimated_credits,status,metadata,created_at")
+            .eq("workflow_id", workflow_id)
+            .order("created_at", desc=False)
+            .limit(1000)
+            .execute()
+        )
+    except Exception as exc:
+        logger.warning("Token heatmap lookup failed workflow=%s error=%s", workflow_id, exc)
+        return {
+            "workflow_id": workflow_id,
+            "available": False,
+            "agents": [],
+            "summary": {
+                "agent_count": 0,
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "total_tokens": 0,
+                "estimated_cost_usd": None,
+                "estimated_credits": 0,
+                "event_count": 0,
+            },
+        }
+
+    rows = result.data or []
+    current_usage = _aggregate_usage_rows(rows)
+    grouped: Dict[str, Dict[str, Any]] = {}
+
+    def ensure_agent(agent_name: str) -> Dict[str, Any]:
+        agent_name = str(agent_name or "").strip() or "Unassigned model call"
+        return grouped.setdefault(agent_name, {
+            "agent_name": agent_name,
+            "capability": None,
+            "provider": None,
+            "model": None,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "total_tokens": 0,
+            "estimated_cost_usd": 0.0,
+            "estimated_credits": 0,
+            "event_count": 0,
+            "failed_event_count": 0,
+            "context_mode": "workflow",
+            "full_context_estimate_tokens": None,
+            "smart_context_tokens": None,
+            "smart_context_reduction_percent": None,
+        })
+
+    for row in rows:
+        agent_name = str(row.get("agent_name") or row.get("capability") or "Unassigned model call").strip()
+        if not agent_name:
+            agent_name = "Unassigned model call"
+        item = ensure_agent(agent_name)
+        item["capability"] = item.get("capability") or row.get("capability")
+        item["provider"] = item.get("provider") or row.get("provider")
+        item["model"] = item.get("model") or row.get("model")
+        item["input_tokens"] += _usage_int(row.get("input_tokens"))
+        item["output_tokens"] += _usage_int(row.get("output_tokens"))
+        item["total_tokens"] += _usage_int(row.get("total_tokens"))
+        item["estimated_cost_usd"] += _usage_number(row.get("estimated_cost_usd"))
+        item["estimated_credits"] += _usage_int(row.get("estimated_credits"))
+        item["event_count"] += 1
+        if str(row.get("status") or "").lower() not in {"", "ok", "completed", "success"}:
+            item["failed_event_count"] += 1
+        metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+        context_mode = metadata.get("context_mode") or metadata.get("smart_context_mode")
+        if context_mode:
+            item["context_mode"] = str(context_mode)
+        full_context = _usage_int(metadata.get("full_tokens_estimate") or metadata.get("full_context_estimate_tokens"))
+        smart_context = _usage_int(metadata.get("smart_tokens_estimate") or metadata.get("smart_context_tokens"))
+        reduction = metadata.get("reduction_percent") or metadata.get("smart_context_reduction_percent")
+        if full_context:
+            item["full_context_estimate_tokens"] = (item.get("full_context_estimate_tokens") or 0) + full_context
+        if smart_context:
+            item["smart_context_tokens"] = (item.get("smart_context_tokens") or 0) + smart_context
+        if reduction is not None:
+            try:
+                item["smart_context_reduction_percent"] = int(round(float(reduction)))
+            except Exception:
+                pass
+        if not item.get("model") and row.get("model"):
+            item["model"] = row.get("model")
+        if not item.get("provider") and row.get("provider"):
+            item["provider"] = row.get("provider")
+
+    try:
+        run_rows = (
+            supabase.table("runs")
+            .select("logs")
+            .eq("workflow_id", workflow_id)
+            .order("created_at", desc=True)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        workflow_rows = (
+            supabase.table("workflows")
+            .select("logs")
+            .eq("id", workflow_id)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        combined_logs = "\n".join([
+            str((run_rows[0] if run_rows else {}).get("logs") or ""),
+            str((workflow_rows[0] if workflow_rows else {}).get("logs") or ""),
+        ])
+        for line in _workflow_agent_log_lines(combined_logs, max_lines=500):
+            running = re.search(r"Running\s+(.+?\sAgent)\b", line, flags=re.IGNORECASE)
+            finished = re.search(r"^(.+?\sAgent)\s+(?:done|failed)\b", line, flags=re.IGNORECASE)
+            name = (running.group(1) if running else None) or (finished.group(1) if finished else None)
+            if name:
+                item = ensure_agent(name.strip())
+                if not item.get("event_count"):
+                    item["context_mode"] = "tool/no-model"
+    except Exception as exc:
+        logger.debug("Token heatmap log-agent merge skipped workflow=%s error=%s", workflow_id, exc)
+
+    agents = sorted(grouped.values(), key=lambda item: (item.get("total_tokens", 0), item.get("agent_name") or ""), reverse=True)
+    for rank, item in enumerate(agents, start=1):
+        item["rank"] = rank
+        if item.get("estimated_cost_usd") is not None:
+            item["estimated_cost_usd"] = round(float(item["estimated_cost_usd"]), 6)
+
+    total_cost = sum(_usage_number(item.get("estimated_cost_usd")) for item in agents)
+    previous_workflow_id = None
+    previous_usage: Optional[Dict[str, Any]] = None
+    current_user_id = next((str(row.get("user_id")) for row in rows if row.get("user_id")), None)
+    if current_user_id:
+        try:
+            previous_rows = (
+                supabase.table("model_usage_events")
+                .select("workflow_id,input_tokens,output_tokens,total_tokens,estimated_cost_usd,estimated_credits,created_at")
+                .eq("user_id", current_user_id)
+                .neq("workflow_id", workflow_id)
+                .order("created_at", desc=True)
+                .limit(1000)
+                .execute()
+                .data
+                or []
+            )
+            for previous_row in previous_rows:
+                candidate = previous_row.get("workflow_id")
+                if candidate:
+                    previous_workflow_id = str(candidate)
+                    break
+            if previous_workflow_id:
+                previous_usage = _aggregate_usage_rows([
+                    row for row in previous_rows
+                    if str(row.get("workflow_id") or "") == previous_workflow_id
+                ])
+        except Exception as exc:
+            logger.debug("Token heatmap previous-run comparison skipped workflow=%s error=%s", workflow_id, exc)
+
+    optimization_suggestions: List[str] = []
+    if agents:
+        highest = agents[0]
+        highest_total = _usage_int(highest.get("total_tokens"))
+        summary_total = max(1, sum(_usage_int(item.get("total_tokens")) for item in agents))
+        highest_share = highest_total / summary_total
+        if highest_total > 0 and highest_share >= 0.4:
+            optimization_suggestions.append(
+                f"{highest.get('agent_name')} used {int(round(highest_share * 100))}% of tracked tokens. Review its artifact scope or switch that step to Smart Context where possible."
+            )
+        input_tokens = sum(_usage_int(item.get("input_tokens")) for item in agents)
+        output_tokens = sum(_usage_int(item.get("output_tokens")) for item in agents)
+        if input_tokens > 0 and input_tokens >= output_tokens * 4:
+            optimization_suggestions.append("Input tokens dominate this run. Reduce repeated logs, large artifacts, or upstream context passed into later agents.")
+        if previous_usage and previous_usage.get("total_tokens"):
+            delta = _token_delta_percent(summary_total, _usage_int(previous_usage.get("total_tokens")))
+            if delta is not None and delta >= 25:
+                optimization_suggestions.append(f"This run used {delta}% more tokens than the previous tracked workflow. Compare changed inputs, enabled checks, and HEM continuation stages.")
+    if rows and not optimization_suggestions:
+        optimization_suggestions.append("Token usage looks balanced across tracked model calls. Continue using Smart Context for run review and large artifact questions.")
+    if not rows and agents:
+        optimization_suggestions.append("This workflow appears mostly tool-driven. Model token accounting will increase when LLM-backed agents or Ask This Run are used.")
+
+    summary = {
+        "agent_count": len(agents),
+        "input_tokens": sum(_usage_int(item.get("input_tokens")) for item in agents),
+        "output_tokens": sum(_usage_int(item.get("output_tokens")) for item in agents),
+        "total_tokens": sum(_usage_int(item.get("total_tokens")) for item in agents),
+        "estimated_cost_usd": round(total_cost, 6) if total_cost > 0 else None,
+        "estimated_credits": sum(_usage_int(item.get("estimated_credits")) for item in agents),
+        "event_count": sum(_usage_int(item.get("event_count")) for item in agents),
+        "highest_usage_agent": agents[0]["agent_name"] if agents else None,
+        "previous_workflow_id": previous_workflow_id,
+        "previous_total_tokens": previous_usage.get("total_tokens") if previous_usage else None,
+        "token_delta_percent": _token_delta_percent(current_usage.get("total_tokens", 0), _usage_int(previous_usage.get("total_tokens"))) if previous_usage else None,
+        "optimization_suggestions": optimization_suggestions,
+    }
+    return {
+        "workflow_id": workflow_id,
+        "available": bool(agents),
+        "agents": agents,
+        "summary": summary,
+    }
+
 @app.get("/list_agents")
 async def list_agents():
     G = build_capability_graph(AGENT_CAPABILITIES)
