@@ -1,6 +1,8 @@
 import os
 import logging
 import time
+from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Any, Dict, List, Optional
 
 import httpx
@@ -21,6 +23,23 @@ from .profiles import get_model_profile, model_profile_summary, resolve_route
 from .usage import record_model_usage
 
 logger = logging.getLogger("chiploop.model_gateway")
+
+_MODEL_CALL_CONTEXT: ContextVar[Optional[Dict[str, Any]]] = ContextVar("chiploop_model_call_context", default=None)
+
+
+@contextmanager
+def model_call_context(*, state: Optional[Dict[str, Any]] = None, agent_name: Optional[str] = None):
+    current = _MODEL_CALL_CONTEXT.get() or {}
+    merged = dict(current)
+    if state is not None:
+        merged["state"] = state
+    if agent_name:
+        merged["agent_name"] = agent_name
+    token = _MODEL_CALL_CONTEXT.set(merged)
+    try:
+        yield
+    finally:
+        _MODEL_CALL_CONTEXT.reset(token)
 
 
 def _messages(prompt: str, system: str = "") -> List[Dict[str, str]]:
@@ -260,6 +279,11 @@ def complete_text(
     state: Optional[Dict[str, Any]] = None,
     temperature: Optional[float] = None,
 ) -> str:
+    context = _MODEL_CALL_CONTEXT.get() or {}
+    if state is None and isinstance(context.get("state"), dict):
+        state = context.get("state")
+    if not agent_name and context.get("agent_name"):
+        agent_name = str(context.get("agent_name") or "").strip() or None
     profile = get_model_profile(state)
     if not agent_name and isinstance(state, dict):
         agent_name = str(state.get("agent_name") or state.get("current_agent") or state.get("step") or "").strip() or None

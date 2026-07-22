@@ -52,6 +52,7 @@ from browser_routes import router as browser_router
 from platform_browser_api import router as platform_browser_router
 from browser_auth import BrowserUser, is_browser_admin, require_browser_user
 from platform_adapters import get_platform_client
+from model_gateway import model_call_context
 
 
 import logging
@@ -1872,14 +1873,16 @@ def _run_nodes_with_shared_state(
             continue
 
         try:
-            result = _execute_agent_with_runtime(
-                label,
-                fn,
-                shared_state,
-                workflow_id,
-                run_id,
-                loop_type,
-            )
+            with model_call_context(state=shared_state, agent_name=label):
+                shared_state["current_agent"] = label
+                result = _execute_agent_with_runtime(
+                    label,
+                    fn,
+                    shared_state,
+                    workflow_id,
+                    run_id,
+                    loop_type,
+                )
             if isinstance(result, dict):
                 shared_state.update(result)
                 result_status = str(result.get("status", ""))
@@ -2446,14 +2449,16 @@ def execute_workflow_background(
                 # Execute agent function; start from shared_state snapshot
 
 
-                result = _execute_agent_with_runtime(
-                    step,
-                    fn,
-                    shared_state,
-                    workflow_id,
-                    run_id,
-                    loop_type,
-                )  # agents accept legacy dict state through runtime adapter
+                with model_call_context(state=shared_state, agent_name=step):
+                    shared_state["current_agent"] = step
+                    result = _execute_agent_with_runtime(
+                        step,
+                        fn,
+                        shared_state,
+                        workflow_id,
+                        run_id,
+                        loop_type,
+                    )  # agents accept legacy dict state through runtime adapter
 
                 # Save artifacts if provided
                 if isinstance(result, dict):
