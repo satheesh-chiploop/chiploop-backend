@@ -1,9 +1,12 @@
 import math
 import os
 import time
+import logging
 from typing import Any, Dict, Optional
 
 from platform_adapters import get_platform_client
+
+logger = logging.getLogger("chiploop.model_gateway.usage")
 
 
 def _int_or_none(value: Any) -> Optional[int]:
@@ -194,7 +197,16 @@ def record_model_usage(
             }
             ledger = {k: v for k, v in ledger.items() if v is not None}
             client.table("org_credit_ledger").insert(ledger).execute()
-    except Exception:
+    except Exception as exc:
         # Usage accounting must not break model execution if a deployment has not
         # applied the billing migration yet.
+        logger.warning(
+            "model_usage.record_failed workflow_id=%s run_id=%s agent=%s provider=%s model=%s error=%s",
+            row.get("workflow_id"),
+            row.get("run_id"),
+            agent_name,
+            provider,
+            model,
+            exc,
+        )
         return
