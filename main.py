@@ -6171,6 +6171,71 @@ def _agent_name_from_llm_artifact_path(path: str) -> str:
     return "Unassigned model call"
 
 
+def _agent_name_from_heatmap_artifact_path(path: str) -> Optional[str]:
+    lowered = path.lower().replace("\\", "/")
+    name = os.path.basename(lowered)
+    if name in {"digital_sva_assertions_agent.log", "sva_generation_report.json", "sva_spec.json"} or "assertions" in name:
+        return "Digital Assertions (SVA) Agent"
+    if name in {"testbench_generator_agent.log", "tb_generation_report.json", "tb_contract.json"} or name.startswith("test_"):
+        return "Digital Testbench Generator Agent"
+    if name in {"functional_coverage_agent.log", "coverage_generation_report.json", "coverage_model.py", "coverage_spec.json", "coverage_point_plan.md"}:
+        return "Digital Functional Coverage Agent"
+    if name in {"golden_model_comparison_agent.log", "golden_model_generation_report.json", "scoreboard.py", "scoreboard.md"}:
+        return "Digital Golden Model Comparison Agent"
+    if name in {"formal_verification_agent.log", "formal_report.json"} or "/vv/formal/" in lowered:
+        return "Digital Formal Verification Agent"
+    if name in {"simulation_control_agent.log", "sim_control_generation_report.json", "sim_control.md", "simulation_manifest.json"}:
+        return "Digital Simulation Control Agent"
+    if name in {"simulation_execution_agent.log", "simulation_execution_report.json", "simulation_execution_summary.json", "sim_execution.md"}:
+        return "Digital Simulation Execution Agent"
+    if name in {"simulation_summary_coverage_agent.log", "simulation_summary_coverage.json", "simulation_summary_coverage_report.json", "sim_summary_coverage.md"}:
+        return "Digital Simulation Summary Coverage Agent"
+    if name in {"verify_closure_ingest.json", "coverage_gap_analysis.json", "coverage_gap_analysis.md"}:
+        return "Digital Verify Closure Ingest Agent"
+    if name in {"verify_closure_plan.json", "verify_closure_plan.md"}:
+        return "Digital Closure Recommendation Agent"
+    if name in {"testcase_seed_update.json", "closure_rerun_plan.json"}:
+        return "Digital Closure Rerun Planner Agent"
+    if name in {"closure_iteration_judge.json", "closure_iteration_summary.json"}:
+        return "Digital Closure Iteration Judge Agent"
+    if name.endswith("_agent.log"):
+        cleaned = name.replace("_agent.log", "").replace("_", " ").strip().title()
+        return f"Digital {cleaned} Agent" if cleaned and not cleaned.startswith("Digital ") else f"{cleaned} Agent"
+    return None
+
+
+def _usage_estimate_row(workflow_id: str, agent_name: str) -> Dict[str, Any]:
+    return {
+        "workflow_id": workflow_id,
+        "agent_name": agent_name,
+        "capability": "artifact_estimate",
+        "provider": "artifact",
+        "model": "estimated-from-artifacts",
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "total_tokens": 0,
+        "estimated_cost_usd": None,
+        "estimated_credits": 0,
+        "status": "ok",
+        "metadata": {
+            "estimated_tokens": True,
+            "estimated_from_artifacts": [],
+            "context_mode": "artifact-estimate",
+        },
+    }
+
+
+def _append_artifact_estimate(row: Dict[str, Any], path: str, text: str) -> None:
+    output_tokens = max(1, (len(text) + 3) // 4)
+    row["output_tokens"] = _usage_int(row.get("output_tokens")) + output_tokens
+    row["total_tokens"] = _usage_int(row.get("total_tokens")) + output_tokens
+    metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+    paths_seen = metadata.get("estimated_from_artifacts") if isinstance(metadata.get("estimated_from_artifacts"), list) else []
+    paths_seen.append(path)
+    metadata["estimated_from_artifacts"] = paths_seen[:40]
+    row["metadata"] = metadata
+
+
 def _estimated_usage_rows_from_llm_artifacts(workflow_id: str) -> List[Dict[str, Any]]:
     prefix = f"backend/workflows/{workflow_id}/"
     try:
@@ -6198,24 +6263,7 @@ def _estimated_usage_rows_from_llm_artifacts(workflow_id: str) -> List[Dict[str,
             continue
         output_tokens = max(1, (len(text) + 3) // 4)
         agent_name = _agent_name_from_llm_artifact_path(path)
-        row = grouped.setdefault(agent_name, {
-            "workflow_id": workflow_id,
-            "agent_name": agent_name,
-            "capability": "artifact_estimate",
-            "provider": "artifact",
-            "model": "estimated-from-artifacts",
-            "input_tokens": 0,
-            "output_tokens": 0,
-            "total_tokens": 0,
-            "estimated_cost_usd": None,
-            "estimated_credits": 0,
-            "status": "ok",
-            "metadata": {
-                "estimated_tokens": True,
-                "estimated_from_artifacts": [],
-                "context_mode": "artifact-estimate",
-            },
-        })
+        row = grouped.setdefault(agent_name, _usage_estimate_row(workflow_id, agent_name))
         row["output_tokens"] = _usage_int(row.get("output_tokens")) + output_tokens
         row["total_tokens"] = _usage_int(row.get("total_tokens")) + output_tokens
         metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
@@ -6223,6 +6271,34 @@ def _estimated_usage_rows_from_llm_artifacts(workflow_id: str) -> List[Dict[str,
         paths_seen.append(path)
         metadata["estimated_from_artifacts"] = paths_seen
         row["metadata"] = metadata
+    return list(grouped.values())
+
+
+def _estimated_usage_rows_from_agent_artifacts(workflow_id: str) -> List[Dict[str, Any]]:
+    prefix = f"backend/workflows/{workflow_id}/"
+    try:
+        paths = _list_storage_tree_for_main(prefix, max_depth=7)
+    except Exception:
+        paths = []
+    grouped: Dict[str, Dict[str, Any]] = {}
+    seen = set()
+    allowed_ext = {".json", ".md", ".txt", ".log", ".py", ".sv", ".v"}
+    for path in paths:
+        normalized = path.replace("\\", "/")
+        if path in seen:
+            continue
+        seen.add(path)
+        _, ext = os.path.splitext(normalized.lower())
+        if ext not in allowed_ext:
+            continue
+        agent_name = _agent_name_from_heatmap_artifact_path(normalized)
+        if not agent_name:
+            continue
+        text = _download_text_for_main(path, max_bytes=250_000)
+        if not text:
+            continue
+        row = grouped.setdefault(agent_name, _usage_estimate_row(workflow_id, agent_name))
+        _append_artifact_estimate(row, path, text)
     return list(grouped.values())
 
 
@@ -6246,7 +6322,7 @@ def workflow_token_heatmap(workflow_id: str):
     if artifact_rows:
         rows = rows + artifact_rows
     if not rows or _aggregate_usage_rows(rows).get("total_tokens", 0) <= 0:
-        estimated_rows = _estimated_usage_rows_from_llm_artifacts(workflow_id)
+        estimated_rows = _estimated_usage_rows_from_llm_artifacts(workflow_id) + _estimated_usage_rows_from_agent_artifacts(workflow_id)
         if estimated_rows:
             rows = [row for row in rows if _usage_int(row.get("total_tokens")) > 0] + estimated_rows
     current_usage = _aggregate_usage_rows(rows)
