@@ -2315,6 +2315,14 @@ AGENT_CAPABILITIES = {
         "tags": ["fpga", "synthesis", "yosys", "ice40"],
     },
 
+    "FPGA Synthesis Closure Agent": {
+        "domain": "fpga",
+        "inputs": ["fpga/synth/fpga_synthesis_summary.json", "yosys_synth.log"],
+        "outputs": ["fpga/closure/fpga_synthesis_closure_plan.json"],
+        "description": "Reviews FPGA synthesis status and prepares safe retry settings or human fix guidance.",
+        "tags": ["fpga", "closure", "synthesis", "yosys"],
+    },
+
     "FPGA nextpnr Place & Route Agent": {
         "domain": "fpga",
         "inputs": ["fpga/synth/*.json", "fpga/constraints/top.pcf"],
@@ -2329,6 +2337,14 @@ AGENT_CAPABILITIES = {
         "outputs": ["fpga/reports/fpga_timing_drc_summary.json", "fpga/reports/*.log"],
         "description": "Runs timing checks and captures readiness information for the FPGA implementation.",
         "tags": ["fpga", "timing", "drc", "icetime"],
+    },
+
+    "FPGA Timing Closure Agent": {
+        "domain": "fpga",
+        "inputs": ["fpga/pnr/fpga_place_route_summary.json", "fpga/reports/fpga_timing_drc_summary.json"],
+        "outputs": ["fpga/closure/fpga_timing_closure_plan.json", "fpga/closure/fpga_timing_closure_chart.json"],
+        "description": "Reviews FPGA timing status and drives bounded implementation retries such as nextpnr seed exploration.",
+        "tags": ["fpga", "closure", "timing", "nextpnr"],
     },
 
     "FPGA Bitstream Handoff Agent": {

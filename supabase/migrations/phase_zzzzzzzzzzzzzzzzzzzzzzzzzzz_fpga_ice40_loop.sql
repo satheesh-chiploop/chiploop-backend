@@ -87,10 +87,18 @@ with agent_templates(agent_name, description, entrypoint, inputs, outputs, requi
       '["yosys"]'::jsonb
     ),
     (
+      'FPGA Synthesis Closure Agent',
+      'Reviews Yosys synthesis evidence and prepares bounded retry settings or human fix guidance.',
+      'agents.fpga.fpga_synthesis_closure_agent:run_agent',
+      '["fpga/synth/fpga_synthesis_summary.json","run_fpga_synthesis_closure_loop","allow_yosys_flatten"]'::jsonb,
+      '["fpga/closure/fpga_synthesis_closure_plan.json"]'::jsonb,
+      '["python","yosys"]'::jsonb
+    ),
+    (
       'FPGA nextpnr Place & Route Agent',
       'Runs nextpnr-ice40 place-and-route and collects timing, utilization, and routing evidence.',
       'agents.fpga.fpga_nextpnr_place_route_agent:run_agent',
-      '["board","device","package","pcf","netlist_json","target_frequency_mhz"]'::jsonb,
+      '["board","device","package","pcf","netlist_json","target_frequency_mhz","fpga_nextpnr_seed"]'::jsonb,
       '["fpga/pnr/fpga_place_route_summary.json","fpga/pnr/*.asc","fpga/pnr/*.log"]'::jsonb,
       '["nextpnr-ice40"]'::jsonb
     ),
@@ -101,6 +109,14 @@ with agent_templates(agent_name, description, entrypoint, inputs, outputs, requi
       '["asc","device","package","target_frequency_mhz"]'::jsonb,
       '["fpga/reports/fpga_timing_drc_summary.json","fpga/reports/*.log"]'::jsonb,
       '["icetime"]'::jsonb
+    ),
+    (
+      'FPGA Timing Closure Agent',
+      'Reviews FPGA timing evidence and drives bounded implementation retries such as nextpnr seed exploration.',
+      'agents.fpga.fpga_timing_closure_agent:run_agent',
+      '["fpga/pnr/fpga_place_route_summary.json","fpga/reports/fpga_timing_drc_summary.json","run_fpga_timing_closure_loop"]'::jsonb,
+      '["fpga/closure/fpga_timing_closure_plan.json","fpga/closure/fpga_timing_closure_chart.json"]'::jsonb,
+      '["python","nextpnr-ice40","icetime"]'::jsonb
     ),
     (
       'FPGA Bitstream Handoff Agent',
@@ -216,8 +232,10 @@ with templates(name, description, agents) as (
         'FPGA RTL Handoff Ingest Agent',
         'FPGA Constraint Setup Agent',
         'FPGA Yosys Synthesis Agent',
+        'FPGA Synthesis Closure Agent',
         'FPGA nextpnr Place & Route Agent',
         'FPGA Timing & DRC Agent',
+        'FPGA Timing Closure Agent',
         'FPGA Bitstream Handoff Agent',
         'FPGA Dashboard Agent'
       ]::text[]
@@ -265,7 +283,17 @@ definitions as (
           jsonb_build_object('key','board','label','Board','type','select','required',true,'defaultValue','icebreaker','options',jsonb_build_array('icebreaker','upduino_v3','icestick','custom_ice40')),
           jsonb_build_object('key','top_module','label','Top module','type','text','required',false),
           jsonb_build_object('key','target_frequency_mhz','label','Target MHz','type','number','required',false,'defaultValue',12),
-          jsonb_build_object('key','pcf_text','label','Pin constraints PCF','type','textarea','required',false)
+          jsonb_build_object('key','pcf_text','label','Pin constraints PCF','type','textarea','required',false),
+          jsonb_build_object('key','run_fpga_synthesis_closure_loop','label','Run synthesis closure loop','type','checkbox','required',false,'defaultValue',false),
+          jsonb_build_object('key','max_fpga_synthesis_closure_iterations','label','Synthesis closure tries','type','number','required',false,'defaultValue',1),
+          jsonb_build_object('key','run_fpga_timing_closure_loop','label','Run timing closure loop','type','checkbox','required',false,'defaultValue',true),
+          jsonb_build_object('key','max_fpga_timing_closure_iterations','label','Timing closure tries','type','number','required',false,'defaultValue',3),
+          jsonb_build_object('key','allow_yosys_flatten','label','Allow Yosys flatten','type','checkbox','required',false,'defaultValue',true),
+          jsonb_build_object('key','allow_nextpnr_seed_sweep','label','Allow nextpnr seed sweep','type','checkbox','required',false,'defaultValue',true),
+          jsonb_build_object('key','allow_frequency_relaxation','label','Suggest relaxed clock target','type','checkbox','required',false,'defaultValue',false),
+          jsonb_build_object('key','context_mode','label','Context mode','type','select','required',false,'defaultValue','smart','options',jsonb_build_array('smart','full')),
+          jsonb_build_object('key','hem_enabled','label','Enable HEM run memory','type','checkbox','required',false,'defaultValue',false),
+          jsonb_build_object('key','hem_mode','label','HEM mode','type','select','required',false,'defaultValue','fixed','options',jsonb_build_array('fixed','adaptive'))
         )
       )
     ) as definitions

@@ -25,7 +25,16 @@ def run_agent(state: dict) -> dict:
     pcf = fpga.get("constraints_pcf")
     asc_path = os.path.abspath(f"{out_dir}/{fpga.get('top_module') or 'top'}.asc")
     log_path = os.path.abspath(f"{out_dir}/nextpnr_ice40.log")
-    summary = {"agent": agent, "status": "blocked", "target": board, "asc": asc_path}
+    seed = state.get("fpga_nextpnr_seed") or state.get("nextpnr_seed")
+    summary = {
+        "agent": agent,
+        "status": "blocked",
+        "target": board,
+        "asc": asc_path,
+        "closure_iteration": int(state.get("fpga_timing_closure_iteration_index") or 0),
+        "seed": seed,
+        "timing_driven": bool(state.get("fpga_nextpnr_timing_driven") or state.get("run_fpga_timing_closure_loop")),
+    }
     if not json_netlist or not os.path.exists(str(json_netlist)):
         summary["error"] = "Missing Yosys JSON netlist."
     else:
@@ -41,6 +50,8 @@ def run_agent(state: dict) -> dict:
         ]
         if pcf and os.path.exists(str(pcf)):
             cmd.extend(["--pcf", str(pcf)])
+        if seed:
+            cmd.extend(["--seed", str(seed)])
         result = run_cmd(cmd, cwd=out_dir, log_path=log_path, timeout=900)
         summary.update(_parse_nextpnr(log_path))
         summary.update({"status": "completed" if result["ok"] and os.path.exists(asc_path) else "failed", "command": result})
@@ -52,4 +63,3 @@ def run_agent(state: dict) -> dict:
     if summary["status"] == "failed":
         state["status"] = "FPGA place-and-route failed."
     return state
-

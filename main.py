@@ -481,6 +481,8 @@ from agents.fpga.fpga_constraint_setup_agent import run_agent as fpga_constraint
 from agents.fpga.fpga_yosys_synthesis_agent import run_agent as fpga_yosys_synthesis_agent
 from agents.fpga.fpga_nextpnr_place_route_agent import run_agent as fpga_nextpnr_place_route_agent
 from agents.fpga.fpga_timing_drc_agent import run_agent as fpga_timing_drc_agent
+from agents.fpga.fpga_synthesis_closure_agent import run_agent as fpga_synthesis_closure_agent
+from agents.fpga.fpga_timing_closure_agent import run_agent as fpga_timing_closure_agent
 from agents.fpga.fpga_bitstream_handoff_agent import run_agent as fpga_bitstream_handoff_agent
 from agents.fpga.fpga_dashboard_agent import run_agent as fpga_dashboard_agent
 
@@ -577,8 +579,10 @@ FPGA_AGENT_FUNCTIONS: Dict[str, Any] = {
     "FPGA RTL Handoff Ingest Agent": fpga_rtl_handoff_ingest_agent,
     "FPGA Constraint Setup Agent": fpga_constraint_setup_agent,
     "FPGA Yosys Synthesis Agent": fpga_yosys_synthesis_agent,
+    "FPGA Synthesis Closure Agent": fpga_synthesis_closure_agent,
     "FPGA nextpnr Place & Route Agent": fpga_nextpnr_place_route_agent,
     "FPGA Timing & DRC Agent": fpga_timing_drc_agent,
+    "FPGA Timing Closure Agent": fpga_timing_closure_agent,
     "FPGA Bitstream Handoff Agent": fpga_bitstream_handoff_agent,
     "FPGA Dashboard Agent": fpga_dashboard_agent,
 }
@@ -1237,8 +1241,10 @@ FPGA_RTL_TO_BITSTREAM_DEFINITION = _linear_workflow_definition([
     "FPGA RTL Handoff Ingest Agent",
     "FPGA Constraint Setup Agent",
     "FPGA Yosys Synthesis Agent",
+    "FPGA Synthesis Closure Agent",
     "FPGA nextpnr Place & Route Agent",
     "FPGA Timing & DRC Agent",
+    "FPGA Timing Closure Agent",
     "FPGA Bitstream Handoff Agent",
     "FPGA Dashboard Agent",
 ])
@@ -3404,9 +3410,11 @@ class DigitalRTLSourceIn(BaseModel):
     """
     rtl_source_mode: Optional[str] = None  # "from_arch2rtl" | "paste" | "repo_path"
     from_workflow_id: Optional[str] = None
+    source_workflow_id: Optional[str] = None
     repo_path: Optional[str] = None
     repo_ref: Optional[str] = None
     repo_subdir: Optional[str] = None
+    rtl_text: Optional[str] = None
     pasted_rtl_files: Optional[Any] = None  # [{path, content}]
     source_arch2rtl_workflow_id: Optional[str] = None
     parent_workflow_id: Optional[str] = None
@@ -3429,6 +3437,17 @@ class FpgaBitstreamAppIn(DigitalRTLSourceIn):
     pcf_path: Optional[str] = None
     generate_bitstream: Optional[bool] = True
     notes: Optional[str] = None
+    run_fpga_synthesis_closure_loop: Optional[bool] = False
+    max_fpga_synthesis_closure_iterations: Optional[int] = 1
+    run_fpga_timing_closure_loop: Optional[bool] = False
+    max_fpga_timing_closure_iterations: Optional[int] = 1
+    allow_yosys_flatten: Optional[bool] = True
+    allow_nextpnr_seed_sweep: Optional[bool] = True
+    allow_frequency_relaxation: Optional[bool] = False
+    smart_context_enabled: Optional[bool] = True
+    context_mode: Optional[str] = "smart"
+    hem_enabled: Optional[bool] = False
+    hem_mode: Optional[str] = "fixed"
 
 
 class DigitalArch2SynthesisAppIn(DigitalArch2RTLAppIn, DigitalRTLSourceIn):
@@ -3736,6 +3755,8 @@ def execute_digital_app_background(
 ):
     try:
         os.makedirs(artifact_dir, exist_ok=True)
+        app_loop_type = "fpga" if app_name == "fpga" or str(template_workflow_name).startswith("FPGA_") else "digital"
+        app_loop_label = "FPGA" if app_loop_type == "fpga" else "Digital"
 
         shared_state = {
             "workflow_id": workflow_id,
@@ -3744,9 +3765,9 @@ def execute_digital_app_background(
             "supabase_client": supabase,
             "user_id": user_id,
             # IMPORTANT: give agents a canonical storage prefix for robust ZIP (?full=1)
-            "artifact_prefix": f"backend/workflows/{workflow_id}/digital/{app_name}/{run_id}/",
+            "artifact_prefix": f"backend/workflows/{workflow_id}/{app_loop_type}/{app_name}/{run_id}/",
             "app_name": app_name,
-            "loop_type": "digital",
+            "loop_type": app_loop_type,
             "template_workflow": template_workflow_name,
             "template_workflow_name": template_workflow_name,
             "workflow_name": template_workflow_name,
@@ -3783,8 +3804,8 @@ def execute_digital_app_background(
         shared_state["workflow_chain"] = workflow_chain
         save_text_artifact_and_record(
             workflow_id,
-            "Digital Workflow Chain",
-            f"digital/{app_name}",
+            f"{app_loop_label} Workflow Chain",
+            f"{app_loop_type}/{app_name}",
             "workflow_chain.json",
             json.dumps(workflow_chain, indent=2),
         )
@@ -3799,8 +3820,8 @@ def execute_digital_app_background(
             if toggles_for_fail_fast.get("insert_mbist") or toggles_for_fail_fast.get("enable_mbist_rtl_insertion"):
                 shared_state["_fail_fast_on_agent_error"] = True
 
-        append_log_workflow(workflow_id, f"🚀 Starting Digital App: {app_name}", phase="start")
-        append_log_run(run_id, f"🚀 Starting Digital App: {app_name}")
+        append_log_workflow(workflow_id, f"🚀 Starting {app_loop_label} App: {app_name}", phase="start")
+        append_log_run(run_id, f"🚀 Starting {app_loop_label} App: {app_name}")
 
         append_log_workflow(workflow_id, f"▶️ Loading Studio workflow: {template_workflow_name}", phase="load")
         append_log_run(run_id, f"▶️ Loading Studio workflow: {template_workflow_name}")
@@ -4185,17 +4206,105 @@ def execute_digital_app_background(
                     nodes=suffix_nodes,
                     shared_state=shared_state,
                 )
+        elif app_name == "fpga" and bool(shared_state.get("run_fpga_synthesis_closure_loop") or shared_state.get("run_fpga_timing_closure_loop")):
+            max_synth_iterations = max(1, min(int(shared_state.get("max_fpga_synthesis_closure_iterations") or 1), 3))
+            max_timing_iterations = max(1, min(int(shared_state.get("max_fpga_timing_closure_iterations") or 1), 5))
+
+            def _node_label(node: Dict[str, Any]) -> str:
+                return ((node.get("data") or {}).get("backendLabel") or node.get("label") or "").strip()
+
+            labels = [_node_label(node) for node in nodes]
+            synth_closure_label = "FPGA Synthesis Closure Agent"
+            timing_closure_label = "FPGA Timing Closure Agent"
+            if synth_closure_label not in labels or timing_closure_label not in labels:
+                append_log_workflow(workflow_id, "FPGA closure requested but closure agents are not in this workflow.", phase="fpga_closure_missing")
+                append_log_run(run_id, "FPGA closure requested but closure agents are not in this workflow.")
+                _run_nodes_with_shared_state(workflow_id=workflow_id, run_id=run_id, loop_type=app_loop_type, nodes=nodes, shared_state=shared_state)
+            else:
+                synth_idx = labels.index("FPGA Yosys Synthesis Agent") if "FPGA Yosys Synthesis Agent" in labels else labels.index(synth_closure_label)
+                synth_closure_idx = labels.index(synth_closure_label)
+                pnr_idx = labels.index("FPGA nextpnr Place & Route Agent") if "FPGA nextpnr Place & Route Agent" in labels else labels.index(timing_closure_label)
+                timing_closure_idx = labels.index(timing_closure_label)
+                suffix_nodes = nodes[timing_closure_idx + 1:]
+
+                append_log_workflow(workflow_id, "FPGA synthesis closure baseline started", phase="fpga_synthesis_closure_baseline")
+                append_log_run(run_id, "FPGA synthesis closure baseline started")
+                shared_state["fpga_synthesis_closure_iteration_index"] = 0
+                _run_nodes_with_shared_state(
+                    workflow_id=workflow_id,
+                    run_id=run_id,
+                    loop_type=app_loop_type,
+                    nodes=nodes[:synth_closure_idx + 1],
+                    shared_state=shared_state,
+                )
+                for iteration in range(1, max_synth_iterations + 1):
+                    plan = (((shared_state.get("fpga") or {}).get("synthesis_closure") or {}).get("plan") or {})
+                    if not shared_state.get("run_fpga_synthesis_closure_loop") or plan.get("closure_complete") is True or plan.get("status") == "clean":
+                        break
+                    shared_state["fpga_synthesis_closure_iteration_index"] = iteration
+                    append_log_workflow(workflow_id, f"FPGA synthesis closure iteration {iteration}/{max_synth_iterations} started", phase=f"fpga_synthesis_closure_iteration_{iteration}")
+                    append_log_run(run_id, f"FPGA synthesis closure iteration {iteration}/{max_synth_iterations} started")
+                    _run_nodes_with_shared_state(
+                        workflow_id=workflow_id,
+                        run_id=run_id,
+                        loop_type=app_loop_type,
+                        nodes=nodes[synth_idx:synth_closure_idx + 1],
+                        shared_state=shared_state,
+                    )
+                    plan = (((shared_state.get("fpga") or {}).get("synthesis_closure") or {}).get("plan") or {})
+                    if plan.get("closure_complete") is True or plan.get("status") == "clean":
+                        append_log_workflow(workflow_id, f"FPGA synthesis closure stopped after iteration {iteration}: closure achieved", phase="fpga_synthesis_closure_stop")
+                        append_log_run(run_id, f"FPGA synthesis closure stopped after iteration {iteration}: closure achieved")
+                        break
+
+                append_log_workflow(workflow_id, "FPGA timing closure baseline started", phase="fpga_timing_closure_baseline")
+                append_log_run(run_id, "FPGA timing closure baseline started")
+                shared_state["fpga_timing_closure_iteration_index"] = 0
+                _run_nodes_with_shared_state(
+                    workflow_id=workflow_id,
+                    run_id=run_id,
+                    loop_type=app_loop_type,
+                    nodes=nodes[synth_closure_idx + 1:timing_closure_idx + 1],
+                    shared_state=shared_state,
+                )
+                for iteration in range(1, max_timing_iterations + 1):
+                    plan = (((shared_state.get("fpga") or {}).get("timing_closure") or {}).get("plan") or {})
+                    if not shared_state.get("run_fpga_timing_closure_loop") or plan.get("closure_complete") is True or plan.get("status") == "clean":
+                        break
+                    shared_state["fpga_timing_closure_iteration_index"] = iteration
+                    append_log_workflow(workflow_id, f"FPGA timing closure iteration {iteration}/{max_timing_iterations} started", phase=f"fpga_timing_closure_iteration_{iteration}")
+                    append_log_run(run_id, f"FPGA timing closure iteration {iteration}/{max_timing_iterations} started")
+                    _run_nodes_with_shared_state(
+                        workflow_id=workflow_id,
+                        run_id=run_id,
+                        loop_type=app_loop_type,
+                        nodes=nodes[pnr_idx:timing_closure_idx + 1],
+                        shared_state=shared_state,
+                    )
+                    plan = (((shared_state.get("fpga") or {}).get("timing_closure") or {}).get("plan") or {})
+                    if plan.get("closure_complete") is True or plan.get("status") == "clean":
+                        append_log_workflow(workflow_id, f"FPGA timing closure stopped after iteration {iteration}: closure achieved", phase="fpga_timing_closure_stop")
+                        append_log_run(run_id, f"FPGA timing closure stopped after iteration {iteration}: closure achieved")
+                        break
+
+                _run_nodes_with_shared_state(
+                    workflow_id=workflow_id,
+                    run_id=run_id,
+                    loop_type=app_loop_type,
+                    nodes=suffix_nodes,
+                    shared_state=shared_state,
+                )
         else:
             _run_nodes_with_shared_state(
                 workflow_id=workflow_id,
                 run_id=run_id,
-                loop_type="digital",
+                loop_type=app_loop_type,
                 nodes=nodes,
                 shared_state=shared_state,
             )
 
-        append_log_workflow(workflow_id, f"🎉 Digital App complete: {app_name}", status="completed", phase="done")
-        append_log_run(run_id, f"🎉 Digital App complete: {app_name}", status="completed")
+        append_log_workflow(workflow_id, f"🎉 {app_loop_label} App complete: {app_name}", status="completed", phase="done")
+        append_log_run(run_id, f"🎉 {app_loop_label} App complete: {app_name}", status="completed")
         if app_name in {"arch2rtl", "dqa", "verify", "arch2synthesis", "arch2tapeout"} and bool(shared_state.get("hem_enabled")):
             _hem_continue_digital_rtl_after_success(
                 current_app=app_name,
@@ -4207,7 +4316,7 @@ def execute_digital_app_background(
             )
 
     except Exception as e:
-        err = f"❌ Digital App crashed ({app_name}): {type(e).__name__}: {e}\n{traceback.format_exc()}"
+        err = f"❌ {app_loop_label} App crashed ({app_name}): {type(e).__name__}: {e}\n{traceback.format_exc()}"
         append_log_workflow(workflow_id, err, status="failed", phase="error")
         append_log_run(run_id, err, status="failed")
 
@@ -4232,7 +4341,7 @@ def _create_app_workflow_and_run(user_id: str, app_title: str, loop_type: str):
     }).execute()
 
     user_folder = str(user_id or "anonymous")
-    artifact_dir = os.path.join("artifacts", user_folder, workflow_id, run_id, "digital")
+    artifact_dir = os.path.join("artifacts", user_folder, workflow_id, run_id, loop_type)
     os.makedirs(artifact_dir, exist_ok=True)
 
     supabase.table("runs").insert({
