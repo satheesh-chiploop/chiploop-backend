@@ -476,6 +476,13 @@ from agents.digital.digital_dqa_summary_agent import run_agent as digital_dqa_su
 from agents.digital.digital_rtl_review_agent import run_agent as digital_rtl_review_agent
 from agents.digital.digital_constraint_review_agent import run_agent as digital_constraint_review_agent
 from agents.digital.digital_timing_debug_agent import run_agent as digital_timing_debug_agent
+from agents.fpga.fpga_rtl_handoff_ingest_agent import run_agent as fpga_rtl_handoff_ingest_agent
+from agents.fpga.fpga_constraint_setup_agent import run_agent as fpga_constraint_setup_agent
+from agents.fpga.fpga_yosys_synthesis_agent import run_agent as fpga_yosys_synthesis_agent
+from agents.fpga.fpga_nextpnr_place_route_agent import run_agent as fpga_nextpnr_place_route_agent
+from agents.fpga.fpga_timing_drc_agent import run_agent as fpga_timing_drc_agent
+from agents.fpga.fpga_bitstream_handoff_agent import run_agent as fpga_bitstream_handoff_agent
+from agents.fpga.fpga_dashboard_agent import run_agent as fpga_dashboard_agent
 
 DIGITAL_AGENT_FUNCTIONS: Dict[str, Any] = {
     "Digital Spec Agent": digital_spec_agent,
@@ -566,6 +573,16 @@ DIGITAL_AGENT_FUNCTIONS: Dict[str, Any] = {
 # ==========================================================
 # ✅ ANALOG AGENTS (NEW)
 # ==========================================================
+FPGA_AGENT_FUNCTIONS: Dict[str, Any] = {
+    "FPGA RTL Handoff Ingest Agent": fpga_rtl_handoff_ingest_agent,
+    "FPGA Constraint Setup Agent": fpga_constraint_setup_agent,
+    "FPGA Yosys Synthesis Agent": fpga_yosys_synthesis_agent,
+    "FPGA nextpnr Place & Route Agent": fpga_nextpnr_place_route_agent,
+    "FPGA Timing & DRC Agent": fpga_timing_drc_agent,
+    "FPGA Bitstream Handoff Agent": fpga_bitstream_handoff_agent,
+    "FPGA Dashboard Agent": fpga_dashboard_agent,
+}
+
 from agents.analog.analog_spec_builder_agent import run_agent as analog_spec_builder_agent
 from agents.analog.analog_netlist_scaffold_agent import run_agent as analog_netlist_scaffold_agent
 from agents.analog.analog_sim_plan_agent import run_agent as analog_sim_plan_agent
@@ -1016,6 +1033,7 @@ AGENT_FUNCTIONS: Dict[str, Dict[str, Any]] = {
     "embedded": EMBEDDED_AGENT_FUNCTIONS,
     "system": SYSTEM_AGENT_FUNCTIONS,
     "validation": VALIDATION_AGENT_FUNCTIONS,
+    "fpga": FPGA_AGENT_FUNCTIONS,
 }
 
 
@@ -1215,6 +1233,16 @@ DIGITAL_INTEGRATE_DEFINITION = _linear_workflow_definition([
     "Digital IP Packaging & Handoff Agent",
 ])
 
+FPGA_RTL_TO_BITSTREAM_DEFINITION = _linear_workflow_definition([
+    "FPGA RTL Handoff Ingest Agent",
+    "FPGA Constraint Setup Agent",
+    "FPGA Yosys Synthesis Agent",
+    "FPGA nextpnr Place & Route Agent",
+    "FPGA Timing & DRC Agent",
+    "FPGA Bitstream Handoff Agent",
+    "FPGA Dashboard Agent",
+])
+
 FIRMWARE_DOWNSTREAM_DEFINITION = [
     "Embedded Digital RTL Handoff Ingest Agent",
     "Embedded Firmware Register Extract Agent",
@@ -1407,6 +1435,7 @@ LOCAL_PREBUILT_WORKFLOW_DEFINITIONS: Dict[str, Dict[str, Any]] = {
     "Digital_DQA": DIGITAL_DQA_DEFINITION,
     "Digital_Smoke": DIGITAL_SMOKE_DEFINITION,
     "Digital_Integrate": DIGITAL_INTEGRATE_DEFINITION,
+    "FPGA_RTL_to_Bitstream": FPGA_RTL_TO_BITSTREAM_DEFINITION,
     "System_Architecture_Explorer": SYSTEM_ARCHITECTURE_EXPLORER_DEFINITION,
     "System_Cache_Tuning": SYSTEM_ARCHITECTURE_EXPLORER_DEFINITION,
     "System_ISA_Compare": SYSTEM_ARCHITECTURE_EXPLORER_DEFINITION,
@@ -1438,6 +1467,7 @@ LOCAL_RUNTIME_WORKFLOW_OVERRIDES = {
     "Digital_DQA",
     "Digital_Smoke",
     "Digital_Integrate",
+    "FPGA_RTL_to_Bitstream",
     "Embedded_Run",
     "System_RTL",
     "System_DQA",
@@ -1806,6 +1836,7 @@ def _run_nodes_with_shared_state(
         loop_map.update(EMBEDDED_AGENT_FUNCTIONS)
         loop_map.update(VALIDATION_AGENT_FUNCTIONS)
         loop_map.update(SYSTEM_AGENT_FUNCTIONS)
+        loop_map.update(FPGA_AGENT_FUNCTIONS)
     else:
         # IMPORTANT: use loop-specific maps (validation needs VALIDATION_AGENT_FUNCTIONS)
         loop_map = {
@@ -1814,6 +1845,7 @@ def _run_nodes_with_shared_state(
             "embedded": EMBEDDED_AGENT_FUNCTIONS,
             "validation": VALIDATION_AGENT_FUNCTIONS,
             "system": SYSTEM_AGENT_FUNCTIONS,
+            "fpga": FPGA_AGENT_FUNCTIONS,
         }.get(loop_type, DIGITAL_AGENT_FUNCTIONS)
 
     agent_map = dict(loop_map)
@@ -2148,6 +2180,7 @@ def execute_workflow_background(
            loop_map.update(EMBEDDED_AGENT_FUNCTIONS)
            loop_map.update(VALIDATION_AGENT_FUNCTIONS)
            loop_map.update(SYSTEM_AGENT_FUNCTIONS)
+           loop_map.update(FPGA_AGENT_FUNCTIONS)
         else:
     # Only agents from this domain
            loop_map = AGENT_FUNCTIONS.get(loop_type, DIGITAL_AGENT_FUNCTIONS)
@@ -3378,6 +3411,24 @@ class DigitalRTLSourceIn(BaseModel):
     source_arch2rtl_workflow_id: Optional[str] = None
     parent_workflow_id: Optional[str] = None
     upstream_workflows: Optional[Dict[str, Any]] = None
+
+
+class FpgaBitstreamAppIn(DigitalRTLSourceIn):
+    """
+    FPGA prototype flow input. The first implementation targets open-source
+    iCE40 tooling while keeping vendor/device fields explicit for later boards.
+    """
+    board: Optional[str] = "icebreaker"
+    family: Optional[str] = "ice40"
+    device: Optional[str] = None
+    package: Optional[str] = None
+    top_module: Optional[str] = None
+    target_frequency_mhz: Optional[float] = 12.0
+    constraints_pcf: Optional[str] = None
+    pcf_text: Optional[str] = None
+    pcf_path: Optional[str] = None
+    generate_bitstream: Optional[bool] = True
+    notes: Optional[str] = None
 
 
 class DigitalArch2SynthesisAppIn(DigitalArch2RTLAppIn, DigitalRTLSourceIn):
@@ -5706,6 +5757,48 @@ async def apps_timing_debug_run(request: Request, background_tasks: BackgroundTa
         artifact_dir,
         "timing_debug",
         "Digital_Timing_Debug",
+        data,
+    )
+
+    return {"ok": True, "workflow_id": workflow_id, "run_id": run_id}
+
+
+@app.post("/apps/fpga/bitstream/run")
+async def apps_fpga_bitstream_run(request: Request, background_tasks: BackgroundTasks, payload: FpgaBitstreamAppIn):
+    user_id = _require_user_id(request)
+    workflow_id, run_id, base_dir = _create_app_workflow_and_run(user_id, "App: FPGA RTL to Bitstream", "fpga")
+    artifact_dir = os.path.join(base_dir, "fpga_bitstream")
+    os.makedirs(artifact_dir, exist_ok=True)
+
+    data = payload.dict()
+    if data.get("from_workflow_id") and not data.get("source_workflow_id"):
+        data["source_workflow_id"] = data["from_workflow_id"]
+    if data.get("source_arch2rtl_workflow_id") and not data.get("source_workflow_id"):
+        data["source_workflow_id"] = data["source_arch2rtl_workflow_id"]
+
+    target = {
+        "vendor": "lattice",
+        "family": data.get("family") or "ice40",
+        "board": data.get("board") or "icebreaker",
+        "device": data.get("device"),
+        "package": data.get("package"),
+        "top_module": data.get("top_module"),
+        "target_frequency_mhz": data.get("target_frequency_mhz"),
+    }
+    data["fpga_target"] = target
+    data["fpga"] = {
+        **(data.get("fpga") if isinstance(data.get("fpga"), dict) else {}),
+        "target": target,
+    }
+
+    background_tasks.add_task(
+        execute_digital_app_background,
+        workflow_id,
+        run_id,
+        user_id,
+        artifact_dir,
+        "fpga",
+        "FPGA_RTL_to_Bitstream",
         data,
     )
 
@@ -11623,7 +11716,7 @@ def execute_system_app_background(
                 node
                 for label in canonical_labels
                 for node in [{"label": label}]
-                if label in SYSTEM_AGENT_FUNCTIONS or label in EMBEDDED_AGENT_FUNCTIONS or label in DIGITAL_AGENT_FUNCTIONS
+                if label in SYSTEM_AGENT_FUNCTIONS or label in EMBEDDED_AGENT_FUNCTIONS or label in DIGITAL_AGENT_FUNCTIONS or label in FPGA_AGENT_FUNCTIONS
             ]
             append_log_workflow(
                 workflow_id,

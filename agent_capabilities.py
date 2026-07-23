@@ -2291,6 +2291,62 @@ AGENT_CAPABILITIES = {
         "tags": ["validation", "cognition", "coverage", "proposal"],
     },
 
+    "FPGA RTL Handoff Ingest Agent": {
+        "domain": "fpga",
+        "inputs": ["from_workflow_id", "source_workflow_id", "pasted_rtl_files", "rtl_text", "repo_path", "top_module"],
+        "outputs": ["fpga/handoff/fpga_handoff_ingest.json", "fpga/rtl/*.sv", "fpga/rtl/*.v"],
+        "description": "Imports RTL from an upstream workflow, pasted source, or repo path for FPGA implementation.",
+        "tags": ["fpga", "rtl", "handoff", "ice40"],
+    },
+
+    "FPGA Constraint Setup Agent": {
+        "domain": "fpga",
+        "inputs": ["board", "device", "package", "pcf_text", "target_frequency_mhz"],
+        "outputs": ["fpga/constraints/fpga_constraints_summary.json", "fpga/constraints/top.pcf"],
+        "description": "Selects board/device/package settings and prepares PCF constraints for iCE40 implementation.",
+        "tags": ["fpga", "constraints", "pcf", "ice40"],
+    },
+
+    "FPGA Yosys Synthesis Agent": {
+        "domain": "fpga",
+        "inputs": ["fpga/handoff/fpga_handoff_ingest.json", "fpga/rtl/*.sv", "fpga/rtl/*.v"],
+        "outputs": ["fpga/synth/fpga_synthesis_summary.json", "fpga/synth/*.json"],
+        "description": "Runs Yosys synthesis for iCE40 and creates a JSON netlist for nextpnr.",
+        "tags": ["fpga", "synthesis", "yosys", "ice40"],
+    },
+
+    "FPGA nextpnr Place & Route Agent": {
+        "domain": "fpga",
+        "inputs": ["fpga/synth/*.json", "fpga/constraints/top.pcf"],
+        "outputs": ["fpga/pnr/fpga_place_route_summary.json", "fpga/pnr/*.asc", "fpga/pnr/*.log"],
+        "description": "Runs nextpnr-ice40 place-and-route and summarizes implementation evidence.",
+        "tags": ["fpga", "place-route", "nextpnr", "ice40"],
+    },
+
+    "FPGA Timing & DRC Agent": {
+        "domain": "fpga",
+        "inputs": ["fpga/pnr/*.asc", "target_frequency_mhz"],
+        "outputs": ["fpga/reports/fpga_timing_drc_summary.json", "fpga/reports/*.log"],
+        "description": "Runs timing checks and captures readiness information for the FPGA implementation.",
+        "tags": ["fpga", "timing", "drc", "icetime"],
+    },
+
+    "FPGA Bitstream Handoff Agent": {
+        "domain": "fpga",
+        "inputs": ["fpga/pnr/*.asc", "board"],
+        "outputs": ["fpga/bitstream/fpga_bitstream_summary.json", "fpga/bitstream/*.bin"],
+        "description": "Packages an iCE40 bitstream and records the board programming command.",
+        "tags": ["fpga", "bitstream", "icepack", "openfpgaloader"],
+    },
+
+    "FPGA Dashboard Agent": {
+        "domain": "fpga",
+        "inputs": ["fpga/handoff/fpga_handoff_ingest.json", "fpga/synth/fpga_synthesis_summary.json", "fpga/pnr/fpga_place_route_summary.json"],
+        "outputs": ["fpga/fpga_dashboard.json"],
+        "description": "Builds the FPGA dashboard summary across handoff, constraints, synthesis, place-and-route, timing, and bitstream artifacts.",
+        "tags": ["fpga", "dashboard", "summary"],
+    },
+
 
     
 }
