@@ -6225,25 +6225,169 @@ def dashboard_json_artifact(workflow_id: str, filename: str = Query(..., min_len
     if not re.fullmatch(r"[A-Za-z0-9_./-]+\.json", filename) or ".." in filename or filename.startswith("/"):
         raise HTTPException(status_code=400, detail="invalid artifact filename")
 
+    def _fpga_dashboard_from_parts(parts: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        if not parts:
+            return None
+        summary: Dict[str, Any] = {
+            "type": "fpga_dashboard",
+            "status": "completed",
+        }
+        mapping = {
+            "fpga_handoff_ingest.json": "handoff",
+            "fpga_constraints_summary.json": "constraints",
+            "fpga_synthesis_summary.json": "synthesis",
+            "fpga_place_route_summary.json": "place_route",
+            "fpga_timing_drc_summary.json": "timing_drc",
+            "fpga_synthesis_closure_plan.json": "synthesis_closure",
+            "fpga_timing_closure_plan.json": "timing_closure",
+            "fpga_timing_closure_chart.json": "timing_closure_chart",
+            "fpga_bitstream_summary.json": "bitstream",
+        }
+        for basename_key, summary_key in mapping.items():
+            value = parts.get(basename_key)
+            if value is not None:
+                summary[summary_key] = value
+        for key in ("handoff", "constraints", "synthesis", "place_route", "timing_drc", "bitstream"):
+            target = (summary.get(key) or {}).get("target") if isinstance(summary.get(key), dict) else None
+            if target:
+                summary["target"] = target
+                break
+        synthesis = summary.get("synthesis") if isinstance(summary.get("synthesis"), dict) else {}
+        if synthesis:
+            summary["synthesis_estimate"] = {
+                "logical_cells_used": synthesis.get("logical_cells_used"),
+                "logical_cells_available": synthesis.get("logical_cells_available"),
+                "logic_utilization_percent": synthesis.get("logic_utilization_percent"),
+                "flip_flops": synthesis.get("flip_flops"),
+                "lut4_cells": synthesis.get("lut4_cells"),
+                "carry_cells": synthesis.get("carry_cells"),
+                "combinational_cells": synthesis.get("combinational_cells"),
+                "fabric_mapped_cells": synthesis.get("fabric_mapped_cells"),
+                "total_mapped_cells": synthesis.get("total_mapped_cells"),
+            }
+        place_route = summary.get("place_route") if isinstance(summary.get("place_route"), dict) else {}
+        timing = summary.get("timing_drc") if isinstance(summary.get("timing_drc"), dict) else {}
+        if place_route:
+            summary["utilization"] = {
+                "logical_cells_used": place_route.get("logical_cells_used"),
+                "logical_cells_available": place_route.get("logical_cells_available"),
+                "logic_utilization_percent": place_route.get("logic_utilization_percent"),
+            }
+        if timing or place_route:
+            summary["routed_result"] = {
+                "logical_cells_used": place_route.get("logical_cells_used"),
+                "logical_cells_available": place_route.get("logical_cells_available"),
+                "logic_utilization_percent": place_route.get("logic_utilization_percent"),
+                "max_frequency_mhz": timing.get("max_frequency_mhz") or place_route.get("max_frequency_mhz"),
+                "timing_met": timing.get("timing_met") if timing.get("timing_met") is not None else place_route.get("timing_met"),
+                "timing_violation_count": timing.get("timing_violation_count") if timing.get("timing_violation_count") is not None else place_route.get("timing_violation_count"),
+                "tns_ns": timing.get("tns_ns") if timing.get("tns_ns") is not None else place_route.get("tns_ns"),
+                "wns_ns": timing.get("wns_ns") if timing.get("wns_ns") is not None else place_route.get("wns_ns"),
+            }
+            summary["timing_summary"] = {
+                "max_frequency_mhz": timing.get("max_frequency_mhz") or place_route.get("max_frequency_mhz"),
+                "target_frequency_mhz": timing.get("target_frequency_mhz") or ((summary.get("target") or {}).get("default_frequency_mhz") if isinstance(summary.get("target"), dict) else None),
+                "timing_met": timing.get("timing_met") if timing.get("timing_met") is not None else place_route.get("timing_met"),
+                "timing_violation_count": timing.get("timing_violation_count") if timing.get("timing_violation_count") is not None else place_route.get("timing_violation_count"),
+                "tns_ns": timing.get("tns_ns") if timing.get("tns_ns") is not None else place_route.get("tns_ns"),
+                "wns_ns": timing.get("wns_ns") if timing.get("wns_ns") is not None else place_route.get("wns_ns"),
+            }
+        return summary if len(summary) > 2 else None
+
+    def _synthesize_fpga_dashboard_from_local(local_base: Path) -> Optional[Dict[str, Any]]:
+        wanted = {
+            "fpga_handoff_ingest.json",
+            "fpga_constraints_summary.json",
+            "fpga_synthesis_summary.json",
+            "fpga_place_route_summary.json",
+            "fpga_timing_drc_summary.json",
+            "fpga_synthesis_closure_plan.json",
+            "fpga_timing_closure_plan.json",
+            "fpga_timing_closure_chart.json",
+            "fpga_bitstream_summary.json",
+        }
+        parts: Dict[str, Any] = {}
+        for path in local_base.rglob("*.json"):
+            if path.name not in wanted or path.name in parts:
+                continue
+            try:
+                parts[path.name] = json.loads(path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+        return _fpga_dashboard_from_parts(parts)
+
+    is_fpga_dashboard_request = filename.rsplit("/", 1)[-1] == "fpga_dashboard.json"
+    local_fpga_dashboard: Optional[Dict[str, Any]] = None
     local_base = _artifacts_dir_for_workflow(workflow_id)
     if local_base.exists():
-        local_candidates = [filename]
-        if filename.startswith("fpga/"):
-            local_candidates.append(filename.removeprefix("fpga/"))
-        for local_name in local_candidates:
-            exact = (local_base / local_name).resolve()
-            if str(exact).startswith(str(local_base.resolve())) and exact.is_file():
-                try:
-                    return JSONResponse(json.loads(exact.read_text(encoding="utf-8")))
-                except Exception:
-                    pass
-        basename = filename.rsplit("/", 1)[-1]
-        for path in local_base.rglob(basename):
-            if path.is_file():
-                try:
-                    return JSONResponse(json.loads(path.read_text(encoding="utf-8")))
-                except Exception:
+        if is_fpga_dashboard_request:
+            local_fpga_dashboard = _synthesize_fpga_dashboard_from_local(local_base)
+        else:
+            local_candidates = [filename]
+            if filename.startswith("fpga/"):
+                local_candidates.append(filename.removeprefix("fpga/"))
+            for local_name in local_candidates:
+                exact = (local_base / local_name).resolve()
+                if str(exact).startswith(str(local_base.resolve())) and exact.is_file():
+                    try:
+                        return JSONResponse(json.loads(exact.read_text(encoding="utf-8")))
+                    except Exception:
+                        pass
+            basename = filename.rsplit("/", 1)[-1]
+            for path in local_base.rglob(basename):
+                if path.is_file():
+                    try:
+                        return JSONResponse(json.loads(path.read_text(encoding="utf-8")))
+                    except Exception:
+                        continue
+
+    prefix = f"backend/workflows/{workflow_id}/"
+
+    def _synthesize_fpga_dashboard_from_storage(path_prefix: str) -> Optional[Dict[str, Any]]:
+        wanted = {
+            "fpga_handoff_ingest.json",
+            "fpga_constraints_summary.json",
+            "fpga_synthesis_summary.json",
+            "fpga_place_route_summary.json",
+            "fpga_timing_drc_summary.json",
+            "fpga_synthesis_closure_plan.json",
+            "fpga_timing_closure_plan.json",
+            "fpga_timing_closure_chart.json",
+            "fpga_bitstream_summary.json",
+        }
+        parts: Dict[str, Any] = {}
+
+        def walk(current_prefix: str) -> None:
+            entries = supabase.storage.from_(ARTIFACT_BUCKET).list(current_prefix) or []
+            for entry in entries:
+                name = entry.get("name")
+                if not name:
                     continue
+                full_path = f"{current_prefix}{name}"
+                if name in wanted and name not in parts:
+                    try:
+                        raw = supabase.storage.from_(ARTIFACT_BUCKET).download(full_path)
+                        text = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else str(raw)
+                        parts[name] = json.loads(text)
+                    except Exception:
+                        pass
+                metadata = entry.get("metadata") or {}
+                if not metadata.get("mimetype"):
+                    try:
+                        walk(full_path + "/")
+                    except Exception:
+                        continue
+
+        walk(path_prefix)
+        return _fpga_dashboard_from_parts(parts)
+
+    if is_fpga_dashboard_request:
+        try:
+            synthesized = _synthesize_fpga_dashboard_from_storage(prefix)
+            if synthesized:
+                return JSONResponse(synthesized)
+        except Exception as exc:
+            logger.warning("FPGA dashboard synthesis failed workflow=%s error=%s", workflow_id, exc)
 
     basename = filename.rsplit("/", 1)[-1]
     try:
@@ -6272,7 +6416,28 @@ def dashboard_json_artifact(workflow_id: str, filename: str = Query(..., min_len
     except Exception as exc:
         logger.warning("Dashboard artifact index lookup failed workflow=%s filename=%s error=%s", workflow_id, filename, exc)
 
-    prefix = f"backend/workflows/{workflow_id}/"
+    if is_fpga_dashboard_request and local_fpga_dashboard:
+        return JSONResponse(local_fpga_dashboard)
+
+    if local_base.exists() and is_fpga_dashboard_request:
+        local_candidates = [filename]
+        if filename.startswith("fpga/"):
+            local_candidates.append(filename.removeprefix("fpga/"))
+        for local_name in local_candidates:
+            exact = (local_base / local_name).resolve()
+            if str(exact).startswith(str(local_base.resolve())) and exact.is_file():
+                try:
+                    return JSONResponse(json.loads(exact.read_text(encoding="utf-8")))
+                except Exception:
+                    pass
+        basename = filename.rsplit("/", 1)[-1]
+        for path in local_base.rglob(basename):
+            if path.is_file():
+                try:
+                    return JSONResponse(json.loads(path.read_text(encoding="utf-8")))
+                except Exception:
+                    continue
+
     storage_names = [filename]
     if filename.startswith("fpga/"):
         storage_names.append(filename.removeprefix("fpga/"))
