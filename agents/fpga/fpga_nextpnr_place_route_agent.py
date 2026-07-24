@@ -1,6 +1,6 @@
 import os
 import re
-from .fpga_common import board_config, fpga_dir, manifest_update, read_text, run_cmd, write_json
+from .fpga_common import board_config, fpga_dir, manifest_update, publish_json, read_text, run_cmd
 
 
 def _parse_nextpnr(log: str) -> dict:
@@ -9,6 +9,12 @@ def _parse_nextpnr(log: str) -> dict:
     freq = re.findall(r"Max frequency.*?([0-9]+(?:\.[0-9]+)?)\s*MHz", text, flags=re.IGNORECASE)
     if freq:
         out["max_frequency_mhz"] = float(freq[-1])
+    util = re.findall(r"(?:ICESTORM_LC|SB_LUT4|Logic cells).*?([0-9]+)\s*/\s*([0-9]+)", text, flags=re.IGNORECASE)
+    if util:
+        used, available = util[-1]
+        out["logical_cells_used"] = int(used)
+        out["logical_cells_available"] = int(available)
+        out["logic_utilization_percent"] = round((int(used) / max(int(available), 1)) * 100.0, 3)
     if "timing met" in text.lower():
         out["timing_met"] = True
     if "failed to meet timing" in text.lower() or "timing failed" in text.lower():
@@ -57,7 +63,7 @@ def run_agent(state: dict) -> dict:
         summary.update({"status": "completed" if result["ok"] and os.path.exists(asc_path) else "failed", "command": result})
         if not os.path.exists(asc_path):
             summary["error"] = "nextpnr did not produce an ASC place-route output."
-    write_json(f"{out_dir}/fpga_place_route_summary.json", summary)
+    publish_json(state, agent, "pnr", "fpga_place_route_summary.json", summary)
     manifest_update(state, "place_route", summary)
     manifest_update(state, "asc", asc_path if os.path.exists(asc_path) else None)
     if summary["status"] == "failed":

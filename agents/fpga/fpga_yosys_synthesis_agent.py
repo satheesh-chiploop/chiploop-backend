@@ -1,11 +1,58 @@
+import json
 import os
-from .fpga_common import fpga_dir, manifest_update, run_cmd, write_json, write_text
+from .fpga_common import board_config, fpga_dir, manifest_update, publish_json, run_cmd, write_json, write_text
+
+
+def _yosys_cell_metrics(json_path: str, board: dict) -> dict:
+    metrics = {
+        "logical_cells_used": 0,
+        "flip_flops": 0,
+        "combinational_cells": 0,
+        "lut4_cells": 0,
+        "cell_type_counts": {},
+        "logical_cells_available": (board.get("resources") or {}).get("logic_cells"),
+        "logic_utilization_percent": None,
+    }
+    try:
+        with open(json_path, "r", encoding="utf-8", errors="ignore") as handle:
+            data = json.load(handle)
+    except Exception:
+        return metrics
+    type_counts: dict[str, int] = {}
+    modules = data.get("modules") if isinstance(data, dict) else {}
+    if isinstance(modules, dict):
+        for module in modules.values():
+            cells = module.get("cells") if isinstance(module, dict) else {}
+            if not isinstance(cells, dict):
+                continue
+            for cell in cells.values():
+                cell_type = str((cell or {}).get("type") or "unknown")
+                type_counts[cell_type] = type_counts.get(cell_type, 0) + 1
+    ff_count = sum(count for cell_type, count in type_counts.items() if "DFF" in cell_type or cell_type.startswith("SB_DFF"))
+    lut_count = type_counts.get("SB_LUT4", 0)
+    combo_count = sum(
+        count for cell_type, count in type_counts.items()
+        if cell_type not in {"SB_DFF", "SB_DFFE", "SB_DFFR", "SB_DFFS", "SB_DFFES", "SB_DFFER"} and "DFF" not in cell_type
+    )
+    logical_used = max(lut_count + ff_count, sum(type_counts.values()))
+    available = metrics["logical_cells_available"]
+    metrics.update({
+        "logical_cells_used": logical_used,
+        "flip_flops": ff_count,
+        "combinational_cells": combo_count,
+        "lut4_cells": lut_count,
+        "cell_type_counts": type_counts,
+    })
+    if available:
+        metrics["logic_utilization_percent"] = round((logical_used / float(available)) * 100.0, 3)
+    return metrics
 
 
 def run_agent(state: dict) -> dict:
     agent = "FPGA Yosys Synthesis Agent"
     fpga = state.get("fpga") if isinstance(state.get("fpga"), dict) else {}
     out_dir = fpga_dir(state, "synth")
+    board = board_config(state)
     rtl_files = fpga.get("rtl_files") or []
     top = fpga.get("top_module") or state.get("top_module")
     json_path = os.path.abspath(f"{out_dir}/{top or 'top'}_ice40.json")
@@ -22,7 +69,7 @@ def run_agent(state: dict) -> dict:
     }
     if not rtl_files or not top:
         summary["error"] = "Missing RTL files or top module from FPGA handoff ingest."
-        write_json(f"{out_dir}/fpga_synthesis_summary.json", summary)
+        publish_json(state, agent, "synth", "fpga_synthesis_summary.json", summary)
         state["status"] = summary["error"]
         return state
     steps = [f"read_verilog -sv {path}" for path in rtl_files]
@@ -34,9 +81,11 @@ def run_agent(state: dict) -> dict:
     write_text(script_path, script)
     result = run_cmd(["yosys", "-s", script_path], cwd=out_dir, log_path=log_path, timeout=600)
     summary.update({"status": "completed" if result["ok"] and os.path.exists(json_path) else "failed", "command": result})
+    if os.path.exists(json_path):
+        summary.update(_yosys_cell_metrics(json_path, board))
     if not os.path.exists(json_path):
         summary["error"] = "Yosys did not produce the FPGA JSON netlist."
-    write_json(f"{out_dir}/fpga_synthesis_summary.json", summary)
+    publish_json(state, agent, "synth", "fpga_synthesis_summary.json", summary)
     manifest_update(state, "synthesis", summary)
     manifest_update(state, "yosys_json", json_path if os.path.exists(json_path) else None)
     if summary["status"] == "failed":

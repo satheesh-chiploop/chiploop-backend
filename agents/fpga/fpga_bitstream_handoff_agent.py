@@ -1,5 +1,5 @@
 import os
-from .fpga_common import board_config, fpga_dir, manifest_update, run_cmd, write_json
+from .fpga_common import board_config, fpga_dir, manifest_update, publish_json, run_cmd
 
 
 def run_agent(state: dict) -> dict:
@@ -18,9 +18,8 @@ def run_agent(state: dict) -> dict:
     programmer_board = summary["target"].get("programmer_board")
     if os.path.exists(bitstream) and programmer_board:
         summary["programming_command"] = f"openFPGALoader -b {programmer_board} {bitstream}"
-    write_json(f"{out_dir}/fpga_bitstream_summary.json", summary)
+    publish_json(state, agent, "bitstream", "fpga_bitstream_summary.json", summary)
     manifest_update(state, "bitstream", summary)
     if summary["status"] == "failed":
         state["status"] = "FPGA bitstream generation failed."
     return state
-

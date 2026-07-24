@@ -25,6 +25,7 @@ BOARD_REGISTRY: Dict[str, Dict[str, Any]] = {
         "constraint_format": "pcf",
         "programmer_board": "icebreaker",
         "default_frequency_mhz": 12.0,
+        "resources": {"logic_cells": 5280},
     },
     "upduino_v3": {
         "label": "UPduino v3",
@@ -37,6 +38,7 @@ BOARD_REGISTRY: Dict[str, Dict[str, Any]] = {
         "constraint_format": "pcf",
         "programmer_board": "upduino3",
         "default_frequency_mhz": 12.0,
+        "resources": {"logic_cells": 5280},
     },
     "icestick": {
         "label": "Lattice iCEstick",
@@ -49,6 +51,7 @@ BOARD_REGISTRY: Dict[str, Dict[str, Any]] = {
         "constraint_format": "pcf",
         "programmer_board": "icestick",
         "default_frequency_mhz": 12.0,
+        "resources": {"logic_cells": 1280},
     },
     "custom_ice40": {
         "label": "Custom iCE40",
@@ -61,6 +64,7 @@ BOARD_REGISTRY: Dict[str, Dict[str, Any]] = {
         "constraint_format": "pcf",
         "programmer_board": None,
         "default_frequency_mhz": 12.0,
+        "resources": {"logic_cells": 7680},
     },
 }
 
@@ -86,6 +90,25 @@ def write_text(path: str, text: str) -> str:
 
 def write_json(path: str, data: Dict[str, Any]) -> str:
     return write_text(path, json.dumps(data, indent=2, sort_keys=True))
+
+
+def publish_json(state: Dict[str, Any], agent: str, subdir: str, filename: str, data: Dict[str, Any]) -> str:
+    path = write_json(f"{fpga_dir(state, subdir)}/{filename}", data)
+    workflow_id = str(state.get("workflow_id") or "")
+    if workflow_id:
+        try:
+            from utils.artifact_utils import save_text_artifact_and_record
+
+            save_text_artifact_and_record(
+                workflow_id,
+                agent,
+                f"fpga/{subdir}".rstrip("/"),
+                filename,
+                json.dumps(data, indent=2, sort_keys=True),
+            )
+        except Exception:
+            pass
+    return path
 
 
 def read_text(path: Optional[str]) -> str:

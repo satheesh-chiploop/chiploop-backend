@@ -1,4 +1,4 @@
-from .fpga_common import fpga_dir, manifest_update, read_text, write_json
+from .fpga_common import fpga_dir, manifest_update, publish_json, read_text
 
 
 def _find_actions(summary: dict, log_tail: str, state: dict) -> list[str]:
@@ -46,6 +46,6 @@ def run_agent(state: dict) -> dict:
             "fpga_yosys_flatten": bool(state.get("fpga_yosys_flatten")),
         },
     }
-    write_json(f"{out_dir}/fpga_synthesis_closure_plan.json", plan)
+    publish_json(state, agent, "closure", "fpga_synthesis_closure_plan.json", plan)
     manifest_update(state, "synthesis_closure", {"plan": plan})
     return state

@@ -1,5 +1,5 @@
 import os
-from .fpga_common import board_config, fpga_dir, manifest_update, write_json, write_text
+from .fpga_common import board_config, fpga_dir, manifest_update, publish_json, write_text
 
 
 def _starter_pcf(top_module: str, frequency_mhz: float) -> str:
@@ -40,9 +40,8 @@ def run_agent(state: dict) -> dict:
         "board": board.get("board"),
         "note": "Starter constraints are enough for dry-run/reporting, but real board programming requires valid pin assignments.",
     }
-    write_json(f"{out_dir}/fpga_constraints_summary.json", summary)
+    publish_json(state, agent, "constraints", "fpga_constraints_summary.json", summary)
     manifest_update(state, "constraints_pcf", pcf_path)
     manifest_update(state, "target_frequency_mhz", frequency)
     manifest_update(state, "constraints", summary)
     return state
-

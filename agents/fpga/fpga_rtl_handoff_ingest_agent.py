@@ -1,4 +1,4 @@
-from .fpga_common import board_config, detect_top_module, fpga_dir, manifest_update, resolve_rtl_sources, tool_status, write_json
+from .fpga_common import board_config, detect_top_module, fpga_dir, manifest_update, publish_json, resolve_rtl_sources, tool_status
 
 
 def run_agent(state: dict) -> dict:
@@ -22,7 +22,7 @@ def run_agent(state: dict) -> dict:
         summary["error"] = "Top module could not be inferred. Provide top_module."
     elif not board.get("supported"):
         summary["error"] = board.get("unsupported_reason")
-    write_json(f"{out_dir}/fpga_handoff_ingest.json", summary)
+    publish_json(state, agent, "handoff", "fpga_handoff_ingest.json", summary)
     manifest_update(state, "rtl_files", sources)
     manifest_update(state, "top_module", top)
     manifest_update(state, "target", board)
@@ -30,4 +30,3 @@ def run_agent(state: dict) -> dict:
     if summary["status"] != "ok":
         state["status"] = summary["error"]
     return state
-

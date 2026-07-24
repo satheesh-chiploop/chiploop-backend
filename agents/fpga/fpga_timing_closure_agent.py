@@ -1,4 +1,4 @@
-from .fpga_common import fpga_dir, manifest_update, write_json
+from .fpga_common import fpga_dir, manifest_update, publish_json
 
 
 def _num(value, default=0.0) -> float:
@@ -63,7 +63,7 @@ def run_agent(state: dict) -> dict:
             }
         ],
     }
-    write_json(f"{out_dir}/fpga_timing_closure_plan.json", plan)
-    write_json(f"{out_dir}/fpga_timing_closure_chart.json", chart)
+    publish_json(state, agent, "closure", "fpga_timing_closure_plan.json", plan)
+    publish_json(state, agent, "closure", "fpga_timing_closure_chart.json", chart)
     manifest_update(state, "timing_closure", {"plan": plan, "chart": chart})
     return state
