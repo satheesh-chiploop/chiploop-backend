@@ -73,9 +73,10 @@ def append_artifact_record(
     """
     Append/merge a single artifact entry into workflows.artifacts.
 
-    Storage is the source of truth.
-    workflows.artifacts is a best-effort index and may be VARCHAR-limited on early schemas.
-    We keep payload very small and retry with ultra-minimal payload on 22023.
+    Storage is the artifact body source of truth.
+    workflows.artifacts is the Supabase index that dashboards use to discover those
+    storage paths. Modern schemas keep it as JSONB, but older deployments may still
+    have a small VARCHAR column, so we retain a final compact fallback.
     """
     def _payload_len(obj: Dict[str, Any]) -> int:
         try:
@@ -83,8 +84,9 @@ def append_artifact_record(
         except Exception:
             return 10**9
 
-    # Keep this conservative. Many early schemas use VARCHAR(1000) for artifacts.
-    MAX_ARTIFACTS_JSON_CHARS = int(os.getenv("MAX_ARTIFACTS_JSON_CHARS", "850"))
+    # Modern migrations make workflows.artifacts JSONB. Keep this high by default
+    # so complete workflow dashboards remain discoverable from Supabase.
+    MAX_ARTIFACTS_JSON_CHARS = int(os.getenv("MAX_ARTIFACTS_JSON_CHARS", "200000"))
 
     try:
         artifacts = _safe_get_artifacts(workflow_id)
