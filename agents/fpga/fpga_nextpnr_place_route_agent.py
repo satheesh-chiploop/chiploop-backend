@@ -23,9 +23,10 @@ def _parse_nextpnr(log: str) -> dict:
         out["logical_cells_used"] = int(used)
         out["logical_cells_available"] = int(available)
         out["logic_utilization_percent"] = round((int(used) / max(int(available), 1)) * 100.0, 3)
-    if "timing met" in text.lower():
+    lowered = text.lower()
+    if "timing met" in lowered or re.search(r"\bPASS\s+at\s+[0-9]+(?:\.[0-9]+)?\s*MHz", text, flags=re.IGNORECASE):
         out["timing_met"] = True
-    if "failed to meet timing" in text.lower() or "timing failed" in text.lower():
+    if "failed to meet timing" in lowered or "timing failed" in lowered or re.search(r"\bFAIL\s+at\s+[0-9]+(?:\.[0-9]+)?\s*MHz", text, flags=re.IGNORECASE):
         out["timing_met"] = False
     slack_values = [
         float(value)

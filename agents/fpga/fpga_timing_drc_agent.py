@@ -10,7 +10,7 @@ def _timing_metrics(target_mhz, observed_mhz, timing_met) -> dict:
     except Exception:
         target = 0
         observed = 0
-    out = {"wns_ns": None, "tns_ns": None, "timing_violation_count": 0}
+    out = {"wns_ns": None, "tns_ns": None, "timing_violation_count": 0, "timing_met": timing_met}
     if target > 0 and observed > 0:
         target_period = 1000.0 / target
         observed_period = 1000.0 / observed
@@ -18,6 +18,7 @@ def _timing_metrics(target_mhz, observed_mhz, timing_met) -> dict:
         out["wns_ns"] = wns
         out["tns_ns"] = 0 if wns >= 0 else wns
         out["timing_violation_count"] = 0 if wns >= 0 else 1
+        out["timing_met"] = wns >= 0
     elif timing_met is False:
         out["timing_violation_count"] = 1
     return out
@@ -30,7 +31,7 @@ def _parse_icetime_report(text: str) -> dict:
         "tns_ns": None,
         "timing_violation_count": None,
     }
-    freq = re.findall(r"(?:Max frequency|fmax).*?([0-9]+(?:\.[0-9]+)?)\s*MHz", text, flags=re.IGNORECASE)
+    freq = re.findall(r"(?:Max frequency|fmax|Timing estimate).*?([0-9]+(?:\.[0-9]+)?)\s*MHz", text, flags=re.IGNORECASE)
     if freq:
         out["max_frequency_mhz"] = float(freq[-1])
     slack_values = [
