@@ -6237,13 +6237,13 @@ def dashboard_json_artifact(workflow_id: str, filename: str = Query(..., min_len
                     return JSONResponse(json.loads(exact.read_text(encoding="utf-8")))
                 except Exception:
                     pass
-        if "/" not in filename:
-            for path in local_base.rglob(filename):
-                if path.is_file():
-                    try:
-                        return JSONResponse(json.loads(path.read_text(encoding="utf-8")))
-                    except Exception:
-                        continue
+        basename = filename.rsplit("/", 1)[-1]
+        for path in local_base.rglob(basename):
+            if path.is_file():
+                try:
+                    return JSONResponse(json.loads(path.read_text(encoding="utf-8")))
+                except Exception:
+                    continue
 
     basename = filename.rsplit("/", 1)[-1]
     try:
