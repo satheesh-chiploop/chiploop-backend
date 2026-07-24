@@ -67,6 +67,34 @@ BOARD_REGISTRY: Dict[str, Dict[str, Any]] = {
         "default_frequency_mhz": 12.0,
         "resources": {"logic_cells": 7680},
     },
+    "ice40_hx8k_breakout": {
+        "label": "iCE40 HX8K Breakout",
+        "vendor": "lattice",
+        "family": "ice40",
+        "device": "hx8k",
+        "package": "ct256",
+        "nextpnr_tool": "nextpnr-ice40",
+        "nextpnr_device_flag": "--hx8k",
+        "nextpnr_package": "ct256",
+        "constraint_format": "pcf",
+        "programmer_board": None,
+        "default_frequency_mhz": 12.0,
+        "resources": {"logic_cells": 7680},
+    },
+    "ulx3s_ecp5_45f": {
+        "label": "ULX3S ECP5-45F",
+        "vendor": "lattice",
+        "family": "ecp5",
+        "device": "45k",
+        "package": "CABGA381",
+        "nextpnr_tool": "nextpnr-ecp5",
+        "nextpnr_device_flag": "--45k",
+        "nextpnr_package": "CABGA381",
+        "constraint_format": "lpf",
+        "programmer_board": "ulx3s",
+        "default_frequency_mhz": 25.0,
+        "resources": {"logic_cells": 44000},
+    },
 }
 
 
@@ -149,7 +177,7 @@ def _copy_tree_rtl(source_dir: str, dest_dir: str) -> List[str]:
     copied: List[str] = []
     for pattern in ("**/*.v", "**/*.sv"):
         for src in glob.glob(os.path.join(source_dir, pattern), recursive=True):
-            if any(skip in src.replace("\\", "/").lower() for skip in ("/sim_build/", "/node_modules/", "/.git/")):
+            if any(skip in src.replace("\\", "/").lower() for skip in ("/sim_build/", "/node_modules/", "/.git/", "/fpga/src/")):
                 continue
             rel = os.path.relpath(src, source_dir)
             dst = os.path.join(dest_dir, rel)
@@ -253,6 +281,10 @@ def resolve_rtl_sources(state: Dict[str, Any]) -> List[str]:
         if isinstance(subdir, str) and subdir.strip():
             base = os.path.join(base, subdir.strip())
         sources.extend(_copy_tree_rtl(base, out_dir))
+    if mode in {"generate_arch2rtl", "spec", "arch2rtl_from_spec"}:
+        for base in (state.get("artifact_dir"), workflow_dir(state)):
+            if isinstance(base, str) and base and os.path.exists(base):
+                sources.extend(_copy_tree_rtl(base, out_dir))
     source_wf = state.get("from_workflow_id") or state.get("source_arch2rtl_workflow_id") or state.get("source_workflow_id")
     if source_wf:
         sources.extend(_copy_storage_rtl(state, str(source_wf), out_dir))
@@ -298,17 +330,37 @@ def board_config(state: Dict[str, Any]) -> Dict[str, Any]:
             base[key] = state.get(key)
         if fpga.get(key):
             base[key] = fpga.get(key)
-    if base.get("family") != "ice40":
+    family = str(base.get("family") or "").lower()
+    if family not in {"ice40", "ecp5"}:
         base["supported"] = False
-        base["unsupported_reason"] = "First production slice supports Lattice iCE40 open-source flow only."
+        base["unsupported_reason"] = "This FPGA loop currently supports Lattice iCE40 and ECP5 open-source flows."
     else:
         base["supported"] = True
-    if str(base.get("device", "")).lower() in {"up5k", "u4k"}:
-        base["nextpnr_device_flag"] = "--up5k"
-    elif str(base.get("device", "")).lower() in {"hx1k", "lp1k"}:
-        base["nextpnr_device_flag"] = "--hx1k"
-    elif str(base.get("device", "")).lower() in {"hx8k", "lp8k"}:
-        base["nextpnr_device_flag"] = "--hx8k"
+    device = str(base.get("device", "")).lower()
+    if family == "ice40":
+        base.setdefault("nextpnr_tool", "nextpnr-ice40")
+        base.setdefault("bitstream_tool", "icepack")
+        base.setdefault("bitstream_ext", ".bin")
+        base.setdefault("pnr_output_ext", ".asc")
+        base.setdefault("constraint_format", "pcf")
+        if device in {"up5k", "u4k"}:
+            base["nextpnr_device_flag"] = "--up5k"
+        elif device in {"hx1k", "lp1k"}:
+            base["nextpnr_device_flag"] = "--hx1k"
+        elif device in {"hx8k", "lp8k"}:
+            base["nextpnr_device_flag"] = "--hx8k"
+    elif family == "ecp5":
+        base.setdefault("nextpnr_tool", "nextpnr-ecp5")
+        base.setdefault("bitstream_tool", "ecppack")
+        base.setdefault("bitstream_ext", ".bit")
+        base.setdefault("pnr_output_ext", ".config")
+        base.setdefault("constraint_format", "lpf")
+        if device in {"25k", "lfe5u-25f", "lfe5um-25f"}:
+            base["nextpnr_device_flag"] = "--25k"
+        elif device in {"45k", "lfe5u-45f", "lfe5um-45f"}:
+            base["nextpnr_device_flag"] = "--45k"
+        elif device in {"85k", "lfe5u-85f", "lfe5um-85f"}:
+            base["nextpnr_device_flag"] = "--85k"
     return base
 
 
@@ -316,8 +368,10 @@ def tool_status() -> Dict[str, Any]:
     tools = {
         "yosys": shutil.which("yosys"),
         "nextpnr-ice40": shutil.which("nextpnr-ice40"),
+        "nextpnr-ecp5": shutil.which("nextpnr-ecp5"),
         "icepack": shutil.which("icepack"),
         "icetime": shutil.which("icetime"),
+        "ecppack": shutil.which("ecppack"),
         "openFPGALoader": shutil.which("openFPGALoader"),
     }
     return {name: {"available": bool(path), "path": path} for name, path in tools.items()}

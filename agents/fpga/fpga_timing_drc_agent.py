@@ -50,7 +50,8 @@ def run_agent(state: dict) -> dict:
     fpga = state.get("fpga") if isinstance(state.get("fpga"), dict) else {}
     board = board_config(state)
     out_dir = fpga_dir(state, "reports")
-    asc = fpga.get("asc")
+    family = str(board.get("family") or "ice40").lower()
+    routed_output = fpga.get("asc") or fpga.get("routed_config") or fpga.get("pnr_output")
     log_path = os.path.abspath(f"{out_dir}/icetime.log")
     pnr = fpga.get("place_route") if isinstance(fpga.get("place_route"), dict) else {}
     summary = {
@@ -62,8 +63,13 @@ def run_agent(state: dict) -> dict:
         "error_count": pnr.get("errors", 0),
         "target": board,
     }
-    if asc and os.path.exists(str(asc)):
-        result = run_cmd(["icetime", "-d", str(board.get("device") or "hx8k"), "-m", "-r", log_path, str(asc)], cwd=out_dir, log_path=log_path, timeout=300)
+    if family == "ecp5" and pnr.get("status") == "completed":
+        summary.update(_timing_metrics(state.get("target_frequency_mhz"), summary.get("max_frequency_mhz"), summary.get("timing_met")))
+        summary["status"] = "completed"
+        summary["timing_source"] = "nextpnr-ecp5"
+        summary["note"] = "ECP5 timing was derived from nextpnr-ecp5 reported max frequency."
+    elif routed_output and os.path.exists(str(routed_output)):
+        result = run_cmd(["icetime", "-d", str(board.get("device") or "hx8k"), "-m", "-r", log_path, str(routed_output)], cwd=out_dir, log_path=log_path, timeout=300)
         text = read_text(log_path)
         summary.update({"status": "completed" if result["ok"] else "warning", "icetime": result, "report_tail": text[-3000:]})
         parsed = _parse_icetime_report(text)
@@ -71,7 +77,7 @@ def run_agent(state: dict) -> dict:
         summary.update(_timing_metrics(state.get("target_frequency_mhz"), summary.get("max_frequency_mhz"), summary.get("timing_met")))
         summary.update({key: value for key, value in parsed.items() if value is not None})
     else:
-        summary["error"] = "No routed ASC available for timing analysis."
+        summary["error"] = "No routed place-and-route artifact available for timing analysis."
     publish_json(state, agent, "reports", "fpga_timing_drc_summary.json", summary)
     manifest_update(state, "timing_drc", summary)
     return state

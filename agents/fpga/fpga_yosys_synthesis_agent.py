@@ -28,8 +28,11 @@ def _yosys_cell_metrics(json_path: str, board: dict) -> dict:
             for cell in cells.values():
                 cell_type = str((cell or {}).get("type") or "unknown")
                 type_counts[cell_type] = type_counts.get(cell_type, 0) + 1
-    ff_count = sum(count for cell_type, count in type_counts.items() if "DFF" in cell_type or cell_type.startswith("SB_DFF"))
-    lut_count = type_counts.get("SB_LUT4", 0)
+    ff_count = sum(
+        count for cell_type, count in type_counts.items()
+        if "DFF" in cell_type or cell_type.startswith("SB_DFF") or cell_type == "TRELLIS_FF"
+    )
+    lut_count = type_counts.get("SB_LUT4", 0) + type_counts.get("LUT4", 0)
     combo_count = sum(
         count for cell_type, count in type_counts.items()
         if cell_type not in {"SB_DFF", "SB_DFFE", "SB_DFFR", "SB_DFFS", "SB_DFFES", "SB_DFFER"} and "DFF" not in cell_type
@@ -43,6 +46,9 @@ def _yosys_cell_metrics(json_path: str, board: dict) -> dict:
         "SB_DFFS",
         "SB_DFFES",
         "SB_DFFER",
+        "LUT4",
+        "TRELLIS_FF",
+        "CCU2C",
     }
     fabric_cell_count = sum(count for cell_type, count in type_counts.items() if cell_type in fabric_cell_types)
     total_mapped_cells = sum(type_counts.values())
@@ -55,7 +61,7 @@ def _yosys_cell_metrics(json_path: str, board: dict) -> dict:
         "flip_flops": ff_count,
         "combinational_cells": combo_count,
         "lut4_cells": lut_count,
-        "carry_cells": type_counts.get("SB_CARRY", 0),
+        "carry_cells": type_counts.get("SB_CARRY", 0) + type_counts.get("CCU2C", 0),
         "fabric_mapped_cells": fabric_cell_count,
         "total_mapped_cells": total_mapped_cells,
         "cell_type_counts": type_counts,
@@ -72,8 +78,10 @@ def run_agent(state: dict) -> dict:
     board = board_config(state)
     rtl_files = fpga.get("rtl_files") or []
     top = fpga.get("top_module") or state.get("top_module")
-    json_path = os.path.abspath(f"{out_dir}/{top or 'top'}_ice40.json")
-    script_path = os.path.abspath(f"{out_dir}/synth_ice40.ys")
+    family = str(board.get("family") or "ice40").lower()
+    synth_cmd = "synth_ecp5" if family == "ecp5" else "synth_ice40"
+    json_path = os.path.abspath(f"{out_dir}/{top or 'top'}_{family}.json")
+    script_path = os.path.abspath(f"{out_dir}/synth_{family}.ys")
     log_path = os.path.abspath(f"{out_dir}/yosys_synth.log")
     summary = {
         "agent": agent,
@@ -93,7 +101,7 @@ def run_agent(state: dict) -> dict:
     if state.get("fpga_yosys_flatten"):
         steps.append("hierarchy -check")
         steps.append("flatten")
-    steps.append(f"synth_ice40 -top {top} -json {json_path}")
+    steps.append(f"{synth_cmd} -top {top} -json {json_path}")
     script = "\n".join(steps) + "\n"
     write_text(script_path, script)
     result = run_cmd(["yosys", "-s", script_path], cwd=out_dir, log_path=log_path, timeout=600)

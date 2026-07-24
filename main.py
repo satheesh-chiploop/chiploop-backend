@@ -1249,6 +1249,27 @@ FPGA_RTL_TO_BITSTREAM_DEFINITION = _linear_workflow_definition([
     "FPGA Dashboard Agent",
 ])
 
+FPGA2RTL_TO_BITSTREAM_DEFINITION = _linear_workflow_definition([
+    "Digital Spec Agent",
+    "Digital Architecture Agent",
+    "Digital Microarchitecture Agent",
+    "Digital Register Map Agent",
+    "Digital RTL Agent",
+    "Digital Power Intent (UPF-lite) Agent",
+    "Digital UPF Static Check Agent",
+    "Digital IP Packaging & Handoff Agent",
+    "Digital Arch2RTL Dashboard Agent",
+    "FPGA RTL Handoff Ingest Agent",
+    "FPGA Constraint Setup Agent",
+    "FPGA Yosys Synthesis Agent",
+    "FPGA Synthesis Closure Agent",
+    "FPGA nextpnr Place & Route Agent",
+    "FPGA Timing & DRC Agent",
+    "FPGA Timing Closure Agent",
+    "FPGA Bitstream Handoff Agent",
+    "FPGA Dashboard Agent",
+])
+
 FIRMWARE_DOWNSTREAM_DEFINITION = [
     "Embedded Digital RTL Handoff Ingest Agent",
     "Embedded Firmware Register Extract Agent",
@@ -1442,6 +1463,7 @@ LOCAL_PREBUILT_WORKFLOW_DEFINITIONS: Dict[str, Dict[str, Any]] = {
     "Digital_Smoke": DIGITAL_SMOKE_DEFINITION,
     "Digital_Integrate": DIGITAL_INTEGRATE_DEFINITION,
     "FPGA_RTL_to_Bitstream": FPGA_RTL_TO_BITSTREAM_DEFINITION,
+    "FPGA2RTL_to_Bitstream": FPGA2RTL_TO_BITSTREAM_DEFINITION,
     "System_Architecture_Explorer": SYSTEM_ARCHITECTURE_EXPLORER_DEFINITION,
     "System_Cache_Tuning": SYSTEM_ARCHITECTURE_EXPLORER_DEFINITION,
     "System_ISA_Compare": SYSTEM_ARCHITECTURE_EXPLORER_DEFINITION,
@@ -1474,6 +1496,7 @@ LOCAL_RUNTIME_WORKFLOW_OVERRIDES = {
     "Digital_Smoke",
     "Digital_Integrate",
     "FPGA_RTL_to_Bitstream",
+    "FPGA2RTL_to_Bitstream",
     "Embedded_Run",
     "System_RTL",
     "System_DQA",
@@ -1842,6 +1865,10 @@ def _run_nodes_with_shared_state(
         loop_map.update(EMBEDDED_AGENT_FUNCTIONS)
         loop_map.update(VALIDATION_AGENT_FUNCTIONS)
         loop_map.update(SYSTEM_AGENT_FUNCTIONS)
+        loop_map.update(FPGA_AGENT_FUNCTIONS)
+    elif loop_type == "fpga":
+        loop_map = {}
+        loop_map.update(DIGITAL_AGENT_FUNCTIONS)
         loop_map.update(FPGA_AGENT_FUNCTIONS)
     else:
         # IMPORTANT: use loop-specific maps (validation needs VALIDATION_AGENT_FUNCTIONS)
@@ -3408,7 +3435,7 @@ class DigitalRTLSourceIn(BaseModel):
     """
     Used by apps that can START from existing RTL (skip Arch2RTL).
     """
-    rtl_source_mode: Optional[str] = None  # "from_arch2rtl" | "paste" | "repo_path"
+    rtl_source_mode: Optional[str] = None  # "from_arch2rtl" | "paste" | "repo_path" | "generate_arch2rtl"
     from_workflow_id: Optional[str] = None
     source_workflow_id: Optional[str] = None
     repo_path: Optional[str] = None
@@ -3419,15 +3446,16 @@ class DigitalRTLSourceIn(BaseModel):
     source_arch2rtl_workflow_id: Optional[str] = None
     parent_workflow_id: Optional[str] = None
     upstream_workflows: Optional[Dict[str, Any]] = None
+    spec_text: Optional[str] = None
 
 
 class FpgaBitstreamAppIn(DigitalRTLSourceIn):
     """
     FPGA prototype flow input. The first implementation targets open-source
-    iCE40 tooling while keeping vendor/device fields explicit for later boards.
+    iCE40 and ECP5 tooling while keeping vendor/device fields explicit.
     """
     board: Optional[str] = "icebreaker"
-    family: Optional[str] = "ice40"
+    family: Optional[str] = None
     device: Optional[str] = None
     package: Optional[str] = None
     top_module: Optional[str] = None
@@ -3755,7 +3783,7 @@ def execute_digital_app_background(
 ):
     try:
         os.makedirs(artifact_dir, exist_ok=True)
-        app_loop_type = "fpga" if app_name == "fpga" or str(template_workflow_name).startswith("FPGA_") else "digital"
+        app_loop_type = "fpga" if app_name in {"fpga", "fpga2rtl"} or str(template_workflow_name).startswith("FPGA") else "digital"
         app_loop_label = "FPGA" if app_loop_type == "fpga" else "Digital"
 
         shared_state = {
@@ -3835,6 +3863,26 @@ def execute_digital_app_background(
         nodes = _definition_to_executor_nodes(defn)
         toggles = shared_state.get("toggles") if isinstance(shared_state.get("toggles"), dict) else {}
         rtl_source_mode = str(shared_state.get("rtl_source_mode") or "").strip().lower()
+        if app_name == "fpga" and rtl_source_mode in {"generate_arch2rtl", "spec", "arch2rtl_from_spec"}:
+            arch_nodes = _definition_to_executor_nodes(DIGITAL_ARCH2RTL_DEFINITION)
+            arch_skip = {
+                "Digital MBIST RTL Insertion Agent",
+            }
+            arch_nodes = [
+                node for node in arch_nodes
+                if str((node.get("data") or {}).get("backendLabel") or node.get("label") or node.get("name") or "") not in arch_skip
+            ]
+            nodes = arch_nodes + nodes
+            shared_state["source"] = "generated_arch2rtl"
+            append_log_workflow(
+                workflow_id,
+                "FPGA prototype source mode: generating RTL from design intent before FPGA implementation.",
+                phase="fpga_arch2rtl_source",
+            )
+            append_log_run(
+                run_id,
+                "FPGA prototype source mode: generating RTL from design intent before FPGA implementation.",
+            )
         using_existing_system_rtl = bool(shared_state.get("system_rtl_workflow_id")) or rtl_source_mode in {"paste", "repo_path"}
         if template_workflow_name in {"System_DQA", "System_Sim", "System_Firmware", "System_Synthesis", "System_PD"} and using_existing_system_rtl:
             skip_labels = {
@@ -5887,7 +5935,7 @@ async def apps_fpga_bitstream_run(request: Request, background_tasks: Background
 
     target = {
         "vendor": "lattice",
-        "family": data.get("family") or "ice40",
+        "family": data.get("family"),
         "board": data.get("board") or "icebreaker",
         "device": data.get("device"),
         "package": data.get("package"),
@@ -5908,6 +5956,46 @@ async def apps_fpga_bitstream_run(request: Request, background_tasks: Background
         artifact_dir,
         "fpga",
         "FPGA_RTL_to_Bitstream",
+        data,
+    )
+
+    return {"ok": True, "workflow_id": workflow_id, "run_id": run_id}
+
+
+@app.post("/apps/fpga2rtl/run")
+async def apps_fpga2rtl_run(request: Request, background_tasks: BackgroundTasks, payload: FpgaBitstreamAppIn):
+    user_id = _require_user_id(request)
+    workflow_id, run_id, base_dir = _create_app_workflow_and_run(user_id, "App: FPGA2RTL", "fpga")
+    artifact_dir = os.path.join(base_dir, "fpga2rtl")
+    os.makedirs(artifact_dir, exist_ok=True)
+
+    data = payload.dict()
+    data["rtl_source_mode"] = data.get("rtl_source_mode") or "generate_arch2rtl"
+    data["source"] = "generated_arch2rtl"
+
+    target = {
+        "vendor": "lattice",
+        "family": data.get("family"),
+        "board": data.get("board") or "icebreaker",
+        "device": data.get("device"),
+        "package": data.get("package"),
+        "top_module": data.get("top_module"),
+        "target_frequency_mhz": data.get("target_frequency_mhz"),
+    }
+    data["fpga_target"] = target
+    data["fpga"] = {
+        **(data.get("fpga") if isinstance(data.get("fpga"), dict) else {}),
+        "target": target,
+    }
+
+    background_tasks.add_task(
+        execute_digital_app_background,
+        workflow_id,
+        run_id,
+        user_id,
+        artifact_dir,
+        "fpga2rtl",
+        "FPGA2RTL_to_Bitstream",
         data,
     )
 
