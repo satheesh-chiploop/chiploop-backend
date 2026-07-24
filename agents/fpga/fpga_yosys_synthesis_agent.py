@@ -34,13 +34,30 @@ def _yosys_cell_metrics(json_path: str, board: dict) -> dict:
         count for cell_type, count in type_counts.items()
         if cell_type not in {"SB_DFF", "SB_DFFE", "SB_DFFR", "SB_DFFS", "SB_DFFES", "SB_DFFER"} and "DFF" not in cell_type
     )
-    logical_used = max(lut_count + ff_count, sum(type_counts.values()))
+    fabric_cell_types = {
+        "SB_LUT4",
+        "SB_CARRY",
+        "SB_DFF",
+        "SB_DFFE",
+        "SB_DFFR",
+        "SB_DFFS",
+        "SB_DFFES",
+        "SB_DFFER",
+    }
+    fabric_cell_count = sum(count for cell_type, count in type_counts.items() if cell_type in fabric_cell_types)
+    total_mapped_cells = sum(type_counts.values())
+    # Yosys reports mapped primitives before packing. Keep logic-cell estimate
+    # FPGA-oriented instead of counting internal/specify helper cells.
+    logical_used = lut_count + ff_count
     available = metrics["logical_cells_available"]
     metrics.update({
         "logical_cells_used": logical_used,
         "flip_flops": ff_count,
         "combinational_cells": combo_count,
         "lut4_cells": lut_count,
+        "carry_cells": type_counts.get("SB_CARRY", 0),
+        "fabric_mapped_cells": fabric_cell_count,
+        "total_mapped_cells": total_mapped_cells,
         "cell_type_counts": type_counts,
     })
     if available:

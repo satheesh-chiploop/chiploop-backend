@@ -20,8 +20,9 @@ def run_agent(state: dict) -> dict:
         "flip_flops": synth.get("flip_flops"),
         "combinational_cells": synth.get("combinational_cells"),
         "lut4_cells": synth.get("lut4_cells"),
-        "carry_cells": (synth.get("cell_type_counts") or {}).get("SB_CARRY") if isinstance(synth.get("cell_type_counts"), dict) else None,
-        "total_mapped_cells": sum((synth.get("cell_type_counts") or {}).values()) if isinstance(synth.get("cell_type_counts"), dict) else None,
+        "carry_cells": _first(synth.get("carry_cells"), (synth.get("cell_type_counts") or {}).get("SB_CARRY") if isinstance(synth.get("cell_type_counts"), dict) else None),
+        "fabric_mapped_cells": synth.get("fabric_mapped_cells"),
+        "total_mapped_cells": _first(synth.get("total_mapped_cells"), sum((synth.get("cell_type_counts") or {}).values()) if isinstance(synth.get("cell_type_counts"), dict) else None),
     }
     routed_result = {
         "logical_cells_used": pnr.get("logical_cells_used"),
