@@ -1,4 +1,5 @@
 import glob
+import hashlib
 import json
 import os
 import re
@@ -129,6 +130,11 @@ def detect_top_module(paths: List[str]) -> Optional[str]:
     return None
 
 
+def _module_names(path: str) -> List[str]:
+    text = read_text(path)
+    return re.findall(r"\bmodule\s+([A-Za-z_][A-Za-z0-9_$]*)\b", text)
+
+
 def _safe_rel(path: str) -> str:
     normalized = str(path or "").replace("\\", "/").strip().lstrip("/")
     if not normalized:
@@ -253,7 +259,33 @@ def resolve_rtl_sources(state: Dict[str, Any]) -> List[str]:
         source_root = os.path.join("backend", "workflows", str(source_wf))
         if os.path.exists(source_root):
             sources.extend(_copy_tree_rtl(source_root, out_dir))
-    return sorted(dict.fromkeys(os.path.abspath(path) for path in sources if os.path.exists(path)))
+    unique_paths = list(dict.fromkeys(os.path.abspath(path) for path in sources if os.path.exists(path)))
+    deduped: List[str] = []
+    ignored: List[Dict[str, Any]] = []
+    seen_hashes: Dict[str, str] = {}
+    seen_modules: Dict[str, str] = {}
+    for path in unique_paths:
+        text = read_text(path)
+        digest = hashlib.sha256(text.encode("utf-8", errors="ignore")).hexdigest()
+        if digest in seen_hashes:
+            ignored.append({"path": path, "reason": "duplicate_content", "matches": seen_hashes[digest]})
+            continue
+        modules = _module_names(path)
+        duplicate_modules = [name for name in modules if name in seen_modules]
+        if duplicate_modules:
+            ignored.append({
+                "path": path,
+                "reason": "duplicate_module_definition",
+                "modules": duplicate_modules,
+                "matches": {name: seen_modules[name] for name in duplicate_modules},
+            })
+            continue
+        deduped.append(path)
+        seen_hashes[digest] = path
+        for name in modules:
+            seen_modules[name] = path
+    state["fpga_rtl_ignored_sources"] = ignored
+    return sorted(deduped)
 
 
 def board_config(state: Dict[str, Any]) -> Dict[str, Any]:

@@ -12,6 +12,8 @@ def run_agent(state: dict) -> dict:
         "status": "ok" if sources and top and board.get("supported") else "blocked",
         "rtl_file_count": len(sources),
         "rtl_files": sources,
+        "ignored_rtl_file_count": len(state.get("fpga_rtl_ignored_sources") or []),
+        "ignored_rtl_files": state.get("fpga_rtl_ignored_sources") or [],
         "top_module": top,
         "target": board,
         "tools": tool_status(),
