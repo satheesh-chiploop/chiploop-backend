@@ -5,7 +5,15 @@ from .fpga_common import board_config, fpga_dir, manifest_update, publish_json, 
 
 def _parse_nextpnr(log: str) -> dict:
     text = read_text(log)
-    out = {"timing_met": None, "max_frequency_mhz": None, "warnings": text.lower().count("warning"), "errors": text.lower().count("error")}
+    out = {
+        "timing_met": None,
+        "max_frequency_mhz": None,
+        "wns_ns": None,
+        "tns_ns": None,
+        "timing_violation_count": None,
+        "warnings": text.lower().count("warning"),
+        "errors": text.lower().count("error"),
+    }
     freq = re.findall(r"Max frequency.*?([0-9]+(?:\.[0-9]+)?)\s*MHz", text, flags=re.IGNORECASE)
     if freq:
         out["max_frequency_mhz"] = float(freq[-1])
@@ -19,6 +27,17 @@ def _parse_nextpnr(log: str) -> dict:
         out["timing_met"] = True
     if "failed to meet timing" in text.lower() or "timing failed" in text.lower():
         out["timing_met"] = False
+    slack_values = [
+        float(value)
+        for value in re.findall(r"(?:slack|WNS).*?(-?[0-9]+(?:\.[0-9]+)?)\s*ns", text, flags=re.IGNORECASE)
+    ]
+    if slack_values:
+        out["wns_ns"] = round(min(slack_values), 3)
+        out["timing_violation_count"] = sum(1 for value in slack_values if value < 0)
+        out["tns_ns"] = round(sum(value for value in slack_values if value < 0), 3)
+    elif out["timing_met"] is True:
+        out["timing_violation_count"] = 0
+        out["tns_ns"] = 0
     return out
 
 
