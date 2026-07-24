@@ -477,6 +477,7 @@ from agents.digital.digital_rtl_review_agent import run_agent as digital_rtl_rev
 from agents.digital.digital_constraint_review_agent import run_agent as digital_constraint_review_agent
 from agents.digital.digital_timing_debug_agent import run_agent as digital_timing_debug_agent
 from agents.fpga.fpga_rtl_handoff_ingest_agent import run_agent as fpga_rtl_handoff_ingest_agent
+from agents.fpga.fpga_rtl_quality_gate_agent import run_agent as fpga_rtl_quality_gate_agent
 from agents.fpga.fpga_constraint_setup_agent import run_agent as fpga_constraint_setup_agent
 from agents.fpga.fpga_yosys_synthesis_agent import run_agent as fpga_yosys_synthesis_agent
 from agents.fpga.fpga_nextpnr_place_route_agent import run_agent as fpga_nextpnr_place_route_agent
@@ -577,6 +578,7 @@ DIGITAL_AGENT_FUNCTIONS: Dict[str, Any] = {
 # ==========================================================
 FPGA_AGENT_FUNCTIONS: Dict[str, Any] = {
     "FPGA RTL Handoff Ingest Agent": fpga_rtl_handoff_ingest_agent,
+    "FPGA RTL Quality Gate Agent": fpga_rtl_quality_gate_agent,
     "FPGA Constraint Setup Agent": fpga_constraint_setup_agent,
     "FPGA Yosys Synthesis Agent": fpga_yosys_synthesis_agent,
     "FPGA Synthesis Closure Agent": fpga_synthesis_closure_agent,
@@ -1239,6 +1241,10 @@ DIGITAL_INTEGRATE_DEFINITION = _linear_workflow_definition([
 
 FPGA_RTL_TO_BITSTREAM_DEFINITION = _linear_workflow_definition([
     "FPGA RTL Handoff Ingest Agent",
+    "FPGA RTL Quality Gate Agent",
+    "Digital RTL Linting Agent",
+    "Digital Synthesis Readiness Agent",
+    "Digital DQA Summary Agent",
     "FPGA Constraint Setup Agent",
     "FPGA Yosys Synthesis Agent",
     "FPGA Synthesis Closure Agent",
@@ -1260,6 +1266,10 @@ FPGA2RTL_TO_BITSTREAM_DEFINITION = _linear_workflow_definition([
     "Digital IP Packaging & Handoff Agent",
     "Digital Arch2RTL Dashboard Agent",
     "FPGA RTL Handoff Ingest Agent",
+    "FPGA RTL Quality Gate Agent",
+    "Digital RTL Linting Agent",
+    "Digital Synthesis Readiness Agent",
+    "Digital DQA Summary Agent",
     "FPGA Constraint Setup Agent",
     "FPGA Yosys Synthesis Agent",
     "FPGA Synthesis Closure Agent",
@@ -3467,6 +3477,7 @@ class FpgaBitstreamAppIn(DigitalRTLSourceIn):
     notes: Optional[str] = None
     run_fpga_synthesis_closure_loop: Optional[bool] = False
     max_fpga_synthesis_closure_iterations: Optional[int] = 1
+    run_fpga_rtl_repair_loop: Optional[bool] = True
     run_fpga_timing_closure_loop: Optional[bool] = False
     max_fpga_timing_closure_iterations: Optional[int] = 1
     allow_yosys_flatten: Optional[bool] = True
@@ -3843,6 +3854,8 @@ def execute_digital_app_background(
             shared_state["spec"] = shared_state["spec_text"]
         if app_name == "verify":
             shared_state["_fail_fast_on_agent_error"] = True
+        if app_loop_type == "fpga":
+            shared_state["_fail_fast_on_agent_error"] = True
         if app_name == "arch2rtl":
             toggles_for_fail_fast = shared_state.get("toggles") if isinstance(shared_state.get("toggles"), dict) else {}
             if toggles_for_fail_fast.get("insert_mbist") or toggles_for_fail_fast.get("enable_mbist_rtl_insertion"):
@@ -3853,6 +3866,18 @@ def execute_digital_app_background(
 
         append_log_workflow(workflow_id, f"▶️ Loading Studio workflow: {template_workflow_name}", phase="load")
         append_log_run(run_id, f"▶️ Loading Studio workflow: {template_workflow_name}")
+
+        if app_loop_type == "fpga":
+            repair_state = "enabled" if bool(shared_state.get("run_fpga_rtl_repair_loop", True)) else "disabled"
+            append_log_workflow(
+                workflow_id,
+                f"FPGA RTL quality gate active: pass1 lint/compile, repair loop {repair_state}, pass2 lint/compile before FPGA synthesis.",
+                phase="fpga_rtl_quality_gate",
+            )
+            append_log_run(
+                run_id,
+                f"FPGA RTL quality gate active: pass1 lint/compile, repair loop {repair_state}, pass2 lint/compile before FPGA synthesis.",
+            )
 
         # Load Studio prebuilt workflow and convert to executor nodes
         defn = _load_workflow_def_by_name(

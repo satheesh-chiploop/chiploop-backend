@@ -11,6 +11,7 @@ def _first(*values):
 def run_agent(state: dict) -> dict:
     fpga = state.get("fpga") if isinstance(state.get("fpga"), dict) else {}
     synth = fpga.get("synthesis", {}) if isinstance(fpga.get("synthesis"), dict) else {}
+    rtl_quality = fpga.get("rtl_quality", {}) if isinstance(fpga.get("rtl_quality"), dict) else {}
     pnr = fpga.get("place_route", {}) if isinstance(fpga.get("place_route"), dict) else {}
     timing = fpga.get("timing_drc", {}) if isinstance(fpga.get("timing_drc"), dict) else {}
     synthesis_estimate = {
@@ -59,6 +60,7 @@ def run_agent(state: dict) -> dict:
         "top_module": fpga.get("top_module"),
         "rtl_file_count": len(fpga.get("rtl_files") or []),
         "synthesis_estimate": synthesis_estimate,
+        "rtl_quality": rtl_quality,
         "routed_result": routed_result,
         "utilization": utilization,
         "timing_summary": timing_summary,
