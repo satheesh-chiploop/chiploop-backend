@@ -6227,12 +6227,16 @@ def dashboard_json_artifact(workflow_id: str, filename: str = Query(..., min_len
 
     local_base = _artifacts_dir_for_workflow(workflow_id)
     if local_base.exists():
-        exact = (local_base / filename).resolve()
-        if str(exact).startswith(str(local_base.resolve())) and exact.is_file():
-            try:
-                return JSONResponse(json.loads(exact.read_text(encoding="utf-8")))
-            except Exception:
-                pass
+        local_candidates = [filename]
+        if filename.startswith("fpga/"):
+            local_candidates.append(filename.removeprefix("fpga/"))
+        for local_name in local_candidates:
+            exact = (local_base / local_name).resolve()
+            if str(exact).startswith(str(local_base.resolve())) and exact.is_file():
+                try:
+                    return JSONResponse(json.loads(exact.read_text(encoding="utf-8")))
+                except Exception:
+                    pass
         if "/" not in filename:
             for path in local_base.rglob(filename):
                 if path.is_file():
@@ -6269,12 +6273,19 @@ def dashboard_json_artifact(workflow_id: str, filename: str = Query(..., min_len
         logger.warning("Dashboard artifact index lookup failed workflow=%s filename=%s error=%s", workflow_id, filename, exc)
 
     prefix = f"backend/workflows/{workflow_id}/"
-    exact_storage_path = f"{prefix}{filename}"
+    storage_names = [filename]
+    if filename.startswith("fpga/"):
+        storage_names.append(filename.removeprefix("fpga/"))
     if "/" in filename:
         try:
-            data = supabase.storage.from_(ARTIFACT_BUCKET).download(exact_storage_path)
-            text = data.decode("utf-8") if isinstance(data, (bytes, bytearray)) else str(data)
-            return JSONResponse(json.loads(text))
+            for storage_name in storage_names:
+                exact_storage_path = f"{prefix}{storage_name}"
+                try:
+                    data = supabase.storage.from_(ARTIFACT_BUCKET).download(exact_storage_path)
+                    text = data.decode("utf-8") if isinstance(data, (bytes, bytearray)) else str(data)
+                    return JSONResponse(json.loads(text))
+                except Exception:
+                    continue
         except Exception:
             pass
 
