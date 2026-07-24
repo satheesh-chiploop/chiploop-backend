@@ -6444,13 +6444,28 @@ def _estimated_usage_rows_from_llm_artifacts(workflow_id: str) -> List[Dict[str,
         paths = _list_storage_tree_for_main(prefix, max_depth=6)
     except Exception:
         paths = []
-    paths = list(dict.fromkeys(paths + [
-        f"{prefix}spec/llm_raw_output.txt",
-        f"{prefix}digital/digital_architecture_raw_output.txt",
-        f"{prefix}digital/digital_microarchitecture_raw_output.txt",
-        f"{prefix}digital/digital_regmap_raw_output.txt",
-        f"{prefix}rtl/rtl_llm_raw_output.txt",
-    ]))
+    workflow_loop_type = ""
+    try:
+        row = (
+            supabase.table("workflows")
+            .select("loop_type")
+            .eq("id", workflow_id)
+            .single()
+            .execute()
+        )
+        workflow_loop_type = str((row.data or {}).get("loop_type") or "").strip().lower()
+    except Exception:
+        workflow_loop_type = ""
+    default_llm_paths = []
+    if workflow_loop_type != "fpga":
+        default_llm_paths = [
+            f"{prefix}spec/llm_raw_output.txt",
+            f"{prefix}digital/digital_architecture_raw_output.txt",
+            f"{prefix}digital/digital_microarchitecture_raw_output.txt",
+            f"{prefix}digital/digital_regmap_raw_output.txt",
+            f"{prefix}rtl/rtl_llm_raw_output.txt",
+        ]
+    paths = list(dict.fromkeys(paths + default_llm_paths))
     grouped: Dict[str, Dict[str, Any]] = {}
     seen = set()
     for path in paths:
