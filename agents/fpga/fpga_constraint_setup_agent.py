@@ -29,7 +29,7 @@ def run_agent(state: dict) -> dict:
     if not pcf_text.strip():
         pcf_text = _starter_pcf(str(top), frequency)
         generated = True
-    pcf_path = write_text(f"{out_dir}/{top}.pcf", pcf_text)
+    pcf_path = os.path.abspath(write_text(f"{out_dir}/{top}.pcf", pcf_text))
     summary = {
         "agent": agent,
         "status": "ok",

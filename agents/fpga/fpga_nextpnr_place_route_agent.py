@@ -54,8 +54,12 @@ def run_agent(state: dict) -> dict:
             "--asc",
             asc_path,
         ]
-        if pcf and os.path.exists(str(pcf)):
-            cmd.extend(["--pcf", str(pcf)])
+        if pcf:
+            pcf_path = os.path.abspath(str(pcf))
+            if os.path.exists(pcf_path):
+                cmd.extend(["--pcf", pcf_path])
+            else:
+                summary["pcf_warning"] = f"PCF file not found: {pcf}"
         if seed:
             cmd.extend(["--seed", str(seed)])
         result = run_cmd(cmd, cwd=out_dir, log_path=log_path, timeout=900)
