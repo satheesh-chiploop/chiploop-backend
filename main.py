@@ -1239,12 +1239,36 @@ DIGITAL_INTEGRATE_DEFINITION = _linear_workflow_definition([
     "Digital IP Packaging & Handoff Agent",
 ])
 
+FPGA_INLINE_VERIFY_AGENTS = [
+    "Digital Verification Handoff Ingest Agent",
+    "Digital Functional Coverage Agent",
+    "Digital Testbench Generator Agent",
+    "Digital Assertions (SVA) Agent",
+    "Digital Simulation Control Agent",
+    "Digital Simulation Execution Agent",
+    "Digital Simulation Summary Coverage Agent",
+]
+
+FPGA_INLINE_VERIFY_CLOSURE_AGENTS = [
+    "Digital Coverage Gap Analysis Agent",
+    "Digital Failure Triage Agent",
+    "Digital Failure Debug Agent",
+    "Digital Closure Recommendation Agent",
+    "Digital Verification Plan Update Agent",
+    "Digital Coverage Plan Update Agent",
+    "Digital Testcase Seed Update Agent",
+    "Digital Closure Rerun Planner Agent",
+    "Digital Closure Iteration Judge Agent",
+]
+
 FPGA_RTL_TO_BITSTREAM_DEFINITION = _linear_workflow_definition([
     "FPGA RTL Handoff Ingest Agent",
     "FPGA RTL Quality Gate Agent",
     "Digital RTL Linting Agent",
     "Digital Synthesis Readiness Agent",
     "Digital DQA Summary Agent",
+    *FPGA_INLINE_VERIFY_AGENTS,
+    *FPGA_INLINE_VERIFY_CLOSURE_AGENTS,
     "FPGA Constraint Setup Agent",
     "FPGA Yosys Synthesis Agent",
     "FPGA Synthesis Closure Agent",
@@ -1270,6 +1294,8 @@ FPGA2RTL_TO_BITSTREAM_DEFINITION = _linear_workflow_definition([
     "Digital RTL Linting Agent",
     "Digital Synthesis Readiness Agent",
     "Digital DQA Summary Agent",
+    *FPGA_INLINE_VERIFY_AGENTS,
+    *FPGA_INLINE_VERIFY_CLOSURE_AGENTS,
     "FPGA Constraint Setup Agent",
     "FPGA Yosys Synthesis Agent",
     "FPGA Synthesis Closure Agent",
@@ -1278,6 +1304,36 @@ FPGA2RTL_TO_BITSTREAM_DEFINITION = _linear_workflow_definition([
     "FPGA Timing Closure Agent",
     "FPGA Bitstream Handoff Agent",
     "FPGA Dashboard Agent",
+])
+
+FPGA_VERIFY_DEFINITION = _linear_workflow_definition([
+    "Digital Verification Handoff Ingest Agent",
+    "Digital Functional Coverage Agent",
+    "Digital Testbench Generator Agent",
+    "Digital Assertions (SVA) Agent",
+    "Digital Simulation Control Agent",
+    "Digital Simulation Execution Agent",
+    "Digital Simulation Summary Coverage Agent",
+])
+
+FPGA_VERIFY_CLOSURE_LOOP_DEFINITION = _linear_workflow_definition([
+    "Digital Verify Closure Ingest Agent",
+    "Digital Coverage Gap Analysis Agent",
+    "Digital Failure Triage Agent",
+    "Digital Failure Debug Agent",
+    "Digital Closure Recommendation Agent",
+    "Digital Verification Plan Update Agent",
+    "Digital Coverage Plan Update Agent",
+    "Digital Testcase Seed Update Agent",
+    "Digital Closure Rerun Planner Agent",
+    "Digital Verification Handoff Ingest Agent",
+    "Digital Testbench Generator Agent",
+    "Digital Assertions (SVA) Agent",
+    "Digital Functional Coverage Agent",
+    "Digital Simulation Control Agent",
+    "Digital Simulation Execution Agent",
+    "Digital Simulation Summary Coverage Agent",
+    "Digital Closure Iteration Judge Agent",
 ])
 
 FIRMWARE_DOWNSTREAM_DEFINITION = [
@@ -1474,6 +1530,8 @@ LOCAL_PREBUILT_WORKFLOW_DEFINITIONS: Dict[str, Dict[str, Any]] = {
     "Digital_Integrate": DIGITAL_INTEGRATE_DEFINITION,
     "FPGA_RTL_to_Bitstream": FPGA_RTL_TO_BITSTREAM_DEFINITION,
     "FPGA2RTL_to_Bitstream": FPGA2RTL_TO_BITSTREAM_DEFINITION,
+    "FPGA_Verify": FPGA_VERIFY_DEFINITION,
+    "FPGA_Verify_Closure_Loop": FPGA_VERIFY_CLOSURE_LOOP_DEFINITION,
     "System_Architecture_Explorer": SYSTEM_ARCHITECTURE_EXPLORER_DEFINITION,
     "System_Cache_Tuning": SYSTEM_ARCHITECTURE_EXPLORER_DEFINITION,
     "System_ISA_Compare": SYSTEM_ARCHITECTURE_EXPLORER_DEFINITION,
@@ -1505,8 +1563,6 @@ LOCAL_RUNTIME_WORKFLOW_OVERRIDES = {
     "Digital_DQA",
     "Digital_Smoke",
     "Digital_Integrate",
-    "FPGA_RTL_to_Bitstream",
-    "FPGA2RTL_to_Bitstream",
     "Embedded_Run",
     "System_RTL",
     "System_DQA",
@@ -1675,8 +1731,9 @@ def _load_workflow_def_by_name(
     if force_platform_definition and name in LOCAL_RUNTIME_WORKFLOW_OVERRIDES:
         return LOCAL_PREBUILT_WORKFLOW_DEFINITIONS[name]
 
-    # 1) User-owned custom workflow.
-    if user_id:
+    # 1) User-owned custom workflow. App execution can force the platform
+    # prebuilt path so a same-name private workflow cannot shadow source of truth.
+    if user_id and not force_platform_definition:
         r = (
             supabase.table("workflows")
             .select(select_cols)
@@ -1935,6 +1992,25 @@ def _run_nodes_with_shared_state(
         label = label.strip()
         if not label:
             continue
+        if loop_type == "fpga":
+            fpga_verify_labels = set(FPGA_INLINE_VERIFY_AGENTS)
+            fpga_verify_closure_labels = set(FPGA_INLINE_VERIFY_CLOSURE_AGENTS)
+            if label in fpga_verify_labels and not bool(shared_state.get("run_fpga_verification")):
+                append_log_workflow(workflow_id, f"⏭️ Skipping {label}: FPGA verification disabled")
+                append_log_run(run_id, f"⏭️ Skipping {label}: FPGA verification disabled")
+                continue
+            if label in fpga_verify_closure_labels and not bool(shared_state.get("run_fpga_verification_closure_loop")):
+                append_log_workflow(workflow_id, f"⏭️ Skipping {label}: FPGA verification closure disabled")
+                append_log_run(run_id, f"⏭️ Skipping {label}: FPGA verification closure disabled")
+                continue
+            if label == "FPGA Synthesis Closure Agent" and not bool(shared_state.get("run_fpga_synthesis_closure_loop")):
+                append_log_workflow(workflow_id, f"⏭️ Skipping {label}: FPGA synthesis closure disabled")
+                append_log_run(run_id, f"⏭️ Skipping {label}: FPGA synthesis closure disabled")
+                continue
+            if label == "FPGA Timing Closure Agent" and not bool(shared_state.get("run_fpga_timing_closure_loop")):
+                append_log_workflow(workflow_id, f"⏭️ Skipping {label}: FPGA timing closure disabled")
+                append_log_run(run_id, f"⏭️ Skipping {label}: FPGA timing closure disabled")
+                continue
         if loop_type == "system":
             _prepare_scoped_agent_state(label)
 
@@ -3480,6 +3556,20 @@ class FpgaBitstreamAppIn(DigitalRTLSourceIn):
     run_fpga_rtl_repair_loop: Optional[bool] = True
     run_fpga_timing_closure_loop: Optional[bool] = False
     max_fpga_timing_closure_iterations: Optional[int] = 1
+    run_fpga_verification: Optional[bool] = True
+    run_fpga_verification_closure_loop: Optional[bool] = False
+    max_fpga_verification_closure_iterations: Optional[int] = 1
+    test_intent: Optional[str] = None
+    verification_plan: Optional[str] = None
+    random_vs_directed: Optional[str] = "both"
+    coverage_targets: Optional[str] = None
+    simulator_type: Optional[str] = "verilator"
+    seed_count: Optional[int] = 10
+    run_closure_analysis: Optional[bool] = False
+    enable_failure_debug: Optional[bool] = False
+    failure_debug_options: Optional[Dict[str, Any]] = None
+    toolchain: Optional[Dict[str, Any]] = None
+    toggles: Optional[Dict[str, Any]] = None
     allow_yosys_flatten: Optional[bool] = True
     allow_nextpnr_seed_sweep: Optional[bool] = True
     allow_frequency_relaxation: Optional[bool] = False
@@ -3794,8 +3884,9 @@ def execute_digital_app_background(
 ):
     try:
         os.makedirs(artifact_dir, exist_ok=True)
-        app_loop_type = "fpga" if app_name in {"fpga", "fpga2rtl"} or str(template_workflow_name).startswith("FPGA") else "digital"
+        app_loop_type = "fpga" if app_name in {"fpga", "fpga2rtl", "fpga_verify", "fpga_verify_closure_loop"} or str(template_workflow_name).startswith("FPGA") else "digital"
         app_loop_label = "FPGA" if app_loop_type == "fpga" else "Digital"
+        execution_loop_type = "digital" if app_name in {"fpga_verify", "fpga_verify_closure_loop"} else app_loop_type
 
         shared_state = {
             "workflow_id": workflow_id,
@@ -3816,6 +3907,8 @@ def execute_digital_app_background(
         for k, v in (payload or {}).items():
             if v is not None:
                 shared_state[k] = v
+        if app_loop_type == "fpga" and not bool(shared_state.get("run_fpga_verification", True)):
+            shared_state["run_fpga_verification_closure_loop"] = False
         if shared_state.get("system_rtl_workflow_id") and not shared_state.get("from_workflow_id"):
             shared_state["from_workflow_id"] = shared_state.get("system_rtl_workflow_id")
             shared_state["source_arch2rtl_workflow_id"] = shared_state.get("system_rtl_workflow_id")
@@ -3852,7 +3945,7 @@ def execute_digital_app_background(
         # Normalize spec fields (Arch2RTL agents often expect state["spec"])
         if shared_state.get("spec_text"):
             shared_state["spec"] = shared_state["spec_text"]
-        if app_name == "verify":
+        if app_name in {"verify", "fpga_verify"}:
             shared_state["_fail_fast_on_agent_error"] = True
         if app_loop_type == "fpga":
             shared_state["_fail_fast_on_agent_error"] = True
@@ -3867,7 +3960,7 @@ def execute_digital_app_background(
         append_log_workflow(workflow_id, f"▶️ Loading Studio workflow: {template_workflow_name}", phase="load")
         append_log_run(run_id, f"▶️ Loading Studio workflow: {template_workflow_name}")
 
-        if app_loop_type == "fpga":
+        if app_name in {"fpga", "fpga2rtl"}:
             repair_state = "enabled" if bool(shared_state.get("run_fpga_rtl_repair_loop", True)) else "disabled"
             append_log_workflow(
                 workflow_id,
@@ -4026,7 +4119,7 @@ def execute_digital_app_background(
                 "Digital PD Signoff Closure Agent",
             }
             nodes = [node for node in nodes if ((node.get("data") or {}).get("backendLabel") or node.get("label")) in keep]
-        if app_name == "verify":
+        if app_name in {"verify", "fpga_verify"}:
             optional_before = "Digital Simulation Control Agent"
             if toggles.get("enable_golden_model"):
                 nodes = _insert_node_before_once(
@@ -4041,8 +4134,59 @@ def execute_digital_app_background(
                     optional_before,
                 )
 
+        if app_name in {"fpga", "fpga2rtl"} and bool(shared_state.get("run_fpga_verification_closure_loop")):
+            def _node_label_for_fpga_verify(node: Dict[str, Any]) -> str:
+                return ((node.get("data") or {}).get("backendLabel") or node.get("label") or "").strip()
+
+            labels = [_node_label_for_fpga_verify(node) for node in nodes]
+            fpga_verify_closure_set = set(FPGA_INLINE_VERIFY_CLOSURE_AGENTS)
+            closure_positions = [idx for idx, label in enumerate(labels) if label in fpga_verify_closure_set]
+            if closure_positions:
+                first_closure_idx = min(closure_positions)
+                last_closure_idx = max(closure_positions)
+                before_closure_nodes = nodes[:first_closure_idx]
+                closure_nodes = nodes[first_closure_idx:last_closure_idx + 1]
+                nodes = nodes[last_closure_idx + 1:]
+                max_verify_iterations = max(1, min(int(shared_state.get("max_fpga_verification_closure_iterations") or 1), 5))
+
+                append_log_workflow(workflow_id, "FPGA verification baseline started", phase="fpga_verification_baseline")
+                append_log_run(run_id, "FPGA verification baseline started")
+                _run_nodes_with_shared_state(
+                    workflow_id=workflow_id,
+                    run_id=run_id,
+                    loop_type=execution_loop_type,
+                    nodes=before_closure_nodes,
+                    shared_state=shared_state,
+                )
+
+                for iteration in range(1, max_verify_iterations + 1):
+                    shared_state["closure_iteration_index"] = iteration
+                    shared_state["max_iterations"] = max_verify_iterations
+                    append_log_workflow(
+                        workflow_id,
+                        f"FPGA verification closure iteration {iteration}/{max_verify_iterations} started",
+                        phase=f"fpga_verification_closure_iteration_{iteration}",
+                    )
+                    append_log_run(run_id, f"FPGA verification closure iteration {iteration}/{max_verify_iterations} started")
+                    _run_nodes_with_shared_state(
+                        workflow_id=workflow_id,
+                        run_id=run_id,
+                        loop_type=execution_loop_type,
+                        nodes=closure_nodes,
+                        shared_state=shared_state,
+                    )
+                    judge = (
+                        shared_state.get("digital_closure_iteration_judge")
+                        or shared_state.get("closure_iteration_judge")
+                        or {}
+                    )
+                    if isinstance(judge, dict) and (judge.get("closure_complete") is True or judge.get("status") in {"clean", "closed", "completed"}):
+                        append_log_workflow(workflow_id, f"FPGA verification closure stopped after iteration {iteration}: closure achieved", phase="fpga_verification_closure_stop")
+                        append_log_run(run_id, f"FPGA verification closure stopped after iteration {iteration}: closure achieved")
+                        break
+
         # Run nodes (loop_type="digital" so it uses DIGITAL_AGENT_FUNCTIONS)
-        if app_name == "verify_closure_loop":
+        if app_name in {"verify_closure_loop", "fpga_verify_closure_loop"}:
             max_iterations = max(1, min(int(shared_state.get("max_iterations") or 1), 10))
 
             def _node_label(node: Dict[str, Any]) -> str:
@@ -4056,7 +4200,7 @@ def execute_digital_app_background(
                 _run_nodes_with_shared_state(
                     workflow_id=workflow_id,
                     run_id=run_id,
-                    loop_type="digital",
+                    loop_type=execution_loop_type,
                     nodes=ingest_nodes,
                     shared_state=shared_state,
                 )
@@ -4067,7 +4211,7 @@ def execute_digital_app_background(
                 _run_nodes_with_shared_state(
                     workflow_id=workflow_id,
                     run_id=run_id,
-                    loop_type="digital",
+                    loop_type=execution_loop_type,
                     nodes=body_nodes,
                     shared_state=shared_state,
                 )
@@ -4279,7 +4423,7 @@ def execute_digital_app_background(
                     nodes=suffix_nodes,
                     shared_state=shared_state,
                 )
-        elif app_name == "fpga" and bool(shared_state.get("run_fpga_synthesis_closure_loop") or shared_state.get("run_fpga_timing_closure_loop")):
+        elif app_name in {"fpga", "fpga2rtl"} and bool(shared_state.get("run_fpga_synthesis_closure_loop") or shared_state.get("run_fpga_timing_closure_loop")):
             max_synth_iterations = max(1, min(int(shared_state.get("max_fpga_synthesis_closure_iterations") or 1), 3))
             max_timing_iterations = max(1, min(int(shared_state.get("max_fpga_timing_closure_iterations") or 1), 5))
 
@@ -4292,7 +4436,7 @@ def execute_digital_app_background(
             if synth_closure_label not in labels or timing_closure_label not in labels:
                 append_log_workflow(workflow_id, "FPGA closure requested but closure agents are not in this workflow.", phase="fpga_closure_missing")
                 append_log_run(run_id, "FPGA closure requested but closure agents are not in this workflow.")
-                _run_nodes_with_shared_state(workflow_id=workflow_id, run_id=run_id, loop_type=app_loop_type, nodes=nodes, shared_state=shared_state)
+                _run_nodes_with_shared_state(workflow_id=workflow_id, run_id=run_id, loop_type=execution_loop_type, nodes=nodes, shared_state=shared_state)
             else:
                 synth_idx = labels.index("FPGA Yosys Synthesis Agent") if "FPGA Yosys Synthesis Agent" in labels else labels.index(synth_closure_label)
                 synth_closure_idx = labels.index(synth_closure_label)
@@ -4371,7 +4515,7 @@ def execute_digital_app_background(
             _run_nodes_with_shared_state(
                 workflow_id=workflow_id,
                 run_id=run_id,
-                loop_type=app_loop_type,
+                loop_type=execution_loop_type,
                 nodes=nodes,
                 shared_state=shared_state,
             )
@@ -6027,6 +6171,61 @@ async def apps_fpga2rtl_run(request: Request, background_tasks: BackgroundTasks,
     return {"ok": True, "workflow_id": workflow_id, "run_id": run_id}
 
 
+@app.post("/apps/fpga/verify/run")
+async def apps_fpga_verify_run(request: Request, background_tasks: BackgroundTasks, payload: DigitalVerifyAppIn):
+    user_id = _require_user_id(request)
+    workflow_id, run_id, base_dir = _create_app_workflow_and_run(user_id, "App: FPGA Verify", "fpga")
+    artifact_dir = os.path.join(base_dir, "fpga_verify")
+    os.makedirs(artifact_dir, exist_ok=True)
+
+    data = payload.dict()
+    data["target"] = "fpga"
+    data["verification_domain"] = "fpga"
+
+    background_tasks.add_task(
+        execute_digital_app_background,
+        workflow_id,
+        run_id,
+        user_id,
+        artifact_dir,
+        "fpga_verify",
+        "FPGA_Verify",
+        data,
+    )
+
+    return {"ok": True, "workflow_id": workflow_id, "run_id": run_id}
+
+
+@app.post("/apps/fpga/verify/closure-loop/run")
+async def apps_fpga_verify_closure_loop_run(request: Request, background_tasks: BackgroundTasks, payload: DigitalVerifyClosureAppIn):
+    user_id = _require_user_id(request)
+    workflow_id, run_id, base_dir = _create_app_workflow_and_run(user_id, "App: FPGA Verify Closure Loop", "fpga")
+    artifact_dir = os.path.join(base_dir, "fpga_verify_closure_loop")
+    os.makedirs(artifact_dir, exist_ok=True)
+
+    payload_dict = payload.dict()
+    payload_dict["parent_workflow_id"] = payload.source_verify_workflow_id
+    payload_dict["closure_iteration_index"] = 1
+    payload_dict["max_iterations"] = max(int(payload.max_iterations or 1), 1)
+    payload_dict["target"] = "fpga"
+    payload_dict["verification_domain"] = "fpga"
+    if not payload_dict.get("seed_budget"):
+        payload_dict["seed_budget"] = payload.seed_count or 5
+
+    background_tasks.add_task(
+        execute_digital_app_background,
+        workflow_id,
+        run_id,
+        user_id,
+        artifact_dir,
+        "fpga_verify_closure_loop",
+        "FPGA_Verify_Closure_Loop",
+        payload_dict,
+    )
+
+    return {"ok": True, "workflow_id": workflow_id, "run_id": run_id}
+
+
 @app.post("/apps/verify/run")
 async def apps_verify_run(request: Request, background_tasks: BackgroundTasks, payload: DigitalVerifyAppIn):
     user_id = _require_user_id(request)
@@ -6347,6 +6546,7 @@ def dashboard_json_artifact(workflow_id: str, filename: str = Query(..., min_len
         }
         mapping = {
             "fpga_handoff_ingest.json": "handoff",
+            "fpga_rtl_quality_summary.json": "rtl_quality",
             "fpga_constraints_summary.json": "constraints",
             "fpga_synthesis_summary.json": "synthesis",
             "fpga_place_route_summary.json": "place_route",
@@ -6410,6 +6610,7 @@ def dashboard_json_artifact(workflow_id: str, filename: str = Query(..., min_len
     def _synthesize_fpga_dashboard_from_local(local_base: Path) -> Optional[Dict[str, Any]]:
         wanted = {
             "fpga_handoff_ingest.json",
+            "fpga_rtl_quality_summary.json",
             "fpga_constraints_summary.json",
             "fpga_synthesis_summary.json",
             "fpga_place_route_summary.json",
@@ -6459,6 +6660,7 @@ def dashboard_json_artifact(workflow_id: str, filename: str = Query(..., min_len
     def _synthesize_fpga_dashboard_from_storage(path_prefix: str) -> Optional[Dict[str, Any]]:
         wanted = {
             "fpga_handoff_ingest.json",
+            "fpga_rtl_quality_summary.json",
             "fpga_constraints_summary.json",
             "fpga_synthesis_summary.json",
             "fpga_place_route_summary.json",

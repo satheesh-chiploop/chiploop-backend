@@ -4,6 +4,12 @@ from .fpga_common import board_config, fpga_dir, manifest_update, publish_json, 
 
 
 def _extract_ports_from_rtl(paths: list[str]) -> list[str]:
+    def add_port(name: str) -> None:
+        clean = re.sub(r"[^A-Za-z0-9_$].*$", "", name.strip())
+        if clean and clean not in seen:
+            seen.add(clean)
+            ports.append(clean)
+
     ports: list[str] = []
     seen: set[str] = set()
     for path in paths:
@@ -11,12 +17,23 @@ def _extract_ports_from_rtl(paths: list[str]) -> list[str]:
             text = open(path, "r", encoding="utf-8", errors="ignore").read()
         except OSError:
             continue
-        for match in re.finditer(r"\b(?:input|output|inout)\b(?:\s+(?:wire|reg|logic|signed))*\s*(?:\[[^\]]+\]\s*)?([A-Za-z_][A-Za-z0-9_$]*(?:\s*,\s*[A-Za-z_][A-Za-z0-9_$]*)*)", text):
-            for name in match.group(1).split(","):
-                clean = re.sub(r"[^A-Za-z0-9_$].*$", "", name.strip())
-                if clean and clean not in seen:
-                    seen.add(clean)
-                    ports.append(clean)
+        for module_match in re.finditer(r"\bmodule\s+[A-Za-z_][A-Za-z0-9_$]*\s*\((.*?)\)\s*;", text, flags=re.DOTALL):
+            current_direction = ""
+            for segment in module_match.group(1).split(","):
+                tokens = re.findall(r"[A-Za-z_][A-Za-z0-9_$]*", re.sub(r"\[[^\]]+\]", " ", segment))
+                useful = [token for token in tokens if token not in {"wire", "reg", "logic", "signed", "unsigned"}]
+                if not useful:
+                    continue
+                if useful[0] in {"input", "output", "inout"}:
+                    current_direction = useful[0]
+                    useful = useful[1:]
+                if current_direction and useful:
+                    add_port(useful[-1])
+        for match in re.finditer(r"^\s*(?:input|output|inout)\b([^\n;]*);", text, flags=re.MULTILINE):
+            fragment = re.sub(r"\[[^\]]+\]", " ", match.group(1))
+            fragment = re.sub(r"\b(?:wire|reg|logic|signed|unsigned)\b", " ", fragment)
+            for name in fragment.split(","):
+                add_port(name)
     return ports
 
 
