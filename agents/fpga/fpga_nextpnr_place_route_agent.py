@@ -58,9 +58,11 @@ def run_agent(state: dict) -> dict:
         "agent": agent,
         "status": "blocked",
         "target": board,
-        "pnr_output": pnr_output,
-        "asc": pnr_output if family == "ice40" else None,
-        "routed_config": pnr_output if family == "ecp5" else None,
+        "planned_pnr_output": pnr_output,
+        "pnr_output": None,
+        "asc": None,
+        "routed_config": None,
+        "artifact_produced": False,
         "output_format": "textcfg" if family == "ecp5" else "asc",
         "closure_iteration": int(state.get("fpga_timing_closure_iteration_index") or 0),
         "seed": seed,
@@ -91,8 +93,16 @@ def run_agent(state: dict) -> dict:
             cmd.extend(["--seed", str(seed)])
         result = run_cmd(cmd, cwd=out_dir, log_path=log_path, timeout=900)
         summary.update(_parse_nextpnr(log_path))
-        summary.update({"status": "completed" if result["ok"] and os.path.exists(pnr_output) else "failed", "command": result})
-        if not os.path.exists(pnr_output):
+        produced = os.path.exists(pnr_output)
+        summary.update({
+            "status": "completed" if result["ok"] and produced else "warning" if produced else "failed",
+            "command": result,
+            "artifact_produced": produced,
+            "pnr_output": pnr_output if produced else None,
+            "asc": pnr_output if family == "ice40" and produced else None,
+            "routed_config": pnr_output if family == "ecp5" and produced else None,
+        })
+        if not produced:
             summary["error"] = f"nextpnr did not produce a {summary['output_format']} place-route output."
     publish_json(state, agent, "pnr", "fpga_place_route_summary.json", summary)
     manifest_update(state, "place_route", summary)

@@ -12,7 +12,14 @@ def run_agent(state: dict) -> dict:
     routed_output = routed_output or fpga.get("pnr_output")
     ext = str(board.get("bitstream_ext") or (".bit" if family == "ecp5" else ".bin"))
     bitstream = os.path.abspath(f"{out_dir}/{fpga.get('top_module') or 'top'}{ext}")
-    summary = {"agent": agent, "status": "blocked", "bitstream": bitstream, "target": board}
+    summary = {
+        "agent": agent,
+        "status": "blocked",
+        "planned_bitstream": bitstream,
+        "bitstream": None,
+        "artifact_produced": False,
+        "target": board,
+    }
     if routed_output and os.path.exists(str(routed_output)):
         if family == "ecp5":
             cmd = ["ecppack", str(routed_output), bitstream]
@@ -21,7 +28,13 @@ def run_agent(state: dict) -> dict:
             cmd = ["icepack", str(routed_output), bitstream]
             log_name = "icepack.log"
         result = run_cmd(cmd, cwd=out_dir, log_path=os.path.abspath(f"{out_dir}/{log_name}"), timeout=300)
-        summary.update({"status": "completed" if result["ok"] and os.path.exists(bitstream) else "failed", "command": result})
+        produced = os.path.exists(bitstream)
+        summary.update({
+            "status": "completed" if result["ok"] and produced else "warning" if produced else "failed",
+            "command": result,
+            "artifact_produced": produced,
+            "bitstream": bitstream if produced else None,
+        })
     else:
         summary["error"] = "No routed place-and-route artifact available for bitstream generation."
     summary["programming_command"] = None
