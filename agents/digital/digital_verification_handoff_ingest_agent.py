@@ -215,7 +215,119 @@ def _top_module(spec: Dict[str, Any], rtl_path: str) -> str:
     return Path(rtl_path).stem
 
 
+def _detect_top_from_rtl(paths: List[str]) -> str:
+    for path in paths:
+        text = _read_first_text([path])
+        match = __import__("re").search(r"\bmodule\s+([A-Za-z_][A-Za-z0-9_$]*)\b", text)
+        if match:
+            return match.group(1)
+    return Path(paths[0]).stem if paths else "top"
+
+
+def _fpga_inline_handoff(state: Dict[str, Any]) -> Dict[str, Any]:
+    workflow_id = str(state.get("workflow_id") or "default")
+    workflow_dir = str(state.get("workflow_dir") or f"backend/workflows/{workflow_id}")
+    os.makedirs(workflow_dir, exist_ok=True)
+    state["workflow_dir"] = workflow_dir
+
+    fpga = state.get("fpga") if isinstance(state.get("fpga"), dict) else {}
+    source_files = fpga.get("rtl_files") or state.get("rtl_files") or state.get("rtl_inputs") or []
+    rtl_sources = [str(path) for path in source_files if isinstance(path, str) and Path(path).exists()]
+    if not rtl_sources:
+        raise RuntimeError(
+            "FPGA verification requires RTL from the current FPGA handoff. "
+            "Run FPGA RTL handoff/quality first, or provide RTL text/files."
+        )
+
+    rtl_files: List[str] = []
+    imported_rtl_paths: List[str] = []
+    for source_path in dict.fromkeys(rtl_sources):
+        raw = Path(source_path).read_bytes()
+        rtl_name = os.path.basename(source_path) or "fpga_source.sv"
+        local_rtl = _write_local(workflow_dir, f"handoff/rtl/{rtl_name}", raw)
+        rtl_files.append(local_rtl)
+        imported_rtl_paths.append(source_path)
+        save_text_artifact_and_record(
+            workflow_id,
+            AGENT_NAME,
+            "verification/handoff/rtl",
+            rtl_name,
+            raw.decode("utf-8", errors="replace"),
+        )
+
+    top_module = str(state.get("top_module") or "").strip() or _detect_top_from_rtl(rtl_files)
+    spec = {
+        "name": top_module,
+        "source": "fpga_current_workflow",
+        "target": "fpga",
+        "test_intent": state.get("test_intent"),
+        "verification_plan": state.get("verification_plan"),
+    }
+    spec_raw = json.dumps(spec, indent=2).encode("utf-8")
+    local_spec = _write_local(workflow_dir, "spec/fpga_verification_source_spec.json", spec_raw)
+    save_text_artifact_and_record(
+        workflow_id,
+        AGENT_NAME,
+        "verification/handoff/spec",
+        "fpga_verification_source_spec.json",
+        json.dumps(spec, indent=2),
+    )
+
+    constraints = str(state.get("constraints_sdc") or state.get("pcf_text") or state.get("constraints_pcf") or "")
+    local_sdc_files: List[str] = []
+    if constraints.strip() and str(state.get("constraints_sdc") or "").strip().endswith(".sdc"):
+        local_sdc_files = [str(state.get("constraints_sdc"))]
+
+    clock_intent = build_clock_intent(
+        spec=spec,
+        rtl_files=rtl_files,
+        sdc_text=_read_first_text(local_sdc_files),
+        requested=state.get("clock_constraints") or state.get("clocks"),
+    )
+    manifest = {
+        "type": "fpga_verification_source_handoff",
+        "source_workflow_id": workflow_id,
+        "spec_source_path": "current_fpga_workflow",
+        "rtl_source_paths": imported_rtl_paths,
+        "rtl_source_kind": "fpga_current_workflow_rtl",
+        "mbist_integrated_rtl": False,
+        "top_module": top_module,
+        "local_spec_path": local_spec,
+        "local_rtl_files": rtl_files,
+        "local_sdc_files": local_sdc_files,
+        "clock_intent": clock_intent,
+    }
+    save_text_artifact_and_record(
+        workflow_id,
+        AGENT_NAME,
+        "verification/handoff",
+        "verification_source_handoff.json",
+        json.dumps(manifest, indent=2),
+    )
+    save_text_artifact_and_record(
+        workflow_id,
+        AGENT_NAME,
+        "verification/handoff/timing",
+        "clock_intent.json",
+        json.dumps(clock_intent, indent=2),
+    )
+
+    state["spec_json"] = local_spec
+    state["digital_spec_json"] = local_spec
+    state["rtl_files"] = rtl_files
+    state["rtl_inputs"] = rtl_files
+    state["top_module"] = top_module
+    state["clock_intent"] = clock_intent
+    state.setdefault("digital", {})["clock_intent"] = clock_intent
+    state["verification_source_handoff"] = manifest
+    state["status"] = "Imported current FPGA RTL for verification."
+    return state
+
+
 def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
+    if str(state.get("verification_domain") or state.get("target") or "").strip().lower() == "fpga":
+        return _fpga_inline_handoff(state)
+
     source_mode = str(state.get("rtl_source_mode") or "").strip()
     upstream = state.get("upstream_workflows") if isinstance(state.get("upstream_workflows"), dict) else {}
     source_workflow_id = str(

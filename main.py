@@ -6101,6 +6101,8 @@ async def apps_fpga_bitstream_run(request: Request, background_tasks: Background
         data["source_workflow_id"] = data["from_workflow_id"]
     if data.get("source_arch2rtl_workflow_id") and not data.get("source_workflow_id"):
         data["source_workflow_id"] = data["source_arch2rtl_workflow_id"]
+    data["target"] = "fpga"
+    data["verification_domain"] = "fpga"
 
     target = {
         "vendor": "lattice",
@@ -6141,6 +6143,8 @@ async def apps_fpga2rtl_run(request: Request, background_tasks: BackgroundTasks,
     data = payload.dict()
     data["rtl_source_mode"] = data.get("rtl_source_mode") or "generate_arch2rtl"
     data["source"] = "generated_arch2rtl"
+    data["target"] = "fpga"
+    data["verification_domain"] = "fpga"
 
     target = {
         "vendor": "lattice",
