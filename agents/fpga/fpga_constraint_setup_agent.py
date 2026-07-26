@@ -88,6 +88,30 @@ def _pin_for_pcf_port(board_key: str, port: str) -> str | None:
             "led_1": "98",
         }
         return pins.get(lower)
+    if board_key == "ice40_hx8k_breakout":
+        pins = {
+            "clk": "J3",
+            "clock": "J3",
+            "clk_12mhz": "J3",
+            "led": "B5",
+            "led0": "B5",
+            "led_0": "B5",
+            "led1": "B4",
+            "led_1": "B4",
+            "led2": "A2",
+            "led_2": "A2",
+            "led3": "A1",
+            "led_3": "A1",
+            "led4": "C5",
+            "led_4": "C5",
+            "led5": "C4",
+            "led_5": "C4",
+            "led6": "B3",
+            "led_6": "B3",
+            "led7": "C3",
+            "led_7": "C3",
+        }
+        return pins.get(lower)
     return None
 
 
@@ -119,15 +143,28 @@ def _pin_for_lpf_port(board_key: str, port: str) -> str | None:
     pins = {
         "clk": "G2",
         "clock": "G2",
-        "reset": "D6",
-        "rst": "D6",
-        "reset_n": "D6",
-        "rst_n": "D6",
+        "clk_25mhz": "G2",
+        "reset": "T1",
+        "rst": "T1",
+        "reset_n": "T1",
+        "rst_n": "T1",
         "led": "B2",
         "led0": "B2",
         "led_0": "B2",
         "led1": "C2",
         "led_1": "C2",
+        "led2": "C1",
+        "led_2": "C1",
+        "led3": "D2",
+        "led_3": "D2",
+        "led4": "D1",
+        "led_4": "D1",
+        "led5": "E2",
+        "led_5": "E2",
+        "led6": "E1",
+        "led_6": "E1",
+        "led7": "H3",
+        "led_7": "H3",
     }
     return pins.get(port.lower())
 
