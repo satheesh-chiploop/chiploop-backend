@@ -157,6 +157,20 @@ def _starter_lpf(top_module: str, frequency_mhz: float, board_key: str, ports: l
     return "\n".join(lines).strip() + "\n", constrained
 
 
+def _constrained_ports_from_text(fmt: str, text: str) -> list[str]:
+    ports: list[str] = []
+    seen: set[str] = set()
+    if fmt == "lpf":
+        matches = re.findall(r'\b(?:LOCATE\s+COMP|IOBUF\s+PORT|FREQUENCY\s+PORT)\s+"([^"]+)"', text, flags=re.IGNORECASE)
+    else:
+        matches = re.findall(r"^\s*set_io\b(?:\s+-[A-Za-z0-9_-]+)*\s+([A-Za-z_][A-Za-z0-9_$]*)\b", text, flags=re.IGNORECASE | re.MULTILINE)
+    for port in matches:
+        if port not in seen:
+            seen.add(port)
+            ports.append(port)
+    return ports
+
+
 def run_agent(state: dict) -> dict:
     agent = "FPGA Constraint Setup Agent"
     out_dir = fpga_dir(state, "constraints")
@@ -187,6 +201,8 @@ def run_agent(state: dict) -> dict:
         else:
             constraint_text, constrained_ports = _starter_pcf(str(top), frequency, board_key, rtl_ports)
         generated = True
+    else:
+        constrained_ports = _constrained_ports_from_text(fmt, constraint_text)
     constraint_path = os.path.abspath(write_text(f"{out_dir}/{top}.{fmt}", constraint_text))
     summary = {
         "agent": agent,
@@ -202,10 +218,39 @@ def run_agent(state: dict) -> dict:
         "board": board.get("board"),
         "note": "Generated demo constraints are intended for common clock/reset/LED examples. Custom boards or interfaces should provide board-verified PCF/LPF pin assignments.",
     }
+    if summary["unconstrained_ports"]:
+        summary["status"] = "blocked"
+        summary["error"] = (
+            "FPGA constraints are incomplete. Provide a board-verified PCF/LPF, or select a board with a verified "
+            "ChipLoop pin map for every top-level RTL port."
+        )
+        if generated:
+            summary["routing_note"] = (
+                "ChipLoop generated constraints only for ports with verified board pin mappings. No unconstrained "
+                "fallback is allowed."
+            )
     publish_json(state, agent, "constraints", "fpga_constraints_summary.json", summary)
+    workflow_id = str(state.get("workflow_id") or "")
+    if workflow_id:
+        try:
+            from utils.artifact_utils import save_text_artifact_and_record
+
+            save_text_artifact_and_record(
+                workflow_id,
+                agent,
+                "fpga/constraints",
+                f"{top}.{fmt}",
+                constraint_text,
+            )
+        except Exception:
+            pass
     manifest_update(state, "constraints_pcf", constraint_path if fmt == "pcf" else None)
     manifest_update(state, "constraints_lpf", constraint_path if fmt == "lpf" else None)
     manifest_update(state, "constraints_path", constraint_path)
+    manifest_update(state, "constraints_unconstrained_ports", summary["unconstrained_ports"])
     manifest_update(state, "target_frequency_mhz", frequency)
     manifest_update(state, "constraints", summary)
+    if summary["status"] == "blocked":
+        state["status"] = "FPGA constraints incomplete."
+        raise RuntimeError(f"{summary['error']} Unconstrained ports: {', '.join(summary['unconstrained_ports'])}")
     return state
