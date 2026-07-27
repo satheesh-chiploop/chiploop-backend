@@ -127,6 +127,13 @@ def _parse_nextpnr_report(report_path: str, board: dict) -> dict:
                 if available:
                     out["logic_utilization_percent"] = round((used / available) * 100.0, 3)
                 break
+        for key in ("SB_LUT4", "LUT4", "TRELLIS_COMB"):
+            lut_used, lut_available = _used_available(utilization.get(key))
+            if lut_used is not None:
+                out["routed_lut4_cells"] = lut_used
+                if lut_available is not None:
+                    out["routed_lut4_cells_available"] = lut_available
+                break
         ff_used, ff_available = None, None
         for key in ("TRELLIS_FF", "DFF", "SB_DFF", "SB_DFFE", "FF"):
             ff_used, ff_available = _used_available(utilization.get(key))

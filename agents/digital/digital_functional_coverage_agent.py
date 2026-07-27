@@ -211,6 +211,36 @@ def _ports_from_spec(spec: Dict[str, Any]) -> List[Dict[str, Any]]:
     return out
 
 
+def _ports_from_rtl_files(rtl_files: List[str], top_module: str) -> List[Dict[str, Any]]:
+    """Fall back to real RTL ports when the verification handoff spec omits its I/O contract."""
+    try:
+        from agents.system.system_top_assembly_agent import _extract_module_ports_from_text
+    except Exception:
+        return []
+
+    ports: Dict[str, Dict[str, Any]] = {}
+    for rtl_file in rtl_files:
+        try:
+            with open(str(rtl_file), "r", encoding="utf-8", errors="ignore") as handle:
+                modules = _extract_module_ports_from_text(handle.read())
+        except Exception:
+            continue
+        module_ports = modules.get(top_module) if isinstance(modules, dict) else None
+        if not isinstance(module_ports, dict):
+            continue
+        for name, metadata in module_ports.items():
+            if not isinstance(metadata, dict):
+                continue
+            ports[str(name)] = {
+                "name": str(name),
+                "direction": metadata.get("dir"),
+                "range": metadata.get("range") or "",
+            }
+        if ports:
+            break
+    return list(ports.values())
+
+
 def _normalize_direction(value: Any) -> str:
     s = str(value or "").strip().lower()
     if s in ("input", "in", "i"):
@@ -797,12 +827,19 @@ def run_agent(state: dict) -> dict:
 
     spec = _safe_read_json(spec_path)
     ports = [] if soc_mode else _ports_from_spec(spec)
+    port_source = "spec"
+    if not soc_mode and not ports:
+        ports = _ports_from_rtl_files(rtl_files, top)
+        port_source = "rtl_fallback" if ports else "unresolved"
     clocks, resets = _infer_clocks_resets(spec, ports)
     uploaded_verification_plan = state.get("verification_plan") if isinstance(state.get("verification_plan"), str) else ""
     uploaded_monitor_checker_plan = state.get("monitor_checker_plan") if isinstance(state.get("monitor_checker_plan"), str) else ""
     uploaded_coverage_plan = state.get("coverage_plan") if isinstance(state.get("coverage_plan"), str) else ""
     test_intent = state.get("test_intent") if isinstance(state.get("test_intent"), str) else ""
-    cov_spec = _build_coverage_points(spec, top, soc_mode=soc_mode, coverage_plan=uploaded_coverage_plan)
+    coverage_spec_source = dict(spec)
+    if ports and not _ports_from_spec(coverage_spec_source):
+        coverage_spec_source["ports"] = ports
+    cov_spec = _build_coverage_points(coverage_spec_source, top, soc_mode=soc_mode, coverage_plan=uploaded_coverage_plan)
     verification_plan_source = "uploaded" if uploaded_verification_plan.strip() else "generated_from_spec"
     monitor_checker_plan_source = "uploaded" if uploaded_monitor_checker_plan.strip() else "generated_from_spec"
     coverage_plan_source = "uploaded" if uploaded_coverage_plan.strip() else "generated_from_spec"
@@ -818,6 +855,7 @@ def run_agent(state: dict) -> dict:
     _log(log_path, f"spec_path={spec_path}")
     _log(log_path, f"top_module={top}")
     _log(log_path, f"rtl_file_count={len(rtl_files)}")
+    _log(log_path, f"port_source={port_source}")
     _log_kv(log_path, "clock_candidates", clocks)
     _log_kv(log_path, "reset_candidates", resets)
     _log_kv(

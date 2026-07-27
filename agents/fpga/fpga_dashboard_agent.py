@@ -1,3 +1,6 @@
+import json
+import os
+
 from .fpga_common import publish_json
 
 
@@ -6,6 +9,17 @@ def _first(*values):
         if value not in (None, ""):
             return value
     return None
+
+
+def _load_json(path):
+    if not path or not os.path.exists(str(path)):
+        return {}
+    try:
+        with open(str(path), "r", encoding="utf-8") as handle:
+            value = json.load(handle)
+        return value if isinstance(value, dict) else {}
+    except Exception:
+        return {}
 
 
 def run_agent(state: dict) -> dict:
@@ -27,6 +41,7 @@ def run_agent(state: dict) -> dict:
     }
     routed_result = {
         "logical_cells_used": pnr.get("logical_cells_used"),
+        "routed_lut4_cells": pnr.get("routed_lut4_cells"),
         "logical_cells_available": _first(pnr.get("logical_cells_available"), synthesis_estimate.get("logical_cells_available")),
         "logic_utilization_percent": pnr.get("logic_utilization_percent"),
         "utilization_source": pnr.get("utilization_source"),
@@ -42,6 +57,7 @@ def run_agent(state: dict) -> dict:
     }
     utilization = {
         "logical_cells_used": pnr.get("logical_cells_used"),
+        "routed_lut4_cells": pnr.get("routed_lut4_cells"),
         "logical_cells_available": _first(pnr.get("logical_cells_available"), ((fpga.get("target") or {}).get("resources") or {}).get("logic_cells")),
         "logic_utilization_percent": pnr.get("logic_utilization_percent"),
         "source": pnr.get("utilization_source"),
@@ -72,7 +88,11 @@ def run_agent(state: dict) -> dict:
         "place_route": pnr,
         "timing_drc": timing,
         "timing_closure": fpga.get("timing_closure", {}),
+        "timing_rtl_repair": fpga.get("timing_rtl_repair", {}),
         "bitstream": fpga.get("bitstream", {}),
+        "verification": _load_json(state.get("simulation_summary_coverage_json")),
+        "participating_agents": list(dict.fromkeys(state.get("_participating_agents") or [])),
+        "agent_count": len(set(state.get("_participating_agents") or [])),
         "smart_context": {
             "enabled": bool(state.get("smart_context_enabled") or str(state.get("context_mode") or "").lower() == "smart"),
             "mode": state.get("context_mode") or "smart",

@@ -8,7 +8,9 @@ def run_agent(state: dict) -> dict:
     out_dir = fpga_dir(state, "bitstream")
     board = board_config(state)
     family = str(board.get("family") or "ice40").lower()
-    routed_output = fpga.get("asc") if family == "ice40" else fpga.get("routed_config")
+    best = state.get("_fpga_best_timing_result") if isinstance(state.get("_fpga_best_timing_result"), dict) else {}
+    routed_output = best.get("winning_pnr_output") if best.get("timing_met") else None
+    routed_output = routed_output or (fpga.get("asc") if family == "ice40" else fpga.get("routed_config"))
     routed_output = routed_output or fpga.get("pnr_output")
     ext = str(board.get("bitstream_ext") or (".bit" if family == "ecp5" else ".bin"))
     bitstream = os.path.abspath(f"{out_dir}/{fpga.get('top_module') or 'top'}{ext}")
@@ -20,7 +22,9 @@ def run_agent(state: dict) -> dict:
         "artifact_produced": False,
         "target": board,
     }
-    if routed_output and os.path.exists(str(routed_output)):
+    if state.get("fpga_timing_closure_failed"):
+        summary["error"] = "Timing closure did not meet the requested frequency; bitstream generation is blocked. Review the achievable-clock recommendation or escalate the critical path."
+    elif routed_output and os.path.exists(str(routed_output)):
         if family == "ecp5":
             cmd = ["ecppack", str(routed_output), bitstream]
             log_name = "ecppack.log"

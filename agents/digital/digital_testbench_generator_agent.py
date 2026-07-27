@@ -213,6 +213,36 @@ def _ports_from_spec(spec: Dict[str, Any]) -> List[Dict[str, Any]]:
     return out
 
 
+def _ports_from_rtl_files(rtl_files: List[str], top_module: str) -> List[Dict[str, Any]]:
+    """Fall back to real RTL ports when the verification handoff spec omits its I/O contract."""
+    try:
+        from agents.system.system_top_assembly_agent import _extract_module_ports_from_text
+    except Exception:
+        return []
+
+    ports: Dict[str, Dict[str, Any]] = {}
+    for rtl_file in rtl_files:
+        try:
+            with open(str(rtl_file), "r", encoding="utf-8", errors="ignore") as handle:
+                modules = _extract_module_ports_from_text(handle.read())
+        except Exception:
+            continue
+        module_ports = modules.get(top_module) if isinstance(modules, dict) else None
+        if not isinstance(module_ports, dict):
+            continue
+        for name, metadata in module_ports.items():
+            if not isinstance(metadata, dict):
+                continue
+            ports[str(name)] = {
+                "name": str(name),
+                "direction": metadata.get("dir"),
+                "range": metadata.get("range") or "",
+            }
+        if ports:
+            break
+    return list(ports.values())
+
+
 def _normalize_direction(value: Any) -> str:
     s = str(value or "").strip().lower()
     if s in ("input", "in", "i"):
@@ -1571,6 +1601,10 @@ def run_agent(state: dict) -> dict:
     spec = _safe_read_json(spec_path)
 
     ports = [] if soc_mode else _ports_from_spec(spec)
+    port_source = "spec"
+    if not soc_mode and not ports:
+        ports = _ports_from_rtl_files(rtl_files, top)
+        port_source = "rtl_fallback" if ports else "unresolved"
     clocks, resets = _infer_clocks_resets(spec, ports)
     directed_tests = _detected_directed_tests(ports, spec, rtl_files)
 
@@ -1578,13 +1612,17 @@ def run_agent(state: dict) -> dict:
     _log(log_path, f"spec_path={spec_path}")
     _log(log_path, f"top_module={top}")
     _log(log_path, f"rtl_file_count={len(rtl_files)}")
+    _log(log_path, f"port_source={port_source}")
     _log_kv(log_path, "clock_candidates", clocks)
     _log_kv(log_path, "reset_candidates", resets)
 
     tb_root = os.path.join(workflow_dir, "vv", "tb")
     os.makedirs(tb_root, exist_ok=True)
 
-    test_py = _gen_cocotb_test(spec, top, clocks, resets, rtl_files=rtl_files, soc_mode=soc_mode)
+    generation_spec = dict(spec)
+    if ports and not _ports_from_spec(generation_spec):
+        generation_spec["ports"] = ports
+    test_py = _gen_cocotb_test(generation_spec, top, clocks, resets, rtl_files=rtl_files, soc_mode=soc_mode)
     test_selection = state.get("random_vs_directed") or "both"
     testcase_manifest = _build_testcases_manifest(top, clocks, resets, mode, test_selection, directed_tests)
     closure_testcase_intents = [
