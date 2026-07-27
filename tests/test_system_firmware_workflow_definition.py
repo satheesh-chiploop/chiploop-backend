@@ -67,7 +67,8 @@ def test_system_dqa_exists_and_reuses_system_rtl_sequence():
     assert block.index("*SYSTEM_RTL_AGENT_SEQUENCE") < block.index('"Digital CDC Analysis Agent"')
     assert '"Digital DQA Summary Agent"' in block
     assert '"Digital Executive Summary Agent"' not in block
-    canonical_block = _between(text, '"System_DQA": [', '"System_Sim": [')
+    canonical_nodes = _between(text, "canonical_system_downstream_nodes = {", "        if template_workflow_name in canonical_system_downstream_nodes and using_existing_system_rtl:")
+    canonical_block = _between(canonical_nodes, '"System_DQA": [', '"System_Sim": [')
     assert '"Digital RTL Linting Agent"' in canonical_block
     assert '"Digital Register Map Agent"' not in canonical_block
     assert '"System Assertions (SVA) Agent"' not in canonical_block

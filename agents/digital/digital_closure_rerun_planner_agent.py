@@ -15,6 +15,15 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     source_handoff = state.get("source_verification_source_handoff") if isinstance(state.get("source_verification_source_handoff"), dict) else {}
+    if not source_handoff and isinstance(state.get("verification_source_handoff"), dict):
+        source_handoff = state["verification_source_handoff"]
+    source_handoff_type = str(source_handoff.get("type") or "").strip().lower()
+    is_inline_fpga = source_handoff_type == "fpga_verification_source_handoff"
+    source_fpga_workflow = str(
+        source_handoff.get("source_workflow_id")
+        or (state.get("workflow_id") if is_inline_fpga else "")
+        or ""
+    ).strip()
     source_manifest = state.get("source_simulation_manifest") if isinstance(state.get("source_simulation_manifest"), dict) else {}
     source_manifest_type = str(source_manifest.get("type") or "").strip().lower()
     explicit_system_sim = bool(
@@ -32,11 +41,11 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     source_arch2rtl = str(
         state.get("source_arch2rtl_workflow_id")
         or state.get("from_workflow_id")
-        or source_handoff.get("source_workflow_id")
+        or (source_handoff.get("source_workflow_id") if not is_inline_fpga else "")
         or ""
     ).strip()
-    if not source_arch2rtl and not is_system_sim:
-        raise RuntimeError("Cannot plan closure rerun: source Arch2RTL workflow id was not found in prior Verify handoff.")
+    if not source_arch2rtl and not is_system_sim and not (is_inline_fpga and source_fpga_workflow):
+        raise RuntimeError("Cannot plan closure rerun: no Arch2RTL, System Sim, or current FPGA verification source was found in the handoff.")
 
     tests = state.get("vv_testcases") if isinstance(state.get("vv_testcases"), list) else []
     seeds = state.get("simulation_seeds") if isinstance(state.get("simulation_seeds"), list) else []
@@ -49,7 +58,8 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
         "source_verify_workflow_id": state.get("source_verify_workflow_id"),
         "source_arch2rtl_workflow_id": source_arch2rtl or None,
         "source_system_sim_workflow_id": source_system_sim or None,
-        "closure_context": "system_sim" if is_system_sim else "digital_verify",
+        "source_fpga_workflow_id": source_fpga_workflow or None,
+        "closure_context": "system_sim" if is_system_sim else "fpga_inline_verify" if is_inline_fpga else "digital_verify",
         "rerun_mode": state.get("rerun_mode") or "coverage_targeted",
         "random_vs_directed": random_vs_directed,
         "tests": tests,
@@ -65,6 +75,11 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
         state["rtl_source_mode"] = "from_system_rtl"
         state["source_system_sim_workflow_id"] = source_system_sim
         state["upstream_workflows"] = {"system_sim": source_system_sim}
+    elif is_inline_fpga:
+        state["rtl_source_mode"] = str(state.get("rtl_source_mode") or "fpga_current_workflow")
+        state["source_fpga_workflow_id"] = source_fpga_workflow
+        upstream = state.get("upstream_workflows") if isinstance(state.get("upstream_workflows"), dict) else {}
+        state["upstream_workflows"] = {**upstream, "fpga": source_fpga_workflow}
     else:
         state["rtl_source_mode"] = "from_arch2rtl"
         state["from_workflow_id"] = source_arch2rtl

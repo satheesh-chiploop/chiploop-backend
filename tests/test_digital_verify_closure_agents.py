@@ -196,3 +196,41 @@ def test_verify_closure_rerun_planner_keeps_vv_manifest_as_digital_verify(tmp_pa
     assert state["closure_rerun_manifest"]["source_arch2rtl_workflow_id"] == "arch2rtl-parent"
     assert state["rtl_source_mode"] == "from_arch2rtl"
     assert state["from_workflow_id"] == "arch2rtl-parent"
+
+def test_verify_closure_rerun_planner_accepts_inline_fpga_handoff(tmp_path, monkeypatch):
+    _stub_upload(monkeypatch)
+
+    state = {
+        "workflow_id": "fpga-current",
+        "workflow_dir": str(tmp_path / "backend" / "workflows" / "fpga-current"),
+        "rtl_source_mode": "paste",
+        "upstream_workflows": {"requirements": "requirements-parent"},
+        "verification_source_handoff": {
+            "type": "fpga_verification_source_handoff",
+            "source_workflow_id": "fpga-current",
+            "rtl_source_kind": "fpga_current_workflow_rtl",
+        },
+    }
+
+    rerun_planner_agent.run_agent(state)
+
+    manifest = state["closure_rerun_manifest"]
+    assert manifest["closure_context"] == "fpga_inline_verify"
+    assert manifest["source_fpga_workflow_id"] == "fpga-current"
+    assert manifest["source_arch2rtl_workflow_id"] is None
+    assert state["rtl_source_mode"] == "paste"
+    assert state["source_fpga_workflow_id"] == "fpga-current"
+    assert state["upstream_workflows"] == {
+        "requirements": "requirements-parent",
+        "fpga": "fpga-current",
+    }
+    assert "from_workflow_id" not in state
+    assert (
+        tmp_path
+        / "backend"
+        / "workflows"
+        / "fpga-current"
+        / "verify_closure"
+        / "iteration_001"
+        / "rerun_manifest.json"
+    ).is_file()

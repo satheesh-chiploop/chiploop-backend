@@ -209,3 +209,19 @@ def test_fpga_repair_verification_gate_requires_formal_when_enabled(tmp_path):
         "formal": {"status": "pass"},
     }), encoding="utf-8")
     assert verification_passed(state) == (True, "simulation_passed:1/1")
+
+def test_inline_fpga_verification_closure_reruns_verification_before_judging():
+    main_source = (Path(__file__).parents[1] / "main.py").read_text(encoding="utf-8")
+    closure_block_start = main_source.index(
+        'if app_name in {"fpga", "fpga2rtl", "fpga_implementation"} and bool(shared_state.get("run_fpga_verification_closure_loop")):'
+    )
+    closure_block_end = main_source.index(
+        '# Run nodes (loop_type="digital" so it uses DIGITAL_AGENT_FUNCTIONS)',
+        closure_block_start,
+    )
+    closure_block = main_source[closure_block_start:closure_block_end]
+
+    assert "closure_iteration_nodes = closure_analysis_nodes + verify_rerun_nodes + closure_judge_nodes" in closure_block
+    assert "nodes=closure_iteration_nodes" in closure_block
+    assert 'shared_state.get("closure_iteration_judgement")' in closure_block
+    assert 'judge.get("stop_reason") in {"closure_achieved", "no_measurable_improvement"}' in closure_block

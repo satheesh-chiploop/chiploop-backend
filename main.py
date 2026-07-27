@@ -4221,6 +4221,19 @@ def execute_digital_app_background(
                 last_closure_idx = max(closure_positions)
                 before_closure_nodes = nodes[:first_closure_idx]
                 closure_nodes = nodes[first_closure_idx:last_closure_idx + 1]
+                verify_rerun_nodes = [
+                    node for node in before_closure_nodes
+                    if _node_label_for_fpga_verify(node) in set(FPGA_INLINE_VERIFY_AGENTS)
+                ]
+                closure_analysis_nodes = [
+                    node for node in closure_nodes
+                    if _node_label_for_fpga_verify(node) != "Digital Closure Iteration Judge Agent"
+                ]
+                closure_judge_nodes = [
+                    node for node in closure_nodes
+                    if _node_label_for_fpga_verify(node) == "Digital Closure Iteration Judge Agent"
+                ]
+                closure_iteration_nodes = closure_analysis_nodes + verify_rerun_nodes + closure_judge_nodes
                 nodes = nodes[last_closure_idx + 1:]
                 max_verify_iterations = max(1, min(int(shared_state.get("max_fpga_verification_closure_iterations") or 1), 5))
 
@@ -4247,15 +4260,11 @@ def execute_digital_app_background(
                         workflow_id=workflow_id,
                         run_id=run_id,
                         loop_type=execution_loop_type,
-                        nodes=closure_nodes,
+                        nodes=closure_iteration_nodes,
                         shared_state=shared_state,
                     )
-                    judge = (
-                        shared_state.get("digital_closure_iteration_judge")
-                        or shared_state.get("closure_iteration_judge")
-                        or {}
-                    )
-                    if isinstance(judge, dict) and (judge.get("closure_complete") is True or judge.get("status") in {"clean", "closed", "completed"}):
+                    judge = shared_state.get("closure_iteration_judgement") or {}
+                    if isinstance(judge, dict) and judge.get("stop_reason") in {"closure_achieved", "no_measurable_improvement"}:
                         append_log_workflow(workflow_id, f"FPGA verification closure stopped after iteration {iteration}: closure achieved", phase="fpga_verification_closure_stop")
                         append_log_run(run_id, f"FPGA verification closure stopped after iteration {iteration}: closure achieved")
                         break
