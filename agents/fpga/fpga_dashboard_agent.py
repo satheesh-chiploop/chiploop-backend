@@ -29,6 +29,9 @@ def run_agent(state: dict) -> dict:
         "logical_cells_used": pnr.get("logical_cells_used"),
         "logical_cells_available": _first(pnr.get("logical_cells_available"), synthesis_estimate.get("logical_cells_available")),
         "logic_utilization_percent": pnr.get("logic_utilization_percent"),
+        "utilization_source": pnr.get("utilization_source"),
+        "routed_resource": pnr.get("routed_resource"),
+        "routed_flip_flops": pnr.get("routed_flip_flops"),
         "max_frequency_mhz": _first(timing.get("max_frequency_mhz"), pnr.get("max_frequency_mhz")),
         "timing_met": _first(timing.get("timing_met"), pnr.get("timing_met")),
         "wns_ns": _first(timing.get("wns_ns"), pnr.get("wns_ns")),
@@ -38,12 +41,12 @@ def run_agent(state: dict) -> dict:
         "error_count": _first(timing.get("error_count"), pnr.get("errors")),
     }
     utilization = {
-        "logical_cells_used": _first(pnr.get("logical_cells_used"), synth.get("logical_cells_used")),
-        "logical_cells_available": _first(pnr.get("logical_cells_available"), synth.get("logical_cells_available"), ((fpga.get("target") or {}).get("resources") or {}).get("logic_cells")),
-        "logic_utilization_percent": _first(pnr.get("logic_utilization_percent"), synth.get("logic_utilization_percent")),
-        "flip_flops": synth.get("flip_flops"),
-        "combinational_cells": synth.get("combinational_cells"),
-        "lut4_cells": synth.get("lut4_cells"),
+        "logical_cells_used": pnr.get("logical_cells_used"),
+        "logical_cells_available": _first(pnr.get("logical_cells_available"), ((fpga.get("target") or {}).get("resources") or {}).get("logic_cells")),
+        "logic_utilization_percent": pnr.get("logic_utilization_percent"),
+        "source": pnr.get("utilization_source"),
+        "routed_resource": pnr.get("routed_resource"),
+        "routed_flip_flops": pnr.get("routed_flip_flops"),
     }
     timing_summary = {
         "target_frequency_mhz": state.get("target_frequency_mhz") or (fpga.get("target") or {}).get("target_frequency_mhz"),

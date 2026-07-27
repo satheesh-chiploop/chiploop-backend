@@ -16,7 +16,7 @@ RTL_EXTENSIONS = (".sv", ".v", ".svh", ".vh")
 
 BOARD_REGISTRY: Dict[str, Dict[str, Any]] = {
     "icebreaker": {
-        "label": "iCEBreaker",
+        "label": "Lattice iCEBreaker",
         "vendor": "lattice",
         "family": "ice40",
         "device": "up5k",
@@ -29,7 +29,7 @@ BOARD_REGISTRY: Dict[str, Dict[str, Any]] = {
         "resources": {"logic_cells": 5280},
     },
     "upduino_v3": {
-        "label": "UPduino v3",
+        "label": "Lattice UPduino v3",
         "vendor": "lattice",
         "family": "ice40",
         "device": "up5k",
@@ -94,6 +94,35 @@ BOARD_REGISTRY: Dict[str, Dict[str, Any]] = {
         "programmer_board": "ulx3s",
         "default_frequency_mhz": 25.0,
         "resources": {"logic_cells": 44000},
+    },
+    "orangecrab_ecp5_85f": {
+        "label": "OrangeCrab ECP5-85F",
+        "vendor": "lattice",
+        "family": "ecp5",
+        "device": "85k",
+        "package": "CSFBGA285",
+        "nextpnr_tool": "nextpnr-ecp5",
+        "nextpnr_device_flag": "--85k",
+        "nextpnr_package": "CSFBGA285",
+        "constraint_format": "lpf",
+        "programmer_board": "orangeCrab",
+        "default_frequency_mhz": 48.0,
+        "resources": {"logic_cells": 84000},
+    },
+    "colorlight_5a_75b": {
+        "label": "Colorlight 5A-75B ECP5-25F",
+        "vendor": "lattice",
+        "family": "ecp5",
+        "device": "25k",
+        "package": "CABGA256",
+        "nextpnr_tool": "nextpnr-ecp5",
+        "nextpnr_device_flag": "--25k",
+        "nextpnr_package": "CABGA256",
+        "constraint_format": "lpf",
+        "programmer_board": None,
+        "programming_note": "Colorlight 5A-75B usually requires an external JTAG adapter; use openFPGALoader or OpenOCD with the adapter-specific cable configuration.",
+        "default_frequency_mhz": 25.0,
+        "resources": {"logic_cells": 24000},
     },
 }
 

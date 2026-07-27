@@ -138,35 +138,75 @@ def _starter_pcf(top_module: str, frequency_mhz: float, board_key: str, ports: l
 
 
 def _pin_for_lpf_port(board_key: str, port: str) -> str | None:
-    if board_key != "ulx3s_ecp5_45f":
-        return None
-    pins = {
-        "clk": "G2",
-        "clock": "G2",
-        "clk_25mhz": "G2",
-        "reset": "T1",
-        "rst": "T1",
-        "reset_n": "T1",
-        "rst_n": "T1",
-        "led": "B2",
-        "led0": "B2",
-        "led_0": "B2",
-        "led1": "C2",
-        "led_1": "C2",
-        "led2": "C1",
-        "led_2": "C1",
-        "led3": "D2",
-        "led_3": "D2",
-        "led4": "D1",
-        "led_4": "D1",
-        "led5": "E2",
-        "led_5": "E2",
-        "led6": "E1",
-        "led_6": "E1",
-        "led7": "H3",
-        "led_7": "H3",
-    }
-    return pins.get(port.lower())
+    if board_key == "ulx3s_ecp5_45f":
+        pins = {
+            "clk": "G2",
+            "clock": "G2",
+            "clk_25mhz": "G2",
+            "reset": "T1",
+            "rst": "T1",
+            "reset_n": "T1",
+            "rst_n": "T1",
+            "led": "B2",
+            "led0": "B2",
+            "led_0": "B2",
+            "led1": "C2",
+            "led_1": "C2",
+            "led2": "C1",
+            "led_2": "C1",
+            "led3": "D2",
+            "led_3": "D2",
+            "led4": "D1",
+            "led_4": "D1",
+            "led5": "E2",
+            "led_5": "E2",
+            "led6": "E1",
+            "led_6": "E1",
+            "led7": "H3",
+            "led_7": "H3",
+        }
+        return pins.get(port.lower())
+    if board_key == "orangecrab_ecp5_85f":
+        pins = {
+            "clk": "A9",
+            "clock": "A9",
+            "clk_48mhz": "A9",
+            "reset": "J17",
+            "rst": "J17",
+            "button": "J17",
+            "btn": "J17",
+            "reset_n": "V17",
+            "rst_n": "V17",
+            "led": "K4",
+            "led0": "K4",
+            "led_0": "K4",
+            "led_r": "K4",
+            "led1": "M3",
+            "led_1": "M3",
+            "led_g": "M3",
+            "led2": "J3",
+            "led_2": "J3",
+            "led_b": "J3",
+        }
+        return pins.get(port.lower())
+    if board_key == "colorlight_5a_75b":
+        pins = {
+            "clk": "P6",
+            "clock": "P6",
+            "clk_25mhz": "P6",
+            "reset": "P11",
+            "rst": "P11",
+            "button": "P11",
+            "btn": "P11",
+            "reset_n": "P11",
+            "rst_n": "P11",
+            "led": "T6",
+            "led0": "T6",
+            "led_0": "T6",
+            "user_led": "T6",
+        }
+        return pins.get(port.lower())
+    return None
 
 
 def _starter_lpf(top_module: str, frequency_mhz: float, board_key: str, ports: list[str]) -> tuple[str, list[str]]:

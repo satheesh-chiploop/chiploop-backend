@@ -1,6 +1,24 @@
+import json
 import os
 import re
 from .fpga_common import board_config, fpga_dir, manifest_update, publish_json, read_text, run_cmd
+
+
+def _publish_text(state: dict, agent: str, subdir: str, filename: str, content: str) -> None:
+    if not content:
+        return
+    try:
+        from utils.artifact_utils import save_text_artifact_and_record
+
+        save_text_artifact_and_record(
+            workflow_id=str(state.get("workflow_id") or ""),
+            agent_name=agent,
+            subdir=f"fpga/{subdir}".rstrip("/"),
+            filename=filename,
+            content=content,
+        )
+    except Exception:
+        pass
 
 
 def _parse_nextpnr(log: str) -> dict:
@@ -42,6 +60,101 @@ def _parse_nextpnr(log: str) -> dict:
     return out
 
 
+def _as_number(value):
+    if isinstance(value, (int, float)):
+        return value
+    if isinstance(value, str):
+        match = re.search(r"-?[0-9]+(?:\.[0-9]+)?", value)
+        if match:
+            number = float(match.group(0))
+            return int(number) if number.is_integer() else number
+    return None
+
+
+def _used_available(item):
+    if isinstance(item, dict):
+        used = _as_number(item.get("used"))
+        available = _as_number(item.get("available") or item.get("total"))
+        if used is not None:
+            return int(used), int(available) if available is not None else None
+    if isinstance(item, (list, tuple)) and item:
+        used = _as_number(item[0])
+        available = _as_number(item[1]) if len(item) > 1 else None
+        if used is not None:
+            return int(used), int(available) if available is not None else None
+    if isinstance(item, str):
+        match = re.search(r"([0-9]+)\s*/\s*([0-9]+)", item)
+        if match:
+            return int(match.group(1)), int(match.group(2))
+    return None, None
+
+
+def _parse_nextpnr_report(report_path: str, board: dict) -> dict:
+    if not os.path.exists(report_path):
+        return {}
+    try:
+        with open(report_path, "r", encoding="utf-8", errors="ignore") as handle:
+            data = json.load(handle)
+    except Exception:
+        return {}
+    out: dict = {"report": report_path, "utilization_source": "nextpnr_report"}
+    utilization = data.get("utilization") if isinstance(data, dict) else {}
+    if isinstance(utilization, dict):
+        out["utilization"] = utilization
+        family = str(board.get("family") or "").lower()
+        logic_keys = (
+            "ICESTORM_LC",
+            "TRELLIS_COMB",
+            "TRELLIS_SLICE",
+            "SLICE",
+            "LUT4",
+        ) if family == "ecp5" else (
+            "ICESTORM_LC",
+            "SB_LUT4",
+            "TRELLIS_COMB",
+            "TRELLIS_SLICE",
+            "LUT4",
+        )
+        for key in logic_keys:
+            item = utilization.get(key)
+            used, available = _used_available(item)
+            if used is not None:
+                if available is None:
+                    available = (((board.get("resources") or {}).get("logic_cells")) or 0)
+                out["logical_cells_used"] = used
+                out["logical_cells_available"] = available
+                out["routed_resource"] = key
+                if available:
+                    out["logic_utilization_percent"] = round((used / available) * 100.0, 3)
+                break
+        ff_used, ff_available = None, None
+        for key in ("TRELLIS_FF", "DFF", "SB_DFF", "SB_DFFE", "FF"):
+            ff_used, ff_available = _used_available(utilization.get(key))
+            if ff_used is not None:
+                out["routed_flip_flops"] = ff_used
+                if ff_available is not None:
+                    out["routed_flip_flops_available"] = ff_available
+                break
+    fmax = data.get("fmax") if isinstance(data, dict) else {}
+    if isinstance(fmax, dict) and fmax:
+        out["fmax"] = fmax
+        achieved = [
+            value.get("achieved")
+            for value in fmax.values()
+            if isinstance(value, dict) and isinstance(value.get("achieved"), (int, float))
+        ]
+        constraints = [
+            value.get("constraint")
+            for value in fmax.values()
+            if isinstance(value, dict) and isinstance(value.get("constraint"), (int, float))
+        ]
+        if achieved:
+            out["max_frequency_mhz"] = round(float(min(achieved)), 3)
+        if achieved and constraints:
+            out["timing_met"] = min(achieved) >= max(constraints)
+    return out
+
+
 def run_agent(state: dict) -> dict:
     agent = "FPGA nextpnr Place & Route Agent"
     fpga = state.get("fpga") if isinstance(state.get("fpga"), dict) else {}
@@ -53,6 +166,7 @@ def run_agent(state: dict) -> dict:
     output_ext = str(board.get("pnr_output_ext") or (".config" if family == "ecp5" else ".asc"))
     pnr_output = os.path.abspath(f"{out_dir}/{fpga.get('top_module') or 'top'}{output_ext}")
     log_path = os.path.abspath(f"{out_dir}/{board.get('nextpnr_tool') or 'nextpnr'}.log")
+    report_path = os.path.abspath(f"{out_dir}/fpga_nextpnr_report.json")
     seed = state.get("fpga_nextpnr_seed") or state.get("nextpnr_seed")
     summary = {
         "agent": agent,
@@ -78,6 +192,8 @@ def run_agent(state: dict) -> dict:
             str(board.get("nextpnr_package") or board.get("package") or "ct256"),
             "--json",
             str(json_netlist),
+            "--report",
+            report_path,
         ]
         if family == "ecp5":
             cmd.extend(["--textcfg", pnr_output])
@@ -92,7 +208,12 @@ def run_agent(state: dict) -> dict:
         if seed:
             cmd.extend(["--seed", str(seed)])
         result = run_cmd(cmd, cwd=out_dir, log_path=log_path, timeout=900)
-        summary.update(_parse_nextpnr(log_path))
+        log_metrics = _parse_nextpnr(log_path)
+        for key in ("logical_cells_used", "logical_cells_available", "logic_utilization_percent"):
+            log_metrics.pop(key, None)
+        summary.update(log_metrics)
+        report_metrics = _parse_nextpnr_report(report_path, board)
+        summary.update(report_metrics)
         produced = os.path.exists(pnr_output)
         summary.update({
             "status": "completed" if result["ok"] and produced else "warning" if produced else "failed",
@@ -101,9 +222,17 @@ def run_agent(state: dict) -> dict:
             "pnr_output": pnr_output if produced else None,
             "asc": pnr_output if family == "ice40" and produced else None,
             "routed_config": pnr_output if family == "ecp5" and produced else None,
+            "report": report_path if os.path.exists(report_path) else None,
         })
         if not produced:
             summary["error"] = f"nextpnr did not produce a {summary['output_format']} place-route output."
+        if os.path.exists(report_path):
+            try:
+                with open(report_path, "r", encoding="utf-8", errors="ignore") as handle:
+                    publish_json(state, agent, "pnr", "fpga_nextpnr_report.json", json.load(handle))
+            except Exception:
+                _publish_text(state, agent, "pnr", "fpga_nextpnr_report.json", read_text(report_path))
+        _publish_text(state, agent, "pnr", os.path.basename(log_path), read_text(log_path))
     publish_json(state, agent, "pnr", "fpga_place_route_summary.json", summary)
     manifest_update(state, "place_route", summary)
     manifest_update(state, "pnr_output", pnr_output if os.path.exists(pnr_output) else None)

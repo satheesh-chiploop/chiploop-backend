@@ -1244,6 +1244,7 @@ FPGA_INLINE_VERIFY_AGENTS = [
     "Digital Functional Coverage Agent",
     "Digital Testbench Generator Agent",
     "Digital Assertions (SVA) Agent",
+    "Digital Formal Verification Agent",
     "Digital Simulation Control Agent",
     "Digital Simulation Execution Agent",
     "Digital Simulation Summary Coverage Agent",
@@ -1316,6 +1317,11 @@ FPGA_VERIFY_DEFINITION = _linear_workflow_definition([
     "Digital Simulation Summary Coverage Agent",
 ])
 
+FPGA_FORMAL_DEFINITION = _linear_workflow_definition([
+    "Digital Verification Handoff Ingest Agent",
+    "Digital Formal Verification Agent",
+])
+
 FPGA_VERIFY_CLOSURE_LOOP_DEFINITION = _linear_workflow_definition([
     "Digital Verify Closure Ingest Agent",
     "Digital Coverage Gap Analysis Agent",
@@ -1334,6 +1340,33 @@ FPGA_VERIFY_CLOSURE_LOOP_DEFINITION = _linear_workflow_definition([
     "Digital Simulation Execution Agent",
     "Digital Simulation Summary Coverage Agent",
     "Digital Closure Iteration Judge Agent",
+])
+
+FPGA_SYNTHESIS_DEFINITION = _linear_workflow_definition([
+    "FPGA RTL Handoff Ingest Agent",
+    "FPGA RTL Quality Gate Agent",
+    "Digital RTL Linting Agent",
+    "Digital Synthesis Readiness Agent",
+    "Digital DQA Summary Agent",
+    "FPGA Constraint Setup Agent",
+    "FPGA Yosys Synthesis Agent",
+    "FPGA Synthesis Closure Agent",
+    "FPGA Dashboard Agent",
+])
+
+FPGA_IMPLEMENTATION_DEFINITION = _linear_workflow_definition([
+    "FPGA RTL Handoff Ingest Agent",
+    "FPGA RTL Quality Gate Agent",
+    "Digital RTL Linting Agent",
+    "Digital Synthesis Readiness Agent",
+    "Digital DQA Summary Agent",
+    "FPGA Constraint Setup Agent",
+    "FPGA Yosys Synthesis Agent",
+    "FPGA Synthesis Closure Agent",
+    "FPGA nextpnr Place & Route Agent",
+    "FPGA Timing & DRC Agent",
+    "FPGA Timing Closure Agent",
+    "FPGA Dashboard Agent",
 ])
 
 FIRMWARE_DOWNSTREAM_DEFINITION = [
@@ -1531,7 +1564,10 @@ LOCAL_PREBUILT_WORKFLOW_DEFINITIONS: Dict[str, Dict[str, Any]] = {
     "FPGA_RTL_to_Bitstream": FPGA_RTL_TO_BITSTREAM_DEFINITION,
     "FPGA2RTL_to_Bitstream": FPGA2RTL_TO_BITSTREAM_DEFINITION,
     "FPGA_Verify": FPGA_VERIFY_DEFINITION,
+    "FPGA_Formal": FPGA_FORMAL_DEFINITION,
     "FPGA_Verify_Closure_Loop": FPGA_VERIFY_CLOSURE_LOOP_DEFINITION,
+    "FPGA_Synthesis": FPGA_SYNTHESIS_DEFINITION,
+    "FPGA_Implementation": FPGA_IMPLEMENTATION_DEFINITION,
     "System_Architecture_Explorer": SYSTEM_ARCHITECTURE_EXPLORER_DEFINITION,
     "System_Cache_Tuning": SYSTEM_ARCHITECTURE_EXPLORER_DEFINITION,
     "System_ISA_Compare": SYSTEM_ARCHITECTURE_EXPLORER_DEFINITION,
@@ -1999,6 +2035,14 @@ def _run_nodes_with_shared_state(
                 append_log_workflow(workflow_id, f"⏭️ Skipping {label}: FPGA verification disabled")
                 append_log_run(run_id, f"⏭️ Skipping {label}: FPGA verification disabled")
                 continue
+            if label == "Digital Formal Verification Agent":
+                toolchain = shared_state.get("toolchain") if isinstance(shared_state.get("toolchain"), dict) else {}
+                toggles = shared_state.get("toggles") if isinstance(shared_state.get("toggles"), dict) else {}
+                formal_tool = str(toolchain.get("formal") or shared_state.get("formal_tool") or "none").strip().lower()
+                if formal_tool in {"", "none", "disabled"} and not bool(toggles.get("enable_formal")):
+                    append_log_workflow(workflow_id, f"⏭️ Skipping {label}: FPGA formal verification disabled")
+                    append_log_run(run_id, f"⏭️ Skipping {label}: FPGA formal verification disabled")
+                    continue
             if label in fpga_verify_closure_labels and not bool(shared_state.get("run_fpga_verification_closure_loop")):
                 append_log_workflow(workflow_id, f"⏭️ Skipping {label}: FPGA verification closure disabled")
                 append_log_run(run_id, f"⏭️ Skipping {label}: FPGA verification closure disabled")
@@ -3884,9 +3928,9 @@ def execute_digital_app_background(
 ):
     try:
         os.makedirs(artifact_dir, exist_ok=True)
-        app_loop_type = "fpga" if app_name in {"fpga", "fpga2rtl", "fpga_verify", "fpga_verify_closure_loop"} or str(template_workflow_name).startswith("FPGA") else "digital"
+        app_loop_type = "fpga" if app_name in {"fpga", "fpga2rtl", "fpga_verify", "fpga_formal", "fpga_verify_closure_loop", "fpga_synthesis", "fpga_implementation"} or str(template_workflow_name).startswith("FPGA") else "digital"
         app_loop_label = "FPGA" if app_loop_type == "fpga" else "Digital"
-        execution_loop_type = "digital" if app_name in {"fpga_verify", "fpga_verify_closure_loop"} else app_loop_type
+        execution_loop_type = "digital" if app_name in {"fpga_verify", "fpga_formal", "fpga_verify_closure_loop"} else app_loop_type
 
         shared_state = {
             "workflow_id": workflow_id,
@@ -3945,7 +3989,7 @@ def execute_digital_app_background(
         # Normalize spec fields (Arch2RTL agents often expect state["spec"])
         if shared_state.get("spec_text"):
             shared_state["spec"] = shared_state["spec_text"]
-        if app_name in {"verify", "fpga_verify"}:
+        if app_name in {"verify", "fpga_verify", "fpga", "fpga2rtl"}:
             shared_state["_fail_fast_on_agent_error"] = True
         if app_loop_type == "fpga":
             shared_state["_fail_fast_on_agent_error"] = True
@@ -6175,6 +6219,96 @@ async def apps_fpga2rtl_run(request: Request, background_tasks: BackgroundTasks,
     return {"ok": True, "workflow_id": workflow_id, "run_id": run_id}
 
 
+@app.post("/apps/fpga/synthesis/run")
+async def apps_fpga_synthesis_run(request: Request, background_tasks: BackgroundTasks, payload: FpgaBitstreamAppIn):
+    user_id = _require_user_id(request)
+    workflow_id, run_id, base_dir = _create_app_workflow_and_run(user_id, "App: FPGA Synthesis", "fpga")
+    artifact_dir = os.path.join(base_dir, "fpga_synthesis")
+    os.makedirs(artifact_dir, exist_ok=True)
+
+    data = payload.dict()
+    if data.get("from_workflow_id") and not data.get("source_workflow_id"):
+        data["source_workflow_id"] = data["from_workflow_id"]
+    if data.get("source_arch2rtl_workflow_id") and not data.get("source_workflow_id"):
+        data["source_workflow_id"] = data["source_arch2rtl_workflow_id"]
+    data["target"] = "fpga"
+    data["verification_domain"] = "fpga"
+    data["generate_bitstream"] = False
+    data["run_fpga_verification"] = False
+    target = {
+        "vendor": "lattice",
+        "family": data.get("family"),
+        "board": data.get("board") or "icebreaker",
+        "device": data.get("device"),
+        "package": data.get("package"),
+        "top_module": data.get("top_module"),
+        "target_frequency_mhz": data.get("target_frequency_mhz"),
+    }
+    data["fpga_target"] = target
+    data["fpga"] = {
+        **(data.get("fpga") if isinstance(data.get("fpga"), dict) else {}),
+        "target": target,
+    }
+
+    background_tasks.add_task(
+        execute_digital_app_background,
+        workflow_id,
+        run_id,
+        user_id,
+        artifact_dir,
+        "fpga_synthesis",
+        "FPGA_Synthesis",
+        data,
+    )
+
+    return {"ok": True, "workflow_id": workflow_id, "run_id": run_id}
+
+
+@app.post("/apps/fpga/implementation/run")
+async def apps_fpga_implementation_run(request: Request, background_tasks: BackgroundTasks, payload: FpgaBitstreamAppIn):
+    user_id = _require_user_id(request)
+    workflow_id, run_id, base_dir = _create_app_workflow_and_run(user_id, "App: FPGA Implementation", "fpga")
+    artifact_dir = os.path.join(base_dir, "fpga_implementation")
+    os.makedirs(artifact_dir, exist_ok=True)
+
+    data = payload.dict()
+    if data.get("from_workflow_id") and not data.get("source_workflow_id"):
+        data["source_workflow_id"] = data["from_workflow_id"]
+    if data.get("source_arch2rtl_workflow_id") and not data.get("source_workflow_id"):
+        data["source_workflow_id"] = data["source_arch2rtl_workflow_id"]
+    data["target"] = "fpga"
+    data["verification_domain"] = "fpga"
+    data["generate_bitstream"] = False
+    data["run_fpga_verification"] = False
+    target = {
+        "vendor": "lattice",
+        "family": data.get("family"),
+        "board": data.get("board") or "icebreaker",
+        "device": data.get("device"),
+        "package": data.get("package"),
+        "top_module": data.get("top_module"),
+        "target_frequency_mhz": data.get("target_frequency_mhz"),
+    }
+    data["fpga_target"] = target
+    data["fpga"] = {
+        **(data.get("fpga") if isinstance(data.get("fpga"), dict) else {}),
+        "target": target,
+    }
+
+    background_tasks.add_task(
+        execute_digital_app_background,
+        workflow_id,
+        run_id,
+        user_id,
+        artifact_dir,
+        "fpga_implementation",
+        "FPGA_Implementation",
+        data,
+    )
+
+    return {"ok": True, "workflow_id": workflow_id, "run_id": run_id}
+
+
 @app.post("/apps/fpga/verify/run")
 async def apps_fpga_verify_run(request: Request, background_tasks: BackgroundTasks, payload: DigitalVerifyAppIn):
     user_id = _require_user_id(request)
@@ -6194,6 +6328,43 @@ async def apps_fpga_verify_run(request: Request, background_tasks: BackgroundTas
         artifact_dir,
         "fpga_verify",
         "FPGA_Verify",
+        data,
+    )
+
+    return {"ok": True, "workflow_id": workflow_id, "run_id": run_id}
+
+
+@app.post("/apps/fpga/formal/run")
+async def apps_fpga_formal_run(request: Request, background_tasks: BackgroundTasks, payload: FpgaBitstreamAppIn):
+    user_id = _require_user_id(request)
+    workflow_id, run_id, base_dir = _create_app_workflow_and_run(user_id, "App: FPGA Formal", "fpga")
+    artifact_dir = os.path.join(base_dir, "fpga_formal")
+    os.makedirs(artifact_dir, exist_ok=True)
+
+    data = payload.dict()
+    if data.get("from_workflow_id") and not data.get("source_workflow_id"):
+        data["source_workflow_id"] = data["from_workflow_id"]
+    if data.get("source_arch2rtl_workflow_id") and not data.get("source_workflow_id"):
+        data["source_workflow_id"] = data["source_arch2rtl_workflow_id"]
+    data["target"] = "fpga"
+    data["verification_domain"] = "fpga"
+    data["toggles"] = {**(data.get("toggles") if isinstance(data.get("toggles"), dict) else {}), "enable_formal": True}
+    incoming_toolchain = data.get("toolchain") if isinstance(data.get("toolchain"), dict) else {}
+    solver = str(incoming_toolchain.get("formal_solver") or data.get("formal_solver") or "z3").strip().lower()
+    data["toolchain"] = {
+        **incoming_toolchain,
+        "formal": "symbiyosys",
+        "formal_solver": solver if solver in {"z3", "boolector"} else "z3",
+    }
+
+    background_tasks.add_task(
+        execute_digital_app_background,
+        workflow_id,
+        run_id,
+        user_id,
+        artifact_dir,
+        "fpga_formal",
+        "FPGA_Formal",
         data,
     )
 
@@ -6589,12 +6760,18 @@ def dashboard_json_artifact(workflow_id: str, filename: str = Query(..., min_len
                 "logical_cells_used": place_route.get("logical_cells_used"),
                 "logical_cells_available": place_route.get("logical_cells_available"),
                 "logic_utilization_percent": place_route.get("logic_utilization_percent"),
+                "source": place_route.get("utilization_source"),
+                "routed_resource": place_route.get("routed_resource"),
+                "routed_flip_flops": place_route.get("routed_flip_flops"),
             }
         if timing or place_route:
             summary["routed_result"] = {
                 "logical_cells_used": place_route.get("logical_cells_used"),
                 "logical_cells_available": place_route.get("logical_cells_available"),
                 "logic_utilization_percent": place_route.get("logic_utilization_percent"),
+                "utilization_source": place_route.get("utilization_source"),
+                "routed_resource": place_route.get("routed_resource"),
+                "routed_flip_flops": place_route.get("routed_flip_flops"),
                 "max_frequency_mhz": timing.get("max_frequency_mhz") or place_route.get("max_frequency_mhz"),
                 "timing_met": timing.get("timing_met") if timing.get("timing_met") is not None else place_route.get("timing_met"),
                 "timing_violation_count": timing.get("timing_violation_count") if timing.get("timing_violation_count") is not None else place_route.get("timing_violation_count"),
