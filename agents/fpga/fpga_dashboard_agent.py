@@ -64,6 +64,15 @@ def run_agent(state: dict) -> dict:
         "routed_resource": pnr.get("routed_resource"),
         "routed_flip_flops": pnr.get("routed_flip_flops"),
     }
+    verification = _load_json(state.get("simulation_summary_coverage_json"))
+    formal = ((state.get("vv") or {}).get("formal") or {}) if isinstance(state.get("vv"), dict) else {}
+    if isinstance(formal, dict) and formal:
+        verification = {**verification, "formal": formal}
+        formal_toolchain = formal.get("toolchain") if isinstance(formal.get("toolchain"), dict) else {}
+        verification["toolchain"] = {
+            **(verification.get("toolchain") if isinstance(verification.get("toolchain"), dict) else {}),
+            **formal_toolchain,
+        }
     timing_summary = {
         "target_frequency_mhz": state.get("target_frequency_mhz") or (fpga.get("target") or {}).get("target_frequency_mhz"),
         "max_frequency_mhz": routed_result.get("max_frequency_mhz"),
@@ -90,7 +99,7 @@ def run_agent(state: dict) -> dict:
         "timing_closure": fpga.get("timing_closure", {}),
         "timing_rtl_repair": fpga.get("timing_rtl_repair", {}),
         "bitstream": fpga.get("bitstream", {}),
-        "verification": _load_json(state.get("simulation_summary_coverage_json")),
+        "verification": verification,
         "participating_agents": list(dict.fromkeys(state.get("_participating_agents") or [])),
         "agent_count": len(set(state.get("_participating_agents") or [])),
         "smart_context": {

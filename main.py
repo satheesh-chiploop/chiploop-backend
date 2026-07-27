@@ -4640,6 +4640,29 @@ def execute_digital_app_background(
                         plan = (((shared_state.get("fpga") or {}).get("timing_closure") or {}).get("plan") or {})
 
                 if (shared_state.get("run_fpga_timing_closure_loop") and not plan.get("closure_complete")
+                        and closure_mode == "advanced"):
+                    append_log_workflow(workflow_id, "FPGA timing closure exploring retiming synthesis strategy", phase="fpga_timing_strategy_exploration")
+                    append_log_run(run_id, "FPGA timing closure exploring retiming synthesis strategy")
+                    shared_state["fpga_yosys_retime"] = True
+                    shared_state["_fpga_active_synthesis_strategy"] = "retime"
+                    shared_state["fpga_timing_closure_iteration_index"] = len(shared_state.get("_fpga_timing_history") or [])
+                    _run_nodes_with_shared_state(
+                        workflow_id=workflow_id, run_id=run_id, loop_type=app_loop_type,
+                        nodes=nodes[synth_idx:timing_closure_idx + 1], shared_state=shared_state,
+                    )
+                    plan = (((shared_state.get("fpga") or {}).get("timing_closure") or {}).get("plan") or {})
+                    for strategy_try in range(1, 3):
+                        if plan.get("closure_complete"):
+                            break
+                        shared_state["fpga_timing_closure_iteration_index"] = len(shared_state.get("_fpga_timing_history") or [])
+                        append_log_run(run_id, f"Retiming strategy seed exploration {strategy_try}/2")
+                        _run_nodes_with_shared_state(
+                            workflow_id=workflow_id, run_id=run_id, loop_type=app_loop_type,
+                            nodes=nodes[pnr_idx:timing_closure_idx + 1], shared_state=shared_state,
+                        )
+                        plan = (((shared_state.get("fpga") or {}).get("timing_closure") or {}).get("plan") or {})
+
+                if (shared_state.get("run_fpga_timing_closure_loop") and not plan.get("closure_complete")
                         and bool(shared_state.get("allow_automatic_rtl_timing_repair"))):
                     append_log_workflow(workflow_id, "Automatic FPGA RTL timing repair started", phase="fpga_timing_rtl_repair")
                     append_log_run(run_id, "Automatic FPGA RTL timing repair started")

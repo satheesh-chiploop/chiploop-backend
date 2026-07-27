@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 
 from agents.fpga import fpga_dashboard_agent
-from agents.fpga.fpga_nextpnr_place_route_agent import _parse_nextpnr_report
+from agents.fpga.fpga_nextpnr_place_route_agent import _nextpnr_effort_policy, _parse_nextpnr, _parse_nextpnr_report
 
 
 def test_nextpnr_report_exposes_routed_lut4_cells(tmp_path):
@@ -225,3 +225,103 @@ def test_inline_fpga_verification_closure_reruns_verification_before_judging():
     assert "nodes=closure_iteration_nodes" in closure_block
     assert 'shared_state.get("closure_iteration_judgement")' in closure_block
     assert 'judge.get("stop_reason") in {"closure_achieved", "no_measurable_improvement"}' in closure_block
+
+
+def test_nextpnr_log_exposes_routed_lut4_and_flip_flop_counts(tmp_path):
+    log = tmp_path / "nextpnr-ice40.log"
+    log.write_text(
+        "Info: 39 LCs used as LUT4 only\n"
+        "Info: 33 LCs used as LUT4 and DFF\n"
+        "Info: 0 LCs used as DFF only\n"
+        "Info: ICESTORM_LC: 79/5280 1%\n",
+        encoding="utf-8",
+    )
+
+    parsed = _parse_nextpnr(str(log))
+
+    assert parsed["routed_lut4_cells"] == 72
+    assert parsed["routed_flip_flops"] == 33
+
+
+def test_fpga_dashboard_prefers_authoritative_formal_result(tmp_path, monkeypatch):
+    simulation_path = tmp_path / "simulation_summary_coverage.json"
+    simulation_path.write_text(json.dumps({
+        "simulation": {"total": 1, "pass": 1, "fail": 0},
+        "formal": {"status": "not_enabled"},
+        "toolchain": {"formal": "none"},
+    }), encoding="utf-8")
+    published = {}
+    monkeypatch.setattr(fpga_dashboard_agent, "publish_json", lambda _state, _agent, _subdir, _filename, summary: published.update(summary))
+    state = {
+        "simulation_summary_coverage_json": str(simulation_path),
+        "vv": {"formal": {"status": "pass", "toolchain": {"formal": "symbiyosys", "formal_solver": "z3"}}},
+        "_participating_agents": ["Digital Formal Verification Agent", "FPGA Dashboard Agent"],
+        "fpga": {"target": {}, "bitstream": {"status": "completed"}},
+    }
+
+    fpga_dashboard_agent.run_agent(state)
+
+    assert published["verification"]["formal"]["status"] == "pass"
+    assert published["verification"]["toolchain"]["formal"] == "symbiyosys"
+
+
+def test_balanced_tool_policy_uses_supported_baseline_and_reporting_knobs():
+    from agents.fpga.fpga_yosys_synthesis_agent import _yosys_effort_policy
+
+    yosys = _yosys_effort_policy(
+        {"fpga_closure_mode": "balanced"}, "synth_ice40", "options: -noflatten -flatten -noabc9 -retime"
+    )
+    pnr = _nextpnr_effort_policy(
+        {"fpga_closure_mode": "balanced", "target_frequency_mhz": 75},
+        "nextpnr-ice40",
+        "--freq --placer --router --detailed-timing-report",
+    )
+
+    assert yosys["effective_options"] == ["-noflatten"]
+    assert yosys["strategy"] == "baseline"
+    assert pnr["effective_args"] == ["--detailed-timing-report", "--freq", "75"]
+
+
+def test_advanced_tool_policy_enables_only_architecture_advertised_knobs():
+    pnr = _nextpnr_effort_policy(
+        {"fpga_closure_mode": "advanced", "target_frequency_mhz": 100},
+        "nextpnr-ice40",
+        "--placer available: heap, sa; default: heap\n"
+        "--router available: router1, router2; default: router1\n"
+        "--freq --placer-heap-timingweight --placer-heap-critexp --tmg-ripup --router2-alt-weights",
+    )
+
+    assert pnr["effective_args"] == [
+        "--placer", "heap",
+        "--placer-heap-timingweight", "20",
+        "--placer-heap-critexp", "4",
+        "--router", "router2",
+        "--tmg-ripup",
+        "--router2-alt-weights",
+        "--freq", "100",
+    ]
+
+
+def test_advanced_tool_policy_does_not_assume_placer_or_router_values():
+    pnr = _nextpnr_effort_policy(
+        {"fpga_closure_mode": "advanced"},
+        "nextpnr-ecp5",
+        "--placer available: sa; default: sa\n--router available: router1; default: router1\n"
+        "--placer-heap-timingweight --tmg-ripup",
+    )
+
+    assert pnr["effective_args"] == []
+
+
+def test_retime_strategy_disables_abc9_and_never_passes_abc9():
+    from agents.fpga.fpga_yosys_synthesis_agent import _yosys_effort_policy
+
+    policy = _yosys_effort_policy(
+        {"fpga_closure_mode": "advanced", "fpga_yosys_retime": True},
+        "synth_ice40",
+        "options: -abc9 -noabc9 -retime",
+    )
+
+    assert policy["strategy"] == "retime"
+    assert policy["effective_options"] == ["-noabc9", "-retime"]
+    assert "-abc9" not in policy["effective_options"]

@@ -41,6 +41,7 @@ def run_agent(state: dict) -> dict:
     agent = "FPGA Timing Closure Agent"
     fpga = state.get("fpga") if isinstance(state.get("fpga"), dict) else {}
     pnr = fpga.get("place_route") if isinstance(fpga.get("place_route"), dict) else {}
+    synthesis = fpga.get("synthesis") if isinstance(fpga.get("synthesis"), dict) else {}
     timing = fpga.get("timing_drc") if isinstance(fpga.get("timing_drc"), dict) else {}
     target_mhz = _num(state.get("target_frequency_mhz") or fpga.get("target", {}).get("target_frequency_mhz"), 0.0)
     observed_mhz = _num(timing.get("max_frequency_mhz") or pnr.get("max_frequency_mhz"), 0.0)
@@ -66,7 +67,10 @@ def run_agent(state: dict) -> dict:
         "synthesis_strategy": strategy,
         "rtl_repair_used": repair_used,
         "pnr_output": pnr_output,
+        "yosys_command": (synthesis.get("command") or {}).get("cmd") if isinstance(synthesis.get("command"), dict) else None,
         "nextpnr_command": (pnr.get("command") or {}).get("cmd") if isinstance(pnr.get("command"), dict) else None,
+        "synthesis_tool_effort": synthesis.get("tool_effort"),
+        "place_route_tool_effort": pnr.get("tool_effort"),
     }
     history.append(candidate)
     best = max(history, key=lambda item: (_num(item.get("max_frequency_mhz"), -1.0), bool(item.get("timing_met"))))
@@ -110,7 +114,10 @@ def run_agent(state: dict) -> dict:
         "rtl_repair_used": selected.get("rtl_repair_used", False),
         "winning_pnr_output": selected.get("winning_pnr_output"),
         "winning_pnr_sha256": _sha256(selected.get("winning_pnr_output")),
+        "yosys_command": selected.get("yosys_command"),
         "nextpnr_command": selected.get("nextpnr_command"),
+        "synthesis_tool_effort": selected.get("synthesis_tool_effort"),
+        "place_route_tool_effort": selected.get("place_route_tool_effort"),
         "board": (fpga.get("target") or {}).get("board"),
         "device": (fpga.get("target") or {}).get("device"),
         "package": (fpga.get("target") or {}).get("package"),

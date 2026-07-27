@@ -1,5 +1,7 @@
 import json
 import os
+import subprocess
+from functools import lru_cache
 from .fpga_common import board_config, fpga_dir, manifest_update, publish_json, run_cmd, write_json, write_text
 
 
@@ -71,6 +73,66 @@ def _yosys_cell_metrics(json_path: str, board: dict) -> dict:
     return metrics
 
 
+@lru_cache(maxsize=4)
+def _yosys_help(synth_cmd: str) -> str:
+    try:
+        result = subprocess.run(
+            ["yosys", "-Q", "-p", f"help {synth_cmd}"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+        return f"{result.stdout or ''}\n{result.stderr or ''}"
+    except Exception:
+        return ""
+
+
+@lru_cache(maxsize=1)
+def _yosys_version() -> str | None:
+    try:
+        result = subprocess.run(["yosys", "-V"], capture_output=True, text=True, timeout=15, check=False)
+        return (result.stdout or result.stderr or "").strip() or None
+    except Exception:
+        return None
+
+
+def _yosys_effort_policy(state: dict, synth_cmd: str, help_text: str | None = None) -> dict:
+    mode = str(state.get("fpga_closure_mode") or "balanced").strip().lower()
+    mode = mode if mode in {"balanced", "advanced"} else "balanced"
+    available = help_text if help_text is not None else _yosys_help(synth_cmd)
+    options: list[str] = []
+    requested = ["technology_mapping"]
+    strategy = "baseline"
+    if state.get("fpga_yosys_retime"):
+        strategy = "retime"
+        requested.extend(["disable_abc9", "retime"])
+        # Current synth_ice40 enables ABC9 by default, while retiming is
+        # explicitly incompatible with ABC9. Keep this as a separate strategy.
+        if "-noabc9" in available and "-retime" in available:
+            options.extend(["-noabc9", "-retime"])
+    elif state.get("fpga_yosys_flatten"):
+        strategy = "flatten"
+        requested.append("flatten")
+        if "-flatten" in available:
+            options.append("-flatten")
+    else:
+        requested.append("preserve_hierarchy")
+        if "-noflatten" in available:
+            options.append("-noflatten")
+    return {
+        "mode": mode,
+        "goal": "high_timing_effort" if mode == "advanced" else "balanced_timing",
+        "strategy": strategy,
+        "requested": requested,
+        "effective_options": options,
+        "capability_checked": True,
+        "tool_version": _yosys_version() if help_text is None else None,
+        "flatten": bool(state.get("fpga_yosys_flatten")),
+        "retime": bool(state.get("fpga_yosys_retime")),
+    }
+
+
 def run_agent(state: dict) -> dict:
     agent = "FPGA Yosys Synthesis Agent"
     fpga = state.get("fpga") if isinstance(state.get("fpga"), dict) else {}
@@ -83,6 +145,7 @@ def run_agent(state: dict) -> dict:
     json_path = os.path.abspath(f"{out_dir}/{top or 'top'}_{family}.json")
     script_path = os.path.abspath(f"{out_dir}/synth_{family}.ys")
     log_path = os.path.abspath(f"{out_dir}/yosys_synth.log")
+    effort_policy = _yosys_effort_policy(state, synth_cmd)
     summary = {
         "agent": agent,
         "status": "blocked",
@@ -91,6 +154,7 @@ def run_agent(state: dict) -> dict:
         "json_netlist": json_path,
         "closure_iteration": int(state.get("fpga_synthesis_closure_iteration_index") or 0),
         "flatten_enabled": bool(state.get("fpga_yosys_flatten")),
+        "tool_effort": effort_policy,
     }
     if not rtl_files or not top:
         summary["error"] = "Missing RTL files or top module from FPGA handoff ingest."
@@ -101,7 +165,8 @@ def run_agent(state: dict) -> dict:
     if state.get("fpga_yosys_flatten"):
         steps.append("hierarchy -check")
         steps.append("flatten")
-    steps.append(f"{synth_cmd} -top {top} -json {json_path}")
+    synth_options = " ".join(effort_policy["effective_options"])
+    steps.append(f"{synth_cmd} -top {top} {synth_options} -json {json_path}".replace("  ", " "))
     script = "\n".join(steps) + "\n"
     write_text(script_path, script)
     result = run_cmd(["yosys", "-s", script_path], cwd=out_dir, log_path=log_path, timeout=600)

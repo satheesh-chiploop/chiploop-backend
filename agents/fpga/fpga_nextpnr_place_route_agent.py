@@ -1,6 +1,8 @@
 import json
 import os
 import re
+import subprocess
+from functools import lru_cache
 from .fpga_common import board_config, fpga_dir, manifest_update, publish_json, read_text, run_cmd
 
 
@@ -41,6 +43,15 @@ def _parse_nextpnr(log: str) -> dict:
         out["logical_cells_used"] = int(used)
         out["logical_cells_available"] = int(available)
         out["logic_utilization_percent"] = round((int(used) / max(int(available), 1)) * 100.0, 3)
+    lut_only = re.findall(r"([0-9]+)\s+LCs used as LUT4 only", text, flags=re.IGNORECASE)
+    lut_with_ff = re.findall(r"([0-9]+)\s+LCs used as LUT4 and DFF", text, flags=re.IGNORECASE)
+    if lut_only or lut_with_ff:
+        out["routed_lut4_cells"] = int(lut_only[-1]) if lut_only else 0
+        out["routed_lut4_cells"] += int(lut_with_ff[-1]) if lut_with_ff else 0
+    dff_only = re.findall(r"([0-9]+)\s+LCs used as DFF only", text, flags=re.IGNORECASE)
+    if lut_with_ff or dff_only:
+        out["routed_flip_flops"] = int(lut_with_ff[-1]) if lut_with_ff else 0
+        out["routed_flip_flops"] += int(dff_only[-1]) if dff_only else 0
     lowered = text.lower()
     if "timing met" in lowered or re.search(r"\bPASS\s+at\s+[0-9]+(?:\.[0-9]+)?\s*MHz", text, flags=re.IGNORECASE):
         out["timing_met"] = True
@@ -162,6 +173,72 @@ def _parse_nextpnr_report(report_path: str, board: dict) -> dict:
     return out
 
 
+@lru_cache(maxsize=4)
+def _nextpnr_help(tool: str) -> str:
+    try:
+        result = subprocess.run([tool, "--help"], capture_output=True, text=True, timeout=15, check=False)
+        return f"{result.stdout or ''}\n{result.stderr or ''}"
+    except Exception:
+        return ""
+
+
+@lru_cache(maxsize=4)
+def _nextpnr_version(tool: str) -> str | None:
+    try:
+        result = subprocess.run([tool, "--version"], capture_output=True, text=True, timeout=15, check=False)
+        return (result.stdout or result.stderr or "").strip() or None
+    except Exception:
+        return None
+
+
+def _nextpnr_choice_available(help_text: str, option: str, value: str) -> bool:
+    pattern = rf"{re.escape(option)}[^\n]*(?:available|values?|choices?)[^:\n]*:\s*([^\n;]+)"
+    match = re.search(pattern, help_text, flags=re.IGNORECASE)
+    if not match:
+        return False
+    choices = {item.lower() for item in re.findall(r"[A-Za-z0-9_-]+", match.group(1))}
+    return value.lower() in choices
+
+
+def _nextpnr_effort_policy(state: dict, tool: str, help_text: str | None = None) -> dict:
+    mode = str(state.get("fpga_closure_mode") or "balanced").strip().lower()
+    mode = mode if mode in {"balanced", "advanced"} else "balanced"
+    available = help_text if help_text is not None else _nextpnr_help(tool)
+    args: list[str] = []
+    requested = ["timing_driven", "target_frequency", "seed_exploration"]
+    if mode == "advanced":
+        requested.extend(["heap_placer", "router2", "higher_timing_weight", "timing_ripup"])
+        heap_available = _nextpnr_choice_available(available, "--placer", "heap")
+        router2_available = _nextpnr_choice_available(available, "--router", "router2")
+        if heap_available:
+            args.extend(["--placer", "heap"])
+            if "--placer-heap-timingweight" in available:
+                args.extend(["--placer-heap-timingweight", "20"])
+            if "--placer-heap-critexp" in available:
+                args.extend(["--placer-heap-critexp", "4"])
+        if router2_available:
+            args.extend(["--router", "router2"])
+            if "--tmg-ripup" in available:
+                args.append("--tmg-ripup")
+            elif "--router2-tmg-ripup" in available:
+                args.append("--router2-tmg-ripup")
+            if "--router2-alt-weights" in available:
+                args.append("--router2-alt-weights")
+    if "--detailed-timing-report" in available:
+        args.append("--detailed-timing-report")
+    target = state.get("target_frequency_mhz")
+    if target not in (None, "") and "--freq" in available:
+        args.extend(["--freq", str(target)])
+    return {
+        "mode": mode,
+        "goal": "high_timing_effort" if mode == "advanced" else "balanced_timing",
+        "requested": requested,
+        "effective_args": args,
+        "capability_checked": True,
+        "tool_version": _nextpnr_version(tool) if help_text is None else None,
+    }
+
+
 def run_agent(state: dict) -> dict:
     agent = "FPGA nextpnr Place & Route Agent"
     fpga = state.get("fpga") if isinstance(state.get("fpga"), dict) else {}
@@ -175,6 +252,8 @@ def run_agent(state: dict) -> dict:
     log_path = os.path.abspath(f"{out_dir}/{board.get('nextpnr_tool') or 'nextpnr'}.log")
     report_path = os.path.abspath(f"{out_dir}/fpga_nextpnr_report.json")
     seed = state.get("fpga_nextpnr_seed") or state.get("nextpnr_seed")
+    nextpnr_tool = str(board.get("nextpnr_tool") or ("nextpnr-ecp5" if family == "ecp5" else "nextpnr-ice40"))
+    effort_policy = _nextpnr_effort_policy(state, nextpnr_tool)
     summary = {
         "agent": agent,
         "status": "blocked",
@@ -188,12 +267,13 @@ def run_agent(state: dict) -> dict:
         "closure_iteration": int(state.get("fpga_timing_closure_iteration_index") or 0),
         "seed": seed,
         "timing_driven": bool(state.get("fpga_nextpnr_timing_driven") or state.get("run_fpga_timing_closure_loop")),
+        "tool_effort": effort_policy,
     }
     if not json_netlist or not os.path.exists(str(json_netlist)):
         summary["error"] = "Missing Yosys JSON netlist."
     else:
         cmd = [
-            str(board.get("nextpnr_tool") or ("nextpnr-ecp5" if family == "ecp5" else "nextpnr-ice40")),
+            nextpnr_tool,
             str(board.get("nextpnr_device_flag") or "--hx8k"),
             "--package",
             str(board.get("nextpnr_package") or board.get("package") or "ct256"),
@@ -212,6 +292,7 @@ def run_agent(state: dict) -> dict:
                 cmd.extend(["--lpf" if family == "ecp5" else "--pcf", resolved_constraint])
             else:
                 summary["constraint_warning"] = f"Constraint file not found: {constraint_path}"
+        cmd.extend(effort_policy["effective_args"])
         if seed:
             cmd.extend(["--seed", str(seed)])
         result = run_cmd(cmd, cwd=out_dir, log_path=log_path, timeout=900)
