@@ -39,11 +39,22 @@ def run_agent(state: dict) -> dict:
         "fabric_mapped_cells": synth.get("fabric_mapped_cells"),
         "total_mapped_cells": _first(synth.get("total_mapped_cells"), sum((synth.get("cell_type_counts") or {}).values()) if isinstance(synth.get("cell_type_counts"), dict) else None),
     }
+    routed_lut4 = pnr.get("routed_lut4_cells")
+    routed_ff = pnr.get("routed_flip_flops")
+    routed_used_fallback = max(
+        int(routed_lut4 or 0),
+        int(routed_ff or 0),
+    ) if routed_lut4 is not None or routed_ff is not None else None
+    routed_used = _first(pnr.get("logical_cells_used"), routed_used_fallback)
+    routed_available = _first(pnr.get("logical_cells_available"), synthesis_estimate.get("logical_cells_available"))
+    routed_utilization = pnr.get("logic_utilization_percent")
+    if routed_utilization is None and routed_used is not None and routed_available:
+        routed_utilization = round((float(routed_used) / float(routed_available)) * 100.0, 3)
     routed_result = {
-        "logical_cells_used": pnr.get("logical_cells_used"),
-        "routed_lut4_cells": pnr.get("routed_lut4_cells"),
-        "logical_cells_available": _first(pnr.get("logical_cells_available"), synthesis_estimate.get("logical_cells_available")),
-        "logic_utilization_percent": pnr.get("logic_utilization_percent"),
+        "logical_cells_used": routed_used,
+        "routed_lut4_cells": routed_lut4,
+        "logical_cells_available": routed_available,
+        "logic_utilization_percent": routed_utilization,
         "utilization_source": pnr.get("utilization_source"),
         "routed_resource": pnr.get("routed_resource"),
         "routed_flip_flops": pnr.get("routed_flip_flops"),
@@ -56,10 +67,10 @@ def run_agent(state: dict) -> dict:
         "error_count": _first(timing.get("error_count"), pnr.get("errors")),
     }
     utilization = {
-        "logical_cells_used": pnr.get("logical_cells_used"),
-        "routed_lut4_cells": pnr.get("routed_lut4_cells"),
-        "logical_cells_available": _first(pnr.get("logical_cells_available"), ((fpga.get("target") or {}).get("resources") or {}).get("logic_cells")),
-        "logic_utilization_percent": pnr.get("logic_utilization_percent"),
+        "logical_cells_used": routed_used,
+        "routed_lut4_cells": routed_lut4,
+        "logical_cells_available": routed_available,
+        "logic_utilization_percent": routed_utilization,
         "source": pnr.get("utilization_source"),
         "routed_resource": pnr.get("routed_resource"),
         "routed_flip_flops": pnr.get("routed_flip_flops"),

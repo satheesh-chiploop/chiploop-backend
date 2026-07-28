@@ -490,6 +490,7 @@ from agents.fpga.fpga_timing_rtl_repair_agent import run_agent as fpga_timing_rt
 from agents.fpga.fpga_verification_gate import verification_passed as fpga_verification_passed
 from agents.fpga.fpga_bitstream_handoff_agent import run_agent as fpga_bitstream_handoff_agent
 from agents.fpga.fpga_dashboard_agent import run_agent as fpga_dashboard_agent
+from agents.fpga.fpga_target_explorer_agent import run_agent as fpga_target_explorer_agent
 
 DIGITAL_AGENT_FUNCTIONS: Dict[str, Any] = {
     "Digital Spec Agent": digital_spec_agent,
@@ -592,6 +593,7 @@ FPGA_AGENT_FUNCTIONS: Dict[str, Any] = {
     "FPGA Timing RTL Repair Agent": fpga_timing_rtl_repair_agent,
     "FPGA Bitstream Handoff Agent": fpga_bitstream_handoff_agent,
     "FPGA Dashboard Agent": fpga_dashboard_agent,
+    "FPGA Target Explorer Agent": fpga_target_explorer_agent,
 }
 
 from agents.analog.analog_spec_builder_agent import run_agent as analog_spec_builder_agent
@@ -1359,6 +1361,11 @@ FPGA_SYNTHESIS_DEFINITION = _linear_workflow_definition([
     "FPGA Dashboard Agent",
 ])
 
+FPGA_TARGET_EXPLORER_DEFINITION = _linear_workflow_definition([
+    "FPGA RTL Handoff Ingest Agent",
+    "FPGA Target Explorer Agent",
+])
+
 FPGA_IMPLEMENTATION_DEFINITION = _linear_workflow_definition([
     "FPGA RTL Handoff Ingest Agent",
     "FPGA RTL Quality Gate Agent",
@@ -1575,6 +1582,7 @@ LOCAL_PREBUILT_WORKFLOW_DEFINITIONS: Dict[str, Dict[str, Any]] = {
     "FPGA_Verify_Closure_Loop": FPGA_VERIFY_CLOSURE_LOOP_DEFINITION,
     "FPGA_Synthesis": FPGA_SYNTHESIS_DEFINITION,
     "FPGA_Implementation": FPGA_IMPLEMENTATION_DEFINITION,
+    "FPGA_Target_Explorer": FPGA_TARGET_EXPLORER_DEFINITION,
     "System_Architecture_Explorer": SYSTEM_ARCHITECTURE_EXPLORER_DEFINITION,
     "System_Cache_Tuning": SYSTEM_ARCHITECTURE_EXPLORER_DEFINITION,
     "System_ISA_Compare": SYSTEM_ARCHITECTURE_EXPLORER_DEFINITION,
@@ -3606,6 +3614,8 @@ class FpgaBitstreamAppIn(DigitalRTLSourceIn):
     pcf_path: Optional[str] = None
     generate_bitstream: Optional[bool] = True
     notes: Optional[str] = None
+    recommendation_profile: Optional[str] = "best_overall"
+    candidate_boards: Optional[List[str]] = None
     run_fpga_synthesis_closure_loop: Optional[bool] = False
     max_fpga_synthesis_closure_iterations: Optional[int] = 1
     run_fpga_rtl_repair_loop: Optional[bool] = True
@@ -3941,7 +3951,7 @@ def execute_digital_app_background(
 ):
     try:
         os.makedirs(artifact_dir, exist_ok=True)
-        app_loop_type = "fpga" if app_name in {"fpga", "fpga2rtl", "fpga_verify", "fpga_formal", "fpga_verify_closure_loop", "fpga_synthesis", "fpga_implementation"} or str(template_workflow_name).startswith("FPGA") else "digital"
+        app_loop_type = "fpga" if app_name in {"fpga", "fpga2rtl", "fpga_verify", "fpga_formal", "fpga_verify_closure_loop", "fpga_synthesis", "fpga_implementation", "fpga_target_explorer"} or str(template_workflow_name).startswith("FPGA") else "digital"
         app_loop_label = "FPGA" if app_loop_type == "fpga" else "Digital"
         execution_loop_type = "digital" if app_name in {"fpga_verify", "fpga_formal", "fpga_verify_closure_loop"} else app_loop_type
 
@@ -6483,6 +6493,37 @@ async def apps_fpga_implementation_run(request: Request, background_tasks: Backg
         data,
     )
 
+    return {"ok": True, "workflow_id": workflow_id, "run_id": run_id}
+
+
+@app.post("/apps/fpga/target-explorer/run")
+async def apps_fpga_target_explorer_run(request: Request, background_tasks: BackgroundTasks, payload: FpgaBitstreamAppIn):
+    user_id = _require_user_id(request)
+    workflow_id, run_id, base_dir = _create_app_workflow_and_run(user_id, "App: FPGA Target Explorer", "fpga")
+    artifact_dir = os.path.join(base_dir, "fpga_target_explorer")
+    os.makedirs(artifact_dir, exist_ok=True)
+    data = payload.dict()
+    if data.get("from_workflow_id") and not data.get("source_workflow_id"):
+        data["source_workflow_id"] = data["from_workflow_id"]
+    data.update({
+        "target": "fpga",
+        "verification_domain": "fpga",
+        "run_fpga_verification": False,
+        "run_fpga_verification_closure_loop": False,
+        "allow_automatic_rtl_timing_repair": False,
+        "generate_bitstream": False,
+        "allow_frequency_relaxation": True,
+    })
+    background_tasks.add_task(
+        execute_digital_app_background,
+        workflow_id,
+        run_id,
+        user_id,
+        artifact_dir,
+        "fpga_target_explorer",
+        "FPGA_Target_Explorer",
+        data,
+    )
     return {"ok": True, "workflow_id": workflow_id, "run_id": run_id}
 
 

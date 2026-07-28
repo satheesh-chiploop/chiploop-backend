@@ -46,6 +46,7 @@ def test_fpga_dashboard_embeds_verification_and_authoritative_agent_count(tmp_pa
     monkeypatch.setattr(fpga_dashboard_agent, "publish_json", capture)
     state = {
         "simulation_summary_coverage_json": str(verification_path),
+        "target_frequency_mhz": 75.0,
         "_participating_agents": ["Agent A", "Agent B", "Agent A", "FPGA Dashboard Agent"],
         "fpga": {
             "target": {"resources": {"logic_cells": 5280}},
@@ -62,6 +63,9 @@ def test_fpga_dashboard_embeds_verification_and_authoritative_agent_count(tmp_pa
     assert published["agent_count"] == 3
     assert published["participating_agents"] == ["Agent A", "Agent B", "FPGA Dashboard Agent"]
     assert published["routed_result"]["routed_lut4_cells"] == 72
+    assert published["routed_result"]["logical_cells_used"] == 72
+    assert published["routed_result"]["logic_utilization_percent"] == 1.364
+    assert published["timing_summary"]["target_frequency_mhz"] == 75.0
 
 def test_fpga_verification_uses_rtl_ports_when_handoff_spec_has_no_ports(tmp_path, monkeypatch):
     monkeypatch.setenv("CHIPLOOP_DATABASE_PROVIDER", "postgres")
@@ -325,3 +329,19 @@ def test_retime_strategy_disables_abc9_and_never_passes_abc9():
     assert policy["strategy"] == "retime"
     assert policy["effective_options"] == ["-noabc9", "-retime"]
     assert "-abc9" not in policy["effective_options"]
+
+
+def test_fpga_frontend_prefers_requested_target_and_shows_simulation_counts():
+    source = (Path(__file__).parents[2] / "frontend" / "components" / "WorkflowEvidenceDashboard.tsx").read_text(encoding="utf-8")
+
+    target_block = source[source.index("const targetFrequencyMhz"):source.index("const pnrFrequencyMhz")]
+    assert "constraints.target_frequency_mhz" in target_block
+    assert "target.target_frequency_mhz" in target_block
+    assert target_block.index("constraints.target_frequency_mhz") < target_block.index("target.default_frequency_mhz")
+    assert 'title="Simulation Total"' in source
+    assert 'title="Simulation Passed"' in source
+    assert 'title="Simulation Failed"' in source
+    assert 'title="Routing Utilization"' in source
+    assert 'title="Board Input Clock"' in source
+    assert 'title="Implementation Target"' in source
+    assert 'title="Achieved Fmax"' in source
