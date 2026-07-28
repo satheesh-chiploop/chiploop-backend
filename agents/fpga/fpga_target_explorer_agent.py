@@ -26,6 +26,15 @@ CANDIDATE_BOARDS = [
 PROFILE_KEYS = {"best_overall", "best_performance", "best_low_cost", "best_for_growth"}
 
 
+def _progress(state: dict, message: str) -> None:
+    callback = state.get("_progress_callback")
+    if callable(callback):
+        try:
+            callback(message)
+        except Exception:
+            pass
+
+
 def _record_file(state: dict, board_key: str, stage: str, path: str | None) -> None:
     if not path or not os.path.exists(path):
         return
@@ -233,11 +242,15 @@ def run_agent(state: dict) -> dict:
     if requested_profile not in PROFILE_KEYS:
         requested_profile = "best_overall"
     requested_boards = state.get("candidate_boards") if isinstance(state.get("candidate_boards"), list) else CANDIDATE_BOARDS
-    board_keys = [key for key in requested_boards if key in BOARD_REGISTRY]
+    board_keys = list(dict.fromkeys(key for key in requested_boards if key in CANDIDATE_BOARDS and key in BOARD_REGISTRY))
+    if not board_keys:
+        raise RuntimeError("Select at least one supported FPGA board/device to explore.")
+    _progress(state, f"Explorer plan: {len(board_keys)} selected board(s), target {target:g} MHz, baseline seeds 1-3; closure seeds 4-6 only for misses.")
     implementation_cache: dict[str, dict] = {}
     results: list[dict] = []
-    for board_key in board_keys:
+    for board_index, board_key in enumerate(board_keys, start=1):
         board = deepcopy(BOARD_REGISTRY[board_key])
+        _progress(state, f"Board {board_index}/{len(board_keys)}: {board.get('label') or board_key} ({board.get('family')} {board.get('device')}) started.")
         implementation_key = _implementation_key(board)
         if implementation_key in implementation_cache:
             reused = deepcopy(implementation_cache[implementation_key])
@@ -248,23 +261,48 @@ def run_agent(state: dict) -> dict:
                 "reused_implementation_from": implementation_cache[implementation_key].get("board"),
             })
             results.append(reused)
+            _progress(state, f"Board {board_index}/{len(board_keys)}: reused identical {implementation_key} implementation from {reused.get('reused_implementation_from')}.")
             continue
+        _progress(state, f"{board_key}: baseline synthesis started.")
         baseline = _run_synthesis(state, board_key, board, "baseline")
+        _progress(state, f"{board_key}: baseline synthesis {baseline.get('status')}.")
         synthesis_runs = [baseline]
         pnr_runs: list[dict] = []
         if baseline.get("status") == "completed":
-            pnr_runs.extend(_run_pnr(state, board_key, board, baseline, seed, "balanced") for seed in (1, 2, 3))
-        met = any(_num(run.get("max_frequency_mhz")) >= target or run.get("timing_met") is True for run in pnr_runs)
-        if not met and baseline.get("status") == "completed":
+            for seed in (1, 2, 3):
+                _progress(state, f"{board_key}: baseline P&R seed {seed}/3 started.")
+                run = _run_pnr(state, board_key, board, baseline, seed, "balanced")
+                pnr_runs.append(run)
+                fmax = run.get("max_frequency_mhz")
+                detail = f", Fmax {float(fmax):.3f} MHz" if fmax is not None else ""
+                _progress(state, f"{board_key}: baseline seed {seed} {run.get('status')}{detail}.")
+        routed_baseline = [run for run in pnr_runs if run.get("status") == "completed"]
+        met = any(_num(run.get("max_frequency_mhz")) >= target or run.get("timing_met") is True for run in routed_baseline)
+        if not met and routed_baseline:
+            _progress(state, f"{board_key}: target missed after baseline; starting synthesis/P&R closure.")
             help_text = _yosys_help("synth_ecp5" if board.get("family") == "ecp5" else "synth_ice40")
             closure_strategy = "closure_retime" if "-noabc9" in help_text and "-retime" in help_text else "closure_flatten"
+            _progress(state, f"{board_key}: {closure_strategy} synthesis started.")
             closure_synth = _run_synthesis(state, board_key, board, closure_strategy)
             synthesis_runs.append(closure_synth)
+            _progress(state, f"{board_key}: {closure_strategy} synthesis {closure_synth.get('status')}.")
             if closure_synth.get("status") == "completed":
-                pnr_runs.extend(_run_pnr(state, board_key, board, closure_synth, seed, "advanced") for seed in (4, 5, 6))
+                for seed in (4, 5, 6):
+                    _progress(state, f"{board_key}: closure P&R seed {seed - 3}/3 (seed {seed}) started.")
+                    run = _run_pnr(state, board_key, board, closure_synth, seed, "advanced")
+                    pnr_runs.append(run)
+                    fmax = run.get("max_frequency_mhz")
+                    detail = f", Fmax {float(fmax):.3f} MHz" if fmax is not None else ""
+                    _progress(state, f"{board_key}: closure seed {seed} {run.get('status')}{detail}.")
+        elif not routed_baseline and baseline.get("status") == "completed":
+            _progress(state, f"{board_key}: no baseline route completed; closure seeds skipped because capacity/I/O/tool failures are not timing failures.")
         summary = _summarize_board(board_key, board, synthesis_runs, pnr_runs, target)
         implementation_cache[implementation_key] = deepcopy(summary)
         results.append(summary)
+        outcome = "target met" if summary.get("target_met") else summary.get("status")
+        best = summary.get("best_frequency_mhz")
+        best_text = f" at {float(best):.3f} MHz" if best is not None else ""
+        _progress(state, f"Board {board_index}/{len(board_keys)}: {board_key} {outcome}{best_text}; winning seed {summary.get('winning_seed') or 'n/a'}.")
     recommendations = _recommend(results)
     selected_board = recommendations.get(requested_profile)
     summary = {
@@ -272,6 +310,8 @@ def run_agent(state: dict) -> dict:
         "status": "completed" if results else "failed",
         "top_module": top,
         "rtl_file_count": len(rtl_files),
+        "design_intent_provided": bool(str(state.get("spec_text") or state.get("spec") or "").strip()),
+        "design_intent": str(state.get("spec_text") or state.get("spec") or "").strip() or None,
         "target_frequency_mhz": target,
         "requested_profile": requested_profile,
         "selected_recommendation": selected_board,
@@ -294,6 +334,7 @@ def run_agent(state: dict) -> dict:
             "source_workflow_id": state.get("workflow_id"),
         },
     }
+    _progress(state, f"Exploration complete: {len(results)} board result(s), {len(implementation_cache)} unique implementation(s); {requested_profile} recommends {selected_board or 'no viable target'}.")
     publish_json(state, agent, "target_explorer", "fpga_target_explorer.json", summary)
     state["fpga_target_explorer"] = summary
     return state

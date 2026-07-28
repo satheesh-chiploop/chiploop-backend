@@ -5,15 +5,20 @@ with definition as (
   select jsonb_build_object(
     'nodes', jsonb_build_array(
       jsonb_build_object('id','n1','type','agent','position',jsonb_build_object('x',120,'y',140),'data',jsonb_build_object('uiLabel','FPGA RTL Handoff Ingest Agent','backendLabel','FPGA RTL Handoff Ingest Agent')),
-      jsonb_build_object('id','n2','type','agent','position',jsonb_build_object('x',440,'y',140),'data',jsonb_build_object('uiLabel','FPGA Target Explorer Agent','backendLabel','FPGA Target Explorer Agent'))
+      jsonb_build_object('id','n2','type','agent','position',jsonb_build_object('x',420,'y',140),'data',jsonb_build_object('uiLabel','FPGA RTL Quality Gate Agent','backendLabel','FPGA RTL Quality Gate Agent')),
+      jsonb_build_object('id','n3','type','agent','position',jsonb_build_object('x',720,'y',140),'data',jsonb_build_object('uiLabel','FPGA Target Explorer Agent','backendLabel','FPGA Target Explorer Agent'))
     ),
-    'edges', jsonb_build_array(jsonb_build_object('id','e1','source','n1','target','n2')),
+    'edges', jsonb_build_array(
+      jsonb_build_object('id','e1','source','n1','target','n2'),
+      jsonb_build_object('id','e2','source','n2','target','n3')
+    ),
     'description', 'Runs family-specific Yosys synthesis and controlled nextpnr sweeps across supported FPGA targets, applies synthesis/P&R closure only to target misses, and recommends best overall, performance, low-cost proxy, and growth targets.',
     'category', 'fpga',
     'source_of_truth', 'supabase',
     'input_contract', jsonb_build_object(
       'version', 1,
       'fields', jsonb_build_array(
+        jsonb_build_object('key','spec_text','label','Design intent','type','textarea','required',true),
         jsonb_build_object('key','rtl_source_mode','label','RTL source','type','select','required',true,'defaultValue','from_arch2rtl','options',jsonb_build_array('from_arch2rtl','paste','repo_path')),
         jsonb_build_object('key','from_workflow_id','label','Source workflow ID','type','text','required',false),
         jsonb_build_object('key','source_workflow_id','label','Source workflow ID','type','text','required',false),

@@ -3980,6 +3980,11 @@ def execute_digital_app_background(
             shared_state["from_workflow_id"] = shared_state.get("system_rtl_workflow_id")
             shared_state["source_arch2rtl_workflow_id"] = shared_state.get("system_rtl_workflow_id")
 
+        if app_name == "fpga_target_explorer":
+            def _explorer_progress(line: str) -> None:
+                append_log_workflow(workflow_id, line, phase="fpga_target_explorer")
+                append_log_run(run_id, line)
+            shared_state["_progress_callback"] = _explorer_progress
         upstream = shared_state.get("upstream_workflows") if isinstance(shared_state.get("upstream_workflows"), dict) else {}
         source_arch2rtl_workflow_id = (
             shared_state.get("source_arch2rtl_workflow_id")
@@ -4027,7 +4032,7 @@ def execute_digital_app_background(
         append_log_workflow(workflow_id, f"▶️ Loading Studio workflow: {template_workflow_name}", phase="load")
         append_log_run(run_id, f"▶️ Loading Studio workflow: {template_workflow_name}")
 
-        if app_name in {"fpga", "fpga2rtl"}:
+        if app_name in {"fpga", "fpga2rtl", "fpga_target_explorer"}:
             repair_state = "enabled" if bool(shared_state.get("run_fpga_rtl_repair_loop", True)) else "disabled"
             append_log_workflow(
                 workflow_id,
@@ -4046,6 +4051,11 @@ def execute_digital_app_background(
             force_platform_definition=True,
         )
         nodes = _definition_to_executor_nodes(defn)
+        if app_name == "fpga_target_explorer":
+            nodes = _insert_node_before_once(nodes, "FPGA RTL Quality Gate Agent", "FPGA Target Explorer Agent")
+            selected = shared_state.get("candidate_boards") if isinstance(shared_state.get("candidate_boards"), list) else []
+            append_log_workflow(workflow_id, f"Explorer scope locked: {len(selected)} selected board(s). RTL ingest and lint/compile quality gate run before exploration.", phase="fpga_target_explorer_setup")
+            append_log_run(run_id, f"Explorer scope locked: {len(selected)} selected board(s). RTL ingest and lint/compile quality gate run before exploration.")
         toggles = shared_state.get("toggles") if isinstance(shared_state.get("toggles"), dict) else {}
         rtl_source_mode = str(shared_state.get("rtl_source_mode") or "").strip().lower()
         if app_name == "fpga" and rtl_source_mode in {"generate_arch2rtl", "spec", "arch2rtl_from_spec"}:

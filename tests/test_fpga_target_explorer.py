@@ -70,6 +70,44 @@ def test_workflow_and_frontend_contracts_are_registered():
 
     assert '"FPGA_Target_Explorer": FPGA_TARGET_EXPLORER_DEFINITION' in main
     assert '@app.post("/apps/fpga/target-explorer/run")' in main
+    template = (root / "frontend" / "app" / "apps" / "digital-review" / "_DigitalReviewAppTemplate.tsx").read_text(encoding="utf-8")
+    migration = (root / "backend" / "supabase" / "migrations" / "phase_20260727_fpga_target_explorer.sql").read_text(encoding="utf-8")
     assert 'dashboardStage="fpga_target_explorer"' in page
+    assert 'fields={["source", "intent", "rtl", "frequency", "recommendation", "notes"]}' in page
+    assert 'candidate_boards: fpgaMode === "target-explorer" ? candidateBoards : undefined' in template
+    assert "Upload design intent" in template
+    assert "FPGA RTL Quality Gate Agent" in migration
     assert "Best Low-Cost Variant" in dashboard
     assert "Continue with this board" in dashboard
+
+
+def test_explorer_honors_selected_boards_and_emits_progress(monkeypatch):
+    progress = []
+    synth_calls = []
+    monkeypatch.setattr(explorer, "_run_synthesis", lambda _state, board, _cfg, strategy: synth_calls.append((board, strategy)) or {"status": "completed", "strategy": strategy, "netlist": "demo.json"})
+    monkeypatch.setattr(explorer, "_run_pnr", lambda _state, _board, cfg, _synth, seed, effort: {"status": "completed", "seed": seed, "effort": effort, "max_frequency_mhz": 90, "timing_met": True, "logic_cells_used": 3000, "logic_cells_available": cfg["resources"]["logic_cells"]})
+    monkeypatch.setattr(explorer, "publish_json", lambda *_args: None)
+    state = {"workflow_id": "wf", "target_frequency_mhz": 75, "candidate_boards": ["ice40_hx8k_breakout"], "_progress_callback": progress.append, "fpga": {"top_module": "top", "rtl_files": ["top.sv"]}}
+
+    explorer.run_agent(state)
+
+    assert synth_calls == [("ice40_hx8k_breakout", "baseline")]
+    assert state["fpga_target_explorer"]["candidate_count"] == 1
+    assert any("seed 1/3 started" in line for line in progress)
+    assert any("Exploration complete" in line for line in progress)
+
+
+def test_explorer_skips_closure_when_no_route_completes(monkeypatch):
+    synth_calls = []
+    pnr_calls = []
+    progress = []
+    monkeypatch.setattr(explorer, "_run_synthesis", lambda _state, board, _cfg, strategy: synth_calls.append((board, strategy)) or {"status": "completed", "strategy": strategy, "netlist": "demo.json"})
+    monkeypatch.setattr(explorer, "_run_pnr", lambda _state, board, _cfg, _synth, seed, effort: pnr_calls.append((board, seed, effort)) or {"status": "failed", "seed": seed, "effort": effort})
+    monkeypatch.setattr(explorer, "publish_json", lambda *_args: None)
+    state = {"workflow_id": "wf", "candidate_boards": ["icestick"], "_progress_callback": progress.append, "fpga": {"top_module": "top", "rtl_files": ["top.sv"]}}
+
+    explorer.run_agent(state)
+
+    assert synth_calls == [("icestick", "baseline")]
+    assert [seed for _board, seed, _effort in pnr_calls] == [1, 2, 3]
+    assert any("closure seeds skipped" in line for line in progress)
