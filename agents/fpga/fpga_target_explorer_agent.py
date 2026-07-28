@@ -22,6 +22,13 @@ CANDIDATE_BOARDS = [
     "colorlight_5a_75b",
     "ulx3s_ecp5_45f",
     "orangecrab_ecp5_85f",
+    "certus_nx_versa_40",
+    "crosslink_nx_eval_40",
+    "certuspro_nx_versa_100",
+    "gowin_tang_nano_9k",
+    "gowin_tang_nano_20k",
+    "gowin_tang_primer_20k",
+    "gowin_gw5a_25_starter",
 ]
 PROFILE_KEYS = {"best_overall", "best_performance", "best_low_cost", "best_for_growth"}
 
@@ -81,7 +88,11 @@ def _run_synthesis(state: dict, board_key: str, board: dict, strategy: str) -> d
     rtl_files = [str(path) for path in fpga.get("rtl_files") or []]
     top = str(fpga.get("top_module") or state.get("top_module") or "top")
     family = str(board.get("family") or "ice40").lower()
-    synth_cmd = "synth_ecp5" if family == "ecp5" else "synth_ice40"
+    synth_cmd = {
+        "ecp5": "synth_ecp5",
+        "nexus": "synth_nexus",
+        "gowin": "synth_gowin",
+    }.get(family, "synth_ice40")
     out_dir = fpga_dir(state, "target_explorer", board_key, strategy, "synth")
     netlist = os.path.abspath(os.path.join(out_dir, f"{top}_{family}.json"))
     script_path = os.path.abspath(os.path.join(out_dir, "synth.ys"))
@@ -112,24 +123,32 @@ def _run_pnr(state: dict, board_key: str, board: dict, synthesis: dict, seed: in
     family = str(board.get("family") or "ice40").lower()
     tool = str(board.get("nextpnr_tool") or ("nextpnr-ecp5" if family == "ecp5" else "nextpnr-ice40"))
     out_dir = fpga_dir(state, "target_explorer", board_key, synthesis.get("strategy") or "baseline", f"seed_{seed}")
-    routed_ext = ".config" if family == "ecp5" else ".asc"
+    routed_ext = str(board.get("pnr_output_ext") or (".config" if family == "ecp5" else ".asc"))
     routed = os.path.abspath(os.path.join(out_dir, f"routed{routed_ext}"))
     report = os.path.abspath(os.path.join(out_dir, "nextpnr_report.json"))
     log = os.path.abspath(os.path.join(out_dir, "nextpnr.log"))
     help_text = _nextpnr_help(tool)
     policy_state = {"fpga_closure_mode": effort, "target_frequency_mhz": state.get("target_frequency_mhz")}
     policy = _nextpnr_effort_policy(policy_state, tool, help_text)
-    cmd = [
-        tool,
-        str(board.get("nextpnr_device_flag")),
-        "--package", str(board.get("nextpnr_package") or board.get("package")),
-        "--json", str(synthesis.get("netlist")),
-        "--report", report,
-    ]
-    cmd.extend(["--textcfg", routed] if family == "ecp5" else ["--asc", routed])
-    unconstrained_flag = "--lpf-allow-unconstrained" if family == "ecp5" else "--pcf-allow-unconstrained"
-    if unconstrained_flag in help_text:
-        cmd.append(unconstrained_flag)
+    if family in {"nexus", "gowin"}:
+        cmd = [tool]
+        if tool.endswith("nextpnr-himbaechel") and family == "gowin":
+            cmd.extend(["--uarch", "gowin"])
+        cmd.extend(str(arg) for arg in (board.get("nextpnr_device_args") or []))
+        cmd.extend(["--json", str(synthesis.get("netlist")), "--report", report])
+        cmd.extend(["--fasm", routed] if family == "nexus" else ["--write", routed])
+    else:
+        cmd = [
+            tool,
+            str(board.get("nextpnr_device_flag")),
+            "--package", str(board.get("nextpnr_package") or board.get("package")),
+            "--json", str(synthesis.get("netlist")),
+            "--report", report,
+        ]
+        cmd.extend(["--textcfg", routed] if family == "ecp5" else ["--asc", routed])
+        unconstrained_flag = "--lpf-allow-unconstrained" if family == "ecp5" else "--pcf-allow-unconstrained"
+        if unconstrained_flag in help_text:
+            cmd.append(unconstrained_flag)
     if "--timing-allow-fail" in help_text:
         cmd.append("--timing-allow-fail")
     cmd.extend(policy.get("effective_args") or [])
@@ -177,6 +196,10 @@ def _summarize_board(board_key: str, board: dict, synthesis_runs: list[dict], pn
         "board": board_key,
         "label": board.get("label") or board_key,
         "family": board.get("family"),
+        "vendor": board.get("vendor"),
+        "product_family": board.get("product_family") or board.get("family"),
+        "support_tier": board.get("support_tier") or "production",
+        "segments": board.get("segments") or [],
         "device": board.get("device"),
         "package": board.get("package"),
         "implementation_key": _implementation_key(board),
@@ -245,7 +268,11 @@ def run_agent(state: dict) -> dict:
     board_keys = list(dict.fromkeys(key for key in requested_boards if key in CANDIDATE_BOARDS and key in BOARD_REGISTRY))
     if not board_keys:
         raise RuntimeError("Select at least one supported FPGA board/device to explore.")
-    _progress(state, f"Explorer plan: {len(board_keys)} selected board(s), target {target:g} MHz, baseline seeds 1-3; closure seeds 4-6 only for misses.")
+    baseline_seed_count = max(1, min(int(_num(state.get("baseline_seed_count"), 1)), 10))
+    closure_seed_count = max(1, min(int(_num(state.get("closure_seed_count"), 1)), 10))
+    baseline_seeds = list(range(1, baseline_seed_count + 1))
+    closure_seeds = list(range(baseline_seed_count + 1, baseline_seed_count + closure_seed_count + 1))
+    _progress(state, f"Explorer plan: {len(board_keys)} selected board(s), target {target:g} MHz, {baseline_seed_count} baseline seed(s) + {closure_seed_count} conditional closure seed(s).")
     implementation_cache: dict[str, dict] = {}
     results: list[dict] = []
     for board_index, board_key in enumerate(board_keys, start=1):
@@ -269,8 +296,8 @@ def run_agent(state: dict) -> dict:
         synthesis_runs = [baseline]
         pnr_runs: list[dict] = []
         if baseline.get("status") == "completed":
-            for seed in (1, 2, 3):
-                _progress(state, f"{board_key}: baseline P&R seed {seed}/3 started.")
+            for seed_index, seed in enumerate(baseline_seeds, start=1):
+                _progress(state, f"{board_key}: baseline P&R {seed_index}/{baseline_seed_count} (seed {seed}) started.")
                 run = _run_pnr(state, board_key, board, baseline, seed, "balanced")
                 pnr_runs.append(run)
                 fmax = run.get("max_frequency_mhz")
@@ -280,15 +307,20 @@ def run_agent(state: dict) -> dict:
         met = any(_num(run.get("max_frequency_mhz")) >= target or run.get("timing_met") is True for run in routed_baseline)
         if not met and routed_baseline:
             _progress(state, f"{board_key}: target missed after baseline; starting synthesis/P&R closure.")
-            help_text = _yosys_help("synth_ecp5" if board.get("family") == "ecp5" else "synth_ice40")
+            closure_synth_cmd = {
+                "ecp5": "synth_ecp5",
+                "nexus": "synth_nexus",
+                "gowin": "synth_gowin",
+            }.get(str(board.get("family") or "ice40"), "synth_ice40")
+            help_text = _yosys_help(closure_synth_cmd)
             closure_strategy = "closure_retime" if "-noabc9" in help_text and "-retime" in help_text else "closure_flatten"
             _progress(state, f"{board_key}: {closure_strategy} synthesis started.")
             closure_synth = _run_synthesis(state, board_key, board, closure_strategy)
             synthesis_runs.append(closure_synth)
             _progress(state, f"{board_key}: {closure_strategy} synthesis {closure_synth.get('status')}.")
             if closure_synth.get("status") == "completed":
-                for seed in (4, 5, 6):
-                    _progress(state, f"{board_key}: closure P&R seed {seed - 3}/3 (seed {seed}) started.")
+                for seed_index, seed in enumerate(closure_seeds, start=1):
+                    _progress(state, f"{board_key}: closure P&R {seed_index}/{closure_seed_count} (seed {seed}) started.")
                     run = _run_pnr(state, board_key, board, closure_synth, seed, "advanced")
                     pnr_runs.append(run)
                     fmax = run.get("max_frequency_mhz")
@@ -314,6 +346,7 @@ def run_agent(state: dict) -> dict:
         "design_intent": str(state.get("spec_text") or state.get("spec") or "").strip() or None,
         "target_frequency_mhz": target,
         "requested_profile": requested_profile,
+        "seed_policy": {"baseline_seed_count": baseline_seed_count, "closure_seed_count": closure_seed_count, "closure_is_conditional": True},
         "selected_recommendation": selected_board,
         "recommendations": recommendations,
         "recommendation_policy": {

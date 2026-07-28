@@ -68,7 +68,7 @@ BOARD_REGISTRY: Dict[str, Dict[str, Any]] = {
         "resources": {"logic_cells": 7680},
     },
     "ice40_hx8k_breakout": {
-        "label": "iCE40 HX8K Breakout",
+        "label": "Lattice iCE40 HX8K Breakout",
         "vendor": "lattice",
         "family": "ice40",
         "device": "hx8k",
@@ -125,6 +125,85 @@ BOARD_REGISTRY: Dict[str, Dict[str, Any]] = {
         "resources": {"logic_cells": 24000},
     },
 }
+
+BOARD_REGISTRY.update({
+    "certus_nx_versa_40": {
+        "label": "Lattice Certus-NX Versa (LFD2NX-40)", "vendor": "lattice", "family": "nexus", "product_family": "Certus-NX",
+        "device": "LFD2NX-40-8BG256C", "package": "BG256", "nextpnr_tool": "nextpnr-nexus",
+        "nextpnr_device_args": ["--device", "LFD2NX-40-8BG256C"], "constraint_format": "lpf", "bitstream_tool": "prjoxide",
+        "bitstream_ext": ".bit", "pnr_output_ext": ".fasm", "support_tier": "experimental",
+        "segments": ["industrial", "general-purpose embedded", "connectivity"], "default_frequency_mhz": 12.0, "resources": {"logic_cells": 39000},
+    },
+    "crosslink_nx_eval_40": {
+        "label": "Lattice CrossLink-NX Evaluation Board (LIFCL-40)", "vendor": "lattice", "family": "nexus", "product_family": "CrossLink-NX",
+        "device": "LIFCL-40-9BG400C", "package": "BG400", "nextpnr_tool": "nextpnr-nexus",
+        "nextpnr_device_args": ["--device", "LIFCL-40-9BG400C"], "constraint_format": "lpf", "bitstream_tool": "prjoxide",
+        "bitstream_ext": ".bit", "pnr_output_ext": ".fasm", "support_tier": "experimental",
+        "segments": ["machine vision", "camera/display bridging", "sensor aggregation"], "default_frequency_mhz": 12.0, "resources": {"logic_cells": 39000},
+    },
+    "certuspro_nx_versa_100": {
+        "label": "Lattice CertusPro-NX Versa (LFCPNX-100)", "vendor": "lattice", "family": "nexus", "product_family": "CertusPro-NX",
+        "device": "LFCPNX-100-9LFG672C", "package": "LFG672", "nextpnr_tool": "nextpnr-nexus",
+        "nextpnr_device_args": ["--device", "LFCPNX-100-9LFG672C"], "constraint_format": "lpf", "bitstream_tool": "prjoxide",
+        "bitstream_ext": ".bit", "pnr_output_ext": ".fasm", "support_tier": "experimental",
+        "segments": ["communications", "networking", "compute acceleration", "infrastructure"], "default_frequency_mhz": 25.0, "resources": {"logic_cells": 100000},
+    },
+    "machxo5_nx_65t": {
+        "label": "Lattice MachXO5-NX 65T Development Board", "vendor": "lattice", "family": "nexus", "product_family": "MachXO5-NX",
+        "device": "LFMXO5-65", "package": "board-specific", "support_tier": "unavailable",
+        "unsupported_reason": "Deferred until Project Oxide supports and ChipLoop qualifies this exact open-source target.",
+        "segments": ["secure control", "server management", "industrial platform management"], "default_frequency_mhz": 25.0, "resources": {"logic_cells": 65000},
+    },
+    "gowin_tang_nano_9k": {
+        "label": "Gowin Tang Nano 9K (LittleBee GW1NR-9)", "vendor": "gowin", "family": "gowin", "product_family": "LittleBee",
+        "device": "GW1NR-LV9QN88PC6/I5", "apicula_family": "GW1N-9", "package": "QN88", "nextpnr_tool": "nextpnr-himbaechel-gowin",
+        "nextpnr_device_args": ["--device", "GW1NR-LV9QN88PC6/I5", "--vopt", "family=GW1N-9"], "constraint_format": "cst",
+        "bitstream_tool": "gowin_pack", "bitstream_ext": ".fs", "pnr_output_ext": ".json", "support_tier": "beta",
+        "segments": ["education", "makers", "IoT", "low-cost embedded", "small industrial control"], "programmer_board": "tangnano9k",
+        "default_frequency_mhz": 27.0, "resources": {"logic_cells": 8640},
+    },
+    "gowin_tang_nano_20k": {
+        "label": "Gowin Tang Nano 20K (Arora II GW2AR-18C)", "vendor": "gowin", "family": "gowin", "product_family": "Arora II",
+        "device": "GW2AR-LV18QN88PC8/I7", "apicula_family": "GW2A-18C", "package": "QN88", "nextpnr_tool": "nextpnr-himbaechel-gowin",
+        "nextpnr_device_args": ["--device", "GW2AR-LV18QN88PC8/I7", "--vopt", "family=GW2A-18C"], "constraint_format": "cst",
+        "bitstream_tool": "gowin_pack", "bitstream_ext": ".fs", "pnr_output_ext": ".json", "support_tier": "beta",
+        "segments": ["video", "soft CPUs", "DSP", "robotics", "industrial control"], "programmer_board": "tangnano20k",
+        "default_frequency_mhz": 27.0, "resources": {"logic_cells": 20736},
+    },
+    "gowin_tang_primer_20k": {
+        "label": "Gowin Tang Primer 20K (Arora II GW2A-18)", "vendor": "gowin", "family": "gowin", "product_family": "Arora II",
+        "device": "GW2A-LV18PG256C8/I7", "apicula_family": "GW2A-18", "package": "PG256", "nextpnr_tool": "nextpnr-himbaechel-gowin",
+        "nextpnr_device_args": ["--device", "GW2A-LV18PG256C8/I7", "--vopt", "family=GW2A-18"], "constraint_format": "cst",
+        "bitstream_tool": "gowin_pack", "bitstream_ext": ".fs", "pnr_output_ext": ".json", "support_tier": "beta",
+        "segments": ["modular prototyping", "embedded compute", "motor control", "communications"], "programmer_board": "tangprimer20k",
+        "default_frequency_mhz": 50.0, "resources": {"logic_cells": 20736},
+    },
+    "gowin_gw5a_25_starter": {
+        "label": "Gowin Arora V GW5A-25 Starter Board", "vendor": "gowin", "family": "gowin", "product_family": "Arora V",
+        "device": "GW5A-LV25LQ144C1/I0", "apicula_family": "GW5A-25", "package": "LQ144", "nextpnr_tool": "nextpnr-himbaechel-gowin",
+        "nextpnr_device_args": ["--device", "GW5A-LV25LQ144C1/I0", "--vopt", "family=GW5A-25"], "constraint_format": "cst",
+        "bitstream_tool": "gowin_pack", "bitstream_ext": ".fs", "pnr_output_ext": ".json", "support_tier": "experimental",
+        "segments": ["machine vision", "displays", "high-performance DSP", "edge processing"], "default_frequency_mhz": 50.0, "resources": {"logic_cells": 23040},
+    },
+    "gowin_gw5at_60_pcie": {
+        "label": "Gowin Arora V GW5AT-60 PCIe Board", "vendor": "gowin", "family": "gowin", "product_family": "Arora V",
+        "device": "GW5AT-LV60UG324", "package": "UG324", "support_tier": "unavailable",
+        "unsupported_reason": "PCIe/SerDes and the exact board bitstream are not qualified in the open-source flow.",
+        "segments": ["PCIe", "SerDes", "networking", "high-speed video"], "default_frequency_mhz": 50.0, "resources": {"logic_cells": 59904},
+    },
+    "gowin_gw5ast_138": {
+        "label": "Gowin Arora V GW5AST-138 RISC-V Board", "vendor": "gowin", "family": "gowin", "product_family": "Arora V",
+        "device": "GW5AST-LV138FPG676", "package": "FPG676", "support_tier": "unavailable",
+        "unsupported_reason": "The hardened RISC-V SoC and exact device are not qualified with Project Apicula.",
+        "segments": ["embedded RISC-V", "edge AI", "industrial compute"], "default_frequency_mhz": 50.0, "resources": {"logic_cells": 138240},
+    },
+    "gowin_gw3a_20k": {
+        "label": "Gowin Arora III GW3A-20K Starter Board", "vendor": "gowin", "family": "gowin", "product_family": "Arora III",
+        "device": "GW3A-LV20LQ144", "package": "LQ144", "support_tier": "unavailable",
+        "unsupported_reason": "Deferred until Yosys, nextpnr-himbaechel and Project Apicula provide an upstream implementation database.",
+        "segments": ["industrial control", "machine vision", "displays", "mid-range DSP"], "default_frequency_mhz": 50.0, "resources": {"logic_cells": 23040},
+    },
+})
 
 
 def workflow_dir(state: Dict[str, Any]) -> str:
@@ -360,11 +439,16 @@ def board_config(state: Dict[str, Any]) -> Dict[str, Any]:
         if fpga.get(key):
             base[key] = fpga.get(key)
     family = str(base.get("family") or "").lower()
-    if family not in {"ice40", "ecp5"}:
+    configured_tier = str(base.get("support_tier") or "production").lower()
+    if configured_tier == "unavailable":
         base["supported"] = False
-        base["unsupported_reason"] = "This FPGA loop currently supports Lattice iCE40 and ECP5 open-source flows."
+        base.setdefault("unsupported_reason", "This target is unavailable in ChipLoop's open-source implementation flow.")
+    elif family not in {"ice40", "ecp5", "nexus", "gowin"}:
+        base["supported"] = False
+        base["unsupported_reason"] = "This architecture is not supported by ChipLoop's open-source implementation flow."
     else:
         base["supported"] = True
+    base["support_tier"] = configured_tier
     device = str(base.get("device", "")).lower()
     if family == "ice40":
         base.setdefault("nextpnr_tool", "nextpnr-ice40")
@@ -390,20 +474,42 @@ def board_config(state: Dict[str, Any]) -> Dict[str, Any]:
             base["nextpnr_device_flag"] = "--45k"
         elif device in {"85k", "lfe5u-85f", "lfe5um-85f"}:
             base["nextpnr_device_flag"] = "--85k"
+    elif family == "nexus":
+        base.setdefault("nextpnr_tool", "nextpnr-nexus")
+        base.setdefault("bitstream_tool", "prjoxide")
+        base.setdefault("bitstream_ext", ".bit")
+        base.setdefault("pnr_output_ext", ".fasm")
+        base.setdefault("constraint_format", "lpf")
+        base.setdefault("nextpnr_device_args", ["--device", base.get("device")])
+    elif family == "gowin":
+        split_himbaechel = shutil.which("nextpnr-himbaechel-gowin")
+        generic_himbaechel = shutil.which("nextpnr-himbaechel")
+        if base.get("nextpnr_tool") == "nextpnr-himbaechel-gowin" and not split_himbaechel and generic_himbaechel:
+            base["nextpnr_tool"] = generic_himbaechel
+        base.setdefault("bitstream_tool", "gowin_pack")
+        base.setdefault("bitstream_ext", ".fs")
+        base.setdefault("pnr_output_ext", ".json")
+        base.setdefault("constraint_format", "cst")
+        base.setdefault("nextpnr_device_args", ["--device", base.get("device"), "--vopt", f"family={base.get('apicula_family')}"])
+
+
     return base
-
-
 def tool_status() -> Dict[str, Any]:
     tools = {
         "yosys": shutil.which("yosys"),
         "nextpnr-ice40": shutil.which("nextpnr-ice40"),
         "nextpnr-ecp5": shutil.which("nextpnr-ecp5"),
+        "nextpnr-nexus": shutil.which("nextpnr-nexus"),
+        "nextpnr-himbaechel-gowin": shutil.which("nextpnr-himbaechel-gowin") or shutil.which("nextpnr-himbaechel"),
         "icepack": shutil.which("icepack"),
         "icetime": shutil.which("icetime"),
         "ecppack": shutil.which("ecppack"),
+        "prjoxide": shutil.which("prjoxide"),
+        "gowin_pack": shutil.which("gowin_pack"),
         "openFPGALoader": shutil.which("openFPGALoader"),
     }
     return {name: {"available": bool(path), "path": path} for name, path in tools.items()}
+
 
 
 def run_cmd(cmd: List[str], cwd: str, log_path: str, timeout: int = 600) -> Dict[str, Any]:

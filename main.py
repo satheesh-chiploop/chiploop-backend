@@ -3612,10 +3612,18 @@ class FpgaBitstreamAppIn(DigitalRTLSourceIn):
     constraints_pcf: Optional[str] = None
     pcf_text: Optional[str] = None
     pcf_path: Optional[str] = None
+    constraints_lpf: Optional[str] = None
+    lpf_text: Optional[str] = None
+    lpf_path: Optional[str] = None
+    constraints_cst: Optional[str] = None
+    cst_text: Optional[str] = None
+    cst_path: Optional[str] = None
     generate_bitstream: Optional[bool] = True
     notes: Optional[str] = None
     recommendation_profile: Optional[str] = "best_overall"
     candidate_boards: Optional[List[str]] = None
+    baseline_seed_count: Optional[int] = 1
+    closure_seed_count: Optional[int] = 1
     run_fpga_synthesis_closure_loop: Optional[bool] = False
     max_fpga_synthesis_closure_iterations: Optional[int] = 1
     run_fpga_rtl_repair_loop: Optional[bool] = True
@@ -6330,6 +6338,25 @@ async def apps_timing_debug_run(request: Request, background_tasks: BackgroundTa
     return {"ok": True, "workflow_id": workflow_id, "run_id": run_id}
 
 
+def _fpga_target_metadata(data: Dict[str, Any]) -> Dict[str, Any]:
+    from agents.fpga.fpga_common import BOARD_REGISTRY
+
+    board_key = str(data.get("board") or "icebreaker")
+    target_config = BOARD_REGISTRY.get(board_key) or BOARD_REGISTRY["icebreaker"]
+    return {
+        "vendor": target_config.get("vendor"),
+        "family": data.get("family") or target_config.get("family"),
+        "product_family": target_config.get("product_family") or target_config.get("family"),
+        "board": board_key,
+        "board_label": target_config.get("label"),
+        "device": data.get("device") or target_config.get("device"),
+        "package": data.get("package") or target_config.get("package"),
+        "support_tier": target_config.get("support_tier") or "production",
+        "segments": target_config.get("segments") or [],
+        "top_module": data.get("top_module"),
+        "target_frequency_mhz": data.get("target_frequency_mhz"),
+    }
+
 @app.post("/apps/fpga/bitstream/run")
 async def apps_fpga_bitstream_run(request: Request, background_tasks: BackgroundTasks, payload: FpgaBitstreamAppIn):
     user_id = _require_user_id(request)
@@ -6345,15 +6372,7 @@ async def apps_fpga_bitstream_run(request: Request, background_tasks: Background
     data["target"] = "fpga"
     data["verification_domain"] = "fpga"
 
-    target = {
-        "vendor": "lattice",
-        "family": data.get("family"),
-        "board": data.get("board") or "icebreaker",
-        "device": data.get("device"),
-        "package": data.get("package"),
-        "top_module": data.get("top_module"),
-        "target_frequency_mhz": data.get("target_frequency_mhz"),
-    }
+    target = _fpga_target_metadata(data)
     data["fpga_target"] = target
     data["fpga"] = {
         **(data.get("fpga") if isinstance(data.get("fpga"), dict) else {}),
@@ -6387,15 +6406,7 @@ async def apps_fpga2rtl_run(request: Request, background_tasks: BackgroundTasks,
     data["target"] = "fpga"
     data["verification_domain"] = "fpga"
 
-    target = {
-        "vendor": "lattice",
-        "family": data.get("family"),
-        "board": data.get("board") or "icebreaker",
-        "device": data.get("device"),
-        "package": data.get("package"),
-        "top_module": data.get("top_module"),
-        "target_frequency_mhz": data.get("target_frequency_mhz"),
-    }
+    target = _fpga_target_metadata(data)
     data["fpga_target"] = target
     data["fpga"] = {
         **(data.get("fpga") if isinstance(data.get("fpga"), dict) else {}),
@@ -6432,15 +6443,7 @@ async def apps_fpga_synthesis_run(request: Request, background_tasks: Background
     data["verification_domain"] = "fpga"
     data["generate_bitstream"] = False
     data["run_fpga_verification"] = False
-    target = {
-        "vendor": "lattice",
-        "family": data.get("family"),
-        "board": data.get("board") or "icebreaker",
-        "device": data.get("device"),
-        "package": data.get("package"),
-        "top_module": data.get("top_module"),
-        "target_frequency_mhz": data.get("target_frequency_mhz"),
-    }
+    target = _fpga_target_metadata(data)
     data["fpga_target"] = target
     data["fpga"] = {
         **(data.get("fpga") if isinstance(data.get("fpga"), dict) else {}),
@@ -6477,15 +6480,7 @@ async def apps_fpga_implementation_run(request: Request, background_tasks: Backg
     data["verification_domain"] = "fpga"
     data["generate_bitstream"] = False
     data["run_fpga_verification"] = bool(data.get("run_fpga_verification", True))
-    target = {
-        "vendor": "lattice",
-        "family": data.get("family"),
-        "board": data.get("board") or "icebreaker",
-        "device": data.get("device"),
-        "package": data.get("package"),
-        "top_module": data.get("top_module"),
-        "target_frequency_mhz": data.get("target_frequency_mhz"),
-    }
+    target = _fpga_target_metadata(data)
     data["fpga_target"] = target
     data["fpga"] = {
         **(data.get("fpga") if isinstance(data.get("fpga"), dict) else {}),

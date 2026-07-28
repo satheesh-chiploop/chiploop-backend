@@ -141,7 +141,11 @@ def run_agent(state: dict) -> dict:
     rtl_files = fpga.get("rtl_files") or []
     top = fpga.get("top_module") or state.get("top_module")
     family = str(board.get("family") or "ice40").lower()
-    synth_cmd = "synth_ecp5" if family == "ecp5" else "synth_ice40"
+    synth_cmd = {
+        "ecp5": "synth_ecp5",
+        "nexus": "synth_nexus",
+        "gowin": "synth_gowin",
+    }.get(family, "synth_ice40")
     json_path = os.path.abspath(f"{out_dir}/{top or 'top'}_{family}.json")
     script_path = os.path.abspath(f"{out_dir}/synth_{family}.ys")
     log_path = os.path.abspath(f"{out_dir}/yosys_synth.log")
@@ -156,6 +160,12 @@ def run_agent(state: dict) -> dict:
         "flatten_enabled": bool(state.get("fpga_yosys_flatten")),
         "tool_effort": effort_policy,
     }
+    if not board.get("supported", True):
+        summary["error"] = board.get("unsupported_reason") or "Selected FPGA target is unavailable."
+        publish_json(state, agent, "synth", "fpga_synthesis_summary.json", summary)
+        state["status"] = summary["error"]
+        return state
+
     if not rtl_files or not top:
         summary["error"] = "Missing RTL files or top module from FPGA handoff ingest."
         publish_json(state, agent, "synth", "fpga_synthesis_summary.json", summary)

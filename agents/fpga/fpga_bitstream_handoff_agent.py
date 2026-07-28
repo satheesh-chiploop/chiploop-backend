@@ -28,6 +28,12 @@ def run_agent(state: dict) -> dict:
         if family == "ecp5":
             cmd = ["ecppack", str(routed_output), bitstream]
             log_name = "ecppack.log"
+        elif family == "nexus":
+            cmd = ["prjoxide", "pack", str(routed_output), bitstream]
+            log_name = "prjoxide_pack.log"
+        elif family == "gowin":
+            cmd = ["gowin_pack", "-d", str(board.get("apicula_family")), "-o", bitstream, str(routed_output)]
+            log_name = "gowin_pack.log"
         else:
             cmd = ["icepack", str(routed_output), bitstream]
             log_name = "icepack.log"

@@ -2303,7 +2303,7 @@ AGENT_CAPABILITIES = {
         "domain": "fpga",
         "inputs": ["board", "device", "package", "pcf_text", "target_frequency_mhz"],
         "outputs": ["fpga/constraints/fpga_constraints_summary.json", "fpga/constraints/top.pcf"],
-        "description": "Selects board/device/package settings and prepares PCF constraints for iCE40 implementation.",
+        "description": "Selects vendor-prefixed Lattice/Gowin targets and prepares PCF, LPF, or CST constraints.",
         "tags": ["fpga", "constraints", "pcf", "ice40"],
     },
 
@@ -2311,7 +2311,7 @@ AGENT_CAPABILITIES = {
         "domain": "fpga",
         "inputs": ["fpga/handoff/fpga_handoff_ingest.json", "fpga/rtl/*.sv", "fpga/rtl/*.v"],
         "outputs": ["fpga/synth/fpga_synthesis_summary.json", "fpga/synth/*.json"],
-        "description": "Runs Yosys synthesis for iCE40 and creates a JSON netlist for nextpnr.",
+        "description": "Runs Yosys synthesis for Lattice iCE40/ECP5/Nexus and Gowin targets.",
         "tags": ["fpga", "synthesis", "yosys", "ice40"],
     },
 
@@ -2327,7 +2327,7 @@ AGENT_CAPABILITIES = {
         "domain": "fpga",
         "inputs": ["fpga/synth/*.json", "fpga/constraints/top.pcf"],
         "outputs": ["fpga/pnr/fpga_place_route_summary.json", "fpga/pnr/*.asc", "fpga/pnr/*.log"],
-        "description": "Runs nextpnr-ice40 place-and-route and summarizes implementation evidence.",
+        "description": "Runs architecture-specific nextpnr place-and-route for Lattice and Gowin open-source targets.",
         "tags": ["fpga", "place-route", "nextpnr", "ice40"],
     },
 
@@ -2351,7 +2351,7 @@ AGENT_CAPABILITIES = {
         "domain": "fpga",
         "inputs": ["fpga/pnr/*.asc", "board"],
         "outputs": ["fpga/bitstream/fpga_bitstream_summary.json", "fpga/bitstream/*.bin"],
-        "description": "Packages an iCE40 bitstream and records the board programming command.",
+        "description": "Packages iCE40, ECP5, Nexus, or Gowin bitstreams with the qualified open-source toolchain.",
         "tags": ["fpga", "bitstream", "icepack", "openfpgaloader"],
     },
 

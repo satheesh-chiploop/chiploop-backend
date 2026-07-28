@@ -29,6 +29,8 @@ with definition as (
         jsonb_build_object('key','target_frequency_mhz','label','Target MHz','type','number','required',true,'defaultValue',75),
         jsonb_build_object('key','recommendation_profile','label','Primary recommendation','type','select','required',false,'defaultValue','best_overall','options',jsonb_build_array('best_overall','best_performance','best_low_cost','best_for_growth')),
         jsonb_build_object('key','candidate_boards','label','Candidate boards','type','json','required',false),
+        jsonb_build_object('key','baseline_seed_count','label','Baseline seeds','type','number','required',false,'defaultValue',1),
+        jsonb_build_object('key','closure_seed_count','label','Closure seeds','type','number','required',false,'defaultValue',1),
         jsonb_build_object('key','notes','label','Notes','type','textarea','required',false)
       )
     )

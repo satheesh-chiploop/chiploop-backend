@@ -36,6 +36,21 @@
     "yosys": {
       "executable": "/usr/bin/yosys"
     },
+    "nextpnr_nexus": {
+      "executable": "/usr/local/bin/nextpnr-nexus"
+    },
+    "prjoxide": {
+      "executable": "/usr/local/bin/prjoxide"
+    },
+    "nextpnr_himbaechel_gowin": {
+      "executable": "/usr/local/bin/nextpnr-himbaechel-gowin"
+    },
+    "gowin_pack": {
+      "executable": "/usr/local/bin/gowin_pack"
+    },
+    "openfpgaloader": {
+      "executable": "/usr/local/bin/openFPGALoader"
+    },
     "sby": {
       "executable": "/usr/local/bin/sby"
     },

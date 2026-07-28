@@ -55,7 +55,7 @@ def test_explorer_reuses_identical_implementation_targets(monkeypatch):
     explorer.run_agent(state)
 
     assert synth_calls == [("icebreaker", "baseline")]
-    assert len(pnr_calls) == 3
+    assert len(pnr_calls) == 1
     assert published["candidate_count"] == 2
     assert published["unique_implementation_count"] == 1
     assert published["results"][1]["reused_implementation_from"] == "icebreaker"
@@ -76,6 +76,8 @@ def test_workflow_and_frontend_contracts_are_registered():
     assert 'fields={["source", "intent", "rtl", "frequency", "recommendation", "notes"]}' in page
     assert 'candidate_boards: fpgaMode === "target-explorer" ? candidateBoards : undefined' in template
     assert "Upload design intent" in template
+    assert 'useState("1")' in template
+    assert "baseline_seed_count" in migration and "closure_seed_count" in migration
     assert "FPGA RTL Quality Gate Agent" in migration
     assert "Best Low-Cost Variant" in dashboard
     assert "Continue with this board" in dashboard
@@ -93,7 +95,7 @@ def test_explorer_honors_selected_boards_and_emits_progress(monkeypatch):
 
     assert synth_calls == [("ice40_hx8k_breakout", "baseline")]
     assert state["fpga_target_explorer"]["candidate_count"] == 1
-    assert any("seed 1/3 started" in line for line in progress)
+    assert any("baseline P&R 1/1 (seed 1) started" in line for line in progress)
     assert any("Exploration complete" in line for line in progress)
 
 
@@ -109,5 +111,65 @@ def test_explorer_skips_closure_when_no_route_completes(monkeypatch):
     explorer.run_agent(state)
 
     assert synth_calls == [("icestick", "baseline")]
-    assert [seed for _board, seed, _effort in pnr_calls] == [1, 2, 3]
+    assert [seed for _board, seed, _effort in pnr_calls] == [1]
     assert any("closure seeds skipped" in line for line in progress)
+
+
+def test_explorer_honors_user_seed_counts_and_keeps_closure_conditional(monkeypatch):
+    pnr_calls = []
+    monkeypatch.setattr(explorer, "_run_synthesis", lambda _state, _board, _cfg, strategy: {"status": "completed", "strategy": strategy, "netlist": "demo.json"})
+    monkeypatch.setattr(explorer, "_run_pnr", lambda _state, _board, cfg, _synth, seed, effort: pnr_calls.append((seed, effort)) or {"status": "completed", "seed": seed, "effort": effort, "max_frequency_mhz": 50, "timing_met": False, "logic_cells_used": 3000, "logic_cells_available": cfg["resources"]["logic_cells"]})
+    monkeypatch.setattr(explorer, "publish_json", lambda *_args: None)
+    state = {"workflow_id": "wf", "target_frequency_mhz": 75, "baseline_seed_count": 2, "closure_seed_count": 2, "candidate_boards": ["ice40_hx8k_breakout"], "fpga": {"top_module": "top", "rtl_files": ["top.sv"]}}
+
+    explorer.run_agent(state)
+
+    assert pnr_calls == [(1, "balanced"), (2, "balanced"), (3, "advanced"), (4, "advanced")]
+    assert state["fpga_target_explorer"]["seed_policy"] == {"baseline_seed_count": 2, "closure_seed_count": 2, "closure_is_conditional": True}
+
+
+def test_vendor_catalog_prefixes_and_support_tiers():
+    from agents.fpga.fpga_common import BOARD_REGISTRY, board_config
+
+    runnable = ["certus_nx_versa_40", "crosslink_nx_eval_40", "certuspro_nx_versa_100", "gowin_tang_nano_9k", "gowin_tang_nano_20k", "gowin_tang_primer_20k", "gowin_gw5a_25_starter"]
+    for key in runnable:
+        target = BOARD_REGISTRY[key]
+        assert target["label"].lower().startswith(target["vendor"])
+        assert target["support_tier"] in {"beta", "experimental"}
+        assert target["segments"]
+        assert board_config({"board": key})["supported"] is True
+
+    assert board_config({"board": "machxo5_nx_65t"})["supported"] is False
+    assert board_config({"board": "gowin_gw3a_20k"})["supported"] is False
+
+
+def test_open_source_architecture_commands(monkeypatch, tmp_path):
+    commands = []
+    monkeypatch.setattr(explorer, "_nextpnr_help", lambda _tool: "--freq --timing-allow-fail")
+    monkeypatch.setattr(explorer, "_nextpnr_version", lambda _tool: "test")
+    monkeypatch.setattr(explorer, "run_cmd", lambda cmd, **_kwargs: commands.append(cmd) or {"ok": False, "cmd": cmd})
+    state = {"workflow_id": "wf", "workflow_dir": str(tmp_path), "target_frequency_mhz": 75}
+
+    for key in ("certus_nx_versa_40", "gowin_tang_nano_9k"):
+        board = explorer.BOARD_REGISTRY[key]
+        explorer._run_pnr(state, key, board, {"strategy": "baseline", "netlist": "demo.json"}, 1, "balanced")
+
+    assert commands[0][0] == "nextpnr-nexus"
+    assert "--fasm" in commands[0]
+    assert commands[1][0] == "nextpnr-himbaechel-gowin"
+    assert "family=GW1N-9" in commands[1]
+    assert "--write" in commands[1]
+
+
+def test_frontend_and_supabase_share_vendor_target_catalog():
+    from pathlib import Path
+    root = Path(__file__).parents[2]
+    frontend_catalog = (root / "frontend" / "lib" / "fpgaTargets.ts").read_text(encoding="utf-8")
+    migration = (root / "backend" / "supabase" / "migrations" / "phase_20260728_fpga_vendor_open_source_targets.sql").read_text(encoding="utf-8")
+    template = (root / "frontend" / "app" / "apps" / "digital-review" / "_DigitalReviewAppTemplate.tsx").read_text(encoding="utf-8")
+
+    for key in ("certus_nx_versa_40", "crosslink_nx_eval_40", "certuspro_nx_versa_100", "gowin_tang_nano_9k", "gowin_tang_nano_20k", "gowin_tang_primer_20k", "gowin_gw5a_25_starter"):
+        assert key in frontend_catalog
+        assert key in migration
+    assert "FPGA_TARGET_OPTIONS.map" in template
+    assert "PCF / LPF / CST" in template

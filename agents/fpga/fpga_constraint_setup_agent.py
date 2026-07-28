@@ -233,6 +233,23 @@ def _starter_lpf(top_module: str, frequency_mhz: float, board_key: str, ports: l
         ])
     return "\n".join(lines).strip() + "\n", constrained
 
+def _starter_cst(top_module: str, frequency_mhz: float) -> tuple[str, list[str]]:
+    return (
+        f"// ChipLoop starter CST for {top_module}\n"
+        f"// target_frequency_mhz {frequency_mhz}\n"
+        "// Supply a board-verified Gowin CST before implementation/programming.\n",
+        [],
+    )
+
+
+def _constrained_cst_ports(text: str) -> list[str]:
+    ports: list[str] = []
+    for port in re.findall(r'IO_LOC\s+"([^"]+)"', text, flags=re.IGNORECASE):
+        if port not in ports:
+            ports.append(port)
+    return ports
+
+
 
 def _constrained_ports_from_text(fmt: str, text: str) -> list[str]:
     ports: list[str] = []
@@ -260,26 +277,30 @@ def run_agent(state: dict) -> dict:
     rtl_files = [str(path) for path in fpga.get("rtl_files") or [] if os.path.exists(str(path))]
     rtl_ports = _extract_ports_from_rtl(rtl_files)
     constraint_text = str(
-        state.get("constraints_lpf")
+        state.get("constraints_cst")
+        or state.get("constraints_lpf")
+        or state.get("cst_text")
         or state.get("lpf_text")
         or state.get("constraints_pcf")
         or state.get("pcf_text")
         or ""
     )
-    source_path = state.get("lpf_path") or state.get("pcf_path")
+    source_path = state.get("cst_path") or state.get("lpf_path") or state.get("pcf_path")
     if not constraint_text and isinstance(source_path, str) and source_path and os.path.exists(source_path):
         with open(source_path, "r", encoding="utf-8", errors="ignore") as handle:
             constraint_text = handle.read()
     generated = False
     constrained_ports: list[str] = []
     if not constraint_text.strip():
-        if fmt == "lpf":
+        if fmt == "cst":
+            constraint_text, constrained_ports = _starter_cst(str(top), frequency)
+        elif fmt == "lpf":
             constraint_text, constrained_ports = _starter_lpf(str(top), frequency, board_key, rtl_ports)
         else:
             constraint_text, constrained_ports = _starter_pcf(str(top), frequency, board_key, rtl_ports)
         generated = True
     else:
-        constrained_ports = _constrained_ports_from_text(fmt, constraint_text)
+        constrained_ports = _constrained_cst_ports(constraint_text) if fmt == "cst" else _constrained_ports_from_text(fmt, constraint_text)
     constraint_path = os.path.abspath(write_text(f"{out_dir}/{top}.{fmt}", constraint_text))
     summary = {
         "agent": agent,
@@ -291,15 +312,16 @@ def run_agent(state: dict) -> dict:
         "constraint_path": constraint_path,
         "pcf_path": constraint_path if fmt == "pcf" else None,
         "lpf_path": constraint_path if fmt == "lpf" else None,
+        "cst_path": constraint_path if fmt == "cst" else None,
         "target_frequency_mhz": frequency,
         "board": board.get("board"),
-        "note": "Generated demo constraints are intended for common clock/reset/LED examples. Custom boards or interfaces should provide board-verified PCF/LPF pin assignments.",
+        "note": "Generated demo constraints cover verified pins only. Custom interfaces must provide board-verified PCF, LPF, or CST assignments.",
     }
     if summary["unconstrained_ports"]:
         summary["status"] = "blocked"
         summary["error"] = (
-            "FPGA constraints are incomplete. Provide a board-verified PCF/LPF, or select a board with a verified "
-            "ChipLoop pin map for every top-level RTL port."
+            "FPGA constraints are incomplete. Provide a board-verified PCF, LPF, or CST, or select a board with "
+            "a verified ChipLoop pin map for every top-level RTL port."
         )
         if generated:
             summary["routing_note"] = (
@@ -327,6 +349,7 @@ def run_agent(state: dict) -> dict:
     manifest_update(state, "constraints_unconstrained_ports", summary["unconstrained_ports"])
     manifest_update(state, "target_frequency_mhz", frequency)
     manifest_update(state, "constraints", summary)
+    manifest_update(state, "constraints_cst", constraint_path if fmt == "cst" else None)
     if summary["status"] == "blocked":
         state["status"] = "FPGA constraints incomplete."
         raise RuntimeError(f"{summary['error']} Unconstrained ports: {', '.join(summary['unconstrained_ports'])}")

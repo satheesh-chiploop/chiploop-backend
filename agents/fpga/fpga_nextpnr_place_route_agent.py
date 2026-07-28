@@ -246,7 +246,8 @@ def run_agent(state: dict) -> dict:
     out_dir = fpga_dir(state, "pnr")
     json_netlist = fpga.get("yosys_json")
     family = str(board.get("family") or "ice40").lower()
-    constraint_path = fpga.get("constraints_lpf") if family == "ecp5" else fpga.get("constraints_pcf")
+    constraint_format = str(board.get("constraint_format") or "pcf").lower()
+    constraint_path = fpga.get(f"constraints_{constraint_format}") or fpga.get("constraints_path")
     output_ext = str(board.get("pnr_output_ext") or (".config" if family == "ecp5" else ".asc"))
     pnr_output = os.path.abspath(f"{out_dir}/{fpga.get('top_module') or 'top'}{output_ext}")
     log_path = os.path.abspath(f"{out_dir}/{board.get('nextpnr_tool') or 'nextpnr'}.log")
@@ -263,33 +264,43 @@ def run_agent(state: dict) -> dict:
         "asc": None,
         "routed_config": None,
         "artifact_produced": False,
-        "output_format": "textcfg" if family == "ecp5" else "asc",
+        "output_format": output_ext.lstrip("."),
         "closure_iteration": int(state.get("fpga_timing_closure_iteration_index") or 0),
         "seed": seed,
         "timing_driven": bool(state.get("fpga_nextpnr_timing_driven") or state.get("run_fpga_timing_closure_loop")),
         "tool_effort": effort_policy,
     }
-    if not json_netlist or not os.path.exists(str(json_netlist)):
+    if not board.get("supported", True):
+        summary["error"] = board.get("unsupported_reason") or "Selected FPGA target is unavailable."
+    elif not json_netlist or not os.path.exists(str(json_netlist)):
         summary["error"] = "Missing Yosys JSON netlist."
     else:
-        cmd = [
-            nextpnr_tool,
-            str(board.get("nextpnr_device_flag") or "--hx8k"),
-            "--package",
-            str(board.get("nextpnr_package") or board.get("package") or "ct256"),
-            "--json",
-            str(json_netlist),
-            "--report",
-            report_path,
-        ]
-        if family == "ecp5":
-            cmd.extend(["--textcfg", pnr_output])
+        if family in {"nexus", "gowin"}:
+            cmd = [nextpnr_tool]
+            if nextpnr_tool.endswith("nextpnr-himbaechel") and family == "gowin":
+                cmd.extend(["--uarch", "gowin"])
+            cmd.extend(str(arg) for arg in (board.get("nextpnr_device_args") or []))
+            cmd.extend(["--json", str(json_netlist), "--report", report_path])
+            cmd.extend(["--fasm", pnr_output] if family == "nexus" else ["--write", pnr_output])
         else:
-            cmd.extend(["--asc", pnr_output])
+            cmd = [
+                nextpnr_tool,
+                str(board.get("nextpnr_device_flag") or "--hx8k"),
+                "--package",
+                str(board.get("nextpnr_package") or board.get("package") or "ct256"),
+                "--json",
+                str(json_netlist),
+                "--report",
+                report_path,
+            ]
+            cmd.extend(["--textcfg", pnr_output] if family == "ecp5" else ["--asc", pnr_output])
         if constraint_path:
             resolved_constraint = os.path.abspath(str(constraint_path))
             if os.path.exists(resolved_constraint):
-                cmd.extend(["--lpf" if family == "ecp5" else "--pcf", resolved_constraint])
+                if family == "gowin":
+                    cmd.extend(["--vopt", f"cst={resolved_constraint}"])
+                else:
+                    cmd.extend(["--lpf" if constraint_format == "lpf" else "--pcf", resolved_constraint])
             else:
                 summary["constraint_warning"] = f"Constraint file not found: {constraint_path}"
         cmd.extend(effort_policy["effective_args"])
