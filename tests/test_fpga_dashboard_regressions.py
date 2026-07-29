@@ -2,7 +2,12 @@ import json
 from pathlib import Path
 
 from agents.fpga import fpga_dashboard_agent
-from agents.fpga.fpga_nextpnr_place_route_agent import _nextpnr_effort_policy, _parse_nextpnr, _parse_nextpnr_report
+from agents.fpga.fpga_nextpnr_place_route_agent import (
+    _himbaechel_uarch_args,
+    _nextpnr_effort_policy,
+    _parse_nextpnr,
+    _parse_nextpnr_report,
+)
 
 
 def test_nextpnr_report_exposes_routed_lut4_cells(tmp_path):
@@ -394,3 +399,34 @@ def test_timing_closure_does_not_seed_sweep_when_nextpnr_is_unavailable(tmp_path
     assert plan["selected_restart_stage"] is None
     assert "fpga_nextpnr_seed" not in state
     assert state["fpga_implementation_unavailable_reason"] == "nextpnr is not configured"
+
+
+def test_himbaechel_uarch_selector_is_version_aware():
+    assert _himbaechel_uarch_args("/opt/chiploop-eda/bin/nextpnr-himbaechel", "gowin", "--device --vopt") == []
+    assert _himbaechel_uarch_args("nextpnr-himbaechel", "gowin", "--uarch arg --device") == ["--uarch", "gowin"]
+
+
+def test_timing_closure_does_not_retry_invalid_nextpnr_cli(tmp_path, monkeypatch):
+    from agents.fpga import fpga_timing_closure_agent as closure
+
+    monkeypatch.setattr(closure, "fpga_dir", lambda _state, *parts: str(tmp_path.joinpath(*parts)))
+    monkeypatch.setattr(closure, "publish_json", lambda *_args, **_kwargs: None)
+    state = {
+        "target_frequency_mhz": 12.0,
+        "allow_nextpnr_seed_sweep": True,
+        "fpga": {
+            "target": {"board": "gowin_tang_nano_9k"},
+            "place_route": {
+                "status": "failed",
+                "command": {"returncode": 255, "stdout_tail": "unrecognised option '--uarch'\n"},
+            },
+        },
+    }
+
+    closure.run_agent(state)
+
+    plan = state["fpga"]["timing_closure"]["plan"]
+    assert plan["status"] == "implementation_unavailable"
+    assert plan["selected_restart_stage"] is None
+    assert "fpga_nextpnr_seed" not in state
+    assert "unrecognised option" in state["fpga_implementation_unavailable_reason"]

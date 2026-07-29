@@ -239,6 +239,13 @@ def _nextpnr_effort_policy(state: dict, tool: str, help_text: str | None = None)
     }
 
 
+def _himbaechel_uarch_args(tool: str, family: str, help_text: str) -> list[str]:
+    """Return a uarch selector only for multi-uarch Himbächel builds."""
+    if tool.endswith("nextpnr-himbaechel") and family == "gowin" and "--uarch" in help_text:
+        return ["--uarch", "gowin"]
+    return []
+
+
 def run_agent(state: dict) -> dict:
     agent = "FPGA nextpnr Place & Route Agent"
     fpga = state.get("fpga") if isinstance(state.get("fpga"), dict) else {}
@@ -254,7 +261,8 @@ def run_agent(state: dict) -> dict:
     report_path = os.path.abspath(f"{out_dir}/fpga_nextpnr_report.json")
     seed = state.get("fpga_nextpnr_seed") or state.get("nextpnr_seed")
     nextpnr_tool = str(board.get("nextpnr_tool") or ("nextpnr-ecp5" if family == "ecp5" else "nextpnr-ice40"))
-    effort_policy = _nextpnr_effort_policy(state, nextpnr_tool)
+    help_text = _nextpnr_help(nextpnr_tool)
+    effort_policy = _nextpnr_effort_policy(state, nextpnr_tool, help_text)
     summary = {
         "agent": agent,
         "status": "blocked",
@@ -277,8 +285,7 @@ def run_agent(state: dict) -> dict:
     else:
         if family in {"nexus", "gowin"}:
             cmd = [nextpnr_tool]
-            if nextpnr_tool.endswith("nextpnr-himbaechel") and family == "gowin":
-                cmd.extend(["--uarch", "gowin"])
+            cmd.extend(_himbaechel_uarch_args(nextpnr_tool, family, help_text))
             cmd.extend(str(arg) for arg in (board.get("nextpnr_device_args") or []))
             cmd.extend(["--json", str(json_netlist), "--report", report_path])
             cmd.extend(["--fasm", pnr_output] if family == "nexus" else ["--write", pnr_output])

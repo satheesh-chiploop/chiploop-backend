@@ -7,6 +7,7 @@ from .fpga_common import BOARD_REGISTRY, fpga_dir, publish_json, read_text, run_
 from .fpga_nextpnr_place_route_agent import (
     _nextpnr_effort_policy,
     _nextpnr_help,
+    _himbaechel_uarch_args,
     _nextpnr_version,
     _parse_nextpnr,
     _parse_nextpnr_report,
@@ -132,8 +133,7 @@ def _run_pnr(state: dict, board_key: str, board: dict, synthesis: dict, seed: in
     policy = _nextpnr_effort_policy(policy_state, tool, help_text)
     if family in {"nexus", "gowin"}:
         cmd = [tool]
-        if tool.endswith("nextpnr-himbaechel") and family == "gowin":
-            cmd.extend(["--uarch", "gowin"])
+        cmd.extend(_himbaechel_uarch_args(tool, family, help_text))
         cmd.extend(str(arg) for arg in (board.get("nextpnr_device_args") or []))
         cmd.extend(["--json", str(synthesis.get("netlist")), "--report", report])
         cmd.extend(["--fasm", routed] if family == "nexus" else ["--write", routed])
