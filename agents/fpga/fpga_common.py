@@ -4,7 +4,6 @@ import json
 import os
 import re
 import shutil
-import subprocess
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -496,48 +495,49 @@ def board_config(state: Dict[str, Any]) -> Dict[str, Any]:
 
 
     return base
-def tool_status() -> Dict[str, Any]:
+def tool_status(state: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    from tooling.profiles import resolve_tool
+
+    aliases = {
+        "nextpnr-himbaechel": "nextpnr_himbaechel_gowin",
+        "nextpnr-nexus": "nextpnr_nexus",
+        "openFPGALoader": "openfpgaloader",
+    }
+    names = [
+        "yosys", "nextpnr-ice40", "nextpnr-ecp5", "nextpnr-nexus",
+        "nextpnr-himbaechel", "icepack", "icetime", "ecppack",
+        "prjoxide", "gowin_pack", "openFPGALoader",
+    ]
     tools = {
-        "yosys": shutil.which("yosys"),
-        "nextpnr-ice40": shutil.which("nextpnr-ice40"),
-        "nextpnr-ecp5": shutil.which("nextpnr-ecp5"),
-        "nextpnr-nexus": shutil.which("nextpnr-nexus"),
-        "nextpnr-himbaechel": shutil.which("nextpnr-himbaechel") or shutil.which("nextpnr-himbaechel-gowin"),
-        "icepack": shutil.which("icepack"),
-        "icetime": shutil.which("icetime"),
-        "ecppack": shutil.which("ecppack"),
-        "prjoxide": shutil.which("prjoxide"),
-        "gowin_pack": shutil.which("gowin_pack"),
-        "openFPGALoader": shutil.which("openFPGALoader"),
+        name: resolve_tool(aliases.get(name, name), state or {})
+        for name in names
     }
     return {name: {"available": bool(path), "path": path} for name, path in tools.items()}
 
+def run_cmd(cmd: List[str], cwd: str, log_path: str, timeout: int = 600, state: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    from tooling.runner import run_command
 
-
-def run_cmd(cmd: List[str], cwd: str, log_path: str, timeout: int = 600) -> Dict[str, Any]:
-    started = None
-    try:
-        started = subprocess.run(
-            cmd,
-            cwd=cwd,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            timeout=timeout,
-            check=False,
-        )
-        output = started.stdout or ""
-        write_text(log_path, output)
-        return {"cmd": cmd, "returncode": started.returncode, "ok": started.returncode == 0, "log": log_path, "stdout_tail": output[-4000:]}
-    except FileNotFoundError as exc:
-        msg = f"Tool not found: {cmd[0]} ({exc})"
-        write_text(log_path, msg)
-        return {"cmd": cmd, "returncode": 127, "ok": False, "log": log_path, "error": msg}
-    except subprocess.TimeoutExpired as exc:
-        msg = f"Timed out after {timeout}s: {' '.join(cmd)}\n{exc.stdout or ''}"
-        write_text(log_path, msg)
-        return {"cmd": cmd, "returncode": 124, "ok": False, "log": log_path, "error": msg}
-
+    result = run_command(
+        state or {},
+        "fpga_implementation",
+        cmd,
+        cwd=cwd,
+        timeout_sec=timeout,
+    )
+    output = "\n".join(part for part in (result.stdout, result.stderr, result.error) if part).strip()
+    write_text(log_path, output)
+    return {
+        "cmd": result.command or cmd,
+        "executable": result.executable,
+        "profile_id": result.profile_id,
+        "status": result.status,
+        "returncode": result.returncode,
+        "ok": result.status == "success" and result.returncode == 0,
+        "log": log_path,
+        "stdout_tail": (result.stdout or "")[-4000:],
+        "stderr_tail": (result.stderr or "")[-4000:],
+        "error": result.error,
+    }
 
 def manifest_update(state: Dict[str, Any], key: str, value: Any) -> None:
     fpga = state.setdefault("fpga", {})

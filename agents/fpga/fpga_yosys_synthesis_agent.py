@@ -187,7 +187,7 @@ def run_agent(state: dict) -> dict:
     steps.append(f"{synth_cmd} -top {top} {synth_options} -json {json_path}".replace("  ", " "))
     script = "\n".join(steps) + "\n"
     write_text(script_path, script)
-    result = run_cmd(["yosys", "-s", script_path], cwd=out_dir, log_path=log_path, timeout=600)
+    result = run_cmd(["yosys", "-s", script_path], cwd=out_dir, log_path=log_path, timeout=600, state=state)
     summary.update({"status": "completed" if result["ok"] and os.path.exists(json_path) else "failed", "command": result})
     if os.path.exists(json_path):
         summary.update(_yosys_cell_metrics(json_path, board))

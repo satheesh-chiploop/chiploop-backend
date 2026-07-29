@@ -227,7 +227,7 @@ def _nextpnr_effort_policy(state: dict, tool: str, help_text: str | None = None)
     if "--detailed-timing-report" in available:
         args.append("--detailed-timing-report")
     target = state.get("target_frequency_mhz")
-    if target not in (None, "") and "--freq" in available:
+    if target not in (None, ""):
         args.extend(["--freq", str(target)])
     return {
         "mode": mode,
@@ -307,7 +307,7 @@ def run_agent(state: dict) -> dict:
         cmd.extend(effort_policy["effective_args"])
         if seed:
             cmd.extend(["--seed", str(seed)])
-        result = run_cmd(cmd, cwd=out_dir, log_path=log_path, timeout=900)
+        result = run_cmd(cmd, cwd=out_dir, log_path=log_path, timeout=900, state=state)
         log_metrics = _parse_nextpnr(log_path)
         for key in ("logical_cells_used", "logical_cells_available", "logic_utilization_percent"):
             log_metrics.pop(key, None)
@@ -317,6 +317,7 @@ def run_agent(state: dict) -> dict:
         produced = os.path.exists(pnr_output)
         summary.update({
             "status": "completed" if result["ok"] and produced else "warning" if produced else "failed",
+            "failure_kind": "tool_unavailable" if result.get("status") == "tool_unavailable" or result.get("returncode") == 127 else None,
             "command": result,
             "artifact_produced": produced,
             "pnr_output": pnr_output if produced else None,

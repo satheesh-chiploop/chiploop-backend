@@ -69,7 +69,7 @@ def run_agent(state: dict) -> dict:
         summary["timing_source"] = "nextpnr-ecp5"
         summary["note"] = "ECP5 timing was derived from nextpnr-ecp5 reported max frequency."
     elif routed_output and os.path.exists(str(routed_output)):
-        result = run_cmd(["icetime", "-d", str(board.get("device") or "hx8k"), "-m", "-r", log_path, str(routed_output)], cwd=out_dir, log_path=log_path, timeout=300)
+        result = run_cmd(["icetime", "-d", str(board.get("device") or "hx8k"), "-m", "-r", log_path, str(routed_output)], cwd=out_dir, log_path=log_path, timeout=300, state=state)
         text = read_text(log_path)
         summary.update({"status": "completed" if result["ok"] else "warning", "icetime": result, "report_tail": text[-3000:]})
         parsed = _parse_icetime_report(text)

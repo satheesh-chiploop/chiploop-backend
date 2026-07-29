@@ -22,7 +22,9 @@ def run_agent(state: dict) -> dict:
         "artifact_produced": False,
         "target": board,
     }
-    if state.get("fpga_timing_closure_failed"):
+    if state.get("fpga_implementation_unavailable_reason"):
+        summary["error"] = f"Implementation tool unavailable; bitstream generation was not attempted. {state.get('fpga_implementation_unavailable_reason')}"
+    elif state.get("fpga_timing_closure_failed"):
         summary["error"] = "Timing closure did not meet the requested frequency; bitstream generation is blocked. Review the achievable-clock recommendation or escalate the critical path."
     elif routed_output and os.path.exists(str(routed_output)):
         if family == "ecp5":
@@ -37,7 +39,7 @@ def run_agent(state: dict) -> dict:
         else:
             cmd = ["icepack", str(routed_output), bitstream]
             log_name = "icepack.log"
-        result = run_cmd(cmd, cwd=out_dir, log_path=os.path.abspath(f"{out_dir}/{log_name}"), timeout=300)
+        result = run_cmd(cmd, cwd=out_dir, log_path=os.path.abspath(f"{out_dir}/{log_name}"), timeout=300, state=state)
         produced = os.path.exists(bitstream)
         summary.update({
             "status": "completed" if result["ok"] and produced else "warning" if produced else "failed",

@@ -107,3 +107,9 @@ def test_readiness_accepts_hybrid_private_backend_license_key(monkeypatch):
     monkeypatch.setenv("CHIPLOOP_LICENSE_KEY", "test-license")
     payload = build_readiness_payload(_ReadyClient())
     assert payload["checks"]["license"]["ok"] is True
+
+
+def test_runner_aliases_include_open_source_fpga_tools():
+    assert TOOL_ALIASES["nextpnr-nexus"] == "nextpnr_nexus"
+    assert TOOL_ALIASES["nextpnr-himbaechel"] == "nextpnr_himbaechel_gowin"
+    assert TOOL_ALIASES["gowin_pack"] == "gowin_pack"

@@ -16,7 +16,7 @@ def run_agent(state: dict) -> dict:
         "ignored_rtl_files": state.get("fpga_rtl_ignored_sources") or [],
         "top_module": top,
         "target": board,
-        "tools": tool_status(),
+        "tools": tool_status(state),
     }
     if not sources:
         summary["error"] = "No RTL sources found. Provide an upstream workflow ID, uploaded/pasted RTL, or repo path."

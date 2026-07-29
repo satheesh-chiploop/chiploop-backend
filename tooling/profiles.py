@@ -108,6 +108,27 @@ def _default_profile() -> Dict[str, Any]:
                 "/usr/bin/yosys",
                 "yosys",
             ])},
+            "nextpnr_nexus": {"executable": _first_existing([
+                os.getenv("CHIPLOOP_NEXTPNR_NEXUS", ""),
+                "/opt/chiploop-eda/bin/nextpnr-nexus",
+                "nextpnr-nexus",
+            ])},
+            "nextpnr_himbaechel_gowin": {"executable": _first_existing([
+                os.getenv("CHIPLOOP_NEXTPNR_HIMBAECHEL", ""),
+                "/opt/chiploop-eda/bin/nextpnr-himbaechel",
+                "nextpnr-himbaechel",
+                "nextpnr-himbaechel-gowin",
+            ])},
+            "prjoxide": {"executable": _first_existing([
+                os.getenv("CHIPLOOP_PRJOXIDE", ""),
+                "/opt/chiploop-eda/bin/prjoxide",
+                "prjoxide",
+            ])},
+            "gowin_pack": {"executable": _first_existing([
+                os.getenv("CHIPLOOP_GOWIN_PACK", ""),
+                "/root/chiploop-backend/venv/bin/gowin_pack",
+                "gowin_pack",
+            ])},
             "sta": {"executable": _first_existing([
                 os.getenv("CHIPLOOP_STA", ""),
                 os.getenv("CHIPLOOP_OPENSTA", ""),

@@ -103,7 +103,7 @@ def _run_synthesis(state: dict, board_key: str, board: dict, strategy: str) -> d
     option_text = " ".join(options)
     steps.append(f"{synth_cmd} -top {top} {option_text} -json {netlist}".replace("  ", " "))
     write_text(script_path, "\n".join(steps) + "\n")
-    result = run_cmd(["yosys", "-s", script_path], cwd=out_dir, log_path=log_path, timeout=900)
+    result = run_cmd(["yosys", "-s", script_path], cwd=out_dir, log_path=log_path, timeout=900, state=state)
     for artifact in (script_path, log_path, netlist if os.path.exists(netlist) else None):
         _record_file(state, board_key, f"{strategy}/synth", artifact)
     return {
@@ -153,7 +153,7 @@ def _run_pnr(state: dict, board_key: str, board: dict, synthesis: dict, seed: in
         cmd.append("--timing-allow-fail")
     cmd.extend(policy.get("effective_args") or [])
     cmd.extend(["--seed", str(seed)])
-    result = run_cmd(cmd, cwd=out_dir, log_path=log, timeout=1200)
+    result = run_cmd(cmd, cwd=out_dir, log_path=log, timeout=1200, state=state)
     metrics = _parse_nextpnr(log)
     metrics.update(_parse_nextpnr_report(report, board))
     produced = os.path.exists(routed)

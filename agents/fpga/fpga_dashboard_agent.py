@@ -95,7 +95,10 @@ def run_agent(state: dict) -> dict:
     summary = {
         "type": "fpga_dashboard",
         "status": "completed" if fpga.get("bitstream", {}).get("status") == "completed" else "review",
-        "target": fpga.get("target", {}),
+        "target": {
+            **(fpga.get("target", {}) if isinstance(fpga.get("target"), dict) else {}),
+            "target_frequency_mhz": timing_summary.get("target_frequency_mhz"),
+        },
         "top_module": fpga.get("top_module"),
         "rtl_file_count": len(fpga.get("rtl_files") or []),
         "synthesis_estimate": synthesis_estimate,

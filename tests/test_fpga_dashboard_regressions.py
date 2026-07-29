@@ -334,10 +334,10 @@ def test_retime_strategy_disables_abc9_and_never_passes_abc9():
 def test_fpga_frontend_prefers_requested_target_and_shows_simulation_counts():
     source = (Path(__file__).parents[2] / "frontend" / "components" / "WorkflowEvidenceDashboard.tsx").read_text(encoding="utf-8")
 
-    target_block = source[source.index("const targetFrequencyMhz"):source.index("const pnrFrequencyMhz")]
+    target_block = source[source.index("const targetFrequencyMhz"):source.index("const boardInputFrequencyMhz")]
     assert "constraints.target_frequency_mhz" in target_block
     assert "target.target_frequency_mhz" in target_block
-    assert target_block.index("constraints.target_frequency_mhz") < target_block.index("target.default_frequency_mhz")
+    assert "target.default_frequency_mhz" not in target_block
     assert 'title="Simulation Total"' in source
     assert 'title="Simulation Passed"' in source
     assert 'title="Simulation Failed"' in source
@@ -345,3 +345,52 @@ def test_fpga_frontend_prefers_requested_target_and_shows_simulation_counts():
     assert 'title="Board Input Clock"' in source
     assert 'title="Implementation Target"' in source
     assert 'title="Achieved Fmax"' in source
+
+
+def test_missing_route_does_not_become_zero_utilization(monkeypatch):
+    published = {}
+    monkeypatch.setattr(fpga_dashboard_agent, "publish_json", lambda _state, _agent, _subdir, _filename, data: published.update(data))
+    state = {
+        "target_frequency_mhz": 12.0,
+        "fpga": {
+            "target": {"default_frequency_mhz": 27.0, "resources": {"logic_cells": 8640}},
+            "synthesis": {"logical_cells_available": 8640},
+            "place_route": {"status": "failed", "failure_kind": "tool_unavailable"},
+            "timing_drc": {"status": "blocked"},
+            "bitstream": {"status": "blocked"},
+        },
+    }
+
+    fpga_dashboard_agent.run_agent(state)
+
+    assert published["target"]["target_frequency_mhz"] == 12.0
+    assert published["routed_result"]["logical_cells_used"] is None
+    assert published["routed_result"]["logic_utilization_percent"] is None
+
+
+def test_timing_closure_does_not_seed_sweep_when_nextpnr_is_unavailable(tmp_path, monkeypatch):
+    from agents.fpga import fpga_timing_closure_agent as closure
+
+    monkeypatch.setattr(closure, "fpga_dir", lambda _state, *parts: str(tmp_path.joinpath(*parts)))
+    monkeypatch.setattr(closure, "publish_json", lambda *_args, **_kwargs: None)
+    state = {
+        "target_frequency_mhz": 12.0,
+        "allow_nextpnr_seed_sweep": True,
+        "fpga": {
+            "target": {"board": "gowin_tang_nano_9k"},
+            "synthesis": {"status": "completed"},
+            "place_route": {
+                "status": "failed",
+                "command": {"status": "tool_unavailable", "returncode": 127, "error": "nextpnr is not configured"},
+            },
+            "timing_drc": {"status": "blocked"},
+        },
+    }
+
+    closure.run_agent(state)
+
+    plan = state["fpga"]["timing_closure"]["plan"]
+    assert plan["status"] == "implementation_unavailable"
+    assert plan["selected_restart_stage"] is None
+    assert "fpga_nextpnr_seed" not in state
+    assert state["fpga_implementation_unavailable_reason"] == "nextpnr is not configured"
