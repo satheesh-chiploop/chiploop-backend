@@ -8,7 +8,7 @@ from .fpga_common import board_config, fpga_dir, manifest_update, publish_json, 
 def _architecture_synth_options(board: dict, help_text: str = "") -> list[str]:
     family = str(board.get("family") or "").lower()
     yosys_family = str(board.get("yosys_family") or "").strip()
-    if family in {"nexus", "gowin"} and yosys_family and "-family" in help_text:
+    if family == "nexus" and yosys_family and "-family" in help_text:
         return ["-family", yosys_family]
     return []
 
