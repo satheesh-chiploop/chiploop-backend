@@ -81,7 +81,7 @@ def _pin_for_pcf_port(board_key: str, port: str) -> str | None:
             "rst": "44",
             "reset_n": "44",
             "rst_n": "44",
-            "led": "95",
+            "led": "99",
             "led0": "99",
             "led_0": "99",
             "led1": "98",
@@ -234,6 +234,43 @@ def _starter_lpf(top_module: str, frequency_mhz: float, board_key: str, ports: l
         ])
     return "\n".join(lines).strip() + "\n", constrained
 
+def _pin_for_pdc_port(board_key: str, port: str) -> str | None:
+    if board_key == "certus_nx_versa_40":
+        pins = {
+            "clk": "G13", "clock": "G13", "clk_12mhz": "G13",
+            "led": "B3", "led_n": "B3", "led0": "B3", "led_0": "B3",
+            "led1": "A2", "led_1": "A2", "led2": "H16", "led_2": "H16",
+            "led3": "B2", "led_3": "B2", "led4": "H15", "led_4": "H15",
+            "led5": "H14", "led_5": "H14", "led6": "H12", "led_6": "H12",
+            "led7": "J15", "led_7": "J15",
+        }
+        return pins.get(port.lower())
+    if board_key == "crosslink_nx_eval_40":
+        pins = {
+            "clk": "L13", "clock": "L13", "clk_12mhz": "L13",
+            "led": "E17", "led_n": "E17", "led0": "E17", "led_0": "E17",
+            "led1": "F13", "led_1": "F13", "led2": "G13", "led_2": "G13",
+            "led3": "F14", "led_3": "F14", "led4": "L16", "led_4": "L16",
+            "led5": "L15", "led_5": "L15", "led6": "L20", "led_6": "L20",
+            "led7": "L19", "led_7": "L19",
+        }
+        return pins.get(port.lower())
+    return None
+
+
+def _starter_pdc(top_module: str, frequency_mhz: float, board_key: str, ports: list[str]) -> tuple[str, list[str]]:
+    lines = [f"# ChipLoop starter PDC for {top_module}", f"# target_frequency_mhz {frequency_mhz}"]
+    constrained: list[str] = []
+    for port in ports:
+        pin = _pin_for_pdc_port(board_key, port)
+        if pin:
+            lines.append(f"ldc_set_location -site {{{pin}}} [get_ports {{{port}}}]")
+            lines.append(f"ldc_set_port -iobuf {{IO_TYPE=LVCMOS33}} [get_ports {{{port}}}]")
+            constrained.append(port)
+    if not constrained:
+        lines.append("# Supply a board-verified Lattice PDC before implementation/programming.")
+    return "\n".join(lines).strip() + "\n", constrained
+
 def _pin_for_cst_port(board_key: str, port: str) -> str | None:
     lower = port.lower()
     if board_key == "gowin_tang_nano_9k":
@@ -340,8 +377,10 @@ def run_agent(state: dict) -> dict:
             constraint_text, constrained_ports = _starter_lpf(str(top), frequency, board_key, rtl_ports)
         elif fmt == "pcf":
             constraint_text, constrained_ports = _starter_pcf(str(top), frequency, board_key, rtl_ports)
+        elif fmt == "pdc":
+            constraint_text, constrained_ports = _starter_pdc(str(top), frequency, board_key, rtl_ports)
         else:
-            constraint_text = f"# ChipLoop requires a board-verified PDC for {top}.\n"
+            constraint_text = f"# ChipLoop requires board-verified constraints for {top}.\n"
             constrained_ports = []
         generated = True
     else:
@@ -361,12 +400,12 @@ def run_agent(state: dict) -> dict:
         "cst_path": constraint_path if fmt == "cst" else None,
         "target_frequency_mhz": frequency,
         "board": board.get("board"),
-        "note": "Generated demo constraints cover verified pins only. Custom interfaces must provide board-verified PCF, LPF, or CST assignments.",
+        "note": "Generated demo constraints cover verified pins only. Custom interfaces must provide board-verified PCF, LPF, PDC, or CST assignments.",
     }
     if summary["unconstrained_ports"]:
         summary["status"] = "blocked"
         summary["error"] = (
-            "FPGA constraints are incomplete. Provide a board-verified PCF, LPF, or CST, or select a board with "
+            "FPGA constraints are incomplete. Provide a board-verified PCF, LPF, PDC, or CST, or select a board with "
             "a verified ChipLoop pin map for every top-level RTL port."
         )
         if generated:
