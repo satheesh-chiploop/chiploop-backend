@@ -233,14 +233,42 @@ def _starter_lpf(top_module: str, frequency_mhz: float, board_key: str, ports: l
         ])
     return "\n".join(lines).strip() + "\n", constrained
 
-def _starter_cst(top_module: str, frequency_mhz: float) -> tuple[str, list[str]]:
-    return (
-        f"// ChipLoop starter CST for {top_module}\n"
-        f"// target_frequency_mhz {frequency_mhz}\n"
-        "// Supply a board-verified Gowin CST before implementation/programming.\n",
-        [],
-    )
+def _pin_for_cst_port(board_key: str, port: str) -> str | None:
+    lower = port.lower()
+    if board_key == "gowin_tang_nano_9k":
+        pins = {
+            "clk": "52", "clock": "52", "clk_27mhz": "52",
+            "led": "10", "led_n": "10", "led0": "10", "led_0": "10",
+            "led1": "11", "led_1": "11", "led2": "13", "led_2": "13",
+            "led3": "14", "led_3": "14", "led4": "15", "led_4": "15",
+            "led5": "16", "led_5": "16",
+        }
+        return pins.get(lower)
+    if board_key == "gowin_tang_nano_20k":
+        pins = {
+            "clk": "4", "clock": "4", "clk_i": "4", "clk_27mhz": "4",
+            "led": "15", "led_n": "15", "led0": "15", "led_0": "15",
+            "led_r": "15", "led1": "16", "led_1": "16", "led_g": "16",
+            "led2": "17", "led_2": "17", "led_b": "17",
+            "led3": "18", "led_3": "18", "led4": "19", "led_4": "19",
+            "led5": "20", "led_5": "20",
+        }
+        return pins.get(lower)
+    return None
 
+
+def _starter_cst(top_module: str, frequency_mhz: float, board_key: str, ports: list[str]) -> tuple[str, list[str]]:
+    lines = [f"// ChipLoop starter CST for {top_module}", f"// target_frequency_mhz {frequency_mhz}"]
+    constrained: list[str] = []
+    for port in ports:
+        pin = _pin_for_cst_port(board_key, port)
+        if pin:
+            lines.append(f'IO_LOC "{port}" {pin};')
+            lines.append(f'IO_PORT "{port}" IO_TYPE=LVCMOS33;')
+            constrained.append(port)
+    if not constrained:
+        lines.append("// Supply a board-verified Gowin CST before implementation/programming.")
+    return "\n".join(lines).strip() + "\n", constrained
 
 def _constrained_cst_ports(text: str) -> list[str]:
     ports: list[str] = []
@@ -254,7 +282,10 @@ def _constrained_cst_ports(text: str) -> list[str]:
 def _constrained_ports_from_text(fmt: str, text: str) -> list[str]:
     ports: list[str] = []
     seen: set[str] = set()
-    if fmt == "lpf":
+    if fmt == "pdc":
+        raw_matches = re.findall(r'get_ports\s+(?:\{([^}]+)\}|"([^"]+)"|([A-Za-z_][A-Za-z0-9_$]*))', text, flags=re.IGNORECASE)
+        matches = [next(value for value in match if value) for match in raw_matches]
+    elif fmt == "lpf":
         matches = re.findall(r'\b(?:LOCATE\s+COMP|IOBUF\s+PORT|FREQUENCY\s+PORT)\s+"([^"]+)"', text, flags=re.IGNORECASE)
     else:
         matches = re.findall(r"^\s*set_io\b(?:\s+-[A-Za-z0-9_-]+)*\s+([A-Za-z_][A-Za-z0-9_$]*)\b", text, flags=re.IGNORECASE | re.MULTILINE)
@@ -277,7 +308,9 @@ def run_agent(state: dict) -> dict:
     rtl_files = [str(path) for path in fpga.get("rtl_files") or [] if os.path.exists(str(path))]
     rtl_ports = _extract_ports_from_rtl(rtl_files)
     constraint_text = str(
-        state.get("constraints_cst")
+        state.get("constraints_pdc")
+        or state.get("pdc_text")
+        or state.get("constraints_cst")
         or state.get("constraints_lpf")
         or state.get("cst_text")
         or state.get("lpf_text")
@@ -285,7 +318,7 @@ def run_agent(state: dict) -> dict:
         or state.get("pcf_text")
         or ""
     )
-    source_path = state.get("cst_path") or state.get("lpf_path") or state.get("pcf_path")
+    source_path = state.get("pdc_path") or state.get("cst_path") or state.get("lpf_path") or state.get("pcf_path")
     if not constraint_text and isinstance(source_path, str) and source_path and os.path.exists(source_path):
         with open(source_path, "r", encoding="utf-8", errors="ignore") as handle:
             constraint_text = handle.read()
@@ -293,11 +326,14 @@ def run_agent(state: dict) -> dict:
     constrained_ports: list[str] = []
     if not constraint_text.strip():
         if fmt == "cst":
-            constraint_text, constrained_ports = _starter_cst(str(top), frequency)
+            constraint_text, constrained_ports = _starter_cst(str(top), frequency, board_key, rtl_ports)
         elif fmt == "lpf":
             constraint_text, constrained_ports = _starter_lpf(str(top), frequency, board_key, rtl_ports)
-        else:
+        elif fmt == "pcf":
             constraint_text, constrained_ports = _starter_pcf(str(top), frequency, board_key, rtl_ports)
+        else:
+            constraint_text = f"# ChipLoop requires a board-verified PDC for {top}.\n"
+            constrained_ports = []
         generated = True
     else:
         constrained_ports = _constrained_cst_ports(constraint_text) if fmt == "cst" else _constrained_ports_from_text(fmt, constraint_text)
@@ -310,6 +346,7 @@ def run_agent(state: dict) -> dict:
         "constrained_ports": constrained_ports,
         "unconstrained_ports": [port for port in rtl_ports if port not in constrained_ports],
         "constraint_path": constraint_path,
+        "pdc_path": constraint_path if fmt == "pdc" else None,
         "pcf_path": constraint_path if fmt == "pcf" else None,
         "lpf_path": constraint_path if fmt == "lpf" else None,
         "cst_path": constraint_path if fmt == "cst" else None,
@@ -343,6 +380,7 @@ def run_agent(state: dict) -> dict:
             )
         except Exception:
             pass
+    manifest_update(state, "constraints_pdc", constraint_path if fmt == "pdc" else None)
     manifest_update(state, "constraints_pcf", constraint_path if fmt == "pcf" else None)
     manifest_update(state, "constraints_lpf", constraint_path if fmt == "lpf" else None)
     manifest_update(state, "constraints_path", constraint_path)

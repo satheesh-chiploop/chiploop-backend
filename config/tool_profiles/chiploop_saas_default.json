@@ -37,16 +37,16 @@
       "executable": "/usr/bin/yosys"
     },
     "nextpnr_nexus": {
-      "executable": "/usr/local/bin/nextpnr-nexus"
+      "executable": "/opt/chiploop-eda/bin/nextpnr-nexus"
     },
     "prjoxide": {
-      "executable": "/usr/local/bin/prjoxide"
+      "executable": "/opt/chiploop-eda/bin/prjoxide"
     },
     "nextpnr_himbaechel_gowin": {
-      "executable": "/usr/local/bin/nextpnr-himbaechel-gowin"
+      "executable": "/opt/chiploop-eda/bin/nextpnr-himbaechel"
     },
     "gowin_pack": {
-      "executable": "/usr/local/bin/gowin_pack"
+      "executable": "/root/chiploop-backend/venv/bin/gowin_pack"
     },
     "openfpgaloader": {
       "executable": "/usr/local/bin/openFPGALoader"

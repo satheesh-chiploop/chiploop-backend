@@ -130,14 +130,14 @@ BOARD_REGISTRY.update({
     "certus_nx_versa_40": {
         "label": "Lattice Certus-NX Versa (LFD2NX-40)", "vendor": "lattice", "family": "nexus", "product_family": "Certus-NX",
         "device": "LFD2NX-40-8BG256C", "package": "BG256", "nextpnr_tool": "nextpnr-nexus",
-        "nextpnr_device_args": ["--device", "LFD2NX-40-8BG256C"], "constraint_format": "lpf", "bitstream_tool": "prjoxide",
+        "nextpnr_device_args": ["--device", "LFD2NX-40-8BG256C"], "constraint_format": "pdc", "yosys_family": "lfd2nx", "bitstream_tool": "prjoxide",
         "bitstream_ext": ".bit", "pnr_output_ext": ".fasm", "support_tier": "experimental",
         "segments": ["industrial", "general-purpose embedded", "connectivity"], "default_frequency_mhz": 12.0, "resources": {"logic_cells": 39000},
     },
     "crosslink_nx_eval_40": {
         "label": "Lattice CrossLink-NX Evaluation Board (LIFCL-40)", "vendor": "lattice", "family": "nexus", "product_family": "CrossLink-NX",
         "device": "LIFCL-40-9BG400C", "package": "BG400", "nextpnr_tool": "nextpnr-nexus",
-        "nextpnr_device_args": ["--device", "LIFCL-40-9BG400C"], "constraint_format": "lpf", "bitstream_tool": "prjoxide",
+        "nextpnr_device_args": ["--device", "LIFCL-40-9BG400C"], "constraint_format": "pdc", "yosys_family": "lifcl", "bitstream_tool": "prjoxide",
         "bitstream_ext": ".bit", "pnr_output_ext": ".fasm", "support_tier": "experimental",
         "segments": ["machine vision", "camera/display bridging", "sensor aggregation"], "default_frequency_mhz": 12.0, "resources": {"logic_cells": 39000},
     },
@@ -145,7 +145,8 @@ BOARD_REGISTRY.update({
         "label": "Lattice CertusPro-NX Versa (LFCPNX-100)", "vendor": "lattice", "family": "nexus", "product_family": "CertusPro-NX",
         "device": "LFCPNX-100-9LFG672C", "package": "LFG672", "nextpnr_tool": "nextpnr-nexus",
         "nextpnr_device_args": ["--device", "LFCPNX-100-9LFG672C"], "constraint_format": "lpf", "bitstream_tool": "prjoxide",
-        "bitstream_ext": ".bit", "pnr_output_ext": ".fasm", "support_tier": "experimental",
+        "bitstream_ext": ".bit", "pnr_output_ext": ".fasm", "support_tier": "unavailable",
+        "unsupported_reason": "Yosys synth_nexus and Project Oxide do not support LFCPNX in the qualified open-source flow.",
         "segments": ["communications", "networking", "compute acceleration", "infrastructure"], "default_frequency_mhz": 25.0, "resources": {"logic_cells": 100000},
     },
     "machxo5_nx_65t": {
@@ -156,23 +157,23 @@ BOARD_REGISTRY.update({
     },
     "gowin_tang_nano_9k": {
         "label": "Gowin Tang Nano 9K (LittleBee GW1NR-9)", "vendor": "gowin", "family": "gowin", "product_family": "LittleBee",
-        "device": "GW1NR-LV9QN88PC6/I5", "apicula_family": "GW1N-9", "package": "QN88", "nextpnr_tool": "nextpnr-himbaechel-gowin",
-        "nextpnr_device_args": ["--device", "GW1NR-LV9QN88PC6/I5", "--vopt", "family=GW1N-9"], "constraint_format": "cst",
+        "device": "GW1NR-LV9QN88PC6/I5", "apicula_family": "GW1N-9C", "package": "QN88", "nextpnr_tool": "nextpnr-himbaechel",
+        "nextpnr_device_args": ["--device", "GW1NR-LV9QN88PC6/I5", "--vopt", "family=GW1N-9C"], "constraint_format": "cst",
         "bitstream_tool": "gowin_pack", "bitstream_ext": ".fs", "pnr_output_ext": ".json", "support_tier": "beta",
         "segments": ["education", "makers", "IoT", "low-cost embedded", "small industrial control"], "programmer_board": "tangnano9k",
         "default_frequency_mhz": 27.0, "resources": {"logic_cells": 8640},
     },
     "gowin_tang_nano_20k": {
         "label": "Gowin Tang Nano 20K (Arora II GW2AR-18C)", "vendor": "gowin", "family": "gowin", "product_family": "Arora II",
-        "device": "GW2AR-LV18QN88PC8/I7", "apicula_family": "GW2A-18C", "package": "QN88", "nextpnr_tool": "nextpnr-himbaechel-gowin",
-        "nextpnr_device_args": ["--device", "GW2AR-LV18QN88PC8/I7", "--vopt", "family=GW2A-18C"], "constraint_format": "cst",
+        "device": "GW2AR-LV18QN88C8/I7", "apicula_family": "GW2A-18C", "yosys_family": "gw2a", "package": "QN88", "nextpnr_tool": "nextpnr-himbaechel",
+        "nextpnr_device_args": ["--device", "GW2AR-LV18QN88C8/I7", "--vopt", "family=GW2A-18C"], "constraint_format": "cst",
         "bitstream_tool": "gowin_pack", "bitstream_ext": ".fs", "pnr_output_ext": ".json", "support_tier": "beta",
         "segments": ["video", "soft CPUs", "DSP", "robotics", "industrial control"], "programmer_board": "tangnano20k",
         "default_frequency_mhz": 27.0, "resources": {"logic_cells": 20736},
     },
     "gowin_tang_primer_20k": {
         "label": "Gowin Tang Primer 20K (Arora II GW2A-18)", "vendor": "gowin", "family": "gowin", "product_family": "Arora II",
-        "device": "GW2A-LV18PG256C8/I7", "apicula_family": "GW2A-18", "package": "PG256", "nextpnr_tool": "nextpnr-himbaechel-gowin",
+        "device": "GW2A-LV18PG256C8/I7", "apicula_family": "GW2A-18", "yosys_family": "gw2a", "package": "PG256", "nextpnr_tool": "nextpnr-himbaechel",
         "nextpnr_device_args": ["--device", "GW2A-LV18PG256C8/I7", "--vopt", "family=GW2A-18"], "constraint_format": "cst",
         "bitstream_tool": "gowin_pack", "bitstream_ext": ".fs", "pnr_output_ext": ".json", "support_tier": "beta",
         "segments": ["modular prototyping", "embedded compute", "motor control", "communications"], "programmer_board": "tangprimer20k",
@@ -180,9 +181,10 @@ BOARD_REGISTRY.update({
     },
     "gowin_gw5a_25_starter": {
         "label": "Gowin Arora V GW5A-25 Starter Board", "vendor": "gowin", "family": "gowin", "product_family": "Arora V",
-        "device": "GW5A-LV25LQ144C1/I0", "apicula_family": "GW5A-25", "package": "LQ144", "nextpnr_tool": "nextpnr-himbaechel-gowin",
+        "device": "GW5A-LV25LQ144C1/I0", "apicula_family": "GW5A-25", "package": "LQ144", "nextpnr_tool": "nextpnr-himbaechel",
         "nextpnr_device_args": ["--device", "GW5A-LV25LQ144C1/I0", "--vopt", "family=GW5A-25"], "constraint_format": "cst",
-        "bitstream_tool": "gowin_pack", "bitstream_ext": ".fs", "pnr_output_ext": ".json", "support_tier": "experimental",
+        "bitstream_tool": "gowin_pack", "bitstream_ext": ".fs", "pnr_output_ext": ".json", "support_tier": "unavailable",
+        "unsupported_reason": "The exact GW5A-25 device and board pin map are not qualified in upstream nextpnr/Apicula.",
         "segments": ["machine vision", "displays", "high-performance DSP", "edge processing"], "default_frequency_mhz": 50.0, "resources": {"logic_cells": 23040},
     },
     "gowin_gw5at_60_pcie": {
@@ -479,13 +481,13 @@ def board_config(state: Dict[str, Any]) -> Dict[str, Any]:
         base.setdefault("bitstream_tool", "prjoxide")
         base.setdefault("bitstream_ext", ".bit")
         base.setdefault("pnr_output_ext", ".fasm")
-        base.setdefault("constraint_format", "lpf")
+        base.setdefault("constraint_format", "pdc")
         base.setdefault("nextpnr_device_args", ["--device", base.get("device")])
     elif family == "gowin":
-        split_himbaechel = shutil.which("nextpnr-himbaechel-gowin")
         generic_himbaechel = shutil.which("nextpnr-himbaechel")
-        if base.get("nextpnr_tool") == "nextpnr-himbaechel-gowin" and not split_himbaechel and generic_himbaechel:
-            base["nextpnr_tool"] = generic_himbaechel
+        split_himbaechel = shutil.which("nextpnr-himbaechel-gowin")
+        if base.get("nextpnr_tool") == "nextpnr-himbaechel" and not generic_himbaechel and split_himbaechel:
+            base["nextpnr_tool"] = split_himbaechel
         base.setdefault("bitstream_tool", "gowin_pack")
         base.setdefault("bitstream_ext", ".fs")
         base.setdefault("pnr_output_ext", ".json")
@@ -500,7 +502,7 @@ def tool_status() -> Dict[str, Any]:
         "nextpnr-ice40": shutil.which("nextpnr-ice40"),
         "nextpnr-ecp5": shutil.which("nextpnr-ecp5"),
         "nextpnr-nexus": shutil.which("nextpnr-nexus"),
-        "nextpnr-himbaechel-gowin": shutil.which("nextpnr-himbaechel-gowin") or shutil.which("nextpnr-himbaechel"),
+        "nextpnr-himbaechel": shutil.which("nextpnr-himbaechel") or shutil.which("nextpnr-himbaechel-gowin"),
         "icepack": shutil.which("icepack"),
         "icetime": shutil.which("icetime"),
         "ecppack": shutil.which("ecppack"),

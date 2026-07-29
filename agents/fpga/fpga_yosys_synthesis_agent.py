@@ -5,6 +5,14 @@ from functools import lru_cache
 from .fpga_common import board_config, fpga_dir, manifest_update, publish_json, run_cmd, write_json, write_text
 
 
+def _architecture_synth_options(board: dict) -> list[str]:
+    family = str(board.get("family") or "").lower()
+    yosys_family = str(board.get("yosys_family") or "").strip()
+    if family in {"nexus", "gowin"} and yosys_family:
+        return ["-family", yosys_family]
+    return []
+
+
 def _yosys_cell_metrics(json_path: str, board: dict) -> dict:
     metrics = {
         "logical_cells_used": 0,
@@ -175,7 +183,7 @@ def run_agent(state: dict) -> dict:
     if state.get("fpga_yosys_flatten"):
         steps.append("hierarchy -check")
         steps.append("flatten")
-    synth_options = " ".join(effort_policy["effective_options"])
+    synth_options = " ".join(_architecture_synth_options(board) + effort_policy["effective_options"])
     steps.append(f"{synth_cmd} -top {top} {synth_options} -json {json_path}".replace("  ", " "))
     script = "\n".join(steps) + "\n"
     write_text(script_path, script)

@@ -11,7 +11,7 @@ from .fpga_nextpnr_place_route_agent import (
     _parse_nextpnr,
     _parse_nextpnr_report,
 )
-from .fpga_yosys_synthesis_agent import _yosys_help, _yosys_version
+from .fpga_yosys_synthesis_agent import _architecture_synth_options, _yosys_help, _yosys_version
 
 
 CANDIDATE_BOARDS = [
@@ -98,7 +98,7 @@ def _run_synthesis(state: dict, board_key: str, board: dict, strategy: str) -> d
     script_path = os.path.abspath(os.path.join(out_dir, "synth.ys"))
     log_path = os.path.abspath(os.path.join(out_dir, "yosys.log"))
     help_text = _yosys_help(synth_cmd)
-    options = _synthesis_options(strategy, help_text)
+    options = _architecture_synth_options(board) + _synthesis_options(strategy, help_text)
     steps = [f"read_verilog -sv {path}" for path in rtl_files]
     option_text = " ".join(options)
     steps.append(f"{synth_cmd} -top {top} {option_text} -json {netlist}".replace("  ", " "))
@@ -265,7 +265,12 @@ def run_agent(state: dict) -> dict:
     if requested_profile not in PROFILE_KEYS:
         requested_profile = "best_overall"
     requested_boards = state.get("candidate_boards") if isinstance(state.get("candidate_boards"), list) else CANDIDATE_BOARDS
-    board_keys = list(dict.fromkeys(key for key in requested_boards if key in CANDIDATE_BOARDS and key in BOARD_REGISTRY))
+    board_keys = list(dict.fromkeys(
+        key for key in requested_boards
+        if key in CANDIDATE_BOARDS
+        and key in BOARD_REGISTRY
+        and str(BOARD_REGISTRY[key].get("support_tier") or "production").lower() != "unavailable"
+    ))
     if not board_keys:
         raise RuntimeError("Select at least one supported FPGA board/device to explore.")
     baseline_seed_count = max(1, min(int(_num(state.get("baseline_seed_count"), 1)), 10))

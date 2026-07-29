@@ -3608,7 +3608,7 @@ class FpgaBitstreamAppIn(DigitalRTLSourceIn):
     device: Optional[str] = None
     package: Optional[str] = None
     top_module: Optional[str] = None
-    target_frequency_mhz: Optional[float] = 12.0
+    target_frequency_mhz: Optional[float] = None  # Use the selected board default when the user does not provide a target.
     constraints_pcf: Optional[str] = None
     pcf_text: Optional[str] = None
     pcf_path: Optional[str] = None

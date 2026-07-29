@@ -131,7 +131,7 @@ def test_explorer_honors_user_seed_counts_and_keeps_closure_conditional(monkeypa
 def test_vendor_catalog_prefixes_and_support_tiers():
     from agents.fpga.fpga_common import BOARD_REGISTRY, board_config
 
-    runnable = ["certus_nx_versa_40", "crosslink_nx_eval_40", "certuspro_nx_versa_100", "gowin_tang_nano_9k", "gowin_tang_nano_20k", "gowin_tang_primer_20k", "gowin_gw5a_25_starter"]
+    runnable = ["certus_nx_versa_40", "crosslink_nx_eval_40", "gowin_tang_nano_9k", "gowin_tang_nano_20k", "gowin_tang_primer_20k"]
     for key in runnable:
         target = BOARD_REGISTRY[key]
         assert target["label"].lower().startswith(target["vendor"])
@@ -141,6 +141,8 @@ def test_vendor_catalog_prefixes_and_support_tiers():
 
     assert board_config({"board": "machxo5_nx_65t"})["supported"] is False
     assert board_config({"board": "gowin_gw3a_20k"})["supported"] is False
+    assert board_config({"board": "certuspro_nx_versa_100"})["supported"] is False
+    assert board_config({"board": "gowin_gw5a_25_starter"})["supported"] is False
 
 
 def test_open_source_architecture_commands(monkeypatch, tmp_path):
@@ -156,8 +158,8 @@ def test_open_source_architecture_commands(monkeypatch, tmp_path):
 
     assert commands[0][0] == "nextpnr-nexus"
     assert "--fasm" in commands[0]
-    assert commands[1][0] == "nextpnr-himbaechel-gowin"
-    assert "family=GW1N-9" in commands[1]
+    assert commands[1][0] == "nextpnr-himbaechel"
+    assert "family=GW1N-9C" in commands[1]
     assert "--write" in commands[1]
 
 
@@ -173,3 +175,16 @@ def test_frontend_and_supabase_share_vendor_target_catalog():
         assert key in migration
     assert "FPGA_TARGET_OPTIONS.map" in template
     assert "PCF / LPF / CST" in template
+
+
+def test_explorer_rejects_unavailable_board_even_from_direct_api_input(tmp_path):
+    state = {
+        "workflow_id": "wf-unavailable",
+        "workflow_dir": str(tmp_path),
+        "target_frequency_mhz": 75,
+        "candidate_boards": ["certuspro_nx_versa_100"],
+        "fpga": {"rtl_files": ["demo.sv"], "top_module": "demo"},
+    }
+    import pytest
+    with pytest.raises(RuntimeError, match="Select at least one supported FPGA board/device"):
+        explorer.run_agent(state)

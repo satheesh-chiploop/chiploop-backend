@@ -300,7 +300,8 @@ def run_agent(state: dict) -> dict:
                 if family == "gowin":
                     cmd.extend(["--vopt", f"cst={resolved_constraint}"])
                 else:
-                    cmd.extend(["--lpf" if constraint_format == "lpf" else "--pcf", resolved_constraint])
+                    constraint_flag = "--pdc" if constraint_format == "pdc" else "--lpf" if constraint_format == "lpf" else "--pcf"
+                    cmd.extend([constraint_flag, resolved_constraint])
             else:
                 summary["constraint_warning"] = f"Constraint file not found: {constraint_path}"
         cmd.extend(effort_policy["effective_args"])
