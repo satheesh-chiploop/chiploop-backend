@@ -364,6 +364,11 @@ def run_agent(state: dict) -> dict:
     manifest_update(state, "pnr_output", pnr_output if os.path.exists(pnr_output) else None)
     manifest_update(state, "asc", pnr_output if family == "ice40" and os.path.exists(pnr_output) else None)
     manifest_update(state, "routed_config", pnr_output if family == "ecp5" and os.path.exists(pnr_output) else None)
+    if summary.get("failure_kind") in {"tool_unavailable", "toolchain_version_mismatch", "invalid_cli"}:
+        command = summary.get("command") if isinstance(summary.get("command"), dict) else {}
+        detail = str(command.get("stderr_tail") or command.get("error") or summary.get("error") or "").strip()
+        state["fpga_implementation_unavailable_reason"] = detail or str(summary.get("error") or "FPGA implementation tool unavailable.")
+        state["fpga_timing_closure_terminal"] = True
     if summary["status"] == "failed":
         state["status"] = "FPGA place-and-route failed."
     return state

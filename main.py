@@ -4766,15 +4766,20 @@ def execute_digital_app_background(
             )
 
         closure_failed = bool(shared_state.get("fpga_timing_closure_failed"))
-        final_status = "failed" if closure_failed else "completed"
-        final_phase = "timing_closure_failed" if closure_failed else "done"
+        implementation_unavailable_reason = str(shared_state.get("fpga_implementation_unavailable_reason") or "").strip()
+        implementation_failed = bool(implementation_unavailable_reason)
+        app_failed = closure_failed or implementation_failed
+        final_status = "failed" if app_failed else "completed"
+        final_phase = "implementation_unavailable" if implementation_failed else "timing_closure_failed" if closure_failed else "done"
         final_message = (
-            f"FPGA timing closure failed for {app_name}; review the achievable-clock recommendation or escalate the critical path."
+            f"FPGA implementation unavailable for {app_name}: {implementation_unavailable_reason}"
+            if implementation_failed
+            else f"FPGA timing closure failed for {app_name}; review the achievable-clock recommendation or escalate the critical path."
             if closure_failed else f"{app_loop_label} App complete: {app_name}"
         )
         append_log_workflow(workflow_id, final_message, status=final_status, phase=final_phase)
         append_log_run(run_id, final_message, status=final_status)
-        if not closure_failed and app_name in {"arch2rtl", "dqa", "verify", "arch2synthesis", "arch2tapeout"} and bool(shared_state.get("hem_enabled")):
+        if not app_failed and app_name in {"arch2rtl", "dqa", "verify", "arch2synthesis", "arch2tapeout"} and bool(shared_state.get("hem_enabled")):
             _hem_continue_digital_rtl_after_success(
                 current_app=app_name,
                 current_workflow_id=workflow_id,

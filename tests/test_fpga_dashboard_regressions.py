@@ -560,3 +560,54 @@ def test_nexus_yosys_metrics_count_fd1p3_flip_flops_and_ccu2(tmp_path):
     assert metrics["combinational_cells"] == 49
     assert metrics["logical_cells_used"] == 44
     assert metrics["fabric_mapped_cells"] == 82
+
+def test_nextpnr_terminal_failure_propagates_without_timing_closure(tmp_path, monkeypatch):
+    from agents.fpga import fpga_nextpnr_place_route_agent as pnr_agent
+
+    netlist = tmp_path / "top.json"
+    netlist.write_text("{}", encoding="utf-8")
+    constraints = tmp_path / "top.pdc"
+    constraints.write_text("ldc_set_location -site {G13} [get_ports {clk}]\n", encoding="utf-8")
+    monkeypatch.setattr(pnr_agent, "fpga_dir", lambda _state, *_parts: str(tmp_path))
+    monkeypatch.setattr(pnr_agent, "board_config", lambda _state: {
+        "board": "certus_nx_versa_40",
+        "family": "nexus",
+        "supported": True,
+        "nextpnr_tool": "nextpnr-nexus",
+        "nextpnr_device_args": ["--device", "LFD2NX-40-8BG256C"],
+        "constraint_format": "pdc",
+        "pnr_output_ext": ".fasm",
+    })
+    monkeypatch.setattr(pnr_agent, "_nextpnr_help", lambda _tool: "--freq --pdc --fasm")
+    monkeypatch.setattr(pnr_agent, "_nextpnr_effort_policy", lambda *_args: {
+        "mode": "balanced", "goal": "balanced_timing", "requested": [],
+        "effective_args": ["--freq", "12.0"], "capability_checked": True,
+    })
+    error = "ERROR: Provided database version 12 is newer than nextpnr version 11, please rebuild database/nextpnr."
+    monkeypatch.setattr(pnr_agent, "run_cmd", lambda *_args, **_kwargs: {
+        "ok": False, "status": "failed", "returncode": 255,
+        "stderr_tail": error, "stdout_tail": "", "error": None,
+    })
+    monkeypatch.setattr(pnr_agent, "publish_json", lambda *_args, **_kwargs: None)
+    state = {
+        "target_frequency_mhz": 12.0,
+        "run_fpga_timing_closure_loop": False,
+        "fpga": {
+            "top_module": "top",
+            "yosys_json": str(netlist),
+            "constraints_pdc": str(constraints),
+        },
+    }
+
+    pnr_agent.run_agent(state)
+
+    assert "database version 12" in state["fpga_implementation_unavailable_reason"]
+    assert state["fpga_timing_closure_terminal"] is True
+
+
+def test_fpga_app_final_status_includes_implementation_unavailable():
+    source = (Path(__file__).parents[1] / "main.py").read_text(encoding="utf-8")
+
+    assert 'implementation_failed = bool(implementation_unavailable_reason)' in source
+    assert 'app_failed = closure_failed or implementation_failed' in source
+    assert 'final_phase = "implementation_unavailable" if implementation_failed' in source
