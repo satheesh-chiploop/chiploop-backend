@@ -131,14 +131,14 @@ BOARD_REGISTRY.update({
         "device": "LFD2NX-40-8BG256C", "package": "BG256", "nextpnr_tool": "nextpnr-nexus",
         "nextpnr_device_args": ["--device", "LFD2NX-40-8BG256C"], "constraint_format": "pdc", "yosys_family": "lfd2nx", "bitstream_tool": "prjoxide",
         "bitstream_ext": ".bit", "pnr_output_ext": ".fasm", "support_tier": "experimental",
-        "segments": ["industrial", "general-purpose embedded", "connectivity"], "default_frequency_mhz": 12.0, "resources": {"logic_cells": 39000},
+        "segments": ["industrial", "general-purpose embedded", "connectivity"], "programmer_board": "certusnx_versa_evn", "default_frequency_mhz": 12.0, "resources": {"logic_cells": 39000},
     },
     "crosslink_nx_eval_40": {
         "label": "Lattice CrossLink-NX Evaluation Board (LIFCL-40)", "vendor": "lattice", "family": "nexus", "product_family": "CrossLink-NX",
         "device": "LIFCL-40-9BG400C", "package": "BG400", "nextpnr_tool": "nextpnr-nexus",
         "nextpnr_device_args": ["--device", "LIFCL-40-9BG400C"], "constraint_format": "pdc", "yosys_family": "lifcl", "bitstream_tool": "prjoxide",
         "bitstream_ext": ".bit", "pnr_output_ext": ".fasm", "support_tier": "experimental",
-        "segments": ["machine vision", "camera/display bridging", "sensor aggregation"], "default_frequency_mhz": 12.0, "resources": {"logic_cells": 39000},
+        "segments": ["machine vision", "camera/display bridging", "sensor aggregation"], "programmer_board": "crosslinknx_evn", "default_frequency_mhz": 12.0, "resources": {"logic_cells": 39000},
     },
     "certuspro_nx_versa_100": {
         "label": "Lattice CertusPro-NX Versa (LFCPNX-100)", "vendor": "lattice", "family": "nexus", "product_family": "CertusPro-NX",

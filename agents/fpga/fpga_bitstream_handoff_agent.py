@@ -1,6 +1,39 @@
+import hashlib
 import os
 from .fpga_common import board_config, fpga_dir, manifest_update, publish_json, run_cmd
 
+
+def _sha256(path: str) -> str | None:
+    if not path or not os.path.exists(path):
+        return None
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _hardware_launch(board: dict, bitstream: str, programming_command: str | None, state: dict) -> dict:
+    ready = bool(bitstream and os.path.exists(bitstream))
+    expected = str(state.get("hardware_expected_behavior") or "").strip() or "Observe the behavior described in the design intent on the board I/O. Hardware confirmation is required."
+    steps = [
+        "Connect the selected board to the local machine over its programming USB/JTAG interface.",
+        "Confirm the board is detected by openFPGALoader.",
+        "Run the generated programming command with the downloaded bitstream." if programming_command else "Use the board-specific programmer; an automatic command is not available for this target.",
+        "Check the expected behavior, then record whether the hardware test passed.",
+    ]
+    return {
+        "status": "ready_for_hardware_test" if ready else "not_ready",
+        "board": board.get("board"), "board_label": board.get("label"),
+        "bitstream": bitstream if ready else None,
+        "bitstream_filename": os.path.basename(bitstream) if ready else None,
+        "bitstream_sha256": _sha256(bitstream) if ready else None,
+        "programming_command": programming_command,
+        "programmer_board": board.get("programmer_board"),
+        "connection_steps": steps, "expected_behavior": expected,
+        "programming_note": str(board.get("programming_note") or "").strip() or None,
+        "confirmation_required": True,
+    }
 
 def run_agent(state: dict) -> dict:
     agent = "FPGA Bitstream Handoff Agent"
@@ -52,7 +85,8 @@ def run_agent(state: dict) -> dict:
     summary["programming_command"] = None
     programmer_board = summary["target"].get("programmer_board")
     if os.path.exists(bitstream) and programmer_board:
-        summary["programming_command"] = f"openFPGALoader -b {programmer_board} {bitstream}"
+        summary["programming_command"] = f"openFPGALoader -b {programmer_board} {os.path.basename(bitstream)}"
+    summary["hardware_launch"] = _hardware_launch(board, bitstream, summary.get("programming_command"), state)
     publish_json(state, agent, "bitstream", "fpga_bitstream_summary.json", summary)
     manifest_update(state, "bitstream", summary)
     if summary["status"] == "failed":

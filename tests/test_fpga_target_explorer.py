@@ -188,3 +188,43 @@ def test_explorer_rejects_unavailable_board_even_from_direct_api_input(tmp_path)
     import pytest
     with pytest.raises(RuntimeError, match="Select at least one supported FPGA board/device"):
         explorer.run_agent(state)
+
+
+def test_recommendation_details_explain_timing_margin_and_next_step():
+    results = [{
+        "board": "demo", "label": "Demo Board", "target_met": True,
+        "best_frequency_mhz": 90.0, "timing_margin_percent": 20.0,
+        "resource_headroom_percent": 70.0, "toolchain_confidence": "qualified",
+        "constraint_confidence": "exploration_only",
+    }]
+
+    details = explorer._recommendation_details(results, {"best_overall": "demo"}, 75.0)
+
+    assert details["best_overall"]["why"] == "Meets 75 MHz with 20.0% timing margin and 70.0% logic headroom."
+    assert details["best_overall"]["constraint_confidence"] == "exploration_only"
+    assert "FPGA Prototyping" in details["best_overall"]["next_step"]
+
+
+def test_explorer_frontend_carries_winning_configuration_and_provenance():
+    from pathlib import Path
+    root = Path(__file__).parents[2]
+    dashboard = (root / "frontend" / "components" / "WorkflowEvidenceDashboard.tsx").read_text(encoding="utf-8")
+    template = (root / "frontend" / "app" / "apps" / "digital-review" / "_DigitalReviewAppTemplate.tsx").read_text(encoding="utf-8")
+    main = (root / "backend" / "main.py").read_text(encoding="utf-8")
+
+    assert "explorerWinningConfiguration" in dashboard
+    assert "explorerSourceWorkflowId" in dashboard
+    assert "FPGA Prototyping will rerun verification and implementation" in dashboard
+    assert "explorer_winning_configuration" in template
+    assert "fpga_nextpnr_seed" in template
+    assert "explorer_winning_configuration: Optional[Dict[str, Any]]" in main
+
+
+def test_fpga_prototyping_applies_explorer_winning_seed_and_strategy():
+    from pathlib import Path
+    main = (Path(__file__).parents[1] / "main.py").read_text(encoding="utf-8")
+    endpoint = main[main.index("async def apps_fpga_bitstream_run"):main.index('@app.post("/apps/fpga2rtl/run")')]
+
+    assert 'data["fpga_nextpnr_seed"] = explorer_winner.get("seed")' in endpoint
+    assert 'data["fpga_yosys_retime"] = True' in endpoint
+    assert 'data["fpga_yosys_flatten"] = True' in endpoint

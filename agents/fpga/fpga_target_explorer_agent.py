@@ -162,6 +162,7 @@ def _run_pnr(state: dict, board_key: str, board: dict, synthesis: dict, seed: in
     return {
         "seed": seed,
         "effort": effort,
+        "synthesis_strategy": synthesis.get("strategy"),
         "status": "completed" if produced else "failed",
         "timing_met": metrics.get("timing_met"),
         "max_frequency_mhz": metrics.get("max_frequency_mhz"),
@@ -191,6 +192,7 @@ def _summarize_board(board_key: str, board: dict, synthesis_runs: list[dict], pn
     if utilization is None and available:
         utilization = round((used / available) * 100.0, 3)
     best_fmax = max(frequencies) if frequencies else None
+    timing_margin_percent = round(((best_fmax - target) / target) * 100.0, 3) if best_fmax and target else None
     relaxed = round(best_fmax * 0.9, 3) if best_fmax and not met_runs else None
     return {
         "board": board_key,
@@ -208,6 +210,7 @@ def _summarize_board(board_key: str, board: dict, synthesis_runs: list[dict], pn
         "status": "target_met" if met_runs else "target_missed" if completed else "implementation_failed",
         "target_met": bool(met_runs),
         "best_frequency_mhz": best_fmax,
+        "timing_margin_percent": timing_margin_percent,
         "median_frequency_mhz": round(statistics.median(frequencies), 3) if frequencies else None,
         "worst_frequency_mhz": min(frequencies) if frequencies else None,
         "timing_pass_rate": round(len(met_runs) / len(completed), 3) if completed else 0.0,
@@ -219,6 +222,8 @@ def _summarize_board(board_key: str, board: dict, synthesis_runs: list[dict], pn
         "closure_used": len(synthesis_runs) > 1 or any(run.get("effort") == "advanced" for run in pnr_runs),
         "frequency_relaxation": {"eligible": bool(relaxed), "recommended_mhz": relaxed, "reason": "reported only after target closure failed" if relaxed else None},
         "constraint_scope": "capacity_and_timing_exploration; board pin compatibility must be confirmed in FPGA Prototyping",
+        "constraint_confidence": "exploration_only",
+        "toolchain_confidence": "qualified" if str(board.get("support_tier") or "production").lower() == "production" else str(board.get("support_tier") or "experimental").lower(),
         "synthesis_runs": synthesis_runs,
         "pnr_runs": pnr_runs,
         "winning_run": best or None,
@@ -250,6 +255,31 @@ def _recommend(results: list[dict]) -> dict:
         "best_for_growth": growth.get("board"),
     }
 
+
+def _recommendation_details(results: list[dict], recommendations: dict, target: float) -> dict:
+    by_board = {str(item.get("board")): item for item in results}
+    details = {}
+    for profile, board_key in recommendations.items():
+        item = by_board.get(str(board_key)) if board_key else None
+        if not item:
+            details[profile] = None
+            continue
+        margin = _num(item.get("timing_margin_percent"))
+        headroom = _num(item.get("resource_headroom_percent"))
+        details[profile] = {
+            "board": board_key,
+            "label": item.get("label"),
+            "target_met": bool(item.get("target_met")),
+            "target_frequency_mhz": target,
+            "best_frequency_mhz": item.get("best_frequency_mhz"),
+            "timing_margin_percent": item.get("timing_margin_percent"),
+            "resource_headroom_percent": item.get("resource_headroom_percent"),
+            "toolchain_confidence": item.get("toolchain_confidence"),
+            "constraint_confidence": item.get("constraint_confidence"),
+            "why": (f"Meets {target:g} MHz with {margin:.1f}% timing margin and {headroom:.1f}% logic headroom." if item.get("target_met") else f"Best available result is {item.get('best_frequency_mhz')} MHz; the {target:g} MHz target was not met."),
+            "next_step": "Continue to FPGA Prototyping to apply verified board pins, rerun implementation, verify, and generate the bitstream.",
+        }
+    return details
 
 def run_agent(state: dict) -> dict:
     agent = "FPGA Target Explorer Agent"
@@ -341,7 +371,10 @@ def run_agent(state: dict) -> dict:
         best_text = f" at {float(best):.3f} MHz" if best is not None else ""
         _progress(state, f"Board {board_index}/{len(board_keys)}: {board_key} {outcome}{best_text}; winning seed {summary.get('winning_seed') or 'n/a'}.")
     recommendations = _recommend(results)
+    recommendation_details = _recommendation_details(results, recommendations, target)
     selected_board = recommendations.get(requested_profile)
+    selected_result = next((item for item in results if item.get("board") == selected_board), None)
+    winning_run = (selected_result or {}).get("winning_run") if isinstance((selected_result or {}).get("winning_run"), dict) else {}
     summary = {
         "type": "fpga_target_explorer",
         "status": "completed" if results else "failed",
@@ -354,6 +387,7 @@ def run_agent(state: dict) -> dict:
         "seed_policy": {"baseline_seed_count": baseline_seed_count, "closure_seed_count": closure_seed_count, "closure_is_conditional": True},
         "selected_recommendation": selected_board,
         "recommendations": recommendations,
+        "recommendation_details": recommendation_details,
         "recommendation_policy": {
             "best_overall": "target met, timing stability, useful headroom, performance, then smallest viable target",
             "best_performance": "highest robust median Fmax",
@@ -370,6 +404,14 @@ def run_agent(state: dict) -> dict:
             "selected_board": selected_board,
             "target_frequency_mhz": target,
             "source_workflow_id": state.get("workflow_id"),
+            "top_module": top,
+            "winning_configuration": {
+                "seed": winning_run.get("seed"),
+                "synthesis_strategy": winning_run.get("synthesis_strategy"),
+                "tool_effort": winning_run.get("effort"),
+                "achieved_frequency_mhz": (selected_result or {}).get("best_frequency_mhz"),
+                "timing_margin_percent": (selected_result or {}).get("timing_margin_percent"),
+            },
         },
     }
     _progress(state, f"Exploration complete: {len(results)} board result(s), {len(implementation_cache)} unique implementation(s); {requested_profile} recommends {selected_board or 'no viable target'}.")

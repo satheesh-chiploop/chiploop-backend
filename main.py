@@ -3624,6 +3624,9 @@ class FpgaBitstreamAppIn(DigitalRTLSourceIn):
     candidate_boards: Optional[List[str]] = None
     baseline_seed_count: Optional[int] = 1
     closure_seed_count: Optional[int] = 1
+    explorer_source_workflow_id: Optional[str] = None
+    explorer_winning_configuration: Optional[Dict[str, Any]] = None
+    fpga_nextpnr_seed: Optional[int] = None
     run_fpga_synthesis_closure_loop: Optional[bool] = False
     max_fpga_synthesis_closure_iterations: Optional[int] = 1
     run_fpga_rtl_repair_loop: Optional[bool] = True
@@ -6379,7 +6382,14 @@ async def apps_fpga_bitstream_run(request: Request, background_tasks: Background
         data["source_workflow_id"] = data["source_arch2rtl_workflow_id"]
     data["target"] = "fpga"
     data["verification_domain"] = "fpga"
-
+    explorer_winner = data.get("explorer_winning_configuration") if isinstance(data.get("explorer_winning_configuration"), dict) else {}
+    explorer_strategy = str(explorer_winner.get("synthesisStrategy") or explorer_winner.get("synthesis_strategy") or "").lower()
+    if explorer_winner.get("seed") is not None:
+        data["fpga_nextpnr_seed"] = explorer_winner.get("seed")
+    if explorer_strategy in {"closure_retime", "retime"}:
+        data["fpga_yosys_retime"] = True
+    elif explorer_strategy in {"closure_flatten", "flatten"}:
+        data["fpga_yosys_flatten"] = True
     target = _fpga_target_metadata(data)
     data["fpga_target"] = target
     data["fpga"] = {

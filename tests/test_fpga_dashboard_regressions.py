@@ -671,3 +671,30 @@ def test_nexus_timing_uses_nextpnr_report_without_icetime(tmp_path, monkeypatch)
     assert published["tns_ns"] == 0
     assert published["timing_violation_count"] == 0
     assert "icetime" not in published
+
+
+def test_hardware_launch_uses_local_filename_and_checksum(tmp_path):
+    from agents.fpga.fpga_bitstream_handoff_agent import _hardware_launch
+
+    bitstream = tmp_path / "demo.bit"
+    bitstream.write_bytes(b"chiploop")
+    launch = _hardware_launch(
+        {"board": "demo", "label": "Demo Board", "programmer_board": "demo"},
+        str(bitstream), "openFPGALoader -b demo demo.bit", {},
+    )
+
+    assert launch["status"] == "ready_for_hardware_test"
+    assert launch["bitstream_filename"] == "demo.bit"
+    assert len(launch["bitstream_sha256"]) == 64
+    assert launch["programming_command"] == "openFPGALoader -b demo demo.bit"
+    assert launch["confirmation_required"] is True
+
+
+def test_hardware_launch_frontend_is_prominent_and_not_auto_confirmed():
+    from pathlib import Path
+    source = (Path(__file__).parents[2] / "frontend" / "components" / "WorkflowEvidenceDashboard.tsx").read_text(encoding="utf-8")
+
+    assert "Ready for hardware test" in source
+    assert "Copy command" in source
+    assert "Hardware status: awaiting confirmation" in source
+    assert "bitstream_sha256" in source
