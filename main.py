@@ -6938,6 +6938,9 @@ def dashboard_json_artifact(workflow_id: str, filename: str = Query(..., min_len
     def _fpga_dashboard_from_parts(parts: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if not parts:
             return None
+        generated = parts.get("fpga_dashboard.json")
+        if isinstance(generated, dict) and generated:
+            return generated
         summary: Dict[str, Any] = {
             "type": "fpga_dashboard",
             "status": "completed",
@@ -6978,6 +6981,15 @@ def dashboard_json_artifact(workflow_id: str, filename: str = Query(..., min_len
             }
         place_route = summary.get("place_route") if isinstance(summary.get("place_route"), dict) else {}
         timing = summary.get("timing_drc") if isinstance(summary.get("timing_drc"), dict) else {}
+        constraints = summary.get("constraints") if isinstance(summary.get("constraints"), dict) else {}
+        timing_closure = summary.get("timing_closure") if isinstance(summary.get("timing_closure"), dict) else {}
+        target = summary.get("target") if isinstance(summary.get("target"), dict) else {}
+        implementation_target_mhz = (
+            constraints.get("target_frequency_mhz")
+            or timing_closure.get("target_frequency_mhz")
+            or timing.get("target_frequency_mhz")
+            or target.get("target_frequency_mhz")
+        )
         if place_route:
             summary["utilization"] = {
                 "logical_cells_used": place_route.get("logical_cells_used"),
@@ -7003,7 +7015,7 @@ def dashboard_json_artifact(workflow_id: str, filename: str = Query(..., min_len
             }
             summary["timing_summary"] = {
                 "max_frequency_mhz": timing.get("max_frequency_mhz") or place_route.get("max_frequency_mhz"),
-                "target_frequency_mhz": timing.get("target_frequency_mhz") or ((summary.get("target") or {}).get("default_frequency_mhz") if isinstance(summary.get("target"), dict) else None),
+                "target_frequency_mhz": implementation_target_mhz,
                 "timing_met": timing.get("timing_met") if timing.get("timing_met") is not None else place_route.get("timing_met"),
                 "timing_violation_count": timing.get("timing_violation_count") if timing.get("timing_violation_count") is not None else place_route.get("timing_violation_count"),
                 "tns_ns": timing.get("tns_ns") if timing.get("tns_ns") is not None else place_route.get("tns_ns"),
@@ -7013,6 +7025,7 @@ def dashboard_json_artifact(workflow_id: str, filename: str = Query(..., min_len
 
     def _synthesize_fpga_dashboard_from_local(local_base: Path) -> Optional[Dict[str, Any]]:
         wanted = {
+            "fpga_dashboard.json",
             "fpga_handoff_ingest.json",
             "fpga_rtl_quality_summary.json",
             "fpga_constraints_summary.json",
@@ -7063,6 +7076,7 @@ def dashboard_json_artifact(workflow_id: str, filename: str = Query(..., min_len
 
     def _synthesize_fpga_dashboard_from_storage(path_prefix: str) -> Optional[Dict[str, Any]]:
         wanted = {
+            "fpga_dashboard.json",
             "fpga_handoff_ingest.json",
             "fpga_rtl_quality_summary.json",
             "fpga_constraints_summary.json",

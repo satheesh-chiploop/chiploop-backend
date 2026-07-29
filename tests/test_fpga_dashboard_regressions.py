@@ -430,3 +430,13 @@ def test_timing_closure_does_not_retry_invalid_nextpnr_cli(tmp_path, monkeypatch
     assert plan["selected_restart_stage"] is None
     assert "fpga_nextpnr_seed" not in state
     assert "unrecognised option" in state["fpga_implementation_unavailable_reason"]
+
+
+def test_fpga_dashboard_api_preserves_generated_target_frequency():
+    source = (Path(__file__).parents[1] / "main.py").read_text(encoding="utf-8")
+    endpoint = source[source.index("def dashboard_json_artifact"):source.index("def _usage_number")]
+
+    assert 'generated = parts.get("fpga_dashboard.json")' in endpoint
+    assert "return generated" in endpoint
+    assert 'constraints.get("target_frequency_mhz")' in endpoint
+    assert 'target.get("default_frequency_mhz")' not in endpoint
