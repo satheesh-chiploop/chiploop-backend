@@ -176,7 +176,7 @@ BOARD_REGISTRY.update({
         "nextpnr_device_args": ["--device", "GW2A-LV18PG256C8/I7", "--vopt", "family=GW2A-18"], "constraint_format": "cst",
         "bitstream_tool": "gowin_pack", "bitstream_ext": ".fs", "pnr_output_ext": ".json", "support_tier": "beta",
         "segments": ["modular prototyping", "embedded compute", "motor control", "communications"], "programmer_board": "tangprimer20k",
-        "default_frequency_mhz": 50.0, "resources": {"logic_cells": 20736},
+        "default_frequency_mhz": 27.0, "resources": {"logic_cells": 20736},
     },
     "gowin_gw5a_25_starter": {
         "label": "Gowin Arora V GW5A-25 Starter Board", "vendor": "gowin", "family": "gowin", "product_family": "Arora V",

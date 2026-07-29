@@ -112,6 +112,7 @@ def _pin_for_pcf_port(board_key: str, port: str) -> str | None:
             "led_7": "C3",
         }
         return pins.get(lower)
+
     return None
 
 
@@ -252,6 +253,14 @@ def _pin_for_cst_port(board_key: str, port: str) -> str | None:
             "led2": "17", "led_2": "17", "led_b": "17",
             "led3": "18", "led_3": "18", "led4": "19", "led_4": "19",
             "led5": "20", "led_5": "20",
+        }
+        return pins.get(lower)
+    if board_key == "gowin_tang_primer_20k":
+        # Sipeed Tang Primer 20K core clock and Dock user LEDs.
+        pins = {
+            "clk": "H11", "clock": "H11", "clk_i": "H11", "clk_27mhz": "H11",
+            "led": "N16", "led_n": "N16", "led0": "N16", "led_0": "N16",
+            "led1": "N14", "led_1": "N14",
         }
         return pins.get(lower)
     return None

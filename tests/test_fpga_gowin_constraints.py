@@ -36,6 +36,16 @@ def test_tang_nano_20k_generates_upstream_clock_and_led_constraints():
     assert constrained == ["clk", "led"]
 
 
+def test_tang_primer_20k_generates_verified_dock_clock_and_led_constraints():
+    text, constrained = _starter_cst(
+        "pwm_fpga_demo", 16.0, "gowin_tang_primer_20k", ["clk", "led"],
+    )
+    assert 'IO_LOC "clk" H11;' in text
+    assert 'IO_LOC "led" N16;' in text
+    assert constrained == ["clk", "led"]
+    assert _constrained_cst_ports(text) == ["clk", "led"]
+    assert BOARD_REGISTRY["gowin_tang_primer_20k"]["default_frequency_mhz"] == 27.0
+
 def test_new_architectures_use_board_specific_yosys_families_when_supported():
     help_with_family = "-family <device> supported values"
     assert _architecture_synth_options(BOARD_REGISTRY["gowin_tang_nano_20k"], help_with_family) == []
