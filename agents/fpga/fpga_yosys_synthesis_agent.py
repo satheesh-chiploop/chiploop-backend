@@ -5,10 +5,10 @@ from functools import lru_cache
 from .fpga_common import board_config, fpga_dir, manifest_update, publish_json, run_cmd, write_json, write_text
 
 
-def _architecture_synth_options(board: dict) -> list[str]:
+def _architecture_synth_options(board: dict, help_text: str = "") -> list[str]:
     family = str(board.get("family") or "").lower()
     yosys_family = str(board.get("yosys_family") or "").strip()
-    if family in {"nexus", "gowin"} and yosys_family:
+    if family in {"nexus", "gowin"} and yosys_family and "-family" in help_text:
         return ["-family", yosys_family]
     return []
 
@@ -157,7 +157,8 @@ def run_agent(state: dict) -> dict:
     json_path = os.path.abspath(f"{out_dir}/{top or 'top'}_{family}.json")
     script_path = os.path.abspath(f"{out_dir}/synth_{family}.ys")
     log_path = os.path.abspath(f"{out_dir}/yosys_synth.log")
-    effort_policy = _yosys_effort_policy(state, synth_cmd)
+    help_text = _yosys_help(synth_cmd)
+    effort_policy = _yosys_effort_policy(state, synth_cmd, help_text)
     summary = {
         "agent": agent,
         "status": "blocked",
@@ -183,7 +184,7 @@ def run_agent(state: dict) -> dict:
     if state.get("fpga_yosys_flatten"):
         steps.append("hierarchy -check")
         steps.append("flatten")
-    synth_options = " ".join(_architecture_synth_options(board) + effort_policy["effective_options"])
+    synth_options = " ".join(_architecture_synth_options(board, help_text) + effort_policy["effective_options"])
     steps.append(f"{synth_cmd} -top {top} {synth_options} -json {json_path}".replace("  ", " "))
     script = "\n".join(steps) + "\n"
     write_text(script_path, script)

@@ -440,3 +440,36 @@ def test_fpga_dashboard_api_preserves_generated_target_frequency():
     assert "return generated" in endpoint
     assert 'constraints.get("target_frequency_mhz")' in endpoint
     assert 'target.get("default_frequency_mhz")' not in endpoint
+
+
+def test_timing_closure_stops_when_synthesis_failed(tmp_path, monkeypatch):
+    from agents.fpga import fpga_timing_closure_agent as closure
+
+    monkeypatch.setattr(closure, "fpga_dir", lambda _state, *parts: str(tmp_path.joinpath(*parts)))
+    monkeypatch.setattr(closure, "publish_json", lambda *_args, **_kwargs: None)
+    state = {
+        "target_frequency_mhz": 15.0,
+        "allow_nextpnr_seed_sweep": True,
+        "fpga": {
+            "target": {"board": "gowin_tang_nano_20k"},
+            "synthesis": {"status": "failed", "error": "Yosys did not produce the FPGA JSON netlist."},
+            "place_route": {"status": "blocked", "error": "Missing Yosys JSON netlist."},
+            "timing_drc": {"status": "blocked"},
+        },
+    }
+
+    closure.run_agent(state)
+
+    plan = state["fpga"]["timing_closure"]["plan"]
+    assert plan["status"] == "upstream_failed"
+    assert plan["selected_restart_stage"] is None
+    assert "fpga_nextpnr_seed" not in state
+
+
+def test_fpga_dashboard_records_user_disabled_verification(monkeypatch):
+    published = {}
+    monkeypatch.setattr(fpga_dashboard_agent, "publish_json", lambda _state, _agent, _subdir, _filename, data: published.update(data))
+    fpga_dashboard_agent.run_agent({"run_fpga_verification": False, "fpga": {}})
+
+    assert published["verification"]["status"] == "disabled"
+    assert published["verification"]["coverage"]["status"] == "disabled"

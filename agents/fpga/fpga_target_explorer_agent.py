@@ -99,7 +99,7 @@ def _run_synthesis(state: dict, board_key: str, board: dict, strategy: str) -> d
     script_path = os.path.abspath(os.path.join(out_dir, "synth.ys"))
     log_path = os.path.abspath(os.path.join(out_dir, "yosys.log"))
     help_text = _yosys_help(synth_cmd)
-    options = _architecture_synth_options(board) + _synthesis_options(strategy, help_text)
+    options = _architecture_synth_options(board, help_text) + _synthesis_options(strategy, help_text)
     steps = [f"read_verilog -sv {path}" for path in rtl_files]
     option_text = " ".join(options)
     steps.append(f"{synth_cmd} -top {top} {option_text} -json {netlist}".replace("  ", " "))

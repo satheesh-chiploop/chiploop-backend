@@ -36,10 +36,12 @@ def test_tang_nano_20k_generates_upstream_clock_and_led_constraints():
     assert constrained == ["clk", "led"]
 
 
-def test_new_architectures_use_board_specific_yosys_families():
-    assert _architecture_synth_options(BOARD_REGISTRY["gowin_tang_nano_20k"] ) == ["-family", "gw2a"]
-    assert _architecture_synth_options(BOARD_REGISTRY["gowin_tang_primer_20k"] ) == ["-family", "gw2a"]
-    assert _architecture_synth_options(BOARD_REGISTRY["certus_nx_versa_40"] ) == ["-family", "lfd2nx"]
-    assert _architecture_synth_options(BOARD_REGISTRY["crosslink_nx_eval_40"] ) == ["-family", "lifcl"]
+def test_new_architectures_use_board_specific_yosys_families_when_supported():
+    help_with_family = "-family <device> supported values"
+    assert _architecture_synth_options(BOARD_REGISTRY["gowin_tang_nano_20k"], help_with_family) == ["-family", "gw2a"]
+    assert _architecture_synth_options(BOARD_REGISTRY["gowin_tang_primer_20k"], help_with_family) == ["-family", "gw2a"]
+    assert _architecture_synth_options(BOARD_REGISTRY["certus_nx_versa_40"], help_with_family) == ["-family", "lfd2nx"]
+    assert _architecture_synth_options(BOARD_REGISTRY["crosslink_nx_eval_40"], help_with_family) == ["-family", "lifcl"]
+    assert _architecture_synth_options(BOARD_REGISTRY["gowin_tang_nano_20k"], "synth_gowin -top -json") == []
     assert BOARD_REGISTRY["certus_nx_versa_40"]["constraint_format"] == "pdc"
     assert BOARD_REGISTRY["crosslink_nx_eval_40"]["constraint_format"] == "pdc"

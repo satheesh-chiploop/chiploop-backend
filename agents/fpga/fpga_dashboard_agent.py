@@ -75,7 +75,15 @@ def run_agent(state: dict) -> dict:
         "routed_resource": pnr.get("routed_resource"),
         "routed_flip_flops": pnr.get("routed_flip_flops"),
     }
+    verification_enabled = bool(state.get("run_fpga_verification", True))
     verification = _load_json(state.get("simulation_summary_coverage_json"))
+    if not verification_enabled and not verification:
+        verification = {
+            "status": "disabled",
+            "simulation": {"status": "disabled"},
+            "coverage": {"status": "disabled"},
+            "formal": {"status": "disabled"},
+        }
     formal = ((state.get("vv") or {}).get("formal") or {}) if isinstance(state.get("vv"), dict) else {}
     if isinstance(formal, dict) and formal:
         verification = {**verification, "formal": formal}
