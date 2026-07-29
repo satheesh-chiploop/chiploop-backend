@@ -4625,7 +4625,7 @@ def execute_digital_app_background(
                 )
                 for iteration in range(1, max_timing_iterations + 1):
                     plan = (((shared_state.get("fpga") or {}).get("timing_closure") or {}).get("plan") or {})
-                    if not shared_state.get("run_fpga_timing_closure_loop") or plan.get("closure_complete") is True or plan.get("status") == "clean":
+                    if not shared_state.get("run_fpga_timing_closure_loop") or shared_state.get("fpga_timing_closure_terminal") or plan.get("closure_complete") is True or plan.get("status") == "clean":
                         break
                     shared_state["fpga_timing_closure_iteration_index"] = iteration
                     append_log_workflow(workflow_id, f"FPGA timing closure iteration {iteration}/{max_timing_iterations} started", phase=f"fpga_timing_closure_iteration_{iteration}")
@@ -4644,7 +4644,8 @@ def execute_digital_app_background(
                         break
 
                 plan = (((shared_state.get("fpga") or {}).get("timing_closure") or {}).get("plan") or {})
-                if shared_state.get("run_fpga_timing_closure_loop") and not plan.get("closure_complete"):
+                if (shared_state.get("run_fpga_timing_closure_loop") and not shared_state.get("fpga_timing_closure_terminal")
+                        and not plan.get("closure_complete")):
                     append_log_workflow(workflow_id, "FPGA timing closure exploring flattened synthesis strategy", phase="fpga_timing_strategy_exploration")
                     append_log_run(run_id, "FPGA timing closure exploring flattened synthesis strategy")
                     shared_state["fpga_yosys_flatten"] = True
@@ -4667,7 +4668,8 @@ def execute_digital_app_background(
                         )
                         plan = (((shared_state.get("fpga") or {}).get("timing_closure") or {}).get("plan") or {})
 
-                if (shared_state.get("run_fpga_timing_closure_loop") and not plan.get("closure_complete")
+                if (shared_state.get("run_fpga_timing_closure_loop") and not shared_state.get("fpga_timing_closure_terminal")
+                        and not plan.get("closure_complete")
                         and closure_mode == "advanced"):
                     append_log_workflow(workflow_id, "FPGA timing closure exploring retiming synthesis strategy", phase="fpga_timing_strategy_exploration")
                     append_log_run(run_id, "FPGA timing closure exploring retiming synthesis strategy")
@@ -4690,7 +4692,8 @@ def execute_digital_app_background(
                         )
                         plan = (((shared_state.get("fpga") or {}).get("timing_closure") or {}).get("plan") or {})
 
-                if (shared_state.get("run_fpga_timing_closure_loop") and not plan.get("closure_complete")
+                if (shared_state.get("run_fpga_timing_closure_loop") and not shared_state.get("fpga_timing_closure_terminal")
+                        and not plan.get("closure_complete")
                         and bool(shared_state.get("allow_automatic_rtl_timing_repair"))):
                     append_log_workflow(workflow_id, "Automatic FPGA RTL timing repair started", phase="fpga_timing_rtl_repair")
                     append_log_run(run_id, "Automatic FPGA RTL timing repair started")

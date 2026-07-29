@@ -71,6 +71,19 @@ def _parse_nextpnr(log: str) -> dict:
     return out
 
 
+def _classify_nextpnr_failure(result: dict, log_text: str = "") -> str | None:
+    combined = "\n".join(
+        str(value or "")
+        for value in (log_text, result.get("error"), result.get("stderr_tail"), result.get("stdout_tail"))
+    ).lower()
+    if result.get("status") == "tool_unavailable" or result.get("returncode") == 127:
+        return "tool_unavailable"
+    if "database version" in combined and ("newer than nextpnr" in combined or "rebuild database/nextpnr" in combined):
+        return "toolchain_version_mismatch"
+    if any(message in combined for message in ("unrecognised option", "unknown option", "invalid option")):
+        return "invalid_cli"
+    return None
+
 def _as_number(value):
     if isinstance(value, (int, float)):
         return value
@@ -322,9 +335,10 @@ def run_agent(state: dict) -> dict:
         report_metrics = _parse_nextpnr_report(report_path, board)
         summary.update(report_metrics)
         produced = os.path.exists(pnr_output)
+        failure_kind = _classify_nextpnr_failure(result, read_text(log_path))
         summary.update({
             "status": "completed" if result["ok"] and produced else "warning" if produced else "failed",
-            "failure_kind": "tool_unavailable" if result.get("status") == "tool_unavailable" or result.get("returncode") == 127 else None,
+            "failure_kind": failure_kind,
             "command": result,
             "artifact_produced": produced,
             "pnr_output": pnr_output if produced else None,
@@ -333,7 +347,11 @@ def run_agent(state: dict) -> dict:
             "report": report_path if os.path.exists(report_path) else None,
         })
         if not produced:
-            summary["error"] = f"nextpnr did not produce a {summary['output_format']} place-route output."
+            summary["error"] = (
+                "nextpnr and its FPGA architecture database are incompatible; rebuild nextpnr against the installed database."
+                if failure_kind == "toolchain_version_mismatch"
+                else f"nextpnr did not produce a {summary['output_format']} place-route output."
+            )
         if os.path.exists(report_path):
             try:
                 with open(report_path, "r", encoding="utf-8", errors="ignore") as handle:

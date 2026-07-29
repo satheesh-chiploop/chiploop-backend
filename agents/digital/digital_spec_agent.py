@@ -903,6 +903,15 @@ def _repair_json_syntax_near_error(candidate: str, exc: JSONDecodeError) -> str:
         parsed = _try_parse_after_eof_repair(probe)
         if parsed is not None:
             return parsed
+    for pos in positions:
+        if pos < 0 or pos >= len(text) or text[pos] not in ("}", "]"):
+            continue
+        # Remove only a closing token adjacent to the decoder failure, and
+        # accept the edit only when the complete JSON object validates.
+        probe = text[:pos] + text[pos + 1:]
+        parsed = _try_parse_after_eof_repair(probe)
+        if parsed is not None:
+            return parsed
     return candidate
 
 

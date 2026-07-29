@@ -56,14 +56,17 @@ def run_agent(state: dict) -> dict:
         or (pnr.get("status") == "blocked" and "yosys json" in str(pnr.get("error") or "").lower())
     )
     deterministic_tool_failure = (
-        pnr_command.get("status") == "tool_unavailable"
+        pnr.get("failure_kind") in {"tool_unavailable", "toolchain_version_mismatch", "invalid_cli"}
+        or pnr_command.get("status") == "tool_unavailable"
         or pnr_command.get("returncode") == 127
         or "tool not found" in pnr_error.lower()
         or "not configured" in pnr_error.lower()
         or "unrecognised option" in pnr_error.lower()
         or "unknown option" in pnr_error.lower()
         or "invalid option" in pnr_error.lower()
+        or ("database version" in pnr_error.lower() and "newer than nextpnr" in pnr_error.lower())
     )
+    state["fpga_timing_closure_terminal"] = bool(upstream_synthesis_failure or deterministic_tool_failure)
     iteration = int(state.get("fpga_timing_closure_iteration_index") or 0)
     evaluated_seed = pnr.get("seed") if pnr.get("seed") is not None else state.get("fpga_nextpnr_seed")
     repair_used = bool(state.get("fpga_timing_rtl_repair_used"))
@@ -133,7 +136,7 @@ def run_agent(state: dict) -> dict:
         "status": "locked" if complete else "upstream_failed" if upstream_synthesis_failure else "implementation_unavailable" if deterministic_tool_failure else "best_available",
         "target_frequency_mhz": target_mhz or None,
         "achieved_frequency_mhz": selected.get("max_frequency_mhz"),
-        "selected_seed": selected.get("seed"),
+        "selected_seed": None if deterministic_tool_failure or upstream_synthesis_failure else selected.get("seed"),
         "synthesis_strategy": selected.get("synthesis_strategy"),
         "rtl_repair_used": selected.get("rtl_repair_used", False),
         "winning_pnr_output": selected.get("winning_pnr_output"),
@@ -146,6 +149,7 @@ def run_agent(state: dict) -> dict:
         "device": (fpga.get("target") or {}).get("device"),
         "package": (fpga.get("target") or {}).get("package"),
         "timing_met": None if upstream_synthesis_failure or deterministic_tool_failure else bool(selected.get("timing_met")),
+        "failure_kind": pnr.get("failure_kind"),
     }
     plan = {
         "agent": agent,
@@ -158,7 +162,7 @@ def run_agent(state: dict) -> dict:
         "timing_met": timing_met,
         "selected_restart_stage": None if complete or upstream_synthesis_failure or deterministic_tool_failure else "FPGA nextpnr Place & Route Agent",
         "actions": actions,
-        "selected_seed": selected.get("seed"),
+        "selected_seed": None if deterministic_tool_failure or upstream_synthesis_failure else selected.get("seed"),
         "selected_max_frequency_mhz": selected.get("max_frequency_mhz"),
         "selected_synthesis_strategy": selected.get("synthesis_strategy"),
         "winning_pnr_output": selected.get("winning_pnr_output"),
@@ -167,6 +171,8 @@ def run_agent(state: dict) -> dict:
         "before_rtl_repair": before_best,
         "after_rtl_repair": after_best,
         "recommended_achievable_frequency_mhz": achievable,
+        "failure_kind": pnr.get("failure_kind"),
+        "implementation_unavailable_reason": state.get("fpga_implementation_unavailable_reason"),
         "settings_for_next_iteration": {
             "fpga_nextpnr_seed": state.get("fpga_nextpnr_seed"),
             "fpga_nextpnr_timing_driven": True,

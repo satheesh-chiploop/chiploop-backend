@@ -3,6 +3,7 @@ from pathlib import Path
 
 from agents.fpga import fpga_dashboard_agent
 from agents.fpga.fpga_nextpnr_place_route_agent import (
+    _classify_nextpnr_failure,
     _himbaechel_uarch_args,
     _nextpnr_effort_policy,
     _parse_nextpnr,
@@ -473,3 +474,89 @@ def test_fpga_dashboard_records_user_disabled_verification(monkeypatch):
 
     assert published["verification"]["status"] == "disabled"
     assert published["verification"]["coverage"]["status"] == "disabled"
+
+def test_nextpnr_database_version_mismatch_is_classified_as_terminal():
+    result = {
+        "returncode": 255,
+        "status": "failed",
+        "stderr_tail": "ERROR: Provided database version 12 is newer than nextpnr version 11, please rebuild database/nextpnr.",
+    }
+
+    assert _classify_nextpnr_failure(result) == "toolchain_version_mismatch"
+
+
+def test_timing_closure_stops_on_nextpnr_database_version_mismatch(tmp_path, monkeypatch):
+    from agents.fpga import fpga_timing_closure_agent as closure
+
+    monkeypatch.setattr(closure, "fpga_dir", lambda _state, *parts: str(tmp_path.joinpath(*parts)))
+    monkeypatch.setattr(closure, "publish_json", lambda *_args, **_kwargs: None)
+    error = "ERROR: Provided database version 12 is newer than nextpnr version 11, please rebuild database/nextpnr."
+    state = {
+        "target_frequency_mhz": 15.0,
+        "allow_nextpnr_seed_sweep": True,
+        "allow_automatic_rtl_timing_repair": True,
+        "fpga": {
+            "target": {"board": "certus_nx_versa_40"},
+            "synthesis": {"status": "completed"},
+            "place_route": {
+                "status": "failed",
+                "seed": 10,
+                "failure_kind": "toolchain_version_mismatch",
+                "command": {"returncode": 255, "stderr_tail": error},
+            },
+            "timing_drc": {"status": "blocked"},
+        },
+    }
+
+    closure.run_agent(state)
+
+    plan = state["fpga"]["timing_closure"]["plan"]
+    lock = state["fpga"]["timing_closure"]["implementation_lock"]
+    assert plan["status"] == "implementation_unavailable"
+    assert plan["failure_kind"] == "toolchain_version_mismatch"
+    assert plan["selected_restart_stage"] is None
+    assert plan["selected_seed"] is None
+    assert lock["selected_seed"] is None
+    assert state["fpga_timing_closure_terminal"] is True
+    assert "fpga_nextpnr_seed" not in state
+    assert "database version 12" in state["fpga_implementation_unavailable_reason"]
+
+
+def test_fpga_closure_orchestrator_skips_exploration_after_terminal_failure():
+    source = (Path(__file__).parents[1] / "main.py").read_text(encoding="utf-8")
+
+    assert 'shared_state.get("fpga_timing_closure_terminal")' in source
+    assert 'and not shared_state.get("fpga_timing_closure_terminal")' in source
+
+def test_nexus_yosys_metrics_count_fd1p3_flip_flops_and_ccu2(tmp_path):
+    from agents.fpga.fpga_yosys_synthesis_agent import _yosys_cell_metrics
+
+    netlist = tmp_path / "nexus.json"
+    cells = {}
+    counts = {
+        "$specify2": 5,
+        "CCU2": 29,
+        "FD1P3IX": 32,
+        "FD1P3JX": 1,
+        "IB": 1,
+        "LUT4": 11,
+        "OB": 1,
+        "VHI": 1,
+        "VLO": 1,
+        "WIDEFN9": 9,
+    }
+    index = 0
+    for cell_type, count in counts.items():
+        for _ in range(count):
+            cells[f"cell_{index}"] = {"type": cell_type}
+            index += 1
+    netlist.write_text(json.dumps({"modules": {"top": {"cells": cells}}}), encoding="utf-8")
+
+    metrics = _yosys_cell_metrics(str(netlist), {"resources": {"logic_cells": 39000}})
+
+    assert metrics["flip_flops"] == 33
+    assert metrics["lut4_cells"] == 11
+    assert metrics["carry_cells"] == 29
+    assert metrics["combinational_cells"] == 49
+    assert metrics["logical_cells_used"] == 44
+    assert metrics["fabric_mapped_cells"] == 82

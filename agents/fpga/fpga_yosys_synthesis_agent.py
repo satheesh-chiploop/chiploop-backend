@@ -38,14 +38,23 @@ def _yosys_cell_metrics(json_path: str, board: dict) -> dict:
             for cell in cells.values():
                 cell_type = str((cell or {}).get("type") or "unknown")
                 type_counts[cell_type] = type_counts.get(cell_type, 0) + 1
+    def is_flip_flop(cell_type: str) -> bool:
+        return (
+            "DFF" in cell_type
+            or cell_type.startswith("SB_DFF")
+            or cell_type == "TRELLIS_FF"
+            or cell_type.startswith("FD1P3")
+        )
     ff_count = sum(
         count for cell_type, count in type_counts.items()
-        if "DFF" in cell_type or cell_type.startswith("SB_DFF") or cell_type == "TRELLIS_FF"
+        if is_flip_flop(cell_type)
     )
     lut_count = type_counts.get("SB_LUT4", 0) + type_counts.get("LUT4", 0)
     combo_count = sum(
         count for cell_type, count in type_counts.items()
-        if cell_type not in {"SB_DFF", "SB_DFFE", "SB_DFFR", "SB_DFFS", "SB_DFFES", "SB_DFFER"} and "DFF" not in cell_type
+        if not is_flip_flop(cell_type)
+        and cell_type not in {"IB", "OB", "IBUF", "OBUF", "IOBUF", "VHI", "VLO", "VCC", "GND"}
+        and not cell_type.startswith("$specify")
     )
     fabric_cell_types = {
         "SB_LUT4",
@@ -58,9 +67,13 @@ def _yosys_cell_metrics(json_path: str, board: dict) -> dict:
         "SB_DFFER",
         "LUT4",
         "TRELLIS_FF",
+        "CCU2",
         "CCU2C",
     }
-    fabric_cell_count = sum(count for cell_type, count in type_counts.items() if cell_type in fabric_cell_types)
+    fabric_cell_count = sum(
+        count for cell_type, count in type_counts.items()
+        if cell_type in fabric_cell_types or cell_type.startswith("FD1P3") or cell_type.startswith("WIDEFN")
+    )
     total_mapped_cells = sum(type_counts.values())
     # Yosys reports mapped primitives before packing. Keep logic-cell estimate
     # FPGA-oriented instead of counting internal/specify helper cells.
@@ -71,7 +84,7 @@ def _yosys_cell_metrics(json_path: str, board: dict) -> dict:
         "flip_flops": ff_count,
         "combinational_cells": combo_count,
         "lut4_cells": lut_count,
-        "carry_cells": type_counts.get("SB_CARRY", 0) + type_counts.get("CCU2C", 0),
+        "carry_cells": type_counts.get("SB_CARRY", 0) + type_counts.get("CCU2", 0) + type_counts.get("CCU2C", 0),
         "fabric_mapped_cells": fabric_cell_count,
         "total_mapped_cells": total_mapped_cells,
         "cell_type_counts": type_counts,

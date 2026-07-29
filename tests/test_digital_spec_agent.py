@@ -441,6 +441,22 @@ def test_parse_repairs_array_closed_as_object_before_next_key():
     assert parsed["hierarchy"]["top_module"]["rtl_output_file"] == "top.v"
 
 
+def test_parse_repairs_duplicated_unmatched_array_closer_before_next_key():
+    malformed = (
+        '{"name":"pwm_fpga_demo","ports":[{"name":"clk","direction":"input","width":1},'
+        '{"name":"led","direction":"output","width":1}],'
+        '"functionality":"PWM LED demo.","responsibilities":["Generate PWM."],'
+        '"must_drive":["led"],"must_receive":["clk"],"must_not_drive":[],'
+        '"reset_behavior":"No reset.","behavior_rules":["Single clock."]],'
+        '"rtl_output_file":"pwm_fpga_demo.v"}'
+    )
+
+    parsed = spec_agent._parse_llm_json_object(malformed)
+
+    assert parsed["name"] == "pwm_fpga_demo"
+    assert parsed["behavior_rules"] == ["Single clock."]
+    assert parsed["rtl_output_file"] == "pwm_fpga_demo.v"
+
 def test_parse_repairs_array_bracket_drift_then_eof_truncation():
     malformed = (
         '{"design_name":"demo","hierarchy":{"top_module":{"name":"top","ports":[],'
