@@ -63,11 +63,11 @@ def run_agent(state: dict) -> dict:
         "error_count": pnr.get("errors", 0),
         "target": board,
     }
-    if family == "ecp5" and pnr.get("status") == "completed":
+    if family in {"ecp5", "nexus", "gowin"} and pnr.get("status") == "completed":
         summary.update(_timing_metrics(state.get("target_frequency_mhz"), summary.get("max_frequency_mhz"), summary.get("timing_met")))
         summary["status"] = "completed"
-        summary["timing_source"] = "nextpnr-ecp5"
-        summary["note"] = "ECP5 timing was derived from nextpnr-ecp5 reported max frequency."
+        summary["timing_source"] = str(board.get("nextpnr_tool") or f"nextpnr-{family}")
+        summary["note"] = f"{family.upper()} timing was derived from the nextpnr place-and-route report."
     elif routed_output and os.path.exists(str(routed_output)):
         result = run_cmd(["icetime", "-d", str(board.get("device") or "hx8k"), "-m", "-r", log_path, str(routed_output)], cwd=out_dir, log_path=log_path, timeout=300, state=state)
         text = read_text(log_path)

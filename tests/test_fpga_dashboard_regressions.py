@@ -611,3 +611,63 @@ def test_fpga_app_final_status_includes_implementation_unavailable():
     assert 'implementation_failed = bool(implementation_unavailable_reason)' in source
     assert 'app_failed = closure_failed or implementation_failed' in source
     assert 'final_phase = "implementation_unavailable" if implementation_failed' in source
+
+
+def test_nextpnr_nexus_report_exposes_routed_utilization(tmp_path):
+    report = tmp_path / "nextpnr-nexus.json"
+    report.write_text(json.dumps({
+        "utilization": {
+            "OXIDE_COMB": {"used": 88, "available": 32256},
+            "OXIDE_FF": {"used": 33, "available": 32256},
+        },
+        "fmax": {"clk": {"achieved": 384.76336669921875, "constraint": 12}},
+    }), encoding="utf-8")
+
+    parsed = _parse_nextpnr_report(
+        str(report), {"family": "nexus", "resources": {"logic_cells": 39000}}
+    )
+
+    assert parsed["logical_cells_used"] == 88
+    assert parsed["logical_cells_available"] == 32256
+    assert parsed["logic_utilization_percent"] == 0.273
+    assert parsed["routed_resource"] == "OXIDE_COMB"
+    assert parsed["routed_lut4_cells"] == 88
+    assert parsed["routed_flip_flops"] == 33
+    assert parsed["max_frequency_mhz"] == 384.763
+    assert parsed["timing_met"] is True
+
+
+def test_nexus_timing_uses_nextpnr_report_without_icetime(tmp_path, monkeypatch):
+    from agents.fpga import fpga_timing_drc_agent as timing_agent
+
+    published = {}
+    monkeypatch.setattr(timing_agent, "fpga_dir", lambda _state, *_parts: str(tmp_path))
+    monkeypatch.setattr(timing_agent, "board_config", lambda _state: {
+        "family": "nexus", "nextpnr_tool": "nextpnr-nexus",
+    })
+    monkeypatch.setattr(
+        timing_agent, "run_cmd",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("icetime must not run for Nexus")),
+    )
+    monkeypatch.setattr(
+        timing_agent, "publish_json",
+        lambda _state, _agent, _subdir, _filename, data: published.update(data),
+    )
+    monkeypatch.setattr(timing_agent, "manifest_update", lambda *_args, **_kwargs: None)
+    state = {
+        "target_frequency_mhz": 12.0,
+        "fpga": {"place_route": {
+            "status": "completed", "max_frequency_mhz": 384.763,
+            "timing_met": True, "warnings": 0, "errors": 0,
+        }},
+    }
+
+    timing_agent.run_agent(state)
+
+    assert published["status"] == "completed"
+    assert published["timing_source"] == "nextpnr-nexus"
+    assert published["max_frequency_mhz"] == 384.763
+    assert published["wns_ns"] == 80.734
+    assert published["tns_ns"] == 0
+    assert published["timing_violation_count"] == 0
+    assert "icetime" not in published

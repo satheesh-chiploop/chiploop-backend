@@ -126,19 +126,14 @@ def _parse_nextpnr_report(report_path: str, board: dict) -> dict:
     if isinstance(utilization, dict):
         out["utilization"] = utilization
         family = str(board.get("family") or "").lower()
-        logic_keys = (
-            "ICESTORM_LC",
-            "TRELLIS_COMB",
-            "TRELLIS_SLICE",
-            "SLICE",
-            "LUT4",
-        ) if family == "ecp5" else (
-            "ICESTORM_LC",
-            "SB_LUT4",
-            "TRELLIS_COMB",
-            "TRELLIS_SLICE",
-            "LUT4",
-        )
+        if family == "ecp5":
+            logic_keys = ("TRELLIS_COMB", "TRELLIS_SLICE", "SLICE", "LUT4")
+        elif family == "nexus":
+            logic_keys = ("OXIDE_COMB", "LUT4")
+        else:
+            logic_keys = (
+                "ICESTORM_LC", "SB_LUT4", "TRELLIS_COMB", "TRELLIS_SLICE", "LUT4",
+            )
         for key in logic_keys:
             item = utilization.get(key)
             used, available = _used_available(item)
@@ -151,7 +146,7 @@ def _parse_nextpnr_report(report_path: str, board: dict) -> dict:
                 if available:
                     out["logic_utilization_percent"] = round((used / available) * 100.0, 3)
                 break
-        for key in ("SB_LUT4", "LUT4", "TRELLIS_COMB"):
+        for key in ("SB_LUT4", "LUT4", "TRELLIS_COMB", "OXIDE_COMB"):
             lut_used, lut_available = _used_available(utilization.get(key))
             if lut_used is not None:
                 out["routed_lut4_cells"] = lut_used
@@ -159,7 +154,7 @@ def _parse_nextpnr_report(report_path: str, board: dict) -> dict:
                     out["routed_lut4_cells_available"] = lut_available
                 break
         ff_used, ff_available = None, None
-        for key in ("TRELLIS_FF", "DFF", "SB_DFF", "SB_DFFE", "FF"):
+        for key in ("TRELLIS_FF", "OXIDE_FF", "DFF", "SB_DFF", "SB_DFFE", "FF"):
             ff_used, ff_available = _used_available(utilization.get(key))
             if ff_used is not None:
                 out["routed_flip_flops"] = ff_used
