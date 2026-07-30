@@ -84,6 +84,25 @@ def _synthesis_options(strategy: str, help_text: str) -> list[str]:
     return []
 
 
+def _make_core_only_netlist(netlist: str, top: str) -> list[str]:
+    """Remove top-level port declarations after synthesis for core-only exploration."""
+    try:
+        with open(netlist, "r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+        modules = payload.get("modules") if isinstance(payload, dict) else None
+        module = modules.get(top) if isinstance(modules, dict) else None
+        if not isinstance(module, dict) or not isinstance(module.get("ports"), dict):
+            return []
+        stripped = list(module["ports"])
+        module["ports"] = {}
+        with open(netlist, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=2, sort_keys=True)
+            handle.write("\n")
+        return stripped
+    except (OSError, ValueError, TypeError):
+        return []
+
+
 def _run_synthesis(state: dict, board_key: str, board: dict, strategy: str) -> dict:
     fpga = state.get("fpga") if isinstance(state.get("fpga"), dict) else {}
     rtl_files = [str(path) for path in fpga.get("rtl_files") or []]
@@ -109,6 +128,7 @@ def _run_synthesis(state: dict, board_key: str, board: dict, strategy: str) -> d
     steps.append(f"{synth_cmd} -top {top} {option_text} -json {netlist}".replace("  ", " "))
     write_text(script_path, "\n".join(steps) + "\n")
     result = run_cmd(["yosys", "-s", script_path], cwd=out_dir, log_path=log_path, timeout=900, state=state)
+    core_only_ports = _make_core_only_netlist(netlist, top) if family in {"gowin", "nexus"} and result.get("ok") and os.path.exists(netlist) else []
     for artifact in (script_path, log_path, netlist if os.path.exists(netlist) else None):
         _record_file(state, board_key, f"{strategy}/synth", artifact)
     return {
@@ -119,6 +139,7 @@ def _run_synthesis(state: dict, board_key: str, board: dict, strategy: str) -> d
         "log": log_path,
         "command": result.get("cmd"),
         "effective_options": options,
+        "core_only_ports_removed": core_only_ports,
         "tool_version": _yosys_version(),
         "error": None if result.get("ok") else result.get("stderr_tail") or result.get("stdout_tail"),
     }
@@ -190,14 +211,29 @@ def _summarize_board(board_key: str, board: dict, synthesis_runs: list[dict], pn
     frequencies = [_num(run.get("max_frequency_mhz")) for run in completed]
     best = max(completed, key=lambda run: _num(run.get("max_frequency_mhz"))) if completed else {}
     met_runs = [run for run in completed if _num(run.get("max_frequency_mhz")) >= target or run.get("timing_met") is True]
-    available = int(best.get("logic_cells_available") or ((board.get("resources") or {}).get("logic_cells")) or 0) if best else 0
-    used = int(best.get("logic_cells_used") or best.get("routed_lut4_cells") or 0) if best else 0
-    utilization = best.get("logic_utilization_percent")
-    if utilization is None and available:
+    diagnostic = best or max(pnr_runs, key=lambda run: _num(run.get("logic_utilization_percent")), default={})
+    available = int(diagnostic.get("logic_cells_available") or ((board.get("resources") or {}).get("logic_cells")) or 0) if diagnostic else 0
+    used = int(diagnostic.get("logic_cells_used") or diagnostic.get("routed_lut4_cells") or 0) if diagnostic else 0
+    utilization = diagnostic.get("logic_utilization_percent")
+    if utilization is None and available and used:
         utilization = round((used / available) * 100.0, 3)
     best_fmax = max(frequencies) if frequencies else None
     timing_margin_percent = round(((best_fmax - target) / target) * 100.0, 3) if best_fmax and target else None
     relaxed = round(best_fmax * 0.9, 3) if best_fmax and not met_runs else None
+    errors = [str(run.get("error") or "") for run in pnr_runs if run.get("status") == "failed"]
+    error_text = "\n".join(errors).lower()
+    capacity_failed = "unable to find a placement location" in error_text and any(
+        _num(run.get("logic_utilization_percent")) > 100
+        or (_num(run.get("logic_cells_available")) > 0 and _num(run.get("logic_cells_used")) > _num(run.get("logic_cells_available")))
+        for run in pnr_runs
+    )
+    failure_kind = (
+        "capacity_exceeded" if capacity_failed
+        else "unconstrained_io" if "unconstrained io:" in error_text
+        else "io_packing" if "pack iobs" in error_text or "driven by illegal port" in error_text
+        else "implementation_failed" if errors
+        else None
+    )
     return {
         "board": board_key,
         "label": board.get("label") or board_key,
@@ -223,7 +259,7 @@ def _summarize_board(board_key: str, board: dict, synthesis_runs: list[dict], pn
         "logic_cells_available": available or None,
         "logic_utilization_percent": utilization,
         "resource_headroom_percent": round(100.0 - _num(utilization), 3) if best and utilization is not None else None,
-        "failure_kind": "unconstrained_io" if any("unconstrained io:" in str(run.get("error") or "").lower() for run in pnr_runs) else None,
+        "failure_kind": failure_kind,
         "failure_reason": next((run.get("error") for run in pnr_runs if run.get("status") == "failed" and run.get("error")), None),
         "closure_used": len(synthesis_runs) > 1 or any(run.get("effort") == "advanced" for run in pnr_runs),
         "frequency_relaxation": {"eligible": bool(relaxed), "recommended_mhz": relaxed, "reason": "reported only after target closure failed" if relaxed else None},

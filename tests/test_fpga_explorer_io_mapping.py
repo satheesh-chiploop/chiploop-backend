@@ -91,3 +91,30 @@ def test_io_mapping_enumerates_every_bus_bit(tmp_path, monkeypatch):
     board = published["mappings"][0]
     assert board["mapped_ports"] == ["clk", "led[3]", "led[2]", "led[1]", "led[0]"]
     assert board["unmapped_ports"] == ["debug_addr[3]", "debug_addr[2]", "debug_addr[1]", "debug_addr[0]"]
+
+
+def test_core_only_netlist_removes_only_top_level_ports(tmp_path):
+    netlist = tmp_path / "core.json"
+    netlist.write_text(
+        '{"modules":{"top":{"ports":{"clk":{"direction":"input","bits":[2]},'
+        '"uart_tx":{"direction":"output","bits":[3]}},"cells":{"ff":{"type":"DFF"}},'
+        '"netnames":{"clk":{"bits":[2]},"uart_tx":{"bits":[3]}}}}}',
+        encoding="utf-8",
+    )
+    removed = explorer._make_core_only_netlist(str(netlist), "top")
+    payload = __import__("json").loads(netlist.read_text(encoding="utf-8"))
+    assert removed == ["clk", "uart_tx"]
+    assert payload["modules"]["top"]["ports"] == {}
+    assert payload["modules"]["top"]["cells"] == {"ff": {"type": "DFF"}}
+    assert set(payload["modules"]["top"]["netnames"]) == {"clk", "uart_tx"}
+
+
+def test_capacity_failure_is_classified_explicitly():
+    result = explorer._summarize_board(
+        "upduino_v3", BOARD_REGISTRY["upduino_v3"], [{"status": "completed"}],
+        [{"status": "failed", "logic_cells_used": 5572, "logic_cells_available": 5280,
+          "logic_utilization_percent": 105.53,
+          "error": "ERROR: Unable to find a placement location for cell sensor_data[14]$sb_io"}], 15,
+    )
+    assert result["status"] == "implementation_failed"
+    assert result["failure_kind"] == "capacity_exceeded"
