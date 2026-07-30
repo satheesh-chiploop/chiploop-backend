@@ -1,6 +1,9 @@
 import json
 import os
+import re
 import statistics
+import threading
+import time
 from copy import deepcopy
 
 from .fpga_common import BOARD_REGISTRY, fpga_dir, publish_json, read_text, run_cmd, write_text
@@ -178,7 +181,26 @@ def _run_pnr(state: dict, board_key: str, board: dict, synthesis: dict, seed: in
         cmd.append("--timing-allow-fail")
     cmd.extend(policy.get("effective_args") or [])
     cmd.extend(["--seed", str(seed)])
-    result = run_cmd(cmd, cwd=out_dir, log_path=log, timeout=1200, state=state)
+    timeout_seconds = 1200
+    heartbeat_stop = threading.Event()
+
+    def heartbeat() -> None:
+        started = time.monotonic()
+        while not heartbeat_stop.wait(60):
+            elapsed_minutes = max(1, int((time.monotonic() - started) // 60))
+            _progress(
+                state,
+                f"{board_key}: {effort} P&R seed {seed} still running "
+                f"({elapsed_minutes} min elapsed; timeout {timeout_seconds // 60} min).",
+            )
+
+    heartbeat_thread = threading.Thread(target=heartbeat, daemon=True)
+    heartbeat_thread.start()
+    try:
+        result = run_cmd(cmd, cwd=out_dir, log_path=log, timeout=timeout_seconds, state=state)
+    finally:
+        heartbeat_stop.set()
+        heartbeat_thread.join(timeout=1)
     metrics = _parse_nextpnr(log)
     metrics.update(_parse_nextpnr_report(report, board))
     produced = os.path.exists(routed)
@@ -211,26 +233,30 @@ def _summarize_board(board_key: str, board: dict, synthesis_runs: list[dict], pn
     frequencies = [_num(run.get("max_frequency_mhz")) for run in completed]
     best = max(completed, key=lambda run: _num(run.get("max_frequency_mhz"))) if completed else {}
     met_runs = [run for run in completed if _num(run.get("max_frequency_mhz")) >= target or run.get("timing_met") is True]
+    errors = [str(run.get("error") or "") for run in pnr_runs if run.get("status") == "failed"]
+    error_text = "\n".join(errors).lower()
     diagnostic = best or max(pnr_runs, key=lambda run: _num(run.get("logic_utilization_percent")), default={})
     available = int(diagnostic.get("logic_cells_available") or ((board.get("resources") or {}).get("logic_cells")) or 0) if diagnostic else 0
     used = int(diagnostic.get("logic_cells_used") or diagnostic.get("routed_lut4_cells") or 0) if diagnostic else 0
     utilization = diagnostic.get("logic_utilization_percent")
+    resource_match = re.search(r"(?:ICESTORM_LC|LUT4):\s*(\d+)\s*/\s*(\d+)\s+(\d+(?:\.\d+)?)%", "\n".join(errors), re.IGNORECASE)
+    if resource_match and not used:
+        used, available = int(resource_match.group(1)), int(resource_match.group(2))
+        utilization = round((used / available) * 100.0, 3) if available else None
     if utilization is None and available and used:
         utilization = round((used / available) * 100.0, 3)
     best_fmax = max(frequencies) if frequencies else None
     timing_margin_percent = round(((best_fmax - target) / target) * 100.0, 3) if best_fmax and target else None
     relaxed = round(best_fmax * 0.9, 3) if best_fmax and not met_runs else None
-    errors = [str(run.get("error") or "") for run in pnr_runs if run.get("status") == "failed"]
-    error_text = "\n".join(errors).lower()
-    capacity_failed = "unable to find a placement location" in error_text and any(
-        _num(run.get("logic_utilization_percent")) > 100
-        or (_num(run.get("logic_cells_available")) > 0 and _num(run.get("logic_cells_used")) > _num(run.get("logic_cells_available")))
-        for run in pnr_runs
-    )
+    placement_capacity_error = any(marker in error_text for marker in (
+        "unable to find a placement location", "unable to find legal placement",
+        "unable to place cell", "no bels remaining", "check constraints and utilisation",
+    ))
+    capacity_failed = placement_capacity_error and utilization is not None and _num(utilization) > 100
     failure_kind = (
         "capacity_exceeded" if capacity_failed
         else "unconstrained_io" if "unconstrained io:" in error_text
-        else "io_packing" if "pack iobs" in error_text or "driven by illegal port" in error_text
+        else "io_packing" if "driven by illegal port" in error_text
         else "implementation_failed" if errors
         else None
     )
@@ -374,7 +400,7 @@ def run_agent(state: dict) -> dict:
         pnr_runs: list[dict] = []
         if baseline.get("status") == "completed":
             for seed_index, seed in enumerate(baseline_seeds, start=1):
-                _progress(state, f"{board_key}: baseline P&R {seed_index}/{baseline_seed_count} (seed {seed}) started.")
+                _progress(state, f"{board_key}: baseline P&R {seed_index}/{baseline_seed_count} (seed {seed}) started; long placements can take up to 20 minutes and progress is reported every minute.")
                 run = _run_pnr(state, board_key, board, baseline, seed, "balanced")
                 pnr_runs.append(run)
                 fmax = run.get("max_frequency_mhz")
@@ -397,7 +423,7 @@ def run_agent(state: dict) -> dict:
             _progress(state, f"{board_key}: {closure_strategy} synthesis {closure_synth.get('status')}.")
             if closure_synth.get("status") == "completed":
                 for seed_index, seed in enumerate(closure_seeds, start=1):
-                    _progress(state, f"{board_key}: closure P&R {seed_index}/{closure_seed_count} (seed {seed}) started.")
+                    _progress(state, f"{board_key}: closure P&R {seed_index}/{closure_seed_count} (seed {seed}) started; long placements can take up to 20 minutes and progress is reported every minute.")
                     run = _run_pnr(state, board_key, board, closure_synth, seed, "advanced")
                     pnr_runs.append(run)
                     fmax = run.get("max_frequency_mhz")

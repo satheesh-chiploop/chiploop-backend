@@ -118,3 +118,21 @@ def test_capacity_failure_is_classified_explicitly():
     )
     assert result["status"] == "implementation_failed"
     assert result["failure_kind"] == "capacity_exceeded"
+
+def test_capacity_classification_covers_icestick_and_gowin_wording():
+    cases = [
+        ("icestick", BOARD_REGISTRY["icestick"], "Info: ICESTORM_LC: 5572/1280 435%\nERROR: Unable to place cell x, no BELs remaining"),
+        ("gowin_tang_nano_9k", BOARD_REGISTRY["gowin_tang_nano_9k"], "Info: Pack IOBs...\nInfo: LUT4: 13545/8640 156%\nERROR: Unable to find legal placement for cell x, check constraints and utilisation"),
+    ]
+    for key, board, error in cases:
+        result = explorer._summarize_board(key, board, [{"status": "completed"}], [{"status": "failed", "error": error}], 15)
+        assert result["failure_kind"] == "capacity_exceeded"
+        assert result["logic_utilization_percent"] > 100
+
+
+def test_pack_iobs_phase_without_illegal_port_is_not_io_packing_failure():
+    result = explorer._summarize_board(
+        "gowin_tang_nano_9k", BOARD_REGISTRY["gowin_tang_nano_9k"], [{"status": "completed"}],
+        [{"status": "failed", "error": "Info: Pack IOBs...\nERROR: router crashed"}], 15,
+    )
+    assert result["failure_kind"] == "implementation_failed"
