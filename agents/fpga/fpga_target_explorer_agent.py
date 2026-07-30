@@ -100,6 +100,10 @@ def _run_synthesis(state: dict, board_key: str, board: dict, strategy: str) -> d
     log_path = os.path.abspath(os.path.join(out_dir, "yosys.log"))
     help_text = _yosys_help(synth_cmd)
     options = _architecture_synth_options(board, help_text) + _synthesis_options(strategy, help_text)
+    if family == "gowin" and "-noiopads" in help_text and "-noiopads" not in options:
+        options.append("-noiopads")
+    elif family == "nexus" and "-noiopad" in help_text and "-noiopad" not in options:
+        options.append("-noiopad")
     steps = [f"read_verilog -sv {path}" for path in rtl_files]
     option_text = " ".join(options)
     steps.append(f"{synth_cmd} -top {top} {option_text} -json {netlist}".replace("  ", " "))
@@ -186,8 +190,8 @@ def _summarize_board(board_key: str, board: dict, synthesis_runs: list[dict], pn
     frequencies = [_num(run.get("max_frequency_mhz")) for run in completed]
     best = max(completed, key=lambda run: _num(run.get("max_frequency_mhz"))) if completed else {}
     met_runs = [run for run in completed if _num(run.get("max_frequency_mhz")) >= target or run.get("timing_met") is True]
-    available = int(best.get("logic_cells_available") or ((board.get("resources") or {}).get("logic_cells")) or 0)
-    used = int(best.get("logic_cells_used") or best.get("routed_lut4_cells") or 0)
+    available = int(best.get("logic_cells_available") or ((board.get("resources") or {}).get("logic_cells")) or 0) if best else 0
+    used = int(best.get("logic_cells_used") or best.get("routed_lut4_cells") or 0) if best else 0
     utilization = best.get("logic_utilization_percent")
     if utilization is None and available:
         utilization = round((used / available) * 100.0, 3)
@@ -218,7 +222,9 @@ def _summarize_board(board_key: str, board: dict, synthesis_runs: list[dict], pn
         "logic_cells_used": used or None,
         "logic_cells_available": available or None,
         "logic_utilization_percent": utilization,
-        "resource_headroom_percent": round(100.0 - _num(utilization), 3) if utilization is not None else None,
+        "resource_headroom_percent": round(100.0 - _num(utilization), 3) if best and utilization is not None else None,
+        "failure_kind": "unconstrained_io" if any("unconstrained io:" in str(run.get("error") or "").lower() for run in pnr_runs) else None,
+        "failure_reason": next((run.get("error") for run in pnr_runs if run.get("status") == "failed" and run.get("error")), None),
         "closure_used": len(synthesis_runs) > 1 or any(run.get("effort") == "advanced" for run in pnr_runs),
         "frequency_relaxation": {"eligible": bool(relaxed), "recommended_mhz": relaxed, "reason": "reported only after target closure failed" if relaxed else None},
         "constraint_scope": "capacity_and_timing_exploration; board pin compatibility must be confirmed in FPGA Prototyping",

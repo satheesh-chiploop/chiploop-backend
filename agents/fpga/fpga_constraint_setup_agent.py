@@ -37,6 +37,47 @@ def _extract_ports_from_rtl(paths: list[str]) -> list[str]:
     return ports
 
 
+def _extract_port_bits_from_rtl(paths: list[str], top_module: str | None = None) -> list[str]:
+    bits: list[str] = []
+    seen: set[str] = set()
+    def add(name: str, width: tuple[int, int] | None) -> None:
+        names = [name]
+        if width:
+            high, low = width
+            step = -1 if high >= low else 1
+            names = [f"{name}[{index}]" for index in range(high, low + step, step)]
+        for item in names:
+            if item not in seen:
+                seen.add(item); bits.append(item)
+    for path in paths:
+        try:
+            text = open(path, "r", encoding="utf-8", errors="ignore").read()
+        except OSError:
+            continue
+        for module_match in re.finditer(r"\bmodule\s+([A-Za-z_][A-Za-z0-9_$]*)\s*\((.*?)\)\s*;", text, flags=re.DOTALL):
+            if top_module and module_match.group(1) != top_module:
+                continue
+            direction = ""; width = None
+            for segment in module_match.group(2).split(","):
+                direction_match = re.search(r"\b(input|output|inout)\b", segment)
+                if direction_match: direction = direction_match.group(1)
+                width_match = re.search(r"\[\s*(\d+)\s*:\s*(\d+)\s*\]", segment)
+                if width_match: width = (int(width_match.group(1)), int(width_match.group(2)))
+                elif direction_match: width = None
+                clean = re.sub(r"\[[^\]]+\]", " ", segment)
+                tokens = re.findall(r"[A-Za-z_][A-Za-z0-9_$]*", clean)
+                useful = [token for token in tokens if token not in {"input", "output", "inout", "wire", "reg", "logic", "signed", "unsigned"}]
+                if direction and useful: add(useful[-1], width)
+    return bits or _extract_ports_from_rtl(paths)
+
+
+def _lookup_pin(pins: dict[str, str], port: str) -> str | None:
+    lower = port.lower(); aliases = [lower]
+    indexed = re.fullmatch(r"(.+)\[(\d+)\]", lower)
+    if indexed:
+        base, index = indexed.groups(); aliases.extend([f"{base}{index}", f"{base}_{index}"])
+    return next((pins[alias] for alias in aliases if alias in pins), None)
+
 def _pin_for_pcf_port(board_key: str, port: str) -> str | None:
     lower = port.lower()
     if board_key == "icebreaker":
@@ -57,7 +98,7 @@ def _pin_for_pcf_port(board_key: str, port: str) -> str | None:
             "led1": "11",
             "led_1": "11",
         }
-        return pins.get(lower)
+        return _lookup_pin(pins, port)
     if board_key == "upduino_v3":
         pins = {
             "clk": "20",
@@ -72,7 +113,7 @@ def _pin_for_pcf_port(board_key: str, port: str) -> str | None:
             "led1": "40",
             "led_1": "40",
         }
-        return pins.get(lower)
+        return _lookup_pin(pins, port)
     if board_key == "icestick":
         pins = {
             "clk": "21",
@@ -87,7 +128,7 @@ def _pin_for_pcf_port(board_key: str, port: str) -> str | None:
             "led1": "98",
             "led_1": "98",
         }
-        return pins.get(lower)
+        return _lookup_pin(pins, port)
     if board_key == "ice40_hx8k_breakout":
         pins = {
             "clk": "J3",
@@ -111,7 +152,7 @@ def _pin_for_pcf_port(board_key: str, port: str) -> str | None:
             "led7": "C3",
             "led_7": "C3",
         }
-        return pins.get(lower)
+        return _lookup_pin(pins, port)
 
     return None
 
@@ -166,7 +207,7 @@ def _pin_for_lpf_port(board_key: str, port: str) -> str | None:
             "led7": "H3",
             "led_7": "H3",
         }
-        return pins.get(port.lower())
+        return _lookup_pin(pins, port)
     if board_key == "orangecrab_ecp5_85f":
         pins = {
             "clk": "A9",
@@ -189,7 +230,7 @@ def _pin_for_lpf_port(board_key: str, port: str) -> str | None:
             "led_2": "J3",
             "led_b": "J3",
         }
-        return pins.get(port.lower())
+        return _lookup_pin(pins, port)
     if board_key == "colorlight_5a_75b":
         pins = {
             "clk": "P6",
@@ -206,7 +247,7 @@ def _pin_for_lpf_port(board_key: str, port: str) -> str | None:
             "led_0": "T6",
             "user_led": "T6",
         }
-        return pins.get(port.lower())
+        return _lookup_pin(pins, port)
     return None
 
 
@@ -244,7 +285,7 @@ def _pin_for_pdc_port(board_key: str, port: str) -> str | None:
             "led5": "H14", "led_5": "H14", "led6": "H12", "led_6": "H12",
             "led7": "J15", "led_7": "J15",
         }
-        return pins.get(port.lower())
+        return _lookup_pin(pins, port)
     if board_key == "crosslink_nx_eval_40":
         pins = {
             "clk": "L13", "clock": "L13", "clk_12mhz": "L13",
@@ -254,7 +295,7 @@ def _pin_for_pdc_port(board_key: str, port: str) -> str | None:
             "led5": "L15", "led_5": "L15", "led6": "L20", "led_6": "L20",
             "led7": "L19", "led_7": "L19",
         }
-        return pins.get(port.lower())
+        return _lookup_pin(pins, port)
     return None
 
 
@@ -281,7 +322,7 @@ def _pin_for_cst_port(board_key: str, port: str) -> str | None:
             "led3": "14", "led_3": "14", "led4": "15", "led_4": "15",
             "led5": "16", "led_5": "16",
         }
-        return pins.get(lower)
+        return _lookup_pin(pins, port)
     if board_key == "gowin_tang_nano_20k":
         pins = {
             "clk": "4", "clock": "4", "clk_i": "4", "clk_27mhz": "4",
@@ -291,7 +332,7 @@ def _pin_for_cst_port(board_key: str, port: str) -> str | None:
             "led3": "18", "led_3": "18", "led4": "19", "led_4": "19",
             "led5": "20", "led_5": "20",
         }
-        return pins.get(lower)
+        return _lookup_pin(pins, port)
     if board_key == "gowin_tang_primer_20k":
         # Sipeed Tang Primer 20K core clock and Dock user LEDs.
         pins = {
@@ -299,7 +340,7 @@ def _pin_for_cst_port(board_key: str, port: str) -> str | None:
             "led": "N16", "led_n": "N16", "led0": "N16", "led_0": "N16",
             "led1": "N14", "led_1": "N14",
         }
-        return pins.get(lower)
+        return _lookup_pin(pins, port)
     return None
 
 
@@ -352,7 +393,7 @@ def run_agent(state: dict) -> dict:
     fmt = str(board.get("constraint_format") or "pcf").lower()
     board_key = str(board.get("board") or state.get("board") or "custom").lower()
     rtl_files = [str(path) for path in fpga.get("rtl_files") or [] if os.path.exists(str(path))]
-    rtl_ports = _extract_ports_from_rtl(rtl_files)
+    rtl_ports = _extract_port_bits_from_rtl(rtl_files, str(top))
     constraint_text = str(
         state.get("constraints_pdc")
         or state.get("pdc_text")

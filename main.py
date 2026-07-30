@@ -491,6 +491,7 @@ from agents.fpga.fpga_verification_gate import verification_passed as fpga_verif
 from agents.fpga.fpga_bitstream_handoff_agent import run_agent as fpga_bitstream_handoff_agent
 from agents.fpga.fpga_dashboard_agent import run_agent as fpga_dashboard_agent
 from agents.fpga.fpga_target_explorer_agent import run_agent as fpga_target_explorer_agent
+from agents.fpga.fpga_explorer_io_mapping_agent import run_agent as fpga_explorer_io_mapping_agent
 
 DIGITAL_AGENT_FUNCTIONS: Dict[str, Any] = {
     "Digital Spec Agent": digital_spec_agent,
@@ -594,6 +595,7 @@ FPGA_AGENT_FUNCTIONS: Dict[str, Any] = {
     "FPGA Bitstream Handoff Agent": fpga_bitstream_handoff_agent,
     "FPGA Dashboard Agent": fpga_dashboard_agent,
     "FPGA Target Explorer Agent": fpga_target_explorer_agent,
+    "FPGA Explorer I/O Mapping Agent": fpga_explorer_io_mapping_agent,
 }
 
 from agents.analog.analog_spec_builder_agent import run_agent as analog_spec_builder_agent
@@ -1363,6 +1365,7 @@ FPGA_SYNTHESIS_DEFINITION = _linear_workflow_definition([
 
 FPGA_TARGET_EXPLORER_DEFINITION = _linear_workflow_definition([
     "FPGA RTL Handoff Ingest Agent",
+    "FPGA Explorer I/O Mapping Agent",
     "FPGA Target Explorer Agent",
 ])
 
@@ -4063,7 +4066,8 @@ def execute_digital_app_background(
         )
         nodes = _definition_to_executor_nodes(defn)
         if app_name == "fpga_target_explorer":
-            nodes = _insert_node_before_once(nodes, "FPGA RTL Quality Gate Agent", "FPGA Target Explorer Agent")
+            nodes = _insert_node_before_once(nodes, "FPGA Explorer I/O Mapping Agent", "FPGA Target Explorer Agent")
+            nodes = _insert_node_before_once(nodes, "FPGA RTL Quality Gate Agent", "FPGA Explorer I/O Mapping Agent")
             selected = shared_state.get("candidate_boards") if isinstance(shared_state.get("candidate_boards"), list) else []
             append_log_workflow(workflow_id, f"Explorer scope locked: {len(selected)} selected board(s). RTL ingest and lint/compile quality gate run before exploration.", phase="fpga_target_explorer_setup")
             append_log_run(run_id, f"Explorer scope locked: {len(selected)} selected board(s). RTL ingest and lint/compile quality gate run before exploration.")
