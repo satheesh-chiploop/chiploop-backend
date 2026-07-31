@@ -28,6 +28,7 @@ def run_agent(state: dict) -> dict:
     rtl_quality = fpga.get("rtl_quality", {}) if isinstance(fpga.get("rtl_quality"), dict) else {}
     pnr = fpga.get("place_route", {}) if isinstance(fpga.get("place_route"), dict) else {}
     timing = fpga.get("timing_drc", {}) if isinstance(fpga.get("timing_drc"), dict) else {}
+    lec = fpga.get("lec", {}) if isinstance(fpga.get("lec"), dict) else {}
     synthesis_estimate = {
         "logical_cells_used": synth.get("logical_cells_used"),
         "logical_cells_available": _first(synth.get("logical_cells_available"), ((fpga.get("target") or {}).get("resources") or {}).get("logic_cells")),
@@ -115,6 +116,10 @@ def run_agent(state: dict) -> dict:
         "utilization": utilization,
         "timing_summary": timing_summary,
         "synthesis": synth,
+        "lec": lec,
+        "constraint_cdc_signoff": fpga.get("constraint_cdc_signoff", {}),
+        "power_device_qualification": fpga.get("power_device_qualification", {}),
+        "hardware_validation": fpga.get("hardware_validation", {}),
         "synthesis_closure": fpga.get("synthesis_closure", {}),
         "place_route": pnr,
         "timing_drc": timing,

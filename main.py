@@ -481,6 +481,10 @@ from agents.fpga.fpga_rtl_handoff_ingest_agent import run_agent as fpga_rtl_hand
 from agents.fpga.fpga_rtl_quality_gate_agent import run_agent as fpga_rtl_quality_gate_agent
 from agents.fpga.fpga_constraint_setup_agent import run_agent as fpga_constraint_setup_agent
 from agents.fpga.fpga_yosys_synthesis_agent import run_agent as fpga_yosys_synthesis_agent
+from agents.fpga.fpga_logic_equivalence_agent import run_agent as fpga_logic_equivalence_agent
+from agents.fpga.fpga_constraint_cdc_signoff_agent import run_agent as fpga_constraint_cdc_signoff_agent
+from agents.fpga.fpga_board_bringup_validation_agent import run_agent as fpga_board_bringup_validation_agent
+from agents.fpga.fpga_power_device_qualification_agent import run_agent as fpga_power_device_qualification_agent
 from agents.fpga.fpga_nextpnr_place_route_agent import run_agent as fpga_nextpnr_place_route_agent
 from agents.fpga.fpga_timing_drc_agent import run_agent as fpga_timing_drc_agent
 from agents.fpga.fpga_synthesis_closure_agent import run_agent as fpga_synthesis_closure_agent
@@ -587,6 +591,10 @@ FPGA_AGENT_FUNCTIONS: Dict[str, Any] = {
     "FPGA RTL Quality Gate Agent": fpga_rtl_quality_gate_agent,
     "FPGA Constraint Setup Agent": fpga_constraint_setup_agent,
     "FPGA Yosys Synthesis Agent": fpga_yosys_synthesis_agent,
+    "FPGA RTL-to-Netlist Equivalence Agent": fpga_logic_equivalence_agent,
+    "FPGA Constraint and CDC/RDC Signoff Agent": fpga_constraint_cdc_signoff_agent,
+    "FPGA Board Bring-up and Hardware Validation Agent": fpga_board_bringup_validation_agent,
+    "FPGA Power and Device Qualification Agent": fpga_power_device_qualification_agent,
     "FPGA Synthesis Closure Agent": fpga_synthesis_closure_agent,
     "FPGA nextpnr Place & Route Agent": fpga_nextpnr_place_route_agent,
     "FPGA Timing & DRC Agent": fpga_timing_drc_agent,
@@ -1275,17 +1283,23 @@ FPGA_RTL_TO_BITSTREAM_DEFINITION = _linear_workflow_definition([
     "FPGA RTL Handoff Ingest Agent",
     "FPGA RTL Quality Gate Agent",
     "Digital RTL Linting Agent",
+    "Digital CDC Analysis Agent",
+    "Digital Reset Integrity Agent",
     "Digital Synthesis Readiness Agent",
     "Digital DQA Summary Agent",
     *FPGA_INLINE_VERIFY_AGENTS,
     *FPGA_INLINE_VERIFY_CLOSURE_AGENTS,
     "FPGA Constraint Setup Agent",
+    "FPGA Constraint and CDC/RDC Signoff Agent",
     "FPGA Yosys Synthesis Agent",
     "FPGA Synthesis Closure Agent",
+    "FPGA RTL-to-Netlist Equivalence Agent",
     "FPGA nextpnr Place & Route Agent",
     "FPGA Timing & DRC Agent",
     "FPGA Timing Closure Agent",
+    "FPGA Power and Device Qualification Agent",
     "FPGA Bitstream Handoff Agent",
+    "FPGA Board Bring-up and Hardware Validation Agent",
     "FPGA Dashboard Agent",
 ])
 
@@ -1302,17 +1316,23 @@ FPGA2RTL_TO_BITSTREAM_DEFINITION = _linear_workflow_definition([
     "FPGA RTL Handoff Ingest Agent",
     "FPGA RTL Quality Gate Agent",
     "Digital RTL Linting Agent",
+    "Digital CDC Analysis Agent",
+    "Digital Reset Integrity Agent",
     "Digital Synthesis Readiness Agent",
     "Digital DQA Summary Agent",
     *FPGA_INLINE_VERIFY_AGENTS,
     *FPGA_INLINE_VERIFY_CLOSURE_AGENTS,
     "FPGA Constraint Setup Agent",
+    "FPGA Constraint and CDC/RDC Signoff Agent",
     "FPGA Yosys Synthesis Agent",
     "FPGA Synthesis Closure Agent",
+    "FPGA RTL-to-Netlist Equivalence Agent",
     "FPGA nextpnr Place & Route Agent",
     "FPGA Timing & DRC Agent",
     "FPGA Timing Closure Agent",
+    "FPGA Power and Device Qualification Agent",
     "FPGA Bitstream Handoff Agent",
+    "FPGA Board Bring-up and Hardware Validation Agent",
     "FPGA Dashboard Agent",
 ])
 
@@ -1355,11 +1375,15 @@ FPGA_SYNTHESIS_DEFINITION = _linear_workflow_definition([
     "FPGA RTL Handoff Ingest Agent",
     "FPGA RTL Quality Gate Agent",
     "Digital RTL Linting Agent",
+    "Digital CDC Analysis Agent",
+    "Digital Reset Integrity Agent",
     "Digital Synthesis Readiness Agent",
     "Digital DQA Summary Agent",
     "FPGA Constraint Setup Agent",
+    "FPGA Constraint and CDC/RDC Signoff Agent",
     "FPGA Yosys Synthesis Agent",
     "FPGA Synthesis Closure Agent",
+    "FPGA RTL-to-Netlist Equivalence Agent",
     "FPGA Dashboard Agent",
 ])
 
@@ -1373,16 +1397,21 @@ FPGA_IMPLEMENTATION_DEFINITION = _linear_workflow_definition([
     "FPGA RTL Handoff Ingest Agent",
     "FPGA RTL Quality Gate Agent",
     "Digital RTL Linting Agent",
+    "Digital CDC Analysis Agent",
+    "Digital Reset Integrity Agent",
     "Digital Synthesis Readiness Agent",
     "Digital DQA Summary Agent",
     *FPGA_INLINE_VERIFY_AGENTS,
     *FPGA_INLINE_VERIFY_CLOSURE_AGENTS,
     "FPGA Constraint Setup Agent",
+    "FPGA Constraint and CDC/RDC Signoff Agent",
     "FPGA Yosys Synthesis Agent",
     "FPGA Synthesis Closure Agent",
+    "FPGA RTL-to-Netlist Equivalence Agent",
     "FPGA nextpnr Place & Route Agent",
     "FPGA Timing & DRC Agent",
     "FPGA Timing Closure Agent",
+    "FPGA Power and Device Qualification Agent",
     "FPGA Dashboard Agent",
 ])
 
@@ -3633,6 +3662,18 @@ class FpgaBitstreamAppIn(DigitalRTLSourceIn):
     run_fpga_synthesis_closure_loop: Optional[bool] = False
     max_fpga_synthesis_closure_iterations: Optional[int] = 1
     run_fpga_rtl_repair_loop: Optional[bool] = True
+    run_fpga_lec: Optional[bool] = True
+    require_fpga_lec: Optional[bool] = True
+    fpga_lec_induct_depth: Optional[int] = 12
+    run_fpga_constraint_signoff: Optional[bool] = True
+    require_fpga_constraint_signoff: Optional[bool] = True
+    run_fpga_hardware_validation: Optional[bool] = False
+    require_fpga_hardware_validation: Optional[bool] = False
+    program_connected_fpga: Optional[bool] = False
+    hardware_expected_behavior: Optional[str] = None
+    hardware_observed_behavior: Optional[str] = None
+    hardware_test_passed: Optional[bool] = False
+    fpga_activity_factor: Optional[float] = 0.125
     run_fpga_timing_closure_loop: Optional[bool] = False
     max_fpga_timing_closure_iterations: Optional[int] = 1
     fpga_closure_mode: Optional[str] = "balanced"
@@ -6522,6 +6563,38 @@ async def apps_fpga_implementation_run(request: Request, background_tasks: Backg
 
     return {"ok": True, "workflow_id": workflow_id, "run_id": run_id}
 
+
+
+def _start_fpga_specialty_app(background_tasks: BackgroundTasks, user_id: str, payload: FpgaBitstreamAppIn, *, title: str, artifact_name: str, app_name: str, workflow_name: str, overrides: Dict[str, Any]):
+    workflow_id, run_id, base_dir = _create_app_workflow_and_run(user_id, title, "fpga")
+    artifact_dir = os.path.join(base_dir, artifact_name)
+    os.makedirs(artifact_dir, exist_ok=True)
+    data = payload.dict()
+    if data.get("from_workflow_id") and not data.get("source_workflow_id"):
+        data["source_workflow_id"] = data["from_workflow_id"]
+    if data.get("source_arch2rtl_workflow_id") and not data.get("source_workflow_id"):
+        data["source_workflow_id"] = data["source_arch2rtl_workflow_id"]
+    data.update({"target": "fpga", "verification_domain": "fpga", **overrides})
+    target = _fpga_target_metadata(data)
+    data["fpga_target"] = target
+    data["fpga"] = {**(data.get("fpga") if isinstance(data.get("fpga"), dict) else {}), "target": target}
+    background_tasks.add_task(execute_digital_app_background, workflow_id, run_id, user_id, artifact_dir, app_name, workflow_name, data)
+    return {"ok": True, "workflow_id": workflow_id, "run_id": run_id}
+
+
+@app.post("/apps/fpga/constraint-signoff/run")
+async def apps_fpga_constraint_signoff_run(request: Request, background_tasks: BackgroundTasks, payload: FpgaBitstreamAppIn):
+    return _start_fpga_specialty_app(background_tasks, _require_user_id(request), payload, title="App: FPGA Constraint + CDC/RDC Signoff", artifact_name="fpga_constraint_signoff", app_name="fpga_constraint_signoff", workflow_name="FPGA_Synthesis", overrides={"run_fpga_constraint_signoff": True, "require_fpga_constraint_signoff": True, "run_fpga_verification": False, "generate_bitstream": False})
+
+
+@app.post("/apps/fpga/power-qualification/run")
+async def apps_fpga_power_qualification_run(request: Request, background_tasks: BackgroundTasks, payload: FpgaBitstreamAppIn):
+    return _start_fpga_specialty_app(background_tasks, _require_user_id(request), payload, title="App: FPGA Power + Device Qualification", artifact_name="fpga_power_qualification", app_name="fpga_power_qualification", workflow_name="FPGA_Implementation", overrides={"generate_bitstream": False})
+
+
+@app.post("/apps/fpga/board-bringup/run")
+async def apps_fpga_board_bringup_run(request: Request, background_tasks: BackgroundTasks, payload: FpgaBitstreamAppIn):
+    return _start_fpga_specialty_app(background_tasks, _require_user_id(request), payload, title="App: FPGA Board Bring-up + Hardware Validation", artifact_name="fpga_board_bringup", app_name="fpga_board_bringup", workflow_name="FPGA_RTL_to_Bitstream", overrides={"generate_bitstream": True, "run_fpga_hardware_validation": True})
 
 @app.post("/apps/fpga/target-explorer/run")
 async def apps_fpga_target_explorer_run(request: Request, background_tasks: BackgroundTasks, payload: FpgaBitstreamAppIn):
