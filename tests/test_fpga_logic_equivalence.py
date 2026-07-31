@@ -43,7 +43,10 @@ def test_fpga_lec_uses_yosys_equivalence_and_passes(tmp_path, monkeypatch):
     assert "equiv_make gold gate equiv" in script
     assert "equiv_simple" in script
     assert "equiv_induct -seq 12" in script
+    assert "equiv_induct -seq 24" in script
+    assert "equiv_induct -seq 48" in script
     assert "equiv_status -assert" in script
+    assert published["induction_depths_attempted"] == [12, 24, 48]
 
 
 def test_fpga_lec_disabled_by_user_is_recorded(tmp_path, monkeypatch):
@@ -68,6 +71,28 @@ def test_required_fpga_lec_failure_blocks_downstream(tmp_path, monkeypatch):
     with pytest.raises(RuntimeError, match="LEC did not pass"):
         lec.run_agent(state)
 
+
+def test_unproven_equivalence_is_reported_as_inconclusive(tmp_path, monkeypatch):
+    state = _state(tmp_path)
+    state["require_fpga_lec"] = False
+    published = {}
+    monkeypatch.setattr(lec, "publish_json", lambda _state, _agent, _subdir, _name, data: published.update(data))
+    monkeypatch.setattr(lec, "manifest_update", lambda *_args: None)
+
+    def incomplete_run(_cmd, cwd, log_path, **_kwargs):
+        Path(log_path).write_text(
+            "Found 14 unproven $equiv cells in module equiv.\n"
+            "ERROR: Found 9 unproven $equiv cells in 'equiv_status -assert'.\n",
+            encoding="utf-8",
+        )
+        return {"ok": False, "stderr_tail": "ERROR: Found 9 unproven $equiv cells"}
+
+    monkeypatch.setattr(lec, "run_cmd", incomplete_run)
+    lec.run_agent(state)
+    assert published["status"] == "inconclusive"
+    assert published["failure_kind"] == "proof_incomplete"
+    assert published["unproven_points"] == 9
+    assert "12, 24, 48" in published["reason"]
 
 def test_fpga_lec_is_registered_in_supabase_and_all_implementation_flows():
     root = Path(__file__).parents[2]
