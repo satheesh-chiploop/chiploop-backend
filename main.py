@@ -7044,13 +7044,17 @@ def dashboard_json_artifact(workflow_id: str, filename: str = Query(..., min_len
             "fpga_handoff_ingest.json": "handoff",
             "fpga_rtl_quality_summary.json": "rtl_quality",
             "fpga_constraints_summary.json": "constraints",
+            "fpga_constraint_cdc_signoff_summary.json": "constraint_cdc_signoff",
             "fpga_synthesis_summary.json": "synthesis",
+            "fpga_lec_summary.json": "lec",
             "fpga_place_route_summary.json": "place_route",
             "fpga_timing_drc_summary.json": "timing_drc",
             "fpga_synthesis_closure_plan.json": "synthesis_closure",
             "fpga_timing_closure_plan.json": "timing_closure",
             "fpga_timing_closure_chart.json": "timing_closure_chart",
+            "fpga_power_device_qualification_summary.json": "power_device_qualification",
             "fpga_bitstream_summary.json": "bitstream",
+            "fpga_hardware_validation_summary.json": "hardware_validation",
         }
         for basename_key, summary_key in mapping.items():
             value = parts.get(basename_key)
@@ -7124,13 +7128,17 @@ def dashboard_json_artifact(workflow_id: str, filename: str = Query(..., min_len
             "fpga_handoff_ingest.json",
             "fpga_rtl_quality_summary.json",
             "fpga_constraints_summary.json",
+            "fpga_constraint_cdc_signoff_summary.json",
             "fpga_synthesis_summary.json",
+            "fpga_lec_summary.json",
             "fpga_place_route_summary.json",
             "fpga_timing_drc_summary.json",
             "fpga_synthesis_closure_plan.json",
             "fpga_timing_closure_plan.json",
             "fpga_timing_closure_chart.json",
+            "fpga_power_device_qualification_summary.json",
             "fpga_bitstream_summary.json",
+            "fpga_hardware_validation_summary.json",
         }
         parts: Dict[str, Any] = {}
         for path in local_base.rglob("*.json"):
@@ -7175,13 +7183,17 @@ def dashboard_json_artifact(workflow_id: str, filename: str = Query(..., min_len
             "fpga_handoff_ingest.json",
             "fpga_rtl_quality_summary.json",
             "fpga_constraints_summary.json",
+            "fpga_constraint_cdc_signoff_summary.json",
             "fpga_synthesis_summary.json",
+            "fpga_lec_summary.json",
             "fpga_place_route_summary.json",
             "fpga_timing_drc_summary.json",
             "fpga_synthesis_closure_plan.json",
             "fpga_timing_closure_plan.json",
             "fpga_timing_closure_chart.json",
+            "fpga_power_device_qualification_summary.json",
             "fpga_bitstream_summary.json",
+            "fpga_hardware_validation_summary.json",
         }
         parts: Dict[str, Any] = {}
 

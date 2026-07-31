@@ -30,6 +30,29 @@ def test_constraint_signoff_passes_single_clock_complete_constraints(tmp_path):
     assert result["fpga"]["constraint_cdc_signoff"]["detected_clocks"] == ["clk"]
 
 
+def test_resetless_design_is_an_advisory_not_a_signoff_review(tmp_path):
+    rtl = tmp_path / "top.sv"
+    rtl.write_text("module top(input clk, output reg led); always @(posedge clk) led <= ~led; endmodule")
+    digital = tmp_path / "digital"
+    digital.mkdir()
+    (digital / "reset_integrity_findings.json").write_text(
+        '{"findings":[{"type":"no_reset_detected","severity":"warning","msg":"No reset signal detected by heuristic."}]}',
+        encoding="utf-8",
+    )
+    state = {
+        "workflow_id": "resetless-signoff",
+        "workflow_dir": str(tmp_path),
+        "target_frequency_mhz": 25,
+        "fpga": {
+            "rtl_files": [str(rtl)],
+            "constraints": {"unconstrained_ports": [], "target_frequency_mhz": 25},
+        },
+    }
+    result = run_constraint_signoff(state)
+    summary = result["fpga"]["constraint_cdc_signoff"]
+    assert summary["status"] == "pass"
+    assert summary["warnings"] == []
+    assert summary["advisories"] == ["No reset signal detected by heuristic."]
 def test_constraint_signoff_blocks_unconstrained_ports(tmp_path):
     state = {
         "workflow_id": "signoff-fail",
@@ -40,10 +63,10 @@ def test_constraint_signoff_blocks_unconstrained_ports(tmp_path):
         run_constraint_signoff(state)
 
 
-def test_hardware_validation_defaults_to_disabled(tmp_path):
+def test_hardware_validation_defaults_to_not_requested(tmp_path):
     state = {"workflow_id": "bringup-disabled", "workflow_dir": str(tmp_path), "fpga": {}}
     result = run_bringup(state)
-    assert result["fpga"]["hardware_validation"]["status"] == "disabled"
+    assert result["fpga"]["hardware_validation"]["status"] == "not_requested"
     assert result["fpga"]["hardware_validation"]["tool"] == "openFPGALoader"
 
 

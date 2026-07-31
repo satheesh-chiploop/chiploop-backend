@@ -45,10 +45,22 @@ def run_agent(state: dict) -> dict:
     crossings.extend(_findings(str(state.get("cdc_report_path") or os.path.join(workflow_root, "digital", "cdc_findings.json")), "cdc"))
     crossings.extend(_findings(str(state.get("reset_integrity_report_path") or os.path.join(workflow_root, "digital", "reset_integrity_findings.json")), "rdc"))
     unsafe_crossings = [item for item in crossings if str((item or {}).get("severity", "")).lower() in {"error", "critical", "unsafe"}]
+    # Reset-less RTL is valid when there is no asynchronous reset structure.
+    # Preserve the heuristic finding as an advisory without holding signoff.
+    advisory_findings = [
+        item for item in crossings
+        if str((item or {}).get("type") or "").lower() == "no_reset_detected"
+        and not async_resets
+    ]
     warnings = []
     if len(sequential_clocks) > 1 and not crossings:
         warnings.append("Multiple RTL clock signals were detected; provide CDC classifications or run structural CDC analysis.")
-    warnings.extend(str(item.get("msg") or item.get("message") or item.get("type")) for item in crossings if str(item.get("severity", "")).lower() == "warning")
+    warnings.extend(
+        str(item.get("msg") or item.get("message") or item.get("type"))
+        for item in crossings
+        if str(item.get("severity", "")).lower() == "warning"
+        and item not in advisory_findings
+    )
     if async_resets and not state.get("fpga_rdc_reviewed"):
         warnings.append("Asynchronous reset usage was detected; reset release synchronization requires review.")
     errors = []
@@ -73,6 +85,10 @@ def run_agent(state: dict) -> dict:
         "detected_async_resets": async_resets,
         "unconstrained_ports": unconstrained_ports,
         "cdc_rdc_findings": crossings,
+        "advisories": [
+            str(item.get("msg") or item.get("message") or item.get("type"))
+            for item in advisory_findings
+        ],
         "unsafe_crossing_count": len(unsafe_crossings),
         "warnings": warnings,
         "errors": errors,

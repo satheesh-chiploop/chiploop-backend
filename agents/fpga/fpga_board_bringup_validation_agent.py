@@ -28,11 +28,11 @@ def run_agent(state: dict) -> dict:
         "bitstream": artifact or None,
         "expected_behavior": expected,
         "programming_requested": program_board,
-        "status": "disabled",
+        "status": "not_requested",
         "checks": [],
     }
     if not enabled:
-        summary["reason"] = "Hardware validation disabled; bitstream remains available for local programming."
+        summary["reason"] = "Hardware validation was not requested for this run; the bitstream remains available for local programming."
     elif not artifact or not os.path.exists(artifact):
         summary.update(status="blocked", reason="A generated bitstream is required before board bring-up.")
     elif not programmer_board:
