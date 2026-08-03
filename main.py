@@ -54,6 +54,7 @@ from platform_browser_api import router as platform_browser_router
 from browser_auth import BrowserUser, is_browser_admin, require_browser_user
 from platform_adapters import get_platform_client
 from model_gateway import model_call_context
+from physical_ai import build_motor_control_package, list_physics_models, run_physical_ai_workflow
 
 
 import logging
@@ -3701,6 +3702,41 @@ class FpgaBitstreamAppIn(DigitalRTLSourceIn):
     hem_mode: Optional[str] = "fixed"
 
 
+class PhysicalAiMotorControlIn(BaseModel):
+    model_policy: Dict[str, Any] = Field(default_factory=lambda: {"mode": "standard", "selected_model": "chiploop_default"})
+    board: str = "orangecrab_ecp5_85f"
+    dc_bus_voltage_v: float = 48.0
+    rated_speed_rpm: float = 3000.0
+    control_loop_hz: float = 20000.0
+    pole_pairs: int = 4
+    target_frequency_mhz: float = 50.0
+    maximum_surrogate_error_percent: float = 3.0
+    simulation_mode: Literal["equation"] = "equation"
+    simulation_duration_s: float = 0.25
+    stator_resistance_ohm: float = 0.08
+    ld_h: float = 0.0002
+    lq_h: float = 0.0002
+    flux_linkage_wb: float = 0.018
+    inertia_kg_m2: float = 0.0002
+    viscous_friction_nms: float = 0.00002
+    load_torque_nm: float = 0.15
+    current_limit_a: float = 15.0
+    ambient_temperature_c: float = 25.0
+
+
+class PhysicalAiWorkflowIn(BaseModel):
+    application: str = "pmsm_motor_control"
+    objective: str = "Validate a PMSM model and prepare an FPGA implementation"
+    physics_domain: str = "motor_control"
+    physics_model_id: str = "chiploop.pmsm.dq.v1"
+    implementation_target: Literal["software", "fpga", "asic", "gpu_service"] = "fpga"
+    maximum_error_percent: float = 3.0
+    safety_constraints: List[str] = Field(default_factory=list)
+    operating_envelope: Dict[str, Any] = Field(default_factory=dict)
+    parameters: Dict[str, Any] = Field(default_factory=dict)
+    model_policy: Dict[str, Any] = Field(default_factory=lambda: {"mode": "standard", "selected_model": "chiploop_default"})
+
+
 class DigitalArch2SynthesisAppIn(DigitalArch2RTLAppIn, DigitalRTLSourceIn):
     """
     Arch2Synthesis = Arch2RTL + optional RTL source + synthesis knobs + stage control
@@ -6625,6 +6661,88 @@ async def apps_fpga_target_explorer_run(request: Request, background_tasks: Back
         data,
     )
     return {"ok": True, "workflow_id": workflow_id, "run_id": run_id}
+
+
+def execute_physical_ai_motor_control_background(workflow_id: str, run_id: str, artifact_dir: str, data: Dict[str, Any]):
+    try:
+        append_log_workflow(workflow_id, "Building Physical AI design contract", phase="physical_ai_contract")
+        append_log_run(run_id, "Building motor-control Physical AI package")
+        summary = build_motor_control_package(data, artifact_dir)
+        artifacts = {
+            "physical_ai_summary": summary["files"].get("design_contract"),
+            "nemo_agent_workflow": summary["files"].get("agent_workflow"),
+            "physicsnemo_job": summary["files"].get("physicsnemo_job"),
+            "fpga_handoff": summary["files"].get("fpga_handoff"),
+            "equation_metrics": summary["files"].get("equation_metrics"),
+            "equation_timeseries": summary["files"].get("equation_timeseries"),
+            "speed_response_plot": summary["files"].get("speed_response_plot"),
+            "current_response_plot": summary["files"].get("current_response_plot"),
+            "operating_sweep": summary["files"].get("operating_sweep"),
+            "operating_sweep_csv": summary["files"].get("operating_sweep_csv"),
+            "operating_envelope_plot": summary["files"].get("operating_envelope_plot"),
+        }
+        metrics = summary.get("simulation", {}).get("metrics", {})
+        sweep = summary.get("operating_sweep", {})
+        append_log_workflow(workflow_id, f"Equation simulation complete: final speed {metrics.get('final_speed_rpm', 0):.1f} RPM, max current {metrics.get('maximum_current_a', 0):.2f} A; operating sweep {sweep.get('feasible_cases', 0)}/{sweep.get('total_cases', 0)} feasible", phase="physical_ai_ready")
+        append_log_workflow(workflow_id, "Physical AI motor-control equation baseline complete", status="completed", phase="done", artifacts=artifacts)
+        append_log_run(run_id, "Physical AI motor-control equation baseline complete", status="completed", artifacts_path=artifact_dir)
+    except Exception as exc:
+        message = f"Physical AI motor-control scaffold failed: {type(exc).__name__}: {exc}"
+        append_log_workflow(workflow_id, message, status="failed", phase="error")
+        append_log_run(run_id, message, status="failed")
+
+
+def execute_physical_ai_workflow_background(workflow_id: str, run_id: str, artifact_dir: str, data: Dict[str, Any]):
+    try:
+        append_log_workflow(workflow_id, "Normalizing Physical AI application requirements", phase="requirements")
+        append_log_run(run_id, "Physical AI parent workflow started")
+        result = run_physical_ai_workflow(data, artifact_dir, workflow_id=workflow_id)
+        metrics = result["physics_execution"]["metrics"]
+        artifacts = {
+            "requirements_contract": result["files"].get("requirements_contract"),
+            "physics_model": result["files"].get("selected_physics_model"),
+            "physics_results": result["files"].get("equation_metrics"),
+            "operating_envelope": result["files"].get("operating_envelope_plot"),
+            "child_handoff": result["files"].get("child_handoff"),
+            "physical_ai_summary": result["files"].get("workflow_summary"),
+        }
+        append_log_workflow(workflow_id, f"Physics model {result['physics_model']['name']} completed; speed error {metrics['steady_state_speed_error_percent']:.2f}%", phase="physics_validation")
+        if result["status"] == "physics_validated":
+            append_log_workflow(workflow_id, "Physics validation passed; existing architecture, digital, FPGA, firmware, and product loops are ready", status="completed", phase="child_loops_ready", artifacts=artifacts)
+            append_log_run(run_id, "Physical AI parent workflow completed", status="completed", artifacts_path=artifact_dir)
+        else:
+            append_log_workflow(workflow_id, "Physics validation needs revision before child loops can start", status="completed", phase="needs_revision", artifacts=artifacts)
+            append_log_run(run_id, "Physical AI physics validation needs revision", status="completed", artifacts_path=artifact_dir)
+    except Exception as exc:
+        message = f"Physical AI workflow failed: {type(exc).__name__}: {exc}"
+        append_log_workflow(workflow_id, message, status="failed", phase="error")
+        append_log_run(run_id, message, status="failed")
+
+
+@app.get("/apps/physical-ai/models")
+async def apps_physical_ai_models(request: Request):
+    _require_user_id(request)
+    return {"models": list_physics_models()}
+
+
+@app.post("/apps/physical-ai/run")
+async def apps_physical_ai_run(request: Request, background_tasks: BackgroundTasks, payload: PhysicalAiWorkflowIn):
+    user_id = _require_user_id(request)
+    workflow_id, run_id, artifact_dir = _create_app_workflow_and_run(user_id, "App: Physical AI Studio", "physical_ai")
+    data = payload.dict()
+    background_tasks.add_task(execute_physical_ai_workflow_background, workflow_id, run_id, artifact_dir, data)
+    return {"ok": True, "workflow_id": workflow_id, "run_id": run_id, "dashboard_path": f"/dashboard/{workflow_id}?stage=physical_ai"}
+
+
+@app.post("/apps/physical-ai/motor-control/run")
+async def apps_physical_ai_motor_control_run(request: Request, background_tasks: BackgroundTasks, payload: PhysicalAiMotorControlIn):
+    user_id = _require_user_id(request)
+    workflow_id, run_id, artifact_dir = _create_app_workflow_and_run(user_id, "App: Physical AI Motor Control", "physical_ai")
+    data = payload.dict()
+    data["application"] = "pmsm_motor_control_and_fault_detection"
+    data["adc_dac_mode"] = "abstract_digital_streams"
+    background_tasks.add_task(execute_physical_ai_motor_control_background, workflow_id, run_id, artifact_dir, data)
+    return {"ok": True, "workflow_id": workflow_id, "run_id": run_id, "dashboard_path": f"/dashboard/{workflow_id}?stage=physical_ai"}
 
 
 @app.post("/apps/fpga/verify/run")

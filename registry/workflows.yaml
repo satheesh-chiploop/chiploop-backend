@@ -736,6 +736,25 @@
         "on_failure_preserve_logs",
         "artifact_publish_to_supabase"
       ]
+    },
+    {
+      "name": "Physical_AI_Loop",
+      "loop_type": "physical_ai",
+      "description": "Parent Physical AI workflow for requirements, physics-model selection, execution, validation, and contract-based delegation to existing ChipLoop loops.",
+      "agents": [
+        "Physical AI Requirements Agent",
+        "Physical AI Model Selection Agent",
+        "Physical AI Physics Execution Agent",
+        "Physical AI Orchestrator Agent"
+      ],
+      "hooks": [
+        "pre_run_validate_inputs",
+        "post_run_collect_artifacts",
+        "post_run_update_state",
+        "on_failure_capture_traceback",
+        "on_failure_preserve_logs",
+        "artifact_publish_to_supabase"
+      ]
     }
   ]
 }

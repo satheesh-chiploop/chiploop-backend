@@ -354,8 +354,10 @@ def complete_text(
         return text
 
     if provider == "openai_compatible":
-        api_key = _env_value(profile, "OPENAI_API_KEY", "not-required")
-        base_url = str(profile.get("base_url") or os.getenv("OPENAI_BASE_URL") or "").strip()
+        api_key_env = str(route.get("api_key_env") or "OPENAI_API_KEY").strip()
+        base_url_env = str(route.get("base_url_env") or "OPENAI_BASE_URL").strip()
+        api_key = _env_value(profile, api_key_env, "not-required")
+        base_url = str(route.get("base_url") or profile.get("base_url") or os.getenv(base_url_env) or "").strip()
         model = _route_value(route, "model", default=os.getenv("CHIPLOOP_DEFAULT_MODEL", "gpt-5.4-mini"))
         if not base_url:
             raise RuntimeError("OpenAI-compatible profile requires base_url")

@@ -4,6 +4,8 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from .policies import apply_model_policy
+
 
 DEFAULT_MODEL_PROFILE_ID = "chiploop_saas_default"
 DEFAULT_MODEL_PROVIDER = "openai"
@@ -50,16 +52,16 @@ def get_model_profile(state: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     state = state or {}
     profile = state.get("model_profile")
     if isinstance(profile, dict):
-        return _deep_merge(_default_profile(), profile)
+        return apply_model_policy(_deep_merge(_default_profile(), profile), state.get("model_policy"))
 
     profile_path = (
         state.get("model_profile_path")
         or os.getenv("CHIPLOOP_MODEL_PROFILE_PATH")
     )
     if isinstance(profile_path, str) and profile_path and os.path.exists(profile_path):
-        return _deep_merge(_default_profile(), _load_profile_file(profile_path))
+        return apply_model_policy(_deep_merge(_default_profile(), _load_profile_file(profile_path)), state.get("model_policy"))
 
-    return _default_profile()
+    return apply_model_policy(_default_profile(), state.get("model_policy"))
 
 
 def resolve_route(profile: Dict[str, Any], capability: str, agent_name: Optional[str] = None) -> Dict[str, Any]:
@@ -90,4 +92,5 @@ def model_profile_summary(state: Optional[Dict[str, Any]] = None) -> Dict[str, A
         "model_key_owner": profile.get("model_key_owner") or os.getenv("CHIPLOOP_MODEL_KEY_OWNER", "customer"),
         "capabilities": sorted(routing.keys()),
         "agents": sorted((profile.get("agents") or {}).keys()) if isinstance(profile.get("agents"), dict) else [],
+        "model_policy": profile.get("model_policy"),
     }
