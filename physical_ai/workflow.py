@@ -39,15 +39,25 @@ def run_physical_ai_workflow(payload: Dict[str, Any], artifact_dir: str, *, work
     })
     result = {
         "schema": "chiploop.physical_ai.workflow_result.v1",
-        "status": "physics_validated" if state["physical_ai_loop"]["physics_passed"] else "needs_revision",
+        "status": "ready_for_fpga_exploration" if state["physical_ai_loop"]["physics_passed"] and state["physical_ai_loop"]["fixed_point_passed"] and state["physical_ai_loop"]["rtl_smoke_passed"] else "needs_revision",
         "requirements": state["requirements_contract"],
         "physics_model": state["selected_physics_model"],
         "physics_execution": {
             "status": state["physics_execution"]["status"],
             "metrics": state["physics_execution"]["simulation"]["metrics"],
             "operating_sweep": state["physics_execution"]["operating_sweep"],
+            "fixed_point": state["physics_execution"]["fixed_point"],
+            "rtl_numeric_contract": state["physics_execution"]["rtl_numeric_contract"],
+            "rtl": state["physics_execution"]["rtl"],
         },
         "loop": state["physical_ai_loop"],
+        "hem": {
+            "enabled": bool(payload.get("hem_enabled", True)),
+            "mode": str(payload.get("hem_mode") or "fixed"),
+            "goal": str(payload.get("hem_goal") or "product_demo"),
+            "stage_toggles": payload.get("hem_stage_toggles") or {"fpga_exploration": True, "fpga_bitstream": True, "firmware_product": True},
+            "start_condition": "physics_passed AND fixed_point_passed AND rtl_smoke_passed",
+        },
         "files": files,
     }
     summary_path = _write_json(root, "physical_ai_workflow_summary.json", result)

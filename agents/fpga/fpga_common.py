@@ -363,6 +363,32 @@ def _copy_storage_rtl(state: Dict[str, Any], source_workflow_id: str, dest_dir: 
         os.makedirs(os.path.dirname(target), exist_ok=True)
         Path(target).write_bytes(raw)
         copied.append(target)
+    try:
+        run_rows = (
+            client.table("runs")
+            .select("artifacts_path")
+            .eq("workflow_id", source_workflow_id)
+            .order("created_at", desc=True)
+            .execute()
+            .data
+            or []
+        )
+    except Exception:
+        run_rows = []
+    for row in run_rows:
+        root = Path(str((row or {}).get("artifacts_path") or ""))
+        if not root.exists():
+            continue
+        for source in sorted(root.rglob("*")):
+            lower_name = source.name.lower()
+            if not source.is_file() or not lower_name.endswith(RTL_EXTENSIONS):
+                continue
+            if lower_name.startswith("tb_") or "testbench" in lower_name or "_tb." in lower_name:
+                continue
+            target = os.path.join(dest_dir, _safe_rel(f"upstream/{source.name}"))
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            Path(target).write_bytes(source.read_bytes())
+            copied.append(target)
     return copied
 
 
@@ -403,6 +429,12 @@ def resolve_rtl_sources(state: Dict[str, Any]) -> List[str]:
         if os.path.exists(source_root):
             sources.extend(_copy_tree_rtl(source_root, out_dir))
     unique_paths = list(dict.fromkeys(os.path.abspath(path) for path in sources if os.path.exists(path)))
+    unique_paths = [
+        path for path in unique_paths
+        if not os.path.basename(path).lower().startswith("tb_")
+        and "testbench" not in os.path.basename(path).lower()
+        and "_tb." not in os.path.basename(path).lower()
+    ]
     deduped: List[str] = []
     ignored: List[Dict[str, Any]] = []
     seen_hashes: Dict[str, str] = {}

@@ -4,7 +4,9 @@ from pathlib import Path
 from typing import Any, Dict
 
 from model_gateway.policies import physical_ai_agent_assignments
+from .fixed_point import analyze_fixed_point
 from .pmsm_equations import run_operating_sweep, simulate_pmsm
+from .rtl_motor import generate_motor_rtl
 
 
 DEFAULT_BOARD = "orangecrab_ecp5_85f"
@@ -49,7 +51,7 @@ def build_motor_control_package(payload: Dict[str, Any], artifact_dir: str) -> D
             "board": board,
             "adc_boundary": "abstract_signed_int16_sample_stream",
             "dac_boundary": "abstract_signed_int16_command_stream",
-            "blocks": ["clarke_park", "pi_current_control", "compact_surrogate", "fault_monitor", "svpwm"],
+            "blocks": ["clarke", "park", "speed_pi", "id_iq_current_control", "inverse_park", "fault_monitor", "svpwm"],
             "hard_safety_limits_independent_of_ai": True,
         },
         "acceptance": {
@@ -70,6 +72,44 @@ def build_motor_control_package(payload: Dict[str, Any], artifact_dir: str) -> D
     }
     simulation = simulate_pmsm(payload, root)
     sweep = run_operating_sweep(payload, root)
+    fixed_point = analyze_fixed_point(simulation["timeseries"], payload, root)
+    rtl = generate_motor_rtl(payload, root, fixed_point["rtl_contract"])
+    register_map = {
+        "schema": "chiploop.register_map.v1",
+        "block_name": "motor_control",
+        "base_address": "0x40000000",
+        "address_width": 8,
+        "data_width": 32,
+        "top_module": "motor_control_mmio_top",
+        "registers": [
+            {"name": "CONTROL", "offset": "0x00", "access": "RW", "fields": [{"name": "enable", "bit_offset": 0, "bit_width": 1, "access": "RW"}, {"name": "clear_fault", "bit_offset": 1, "bit_width": 1, "access": "WO"}]},
+            {"name": "SPEED_REFERENCE", "offset": "0x04", "access": "RW", "fields": [{"name": "rpm_q", "bit_offset": 0, "bit_width": 16, "access": "RW"}]},
+            {"name": "STATUS", "offset": "0x08", "access": "RO", "fields": [{"name": "fault", "bit_offset": 0, "bit_width": 1, "access": "RO"}, {"name": "command_valid", "bit_offset": 1, "bit_width": 1, "access": "RO"}]},
+            {"name": "SPEED_MEASURED", "offset": "0x0C", "access": "RO"},
+            {"name": "PHASE_CURRENT_A", "offset": "0x10", "access": "RO"},
+            {"name": "PHASE_CURRENT_B", "offset": "0x14", "access": "RO"},
+            {"name": "DUTY_U", "offset": "0x18", "access": "RO"},
+            {"name": "DUTY_V", "offset": "0x1C", "access": "RO"},
+            {"name": "DUTY_W", "offset": "0x20", "access": "RO"},
+            {"name": "DC_BUS_VOLTAGE", "offset": "0x24", "access": "RO"},
+            {"name": "ROTOR_POSITION", "offset": "0x28", "access": "RO"},
+        ],
+        "safety": {"reset_state": "disabled", "enable_required": True, "clear_fault": "write_one_pulse"},
+    }
+    hardware_validation = {
+        "schema": "chiploop.physical_ai.hardware_validation.v1",
+        "status": "approval_required",
+        "automatic_execution": False,
+        "prerequisites": [
+            "Confirm selected FPGA board and ADC/DAC or external converter pin mapping",
+            "Verify gate-driver dead time and hardware over-current shutdown independently of FPGA logic",
+            "Run firmware/RTL co-simulation with CONTROL.enable remaining zero after reset",
+            "Approve a current-limited bench setup with the motor mechanically unloaded",
+        ],
+        "approval_actions": ["program_fpga", "enable_gate_driver", "energize_motor"],
+        "first_power_limits": {"speed_reference_rpm": 100, "current_limit_percent_of_rated": 10, "maximum_duration_seconds": 10},
+        "evidence_required": ["pin_mapping", "scope_capture_pwm_dead_time", "fault_shutdown_test", "operator_approval"],
+    }
     physics_job = {
         "schema": "chiploop.gpu_job.v1",
         "job_type": "physicsnemo_motor_surrogate_future",
@@ -86,9 +126,9 @@ def build_motor_control_package(payload: Dict[str, Any], artifact_dir: str) -> D
         "top_module": "motor_control_top",
         "target_frequency_mhz": float(payload.get("target_frequency_mhz") or 50.0),
         "stream_contract": {
-            "inputs": ["sample_valid", "phase_current_a", "phase_current_b", "rotor_position", "speed_rpm"],
-            "outputs": ["command_valid", "pwm_u", "pwm_v", "pwm_w", "torque_prediction", "fault"],
-            "sample_format": "signed Q5.10 unless overridden by quantization report",
+            "inputs": ["sample_valid", "phase_current_a", "phase_current_b", "rotor_position_turns", "speed_reference_rpm", "speed_measured_rpm", "dc_bus_voltage_v"],
+            "outputs": ["command_valid", "duty_u", "duty_v", "duty_w", "pwm_u", "pwm_v", "pwm_w", "fault"],
+            "sample_format": "Per-port formats are defined by rtl_numeric_contract.json",
         },
         "next_app": "/apps/fpga-target-explorer",
     }
@@ -97,9 +137,13 @@ def build_motor_control_package(payload: Dict[str, Any], artifact_dir: str) -> D
         "agent_workflow": _write_json(root, "nemo_agent_workflow.json", agent_workflow),
         "physicsnemo_job": _write_json(root, "physicsnemo_job.json", physics_job),
         "fpga_handoff": _write_json(root, "fpga_handoff.json", fpga_handoff),
+        "digital_regmap": _write_json(root, "digital_regmap.json", register_map),
+        "hardware_validation_plan": _write_json(root, "hardware_validation_plan.json", hardware_validation),
         **simulation["files"],
         **sweep["files"],
+        **fixed_point["files"],
+        **rtl["files"],
     }
-    summary = {"application": contract["application"], "status": "equation_validation_complete", "files": files, "contract": contract, "simulation": {"metrics": simulation["metrics"]}, "operating_sweep": sweep["result"], "agent_workflow": agent_workflow, "physicsnemo_job": physics_job, "fpga_handoff": fpga_handoff}
+    summary = {"application": contract["application"], "status": "rtl_smoke_verified" if rtl["manifest"]["verification"]["smoke_passed"] else "rtl_generated", "files": files, "contract": contract, "simulation": {"metrics": simulation["metrics"]}, "operating_sweep": sweep["result"], "fixed_point": fixed_point["analysis"], "rtl_numeric_contract": fixed_point["rtl_contract"], "rtl": rtl["manifest"], "agent_workflow": agent_workflow, "physicsnemo_job": physics_job, "fpga_handoff": fpga_handoff}
     _write_json(root, "physical_ai_summary.json", summary)
     return summary

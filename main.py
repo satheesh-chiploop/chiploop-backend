@@ -3735,6 +3735,10 @@ class PhysicalAiWorkflowIn(BaseModel):
     operating_envelope: Dict[str, Any] = Field(default_factory=dict)
     parameters: Dict[str, Any] = Field(default_factory=dict)
     model_policy: Dict[str, Any] = Field(default_factory=lambda: {"mode": "standard", "selected_model": "chiploop_default"})
+    hem_enabled: bool = True
+    hem_mode: Literal["fixed", "adaptive"] = "fixed"
+    hem_goal: Literal["fpga_prototype", "product_demo"] = "product_demo"
+    hem_stage_toggles: Dict[str, bool] = Field(default_factory=lambda: {"fpga_exploration": True, "fpga_bitstream": True, "firmware_product": True})
 
 
 class DigitalArch2SynthesisAppIn(DigitalArch2RTLAppIn, DigitalRTLSourceIn):
@@ -4928,6 +4932,7 @@ def _hem_insert_run_record(
     next_stage: Optional[str],
     status: str,
     metadata: Optional[Dict[str, Any]] = None,
+    policy_key: str = "digital_rtl_default",
 ) -> Optional[str]:
     hem_run_id = str(uuid.uuid4())
     now = datetime.utcnow().isoformat()
@@ -4938,7 +4943,7 @@ def _hem_insert_run_record(
             "root_workflow_id": root_workflow_id,
             "root_run_id": root_run_id,
             "mode": mode,
-            "policy_key": "digital_rtl_default",
+            "policy_key": policy_key,
             "current_workflow_id": current_workflow_id,
             "current_run_id": current_run_id,
             "current_stage": current_stage,
@@ -6663,6 +6668,179 @@ async def apps_fpga_target_explorer_run(request: Request, background_tasks: Back
     return {"ok": True, "workflow_id": workflow_id, "run_id": run_id}
 
 
+HEM_PHYSICAL_AI_POLICY_KEY = "physical_ai_fpga_prototype_v1"
+HEM_PHYSICAL_AI_STAGE_META: Dict[str, Dict[str, str]] = {
+    "fpga_exploration": {
+        "label": "FPGA Target Explorer",
+        "title": "HEM: Physical AI FPGA Target Explorer",
+        "artifact": "fpga_target_explorer",
+        "app_name": "fpga_target_explorer",
+        "workflow_name": "FPGA_Target_Explorer",
+        "dashboard_stage": "fpga_target_explorer",
+    },
+    "fpga_bitstream": {
+        "label": "FPGA RTL to Bitstream",
+        "title": "HEM: Physical AI FPGA RTL to Bitstream",
+        "artifact": "fpga_bitstream",
+        "app_name": "fpga",
+        "workflow_name": "FPGA_RTL_to_Bitstream",
+        "dashboard_stage": "synthesis",
+    },
+    "firmware_product": {
+        "label": "Firmware through Product Demo",
+        "title": "HEM: Physical AI Motor Firmware",
+        "artifact": "system",
+        "app_name": "system",
+        "workflow_name": "System_Firmware",
+        "dashboard_stage": "firmware",
+    },
+}
+
+
+def _hem_physical_ai_stage_plan(payload: Dict[str, Any]) -> List[str]:
+    toggles = payload.get("hem_stage_toggles") if isinstance(payload.get("hem_stage_toggles"), dict) else {}
+    return [stage for stage in ("fpga_exploration", "fpga_bitstream", "firmware_product") if bool(toggles.get(stage, True))]
+
+
+def _hem_physical_ai_child_payload(root_workflow_id: str, root_run_id: str, payload: Dict[str, Any], *, stage: str, hem_run_id: Optional[str]) -> Dict[str, Any]:
+    if stage == "firmware_product":
+        return {
+            "project_name": "physical_ai_pmsm_motor_control",
+            "rtl_source_mode": "from_system_rtl",
+            "system_rtl_workflow_id": root_workflow_id,
+            "source_system_rtl_workflow_id": root_workflow_id,
+            "from_workflow_id": root_workflow_id,
+            "parent_workflow_id": root_workflow_id,
+            "upstream_workflows": {"physical_ai": root_workflow_id, "system_rtl": root_workflow_id},
+            "top_module": "motor_control_mmio_top",
+            "target_frequency_mhz": float(payload.get("target_frequency_mhz") or 50.0),
+            "execute_cosim": True,
+            "run_cosim": True,
+            "toolchain": {"language": "rust"},
+            "hem_enabled": True,
+            "hem_mode": _hem_normalized_mode(str(payload.get("hem_mode") or "fixed")),
+            "hem_goal": "product_demo",
+            "hem_root_workflow_id": root_workflow_id,
+            "hem_root_run_id": root_run_id,
+            "hem_stage_toggles": {"system_software": True, "system_validation": True, "system_product": True},
+            "product_intent": "Build a safe simulator-backed PMSM motor-control product demo; physical board programming requires explicit approval.",
+        }
+    common = {
+        "rtl_source_mode": "from_arch2rtl",
+        "from_workflow_id": root_workflow_id,
+        "source_workflow_id": root_workflow_id,
+        "source_arch2rtl_workflow_id": root_workflow_id,
+        "parent_workflow_id": root_workflow_id,
+        "upstream_workflows": {"physical_ai": root_workflow_id},
+        "top_module": "motor_control_top",
+        "board": str(payload.get("board") or "orangecrab_ecp5_85f"),
+        "target_frequency_mhz": float(payload.get("target_frequency_mhz") or 50.0),
+        "target": "fpga",
+        "verification_domain": "fpga",
+        "hem_enabled": False,
+        "hem_mode": _hem_normalized_mode(str(payload.get("hem_mode") or "fixed")),
+        "hem_run_id": hem_run_id,
+        "hem_root_workflow_id": root_workflow_id,
+        "hem_root_run_id": root_run_id,
+    }
+    if stage == "fpga_exploration":
+        return {
+            **common,
+            "candidate_boards": payload.get("candidate_boards") or ["orangecrab_ecp5_85f", "ulx3s_45f"],
+            "requested_recommendation_profile": str(payload.get("requested_recommendation_profile") or "best_overall"),
+            "baseline_seed_count": int(payload.get("baseline_seed_count") or 1),
+            "closure_seed_count": int(payload.get("closure_seed_count") or 1),
+            "run_fpga_verification": False,
+            "generate_bitstream": False,
+            "allow_frequency_relaxation": True,
+        }
+    return {**common, "explorer_winning_configuration": payload.get("explorer_winning_configuration") or {}, "run_fpga_verification": True, "generate_bitstream": True, "run_fpga_hardware_validation": False}
+
+
+def _hem_continue_physical_ai_after_success(*, root_workflow_id: str, root_run_id: str, user_id: str, payload: Dict[str, Any]) -> None:
+    if not bool(payload.get("hem_enabled")):
+        append_log_workflow(root_workflow_id, "HEM Automatic Runs disabled; FPGA child workflows were not started.", phase="done")
+        return
+    mode = _hem_normalized_mode(str(payload.get("hem_mode") or "fixed"))
+    plan = _hem_physical_ai_stage_plan(payload)
+    if not plan:
+        append_log_workflow(root_workflow_id, "HEM Automatic Run has no enabled Physical AI child stages.", phase="hem_complete")
+        return
+    hem_run_id = _hem_insert_run_record(
+        user_id=user_id,
+        root_workflow_id=root_workflow_id,
+        root_run_id=root_run_id,
+        mode=mode,
+        current_workflow_id=root_workflow_id,
+        current_run_id=root_run_id,
+        current_stage="physical_ai",
+        next_stage=plan[0],
+        status="continuing",
+        policy_key=HEM_PHYSICAL_AI_POLICY_KEY,
+        metadata={"source": "physical_ai", "goal": "fpga_prototype", "path": plan, "completed": []},
+    )
+    completed: List[str] = []
+    previous_stage = "physical_ai"
+    automation_payload = dict(payload)
+    for index, stage in enumerate(plan):
+        meta = HEM_PHYSICAL_AI_STAGE_META[stage]
+        append_log_workflow(root_workflow_id, f"HEM Automatic Run ({mode}) queued {meta['label']} because {previous_stage} completed successfully.", phase="hem_queued")
+        child_loop_type = "system" if stage == "firmware_product" else "fpga"
+        child_workflow_id, child_run_id, base_dir = _create_app_workflow_and_run(user_id, meta["title"], child_loop_type)
+        child_artifact_dir = os.path.join(base_dir, meta["artifact"])
+        os.makedirs(child_artifact_dir, exist_ok=True)
+        child_payload = _hem_physical_ai_child_payload(root_workflow_id, root_run_id, automation_payload, stage=stage, hem_run_id=str(hem_run_id) if hem_run_id else None)
+        dashboard_path = f"/dashboard/{child_workflow_id}?stage={meta['dashboard_stage']}&app=HEM"
+        append_log_workflow(root_workflow_id, f"HEM started {meta['label']} workflow {child_workflow_id}. Dashboard: {dashboard_path}", phase="hem_running")
+        append_log_run(root_run_id, f"HEM started {meta['label']} workflow {child_workflow_id}. Dashboard: {dashboard_path}")
+        append_log_workflow(child_workflow_id, f"HEM started {meta['label']} from Physical AI workflow {root_workflow_id}.", phase="hem_start")
+        append_log_run(child_run_id, f"HEM started {meta['label']} from Physical AI workflow {root_workflow_id}.")
+        _hem_update_run_record(
+            str(hem_run_id) if hem_run_id else None,
+            current_workflow_id=child_workflow_id,
+            current_run_id=child_run_id,
+            current_stage=stage,
+            next_stage=plan[index + 1] if index + 1 < len(plan) else None,
+            status="running",
+            metadata={"source": "physical_ai", "goal": "fpga_prototype", "path": plan, "completed": completed},
+        )
+        try:
+            if stage == "firmware_product":
+                execute_system_app_background(child_workflow_id, child_run_id, user_id, child_artifact_dir, meta["workflow_name"], child_payload, meta["app_name"])
+            else:
+                execute_digital_app_background(child_workflow_id, child_run_id, user_id, child_artifact_dir, meta["app_name"], meta["workflow_name"], child_payload)
+        except Exception as exc:
+            append_log_workflow(child_workflow_id, f"HEM child execution crashed: {type(exc).__name__}: {exc}", status="failed", phase="error")
+        child_rows = supabase.table("workflows").select("status").eq("id", child_workflow_id).limit(1).execute().data or []
+        child_status = str((child_rows[0] if child_rows else {}).get("status") or "unknown")
+        append_log_workflow(root_workflow_id, f"HEM {meta['label']} finished with status {child_status}.", phase="hem_running" if child_status == "completed" else "hem_failed")
+        if child_status != "completed":
+            message = f"HEM stopped after {meta['label']} because the child workflow status is {child_status}."
+            append_log_workflow(root_workflow_id, message, phase="hem_failed")
+            append_log_run(root_run_id, message)
+            _hem_update_run_record(str(hem_run_id) if hem_run_id else None, status="failed", metadata={"source": "physical_ai", "path": plan, "completed": completed, "failed_stage": stage, "failed_workflow_id": child_workflow_id})
+            return
+        if stage == "fpga_exploration":
+            explorer_files = list(Path(child_artifact_dir).rglob("fpga_target_explorer.json"))
+            if explorer_files:
+                try:
+                    explorer = json.loads(explorer_files[-1].read_text(encoding="utf-8"))
+                    continuation = explorer.get("continuation") if isinstance(explorer.get("continuation"), dict) else {}
+                    selected_board = continuation.get("selected_board") or explorer.get("selected_recommendation")
+                    if selected_board:
+                        automation_payload["board"] = selected_board
+                    automation_payload["explorer_winning_configuration"] = continuation.get("winning_configuration") or {}
+                    append_log_workflow(root_workflow_id, f"HEM selected FPGA board {selected_board or 'unresolved'} from Target Explorer evidence.", phase="hem_running")
+                except Exception as exc:
+                    logger.warning("HEM Physical AI: could not parse FPGA Target Explorer result: %s", exc)
+        completed.append(meta["label"])
+        previous_stage = stage
+    message = f"HEM Automatic Run ({mode}) completed with respect to Physical AI: {', '.join(completed)} completed."
+    append_log_workflow(root_workflow_id, message, phase="hem_complete")
+    append_log_run(root_run_id, message)
+    _hem_update_run_record(str(hem_run_id) if hem_run_id else None, status="completed", next_stage=None, metadata={"source": "physical_ai", "goal": "fpga_prototype", "path": plan, "completed_stages": completed, "summary": message})
+
+
 def execute_physical_ai_motor_control_background(workflow_id: str, run_id: str, artifact_dir: str, data: Dict[str, Any]):
     try:
         append_log_workflow(workflow_id, "Building Physical AI design contract", phase="physical_ai_contract")
@@ -6692,11 +6870,26 @@ def execute_physical_ai_motor_control_background(workflow_id: str, run_id: str, 
         append_log_run(run_id, message, status="failed")
 
 
-def execute_physical_ai_workflow_background(workflow_id: str, run_id: str, artifact_dir: str, data: Dict[str, Any]):
+def execute_physical_ai_workflow_background(workflow_id: str, run_id: str, user_id: str, artifact_dir: str, data: Dict[str, Any]):
     try:
         append_log_workflow(workflow_id, "Normalizing Physical AI application requirements", phase="requirements")
         append_log_run(run_id, "Physical AI parent workflow started")
         result = run_physical_ai_workflow(data, artifact_dir, workflow_id=workflow_id)
+        for logical_name, raw_path in (result.get("files") or {}).items():
+            path = Path(str(raw_path))
+            if not path.is_file():
+                continue
+            try:
+                relative_parent = path.parent.relative_to(Path(artifact_dir)).as_posix()
+            except ValueError:
+                relative_parent = "physical_ai"
+            save_text_artifact_and_record(
+                workflow_id,
+                "Physical AI Parent Workflow",
+                relative_parent,
+                path.name,
+                path.read_text(encoding="utf-8"),
+            )
         metrics = result["physics_execution"]["metrics"]
         artifacts = {
             "requirements_contract": result["files"].get("requirements_contract"),
@@ -6704,12 +6897,18 @@ def execute_physical_ai_workflow_background(workflow_id: str, run_id: str, artif
             "physics_results": result["files"].get("equation_metrics"),
             "operating_envelope": result["files"].get("operating_envelope_plot"),
             "child_handoff": result["files"].get("child_handoff"),
+            "fixed_point_analysis": result["files"].get("fixed_point_analysis"),
+            "fixed_point_vectors": result["files"].get("fixed_point_vectors"),
+            "rtl_numeric_contract": result["files"].get("rtl_numeric_contract"),
+            "motor_rtl_manifest": result["files"].get("motor_rtl_manifest"),
+            "motor_control_top": result["files"].get("rtl_motor_control_top"),
             "physical_ai_summary": result["files"].get("workflow_summary"),
         }
         append_log_workflow(workflow_id, f"Physics model {result['physics_model']['name']} completed; speed error {metrics['steady_state_speed_error_percent']:.2f}%", phase="physics_validation")
-        if result["status"] == "physics_validated":
-            append_log_workflow(workflow_id, "Physics validation passed; existing architecture, digital, FPGA, firmware, and product loops are ready", status="completed", phase="child_loops_ready", artifacts=artifacts)
+        if result["status"] == "ready_for_fpga_exploration":
+            append_log_workflow(workflow_id, "Physics, fixed-point, and RTL smoke validation passed; FPGA exploration is ready", status="completed", phase="fpga_exploration_ready", artifacts=artifacts)
             append_log_run(run_id, "Physical AI parent workflow completed", status="completed", artifacts_path=artifact_dir)
+            _hem_continue_physical_ai_after_success(root_workflow_id=workflow_id, root_run_id=run_id, user_id=user_id, payload=data)
         else:
             append_log_workflow(workflow_id, "Physics validation needs revision before child loops can start", status="completed", phase="needs_revision", artifacts=artifacts)
             append_log_run(run_id, "Physical AI physics validation needs revision", status="completed", artifacts_path=artifact_dir)
@@ -6722,16 +6921,128 @@ def execute_physical_ai_workflow_background(workflow_id: str, run_id: str, artif
 @app.get("/apps/physical-ai/models")
 async def apps_physical_ai_models(request: Request):
     _require_user_id(request)
-    return {"models": list_physics_models()}
+    try:
+        rows = (
+            supabase.table("physical_ai_models")
+            .select("model_id,name,provider,domain,runtime,availability,training_required,gpu_required,implementation_targets,executor,inputs,outputs,configuration,updated_at")
+            .order("name")
+            .execute()
+            .data
+            or []
+        )
+    except Exception as exc:
+        logger.error("Physical AI model catalog unavailable in Supabase: %s", exc)
+        raise HTTPException(status_code=503, detail="Physical AI model catalog is unavailable; apply the Supabase Physical AI migration")
+    return {"models": rows, "source_of_truth": "supabase"}
+
+
+@app.get("/apps/physical-ai/{workflow_id}/result")
+async def apps_physical_ai_result(workflow_id: str, request: Request):
+    user_id = _require_user_id(request)
+    workflow_query = (
+        supabase.table("workflows")
+        .select("id,user_id,status,phase,logs,artifacts")
+        .eq("id", workflow_id)
+        .eq("user_id", user_id)
+        .limit(1)
+        .execute()
+    )
+    rows = workflow_query.data or []
+    if not rows:
+        raise HTTPException(status_code=404, detail="Physical AI workflow not found")
+    workflow = rows[0]
+    base = _artifacts_dir_for_workflow(workflow_id)
+    summary_path = base / "physical_ai" / "physical_ai_workflow_summary.json"
+    summary_text: Optional[str] = None
+    if summary_path.exists():
+        summary_text = summary_path.read_text(encoding="utf-8")
+    else:
+        artifact_index = workflow.get("artifacts") if isinstance(workflow.get("artifacts"), dict) else {}
+        for agent_artifacts in artifact_index.values():
+            if not isinstance(agent_artifacts, dict):
+                continue
+            storage_path = agent_artifacts.get("physical_ai_workflow_summary.json")
+            if not storage_path:
+                continue
+            try:
+                blob = supabase.storage.from_(ARTIFACT_BUCKET).download(str(storage_path))
+                summary_text = blob.decode("utf-8") if isinstance(blob, bytes) else str(blob)
+            except Exception as exc:
+                logger.warning("Could not load Physical AI summary from Supabase Storage: %s", exc)
+            break
+    if summary_text is None:
+        status = str(workflow.get("status") or "running")
+        if status == "failed":
+            return JSONResponse(status_code=409, content={"status": "failed", "phase": workflow.get("phase"), "logs": workflow.get("logs") or ""})
+        return JSONResponse(status_code=202, content={"status": status, "phase": workflow.get("phase"), "workflow_id": workflow_id})
+    try:
+        result = json.loads(summary_text)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Invalid Physical AI result: {exc}")
+
+    artifact_index = workflow.get("artifacts") if isinstance(workflow.get("artifacts"), dict) else {}
+    storage_by_filename: Dict[str, str] = {}
+    for agent_artifacts in artifact_index.values():
+        if isinstance(agent_artifacts, dict):
+            for filename, storage_path in agent_artifacts.items():
+                if isinstance(storage_path, str):
+                    storage_by_filename[str(filename)] = storage_path
+    safe_files: Dict[str, str] = {}
+    for name, raw_path in (result.get("files") or {}).items():
+        try:
+            path = Path(str(raw_path)).resolve()
+            relative = path.relative_to(base.resolve())
+            safe_files[str(name)] = str(relative).replace("\\", "/")
+        except Exception:
+            normalized = str(raw_path).replace("\\", "/")
+            marker = "/physical_ai/"
+            if marker in normalized:
+                safe_files[str(name)] = "physical_ai/" + normalized.split(marker, 1)[1]
+    plots: Dict[str, str] = {}
+    for key in ("speed_response_plot", "current_response_plot", "operating_envelope_plot"):
+        relative = safe_files.get(key)
+        if not relative:
+            continue
+        plot_path = (base / relative).resolve()
+        if plot_path.is_file() and plot_path.suffix.lower() == ".svg" and str(plot_path).startswith(str(base.resolve())):
+            plots[key] = plot_path.read_text(encoding="utf-8")
+        elif Path(relative).suffix.lower() == ".svg":
+            storage_path = storage_by_filename.get(Path(relative).name)
+            if storage_path:
+                try:
+                    blob = supabase.storage.from_(ARTIFACT_BUCKET).download(storage_path)
+                    plots[key] = blob.decode("utf-8") if isinstance(blob, bytes) else str(blob)
+                except Exception as exc:
+                    logger.warning("Could not load Physical AI plot from Supabase Storage: %s", exc)
+    result["files"] = safe_files
+    return {"status": "completed", "phase": workflow.get("phase"), "logs": workflow.get("logs") or "", "workflow_id": workflow_id, "result": result, "plots": plots}
 
 
 @app.post("/apps/physical-ai/run")
 async def apps_physical_ai_run(request: Request, background_tasks: BackgroundTasks, payload: PhysicalAiWorkflowIn):
     user_id = _require_user_id(request)
+    try:
+        model_rows = (
+            supabase.table("physical_ai_models")
+            .select("model_id,name,provider,domain,runtime,availability,training_required,gpu_required,implementation_targets,executor,inputs,outputs,configuration,updated_at")
+            .eq("model_id", payload.physics_model_id)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+    except Exception as exc:
+        logger.error("Physical AI model lookup failed: %s", exc)
+        raise HTTPException(status_code=503, detail="Physical AI model catalog is unavailable; apply the Supabase Physical AI migration")
+    if not model_rows:
+        raise HTTPException(status_code=400, detail="Unknown or disabled Physical AI model")
+    if str(model_rows[0].get("availability")) != "ready":
+        raise HTTPException(status_code=409, detail=f"Physical AI model is not executable: {model_rows[0].get('availability')}")
     workflow_id, run_id, artifact_dir = _create_app_workflow_and_run(user_id, "App: Physical AI Studio", "physical_ai")
     data = payload.dict()
-    background_tasks.add_task(execute_physical_ai_workflow_background, workflow_id, run_id, artifact_dir, data)
-    return {"ok": True, "workflow_id": workflow_id, "run_id": run_id, "dashboard_path": f"/dashboard/{workflow_id}?stage=physical_ai"}
+    data["physics_model_record"] = model_rows[0]
+    background_tasks.add_task(execute_physical_ai_workflow_background, workflow_id, run_id, user_id, artifact_dir, data)
+    return {"ok": True, "workflow_id": workflow_id, "run_id": run_id, "dashboard_path": f"/apps/physical-ai/results/{workflow_id}"}
 
 
 @app.post("/apps/physical-ai/motor-control/run")

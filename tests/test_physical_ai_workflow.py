@@ -29,10 +29,17 @@ def test_generic_physical_ai_parent_workflow_executes_motor_adapter(tmp_path):
         str(tmp_path),
         workflow_id="parent-123",
     )
-    assert result["status"] == "physics_validated"
+    assert result["status"] == "ready_for_fpga_exploration"
+    assert result["physics_execution"]["fixed_point"]["passed"] is True
+    assert result["hem"]["enabled"] is True
+    assert result["hem"]["stage_toggles"] == {"fpga_exploration": True, "fpga_bitstream": True, "firmware_product": True}
     assert result["loop"]["child_handoff"]["parent_workflow_id"] == "parent-123"
-    assert result["loop"]["stages"][3]["owner"] == "existing_loop"
-    assert result["loop"]["stages"][3]["status"] == "ready"
+    assert result["loop"]["stages"][3]["id"] == "fixed_point_validation"
+    assert result["loop"]["stages"][3]["status"] == "completed"
+    assert result["loop"]["stages"][4]["id"] == "rtl_generation"
+    assert result["loop"]["stages"][4]["status"] == "completed"
+    assert result["loop"]["stages"][5]["owner"] == "existing_loop"
+    assert result["loop"]["stages"][5]["status"] == "ready"
     for path in result["files"].values():
         assert path
 
@@ -64,4 +71,36 @@ def test_physical_ai_agents_and_workflow_are_registered():
 def test_main_registers_generic_physical_ai_endpoints():
     main = open("main.py", encoding="utf-8").read()
     assert '@app.get("/apps/physical-ai/models")' in main
+    assert '@app.get("/apps/physical-ai/{workflow_id}/result")' in main
     assert '@app.post("/apps/physical-ai/run")' in main
+    assert 'dashboard_path": f"/apps/physical-ai/results/{workflow_id}"' in main
+    assert 'hem_enabled: bool = True' in main
+    assert 'def _hem_continue_physical_ai_after_success' in main
+    assert '"FPGA_Target_Explorer"' in main
+    assert '"FPGA_RTL_to_Bitstream"' in main
+
+
+def test_physical_ai_has_supabase_source_of_truth_migration():
+    migration = open(
+        "supabase/migrations/phase_20260803_physical_ai_source_of_truth.sql",
+        encoding="utf-8",
+    ).read()
+    assert "create table if not exists public.physical_ai_models" in migration
+    assert "'Physical_AI_Loop'" in migration
+    assert "source_of_truth', 'supabase'" in migration
+    assert "enable row level security" in migration
+
+
+def test_model_selection_accepts_supabase_snapshot(tmp_path):
+    model = get_physics_model("chiploop.pmsm.dq.v1")
+    model["name"] = "Supabase governed PMSM"
+    result = run_physical_ai_workflow(
+        {
+            "physics_domain": "motor_control",
+            "physics_model_id": "chiploop.pmsm.dq.v1",
+            "physics_model_record": model,
+            "implementation_target": "fpga",
+        },
+        str(tmp_path),
+    )
+    assert result["physics_model"]["name"] == "Supabase governed PMSM"
