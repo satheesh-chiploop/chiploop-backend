@@ -89,6 +89,24 @@ def test_physical_ai_has_supabase_source_of_truth_migration():
     assert "'Physical_AI_Loop'" in migration
     assert "source_of_truth', 'supabase'" in migration
     assert "enable row level security" in migration
+    assert "drop constraint if exists workflows_loop_type_chk" in migration
+    assert "'physical_ai'" in migration
+    for agent_name in (
+        "Physical AI Requirements Agent",
+        "Physical AI Model Selection Agent",
+        "Physical AI Physics Execution Agent",
+        "Physical AI Orchestrator Agent",
+    ):
+        assert agent_name in migration
+
+    apps_page = open("../frontend/app/apps/page.tsx", encoding="utf-8").read()
+    loops_page = open("../frontend/app/loops/page.tsx", encoding="utf-8").read()
+    studio_page = open("../frontend/app/workflow/page.tsx", encoding="utf-8").read()
+    assert 'title: "Physical AI Design Studio"' in apps_page
+    assert 'key: "physical-ai-pmsm"' in apps_page
+    assert 'href: "/loops/physical-ai"' in loops_page
+    assert '<option value="physical_ai">Physical AI Loop — Coming soon</option>' in studio_page
+    assert 'Physical_AI_Loop: linearWorkflowDefinition' in studio_page
 
 
 def test_model_selection_accepts_supabase_snapshot(tmp_path):

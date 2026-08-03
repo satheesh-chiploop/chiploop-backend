@@ -2,6 +2,29 @@
 -- Supabase owns discoverable model/workflow metadata. Executable adapters remain
 -- versioned backend code; each run snapshots the selected row into its artifacts.
 
+-- Older production schemas restrict loop_type to the original six loops. Extend
+-- both catalogs before inserting the Physical AI workflow/agents. Keep all
+-- previously accepted values intact.
+alter table if exists public.workflows
+  drop constraint if exists workflows_loop_type_chk;
+
+alter table if exists public.workflows
+  add constraint workflows_loop_type_chk
+  check (
+    loop_type is null
+    or loop_type in ('digital', 'analog', 'system', 'embedded', 'validation', 'fpga', 'physical_ai')
+  );
+
+alter table if exists public.agents
+  drop constraint if exists agents_loop_type_chk;
+
+alter table if exists public.agents
+  add constraint agents_loop_type_chk
+  check (
+    loop_type is null
+    or loop_type in ('digital', 'analog', 'system', 'embedded', 'validation', 'fpga', 'physical_ai')
+  );
+
 create table if not exists public.physical_ai_models (
   model_id text primary key,
   name text not null,
@@ -110,3 +133,53 @@ where not exists (select 1 from updated)
 
 comment on table public.physical_ai_models is
   'Supabase source-of-truth catalog for selectable Physical AI equation and surrogate models.';
+
+-- Publish the four native Physical AI agents into the same Supabase catalog used
+-- by the other platform agents.
+with physical_ai_agents(agent_name, description, entrypoint, inputs, outputs) as (
+  values
+    ('Physical AI Requirements Agent', 'Normalizes application, operating-envelope, accuracy, safety, and implementation requirements.', 'agents.physical_ai.physical_ai_requirements_agent:run_agent', '["application requirements"]'::jsonb, '["physical_ai/requirements_contract.json"]'::jsonb),
+    ('Physical AI Model Selection Agent', 'Selects a compatible governed equation or surrogate model from the Supabase model catalog.', 'agents.physical_ai.physical_ai_model_selection_agent:run_agent', '["physical_ai/requirements_contract.json","physical_ai_models"]'::jsonb, '["physical_ai/selected_physics_model.json"]'::jsonb),
+    ('Physical AI Physics Execution Agent', 'Executes physics validation and produces operating-envelope, fixed-point, RTL, and register-map evidence.', 'agents.physical_ai.physical_ai_physics_execution_agent:run_agent', '["physical_ai/requirements_contract.json","physical_ai/selected_physics_model.json"]'::jsonb, '["physical_ai/motor_control/equation_metrics.json","physical_ai/motor_control/operating_sweep.json","physical_ai/motor_control/rtl/motor_rtl_manifest.json","physical_ai/motor_control/digital_regmap.json"]'::jsonb),
+    ('Physical AI Orchestrator Agent', 'Judges readiness and delegates approved evidence to existing FPGA, firmware, validation, and product workflows.', 'agents.physical_ai.physical_ai_orchestrator_agent:run_agent', '["physical_ai physics results"]'::jsonb, '["physical_ai/physical_ai_loop_state.json","physical_ai/child_handoff.json"]'::jsonb)
+), updated_agents as (
+  update public.agents a
+  set agent_name=p.agent_name,
+      name=p.agent_name,
+      loop_type='physical_ai',
+      domain='physical_ai',
+      description=p.description,
+      script_path=p.entrypoint,
+      entrypoint=p.entrypoint,
+      execution_mode='native',
+      inputs=p.inputs,
+      outputs=p.outputs,
+      artifact_paths=p.outputs,
+      artifact_types='["structured_data","report"]'::jsonb,
+      required_skills='["artifact_publish"]'::jsonb,
+      required_tools='["python","supabase"]'::jsonb,
+      skills='["artifact_publish"]'::jsonb,
+      tools='["python","supabase"]'::jsonb,
+      hooks='["pre_run_validate_inputs","post_run_collect_artifacts","post_run_update_state","artifact_publish_to_supabase"]'::jsonb,
+      agent_spec=jsonb_build_object('name',p.agent_name,'loop_type','physical_ai','domain','physical_ai','entrypoint',p.entrypoint,'execution_mode','native'),
+      metadata=jsonb_build_object('registry_source','PHYSICAL_AI_AGENT_FUNCTIONS','default_enabled',true),
+      owner_id=null,is_custom=false,is_prebuilt=true,is_marketplace=false,
+      status='approved',visibility='global',source='platform_registry',updated_at=now()
+  from physical_ai_agents p
+  where coalesce(a.agent_name,a.name)=p.agent_name
+)
+insert into public.agents (
+  agent_name,name,loop_type,domain,description,script_path,entrypoint,execution_mode,
+  inputs,outputs,artifact_paths,artifact_types,required_skills,required_tools,agent_spec,
+  skills,tools,hooks,metadata,owner_id,is_custom,is_prebuilt,is_marketplace,status,visibility,source,created_at,updated_at
+)
+select p.agent_name,p.agent_name,'physical_ai','physical_ai',p.description,p.entrypoint,p.entrypoint,'native',
+  p.inputs,p.outputs,p.outputs,'["structured_data","report"]'::jsonb,
+  '["artifact_publish"]'::jsonb,'["python","supabase"]'::jsonb,
+  jsonb_build_object('name',p.agent_name,'loop_type','physical_ai','domain','physical_ai','entrypoint',p.entrypoint,'execution_mode','native'),
+  '["artifact_publish"]'::jsonb,'["python","supabase"]'::jsonb,
+  '["pre_run_validate_inputs","post_run_collect_artifacts","post_run_update_state","artifact_publish_to_supabase"]'::jsonb,
+  jsonb_build_object('registry_source','PHYSICAL_AI_AGENT_FUNCTIONS','default_enabled',true),
+  null,false,true,false,'approved','global','platform_registry',now(),now()
+from physical_ai_agents p
+where not exists (select 1 from public.agents a where coalesce(a.agent_name,a.name)=p.agent_name);
