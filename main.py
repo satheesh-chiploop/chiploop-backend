@@ -4054,11 +4054,35 @@ def _digital_app_gate_failure(app_name: str, state: Dict[str, Any], artifact_dir
 
     if app_name in {"arch2rtl", "dqa"}:
         lint = load_named("rtl_lint_report.json")
-        lint_status = str(lint.get("status") or "").lower()
-        if lint and lint_status not in {"pass", "ok", "passed", "success"}:
-            return f"RTL lint/compile did not pass (status={lint_status or 'missing'})"
-        if app_name == "arch2rtl" and not lint:
-            return "RTL generation did not produce a lint/compile report"
+        dashboard = load_named("arch2rtl_dashboard.json") if app_name == "arch2rtl" else {}
+        dashboard_lint = dashboard.get("lint") if isinstance(dashboard.get("lint"), dict) else {}
+        evidence = lint or dashboard_lint
+        lint_status = str(evidence.get("status") or "").lower()
+        return_code = evidence.get("returncode")
+        error_count = int(evidence.get("error_count") or 0)
+        # Warnings are valid non-blocking lint evidence when the tool returned
+        # successfully. Only errors, non-zero tool exits, or explicit failures
+        # should stop HEM.
+        if evidence and (
+            lint_status in {"fail", "failed", "error"}
+            or error_count > 0
+            or (return_code is not None and int(return_code) != 0)
+        ):
+            return (
+                "RTL lint/compile did not pass "
+                f"(status={lint_status or 'unknown'}, rc={return_code}, errors={error_count})"
+            )
+        if app_name == "arch2rtl" and not evidence:
+            tool_summary = load_named("tool_execution_summary.json")
+            executions = tool_summary.get("executions") if isinstance(tool_summary.get("executions"), list) else []
+            successful_compile = any(
+                isinstance(item, dict)
+                and int(item.get("returncode") or 0) == 0
+                and str(item.get("status") or "").lower() in {"ok", "pass", "passed", "success", "completed"}
+                for item in executions
+            )
+            if not successful_compile:
+                return "RTL generation did not produce successful lint/compile evidence"
 
     if app_name == "verify":
         summary = load_named("simulation_execution_summary.json")
