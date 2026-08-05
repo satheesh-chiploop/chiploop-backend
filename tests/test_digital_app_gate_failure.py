@@ -62,3 +62,18 @@ def test_arch2rtl_repair_summary_is_authoritative(tmp_path):
 
     gate = _load_gate()
     assert gate("arch2rtl", {}, str(tmp_path)) is None
+
+
+def test_arch2rtl_gate_finds_outputs_at_workflow_root(tmp_path):
+    """The runner passes <workflow>/arch2rtl but agents save to <workflow>/rtl."""
+    execution_dir = tmp_path / "arch2rtl"
+    execution_dir.mkdir()
+    rtl_dir = tmp_path / "rtl"
+    rtl_dir.mkdir()
+    (rtl_dir / "rtl_agent_summary.txt").write_text(
+        "Icarus compile: pass\nVerilator lint: pass\nIssue count: 0\n",
+        encoding="utf-8",
+    )
+
+    gate = _load_gate()
+    assert gate("arch2rtl", {"status": "Spec2RTL conformance partial"}, str(execution_dir)) is None

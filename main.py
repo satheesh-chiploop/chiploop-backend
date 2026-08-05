@@ -4041,15 +4041,31 @@ def execute_validation_app_background(
 def _digital_app_gate_failure(app_name: str, state: Dict[str, Any], artifact_dir: str) -> Optional[str]:
     """Return a concrete failure reason that must block HEM continuation."""
     root = Path(artifact_dir)
+    # App runners receive a stage subdirectory (for example
+    # ``<workflow>/arch2rtl``), while artifact helpers persist agent outputs at
+    # the workflow root (for example ``<workflow>/rtl`` and
+    # ``<workflow>/digital``). Search both without ever walking into sibling
+    # workflows.
+    search_roots = [root]
+    stage_directory_names = {
+        "arch2rtl",
+        "dqa",
+        "verify",
+        "arch2synthesis",
+        "arch2tapeout",
+    }
+    if root.name.lower() in stage_directory_names:
+        search_roots.append(root.parent)
 
     def load_named(name: str) -> Dict[str, Any]:
-        for path in root.rglob(name) if root.exists() else []:
-            try:
-                value = json.loads(path.read_text(encoding="utf-8"))
-                if isinstance(value, dict):
-                    return value
-            except Exception:
-                continue
+        for search_root in search_roots:
+            for path in search_root.rglob(name) if search_root.exists() else []:
+                try:
+                    value = json.loads(path.read_text(encoding="utf-8"))
+                    if isinstance(value, dict):
+                        return value
+                except Exception:
+                    continue
         return {}
 
     def final_rtl_summary() -> str:
@@ -4060,17 +4076,18 @@ def _digital_app_gate_failure(app_name: str, state: Dict[str, Any], artifact_dir
         shared state, but that must not turn a successful compile into a failed
         Arch2RTL workflow.
         """
-        rtl_dir = root / "rtl"
-        candidates = (
-            rtl_dir / "rtl_agent_summary_pass2.txt",
-            rtl_dir / "rtl_agent_summary.txt",
-        )
-        for path in candidates:
-            if path.exists():
-                try:
-                    return path.read_text(encoding="utf-8", errors="replace")
-                except Exception:
-                    continue
+        for search_root in search_roots:
+            rtl_dir = search_root / "rtl"
+            candidates = (
+                rtl_dir / "rtl_agent_summary_pass2.txt",
+                rtl_dir / "rtl_agent_summary.txt",
+            )
+            for path in candidates:
+                if path.exists():
+                    try:
+                        return path.read_text(encoding="utf-8", errors="replace")
+                    except Exception:
+                        continue
         return ""
 
     if app_name in {"arch2rtl", "dqa"}:
