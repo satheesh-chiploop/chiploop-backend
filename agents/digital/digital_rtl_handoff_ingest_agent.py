@@ -135,6 +135,22 @@ def _artifact_candidates(client: Any, source_workflow_id: str) -> Tuple[List[str
     prefix = f"backend/workflows/{source_workflow_id}"
     paths.extend(_list_storage_tree(client, prefix))
 
+    # Artifact metadata may contain only the last artifact recorded by an agent.
+    # Expand every discovered RTL directory so multi-file hierarchical designs
+    # are never reduced to a single source file during a downstream handoff.
+    rtl_parent_folders = {
+        path.rsplit("/", 1)[0]
+        for path in paths
+        if path.lower().endswith(RTL_EXTENSIONS) and "/" in path
+    }
+    rtl_parent_folders.update({
+        f"{prefix}/rtl",
+        f"{prefix}/handoff/rtl",
+        f"{prefix}/digital/handoff/rtl",
+    })
+    for folder in sorted(rtl_parent_folders):
+        paths.extend(_list_storage_folder(client, folder))
+
     unique = list(dict.fromkeys(paths))
     rtl = [p for p in unique if p.lower().endswith(RTL_EXTENSIONS)]
     spec = [
@@ -397,6 +413,17 @@ def _infer_top_module(state: Dict[str, Any], rtl_files: List[str]) -> str:
     return ""
 
 
+def _declared_modules(rtl_files: List[str]) -> set[str]:
+    modules: set[str] = set()
+    for path in rtl_files:
+        try:
+            text = Path(path).read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            continue
+        modules.update(re.findall(r"\bmodule\s+([A-Za-z_][A-Za-z0-9_$]*)\b", text))
+    return modules
+
+
 def _existing_rtl_files(state: Dict[str, Any], workflow_dir: str) -> List[str]:
     existing = state.get("rtl_files")
     if isinstance(existing, list) and existing:
@@ -478,6 +505,12 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     state["source_rtl_files"] = rtl_files
     top_module = _infer_top_module(state, rtl_files)
     if top_module:
+        declared_modules = _declared_modules(rtl_files)
+        if top_module not in declared_modules:
+            raise RuntimeError(
+                f"Top module {top_module!r} is not present in the imported RTL set "
+                f"({len(rtl_files)} file(s), modules={sorted(declared_modules)})"
+            )
         state["top_module"] = top_module
         manifest["top_module"] = top_module
 

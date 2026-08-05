@@ -4038,6 +4038,53 @@ def execute_validation_app_background(
         append_log_workflow(workflow_id, err, status="failed", phase="error")
         append_log_run(run_id, err, status="failed")
 
+def _digital_app_gate_failure(app_name: str, state: Dict[str, Any], artifact_dir: str) -> Optional[str]:
+    """Return a concrete failure reason that must block HEM continuation."""
+    root = Path(artifact_dir)
+
+    def load_named(name: str) -> Dict[str, Any]:
+        for path in root.rglob(name) if root.exists() else []:
+            try:
+                value = json.loads(path.read_text(encoding="utf-8"))
+                if isinstance(value, dict):
+                    return value
+            except Exception:
+                continue
+        return {}
+
+    if app_name in {"arch2rtl", "dqa"}:
+        lint = load_named("rtl_lint_report.json")
+        lint_status = str(lint.get("status") or "").lower()
+        if lint and lint_status not in {"pass", "ok", "passed", "success"}:
+            return f"RTL lint/compile did not pass (status={lint_status or 'missing'})"
+        if app_name == "arch2rtl" and not lint:
+            return "RTL generation did not produce a lint/compile report"
+
+    if app_name == "verify":
+        summary = load_named("simulation_execution_summary.json")
+        if not summary:
+            return "verification did not produce a simulation execution summary"
+        failed = int(summary.get("fail") or 0)
+        passed = int(summary.get("pass") or 0)
+        if failed or passed <= 0:
+            return f"verification failed ({passed} passed, {failed} failed)"
+
+    if app_name in {"arch2synthesis", "arch2tapeout"}:
+        synth = (state.get("digital") or {}).get("synth") if isinstance(state.get("digital"), dict) else {}
+        synth = synth if isinstance(synth, dict) else {}
+        summary = load_named("synth_summary.json")
+        synth_status = str(synth.get("status") or summary.get("status") or "").lower()
+        if synth_status not in {"ok", "pass", "passed", "success", "completed"}:
+            return f"synthesis did not pass (status={synth_status or 'missing'})"
+        if not (synth.get("netlist") or (summary.get("outputs") or {}).get("netlist")):
+            return "synthesis did not produce a netlist"
+
+    status_text = str(state.get("status") or "").lower()
+    if any(token in status_text for token in ("❌", " failed", ":failed", "error")):
+        return str(state.get("status"))
+    return None
+
+
 def execute_digital_app_background(
     workflow_id: str,
     run_id: str,
@@ -4856,14 +4903,17 @@ def execute_digital_app_background(
                 shared_state=shared_state,
             )
 
+        gate_failure = _digital_app_gate_failure(app_name, shared_state, artifact_dir)
         closure_failed = bool(shared_state.get("fpga_timing_closure_failed"))
         implementation_unavailable_reason = str(shared_state.get("fpga_implementation_unavailable_reason") or "").strip()
         implementation_failed = bool(implementation_unavailable_reason)
-        app_failed = closure_failed or implementation_failed
+        app_failed = bool(gate_failure) or closure_failed or implementation_failed
         final_status = "failed" if app_failed else "completed"
-        final_phase = "implementation_unavailable" if implementation_failed else "timing_closure_failed" if closure_failed else "done"
+        final_phase = "quality_gate_failed" if gate_failure else "implementation_unavailable" if implementation_failed else "timing_closure_failed" if closure_failed else "done"
         final_message = (
-            f"FPGA implementation unavailable for {app_name}: {implementation_unavailable_reason}"
+            f"{app_loop_label} quality gate failed for {app_name}: {gate_failure}"
+            if gate_failure
+            else f"FPGA implementation unavailable for {app_name}: {implementation_unavailable_reason}"
             if implementation_failed
             else f"FPGA timing closure failed for {app_name}; review the achievable-clock recommendation or escalate the critical path."
             if closure_failed else f"{app_loop_label} App complete: {app_name}"
