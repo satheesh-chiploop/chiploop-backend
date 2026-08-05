@@ -90,10 +90,39 @@ def _functional_rtl_files(workflow_dir: str, state: Dict[str, Any], mbist: Dict[
         if files:
             return files
 
+    # The RTL agent promotes a successful repair pass into state.rtl_files and
+    # state.artifact_list. Prefer that authoritative set. Recursively scanning
+    # rtl/ also finds the retained pass2 debug copy and makes every module look
+    # duplicated even though the promoted package is valid.
+    for source in (state.get("rtl_files"), state.get("artifact_list")):
+        files = _existing_rtl_files(source)
+        if files:
+            return _prefer_handoff_rtl(files)
+
     root = Path(workflow_dir) / "rtl"
     if root.exists():
-        return sorted(str(p) for p in root.rglob("*") if p.suffix.lower() in {".v", ".sv"})
+        root_files = [
+            str(p)
+            for p in root.iterdir()
+            if p.is_file() and p.suffix.lower() in {".v", ".sv"}
+        ]
+        return _prefer_handoff_rtl(root_files)
     return []
+
+
+def _spec_top_module_name(state: Dict[str, Any]) -> str:
+    for value in (state.get("spec_json"), state.get("digital_spec_json")):
+        spec = _read_json(value)
+        hierarchy = spec.get("hierarchy") if isinstance(spec.get("hierarchy"), dict) else {}
+        top = hierarchy.get("top_module")
+        if isinstance(top, dict) and isinstance(top.get("name"), str):
+            return top["name"].strip()
+        if isinstance(top, str):
+            return top.strip()
+        for key in ("top_module", "module_name", "design_name"):
+            if isinstance(spec.get(key), str) and spec[key].strip():
+                return spec[key].strip()
+    return ""
 
 
 def _module_header(text: str, module_name: str) -> str:
@@ -450,7 +479,14 @@ def _run(context: AgentContext) -> AgentResult:
     functional_rtl_files = _functional_rtl_files(workflow_dir, state, mbist)
     rtl_files = functional_rtl_files or package_rtl_files
     modules = _parse_modules(rtl_files)
-    top_name = str(state.get("top_module") or (modules[0]["name"] if modules else "top"))
+    module_names = {str(module.get("name") or "") for module in modules}
+    spec_top = _spec_top_module_name(state)
+    requested_top = str(state.get("top_module") or "").strip()
+    top_name = (
+        spec_top if spec_top in module_names
+        else requested_top if requested_top in module_names
+        else str(modules[0]["name"] if modules else "top")
+    )
     top_module = next((m for m in modules if m["name"] == top_name), modules[0] if modules else {})
     storage = _count_storage(rtl_files)
     clock_reset = _infer_clock_reset(modules, state)

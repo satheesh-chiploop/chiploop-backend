@@ -60,6 +60,38 @@ endmodule
     assert state["arch2rtl_dashboard"]["type"] == "arch2rtl_dashboard"
 
 
+def test_arch2rtl_dashboard_uses_promoted_repair_set_and_spec_top(tmp_path, monkeypatch):
+    monkeypatch.setattr(dashboard_agent, "save_text_artifact_and_record", lambda *args, **kwargs: None)
+    workflow_dir = tmp_path / "backend" / "workflows" / "wf"
+    rtl_dir = workflow_dir / "rtl"
+    pass2_dir = rtl_dir / "pass2"
+    pass2_dir.mkdir(parents=True)
+
+    promoted_top = rtl_dir / "product_top.v"
+    promoted_child = rtl_dir / "child.v"
+    promoted_top.write_text("module product_top(input wire clk); child u_child(.clk(clk)); endmodule\n", encoding="utf-8")
+    promoted_child.write_text("module child(input wire clk); endmodule\n", encoding="utf-8")
+    (pass2_dir / "product_top.v").write_text(promoted_top.read_text(encoding="utf-8"), encoding="utf-8")
+    (pass2_dir / "child.v").write_text(promoted_child.read_text(encoding="utf-8"), encoding="utf-8")
+
+    state = {
+        "workflow_id": "wf",
+        "workflow_dir": str(workflow_dir),
+        "top_module": "child",
+        "rtl_files": [str(promoted_child), str(promoted_top)],
+        "artifact_list": [str(promoted_child), str(promoted_top)],
+        "spec_json": {"hierarchy": {"top_module": {"name": "product_top"}}},
+    }
+
+    dashboard_agent.run_agent(state)
+
+    report = json.loads((workflow_dir / "digital" / "arch2rtl_dashboard.json").read_text(encoding="utf-8"))
+    assert report["top_module"] == "product_top"
+    assert report["rtl_file_count"] == 2
+    assert report["module_count"] == 2
+    assert all("pass2" not in str(module["file"]).replace("\\", "/") for module in report["modules"])
+
+
 def test_arch2rtl_dashboard_separates_mbist_package_from_functional_metrics(tmp_path, monkeypatch):
     monkeypatch.setattr(dashboard_agent, "save_text_artifact_and_record", lambda *args, **kwargs: None)
     workflow_dir = tmp_path / "backend" / "workflows" / "wf"
