@@ -4052,7 +4052,47 @@ def _digital_app_gate_failure(app_name: str, state: Dict[str, Any], artifact_dir
                 continue
         return {}
 
+    def final_rtl_summary() -> str:
+        """Read the authoritative result emitted by the RTL generation agent.
+
+        A repaired run writes a pass2 summary; otherwise the first-pass summary
+        is final.  Later reporting agents may leave a warning/partial status in
+        shared state, but that must not turn a successful compile into a failed
+        Arch2RTL workflow.
+        """
+        rtl_dir = root / "rtl"
+        candidates = (
+            rtl_dir / "rtl_agent_summary_pass2.txt",
+            rtl_dir / "rtl_agent_summary.txt",
+        )
+        for path in candidates:
+            if path.exists():
+                try:
+                    return path.read_text(encoding="utf-8", errors="replace")
+                except Exception:
+                    continue
+        return ""
+
     if app_name in {"arch2rtl", "dqa"}:
+        if app_name == "arch2rtl":
+            rtl_summary = final_rtl_summary()
+            normalized_summary = rtl_summary.lower()
+            compile_passed = "icarus compile: pass" in normalized_summary
+            lint_passed = "verilator lint: pass" in normalized_summary
+            compile_failed = "icarus compile: fail" in normalized_summary
+            lint_failed = "verilator lint: fail" in normalized_summary
+            if compile_passed and lint_passed:
+                # This is the final executable RTL verdict. Spec2RTL partial
+                # coverage and lint warnings remain visible in the dashboard,
+                # but are review findings rather than generation failures.
+                return None
+            if compile_failed or lint_failed:
+                return (
+                    "RTL generation final tool checks failed "
+                    f"(compile={'pass' if compile_passed else 'fail'}, "
+                    f"lint={'pass' if lint_passed else 'fail'})"
+                )
+
         lint = load_named("rtl_lint_report.json")
         dashboard = load_named("arch2rtl_dashboard.json") if app_name == "arch2rtl" else {}
         dashboard_lint = dashboard.get("lint") if isinstance(dashboard.get("lint"), dict) else {}
