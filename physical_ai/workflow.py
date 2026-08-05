@@ -4,6 +4,7 @@ from typing import Any, Callable, Dict, Optional
 
 from agents.physical_ai import (
     run_model_selection_agent,
+    run_architecture_agent,
     run_orchestrator_agent,
     run_physics_execution_agent,
     run_requirements_agent,
@@ -35,6 +36,7 @@ def run_physical_ai_workflow(
         ("Physical AI Requirements Agent", "requirements_agent", run_requirements_agent),
         ("Physical AI Model Selection Agent", "model_selection_agent", run_model_selection_agent),
         ("Physical AI Physics Execution Agent", "physics_execution_agent", run_physics_execution_agent),
+        ("Physical AI Architecture Agent", "architecture_agent", run_architecture_agent),
         ("Physical AI Orchestrator Agent", "orchestrator_agent", run_orchestrator_agent),
     )
     for agent_name, phase, execute in steps:
@@ -73,12 +75,14 @@ def run_physical_ai_workflow(
             "fixed_point": state["physics_execution"]["fixed_point"],
             "rtl_numeric_contract": state["physics_execution"]["rtl_numeric_contract"],
             "rtl": state["physics_execution"]["rtl"],
+            "architecture": state.get("generated_architecture") or {},
         }
     result = {
         "schema": "chiploop.physical_ai.workflow_result.v1",
         "status": ("architecture_complete" if state["physics_execution"].get("implementation_path") == "architecture_only" else "ready_for_digital_design") if architecture_mode else ("ready_for_fpga_exploration" if state["physical_ai_loop"]["physics_passed"] and state["physical_ai_loop"]["fixed_point_passed"] and state["physical_ai_loop"]["rtl_smoke_passed"] else "needs_revision"),
         "requirements": state["requirements_contract"],
         "physics_model": state["selected_physics_model"],
+        "architecture_generation": state.get("architecture_generation") or {},
         "physics_execution": execution_result,
         "loop": state["physical_ai_loop"],
         "hem": {

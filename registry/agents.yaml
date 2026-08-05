@@ -9507,6 +9507,22 @@
       "metadata": {"registry_source": "PHYSICAL_AI_AGENT_FUNCTIONS", "studio_contract_version": "v1"}
     },
     {
+      "name": "Physical AI Architecture Agent",
+      "loop_type": "physical_ai",
+      "domain": "physical_ai",
+      "description": "Uses the selected agent model to turn the chosen physics-model interface and available evidence into a product architecture and Arch2RTL-ready specification.",
+      "entrypoint": "agents.physical_ai.physical_ai_architecture_agent:run_agent",
+      "execution_mode": "native",
+      "inputs": ["physical_ai requirements", "selected physics model", "physics evidence"],
+      "outputs": ["physical_ai/model_generated_architecture.json"],
+      "artifact_paths": ["physical_ai/model_generated_architecture.json", "physical_ai/model_generated_architecture_raw.txt"],
+      "artifact_types": ["structured_data", "report"],
+      "required_skills": ["artifact_publish"],
+      "required_tools": ["llm", "python", "supabase"],
+      "hooks": ["pre_run_validate_inputs", "post_run_collect_artifacts", "post_run_update_state", "artifact_publish_to_supabase"],
+      "metadata": {"registry_source": "PHYSICAL_AI_AGENT_FUNCTIONS", "studio_contract_version": "v1"}
+    },
+    {
       "name": "Physical AI Orchestrator Agent",
       "loop_type": "physical_ai",
       "domain": "physical_ai",

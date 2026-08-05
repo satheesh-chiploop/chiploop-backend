@@ -3732,6 +3732,7 @@ class PhysicalAiWorkflowIn(BaseModel):
     implementation_target: Literal["software", "fpga", "asic", "gpu_service"] = "fpga"
     execution_mode: Literal["validated", "architecture"] = "validated"
     implementation_path: Literal["architecture_only", "digital_ip_asic", "fpga_prototype", "fpga_then_asic"] = "digital_ip_asic"
+    generate_architecture_with_model: bool = True
     maximum_error_percent: float = 3.0
     safety_constraints: List[str] = Field(default_factory=list)
     operating_envelope: Dict[str, Any] = Field(default_factory=dict)
@@ -6672,6 +6673,22 @@ async def apps_fpga_target_explorer_run(request: Request, background_tasks: Back
 
 HEM_PHYSICAL_AI_POLICY_KEY = "physical_ai_fpga_prototype_v1"
 HEM_PHYSICAL_AI_STAGE_META: Dict[str, Dict[str, str]] = {
+    "arch2rtl": {
+        "label": "RTL Generation",
+        "title": "HEM: Physical AI Arch2RTL",
+        "artifact": "arch2rtl",
+        "app_name": "arch2rtl",
+        "workflow_name": "Digital_Arch2RTL",
+        "dashboard_stage": "arch2rtl",
+    },
+    "verify": {
+        "label": "RTL Verification",
+        "title": "HEM: Physical AI Verification",
+        "artifact": "verify",
+        "app_name": "verify",
+        "workflow_name": "Digital_Verify",
+        "dashboard_stage": "verification",
+    },
     "fpga_exploration": {
         "label": "FPGA Target Explorer",
         "title": "HEM: Physical AI FPGA Target Explorer",
@@ -6688,6 +6705,14 @@ HEM_PHYSICAL_AI_STAGE_META: Dict[str, Dict[str, str]] = {
         "workflow_name": "FPGA_RTL_to_Bitstream",
         "dashboard_stage": "synthesis",
     },
+    "asic_tapeout": {
+        "label": "ASIC Implementation",
+        "title": "HEM: Physical AI Arch2Tapeout",
+        "artifact": "arch2tapeout",
+        "app_name": "arch2tapeout",
+        "workflow_name": "Digital_Arch2Tapeout",
+        "dashboard_stage": "tapeout",
+    },
     "firmware_product": {
         "label": "Firmware through Product Demo",
         "title": "HEM: Physical AI Motor Firmware",
@@ -6700,11 +6725,62 @@ HEM_PHYSICAL_AI_STAGE_META: Dict[str, Dict[str, str]] = {
 
 
 def _hem_physical_ai_stage_plan(payload: Dict[str, Any]) -> List[str]:
-    toggles = payload.get("hem_stage_toggles") if isinstance(payload.get("hem_stage_toggles"), dict) else {}
-    return [stage for stage in ("fpga_exploration", "fpga_bitstream", "firmware_product") if bool(toggles.get(stage, True))]
+    path = str(payload.get("implementation_path") or "fpga_prototype")
+    if path == "architecture_only":
+        return []
+    plan = ["arch2rtl", "verify"]
+    if path in {"fpga_prototype", "fpga_then_asic"}:
+        plan.extend(["fpga_exploration", "fpga_bitstream"])
+    if path in {"digital_ip_asic", "fpga_then_asic"}:
+        plan.append("asic_tapeout")
+    return plan
 
 
 def _hem_physical_ai_child_payload(root_workflow_id: str, root_run_id: str, payload: Dict[str, Any], *, stage: str, hem_run_id: Optional[str]) -> Dict[str, Any]:
+    source_arch2rtl = str(payload.get("source_arch2rtl_workflow_id") or root_workflow_id)
+    common_digital = {
+        "project_name": str(payload.get("project_name") or "physical_ai_product"),
+        "parent_workflow_id": root_workflow_id,
+        "hem_enabled": False,
+        "hem_mode": _hem_normalized_mode(str(payload.get("hem_mode") or "fixed")),
+        "hem_run_id": hem_run_id,
+        "hem_root_workflow_id": root_workflow_id,
+        "hem_root_run_id": root_run_id,
+    }
+    if stage == "arch2rtl":
+        return {
+            **common_digital,
+            "spec_text": str(payload.get("rtl_spec_text") or payload.get("objective") or "Generate the Physical AI support digital IP."),
+            "top_module": payload.get("top_module"),
+            "design_language": "SystemVerilog",
+            "toggles": {"run_spec2rtl_check": True},
+        }
+    if stage == "verify":
+        return {
+            **common_digital,
+            "rtl_source_mode": "from_arch2rtl",
+            "from_workflow_id": source_arch2rtl,
+            "source_arch2rtl_workflow_id": source_arch2rtl,
+            "test_intent": payload.get("verification_goals") or "Verify generated RTL against the Physical AI architecture, interfaces, reset behavior, safety behavior, and register contract.",
+            "simulator_type": "verilator",
+            "seed_count": 4,
+        }
+    if stage == "asic_tapeout":
+        return {
+            **common_digital,
+            "rtl_source_mode": "from_arch2rtl",
+            "from_workflow_id": source_arch2rtl,
+            "source_arch2rtl_workflow_id": source_arch2rtl,
+            "foundry": payload.get("foundry") or "sky130",
+            "pdk": payload.get("pdk") or "sky130A",
+            "toolchain": payload.get("toolchain") or "openlane2",
+            "target_frequency_mhz": float(payload.get("target_frequency_mhz") or 100.0),
+            "start_stage": "synth",
+            "stop_stage": "tapeout",
+            "run_fill": True,
+            "run_drc": True,
+            "run_lvs": True,
+        }
     if stage == "firmware_product":
         return {
             "project_name": "physical_ai_pmsm_motor_control",
@@ -6729,9 +6805,9 @@ def _hem_physical_ai_child_payload(root_workflow_id: str, root_run_id: str, payl
         }
     common = {
         "rtl_source_mode": "from_arch2rtl",
-        "from_workflow_id": root_workflow_id,
-        "source_workflow_id": root_workflow_id,
-        "source_arch2rtl_workflow_id": root_workflow_id,
+        "from_workflow_id": source_arch2rtl,
+        "source_workflow_id": source_arch2rtl,
+        "source_arch2rtl_workflow_id": source_arch2rtl,
         "parent_workflow_id": root_workflow_id,
         "upstream_workflows": {"physical_ai": root_workflow_id},
         "top_module": "motor_control_top",
@@ -6766,7 +6842,7 @@ def _hem_continue_physical_ai_after_success(*, root_workflow_id: str, root_run_i
     mode = _hem_normalized_mode(str(payload.get("hem_mode") or "fixed"))
     plan = _hem_physical_ai_stage_plan(payload)
     if not plan:
-        append_log_workflow(root_workflow_id, "HEM Automatic Run has no enabled Physical AI child stages.", phase="hem_complete")
+        append_log_workflow(root_workflow_id, "Architecture-only journey completed; no downstream implementation was requested.", phase="hem_complete")
         return
     hem_run_id = _hem_insert_run_record(
         user_id=user_id,
@@ -6787,7 +6863,7 @@ def _hem_continue_physical_ai_after_success(*, root_workflow_id: str, root_run_i
     for index, stage in enumerate(plan):
         meta = HEM_PHYSICAL_AI_STAGE_META[stage]
         append_log_workflow(root_workflow_id, f"HEM Automatic Run ({mode}) queued {meta['label']} because {previous_stage} completed successfully.", phase="hem_queued")
-        child_loop_type = "system" if stage == "firmware_product" else "fpga"
+        child_loop_type = "system" if stage == "firmware_product" else ("fpga" if stage.startswith("fpga_") else "digital")
         child_workflow_id, child_run_id, base_dir = _create_app_workflow_and_run(user_id, meta["title"], child_loop_type)
         child_artifact_dir = os.path.join(base_dir, meta["artifact"])
         os.makedirs(child_artifact_dir, exist_ok=True)
@@ -6822,6 +6898,10 @@ def _hem_continue_physical_ai_after_success(*, root_workflow_id: str, root_run_i
             append_log_run(root_run_id, message)
             _hem_update_run_record(str(hem_run_id) if hem_run_id else None, status="failed", metadata={"source": "physical_ai", "path": plan, "completed": completed, "failed_stage": stage, "failed_workflow_id": child_workflow_id})
             return
+        if stage == "arch2rtl":
+            automation_payload["source_arch2rtl_workflow_id"] = child_workflow_id
+            automation_payload["from_workflow_id"] = child_workflow_id
+            append_log_workflow(root_workflow_id, f"HEM will use generated RTL workflow {child_workflow_id} for verification and implementation.", phase="hem_running")
         if stage == "fpga_exploration":
             explorer_files = list(Path(child_artifact_dir).rglob("fpga_target_explorer.json"))
             if explorer_files:
@@ -6922,11 +7002,20 @@ def execute_physical_ai_workflow_background(workflow_id: str, run_id: str, user_
             architecture_only = result["physics_execution"].get("implementation_path") == "architecture_only"
             append_log_workflow(workflow_id, "Product architecture and digital-IP specification completed" + ("; journey stopped as requested" if architecture_only else "; Digital Design Loop is ready"), status="completed", phase="architecture_complete" if architecture_only else "digital_design_ready", artifacts=artifacts)
             append_log_run(run_id, "Physical AI surrogate architecture reference journey completed", status="completed", artifacts_path=artifact_dir)
+            if bool(data.get("hem_enabled")) and not architecture_only:
+                generated = result["physics_execution"].get("architecture") or {}
+                _hem_continue_physical_ai_after_success(
+                    root_workflow_id=workflow_id,
+                    root_run_id=run_id,
+                    user_id=user_id,
+                    payload={**data, "rtl_spec_text": generated.get("rtl_spec_text"), "verification_goals": generated.get("verification_goals")},
+                )
         elif result["status"] == "ready_for_fpga_exploration":
             append_log_workflow(workflow_id, f"Physics model {result['physics_model']['name']} completed; speed error {metrics['steady_state_speed_error_percent']:.2f}%", phase="physics_validation")
             append_log_workflow(workflow_id, "Physics, fixed-point, and RTL smoke validation passed; FPGA exploration is ready", status="completed", phase="fpga_exploration_ready", artifacts=artifacts)
             append_log_run(run_id, "Physical AI parent workflow completed", status="completed", artifacts_path=artifact_dir)
-            _hem_continue_physical_ai_after_success(root_workflow_id=workflow_id, root_run_id=run_id, user_id=user_id, payload=data)
+            generated = result["physics_execution"].get("architecture") or {}
+            _hem_continue_physical_ai_after_success(root_workflow_id=workflow_id, root_run_id=run_id, user_id=user_id, payload={**data, "rtl_spec_text": generated.get("rtl_spec_text"), "verification_goals": generated.get("verification_goals")})
         else:
             append_log_workflow(workflow_id, "Physics validation needs revision before child loops can start", status="completed", phase="needs_revision", artifacts=artifacts)
             append_log_run(run_id, "Physical AI physics validation needs revision", status="completed", artifacts_path=artifact_dir)

@@ -13,6 +13,7 @@ ROUTES = {
 
 def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     execution = state["physics_execution"]
+    generated_architecture = state.get("generated_architecture") or execution.get("architecture") or {}
     if execution.get("execution_mode") == "architecture":
         implementation_path = execution.get("implementation_path") or "digital_ip_asic"
         continue_to_rtl = implementation_path != "architecture_only"
@@ -35,6 +36,8 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
             "surrogate_interface_contract": execution["files"]["surrogate_interface_contract"],
             "product_architecture": execution["files"]["product_architecture"],
             "digital_ip_spec": execution["files"]["digital_ip_spec"],
+            "rtl_spec_text": generated_architecture.get("rtl_spec_text"),
+            "model_generated_architecture": execution["files"].get("model_generated_architecture"),
             "implementation_path": implementation_path,
             "next_loop": "digital_design" if continue_to_rtl else None,
             "return_to_parent": True,
@@ -73,6 +76,8 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
         "rtl_manifest": execution["files"]["motor_rtl_manifest"],
         "rtl_top": execution["files"]["rtl_motor_control_top"],
         "requirements": state["requirements_contract"],
+        "rtl_spec_text": generated_architecture.get("rtl_spec_text"),
+        "model_generated_architecture": execution["files"].get("model_generated_architecture"),
         "return_to_parent": True,
     }
     return {**state, "physical_ai_loop": {"physics_passed": physics_passed, "fixed_point_passed": fixed_point_passed, "rtl_smoke_passed": rtl_smoke_passed, "stages": stages, "child_handoff": handoff}}

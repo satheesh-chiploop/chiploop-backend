@@ -740,11 +740,12 @@
     {
       "name": "Physical_AI_Loop",
       "loop_type": "physical_ai",
-      "description": "Parent Physical AI workflow for requirements, physics-model selection, execution, validation, and contract-based delegation to existing ChipLoop loops.",
+      "description": "Parent Physical AI workflow for requirements, physics-model selection, physics evidence, model-generated architecture, and controlled FPGA or ASIC delegation.",
       "agents": [
         "Physical AI Requirements Agent",
         "Physical AI Model Selection Agent",
         "Physical AI Physics Execution Agent",
+        "Physical AI Architecture Agent",
         "Physical AI Orchestrator Agent"
       ],
       "hooks": [

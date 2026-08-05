@@ -2,6 +2,7 @@ import json
 
 import pytest
 
+import agents.physical_ai.physical_ai_architecture_agent as architecture_agent
 from physical_ai.model_registry import get_physics_model, list_physics_models
 from physical_ai.workflow import run_physical_ai_workflow
 from studio_contract.registry import load_registry
@@ -44,11 +45,12 @@ def test_generic_physical_ai_parent_workflow_executes_motor_adapter(tmp_path):
     assert result["loop"]["stages"][5]["status"] == "ready"
     for path in result["files"].values():
         assert path
-    assert [event[1] for event in progress] == ["started", "completed"] * 4
+    assert [event[1] for event in progress] == ["started", "completed"] * 5
     assert [event[0] for event in progress if event[1] == "completed"] == [
         "Physical AI Requirements Agent",
         "Physical AI Model Selection Agent",
         "Physical AI Physics Execution Agent",
+        "Physical AI Architecture Agent",
         "Physical AI Orchestrator Agent",
     ]
 
@@ -111,6 +113,37 @@ def test_architecture_only_stops_before_rtl(tmp_path):
     assert next(stage for stage in result["loop"]["stages"] if stage["id"] == "digital_design")["status"] == "not_requested"
 
 
+def test_selected_agent_model_generates_rtl_ready_architecture(tmp_path, monkeypatch):
+    response = {
+        "product_name": "Active Aero Controller",
+        "product_summary": "Controls active aerodynamic surfaces safely.",
+        "architecture_decisions": ["Keep surrogate inference outside RTL"],
+        "blocks": ["sensor_filter", "command_limiter", "safety_fsm"],
+        "interfaces": ["AXI4-Lite", "sensor stream", "actuator command"],
+        "safety_requirements": ["Fallback on stale command"],
+        "rtl_spec_text": "Create a synthesizable active_aero_control_top with AXI4-Lite registers, sensor filtering, command limits, watchdog, and safe fallback.",
+        "verification_goals": ["Verify stale-command fallback", "Verify command clamping"],
+    }
+    calls = []
+    monkeypatch.setattr(architecture_agent, "complete_text", lambda prompt, **kwargs: calls.append((prompt, kwargs)) or json.dumps(response))
+    result = run_physical_ai_workflow(
+        {
+            "physics_domain": "automotive_aerodynamics",
+            "physics_model_id": "nvidia.domino.automotive_aero",
+            "implementation_target": "asic",
+            "execution_mode": "architecture",
+            "implementation_path": "digital_ip_asic",
+            "generate_architecture_with_model": True,
+            "model_policy": {"mode": "standard", "selected_model": "nvidia_nemotron"},
+        },
+        str(tmp_path),
+    )
+    assert calls
+    assert calls[0][1]["agent_name"] == "Physical AI Architecture Agent"
+    assert result["physics_execution"]["architecture"]["rtl_spec_text"].startswith("Create a synthesizable")
+    assert result["loop"]["child_handoff"]["rtl_spec_text"] == response["rtl_spec_text"]
+
+
 def test_physical_ai_agents_and_workflow_are_registered():
     registry = load_registry("registry")
     workflow = registry.workflows["Physical_AI_Loop"]
@@ -119,6 +152,7 @@ def test_physical_ai_agents_and_workflow_are_registered():
         "Physical AI Requirements Agent",
         "Physical AI Model Selection Agent",
         "Physical AI Physics Execution Agent",
+        "Physical AI Architecture Agent",
         "Physical AI Orchestrator Agent",
     ]
 
@@ -150,6 +184,7 @@ def test_physical_ai_has_supabase_source_of_truth_migration():
         "Physical AI Requirements Agent",
         "Physical AI Model Selection Agent",
         "Physical AI Physics Execution Agent",
+        "Physical AI Architecture Agent",
         "Physical AI Orchestrator Agent",
     ):
         assert agent_name in migration

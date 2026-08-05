@@ -95,12 +95,14 @@ with definition as (
       jsonb_build_object('id','n1','type','agent','position',jsonb_build_object('x',80,'y',140),'data',jsonb_build_object('uiLabel','Physical AI Requirements Agent','backendLabel','Physical AI Requirements Agent')),
       jsonb_build_object('id','n2','type','agent','position',jsonb_build_object('x',380,'y',140),'data',jsonb_build_object('uiLabel','Physical AI Model Selection Agent','backendLabel','Physical AI Model Selection Agent')),
       jsonb_build_object('id','n3','type','agent','position',jsonb_build_object('x',680,'y',140),'data',jsonb_build_object('uiLabel','Physical AI Physics Execution Agent','backendLabel','Physical AI Physics Execution Agent')),
-      jsonb_build_object('id','n4','type','agent','position',jsonb_build_object('x',980,'y',140),'data',jsonb_build_object('uiLabel','Physical AI Orchestrator Agent','backendLabel','Physical AI Orchestrator Agent'))
+      jsonb_build_object('id','n4','type','agent','position',jsonb_build_object('x',980,'y',140),'data',jsonb_build_object('uiLabel','Physical AI Architecture Agent','backendLabel','Physical AI Architecture Agent')),
+      jsonb_build_object('id','n5','type','agent','position',jsonb_build_object('x',1280,'y',140),'data',jsonb_build_object('uiLabel','Physical AI Orchestrator Agent','backendLabel','Physical AI Orchestrator Agent'))
     ),
     'edges', jsonb_build_array(
       jsonb_build_object('id','e1','source','n1','target','n2'),
       jsonb_build_object('id','e2','source','n2','target','n3'),
-      jsonb_build_object('id','e3','source','n3','target','n4')
+      jsonb_build_object('id','e3','source','n3','target','n4'),
+      jsonb_build_object('id','e4','source','n4','target','n5')
     ),
     'description', 'Selects a governed physics model, validates it, creates RTL and register-map handoffs, and optionally continues through FPGA, firmware, software validation, and product-demo loops with HEM.',
     'category', 'physical_ai',
@@ -141,6 +143,7 @@ with physical_ai_agents(agent_name, description, entrypoint, inputs, outputs) as
     ('Physical AI Requirements Agent', 'Normalizes application, operating-envelope, accuracy, safety, and implementation requirements.', 'agents.physical_ai.physical_ai_requirements_agent:run_agent', '["application requirements"]'::jsonb, '["physical_ai/requirements_contract.json"]'::jsonb),
     ('Physical AI Model Selection Agent', 'Selects a compatible governed equation or surrogate model from the Supabase model catalog.', 'agents.physical_ai.physical_ai_model_selection_agent:run_agent', '["physical_ai/requirements_contract.json","physical_ai_models"]'::jsonb, '["physical_ai/selected_physics_model.json"]'::jsonb),
     ('Physical AI Physics Execution Agent', 'Executes physics validation and produces operating-envelope, fixed-point, RTL, and register-map evidence.', 'agents.physical_ai.physical_ai_physics_execution_agent:run_agent', '["physical_ai/requirements_contract.json","physical_ai/selected_physics_model.json"]'::jsonb, '["physical_ai/motor_control/equation_metrics.json","physical_ai/motor_control/operating_sweep.json","physical_ai/motor_control/rtl/motor_rtl_manifest.json","physical_ai/motor_control/digital_regmap.json"]'::jsonb),
+    ('Physical AI Architecture Agent', 'Uses the selected agent model and physics evidence to generate a product architecture and Arch2RTL-ready specification.', 'agents.physical_ai.physical_ai_architecture_agent:run_agent', '["physical_ai requirements","selected physics model","physics evidence"]'::jsonb, '["physical_ai/model_generated_architecture.json"]'::jsonb),
     ('Physical AI Orchestrator Agent', 'Judges readiness and delegates approved evidence to existing FPGA, firmware, validation, and product workflows.', 'agents.physical_ai.physical_ai_orchestrator_agent:run_agent', '["physical_ai physics results"]'::jsonb, '["physical_ai/physical_ai_loop_state.json","physical_ai/child_handoff.json"]'::jsonb)
 ), updated_agents as (
   update public.agents a
