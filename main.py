@@ -3730,6 +3730,8 @@ class PhysicalAiWorkflowIn(BaseModel):
     physics_domain: str = "motor_control"
     physics_model_id: str = "chiploop.pmsm.dq.v1"
     implementation_target: Literal["software", "fpga", "asic", "gpu_service"] = "fpga"
+    execution_mode: Literal["validated", "architecture"] = "validated"
+    implementation_path: Literal["architecture_only", "digital_ip_asic", "fpga_prototype", "fpga_then_asic"] = "digital_ip_asic"
     maximum_error_percent: float = 3.0
     safety_constraints: List[str] = Field(default_factory=list)
     operating_envelope: Dict[str, Any] = Field(default_factory=dict)
@@ -6874,7 +6876,12 @@ def execute_physical_ai_workflow_background(workflow_id: str, run_id: str, user_
     try:
         append_log_workflow(workflow_id, "Normalizing Physical AI application requirements", phase="requirements")
         append_log_run(run_id, "Physical AI parent workflow started")
-        result = run_physical_ai_workflow(data, artifact_dir, workflow_id=workflow_id)
+        def report_agent(agent_name: str, event: str, phase: str) -> None:
+            message = f"Physical AI agent {event}: {agent_name}"
+            append_log_workflow(workflow_id, message, phase=phase)
+            append_log_run(run_id, message)
+
+        result = run_physical_ai_workflow(data, artifact_dir, workflow_id=workflow_id, progress=report_agent)
         for logical_name, raw_path in (result.get("files") or {}).items():
             path = Path(str(raw_path))
             if not path.is_file():
@@ -6890,7 +6897,8 @@ def execute_physical_ai_workflow_background(workflow_id: str, run_id: str, user_
                 path.name,
                 path.read_text(encoding="utf-8"),
             )
-        metrics = result["physics_execution"]["metrics"]
+        architecture_mode = result["physics_execution"].get("execution_mode") == "architecture"
+        metrics = result["physics_execution"].get("metrics") or {}
         artifacts = {
             "requirements_contract": result["files"].get("requirements_contract"),
             "physics_model": result["files"].get("selected_physics_model"),
@@ -6903,9 +6911,19 @@ def execute_physical_ai_workflow_background(workflow_id: str, run_id: str, user_
             "motor_rtl_manifest": result["files"].get("motor_rtl_manifest"),
             "motor_control_top": result["files"].get("rtl_motor_control_top"),
             "physical_ai_summary": result["files"].get("workflow_summary"),
+            "surrogate_interface_contract": result["files"].get("surrogate_interface_contract"),
+            "product_architecture": result["files"].get("product_architecture"),
+            "digital_ip_spec": result["files"].get("digital_ip_spec"),
+            "validation_plan": result["files"].get("validation_plan"),
+            "product_map": result["files"].get("product_map"),
         }
-        append_log_workflow(workflow_id, f"Physics model {result['physics_model']['name']} completed; speed error {metrics['steady_state_speed_error_percent']:.2f}%", phase="physics_validation")
-        if result["status"] == "ready_for_fpga_exploration":
+        if architecture_mode:
+            append_log_workflow(workflow_id, f"Pretrained surrogate interface selected: {result['physics_model']['name']}; inference explicitly not executed", phase="architecture_definition")
+            architecture_only = result["physics_execution"].get("implementation_path") == "architecture_only"
+            append_log_workflow(workflow_id, "Product architecture and digital-IP specification completed" + ("; journey stopped as requested" if architecture_only else "; Digital Design Loop is ready"), status="completed", phase="architecture_complete" if architecture_only else "digital_design_ready", artifacts=artifacts)
+            append_log_run(run_id, "Physical AI surrogate architecture reference journey completed", status="completed", artifacts_path=artifact_dir)
+        elif result["status"] == "ready_for_fpga_exploration":
+            append_log_workflow(workflow_id, f"Physics model {result['physics_model']['name']} completed; speed error {metrics['steady_state_speed_error_percent']:.2f}%", phase="physics_validation")
             append_log_workflow(workflow_id, "Physics, fixed-point, and RTL smoke validation passed; FPGA exploration is ready", status="completed", phase="fpga_exploration_ready", artifacts=artifacts)
             append_log_run(run_id, "Physical AI parent workflow completed", status="completed", artifacts_path=artifact_dir)
             _hem_continue_physical_ai_after_success(root_workflow_id=workflow_id, root_run_id=run_id, user_id=user_id, payload=data)
@@ -6974,7 +6992,7 @@ async def apps_physical_ai_result(workflow_id: str, request: Request):
         status = str(workflow.get("status") or "running")
         if status == "failed":
             return JSONResponse(status_code=409, content={"status": "failed", "phase": workflow.get("phase"), "logs": workflow.get("logs") or ""})
-        return JSONResponse(status_code=202, content={"status": status, "phase": workflow.get("phase"), "workflow_id": workflow_id})
+        return JSONResponse(status_code=202, content={"status": status, "phase": workflow.get("phase"), "logs": workflow.get("logs") or "", "workflow_id": workflow_id})
     try:
         result = json.loads(summary_text)
     except Exception as exc:
@@ -7036,7 +7054,7 @@ async def apps_physical_ai_run(request: Request, background_tasks: BackgroundTas
         raise HTTPException(status_code=503, detail="Physical AI model catalog is unavailable; apply the Supabase Physical AI migration")
     if not model_rows:
         raise HTTPException(status_code=400, detail="Unknown or disabled Physical AI model")
-    if str(model_rows[0].get("availability")) != "ready":
+    if str(model_rows[0].get("availability")) != "ready" and payload.execution_mode != "architecture":
         raise HTTPException(status_code=409, detail=f"Physical AI model is not executable: {model_rows[0].get('availability')}")
     workflow_id, run_id, artifact_dir = _create_app_workflow_and_run(user_id, "App: Physical AI Studio", "physical_ai")
     data = payload.dict()

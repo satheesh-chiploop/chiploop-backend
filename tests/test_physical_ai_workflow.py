@@ -16,6 +16,7 @@ def test_pmsm_equation_model_is_ready_and_fpga_compatible():
 
 
 def test_generic_physical_ai_parent_workflow_executes_motor_adapter(tmp_path):
+    progress = []
     result = run_physical_ai_workflow(
         {
             "application": "pmsm_motor_control",
@@ -28,6 +29,7 @@ def test_generic_physical_ai_parent_workflow_executes_motor_adapter(tmp_path):
         },
         str(tmp_path),
         workflow_id="parent-123",
+        progress=lambda agent, status, phase: progress.append((agent, status, phase)),
     )
     assert result["status"] == "ready_for_fpga_exploration"
     assert result["physics_execution"]["fixed_point"]["passed"] is True
@@ -42,6 +44,13 @@ def test_generic_physical_ai_parent_workflow_executes_motor_adapter(tmp_path):
     assert result["loop"]["stages"][5]["status"] == "ready"
     for path in result["files"].values():
         assert path
+    assert [event[1] for event in progress] == ["started", "completed"] * 4
+    assert [event[0] for event in progress if event[1] == "completed"] == [
+        "Physical AI Requirements Agent",
+        "Physical AI Model Selection Agent",
+        "Physical AI Physics Execution Agent",
+        "Physical AI Orchestrator Agent",
+    ]
 
 
 def test_unavailable_gpu_model_is_not_executed(tmp_path):
@@ -54,6 +63,52 @@ def test_unavailable_gpu_model_is_not_executed(tmp_path):
             },
             str(tmp_path),
         )
+
+
+def test_pretrained_gpu_surrogate_supports_cpu_architecture_journey(tmp_path):
+    result = run_physical_ai_workflow(
+        {
+            "application": "automotive_aerodynamics_architecture",
+            "objective": "Define active-aero digital IP",
+            "physics_domain": "automotive_aerodynamics",
+            "physics_model_id": "nvidia.domino.automotive_aero",
+            "implementation_target": "asic",
+            "execution_mode": "architecture",
+            "implementation_path": "fpga_then_asic",
+            "parameters": {"stream_velocity_mps": 38.89},
+            "hem_enabled": False,
+        },
+        str(tmp_path),
+        workflow_id="aero-parent-1",
+    )
+    assert result["status"] == "ready_for_digital_design"
+    assert result["physics_execution"]["inference_status"] == "not_executed"
+    assert result["loop"]["architecture_passed"] is True
+    assert result["loop"]["physics_passed"] is False
+    assert result["loop"]["child_handoff"]["next_loop"] == "digital_design"
+    assert result["loop"]["child_handoff"]["implementation_path"] == "fpga_then_asic"
+    assert next(stage for stage in result["loop"]["stages"] if stage["id"] == "fpga_exploration")["status"] == "planned"
+    assert next(stage for stage in result["loop"]["stages"] if stage["id"] == "digital_implementation")["status"] == "planned"
+    assert result["physics_execution"]["digital_ip_spec"]["surrogate_is_not_rtl"] is True
+    assert result["files"]["digital_ip_spec"]
+    summary = json.loads(open(result["files"]["workflow_summary"], encoding="utf-8").read())
+    assert summary["physics_execution"]["interface"]["inference"]["status"] == "not_executed"
+
+
+def test_architecture_only_stops_before_rtl(tmp_path):
+    result = run_physical_ai_workflow(
+        {
+            "physics_domain": "automotive_aerodynamics",
+            "physics_model_id": "nvidia.domino.automotive_aero",
+            "implementation_target": "asic",
+            "execution_mode": "architecture",
+            "implementation_path": "architecture_only",
+        },
+        str(tmp_path),
+    )
+    assert result["status"] == "architecture_complete"
+    assert result["loop"]["child_handoff"]["next_loop"] is None
+    assert next(stage for stage in result["loop"]["stages"] if stage["id"] == "digital_design")["status"] == "not_requested"
 
 
 def test_physical_ai_agents_and_workflow_are_registered():

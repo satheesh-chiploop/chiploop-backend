@@ -12,6 +12,8 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
         "operating_envelope": raw.get("operating_envelope") or {},
         "accuracy": {"maximum_error_percent": float(raw.get("maximum_error_percent") or 3.0)},
         "implementation_target": str(raw.get("implementation_target") or "fpga"),
+        "execution_mode": str(raw.get("execution_mode") or "validated"),
+        "implementation_path": str(raw.get("implementation_path") or "digital_ip_asic"),
         "safety_constraints": list(raw.get("safety_constraints") or []),
         "parameters": dict(raw.get("parameters") or {}),
         "approved": True,

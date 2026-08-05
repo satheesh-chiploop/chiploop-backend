@@ -18,9 +18,14 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
         if not matches:
             raise ValueError(f"No ready physics model for domain {requirements['physics_domain']}")
         model = matches[0]
-    if model["availability"] != "ready":
+    architecture_mode = requirements.get("execution_mode") == "architecture"
+    architecture_supported = bool(
+        model.get("architecture_definition_supported")
+        or (model.get("configuration") or {}).get("architecture_definition_supported")
+    )
+    if model["availability"] != "ready" and not (architecture_mode and architecture_supported):
         raise ValueError(f"Physics model {model['model_id']} is not executable: {model['availability']}")
     target = requirements["implementation_target"]
-    if target not in model["implementation_targets"]:
+    if not architecture_mode and target not in model["implementation_targets"]:
         raise ValueError(f"Physics model {model['model_id']} does not support target {target}")
     return {**state, "selected_physics_model": model}

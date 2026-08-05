@@ -13,6 +13,42 @@ ROUTES = {
 
 def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     execution = state["physics_execution"]
+    if execution.get("execution_mode") == "architecture":
+        implementation_path = execution.get("implementation_path") or "digital_ip_asic"
+        continue_to_rtl = implementation_path != "architecture_only"
+        stages = [
+            {"id": "requirements", "owner": "physical_ai", "status": "completed"},
+            {"id": "model_selection", "owner": "physical_ai", "status": "completed"},
+            {"id": "surrogate_interface", "owner": "physical_ai", "status": "completed"},
+            {"id": "architecture_definition", "owner": "physical_ai", "status": "completed"},
+            {"id": "surrogate_inference", "owner": "physical_ai", "status": "not_executed"},
+            {"id": "digital_design", "owner": "existing_loop", "status": "ready" if continue_to_rtl else "not_requested", "app_path": ROUTES["digital_design"]},
+            {"id": "rtl_verification", "owner": "existing_loop", "status": "planned" if continue_to_rtl else "not_requested", "app_path": "/apps/verify"},
+            {"id": "digital_implementation", "owner": "existing_loop", "status": "planned" if implementation_path in {"digital_ip_asic", "fpga_then_asic"} else "not_requested", "app_path": ROUTES["digital_implementation"]},
+            {"id": "fpga_exploration", "owner": "existing_loop", "status": "planned" if implementation_path in {"fpga_prototype", "fpga_then_asic"} else "not_requested", "app_path": ROUTES["fpga_exploration"]},
+        ]
+        handoff = {
+            "schema": "chiploop.physical_ai.architecture_handoff.v1",
+            "parent_workflow_id": state.get("workflow_id"),
+            "source_model_id": state["selected_physics_model"]["model_id"],
+            "inference_status": "not_executed",
+            "surrogate_interface_contract": execution["files"]["surrogate_interface_contract"],
+            "product_architecture": execution["files"]["product_architecture"],
+            "digital_ip_spec": execution["files"]["digital_ip_spec"],
+            "implementation_path": implementation_path,
+            "next_loop": "digital_design" if continue_to_rtl else None,
+            "return_to_parent": True,
+        }
+        return {**state, "physical_ai_loop": {
+            "architecture_passed": True,
+            "physics_passed": False,
+            "fixed_point_passed": False,
+            "rtl_smoke_passed": False,
+            "inference_status": "not_executed",
+            "implementation_path": implementation_path,
+            "stages": stages,
+            "child_handoff": handoff,
+        }}
     metrics = execution["simulation"]["metrics"]
     physics_passed = all(metrics["checks"].values()) and metrics["steady_state_speed_error_percent"] <= state["requirements_contract"]["accuracy"]["maximum_error_percent"]
     fixed_point_passed = bool(execution.get("fixed_point", {}).get("passed"))
