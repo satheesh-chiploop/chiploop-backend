@@ -117,7 +117,8 @@ def _closure_overrides(state: dict, workflow_dir: str, stage: str) -> dict:
 
 def _run(cmd: list[str], cwd: str, state: dict | None = None) -> tuple[int, str]:
     p = run_command(state or {}, "digital_placement", [str(x) for x in cmd], cwd=cwd, timeout_sec=1800)
-    return p.returncode if p.returncode is not None else 1, (p.stdout or "") + (p.stderr or "")
+    error_text = f"\nRUNNER_ERROR: {p.error}\n" if p.error else ""
+    return p.returncode if p.returncode is not None else 1, (p.stdout or "") + (p.stderr or "") + error_text
 
 
 def _latest_run_dir(run_work_dir: str) -> str | None:
@@ -165,6 +166,8 @@ def _failure_reason(log_text: str, rc: int, def_path: str | None) -> str | None:
     lower = (log_text or "").lower()
     if "no space left on device" in lower or "errno 28" in lower:
         return "no_space_left_on_device"
+    if rc == 124 or "timed out" in lower or "timeoutexpired" in lower:
+        return "placement_timeout"
     if rc != 0:
         return "openlane_failed"
     if not def_path:
@@ -604,6 +607,12 @@ def run_agent(state: dict) -> dict:
     _write_text(os.path.join(logs_dir, "placement_input_resolution.log"), input_log)
 
 
+    try:
+        placement_timeout_sec = int(state.get("placement_timeout_sec") or 1500)
+    except Exception:
+        placement_timeout_sec = 1500
+    placement_timeout_sec = max(300, min(placement_timeout_sec, 1700))
+
     run_sh = f"""#!/usr/bin/env bash
 set -euo pipefail
 
@@ -620,13 +629,36 @@ docker run --rm \
   -e PDK={pdk_variant} \
   -e PDK_ROOT=/pdk \
   {openlane_image} \
-  bash -lc 'set -e; cd /work && openlane --flow Classic --run-tag {run_tag} --override-config RUN_LINTER=False --to OpenROAD.DetailedPlacement place/config.json'
+  bash -lc 'set -e; cd /work && timeout --foreground --kill-after=30s {placement_timeout_sec}s openlane --flow Classic --run-tag {run_tag} --override-config RUN_LINTER=False --to OpenROAD.DetailedPlacement place/config.json'
 
 
 """
     run_sh_path = os.path.join(stage_dir, "run.sh")
     _write_text(run_sh_path, run_sh)
     os.chmod(run_sh_path, 0o755)
+
+    started_payload = {
+        "workflow_id": workflow_id,
+        "agent": AGENT_NAME,
+        "status": "running",
+        "started_at": datetime.utcnow().isoformat() + "Z",
+        "timeout_seconds": placement_timeout_sec,
+        "run_tag": run_tag,
+        "die_area": cfg.get("DIE_AREA"),
+        "fp_sizing": cfg.get("FP_SIZING"),
+    }
+    started_path = os.path.join(stage_dir, "placement_started.json")
+    _write_text(started_path, json.dumps(started_payload, indent=2))
+    try:
+        save_text_artifact_and_record(
+            workflow_id,
+            AGENT_NAME,
+            "digital",
+            "place/placement_started.json",
+            json.dumps(started_payload, indent=2),
+        )
+    except Exception as exc:
+        logger.warning("%s: could not publish placement start marker: %s", AGENT_NAME, exc)
 
     rc, out = _run(["bash", "-lc", "./run.sh"], cwd=stage_dir, state=state)
     log_path = os.path.join(logs_dir, "openlane_place.log")

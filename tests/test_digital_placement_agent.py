@@ -107,6 +107,8 @@ def test_cleanup_stage_run_removes_only_matching_run_tag(tmp_path):
 
 def test_placement_failure_reason_detects_no_space():
     assert agent._failure_reason("OSError: [Errno 28] No space left on device", 1, None) == "no_space_left_on_device"
+    assert agent._failure_reason("", 124, None) == "placement_timeout"
+    assert agent._failure_reason("RUNNER_ERROR: TimeoutExpired", 1, None) == "placement_timeout"
     assert agent._failure_reason("other failure", 1, None) == "openlane_failed"
     assert agent._failure_reason("", 0, None) == "def_missing"
 

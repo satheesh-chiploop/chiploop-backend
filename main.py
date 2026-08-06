@@ -2040,6 +2040,32 @@ def _run_nodes_with_shared_state(
 
     agent_map_norm = {_norm(k): v for k, v in agent_map.items()}
 
+    root_workflow_id = str(shared_state.get("hem_root_workflow_id") or "").strip()
+    root_run_id = str(shared_state.get("hem_root_run_id") or "").strip()
+    stage_label = str(
+        shared_state.get("hem_stage_label")
+        or shared_state.get("app_name")
+        or shared_state.get("workflow_name")
+        or loop_type.replace("_", " ").title()
+    ).strip()
+
+    def _report_agent_state(label: str, state: str, detail: str = "") -> None:
+        marker = {
+            "running": "ACTIVE AGENT",
+            "completed": "AGENT COMPLETED",
+            "failed": "AGENT FAILED",
+        }.get(state, "AGENT UPDATE")
+        message = f"{marker}: {label} | Stage: {stage_label}"
+        if detail:
+            message += f" | {detail}"
+        append_log_workflow(workflow_id, message)
+        append_log_run(run_id, message)
+        # Mirror HEM child progress into the Physical AI parent Supabase rows.
+        if root_workflow_id and root_workflow_id != workflow_id:
+            append_log_workflow(root_workflow_id, message, phase="hem_running" if state != "failed" else "hem_failed")
+        if root_run_id and root_run_id != run_id:
+            append_log_run(root_run_id, message)
+
     def _prepare_scoped_agent_state(label: str) -> None:
         if label.startswith("Digital "):
             digital_text = shared_state.get("digital_spec_text") or shared_state.get("digital_spec") or ""
@@ -2106,13 +2132,11 @@ def _run_nodes_with_shared_state(
         if loop_type == "system":
             _prepare_scoped_agent_state(label)
 
-        append_log_workflow(workflow_id, f"⚙️ Running {label}")
-        append_log_run(run_id, f"⚙️ Running {label}")
+        _report_agent_state(label, "running")
 
         fn = agent_map_norm.get(label)
         if not fn:
-            append_log_workflow(workflow_id, f"❌ No agent implementation found for: {label}")
-            append_log_run(run_id, f"❌ No agent implementation found for: {label}")
+            _report_agent_state(label, "failed", "No agent implementation found")
             continue
 
         participating_agents = shared_state.setdefault("_participating_agents", [])
@@ -2136,12 +2160,10 @@ def _run_nodes_with_shared_state(
                 if result_status.startswith("❌"):
                     raise RuntimeError(result_status)
 
-            append_log_workflow(workflow_id, f"✅ {label} done")
-            append_log_run(run_id, f"✅ {label} done")
+            _report_agent_state(label, "completed")
 
         except Exception as e:
-            append_log_workflow(workflow_id, f"❌ {label} failed: {type(e).__name__}: {e}")
-            append_log_run(run_id, f"❌ {label} failed: {type(e).__name__}: {e}")
+            _report_agent_state(label, "failed", f"{type(e).__name__}: {e}")
             if shared_state.get("_fail_fast_on_agent_error"):
                 raise
             # Continue for legacy workflows that preserve best-effort execution.
@@ -6959,6 +6981,8 @@ def _hem_physical_ai_child_payload(root_workflow_id: str, root_run_id: str, payl
         "hem_run_id": hem_run_id,
         "hem_root_workflow_id": root_workflow_id,
         "hem_root_run_id": root_run_id,
+        "hem_stage": stage,
+        "hem_stage_label": HEM_PHYSICAL_AI_STAGE_META.get(stage, {}).get("label", stage.replace("_", " ").title()),
     }
     if stage == "arch2rtl":
         implementation_path = str(payload.get("implementation_path") or "fpga_prototype")
