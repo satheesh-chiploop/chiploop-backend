@@ -7037,7 +7037,7 @@ def _hem_physical_ai_child_payload(root_workflow_id: str, root_run_id: str, payl
     if stage == "fpga_exploration":
         return {
             **common,
-            "candidate_boards": payload.get("candidate_boards") or ["orangecrab_ecp5_85f", "ulx3s_45f"],
+            "candidate_boards": payload.get("candidate_boards") or ["orangecrab_ecp5_85f", "ulx3s_ecp5_45f"],
             "requested_recommendation_profile": str(payload.get("requested_recommendation_profile") or "best_overall"),
             "baseline_seed_count": int(payload.get("baseline_seed_count") or 1),
             "closure_seed_count": int(payload.get("closure_seed_count") or 1),
@@ -7086,6 +7086,17 @@ def _hem_continue_physical_ai_after_success(*, root_workflow_id: str, root_run_i
         append_log_run(root_run_id, f"HEM started {meta['label']} workflow {child_workflow_id}. Dashboard: {dashboard_path}")
         append_log_workflow(child_workflow_id, f"HEM started {meta['label']} from Physical AI workflow {root_workflow_id}.", phase="hem_start")
         append_log_run(child_run_id, f"HEM started {meta['label']} from Physical AI workflow {root_workflow_id}.")
+        _hem_insert_event(
+            hem_run_id=str(hem_run_id) if hem_run_id else None,
+            user_id=user_id,
+            workflow_id=child_workflow_id,
+            run_id=child_run_id,
+            stage=stage,
+            event_type="stage_started",
+            status="running",
+            message=f"HEM started {meta['label']} from Physical AI.",
+            metadata={"label": meta["label"], "dashboard_stage": meta["dashboard_stage"]},
+        )
         _hem_update_run_record(
             str(hem_run_id) if hem_run_id else None,
             current_workflow_id=child_workflow_id,
@@ -7104,6 +7115,17 @@ def _hem_continue_physical_ai_after_success(*, root_workflow_id: str, root_run_i
             append_log_workflow(child_workflow_id, f"HEM child execution crashed: {type(exc).__name__}: {exc}", status="failed", phase="error")
         child_rows = supabase.table("workflows").select("status").eq("id", child_workflow_id).limit(1).execute().data or []
         child_status = str((child_rows[0] if child_rows else {}).get("status") or "unknown")
+        _hem_insert_event(
+            hem_run_id=str(hem_run_id) if hem_run_id else None,
+            user_id=user_id,
+            workflow_id=child_workflow_id,
+            run_id=child_run_id,
+            stage=stage,
+            event_type="stage_finished",
+            status=child_status,
+            message=f"HEM {meta['label']} finished with status {child_status}.",
+            metadata={"label": meta["label"], "dashboard_stage": meta["dashboard_stage"]},
+        )
         append_log_workflow(root_workflow_id, f"HEM {meta['label']} finished with status {child_status}.", phase="hem_running" if child_status == "completed" else "hem_failed")
         if child_status != "completed":
             message = f"HEM stopped after {meta['label']} because the child workflow status is {child_status}."
@@ -7340,7 +7362,70 @@ async def apps_physical_ai_result(workflow_id: str, request: Request):
                 except Exception as exc:
                     logger.warning("Could not load Physical AI plot from Supabase Storage: %s", exc)
     result["files"] = safe_files
-    return {"status": "completed", "phase": workflow.get("phase"), "logs": workflow.get("logs") or "", "workflow_id": workflow_id, "result": result, "plots": plots}
+    # HEM journey rows come from Supabase event records, not the bounded text
+    # log. Logs may be truncated as long implementation stages run and must not
+    # make completed child workflows disappear from the UI.
+    hem_children: List[Dict[str, Any]] = []
+    try:
+        hem_rows = (
+            supabase.table("hem_runs")
+            .select("id")
+            .eq("root_workflow_id", workflow_id)
+            .eq("user_id", user_id)
+            .order("created_at", desc=True)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        if hem_rows:
+            event_rows = (
+                supabase.table("hem_run_events")
+                .select("workflow_id,run_id,stage,event_type,status,metadata,created_at")
+                .eq("hem_run_id", hem_rows[0]["id"])
+                .eq("user_id", user_id)
+                .order("created_at")
+                .execute()
+                .data
+                or []
+            )
+            by_workflow: Dict[str, Dict[str, Any]] = {}
+            for event in event_rows:
+                child_id = str(event.get("workflow_id") or "").strip()
+                if not child_id:
+                    continue
+                metadata = event.get("metadata") if isinstance(event.get("metadata"), dict) else {}
+                stage = str(event.get("stage") or "")
+                meta = HEM_PHYSICAL_AI_STAGE_META.get(stage) or {}
+                item = by_workflow.setdefault(child_id, {
+                    "workflow_id": child_id,
+                    "run_id": event.get("run_id"),
+                    "stage": stage,
+                    "label": metadata.get("label") or meta.get("label") or stage,
+                    "dashboard_path": f"/dashboard/{child_id}?stage={metadata.get('dashboard_stage') or meta.get('dashboard_stage') or stage}&app=HEM",
+                    "status": "running",
+                })
+                if event.get("status"):
+                    item["status"] = event.get("status")
+            child_ids = list(by_workflow)
+            if child_ids:
+                status_rows = (
+                    supabase.table("workflows")
+                    .select("id,status")
+                    .in_("id", child_ids)
+                    .execute()
+                    .data
+                    or []
+                )
+                for status_row in status_rows:
+                    child_id = str(status_row.get("id") or "")
+                    if child_id in by_workflow and status_row.get("status"):
+                        by_workflow[child_id]["status"] = status_row["status"]
+            stage_order = {name: index for index, name in enumerate(HEM_PHYSICAL_AI_STAGE_META)}
+            hem_children = sorted(by_workflow.values(), key=lambda item: stage_order.get(str(item.get("stage")), 99))
+    except Exception as exc:
+        logger.warning("Physical AI HEM children could not be loaded from Supabase: %s", exc)
+    return {"status": "completed", "phase": workflow.get("phase"), "logs": workflow.get("logs") or "", "workflow_id": workflow_id, "result": result, "plots": plots, "hem_children": hem_children}
 
 
 @app.post("/apps/physical-ai/run")

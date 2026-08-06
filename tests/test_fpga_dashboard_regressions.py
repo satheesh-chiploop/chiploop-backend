@@ -561,6 +561,59 @@ def test_nexus_yosys_metrics_count_fd1p3_flip_flops_and_ccu2(tmp_path):
     assert metrics["logical_cells_used"] == 44
     assert metrics["fabric_mapped_cells"] == 82
 
+
+def test_ecp5_yosys_metrics_report_native_block_ram(tmp_path):
+    from agents.fpga.fpga_yosys_synthesis_agent import _yosys_cell_metrics
+
+    netlist = tmp_path / "ecp5.json"
+    netlist.write_text(json.dumps({
+        "modules": {"top": {"cells": {
+            "ram_a": {"type": "DP16KD"},
+            "ram_b": {"type": "DP16KD"},
+            "lut": {"type": "LUT4"},
+        }}}
+    }), encoding="utf-8")
+    board = {"resources": {
+        "logic_cells": 84000,
+        "block_ram_primitive": "DP16KD",
+        "block_ram_blocks": 208,
+        "block_ram_bits": 3_744_000,
+    }}
+
+    metrics = _yosys_cell_metrics(str(netlist), board)
+
+    assert metrics["block_ram_primitive"] == "DP16KD"
+    assert metrics["block_ram_blocks_used"] == 2
+    assert metrics["block_ram_blocks_available"] == 208
+    assert metrics["block_ram_bits_available"] == 3_744_000
+    assert metrics["block_ram_utilization_percent"] == 0.962
+
+
+def test_rtl_memory_intent_detects_substantial_unpacked_array(tmp_path):
+    from agents.fpga.fpga_yosys_synthesis_agent import _rtl_memory_intent
+
+    rtl = tmp_path / "memory.sv"
+    rtl.write_text(
+        "module memory;\n"
+        "logic [31:0] payload_mem [0:255];\n"
+        "logic [7:0] tiny_history [0:3];\n"
+        "endmodule\n",
+        encoding="utf-8",
+    )
+
+    intent = _rtl_memory_intent([str(rtl)], threshold_bits=4096)
+
+    assert intent["requires_block_ram"] is True
+    assert intent["estimated_bits"] == 8224
+    assert intent["declarations"][0]["bits"] == 8192
+
+
+def test_physical_ai_fpga_candidates_use_registered_ulx3s_key():
+    source = (Path(__file__).parents[1] / "main.py").read_text(encoding="utf-8")
+
+    assert '["orangecrab_ecp5_85f", "ulx3s_ecp5_45f"]' in source
+    assert '"ulx3s_45f"' not in source
+
 def test_nextpnr_terminal_failure_propagates_without_timing_closure(tmp_path, monkeypatch):
     from agents.fpga import fpga_nextpnr_place_route_agent as pnr_agent
 
@@ -609,8 +662,8 @@ def test_fpga_app_final_status_includes_implementation_unavailable():
     source = (Path(__file__).parents[1] / "main.py").read_text(encoding="utf-8")
 
     assert 'implementation_failed = bool(implementation_unavailable_reason)' in source
-    assert 'app_failed = closure_failed or implementation_failed' in source
-    assert 'final_phase = "implementation_unavailable" if implementation_failed' in source
+    assert 'app_failed = bool(gate_failure) or closure_failed or implementation_failed' in source
+    assert '"implementation_unavailable" if implementation_failed' in source
 
 
 def test_nextpnr_nexus_report_exposes_routed_utilization(tmp_path):

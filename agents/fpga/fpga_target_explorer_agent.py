@@ -15,7 +15,13 @@ from .fpga_nextpnr_place_route_agent import (
     _parse_nextpnr,
     _parse_nextpnr_report,
 )
-from .fpga_yosys_synthesis_agent import _architecture_synth_options, _yosys_help, _yosys_version
+from .fpga_yosys_synthesis_agent import (
+    _architecture_synth_options,
+    _rtl_memory_intent,
+    _yosys_cell_metrics,
+    _yosys_help,
+    _yosys_version,
+)
 
 
 CANDIDATE_BOARDS = [
@@ -134,8 +140,27 @@ def _run_synthesis(state: dict, board_key: str, board: dict, strategy: str) -> d
     core_only_ports = _make_core_only_netlist(netlist, top) if family in {"gowin", "nexus"} and result.get("ok") and os.path.exists(netlist) else []
     for artifact in (script_path, log_path, netlist if os.path.exists(netlist) else None):
         _record_file(state, board_key, f"{strategy}/synth", artifact)
+    completed = bool(result.get("ok") and os.path.exists(netlist))
+    metrics = _yosys_cell_metrics(netlist, board) if completed else {}
+    memory_intent = _rtl_memory_intent(
+        rtl_files,
+        max(1, int(state.get("fpga_block_memory_threshold_bits") or 4096)),
+    )
+    native_ram_required = bool(memory_intent.get("requires_block_ram"))
+    native_ram_supported = bool(((board.get("resources") or {}).get("block_ram_primitive")))
+    native_ram_mapped = int(metrics.get("block_ram_blocks_used") or 0) > 0
+    gate_enforced = native_ram_required and native_ram_supported
+    gate_passed = not gate_enforced or native_ram_mapped
+    status = "completed" if completed and gate_passed else "failed"
+    mapping_error = None
+    if completed and not gate_passed:
+        mapping_error = (
+            "Substantial RTL memory did not map to native "
+            f"{metrics.get('block_ram_primitive') or 'block RAM'} on this candidate."
+        )
     return {
-        "status": "completed" if result.get("ok") and os.path.exists(netlist) else "failed",
+        **metrics,
+        "status": status,
         "strategy": strategy,
         "netlist": netlist if os.path.exists(netlist) else None,
         "script": script_path,
@@ -144,7 +169,16 @@ def _run_synthesis(state: dict, board_key: str, board: dict, strategy: str) -> d
         "effective_options": options,
         "core_only_ports_removed": core_only_ports,
         "tool_version": _yosys_version(),
-        "error": None if result.get("ok") else result.get("stderr_tail") or result.get("stdout_tail"),
+        "memory_intent": memory_intent,
+        "memory_mapping_gate": {
+            "status": "pass" if gate_passed else "fail",
+            "enforced": gate_enforced,
+            "required": native_ram_required,
+            "supported": native_ram_supported,
+            "mapped": native_ram_mapped,
+            "primitive": metrics.get("block_ram_primitive"),
+        },
+        "error": mapping_error or (None if result.get("ok") else result.get("stderr_tail") or result.get("stdout_tail")),
     }
 
 

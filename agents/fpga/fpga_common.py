@@ -94,7 +94,12 @@ BOARD_REGISTRY: Dict[str, Dict[str, Any]] = {
         "constraint_format": "lpf",
         "programmer_board": "ulx3s",
         "default_frequency_mhz": 25.0,
-        "resources": {"logic_cells": 44000},
+        "resources": {
+            "logic_cells": 44000,
+            "block_ram_primitive": "DP16KD",
+            "block_ram_blocks": 108,
+            "block_ram_bits": 1_944_000,
+        },
     },
     "orangecrab_ecp5_85f": {
         "label": "Lattice OrangeCrab ECP5-85F",
@@ -108,7 +113,12 @@ BOARD_REGISTRY: Dict[str, Dict[str, Any]] = {
         "constraint_format": "lpf",
         "programmer_board": "orangeCrab",
         "default_frequency_mhz": 48.0,
-        "resources": {"logic_cells": 84000},
+        "resources": {
+            "logic_cells": 84000,
+            "block_ram_primitive": "DP16KD",
+            "block_ram_blocks": 208,
+            "block_ram_bits": 3_744_000,
+        },
     },
     "colorlight_5a_75b": {
         "label": "Lattice Colorlight 5A-75B ECP5-25F",

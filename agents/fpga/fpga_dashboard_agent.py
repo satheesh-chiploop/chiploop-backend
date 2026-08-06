@@ -39,6 +39,12 @@ def run_agent(state: dict) -> dict:
         "carry_cells": _first(synth.get("carry_cells"), (synth.get("cell_type_counts") or {}).get("SB_CARRY") if isinstance(synth.get("cell_type_counts"), dict) else None),
         "fabric_mapped_cells": synth.get("fabric_mapped_cells"),
         "total_mapped_cells": _first(synth.get("total_mapped_cells"), sum((synth.get("cell_type_counts") or {}).values()) if isinstance(synth.get("cell_type_counts"), dict) else None),
+        "block_ram_primitive": synth.get("block_ram_primitive"),
+        "block_ram_blocks_used": synth.get("block_ram_blocks_used"),
+        "block_ram_blocks_available": _first(synth.get("block_ram_blocks_available"), ((fpga.get("target") or {}).get("resources") or {}).get("block_ram_blocks")),
+        "block_ram_bits_available": _first(synth.get("block_ram_bits_available"), ((fpga.get("target") or {}).get("resources") or {}).get("block_ram_bits")),
+        "block_ram_utilization_percent": synth.get("block_ram_utilization_percent"),
+        "memory_mapping_gate": synth.get("memory_mapping_gate"),
     }
     routed_lut4 = pnr.get("routed_lut4_cells")
     routed_ff = pnr.get("routed_flip_flops")

@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import subprocess
 from functools import lru_cache
 from .fpga_common import board_config, fpga_dir, manifest_update, publish_json, run_cmd, write_json, write_text
@@ -14,14 +15,20 @@ def _architecture_synth_options(board: dict, help_text: str = "") -> list[str]:
 
 
 def _yosys_cell_metrics(json_path: str, board: dict) -> dict:
+    resources = board.get("resources") or {}
     metrics = {
         "logical_cells_used": 0,
         "flip_flops": 0,
         "combinational_cells": 0,
         "lut4_cells": 0,
         "cell_type_counts": {},
-        "logical_cells_available": (board.get("resources") or {}).get("logic_cells"),
+        "logical_cells_available": resources.get("logic_cells"),
         "logic_utilization_percent": None,
+        "block_ram_primitive": resources.get("block_ram_primitive"),
+        "block_ram_blocks_used": 0,
+        "block_ram_blocks_available": resources.get("block_ram_blocks"),
+        "block_ram_bits_available": resources.get("block_ram_bits"),
+        "block_ram_utilization_percent": None,
     }
     try:
         with open(json_path, "r", encoding="utf-8", errors="ignore") as handle:
@@ -75,6 +82,11 @@ def _yosys_cell_metrics(json_path: str, board: dict) -> dict:
         if cell_type in fabric_cell_types or cell_type.startswith("FD1P3") or cell_type.startswith("WIDEFN")
     )
     total_mapped_cells = sum(type_counts.values())
+    block_ram_primitive = str(resources.get("block_ram_primitive") or "")
+    block_ram_blocks_used = sum(
+        count for cell_type, count in type_counts.items()
+        if block_ram_primitive and cell_type.upper().endswith(block_ram_primitive.upper())
+    )
     # Yosys reports mapped primitives before packing. Keep logic-cell estimate
     # FPGA-oriented instead of counting internal/specify helper cells.
     logical_used = lut_count + ff_count
@@ -88,10 +100,55 @@ def _yosys_cell_metrics(json_path: str, board: dict) -> dict:
         "fabric_mapped_cells": fabric_cell_count,
         "total_mapped_cells": total_mapped_cells,
         "cell_type_counts": type_counts,
+        "block_ram_blocks_used": block_ram_blocks_used,
     })
     if available:
         metrics["logic_utilization_percent"] = round((logical_used / float(available)) * 100.0, 3)
+    block_ram_available = resources.get("block_ram_blocks")
+    if block_ram_available:
+        metrics["block_ram_utilization_percent"] = round(
+            (block_ram_blocks_used / float(block_ram_available)) * 100.0, 3
+        )
     return metrics
+
+
+def _constant_range_size(range_text: str) -> int | None:
+    match = re.fullmatch(r"\[\s*(\d+)\s*:\s*(\d+)\s*\]", range_text.strip())
+    if not match:
+        return None
+    return abs(int(match.group(1)) - int(match.group(2))) + 1
+
+
+def _rtl_memory_intent(rtl_files: list[str], threshold_bits: int = 4096) -> dict:
+    """Find substantial constant-size unpacked RTL arrays that should use native RAM."""
+    declarations = []
+    pattern = re.compile(
+        r"\b(?:reg|logic)\s*(\[[^\]]+\])?\s*([A-Za-z_][A-Za-z0-9_$]*)\s*(\[[^\]]+\])\s*;"
+    )
+    for path in rtl_files:
+        try:
+            source = open(path, "r", encoding="utf-8", errors="ignore").read()
+        except OSError:
+            continue
+        source = re.sub(r"/\*.*?\*/|//[^\r\n]*", "", source, flags=re.DOTALL)
+        for match in pattern.finditer(source):
+            width = _constant_range_size(match.group(1) or "[0:0]")
+            depth = _constant_range_size(match.group(3))
+            bits = width * depth if width is not None and depth is not None else None
+            declarations.append({
+                "file": os.path.abspath(path),
+                "name": match.group(2),
+                "width": width,
+                "depth": depth,
+                "bits": bits,
+                "requires_block_ram": bits is not None and bits >= threshold_bits,
+            })
+    return {
+        "threshold_bits": threshold_bits,
+        "declarations": declarations,
+        "requires_block_ram": any(item["requires_block_ram"] for item in declarations),
+        "estimated_bits": sum(item["bits"] or 0 for item in declarations),
+    }
 
 
 @lru_cache(maxsize=4)
@@ -184,6 +241,11 @@ def run_agent(state: dict) -> dict:
         "flatten_enabled": bool(state.get("fpga_yosys_flatten")),
         "tool_effort": effort_policy,
     }
+    memory_intent = _rtl_memory_intent(
+        [str(path) for path in rtl_files],
+        max(1, int(state.get("fpga_block_memory_threshold_bits") or 4096)),
+    )
+    summary["memory_intent"] = memory_intent
     if not board.get("supported", True):
         summary["error"] = board.get("unsupported_reason") or "Selected FPGA target is unavailable."
         publish_json(state, agent, "synth", "fpga_synthesis_summary.json", summary)
@@ -208,6 +270,24 @@ def run_agent(state: dict) -> dict:
     summary.update({"status": "completed" if result["ok"] and os.path.exists(json_path) else "failed", "command": result})
     if os.path.exists(json_path):
         summary.update(_yosys_cell_metrics(json_path, board))
+    native_ram_required = bool(memory_intent.get("requires_block_ram"))
+    native_ram_supported = bool(((board.get("resources") or {}).get("block_ram_primitive")))
+    native_ram_mapped = int(summary.get("block_ram_blocks_used") or 0) > 0
+    native_ram_gate_enforced = native_ram_required and native_ram_supported
+    summary["memory_mapping_gate"] = {
+        "status": "pass" if not native_ram_gate_enforced or native_ram_mapped else "fail",
+        "enforced": native_ram_gate_enforced,
+        "required": native_ram_required,
+        "supported": native_ram_supported,
+        "mapped": native_ram_mapped,
+        "primitive": summary.get("block_ram_primitive"),
+    }
+    if summary["status"] == "completed" and summary["memory_mapping_gate"]["status"] == "fail":
+        summary["status"] = "failed"
+        summary["error"] = (
+            "RTL contains substantial memory arrays, but synthesis did not map them to the "
+            f"selected board's native {summary.get('block_ram_primitive') or 'block RAM'} primitive."
+        )
     if not os.path.exists(json_path):
         summary["error"] = "Yosys did not produce the FPGA JSON netlist."
     publish_json(state, agent, "synth", "fpga_synthesis_summary.json", summary)

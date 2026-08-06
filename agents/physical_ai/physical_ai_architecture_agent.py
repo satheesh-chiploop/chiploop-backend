@@ -34,6 +34,15 @@ Create the hardware architecture around the selected physics model. The physics/
 Use only the supplied requirements, model interface, and execution evidence. If inference_status is not_executed, do not invent predictions.
 Return JSON only with keys: product_name, product_summary, architecture_decisions, blocks, interfaces, safety_requirements, rtl_spec_text, verification_goals.
 rtl_spec_text must be a detailed synthesizable digital-IP requirement suitable for an Arch2RTL workflow.
+For FPGA or ASIC implementation, the RTL top level MUST use a compact implementation-friendly interface:
+- Do not expose tensors, geometry arrays, flow fields, or surrogate-model payloads as thousands of individual top-level pins.
+- Use a bounded streaming data bus no wider than 128 bits with valid/ready, or an address/data register-memory window no wider than 64 bits.
+- For a Sky130 ASIC path, payload storage MUST instantiate only the backend-supported hard macro `sky130_sram_1kbyte_1rw1r_32x256_8` using ports `clk0`, `csb0`, `web0`, `wmask0[3:0]`, `addr0[7:0]`, `din0[31:0]`, and `dout0[31:0]`. Bank multiple instances when more capacity is required.
+- Do not infer ASIC payload memory with `reg [...] mem [...]`, generic SRAM modules, inferred BRAM, or payload FIFOs implemented as flip-flop/register arrays. Small control/status registers, pointers, and FSM state are allowed; bulk payload storage is not.
+- Require the Sky130 macro's behavioral Verilog, Liberty, LEF, GDS, and SPICE collateral before ASIC implementation. If complete collateral is unavailable, stop at the memory-collateral gate rather than silently mapping storage into standard-cell registers.
+- For an FPGA-only path, use the platform's BRAM abstraction instead of a Sky130 macro; never send a Sky130 hard macro into FPGA synthesis.
+- Keep the estimated top-level scalar-equivalent I/O count below 256 unless the requirements explicitly demand a wider physical package.
+- The pretrained surrogate executes in software/GPU; RTL implements request/response transport, buffering, validation, safety, timeout, and actuator command handling rather than the full surrogate tensor interface.
 
 REQUIREMENTS:
 {json.dumps(requirements, indent=2)}
