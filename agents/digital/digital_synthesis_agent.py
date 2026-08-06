@@ -951,6 +951,72 @@ def _write_local(path: str, content: str) -> None:
     with open(path, "w", encoding="utf-8") as f:
         f.write(content)
 
+
+def _is_constant_reset_rhs(rhs: str) -> bool:
+    value = re.sub(r"\s+", "", str(rhs or ""))
+    return bool(re.fullmatch(r"(?:\d+)?'[sS]?[bBoOdDhH][0-9a-fA-FxXzZ?_]+|\d+", value))
+
+
+def _normalize_nonconstant_async_resets(path: str) -> list[str]:
+    """Make technology-unmappable async data loads synchronous in the staged ASIC RTL.
+
+    Sky130 has async set/reset flops, but cannot implement a flop whose asynchronous
+    reset value comes from another data signal. Yosys represents that construct as
+    $_ALDFF_*, which OpenLane correctly rejects as unmapped. The source/handoff RTL
+    remains untouched; only the synthesis-stage copy is normalized and recorded.
+    """
+    text = Path(path).read_text(encoding="utf-8")
+    lines = text.splitlines()
+    repairs: list[str] = []
+    always_re = re.compile(
+        r"\balways\s*@\s*\(\s*((?:pos|neg)edge\s+[A-Za-z_]\w*)\s+or\s+"
+        r"((?:pos|neg)edge\s+([A-Za-z_]\w*))\s*\)",
+        re.IGNORECASE,
+    )
+    i = 0
+    while i < len(lines):
+        match = always_re.search(lines[i])
+        if not match:
+            i += 1
+            continue
+        depth = 0
+        started = False
+        end = i
+        for end in range(i, len(lines)):
+            begins = len(re.findall(r"\bbegin\b", lines[end]))
+            ends = len(re.findall(r"\bend\b", lines[end]))
+            if begins:
+                started = True
+            depth += begins - ends
+            if started and depth <= 0:
+                break
+        block = "\n".join(lines[i:end + 1])
+        reset_name = match.group(3)
+        reset_if = re.search(
+            rf"\bif\s*\(\s*(?:!\s*{re.escape(reset_name)}|~\s*{re.escape(reset_name)}|"
+            rf"{re.escape(reset_name)}\s*==\s*1'b[01])\s*\)\s*begin(?P<body>.*?)\bend\s+else\b",
+            block,
+            re.IGNORECASE | re.DOTALL,
+        )
+        dynamic_targets: list[str] = []
+        if reset_if:
+            for lhs, rhs in re.findall(
+                r"\b([A-Za-z_]\w*(?:\s*\[[^\]]+\])?)\s*<=\s*([^;]+);",
+                reset_if.group("body"),
+            ):
+                if not _is_constant_reset_rhs(rhs):
+                    dynamic_targets.append(re.sub(r"\s+", "", lhs))
+        if dynamic_targets:
+            lines[i] = always_re.sub(f"always @({match.group(1)})", lines[i], count=1)
+            repairs.append(
+                "normalized_nonconstant_async_reset_to_synchronous:"
+                + ",".join(sorted(set(dynamic_targets)))
+            )
+        i = end + 1
+    if repairs:
+        Path(path).write_text("\n".join(lines) + ("\n" if text.endswith("\n") else ""), encoding="utf-8")
+    return repairs
+
 def _closure_bool(state: dict, closure: dict, key: str, default: bool = False) -> bool:
     toggles = state.get("toggles") if isinstance(state.get("toggles"), dict) else {}
     value = closure.get(key)
@@ -1213,6 +1279,9 @@ def run_agent(state: dict) -> dict:
         repairs = _repair_common_status_tieoffs(dst)
         if repairs:
             rtl_repairs[os.path.basename(dst)] = repairs
+        async_reset_repairs = _normalize_nonconstant_async_resets(dst)
+        if async_reset_repairs:
+            rtl_repairs.setdefault(os.path.basename(dst), []).extend(async_reset_repairs)
         copied.append(dst)
 
     inferred_memory_arrays = _large_inferred_memory_arrays(copied)

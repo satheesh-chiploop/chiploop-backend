@@ -4325,7 +4325,7 @@ def execute_digital_app_background(
         # Normalize spec fields (Arch2RTL agents often expect state["spec"])
         if shared_state.get("spec_text"):
             shared_state["spec"] = shared_state["spec_text"]
-        if app_name in {"verify", "fpga_verify", "fpga", "fpga2rtl"}:
+        if app_name in {"verify", "arch2synthesis", "arch2tapeout", "fpga_verify", "fpga", "fpga2rtl"}:
             shared_state["_fail_fast_on_agent_error"] = True
         if app_loop_type == "fpga":
             shared_state["_fail_fast_on_agent_error"] = True

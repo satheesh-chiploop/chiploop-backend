@@ -9,6 +9,43 @@ os.environ.setdefault("OPENAI_API_KEY", "test-openai-key")
 from agents.digital import digital_synthesis_agent as agent
 
 
+def test_normalizes_nonconstant_async_reset_for_sky130_mapping(tmp_path):
+    rtl = tmp_path / "safe_fallback_manager.v"
+    rtl.write_text(
+        """
+module safe_fallback_manager(input clk, input reset_n, input [31:0] safe_cmd, output reg [31:0] selected);
+always @(posedge clk or negedge reset_n) begin
+  if (!reset_n) begin
+    selected <= safe_cmd;
+  end else begin
+    selected <= 32'h0;
+  end
+end
+endmodule
+""",
+        encoding="utf-8",
+    )
+
+    repairs = agent._normalize_nonconstant_async_resets(str(rtl))
+    text = rtl.read_text(encoding="utf-8")
+
+    assert repairs == ["normalized_nonconstant_async_reset_to_synchronous:selected"]
+    assert "always @(posedge clk)" in text
+    assert "or negedge reset_n" not in text
+    assert "selected <= safe_cmd;" in text
+
+
+def test_keeps_constant_async_reset_unchanged(tmp_path):
+    rtl = tmp_path / "ordinary_flop.v"
+    original = "always @(posedge clk or negedge reset_n) begin\n  if (!reset_n) begin\n    q <= 1'b0;\n  end else begin\n    q <= d;\n  end\nend\n"
+    rtl.write_text(original, encoding="utf-8")
+
+    repairs = agent._normalize_nonconstant_async_resets(str(rtl))
+
+    assert repairs == []
+    assert rtl.read_text(encoding="utf-8") == original
+
+
 def test_repair_common_status_tieoffs_adds_safe_assignments(tmp_path):
     rtl = tmp_path / "top.v"
     rtl.write_text(
