@@ -24,6 +24,24 @@ def test_rtl_completion_retries_one_empty_provider_response(monkeypatch):
     assert len(calls) == 2
 
 
+def test_storage_gate_ignores_optional_or_prohibited_fifo_language():
+    spec = {
+        "design_name": "small_control_ip",
+        "_source_spec_text": (
+            "Optional response payload buffering may use a FIFO only if necessary. "
+            "Do not infer payload storage as flip-flop FIFOs. DMA is remote, not on-chip."
+        ),
+    }
+
+    assert agent._minimum_expected_flops(spec, "flat") == 0
+
+
+def test_storage_gate_keeps_explicit_register_bit_target():
+    spec = {"design_name": "stateful_ip", "requirements": "Target 128 register bits."}
+
+    assert agent._minimum_expected_flops(spec, "flat") == 64
+
+
 def test_module_code_for_name_extracts_top_when_file_contains_children():
     code = """
 module register_file(

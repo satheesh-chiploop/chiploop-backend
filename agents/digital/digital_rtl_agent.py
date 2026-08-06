@@ -1185,14 +1185,11 @@ def _minimum_expected_flops(spec_json: dict, mode: str) -> int:
         val = int(m.group(1).replace(",", ""))
         if val >= 64:
             targets.append(max(1, int(val * 0.50)))
-    if "fifo" in text:
-        depths = [int(x) for x in re.findall(r"(?:fifo depth|depth is|depth)\D{0,20}(\d+)", text)]
-        if depths:
-            targets.append(max(depths) * 8)
-        else:
-            targets.append(64)
-    if "line buffer" in text or "histogram" in text or "dma" in text:
-        targets.append(512)
+    # Do not infer a storage quota from feature words alone. Requirements often
+    # say "optional FIFO", "do not infer FIFO", or describe remote DMA/model
+    # interfaces. Those phrases are not an executable register-count contract.
+    # Explicit numeric flip-flop/register-bit targets above remain enforceable;
+    # memories and hard macros have their own implementation collateral gates.
     return max(targets) if targets else 0
 
 
