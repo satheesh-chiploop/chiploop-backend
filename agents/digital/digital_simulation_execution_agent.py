@@ -581,6 +581,13 @@ def run_agent(state: dict) -> dict:
         state["simulation_execution_summary_json"] = summary_path
         state["simulation_execution_report_json"] = report_path
         state["code_coverage_summary_json"] = code_coverage_path
+        state["verification_quality_gate"] = {
+            "passed": summary["pass"] > 0 and summary["fail"] == 0,
+            "total": summary["total"],
+            "pass": summary["pass"],
+            "fail": summary["fail"],
+            "simulator": summary["toolchain"].get("simulator"),
+        }
         state.setdefault("vv", {})
         state["vv"]["simulation_execution"] = report
 

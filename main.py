@@ -4053,6 +4053,9 @@ def _digital_app_gate_failure(app_name: str, state: Dict[str, Any], artifact_dir
         "verify",
         "arch2synthesis",
         "arch2tapeout",
+        "fpga_target_explorer",
+        "fpga_bitstream",
+        "fpga",
     }
     if root.name.lower() in stage_directory_names:
         search_roots.append(root.parent)
@@ -4156,6 +4159,28 @@ def _digital_app_gate_failure(app_name: str, state: Dict[str, Any], artifact_dir
                 return "RTL generation did not produce successful lint/compile evidence"
 
     if app_name == "verify":
+        state_gate = state.get("verification_quality_gate")
+        if isinstance(state_gate, dict):
+            failed = int(state_gate.get("fail") or 0)
+            passed = int(state_gate.get("pass") or 0)
+            gate_passed = state_gate.get("passed") is True and failed == 0 and passed > 0
+            if gate_passed:
+                return None
+            return f"verification failed ({passed} passed, {failed} failed)"
+
+        # Compatibility with verification agents deployed before the explicit
+        # quality-gate contract. The report remains in shared execution state
+        # even when the runner's stage subdirectory differs from the workflow
+        # artifact root.
+        vv_state = state.get("vv") if isinstance(state.get("vv"), dict) else {}
+        execution_report = vv_state.get("simulation_execution") if isinstance(vv_state.get("simulation_execution"), dict) else {}
+        if execution_report:
+            failed = int(execution_report.get("fail") or 0)
+            passed = int(execution_report.get("pass") or 0)
+            if failed == 0 and passed > 0:
+                return None
+            return f"verification failed ({passed} passed, {failed} failed)"
+
         summary = load_named("simulation_execution_summary.json")
         if not summary:
             return "verification did not produce a simulation execution summary"
@@ -4173,6 +4198,49 @@ def _digital_app_gate_failure(app_name: str, state: Dict[str, Any], artifact_dir
             return f"synthesis did not pass (status={synth_status or 'missing'})"
         if not (synth.get("netlist") or (summary.get("outputs") or {}).get("netlist")):
             return "synthesis did not produce a netlist"
+        if app_name == "arch2synthesis":
+            # The explicit synthesis result is authoritative; do not let a
+            # later informational agent status override it.
+            return None
+
+        tapeout = (state.get("digital") or {}).get("tapeout") if isinstance(state.get("digital"), dict) else {}
+        tapeout = tapeout if isinstance(tapeout, dict) else {}
+        tapeout_summary = load_named("tapeout_summary.json")
+        tapeout_status = str(tapeout.get("status") or tapeout_summary.get("status") or "").lower()
+        gds_produced = bool(
+            tapeout.get("gds_klayout")
+            or tapeout.get("gds_magic")
+            or (tapeout_summary.get("outputs") or {}).get("klayout_gds")
+            or (tapeout_summary.get("outputs") or {}).get("magic_gds")
+        )
+        if tapeout_status not in {"ok", "pass", "passed", "success", "completed"}:
+            return f"tapeout did not pass (status={tapeout_status or 'missing'})"
+        if not gds_produced:
+            return "tapeout did not produce GDS"
+        return None
+
+    if app_name == "fpga_target_explorer":
+        explorer = state.get("fpga_target_explorer") if isinstance(state.get("fpga_target_explorer"), dict) else {}
+        if not explorer:
+            explorer = load_named("fpga_target_explorer.json")
+        explorer_status = str(explorer.get("status") or "").lower()
+        selected_board = explorer.get("selected_recommendation")
+        if explorer_status != "completed":
+            return f"FPGA target exploration did not complete (status={explorer_status or 'missing'})"
+        if not selected_board:
+            return "FPGA target exploration did not select a viable board"
+        return None
+
+    if app_name in {"fpga", "fpga2rtl", "fpga_implementation"} and bool(state.get("generate_bitstream")):
+        fpga_state = state.get("fpga") if isinstance(state.get("fpga"), dict) else {}
+        bitstream = fpga_state.get("bitstream") if isinstance(fpga_state.get("bitstream"), dict) else {}
+        if not bitstream:
+            bitstream = load_named("fpga_bitstream_summary.json")
+        bitstream_status = str(bitstream.get("status") or "").lower()
+        produced = bitstream.get("artifact_produced") is True and bool(bitstream.get("bitstream"))
+        if bitstream_status != "completed" or not produced:
+            return f"FPGA bitstream was not produced (status={bitstream_status or 'missing'})"
+        return None
 
     status_text = str(state.get("status") or "").lower()
     if any(token in status_text for token in ("❌", " failed", ":failed", "error")):
@@ -7048,7 +7116,12 @@ def _hem_continue_physical_ai_after_success(*, root_workflow_id: str, root_run_i
             automation_payload["from_workflow_id"] = child_workflow_id
             append_log_workflow(root_workflow_id, f"HEM will use generated RTL workflow {child_workflow_id} for verification and implementation.", phase="hem_running")
         if stage == "fpga_exploration":
+            # FPGA agents publish beneath the workflow root, while the runner
+            # receives a stage subdirectory. Search the exact workflow root as
+            # well so the selected board reaches the bitstream stage.
             explorer_files = list(Path(child_artifact_dir).rglob("fpga_target_explorer.json"))
+            explorer_files.extend(Path(base_dir).rglob("fpga_target_explorer.json"))
+            explorer_files = list(dict.fromkeys(explorer_files))
             if explorer_files:
                 try:
                     explorer = json.loads(explorer_files[-1].read_text(encoding="utf-8"))

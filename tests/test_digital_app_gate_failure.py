@@ -104,3 +104,87 @@ def test_arch2rtl_gate_blocks_explicit_lint_failure(tmp_path):
         },
     }
     assert "lint=fail" in gate("arch2rtl", state, str(tmp_path / "arch2rtl"))
+
+
+def test_verify_gate_uses_explicit_simulation_result(tmp_path):
+    gate = _load_gate()
+    state = {
+        "verification_quality_gate": {
+            "passed": True,
+            "total": 8,
+            "pass": 8,
+            "fail": 0,
+            "simulator": "verilator",
+        }
+    }
+    assert gate("verify", state, str(tmp_path / "verify")) is None
+
+
+def test_verify_gate_uses_legacy_shared_execution_report(tmp_path):
+    gate = _load_gate()
+    state = {"vv": {"simulation_execution": {"pass": 8, "fail": 0}}}
+    assert gate("verify", state, str(tmp_path / "verify")) is None
+
+
+def test_verify_gate_blocks_explicit_simulation_failure(tmp_path):
+    gate = _load_gate()
+    state = {
+        "verification_quality_gate": {
+            "passed": False,
+            "total": 8,
+            "pass": 7,
+            "fail": 1,
+        }
+    }
+    assert gate("verify", state, str(tmp_path / "verify")) == "verification failed (7 passed, 1 failed)"
+
+
+def test_fpga_explorer_gate_requires_selected_board(tmp_path):
+    gate = _load_gate()
+    passing = {
+        "fpga_target_explorer": {
+            "status": "completed",
+            "selected_recommendation": "orangecrab_ecp5_85f",
+        }
+    }
+    assert gate("fpga_target_explorer", passing, str(tmp_path / "fpga_target_explorer")) is None
+
+    missing_board = {"fpga_target_explorer": {"status": "completed", "selected_recommendation": None}}
+    assert "did not select" in gate("fpga_target_explorer", missing_board, str(tmp_path / "fpga_target_explorer"))
+
+
+def test_fpga_bitstream_gate_requires_real_artifact(tmp_path):
+    gate = _load_gate()
+    passing = {
+        "generate_bitstream": True,
+        "fpga": {
+            "bitstream": {
+                "status": "completed",
+                "artifact_produced": True,
+                "bitstream": "/workflow/fpga/bitstream/design.bit",
+            }
+        },
+    }
+    assert gate("fpga", passing, str(tmp_path / "fpga_bitstream")) is None
+
+    missing = {"generate_bitstream": True, "fpga": {"bitstream": {"status": "failed"}}}
+    assert "was not produced" in gate("fpga", missing, str(tmp_path / "fpga_bitstream"))
+
+
+def test_tapeout_gate_requires_explicit_gds_result(tmp_path):
+    gate = _load_gate()
+    passing = {
+        "digital": {
+            "synth": {"status": "ok", "netlist": "/workflow/netlist.v"},
+            "tapeout": {"status": "ok", "gds_klayout": "/workflow/design.gds"},
+        }
+    }
+    assert gate("arch2tapeout", passing, str(tmp_path / "arch2tapeout")) is None
+
+    missing_gds = {
+        "digital": {
+            "synth": {"status": "ok", "netlist": "/workflow/netlist.v"},
+            "tapeout": {"status": "ok"},
+        }
+    }
+    assert gate("arch2tapeout", missing_gds, str(tmp_path / "arch2tapeout")) == "tapeout did not produce GDS"
