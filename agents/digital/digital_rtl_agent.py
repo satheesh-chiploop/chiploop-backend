@@ -1025,7 +1025,10 @@ def _sanitize_child_output_instance_connections(verilog_map: Dict[str, str]) -> 
                 elif parent_info and parent_info.get("direction") == "input":
                     new_sig = f"{sig}_from_{inst}"
                     wire_updates[new_sig] = child_width
-                elif sig_width != child_width and sig.endswith("_unused"):
+                elif not parent_info and sig in signal_widths and sig_width != child_width:
+                    # Internal structural nets inherit the width of their
+                    # child output driver. This corrects scalar-by-default
+                    # declarations without an LLM repair or prompt change.
                     new_sig = sig
                     wire_updates[new_sig] = child_width
                 else:

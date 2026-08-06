@@ -471,6 +471,28 @@ endmodule
     assert ".dout(mem_dout_unused)" in out
 
 
+def test_sanitize_child_output_resizes_internal_structural_wire():
+    code = """
+module top(input clk);
+  wire clamped_value;
+  clamp u_clamp(.clk(clk), .clamped_value(clamped_value));
+  fallback u_fallback(.clk(clk), .clamped_value(clamped_value));
+endmodule
+
+module clamp(input clk, output [15:0] clamped_value);
+  assign clamped_value = 16'h0000;
+endmodule
+
+module fallback(input clk, input [15:0] clamped_value);
+endmodule
+"""
+
+    out = agent._sanitize_child_output_instance_connections({"top.v": code})["top.v"]
+
+    assert "wire [15:0] clamped_value;" in out
+    assert ".clamped_value(clamped_value)" in out
+
+
 def test_sanitize_child_output_reroutes_duplicate_child_drivers_semantically():
     code = """
 module top(output sample_req, output alert_irq, output alert_status);
