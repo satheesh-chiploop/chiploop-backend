@@ -957,6 +957,21 @@ def _sanitize_child_output_instance_connections(verilog_map: Dict[str, str]) -> 
         duplicate_output_drivers: Dict[tuple[str, str, str], str] = {}
         drivers_by_sig: Dict[str, list[dict]] = {}
 
+        def has_parent_driver(sig: str, instance_start: int, instance_end: int) -> bool:
+            # A child output is already a structural driver. If the parent also
+            # assigns the connected net, Verilator reports BLKANDNBLK or
+            # MULTIDRIVEN. Keep the explicit parent data path and move the
+            # redundant child output to an isolated observation wire.
+            module_start = text.rfind("module", 0, instance_start)
+            module_end = text.find("endmodule", instance_end)
+            parent_text = text[module_start : module_end if module_end >= 0 else len(text)]
+            escaped = re.escape(sig)
+            if re.search(rf"^\s*assign\s+{escaped}(?:\s*\[[^\]]+\])?\s*=", parent_text, flags=re.MULTILINE):
+                return True
+            if re.search(rf"^\s*{escaped}(?:\s*\[[^\]]+\])?\s*(?:<=|=(?!=))", parent_text, flags=re.MULTILINE):
+                return True
+            return False
+
         for match in inst_re.finditer(text):
             cell = match.group("cell")
             inst = match.group("inst")
@@ -1019,7 +1034,10 @@ def _sanitize_child_output_instance_connections(verilog_map: Dict[str, str]) -> 
                 parent_info = parent_ports.get(sig)
                 sig_width = int(signal_widths.get(sig, 1))
                 duplicate_unused = duplicate_output_drivers.get((cell, inst, port))
-                if duplicate_unused:
+                if has_parent_driver(sig, match.start(), match.end()):
+                    new_sig = f"{sig}_unused_from_{inst}_{port}"
+                    wire_updates[new_sig] = child_width
+                elif duplicate_unused:
                     new_sig = duplicate_unused
                     wire_updates[new_sig] = child_width
                 elif parent_info and parent_info.get("direction") == "input":

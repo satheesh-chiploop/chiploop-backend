@@ -511,6 +511,30 @@ endmodule
     assert ".clamped_value(clamped_value)" in out
 
 
+def test_sanitize_child_output_reroutes_net_already_driven_by_parent_assign():
+    code = """
+module top(input fallback_source, output fallback_status);
+  wire fallback_status_i;
+  assign fallback_status_i = fallback_source;
+  safety_logic u_safety_logic(
+    .fallback_active(fallback_status_i)
+  );
+  assign fallback_status = fallback_status_i;
+endmodule
+
+module safety_logic(output fallback_active);
+  reg fallback_active;
+  always @(*) fallback_active = 1'b1;
+endmodule
+"""
+
+    out = agent._sanitize_child_output_instance_connections({"top.v": code})["top.v"]
+
+    assert "wire fallback_status_i_unused_from_u_safety_logic_fallback_active;" in out
+    assert ".fallback_active(fallback_status_i_unused_from_u_safety_logic_fallback_active)" in out
+    assert "assign fallback_status_i = fallback_source;" in out
+
+
 def test_sanitize_child_output_reroutes_duplicate_child_drivers_semantically():
     code = """
 module top(output sample_req, output alert_irq, output alert_status);
