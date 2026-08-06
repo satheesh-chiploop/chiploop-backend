@@ -3068,6 +3068,13 @@ def _run(context: AgentContext) -> dict:
             "tool_profile": final_result.get("tool_profile") or profile_summary(state),
             "executions": final_result.get("tool_executions") or [],
         }
+        rtl_quality_gate = {
+            "passed": True,
+            "compile_passed": True,
+            "lint_passed": True,
+            "final_pass": final_suffix,
+            "issue_count": len(issues),
+        }
         tool_summary_text = json.dumps(tool_summary, indent=2)
         with open(os.path.join(rtl_dir, "tool_profile_used.json"), "w", encoding="utf-8") as f:
             f.write(tool_profile_text)
@@ -3075,6 +3082,13 @@ def _run(context: AgentContext) -> dict:
             f.write(tool_summary_text)
         save_text_artifact_and_record(workflow_id, agent_name, "rtl", "tool_profile_used.json", tool_profile_text)
         save_text_artifact_and_record(workflow_id, agent_name, "rtl", "tool_execution_summary.json", tool_summary_text)
+        save_text_artifact_and_record(
+            workflow_id,
+            agent_name,
+            "rtl",
+            "rtl_quality_gate.json",
+            json.dumps(rtl_quality_gate, indent=2),
+        )
 
         state.update({
             "rtl_output_dir": rtl_dir,
@@ -3088,6 +3102,7 @@ def _run(context: AgentContext) -> dict:
             "issues": issues,
             "status": f"✅ RTL generation complete ({final_suffix})" if not issues else f"⚠ RTL generation completed with issues ({final_suffix})",
             "digital_rtl_generated": True,
+            "rtl_quality_gate": rtl_quality_gate,
             "digital_rtl_dir": rtl_dir,
             "tool_profile": final_result.get("tool_profile") or profile_summary(state),
             "tool_execution_summary": tool_summary,

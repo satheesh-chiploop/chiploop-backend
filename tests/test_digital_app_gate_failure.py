@@ -77,3 +77,30 @@ def test_arch2rtl_gate_finds_outputs_at_workflow_root(tmp_path):
 
     gate = _load_gate()
     assert gate("arch2rtl", {"status": "Spec2RTL conformance partial"}, str(execution_dir)) is None
+
+
+def test_arch2rtl_gate_prefers_explicit_execution_state(tmp_path):
+    gate = _load_gate()
+    state = {
+        "status": "Spec2RTL conformance partial",
+        "rtl_quality_gate": {
+            "passed": True,
+            "compile_passed": True,
+            "lint_passed": True,
+            "final_pass": "pass2",
+        },
+    }
+    assert gate("arch2rtl", state, str(tmp_path / "arch2rtl")) is None
+
+
+def test_arch2rtl_gate_blocks_explicit_lint_failure(tmp_path):
+    gate = _load_gate()
+    state = {
+        "rtl_quality_gate": {
+            "passed": False,
+            "compile_passed": True,
+            "lint_passed": False,
+            "final_pass": "pass2",
+        },
+    }
+    assert "lint=fail" in gate("arch2rtl", state, str(tmp_path / "arch2rtl"))

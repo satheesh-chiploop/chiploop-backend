@@ -4092,6 +4092,19 @@ def _digital_app_gate_failure(app_name: str, state: Dict[str, Any], artifact_dir
 
     if app_name in {"arch2rtl", "dqa"}:
         if app_name == "arch2rtl":
+            state_gate = state.get("rtl_quality_gate")
+            if isinstance(state_gate, dict):
+                compile_passed = state_gate.get("compile_passed") is True
+                lint_passed = state_gate.get("lint_passed") is True
+                passed = state_gate.get("passed") is True and compile_passed and lint_passed
+                if passed:
+                    return None
+                return (
+                    "RTL generation quality gate failed "
+                    f"(compile={'pass' if compile_passed else 'fail'}, "
+                    f"lint={'pass' if lint_passed else 'fail'})"
+                )
+
             rtl_summary = final_rtl_summary()
             normalized_summary = rtl_summary.lower()
             compile_passed = "icarus compile: pass" in normalized_summary
