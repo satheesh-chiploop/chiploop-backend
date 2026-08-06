@@ -9,6 +9,7 @@ logger = logging.getLogger("chiploop")
 
 from utils.artifact_utils import save_text_artifact_and_record
 from .clock_intent import build_clock_intent, normalize_clock_constraints, sdc_from_clock_intent
+from .digital_floorplan_sizing import implementation_die_area
 
 AGENT_NAME = "Digital Implementation Setup Agent"
 
@@ -371,6 +372,7 @@ def run_agent(state: dict) -> dict:
         corners_path = os.path.join(stage_dir, "corners.json")
         _write_text(corners_path, json.dumps(corners_json, indent=2))
 
+        die_area, top_level_io_bits, die_side_um = implementation_die_area(rtl_files, top_module)
         openlane_cfg = {
             "DESIGN_NAME": top_module,
             "PDK": profile.get("pdk") or "sky130A",
@@ -384,7 +386,9 @@ def run_agent(state: dict) -> dict:
             "CHIPLOOP_UPSTREAM_SDC_SOURCE": sdc_source,
             "FP_CORE_UTIL": 20,
             "PL_TARGET_DENSITY": 0.25,
-            "DIE_AREA": "0 0 120 120",
+            "DIE_AREA": die_area,
+            "CHIPLOOP_TOP_LEVEL_IO_BITS": top_level_io_bits,
+            "CHIPLOOP_DIE_SIDE_UM": die_side_um,
         }
 
         cfg_path = os.path.join(openlane_dir, "config.json")
@@ -397,6 +401,8 @@ def run_agent(state: dict) -> dict:
             f"profile_path={profile_path}",
             f"spec_json={spec_json_path}",
             f"top_module={top_module}",
+            f"top_level_io_bits={top_level_io_bits}",
+            f"die_area={die_area}",
             f"rtl_count={len(rtl_files)}",
             f"clock_port={clk_name}",
             f"reset_name={reset_name}",

@@ -6961,10 +6961,24 @@ def _hem_physical_ai_child_payload(root_workflow_id: str, root_run_id: str, payl
         "hem_root_run_id": root_run_id,
     }
     if stage == "arch2rtl":
+        implementation_path = str(payload.get("implementation_path") or "fpga_prototype")
+        memory_contract = (
+            "\nASIC MEMORY CONTRACT (mandatory): instantiate sky130_sram_1kbyte_1rw1r_32x256_8 for bulk "
+            "payload/history/FIFO storage using clk0, csb0, web0, wmask0[3:0], addr0[7:0], din0[31:0], "
+            "and dout0[31:0]. Do not expand payload, history, FIFO, or telemetry storage into individually "
+            "named registers, flip-flop arrays, or inferred memories. Small control/status registers are allowed."
+            if implementation_path in {"digital_ip_asic", "fpga_then_asic"}
+            else "\nFPGA MEMORY CONTRACT (mandatory): describe bulk payload/history/FIFO storage through a technology-neutral memory wrapper that the FPGA flow can map to native block RAM; do not flatten it into registers."
+        )
+        base_spec = str(payload.get("rtl_spec_text") or payload.get("objective") or "Generate the Physical AI support digital IP.")
         return {
             **common_digital,
-            "spec_text": str(payload.get("rtl_spec_text") or payload.get("objective") or "Generate the Physical AI support digital IP."),
-            "top_module": payload.get("top_module"),
+            "spec_text": (
+                "The required synthesizable top module is motor_control_top. Do not substitute a status, telemetry, "
+                "register-bank, or leaf module as the design top. The top must retain the motor-control request/response, "
+                "safety, timeout, and actuator-command behavior.\n" + base_spec + memory_contract
+            ),
+            "top_module": str(payload.get("top_module") or "motor_control_top"),
             "design_language": "SystemVerilog",
             "toggles": {"run_spec2rtl_check": True},
         }
@@ -6984,6 +6998,7 @@ def _hem_physical_ai_child_payload(root_workflow_id: str, root_run_id: str, payl
             "rtl_source_mode": "from_arch2rtl",
             "from_workflow_id": source_arch2rtl,
             "source_arch2rtl_workflow_id": source_arch2rtl,
+            "top_module": str(payload.get("top_module") or "motor_control_top"),
             "foundry": payload.get("foundry") or "sky130",
             "pdk": payload.get("pdk") or "sky130A",
             "toolchain": payload.get("toolchain") or "openlane2",

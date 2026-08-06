@@ -300,6 +300,29 @@ def _large_inferred_memory_arrays(rtl_files: list[str], min_bits: int = 1024) ->
     return memories
 
 
+def _suspicious_flat_storage_registers(rtl_files: list[str], min_total_bits: int = 1024) -> list[dict[str, object]]:
+    """Detect bulk memory-like storage emitted as individually named registers."""
+    suspicious: list[dict[str, object]] = []
+    declaration = re.compile(
+        r"\b(?:reg|logic)\s*(?P<width>\[[^\]]+\])?\s+(?P<name>[A-Za-z_][A-Za-z0-9_$]*)\s*;"
+    )
+    storage_name = re.compile(r"(?:mem|memory|fifo|buffer|payload|history|store)", re.IGNORECASE)
+    for path in rtl_files or []:
+        text = _read_text(path)
+        for item in declaration.finditer(text):
+            name = item.group("name")
+            if not storage_name.search(name):
+                continue
+            suspicious.append({
+                "file": os.path.basename(path),
+                "path": path,
+                "register": name,
+                "estimated_bits": _range_width(item.group("width")),
+            })
+    total = sum(int(item["estimated_bits"]) for item in suspicious)
+    return suspicious if total >= min_total_bits else []
+
+
 def _read_verilog_module_ports(path: str, module_name: str) -> dict[str, str]:
     text = _read_text(path)
     match = re.search(
@@ -411,6 +434,29 @@ def _sram_collateral_rank(path: str) -> tuple[int, int, int, str]:
     return (tt, voltage, temp, base)
 
 
+def _instantiated_sram_requirements(rtl_files: list[str]) -> list[dict[str, object]]:
+    requirements: list[dict[str, object]] = []
+    seen: set[str] = set()
+    pattern = re.compile(r"\b(sky130_sram_[A-Za-z0-9_$]+)\s+[A-Za-z_][A-Za-z0-9_$]*\s*\(")
+    for path in rtl_files or []:
+        text = _read_text(path)
+        for match in pattern.finditer(text):
+            macro_name = match.group(1)
+            if macro_name in seen:
+                continue
+            seen.add(macro_name)
+            width, depth = _sram_geometry_from_name(macro_name)
+            requirements.append({
+                "file": os.path.basename(path),
+                "path": path,
+                "macro_name_requested": macro_name,
+                "width_bits": width,
+                "depth": depth,
+                "estimated_bits": (width * depth) if width and depth else None,
+            })
+    return requirements
+
+
 def _discover_pdk_sram_collateral(state: dict, workflow_dir: str, memories: list[dict[str, object]]) -> list[dict[str, object]]:
     if not memories:
         return []
@@ -427,10 +473,13 @@ def _discover_pdk_sram_collateral(state: dict, workflow_dir: str, memories: list
     for mem in memories:
         width = int(mem.get("width_bits") or 0)
         depth = int(mem.get("depth") or 0)
+        requested_macro = str(mem.get("macro_name_requested") or "")
         matched_libs = []
         for lib in lib_files:
             lw, ld = _sram_geometry_from_name(os.path.basename(lib))
-            if lw == width and ld == depth:
+            if requested_macro and requested_macro.lower() in os.path.basename(lib).lower():
+                matched_libs.append(lib)
+            elif not requested_macro and lw == width and ld == depth:
                 matched_libs.append(lib)
         if not matched_libs:
             continue
@@ -439,7 +488,7 @@ def _discover_pdk_sram_collateral(state: dict, workflow_dir: str, memories: list
         base_no_ext = re.sub(r"\.lib(?:\.gz)?$", "", base, flags=re.IGNORECASE)
         physical_base = re.sub(r"_(?:tt|ff|ss)_\d+p\d+v_\d+c$", "", base_no_ext, flags=re.IGNORECASE)
         physical_base = re.sub(r"_(?:TT|FF|SS)_\d+p\d+V_\d+C$", "", physical_base)
-        macro_name = physical_base
+        macro_name = requested_macro or physical_base
         verilog_candidates = []
         for root in root_candidates:
             verilog_candidates.extend(glob.glob(os.path.join(root, "**", f"{physical_base}.v"), recursive=True))
@@ -1167,7 +1216,23 @@ def run_agent(state: dict) -> dict:
         copied.append(dst)
 
     inferred_memory_arrays = _large_inferred_memory_arrays(copied)
-    pdk_sram_collateral = _discover_pdk_sram_collateral(state, workflow_dir, inferred_memory_arrays)
+    physical_ai_project = str(state.get("project_name") or "").lower().startswith("physical_ai")
+    flat_memory_registers = _suspicious_flat_storage_registers(copied) if physical_ai_project else []
+    instantiated_sram_requirements = _instantiated_sram_requirements(copied)
+    pdk_sram_collateral = _discover_pdk_sram_collateral(
+        state, workflow_dir, [*inferred_memory_arrays, *instantiated_sram_requirements]
+    )
+    required_collateral_views = ("lib", "lef", "gds", "spice", "verilog")
+    missing_macro_collateral = []
+    for requirement in instantiated_sram_requirements:
+        requested = str(requirement.get("macro_name_requested") or "")
+        collateral = next(
+            (item for item in pdk_sram_collateral if str(item.get("macro_name") or "") == requested),
+            None,
+        )
+        missing_views = [view for view in required_collateral_views if not collateral or not collateral.get(view)]
+        if missing_views:
+            missing_macro_collateral.append({"macro_name": requested, "missing_views": missing_views})
     macro_replacements = _replace_behavioral_memories_with_macros(copied, pdk_sram_collateral)
     if macro_replacements:
         for file_name, repairs in macro_replacements.items():
@@ -1274,11 +1339,23 @@ def run_agent(state: dict) -> dict:
     state["design_name"] = top_module
 
     inferred_memory_arrays = _large_inferred_memory_arrays(copied)
-    if inferred_memory_arrays and not copied_macro_libs:
-        reason = "inferred_memory_macro_requires_real_macro_collateral"
+    if flat_memory_registers or missing_macro_collateral or (inferred_memory_arrays and not copied_macro_libs):
+        reason = (
+            "bulk_storage_flattened_to_registers"
+            if flat_memory_registers
+            else "required_sram_macro_collateral_incomplete"
+            if missing_macro_collateral
+            else "inferred_memory_macro_requires_real_macro_collateral"
+        )
         msg = (
-            "Large inferred memory arrays were found in RTL, but no macro Liberty collateral was available. "
-            "Synthesis is blocked to avoid flattening SRAM/MBIST memories into standard-cell flops."
+            "Bulk memory-like storage was emitted as individually named registers. Synthesis is blocked until the "
+            "Physical AI RTL instantiates the qualified Sky130 SRAM macro and its real collateral is available."
+            if flat_memory_registers
+            else "The RTL instantiates a Sky130 SRAM macro, but one or more required Liberty, LEF, GDS, SPICE, or "
+                 "behavioral Verilog views are unavailable. Implementation is blocked rather than treating it as logic."
+            if missing_macro_collateral
+            else "Large inferred memory arrays were found in RTL, but no macro Liberty collateral was available. "
+                 "Synthesis is blocked to avoid flattening SRAM/MBIST memories into standard-cell flops."
         )
         input_log_path = os.path.join(stage_dir, "synth_input_resolution.log")
         exec_log_path = os.path.join(logs_dir, "openlane_synth.log")
@@ -1296,6 +1373,8 @@ def run_agent(state: dict) -> dict:
             f"status=blocked",
             f"reason={reason}",
             f"inferred_memory_arrays={json.dumps(inferred_memory_arrays, sort_keys=True)}",
+            f"flat_memory_registers={json.dumps(flat_memory_registers, sort_keys=True)}",
+            f"missing_macro_collateral={json.dumps(missing_macro_collateral, sort_keys=True)}",
         ]) + "\n"
         summary = {
             "workflow_id": workflow_id,
@@ -1312,6 +1391,9 @@ def run_agent(state: dict) -> dict:
                 "clock_port": clk_name,
                 "clock_period_ns": clk_period_ns,
                 "inferred_memory_arrays": inferred_memory_arrays,
+                "flat_memory_registers": flat_memory_registers,
+                "instantiated_sram_requirements": instantiated_sram_requirements,
+                "missing_macro_collateral": missing_macro_collateral,
             },
             "outputs": {
                 "stage_dir": stage_dir,
