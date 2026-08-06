@@ -2123,6 +2123,12 @@ def _upload_rtl_debug_artifacts(workflow_id, agent_name, rtl_dir):
         "rtl_agent_summary_pass2.txt",
         "rtl_agent_exception_pass2.txt",
         "rtl_llm_raw_output_pass2.txt",
+        "rtl_agent_compile_pass3.log",
+        "rtl_verilator_lint_pass3.log",
+        "rtl_agent_summary_pass3.txt",
+        "rtl_agent_exception_pass3.txt",
+        "rtl_llm_raw_output_pass3.txt",
+        "rtl_quality_gate.json",
         "rtl_agent_final_status.log",
         "rtl_agent_final_summary.txt",
     ]:
@@ -2146,7 +2152,7 @@ ORIGINAL RTL GENERATION CONTRACT EXCERPT:
 {_truncate_text(base_prompt, 12000)}
 
 ==============================
-REPAIR MODE (SECOND PASS)
+REPAIR MODE (BOUNDED RETRY)
 ==============================
 
 Your previous RTL output failed one or more correctness gates.
@@ -2201,6 +2207,7 @@ TARGETED REPAIR PROCEDURE FOR FATAL LINT / COMPILE ERRORS
 7. If Verilator reports MULTIDRIVEN or multiple procedural drivers, the repair is incomplete unless all duplicate drivers are removed from the final RTL.
 8. If Icarus or Verilator reports unexpected '[' after an arithmetic/parenthesized expression, move that expression into a named wire/reg first and select bits from the named signal.
 9. If BLKANDNBLK reports a register-file signal, remove the combinational blocking assignment to that stored register; keep the clocked nonblocking assignment, or introduce a separate *_next/read_mux signal.
+10. If either tool reports an undeclared identifier, unable-to-bind signal, or missing variable, use the exact declared port/wire/register name already present in that module. Do not invent an alias or silently rename an interface signal.
 
 MANDATORY REPAIR OVERRIDE
 If the previous RTL uses an illegal ownership pattern, you MUST rewrite the affected block structure enough to eliminate the illegal drivers.
@@ -2729,6 +2736,14 @@ def _run(context: AgentContext) -> dict:
         final_log_path = os.path.join(rtl_dir, "rtl_agent_final_status.log")
         final_summary_path = os.path.join(rtl_dir, "rtl_agent_final_summary.txt")
         error_file = os.path.join(rtl_dir, "rtl_agent_exception.txt")
+        quality_gate_path = os.path.join(rtl_dir, "rtl_quality_gate.json")
+        failed_quality_gate = {
+            "passed": False,
+            "compile_passed": False,
+            "lint_passed": False,
+            "final_pass": "failed",
+            "reason": msg,
+        }
 
         with open(final_log_path, "w", encoding="utf-8") as lf:
             lf.write(msg + "\n")
@@ -2746,6 +2761,8 @@ def _run(context: AgentContext) -> dict:
         if exc is not None:
             with open(error_file, "w", encoding="utf-8") as ef:
                 ef.write(repr(exc) + "\n")
+        with open(quality_gate_path, "w", encoding="utf-8") as qf:
+            json.dump(failed_quality_gate, qf, indent=2)
 
         _upload_rtl_debug_artifacts(workflow_id, agent_name, rtl_dir)
         _record_text_artifact_safe(workflow_id, agent_name, "rtl", "rtl_agent_final_status.log", final_log_path)
@@ -2757,6 +2774,7 @@ def _run(context: AgentContext) -> dict:
             "artifact_list": [],
             "artifact_log": final_log_path,
             "issues": [msg] + ([str(exc)] if exc is not None else []),
+            "rtl_quality_gate": failed_quality_gate,
             "workflow_id": workflow_id,
             "workflow_dir": workflow_dir,
         })
@@ -3024,18 +3042,57 @@ def _run(context: AgentContext) -> dict:
                 state=state,
             )
 
-            final_result = pass2 if pass2["ok"] else pass1
-            final_suffix = "pass2" if pass2["ok"] else "pass1"
-
-            if pass2["ok"]:
-                promoted_files = _promote_rtl_files_to_root(rtl_dir, pass2["artifact_list"])
-                final_result["artifact_list"] = promoted_files
-
+            final_result = pass2
+            final_suffix = "pass2"
 
             if not pass2["ok"]:
-                return _fail_and_upload(
-                    "RTL failed checks in both pass1 and pass2."
+                # A first repair can fix the original syntax problem while
+                # exposing a smaller elaboration error (for example one
+                # undeclared identifier). Give the model one bounded retry
+                # using the *latest* tool logs instead of failing the complete
+                # Physical AI journey on that correctable residual error.
+                pass2_compile_log = ""
+                if os.path.exists(pass2["compile_log_path"]):
+                    with open(pass2["compile_log_path"], "r", encoding="utf-8") as f:
+                        pass2_compile_log = f.read()
+                pass2_verilator_log = ""
+                if os.path.exists(pass2["verilator_log_path"]):
+                    with open(pass2["verilator_log_path"], "r", encoding="utf-8") as f:
+                        pass2_verilator_log = f.read()
+
+                repair_prompt_pass3 = _build_rtl_repair_prompt(
+                    base_prompt=prompt,
+                    previous_llm_output=llm_output_pass2,
+                    compile_log_text=pass2_compile_log,
+                    verilator_log_text=pass2_verilator_log,
                 )
+                _stage("starting_llm_call_pass3")
+                try:
+                    llm_output_pass3 = complete_text(
+                        repair_prompt_pass3,
+                        capability="rtl_generation",
+                        agent_name=agent_name,
+                        state=state,
+                    )
+                except Exception as e3:
+                    return _fail_and_upload("Pass2 failed and Pass3 LLM generation failed.", e3)
+
+                pass3 = _validate_and_materialize_rtl(
+                    llm_output=llm_output_pass3,
+                    rtl_dir=rtl_dir,
+                    spec_json=spec_json,
+                    mode=mode,
+                    suffix="pass3",
+                    materialize_subdir="pass3",
+                    state=state,
+                )
+                if not pass3["ok"]:
+                    return _fail_and_upload("RTL failed checks in pass1, pass2, and pass3.")
+                final_result = pass3
+                final_suffix = "pass3"
+
+            promoted_files = _promote_rtl_files_to_root(rtl_dir, final_result["artifact_list"])
+            final_result["artifact_list"] = promoted_files
 
             _stage("pass2_passed")
         else:

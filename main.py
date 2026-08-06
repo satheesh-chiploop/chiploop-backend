@@ -4079,6 +4079,7 @@ def _digital_app_gate_failure(app_name: str, state: Dict[str, Any], artifact_dir
         for search_root in search_roots:
             rtl_dir = search_root / "rtl"
             candidates = (
+                rtl_dir / "rtl_agent_summary_pass3.txt",
                 rtl_dir / "rtl_agent_summary_pass2.txt",
                 rtl_dir / "rtl_agent_summary.txt",
             )
