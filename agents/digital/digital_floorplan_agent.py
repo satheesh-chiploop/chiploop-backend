@@ -471,6 +471,8 @@ def run_agent(state: dict) -> dict:
 
     closure_overrides = _closure_overrides(state, workflow_dir, "floorplan")
     cfg.update(closure_overrides)
+    if cfg.get("DIE_AREA"):
+        cfg["FP_SIZING"] = "absolute"
 
     logger.info(f"{AGENT_NAME}: staged macro LEFs -> {staged_lefs}")
     logger.info(f"{AGENT_NAME}: staged macro LIBs -> {staged_libs}")

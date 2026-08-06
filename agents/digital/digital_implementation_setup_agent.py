@@ -386,6 +386,11 @@ def run_agent(state: dict) -> dict:
             "CHIPLOOP_UPSTREAM_SDC_SOURCE": sdc_source,
             "FP_CORE_UTIL": 20,
             "PL_TARGET_DENSITY": 0.25,
+            # DIE_AREA is an explicit I/O-capacity contract. Without absolute
+            # sizing OpenLane treats it as advisory and recomputes a much
+            # smaller utilization-based die, which can make pin placement
+            # impossible for wide digital interfaces.
+            "FP_SIZING": "absolute",
             "DIE_AREA": die_area,
             "CHIPLOOP_TOP_LEVEL_IO_BITS": top_level_io_bits,
             "CHIPLOOP_DIE_SIDE_UM": die_side_um,
