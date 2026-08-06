@@ -5238,6 +5238,31 @@ def _hem_insert_event(
         logger.warning("HEM: could not insert hem_run_events record for workflow=%s: %s", workflow_id, exc)
 
 
+def _hem_link_child_workflow(
+    *,
+    workflow_id: str,
+    root_workflow_id: str,
+    root_run_id: str,
+    stage: str,
+    label: str,
+    dashboard_stage: str,
+) -> None:
+    """Persist the HEM parent/child relation on the child workflow itself."""
+    try:
+        rows = supabase.table("workflows").select("definitions").eq("id", workflow_id).limit(1).execute().data or []
+        definitions = dict((rows[0] if rows else {}).get("definitions") or {})
+        definitions.update({
+            "hem_root_workflow_id": root_workflow_id,
+            "hem_root_run_id": root_run_id,
+            "hem_stage": stage,
+            "hem_stage_label": label,
+            "hem_dashboard_stage": dashboard_stage,
+        })
+        supabase.table("workflows").update({"definitions": definitions}).eq("id", workflow_id).execute()
+    except Exception as exc:
+        logger.warning("HEM: could not link child workflow=%s to root=%s: %s", workflow_id, root_workflow_id, exc)
+
+
 def _hem_normalized_mode(raw_mode: str) -> str:
     return "adaptive" if str(raw_mode or "").strip().lower() == "adaptive" else "fixed"
 
@@ -7117,6 +7142,14 @@ def _hem_continue_physical_ai_after_success(*, root_workflow_id: str, root_run_i
         append_log_workflow(root_workflow_id, f"HEM Automatic Run ({mode}) queued {meta['label']} because {previous_stage} completed successfully.", phase="hem_queued")
         child_loop_type = "system" if stage == "firmware_product" else ("fpga" if stage.startswith("fpga_") else "digital")
         child_workflow_id, child_run_id, base_dir = _create_app_workflow_and_run(user_id, meta["title"], child_loop_type)
+        _hem_link_child_workflow(
+            workflow_id=child_workflow_id,
+            root_workflow_id=root_workflow_id,
+            root_run_id=root_run_id,
+            stage=stage,
+            label=meta["label"],
+            dashboard_stage=meta["dashboard_stage"],
+        )
         child_artifact_dir = os.path.join(base_dir, meta["artifact"])
         os.makedirs(child_artifact_dir, exist_ok=True)
         child_payload = _hem_physical_ai_child_payload(root_workflow_id, root_run_id, automation_payload, stage=stage, hem_run_id=str(hem_run_id) if hem_run_id else None)
@@ -7408,7 +7441,7 @@ async def apps_physical_ai_result(workflow_id: str, request: Request):
     try:
         hem_rows = (
             supabase.table("hem_runs")
-            .select("id")
+            .select("id,current_workflow_id,current_run_id,current_stage,status,metadata")
             .eq("root_workflow_id", workflow_id)
             .eq("user_id", user_id)
             .order("created_at", desc=True)
@@ -7446,6 +7479,20 @@ async def apps_physical_ai_result(workflow_id: str, request: Request):
                 })
                 if event.get("status"):
                     item["status"] = event.get("status")
+            # Even if event persistence failed, hem_runs still identifies the
+            # currently executing child and must keep it visible in the UI.
+            current_child_id = str(hem_rows[0].get("current_workflow_id") or "").strip()
+            current_stage = str(hem_rows[0].get("current_stage") or "").strip()
+            if current_child_id and current_child_id != workflow_id:
+                current_meta = HEM_PHYSICAL_AI_STAGE_META.get(current_stage) or {}
+                by_workflow.setdefault(current_child_id, {
+                    "workflow_id": current_child_id,
+                    "run_id": hem_rows[0].get("current_run_id"),
+                    "stage": current_stage,
+                    "label": current_meta.get("label") or current_stage,
+                    "dashboard_path": f"/dashboard/{current_child_id}?stage={current_meta.get('dashboard_stage') or current_stage}&app=HEM",
+                    "status": hem_rows[0].get("status") or "running",
+                })
             child_ids = list(by_workflow)
             if child_ids:
                 status_rows = (
@@ -7464,6 +7511,42 @@ async def apps_physical_ai_result(workflow_id: str, request: Request):
             hem_children = sorted(by_workflow.values(), key=lambda item: stage_order.get(str(item.get("stage")), 99))
     except Exception as exc:
         logger.warning("Physical AI HEM children could not be loaded from Supabase: %s", exc)
+    # Durable fallback: child workflows carry their HEM parent and stage in the
+    # Supabase definitions JSON. This survives bounded/truncated text logs and
+    # does not depend on hem_run_events being available.
+    try:
+        linked_rows = (
+            supabase.table("workflows")
+            .select("id,status,name,definitions,created_at")
+            .eq("user_id", user_id)
+            .contains("definitions", {"hem_root_workflow_id": workflow_id})
+            .order("created_at")
+            .execute()
+            .data
+            or []
+        )
+        existing_ids = {str(item.get("workflow_id") or "") for item in hem_children}
+        for linked in linked_rows:
+            child_id = str(linked.get("id") or "").strip()
+            if not child_id or child_id in existing_ids:
+                continue
+            definitions = linked.get("definitions") if isinstance(linked.get("definitions"), dict) else {}
+            stage = str(definitions.get("hem_stage") or "")
+            meta = HEM_PHYSICAL_AI_STAGE_META.get(stage) or {}
+            label = str(definitions.get("hem_stage_label") or meta.get("label") or linked.get("name") or stage)
+            dashboard_stage = str(definitions.get("hem_dashboard_stage") or meta.get("dashboard_stage") or stage)
+            hem_children.append({
+                "workflow_id": child_id,
+                "run_id": None,
+                "stage": stage,
+                "label": label,
+                "dashboard_path": f"/dashboard/{child_id}?stage={dashboard_stage}&app=HEM",
+                "status": linked.get("status") or "running",
+            })
+        stage_order = {name: index for index, name in enumerate(HEM_PHYSICAL_AI_STAGE_META)}
+        hem_children.sort(key=lambda item: stage_order.get(str(item.get("stage")), 99))
+    except Exception as exc:
+        logger.warning("Physical AI HEM linked-workflow fallback unavailable: %s", exc)
     return {"status": "completed", "phase": workflow.get("phase"), "logs": workflow.get("logs") or "", "workflow_id": workflow_id, "result": result, "plots": plots, "hem_children": hem_children}
 
 
