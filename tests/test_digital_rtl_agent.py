@@ -7,6 +7,23 @@ os.environ.setdefault("OPENAI_API_KEY", "test-openai-key")
 from agents.digital import digital_rtl_agent as agent
 
 
+def test_rtl_completion_retries_one_empty_provider_response(monkeypatch):
+    calls = []
+
+    def fake_complete(*args, **kwargs):
+        calls.append((args, kwargs))
+        if len(calls) == 1:
+            raise RuntimeError("Streamed response was empty provider=openai finish_reason=stop")
+        return "---BEGIN top.v---\nmodule top; endmodule\n---END top.v---"
+
+    monkeypatch.setattr(agent, "complete_text", fake_complete)
+
+    output = agent._complete_rtl_text("prompt", agent_name="Digital RTL Agent", state={}, stage_label="pass1")
+
+    assert "module top" in output
+    assert len(calls) == 2
+
+
 def test_module_code_for_name_extracts_top_when_file_contains_children():
     code = """
 module register_file(

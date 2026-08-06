@@ -41,6 +41,32 @@ def _safe_json(obj):
         return json.dumps(str(obj), indent=2)
 
 
+def _is_empty_model_response_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return "response was empty" in message or "empty response" in message
+
+
+def _complete_rtl_text(prompt: str, *, agent_name: str, state: dict, stage_label: str) -> str:
+    """Retry one provider-level empty response; design/tool failures are not retried here."""
+    for attempt in (1, 2):
+        try:
+            output = complete_text(
+                prompt,
+                capability="rtl_generation",
+                agent_name=agent_name,
+                state=state,
+            )
+            if not str(output or "").strip():
+                raise RuntimeError("Model response was empty")
+            return output
+        except Exception as exc:
+            if attempt == 1 and _is_empty_model_response_error(exc):
+                _stage(f"{stage_label}_empty_response_retry: 1")
+                continue
+            raise
+    raise RuntimeError("RTL model response was empty after retry")
+
+
 def _truncate_text(text: str, max_chars: int) -> str:
     text = text or ""
     if len(text) <= max_chars:
@@ -1362,14 +1388,19 @@ def _validate_connectivity_contract(spec_json: dict, mode: str) -> List[str]:
     for owner in contract["ownership"]:
         om = owner["owner"]["module"]
         op = owner["owner"]["port"]
+        top_internal_sources = {
+            signal["source"]["port"]
+            for signal in contract["internal_signals"]
+            if signal["source"]["module"] == top_module_name
+        }
         if om not in modules:
             issues.append(f"❌ signal_ownership owner module '{om}' does not exist.")
             continue
         dirs = _port_dir_map(modules[om]["ports"])
         if om == top_module_name:
-            if op not in top_port_names:
+            if op not in top_port_names and op not in top_internal_sources:
                 issues.append(f"âŒ signal_ownership owner port '{om}.{op}' does not exist.")
-            elif dirs.get(op) == "input" and owner["signal"] != op:
+            elif op in top_port_names and dirs.get(op) == "input" and owner["signal"] != op:
                 issues.append(
                     f"âŒ top-level input owner '{om}.{op}' may own only its external input signal '{op}', "
                     f"not '{owner['signal']}'."
@@ -2970,11 +3001,8 @@ def _run(context: AgentContext) -> dict:
 
     try:
         t0 = time.monotonic()
-        llm_output = complete_text(
-            prompt,
-            capability="rtl_generation",
-            agent_name=agent_name,
-            state=state,
+        llm_output = _complete_rtl_text(
+            prompt, agent_name=agent_name, state=state, stage_label="llm_pass1"
         )
         _stage(f"llm_pass1_elapsed_sec: {time.monotonic() - t0:.2f}")
         _stage(f"llm_output_pass1_chars: {len(llm_output)}")
@@ -3050,11 +3078,8 @@ def _run(context: AgentContext) -> dict:
             try:
                 _stage(f"repair_prompt_length: {len(repair_prompt)}")
                 t0 = time.monotonic()
-                llm_output_pass2 = complete_text(
-                    repair_prompt,
-                    capability="rtl_generation",
-                    agent_name=agent_name,
-                    state=state,
+                llm_output_pass2 = _complete_rtl_text(
+                    repair_prompt, agent_name=agent_name, state=state, stage_label="llm_pass2"
                 )
                 _stage(f"llm_pass2_elapsed_sec: {time.monotonic() - t0:.2f}")
                 _stage(f"llm_output_pass2_chars: {len(llm_output_pass2)}")
@@ -3122,11 +3147,8 @@ def _run(context: AgentContext) -> dict:
                 )
                 _stage("starting_llm_call_pass3")
                 try:
-                    llm_output_pass3 = complete_text(
-                        repair_prompt_pass3,
-                        capability="rtl_generation",
-                        agent_name=agent_name,
-                        state=state,
+                    llm_output_pass3 = _complete_rtl_text(
+                        repair_prompt_pass3, agent_name=agent_name, state=state, stage_label="llm_pass3"
                     )
                 except Exception as e3:
                     return _fail_and_upload("Pass2 failed and Pass3 LLM generation failed.", e3)
