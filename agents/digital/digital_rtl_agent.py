@@ -607,9 +607,18 @@ def _align_verilog_map_to_expected_modules(verilog_map: Dict[str, str], spec_jso
 
 
 def _remove_comb_blocking_assigns_to_sequential_regs(code: str) -> str:
+    # Nonblocking assignments are statements whose LHS starts the statement.
+    # A global ``name <=`` search also matches ordinary relational comparisons
+    # such as ``if (age <= timeout)``. That false positive previously caused
+    # this sanitizer to delete the real combinational assignments to ``age``,
+    # leaving an empty/invalid if statement in materialized RTL.
+    nonblocking_statement = re.compile(
+        r"^\s*([A-Za-z_][A-Za-z0-9_$]*(?:\[[^\]]+\])?)\s*<=\s*[^=]",
+        flags=re.MULTILINE,
+    )
     seq_targets = {
         re.sub(r"\[[^\]]+\]", "", name).strip()
-        for name in re.findall(r"\b([A-Za-z_][A-Za-z0-9_$]*(?:\[[^\]]+\])?)\s*<=", code or "")
+        for name in nonblocking_statement.findall(code or "")
     }
     seq_targets.discard("")
     if not seq_targets:
