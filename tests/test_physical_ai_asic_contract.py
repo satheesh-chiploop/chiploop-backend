@@ -9,6 +9,11 @@ from agents.digital.digital_synthesis_agent import (
     _instantiated_sram_requirements,
     _suspicious_flat_storage_registers,
 )
+from agents.digital.digital_rtl_agent import (
+    _merge_rtl_repair_output,
+    _parse_named_verilog_blocks,
+    _sanitize_child_output_instance_connections,
+)
 
 
 def test_die_area_scales_for_scalar_equivalent_io_width(tmp_path):
@@ -66,3 +71,37 @@ def test_physical_ai_hem_pins_motor_control_top_for_rtl_and_asic():
 
     assert source.count('payload.get("top_module") or "motor_control_top"') >= 2
     assert "ASIC MEMORY CONTRACT (mandatory)" in source
+
+
+def test_rtl_repair_overlay_preserves_unchanged_hierarchy_files():
+    previous = (
+        "---BEGIN motor_control_top.v---\nmodule motor_control_top; bad u(); endmodule\n---END motor_control_top.v---\n"
+        "---BEGIN child.v---\nmodule child; endmodule\n---END child.v---"
+    )
+    repair = (
+        "---BEGIN motor_control_top.v---\nmodule motor_control_top; child u(); endmodule\n---END motor_control_top.v---"
+    )
+
+    merged = _merge_rtl_repair_output(previous, repair, ["motor_control_top.v", "child.v"])
+    files = _parse_named_verilog_blocks(merged)
+
+    assert list(files) == ["motor_control_top.v", "child.v"]
+    assert "child u()" in files["motor_control_top.v"]
+    assert files["child.v"] == "module child; endmodule"
+
+
+def test_structural_child_output_removes_invalid_module_scope_alias():
+    files = {
+        "top.v": (
+            "module top(output service_req);\n"
+            "assign service_req = request_fsm.service_req;\n"
+            "request_fsm u_request_fsm (.service_req(service_req));\n"
+            "endmodule"
+        ),
+        "request_fsm.v": "module request_fsm(output service_req); assign service_req = 1'b1; endmodule",
+    }
+
+    sanitized = _sanitize_child_output_instance_connections(files)
+
+    assert "request_fsm.service_req" not in sanitized["top.v"]
+    assert ".service_req(service_req)" in sanitized["top.v"]

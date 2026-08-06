@@ -294,6 +294,23 @@ def _parse_named_verilog_blocks(llm_output: str) -> Dict[str, str]:
     return {fname.strip(): code.strip() for fname, code in blocks}
 
 
+def _merge_rtl_repair_output(previous_output: str, repair_output: str, expected_files: List[str]) -> str:
+    """Overlay repaired named files while retaining unchanged hierarchy files."""
+    previous = _normalize_emitted_rtl_filenames(_parse_named_verilog_blocks(previous_output), expected_files)
+    repaired = _normalize_emitted_rtl_filenames(_parse_named_verilog_blocks(repair_output), expected_files)
+    merged = {name: previous[name] for name in expected_files if name in previous}
+    for name, code in repaired.items():
+        if name in expected_files:
+            merged[name] = code
+    if not merged:
+        return repair_output
+    return "\n".join(
+        f"---BEGIN {name}---\n{merged[name].strip()}\n---END {name}---"
+        for name in expected_files
+        if name in merged
+    )
+
+
 def _normalize_emitted_rtl_filenames(verilog_map: Dict[str, str], expected_files: List[str]) -> Dict[str, str]:
     normalized = dict(verilog_map)
     by_stem = {os.path.splitext(name)[0]: name for name in verilog_map}
@@ -935,6 +952,16 @@ def _sanitize_child_output_instance_connections(verilog_map: Dict[str, str]) -> 
                 })
 
         for sig, drivers in drivers_by_sig.items():
+            # A child output connected directly to ``sig`` is already its
+            # structural driver. Models occasionally add an invalid redundant
+            # ``assign sig = module_name.port`` reference; module names are not
+            # instance paths and the assignment must be removed.
+            text = re.sub(
+                rf"^\s*assign\s+{re.escape(sig)}\s*=\s*[A-Za-z_][A-Za-z0-9_$]*\.[A-Za-z_][A-Za-z0-9_$]*\s*;\s*$",
+                "",
+                text,
+                flags=re.MULTILINE,
+            )
             if len(drivers) <= 1:
                 continue
             keep = max(
@@ -2155,7 +2182,8 @@ def _append_text(path: str, content: str) -> None:
         f.write(content)
 
 
-def _build_rtl_repair_prompt(base_prompt: str, previous_llm_output: str, compile_log_text: str, verilator_log_text: str) -> str:
+def _build_rtl_repair_prompt(base_prompt: str, previous_llm_output: str, compile_log_text: str, verilator_log_text: str, expected_files: Optional[List[str]] = None) -> str:
+    expected_file_text = ", ".join(expected_files or []) or "the complete original file set"
     return f"""
 ORIGINAL RTL GENERATION CONTRACT EXCERPT:
 {_truncate_text(base_prompt, 12000)}
@@ -2185,7 +2213,8 @@ REPAIR RULES:
   - fatal Verilator errors
   - structural/spec mismatch issues
 - Do NOT spend tokens cleaning non-fatal lint warnings only
-- Return ONE full corrected response in the same named-file-block format
+- Expected hierarchy files: {expected_file_text}
+- Return every expected hierarchy file in the same named-file-block format. Reproduce unchanged files; never omit them.
 - Do NOT return explanations
 - Do NOT return partial edits
 
@@ -2194,7 +2223,7 @@ Make the MINIMUM NECESSARY change to fix correctness errors.
 
 - Do NOT redesign architecture
 - Do NOT rename modules/ports/files
-- Do NOT rewrite unaffected files
+- Do not redesign unaffected files; reproduce their full named blocks unchanged in the response
 - Prefer local fixes over global rewrites
 
 CORRECTNESS REPAIR PRIORITIES (MANDATORY)
@@ -3002,6 +3031,7 @@ def _run(context: AgentContext) -> dict:
                 previous_llm_output=llm_output,
                 compile_log_text=compile_log_text,
                 verilator_log_text=verilator_log_text,
+                expected_files=_collect_expected_rtl_files(spec_json, mode),
             )
 
 
@@ -3039,6 +3069,11 @@ def _run(context: AgentContext) -> dict:
 
                 return _fail_and_upload("Pass1 failed and Pass2 LLM generation failed.", e2)
 
+            llm_output_pass2 = _merge_rtl_repair_output(
+                llm_output,
+                llm_output_pass2,
+                _collect_expected_rtl_files(spec_json, mode),
+            )
             _stage("pass2_validate_and_materialize")
 
             pass2 = _validate_and_materialize_rtl(
@@ -3074,6 +3109,7 @@ def _run(context: AgentContext) -> dict:
                     previous_llm_output=llm_output_pass2,
                     compile_log_text=pass2_compile_log,
                     verilator_log_text=pass2_verilator_log,
+                    expected_files=_collect_expected_rtl_files(spec_json, mode),
                 )
                 _stage("starting_llm_call_pass3")
                 try:
@@ -3085,6 +3121,12 @@ def _run(context: AgentContext) -> dict:
                     )
                 except Exception as e3:
                     return _fail_and_upload("Pass2 failed and Pass3 LLM generation failed.", e3)
+
+                llm_output_pass3 = _merge_rtl_repair_output(
+                    llm_output_pass2,
+                    llm_output_pass3,
+                    _collect_expected_rtl_files(spec_json, mode),
+                )
 
                 pass3 = _validate_and_materialize_rtl(
                     llm_output=llm_output_pass3,
