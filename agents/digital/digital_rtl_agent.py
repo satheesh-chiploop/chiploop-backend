@@ -1365,9 +1365,18 @@ def _validate_connectivity_contract(spec_json: dict, mode: str) -> List[str]:
         if om not in modules:
             issues.append(f"❌ signal_ownership owner module '{om}' does not exist.")
             continue
-        if om == top_module_name and op not in top_port_names:
-            continue
         dirs = _port_dir_map(modules[om]["ports"])
+        if om == top_module_name:
+            if op not in top_port_names:
+                issues.append(f"âŒ signal_ownership owner port '{om}.{op}' does not exist.")
+            elif dirs.get(op) == "input" and owner["signal"] != op:
+                issues.append(
+                    f"âŒ top-level input owner '{om}.{op}' may own only its external input signal '{op}', "
+                    f"not '{owner['signal']}'."
+                )
+            # Top inputs are driven by the external environment; top outputs
+            # are driven by the design. Both are valid ownership endpoints.
+            continue
         if op not in dirs:
             issues.append(f"❌ signal_ownership owner port '{om}.{op}' does not exist.")
         elif dirs.get(op) not in {"output", "inout"}:

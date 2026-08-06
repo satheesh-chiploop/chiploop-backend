@@ -13,6 +13,7 @@ from agents.digital.digital_rtl_agent import (
     _merge_rtl_repair_output,
     _parse_named_verilog_blocks,
     _sanitize_child_output_instance_connections,
+    _validate_connectivity_contract,
 )
 
 
@@ -105,3 +106,31 @@ def test_structural_child_output_removes_invalid_module_scope_alias():
 
     assert "request_fsm.service_req" not in sanitized["top.v"]
     assert ".service_req(service_req)" in sanitized["top.v"]
+
+
+def test_top_level_safety_input_is_valid_external_signal_owner():
+    spec = {
+        "hierarchy": {
+            "top_module": {
+                "name": "motor_control_top",
+                "ports": [{"name": "safe_override_in", "direction": "input", "width": 1}],
+                "rtl_output_file": "motor_control_top.v",
+            },
+            "modules": [{
+                "name": "safe_fallback_manager",
+                "ports": [{"name": "safe_override_in", "direction": "input", "width": 1}],
+                "rtl_output_file": "safe_fallback_manager.v",
+            }],
+        },
+        "top_level_connections": [{
+            "top_port": "safe_override_in",
+            "connected_to": ["safe_fallback_manager.safe_override_in"],
+        }],
+        "inter_module_signals": [],
+        "signal_ownership": [{
+            "signal": "safe_override_in",
+            "owner": "motor_control_top.safe_override_in",
+        }],
+    }
+
+    assert _validate_connectivity_contract(spec, "hierarchical") == []
