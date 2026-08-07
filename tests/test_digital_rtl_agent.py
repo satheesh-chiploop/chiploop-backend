@@ -541,6 +541,32 @@ def test_verilator_undriven_warning_is_structural_failure_even_with_zero_exit():
     assert agent._classify_verilator_result(True, output) == "fatal"
 
 
+def test_sanitize_connects_contract_mirrored_top_outputs_from_child_inputs():
+    code = """
+module top(
+  output [31:0] register_file_status_flags_in,
+  output register_file_fault_in
+);
+  wire [31:0] u_status_flags;
+  wire u_fault_in;
+  assign u_status_flags = 32'h12;
+  assign u_fault_in = 1'b0;
+  register_file u_register_file(
+    .status_flags_in(u_status_flags),
+    .fault_in(u_fault_in)
+  );
+endmodule
+
+module register_file(input [31:0] status_flags_in, input fault_in);
+endmodule
+"""
+
+    out = agent._sanitize_child_output_instance_connections({"top.v": code})["top.v"]
+
+    assert "assign register_file_status_flags_in = u_status_flags;" in out
+    assert "assign register_file_fault_in = u_fault_in;" in out
+
+
 def test_sanitize_child_output_reroutes_duplicate_child_drivers_semantically():
     code = """
 module top(output sample_req, output alert_irq, output alert_status);

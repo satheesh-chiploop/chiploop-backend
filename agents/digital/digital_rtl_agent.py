@@ -1065,6 +1065,38 @@ def _sanitize_child_output_instance_connections(verilog_map: Dict[str, str]) -> 
         text = inst_re.sub(repl, text)
         for wire, width in sorted(wire_updates.items()):
             text = _replace_or_insert_wire_decl(text, wire, width)
+
+        # Structured specs may expose a child input as a top-level observation
+        # port named <module>_<port>. Mirror the actual internal connection into
+        # that output so the declared contract is driven without changing the
+        # child data path.
+        mirror_assigns: List[str] = []
+        for instance_match in inst_re.finditer(text):
+            cell = instance_match.group("cell")
+            inst = instance_match.group("inst")
+            child_ports = module_defs.get(cell, {}).get("ports", {})
+            conns = _named_instance_connections(instance_match.group("conns"))
+            inst_stem = re.sub(r"^u_", "", inst)
+            for port, sig_expr in conns.items():
+                child = child_ports.get(port)
+                if not child or child.get("direction") != "input":
+                    continue
+                signal = re.sub(r"\[[^\]]+\]", "", sig_expr).strip()
+                for mirror in (f"{cell}_{port}", f"{inst_stem}_{port}"):
+                    if mirror == signal or parent_ports.get(mirror, {}).get("direction") != "output":
+                        continue
+                    if re.search(rf"^\s*assign\s+{re.escape(mirror)}\s*=", text, flags=re.MULTILINE):
+                        continue
+                    mirror_assigns.append(f"assign {mirror} = {signal};")
+                    break
+        if mirror_assigns:
+            unique_assigns = list(dict.fromkeys(mirror_assigns))
+            text = re.sub(
+                r"\nendmodule\b",
+                "\n" + "\n".join(unique_assigns) + "\n\nendmodule",
+                text,
+                count=1,
+            )
         out[fname] = text
     return out
 
