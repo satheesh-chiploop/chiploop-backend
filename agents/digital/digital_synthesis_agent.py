@@ -1060,7 +1060,10 @@ def _normalize_nonconstant_async_resets(path: str) -> list[str]:
             if started and depth <= 0:
                 break
         block = "\n".join(lines[i:end + 1])
+        clock_name_match = re.search(r"(?:pos|neg)edge\s+([A-Za-z_]\w*)", match.group(1), re.IGNORECASE)
+        clock_name = clock_name_match.group(1) if clock_name_match else ""
         reset_name = match.group(3)
+        same_signal_clock_reset = bool(clock_name and clock_name == reset_name)
         reset_if = re.search(
             rf"\bif\s*\(\s*(?:!\s*{re.escape(reset_name)}|~\s*{re.escape(reset_name)}|"
             rf"{re.escape(reset_name)}\s*==\s*1'b[01])\s*\)\s*begin(?P<body>.*?)\bend\s+else\b",
@@ -1075,12 +1078,15 @@ def _normalize_nonconstant_async_resets(path: str) -> list[str]:
             ):
                 if not _is_constant_reset_rhs(rhs):
                     dynamic_targets.append(re.sub(r"\s+", "", lhs))
-        if dynamic_targets:
+        if same_signal_clock_reset or dynamic_targets:
             lines[i] = always_re.sub(f"always @({match.group(1)})", lines[i], count=1)
-            repairs.append(
-                "normalized_nonconstant_async_reset_to_synchronous:"
-                + ",".join(sorted(set(dynamic_targets)))
-            )
+            if same_signal_clock_reset:
+                repairs.append(f"normalized_same_signal_clock_async_reset_to_synchronous:{reset_name}")
+            if dynamic_targets:
+                repairs.append(
+                    "normalized_nonconstant_async_reset_to_synchronous:"
+                    + ",".join(sorted(set(dynamic_targets)))
+                )
         i = end + 1
     if repairs:
         Path(path).write_text("\n".join(lines) + ("\n" if text.endswith("\n") else ""), encoding="utf-8")

@@ -46,6 +46,27 @@ def test_keeps_constant_async_reset_unchanged(tmp_path):
     assert rtl.read_text(encoding="utf-8") == original
 
 
+def test_normalizes_same_signal_used_as_clock_and_async_reset(tmp_path):
+    rtl = tmp_path / "request_validation_unit.v"
+    rtl.write_text(
+        "always @(posedge clk_rst_n or negedge clk_rst_n) begin\n"
+        "  if (!clk_rst_n) begin\n"
+        "    accepted_o <= 1'b0;\n"
+        "  end else begin\n"
+        "    accepted_o <= accepted_i;\n"
+        "  end\n"
+        "end\n",
+        encoding="utf-8",
+    )
+
+    repairs = agent._normalize_nonconstant_async_resets(str(rtl))
+    text = rtl.read_text(encoding="utf-8")
+
+    assert repairs == ["normalized_same_signal_clock_async_reset_to_synchronous:clk_rst_n"]
+    assert "always @(posedge clk_rst_n)" in text
+    assert "or negedge clk_rst_n" not in text
+
+
 def test_repair_common_status_tieoffs_adds_safe_assignments(tmp_path):
     rtl = tmp_path / "top.v"
     rtl.write_text(
