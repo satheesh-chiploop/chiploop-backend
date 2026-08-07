@@ -7497,7 +7497,7 @@ async def apps_physical_ai_result(workflow_id: str, request: Request):
             if child_ids:
                 status_rows = (
                     supabase.table("workflows")
-                    .select("id,status")
+                    .select("id,status,phase,logs")
                     .in_("id", child_ids)
                     .execute()
                     .data
@@ -7507,6 +7507,9 @@ async def apps_physical_ai_result(workflow_id: str, request: Request):
                     child_id = str(status_row.get("id") or "")
                     if child_id in by_workflow and status_row.get("status"):
                         by_workflow[child_id]["status"] = status_row["status"]
+                    if child_id in by_workflow:
+                        by_workflow[child_id]["phase"] = status_row.get("phase")
+                        by_workflow[child_id]["logs"] = status_row.get("logs") or ""
             stage_order = {name: index for index, name in enumerate(HEM_PHYSICAL_AI_STAGE_META)}
             hem_children = sorted(by_workflow.values(), key=lambda item: stage_order.get(str(item.get("stage")), 99))
     except Exception as exc:
@@ -7517,7 +7520,7 @@ async def apps_physical_ai_result(workflow_id: str, request: Request):
     try:
         linked_rows = (
             supabase.table("workflows")
-            .select("id,status,name,definitions,created_at")
+            .select("id,status,phase,logs,name,definitions,created_at")
             .eq("user_id", user_id)
             .contains("definitions", {"hem_root_workflow_id": workflow_id})
             .order("created_at")
@@ -7542,6 +7545,8 @@ async def apps_physical_ai_result(workflow_id: str, request: Request):
                 "label": label,
                 "dashboard_path": f"/dashboard/{child_id}?stage={dashboard_stage}&app=HEM",
                 "status": linked.get("status") or "running",
+                "phase": linked.get("phase"),
+                "logs": linked.get("logs") or "",
             })
         stage_order = {name: index for index, name in enumerate(HEM_PHYSICAL_AI_STAGE_META)}
         hem_children.sort(key=lambda item: stage_order.get(str(item.get("stage")), 99))
