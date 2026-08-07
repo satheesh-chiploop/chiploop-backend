@@ -1,4 +1,6 @@
 from pathlib import Path
+import shutil
+import subprocess
 
 from agents.fpga import fpga_explorer_io_mapping_agent as mapping_agent
 from agents.fpga import fpga_target_explorer_agent as explorer
@@ -26,12 +28,21 @@ def test_wide_core_gets_fpga_only_spi_transport(tmp_path, monkeypatch):
     assert report["status"] == "generated"
     assert report["original_top_level_io_bits"] == 260
     assert report["fpga_top_level_io_bits"] == 7
+    assert Path(report["wrapper_rtl"]).is_absolute()
     assert state["fpga"]["core_top_module"] == "adaptive_aero_control_top"
     assert state["fpga"]["top_module"] == "adaptive_aero_control_top_spi_fpga_top"
     wrapper = Path(report["wrapper_rtl"]).read_text(encoding="utf-8")
     assert "input  logic spi_sclk" in wrapper
     assert "adaptive_aero_control_top u_core" in wrapper
     assert ".s_axis_cmd(core_s_axis_cmd)" in wrapper
+    if shutil.which("iverilog"):
+        completed = subprocess.run(
+            ["iverilog", "-g2012", "-s", state["fpga"]["top_module"], "-o", str(tmp_path / "wrapper.out"), str(rtl), report["wrapper_rtl"]],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert completed.returncode == 0, completed.stderr
 
 
 def test_ulx3s_has_verified_spi_wrapper_pin_mapping(tmp_path, monkeypatch):

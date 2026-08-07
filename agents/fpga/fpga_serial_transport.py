@@ -124,7 +124,11 @@ def add_spi_transport_if_needed(state: dict, *, threshold_bits: int = 64) -> dic
     lines.extend(["  );", "endmodule", ""])
 
     out_dir = fpga_dir(state, "target_explorer", "interface_adapter")
-    wrapper_path = write_text(os.path.join(out_dir, f"{wrapper_top}.sv"), "\n".join(lines))
+    # Yosys executes from a board/strategy-specific working directory. Keep
+    # generated RTL absolute so every candidate reads the same wrapper.
+    wrapper_path = os.path.abspath(
+        write_text(os.path.join(out_dir, f"{wrapper_top}.sv"), "\n".join(lines))
+    )
     workflow_id = str(state.get("workflow_id") or "")
     if workflow_id:
         try:
