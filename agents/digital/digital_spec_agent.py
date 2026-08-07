@@ -1256,52 +1256,19 @@ def _ensure_hierarchical_inter_module_signals(spec_json: dict) -> dict:
         return spec_json
 
     hier = spec_json["hierarchy"]
-    top = hier.get("top_module") if isinstance(hier.get("top_module"), dict) else {}
-    top_name = str(top.get("name") or "").strip()
-    top_ports = {
-        str(p.get("name") or "").strip(): str(p.get("direction") or "").strip().lower()
-        for p in (top.get("ports") or [])
-        if isinstance(p, dict) and str(p.get("name") or "").strip()
-    }
-    top_external_inputs = {name for name, direction in top_ports.items() if direction in {"input", "inout"}}
-    top_external_outputs = {name for name, direction in top_ports.items() if direction in {"output", "inout"}}
-    top_text = " ".join(
-        str(value or "")
-        for value in [
-            top.get("description"),
-            top.get("functionality"),
-            " ".join(str(item) for item in (top.get("responsibilities") or []) if item),
-            " ".join(str(item) for item in (top.get("behavior_rules") or []) if item),
-        ]
-    ).lower()
-    referenced_child_names = {
-        str(m.get("name") or "").strip()
-        for m in (hier.get("modules") or [])
-        if isinstance(m, dict)
-        and str(m.get("name") or "").strip()
-        and str(m.get("name") or "").strip().lower() in top_text
-    }
-
-    top_connected_inputs = set()
-    top_connected_outputs = set()
+    top_connected_endpoints = set()
     for conn in spec_json.get("top_level_connections", []) or []:
         if not isinstance(conn, dict):
             continue
-        top_port = str(conn.get("top_port") or "").strip()
-        endpoints = {str(endpoint or "").strip() for endpoint in conn.get("connected_to", []) or []}
-        if top_port in top_external_inputs:
-            top_connected_inputs.update(endpoints)
-        if top_port in top_external_outputs:
-            top_connected_outputs.update(endpoints)
+        top_connected_endpoints.update(str(endpoint or "").strip() for endpoint in conn.get("connected_to", []) or [])
 
-    signals = []
+    outputs = []
+    inputs = []
     for module in (hier.get("modules") or []):
         if not isinstance(module, dict):
             continue
         module_name = str(module.get("name") or "").strip()
-        if not module_name or module_name == top_name:
-            continue
-        if referenced_child_names and module_name not in referenced_child_names:
+        if not module_name:
             continue
         for port in module.get("ports") or []:
             if not isinstance(port, dict):
@@ -1311,23 +1278,37 @@ def _ensure_hierarchical_inter_module_signals(spec_json: dict) -> dict:
             if not port_name:
                 continue
             endpoint = f"{module_name}.{port_name}"
+            if endpoint in top_connected_endpoints:
+                continue
             width = int(port.get("width") or 1) if str(port.get("width") or "").isdigit() else 1
-            if direction in {"input", "inout"} and endpoint not in top_connected_inputs:
-                signals.append({
-                    "name": f"{module_name}_{port_name}",
-                    "width": width,
-                    "source": f"{top_name}.{module_name}_{port_name}",
-                    "destinations": [endpoint],
-                    "description": f"Derived internal top-owned signal driving {endpoint}.",
-                })
-            if direction in {"output", "inout"} and endpoint not in top_connected_outputs:
-                signals.append({
-                    "name": f"{module_name}_{port_name}",
-                    "width": width,
-                    "source": endpoint,
-                    "destinations": [f"{top_name}.{module_name}_{port_name}"],
-                    "description": f"Derived internal signal produced by {endpoint}.",
-                })
+            record = {"module": module_name, "port": port_name, "endpoint": endpoint, "width": width}
+            if direction in {"output", "inout"}:
+                outputs.append(record)
+            if direction in {"input", "inout"}:
+                inputs.append(record)
+
+    signals = []
+    output_groups = {}
+    for output in outputs:
+        output_groups.setdefault((output["port"], output["width"]), []).append(output)
+    for (port_name, width), candidates in sorted(output_groups.items()):
+        if len(candidates) != 1:
+            continue
+        source = candidates[0]
+        destinations = [
+            item["endpoint"]
+            for item in inputs
+            if item["module"] != source["module"] and item["port"] == port_name and item["width"] == width
+        ]
+        if not destinations:
+            continue
+        signals.append({
+            "name": f"{source['module']}_{port_name}",
+            "width": width,
+            "source": source["endpoint"],
+            "destinations": list(dict.fromkeys(destinations)),
+            "description": f"Derived child-to-child signal from the unique matching producer {source['endpoint']}.",
+        })
 
     if signals:
         spec_json["inter_module_signals"] = signals

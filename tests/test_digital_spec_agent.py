@@ -132,7 +132,7 @@ def test_hierarchical_validation_allows_top_internal_interconnect_nets():
     spec_agent._validate_spec_contract(spec, "hierarchical")
 
 
-def test_normalize_derives_missing_inter_module_signals_for_child_ports():
+def test_normalize_derives_only_unique_child_to_child_inter_module_signals():
     spec = {
         "design_name": "controller",
         "hierarchy": {
@@ -155,7 +155,7 @@ def test_normalize_derives_missing_inter_module_signals_for_child_ports():
                 },
                 {
                     **_module("fallback_model"),
-                    "ports": [_port("clk", "input"), _port("dout", "output", 32)],
+                    "ports": [_port("clk", "input"), _port("addr", "output", 8)],
                     "rtl_output_file": "fallback_model.v",
                 }
             ],
@@ -176,11 +176,11 @@ def test_normalize_derives_missing_inter_module_signals_for_child_ports():
     out = spec_agent._sanitize_hierarchical_connectivity(out)
 
     names = {sig["name"] for sig in out["inter_module_signals"]}
-    assert "sram_wrapper_csb" in names
-    assert "sram_wrapper_addr" in names
-    assert "fallback_model_dout" not in names
+    assert "fallback_model_addr" in names
+    assert "sram_wrapper_csb" not in names
     assert all(sig["name"] != "sram_wrapper_clk" for sig in out["inter_module_signals"])
     assert all(sig["name"] != "sram_wrapper_dout" for sig in out["inter_module_signals"])
+    assert all(not endpoint.startswith("controller.") for sig in out["inter_module_signals"] for endpoint in [sig["source"], *sig["destinations"]])
     spec_agent._validate_spec_contract(out, mode)
 
 
