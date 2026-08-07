@@ -534,7 +534,10 @@ def _repair_decl_direction(code: str, name: str, direction: str) -> str:
     name_re = re.escape(name)
 
     def repl(match: re.Match) -> str:
-        return f"{match.group('prefix')}{direction}{match.group('rest')}"
+        rest = match.group("rest")
+        if direction in {"input", "inout"}:
+            rest = re.sub(r"\b(?:reg|logic)\b\s*", "", rest, count=1, flags=re.IGNORECASE)
+        return f"{match.group('prefix')}{direction}{rest}"
 
     header_pattern = re.compile(
         rf"(?P<prefix>(?:^|[,(])\s*)(?:input|output|inout)(?P<rest>\b(?:(?![(),;]).)*?\b{name_re}\b)",
@@ -547,6 +550,74 @@ def _repair_decl_direction(code: str, name: str, direction: str) -> str:
         flags=re.IGNORECASE | re.MULTILINE,
     )
     return line_pattern.sub(repl, code)
+
+
+def _repair_directional_port_aliases_from_spec(verilog_map: Dict[str, str], spec_json: dict, mode: str) -> Dict[str, str]:
+    """Map conventional ``name``/``name_in``/``name_out`` aliases to the contract."""
+    out = dict(verilog_map)
+    for module in _collect_expected_modules(spec_json, mode):
+        rtl_file = str(module.get("rtl_output_file") or "").strip()
+        module_name = str(module.get("name") or "").strip()
+        if not rtl_file or not module_name or rtl_file not in out:
+            continue
+        expected = _ports_from_module_spec(module)
+        module_code = _module_code_for_name(out[rtl_file], module_name)
+        actual = _declared_ports(module_code)
+        renames: Dict[str, str] = {}
+
+        # Resolve input aliases first so a base-name output can subsequently
+        # claim the emitted ``*_out`` port without ambiguity.
+        for expected_name, expected_info in expected.items():
+            if expected_name in actual or str(expected_info.get("direction")) != "input" or not expected_name.endswith("_in"):
+                continue
+            base = expected_name[:-3]
+            if (actual.get(base) or {}).get("direction") == "input":
+                renames[base] = expected_name
+                actual[expected_name] = actual.pop(base)
+        for expected_name, expected_info in expected.items():
+            if expected_name in actual or str(expected_info.get("direction")) != "output":
+                continue
+            candidate = f"{expected_name}_out"
+            if (actual.get(candidate) or {}).get("direction") == "output":
+                renames[candidate] = expected_name
+                actual[expected_name] = actual.pop(candidate)
+        if not renames:
+            continue
+
+        repaired_module = module_code
+        for old_name, new_name in renames.items():
+            repaired_module = re.sub(rf"\b{re.escape(old_name)}\b", new_name, repaired_module)
+        out[rtl_file] = out[rtl_file].replace(module_code, repaired_module, 1)
+
+        for fname, code in list(out.items()):
+            if fname == rtl_file:
+                continue
+            for old_name, new_name in renames.items():
+                code = re.sub(
+                    rf"(\b{re.escape(module_name)}\s+[A-Za-z_][A-Za-z0-9_$]*\s*\(.*?)\.{re.escape(old_name)}(\s*\()",
+                    rf"\1.{new_name}\2",
+                    code,
+                    flags=re.DOTALL,
+                )
+            out[fname] = code
+    return out
+
+
+def _remove_writes_to_spec_input_ports(verilog_map: Dict[str, str], spec_json: dict, mode: str) -> Dict[str, str]:
+    """Remove emitted drivers for ports whose authoritative contract is input."""
+    out = dict(verilog_map)
+    for module in _collect_expected_modules(spec_json, mode):
+        rtl_file = str(module.get("rtl_output_file") or "").strip()
+        if not rtl_file or rtl_file not in out:
+            continue
+        code = out[rtl_file]
+        for name, info in _ports_from_module_spec(module).items():
+            if str(info.get("direction") or "") != "input":
+                continue
+            code = re.sub(rf"^\s*assign\s+{re.escape(name)}(?:\s*\[[^\]]+\])?\s*=.*?;\s*$", "", code, flags=re.MULTILINE)
+            code = re.sub(rf"\b{re.escape(name)}(?:\s*\[[^\]]+\])?\s*(?:<=|=(?!=))\s*[^;]+;", ";", code)
+        out[rtl_file] = code
+    return out
 
 
 def _repair_module_port_widths_from_spec(verilog_map: Dict[str, str], spec_json: dict, mode: str) -> Dict[str, str]:
@@ -2688,7 +2759,9 @@ def _validate_and_materialize_rtl(
     expected_files = _collect_expected_rtl_files(spec_json, mode)
     verilog_map = _normalize_emitted_rtl_filenames(verilog_map, expected_files)
     verilog_map = _align_verilog_map_to_expected_modules(verilog_map, spec_json, mode)
+    verilog_map = _repair_directional_port_aliases_from_spec(verilog_map, spec_json, mode)
     verilog_map = _repair_module_port_directions_from_spec(verilog_map, spec_json, mode)
+    verilog_map = _remove_writes_to_spec_input_ports(verilog_map, spec_json, mode)
     verilog_map = _sanitize_single_driver_rtl(verilog_map)
     verilog_map = _remove_spec_invalid_extra_control_inputs(verilog_map, spec_json, mode)
     verilog_map = _sanitize_child_output_instance_connections(verilog_map)

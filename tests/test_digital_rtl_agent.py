@@ -544,6 +544,56 @@ endmodule
     assert "assign status_fault = fault_out;" in out["motor_control_top.v"]
 
 
+def test_direction_alignment_removes_reg_and_writes_from_spec_input():
+    files = {"response_unpacker.v": """
+module response_unpacker(input clk, output reg resp_ready);
+always @(*) begin
+  resp_ready = 1'b0;
+  if (clk) resp_ready = 1'b1;
+end
+endmodule
+"""}
+    spec = {"rtl_output_file": "response_unpacker.v", "name": "response_unpacker", "ports": [
+        {"name": "clk", "direction": "input", "width": 1},
+        {"name": "resp_ready", "direction": "input", "width": 1},
+    ]}
+
+    out = agent._repair_module_port_directions_from_spec(files, spec, "flat")
+    out = agent._remove_writes_to_spec_input_ports(out, spec, "flat")["response_unpacker.v"]
+
+    assert "input resp_ready" in out
+    assert "input reg resp_ready" not in out
+    assert "resp_ready =" not in out
+
+
+def test_directional_alias_repair_maps_input_base_and_output_suffix_to_spec():
+    files = {
+        "top.v": "module top; wire [7:0] code; fault_manager u_fault(.fault_code(code), .fault_code_out(code)); endmodule",
+        "fault_manager.v": """
+module fault_manager(input [7:0] fault_code, output reg [7:0] fault_code_out);
+always @(*) fault_code_out = fault_code;
+endmodule
+""",
+    }
+    spec = {
+        "hierarchy": {
+            "top_module": {"name": "top", "rtl_output_file": "top.v", "ports": []},
+            "modules": [{"name": "fault_manager", "rtl_output_file": "fault_manager.v", "ports": [
+                {"name": "fault_code_in", "direction": "input", "width": 8},
+                {"name": "fault_code", "direction": "output", "width": 8},
+            ]}],
+        }
+    }
+
+    out = agent._repair_directional_port_aliases_from_spec(files, spec, "hierarchical")
+
+    assert "input [7:0] fault_code_in" in out["fault_manager.v"]
+    assert "output reg [7:0] fault_code" in out["fault_manager.v"]
+    assert "fault_code = fault_code_in" in out["fault_manager.v"]
+    assert ".fault_code_in(code)" in out["top.v"]
+    assert ".fault_code(code)" in out["top.v"]
+
+
 def test_sanitize_child_output_reroutes_net_already_driven_by_parent_assign():
     code = """
 module top(input fallback_source, output fallback_status);
