@@ -55,6 +55,7 @@ from browser_auth import BrowserUser, is_browser_admin, require_browser_user
 from platform_adapters import get_platform_client
 from model_gateway import model_call_context
 from physical_ai import build_motor_control_package, list_physics_models, run_physical_ai_workflow
+from physical_ai.handoff import resolve_design_identity
 
 
 import logging
@@ -6998,8 +6999,9 @@ def _hem_physical_ai_stage_plan(payload: Dict[str, Any]) -> List[str]:
 
 def _hem_physical_ai_child_payload(root_workflow_id: str, root_run_id: str, payload: Dict[str, Any], *, stage: str, hem_run_id: Optional[str]) -> Dict[str, Any]:
     source_arch2rtl = str(payload.get("source_arch2rtl_workflow_id") or root_workflow_id)
+    top_module, project_name = resolve_design_identity(payload)
     common_digital = {
-        "project_name": str(payload.get("project_name") or "physical_ai_product"),
+        "project_name": project_name,
         "parent_workflow_id": root_workflow_id,
         "hem_enabled": False,
         "hem_mode": _hem_normalized_mode(str(payload.get("hem_mode") or "fixed")),
@@ -7023,11 +7025,12 @@ def _hem_physical_ai_child_payload(root_workflow_id: str, root_run_id: str, payl
         return {
             **common_digital,
             "spec_text": (
-                "The required synthesizable top module is motor_control_top. Do not substitute a status, telemetry, "
-                "register-bank, or leaf module as the design top. The top must retain the motor-control request/response, "
-                "safety, timeout, and actuator-command behavior.\n" + base_spec + memory_contract
+                f"The required synthesizable top module is {top_module}. Do not substitute a status, telemetry, "
+                "register-bank, or leaf module as the design top. The top must implement the selected Physical AI "
+                "application contract, external model request/response transport, validation, safety, timeout, "
+                "fallback, and bounded actuator-command behavior.\n" + base_spec + memory_contract
             ),
-            "top_module": str(payload.get("top_module") or "motor_control_top"),
+            "top_module": top_module,
             "design_language": "SystemVerilog",
             "toggles": {"run_spec2rtl_check": True},
         }
@@ -7047,7 +7050,7 @@ def _hem_physical_ai_child_payload(root_workflow_id: str, root_run_id: str, payl
             "rtl_source_mode": "from_arch2rtl",
             "from_workflow_id": source_arch2rtl,
             "source_arch2rtl_workflow_id": source_arch2rtl,
-            "top_module": str(payload.get("top_module") or "motor_control_top"),
+            "top_module": top_module,
             "foundry": payload.get("foundry") or "sky130",
             "pdk": payload.get("pdk") or "sky130A",
             "toolchain": payload.get("toolchain") or "openlane2",
@@ -7060,14 +7063,14 @@ def _hem_physical_ai_child_payload(root_workflow_id: str, root_run_id: str, payl
         }
     if stage == "firmware_product":
         return {
-            "project_name": "physical_ai_pmsm_motor_control",
+            "project_name": project_name,
             "rtl_source_mode": "from_system_rtl",
             "system_rtl_workflow_id": root_workflow_id,
             "source_system_rtl_workflow_id": root_workflow_id,
             "from_workflow_id": root_workflow_id,
             "parent_workflow_id": root_workflow_id,
             "upstream_workflows": {"physical_ai": root_workflow_id, "system_rtl": root_workflow_id},
-            "top_module": "motor_control_mmio_top",
+            "top_module": top_module,
             "target_frequency_mhz": float(payload.get("target_frequency_mhz") or 50.0),
             "execute_cosim": True,
             "run_cosim": True,
@@ -7078,7 +7081,7 @@ def _hem_physical_ai_child_payload(root_workflow_id: str, root_run_id: str, payl
             "hem_root_workflow_id": root_workflow_id,
             "hem_root_run_id": root_run_id,
             "hem_stage_toggles": {"system_software": True, "system_validation": True, "system_product": True},
-            "product_intent": "Build a safe simulator-backed PMSM motor-control product demo; physical board programming requires explicit approval.",
+            "product_intent": str(payload.get("product_intent") or "Build a safe simulator-backed Physical AI product demo; physical board programming requires explicit approval."),
         }
     common = {
         "rtl_source_mode": "from_arch2rtl",
@@ -7087,7 +7090,7 @@ def _hem_physical_ai_child_payload(root_workflow_id: str, root_run_id: str, payl
         "source_arch2rtl_workflow_id": source_arch2rtl,
         "parent_workflow_id": root_workflow_id,
         "upstream_workflows": {"physical_ai": root_workflow_id},
-        "top_module": "motor_control_top",
+        "top_module": top_module,
         "board": str(payload.get("board") or "orangecrab_ecp5_85f"),
         "target_frequency_mhz": float(payload.get("target_frequency_mhz") or 50.0),
         "target": "fpga",
@@ -7316,18 +7319,43 @@ def execute_physical_ai_workflow_background(workflow_id: str, run_id: str, user_
             append_log_run(run_id, "Physical AI surrogate architecture reference journey completed", status="completed", artifacts_path=artifact_dir)
             if bool(data.get("hem_enabled")) and not architecture_only:
                 generated = result["physics_execution"].get("architecture") or {}
+                digital_ip_spec = result["physics_execution"].get("digital_ip_spec") or {}
+                selected_model = result.get("physics_model") or {}
                 _hem_continue_physical_ai_after_success(
                     root_workflow_id=workflow_id,
                     root_run_id=run_id,
                     user_id=user_id,
-                    payload={**data, "rtl_spec_text": generated.get("rtl_spec_text"), "verification_goals": generated.get("verification_goals")},
+                    payload={
+                        **data,
+                        "generated_architecture": generated,
+                        "digital_ip_spec": digital_ip_spec,
+                        "model_top_module": selected_model.get("digital_ip_top_module"),
+                        "model_project_name": selected_model.get("digital_ip_project_name"),
+                        "rtl_spec_text": generated.get("rtl_spec_text"),
+                        "verification_goals": generated.get("verification_goals"),
+                    },
                 )
         elif result["status"] == "ready_for_fpga_exploration":
             append_log_workflow(workflow_id, f"Physics model {result['physics_model']['name']} completed; speed error {metrics['steady_state_speed_error_percent']:.2f}%", phase="physics_validation")
             append_log_workflow(workflow_id, "Physics, fixed-point, and RTL smoke validation passed; FPGA exploration is ready", status="completed", phase="fpga_exploration_ready", artifacts=artifacts)
             append_log_run(run_id, "Physical AI parent workflow completed", status="completed", artifacts_path=artifact_dir)
             generated = result["physics_execution"].get("architecture") or {}
-            _hem_continue_physical_ai_after_success(root_workflow_id=workflow_id, root_run_id=run_id, user_id=user_id, payload={**data, "rtl_spec_text": generated.get("rtl_spec_text"), "verification_goals": generated.get("verification_goals")})
+            digital_ip_spec = result["physics_execution"].get("digital_ip_spec") or {}
+            selected_model = result.get("physics_model") or {}
+            _hem_continue_physical_ai_after_success(
+                root_workflow_id=workflow_id,
+                root_run_id=run_id,
+                user_id=user_id,
+                payload={
+                    **data,
+                    "generated_architecture": generated,
+                    "digital_ip_spec": digital_ip_spec,
+                    "model_top_module": selected_model.get("digital_ip_top_module"),
+                    "model_project_name": selected_model.get("digital_ip_project_name"),
+                    "rtl_spec_text": generated.get("rtl_spec_text"),
+                    "verification_goals": generated.get("verification_goals"),
+                },
+            )
         else:
             append_log_workflow(workflow_id, "Physics validation needs revision before child loops can start", status="completed", phase="needs_revision", artifacts=artifacts)
             append_log_run(run_id, "Physical AI physics validation needs revision", status="completed", artifacts_path=artifact_dir)
@@ -7575,9 +7603,14 @@ async def apps_physical_ai_run(request: Request, background_tasks: BackgroundTas
         raise HTTPException(status_code=400, detail="Unknown or disabled Physical AI model")
     if str(model_rows[0].get("availability")) != "ready" and payload.execution_mode != "architecture":
         raise HTTPException(status_code=409, detail=f"Physical AI model is not executable: {model_rows[0].get('availability')}")
+    model_record = dict(model_rows[0])
+    model_configuration = model_record.get("configuration") if isinstance(model_record.get("configuration"), dict) else {}
+    for governed_key in ("digital_ip_top_module", "digital_ip_project_name", "architecture_definition_supported"):
+        if governed_key in model_configuration:
+            model_record[governed_key] = model_configuration[governed_key]
     workflow_id, run_id, artifact_dir = _create_app_workflow_and_run(user_id, "App: Physical AI Studio", "physical_ai")
     data = payload.dict()
-    data["physics_model_record"] = model_rows[0]
+    data["physics_model_record"] = model_record
     background_tasks.add_task(execute_physical_ai_workflow_background, workflow_id, run_id, user_id, artifact_dir, data)
     return {"ok": True, "workflow_id": workflow_id, "run_id": run_id, "dashboard_path": f"/apps/physical-ai/results/{workflow_id}"}
 

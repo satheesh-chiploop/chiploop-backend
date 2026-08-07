@@ -92,6 +92,8 @@ def test_pretrained_gpu_surrogate_supports_cpu_architecture_journey(tmp_path):
     assert next(stage for stage in result["loop"]["stages"] if stage["id"] == "fpga_exploration")["status"] == "planned"
     assert next(stage for stage in result["loop"]["stages"] if stage["id"] == "digital_implementation")["status"] == "planned"
     assert result["physics_execution"]["digital_ip_spec"]["surrogate_is_not_rtl"] is True
+    assert result["physics_execution"]["digital_ip_spec"]["top_module"] == "adaptive_aero_control_top"
+    assert result["physics_execution"]["digital_ip_spec"]["project_name"] == "adaptive_aero_control"
     assert result["files"]["digital_ip_spec"]
     summary = json.loads(open(result["files"]["workflow_summary"], encoding="utf-8").read())
     assert summary["physics_execution"]["interface"]["inference"]["status"] == "not_executed"
@@ -141,6 +143,7 @@ def test_selected_agent_model_generates_rtl_ready_architecture(tmp_path, monkeyp
     assert calls
     assert calls[0][1]["agent_name"] == "Physical AI Architecture Agent"
     assert result["physics_execution"]["architecture"]["rtl_spec_text"].startswith("Create a synthesizable")
+    assert result["physics_execution"]["architecture"]["top_module"] == "adaptive_aero_control_top"
     assert result["loop"]["child_handoff"]["rtl_spec_text"] == response["rtl_spec_text"]
 
 
@@ -188,6 +191,13 @@ def test_physical_ai_has_supabase_source_of_truth_migration():
         "Physical AI Orchestrator Agent",
     ):
         assert agent_name in migration
+
+    identity_migration = open(
+        "supabase/migrations/phase_20260807_physical_ai_design_identity.sql",
+        encoding="utf-8",
+    ).read()
+    assert "'adaptive_aero_control_top'" in identity_migration
+    assert "'motor_control_top'" in identity_migration
 
     apps_page = open("../frontend/app/apps/page.tsx", encoding="utf-8").read()
     loops_page = open("../frontend/app/loops/page.tsx", encoding="utf-8").read()

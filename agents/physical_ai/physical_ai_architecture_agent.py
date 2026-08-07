@@ -32,7 +32,8 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     prompt = f"""You are a Physical AI and digital-product architect.
 Create the hardware architecture around the selected physics model. The physics/surrogate model itself is not RTL.
 Use only the supplied requirements, model interface, and execution evidence. If inference_status is not_executed, do not invent predictions.
-Return JSON only with keys: product_name, product_summary, architecture_decisions, blocks, interfaces, safety_requirements, rtl_spec_text, verification_goals.
+Return JSON only with keys: product_name, top_module, product_summary, architecture_decisions, blocks, interfaces, safety_requirements, rtl_spec_text, verification_goals.
+top_module must be a valid Verilog identifier describing this application; never reuse a motor-control top for a non-motor application.
 rtl_spec_text must be a detailed synthesizable digital-IP requirement suitable for an Arch2RTL workflow.
 For FPGA or ASIC implementation, the RTL top level MUST use a compact implementation-friendly interface:
 - Do not expose tensors, geometry arrays, flow fields, or surrogate-model payloads as thousands of individual top-level pins.
@@ -59,6 +60,8 @@ AVAILABLE EVIDENCE:
     missing = sorted(required - set(architecture))
     if missing:
         raise ValueError(f"architecture model response missing fields: {', '.join(missing)}")
+    digital_ip_spec = execution.get("digital_ip_spec") if isinstance(execution.get("digital_ip_spec"), dict) else {}
+    architecture.setdefault("top_module", digital_ip_spec.get("top_module") or model.get("digital_ip_top_module"))
     root = Path(state["artifact_dir"])
     path = root / "model_generated_architecture.json"
     raw_path = root / "model_generated_architecture_raw.txt"

@@ -15,6 +15,7 @@ from agents.digital.digital_rtl_agent import (
     _sanitize_child_output_instance_connections,
     _validate_connectivity_contract,
 )
+from physical_ai.handoff import resolve_design_identity
 
 
 def test_die_area_scales_for_scalar_equivalent_io_width(tmp_path):
@@ -67,11 +68,27 @@ def test_explicit_sky130_sram_instance_is_discovered(tmp_path):
     }]
 
 
-def test_physical_ai_hem_pins_motor_control_top_for_rtl_and_asic():
-    source = (Path(__file__).parents[1] / "main.py").read_text(encoding="utf-8")
+def test_physical_ai_hem_uses_selected_model_design_identity():
+    aero = {
+        "implementation_path": "digital_ip_asic",
+        "model_top_module": "adaptive_aero_control_top",
+        "model_project_name": "adaptive_aero_control",
+        "rtl_spec_text": "Implement active-aero request validation, command limits, watchdog, and fallback.",
+    }
 
-    assert source.count('payload.get("top_module") or "motor_control_top"') >= 2
-    assert "ASIC MEMORY CONTRACT (mandatory)" in source
+    assert resolve_design_identity(aero) == ("adaptive_aero_control_top", "adaptive_aero_control")
+
+    main_source = Path("main.py").read_text(encoding="utf-8")
+    assert 'top_module, project_name = resolve_design_identity(payload)' in main_source
+    assert 'f"The required synthesizable top module is {top_module}' in main_source
+    assert '"top_module": top_module' in main_source
+    assert "motor-control request/response" not in main_source
+
+
+def test_physical_ai_motor_model_keeps_motor_top():
+    motor = {"implementation_path": "fpga_prototype", "model_top_module": "motor_control_top", "model_project_name": "pmsm_motor_control"}
+
+    assert resolve_design_identity(motor) == ("motor_control_top", "pmsm_motor_control")
 
 
 def test_rtl_repair_overlay_preserves_unchanged_hierarchy_files():

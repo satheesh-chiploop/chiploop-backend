@@ -66,6 +66,8 @@ def build_surrogate_architecture_package(
     digital_ip = {
         "schema": "chiploop.digital_ip.spec.v1",
         "name": "adaptive_aero_control_ip",
+        "top_module": "adaptive_aero_control_top",
+        "project_name": "adaptive_aero_control",
         "purpose": "Low-latency sensor aggregation, safety monitoring, and active-aero actuator control around an external GPU surrogate.",
         "clock": {"name": "clk", "target_frequency_mhz": 100},
         "reset": {"name": "reset_n", "active_low": True},
