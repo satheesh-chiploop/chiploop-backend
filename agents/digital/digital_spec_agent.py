@@ -1330,6 +1330,15 @@ def _sanitize_hierarchical_connectivity(spec_json: dict) -> dict:
         for m in modules
         if str(m.get("name") or "").strip()
     }
+    module_widths = {
+        str(m.get("name") or "").strip(): {
+            str(p.get("name") or "").strip(): int(p.get("width") or 1)
+            for p in (m.get("ports") or [])
+            if isinstance(p, dict) and str(p.get("name") or "").strip()
+        }
+        for m in modules
+        if str(m.get("name") or "").strip()
+    }
     top_name = str(top.get("name") or "").strip()
     top_dirs = module_dirs.get(top_name, {})
 
@@ -1348,6 +1357,10 @@ def _sanitize_hierarchical_connectivity(spec_json: dict) -> dict:
         if module_name == top_name:
             return True
         return endpoint_dir(endpoint) in {"input", "inout"}
+
+    def endpoint_width(endpoint: str) -> int:
+        module_name, port_name = _normalize_endpoint_port(endpoint)
+        return int((module_widths.get(module_name) or {}).get(port_name, 1))
 
     def compatible_top_endpoint(top_dir: str, child_dir: str) -> bool:
         if top_dir == "input":
@@ -1383,18 +1396,49 @@ def _sanitize_hierarchical_connectivity(spec_json: dict) -> dict:
         src_mod, _ = _normalize_endpoint_port(source)
         if not source_ok(source):
             continue
+        signal_width = int(sig.get("width") or 1)
+        if src_mod != top_name and endpoint_width(source) != signal_width:
+            continue
         destinations = []
         for endpoint in sig.get("destinations", []) or []:
             endpoint = str(endpoint or "").strip()
             dst_mod, _ = _normalize_endpoint_port(endpoint)
             if dst_mod == src_mod:
                 continue
-            if destination_ok(endpoint):
+            if destination_ok(endpoint) and (dst_mod == top_name or endpoint_width(endpoint) == signal_width):
                 destinations.append(endpoint)
         if destinations:
             new_sig = dict(sig)
             new_sig["destinations"] = list(dict.fromkeys(destinations))
             sanitized_signals.append(new_sig)
+
+    # A child input is a single structural sink and may have only one producer.
+    # Prefer the semantically exact signal/port match when an LLM emits
+    # contradictory edges; never allow the ambiguity to become RTL multi-drive.
+    winners = {}
+    for index, sig in enumerate(sanitized_signals):
+        signal_name = str(sig.get("name") or "").strip().lower()
+        _, source_port = _normalize_endpoint_port(str(sig.get("source") or ""))
+        for destination in sig.get("destinations") or []:
+            _, destination_port = _normalize_endpoint_port(destination)
+            dest_lower = destination_port.lower()
+            signal_tokens = set(re.split(r"_+", signal_name))
+            dest_tokens = set(re.split(r"_+", dest_lower))
+            score = len(signal_tokens.intersection(dest_tokens))
+            if signal_name == dest_lower:
+                score += 100
+            if source_port.lower() == dest_lower:
+                score += 80
+            current = winners.get(destination)
+            if current is None or score > current[0]:
+                winners[destination] = (score, index)
+    for index, sig in enumerate(sanitized_signals):
+        sig["destinations"] = [
+            destination
+            for destination in sig.get("destinations") or []
+            if winners.get(destination, (-1, -1))[1] == index
+        ]
+    sanitized_signals = [sig for sig in sanitized_signals if sig.get("destinations")]
     spec_json["inter_module_signals"] = sanitized_signals
 
     ownership = []

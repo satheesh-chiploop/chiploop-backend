@@ -184,6 +184,35 @@ def test_normalize_derives_only_unique_child_to_child_inter_module_signals():
     spec_agent._validate_spec_contract(out, mode)
 
 
+def test_sanitize_connectivity_keeps_one_width_compatible_producer_per_input():
+    spec = {
+        "hierarchy": {
+            "top_module": {**_module("top"), "ports": [_port("clk", "input")], "rtl_output_file": "top.v"},
+            "modules": [
+                {**_module("packager"), "ports": [_port("capture_request", "output"), _port("descriptor_valid", "output"), _port("descriptor", "output", 32)], "rtl_output_file": "packager.v"},
+                {**_module("validator"), "ports": [_port("validated_command", "output", 16)], "rtl_output_file": "validator.v"},
+                {**_module("supervisor"), "ports": [_port("request_captured", "input"), _port("validated_command", "input", 16)], "rtl_output_file": "supervisor.v"},
+            ],
+        },
+        "top_level_connections": [],
+        "inter_module_signals": [
+            {"name": "request_captured", "width": 1, "source": "packager.capture_request", "destinations": ["supervisor.request_captured"]},
+            {"name": "request_descriptor_valid", "width": 1, "source": "packager.descriptor_valid", "destinations": ["supervisor.request_captured"]},
+            {"name": "request_descriptor", "width": 32, "source": "packager.descriptor", "destinations": ["supervisor.validated_command"]},
+            {"name": "validated_command", "width": 16, "source": "validator.validated_command", "destinations": ["supervisor.validated_command"]},
+        ],
+        "signal_ownership": [],
+    }
+
+    out = spec_agent._sanitize_hierarchical_connectivity(spec)
+
+    edges = {(sig["source"], destination) for sig in out["inter_module_signals"] for destination in sig["destinations"]}
+    assert edges == {
+        ("packager.capture_request", "supervisor.request_captured"),
+        ("validator.validated_command", "supervisor.validated_command"),
+    }
+
+
 def test_normalize_adds_referenced_memory_macro_module():
     spec = {
         "design_name": "controller",
