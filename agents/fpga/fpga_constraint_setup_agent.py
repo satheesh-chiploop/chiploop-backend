@@ -206,6 +206,12 @@ def _pin_for_lpf_port(board_key: str, port: str) -> str | None:
             "led_6": "E1",
             "led7": "H3",
             "led_7": "H3",
+            # J1 GPIO pins from the published ULX3S v2/v3 LPF.
+            "spi_sclk": "B11",  # GP0 / J1_5+
+            "spi_cs_n": "A10",  # GP1 / J1_7+
+            "spi_mosi": "A9",   # GP2 / J1_9+
+            "spi_miso": "B9",   # GP3 / J1_11+
+            "fault_indicator": "B2",
         }
         return _lookup_pin(pins, port)
     if board_key == "orangecrab_ecp5_85f":

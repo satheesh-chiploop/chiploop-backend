@@ -1,6 +1,46 @@
 from agents.fpga import fpga_target_explorer_agent as explorer
 
 
+def test_capacity_preflight_rejects_impossible_io_before_place_and_route():
+    synthesis = {
+        "logical_cells_used": 1457,
+        "block_ram_blocks_used": 0,
+        "cell_type_counts": {"LUT4": 1044, "TRELLIS_FF": 413},
+    }
+    board = {"resources": {"logic_cells": 84000, "io_cells": 365, "block_ram_blocks": 208, "dsp_blocks": 156}}
+
+    result = explorer._capacity_preflight(synthesis, board, 370)
+
+    assert result["status"] == "reject"
+    assert result["checks"]["logic_cells"]["status"] == "pass"
+    assert result["checks"]["io_cells"] == {"required": 370, "available": 365, "status": "fail"}
+    assert result["failure_reasons"] == ["io_cells requires 370, board provides 365"]
+
+
+def test_explorer_does_not_run_pnr_for_preflight_rejected_board(monkeypatch):
+    synth_calls = []
+    pnr_calls = []
+    monkeypatch.setattr(explorer, "_run_synthesis", lambda *args: synth_calls.append(args) or {
+        "status": "completed", "strategy": "baseline", "netlist": "demo.json",
+        "logical_cells_used": 1457, "block_ram_blocks_used": 0,
+        "cell_type_counts": {"LUT4": 1044, "TRELLIS_FF": 413},
+    })
+    monkeypatch.setattr(explorer, "_run_pnr", lambda *args, **_kwargs: pnr_calls.append(args) or {})
+    monkeypatch.setattr(explorer, "publish_json", lambda *_args: None)
+    state = {
+        "workflow_id": "wf", "candidate_boards": ["orangecrab_ecp5_85f"],
+        "fpga": {"top_module": "adaptive_aero_control_top", "rtl_files": ["top.sv"]},
+        "fpga_explorer_io_mapping": {"top_level_ports": [f"io[{index}]" for index in range(370)]},
+    }
+
+    explorer.run_agent(state)
+
+    assert synth_calls == []
+    assert pnr_calls == []
+    assert state["fpga_target_explorer"]["preflight_rejected_count"] == 1
+    assert state["fpga_target_explorer"]["results"][0]["status"] == "capacity_rejected"
+
+
 def _board(board, fmax, available, used, met=True):
     return {
         "board": board,

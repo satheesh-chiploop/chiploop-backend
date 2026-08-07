@@ -4,6 +4,7 @@ from .fpga_common import BOARD_REGISTRY, publish_json
 from .fpga_constraint_setup_agent import (
     _extract_port_bits_from_rtl, _starter_cst, _starter_lpf, _starter_pcf, _starter_pdc,
 )
+from .fpga_serial_transport import add_spi_transport_if_needed
 
 
 def _mapping_for_board(board_key: str, board: dict, top: str, ports: list[str], frequency: float) -> dict:
@@ -26,6 +27,11 @@ def run_agent(state: dict) -> dict:
     fpga = state.get("fpga") if isinstance(state.get("fpga"), dict) else {}
     rtl_files = [str(path) for path in fpga.get("rtl_files") or []]
     top = str(fpga.get("top_module") or state.get("top_module") or "top")
+    adapter = add_spi_transport_if_needed(state)
+    if adapter and adapter.get("status") == "generated":
+        fpga = state.get("fpga") if isinstance(state.get("fpga"), dict) else {}
+        rtl_files = [str(path) for path in fpga.get("rtl_files") or []]
+        top = str(fpga.get("top_module") or state.get("top_module") or top)
     ports = _extract_port_bits_from_rtl(rtl_files, top)
     frequency = float(state.get("target_frequency_mhz") or 75.0)
     requested = state.get("candidate_boards") if isinstance(state.get("candidate_boards"), list) else []
@@ -39,6 +45,7 @@ def run_agent(state: dict) -> dict:
         mappings.append(_mapping_for_board(board_key, board, top, ports, frequency))
     summary = {
         "agent": agent, "status": "completed", "top_module": top, "top_level_ports": ports,
+        "interface_adapter": adapter,
         "board_count": len(mappings), "fully_mapped_board_count": sum(1 for item in mappings if item["all_ports_mapped"]),
         "mappings": mappings,
         "policy": "Never invent physical pins. Unmapped I/O is explicit; Explorer uses core-only implementation while Prototyping blocks until every physical I/O is verified.",

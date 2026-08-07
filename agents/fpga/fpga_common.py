@@ -96,9 +96,11 @@ BOARD_REGISTRY: Dict[str, Dict[str, Any]] = {
         "default_frequency_mhz": 25.0,
         "resources": {
             "logic_cells": 44000,
+            "io_cells": 245,
             "block_ram_primitive": "DP16KD",
             "block_ram_blocks": 108,
             "block_ram_bits": 1_944_000,
+            "dsp_blocks": 72,
         },
     },
     "orangecrab_ecp5_85f": {
@@ -115,9 +117,11 @@ BOARD_REGISTRY: Dict[str, Dict[str, Any]] = {
         "default_frequency_mhz": 48.0,
         "resources": {
             "logic_cells": 84000,
+            "io_cells": 365,
             "block_ram_primitive": "DP16KD",
             "block_ram_blocks": 208,
             "block_ram_bits": 3_744_000,
+            "dsp_blocks": 156,
         },
     },
     "colorlight_5a_75b": {

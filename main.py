@@ -7226,6 +7226,14 @@ def _hem_continue_physical_ai_after_success(*, root_workflow_id: str, root_run_i
                     selected_board = continuation.get("selected_board") or explorer.get("selected_recommendation")
                     if selected_board:
                         automation_payload["board"] = selected_board
+                    explorer_top = continuation.get("top_module") or explorer.get("top_module")
+                    if explorer_top:
+                        automation_payload["top_module"] = explorer_top
+                    # The Explorer may generate an FPGA-only serialized wrapper.
+                    # Bitstream must ingest that child workflow, not the original
+                    # wide digital-IP top from Arch2RTL.
+                    automation_payload["source_arch2rtl_workflow_id"] = child_workflow_id
+                    automation_payload["from_workflow_id"] = child_workflow_id
                     automation_payload["explorer_winning_configuration"] = continuation.get("winning_configuration") or {}
                     append_log_workflow(root_workflow_id, f"HEM selected FPGA board {selected_board or 'unresolved'} from Target Explorer evidence.", phase="hem_running")
                 except Exception as exc:

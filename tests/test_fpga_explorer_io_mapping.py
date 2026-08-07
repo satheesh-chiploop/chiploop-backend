@@ -3,6 +3,54 @@ from pathlib import Path
 from agents.fpga import fpga_explorer_io_mapping_agent as mapping_agent
 from agents.fpga import fpga_target_explorer_agent as explorer
 from agents.fpga.fpga_common import BOARD_REGISTRY
+from agents.fpga import fpga_serial_transport
+
+
+def test_wide_core_gets_fpga_only_spi_transport(tmp_path, monkeypatch):
+    rtl = tmp_path / "adaptive_aero_control_top.sv"
+    rtl.write_text(
+        "module adaptive_aero_control_top(input logic clk, input logic rst_n, "
+        "input logic [127:0] s_axis_cmd, input logic s_axis_valid, "
+        "output logic [127:0] m_axis_resp, output logic fault_flag); "
+        "assign m_axis_resp=s_axis_cmd; assign fault_flag=~s_axis_valid; endmodule\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(fpga_serial_transport, "publish_json", lambda *_args: None)
+    state = {
+        "workflow_id": "wf", "workflow_dir": str(tmp_path),
+        "fpga": {"top_module": "adaptive_aero_control_top", "rtl_files": [str(rtl)]},
+    }
+
+    report = fpga_serial_transport.add_spi_transport_if_needed(state)
+
+    assert report["status"] == "generated"
+    assert report["original_top_level_io_bits"] == 260
+    assert report["fpga_top_level_io_bits"] == 7
+    assert state["fpga"]["core_top_module"] == "adaptive_aero_control_top"
+    assert state["fpga"]["top_module"] == "adaptive_aero_control_top_spi_fpga_top"
+    wrapper = Path(report["wrapper_rtl"]).read_text(encoding="utf-8")
+    assert "input  logic spi_sclk" in wrapper
+    assert "adaptive_aero_control_top u_core" in wrapper
+    assert ".s_axis_cmd(core_s_axis_cmd)" in wrapper
+
+
+def test_ulx3s_has_verified_spi_wrapper_pin_mapping(tmp_path, monkeypatch):
+    rtl = tmp_path / "spi_top.sv"
+    rtl.write_text(
+        "module spi_top(input logic clk,input logic reset_n,input logic spi_sclk,"
+        "input logic spi_cs_n,input logic spi_mosi,output logic spi_miso,"
+        "output logic fault_indicator); endmodule\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mapping_agent, "publish_json", lambda *_args: None)
+    state = {"candidate_boards": ["ulx3s_ecp5_45f"], "fpga": {"top_module": "spi_top", "rtl_files": [str(rtl)]}}
+
+    mapping_agent.run_agent(state)
+
+    mapping = state["fpga_explorer_io_mapping"]["mappings"][0]
+    assert mapping["programming_ready"] is True
+    assert mapping["unmapped_ports"] == []
+    assert mapping["mapped_ports"] == ["clk", "reset_n", "spi_sclk", "spi_cs_n", "spi_mosi", "spi_miso", "fault_indicator"]
 
 
 def test_gowin_mapping_reports_every_unmapped_top_level_port(tmp_path, monkeypatch):

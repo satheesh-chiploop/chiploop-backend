@@ -262,7 +262,36 @@ def _run_pnr(state: dict, board_key: str, board: dict, synthesis: dict, seed: in
     }
 
 
-def _summarize_board(board_key: str, board: dict, synthesis_runs: list[dict], pnr_runs: list[dict], target: float) -> dict:
+def _capacity_preflight(synthesis: dict, board: dict, io_required: int) -> dict:
+    """Reject a candidate before P&R when synthesis proves it cannot fit."""
+    resources = board.get("resources") if isinstance(board.get("resources"), dict) else {}
+    cell_counts = synthesis.get("cell_type_counts") if isinstance(synthesis.get("cell_type_counts"), dict) else {}
+    dsp_used = sum(
+        int(_num(count)) for cell, count in cell_counts.items()
+        if any(marker in str(cell).upper() for marker in ("MULT18", "DSP", "ALU54"))
+    )
+    checks = {
+        "io_cells": {"required": int(io_required), "available": resources.get("io_cells")},
+        "logic_cells": {"required": int(_num(synthesis.get("logical_cells_used"))), "available": resources.get("logic_cells")},
+        "block_ram_blocks": {"required": int(_num(synthesis.get("block_ram_blocks_used"))), "available": resources.get("block_ram_blocks")},
+        "dsp_blocks": {"required": dsp_used, "available": resources.get("dsp_blocks")},
+    }
+    failures = []
+    for resource, check in checks.items():
+        available = check.get("available")
+        required = int(check.get("required") or 0)
+        check["status"] = "unknown" if available is None else ("pass" if required <= int(available) else "fail")
+        if check["status"] == "fail":
+            failures.append(f"{resource} requires {required}, board provides {int(available)}")
+    return {
+        "status": "reject" if failures else "pass",
+        "checks": checks,
+        "failure_reasons": failures,
+        "policy": "P&R runs only when every known synthesized resource requirement fits the device.",
+    }
+
+
+def _summarize_board(board_key: str, board: dict, synthesis_runs: list[dict], pnr_runs: list[dict], target: float, capacity_preflight: dict | None = None) -> dict:
     completed = [run for run in pnr_runs if run.get("status") == "completed" and _num(run.get("max_frequency_mhz")) > 0]
     frequencies = [_num(run.get("max_frequency_mhz")) for run in completed]
     best = max(completed, key=lambda run: _num(run.get("max_frequency_mhz"))) if completed else {}
@@ -270,7 +299,7 @@ def _summarize_board(board_key: str, board: dict, synthesis_runs: list[dict], pn
     errors = [str(run.get("error") or "") for run in pnr_runs if run.get("status") == "failed"]
     error_text = "\n".join(errors).lower()
     diagnostic = best or max(pnr_runs, key=lambda run: _num(run.get("logic_utilization_percent")), default={})
-    available = int(diagnostic.get("logic_cells_available") or ((board.get("resources") or {}).get("logic_cells")) or 0) if diagnostic else 0
+    available = int(diagnostic.get("logic_cells_available") or ((board.get("resources") or {}).get("logic_cells")) or 0)
     used = int(diagnostic.get("logic_cells_used") or diagnostic.get("routed_lut4_cells") or 0) if diagnostic else 0
     utilization = diagnostic.get("logic_utilization_percent")
     resource_match = re.search(r"(?:ICESTORM_LC|LUT4):\s*(\d+)\s*/\s*(\d+)\s+(\d+(?:\.\d+)?)%", "\n".join(errors), re.IGNORECASE)
@@ -294,6 +323,7 @@ def _summarize_board(board_key: str, board: dict, synthesis_runs: list[dict], pn
         else "implementation_failed" if errors
         else None
     )
+    rejected = bool(capacity_preflight and capacity_preflight.get("status") == "reject")
     return {
         "board": board_key,
         "label": board.get("label") or board_key,
@@ -307,7 +337,7 @@ def _summarize_board(board_key: str, board: dict, synthesis_runs: list[dict], pn
         "implementation_key": _implementation_key(board),
         "board_input_frequency_mhz": board.get("default_frequency_mhz"),
         "target_frequency_mhz": target,
-        "status": "target_met" if met_runs else "target_missed" if completed else "implementation_failed",
+        "status": "capacity_rejected" if rejected else "target_met" if met_runs else "target_missed" if completed else "implementation_failed",
         "target_met": bool(met_runs),
         "best_frequency_mhz": best_fmax,
         "timing_margin_percent": timing_margin_percent,
@@ -319,8 +349,9 @@ def _summarize_board(board_key: str, board: dict, synthesis_runs: list[dict], pn
         "logic_cells_available": available or None,
         "logic_utilization_percent": utilization,
         "resource_headroom_percent": round(100.0 - _num(utilization), 3) if best and utilization is not None else None,
-        "failure_kind": failure_kind,
-        "failure_reason": next((run.get("error") for run in pnr_runs if run.get("status") == "failed" and run.get("error")), None),
+        "failure_kind": "capacity_exceeded" if rejected else failure_kind,
+        "failure_reason": "; ".join(capacity_preflight.get("failure_reasons") or []) if rejected else next((run.get("error") for run in pnr_runs if run.get("status") == "failed" and run.get("error")), None),
+        "capacity_preflight": capacity_preflight,
         "closure_used": len(synthesis_runs) > 1 or any(run.get("effort") == "advanced" for run in pnr_runs),
         "frequency_relaxation": {"eligible": bool(relaxed), "recommended_mhz": relaxed, "reason": "reported only after target closure failed" if relaxed else None},
         "constraint_scope": "capacity_and_timing_exploration; board pin compatibility must be confirmed in FPGA Prototyping",
@@ -333,8 +364,8 @@ def _summarize_board(board_key: str, board: dict, synthesis_runs: list[dict], pn
 
 
 def _recommend(results: list[dict]) -> dict:
-    viable = [item for item in results if item.get("target_met")]
-    pool = viable or [item for item in results if _num(item.get("best_frequency_mhz")) > 0]
+    viable = [item for item in results if item.get("target_met") and item.get("programming_ready") is not False]
+    pool = viable or [item for item in results if _num(item.get("best_frequency_mhz")) > 0 and item.get("programming_ready") is not False]
     if not pool:
         return {key: None for key in PROFILE_KEYS}
     performance = max(pool, key=lambda item: (_num(item.get("median_frequency_mhz")), _num(item.get("best_frequency_mhz"))))
@@ -409,6 +440,12 @@ def run_agent(state: dict) -> dict:
     closure_seed_count = max(1, min(int(_num(state.get("closure_seed_count"), 1)), 10))
     baseline_seeds = list(range(1, baseline_seed_count + 1))
     closure_seeds = list(range(baseline_seed_count + 1, baseline_seed_count + closure_seed_count + 1))
+    io_mapping = state.get("fpga_explorer_io_mapping") if isinstance(state.get("fpga_explorer_io_mapping"), dict) else {}
+    io_required = len(io_mapping.get("top_level_ports") or [])
+    mappings_by_board = {
+        str(item.get("board")): item for item in (io_mapping.get("mappings") or [])
+        if isinstance(item, dict) and item.get("board")
+    }
     _progress(state, f"Explorer plan: {len(board_keys)} selected board(s), target {target:g} MHz, {baseline_seed_count} baseline seed(s) + {closure_seed_count} conditional closure seed(s).")
     implementation_cache: dict[str, dict] = {}
     results: list[dict] = []
@@ -427,12 +464,28 @@ def run_agent(state: dict) -> dict:
             results.append(reused)
             _progress(state, f"Board {board_index}/{len(board_keys)}: reused identical {implementation_key} implementation from {reused.get('reused_implementation_from')}.")
             continue
+        io_available = ((board.get("resources") or {}).get("io_cells"))
+        if io_required and io_available is not None and io_required > int(io_available):
+            capacity_preflight = _capacity_preflight({}, board, io_required)
+            summary = _summarize_board(board_key, board, [], [], target, capacity_preflight)
+            implementation_cache[implementation_key] = deepcopy(summary)
+            results.append(summary)
+            _progress(
+                state,
+                f"Board {board_index}/{len(board_keys)}: {board_key} rejected before synthesis/P&R; "
+                f"top-level I/O requires {io_required}, device provides {int(io_available)}.",
+            )
+            continue
         _progress(state, f"{board_key}: baseline synthesis started.")
         baseline = _run_synthesis(state, board_key, board, "baseline")
         _progress(state, f"{board_key}: baseline synthesis {baseline.get('status')}.")
         synthesis_runs = [baseline]
         pnr_runs: list[dict] = []
-        if baseline.get("status") == "completed":
+        capacity_preflight = _capacity_preflight(baseline, board, io_required) if baseline.get("status") == "completed" else None
+        if capacity_preflight and capacity_preflight.get("status") == "reject":
+            reasons = "; ".join(capacity_preflight.get("failure_reasons") or [])
+            _progress(state, f"{board_key}: rejected before P&R because synthesized capacity cannot fit ({reasons}).")
+        elif baseline.get("status") == "completed":
             for seed_index, seed in enumerate(baseline_seeds, start=1):
                 _progress(state, f"{board_key}: baseline P&R {seed_index}/{baseline_seed_count} (seed {seed}) started; long placements can take up to 20 minutes and progress is reported every minute.")
                 run = _run_pnr(state, board_key, board, baseline, seed, "balanced")
@@ -465,7 +518,11 @@ def run_agent(state: dict) -> dict:
                     _progress(state, f"{board_key}: closure seed {seed} {run.get('status')}{detail}.")
         elif not routed_baseline and baseline.get("status") == "completed":
             _progress(state, f"{board_key}: no baseline route completed; closure seeds skipped because capacity/I/O/tool failures are not timing failures.")
-        summary = _summarize_board(board_key, board, synthesis_runs, pnr_runs, target)
+        summary = _summarize_board(board_key, board, synthesis_runs, pnr_runs, target, capacity_preflight)
+        board_mapping = mappings_by_board.get(board_key) or {}
+        summary["programming_ready"] = board_mapping.get("programming_ready")
+        summary["mapped_ports"] = board_mapping.get("mapped_ports") or []
+        summary["unmapped_ports"] = board_mapping.get("unmapped_ports") or []
         implementation_cache[implementation_key] = deepcopy(summary)
         results.append(summary)
         outcome = "target met" if summary.get("target_met") else summary.get("status")
@@ -498,6 +555,7 @@ def run_agent(state: dict) -> dict:
         },
         "results": results,
         "candidate_count": len(results),
+        "preflight_rejected_count": sum(1 for item in results if item.get("status") == "capacity_rejected"),
         "unique_implementation_count": len(implementation_cache),
         "frequency_relaxation_policy": "reported only for candidates that fail the requested target after closure",
         "continuation": {
