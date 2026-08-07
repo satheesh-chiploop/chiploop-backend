@@ -142,6 +142,39 @@ endmodule
     assert ".sample_req(sample_req)" in text
 
 
+def test_repair_undriven_status_bus_from_unique_child_status_output(tmp_path):
+    cfg = tmp_path / "cfg_if.v"
+    guard = tmp_path / "response_guard.v"
+    top = tmp_path / "motor_control_top.v"
+    cfg.write_text("module cfg_if(input [31:0] status_i); endmodule\n", encoding="utf-8")
+    guard.write_text("module response_guard(output [31:0] status_o); endmodule\n", encoding="utf-8")
+    top.write_text(
+        """
+module motor_control_top(output [31:0] status_o);
+  wire [31:0] status_i;
+  wire [31:0] guard_status_i;
+  assign status_o = guard_status_i;
+  cfg_if u_cfg_if(.status_i(status_i));
+  response_guard u_response_guard(.status_o(guard_status_i));
+endmodule
+""".strip() + "\n",
+        encoding="utf-8",
+    )
+
+    repairs = agent._repair_undriven_semantic_interconnects(
+        [str(cfg), str(guard), str(top)],
+        "motor_control_top",
+    )
+    text = top.read_text(encoding="utf-8")
+
+    assert repairs == {
+        "motor_control_top.v": [
+            "reconnected undriven semantic interconnect status_i from child output guard_status_i"
+        ]
+    }
+    assert "assign status_i = guard_status_i;" in text
+
+
 def test_repair_mirrored_output_interconnects_connects_top_and_internal_mirrors(tmp_path):
     sampler = tmp_path / "sensor_hub_sampler.v"
     top = tmp_path / "smart_sensor_hub_mcu.v"

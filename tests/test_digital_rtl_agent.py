@@ -535,6 +535,12 @@ endmodule
     assert "assign fallback_status_i = fallback_source;" in out
 
 
+def test_verilator_undriven_warning_is_structural_failure_even_with_zero_exit():
+    output = "%Warning-UNDRIVEN: motor_control_top.v:80: Wire status_i is not driven"
+
+    assert agent._classify_verilator_result(True, output) == "fatal"
+
+
 def test_sanitize_child_output_reroutes_duplicate_child_drivers_semantically():
     code = """
 module top(output sample_req, output alert_irq, output alert_status);

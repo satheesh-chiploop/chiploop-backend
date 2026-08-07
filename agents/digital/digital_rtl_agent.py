@@ -2511,10 +2511,16 @@ def _classify_verilator_result(verilator_ok: bool, verilator_output: str) -> str
       - "warning_only"
       - "fatal"
     """
+    text = verilator_output or ""
+
+    # Structural warnings are implementation blockers even when Verilator was
+    # invoked with warning-fatal behavior disabled. OpenLane/Yosys promotes an
+    # undriven bus to synthesis-check errors, so HEM must stop or repair here.
+    if re.search(r"%Warning-(?:UNDRIVEN|MULTIDRIVEN)\b", text):
+        return "fatal"
+
     if verilator_ok:
         return "pass"
-
-    text = verilator_output or ""
 
     if "%Error:" in text:
         # Treat warnings-only termination as warning_only

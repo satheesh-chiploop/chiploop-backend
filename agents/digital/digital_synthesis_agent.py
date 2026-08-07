@@ -898,6 +898,75 @@ def _repair_stale_input_only_interconnects(rtl_files: list[str], top_module: str
     return repairs
 
 
+def _repair_undriven_semantic_interconnects(rtl_files: list[str], top_module: str) -> dict[str, list[str]]:
+    """Reconnect an undriven status/control consumer to a unique child output."""
+    port_db = _module_port_db_from_files(rtl_files)
+    repairs: dict[str, list[str]] = {}
+    semantic_terms = {"status", "fault", "error", "busy", "done", "valid", "ready", "timeout"}
+
+    def tokens(name: str) -> set[str]:
+        return {
+            token
+            for token in re.split(r"_+", name.lower())
+            if token and token not in {"i", "o", "in", "out", "wire", "sig", "signal"}
+        }
+
+    for path in rtl_files or []:
+        if not _file_defines_module(path, top_module):
+            continue
+        text = _read_text(path)
+        decls = _top_internal_signal_decls(text)
+        uses_by_signal = _top_instance_signal_uses(text)
+        top_ports = _top_ports_from_header(text, top_module)
+        driven = set(re.findall(r"^\s*assign\s+([A-Za-z_][A-Za-z0-9_$]*)\s*=", text, flags=re.MULTILINE))
+        driven.update(re.findall(r"^\s*([A-Za-z_][A-Za-z0-9_$]*)\s*(?:<=|=(?!=))", text, flags=re.MULTILINE))
+
+        child_outputs: dict[str, str] = {}
+        for signal, uses in uses_by_signal.items():
+            for use in uses:
+                port = (port_db.get(use["module"]) or {}).get(use["port"], {})
+                if str(port.get("dir") or "").lower() == "output":
+                    child_outputs[signal] = decls.get(signal, str(port.get("range") or ""))
+
+        additions: list[str] = []
+        changes: list[str] = []
+        for signal, uses in sorted(uses_by_signal.items()):
+            if signal not in decls or signal in top_ports or signal in driven:
+                continue
+            directions = [
+                str((port_db.get(use["module"]) or {}).get(use["port"], {}).get("dir") or "").lower()
+                for use in uses
+            ]
+            if not directions or any(direction != "input" for direction in directions):
+                continue
+            signal_tokens = tokens(signal)
+            if not signal_tokens.intersection(semantic_terms):
+                continue
+            width = _range_width(decls.get(signal, ""))
+            candidates: list[tuple[int, str]] = []
+            for candidate, candidate_range in child_outputs.items():
+                if candidate == signal or _range_width(candidate_range) != width:
+                    continue
+                overlap = signal_tokens.intersection(tokens(candidate))
+                semantic_overlap = overlap.intersection(semantic_terms)
+                if semantic_overlap:
+                    candidates.append((len(semantic_overlap) * 10 + len(overlap), candidate))
+            candidates.sort(reverse=True)
+            if not candidates or (len(candidates) > 1 and candidates[0][0] == candidates[1][0]):
+                continue
+            source = candidates[0][1]
+            additions.append(f"assign {signal} = {source};")
+            changes.append(f"reconnected undriven semantic interconnect {signal} from child output {source}")
+            driven.add(signal)
+
+        if additions:
+            patched = _append_top_assigns(text, additions)
+            if patched != text:
+                Path(path).write_text(patched, encoding="utf-8")
+                repairs[os.path.basename(path)] = changes
+    return repairs
+
+
 def _regenerate_system_physical_top_from_intent(rtl_files: list[str], top_module: str, state: dict) -> dict[str, list[str]]:
     intent = state.get("system_integration_intent")
     if not isinstance(intent, dict) or not intent.get("instances"):
@@ -1399,6 +1468,10 @@ def run_agent(state: dict) -> dict:
 
     mirrored_output_repairs = _repair_mirrored_output_interconnects(copied, top_module)
     for file_name, repairs in mirrored_output_repairs.items():
+        rtl_repairs.setdefault(file_name, []).extend(repairs)
+
+    semantic_interconnect_repairs = _repair_undriven_semantic_interconnects(copied, top_module)
+    for file_name, repairs in semantic_interconnect_repairs.items():
         rtl_repairs.setdefault(file_name, []).extend(repairs)
 
     interconnect_repairs = _repair_stale_input_only_interconnects(copied, top_module)
