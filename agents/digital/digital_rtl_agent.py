@@ -615,7 +615,16 @@ def _remove_writes_to_spec_input_ports(verilog_map: Dict[str, str], spec_json: d
             if str(info.get("direction") or "") != "input":
                 continue
             code = re.sub(rf"^\s*assign\s+{re.escape(name)}(?:\s*\[[^\]]+\])?\s*=.*?;\s*$", "", code, flags=re.MULTILINE)
-            code = re.sub(rf"\b{re.escape(name)}(?:\s*\[[^\]]+\])?\s*(?:<=|=(?!=))\s*[^;]+;", ";", code)
+            # Match only a procedural assignment statement whose LHS begins
+            # the line (optionally after a one-line if).  A broad ``name <=``
+            # search corrupts ordinary comparisons such as
+            # ``if (input_name <= limit)``.
+            statement = re.compile(
+                rf"^(?P<indent>\s*)(?P<guard>if\s*\([^;\n]*\)\s*)?"
+                rf"{re.escape(name)}(?:\s*\[[^\]]+\])?\s*(?:<=|=(?!=))\s*[^;]+;\s*$",
+                flags=re.MULTILINE,
+            )
+            code = statement.sub(lambda match: f"{match.group('indent')}{match.group('guard') or ''};", code)
         out[rtl_file] = code
     return out
 

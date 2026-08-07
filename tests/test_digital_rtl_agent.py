@@ -550,6 +550,8 @@ module response_unpacker(input clk, output reg resp_ready);
 always @(*) begin
   resp_ready = 1'b0;
   if (clk) resp_ready = 1'b1;
+  if (resp_ready <= clk) begin
+  end
 end
 endmodule
 """}
@@ -564,6 +566,7 @@ endmodule
     assert "input resp_ready" in out
     assert "input reg resp_ready" not in out
     assert "resp_ready =" not in out
+    assert "resp_ready <= clk" in out
 
 
 def test_directional_alias_repair_maps_input_base_and_output_suffix_to_spec():
