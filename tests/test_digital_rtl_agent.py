@@ -511,6 +511,39 @@ endmodule
     assert ".clamped_value(clamped_value)" in out
 
 
+def test_connects_spec_inter_module_signal_when_repair_left_consumer_undriven():
+    files = {
+        "motor_control_top.v": """
+module motor_control_top;
+  wire fault_out;
+  wire status_fault;
+  motor_control_safety_fsm u_safety(.fault_latched(fault_out));
+  motor_control_register_map u_regs(.status_fault(status_fault));
+endmodule
+""",
+        "motor_control_safety_fsm.v": "module motor_control_safety_fsm(output fault_latched); endmodule",
+        "motor_control_register_map.v": "module motor_control_register_map(input status_fault); endmodule",
+    }
+    spec = {
+        "hierarchy": {
+            "top_module": {"name": "motor_control_top", "rtl_output_file": "motor_control_top.v", "ports": []},
+            "modules": [
+                {"name": "motor_control_safety_fsm", "ports": []},
+                {"name": "motor_control_register_map", "ports": []},
+            ],
+        },
+        "inter_module_signals": [{
+            "name": "fault_status",
+            "source": "motor_control_safety_fsm.fault_latched",
+            "destinations": ["motor_control_register_map.status_fault"],
+        }],
+    }
+
+    out = agent._connect_spec_inter_module_signals(files, spec, "hierarchical")
+
+    assert "assign status_fault = fault_out;" in out["motor_control_top.v"]
+
+
 def test_sanitize_child_output_reroutes_net_already_driven_by_parent_assign():
     code = """
 module top(input fallback_source, output fallback_status);

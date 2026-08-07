@@ -1101,6 +1101,72 @@ def _sanitize_child_output_instance_connections(verilog_map: Dict[str, str]) -> 
     return out
 
 
+def _connect_spec_inter_module_signals(verilog_map: Dict[str, str], spec_json: dict, mode: str) -> Dict[str, str]:
+    """Restore structural top wiring directly from the spec connection graph.
+
+    Repair passes sometimes preserve both legal child port connections but leave
+    the producer and consumer on different internal nets.  In that case the
+    consumer net is undriven even though ``inter_module_signals`` identifies the
+    unique producer.  Add only the missing structural assignment; never invent a
+    source or alter a module interface.
+    """
+    if mode != "hierarchical":
+        return verilog_map
+    signals = spec_json.get("inter_module_signals") or []
+    if not isinstance(signals, list) or not signals:
+        return verilog_map
+
+    modules = {
+        str(module.get("name") or "")
+        for module in ((spec_json.get("hierarchy") or {}).get("modules") or [])
+        if isinstance(module, dict) and module.get("name")
+    }
+    if not modules:
+        return verilog_map
+    instance_re = re.compile(
+        rf"\b(?P<cell>{'|'.join(sorted((re.escape(name) for name in modules), key=len, reverse=True))})\s+"
+        r"(?P<inst>[A-Za-z_][A-Za-z0-9_$]*)\s*\((?P<conns>.*?)\)\s*;",
+        flags=re.DOTALL,
+    )
+    top_file = _top_rtl_file(spec_json, mode)
+    top_code = verilog_map.get(top_file)
+    if not top_code:
+        return verilog_map
+
+    endpoint_nets: Dict[tuple[str, str], str] = {}
+    for match in instance_re.finditer(top_code):
+        cell = match.group("cell")
+        for port, signal in _named_instance_connections(match.group("conns")).items():
+            endpoint_nets[(cell, port)] = re.sub(r"\[[^\]]+\]", "", signal).strip()
+
+    existing_drivers = set(re.findall(r"^\s*assign\s+([A-Za-z_][A-Za-z0-9_$]*)\s*=", top_code, flags=re.MULTILINE))
+    additions: List[str] = []
+    for item in signals:
+        if not isinstance(item, dict):
+            continue
+        source_module, source_port = _split_endpoint(str(item.get("source") or ""))
+        source_net = endpoint_nets.get((source_module, source_port))
+        if not source_net:
+            continue
+        for destination in item.get("destinations") or []:
+            dest_module, dest_port = _split_endpoint(str(destination or ""))
+            dest_net = endpoint_nets.get((dest_module, dest_port))
+            if not dest_net or dest_net == source_net or dest_net in existing_drivers:
+                continue
+            additions.append(f"assign {dest_net} = {source_net};")
+            existing_drivers.add(dest_net)
+
+    if not additions:
+        return verilog_map
+    patched = re.sub(
+        r"\nendmodule\b",
+        "\n" + "\n".join(dict.fromkeys(additions)) + "\n\nendmodule",
+        top_code,
+        count=1,
+    )
+    return {**verilog_map, top_file: patched}
+
+
 def _expected_top_port_names(spec_json: dict, mode: str) -> set:
     try:
         top = spec_json if mode == "flat" else spec_json["hierarchy"]["top_module"]
@@ -2626,6 +2692,7 @@ def _validate_and_materialize_rtl(
     verilog_map = _sanitize_single_driver_rtl(verilog_map)
     verilog_map = _remove_spec_invalid_extra_control_inputs(verilog_map, spec_json, mode)
     verilog_map = _sanitize_child_output_instance_connections(verilog_map)
+    verilog_map = _connect_spec_inter_module_signals(verilog_map, spec_json, mode)
     artifact_list = []
 
     materialize_dir = rtl_dir if not materialize_subdir else os.path.join(rtl_dir, materialize_subdir)
