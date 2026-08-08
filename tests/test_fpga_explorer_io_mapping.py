@@ -43,6 +43,15 @@ def test_wide_core_gets_fpga_only_spi_transport(tmp_path, monkeypatch):
             check=False,
         )
         assert completed.returncode == 0, completed.stderr
+    if shutil.which("yosys"):
+        script = tmp_path / "wrapper_synth.ys"
+        script.write_text(
+            f"read_verilog -sv {rtl} {report['wrapper_rtl']}\n"
+            f"synth_ecp5 -top {state['fpga']['top_module']} -json {tmp_path / 'wrapper.json'}\n",
+            encoding="utf-8",
+        )
+        completed = subprocess.run(["yosys", "-s", str(script)], capture_output=True, text=True, check=False)
+        assert completed.returncode == 0, completed.stderr + completed.stdout[-2000:]
 
 
 def test_ulx3s_has_verified_spi_wrapper_pin_mapping(tmp_path, monkeypatch):
