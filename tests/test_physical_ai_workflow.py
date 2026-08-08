@@ -199,6 +199,14 @@ def test_physical_ai_has_supabase_source_of_truth_migration():
     assert "'adaptive_aero_control_top'" in identity_migration
     assert "'motor_control_top'" in identity_migration
 
+    runs_migration = open(
+        "supabase/migrations/phase_20260807_physical_ai_runs_loop_type.sql",
+        encoding="utf-8",
+    ).read()
+    assert "alter table if exists public.runs" in runs_migration
+    assert "runs_loop_type_chk" in runs_migration
+    assert "'physical_ai'" in runs_migration
+
     apps_page = open("../frontend/app/apps/page.tsx", encoding="utf-8").read()
     loops_page = open("../frontend/app/loops/page.tsx", encoding="utf-8").read()
     studio_page = open("../frontend/app/workflow/page.tsx", encoding="utf-8").read()

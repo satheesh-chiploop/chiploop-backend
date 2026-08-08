@@ -7394,19 +7394,27 @@ async def apps_physical_ai_models(request: Request):
 @app.get("/apps/physical-ai/{workflow_id}/result")
 async def apps_physical_ai_result(workflow_id: str, request: Request):
     user_id = _require_user_id(request)
-    workflow_query = (
-        supabase.table("workflows")
-        .select("id,user_id,status,phase,logs,artifacts")
-        .eq("id", workflow_id)
-        .eq("user_id", user_id)
-        .limit(1)
-        .execute()
-    )
+    try:
+        workflow_query = (
+            supabase.table("workflows")
+            .select("id,user_id,status,phase,logs,artifacts")
+            .eq("id", workflow_id)
+            .eq("user_id", user_id)
+            .limit(1)
+            .execute()
+        )
+    except Exception as exc:
+        logger.exception("Physical AI workflow lookup failed for %s", workflow_id)
+        raise HTTPException(status_code=503, detail="Physical AI workflow state is temporarily unavailable from Supabase") from exc
     rows = workflow_query.data or []
     if not rows:
         raise HTTPException(status_code=404, detail="Physical AI workflow not found")
     workflow = rows[0]
-    base = _artifacts_dir_for_workflow(workflow_id)
+    try:
+        base = _artifacts_dir_for_workflow(workflow_id)
+    except Exception as exc:
+        logger.warning("Physical AI local artifact directory lookup failed for %s: %s", workflow_id, exc)
+        base = Path("artifacts") / str(user_id) / workflow_id
     summary_path = base / "physical_ai" / "physical_ai_workflow_summary.json"
     summary_text: Optional[str] = None
     if summary_path.exists():
@@ -7616,7 +7624,14 @@ async def apps_physical_ai_run(request: Request, background_tasks: BackgroundTas
     for governed_key in ("digital_ip_top_module", "digital_ip_project_name", "architecture_definition_supported"):
         if governed_key in model_configuration:
             model_record[governed_key] = model_configuration[governed_key]
-    workflow_id, run_id, artifact_dir = _create_app_workflow_and_run(user_id, "App: Physical AI Studio", "physical_ai")
+    try:
+        workflow_id, run_id, artifact_dir = _create_app_workflow_and_run(user_id, "App: Physical AI Studio", "physical_ai")
+    except Exception as exc:
+        logger.exception("Physical AI run creation failed")
+        raise HTTPException(
+            status_code=503,
+            detail="Unable to create the Physical AI workflow/run in Supabase; verify the physical_ai loop-type migration and runs/workflows constraints",
+        ) from exc
     data = payload.dict()
     data["physics_model_record"] = model_record
     background_tasks.add_task(execute_physical_ai_workflow_background, workflow_id, run_id, user_id, artifact_dir, data)

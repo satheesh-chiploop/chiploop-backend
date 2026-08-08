@@ -1212,6 +1212,7 @@ def _connect_spec_inter_module_signals(verilog_map: Dict[str, str], spec_json: d
     top_code = verilog_map.get(top_file)
     if not top_code:
         return verilog_map
+    top_ports = _declared_ports(top_code)
 
     endpoint_nets: Dict[tuple[str, str], str] = {}
     for match in instance_re.finditer(top_code):
@@ -1233,6 +1234,11 @@ def _connect_spec_inter_module_signals(verilog_map: Dict[str, str], spec_json: d
             dest_net = endpoint_nets.get((dest_module, dest_port))
             if not dest_net or dest_net == source_net or dest_net in existing_drivers:
                 continue
+            # A parent input is an externally owned source and can never be a
+            # legal destination for a generated structural assignment, even
+            # when a malformed spec connection graph names it as one.
+            if (top_ports.get(dest_net) or {}).get("direction") in {"input", "inout"}:
+                continue
             additions.append(f"assign {dest_net} = {source_net};")
             existing_drivers.add(dest_net)
 
@@ -1245,6 +1251,51 @@ def _connect_spec_inter_module_signals(verilog_map: Dict[str, str], spec_json: d
         count=1,
     )
     return {**verilog_map, top_file: patched}
+
+
+def _trim_zero_padded_assign_concats(verilog_map: Dict[str, str]) -> Dict[str, str]:
+    """Shrink only leading zero padding when a concat exceeds its LHS width."""
+    out: Dict[str, str] = {}
+    for fname, code in verilog_map.items():
+        widths = _declared_signal_widths(code)
+
+        def repl(match: re.Match) -> str:
+            lhs = match.group("lhs")
+            lhs_width = int(widths.get(lhs, 1))
+            items = [item.strip() for item in match.group("items").split(",")]
+            if not items:
+                return match.group(0)
+            zero = re.fullmatch(r"(?P<width>\d+)'(?P<base>[bdh])0+", items[0], flags=re.IGNORECASE)
+            if not zero:
+                return match.group(0)
+
+            def item_width(item: str) -> int | None:
+                literal = re.fullmatch(r"(\d+)'[bdh][0-9a-f_xz]+", item, flags=re.IGNORECASE)
+                if literal:
+                    return int(literal.group(1))
+                indexed = re.fullmatch(r"([A-Za-z_][A-Za-z0-9_$]*)\[(\d+):(\d+)\]", item)
+                if indexed:
+                    return abs(int(indexed.group(2)) - int(indexed.group(3))) + 1
+                scalar = re.fullmatch(r"[A-Za-z_][A-Za-z0-9_$]*", item)
+                return int(widths.get(item, 1)) if scalar else None
+
+            item_widths = [item_width(item) for item in items]
+            if any(width is None for width in item_widths):
+                return match.group(0)
+            excess = sum(int(width) for width in item_widths) - lhs_width
+            pad_width = int(zero.group("width"))
+            if excess <= 0 or excess >= pad_width:
+                return match.group(0)
+            new_width = pad_width - excess
+            items[0] = f"{new_width}'{zero.group('base')}" + ("0" * max(1, (new_width + (3 if zero.group('base').lower() == 'h' else 0)) // (4 if zero.group('base').lower() == 'h' else 1)))
+            return f"assign {lhs} = {{{', '.join(items)}}};"
+
+        out[fname] = re.sub(
+            r"assign\s+(?P<lhs>[A-Za-z_][A-Za-z0-9_$]*)\s*=\s*\{(?P<items>[^{};]+)\}\s*;",
+            repl,
+            code,
+        )
+    return out
 
 
 def _expected_top_port_names(spec_json: dict, mode: str) -> set:
@@ -2775,6 +2826,7 @@ def _validate_and_materialize_rtl(
     verilog_map = _remove_spec_invalid_extra_control_inputs(verilog_map, spec_json, mode)
     verilog_map = _sanitize_child_output_instance_connections(verilog_map)
     verilog_map = _connect_spec_inter_module_signals(verilog_map, spec_json, mode)
+    verilog_map = _trim_zero_padded_assign_concats(verilog_map)
     artifact_list = []
 
     materialize_dir = rtl_dir if not materialize_subdir else os.path.join(rtl_dir, materialize_subdir)

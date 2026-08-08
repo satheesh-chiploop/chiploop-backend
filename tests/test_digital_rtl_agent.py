@@ -544,6 +544,49 @@ endmodule
     assert "assign status_fault = fault_out;" in out["motor_control_top.v"]
 
 
+def test_inter_module_repair_never_drives_top_level_input():
+    files = {
+        "top.v": """
+module top(input rst_n);
+  wire fallback_active;
+  safety u_safety(.fallback_o(fallback_active));
+  consumer u_consumer(.reset_i(rst_n));
+endmodule
+""",
+        "safety.v": "module safety(output fallback_o); endmodule",
+        "consumer.v": "module consumer(input reset_i); endmodule",
+    }
+    spec = {
+        "hierarchy": {
+            "top_module": {"name": "top", "rtl_output_file": "top.v", "ports": [{"name": "rst_n", "direction": "input", "width": 1}]},
+            "modules": [{"name": "safety"}, {"name": "consumer"}],
+        },
+        "inter_module_signals": [{"source": "safety.fallback_o", "destinations": ["consumer.reset_i"]}],
+    }
+
+    out = agent._connect_spec_inter_module_signals(files, spec, "hierarchical")
+
+    assert "assign rst_n" not in out["top.v"]
+
+
+def test_trim_zero_padding_repairs_concat_without_dropping_payload_bits():
+    code = """
+module top(output [127:0] resp_data, output [63:0] act_data);
+wire [63:0] status_summary;
+wire [7:0] safe_mode, mode_bits;
+wire safe_indicator, clamp_hit;
+wire [15:0] clamped_value, safe_value;
+assign resp_data = {96'h000000000000000000000000, status_summary};
+assign act_data = {16'h0000, safe_mode, mode_bits, safe_indicator, clamp_hit, clamped_value, safe_value};
+endmodule
+"""
+
+    out = agent._trim_zero_padded_assign_concats({"top.v": code})["top.v"]
+
+    assert "{64'h0000000000000000, status_summary}" in out
+    assert "{14'h0000, safe_mode" in out
+
+
 def test_direction_alignment_removes_reg_and_writes_from_spec_input():
     files = {"response_unpacker.v": """
 module response_unpacker(input clk, output reg resp_ready);
