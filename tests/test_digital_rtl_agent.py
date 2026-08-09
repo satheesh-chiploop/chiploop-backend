@@ -587,6 +587,71 @@ endmodule
     assert "{14'h0000, safe_mode" in out
 
 
+def test_concat_normalizer_zero_extends_undersized_continuous_and_procedural_values():
+    code = """
+module top(input [15:0] a, input [15:0] b, output [31:0] readback);
+reg [127:0] packet;
+assign readback = {a[14:0], b};
+always @(*) packet = {a, b, 8'h00, 16'h0000, 64'h0};
+endmodule
+"""
+
+    out = agent._trim_zero_padded_assign_concats({"top.v": code})["top.v"]
+
+    assert "assign readback = {1'b0, a[14:0], b};" in out
+    assert "packet = {8'b0, a, b, 8'h00, 16'h0000, 64'h0};" in out
+
+
+def test_aligns_named_inter_module_wire_to_contract_width():
+    files = {"top.v": """
+module top;
+wire child_cfg_word;
+producer u_producer(.cfg_word(child_cfg_word));
+consumer u_consumer(.cfg_word(child_cfg_word));
+endmodule
+"""}
+    spec = {
+        "hierarchy": {
+            "top_module": {"name": "top", "rtl_output_file": "top.v", "ports": []},
+            "modules": [{"name": "producer"}, {"name": "consumer"}],
+        },
+        "inter_module_signals": [{
+            "name": "child_cfg_word", "width": 32,
+            "source": "producer.cfg_word", "destinations": ["consumer.cfg_word"],
+        }],
+    }
+
+    out = agent._align_spec_inter_module_wire_widths(files, spec, "hierarchical")
+
+    assert "wire [31:0] child_cfg_word;" in out["top.v"]
+
+
+def test_repairs_undriven_inflight_with_valid_ready_tracker_only():
+    files = {"top.v": """
+module top(
+  input clk, input rst_n,
+  output req_valid, input req_ready,
+  input rsp_valid, output rsp_ready
+);
+wire request_inflight;
+packager u_packager(.request_inflight(request_inflight), .req_valid(req_valid));
+endmodule
+""", "packager.v": """
+module packager(input request_inflight, output req_valid);
+assign req_valid = ~request_inflight;
+endmodule
+"""}
+    spec = {"hierarchy": {"top_module": {
+        "name": "top", "rtl_output_file": "top.v", "ports": []
+    }}}
+
+    out = agent._repair_undriven_inflight_state(files, spec, "hierarchical")["top.v"]
+
+    assert "reg request_inflight;" in out
+    assert "if (req_valid && req_ready) request_inflight <= 1'b1;" in out
+    assert "if (rsp_valid && rsp_ready) request_inflight <= 1'b0;" in out
+
+
 def test_direction_alignment_removes_reg_and_writes_from_spec_input():
     files = {"response_unpacker.v": """
 module response_unpacker(input clk, output reg resp_ready);

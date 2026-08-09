@@ -1253,11 +1253,113 @@ def _connect_spec_inter_module_signals(verilog_map: Dict[str, str], spec_json: d
     return {**verilog_map, top_file: patched}
 
 
+def _align_spec_inter_module_wire_widths(verilog_map: Dict[str, str], spec_json: dict, mode: str) -> Dict[str, str]:
+    """Apply the contract width to internal nets named by the connection graph.
+
+    LLM RTL occasionally declares a structured-spec connection name as a scalar
+    even though the actual producer and contract are buses.  Correcting the
+    declaration is deterministic and preserves the generated data path.
+    """
+    if mode != "hierarchical":
+        return verilog_map
+    top_file = _top_rtl_file(spec_json, mode)
+    top_code = verilog_map.get(top_file)
+    if not top_code:
+        return verilog_map
+    top_ports = _declared_ports(top_code)
+    patched = top_code
+    for item in spec_json.get("inter_module_signals") or []:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "").strip()
+        try:
+            width = int(item.get("width") or 1)
+        except (TypeError, ValueError):
+            continue
+        if not name or width < 1 or name in top_ports:
+            continue
+        patched = _replace_or_insert_wire_decl(patched, name, width)
+    return {**verilog_map, top_file: patched}
+
+
+def _repair_undriven_inflight_state(verilog_map: Dict[str, str], spec_json: dict, mode: str) -> Dict[str, str]:
+    """Materialize a missing outstanding-transaction bit from valid/ready I/O.
+
+    An ``*_inflight`` child input is state, not a free structural wire.  When a
+    hierarchical top consumes such a net but supplies no driver, synthesize the
+    standard one-entry handshake tracker.  This is limited to tops that expose
+    both request and response valid/ready handshakes, so unrelated undriven nets
+    remain hard quality-gate failures.
+    """
+    if mode != "hierarchical":
+        return verilog_map
+    top_file = _top_rtl_file(spec_json, mode)
+    code = verilog_map.get(top_file)
+    if not code:
+        return verilog_map
+    ports = _declared_ports(code)
+    required = {"clk", "rst_n", "req_valid", "req_ready", "rsp_valid", "rsp_ready"}
+    if not required.issubset(ports):
+        return verilog_map
+
+    patched = code
+    for match in list(re.finditer(r"^\s*wire\s+(?P<name>[A-Za-z_][A-Za-z0-9_$]*(?:_inflight))\s*;\s*$", code, re.MULTILINE)):
+        name = match.group("name")
+        escaped = re.escape(name)
+        driven = bool(
+            re.search(rf"^\s*assign\s+{escaped}\s*=", code, re.MULTILINE)
+            or re.search(rf"^\s*{escaped}\s*(?:<=|=(?!=))", code, re.MULTILINE)
+        )
+        if driven:
+            continue
+        # A child output connected to this net is already a structural driver.
+        child_output_driver = False
+        for module_code in verilog_map.values():
+            for module_match in re.finditer(r"\bmodule\s+(?P<name>[A-Za-z_][A-Za-z0-9_$]*)\b(?P<body>.*?)(?=\bendmodule\b)", module_code or "", re.DOTALL):
+                module_name = module_match.group("name")
+                module_ports = _declared_ports(module_match.group(0))
+                for inst in re.finditer(rf"\b{re.escape(module_name)}\s+[A-Za-z_][A-Za-z0-9_$]*\s*\((?P<conns>.*?)\)\s*;", code, re.DOTALL):
+                    for port, signal in _named_instance_connections(inst.group("conns")).items():
+                        if signal == name and (module_ports.get(port) or {}).get("direction") in {"output", "inout"}:
+                            child_output_driver = True
+                            break
+                    if child_output_driver:
+                        break
+                if child_output_driver:
+                    break
+            if child_output_driver:
+                break
+        if child_output_driver:
+            continue
+        patched = re.sub(rf"^\s*wire\s+{escaped}\s*;\s*$", f"reg {name};", patched, count=1, flags=re.MULTILINE)
+        tracker = (
+            f"always @(posedge clk or negedge rst_n) begin\n"
+            f"  if (!rst_n) {name} <= 1'b0;\n"
+            f"  else begin\n"
+            f"    if (rsp_valid && rsp_ready) {name} <= 1'b0;\n"
+            f"    if (req_valid && req_ready) {name} <= 1'b1;\n"
+            f"  end\n"
+            f"end\n"
+        )
+        patched = re.sub(r"\nendmodule\b", "\n" + tracker + "\nendmodule", patched, count=1)
+    return {**verilog_map, top_file: patched}
+
+
 def _trim_zero_padded_assign_concats(verilog_map: Dict[str, str]) -> Dict[str, str]:
-    """Shrink only leading zero padding when a concat exceeds its LHS width."""
+    """Normalize concat padding to the declared LHS width without losing data."""
     out: Dict[str, str] = {}
     for fname, code in verilog_map.items():
         widths = _declared_signal_widths(code)
+
+        def item_width(item: str) -> int | None:
+            literal = re.fullmatch(r"(\d+)'[bdh][0-9a-f_xz]+", item, flags=re.IGNORECASE)
+            if literal:
+                return int(literal.group(1))
+            indexed = re.fullmatch(r"([A-Za-z_][A-Za-z0-9_$]*)\[(\d+):(\d+)\]", item)
+            if indexed:
+                return abs(int(indexed.group(2)) - int(indexed.group(3))) + 1
+            scalar = re.fullmatch(r"[A-Za-z_][A-Za-z0-9_$]*", item)
+            return int(widths.get(item, 1)) if scalar else None
 
         def repl(match: re.Match) -> str:
             lhs = match.group("lhs")
@@ -1268,16 +1370,6 @@ def _trim_zero_padded_assign_concats(verilog_map: Dict[str, str]) -> Dict[str, s
             zero = re.fullmatch(r"(?P<width>\d+)'(?P<base>[bdh])0+", items[0], flags=re.IGNORECASE)
             if not zero:
                 return match.group(0)
-
-            def item_width(item: str) -> int | None:
-                literal = re.fullmatch(r"(\d+)'[bdh][0-9a-f_xz]+", item, flags=re.IGNORECASE)
-                if literal:
-                    return int(literal.group(1))
-                indexed = re.fullmatch(r"([A-Za-z_][A-Za-z0-9_$]*)\[(\d+):(\d+)\]", item)
-                if indexed:
-                    return abs(int(indexed.group(2)) - int(indexed.group(3))) + 1
-                scalar = re.fullmatch(r"[A-Za-z_][A-Za-z0-9_$]*", item)
-                return int(widths.get(item, 1)) if scalar else None
 
             item_widths = [item_width(item) for item in items]
             if any(width is None for width in item_widths):
@@ -1290,10 +1382,31 @@ def _trim_zero_padded_assign_concats(verilog_map: Dict[str, str]) -> Dict[str, s
             items[0] = f"{new_width}'{zero.group('base')}" + ("0" * max(1, (new_width + (3 if zero.group('base').lower() == 'h' else 0)) // (4 if zero.group('base').lower() == 'h' else 1)))
             return f"assign {lhs} = {{{', '.join(items)}}};"
 
-        out[fname] = re.sub(
+        normalized = re.sub(
             r"assign\s+(?P<lhs>[A-Za-z_][A-Za-z0-9_$]*)\s*=\s*\{(?P<items>[^{};]+)\}\s*;",
             repl,
             code,
+        )
+
+        def pad_repl(match: re.Match) -> str:
+            lhs = match.group("lhs")
+            lhs_width = int(widths.get(lhs, 1))
+            items = [item.strip() for item in match.group("items").split(",")]
+            item_widths = [item_width(item) for item in items]
+            if not items or any(width is None for width in item_widths):
+                return match.group(0)
+            missing = lhs_width - sum(int(width) for width in item_widths)
+            if missing <= 0:
+                return match.group(0)
+            prefix = match.group("prefix") or ""
+            operator = match.group("operator")
+            return f"{prefix}{lhs} {operator} {{{missing}'b0, {', '.join(items)}}};"
+
+        out[fname] = re.sub(
+            r"(?P<prefix>\bassign\s+)?(?P<lhs>[A-Za-z_][A-Za-z0-9_$]*)\s*"
+            r"(?P<operator><=|=(?!=))\s*\{(?P<items>[^{};]+)\}\s*;",
+            pad_repl,
+            normalized,
         )
     return out
 
@@ -2825,7 +2938,9 @@ def _validate_and_materialize_rtl(
     verilog_map = _sanitize_single_driver_rtl(verilog_map)
     verilog_map = _remove_spec_invalid_extra_control_inputs(verilog_map, spec_json, mode)
     verilog_map = _sanitize_child_output_instance_connections(verilog_map)
+    verilog_map = _align_spec_inter_module_wire_widths(verilog_map, spec_json, mode)
     verilog_map = _connect_spec_inter_module_signals(verilog_map, spec_json, mode)
+    verilog_map = _repair_undriven_inflight_state(verilog_map, spec_json, mode)
     verilog_map = _trim_zero_padded_assign_concats(verilog_map)
     artifact_list = []
 
