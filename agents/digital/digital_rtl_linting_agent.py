@@ -85,7 +85,15 @@ def _rtl_files_from_state(state: Dict[str, Any], workflow_dir: str) -> List[str]
             candidates.extend(str(path) for path in value if str(path).strip())
     out = []
     for raw in candidates:
-        path = raw if os.path.isabs(raw) else os.path.join(workflow_dir, raw)
+        # Artifact paths are often workspace-relative (``backend/workflows/...``)
+        # even when ``workflow_dir`` points at that same workflow. Resolve an
+        # existing workspace-relative path before trying workflow-relative.
+        if os.path.isabs(raw):
+            path = raw
+        elif os.path.exists(raw):
+            path = raw
+        else:
+            path = os.path.join(workflow_dir, raw)
         path = os.path.abspath(path)
         low = path.replace("\\", "/").lower()
         if not path.lower().endswith((".v", ".sv")):

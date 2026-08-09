@@ -48,6 +48,22 @@ def test_rtl_file_discovery_prefers_pass2_duplicate_modules(tmp_path):
     assert str(rtl_dir / "helper.v") in selected
 
 
+def test_rtl_file_discovery_resolves_existing_workspace_relative_artifact(tmp_path, monkeypatch):
+    workspace = tmp_path / "workspace"
+    workflow = workspace / "backend" / "workflows" / "wf"
+    rtl = workflow / "fpga" / "src" / "upstream" / "top.v"
+    rtl.parent.mkdir(parents=True)
+    rtl.write_text("module top; endmodule\n", encoding="utf-8")
+    monkeypatch.chdir(workspace)
+
+    selected = agent._rtl_files_from_state(
+        {"rtl_files": ["backend/workflows/wf/fpga/src/upstream/top.v"]},
+        "backend/workflows/wf",
+    )
+
+    assert selected == [str(rtl.resolve())]
+
+
 def test_rtl_lint_status_requires_icarus_and_verilator_pass(tmp_path, monkeypatch):
     rtl_dir = tmp_path / "rtl"
     rtl_dir.mkdir()

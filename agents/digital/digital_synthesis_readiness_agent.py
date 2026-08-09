@@ -164,8 +164,12 @@ def _yosys_synth(workflow_dir: str, top: str, rtl_files: List[str], state: Optio
     synth_dir = os.path.join(workflow_dir, "synth")
     os.makedirs(synth_dir, exist_ok=True)
 
+    # Yosys runs with ``synth_dir`` as cwd. Normalize imported workflow paths
+    # before writing the script so relative Supabase artifact paths do not get
+    # resolved underneath ``synth/`` and falsely appear missing.
+    resolved_rtl_files = [os.path.abspath(str(path)) for path in rtl_files]
     script = []
-    script.append("read_verilog -sv " + " ".join([f'"{p}"' for p in rtl_files]))
+    script.append("read_verilog -sv " + " ".join([f'"{p}"' for p in resolved_rtl_files]))
     script.append(f"hierarchy -check -top {top}")
     script.append("proc; opt; fsm; opt; memory; opt")
     script.append("check")

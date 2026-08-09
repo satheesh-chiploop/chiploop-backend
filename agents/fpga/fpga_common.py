@@ -325,6 +325,30 @@ def _storage_paths(value: Any) -> List[str]:
     return paths
 
 
+def _upstream_rtl_priority(path: str) -> int | None:
+    """Rank source-of-truth design RTL ahead of derived workflow copies."""
+    normalized = "/" + str(path or "").replace("\\", "/").lower().strip("/")
+    basename = os.path.basename(normalized)
+    if not normalized.endswith(RTL_EXTENSIONS):
+        return None
+    if (
+        basename.startswith("tb_")
+        or "testbench" in basename
+        or "_tb." in basename
+        or "_assertions." in basename
+        or any(part in normalized for part in (
+            "/verification/", "/vv/", "/fpga/", "/sim/", "/simulation/",
+            "/pass1/", "/pass2/", "/pass3/", "/repair/", "/repaired/",
+        ))
+    ):
+        return None
+    if "/handoff/" in normalized and "/rtl/" in normalized:
+        return 0
+    if "/rtl/" in normalized:
+        return 1
+    return 2
+
+
 def _list_storage_tree(client: Any, folder: str, depth: int = 0, max_depth: int = 6) -> List[str]:
     if depth > max_depth:
         return []
@@ -362,10 +386,16 @@ def _copy_storage_rtl(state: Dict[str, Any], source_workflow_id: str, dest_dir: 
     paths.extend(_list_storage_tree(client, f"backend/workflows/{source_workflow_id}"))
     rtl_paths = [
         path for path in list(dict.fromkeys(paths))
-        if path.lower().endswith(RTL_EXTENSIONS)
-    ][:512]
+        if _upstream_rtl_priority(path) is not None
+    ]
+    rtl_paths.sort(key=lambda path: (int(_upstream_rtl_priority(path) or 0), path.count("/"), path))
+    rtl_paths = rtl_paths[:512]
     copied: List[str] = []
+    copied_basenames: set[str] = set()
     for index, path in enumerate(rtl_paths):
+        basename = os.path.basename(path).lower()
+        if basename in copied_basenames:
+            continue
         try:
             raw = client.storage.from_(ARTIFACT_BUCKET).download(path)
         except Exception:
@@ -377,6 +407,7 @@ def _copy_storage_rtl(state: Dict[str, Any], source_workflow_id: str, dest_dir: 
         os.makedirs(os.path.dirname(target), exist_ok=True)
         Path(target).write_bytes(raw)
         copied.append(target)
+        copied_basenames.add(basename)
     try:
         run_rows = (
             client.table("runs")
@@ -395,14 +426,15 @@ def _copy_storage_rtl(state: Dict[str, Any], source_workflow_id: str, dest_dir: 
             continue
         for source in sorted(root.rglob("*")):
             lower_name = source.name.lower()
-            if not source.is_file() or not lower_name.endswith(RTL_EXTENSIONS):
+            if not source.is_file() or _upstream_rtl_priority(str(source)) is None:
                 continue
-            if lower_name.startswith("tb_") or "testbench" in lower_name or "_tb." in lower_name:
+            if lower_name in copied_basenames:
                 continue
             target = os.path.join(dest_dir, _safe_rel(f"upstream/{source.name}"))
             os.makedirs(os.path.dirname(target), exist_ok=True)
             Path(target).write_bytes(source.read_bytes())
             copied.append(target)
+            copied_basenames.add(lower_name)
     return copied
 
 
