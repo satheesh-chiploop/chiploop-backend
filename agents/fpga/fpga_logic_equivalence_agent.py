@@ -36,9 +36,14 @@ def _proof_script(rtl_files: list[str], netlist: str, top: str, family: str, dep
         "design -copy-from gate *",
         "equiv_make gold gate equiv",
         "hierarchy -top equiv",
-        "equiv_simple",
+        # FPGA netlists often encode power-up state in technology primitive
+        # attributes while the source uses Verilog ``initial`` assignments.
+        # Treat unknown state bits consistently during sequential proof, as
+        # the ASIC LEC flow already does, instead of reporting false
+        # non-equivalence solely from representation-specific X semantics.
+        "equiv_simple -undef -seq 20",
     ])
-    lines.extend(f"equiv_induct -seq {depth}" for depth in depths)
+    lines.extend(f"equiv_induct -undef -seq {depth}" for depth in depths)
     lines.append("equiv_status -assert")
     return "\n".join(lines) + "\n"
 

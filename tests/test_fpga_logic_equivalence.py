@@ -41,10 +41,10 @@ def test_fpga_lec_uses_yosys_equivalence_and_passes(tmp_path, monkeypatch):
     assert published["tool"] == "Yosys"
     script = Path(published["script"]).read_text(encoding="utf-8")
     assert "equiv_make gold gate equiv" in script
-    assert "equiv_simple" in script
-    assert "equiv_induct -seq 12" in script
-    assert "equiv_induct -seq 24" in script
-    assert "equiv_induct -seq 48" in script
+    assert "equiv_simple -undef -seq 20" in script
+    assert "equiv_induct -undef -seq 12" in script
+    assert "equiv_induct -undef -seq 24" in script
+    assert "equiv_induct -undef -seq 48" in script
     assert "equiv_status -assert" in script
     assert published["induction_depths_attempted"] == [12, 24, 48]
 

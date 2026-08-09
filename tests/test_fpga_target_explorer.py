@@ -160,12 +160,27 @@ def test_explorer_honors_user_seed_counts_and_keeps_closure_conditional(monkeypa
     monkeypatch.setattr(explorer, "_run_synthesis", lambda _state, _board, _cfg, strategy: {"status": "completed", "strategy": strategy, "netlist": "demo.json"})
     monkeypatch.setattr(explorer, "_run_pnr", lambda _state, _board, cfg, _synth, seed, effort: pnr_calls.append((seed, effort)) or {"status": "completed", "seed": seed, "effort": effort, "max_frequency_mhz": 50, "timing_met": False, "logic_cells_used": 3000, "logic_cells_available": cfg["resources"]["logic_cells"]})
     monkeypatch.setattr(explorer, "publish_json", lambda *_args: None)
-    state = {"workflow_id": "wf", "target_frequency_mhz": 75, "baseline_seed_count": 2, "closure_seed_count": 2, "candidate_boards": ["ice40_hx8k_breakout"], "fpga": {"top_module": "top", "rtl_files": ["top.sv"]}}
+    state = {"workflow_id": "wf", "target_frequency_mhz": 75, "baseline_seed_count": 2, "closure_seed_count": 2, "closure_near_miss_ratio": 0.6, "candidate_boards": ["ice40_hx8k_breakout"], "fpga": {"top_module": "top", "rtl_files": ["top.sv"]}}
 
     explorer.run_agent(state)
 
     assert pnr_calls == [(1, "balanced"), (2, "balanced"), (3, "advanced"), (4, "advanced")]
     assert state["fpga_target_explorer"]["seed_policy"] == {"baseline_seed_count": 2, "closure_seed_count": 2, "closure_is_conditional": True}
+
+
+def test_explorer_skips_expensive_closure_for_large_timing_miss(monkeypatch):
+    pnr_calls = []
+    progress = []
+    monkeypatch.setattr(explorer, "_run_synthesis", lambda _state, _board, _cfg, strategy: {"status": "completed", "strategy": strategy, "netlist": "demo.json"})
+    monkeypatch.setattr(explorer, "_run_pnr", lambda _state, _board, cfg, _synth, seed, effort: pnr_calls.append((seed, effort)) or {"status": "completed", "seed": seed, "effort": effort, "max_frequency_mhz": 50, "timing_met": False, "logic_cells_used": 3000, "logic_cells_available": cfg["resources"]["logic_cells"]})
+    monkeypatch.setattr(explorer, "publish_json", lambda *_args: None)
+    state = {"workflow_id": "wf", "target_frequency_mhz": 75, "candidate_boards": ["ice40_hx8k_breakout"], "_progress_callback": progress.append, "fpga": {"top_module": "top", "rtl_files": ["top.sv"]}}
+
+    explorer.run_agent(state)
+
+    assert pnr_calls == [(1, "balanced")]
+    assert state["fpga_target_explorer"]["results"][0]["frequency_relaxation"]["recommended_mhz"] == 45.0
+    assert any("below the 85% near-miss threshold" in line for line in progress)
 
 
 def test_vendor_catalog_prefixes_and_support_tiers():

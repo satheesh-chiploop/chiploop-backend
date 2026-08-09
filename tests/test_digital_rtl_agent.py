@@ -398,6 +398,23 @@ top.v:49: warning: Port 5 (din) of demo_sram_32x64_model expects 32 bits, got 1.
     assert agent._has_structural_width_warnings("Icarus compile completed cleanly.") is False
 
 
+def test_sanitize_restores_full_bus_connection_for_wide_child_port():
+    code = """
+module child(input [1:0] select);
+endmodule
+
+module top;
+  wire [1:0] fallback_select;
+  child u_child (.select(fallback_select[0]));
+endmodule
+"""
+
+    repaired = agent._sanitize_child_output_instance_connections({"top.v": code})["top.v"]
+
+    assert ".select(fallback_select)" in repaired
+    assert ".select(fallback_select[0])" not in repaired
+
+
 def test_verilator_lint_preserves_pass2_relative_subdir(tmp_path, monkeypatch):
     rtl_dir = tmp_path / "rtl"
     pass2_dir = rtl_dir / "pass2"

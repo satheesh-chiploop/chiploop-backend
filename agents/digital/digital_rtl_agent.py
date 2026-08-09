@@ -1111,9 +1111,28 @@ def _sanitize_child_output_instance_connections(verilog_map: Dict[str, str]) -> 
             for port, sig_expr in conns.items():
                 sig = re.sub(r"\[[^\]]+\]", "", sig_expr).strip()
                 child = child_ports.get(port)
+                # If the contract says the child consumes the complete bus,
+                # do not preserve an LLM-introduced scalar bit-select from a
+                # parent net of that exact width.  This is a deterministic
+                # interface repair based on the emitted module declarations;
+                # it does not depend on application or signal names.
+                child_width = int((child or {}).get("width") or 1)
+                if (
+                    child
+                    and child_width > 1
+                    and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_$]*\[\s*\d+\s*\]", sig_expr)
+                    and int(signal_widths.get(sig, 1)) == child_width
+                ):
+                    conn_text = re.sub(
+                        rf"(\.{re.escape(port)}\s*\(\s*){re.escape(sig_expr)}(\s*\))",
+                        rf"\1{sig}\2",
+                        conn_text,
+                        count=1,
+                    )
+                    sig_expr = sig
+                    changed = True
                 if not child or child.get("direction") not in {"output", "inout"}:
                     continue
-                child_width = int(child.get("width") or 1)
                 parent_info = parent_ports.get(sig)
                 sig_width = int(signal_widths.get(sig, 1))
                 duplicate_unused = duplicate_output_drivers.get((cell, inst, port))

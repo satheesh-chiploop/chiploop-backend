@@ -438,6 +438,7 @@ def run_agent(state: dict) -> dict:
         raise RuntimeError("Select at least one supported FPGA board/device to explore.")
     baseline_seed_count = max(1, min(int(_num(state.get("baseline_seed_count"), 1)), 10))
     closure_seed_count = max(1, min(int(_num(state.get("closure_seed_count"), 1)), 10))
+    closure_near_miss_ratio = max(0.5, min(_num(state.get("closure_near_miss_ratio"), 0.85), 1.0))
     baseline_seeds = list(range(1, baseline_seed_count + 1))
     closure_seeds = list(range(baseline_seed_count + 1, baseline_seed_count + closure_seed_count + 1))
     io_mapping = state.get("fpga_explorer_io_mapping") if isinstance(state.get("fpga_explorer_io_mapping"), dict) else {}
@@ -495,7 +496,13 @@ def run_agent(state: dict) -> dict:
                 _progress(state, f"{board_key}: baseline seed {seed} {run.get('status')}{detail}.")
         routed_baseline = [run for run in pnr_runs if run.get("status") == "completed"]
         met = any(_num(run.get("max_frequency_mhz")) >= target or run.get("timing_met") is True for run in routed_baseline)
-        if not met and routed_baseline:
+        baseline_best_frequency = max((_num(run.get("max_frequency_mhz")) for run in routed_baseline), default=0.0)
+        closure_eligible = bool(
+            not met
+            and routed_baseline
+            and baseline_best_frequency >= target * closure_near_miss_ratio
+        )
+        if closure_eligible:
             _progress(state, f"{board_key}: target missed after baseline; starting synthesis/P&R closure.")
             closure_synth_cmd = {
                 "ecp5": "synth_ecp5",
@@ -516,6 +523,13 @@ def run_agent(state: dict) -> dict:
                     fmax = run.get("max_frequency_mhz")
                     detail = f", Fmax {float(fmax):.3f} MHz" if fmax is not None else ""
                     _progress(state, f"{board_key}: closure seed {seed} {run.get('status')}{detail}.")
+        elif not met and routed_baseline:
+            _progress(
+                state,
+                f"{board_key}: closure skipped because baseline Fmax {baseline_best_frequency:.3f} MHz is below "
+                f"the {closure_near_miss_ratio * 100:.0f}% near-miss threshold for {target:g} MHz; "
+                "the completed baseline remains eligible for a relaxed-frequency recommendation.",
+            )
         elif not routed_baseline and baseline.get("status") == "completed":
             _progress(state, f"{board_key}: no baseline route completed; closure seeds skipped because capacity/I/O/tool failures are not timing failures.")
         summary = _summarize_board(board_key, board, synthesis_runs, pnr_runs, target, capacity_preflight)
@@ -544,6 +558,11 @@ def run_agent(state: dict) -> dict:
         "target_frequency_mhz": target,
         "requested_profile": requested_profile,
         "seed_policy": {"baseline_seed_count": baseline_seed_count, "closure_seed_count": closure_seed_count, "closure_is_conditional": True},
+        "closure_policy": {
+            "near_miss_ratio": closure_near_miss_ratio,
+            "minimum_fmax_mhz": round(target * closure_near_miss_ratio, 3),
+            "far_miss_action": "retain baseline result and recommend a relaxed frequency without expensive closure P&R",
+        },
         "selected_recommendation": selected_board,
         "recommendations": recommendations,
         "recommendation_details": recommendation_details,
