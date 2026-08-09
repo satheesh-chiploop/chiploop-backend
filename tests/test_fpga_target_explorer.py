@@ -81,6 +81,30 @@ def test_recommendations_keep_target_met_board_when_pin_mapping_is_incomplete():
     assert "Add verified mappings" in details["best_overall"]["next_step"]
 
 
+def test_automatic_implementation_can_filter_to_programming_ready_target():
+    unmapped = _board("larger_unmapped", 140, 84000, 5000)
+    unmapped["programming_ready"] = False
+    mapped = _board("mapped_fit", 90, 44000, 5000)
+    mapped["programming_ready"] = True
+
+    implementation = [item for item in [unmapped, mapped] if item.get("target_met") and item.get("programming_ready")]
+    recommendations = explorer._recommend(implementation)
+
+    assert set(recommendations.values()) == {"mapped_fit"}
+
+
+def test_no_automatic_implementation_target_when_all_board_pin_maps_are_incomplete():
+    boards = []
+    for name in ("ice40_unmapped", "ecp5_unmapped", "nexus_unmapped", "gowin_unmapped"):
+        item = _board(name, 100, 44000, 5000)
+        item["programming_ready"] = False
+        boards.append(item)
+
+    implementation = [item for item in boards if item.get("target_met") and item.get("programming_ready")]
+
+    assert explorer._recommend(implementation) == {key: None for key in explorer.PROFILE_KEYS}
+
+
 def test_frequency_relaxation_only_after_target_miss():
     board = {"label": "Demo", "family": "ice40", "device": "up5k", "package": "sg48", "resources": {"logic_cells": 5280}}
     pnr = [{"status": "completed", "seed": 1, "max_frequency_mhz": 68, "logic_cells_used": 3000, "logic_cells_available": 5280}]

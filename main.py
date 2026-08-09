@@ -7231,9 +7231,30 @@ def _hem_continue_physical_ai_after_success(*, root_workflow_id: str, root_run_i
                 try:
                     explorer = json.loads(explorer_files[-1].read_text(encoding="utf-8"))
                     continuation = explorer.get("continuation") if isinstance(explorer.get("continuation"), dict) else {}
-                    selected_board = continuation.get("selected_board") or explorer.get("selected_recommendation")
-                    if selected_board:
-                        automation_payload["board"] = selected_board
+                    selected_board = (
+                        continuation.get("selected_board")
+                        or explorer.get("selected_implementation_recommendation")
+                    )
+                    if not selected_board:
+                        reason = str(
+                            continuation.get("blocked_reason")
+                            or "No explored FPGA board met capacity, timing, and verified pin-map requirements."
+                        )
+                        message = f"HEM stopped after FPGA Explorer: {reason}"
+                        append_log_workflow(root_workflow_id, message, phase="hem_failed")
+                        append_log_run(root_run_id, message)
+                        _hem_update_run_record(
+                            str(hem_run_id) if hem_run_id else None,
+                            status="failed",
+                            metadata={
+                                "source": "physical_ai", "path": plan,
+                                "completed": completed, "failed_stage": stage,
+                                "failed_workflow_id": child_workflow_id,
+                                "reason": reason,
+                            },
+                        )
+                        return
+                    automation_payload["board"] = selected_board
                     explorer_top = continuation.get("top_module") or explorer.get("top_module")
                     if explorer_top:
                         automation_payload["top_module"] = explorer_top
@@ -7246,6 +7267,16 @@ def _hem_continue_physical_ai_after_success(*, root_workflow_id: str, root_run_i
                     append_log_workflow(root_workflow_id, f"HEM selected FPGA board {selected_board or 'unresolved'} from Target Explorer evidence.", phase="hem_running")
                 except Exception as exc:
                     logger.warning("HEM Physical AI: could not parse FPGA Target Explorer result: %s", exc)
+            else:
+                message = "HEM stopped after FPGA Explorer because its Supabase-backed recommendation artifact is missing."
+                append_log_workflow(root_workflow_id, message, phase="hem_failed")
+                append_log_run(root_run_id, message)
+                _hem_update_run_record(
+                    str(hem_run_id) if hem_run_id else None,
+                    status="failed",
+                    metadata={"source": "physical_ai", "path": plan, "completed": completed, "failed_stage": stage, "failed_workflow_id": child_workflow_id},
+                )
+                return
         completed.append(meta["label"])
         previous_stage = stage
     message = f"HEM Automatic Run ({mode}) completed with respect to Physical AI: {', '.join(completed)} completed."

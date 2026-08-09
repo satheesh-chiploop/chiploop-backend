@@ -559,7 +559,20 @@ def run_agent(state: dict) -> dict:
     recommendation_details = _recommendation_details(results, recommendations, target)
     selected_board = recommendations.get(requested_profile)
     selected_result = next((item for item in results if item.get("board") == selected_board), None)
-    winning_run = (selected_result or {}).get("winning_run") if isinstance((selected_result or {}).get("winning_run"), dict) else {}
+    # Dashboard profiles may describe a fast device whose physical pins are
+    # not yet verified. Automatic prototyping must instead continue with a
+    # measured target that is both timing/capacity viable and programmable.
+    implementation_results = [
+        item for item in results
+        if item.get("target_met") and item.get("programming_ready")
+    ]
+    implementation_recommendations = _recommend(implementation_results)
+    implementation_board = implementation_recommendations.get(requested_profile)
+    implementation_result = next((item for item in results if item.get("board") == implementation_board), None)
+    implementation_winning_run = (
+        (implementation_result or {}).get("winning_run")
+        if isinstance((implementation_result or {}).get("winning_run"), dict) else {}
+    )
     summary = {
         "type": "fpga_target_explorer",
         "status": "completed" if results else "failed",
@@ -576,6 +589,7 @@ def run_agent(state: dict) -> dict:
             "far_miss_action": "retain baseline result and recommend a relaxed frequency without expensive closure P&R",
         },
         "selected_recommendation": selected_board,
+        "selected_implementation_recommendation": implementation_board,
         "recommendations": recommendations,
         "recommendation_details": recommendation_details,
         "recommendation_policy": {
@@ -592,18 +606,19 @@ def run_agent(state: dict) -> dict:
         "continuation": {
             "app": "fpga-bitstream",
             "label": "Continue to FPGA Prototyping",
-            "selected_board": selected_board,
-            "programming_ready": bool((selected_result or {}).get("programming_ready")),
-            "unmapped_ports": (selected_result or {}).get("unmapped_ports") or [],
+            "selected_board": implementation_board,
+            "programming_ready": bool(implementation_board),
+            "unmapped_ports": (implementation_result or {}).get("unmapped_ports") or [],
+            "blocked_reason": None if implementation_board else "No explored board both met the target and had a verified complete pin map.",
             "target_frequency_mhz": target,
             "source_workflow_id": state.get("workflow_id"),
             "top_module": top,
             "winning_configuration": {
-                "seed": winning_run.get("seed"),
-                "synthesis_strategy": winning_run.get("synthesis_strategy"),
-                "tool_effort": winning_run.get("effort"),
-                "achieved_frequency_mhz": (selected_result or {}).get("best_frequency_mhz"),
-                "timing_margin_percent": (selected_result or {}).get("timing_margin_percent"),
+                "seed": implementation_winning_run.get("seed"),
+                "synthesis_strategy": implementation_winning_run.get("synthesis_strategy"),
+                "tool_effort": implementation_winning_run.get("effort"),
+                "achieved_frequency_mhz": (implementation_result or {}).get("best_frequency_mhz"),
+                "timing_margin_percent": (implementation_result or {}).get("timing_margin_percent"),
             },
         },
     }
