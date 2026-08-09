@@ -161,6 +161,38 @@ def test_io_mapping_enumerates_every_bus_bit(tmp_path, monkeypatch):
     assert board["unmapped_ports"] == ["debug_addr[3]", "debug_addr[2]", "debug_addr[1]", "debug_addr[0]"]
 
 
+def test_non_ansi_wide_top_generates_spi_adapter_and_counts_bus_bits(tmp_path, monkeypatch):
+    rtl = tmp_path / "legacy_top.v"
+    rtl.write_text(
+        """module legacy_top(clk, rst_n, cfg_wdata, req_data, status);
+input clk;
+input rst_n;
+input [31:0] cfg_wdata;
+output [127:0] req_data;
+output [31:0] status;
+assign req_data = {4{cfg_wdata}};
+assign status = cfg_wdata;
+endmodule
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(fpga_serial_transport, "publish_json", lambda *_args: None)
+    state = {
+        "workflow_id": "wf", "workflow_dir": str(tmp_path),
+        "fpga": {"top_module": "legacy_top", "rtl_files": [str(rtl)]},
+    }
+
+    report = fpga_serial_transport.add_spi_transport_if_needed(state)
+    original_bits = mapping_agent._extract_port_bits_from_rtl([str(rtl)], "legacy_top")
+
+    assert len(original_bits) == 194
+    assert "cfg_wdata[31]" in original_bits
+    assert "req_data[127]" in original_bits
+    assert report["status"] == "generated"
+    assert report["original_top_level_io_bits"] == 194
+    assert state["fpga"]["top_module"] == "legacy_top_spi_fpga_top"
+
+
 def test_core_only_netlist_removes_only_top_level_ports(tmp_path):
     netlist = tmp_path / "core.json"
     netlist.write_text(

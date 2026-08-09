@@ -1,6 +1,7 @@
 import os
 import re
 from .fpga_common import board_config, fpga_dir, manifest_update, publish_json, write_text
+from .fpga_serial_transport import _top_ports
 
 
 def _extract_ports_from_rtl(paths: list[str]) -> list[str]:
@@ -49,6 +50,13 @@ def _extract_port_bits_from_rtl(paths: list[str], top_module: str | None = None)
         for item in names:
             if item not in seen:
                 seen.add(item); bits.append(item)
+    if top_module:
+        structured_ports = _top_ports(paths, top_module)
+        if structured_ports:
+            for port in structured_ports:
+                width = int(port.get("width") or 1)
+                add(str(port.get("name") or ""), (width - 1, 0) if width > 1 else None)
+            return bits
     for path in paths:
         try:
             text = open(path, "r", encoding="utf-8", errors="ignore").read()

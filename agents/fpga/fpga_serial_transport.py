@@ -16,14 +16,21 @@ def _top_ports(paths: list[str], top: str) -> list[dict[str, Any]]:
             text = open(path, "r", encoding="utf-8", errors="ignore").read()
         except OSError:
             continue
-        match = re.search(rf"\bmodule\s+{re.escape(top)}\s*\((.*?)\)\s*;", text, flags=re.DOTALL)
+        match = re.search(
+            rf"\bmodule\s+{re.escape(top)}\s*\((?P<header>.*?)\)\s*;(?P<body>.*?)\bendmodule\b",
+            text,
+            flags=re.DOTALL,
+        )
         if not match:
             continue
-        ports = []
+        header = match.group("header")
+        body = match.group("body")
+        ports_by_name: dict[str, dict[str, Any]] = {}
+        header_order: list[str] = []
         direction = ""
         width_text = ""
         width = 1
-        for segment in match.group(1).split(","):
+        for segment in header.split(","):
             direction_match = re.search(r"\b(input|output|inout)\b", segment)
             if direction_match:
                 direction = direction_match.group(1)
@@ -37,9 +44,39 @@ def _top_ports(paths: list[str], top: str) -> list[dict[str, Any]]:
             clean = re.sub(r"\[[^\]]+\]", " ", segment)
             tokens = re.findall(r"[A-Za-z_][A-Za-z0-9_$]*", clean)
             useful = [token for token in tokens if token not in {"input", "output", "inout", "wire", "reg", "logic", "signed", "unsigned"}]
-            if direction and useful:
-                ports.append({"name": useful[-1], "direction": direction, "width": width, "range": width_text})
-        return ports
+            if useful:
+                name = useful[-1]
+                header_order.append(name)
+                if direction:
+                    ports_by_name[name] = {"name": name, "direction": direction, "width": width, "range": width_text}
+
+        # Non-ANSI Verilog lists only names in the module header and declares
+        # direction/width in the body.  This form is common in generated RTL.
+        for declaration in re.finditer(
+            r"^\s*(?P<direction>input|output|inout)\b\s*"
+            r"(?:wire\s*|reg\s*|logic\s*)?(?:signed\s*)?"
+            r"(?P<range>\[\s*\d+\s*:\s*\d+\s*\]\s*)?(?P<names>[^;]+);",
+            body,
+            flags=re.MULTILINE,
+        ):
+            range_text = (declaration.group("range") or "").strip()
+            range_match = re.search(r"\[\s*(\d+)\s*:\s*(\d+)\s*\]", range_text)
+            declared_width = abs(int(range_match.group(1)) - int(range_match.group(2))) + 1 if range_match else 1
+            for raw_name in declaration.group("names").split(","):
+                names = re.findall(r"[A-Za-z_][A-Za-z0-9_$]*", re.sub(r"=.*", "", raw_name))
+                if not names:
+                    continue
+                name = names[-1]
+                if name in header_order:
+                    ports_by_name[name] = {
+                        "name": name,
+                        "direction": declaration.group("direction"),
+                        "width": declared_width,
+                        "range": range_text,
+                    }
+        ports = [ports_by_name[name] for name in header_order if name in ports_by_name]
+        if ports:
+            return ports
     return []
 
 
