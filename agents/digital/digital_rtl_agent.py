@@ -1366,6 +1366,86 @@ def _repair_undriven_inflight_state(verilog_map: Dict[str, str], spec_json: dict
     return {**verilog_map, top_file: patched}
 
 
+def _repair_undriven_last_accepted_observations(verilog_map: Dict[str, str], spec_json: dict, mode: str) -> Dict[str, str]:
+    """Create missing clocked ``last_*_accepted`` status observations."""
+    if mode != "hierarchical":
+        return verilog_map
+    top_file = _top_rtl_file(spec_json, mode)
+    code = verilog_map.get(top_file)
+    if not code:
+        return verilog_map
+    ports = _declared_ports(code)
+    if not {"clk", "rst_n"}.issubset(ports):
+        return verilog_map
+    widths = _declared_signal_widths(code)
+    hierarchy_modules = ((spec_json.get("hierarchy") or {}).get("modules") or [])
+    directions: Dict[tuple[str, str], str] = {}
+    for module in hierarchy_modules:
+        if not isinstance(module, dict):
+            continue
+        module_name = str(module.get("name") or "")
+        for port in module.get("ports") or []:
+            if isinstance(port, dict) and port.get("name"):
+                directions[(module_name, str(port.get("name")))] = str(port.get("direction") or "").lower()
+    module_names = [str(module.get("name")) for module in hierarchy_modules if isinstance(module, dict) and module.get("name")]
+    if not module_names:
+        return verilog_map
+    instance_re = re.compile(
+        rf"\b(?P<cell>{'|'.join(sorted((re.escape(name) for name in module_names), key=len, reverse=True))})\s+"
+        r"[A-Za-z_][A-Za-z0-9_$]*\s*\((?P<conns>.*?)\)\s*;",
+        re.DOTALL,
+    )
+    structural_outputs: set[str] = set()
+    for instance in instance_re.finditer(code):
+        cell = instance.group("cell")
+        for port, signal in _named_instance_connections(instance.group("conns")).items():
+            net = re.sub(r"\[[^\]]+\]", "", signal).strip()
+            if directions.get((cell, port)) in {"output", "inout"}:
+                structural_outputs.add(net)
+
+    accepted_triggers = sorted(
+        net for net in structural_outputs
+        if int(widths.get(net, 1)) == 1 and (net == "accepted" or net.endswith("_accepted"))
+    )
+    patched = code
+    for target_match in re.finditer(r"^\s*wire\s+(?:\[[^\]]+\]\s*)?(?P<name>last_(?P<field>[A-Za-z0-9_$]+)_accepted)\s*;\s*$", code, re.MULTILINE):
+        target = target_match.group("name")
+        field_tokens = {token for token in target_match.group("field").lower().split("_") if len(token) >= 3}
+        if not field_tokens or target in structural_outputs:
+            continue
+        if re.search(rf"^\s*assign\s+{re.escape(target)}\s*=|^\s*{re.escape(target)}\s*(?:<=|=(?!=))", code, re.MULTILINE):
+            continue
+        target_width = int(widths.get(target, 1))
+        candidates = [
+            net for net in structural_outputs
+            if net != target and int(widths.get(net, 1)) == target_width
+            and field_tokens.issubset(set(net.lower().split("_")))
+        ]
+        if not candidates or not accepted_triggers:
+            continue
+        trigger = next((net for net in accepted_triggers if net.startswith("response_")), accepted_triggers[0])
+        source = next((net for net in candidates if trigger.split("_", 1)[0] in net.lower().split("_")), None)
+        if source is None and len(candidates) == 1:
+            source = candidates[0]
+        if source is None:
+            continue
+        patched = re.sub(
+            rf"^\s*wire\s+(?P<range>\[[^\]]+\]\s*)?{re.escape(target)}\s*;\s*$",
+            lambda match: f"reg {(match.group('range') or '')}{target};",
+            patched,
+            count=1,
+            flags=re.MULTILINE,
+        )
+        tracker = (
+            f"always @(posedge clk or negedge rst_n) begin\n"
+            f"  if (!rst_n) {target} <= {target_width}'b0;\n"
+            f"  else if ({trigger}) {target} <= {source};\n"
+            f"end\n"
+        )
+        patched = re.sub(r"\nendmodule\b", "\n" + tracker + "\nendmodule", patched, count=1)
+    return {**verilog_map, top_file: patched}
+
+
 def _trim_zero_padded_assign_concats(verilog_map: Dict[str, str]) -> Dict[str, str]:
     """Normalize concat padding to the declared LHS width without losing data."""
     out: Dict[str, str] = {}
@@ -1403,10 +1483,19 @@ def _trim_zero_padded_assign_concats(verilog_map: Dict[str, str]) -> Dict[str, s
             items[0] = f"{new_width}'{zero.group('base')}" + ("0" * max(1, (new_width + (3 if zero.group('base').lower() == 'h' else 0)) // (4 if zero.group('base').lower() == 'h' else 1)))
             return f"assign {lhs} = {{{', '.join(items)}}};"
 
+        # Flatten a zero-extension nested inside a larger concatenation. This
+        # keeps the same bit order and lets the width accounting below see all
+        # fields (for example ``{header, {16'b0, value}, reserved}``).
+        flattened = re.sub(
+            r",\s*\{\s*(\d+'[bdh]0+)\s*,\s*([^,{}]+?)\s*\}",
+            r", \1, \2",
+            code,
+            flags=re.IGNORECASE,
+        )
         normalized = re.sub(
             r"assign\s+(?P<lhs>[A-Za-z_][A-Za-z0-9_$]*)\s*=\s*\{(?P<items>[^{};]+)\}\s*;",
             repl,
-            code,
+            flattened,
         )
 
         def pad_repl(match: re.Match) -> str:
@@ -1416,12 +1505,29 @@ def _trim_zero_padded_assign_concats(verilog_map: Dict[str, str]) -> Dict[str, s
             item_widths = [item_width(item) for item in items]
             if not items or any(width is None for width in item_widths):
                 return match.group(0)
-            missing = lhs_width - sum(int(width) for width in item_widths)
-            if missing <= 0:
+            delta = lhs_width - sum(int(width) for width in item_widths)
+            if delta == 0:
                 return match.group(0)
             prefix = match.group("prefix") or ""
             operator = match.group("operator")
-            return f"{prefix}{lhs} {operator} {{{missing}'b0, {', '.join(items)}}};"
+            if delta > 0:
+                return f"{prefix}{lhs} {operator} {{{delta}'b0, {', '.join(items)}}};"
+
+            excess = -delta
+            # Generated packet layouts commonly over-allocate the final
+            # reserved-zero field. Shrink only edge zero padding; never remove
+            # or truncate a payload field.
+            for index in (len(items) - 1, 0):
+                zero = re.fullmatch(r"(?P<width>\d+)'[bdh]0+", items[index], flags=re.IGNORECASE)
+                if not zero or int(zero.group("width")) < excess:
+                    continue
+                remaining = int(zero.group("width")) - excess
+                if remaining:
+                    items[index] = f"{remaining}'b0"
+                else:
+                    items.pop(index)
+                return f"{prefix}{lhs} {operator} {{{', '.join(items)}}};"
+            return match.group(0)
 
         out[fname] = re.sub(
             r"(?P<prefix>\bassign\s+)?(?P<lhs>[A-Za-z_][A-Za-z0-9_$]*)\s*"
@@ -2962,6 +3068,7 @@ def _validate_and_materialize_rtl(
     verilog_map = _align_spec_inter_module_wire_widths(verilog_map, spec_json, mode)
     verilog_map = _connect_spec_inter_module_signals(verilog_map, spec_json, mode)
     verilog_map = _repair_undriven_inflight_state(verilog_map, spec_json, mode)
+    verilog_map = _repair_undriven_last_accepted_observations(verilog_map, spec_json, mode)
     verilog_map = _trim_zero_padded_assign_concats(verilog_map)
     artifact_list = []
 

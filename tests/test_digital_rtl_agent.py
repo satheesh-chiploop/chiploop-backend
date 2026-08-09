@@ -659,6 +659,24 @@ endmodule
     assert "packet = {8'b0, a, b, 8'h00, 16'h0000, 64'h0};" in out
 
 
+def test_concat_normalizer_shrinks_trailing_reserved_zero_padding():
+    code = """
+module top(input [15:0] seq, input [15:0] velocity);
+reg [127:0] packet;
+reg [63:0] command;
+always @(*) begin
+  packet = {8'h01, seq, 32'h1, {16'h0000, velocity}, 16'h0, 24'h0, 40'h0};
+  command = {seq, 8'h0, velocity, 16'h0, 16'h0};
+end
+endmodule
+"""
+
+    out = agent._trim_zero_padded_assign_concats({"top.v": code})["top.v"]
+
+    assert "packet = {8'h01, seq, 32'h1, 16'h0000, velocity, 16'h0, 24'h0};" in out
+    assert "command = {seq, 8'h0, velocity, 16'h0, 8'b0};" in out
+
+
 def test_aligns_named_inter_module_wire_to_contract_width():
     files = {"top.v": """
 module top;
@@ -707,6 +725,35 @@ endmodule
     assert "reg request_inflight;" in out
     assert "if (req_valid && req_ready) request_inflight <= 1'b1;" in out
     assert "if (rsp_valid && rsp_ready) request_inflight <= 1'b0;" in out
+
+
+def test_repairs_last_accepted_observation_from_matching_response_handshake():
+    files = {"top.v": """
+module top(input clk, input rst_n);
+wire [15:0] response_sequence_number;
+wire response_accepted;
+wire [15:0] last_sequence_accepted;
+deframer u_deframer(.response_sequence_number(response_sequence_number), .response_accepted(response_accepted));
+registers u_registers(.last_sequence_accepted(last_sequence_accepted));
+endmodule
+"""}
+    spec = {"hierarchy": {
+        "top_module": {"name": "top", "rtl_output_file": "top.v", "ports": []},
+        "modules": [
+            {"name": "deframer", "ports": [
+                {"name": "response_sequence_number", "direction": "output", "width": 16},
+                {"name": "response_accepted", "direction": "output", "width": 1},
+            ]},
+            {"name": "registers", "ports": [
+                {"name": "last_sequence_accepted", "direction": "input", "width": 16},
+            ]},
+        ],
+    }}
+
+    out = agent._repair_undriven_last_accepted_observations(files, spec, "hierarchical")["top.v"]
+
+    assert "reg [15:0] last_sequence_accepted;" in out
+    assert "else if (response_accepted) last_sequence_accepted <= response_sequence_number;" in out
 
 
 def test_direction_alignment_removes_reg_and_writes_from_spec_input():
