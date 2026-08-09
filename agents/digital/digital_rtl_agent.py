@@ -1214,11 +1214,24 @@ def _connect_spec_inter_module_signals(verilog_map: Dict[str, str], spec_json: d
         return verilog_map
     top_ports = _declared_ports(top_code)
 
+    module_port_directions: Dict[tuple[str, str], str] = {}
+    for module in ((spec_json.get("hierarchy") or {}).get("modules") or []):
+        if not isinstance(module, dict):
+            continue
+        module_name = str(module.get("name") or "")
+        for port in module.get("ports") or []:
+            if isinstance(port, dict) and module_name and port.get("name"):
+                module_port_directions[(module_name, str(port.get("name")))] = str(port.get("direction") or "").lower()
+
     endpoint_nets: Dict[tuple[str, str], str] = {}
+    structurally_driven_nets: set[str] = set()
     for match in instance_re.finditer(top_code):
         cell = match.group("cell")
         for port, signal in _named_instance_connections(match.group("conns")).items():
-            endpoint_nets[(cell, port)] = re.sub(r"\[[^\]]+\]", "", signal).strip()
+            net = re.sub(r"\[[^\]]+\]", "", signal).strip()
+            endpoint_nets[(cell, port)] = net
+            if module_port_directions.get((cell, port)) in {"output", "inout"}:
+                structurally_driven_nets.add(net)
 
     existing_drivers = set(re.findall(r"^\s*assign\s+([A-Za-z_][A-Za-z0-9_$]*)\s*=", top_code, flags=re.MULTILINE))
     additions: List[str] = []
@@ -1233,6 +1246,11 @@ def _connect_spec_inter_module_signals(verilog_map: Dict[str, str], spec_json: d
             dest_module, dest_port = _split_endpoint(str(destination or ""))
             dest_net = endpoint_nets.get((dest_module, dest_port))
             if not dest_net or dest_net == source_net or dest_net in existing_drivers:
+                continue
+            # A net connected to any child output already has a structural
+            # owner. A malformed/ambiguous graph edge must never add a second
+            # continuous driver to it.
+            if dest_net in structurally_driven_nets:
                 continue
             # A parent input is an externally owned source and can never be a
             # legal destination for a generated structural assignment, even

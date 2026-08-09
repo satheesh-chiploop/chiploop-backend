@@ -569,6 +569,41 @@ endmodule
     assert "assign rst_n" not in out["top.v"]
 
 
+def test_inter_module_repair_never_drives_net_owned_by_child_output():
+    files = {
+        "top.v": """
+module top;
+  wire parsed_health;
+  wire health_fault;
+  response_mgr u_response(.parsed_health(parsed_health), .health_fault(health_fault));
+  safety_mgr u_safety(.health_fault(health_fault));
+endmodule
+""",
+        "response_mgr.v": "module response_mgr(output parsed_health, output health_fault); endmodule",
+        "safety_mgr.v": "module safety_mgr(input health_fault); endmodule",
+    }
+    spec = {
+        "hierarchy": {
+            "top_module": {"name": "top", "rtl_output_file": "top.v", "ports": []},
+            "modules": [
+                {"name": "response_mgr", "ports": [
+                    {"name": "parsed_health", "direction": "output"},
+                    {"name": "health_fault", "direction": "output"},
+                ]},
+                {"name": "safety_mgr", "ports": [{"name": "health_fault", "direction": "input"}]},
+            ],
+        },
+        "inter_module_signals": [{
+            "source": "response_mgr.parsed_health",
+            "destinations": ["safety_mgr.health_fault"],
+        }],
+    }
+
+    out = agent._connect_spec_inter_module_signals(files, spec, "hierarchical")
+
+    assert "assign health_fault = parsed_health;" not in out["top.v"]
+
+
 def test_trim_zero_padding_repairs_concat_without_dropping_payload_bits():
     code = """
 module top(output [127:0] resp_data, output [63:0] act_data);
