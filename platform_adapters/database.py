@@ -102,6 +102,10 @@ class PostgresQuery:
         self.filters.append((column, "is", value))
         return self
 
+    def contains(self, column: str, value: Any) -> "PostgresQuery":
+        self.filters.append((column, "contains", value))
+        return self
+
     def order(self, column: str, desc: bool = False) -> "PostgresQuery":
         self.ordering.append((column, bool(desc)))
         return self
@@ -147,7 +151,10 @@ class PostgresQuery:
         params: List[Any] = []
         for column, op, value in self.filters:
             name = _ident(column)
-            if op == "in":
+            if op == "contains":
+                clauses.append(f"{name} @> %s::jsonb")
+                params.append(json.dumps(value))
+            elif op == "in":
                 if not value:
                     clauses.append("FALSE")
                 else:

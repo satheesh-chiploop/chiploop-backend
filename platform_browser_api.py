@@ -19,7 +19,7 @@ READ_TABLES = {
     "validation_bench_connections",
 }
 WRITE_TABLES = {"design_intent_drafts"}
-FILTER_METHODS = {"eq", "neq", "gt", "gte", "lt", "lte", "in_", "is_", "or_"}
+FILTER_METHODS = {"eq", "neq", "gt", "gte", "lt", "lte", "in_", "is_", "contains", "or_"}
 
 
 class PlatformFilter(BaseModel):
