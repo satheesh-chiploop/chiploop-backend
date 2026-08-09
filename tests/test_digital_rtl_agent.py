@@ -365,6 +365,28 @@ endmodule
     assert "wire y;" not in out
 
 
+def test_single_driver_sanitizer_removes_conditional_comb_write_to_sequential_reg():
+    code = """
+module top(input clk, input rst_n, input clamp, output status);
+reg status_r;
+assign status = status_r;
+always @(*) begin
+  status_r = 1'b0;
+  if (clamp) status_r = 1'b1;
+end
+always @(posedge clk or negedge rst_n) begin
+  if (!rst_n) status_r <= 1'b0;
+  else if (clamp) status_r <= 1'b1;
+end
+endmodule
+"""
+
+    out = agent._sanitize_single_driver_rtl({"top.v": code})["top.v"]
+
+    assert "status_r =" not in out
+    assert "status_r <= 1'b1;" in out
+
+
 def test_iverilog_port_width_warnings_are_structural_failures():
     output = """
 top.v:47: warning: Port 4 (addr) of demo_sram_32x64_model expects 6 bits, got 1.
