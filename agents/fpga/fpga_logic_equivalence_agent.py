@@ -55,6 +55,32 @@ def _unproven_points(log: str, proven: bool) -> int | None:
     return int(matches[-1]) if matches else None
 
 
+def _run_proof(state: dict, out_dir: str, name: str, gold_files: list[str], gate_netlist: str,
+               top: str, family: str, depths: list[int]) -> dict:
+    script_path = os.path.abspath(os.path.join(out_dir, f"{name}.ys"))
+    log_path = os.path.abspath(os.path.join(out_dir, f"{name}.log"))
+    write_text(script_path, _proof_script(gold_files, gate_netlist, top, family, depths))
+    result = run_cmd(["yosys", "-s", script_path], cwd=out_dir, log_path=log_path, timeout=900, state=state)
+    log = open(log_path, "r", encoding="utf-8", errors="ignore").read() if os.path.exists(log_path) else ""
+    proven = bool(result.get("ok"))
+    unproven = _unproven_points(log, proven)
+    status = "pass" if proven else "inconclusive" if unproven else "fail"
+    proof = {
+        "status": status, "proven": proven, "gold": gold_files,
+        "gate": gate_netlist, "script": script_path, "log": log_path,
+        "command": result, "unproven_points": unproven,
+    }
+    if not proven:
+        proof["failure_kind"] = "proof_incomplete" if unproven else "tool_error"
+        proof["reason"] = (
+            f"Yosys could not prove {unproven} equivalence points after induction depths "
+            f"{', '.join(str(value) for value in depths)}."
+            if unproven else
+            result.get("stderr_tail") or result.get("stdout_tail") or result.get("error") or "Yosys equivalence proof failed."
+        )
+    return proof
+
+
 def run_agent(state: dict) -> dict:
     fpga = state.get("fpga") if isinstance(state.get("fpga"), dict) else {}
     enabled = bool(state.get("run_fpga_lec", True))
@@ -62,52 +88,47 @@ def run_agent(state: dict) -> dict:
     top = str(fpga.get("top_module") or state.get("top_module") or "")
     rtl_files = [str(path) for path in fpga.get("rtl_files") or [] if os.path.exists(str(path))]
     synthesis = fpga.get("synthesis") if isinstance(fpga.get("synthesis"), dict) else {}
-    netlist = str(synthesis.get("verilog_netlist") or fpga.get("yosys_verilog_netlist") or "")
+    generic_netlist = str(synthesis.get("equivalence_netlist") or fpga.get("yosys_equivalence_netlist") or "")
+    mapped_netlist = str(
+        synthesis.get("mapped_equivalence_netlist")
+        or fpga.get("yosys_mapped_equivalence_netlist")
+        or synthesis.get("verilog_netlist")
+        or fpga.get("yosys_verilog_netlist")
+        or ""
+    )
     family = str(board_config(state).get("family") or "ice40").lower()
     depth = max(1, min(int(state.get("fpga_lec_induct_depth") or 12), 128))
     induction_depths = _induction_depths(depth)
     out_dir = fpga_dir(state, "lec")
-    script_path = os.path.abspath(os.path.join(out_dir, "fpga_rtl_to_netlist_lec.ys"))
-    log_path = os.path.abspath(os.path.join(out_dir, "fpga_rtl_to_netlist_lec.log"))
     summary = {
         "agent": AGENT_NAME, "status": "disabled" if not enabled else "blocked",
         "enabled": enabled, "required": required, "tool": "Yosys",
-        "comparison": "approved_rtl_vs_synthesis_netlist", "top_module": top,
-        "family": family, "rtl_file_count": len(rtl_files), "netlist": netlist or None,
+        "comparison": "two_stage_rtl_generic_and_generic_mapped_equivalence", "top_module": top,
+        "family": family, "rtl_file_count": len(rtl_files), "netlist": mapped_netlist or None,
+        "generic_netlist": generic_netlist or None, "mapped_netlist": mapped_netlist or None,
         "induction_depth": depth, "induction_depths_attempted": induction_depths,
-        "script": script_path, "log": log_path,
         "unproven_points": None,
     }
     if not enabled:
         summary["reason"] = "FPGA LEC disabled by user."
-    elif synthesis.get("status") != "completed" or not top or not rtl_files or not os.path.exists(netlist):
-        summary["reason"] = "LEC requires completed FPGA synthesis, source RTL, top module, and structural Verilog netlist."
+    elif (synthesis.get("status") != "completed" or not top or not rtl_files
+          or not os.path.exists(generic_netlist) or not os.path.exists(mapped_netlist)):
+        summary["reason"] = "LEC requires completed synthesis, source RTL, and both generic and FPGA-mapped netlists."
     else:
-        write_text(script_path, _proof_script(rtl_files, netlist, top, family, induction_depths))
-        result = run_cmd(["yosys", "-s", script_path], cwd=out_dir, log_path=log_path, timeout=900, state=state)
-        log = open(log_path, "r", encoding="utf-8", errors="ignore").read() if os.path.exists(log_path) else ""
-        proven = bool(result.get("ok"))
-        unproven_points = _unproven_points(log, proven)
+        generic_proof = _run_proof(state, out_dir, "fpga_rtl_to_generic_lec", rtl_files, generic_netlist, top, "", induction_depths)
+        mapped_proof = _run_proof(state, out_dir, "fpga_generic_to_mapped_lec", [generic_netlist], mapped_netlist, top, family, induction_depths)
+        proven = bool(generic_proof["proven"] and mapped_proof["proven"])
+        failed_proof = generic_proof if generic_proof["status"] != "pass" else mapped_proof
+        unproven_points = sum(int(proof.get("unproven_points") or 0) for proof in (generic_proof, mapped_proof)) or None
         summary.update({
             "status": "pass" if proven else "inconclusive" if unproven_points else "fail",
-            "command": result,
+            "generic_lec": generic_proof, "mapped_lec": mapped_proof,
+            "generic_proven": generic_proof["proven"], "mapped_proven": mapped_proof["proven"],
             "unproven_points": unproven_points,
             "proven": proven,
         })
         if not proven:
-            if unproven_points:
-                summary.update(
-                    failure_kind="proof_incomplete",
-                    reason=(
-                        f"Yosys could not prove {unproven_points} equivalence points "
-                        f"after induction depths {', '.join(str(value) for value in induction_depths)}."
-                    ),
-                )
-            else:
-                summary.update(
-                    failure_kind="tool_error",
-                    reason=result.get("stderr_tail") or result.get("stdout_tail") or result.get("error") or "Yosys equivalence proof failed.",
-                )
+            summary.update(failure_kind=failed_proof.get("failure_kind"), reason=failed_proof.get("reason"))
     publish_json(state, AGENT_NAME, "lec", "fpga_lec_summary.json", summary)
     manifest_update(state, "lec", summary)
     state["fpga_lec"] = summary

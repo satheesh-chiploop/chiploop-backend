@@ -82,6 +82,8 @@ def test_physical_ai_hem_uses_selected_model_design_identity():
     assert 'top_module, project_name = resolve_design_identity(payload)' in main_source
     assert 'f"The required synthesizable top module is {top_module}' in main_source
     assert '"top_module": top_module' in main_source
+    assert "EXTERNAL MODEL TRANSPORT DIRECTION CONTRACT" in main_source
+    assert "never connect a required top-level output only to a child input" in main_source
     assert "motor-control request/response" not in main_source
 
 

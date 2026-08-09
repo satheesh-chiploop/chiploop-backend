@@ -10,6 +10,8 @@ def _state(tmp_path: Path) -> dict:
     netlist = tmp_path / "top_ice40_netlist.v"
     rtl.write_text("module top(input clk, output reg q); always @(posedge clk) q <= ~q; endmodule\n", encoding="utf-8")
     netlist.write_text(rtl.read_text(encoding="utf-8"), encoding="utf-8")
+    generic = tmp_path / "top_generic_equivalence_netlist.v"
+    generic.write_text(rtl.read_text(encoding="utf-8"), encoding="utf-8")
     return {
         "workflow_id": "wf",
         "workflow_dir": str(tmp_path),
@@ -19,7 +21,7 @@ def _state(tmp_path: Path) -> dict:
         "fpga": {
             "top_module": "top",
             "rtl_files": [str(rtl)],
-            "synthesis": {"status": "completed", "verilog_netlist": str(netlist)},
+            "synthesis": {"status": "completed", "verilog_netlist": str(netlist), "equivalence_netlist": str(generic)},
         },
     }
 
@@ -39,7 +41,9 @@ def test_fpga_lec_uses_yosys_equivalence_and_passes(tmp_path, monkeypatch):
 
     assert published["status"] == "pass"
     assert published["tool"] == "Yosys"
-    script = Path(published["script"]).read_text(encoding="utf-8")
+    assert published["generic_proven"] is True
+    assert published["mapped_proven"] is True
+    script = Path(published["mapped_lec"]["script"]).read_text(encoding="utf-8")
     assert "equiv_make gold gate equiv" in script
     assert "equiv_simple -undef -seq 20" in script
     assert "equiv_induct -undef -seq 12" in script
@@ -47,6 +51,48 @@ def test_fpga_lec_uses_yosys_equivalence_and_passes(tmp_path, monkeypatch):
     assert "equiv_induct -undef -seq 48" in script
     assert "equiv_status -assert" in script
     assert published["induction_depths_attempted"] == [12, 24, 48]
+
+
+def test_fpga_lec_checks_generic_and_mapped_checkpoints(tmp_path, monkeypatch):
+    state = _state(tmp_path)
+    generic = tmp_path / "top_generic_equivalence_netlist.v"
+    generic.write_text("module top(input clk, output reg q); always @(posedge clk) q <= ~q; endmodule\n", encoding="utf-8")
+    state["fpga"]["synthesis"]["equivalence_netlist"] = str(generic)
+    published = {}
+    monkeypatch.setattr(lec, "publish_json", lambda _state, _agent, _subdir, _name, data: published.update(data))
+    monkeypatch.setattr(lec, "manifest_update", lambda *_args: None)
+
+    def fake_run(_cmd, cwd, log_path, **_kwargs):
+        Path(log_path).write_text("Equivalence successfully proven!\n", encoding="utf-8")
+        return {"ok": True, "cmd": ["yosys"]}
+
+    monkeypatch.setattr(lec, "run_cmd", fake_run)
+    lec.run_agent(state)
+
+    assert published["generic_netlist"] == str(generic)
+    assert published["mapped_netlist"].endswith("top_ice40_netlist.v")
+    assert published["comparison"] == "two_stage_rtl_generic_and_generic_mapped_equivalence"
+
+
+def test_mapped_lec_failure_blocks_even_when_generic_proof_passes(tmp_path, monkeypatch):
+    state = _state(tmp_path)
+    monkeypatch.setattr(lec, "publish_json", lambda *_args: None)
+    monkeypatch.setattr(lec, "manifest_update", lambda *_args: None)
+    calls = 0
+
+    def fake_run(_cmd, cwd, log_path, **_kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            Path(log_path).write_text("Equivalence successfully proven!\n", encoding="utf-8")
+            return {"ok": True}
+        Path(log_path).write_text("ERROR: Found 3 unproven $equiv cells\n", encoding="utf-8")
+        return {"ok": False, "stderr_tail": "3 unproven points"}
+
+    monkeypatch.setattr(lec, "run_cmd", fake_run)
+    with pytest.raises(RuntimeError, match="LEC did not pass"):
+        lec.run_agent(state)
+    assert calls == 2
 
 
 def test_fpga_lec_disabled_by_user_is_recorded(tmp_path, monkeypatch):
@@ -91,7 +137,9 @@ def test_unproven_equivalence_is_reported_as_inconclusive(tmp_path, monkeypatch)
     lec.run_agent(state)
     assert published["status"] == "inconclusive"
     assert published["failure_kind"] == "proof_incomplete"
-    assert published["unproven_points"] == 9
+    assert published["unproven_points"] == 18
+    assert published["generic_lec"]["unproven_points"] == 9
+    assert published["mapped_lec"]["unproven_points"] == 9
     assert "12, 24, 48" in published["reason"]
 
 def test_fpga_lec_is_registered_in_supabase_and_all_implementation_flows():

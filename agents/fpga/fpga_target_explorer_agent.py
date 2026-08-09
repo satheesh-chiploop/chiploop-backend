@@ -364,17 +364,23 @@ def _summarize_board(board_key: str, board: dict, synthesis_runs: list[dict], pn
 
 
 def _recommend(results: list[dict]) -> dict:
-    viable = [item for item in results if item.get("target_met") and item.get("programming_ready") is not False]
-    pool = viable or [item for item in results if _num(item.get("best_frequency_mhz")) > 0 and item.get("programming_ready") is not False]
+    # Explorer recommends on measured capacity/timing. Physical pin coverage is
+    # a separate prototyping gate: an otherwise valid device must remain
+    # recommendable with ``programming_ready=false`` and explicit unmapped pins.
+    # Filtering those candidates here previously produced four "Unavailable"
+    # cards even when a board had routed and exceeded the requested frequency.
+    viable = [item for item in results if item.get("target_met")]
+    pool = viable or [item for item in results if _num(item.get("best_frequency_mhz")) > 0]
     if not pool:
         return {key: None for key in PROFILE_KEYS}
-    performance = max(pool, key=lambda item: (_num(item.get("median_frequency_mhz")), _num(item.get("best_frequency_mhz"))))
-    growth = max(pool, key=lambda item: (_num(item.get("resource_headroom_percent")), _num(item.get("logic_cells_available"))))
-    low_cost = min(pool, key=lambda item: (_num(item.get("logic_cells_available"), 1e12), -_num(item.get("median_frequency_mhz"))))
+    performance = max(pool, key=lambda item: (_num(item.get("median_frequency_mhz")), _num(item.get("best_frequency_mhz")), 1 if item.get("programming_ready") else 0))
+    growth = max(pool, key=lambda item: (_num(item.get("resource_headroom_percent")), _num(item.get("logic_cells_available")), 1 if item.get("programming_ready") else 0))
+    low_cost = min(pool, key=lambda item: (_num(item.get("logic_cells_available"), 1e12), 0 if item.get("programming_ready") else 1, -_num(item.get("median_frequency_mhz"))))
     overall = max(
         pool,
         key=lambda item: (
             1 if item.get("target_met") else 0,
+            1 if item.get("programming_ready") else 0,
             _num(item.get("timing_pass_rate")),
             min(_num(item.get("resource_headroom_percent")), 60.0),
             _num(item.get("median_frequency_mhz")),
@@ -409,8 +415,14 @@ def _recommendation_details(results: list[dict], recommendations: dict, target: 
             "resource_headroom_percent": item.get("resource_headroom_percent"),
             "toolchain_confidence": item.get("toolchain_confidence"),
             "constraint_confidence": item.get("constraint_confidence"),
+            "programming_ready": bool(item.get("programming_ready")),
+            "unmapped_ports": item.get("unmapped_ports") or [],
             "why": (f"Meets {target:g} MHz with {margin:.1f}% timing margin and {headroom:.1f}% logic headroom." if item.get("target_met") else f"Best available result is {item.get('best_frequency_mhz')} MHz; the {target:g} MHz target was not met."),
-            "next_step": "Continue to FPGA Prototyping to apply verified board pins, rerun implementation, verify, and generate the bitstream.",
+            "next_step": (
+                "Continue to FPGA Prototyping, rerun implementation, verify, and generate the bitstream."
+                if item.get("programming_ready")
+                else "Add verified mappings for the listed unmapped pins in FPGA Prototyping before bitstream generation."
+            ),
         }
     return details
 
@@ -581,6 +593,8 @@ def run_agent(state: dict) -> dict:
             "app": "fpga-bitstream",
             "label": "Continue to FPGA Prototyping",
             "selected_board": selected_board,
+            "programming_ready": bool((selected_result or {}).get("programming_ready")),
+            "unmapped_ports": (selected_result or {}).get("unmapped_ports") or [],
             "target_frequency_mhz": target,
             "source_workflow_id": state.get("workflow_id"),
             "top_module": top,

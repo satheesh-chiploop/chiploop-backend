@@ -68,6 +68,19 @@ def test_recommendations_generate_all_profiles():
     assert set(recommendations) == explorer.PROFILE_KEYS
 
 
+def test_recommendations_keep_target_met_board_when_pin_mapping_is_incomplete():
+    result = _board("timing_fit", 51.883, 25000, 4314)
+    result.update({"programming_ready": False, "unmapped_ports": ["spi_sclk", "spi_cs_n"]})
+
+    recommendations = explorer._recommend([result])
+    details = explorer._recommendation_details([result], recommendations, 20)
+
+    assert set(recommendations.values()) == {"timing_fit"}
+    assert details["best_overall"]["programming_ready"] is False
+    assert details["best_overall"]["unmapped_ports"] == ["spi_sclk", "spi_cs_n"]
+    assert "Add verified mappings" in details["best_overall"]["next_step"]
+
+
 def test_frequency_relaxation_only_after_target_miss():
     board = {"label": "Demo", "family": "ice40", "device": "up5k", "package": "sg48", "resources": {"logic_cells": 5280}}
     pnr = [{"status": "completed", "seed": 1, "max_frequency_mhz": 68, "logic_cells_used": 3000, "logic_cells_available": 5280}]

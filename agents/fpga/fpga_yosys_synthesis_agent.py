@@ -226,6 +226,8 @@ def run_agent(state: dict) -> dict:
     }.get(family, "synth_ice40")
     json_path = os.path.abspath(f"{out_dir}/{top or 'top'}_{family}.json")
     verilog_netlist_path = os.path.abspath(f"{out_dir}/{top or 'top'}_{family}_netlist.v")
+    equivalence_netlist_path = os.path.abspath(f"{out_dir}/{top or 'top'}_generic_equivalence_netlist.v")
+    mapped_equivalence_netlist_path = os.path.abspath(f"{out_dir}/{top or 'top'}_{family}_mapped_equivalence_netlist.v")
     script_path = os.path.abspath(f"{out_dir}/synth_{family}.ys")
     log_path = os.path.abspath(f"{out_dir}/yosys_synth.log")
     help_text = _yosys_help(synth_cmd)
@@ -237,6 +239,8 @@ def run_agent(state: dict) -> dict:
         "rtl_file_count": len(rtl_files),
         "json_netlist": json_path,
         "verilog_netlist": verilog_netlist_path,
+        "equivalence_netlist": equivalence_netlist_path,
+        "mapped_equivalence_netlist": mapped_equivalence_netlist_path,
         "closure_iteration": int(state.get("fpga_synthesis_closure_iteration_index") or 0),
         "flatten_enabled": bool(state.get("fpga_yosys_flatten")),
         "tool_effort": effort_policy,
@@ -258,11 +262,22 @@ def run_agent(state: dict) -> dict:
         state["status"] = summary["error"]
         return state
     steps = [f"read_verilog -sv {path}" for path in rtl_files]
+    steps.extend([
+        f"hierarchy -check -top {top}",
+        "design -save lec_source",
+        "proc; opt; memory; opt_clean",
+        f"write_verilog -noattr {equivalence_netlist_path}",
+        "design -reset",
+        "design -load lec_source",
+    ])
     if state.get("fpga_yosys_flatten"):
         steps.append("hierarchy -check")
         steps.append("flatten")
     synth_options = " ".join(_architecture_synth_options(board, help_text) + effort_policy["effective_options"])
     steps.append(f"{synth_cmd} -top {top} {synth_options} -json {json_path}".replace("  ", " "))
+    # Keep attributes in the formal checkpoint. Some FPGA families encode
+    # power-up and technology semantics in attributes which -noattr removes.
+    steps.append(f"write_verilog {mapped_equivalence_netlist_path}")
     steps.append(f"write_verilog -noattr {verilog_netlist_path}")
     script = "\n".join(steps) + "\n"
     write_text(script_path, script)
@@ -294,6 +309,8 @@ def run_agent(state: dict) -> dict:
     manifest_update(state, "synthesis", summary)
     manifest_update(state, "yosys_json", json_path if os.path.exists(json_path) else None)
     manifest_update(state, "yosys_verilog_netlist", verilog_netlist_path if os.path.exists(verilog_netlist_path) else None)
+    manifest_update(state, "yosys_equivalence_netlist", equivalence_netlist_path if os.path.exists(equivalence_netlist_path) else None)
+    manifest_update(state, "yosys_mapped_equivalence_netlist", mapped_equivalence_netlist_path if os.path.exists(mapped_equivalence_netlist_path) else None)
     if summary["status"] == "failed":
         state["status"] = "FPGA synthesis failed."
     return state
