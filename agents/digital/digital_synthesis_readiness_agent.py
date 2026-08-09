@@ -76,6 +76,27 @@ def _collect_rtl_files(workflow_dir: str) -> List[str]:
     out.sort()
     return out
 
+def _dedupe_identical_rtl_files(rtl_files: List[str]) -> Tuple[List[str], List[Dict[str, str]]]:
+    """Remove byte-identical workflow copies without hiding real module conflicts."""
+    unique: List[str] = []
+    ignored: List[Dict[str, str]] = []
+    seen: Dict[str, str] = {}
+    for raw_path in rtl_files:
+        path = os.path.abspath(str(raw_path))
+        try:
+            with open(path, "rb") as fh:
+                digest = hashlib.sha256(fh.read()).hexdigest()
+        except OSError:
+            # Preserve missing/unreadable inputs so Yosys reports the real error.
+            unique.append(path)
+            continue
+        if digest in seen:
+            ignored.append({"path": path, "matches": seen[digest], "reason": "duplicate_content"})
+            continue
+        seen[digest] = path
+        unique.append(path)
+    return unique, ignored
+
 def _pick_top(spec: Dict[str, Any], rtl_files: List[str], state_top: Optional[str]) -> str:
     if state_top:
         return state_top
@@ -200,7 +221,8 @@ def run_agent(state: dict) -> dict:
 
     spec_path = state.get("spec_json") or os.path.join(workflow_dir, "digital", "spec.json")
     spec = _read_json(spec_path)
-    rtl_files = state.get("rtl_files") or _collect_rtl_files(workflow_dir)
+    rtl_candidates = state.get("rtl_files") or _collect_rtl_files(workflow_dir)
+    rtl_files, ignored_rtl_files = _dedupe_identical_rtl_files(list(rtl_candidates))
     top = _pick_top(spec, rtl_files, state.get("top_module"))
 
     redflags = _scan_rtl_for_redflags(rtl_files)
@@ -222,6 +244,9 @@ def run_agent(state: dict) -> dict:
         "top_module": top,
         "spec_path": spec_path,
         "rtl_file_count": len(rtl_files),
+        "rtl_candidate_count": len(rtl_candidates),
+        "ignored_rtl_file_count": len(ignored_rtl_files),
+        "ignored_rtl_files": ignored_rtl_files,
         "score": score,
         "intent_findings": intent,
         "synthesizable_subset_findings": redflags[:500],
