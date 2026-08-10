@@ -5802,6 +5802,19 @@ def _hem_continue_digital_rtl_after_success(
         hem_run_id=str(hem_run_id) if hem_run_id else None,
         mode=mode,
     )
+    _hem_link_child_workflow(
+        workflow_id=child_workflow_id,
+        root_workflow_id=root_workflow_id,
+        root_run_id=root_run_id,
+        stage=next_app,
+        label=next_label,
+        dashboard_stage={
+            "dqa": "dqa",
+            "verify": "verification",
+            "arch2synthesis": "synthesis",
+            "arch2tapeout": "tapeout",
+        }.get(next_app, next_app),
+    )
     _hem_update_run_record(
         str(hem_run_id) if hem_run_id else None,
         current_workflow_id=child_workflow_id,

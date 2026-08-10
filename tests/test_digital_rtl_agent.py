@@ -826,6 +826,25 @@ endmodule
     assert ".fault_code(code)" in out["top.v"]
 
 
+def test_promotes_procedurally_assigned_output_wire_without_prompt_repair():
+    files = {
+        "regs.v": """
+module regs(clk, reg_rvalid, passthrough);
+input clk;
+output reg_rvalid;
+output wire passthrough;
+always @(posedge clk) reg_rvalid <= 1'b1;
+assign passthrough = reg_rvalid;
+endmodule
+"""
+    }
+
+    repaired = agent._promote_procedurally_assigned_outputs(files)["regs.v"]
+
+    assert "output reg reg_rvalid;" in repaired
+    assert "output wire passthrough;" in repaired
+
+
 def test_sanitize_child_output_reroutes_net_already_driven_by_parent_assign():
     code = """
 module top(input fallback_source, output fallback_status);

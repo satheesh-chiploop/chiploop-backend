@@ -683,16 +683,62 @@ def _has_structural_width_warnings(tool_output: str) -> bool:
 
 def _module_procedurally_assigns_signal(module_code: str, signal_name: str) -> bool:
     text = _strip_verilog_comments(module_code or "")
+    assignment = rf"\b{re.escape(signal_name)}\s*(?:<=|(?<![=!<>])=(?!=))"
+    # A one-statement always block must not absorb following continuous
+    # assignments into its body during this structural check.
+    single_statement = re.compile(
+        rf"\balways(?:_ff|_comb)?\s*(?:@\s*\([^)]*\))?\s*(?!begin\b)[^;]*{assignment}[^;]*;",
+        flags=re.IGNORECASE,
+    )
+    if single_statement.search(text):
+        return True
     for block in re.findall(
-        r"\balways(?:_ff|_comb)?\s*(?:@\s*\([^)]*\))?\s*(.*?)(?=\balways(?:_ff|_comb)?\b|\bendmodule\b)",
+        r"\balways(?:_ff|_comb)?\s*(?:@\s*\([^)]*\))?\s*begin\b(.*?)\bend\b",
         text,
-        flags=re.DOTALL,
+        flags=re.DOTALL | re.IGNORECASE,
     ):
-        if re.search(rf"\b{re.escape(signal_name)}\s*<=", block):
-            return True
-        if re.search(rf"\b{re.escape(signal_name)}\s*(?<![=!<>])=(?!=)", block):
+        if re.search(assignment, block):
             return True
     return False
+
+
+def _promote_procedurally_assigned_outputs(verilog_map: Dict[str, str]) -> Dict[str, str]:
+    """Make Verilog output declarations legal when an always block drives them."""
+    out = dict(verilog_map)
+    for filename, code in list(out.items()):
+        repaired = code
+        for module_name, module_code in _extract_verilog_modules(code).items():
+            updated_module = module_code
+            declared = _declared_ports(module_code)
+            output_names = {
+                name for name, info in declared.items() if info.get("direction") == "output"
+            }
+            # _declared_ports primarily serves ANSI contracts; include classic
+            # Verilog declarations used by generated hierarchical leaf files.
+            output_names.update(re.findall(
+                r"\boutput\s+(?:(?:wire|reg|logic|signed)\s+)*(?:\[[^\]]+\]\s*)?([A-Za-z_][A-Za-z0-9_$]*)",
+                module_code,
+                flags=re.IGNORECASE,
+            ))
+            for signal_name in output_names:
+                if not _module_procedurally_assigns_signal(module_code, signal_name):
+                    continue
+                # Verilog-2005 requires a procedural output to be a variable.
+                # Preserve its signedness/range and leave output logic/reg alone.
+                declaration = re.compile(
+                    rf"(?P<prefix>\boutput\s+)(?!(?:reg|logic)\b)(?:wire\s+)?"
+                    rf"(?P<shape>(?:signed\s+)?(?:\[[^\]]+\]\s*)?)(?P<name>{re.escape(signal_name)}\b)",
+                    flags=re.IGNORECASE,
+                )
+                updated_module = declaration.sub(
+                    lambda match: f"{match.group('prefix')}reg {match.group('shape')}{match.group('name')}",
+                    updated_module,
+                    count=1,
+                )
+            if updated_module != module_code:
+                repaired = repaired.replace(module_code, updated_module, 1)
+        out[filename] = repaired
+    return out
 
 
 def _align_verilog_map_to_expected_modules(verilog_map: Dict[str, str], spec_json: dict, mode: str) -> Dict[str, str]:
@@ -3089,6 +3135,9 @@ def _validate_and_materialize_rtl(
     verilog_map = _repair_undriven_inflight_state(verilog_map, spec_json, mode)
     verilog_map = _repair_undriven_last_accepted_observations(verilog_map, spec_json, mode)
     verilog_map = _trim_zero_padded_assign_concats(verilog_map)
+    # Run last: earlier interface/width alignment may reconstruct a declaration
+    # and accidentally drop the variable qualifier from a procedural output.
+    verilog_map = _promote_procedurally_assigned_outputs(verilog_map)
     artifact_list = []
 
     materialize_dir = rtl_dir if not materialize_subdir else os.path.join(rtl_dir, materialize_subdir)
