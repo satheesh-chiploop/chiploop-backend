@@ -42,6 +42,32 @@ def test_storage_gate_keeps_explicit_register_bit_target():
     assert agent._minimum_expected_flops(spec, "flat") == 64
 
 
+def test_storage_gate_allows_bounded_tolerance_for_approximate_scale_target():
+    spec = {
+        "design_name": "image_pipeline",
+        "requirements": "Target roughly 25,000 flip-flops using register-based buffers.",
+    }
+    rtl = """
+module image_pipeline(input clk, input [7:0] din);
+reg [7:0] line0 [0:255];
+reg [7:0] line1 [0:255];
+reg [7:0] line2 [0:255];
+reg [15:0] histogram [0:255];
+always @(posedge clk) begin
+  line0[0] <= din;
+  line1[0] <= line0[0];
+  line2[0] <= line1[0];
+  histogram[din] <= histogram[din] + 1'b1;
+end
+endmodule
+"""
+
+    assert agent._assigned_storage_bits(rtl)[0] == 10240
+    issues = agent._validate_generated_complexity(spec, "flat", {"image_pipeline.v": rtl})
+    assert not any("materially below the spec scale" in issue for issue in issues)
+    assert any("too few state elements" in issue for issue in issues)
+
+
 def test_module_code_for_name_extracts_top_when_file_contains_children():
     code = """
 module register_file(
@@ -385,6 +411,31 @@ endmodule
 
     assert "status_r =" not in out
     assert "status_r <= 1'b1;" in out
+
+
+def test_single_driver_sanitizer_removes_case_mux_writes_to_sequential_reg():
+    code = """
+module top(input clk, input [7:0] addr, output [7:0] rd_data);
+reg [7:0] rd_data_reg;
+assign rd_data = rd_data_reg;
+always @(posedge clk) begin
+  if (addr == 8'h10) rd_data_reg <= 8'h5a;
+end
+always @(*) begin
+  rd_data_reg = 8'h00;
+  case (addr)
+    8'h00: rd_data_reg = 8'h11;
+    8'h04: rd_data_reg = 8'h22;
+    default: rd_data_reg = 8'h00;
+  endcase
+end
+endmodule
+"""
+
+    out = agent._sanitize_single_driver_rtl({"top.v": code})["top.v"]
+
+    assert "rd_data_reg =" not in out
+    assert "rd_data_reg <= 8'h5a;" in out
 
 
 def test_iverilog_port_width_warnings_are_structural_failures():
@@ -843,6 +894,27 @@ endmodule
 
     assert "output reg reg_rvalid;" in repaired
     assert "output wire passthrough;" in repaired
+
+
+def test_connects_top_status_output_source_to_same_named_child_status_input():
+    files = {
+        "top.v": """
+module top(output status_irq);
+wire status_irq_int;
+wire status_irq_csr;
+assign status_irq = status_irq_int;
+status_regs u_regs(.status_irq(status_irq_csr));
+status_logic u_logic(.status_irq(status_irq_int));
+endmodule
+""",
+        "status_regs.v": "module status_regs(input status_irq); endmodule\n",
+        "status_logic.v": "module status_logic(output status_irq); assign status_irq = 1'b0; endmodule\n",
+    }
+    spec = {"hierarchy": {"top_module": {"name": "top", "rtl_output_file": "top.v"}, "modules": []}}
+
+    repaired = agent._connect_top_output_feedback_to_matching_child_input(files, spec, "hierarchical")["top.v"]
+
+    assert "assign status_irq_csr = status_irq_int;" in repaired
 
 
 def test_sanitize_child_output_reroutes_net_already_driven_by_parent_assign():

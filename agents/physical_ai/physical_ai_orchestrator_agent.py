@@ -14,7 +14,7 @@ ROUTES = {
 def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     execution = state["physics_execution"]
     generated_architecture = state.get("generated_architecture") or execution.get("architecture") or {}
-    if execution.get("execution_mode") == "architecture":
+    if execution.get("execution_mode") in {"architecture", "cpu_reference"}:
         implementation_path = execution.get("implementation_path") or "digital_ip_asic"
         continue_to_rtl = implementation_path != "architecture_only"
         stages = [
@@ -22,7 +22,8 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
             {"id": "model_selection", "owner": "physical_ai", "status": "completed"},
             {"id": "surrogate_interface", "owner": "physical_ai", "status": "completed"},
             {"id": "architecture_definition", "owner": "physical_ai", "status": "completed"},
-            {"id": "surrogate_inference", "owner": "physical_ai", "status": "not_executed"},
+            {"id": "cpu_reference", "owner": "physical_ai", "status": "completed" if execution.get("execution_mode") == "cpu_reference" else "not_requested"},
+            {"id": "surrogate_inference", "owner": "physical_ai", "status": execution.get("inference_status") or "not_executed"},
             {"id": "digital_design", "owner": "existing_loop", "status": "ready" if continue_to_rtl else "not_requested", "app_path": ROUTES["digital_design"]},
             {"id": "rtl_verification", "owner": "existing_loop", "status": "planned" if continue_to_rtl else "not_requested", "app_path": "/apps/verify"},
             {"id": "digital_implementation", "owner": "existing_loop", "status": "planned" if implementation_path in {"digital_ip_asic", "fpga_then_asic"} else "not_requested", "app_path": ROUTES["digital_implementation"]},
@@ -33,6 +34,7 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
             "parent_workflow_id": state.get("workflow_id"),
             "source_model_id": state["selected_physics_model"]["model_id"],
             "inference_status": "not_executed",
+            "cpu_reference_status": "completed" if execution.get("execution_mode") == "cpu_reference" else "not_requested",
             "surrogate_interface_contract": execution["files"]["surrogate_interface_contract"],
             "product_architecture": execution["files"]["product_architecture"],
             "digital_ip_spec": execution["files"]["digital_ip_spec"],

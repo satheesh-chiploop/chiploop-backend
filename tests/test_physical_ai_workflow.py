@@ -3,6 +3,8 @@ import json
 import pytest
 
 import agents.physical_ai.physical_ai_architecture_agent as architecture_agent
+import agents.physical_ai.physical_ai_application_intelligence_agent as application_intelligence_agent
+import agents.physical_ai.physical_ai_partitioning_agent as partitioning_agent
 from physical_ai.model_registry import get_physics_model, list_physics_models
 from physical_ai.workflow import run_physical_ai_workflow
 from studio_contract.registry import load_registry
@@ -45,12 +47,15 @@ def test_generic_physical_ai_parent_workflow_executes_motor_adapter(tmp_path):
     assert result["loop"]["stages"][5]["status"] == "ready"
     for path in result["files"].values():
         assert path
-    assert [event[1] for event in progress] == ["started", "completed"] * 5
+    assert [event[1] for event in progress] == ["started", "completed"] * 8
     assert [event[0] for event in progress if event[1] == "completed"] == [
         "Physical AI Requirements Agent",
+        "Application Intelligence Agent",
         "Physical AI Model Selection Agent",
+        "Surrogate Discovery and Mapping Agent",
         "Physical AI Physics Execution Agent",
         "Physical AI Architecture Agent",
+        "Hardware Software Partitioning Agent",
         "Physical AI Orchestrator Agent",
     ]
 
@@ -97,6 +102,101 @@ def test_pretrained_gpu_surrogate_supports_cpu_architecture_journey(tmp_path):
     assert result["files"]["digital_ip_spec"]
     summary = json.loads(open(result["files"]["workflow_summary"], encoding="utf-8").read())
     assert summary["physics_execution"]["interface"]["inference"]["status"] == "not_executed"
+
+
+def test_active_aero_cpu_reference_builds_application_partition_and_policy(tmp_path):
+    result = run_physical_ai_workflow(
+        {
+            "application": "intelligent_active_aerodynamics_controller",
+            "objective": "Partition and prototype active aero control",
+            "physics_domain": "automotive_aerodynamics",
+            "physics_model_id": "nvidia.domino.automotive_aero",
+            "implementation_target": "fpga",
+            "execution_mode": "cpu_reference",
+            "implementation_path": "fpga_prototype",
+            "operating_envelope": {"stream_velocity_mps": [20, 55]},
+            "hem_enabled": False,
+        },
+        str(tmp_path),
+        workflow_id="active-aero-reference",
+    )
+
+    assert result["status"] == "ready_for_digital_design"
+    assert result["physics_execution"]["execution_mode"] == "cpu_reference"
+    assert result["physics_execution"]["inference_status"] == "not_executed"
+    assert result["application_intelligence"]["source_of_truth"] == "supabase"
+    assert result["model_qualification"]["qualification_status"] == "provisionally_compatible"
+    assert result["partition"]["decision"] == "heterogeneous"
+    assert len(result["partition"]["jobs"]) == 5
+    assert result["files"]["cpu_reference_results"]
+    assert result["files"]["control_policy"]
+
+
+def test_application_intelligence_and_partition_use_selected_agent_model(tmp_path, monkeypatch):
+    application_response = {
+        "name": "adaptive_aero_product",
+        "objective": "Reduce drag safely",
+        "physics_domain": "automotive_aerodynamics",
+        "operating_envelope": {"stream_velocity_mps": [20, 55]},
+        "constraints": {"safety": ["bounded command"]},
+        "required_capabilities": ["estimate drag", "command actuator"],
+        "acceptance_gates": ["command latency below 10 ms"],
+        "workloads": [{"id": "drag_estimation", "inputs": ["vehicle_state"], "outputs": ["drag_estimate"]}],
+        "interfaces": [{"id": "vehicle_state"}],
+    }
+    partition_response = {
+        "decision": "heterogeneous",
+        "jobs": [{
+            "id": "control_guard",
+            "target": "fpga",
+            "status": "ready_for_rtl",
+            "responsibility": "bound actuator commands",
+            "inputs": ["requested_command"],
+            "outputs": ["safe_command"],
+            "latency_budget": "100 us",
+            "rationale": "deterministic safety path",
+        }],
+        "interfaces": [{"from": "cpu_software", "to": "fpga", "contract": "versioned command"}],
+        "decision_factors": ["latency", "safety"],
+        "tradeoffs": ["surrogate inference remains outside RTL"],
+    }
+    architecture_response = {
+        "product_name": "Active Aero Controller",
+        "top_module": "adaptive_aero_control_top",
+        "product_summary": "Safe active aero control",
+        "architecture_decisions": ["Keep surrogate outside RTL"],
+        "blocks": ["command_guard"],
+        "interfaces": ["request response stream"],
+        "safety_requirements": ["bounded command"],
+        "rtl_spec_text": "Build a synthesizable bounded command controller.",
+        "verification_goals": ["verify command bounds"],
+    }
+    calls = []
+    monkeypatch.setattr(application_intelligence_agent, "complete_text", lambda prompt, **kwargs: calls.append(kwargs) or json.dumps(application_response))
+    monkeypatch.setattr(architecture_agent, "complete_text", lambda prompt, **kwargs: calls.append(kwargs) or json.dumps(architecture_response))
+    monkeypatch.setattr(partitioning_agent, "complete_text", lambda prompt, **kwargs: calls.append(kwargs) or json.dumps(partition_response))
+
+    result = run_physical_ai_workflow(
+        {
+            "application": "intelligent_active_aerodynamics_controller",
+            "physics_domain": "automotive_aerodynamics",
+            "physics_model_id": "nvidia.domino.automotive_aero",
+            "execution_mode": "cpu_reference",
+            "implementation_path": "fpga_prototype",
+            "generate_architecture_with_model": True,
+            "model_policy": {"mode": "standard", "selected_model": "nvidia_nemotron"},
+        },
+        str(tmp_path),
+    )
+
+    assert [call["agent_name"] for call in calls] == [
+        "Application Intelligence Agent",
+        "Physical AI Architecture Agent",
+        "Hardware Software Partitioning Agent",
+    ]
+    assert result["application_intelligence"]["generation_status"] == "model_generated"
+    assert result["partition"]["generation_status"] == "model_generated"
+    assert result["partition"]["jobs"][0]["target"] == "fpga"
 
 
 def test_architecture_only_stops_before_rtl(tmp_path):
@@ -153,9 +253,12 @@ def test_physical_ai_agents_and_workflow_are_registered():
     assert workflow.loop_type == "physical_ai"
     assert workflow.agents == [
         "Physical AI Requirements Agent",
+        "Application Intelligence Agent",
         "Physical AI Model Selection Agent",
+        "Surrogate Discovery and Mapping Agent",
         "Physical AI Physics Execution Agent",
         "Physical AI Architecture Agent",
+        "Hardware Software Partitioning Agent",
         "Physical AI Orchestrator Agent",
     ]
 
@@ -168,6 +271,7 @@ def test_main_registers_generic_physical_ai_endpoints():
     assert 'dashboard_path": f"/apps/physical-ai/results/{workflow_id}"' in main
     assert 'hem_enabled: bool = True' in main
     assert 'def _hem_continue_physical_ai_after_success' in main
+    assert '"App: Application Intelligence - Active Aero"' in main
     assert '"FPGA_Target_Explorer"' in main
     assert '"FPGA_RTL_to_Bitstream"' in main
 
@@ -208,10 +312,13 @@ def test_physical_ai_has_supabase_source_of_truth_migration():
     assert "'physical_ai'" in runs_migration
 
     apps_page = open("../frontend/app/apps/page.tsx", encoding="utf-8").read()
+    application_app = open("../frontend/app/apps/application-intelligence/page.tsx", encoding="utf-8").read()
     loops_page = open("../frontend/app/loops/page.tsx", encoding="utf-8").read()
     studio_page = open("../frontend/app/workflow/page.tsx", encoding="utf-8").read()
     assert 'title: "Physical AI Design Studio"' in apps_page
     assert 'key: "physical-ai-pmsm"' in apps_page
+    assert 'router.push("/apps/application-intelligence")' in apps_page
+    assert 'export { default } from "../physical-ai/page"' in application_app
     assert 'href: "/loops/physical-ai"' in loops_page
     assert '<option value="physical_ai">Physical AI Loop — Coming soon</option>' in studio_page
     assert 'Physical_AI_Loop: linearWorkflowDefinition' in studio_page

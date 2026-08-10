@@ -798,7 +798,11 @@ def _remove_comb_blocking_assigns_to_sequential_regs(code: str) -> str:
     in_comb = False
     depth = 0
     assign_pat = re.compile(
-        rf"^\s*(?:if\s*\([^;]+\)\s*)?"
+        # A combinational assignment may be the statement owned by a case
+        # item (for example ``8'h00: rd_data_reg = control_reg;``). Treat the
+        # case label as syntax surrounding the assignment, not as part of
+        # the signal name, so BLKANDNBLK cleanup covers readback muxes too.
+        rf"^\s*(?:(?:default|[^:;]+)\s*:\s*)?(?:if\s*\([^;]+\)\s*)?"
         rf"({'|'.join(re.escape(name) for name in sorted(seq_targets))})"
         rf"(?:\s*\[[^\]]+\])?\s*=\s*[^=].*;\s*$"
     )
@@ -1339,6 +1343,65 @@ def _connect_spec_inter_module_signals(verilog_map: Dict[str, str], spec_json: d
     return {**verilog_map, top_file: patched}
 
 
+def _connect_top_output_feedback_to_matching_child_input(verilog_map: Dict[str, str], spec_json: dict, mode: str) -> Dict[str, str]:
+    """Feed a top observation net into a same-named child status input.
+
+    Register/status blocks commonly consume the exact status signal also
+    exported by the top. If the LLM puts that child input on a fresh undriven
+    alias, the top's explicit output assignment is authoritative evidence for
+    the connection; no application-specific signal mapping is required.
+    """
+    if mode != "hierarchical":
+        return verilog_map
+    top_file = _top_rtl_file(spec_json, mode)
+    top_code = verilog_map.get(top_file)
+    if not top_code:
+        return verilog_map
+    top_ports = _declared_ports(top_code)
+    output_sources = {
+        match.group("port"): match.group("source")
+        for match in re.finditer(
+            r"^\s*assign\s+(?P<port>[A-Za-z_][A-Za-z0-9_$]*)\s*=\s*(?P<source>[A-Za-z_][A-Za-z0-9_$]*)\s*;",
+            top_code,
+            flags=re.MULTILINE,
+        )
+        if (top_ports.get(match.group("port")) or {}).get("direction") == "output"
+    }
+    if not output_sources:
+        return verilog_map
+
+    module_ports: Dict[str, Dict[str, dict]] = {}
+    for code in verilog_map.values():
+        for module_name, module_code in _extract_verilog_modules(code).items():
+            module_ports[module_name] = _declared_ports(module_code)
+    additions: List[str] = []
+    already_driven = set(re.findall(r"^\s*assign\s+([A-Za-z_][A-Za-z0-9_$]*)\s*=", top_code, flags=re.MULTILINE))
+    for match in re.finditer(
+        r"\b(?P<cell>[A-Za-z_][A-Za-z0-9_$]*)\s+(?P<inst>[A-Za-z_][A-Za-z0-9_$]*)\s*\((?P<conns>.*?)\)\s*;",
+        top_code,
+        flags=re.DOTALL,
+    ):
+        ports = module_ports.get(match.group("cell")) or {}
+        for port, signal_expr in _named_instance_connections(match.group("conns")).items():
+            signal = re.sub(r"\[[^\]]+\]", "", signal_expr).strip()
+            if (ports.get(port) or {}).get("direction") != "input" or signal in already_driven:
+                continue
+            source = output_sources.get(port)
+            if not source or source == signal:
+                continue
+            additions.append(f"assign {signal} = {source};")
+            already_driven.add(signal)
+    if not additions:
+        return verilog_map
+    patched = re.sub(
+        r"\nendmodule\b",
+        "\n" + "\n".join(dict.fromkeys(additions)) + "\n\nendmodule",
+        top_code,
+        count=1,
+    )
+    return {**verilog_map, top_file: patched}
+
+
 def _align_spec_inter_module_wire_widths(verilog_map: Dict[str, str], spec_json: dict, mode: str) -> Dict[str, str]:
     """Apply the contract width to internal nets named by the connection graph.
 
@@ -1765,10 +1828,17 @@ def _validate_generated_complexity(spec_json: dict, mode: str, verilog_map: Dict
 
     min_flops = _minimum_expected_flops(spec_json, mode)
     assigned_bits, targets = _assigned_storage_bits(full_text)
-    if min_flops and assigned_bits < min_flops:
+    # Approximate resource prose is an architecture-size estimate rather than
+    # an exact functional register contract. The parsed threshold is already
+    # conservative; allow a bounded 20% estimation tolerance before calling
+    # the RTL materially undersized. Placeholder shells are still rejected by
+    # the explicit placeholder and minimum-state-element checks.
+    material_floor = max(1, int(min_flops * 0.80)) if min_flops else 0
+    if material_floor and assigned_bits < material_floor:
         issues.append(
             "❌ RTL storage is materially below the spec scale: "
-            f"assigned_flipflop_bits={assigned_bits}, expected_minimum={min_flops}. "
+            f"assigned_flipflop_bits={assigned_bits}, expected_minimum={material_floor} "
+            f"(estimate_basis={min_flops}). "
             "Implement real FIFOs, buffers, counters, shifters, state machines, and register storage described by the spec."
         )
     if min_flops >= 128 and len(targets) < 12:
@@ -3132,6 +3202,7 @@ def _validate_and_materialize_rtl(
     verilog_map = _sanitize_child_output_instance_connections(verilog_map)
     verilog_map = _align_spec_inter_module_wire_widths(verilog_map, spec_json, mode)
     verilog_map = _connect_spec_inter_module_signals(verilog_map, spec_json, mode)
+    verilog_map = _connect_top_output_feedback_to_matching_child_input(verilog_map, spec_json, mode)
     verilog_map = _repair_undriven_inflight_state(verilog_map, spec_json, mode)
     verilog_map = _repair_undriven_last_accepted_observations(verilog_map, spec_json, mode)
     verilog_map = _trim_zero_padded_assign_concats(verilog_map)

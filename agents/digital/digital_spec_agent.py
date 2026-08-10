@@ -373,6 +373,21 @@ def _normalize_spec_json(spec_json: dict):
     if not isinstance(spec_json, dict):
         raise ValueError("Spec JSON must be a dictionary.")
 
+    # Root-level ``design_name`` is also common for flat contracts. Ports plus
+    # an RTL/function contract make that shape unambiguous, so normalize the
+    # alias rather than spending repair passes asking for a one-key rename.
+    if (
+        not spec_json.get("name")
+        and spec_json.get("design_name")
+        and isinstance(spec_json.get("ports"), list)
+        and (
+            spec_json.get("rtl_output_file")
+            or spec_json.get("functionality")
+            or spec_json.get("responsibilities")
+        )
+    ):
+        spec_json["name"] = spec_json["design_name"]
+
     # Hierarchical form
     if isinstance(spec_json.get("hierarchy"), dict):
         hier = spec_json["hierarchy"]
@@ -468,7 +483,7 @@ def _normalize_spec_json(spec_json: dict):
             spec_json["rtl_output_file"] = _default_rtl_output_file(spec_json["name"])
         norm = {
             "name": spec_json["name"],
-            "description": spec_json.get("description", ""),
+            "description": spec_json.get("description") or spec_json.get("design_summary", ""),
             "operating_constraints": spec_json.get("operating_constraints", {}),
             "implementation_requirements": spec_json.get("implementation_requirements", []),
             "verification_requirements": spec_json.get("verification_requirements", []),
@@ -482,6 +497,7 @@ def _normalize_spec_json(spec_json: dict):
             "reset_behavior": spec_json.get("reset_behavior", ""),
             "behavior_rules": spec_json.get("behavior_rules", []),
             "rtl_output_file": spec_json["rtl_output_file"],
+            "register_contract": spec_json.get("register_contract") or spec_json.get("register_map") or {},
         }
         return norm, "flat"
 

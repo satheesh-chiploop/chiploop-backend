@@ -4,8 +4,43 @@ import subprocess
 
 from agents.fpga import fpga_explorer_io_mapping_agent as mapping_agent
 from agents.fpga import fpga_target_explorer_agent as explorer
-from agents.fpga.fpga_common import BOARD_REGISTRY
+from agents.fpga.fpga_common import BOARD_REGISTRY, _upstream_rtl_priority
+from agents.fpga import fpga_rtl_handoff_ingest_agent as handoff_agent
 from agents.fpga import fpga_serial_transport
+
+
+def test_supabase_fpga_handoff_rtl_is_preferred_over_derived_outputs():
+    packaged = "backend/workflows/wf/fpga/handoff/rtl/core.sv"
+    assert _upstream_rtl_priority(packaged) == 0
+    assert _upstream_rtl_priority("backend/workflows/wf/fpga/build/core.sv") is None
+
+
+def test_handoff_publishes_complete_rtl_package_with_collision_safe_names(tmp_path, monkeypatch):
+    first = tmp_path / "core_a" / "core.sv"
+    second = tmp_path / "core_b" / "core.sv"
+    first.parent.mkdir()
+    second.parent.mkdir()
+    first.write_text("module core_a; endmodule\n", encoding="utf-8")
+    second.write_text("module core_b; endmodule\n", encoding="utf-8")
+    uploads = []
+    monkeypatch.setattr(
+        handoff_agent, "_save_rtl_artifact",
+        lambda workflow_id, agent, filename, content: uploads.append(
+            (workflow_id, agent, "fpga/handoff/rtl", filename, content)
+        ) or f"backend/workflows/{workflow_id}/fpga/handoff/rtl/{filename}",
+    )
+
+    report = handoff_agent._publish_rtl_package(
+        {"workflow_id": "wf"}, "FPGA RTL Handoff Ingest Agent", [str(first), str(second)]
+    )
+
+    assert report["status"] == "published"
+    assert report["published_count"] == 2
+    assert {item[2] for item in uploads} == {"fpga/handoff/rtl"}
+    assert len({item[3].lower() for item in uploads}) == 2
+    assert {item[4] for item in uploads} == {
+        "module core_a; endmodule\n", "module core_b; endmodule\n"
+    }
 
 
 def test_wide_core_gets_fpga_only_spi_transport(tmp_path, monkeypatch):

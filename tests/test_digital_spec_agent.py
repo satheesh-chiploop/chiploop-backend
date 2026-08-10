@@ -42,6 +42,24 @@ def test_normalize_flat_spec_derives_missing_rtl_output_file():
     assert out["rtl_output_file"] == "pwm_controller.v"
 
 
+def test_normalize_flat_design_name_alias_preserves_register_contract():
+    spec = {
+        "design_name": "safety_fault_watchdog",
+        "design_summary": "Automotive safety watchdog.",
+        "ports": [{"name": "clk", "direction": "input", "width": 1}],
+        "functionality": "Supervise heartbeat and latch faults.",
+        "rtl_output_file": "safety_fault_watchdog.v",
+        "register_contract": {"bus_type": "custom", "registers": [{"name": "CONTROL"}]},
+    }
+
+    out, mode = spec_agent._normalize_spec_json(spec)
+
+    assert mode == "flat"
+    assert out["name"] == "safety_fault_watchdog"
+    assert out["description"] == "Automotive safety watchdog."
+    assert out["register_contract"]["registers"][0]["name"] == "CONTROL"
+
+
 def test_parse_llm_json_object_prefers_last_spec_shaped_object():
     text = (
         '{"design_name":"draft","hierarchy":{"top_module":{"name":"draft"}}}'

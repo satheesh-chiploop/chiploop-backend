@@ -8,6 +8,9 @@ from agents.physical_ai import (
     run_orchestrator_agent,
     run_physics_execution_agent,
     run_requirements_agent,
+    run_application_intelligence_agent,
+    run_surrogate_mapping_agent,
+    run_partitioning_agent,
 )
 
 
@@ -34,9 +37,12 @@ def run_physical_ai_workflow(
     }
     steps = (
         ("Physical AI Requirements Agent", "requirements_agent", run_requirements_agent),
+        ("Application Intelligence Agent", "application_intelligence_agent", run_application_intelligence_agent),
         ("Physical AI Model Selection Agent", "model_selection_agent", run_model_selection_agent),
+        ("Surrogate Discovery and Mapping Agent", "surrogate_mapping_agent", run_surrogate_mapping_agent),
         ("Physical AI Physics Execution Agent", "physics_execution_agent", run_physics_execution_agent),
         ("Physical AI Architecture Agent", "architecture_agent", run_architecture_agent),
+        ("Hardware Software Partitioning Agent", "partitioning_agent", run_partitioning_agent),
         ("Physical AI Orchestrator Agent", "orchestrator_agent", run_orchestrator_agent),
     )
     for agent_name, phase, execute in steps:
@@ -49,15 +55,18 @@ def run_physical_ai_workflow(
     files = dict(state["physics_execution"]["files"])
     files.update({
         "requirements_contract": _write_json(root, "requirements_contract.json", state["requirements_contract"]),
+        "application_contract": _write_json(root, "application_contract.json", state["application_contract"]),
         "selected_physics_model": _write_json(root, "selected_physics_model.json", state["selected_physics_model"]),
+        "surrogate_mapping": _write_json(root, "surrogate_mapping.json", state["surrogate_mapping"]),
+        "partition_plan": _write_json(root, "partition_plan.json", state["partition_plan"]),
         "child_handoff": _write_json(root, "child_handoff.json", state["physical_ai_loop"]["child_handoff"]),
         "loop_state": _write_json(root, "physical_ai_loop_state.json", state["physical_ai_loop"]),
     })
-    architecture_mode = state["physics_execution"].get("execution_mode") == "architecture"
-    if architecture_mode:
+    model_aware_mode = state["physics_execution"].get("execution_mode") in {"architecture", "cpu_reference"}
+    if model_aware_mode:
         execution_result = {
             "status": state["physics_execution"]["status"],
-            "execution_mode": "architecture",
+            "execution_mode": state["physics_execution"].get("execution_mode"),
             "inference_status": state["physics_execution"]["inference_status"],
             "interface": state["physics_execution"]["interface"],
             "architecture": state["physics_execution"]["architecture"],
@@ -79,9 +88,12 @@ def run_physical_ai_workflow(
         }
     result = {
         "schema": "chiploop.physical_ai.workflow_result.v1",
-        "status": ("architecture_complete" if state["physics_execution"].get("implementation_path") == "architecture_only" else "ready_for_digital_design") if architecture_mode else ("ready_for_fpga_exploration" if state["physical_ai_loop"]["physics_passed"] and state["physical_ai_loop"]["fixed_point_passed"] and state["physical_ai_loop"]["rtl_smoke_passed"] else "needs_revision"),
+        "status": ("architecture_complete" if state["physics_execution"].get("implementation_path") == "architecture_only" else "ready_for_digital_design") if model_aware_mode else ("ready_for_fpga_exploration" if state["physical_ai_loop"]["physics_passed"] and state["physical_ai_loop"]["fixed_point_passed"] and state["physical_ai_loop"]["rtl_smoke_passed"] else "needs_revision"),
         "requirements": state["requirements_contract"],
+        "application_intelligence": state["application_contract"],
         "physics_model": state["selected_physics_model"],
+        "model_qualification": state["surrogate_mapping"],
+        "partition": state["partition_plan"],
         "architecture_generation": state.get("architecture_generation") or {},
         "physics_execution": execution_result,
         "loop": state["physical_ai_loop"],
@@ -90,7 +102,7 @@ def run_physical_ai_workflow(
             "mode": str(payload.get("hem_mode") or "fixed"),
             "goal": str(payload.get("hem_goal") or "product_demo"),
             "stage_toggles": payload.get("hem_stage_toggles") or {"fpga_exploration": True, "fpga_bitstream": True, "firmware_product": True},
-            "start_condition": "architecture_passed" if architecture_mode else "physics_passed AND fixed_point_passed AND rtl_smoke_passed",
+            "start_condition": "architecture_passed" if model_aware_mode else "physics_passed AND fixed_point_passed AND rtl_smoke_passed",
         },
         "files": files,
     }

@@ -18,7 +18,7 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
         if not matches:
             raise ValueError(f"No ready physics model for domain {requirements['physics_domain']}")
         model = matches[0]
-    architecture_mode = requirements.get("execution_mode") == "architecture"
+    architecture_mode = requirements.get("execution_mode") in {"architecture", "cpu_reference"}
     architecture_supported = bool(
         model.get("architecture_definition_supported")
         or (model.get("configuration") or {}).get("architecture_definition_supported")

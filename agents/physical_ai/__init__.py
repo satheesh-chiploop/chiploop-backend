@@ -3,5 +3,8 @@ from .physical_ai_orchestrator_agent import run_agent as run_orchestrator_agent
 from .physical_ai_physics_execution_agent import run_agent as run_physics_execution_agent
 from .physical_ai_requirements_agent import run_agent as run_requirements_agent
 from .physical_ai_architecture_agent import run_agent as run_architecture_agent
+from .physical_ai_application_intelligence_agent import run_agent as run_application_intelligence_agent
+from .physical_ai_surrogate_mapping_agent import run_agent as run_surrogate_mapping_agent
+from .physical_ai_partitioning_agent import run_agent as run_partitioning_agent
 
 __all__ = ["run_requirements_agent", "run_model_selection_agent", "run_physics_execution_agent", "run_orchestrator_agent"]

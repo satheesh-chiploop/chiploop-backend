@@ -331,6 +331,12 @@ def _upstream_rtl_priority(path: str) -> int | None:
     basename = os.path.basename(normalized)
     if not normalized.endswith(RTL_EXTENSIONS):
         return None
+    # FPGA workflows publish a self-contained, Supabase-backed handoff package.
+    # It is derived only in location: its contents are the exact core,
+    # dependency, and optional board-adapter RTL used by the upstream run.
+    # Recognize it before excluding other FPGA implementation products.
+    if "/fpga/handoff/rtl/" in normalized:
+        return 0
     if (
         basename.startswith("tb_")
         or "testbench" in basename

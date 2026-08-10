@@ -743,9 +743,12 @@
       "description": "Parent Physical AI workflow for requirements, physics-model selection, physics evidence, model-generated architecture, and controlled FPGA or ASIC delegation.",
       "agents": [
         "Physical AI Requirements Agent",
+        "Application Intelligence Agent",
         "Physical AI Model Selection Agent",
+        "Surrogate Discovery and Mapping Agent",
         "Physical AI Physics Execution Agent",
         "Physical AI Architecture Agent",
+        "Hardware Software Partitioning Agent",
         "Physical AI Orchestrator Agent"
       ],
       "hooks": [

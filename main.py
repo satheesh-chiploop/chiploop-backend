@@ -3748,12 +3748,13 @@ class PhysicalAiMotorControlIn(BaseModel):
 
 
 class PhysicalAiWorkflowIn(BaseModel):
+    journey_id: Literal["physical_ai_studio", "application_intelligence_active_aero"] = "physical_ai_studio"
     application: str = "pmsm_motor_control"
     objective: str = "Validate a PMSM model and prepare an FPGA implementation"
     physics_domain: str = "motor_control"
     physics_model_id: str = "chiploop.pmsm.dq.v1"
     implementation_target: Literal["software", "fpga", "asic", "gpu_service"] = "fpga"
-    execution_mode: Literal["validated", "architecture"] = "validated"
+    execution_mode: Literal["validated", "architecture", "cpu_reference"] = "validated"
     implementation_path: Literal["architecture_only", "digital_ip_asic", "fpga_prototype", "fpga_then_asic"] = "digital_ip_asic"
     generate_architecture_with_model: bool = True
     maximum_error_percent: float = 3.0
@@ -7415,11 +7416,16 @@ def execute_physical_ai_workflow_background(workflow_id: str, run_id: str, user_
                 path.name,
                 path.read_text(encoding="utf-8"),
             )
-        architecture_mode = result["physics_execution"].get("execution_mode") == "architecture"
+        architecture_mode = result["physics_execution"].get("execution_mode") in {"architecture", "cpu_reference"}
         metrics = result["physics_execution"].get("metrics") or {}
         artifacts = {
             "requirements_contract": result["files"].get("requirements_contract"),
+            "application_contract": result["files"].get("application_contract"),
             "physics_model": result["files"].get("selected_physics_model"),
+            "surrogate_mapping": result["files"].get("surrogate_mapping"),
+            "partition_plan": result["files"].get("partition_plan"),
+            "cpu_reference_results": result["files"].get("cpu_reference_results"),
+            "control_policy": result["files"].get("control_policy"),
             "physics_results": result["files"].get("equation_metrics"),
             "operating_envelope": result["files"].get("operating_envelope_plot"),
             "child_handoff": result["files"].get("child_handoff"),
@@ -7436,7 +7442,9 @@ def execute_physical_ai_workflow_background(workflow_id: str, run_id: str, user_
             "product_map": result["files"].get("product_map"),
         }
         if architecture_mode:
-            append_log_workflow(workflow_id, f"Pretrained surrogate interface selected: {result['physics_model']['name']}; inference explicitly not executed", phase="architecture_definition")
+            execution_mode = str(result["physics_execution"].get("execution_mode") or "architecture")
+            mode_message = "CPU analytical reference executed; pretrained surrogate inference explicitly not executed" if execution_mode == "cpu_reference" else "inference explicitly not executed"
+            append_log_workflow(workflow_id, f"Pretrained surrogate interface selected: {result['physics_model']['name']}; {mode_message}", phase="architecture_definition")
             architecture_only = result["physics_execution"].get("implementation_path") == "architecture_only"
             append_log_workflow(workflow_id, "Product architecture and digital-IP specification completed" + ("; journey stopped as requested" if architecture_only else "; Digital Design Loop is ready"), status="completed", phase="architecture_complete" if architecture_only else "digital_design_ready", artifacts=artifacts)
             append_log_run(run_id, "Physical AI surrogate architecture reference journey completed", status="completed", artifacts_path=artifact_dir)
@@ -7721,8 +7729,6 @@ async def apps_physical_ai_run(request: Request, background_tasks: BackgroundTas
         model_rows = (
             supabase.table("physical_ai_models")
             .select("model_id,name,provider,domain,runtime,availability,training_required,gpu_required,implementation_targets,executor,inputs,outputs,configuration,updated_at")
-            .eq("model_id", payload.physics_model_id)
-            .limit(1)
             .execute()
             .data
             or []
@@ -7730,9 +7736,11 @@ async def apps_physical_ai_run(request: Request, background_tasks: BackgroundTas
     except Exception as exc:
         logger.error("Physical AI model lookup failed: %s", exc)
         raise HTTPException(status_code=503, detail="Physical AI model catalog is unavailable; apply the Supabase Physical AI migration")
+    catalog_rows = [dict(row) for row in model_rows]
+    model_rows = [row for row in catalog_rows if str(row.get("model_id")) == payload.physics_model_id]
     if not model_rows:
         raise HTTPException(status_code=400, detail="Unknown or disabled Physical AI model")
-    if str(model_rows[0].get("availability")) != "ready" and payload.execution_mode != "architecture":
+    if str(model_rows[0].get("availability")) != "ready" and payload.execution_mode not in {"architecture", "cpu_reference"}:
         raise HTTPException(status_code=409, detail=f"Physical AI model is not executable: {model_rows[0].get('availability')}")
     model_record = dict(model_rows[0])
     model_configuration = model_record.get("configuration") if isinstance(model_record.get("configuration"), dict) else {}
@@ -7740,7 +7748,8 @@ async def apps_physical_ai_run(request: Request, background_tasks: BackgroundTas
         if governed_key in model_configuration:
             model_record[governed_key] = model_configuration[governed_key]
     try:
-        workflow_id, run_id, artifact_dir = _create_app_workflow_and_run(user_id, "App: Physical AI Studio", "physical_ai")
+        app_title = "App: Application Intelligence - Active Aero" if payload.journey_id == "application_intelligence_active_aero" else "App: Physical AI Studio"
+        workflow_id, run_id, artifact_dir = _create_app_workflow_and_run(user_id, app_title, "physical_ai")
     except Exception as exc:
         logger.exception("Physical AI run creation failed")
         raise HTTPException(
@@ -7749,6 +7758,7 @@ async def apps_physical_ai_run(request: Request, background_tasks: BackgroundTas
         ) from exc
     data = payload.dict()
     data["physics_model_record"] = model_record
+    data["physics_model_catalog"] = catalog_rows
     background_tasks.add_task(execute_physical_ai_workflow_background, workflow_id, run_id, user_id, artifact_dir, data)
     return {"ok": True, "workflow_id": workflow_id, "run_id": run_id, "dashboard_path": f"/apps/physical-ai/results/{workflow_id}"}
 
