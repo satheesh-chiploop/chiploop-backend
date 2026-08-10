@@ -5694,6 +5694,62 @@ def _hem_build_child_payload(
     return common
 
 
+def _hem_load_json_artifact(workflow_id: str, filename: str, *local_roots: Any) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    """Resolve a HEM handoff from the Supabase artifact index/storage first."""
+    try:
+        rows = (
+            supabase.table("workflows")
+            .select("artifacts")
+            .eq("id", workflow_id)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        artifacts = (rows[0] if rows else {}).get("artifacts")
+        for storage_path in _artifact_storage_paths_for_main(artifacts):
+            if Path(storage_path).name != filename:
+                continue
+            raw = supabase.storage.from_(ARTIFACT_BUCKET).download(storage_path)
+            text = raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else str(raw)
+            data = json.loads(text)
+            if isinstance(data, dict):
+                return data, f"supabase:{storage_path}"
+    except Exception as exc:
+        logger.warning("HEM artifact index lookup failed workflow=%s file=%s: %s", workflow_id, filename, exc)
+
+    # A storage upload can succeed just before its JSONB index update becomes
+    # visible. Try the canonical key before falling back to local disk.
+    canonical_storage_path = f"backend/workflows/{workflow_id}/fpga/target_explorer/{filename}"
+    try:
+        raw = supabase.storage.from_(ARTIFACT_BUCKET).download(canonical_storage_path)
+        text = raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else str(raw)
+        data = json.loads(text)
+        if isinstance(data, dict):
+            return data, f"supabase:{canonical_storage_path}"
+    except Exception:
+        pass
+
+    roots = [Path(root) for root in local_roots if root]
+    roots.append(Path("backend") / "workflows" / workflow_id)
+    seen: set[str] = set()
+    for root in roots:
+        try:
+            resolved = str(root.resolve())
+            if resolved in seen or not root.exists():
+                continue
+            seen.add(resolved)
+            matches = list(root.rglob(filename))
+            if not matches:
+                continue
+            data = json.loads(matches[-1].read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                return data, f"local:{matches[-1]}"
+        except Exception as exc:
+            logger.warning("HEM local artifact lookup failed root=%s file=%s: %s", root, filename, exc)
+    return None, None
+
+
 def _hem_continue_digital_rtl_after_success(
     *,
     current_app: str,
@@ -7234,15 +7290,14 @@ def _hem_continue_physical_ai_after_success(*, root_workflow_id: str, root_run_i
             automation_payload["from_workflow_id"] = child_workflow_id
             append_log_workflow(root_workflow_id, f"HEM will use generated RTL workflow {child_workflow_id} for verification and implementation.", phase="hem_running")
         if stage == "fpga_exploration":
-            # FPGA agents publish beneath the workflow root, while the runner
-            # receives a stage subdirectory. Search the exact workflow root as
-            # well so the selected board reaches the bitstream stage.
-            explorer_files = list(Path(child_artifact_dir).rglob("fpga_target_explorer.json"))
-            explorer_files.extend(Path(base_dir).rglob("fpga_target_explorer.json"))
-            explorer_files = list(dict.fromkeys(explorer_files))
-            if explorer_files:
+            explorer, explorer_source = _hem_load_json_artifact(
+                child_workflow_id,
+                "fpga_target_explorer.json",
+                child_artifact_dir,
+                base_dir,
+            )
+            if explorer:
                 try:
-                    explorer = json.loads(explorer_files[-1].read_text(encoding="utf-8"))
                     continuation = explorer.get("continuation") if isinstance(explorer.get("continuation"), dict) else {}
                     selected_board = (
                         continuation.get("selected_board")
@@ -7277,11 +7332,19 @@ def _hem_continue_physical_ai_after_success(*, root_workflow_id: str, root_run_i
                     automation_payload["source_arch2rtl_workflow_id"] = child_workflow_id
                     automation_payload["from_workflow_id"] = child_workflow_id
                     automation_payload["explorer_winning_configuration"] = continuation.get("winning_configuration") or {}
-                    append_log_workflow(root_workflow_id, f"HEM selected FPGA board {selected_board or 'unresolved'} from Target Explorer evidence.", phase="hem_running")
+                    append_log_workflow(
+                        root_workflow_id,
+                        f"HEM selected FPGA board {selected_board} from Target Explorer evidence ({explorer_source}).",
+                        phase="hem_running",
+                    )
                 except Exception as exc:
-                    logger.warning("HEM Physical AI: could not parse FPGA Target Explorer result: %s", exc)
+                    message = f"HEM stopped after FPGA Explorer because its recommendation handoff is invalid: {type(exc).__name__}: {exc}"
+                    append_log_workflow(root_workflow_id, message, phase="hem_failed")
+                    append_log_run(root_run_id, message)
+                    _hem_update_run_record(str(hem_run_id) if hem_run_id else None, status="failed", metadata={"source": "physical_ai", "path": plan, "completed": completed, "failed_stage": stage, "failed_workflow_id": child_workflow_id, "reason": message})
+                    return
             else:
-                message = "HEM stopped after FPGA Explorer because its Supabase-backed recommendation artifact is missing."
+                message = "HEM stopped after FPGA Explorer because fpga_target_explorer.json is absent from its Supabase artifact index/storage and canonical workflow directory."
                 append_log_workflow(root_workflow_id, message, phase="hem_failed")
                 append_log_run(root_run_id, message)
                 _hem_update_run_record(
