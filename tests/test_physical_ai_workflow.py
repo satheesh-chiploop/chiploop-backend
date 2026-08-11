@@ -274,6 +274,11 @@ def test_main_registers_generic_physical_ai_endpoints():
     assert '"App: Application Intelligence - Active Aero"' in main
     assert '"FPGA_Target_Explorer"' in main
     assert '"FPGA_RTL_to_Bitstream"' in main
+    assert 'plan.append("firmware_product")' in main
+    assert '"system_rtl_workflow_id": source_arch2rtl' in main
+    assert '"system_software": True' in main
+    assert '"system_validation": True' in main
+    assert '"system_product": True' in main
 
 
 def test_physical_ai_has_supabase_source_of_truth_migration():

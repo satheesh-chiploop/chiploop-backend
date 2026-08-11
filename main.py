@@ -7064,6 +7064,9 @@ def _hem_physical_ai_stage_plan(payload: Dict[str, Any]) -> List[str]:
         plan.extend(["fpga_exploration", "fpga_bitstream"])
     if path in {"digital_ip_asic", "fpga_then_asic"}:
         plan.append("asic_tapeout")
+    toggles = payload.get("hem_stage_toggles") if isinstance(payload.get("hem_stage_toggles"), dict) else {}
+    if str(payload.get("hem_goal") or "product_demo") == "product_demo" and bool(toggles.get("firmware_product", True)):
+        plan.append("firmware_product")
     return plan
 
 
@@ -7143,11 +7146,11 @@ def _hem_physical_ai_child_payload(root_workflow_id: str, root_run_id: str, payl
         return {
             "project_name": project_name,
             "rtl_source_mode": "from_system_rtl",
-            "system_rtl_workflow_id": root_workflow_id,
-            "source_system_rtl_workflow_id": root_workflow_id,
-            "from_workflow_id": root_workflow_id,
+            "system_rtl_workflow_id": source_arch2rtl,
+            "source_system_rtl_workflow_id": source_arch2rtl,
+            "from_workflow_id": source_arch2rtl,
             "parent_workflow_id": root_workflow_id,
-            "upstream_workflows": {"physical_ai": root_workflow_id, "system_rtl": root_workflow_id},
+            "upstream_workflows": {"physical_ai": root_workflow_id, "system_rtl": source_arch2rtl},
             "top_module": top_module,
             "target_frequency_mhz": float(payload.get("target_frequency_mhz") or 50.0),
             "execute_cosim": True,
