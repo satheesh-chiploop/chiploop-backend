@@ -78,3 +78,51 @@ def test_product_ingest_loads_l2_validation_summary_from_nested_artifact_path():
 
     assert result["path"] == path
     assert result["data"] == payload
+
+
+def test_product_signoff_requires_completed_lineage_and_passing_cosim():
+    lineage = {
+        "arch2rtl_workflow_id": "rtl",
+        "firmware_workflow_id": "fw",
+        "software_workflow_id": "sw",
+        "validation_workflow_id": "val",
+    }
+    checks = {key: {"status": "completed"} for key in lineage}
+    artifacts = {
+        "firmware_register_map": {"data": {"registers": []}},
+        "software_handoff": {"data": {"type": "handoff"}},
+        "software_api": {"data": {"type": "api"}},
+        "software_package": {"data": {"type": "package"}},
+        "validation_summary": {"data": {
+            "final_system_correctness_verdict": "pass",
+            "scenario_fail_count": 0,
+            "scenario_blocked_count": 0,
+        }},
+    }
+
+    assert ingest._product_signoff(lineage, checks, artifacts)["status"] == "pass"
+
+
+def test_product_signoff_rejects_completed_workflow_with_blocked_validation():
+    lineage = {
+        "arch2rtl_workflow_id": "rtl",
+        "firmware_workflow_id": "fw",
+        "software_workflow_id": "sw",
+        "validation_workflow_id": "val",
+    }
+    checks = {key: {"status": "completed"} for key in lineage}
+    artifacts = {
+        "firmware_register_map": {"data": {}},
+        "software_handoff": {"data": {}},
+        "software_api": {"data": {}},
+        "software_package": {"data": {}},
+        "validation_summary": {"data": {
+            "final_system_correctness_verdict": "blocked",
+            "scenario_blocked_count": 1,
+        }},
+    }
+
+    signoff = ingest._product_signoff(lineage, checks, artifacts)
+    assert signoff["status"] == "fail"
+    assert "validation verdict is blocked, expected pass" in signoff["issues"]
+    assert "validation contains blocked scenarios" in signoff["issues"]

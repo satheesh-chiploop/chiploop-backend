@@ -235,12 +235,42 @@ def _index_module_definitions(workflow_dir: str, extra_rtl_paths: Optional[List[
     return module_to_files
 
 
+def _select_equivalent_candidate(
+    workflow_dir: str,
+    candidates: List[str],
+    preferred_paths: Optional[List[str]] = None,
+) -> Optional[str]:
+    """Select one provenance-preferred file only when all definitions are byte-identical."""
+    if len(candidates) < 2:
+        return candidates[0] if candidates else None
+    contents: List[bytes] = []
+    for candidate in candidates:
+        abs_path = candidate if os.path.isabs(candidate) else os.path.abspath(os.path.join(workflow_dir, candidate))
+        try:
+            with open(abs_path, "rb") as fh:
+                contents.append(fh.read())
+        except OSError:
+            return None
+    if any(content != contents[0] for content in contents[1:]):
+        return None
+
+    preferred_rank = {
+        _path_to_rel_or_abs(path, workflow_dir): index
+        for index, path in enumerate(preferred_paths or [])
+    }
+    return min(
+        candidates,
+        key=lambda path: (preferred_rank.get(_path_to_rel_or_abs(path, workflow_dir), len(preferred_rank)), candidates.index(path)),
+    )
+
+
 def _resolve_required_verilog_sources(workflow_dir: str, soc_top_relpath: str, soc_top_text: str, state: dict) -> List[str]:
     ordered: List[str] = []
     debug = {
         "soc_top_relpath": soc_top_relpath,
         "instantiated_modules": [],
         "resolved_modules": {},
+        "equivalent_duplicate_modules": {},
         "missing_modules": [],
         "ambiguous_modules": {},
     }
@@ -263,7 +293,17 @@ def _resolve_required_verilog_sources(workflow_dir: str, soc_top_relpath: str, s
         elif len(candidates) == 0:
             debug["missing_modules"].append(mod)
         else:
-            debug["ambiguous_modules"][mod] = candidates
+            selected = _select_equivalent_candidate(workflow_dir, candidates, extra_rtl_paths)
+            if selected:
+                debug["resolved_modules"][mod] = selected
+                debug["equivalent_duplicate_modules"][mod] = {
+                    "selected": selected,
+                    "equivalent_candidates": candidates,
+                }
+                if selected not in ordered:
+                    ordered.append(selected)
+            else:
+                debug["ambiguous_modules"][mod] = candidates
 
     write_artifact(state, RTL_RESOLUTION_DEBUG_PATH, json.dumps(debug, indent=2), key=os.path.basename(RTL_RESOLUTION_DEBUG_PATH))
 

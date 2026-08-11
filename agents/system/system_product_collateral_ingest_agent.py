@@ -135,6 +135,42 @@ def _workflow_artifact_json(state: Dict[str, Any], workflow_id: str, filenames: 
     return {}
 
 
+def _product_signoff(lineage: Dict[str, Any], checks: Dict[str, Any], source_artifacts: Dict[str, Any]) -> Dict[str, Any]:
+    issues: list[str] = []
+    required_ids = (
+        "arch2rtl_workflow_id",
+        "firmware_workflow_id",
+        "software_workflow_id",
+        "validation_workflow_id",
+    )
+    for key in required_ids:
+        if not lineage.get(key):
+            issues.append(f"missing {key}")
+            continue
+        status = str((checks.get(key) or {}).get("status") or "").lower()
+        if status != "completed":
+            issues.append(f"{key} status is {status or 'missing'}, expected completed")
+
+    for key in ("firmware_register_map", "software_handoff", "software_api", "software_package", "validation_summary"):
+        if not isinstance((source_artifacts.get(key) or {}).get("data"), dict):
+            issues.append(f"missing required artifact {key}")
+
+    validation = (source_artifacts.get("validation_summary") or {}).get("data") or {}
+    verdict = str(
+        validation.get("final_system_correctness_verdict")
+        or validation.get("overall_status")
+        or validation.get("status")
+        or ""
+    ).lower()
+    if validation and verdict != "pass":
+        issues.append(f"validation verdict is {verdict or 'missing'}, expected pass")
+    if int(validation.get("scenario_fail_count") or 0) > 0:
+        issues.append("validation contains failed scenarios")
+    if int(validation.get("scenario_blocked_count") or 0) > 0:
+        issues.append("validation contains blocked scenarios")
+    return {"status": "pass" if not issues else "fail", "issues": issues, "validation_verdict": verdict or None}
+
+
 def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     workflow_id = state.get("workflow_id") or "default"
     lineage = {
@@ -185,12 +221,16 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
             VALIDATION_ARTIFACT_CANDIDATES,
         ),
     }
+    signoff = _product_signoff(lineage, checks, source_artifacts)
+    if state.get("_require_product_upstream_signoff") and signoff["status"] != "pass":
+        raise RuntimeError("Product upstream signoff failed: " + "; ".join(signoff["issues"]))
     contract = {
         "type": "system_product_collateral_contract",
         "version": "1.0",
         "lineage": lineage,
         "workflow_checks": checks,
         "source_artifacts": source_artifacts,
+        "upstream_signoff": signoff,
         "hardware_replacement_path": "The generated simulator adapter can later be replaced by a board/silicon transport while preserving the app API.",
     }
     _record(workflow_id, "system_product_collateral_contract.json", contract)
