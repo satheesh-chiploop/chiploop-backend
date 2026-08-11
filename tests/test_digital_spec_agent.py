@@ -73,6 +73,28 @@ def test_parse_llm_json_object_prefers_last_spec_shaped_object():
     assert parsed["top_level_connections"][0]["top_port"] == "clk"
 
 
+def test_parse_llm_json_preserves_nonempty_contract_when_duplicate_keys_end_empty():
+    text = """{
+      "design_name": "adaptive_aero_control_top",
+      "hierarchy": {
+        "top_module": {
+          "name": "adaptive_aero_control_top",
+          "ports": [{"name":"clk","direction":"input","width":1},{"name":"cmd","direction":"output","width":16}],
+          "responsibilities": ["Drive bounded commands"],
+          "ports": [],
+          "responsibilities": []
+        },
+        "modules": []
+      }
+    }"""
+
+    parsed = spec_agent._parse_llm_json_object(text)
+    top = parsed["hierarchy"]["top_module"]
+
+    assert [port["name"] for port in top["ports"]] == ["clk", "cmd"]
+    assert top["responsibilities"] == ["Drive bounded commands"]
+
+
 def test_normalize_hierarchical_spec_derives_missing_rtl_output_files():
     spec = {
         "design_name": "pwm_controller",

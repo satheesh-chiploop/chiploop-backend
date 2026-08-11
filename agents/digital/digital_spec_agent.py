@@ -827,13 +827,44 @@ def _extract_json_object_texts(text: str) -> list[str]:
     return out
 
 
+def _json_information_score(value) -> int:
+    if value is None:
+        return 0
+    if isinstance(value, str):
+        return len(value.strip())
+    if isinstance(value, (list, dict)):
+        if not value:
+            return 0
+        return len(json.dumps(value, sort_keys=True, default=str))
+    return 1
+
+
+def _prefer_informative_duplicate_pairs(pairs):
+    """Recover invalid model JSON where a later empty duplicate erases a contract.
+
+    JSON normally keeps the final duplicate key. Model output occasionally repeats
+    module fields (ports, ownership, behavior) and leaves the second copy empty.
+    Preserve the more informative value while retaining normal last-value behavior
+    when both values carry the same amount of information.
+    """
+    result = {}
+    for key, value in pairs:
+        if key not in result or _json_information_score(value) >= _json_information_score(result[key]):
+            result[key] = value
+    return result
+
+
+def _loads_model_json(text: str):
+    return json.loads(text, object_pairs_hook=_prefer_informative_duplicate_pairs)
+
+
 def _parse_llm_json_object(llm_output: str) -> dict:
     candidates = _extract_json_object_texts(llm_output)
     hierarchical_candidates: list[dict] = []
     flat_candidates: list[dict] = []
     for item in candidates:
         try:
-            parsed_item = json.loads(item)
+            parsed_item = _loads_model_json(item)
         except JSONDecodeError:
             continue
         if isinstance(parsed_item, dict) and parsed_item.get("hierarchy"):
@@ -873,14 +904,14 @@ def _parse_llm_json_object(llm_output: str) -> dict:
 
     candidate = _extract_json_object_text(llm_output)
     try:
-        parsed = json.loads(candidate)
+        parsed = _loads_model_json(candidate)
     except JSONDecodeError as exc:
         repaired = _repair_json_syntax_near_error(candidate, exc)
         if repaired == candidate:
             repaired = _repair_json_if_truncated_at_eof(candidate, exc)
         if repaired == candidate:
             raise
-        parsed = json.loads(repaired)
+        parsed = _loads_model_json(repaired)
     if not isinstance(parsed, dict):
         raise ValueError("Spec JSON root must be an object.")
     return parsed
