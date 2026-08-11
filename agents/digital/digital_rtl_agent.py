@@ -2844,8 +2844,38 @@ def _append_text(path: str, content: str) -> None:
         f.write(content)
 
 
+def _targeted_rtl_repair_context(previous_llm_output: str, compile_log_text: str,
+                                 verilator_log_text: str, expected_files: Optional[List[str]] = None) -> tuple[str, List[str]]:
+    """Keep complete failing files in context instead of truncating a large hierarchy."""
+    expected = {os.path.basename(str(name)): str(name) for name in (expected_files or [])}
+    log_text = f"{compile_log_text or ''}\n{verilator_log_text or ''}"
+    referenced: List[str] = []
+    for match in re.finditer(r"(?i)(?:^|[\\/\s'(])(?:pass\d+[\\/])?([A-Za-z0-9_.-]+\.(?:sv|v))(?=:\d+|[\s')]|$)", log_text):
+        basename = os.path.basename(match.group(1))
+        if basename in expected and basename not in referenced:
+            referenced.append(basename)
+    if not referenced:
+        return _truncate_text(previous_llm_output, 30000), list(expected.values())
+    emitted = _parse_named_verilog_blocks(previous_llm_output)
+    blocks: List[str] = []
+    targets: List[str] = []
+    for basename in referenced:
+        content = emitted.get(basename)
+        if content is None:
+            continue
+        blocks.append(f"---BEGIN {basename}---\n{content.rstrip()}\n---END {basename}---")
+        targets.append(expected[basename])
+    if not blocks:
+        return _truncate_text(previous_llm_output, 30000), list(expected.values())
+    return "\n\n".join(blocks), targets
+
+
 def _build_rtl_repair_prompt(base_prompt: str, previous_llm_output: str, compile_log_text: str, verilator_log_text: str, expected_files: Optional[List[str]] = None) -> str:
+    repair_context, repair_targets = _targeted_rtl_repair_context(
+        previous_llm_output, compile_log_text, verilator_log_text, expected_files
+    )
     expected_file_text = ", ".join(expected_files or []) or "the complete original file set"
+    repair_target_text = ", ".join(repair_targets) or expected_file_text
     return f"""
 ORIGINAL RTL GENERATION CONTRACT EXCERPT:
 {_truncate_text(base_prompt, 12000)}
@@ -2859,7 +2889,7 @@ Your previous RTL output failed one or more correctness gates.
 You MUST preserve the same architecture unless a structural change is strictly required to fix the errors.
 
 PREVIOUS RTL OUTPUT:
-{_truncate_text(previous_llm_output, 30000)}
+{repair_context}
 
 ICARUS COMPILE LOG:
 {_truncate_text(compile_log_text, 8000)}
@@ -2876,16 +2906,17 @@ REPAIR RULES:
   - structural/spec mismatch issues
 - Do NOT spend tokens cleaning non-fatal lint warnings only
 - Expected hierarchy files: {expected_file_text}
-- Return every expected hierarchy file in the same named-file-block format. Reproduce unchanged files; never omit them.
+- Repair target files: {repair_target_text}
+- Return every repair target as a complete named-file block. Unlisted hierarchy files are preserved automatically.
 - Do NOT return explanations
-- Do NOT return partial edits
+- Do NOT return snippets or diff fragments
 
 PRIMARY OBJECTIVE:
 Make the MINIMUM NECESSARY change to fix correctness errors.
 
 - Do NOT redesign architecture
 - Do NOT rename modules/ports/files
-- Do not redesign unaffected files; reproduce their full named blocks unchanged in the response
+- Do not redesign or reproduce unaffected files
 - Prefer local fixes over global rewrites
 
 CORRECTNESS REPAIR PRIORITIES (MANDATORY)

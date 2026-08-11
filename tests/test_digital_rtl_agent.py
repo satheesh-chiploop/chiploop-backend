@@ -947,6 +947,32 @@ def test_verilator_undriven_warning_is_structural_failure_even_with_zero_exit():
     assert agent._classify_verilator_result(True, output) == "fatal"
 
 
+def test_repair_context_keeps_complete_files_named_by_latest_lint_log():
+    previous = (
+        "---BEGIN top.v---\nmodule top; child u_child(); endmodule\n---END top.v---\n"
+        "---BEGIN child.v---\nmodule child(output ready); endmodule\n---END child.v---\n"
+        "---BEGIN unrelated.v---\nmodule unrelated; endmodule\n---END unrelated.v---"
+    )
+    context, targets = agent._targeted_rtl_repair_context(
+        previous,
+        "",
+        "%Warning-UNDRIVEN: pass3/child.v:1:21: Signal is not driven: 'ready'",
+        ["top.v", "child.v", "unrelated.v"],
+    )
+    assert targets == ["child.v"]
+    assert "---BEGIN child.v---" in context
+    assert "module child(output ready)" in context
+    assert "top.v" not in context
+    assert "unrelated.v" not in context
+
+
+def test_repair_context_falls_back_to_complete_hierarchy_when_log_has_no_file():
+    previous = "---BEGIN top.v---\nmodule top; endmodule\n---END top.v---"
+    context, targets = agent._targeted_rtl_repair_context(previous, "tool failed", "", ["top.v"])
+    assert context == previous
+    assert targets == ["top.v"]
+
+
 def test_sanitize_connects_contract_mirrored_top_outputs_from_child_inputs():
     code = """
 module top(
