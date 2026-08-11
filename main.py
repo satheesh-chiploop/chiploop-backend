@@ -4313,9 +4313,9 @@ def execute_digital_app_background(
             shared_state["from_workflow_id"] = shared_state.get("system_rtl_workflow_id")
             shared_state["source_arch2rtl_workflow_id"] = shared_state.get("system_rtl_workflow_id")
 
-        if app_name == "fpga_target_explorer":
+        if app_loop_type == "fpga":
             def _explorer_progress(line: str) -> None:
-                append_log_workflow(workflow_id, line, phase="fpga_target_explorer")
+                append_log_workflow(workflow_id, line, phase="fpga_target_explorer" if app_name == "fpga_target_explorer" else f"{app_name}_progress")
                 append_log_run(run_id, line)
             shared_state["_progress_callback"] = _explorer_progress
         upstream = shared_state.get("upstream_workflows") if isinstance(shared_state.get("upstream_workflows"), dict) else {}
@@ -7046,8 +7046,8 @@ HEM_PHYSICAL_AI_STAGE_META: Dict[str, Dict[str, str]] = {
         "dashboard_stage": "tapeout",
     },
     "firmware_product": {
-        "label": "Firmware through Product Demo",
-        "title": "HEM: Physical AI Motor Firmware",
+        "label": "Device Software through Product Demo",
+        "title": "HEM: Physical AI Device Software",
         "artifact": "system",
         "app_name": "system",
         "workflow_name": "System_Firmware",
@@ -7168,6 +7168,14 @@ def _hem_physical_ai_child_payload(root_workflow_id: str, root_run_id: str, payl
                     "firmware_gate": {"portable_source_ready": True, "deployable_binary_ready": False, "missing": missing},
                 }
         platform_note = json.dumps(target_refinement, default=str)[:6000]
+        deployment = str(target_refinement.get("deployment_architecture") or payload.get("deployment_architecture") or "automatic")
+        external_host = deployment in {"fpga_external_host", "asic_companion", "asic_digital_ip"}
+        device_layer_role = "host_device_layer" if external_host else "embedded_firmware"
+        device_layer_goal = (
+            f"Build the host-side SPI device layer and portable driver service for {application_name}"
+            if external_host
+            else f"Build embedded firmware for {application_name}"
+        )
         return {
             "project_name": project_name,
             "rtl_source_mode": "from_system_rtl",
@@ -7177,19 +7185,22 @@ def _hem_physical_ai_child_payload(root_workflow_id: str, root_run_id: str, payl
             "parent_workflow_id": root_workflow_id,
             "upstream_workflows": {"physical_ai": root_workflow_id, "system_rtl": source_arch2rtl},
             "top_module": top_module,
-            "goal": f"Build portable firmware source for {application_name} from the approved partition and existing RTL register collateral. Do not claim a board-deployable binary unless the platform contract gate is ready. Firmware jobs: {json.dumps(firmware_jobs, default=str)[:6000]}. Interfaces: {json.dumps(partition_interfaces, default=str)[:6000]}. Target refinement: {platform_note}.",
+            "goal": f"{device_layer_goal} from the approved partition and existing RTL register collateral. Do not claim a deployable binary unless the platform contract gate is ready. Device-layer jobs: {json.dumps(firmware_jobs, default=str)[:6000]}. Interfaces: {json.dumps(partition_interfaces, default=str)[:6000]}. Target refinement: {platform_note}.",
             "software_goal": f"Build the host control, configuration, diagnostics, telemetry, and product services for {application_name}. Software jobs: {json.dumps(software_jobs, default=str)[:6000]}.",
             "target_frequency_mhz": float(payload.get("target_frequency_mhz") or 50.0),
             "execute_cosim": True,
             "run_cosim": True,
-            "toolchain": {"language": "rust"},
+            "toolchain": {"language": "rust", "target_triple": "x86_64-unknown-linux-gnu" if external_host else "riscv32imac-unknown-none-elf"},
+            "firmware_role": device_layer_role,
+            "deployment_architecture": deployment,
+            "target_refinement": target_refinement,
             "hem_enabled": True,
             "hem_mode": _hem_normalized_mode(str(payload.get("hem_mode") or "fixed")),
             "hem_goal": "product_demo",
             "hem_root_workflow_id": root_workflow_id,
             "hem_root_run_id": root_run_id,
             "hem_stage_toggles": {"system_software": True, "system_validation": True, "system_product": True},
-            "product_intent": str(payload.get("product_intent") or f"Build a safe simulator-backed {application_name} product from the approved application, model, partition, RTL, firmware, and software contracts; physical programming requires explicit approval."),
+            "product_intent": str(payload.get("product_intent") or f"Build a safe simulator-backed {application_name} product from the approved application, model, partition, device-layer, and software contracts; physical programming requires explicit approval."),
         }
     common = {
         "rtl_source_mode": "from_arch2rtl",

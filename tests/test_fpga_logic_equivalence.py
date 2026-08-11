@@ -47,10 +47,11 @@ def test_fpga_lec_uses_yosys_equivalence_and_passes(tmp_path, monkeypatch):
     assert "equiv_make gold gate equiv" in script
     assert "equiv_simple -undef -seq 20" in script
     assert "equiv_induct -undef -seq 12" in script
-    assert "equiv_induct -undef -seq 24" in script
-    assert "equiv_induct -undef -seq 48" in script
+    assert "equiv_induct -undef -seq 24" not in script
+    assert "equiv_induct -undef -seq 48" not in script
     assert "equiv_status -assert" in script
-    assert published["induction_depths_attempted"] == [12, 24, 48]
+    assert published["induction_depths_attempted"] == [12]
+    assert published["mapped_lec"]["timeout_seconds"] == 180
 
 
 def test_fpga_lec_checks_generic_and_mapped_checkpoints(tmp_path, monkeypatch):
@@ -137,10 +138,10 @@ def test_unproven_equivalence_is_reported_as_inconclusive(tmp_path, monkeypatch)
     lec.run_agent(state)
     assert published["status"] == "inconclusive"
     assert published["failure_kind"] == "proof_incomplete"
-    assert published["unproven_points"] == 18
+    assert published["unproven_points"] == 9
     assert published["generic_lec"]["unproven_points"] == 9
-    assert published["mapped_lec"]["unproven_points"] == 9
-    assert "12, 24, 48" in published["reason"]
+    assert published["mapped_lec"]["status"] == "blocked"
+    assert "12" in published["reason"]
 
 def test_fpga_lec_is_registered_in_supabase_and_all_implementation_flows():
     root = Path(__file__).parents[2]

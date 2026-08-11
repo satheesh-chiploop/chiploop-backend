@@ -311,6 +311,9 @@ def test_main_registers_generic_physical_ai_endpoints():
     assert '"system_product": True' in main
     assert '"partition_plan": result.get("partition") or {}' in main
     assert '"software_goal": f"Build the host control' in main
+    assert '"Device Software through Product Demo"' in main
+    assert 'device_layer_role = "host_device_layer" if external_host else "embedded_firmware"' in main
+    assert '"x86_64-unknown-linux-gnu" if external_host else "riscv32imac-unknown-none-elf"' in main
 
 
 def test_physical_ai_reuses_existing_firmware_and_software_collateral_contracts():

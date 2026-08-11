@@ -376,6 +376,8 @@ def run_agent(state: dict) -> dict:
         build_manifest["crate_root"] = "firmware/src"
         build_manifest["hal_mod_path"] = OUTPUT_HAL_MOD_RS
         manifest["build"] = build_manifest
+        manifest["firmware_role"] = str(state.get("firmware_role") or "embedded_firmware")
+        manifest["deployment_architecture"] = str(state.get("deployment_architecture") or "unspecified")
         manifest["elf_path"] = placeholder_elf_rel
         manifest["register_map_path"] = manifest.get("register_map_path") or state.get("firmware_register_map_path") or (state.get("firmware") or {}).get("register_map_path")
         manifest["hal_path"] = manifest.get("hal_path") or state.get("firmware_hal_path") or "firmware/hal/registers.rs"
@@ -442,6 +444,8 @@ def run_agent(state: dict) -> dict:
     build_manifest["crate_root"] = "firmware/src"
     build_manifest["hal_mod_path"] = OUTPUT_HAL_MOD_RS
     manifest["build"] = build_manifest
+    manifest["firmware_role"] = str(state.get("firmware_role") or "embedded_firmware")
+    manifest["deployment_architecture"] = str(state.get("deployment_architecture") or "unspecified")
     manifest["elf_path"] = elf_relpath
     manifest["register_map_path"] = manifest.get("register_map_path") or state.get("firmware_register_map_path") or (state.get("firmware") or {}).get("register_map_path")
     manifest["hal_path"] = manifest.get("hal_path") or "firmware/hal/registers.rs"
