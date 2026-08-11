@@ -5210,6 +5210,26 @@ def _hem_update_run_record(hem_run_id: Optional[str], **patch: Any) -> None:
         logger.warning("HEM: could not update hem_runs id=%s: %s", hem_run_id, exc)
 
 
+def _hem_run_status(hem_run_id: Optional[str]) -> Optional[str]:
+    """Read the authoritative HEM terminal state from Supabase."""
+    if not hem_run_id:
+        return None
+    try:
+        rows = (
+            supabase.table("hem_runs")
+            .select("status")
+            .eq("id", hem_run_id)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        return str((rows[0] if rows else {}).get("status") or "") or None
+    except Exception as exc:
+        logger.warning("HEM: could not read hem_runs id=%s: %s", hem_run_id, exc)
+        return None
+
+
 def _hem_insert_event(
     *,
     hem_run_id: Optional[str],
@@ -6131,6 +6151,9 @@ def _hem_build_system_child_payload(
         "hem_run_id": hem_run_id,
         "hem_root_workflow_id": parent_payload.get("hem_root_workflow_id") or current_workflow_id,
         "hem_root_run_id": parent_payload.get("hem_root_run_id") or current_run_id,
+        # HEM is a gated chain: a required agent failure must fail the stage.
+        # Standalone legacy apps retain their existing best-effort behavior.
+        "_fail_fast_on_agent_error": True,
     }
     if next_template == "System_DQA":
         return {
@@ -6323,6 +6346,14 @@ def _hem_continue_system_rtl_after_success(
     )
 
     child_workflow_id, child_run_id, base_dir = _create_app_workflow_and_run(user_id, next_meta["title"], "system")
+    _hem_link_child_workflow(
+        workflow_id=child_workflow_id,
+        root_workflow_id=root_workflow_id,
+        root_run_id=root_run_id,
+        stage=next_template,
+        label=next_label,
+        dashboard_stage=next_meta.get("stage") or next_template.lower(),
+    )
     child_artifact_dir = os.path.join(base_dir, next_meta["artifact"])
     os.makedirs(child_artifact_dir, exist_ok=True)
     child_payload = _hem_build_system_child_payload(
@@ -6398,14 +6429,28 @@ def _hem_continue_system_rtl_after_success(
                 hem_run_id=str(hem_run_id) if hem_run_id else None,
                 policy_key=HEM_SYSTEM_RTL_POLICY_KEY,
             )
-        _hem_update_run_record(
-            str(hem_run_id) if hem_run_id else None,
-            status="running" if child_status == "completed" and fixed_policy.get(next_template) else ("completed" if child_status == "completed" else "stopped"),
-            current_workflow_id=child_workflow_id,
-            current_run_id=child_run_id,
-            current_stage=next_template,
-            next_stage=fixed_policy.get(next_template),
-        )
+        downstream_stage = fixed_policy.get(next_template)
+        if child_status != "completed":
+            _hem_update_run_record(
+                str(hem_run_id) if hem_run_id else None,
+                status="failed",
+                current_workflow_id=child_workflow_id,
+                current_run_id=child_run_id,
+                current_stage=next_template,
+                next_stage=None,
+            )
+        elif not downstream_stage:
+            _hem_update_run_record(
+                str(hem_run_id) if hem_run_id else None,
+                status="completed",
+                current_workflow_id=child_workflow_id,
+                current_run_id=child_run_id,
+                current_stage=next_template,
+                next_stage=None,
+            )
+        # A successful child with a downstream stage has already executed its
+        # continuation synchronously. Preserve that deeper Supabase state;
+        # this older stack frame must not overwrite it with stale "running".
         _hem_insert_event(
             hem_run_id=str(hem_run_id) if hem_run_id else None,
             user_id=user_id,
@@ -7046,7 +7091,7 @@ HEM_PHYSICAL_AI_STAGE_META: Dict[str, Dict[str, str]] = {
         "dashboard_stage": "tapeout",
     },
     "firmware_product": {
-        "label": "Device Software through Product Demo",
+        "label": "Device Layer / Firmware",
         "title": "HEM: Physical AI Device Software",
         "artifact": "system",
         "app_name": "system",
@@ -7199,14 +7244,17 @@ def _hem_physical_ai_child_payload(root_workflow_id: str, root_run_id: str, payl
             "hem_goal": "product_demo",
             "hem_root_workflow_id": root_workflow_id,
             "hem_root_run_id": root_run_id,
+            "_fail_fast_on_agent_error": True,
             "hem_stage_toggles": {"system_software": True, "system_validation": True, "system_product": True},
             "product_intent": str(payload.get("product_intent") or f"Build a safe simulator-backed {application_name} product from the approved application, model, partition, device-layer, and software contracts; physical programming requires explicit approval."),
         }
     common = {
         "rtl_source_mode": "from_arch2rtl",
-        "from_workflow_id": source_arch2rtl,
-        "source_workflow_id": source_arch2rtl,
-        "source_arch2rtl_workflow_id": source_arch2rtl,
+        # Explorer may create a board wrapper. Only bitstream consumes that
+        # child; firmware/software require the original RTL workflow regmap.
+        "from_workflow_id": str(payload.get("fpga_source_workflow_id") or source_arch2rtl) if stage == "fpga_bitstream" else source_arch2rtl,
+        "source_workflow_id": str(payload.get("fpga_source_workflow_id") or source_arch2rtl) if stage == "fpga_bitstream" else source_arch2rtl,
+        "source_arch2rtl_workflow_id": str(payload.get("fpga_source_workflow_id") or source_arch2rtl) if stage == "fpga_bitstream" else source_arch2rtl,
         "parent_workflow_id": root_workflow_id,
         "upstream_workflows": {"physical_ai": root_workflow_id},
         "top_module": top_module,
@@ -7397,8 +7445,7 @@ def _hem_continue_physical_ai_after_success(*, root_workflow_id: str, root_run_i
                     # The Explorer may generate an FPGA-only serialized wrapper.
                     # Bitstream must ingest that child workflow, not the original
                     # wide digital-IP top from Arch2RTL.
-                    automation_payload["source_arch2rtl_workflow_id"] = child_workflow_id
-                    automation_payload["from_workflow_id"] = child_workflow_id
+                    automation_payload["fpga_source_workflow_id"] = child_workflow_id
                     automation_payload["explorer_winning_configuration"] = continuation.get("winning_configuration") or {}
                     append_log_workflow(
                         root_workflow_id,
@@ -7419,6 +7466,32 @@ def _hem_continue_physical_ai_after_success(*, root_workflow_id: str, root_run_i
                     str(hem_run_id) if hem_run_id else None,
                     status="failed",
                     metadata={"source": "physical_ai", "path": plan, "completed": completed, "failed_stage": stage, "failed_workflow_id": child_workflow_id},
+                )
+                return
+        if stage == "firmware_product":
+            # System_Firmware owns the nested Software -> Validation -> Product
+            # continuation and writes its terminal state to this same Supabase
+            # HEM record. Do not mask a nested failure with outer completion.
+            nested_status = _hem_run_status(str(hem_run_id) if hem_run_id else None)
+            if nested_status != "completed":
+                message = (
+                    "HEM stopped because the Device/Firmware downstream chain did not reach an explicit "
+                    f"Supabase completed state (status={nested_status or 'missing'})."
+                )
+                append_log_workflow(root_workflow_id, message, phase="hem_failed")
+                append_log_run(root_run_id, message)
+                _hem_update_run_record(
+                    str(hem_run_id) if hem_run_id else None,
+                    status="failed",
+                    next_stage=None,
+                    metadata={
+                        "source": "physical_ai",
+                        "path": plan,
+                        "completed": completed,
+                        "failed_stage": stage,
+                        "failed_workflow_id": child_workflow_id,
+                        "reason": message,
+                    },
                 )
                 return
         completed.append(meta["label"])

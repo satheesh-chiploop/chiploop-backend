@@ -13,6 +13,10 @@ def test_cocotb_execution_uses_python_env_paths(tmp_path, monkeypatch):
     validate_dir.mkdir(parents=True)
     makefile = validate_dir / "Makefile"
     makefile.write_text("all:\n\t@echo ok\n", encoding="utf-8")
+    rtl_dir = tmp_path / "rtl"
+    rtl_dir.mkdir()
+    rtl = rtl_dir / "system_top.sv"
+    rtl.write_text("module system_top; endmodule\n", encoding="utf-8")
     captured = {}
 
     state = {
@@ -45,7 +49,14 @@ def test_cocotb_execution_uses_python_env_paths(tmp_path, monkeypatch):
 
     monkeypatch.setattr(agent, "run_command", fake_run)
 
-    result = agent._run_cocotb_simulation(state, str(tmp_path), "firmware/validate/Makefile", "test_firmware_smoke")
+    result = agent._run_cocotb_simulation(
+        state,
+        str(tmp_path),
+        "firmware/validate/Makefile",
+        "test_firmware_smoke",
+        "system_top",
+        ["rtl/system_top.sv"],
+    )
 
     assert result["success"] is True
     path_entries = captured["env"]["PATH"].split(os.pathsep)
@@ -54,3 +65,5 @@ def test_cocotb_execution_uses_python_env_paths(tmp_path, monkeypatch):
     assert str(validate_dir) in pythonpath_entries
     assert str(tmp_path) in pythonpath_entries
     assert captured["adapter_id"] == "system_firmware_cosim"
+    assert "TOPLEVEL=system_top" in captured["cmd"]
+    assert any(str(rtl) in arg for arg in captured["cmd"])

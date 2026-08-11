@@ -311,9 +311,16 @@ def test_main_registers_generic_physical_ai_endpoints():
     assert '"system_product": True' in main
     assert '"partition_plan": result.get("partition") or {}' in main
     assert '"software_goal": f"Build the host control' in main
-    assert '"Device Software through Product Demo"' in main
+    assert '"Device Layer / Firmware"' in main
     assert 'device_layer_role = "host_device_layer" if external_host else "embedded_firmware"' in main
     assert '"x86_64-unknown-linux-gnu" if external_host else "riscv32imac-unknown-none-elf"' in main
+    assert 'automation_payload["fpga_source_workflow_id"] = child_workflow_id' in main
+    assert 'payload.get("fpga_source_workflow_id") or source_arch2rtl' in main
+    assert '"_fail_fast_on_agent_error": True' in main
+    assert 'dashboard_stage=next_meta.get("stage") or next_template.lower()' in main
+    assert 'nested_status = _hem_run_status' in main
+    assert 'nested_status != "completed"' in main
+    assert 'Preserve that deeper Supabase state' in main
 
 
 def test_physical_ai_reuses_existing_firmware_and_software_collateral_contracts():
