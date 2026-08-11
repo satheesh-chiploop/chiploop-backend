@@ -3237,6 +3237,11 @@ def _validate_and_materialize_rtl(
     verilog_map = _repair_undriven_inflight_state(verilog_map, spec_json, mode)
     verilog_map = _repair_undriven_last_accepted_observations(verilog_map, spec_json, mode)
     verilog_map = _trim_zero_padded_assign_concats(verilog_map)
+    # Wiring/feedback sanitizers above may create a convenient alias after the
+    # initial direction repair. Re-assert the authoritative port contract at
+    # the end so no generated continuous or procedural assignment can drive a
+    # spec-declared input (Verilator ASSIGNIN).
+    verilog_map = _remove_writes_to_spec_input_ports(verilog_map, spec_json, mode)
     # Run last: earlier interface/width alignment may reconstruct a declaration
     # and accidentally drop the variable qualifier from a procedural output.
     verilog_map = _promote_procedurally_assigned_outputs(verilog_map)

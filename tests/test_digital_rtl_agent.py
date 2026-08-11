@@ -947,6 +947,31 @@ def test_verilator_undriven_warning_is_structural_failure_even_with_zero_exit():
     assert agent._classify_verilator_result(True, output) == "fatal"
 
 
+def test_final_input_contract_cleanup_removes_feedback_assignment():
+    spec = {
+        "hierarchy": {
+            "top_module": {
+                "name": "adaptive_aero_control_top",
+                "rtl_output_file": "adaptive_aero_control_top.v",
+                "ports": [{"name": "host_cfg_req_seq", "direction": "input", "width": 16}],
+            },
+            "modules": [],
+        }
+    }
+    rtl = {
+        "adaptive_aero_control_top.v": (
+            "module adaptive_aero_control_top(host_cfg_req_seq);\n"
+            "input [15:0] host_cfg_req_seq;\n"
+            "wire [15:0] req_seq_num_w;\n"
+            "assign host_cfg_req_seq = req_seq_num_w;\n"
+            "endmodule"
+        )
+    }
+    cleaned = agent._remove_writes_to_spec_input_ports(rtl, spec, "hierarchical")
+    assert "assign host_cfg_req_seq" not in cleaned["adaptive_aero_control_top.v"]
+    assert "input [15:0] host_cfg_req_seq;" in cleaned["adaptive_aero_control_top.v"]
+
+
 def test_repair_context_keeps_complete_files_named_by_latest_lint_log():
     previous = (
         "---BEGIN top.v---\nmodule top; child u_child(); endmodule\n---END top.v---\n"
