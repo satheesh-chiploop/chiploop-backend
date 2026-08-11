@@ -1440,8 +1440,19 @@ def _sanitize_hierarchical_connectivity(spec_json: dict) -> dict:
         if not isinstance(sig, dict):
             continue
         source = str(sig.get("source") or "").strip()
-        src_mod, _ = _normalize_endpoint_port(source)
+        src_mod, src_port = _normalize_endpoint_port(source)
         if not source_ok(source):
+            continue
+        # A top-level input is already a complete externally-driven signal; it
+        # cannot be the producer of a differently named derived/configuration
+        # signal. Direct top-input fanout belongs in top_level_connections.
+        # Keeping such aliases here creates an ownership contract that the RTL
+        # gate must reject (for example cfg_wdata owning cfg_enable).
+        if (
+            src_mod == top_name
+            and top_dirs.get(src_port) == "input"
+            and str(sig.get("name") or "").strip() != src_port
+        ):
             continue
         signal_width = int(sig.get("width") or 1)
         if src_mod != top_name and endpoint_width(source) != signal_width:
@@ -1495,9 +1506,12 @@ def _sanitize_hierarchical_connectivity(spec_json: dict) -> dict:
             continue
         signal = str(item.get("signal") or "").strip()
         owner = str(item.get("owner") or "").strip()
-        owner_mod, _ = _normalize_endpoint_port(owner)
+        owner_mod, owner_port = _normalize_endpoint_port(owner)
         key = (signal, owner)
-        if signal and owner and key not in seen and (owner_mod == top_name or endpoint_dir(owner) in {"output", "inout"}):
+        valid_top_owner = owner_mod == top_name and (
+            top_dirs.get(owner_port) != "input" or signal == owner_port
+        )
+        if signal and owner and key not in seen and (valid_top_owner or endpoint_dir(owner) in {"output", "inout"}):
             ownership.append(dict(item))
             seen.add(key)
     for sig in sanitized_signals:

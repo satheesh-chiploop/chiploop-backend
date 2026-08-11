@@ -253,6 +253,39 @@ def test_sanitize_connectivity_keeps_one_width_compatible_producer_per_input():
     }
 
 
+def test_sanitize_connectivity_rejects_top_input_as_derived_signal_owner():
+    spec = {
+        "hierarchy": {
+            "top_module": {
+                **_module("top"),
+                "ports": [_port("cfg_wdata", "input", 32), _port("req_ready", "input")],
+                "rtl_output_file": "top.v",
+            },
+            "modules": [
+                {
+                    **_module("consumer"),
+                    "ports": [_port("cfg_enable", "input"), _port("request_ready", "input")],
+                    "rtl_output_file": "consumer.v",
+                }
+            ],
+        },
+        "top_level_connections": [],
+        "inter_module_signals": [
+            {"name": "cfg_enable", "width": 1, "source": "top.cfg_wdata", "destinations": ["consumer.cfg_enable"]},
+            {"name": "request_ready", "width": 1, "source": "top.req_ready", "destinations": ["consumer.request_ready"]},
+        ],
+        "signal_ownership": [
+            {"signal": "cfg_enable", "owner": "top.cfg_wdata"},
+            {"signal": "request_ready", "owner": "top.req_ready"},
+        ],
+    }
+
+    out = spec_agent._sanitize_hierarchical_connectivity(spec)
+
+    assert out["inter_module_signals"] == []
+    assert out["signal_ownership"] == []
+
+
 def test_normalize_adds_referenced_memory_macro_module():
     spec = {
         "design_name": "controller",
