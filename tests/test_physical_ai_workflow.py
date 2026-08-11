@@ -130,6 +130,8 @@ def test_active_aero_cpu_reference_builds_application_partition_and_policy(tmp_p
     assert len(result["partition"]["jobs"]) == 5
     assert result["files"]["cpu_reference_results"]
     assert result["files"]["control_policy"]
+    assert result["physics_execution"]["control_policy"]["format"] == "piecewise_linear_lut"
+    assert len(result["physics_execution"]["cpu_reference"]["operating_points"]) == 5
 
 
 def test_application_intelligence_and_partition_use_selected_agent_model(tmp_path, monkeypatch):
@@ -279,6 +281,22 @@ def test_main_registers_generic_physical_ai_endpoints():
     assert '"system_software": True' in main
     assert '"system_validation": True' in main
     assert '"system_product": True' in main
+    assert '"partition_plan": result.get("partition") or {}' in main
+    assert '"software_goal": f"Build the host control' in main
+
+
+def test_physical_ai_reuses_existing_firmware_and_software_collateral_contracts():
+    main = open("main.py", encoding="utf-8").read()
+    firmware_ingest = open("agents/embedded/embedded_digital_handoff_ingest_agent.py", encoding="utf-8").read()
+    firmware_package = open("agents/system/system_software_handoff_package_agent.py", encoding="utf-8").read()
+    software_ingest = open("agents/system/system_software_handoff_ingest_agent.py", encoding="utf-8").read()
+
+    assert '"system_rtl_workflow_id": source_arch2rtl' in main
+    assert '"from_workflow_id": source_arch2rtl' in main
+    assert 'digital/digital_regmap.json' in firmware_ingest
+    assert 'system/package/system_rtl_package.json' in firmware_ingest
+    assert 'REQUIRED_FIRMWARE_MANIFEST = "firmware/firmware_manifest.json"' in firmware_package
+    assert '"system/software_handoff/system_software_handoff.json"' in software_ingest
 
 
 def test_physical_ai_has_supabase_source_of_truth_migration():

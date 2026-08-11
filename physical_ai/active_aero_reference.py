@@ -57,6 +57,8 @@ def build_active_aero_reference_package(requirements: Dict[str, Any], model: Dic
     package["inference_status"] = "not_executed"
     package["status"] = "cpu_reference_ready"
     package["metrics"] = {"operating_point_count": len(rows), "cpu_reference_executed": True, "surrogate_inference_executed": False}
+    package["cpu_reference"] = reference
+    package["control_policy"] = policy
     package["validation"]["cpu_reference_gate"] = "passed"
     package["validation"]["surrogate_inference_gate"] = "not_executed"
     package["files"]["cpu_reference_results"] = _write(root, "cpu_reference_results.json", reference)

@@ -7143,6 +7143,12 @@ def _hem_physical_ai_child_payload(root_workflow_id: str, root_run_id: str, payl
             "run_lvs": True,
         }
     if stage == "firmware_product":
+        partition_plan = payload.get("partition_plan") if isinstance(payload.get("partition_plan"), dict) else {}
+        application_contract = payload.get("application_contract") if isinstance(payload.get("application_contract"), dict) else {}
+        firmware_jobs = [job for job in (partition_plan.get("jobs") or []) if isinstance(job, dict) and str(job.get("target")) == "firmware"]
+        software_jobs = [job for job in (partition_plan.get("jobs") or []) if isinstance(job, dict) and str(job.get("target")) in {"software", "cpu_software"}]
+        partition_interfaces = partition_plan.get("interfaces") if isinstance(partition_plan.get("interfaces"), list) else []
+        application_name = str(application_contract.get("name") or payload.get("application") or project_name)
         return {
             "project_name": project_name,
             "rtl_source_mode": "from_system_rtl",
@@ -7152,6 +7158,8 @@ def _hem_physical_ai_child_payload(root_workflow_id: str, root_run_id: str, payl
             "parent_workflow_id": root_workflow_id,
             "upstream_workflows": {"physical_ai": root_workflow_id, "system_rtl": source_arch2rtl},
             "top_module": top_module,
+            "goal": f"Build firmware for {application_name} from the approved partition. Firmware jobs: {json.dumps(firmware_jobs, default=str)[:6000]}. Interfaces: {json.dumps(partition_interfaces, default=str)[:6000]}.",
+            "software_goal": f"Build the host control, configuration, diagnostics, telemetry, and product services for {application_name}. Software jobs: {json.dumps(software_jobs, default=str)[:6000]}.",
             "target_frequency_mhz": float(payload.get("target_frequency_mhz") or 50.0),
             "execute_cosim": True,
             "run_cosim": True,
@@ -7162,7 +7170,7 @@ def _hem_physical_ai_child_payload(root_workflow_id: str, root_run_id: str, payl
             "hem_root_workflow_id": root_workflow_id,
             "hem_root_run_id": root_run_id,
             "hem_stage_toggles": {"system_software": True, "system_validation": True, "system_product": True},
-            "product_intent": str(payload.get("product_intent") or "Build a safe simulator-backed Physical AI product demo; physical board programming requires explicit approval."),
+            "product_intent": str(payload.get("product_intent") or f"Build a safe simulator-backed {application_name} product from the approved application, model, partition, RTL, firmware, and software contracts; physical programming requires explicit approval."),
         }
     common = {
         "rtl_source_mode": "from_arch2rtl",
@@ -7467,6 +7475,12 @@ def execute_physical_ai_workflow_background(workflow_id: str, run_id: str, user_
                         "model_project_name": selected_model.get("digital_ip_project_name"),
                         "rtl_spec_text": generated.get("rtl_spec_text"),
                         "verification_goals": generated.get("verification_goals"),
+                        "application_contract": result.get("application_intelligence") or {},
+                        "surrogate_mapping": result.get("model_qualification") or {},
+                        "partition_plan": result.get("partition") or {},
+                        "control_policy": result.get("physics_execution", {}).get("control_policy") or {},
+                        "surrogate_interface_contract": result.get("physics_execution", {}).get("interface") or {},
+                        "validation_plan": result.get("physics_execution", {}).get("validation") or {},
                     },
                 )
         elif result["status"] == "ready_for_fpga_exploration":
@@ -7488,6 +7502,12 @@ def execute_physical_ai_workflow_background(workflow_id: str, run_id: str, user_
                     "model_project_name": selected_model.get("digital_ip_project_name"),
                     "rtl_spec_text": generated.get("rtl_spec_text"),
                     "verification_goals": generated.get("verification_goals"),
+                    "application_contract": result.get("application_intelligence") or {},
+                    "surrogate_mapping": result.get("model_qualification") or {},
+                    "partition_plan": result.get("partition") or {},
+                    "control_policy": result.get("physics_execution", {}).get("control_policy") or {},
+                    "surrogate_interface_contract": result.get("physics_execution", {}).get("interface") or {},
+                    "validation_plan": result.get("physics_execution", {}).get("validation") or {},
                 },
             )
         else:

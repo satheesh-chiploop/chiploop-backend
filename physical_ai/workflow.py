@@ -74,6 +74,8 @@ def run_physical_ai_workflow(
             "validation": state["physics_execution"]["validation"],
             "product_map": state["physics_execution"]["product_map"],
             "implementation_path": state["physics_execution"]["implementation_path"],
+            "cpu_reference": state["physics_execution"].get("cpu_reference") or {},
+            "control_policy": state["physics_execution"].get("control_policy") or {},
         }
     else:
         execution_result = {
