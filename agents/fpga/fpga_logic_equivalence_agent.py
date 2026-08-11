@@ -32,6 +32,21 @@ def _induction_depths(depth: int) -> list[int]:
     return [max(1, min(depth, 4))]
 
 
+def _proof_timeout_seconds(state: dict) -> int:
+    explicit = state.get("fpga_lec_timeout_seconds")
+    if explicit not in {None, ""}:
+        return max(60, min(int(explicit), 1200))
+    fpga = state.get("fpga") if isinstance(state.get("fpga"), dict) else {}
+    synthesis = fpga.get("synthesis") if isinstance(fpga.get("synthesis"), dict) else {}
+    flip_flops = max(0, int(synthesis.get("flip_flops") or 0))
+    mapped_cells = max(0, int(synthesis.get("total_mapped_cells") or 0))
+    # DigitalOcean's two-vCPU worker and Yosys 0.33 are substantially slower
+    # than a current workstation. Scale from measured proof complexity rather
+    # than applying the old fixed 180-second ceiling to every design.
+    estimated = 180 + round(flip_flops * 0.15) + round(mapped_cells * 0.03)
+    return max(180, min(estimated, 1200))
+
+
 def _proof_script(rtl_files: list[str], netlist: str, top: str, family: str, depths: list[int]) -> str:
     normalize = [f"prep -flatten -top {top}", "async2sync", "opt_clean"]
     lines = [*(f"read_verilog -sv {path}" for path in rtl_files), *normalize, f"rename {top} gold", "design -stash gold", "design -reset"]
@@ -75,7 +90,7 @@ def _run_proof(state: dict, out_dir: str, name: str, gold_files: list[str], gate
     script_path = os.path.abspath(os.path.join(out_dir, f"{name}.ys"))
     log_path = os.path.abspath(os.path.join(out_dir, f"{name}.log"))
     write_text(script_path, _proof_script(gold_files, gate_netlist, top, family, depths))
-    timeout_seconds = max(30, min(int(state.get("fpga_lec_timeout_seconds") or 180), 600))
+    timeout_seconds = _proof_timeout_seconds(state)
     result = run_cmd(["yosys", "-s", script_path], cwd=out_dir, log_path=log_path, timeout=timeout_seconds, state=state)
     log = open(log_path, "r", encoding="utf-8", errors="ignore").read() if os.path.exists(log_path) else ""
     proven = bool(result.get("ok"))
@@ -131,7 +146,7 @@ def run_agent(state: dict) -> dict:
           or not os.path.exists(generic_netlist) or not os.path.exists(mapped_netlist)):
         summary["reason"] = "LEC requires completed synthesis, source RTL, and both generic and FPGA-mapped netlists."
     else:
-        _progress(state, f"FPGA LEC proof 1/2 started: RTL to generic synthesis netlist (timeout {max(30, min(int(state.get('fpga_lec_timeout_seconds') or 180), 600))}s).")
+        _progress(state, f"FPGA LEC proof 1/2 started: RTL to generic synthesis netlist (size-aware timeout {_proof_timeout_seconds(state)}s).")
         generic_proof = _run_proof(state, out_dir, "fpga_rtl_to_generic_lec", rtl_files, generic_netlist, top, "", induction_depths)
         _progress(state, f"FPGA LEC proof 1/2 finished with status {generic_proof['status']}.")
         # A failed RTL-to-generic proof already blocks the chain. Do not spend

@@ -77,6 +77,14 @@ def test_fpga_lec_checks_generic_and_mapped_checkpoints(tmp_path, monkeypatch):
     assert published["comparison"] == "two_stage_rtl_generic_and_generic_mapped_equivalence"
 
 
+def test_fpga_lec_timeout_scales_with_synthesized_design_size(tmp_path):
+    state = _state(tmp_path)
+    state["fpga"]["synthesis"].update({"flip_flops": 1866, "total_mapped_cells": 5887})
+    assert lec._proof_timeout_seconds(state) == 637
+    state["fpga_lec_timeout_seconds"] = 900
+    assert lec._proof_timeout_seconds(state) == 900
+
+
 def test_mapped_lec_tool_error_blocks_even_when_generic_proof_passes(tmp_path, monkeypatch):
     state = _state(tmp_path)
     monkeypatch.setattr(lec, "publish_json", lambda *_args: None)

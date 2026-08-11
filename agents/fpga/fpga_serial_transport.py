@@ -53,13 +53,18 @@ def _top_ports(paths: list[str], top: str) -> list[dict[str, Any]]:
 
         # Non-ANSI Verilog lists only names in the module header and declares
         # direction/width in the body.  This form is common in generated RTL.
-        for declaration in re.finditer(
+        declaration_pattern = re.compile(
             r"^\s*(?P<direction>input|output|inout)\b\s*"
-            r"(?:wire\s*|reg\s*|logic\s*)?(?:signed\s*)?"
-            r"(?P<range>\[\s*\d+\s*:\s*\d+\s*\]\s*)?(?P<names>[^;]+);",
-            body,
-            flags=re.MULTILINE,
-        ):
+            # Type keywords require a word boundary. Without it, a legal
+            # identifier such as reg_cs was parsed as the keyword ``reg``
+            # followed by an invalid ``_cs`` suffix and silently disappeared.
+            r"(?:wire\b\s*|reg\b\s*|logic\b\s*)?(?:signed\b\s*)?"
+            r"(?P<range>\[\s*\d+\s*:\s*\d+\s*\]\s*)?(?P<names>.+)\s*$"
+        )
+        for statement in body.split(";"):
+            declaration = declaration_pattern.match(statement)
+            if not declaration:
+                continue
             range_text = (declaration.group("range") or "").strip()
             range_match = re.search(r"\[\s*(\d+)\s*:\s*(\d+)\s*\]", range_text)
             declared_width = abs(int(range_match.group(1)) - int(range_match.group(2))) + 1 if range_match else 1

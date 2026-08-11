@@ -106,6 +106,27 @@ def test_wide_core_gets_fpga_only_spi_transport(tmp_path, monkeypatch):
         assert completed.returncode == 0, completed.stderr + completed.stdout[-2000:]
 
 
+def test_non_ansi_reg_prefixed_ports_are_serialized_and_connected(tmp_path, monkeypatch):
+    rtl = tmp_path / "legacy_control.v"
+    rtl.write_text(
+        "module legacy_control(clk, reset, reg_cs, reg_we, reg_re, payload, result);\n"
+        "input clk; input reset; input reg_cs; input reg_we; input reg_re;\n"
+        "input [127:0] payload; output [127:0] result; assign result = payload; endmodule\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(fpga_serial_transport, "publish_json", lambda *_args: None)
+    state = {
+        "workflow_id": "wf", "workflow_dir": str(tmp_path),
+        "fpga": {"top_module": "legacy_control", "rtl_files": [str(rtl)]},
+    }
+    report = fpga_serial_transport.add_spi_transport_if_needed(state)
+    wrapper = Path(report["wrapper_rtl"]).read_text(encoding="utf-8")
+    assert {item["port"] for item in report["input_bit_map"]} >= {"reg_cs", "reg_we", "reg_re"}
+    assert ".reg_cs(core_reg_cs)" in wrapper
+    assert ".reg_we(core_reg_we)" in wrapper
+    assert ".reg_re(core_reg_re)" in wrapper
+
+
 def test_ulx3s_has_verified_spi_wrapper_pin_mapping(tmp_path, monkeypatch):
     rtl = tmp_path / "spi_top.sv"
     rtl.write_text(

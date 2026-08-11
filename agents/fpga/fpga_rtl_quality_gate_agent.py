@@ -50,6 +50,13 @@ def _lint_pass(state: dict, rtl_files: List[str], out_dir: str, suffix: str) -> 
             cwd=out_dir,
             log_path=os.path.abspath(f"{out_dir}/verilator_{suffix}.log"),
         )
+        verilator = results["tools"]["verilator"]
+        lint_text = read_text(str(verilator.get("log") or ""))
+        blocking = sorted(set(re.findall(r"%Warning-(UNDRIVEN|MULTIDRIVEN|BLKANDNBLK|PROCASSWIRE)\b", lint_text)))
+        if blocking:
+            verilator["ok"] = False
+            verilator["blocking_warning_codes"] = blocking
+            verilator["reason"] = "structural_lint_failure"
     else:
         results["tools"]["verilator"] = {"available": False, "ok": False, "reason": "verilator_not_found"}
 
