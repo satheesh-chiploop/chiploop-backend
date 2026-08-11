@@ -3756,6 +3756,7 @@ class PhysicalAiWorkflowIn(BaseModel):
     implementation_target: Literal["software", "fpga", "asic", "gpu_service"] = "fpga"
     execution_mode: Literal["validated", "architecture", "cpu_reference"] = "validated"
     implementation_path: Literal["architecture_only", "digital_ip_asic", "fpga_prototype", "fpga_then_asic"] = "digital_ip_asic"
+    deployment_architecture: Literal["automatic", "fpga_onboard_cpu", "fpga_soft_cpu", "fpga_external_host", "asic_digital_ip", "asic_soc", "asic_companion"] = "automatic"
     generate_architecture_with_model: bool = True
     maximum_error_percent: float = 3.0
     safety_constraints: List[str] = Field(default_factory=list)
@@ -7149,6 +7150,24 @@ def _hem_physical_ai_child_payload(root_workflow_id: str, root_run_id: str, payl
         software_jobs = [job for job in (partition_plan.get("jobs") or []) if isinstance(job, dict) and str(job.get("target")) in {"software", "cpu_software"}]
         partition_interfaces = partition_plan.get("interfaces") if isinstance(partition_plan.get("interfaces"), list) else []
         application_name = str(application_contract.get("name") or payload.get("application") or project_name)
+        target_refinement = payload.get("target_refinement") if isinstance(payload.get("target_refinement"), dict) else {}
+        if not target_refinement:
+            deployment = str(payload.get("deployment_architecture") or "automatic")
+            path = str(payload.get("implementation_path") or "digital_ip_asic")
+            if path in {"digital_ip_asic", "fpga_then_asic"}:
+                selected = "asic_digital_ip" if deployment == "automatic" else deployment
+                missing = {
+                    "asic_digital_ip": ["integrator_cpu_and_platform"],
+                    "asic_soc": ["embedded_cpu_core_bsp_and_memory_map"],
+                    "asic_companion": ["external_host_and_transport"],
+                }.get(selected, ["cpu_or_host_platform"])
+                target_refinement = {
+                    "schema": "chiploop.application_intelligence.target_refinement.v1",
+                    "status": "portable_only",
+                    "deployment_architecture": selected,
+                    "firmware_gate": {"portable_source_ready": True, "deployable_binary_ready": False, "missing": missing},
+                }
+        platform_note = json.dumps(target_refinement, default=str)[:6000]
         return {
             "project_name": project_name,
             "rtl_source_mode": "from_system_rtl",
@@ -7158,7 +7177,7 @@ def _hem_physical_ai_child_payload(root_workflow_id: str, root_run_id: str, payl
             "parent_workflow_id": root_workflow_id,
             "upstream_workflows": {"physical_ai": root_workflow_id, "system_rtl": source_arch2rtl},
             "top_module": top_module,
-            "goal": f"Build firmware for {application_name} from the approved partition. Firmware jobs: {json.dumps(firmware_jobs, default=str)[:6000]}. Interfaces: {json.dumps(partition_interfaces, default=str)[:6000]}.",
+            "goal": f"Build portable firmware source for {application_name} from the approved partition and existing RTL register collateral. Do not claim a board-deployable binary unless the platform contract gate is ready. Firmware jobs: {json.dumps(firmware_jobs, default=str)[:6000]}. Interfaces: {json.dumps(partition_interfaces, default=str)[:6000]}. Target refinement: {platform_note}.",
             "software_goal": f"Build the host control, configuration, diagnostics, telemetry, and product services for {application_name}. Software jobs: {json.dumps(software_jobs, default=str)[:6000]}.",
             "target_frequency_mhz": float(payload.get("target_frequency_mhz") or 50.0),
             "execute_cosim": True,
@@ -7335,6 +7354,32 @@ def _hem_continue_physical_ai_after_success(*, root_workflow_id: str, root_run_i
                         )
                         return
                     automation_payload["board"] = selected_board
+                    from agents.fpga.fpga_common import BOARD_REGISTRY
+                    board_profile = BOARD_REGISTRY.get(str(selected_board)) or {}
+                    compute_host = board_profile.get("compute_host") if isinstance(board_profile.get("compute_host"), dict) else {}
+                    requested_host = str(automation_payload.get("deployment_architecture") or "automatic")
+                    selected_host = "fpga_external_host" if requested_host == "automatic" else requested_host
+                    if selected_host == "fpga_onboard_cpu" and not compute_host.get("hard_cpu"):
+                        raise RuntimeError(f"selected board {selected_board} has no supported hard onboard CPU")
+                    if selected_host == "fpga_soft_cpu" and not bool(compute_host.get("soft_cpu_supported")):
+                        raise RuntimeError(f"selected board {selected_board} is not qualified for a soft CPU")
+                    transport = str(automation_payload.get("host_transport") or "")
+                    if not transport and continuation.get("transport_contract_ready") and continuation.get("host_driver_ready"):
+                        transport = str(continuation.get("host_transport") or "")
+                    deployable_ready = bool(transport) and selected_host != "fpga_soft_cpu"
+                    automation_payload["target_refinement"] = {
+                        "schema": "chiploop.application_intelligence.target_refinement.v1",
+                        "status": "resolved" if deployable_ready else "portable_only",
+                        "selected_board": selected_board,
+                        "deployment_architecture": selected_host,
+                        "compute_host": compute_host,
+                        "host_transport": transport or "not_selected",
+                        "firmware_gate": {
+                            "portable_source_ready": True,
+                            "deployable_binary_ready": deployable_ready,
+                            "missing": [] if deployable_ready else (["soft_cpu_subsystem_and_bsp"] if selected_host == "fpga_soft_cpu" else ["host_transport_and_board_wrapper"]),
+                        },
+                    }
                     explorer_top = continuation.get("top_module") or explorer.get("top_module")
                     if explorer_top:
                         automation_payload["top_module"] = explorer_top

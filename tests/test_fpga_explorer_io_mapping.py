@@ -1,6 +1,9 @@
 from pathlib import Path
+import importlib.util
+import json
 import shutil
 import subprocess
+import pytest
 
 from agents.fpga import fpga_explorer_io_mapping_agent as mapping_agent
 from agents.fpga import fpga_target_explorer_agent as explorer
@@ -70,6 +73,20 @@ def test_wide_core_gets_fpga_only_spi_transport(tmp_path, monkeypatch):
     assert "input  logic spi_sclk" in wrapper
     assert "adaptive_aero_control_top u_core" in wrapper
     assert ".s_axis_cmd(core_s_axis_cmd)" in wrapper
+    protocol = json.loads(Path(report["protocol_contract"]).read_text(encoding="utf-8"))
+    assert protocol["schema"] == "chiploop.fpga.spi_transport.v1"
+    assert protocol["mode"] == 0
+    assert protocol["response_latency_frames"] == 1
+    assert report["protocol_contract_ready"] is True
+    assert report["host_driver_ready"] is True
+    spec = importlib.util.spec_from_file_location("generated_chiploop_spi_driver", report["host_driver"])
+    assert spec and spec.loader
+    driver = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(driver)
+    command = driver.pack_command({"s_axis_cmd": 0x1234, "s_axis_valid": 1})
+    assert len(command) == protocol["frame_bytes"]
+    with pytest.raises(ValueError, match="exceeds"):
+        driver.pack_command({"s_axis_valid": 2})
     if shutil.which("iverilog"):
         completed = subprocess.run(
             ["iverilog", "-g2012", "-s", state["fpga"]["top_module"], "-o", str(tmp_path / "wrapper.out"), str(rtl), report["wrapper_rtl"]],

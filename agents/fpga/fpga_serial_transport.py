@@ -1,5 +1,6 @@
 import os
 import re
+import json
 from typing import Any
 
 from .fpga_common import fpga_dir, manifest_update, publish_json, write_text
@@ -87,6 +88,53 @@ def _decl(kind: str, port: dict[str, Any]) -> str:
 
 def _shift_expression(name: str, width: int, bit: str) -> str:
     return bit if width == 1 else f"{{{name}[{width - 2}:0], {bit}}}"
+
+
+def _host_driver_source(input_bits: int, output_bits: int, input_map: list[dict[str, Any]], output_map: list[dict[str, Any]]) -> str:
+    frame_bits = max(input_bits, output_bits)
+    return f'''"""Generated ChipLoop SPI Mode-0 host transport.
+
+Command N is committed when chip-select rises.  The response visible during
+that exchange is the previous core snapshot, so callers should pipeline or
+perform a second exchange when they need the response to command N.
+"""
+from typing import Callable, Mapping
+
+INPUT_BITS = {input_bits}
+OUTPUT_BITS = {output_bits}
+FRAME_BITS = {frame_bits}
+FRAME_BYTES = (FRAME_BITS + 7) // 8
+INPUT_MAP = {input_map!r}
+OUTPUT_MAP = {output_map!r}
+
+def _mask(width: int) -> int:
+    return (1 << width) - 1
+
+def pack_command(values: Mapping[str, int]) -> bytes:
+    frame = 0
+    for field in INPUT_MAP:
+        value = int(values.get(field["port"], 0))
+        if value < 0 or value > _mask(field["width"]):
+            raise ValueError(f'{{field["port"]}} exceeds {{field["width"]}} bits')
+        frame |= value << field["lsb"]
+    return frame.to_bytes(FRAME_BYTES, "big")
+
+def unpack_response(raw: bytes) -> dict[str, int]:
+    if len(raw) != FRAME_BYTES:
+        raise ValueError(f"expected {{FRAME_BYTES}} response bytes, got {{len(raw)}}")
+    # Response bits leave the FPGA first and are followed by zero padding when
+    # the command side determines a longer full-duplex frame.
+    value = int.from_bytes(raw, "big") >> (FRAME_BYTES * 8 - OUTPUT_BITS)
+    return {{field["port"]: (value >> field["lsb"]) & _mask(field["width"]) for field in OUTPUT_MAP}}
+
+class ChipLoopSpiDevice:
+    def __init__(self, transfer: Callable[[bytes], bytes]):
+        self._transfer = transfer
+
+    def exchange(self, values: Mapping[str, int]) -> dict[str, int]:
+        response = self._transfer(pack_command(values))
+        return unpack_response(response)
+'''
 
 
 def add_spi_transport_if_needed(state: dict, *, threshold_bits: int = 64) -> dict | None:
@@ -201,18 +249,53 @@ def add_spi_transport_if_needed(state: dict, *, threshold_bits: int = 64) -> dic
     manifest_update(state, "top_module", wrapper_top)
     manifest_update(state, "rtl_files", adapted_files)
     state["top_module"] = wrapper_top
+    input_map = [
+        {"port": port["name"], "width": int(port["width"]), "lsb": sum(int(item["width"]) for item in payload_inputs[:index])}
+        for index, port in enumerate(payload_inputs)
+    ]
+    output_map = []
+    output_lsb = 0
+    for port in reversed(payload_outputs):
+        output_map.append({"port": port["name"], "width": int(port["width"]), "lsb": output_lsb})
+        output_lsb += int(port["width"])
+    output_map.reverse()
+    frame_bits = max(input_bits, output_bits)
+    protocol = {
+        "schema": "chiploop.fpga.spi_transport.v1",
+        "mode": 0,
+        "bit_order": "msb_first",
+        "frame_bits": frame_bits,
+        "frame_bytes": (frame_bits + 7) // 8,
+        "command_commit": "chip_select_rising_edge",
+        "response_latency_frames": 1,
+        "input_bits": input_bits,
+        "output_bits": output_bits,
+        "input_bit_map": input_map,
+        "output_bit_map": output_map,
+    }
+    protocol_path = write_text(os.path.join(out_dir, "fpga_spi_transport_contract.json"), json.dumps(protocol, indent=2))
+    driver_path = write_text(os.path.join(out_dir, "chiploop_spi_driver.py"), _host_driver_source(input_bits, output_bits, input_map, output_map))
+    if workflow_id:
+        try:
+            from utils.artifact_utils import save_text_artifact_and_record
+            save_text_artifact_and_record(workflow_id, "FPGA Explorer I/O Mapping Agent", "fpga/target_explorer/interface_adapter", "fpga_spi_transport_contract.json", json.dumps(protocol, indent=2))
+            save_text_artifact_and_record(workflow_id, "FPGA Explorer I/O Mapping Agent", "fpga/target_explorer/interface_adapter", "chiploop_spi_driver.py", _host_driver_source(input_bits, output_bits, input_map, output_map))
+        except Exception:
+            pass
     report = {
         "status": "generated", "transport": "spi_mode_0_shift_transport",
         "core_top_module": core_top, "fpga_top_module": wrapper_top,
         "original_top_level_io_bits": total_bits, "fpga_top_level_io_bits": 7,
         "serialized_input_bits": input_bits, "serialized_output_bits": output_bits,
-        "input_bit_map": [
-            {"port": port["name"], "width": int(port["width"]), "lsb": sum(int(item["width"]) for item in payload_inputs[:index])}
-            for index, port in enumerate(payload_inputs)
-        ],
+        "input_bit_map": input_map,
+        "output_bit_map": output_map,
         "output_frame_order_msb_first": [port["name"] for port in payload_outputs],
         "transaction_model": "MSB-first full-duplex frames; command N is committed when CS rises and response N is read in the following frame.",
         "wrapper_rtl": wrapper_path,
+        "protocol_contract": os.path.abspath(protocol_path),
+        "host_driver": os.path.abspath(driver_path),
+        "protocol_contract_ready": True,
+        "host_driver_ready": True,
         "scope": "FPGA only; ASIC uses the original core top module.",
         "hardware_readiness": "requires CDC/protocol verification and board pin assignment before programming hardware",
     }

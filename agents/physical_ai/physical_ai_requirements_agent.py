@@ -14,6 +14,7 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
         "implementation_target": str(raw.get("implementation_target") or "fpga"),
         "execution_mode": str(raw.get("execution_mode") or "validated"),
         "implementation_path": str(raw.get("implementation_path") or "digital_ip_asic"),
+        "deployment_architecture": str(raw.get("deployment_architecture") or "automatic"),
         "safety_constraints": list(raw.get("safety_constraints") or []),
         "parameters": dict(raw.get("parameters") or {}),
         "approved": True,

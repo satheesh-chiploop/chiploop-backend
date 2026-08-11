@@ -127,11 +127,39 @@ def test_active_aero_cpu_reference_builds_application_partition_and_policy(tmp_p
     assert result["application_intelligence"]["source_of_truth"] == "supabase"
     assert result["model_qualification"]["qualification_status"] == "provisionally_compatible"
     assert result["partition"]["decision"] == "heterogeneous"
+    assert result["partition"]["schema"] == "chiploop.application_intelligence.partition.v2"
+    assert result["partition"]["partition_phases"]["functional"] == {"status": "completed", "target_independent": True}
+    refinement = result["partition"]["partition_phases"]["target_refinement"]
+    assert refinement["status"] == "pending_board_selection"
+    assert refinement["selected_mode"] is None
+    assert refinement["firmware_gate"]["ready"] is False
+    assert "fpga_onboard_cpu" in refinement["candidate_modes"]
+    assert "fpga_external_host" in refinement["candidate_modes"]
     assert len(result["partition"]["jobs"]) == 5
     assert result["files"]["cpu_reference_results"]
     assert result["files"]["control_policy"]
     assert result["physics_execution"]["control_policy"]["format"] == "piecewise_linear_lut"
     assert len(result["physics_execution"]["cpu_reference"]["operating_points"]) == 5
+
+
+def test_asic_partition_records_explicit_soc_architecture(tmp_path):
+    result = run_physical_ai_workflow(
+        {
+            "application": "intelligent_active_aerodynamics_controller",
+            "physics_domain": "automotive_aerodynamics",
+            "physics_model_id": "nvidia.domino.automotive_aero",
+            "execution_mode": "architecture",
+            "implementation_path": "digital_ip_asic",
+            "deployment_architecture": "asic_soc",
+            "hem_enabled": False,
+        },
+        str(tmp_path),
+    )
+
+    refinement = result["partition"]["partition_phases"]["target_refinement"]
+    assert refinement["status"] == "selected"
+    assert refinement["selected_mode"] == "asic_soc"
+    assert "asic_digital_ip" in refinement["candidate_modes"]
 
 
 def test_application_intelligence_and_partition_use_selected_agent_model(tmp_path, monkeypatch):

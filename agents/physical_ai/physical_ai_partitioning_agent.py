@@ -6,6 +6,51 @@ from model_gateway import complete_text
 
 ALLOWED_TARGETS = {"cpu_software", "gpu_service", "firmware", "fpga", "asic", "fpga_or_asic", "software"}
 
+DEPLOYMENT_ARCHITECTURES = {
+    "automatic",
+    "fpga_onboard_cpu",
+    "fpga_soft_cpu",
+    "fpga_external_host",
+    "asic_digital_ip",
+    "asic_soc",
+    "asic_companion",
+}
+
+
+def _target_refinement(req: Dict[str, Any]) -> Dict[str, Any]:
+    """Describe what must be resolved after functional partitioning.
+
+    Board selection is deliberately not performed here: FPGA Explorer owns that
+    decision after RTL resource and I/O evidence exists.
+    """
+    path = str(req.get("implementation_path") or "digital_ip_asic")
+    requested = str(req.get("deployment_architecture") or "automatic")
+    if requested not in DEPLOYMENT_ARCHITECTURES:
+        requested = "automatic"
+    is_fpga = path in {"fpga_prototype", "fpga_then_asic"}
+    candidates = (
+        ["fpga_onboard_cpu", "fpga_soft_cpu", "fpga_external_host"]
+        if is_fpga
+        else ["asic_digital_ip", "asic_soc", "asic_companion"]
+    )
+    selected = requested if requested != "automatic" else None
+    return {
+        "status": "pending_board_selection" if is_fpga else ("pending_asic_architecture" if selected is None else "selected"),
+        "requested_mode": requested,
+        "selected_mode": selected,
+        "candidate_modes": candidates,
+        "selection_owner": "fpga_target_explorer" if is_fpga else "application_intelligence",
+        "firmware_gate": {
+            "ready": False,
+            "reason": "Finalize CPU/host, bus, address map, interrupts, and register-map version before deployable firmware generation.",
+        },
+        "required_contract": {
+            "compute_host": ["location", "cpu_or_mcu", "architecture", "runtime_or_os", "toolchain"],
+            "hardware_interface": ["bus_or_transport", "base_address", "register_map", "interrupts", "dma_or_shared_memory"],
+            "target": ["board_and_device" if is_fpga else "asic_integration_mode", "clock_reset", "memory", "io"],
+        },
+    }
+
 
 def _json_object(text: str) -> Dict[str, Any]:
     raw = text.strip()
@@ -22,7 +67,7 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     model = state["selected_physics_model"]
     execution = state["physics_execution"]
     fallback = {
-        "schema": "chiploop.application_intelligence.partition.v1",
+        "schema": "chiploop.application_intelligence.partition.v2",
         "application": req["application"],
         "decision": "heterogeneous",
         "jobs": [
@@ -37,6 +82,10 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
             {"from": "fpga_or_asic", "to": "firmware", "contract": "status, faults, telemetry, and interrupt"},
         ],
         "implementation_path": req.get("implementation_path"),
+        "partition_phases": {
+            "functional": {"status": "completed", "target_independent": True},
+            "target_refinement": _target_refinement(req),
+        },
         "decision_factors": ["latency", "determinism", "power", "cost", "accuracy", "interface fit", "runtime availability"],
     }
     if not bool(state.get("generate_architecture_with_model", False)):
@@ -44,7 +93,9 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
 
     prompt = f"""You are ChipLoop's hardware/software partitioning agent.
 Partition the supplied application workloads around the selected physics model and generated architecture.
-The surrogate stays in GPU/CPU software unless evidence explicitly proves it is hardware-deployable.
+First perform target-independent functional partitioning. The surrogate stays in GPU/CPU software unless evidence explicitly proves it is hardware-deployable.
+Do not assume that an FPGA board has a CPU. Treat onboard hard CPU, soft CPU, and external host as distinct deployment modes.
+For ASIC distinguish reusable Digital IP, an SoC with an embedded CPU, and a companion ASIC controlled by an external processor.
 Return JSON only with keys: decision, jobs, interfaces, decision_factors, tradeoffs.
 Every job must have id, target, status, responsibility, inputs, outputs, latency_budget, and rationale.
 Allowed targets: {sorted(ALLOWED_TARGETS)}. Use the requested implementation path. Do not choose a specific FPGA board.
@@ -78,6 +129,7 @@ IMPLEMENTATION PATH: {req.get("implementation_path")}
             **generated,
             "application": req["application"],
             "implementation_path": req.get("implementation_path"),
+            "partition_phases": fallback["partition_phases"],
             "generation_status": "model_generated",
         }
     except Exception as exc:

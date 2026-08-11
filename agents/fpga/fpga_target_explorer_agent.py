@@ -573,6 +573,13 @@ def run_agent(state: dict) -> dict:
         (implementation_result or {}).get("winning_run")
         if isinstance((implementation_result or {}).get("winning_run"), dict) else {}
     )
+    interface_adapter = io_mapping.get("interface_adapter") if isinstance(io_mapping.get("interface_adapter"), dict) else {}
+    spi_transport_ready = bool(
+        implementation_board
+        and interface_adapter.get("status") == "generated"
+        and interface_adapter.get("protocol_contract_ready")
+        and interface_adapter.get("host_driver_ready")
+    )
     summary = {
         "type": "fpga_target_explorer",
         "status": "completed" if results else "failed",
@@ -608,6 +615,9 @@ def run_agent(state: dict) -> dict:
             "label": "Continue to FPGA Prototyping",
             "selected_board": implementation_board,
             "programming_ready": bool(implementation_board),
+            "host_transport": "spi" if spi_transport_ready else None,
+            "transport_contract_ready": spi_transport_ready,
+            "host_driver_ready": spi_transport_ready,
             "unmapped_ports": (implementation_result or {}).get("unmapped_ports") or [],
             "blocked_reason": None if implementation_board else "No explored board both met the target and had a verified complete pin map.",
             "target_frequency_mhz": target,

@@ -94,6 +94,7 @@ BOARD_REGISTRY: Dict[str, Dict[str, Any]] = {
         "constraint_format": "lpf",
         "programmer_board": "ulx3s",
         "default_frequency_mhz": 25.0,
+        "compute_host": {"hard_cpu": None, "soft_cpu_supported": True, "external_host_supported": True},
         "resources": {
             "logic_cells": 44000,
             "io_cells": 245,
@@ -115,6 +116,7 @@ BOARD_REGISTRY: Dict[str, Dict[str, Any]] = {
         "constraint_format": "lpf",
         "programmer_board": "orangeCrab",
         "default_frequency_mhz": 48.0,
+        "compute_host": {"hard_cpu": None, "soft_cpu_supported": True, "external_host_supported": True},
         "resources": {
             "logic_cells": 84000,
             "io_cells": 365,
