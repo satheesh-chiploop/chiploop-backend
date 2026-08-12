@@ -23,6 +23,45 @@ from agents.system import system_firmware_cosim_execution_agent
 from agents.system import system_firmware_coverage_summary_agent
 
 
+def test_rust_hal_uses_64_bit_mmio_for_wide_register_fields():
+    regmap = {
+        "base_address": "0x0",
+        "registers": [{
+            "name": "CSR_CFG0",
+            "offset": "0x0",
+            "access": "RW",
+            "fields": [
+                {"name": "LOW", "bit_offset": 0, "bit_width": 32, "access": "RW"},
+                {"name": "HIGH", "bit_offset": 32, "bit_width": 32, "access": "RW"},
+            ],
+        }],
+    }
+
+    rust = embedded_rust_register_layer_generator_agent._default_hal_from_regmap(regmap)
+
+    assert "CSR_CFG0_HIGH_MASK: u64 = 0xFFFFFFFF00000000" in rust
+    assert "fn read_reg(offset: usize) -> u64" in rust
+    assert "fn write_reg(offset: usize, value: u64)" in rust
+    assert "pub fn read_csr_cfg0() -> u64" in rust
+
+
+def test_rust_hal_preserves_32_bit_mmio_for_narrow_registers():
+    regmap = {
+        "base_address": "0x0",
+        "registers": [{
+            "name": "CTRL",
+            "offset": "0x0",
+            "access": "RW",
+            "fields": [{"name": "ENABLE", "bit_offset": 0, "bit_width": 1, "access": "RW"}],
+        }],
+    }
+
+    rust = embedded_rust_register_layer_generator_agent._default_hal_from_regmap(regmap)
+
+    assert "CTRL_ENABLE_MASK: u32 = 0x00000001" in rust
+    assert "fn read_reg(offset: usize) -> u32" in rust
+
+
 def test_embedded_handoff_ingests_regmap_from_system_rtl_package(tmp_path, monkeypatch):
     monkeypatch.setattr(common, "save_text_artifact_and_record", lambda **_kwargs: None)
 

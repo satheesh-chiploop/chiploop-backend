@@ -489,7 +489,7 @@ def run_agent(state: dict) -> dict:
     if elf_exists:
         state["status"] = f"✅ {AGENT_NAME} done"
     elif build_attempted:
-        state["status"] = f"✅ {AGENT_NAME} build attempted"
+        state["status"] = f"❌ {AGENT_NAME} Cargo compilation failed"
     else:
         state["status"] = f"✅ {AGENT_NAME} generated build workspace"
 

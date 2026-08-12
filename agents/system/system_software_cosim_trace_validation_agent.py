@@ -199,6 +199,8 @@ def run_agent(state: dict) -> dict:
         expected = item.get("expected_behavior") or {}
         observed = item.get("observed_behavior") or {}
 
+        execution_status = str(item.get("execution_status") or "").strip().lower()
+
 
 
         aliases = _semantic_aliases(state)
@@ -245,6 +247,22 @@ def run_agent(state: dict) -> dict:
             })
             continue
 
+        if execution_status != "pass":
+            scenario_validations.append({
+                "scenario_id": scenario_id,
+                "scenario_type": item.get("scenario_type") or "",
+                "trace_validation_status": "blocked" if execution_status == "blocked" else "fail",
+                "expected_behavior": expected,
+                "observed_behavior": observed,
+                "mismatches": [{
+                    "type": "execution_not_passed",
+                    "execution_status": execution_status or "missing",
+                }],
+            })
+            if "execution_not_passed" not in mismatch_categories:
+                mismatch_categories.append("execution_not_passed")
+            continue
+
         for mm in mismatches:
             mtype = str(mm.get("type") or "").strip()
             if mtype and mtype not in mismatch_categories:
@@ -265,9 +283,12 @@ def run_agent(state: dict) -> dict:
     pass_count = sum(1 for x in scenario_validations if x.get("trace_validation_status") == "pass")
     fail_count = sum(1 for x in scenario_validations if x.get("trace_validation_status") == "fail")
     na_count = sum(1 for x in scenario_validations if x.get("trace_validation_status") == "not_applicable")
+    blocked_count = sum(1 for x in scenario_validations if x.get("trace_validation_status") == "blocked")
     applicable_count = pass_count + fail_count
 
-    if applicable_count == 0:
+    if blocked_count:
+        overall_status = "partial_pass" if pass_count > 0 else "blocked"
+    elif applicable_count == 0:
         overall_status = "blocked"
     elif fail_count == 0:
         overall_status = "pass"
@@ -287,6 +308,7 @@ def run_agent(state: dict) -> dict:
         "scenario_fail_count": fail_count,
         "scenario_not_applicable_count": na_count,
         "scenario_applicable_count": applicable_count,
+        "scenario_blocked_count": blocked_count,
         "mismatch_categories": mismatch_categories,
         "scenario_validations": scenario_validations,
     }

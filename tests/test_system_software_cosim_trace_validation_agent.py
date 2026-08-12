@@ -6,7 +6,7 @@ os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-service-role-key")
 from agents.system import system_software_cosim_trace_validation_agent as agent
 
 
-def test_boot_signal_expectation_is_not_required_without_signal_artifacts(monkeypatch):
+def test_software_only_execution_cannot_be_promoted_to_trace_pass(monkeypatch):
     monkeypatch.setattr(agent, "_record_text", lambda *args, **kwargs: None)
 
     state = {
@@ -18,7 +18,7 @@ def test_boot_signal_expectation_is_not_required_without_signal_artifacts(monkey
             "scenario_results": [
                 {
                     "scenario_id": "fan_profile_service_boot_smoke",
-                    "execution_status": "pass",
+                    "execution_status": "blocked",
                     "expected_behavior": {
                         "expected_events": ["app=fan_profile_service", "scenario=fan_profile_service_boot_smoke"],
                         "expected_registers": {},
@@ -44,7 +44,8 @@ def test_boot_signal_expectation_is_not_required_without_signal_artifacts(monkey
     result = agent.run_agent(state)
     report = result["system_software_cosim_trace_validation_report"]
 
-    assert report["trace_validation_status"] == "pass"
-    assert report["scenario_pass_count"] == 1
+    assert report["trace_validation_status"] == "blocked"
+    assert report["scenario_pass_count"] == 0
     assert report["scenario_fail_count"] == 0
-    assert report["scenario_validations"][0]["mismatches"] == []
+    assert report["scenario_blocked_count"] == 1
+    assert report["scenario_validations"][0]["mismatches"][0]["type"] == "execution_not_passed"

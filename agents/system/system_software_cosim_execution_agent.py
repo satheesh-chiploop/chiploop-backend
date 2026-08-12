@@ -367,6 +367,24 @@ def run_agent(state: dict) -> dict:
     workflow_id = state.get("workflow_id") or "default"
     harness = state.get("system_software_cosim_harness_manifest") or {}
     harness_status = str(harness.get("harness_status") or "").strip().lower()
+    resolved_commands = harness.get("resolved_commands") or []
+    rtl_command_count = sum(
+        1
+        for command in resolved_commands
+        if isinstance(command, dict)
+        and (
+            command.get("exercises_rtl") is True
+            or "rtl" in {
+                str(layer).strip().lower()
+                for layer in (command.get("execution_layers") or [])
+            }
+            or str(command.get("source") or "").strip().lower()
+            in {
+                "scenario.runner:cocotb",
+                "scenario.runner:verilator",
+            }
+        )
+    )
 
     if harness_status != "ready":
         report = {
@@ -375,6 +393,8 @@ def run_agent(state: dict) -> dict:
             "execution_status": "blocked",
             "message": "Harness is not ready for execution.",
             "blocked_dependencies": harness.get("blocked_dependencies") or [],
+            "evidence_scope": "full_stack" if rtl_command_count else "software_only",
+            "rtl_command_count": rtl_command_count,
             "scenario_results": [],
         }
         _record_text(workflow_id, REPORT_JSON, json.dumps(report, indent=2))
@@ -390,7 +410,6 @@ def run_agent(state: dict) -> dict:
         return state
 
     scenarios = harness.get("scenarios") or []
-    resolved_commands = harness.get("resolved_commands") or []
     commands_by_scenario: Dict[str, List[Dict[str, Any]]] = {}
     for item in resolved_commands:
         sid = str(item.get("scenario_id") or "").strip()
@@ -495,6 +514,8 @@ def run_agent(state: dict) -> dict:
         "scenario_pass_count": pass_count,
         "scenario_fail_count": fail_count,
         "scenario_blocked_count": blocked_count,
+        "evidence_scope": "full_stack" if rtl_command_count else "software_only",
+        "rtl_command_count": rtl_command_count,
         "scenario_results": scenario_results,
     }
 

@@ -48,8 +48,36 @@ def test_unknown_software_l1_readiness_does_not_block_harness(monkeypatch):
     manifest = result["system_software_cosim_harness_manifest"]
 
     assert manifest["l1_ready"] is None
-    assert manifest["harness_status"] == "ready"
+    assert manifest["harness_status"] == "blocked"
     assert "software_l1_not_ready" not in manifest["blocked_dependencies"]
+    assert "rtl_cosim_command_missing" in manifest["blocked_dependencies"]
+
+
+def test_explicit_cosim_command_satisfies_rtl_execution_contract(monkeypatch):
+    monkeypatch.setattr(agent, "_record_text", lambda *args, **kwargs: None)
+    monkeypatch.setattr(agent, "_tool_available", lambda name: name == "python")
+    state = {
+        "workflow_id": "wf-test",
+        "system_cosim_scenarios": {"scenarios": [{
+            "id": "boot_smoke",
+            "runner": "cocotb",
+            "cocotb_test": "tests.test_boot",
+        }]},
+        "system_cosim_manifest": {
+            "firmware": {"elf": "firmware.elf", "register_map": "registers.json"},
+            "rtl": {"top": "dut", "filelists": {"sim": ["dut.v"]}},
+            "validation_spec": {"rtl": {
+                "digital_spec_json": {"design_name": "dut"},
+                "integration_intent_json": {"intent_type": "system_integration"},
+            }},
+        },
+        "firmware_register_map": {"registers": [{"name": "CONTROL"}]},
+    }
+
+    manifest = agent.run_agent(state)["system_software_cosim_harness_manifest"]
+
+    assert manifest["harness_status"] == "ready"
+    assert "rtl_cosim_command_missing" not in manifest["blocked_dependencies"]
 
 
 def test_explicit_failed_software_l1_readiness_blocks_harness():

@@ -60,9 +60,13 @@ def run_agent(state: dict) -> dict:
     else:
         blocked_count = int(execution.get("scenario_blocked_count") or 0)
 
+    evidence_scope = str(execution.get("evidence_scope") or "").strip().lower()
+
     if harness_status == "blocked":
         final_verdict = "blocked"
-    elif trace_status == "pass":
+    elif evidence_scope != "full_stack":
+        final_verdict = "blocked"
+    elif execution_status == "pass" and trace_status == "pass" and blocked_count == 0:
         final_verdict = "pass"
     elif trace_status == "partial_pass" or execution_status == "partial_pass":
         final_verdict = "partial_pass"
@@ -79,6 +83,7 @@ def run_agent(state: dict) -> dict:
         "l1_ready": bool(harness.get("l1_ready")),
         "harness_status": harness_status,
         "execution_status": execution_status,
+        "evidence_scope": evidence_scope or "unknown",
         "trace_validation_status": trace_status,
         "scenario_count": scenario_count,
         "scenario_pass_count": pass_count,

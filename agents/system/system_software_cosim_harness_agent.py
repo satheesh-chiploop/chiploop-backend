@@ -366,6 +366,24 @@ def _build_commands(scenarios: List[Dict[str, Any]], state: Dict[str, Any], tool
     return commands
 
 
+def _command_exercises_rtl(command: Dict[str, Any]) -> bool:
+    """Return true only when the command contract says it drives RTL simulation.
+
+    A native software command is useful L1 evidence, but it is not full-stack
+    co-simulation merely because RTL and firmware artifacts were also ingested.
+    """
+    if command.get("exercises_rtl") is True:
+        return True
+    layers = command.get("execution_layers") or []
+    if isinstance(layers, list) and "rtl" in {str(x).strip().lower() for x in layers}:
+        return True
+    source = str(command.get("source") or "").strip().lower()
+    return source in {
+        "scenario.runner:cocotb",
+        "scenario.runner:verilator",
+    }
+
+
 
 
 def _discover_software_entry(state: Dict[str, Any]) -> Dict[str, Any]:
@@ -433,6 +451,8 @@ def run_agent(state: dict) -> dict:
 
     if not commands:
         blocked_dependencies.append("no_executable_cosim_commands_resolved")
+    elif not any(_command_exercises_rtl(command) for command in commands):
+        blocked_dependencies.append("rtl_cosim_command_missing")
 
     harness_status = "ready" if not blocked_dependencies else "blocked"
 

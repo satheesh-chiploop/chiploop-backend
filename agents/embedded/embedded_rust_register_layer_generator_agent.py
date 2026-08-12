@@ -123,11 +123,22 @@ def _merge_manifest(manifest: dict, regmap: dict) -> dict:
     return merged
 
 
-def _mask_expr(bit_width: int, bit_offset: int) -> str:
-    if bit_width >= 32:
-        return "0xFFFF_FFFF"
+def _register_word_bits(regmap: dict) -> int:
+    highest_bit = 0
+    for reg in regmap.get("registers") or []:
+        for field in reg.get("fields") or []:
+            highest_bit = max(highest_bit, int(field.get("bit_offset") or 0) + int(field.get("bit_width") or 1))
+    if highest_bit > 64:
+        raise ValueError(f"register field layout requires {highest_bit} bits; only 32/64-bit MMIO is supported")
+    return 64 if highest_bit > 32 else 32
+
+
+def _mask_expr(bit_width: int, bit_offset: int, word_bits: int = 32) -> str:
+    if bit_width < 1 or bit_offset < 0 or bit_offset + bit_width > word_bits:
+        raise ValueError(f"invalid {word_bits}-bit field layout: offset={bit_offset}, width={bit_width}")
     mask = ((1 << bit_width) - 1) << bit_offset
-    return f"0x{mask:08X}"
+    digits = 16 if word_bits == 64 else 8
+    return f"0x{mask:0{digits}X}"
 
 
 def _field_const_prefix(reg_name: str, field_name: str) -> str:
@@ -137,6 +148,8 @@ def _field_const_prefix(reg_name: str, field_name: str) -> str:
 def _default_hal_from_regmap(regmap: dict) -> str:
     regs = regmap.get("registers") or []
     base_address = regmap.get("base_address") or "0x00000000"
+    word_bits = _register_word_bits(regmap)
+    rust_type = f"u{word_bits}"
 
     const_lines: List[str] = []
     helper_lines: List[str] = []
@@ -155,16 +168,16 @@ def _default_hal_from_regmap(regmap: dict) -> str:
             bit_offset = int(field.get("bit_offset") or 0)
             bit_width = int(field.get("bit_width") or 1)
             prefix = _field_const_prefix(reg_name, fname)
-            mask_expr = _mask_expr(bit_width, bit_offset)
+            mask_expr = _mask_expr(bit_width, bit_offset, word_bits)
 
             const_lines.append(f"pub const {prefix}_SHIFT: u32 = {bit_offset};")
             const_lines.append(f"pub const {prefix}_WIDTH: u32 = {bit_width};")
-            const_lines.append(f"pub const {prefix}_MASK: u32 = {mask_expr};")
+            const_lines.append(f"pub const {prefix}_MASK: {rust_type} = {mask_expr};")
 
         helper_lines.extend(
             [
                 "#[inline]",
-                f"pub fn read_{reg_ident}() -> u32 {{",
+                f"pub fn read_{reg_ident}() -> {rust_type} {{",
                 f"    read_reg({reg_const}_OFFSET)",
                 "}",
                 "",
@@ -175,7 +188,7 @@ def _default_hal_from_regmap(regmap: dict) -> str:
             helper_lines.extend(
                 [
                     "#[inline]",
-                    f"pub fn write_{reg_ident}(value: u32) {{",
+                    f"pub fn write_{reg_ident}(value: {rust_type}) {{",
                     f"    write_reg({reg_const}_OFFSET, value)",
                     "}",
                     "",
@@ -191,7 +204,7 @@ def _default_hal_from_regmap(regmap: dict) -> str:
             helper_lines.extend(
                 [
                     "#[inline]",
-                    f"pub fn get_{reg_ident}_{fident}() -> u32 {{",
+                    f"pub fn get_{reg_ident}_{fident}() -> {rust_type} {{",
                     f"    (read_{reg_ident}() & {prefix}_MASK) >> {prefix}_SHIFT",
                     "}",
                     "",
@@ -202,7 +215,7 @@ def _default_hal_from_regmap(regmap: dict) -> str:
                 helper_lines.extend(
                     [
                         "#[inline]",
-                        f"pub fn set_{reg_ident}_{fident}(value: u32) {{",
+                        f"pub fn set_{reg_ident}_{fident}(value: {rust_type}) {{",
                         f"    let current = read_{reg_ident}();",
                         f"    let next = (current & !{prefix}_MASK) | ((value << {prefix}_SHIFT) & {prefix}_MASK);",
                         f"    write_{reg_ident}(next);",
@@ -217,15 +230,15 @@ def _default_hal_from_regmap(regmap: dict) -> str:
         + "\n".join(const_lines)
         + "\n\n"
         + "#[inline]\n"
-        + "fn reg_ptr(offset: usize) -> *mut u32 {\n"
-        + "    (BASE_ADDRESS + offset) as *mut u32\n"
+        + f"fn reg_ptr(offset: usize) -> *mut {rust_type} {{\n"
+        + f"    (BASE_ADDRESS + offset) as *mut {rust_type}\n"
         + "}\n\n"
         + "#[inline]\n"
-        + "fn read_reg(offset: usize) -> u32 {\n"
-        + "    unsafe { read_volatile(reg_ptr(offset) as *const u32) }\n"
+        + f"fn read_reg(offset: usize) -> {rust_type} {{\n"
+        + f"    unsafe {{ read_volatile(reg_ptr(offset) as *const {rust_type}) }}\n"
         + "}\n\n"
         + "#[inline]\n"
-        + "fn write_reg(offset: usize, value: u32) {\n"
+        + f"fn write_reg(offset: usize, value: {rust_type}) {{\n"
         + "    unsafe { write_volatile(reg_ptr(offset), value) }\n"
         + "}\n\n"
         + "\n".join(helper_lines)
@@ -267,6 +280,12 @@ def run_agent(state: dict) -> dict:
 
     if not normalized_regmap:
         state["status"] = "❌ HAL generation received regmap with zero concrete registers"
+        return state
+
+    try:
+        register_word_bits = _register_word_bits(normalized_regmap)
+    except ValueError as exc:
+        state["status"] = f"❌ HAL generation invalid register width: {exc}"
         return state
 
     regmap_json = json.dumps(normalized_regmap, indent=2)[:12000]
@@ -336,6 +355,7 @@ RUST STYLE REQUIREMENTS:
 - Avoid fictional types like VolatileCell unless you fully define them in this file.
 - The output must be plausible for bare-metal/no_std firmware.
 - The module must be compatible with later driver generation.
+- This register map requires {register_word_bits}-bit MMIO. Use u{register_word_bits} for register values, masks, volatile pointers, reads, and writes. Field shifts/width metadata may remain u32.
 
 OUTPUT:
 RAW RUST ONLY.
@@ -355,6 +375,10 @@ Write to firmware/hal/registers.rs
     out = out.replace("#![no_std]", "")
     out = out.replace("#![no_main]", "")
     out = out.strip() + "\n"
+    if register_word_bits == 64:
+        # Enforce the authoritative register width if a model emits a
+        # conventional 32-bit HAL template.
+        out = re.sub(r"\bu32\b", "u64", out)
 
     lines = out.splitlines()
     if lines and lines[0].strip().startswith("pub mod registers"):

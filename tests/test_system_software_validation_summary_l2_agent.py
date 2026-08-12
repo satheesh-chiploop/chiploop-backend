@@ -14,6 +14,7 @@ def test_summary_preserves_not_applicable_scenario_count(monkeypatch):
         "system_software_cosim_harness_manifest": {"harness_status": "ready", "l1_ready": None},
         "system_software_cosim_execution_report": {
             "execution_status": "pass",
+            "evidence_scope": "full_stack",
             "scenario_count": 6,
             "scenario_blocked_count": 0,
         },
@@ -44,3 +45,25 @@ def test_summary_preserves_not_applicable_scenario_count(monkeypatch):
     assert summary["scenario_not_applicable_count"] == 2
     assert summary["scenario_applicable_count"] == 4
     assert summary["scenario_blocked_count"] == 0
+
+
+def test_summary_blocks_software_only_evidence(monkeypatch):
+    monkeypatch.setattr(agent, "_record_text", lambda *args, **kwargs: None)
+    state = {
+        "workflow_id": "wf-test",
+        "system_software_cosim_harness_manifest": {"harness_status": "ready"},
+        "system_software_cosim_execution_report": {
+            "execution_status": "pass",
+            "evidence_scope": "software_only",
+        },
+        "system_software_cosim_trace_validation_report": {
+            "trace_validation_status": "pass",
+            "scenario_pass_count": 1,
+            "scenario_validations": [{"trace_validation_status": "pass"}],
+        },
+    }
+
+    summary = agent.run_agent(state)["system_software_validation_summary_l2"]
+
+    assert summary["final_system_correctness_verdict"] == "blocked"
+    assert summary["evidence_scope"] == "software_only"
