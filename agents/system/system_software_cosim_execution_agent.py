@@ -447,12 +447,15 @@ def run_agent(state: dict) -> dict:
         final_returncode = 0
         for command in commands:
             cmd = [str(x) for x in (command.get("command") or []) if str(x).strip()]
-            result = _run_cmd(cmd, cwd=cwd, timeout_sec=timeout_sec, state=state)
+            command_cwd = str(command.get("cwd") or "").strip()
+            if not command_cwd or not os.path.isdir(command_cwd):
+                command_cwd = cwd
+            result = _run_cmd(cmd, cwd=command_cwd, timeout_sec=timeout_sec, state=state)
             command_result = {
                 "command_id": command.get("command_id") or "",
                 "source": command.get("source") or "",
                 "command": cmd,
-                "cwd": cwd,
+                "cwd": command_cwd,
                 "returncode": result["returncode"],
                 "stdout_tail": result["stdout_tail"],
                 "stderr_tail": result["stderr_tail"],

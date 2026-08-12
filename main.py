@@ -4282,6 +4282,8 @@ def execute_digital_app_background(
     template_workflow_name: str,
     payload: Dict[str, Any],
 ):
+    shared_state: Dict[str, Any] = {}
+    app_loop_label = "FPGA" if app_name.startswith("fpga") else "Digital"
     try:
         os.makedirs(artifact_dir, exist_ok=True)
         app_loop_type = "fpga" if app_name in {"fpga", "fpga2rtl", "fpga_verify", "fpga_formal", "fpga_verify_closure_loop", "fpga_synthesis", "fpga_implementation", "fpga_target_explorer"} or str(template_workflow_name).startswith("FPGA") else "digital"
@@ -5119,6 +5121,19 @@ def execute_digital_app_background(
             )
 
     except Exception as e:
+        if app_name in {"fpga", "fpga2rtl", "fpga_implementation", "fpga_target_explorer"} and shared_state:
+            try:
+                fpga_state = shared_state.setdefault("fpga", {})
+                if isinstance(fpga_state, dict):
+                    fpga_state["failure"] = {
+                        "status": "failed",
+                        "agent": (shared_state.get("_participating_agents") or [None])[-1],
+                        "error_type": type(e).__name__,
+                        "message": str(e),
+                    }
+                fpga_dashboard_agent(shared_state)
+            except Exception as dashboard_exc:
+                logger.warning("FPGA failure dashboard publication failed workflow=%s: %s", workflow_id, dashboard_exc)
         err = f"❌ {app_loop_label} App crashed ({app_name}): {type(e).__name__}: {e}\n{traceback.format_exc()}"
         append_log_workflow(workflow_id, err, status="failed", phase="error")
         append_log_run(run_id, err, status="failed")
@@ -6135,6 +6150,13 @@ def _hem_build_system_child_payload(
         "from_workflow_id": source_system_rtl_workflow_id,
         "parent_workflow_id": current_workflow_id,
         "upstream_workflows": upstream,
+        "source_system_sim_workflow_id": (
+            parent_payload.get("source_system_sim_workflow_id")
+            or parent_payload.get("fpga_bitstream_workflow_id")
+            or upstream.get("system_sim")
+            or upstream.get("fpga")
+        ),
+        "fpga_bitstream_workflow_id": parent_payload.get("fpga_bitstream_workflow_id") or upstream.get("fpga"),
         "digital_spec_text": parent_payload.get("digital_spec_text") or "",
         "analog_spec_text": parent_payload.get("analog_spec_text") or "",
         "soc_integration_spec_text": parent_payload.get("soc_integration_spec_text") or "",
@@ -6216,6 +6238,8 @@ def _hem_build_system_child_payload(
             "source_firmware_workflow_id": firmware_id,
             "source_software_workflow_id": software_id,
             "source_rtl_workflow_id": source_system_rtl_workflow_id,
+            "source_system_sim_workflow_id": common.get("source_system_sim_workflow_id"),
+            "fpga_bitstream_workflow_id": common.get("fpga_bitstream_workflow_id"),
             "validation_mode": parent_payload.get("validation_mode") or "full_co_simulation",
             "app_name": "system_software_validation",
             "validation_scope": "full_stack",
@@ -7243,9 +7267,15 @@ def _hem_physical_ai_child_payload(root_workflow_id: str, root_run_id: str, payl
             "rtl_source_mode": "from_system_rtl",
             "system_rtl_workflow_id": source_arch2rtl,
             "source_system_rtl_workflow_id": source_arch2rtl,
+            "source_system_sim_workflow_id": payload.get("source_system_sim_workflow_id") or payload.get("fpga_bitstream_workflow_id"),
+            "fpga_bitstream_workflow_id": payload.get("fpga_bitstream_workflow_id"),
             "from_workflow_id": source_arch2rtl,
             "parent_workflow_id": root_workflow_id,
-            "upstream_workflows": {"physical_ai": root_workflow_id, "system_rtl": source_arch2rtl},
+            "upstream_workflows": {
+                "physical_ai": root_workflow_id,
+                "system_rtl": source_arch2rtl,
+                **({"fpga": payload.get("fpga_bitstream_workflow_id"), "system_sim": payload.get("source_system_sim_workflow_id") or payload.get("fpga_bitstream_workflow_id")} if payload.get("fpga_bitstream_workflow_id") else {}),
+            },
             "top_module": top_module,
             "goal": f"{device_layer_goal} from the approved partition and existing RTL register collateral. Do not claim a deployable binary unless the platform contract gate is ready. Device-layer jobs: {json.dumps(firmware_jobs, default=str)[:6000]}. Interfaces: {json.dumps(partition_interfaces, default=str)[:6000]}. Target refinement: {platform_note}.",
             "software_goal": f"Build the host control, configuration, diagnostics, telemetry, and product services for {application_name}. Software jobs: {json.dumps(software_jobs, default=str)[:6000]}.",
@@ -7396,6 +7426,15 @@ def _hem_continue_physical_ai_after_success(*, root_workflow_id: str, root_run_i
             automation_payload["source_arch2rtl_workflow_id"] = child_workflow_id
             automation_payload["from_workflow_id"] = child_workflow_id
             append_log_workflow(root_workflow_id, f"HEM will use generated RTL workflow {child_workflow_id} for verification and implementation.", phase="hem_running")
+        if stage == "fpga_bitstream":
+            automation_payload["fpga_bitstream_workflow_id"] = child_workflow_id
+            automation_payload["source_system_sim_workflow_id"] = child_workflow_id
+            upstream_workflows = automation_payload.get("upstream_workflows") if isinstance(automation_payload.get("upstream_workflows"), dict) else {}
+            automation_payload["upstream_workflows"] = {
+                **upstream_workflows,
+                "fpga": child_workflow_id,
+                "system_sim": child_workflow_id,
+            }
         if stage == "fpga_exploration":
             explorer, explorer_source = _hem_load_json_artifact(
                 child_workflow_id,
@@ -14551,6 +14590,14 @@ def execute_system_app_background(
                 nodes=nodes,
                 shared_state=shared_state,
             )
+
+        if template_workflow_name == "System_Software_Validation_L2":
+            validation_summary = shared_state.get("system_software_validation_summary_l2") if isinstance(shared_state.get("system_software_validation_summary_l2"), dict) else {}
+            verdict = str(validation_summary.get("final_system_correctness_verdict") or "missing").lower()
+            if verdict != "pass":
+                raise RuntimeError(f"System co-simulation signoff did not pass (verdict={verdict}).")
+        if template_workflow_name == "System_Product_App_Builder" and not isinstance(shared_state.get("system_product_package"), dict):
+            raise RuntimeError("System Product Demo did not produce its required product package artifact.")
 
         append_log_workflow(workflow_id, f"🎉 System App complete: {template_workflow_name}", status="completed", phase="done")
         append_log_run(run_id, f"🎉 System App complete: {template_workflow_name}", status="completed")

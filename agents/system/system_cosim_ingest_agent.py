@@ -254,6 +254,95 @@ def _load_json_from_absolute_storage_path(supabase: Any, path: str) -> Dict[str,
         return {}
 
 
+def _restore_verified_simulation_bundle(
+    state: Dict[str, Any],
+    workflow_dir: str,
+    source_workflow_id: Optional[str],
+) -> Dict[str, Any]:
+    """Restore a verified simulator bundle from Supabase into this workflow.
+
+    The source workflow remains authoritative; the local copy only provides an
+    executable working tree for Cocotb/Verilator. Paths are restored relative
+    to the source workflow root so generated Makefile relative references stay
+    valid.
+    """
+    if not source_workflow_id or not workflow_dir:
+        return {}
+    try:
+        supabase = _get_supabase(state)
+        wf_row = _workflow_row(supabase, str(source_workflow_id))
+        indexed = _storage_paths_from_artifacts((wf_row or {}).get("artifacts") or {})
+        listed: List[str] = []
+        for prefix in _workflow_storage_prefixes(state, str(source_workflow_id), wf_row):
+            listed.extend(_list_storage_tree(supabase, prefix.rstrip("/"), max_depth=9))
+        all_paths = list(dict.fromkeys(indexed + listed))
+    except Exception as exc:
+        return {"status": "restore_failed", "reason": str(exc), "source_workflow_id": source_workflow_id}
+
+    marker = f"/{source_workflow_id}/"
+    selected: List[Tuple[str, str]] = []
+    for storage_path in all_paths:
+        normalized = "/" + _norm_path(storage_path).lstrip("/")
+        if marker not in normalized:
+            continue
+        relative = normalized.split(marker, 1)[1]
+        lower = relative.lower()
+        if not (
+            lower.startswith("vv/tb/")
+            or lower.startswith("handoff/rtl/")
+            or lower.startswith("verification/handoff/rtl/")
+            or lower.startswith("fpga/handoff/rtl/")
+        ):
+            continue
+        if lower.endswith((".v", ".sv", ".svh", ".vh", ".py", ".json", ".mk", ".md")) or os.path.basename(lower) == "makefile":
+            selected.append((storage_path, relative))
+
+    restore_root = os.path.abspath(os.path.join(workflow_dir, "system", "restored_rtl_sim", str(source_workflow_id)))
+    restored: List[str] = []
+    for storage_path, relative in selected:
+        destination = os.path.abspath(os.path.join(restore_root, *relative.split("/")))
+        if destination != restore_root and not destination.startswith(restore_root + os.sep):
+            continue
+        try:
+            raw = supabase.storage.from_(ARTIFACT_BUCKET).download(storage_path)
+            payload = raw if isinstance(raw, bytes) else str(raw).encode("utf-8")
+            os.makedirs(os.path.dirname(destination), exist_ok=True)
+            with open(destination, "wb") as handle:
+                handle.write(payload)
+            restored.append(destination)
+            if "/handoff/rtl/" in ("/" + relative.lower()) and not relative.lower().startswith("handoff/rtl/"):
+                alias = os.path.abspath(os.path.join(restore_root, "handoff", "rtl", os.path.basename(relative)))
+                if alias.startswith(restore_root + os.sep):
+                    os.makedirs(os.path.dirname(alias), exist_ok=True)
+                    with open(alias, "wb") as handle:
+                        handle.write(payload)
+                    restored.append(alias)
+        except Exception:
+            continue
+
+    manifest_path = next((path for path in restored if os.path.basename(path).lower() == "simulation_manifest.json"), "")
+    manifest = _safe_json(manifest_path)
+    makefile_path = next((path for path in restored if os.path.basename(path).lower() == "makefile" and "/vv/tb/" in path.replace("\\", "/").lower()), "")
+    canonical_rtl_root = os.path.join(restore_root, "handoff", "rtl")
+    rtl_files = [
+        path for path in restored
+        if path.lower().endswith((".v", ".sv"))
+        and os.path.dirname(path) == canonical_rtl_root
+    ]
+    return {
+        "status": "ready" if manifest and makefile_path and rtl_files else "incomplete",
+        "source_workflow_id": source_workflow_id,
+        "restore_root": restore_root,
+        "restored_file_count": len(restored),
+        "simulation_manifest_path": manifest_path,
+        "simulation_manifest": manifest,
+        "makefile_path": makefile_path,
+        "make_dir": os.path.dirname(makefile_path) if makefile_path else "",
+        "rtl_files": rtl_files,
+        "top_module": str(manifest.get("top_module") or ""),
+    }
+
+
 def _build_rtl_package_from_arch2rtl(
     state: Dict[str, Any],
     workflow_dir: str,
@@ -656,6 +745,32 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
             existing_debug=rtl_dbg,
         )
 
+    simulation_source_workflow_id = (
+        state.get("source_system_sim_workflow_id")
+        or state.get("fpga_bitstream_workflow_id")
+        or state.get("system_rtl_workflow_id")
+    )
+    simulation_bundle = _restore_verified_simulation_bundle(
+        state,
+        workflow_dir,
+        str(simulation_source_workflow_id) if simulation_source_workflow_id else None,
+    )
+    if simulation_bundle.get("status") == "ready":
+        rtl_pkg = dict(rtl_pkg or {})
+        rtl_pkg["top"] = {
+            **(rtl_pkg.get("top") if isinstance(rtl_pkg.get("top"), dict) else {}),
+            "sim": simulation_bundle.get("top_module"),
+        }
+        filelists = rtl_pkg.get("filelists") if isinstance(rtl_pkg.get("filelists"), dict) else {}
+        rtl_pkg["filelists"] = {**filelists, "sim": simulation_bundle.get("rtl_files") or []}
+        rtl_pkg["compile"] = {**(rtl_pkg.get("compile") if isinstance(rtl_pkg.get("compile"), dict) else {}), "sim": "imported_from_verified_digital_flow"}
+        rtl_pkg["ready_for_cosim"] = True
+        state["rtl_sim_root"] = simulation_bundle.get("make_dir") or ""
+        state["rtl_build_root"] = simulation_bundle.get("make_dir") or ""
+        state["rtl_verilator_makefile_path"] = simulation_bundle.get("makefile_path") or ""
+        state["rtl_sim_harness_path"] = simulation_bundle.get("simulation_manifest_path") or ""
+        state["verified_simulation_bundle"] = simulation_bundle
+
     sim_filelist = _normalize_filelist(((rtl_pkg.get("filelists") or {}).get("sim")))
     phys_filelist = _normalize_filelist(((rtl_pkg.get("filelists") or {}).get("phys")))
     lib_filelist = _normalize_filelist(((rtl_pkg.get("filelists") or {}).get("libs")))
@@ -839,6 +954,7 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
         "software_resolution": software_dbg,
         "firmware_resolution": firmware_dbg,
         "rtl_resolution": rtl_dbg,
+        "verified_simulation_bundle": simulation_bundle,
         "manifest_checks": {
             "software_entry_found": bool(software_entry),
             "firmware_elf_found": bool(firmware_elf),
@@ -902,7 +1018,8 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
             "phys_filelist": phys_filelist,
             "lib_filelist": lib_filelist,
             "sim_harness_path": sim_filelist[0] if sim_filelist else "",
-            "verilator_makefile_path": "",
+            "verilator_makefile_path": simulation_bundle.get("makefile_path") or "",
+            "waveform_root": simulation_bundle.get("make_dir") or "",
             "compile_sim": "pass" if compile_sim else "fail",
             "ready_for_cosim": rtl_ready_for_cosim,
         },
@@ -920,7 +1037,7 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     state["firmware_register_map"] = register_map_spec or {}
     state["rtl_top_path"] = top_sim or ""
     state["rtl_sim_harness_path"] = sim_filelist[0] if sim_filelist else ""
-    state["rtl_verilator_makefile_path"] = ""
+    state["rtl_verilator_makefile_path"] = simulation_bundle.get("makefile_path") or ""
     state["system_cosim_interrupts"] = interrupts
     state["system_cosim_dma_present"] = dma_present
     state["digital_spec_json_path"] = digital_spec_path

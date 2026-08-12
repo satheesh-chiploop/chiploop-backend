@@ -222,8 +222,6 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
         ),
     }
     signoff = _product_signoff(lineage, checks, source_artifacts)
-    if state.get("_require_product_upstream_signoff") and signoff["status"] != "pass":
-        raise RuntimeError("Product upstream signoff failed: " + "; ".join(signoff["issues"]))
     contract = {
         "type": "system_product_collateral_contract",
         "version": "1.0",
@@ -236,5 +234,7 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     _record(workflow_id, "system_product_collateral_contract.json", contract)
     state["system_product_collateral_contract"] = contract
     state["system_product_collateral_contract_path"] = f"{OUTPUT_SUBDIR}/system_product_collateral_contract.json"
+    if state.get("_require_product_upstream_signoff") and signoff["status"] != "pass":
+        raise RuntimeError("Product upstream signoff failed: " + "; ".join(signoff["issues"]))
     state["status"] = "System product collateral ingested"
     return state

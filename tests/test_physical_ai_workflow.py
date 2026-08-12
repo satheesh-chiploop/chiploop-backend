@@ -20,6 +20,14 @@ def test_physical_ai_hem_default_explores_cross_vendor_fpga_targets():
     assert 'payload.get("candidate_boards") or _hem_physical_ai_fpga_candidates()' in main_source
 
 
+def test_physical_ai_hem_carries_fpga_simulation_lineage_into_product_chain():
+    main_source = (Path(__file__).parents[1] / "main.py").read_text(encoding="utf-8")
+    assert 'automation_payload["fpga_bitstream_workflow_id"] = child_workflow_id' in main_source
+    assert 'automation_payload["source_system_sim_workflow_id"] = child_workflow_id' in main_source
+    assert '"source_system_sim_workflow_id": payload.get("source_system_sim_workflow_id") or payload.get("fpga_bitstream_workflow_id")' in main_source
+    assert '"fpga_bitstream_workflow_id": common.get("fpga_bitstream_workflow_id")' in main_source
+
+
 def test_pmsm_equation_model_is_ready_and_fpga_compatible():
     model = get_physics_model("chiploop.pmsm.dq.v1")
     assert model["availability"] == "ready"

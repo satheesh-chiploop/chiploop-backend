@@ -260,6 +260,23 @@ def _build_commands(scenarios: List[Dict[str, Any]], state: Dict[str, Any], tool
                     "source": "state.system_software_cosim_commands",
                 })
 
+    rtl_assets = _discover_rtl_assets(state)
+    rtl_makefile = str(rtl_assets.get("verilator_makefile_path") or "").strip()
+    first_enabled_scenario = next(
+        (str(item.get("scenario_id") or "") for item in scenarios if item.get("enabled") is not False and item.get("scenario_id")),
+        "",
+    )
+    if tools.get("make") and rtl_makefile and os.path.isfile(rtl_makefile) and first_enabled_scenario:
+        commands.append({
+            "scenario_id": first_enabled_scenario,
+            "command_id": "verified_rtl_regression",
+            "command": ["make", "-C", os.path.dirname(rtl_makefile)],
+            "cwd": os.path.dirname(rtl_makefile),
+            "source": "scenario.runner:verilator",
+            "execution_layers": ["rtl"],
+            "exercises_rtl": True,
+        })
+
     software_entry = _discover_software_entry(state)
     entry_command = software_entry.get("command") or []
     entry_app_name = _first_nonempty(

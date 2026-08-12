@@ -126,3 +126,25 @@ def test_product_signoff_rejects_completed_workflow_with_blocked_validation():
     assert signoff["status"] == "fail"
     assert "validation verdict is blocked, expected pass" in signoff["issues"]
     assert "validation contains blocked scenarios" in signoff["issues"]
+
+
+def test_failed_product_signoff_publishes_contract_before_raising(monkeypatch):
+    published = {}
+    monkeypatch.setattr(ingest, "_record", lambda _workflow_id, filename, obj: published.update({filename: obj}))
+    monkeypatch.setattr(ingest, "_workflow_status", lambda _state, workflow_id: {"id": workflow_id, "status": "failed"})
+    monkeypatch.setattr(ingest, "_workflow_artifact_json", lambda *_args, **_kwargs: {})
+
+    state = {
+        "workflow_id": "product",
+        "system_rtl_workflow_id": "rtl",
+        "system_firmware_workflow_id": "fw",
+        "system_software_workflow_id": "sw",
+        "system_validation_workflow_id": "val",
+        "_require_product_upstream_signoff": True,
+    }
+
+    import pytest
+    with pytest.raises(RuntimeError, match="Product upstream signoff failed"):
+        ingest.run_agent(state)
+
+    assert published["system_product_collateral_contract.json"]["upstream_signoff"]["status"] == "fail"

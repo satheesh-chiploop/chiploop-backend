@@ -83,3 +83,38 @@ def test_explicit_cosim_command_satisfies_rtl_execution_contract(monkeypatch):
 def test_explicit_failed_software_l1_readiness_blocks_harness():
     assert agent._read_l1_ready({"overall_status": "failed"}) is False
     assert agent._read_l1_ready({"l1_ready": False}) is False
+
+
+def test_restored_verified_makefile_creates_real_rtl_command(tmp_path, monkeypatch):
+    makefile = tmp_path / "Makefile"
+    makefile.write_text("all:\n\t@echo rtl_pass\n", encoding="utf-8")
+    monkeypatch.setattr(agent, "_record_text", lambda *args, **kwargs: None)
+    monkeypatch.setattr(agent, "_tool_available", lambda name: name == "make")
+    state = {
+        "workflow_id": "wf-test",
+        "rtl_verilator_makefile_path": str(makefile),
+        "system_cosim_scenarios": {"scenarios": [{"id": "boot_smoke", "commands": [["echo", "software_pass"]]}]},
+        "system_cosim_manifest": {
+            "firmware": {"elf": "firmware.elf", "register_map": "registers.json"},
+            "rtl": {"top": "dut", "filelists": {"sim": ["dut.v"]}},
+            "validation_spec": {"rtl": {
+                "digital_spec_json": {"design_name": "dut"},
+                "integration_intent_json": {"intent_type": "system_integration"},
+            }},
+        },
+        "firmware_register_map": {"registers": [{"name": "CONTROL"}]},
+    }
+
+    manifest = agent.run_agent(state)["system_software_cosim_harness_manifest"]
+
+    assert manifest["harness_status"] == "ready"
+    rtl_commands = [item for item in manifest["resolved_commands"] if item.get("exercises_rtl")]
+    assert rtl_commands == [{
+        "scenario_id": "boot_smoke",
+        "command_id": "verified_rtl_regression",
+        "command": ["make", "-C", str(tmp_path)],
+        "cwd": str(tmp_path),
+        "source": "scenario.runner:verilator",
+        "execution_layers": ["rtl"],
+        "exercises_rtl": True,
+    }]
