@@ -228,12 +228,14 @@ OUTPUT SCHEMA
         except Exception as exc:
             state["status"] = f"❌ Register map layout repair failed: {exc}"
             state["digital_regmap_layout_violations"] = violations
-            return state
+            raise RuntimeError(state["status"]) from exc
         repaired_violations = _register_layout_violations(regmap)
         if repaired_violations:
             state["status"] = "❌ Register map layout remains invalid after repair."
             state["digital_regmap_layout_violations"] = repaired_violations
-            return state
+            raise RuntimeError(
+                f"{state['status']} Violations: {'; '.join(repaired_violations[:8])}"
+            )
         state["digital_regmap_layout_repaired"] = True
 
     out_path = os.path.join(workflow_dir, "digital_regmap.json")

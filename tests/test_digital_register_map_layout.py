@@ -3,6 +3,9 @@ import os
 os.environ.setdefault("SUPABASE_URL", "http://localhost:54321")
 os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-service-role-key")
 
+import pytest
+
+from agents.digital import digital_register_map_agent
 from agents.digital.digital_register_map_agent import _register_layout_violations
 
 
@@ -56,3 +59,21 @@ def test_register_layout_rejects_overlapping_fields():
     }
 
     assert _register_layout_violations(document) == ["CONTROL.ENABLE [3:3] overlaps MODE [3:0]"]
+
+
+def test_arch2rtl_fails_hard_when_register_layout_repair_remains_invalid(tmp_path, monkeypatch):
+    invalid = '{"regmap":{"data_width":64,"registers":[{"name":"CTRL_STATUS","offset":"0x0","fields":[{"name":"STATUS","lsb":69,"msb":79}]}]}}'
+    monkeypatch.setattr(digital_register_map_agent, "complete_text", lambda *_args, **_kwargs: invalid)
+    monkeypatch.setattr(digital_register_map_agent, "save_text_artifact_and_record", lambda **_kwargs: None)
+    state = {
+        "workflow_id": "invalid-regmap",
+        "workflow_dir": str(tmp_path),
+        "digital_spec_json": {"name": "demo", "rtl_output_file": "demo.sv"},
+    }
+
+    with pytest.raises(RuntimeError, match="remains invalid after repair"):
+        digital_register_map_agent.run_agent(state)
+
+    assert state["digital_regmap_layout_violations"] == [
+        "CTRL_STATUS.STATUS [79:69] is outside the 64-bit register word"
+    ]
