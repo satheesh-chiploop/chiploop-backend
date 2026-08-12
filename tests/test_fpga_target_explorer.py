@@ -1,4 +1,5 @@
 from agents.fpga import fpga_target_explorer_agent as explorer
+import json
 
 
 def test_capacity_preflight_rejects_impossible_io_before_place_and_route():
@@ -117,6 +118,17 @@ def test_frequency_relaxation_only_after_target_miss():
     assert missed["frequency_relaxation"]["recommended_mhz"] == 61.2
     assert passed["target_met"] is True
     assert passed["frequency_relaxation"]["recommended_mhz"] is None
+
+
+def test_source_memory_gate_distinguishes_optimized_away_from_ff_mapping(tmp_path):
+    netlist = tmp_path / "synth.json"
+    netlist.write_text(json.dumps({"modules": {"top": {"cells": {"state_ff": {}}}}}), encoding="utf-8")
+    intent = {"estimated_bits": 16384, "declarations": [{"name": "history_mem"}]}
+
+    assert explorer._source_memory_optimized_away(str(netlist), intent, {"flip_flops": 1572}) is True
+
+    netlist.write_text(json.dumps({"modules": {"top": {"cells": {"history_mem[0]": {}}}}}), encoding="utf-8")
+    assert explorer._source_memory_optimized_away(str(netlist), intent, {"flip_flops": 16384}) is False
 
 
 def test_allowed_frequency_relaxation_continues_with_programming_ready_board(monkeypatch):

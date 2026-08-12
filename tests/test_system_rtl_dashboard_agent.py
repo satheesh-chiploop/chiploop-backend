@@ -8,6 +8,20 @@ os.environ.setdefault("OPENAI_API_KEY", "test-openai-key")
 from agents.system import system_rtl_dashboard_agent as agent
 
 
+def test_digital_lint_uses_final_quality_gate_after_repair(tmp_path):
+    rtl = tmp_path / "rtl"
+    rtl.mkdir()
+    (rtl / "rtl_agent_summary.txt").write_text(
+        "Icarus compile: fail\nVerilator lint: fail\n", encoding="utf-8"
+    )
+    (rtl / "rtl_quality_gate.json").write_text(
+        '{"passed": true, "compile_passed": true, "lint_passed": true, "final_pass": "pass2"}',
+        encoding="utf-8",
+    )
+
+    assert agent._digital_lint_status(str(tmp_path)) == "pass"
+
+
 def test_digital_lint_status_requires_dual_tool_evidence(tmp_path):
     digital = tmp_path / "digital"
     digital.mkdir()

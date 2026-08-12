@@ -190,6 +190,19 @@ def _read_json(path: Path) -> Dict[str, Any]:
 
 
 def _digital_lint_status(workflow_dir: str) -> str:
+    # RTL repair passes are cumulative. The final quality gate is authoritative;
+    # the unsuffixed pass-1 summary is retained only as diagnostic evidence.
+    quality_gate = _read_json(Path(workflow_dir) / "rtl" / "rtl_quality_gate.json")
+    if quality_gate:
+        if (
+            quality_gate.get("passed") is True
+            and quality_gate.get("compile_passed") is True
+            and quality_gate.get("lint_passed") is True
+        ):
+            return "pass"
+        if quality_gate.get("passed") is False:
+            return "fail"
+
     summary = Path(workflow_dir) / "rtl" / "rtl_agent_summary.txt"
     if summary.exists():
         text = summary.read_text(encoding="utf-8", errors="ignore").lower()

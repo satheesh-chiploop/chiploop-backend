@@ -7418,8 +7418,8 @@ def _hem_continue_physical_ai_after_success(*, root_workflow_id: str, root_run_i
         append_log_workflow(root_workflow_id, f"HEM {meta['label']} finished with status {child_status}.", phase="hem_running" if child_status == "completed" else "hem_failed")
         if child_status != "completed":
             message = f"HEM stopped after {meta['label']} because the child workflow status is {child_status}."
-            append_log_workflow(root_workflow_id, message, phase="hem_failed")
-            append_log_run(root_run_id, message)
+            append_log_workflow(root_workflow_id, message, status="failed", phase="hem_failed")
+            append_log_run(root_run_id, message, status="failed")
             _hem_update_run_record(str(hem_run_id) if hem_run_id else None, status="failed", metadata={"source": "physical_ai", "path": plan, "completed": completed, "failed_stage": stage, "failed_workflow_id": child_workflow_id})
             return
         if stage == "arch2rtl":
@@ -7455,8 +7455,8 @@ def _hem_continue_physical_ai_after_success(*, root_workflow_id: str, root_run_i
                             or "No explored FPGA board met capacity, timing, and verified pin-map requirements."
                         )
                         message = f"HEM stopped after FPGA Explorer: {reason}"
-                        append_log_workflow(root_workflow_id, message, phase="hem_failed")
-                        append_log_run(root_run_id, message)
+                        append_log_workflow(root_workflow_id, message, status="failed", phase="hem_failed")
+                        append_log_run(root_run_id, message, status="failed")
                         _hem_update_run_record(
                             str(hem_run_id) if hem_run_id else None,
                             status="failed",
@@ -7513,14 +7513,14 @@ def _hem_continue_physical_ai_after_success(*, root_workflow_id: str, root_run_i
                     )
                 except Exception as exc:
                     message = f"HEM stopped after FPGA Explorer because its recommendation handoff is invalid: {type(exc).__name__}: {exc}"
-                    append_log_workflow(root_workflow_id, message, phase="hem_failed")
-                    append_log_run(root_run_id, message)
+                    append_log_workflow(root_workflow_id, message, status="failed", phase="hem_failed")
+                    append_log_run(root_run_id, message, status="failed")
                     _hem_update_run_record(str(hem_run_id) if hem_run_id else None, status="failed", metadata={"source": "physical_ai", "path": plan, "completed": completed, "failed_stage": stage, "failed_workflow_id": child_workflow_id, "reason": message})
                     return
             else:
                 message = "HEM stopped after FPGA Explorer because fpga_target_explorer.json is absent from its Supabase artifact index/storage and canonical workflow directory."
-                append_log_workflow(root_workflow_id, message, phase="hem_failed")
-                append_log_run(root_run_id, message)
+                append_log_workflow(root_workflow_id, message, status="failed", phase="hem_failed")
+                append_log_run(root_run_id, message, status="failed")
                 _hem_update_run_record(
                     str(hem_run_id) if hem_run_id else None,
                     status="failed",

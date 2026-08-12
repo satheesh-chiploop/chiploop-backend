@@ -692,6 +692,33 @@ def _validate_hierarchical_endpoint_coverage(spec_json: dict) -> None:
                 f"signal_ownership[{i}] owner port '{omod}.{oport}' must be output/inout, got '{owner_dir}'."
             )
 
+    # Required child inputs must have an explicit structural source. A port
+    # declaration by itself otherwise becomes an undriven internal RTL wire.
+    driven_child_inputs = set()
+    for connection in spec_json.get("top_level_connections", []):
+        driven_child_inputs.update(str(endpoint) for endpoint in connection.get("connected_to", []))
+    for signal in spec_json.get("inter_module_signals", []):
+        driven_child_inputs.update(str(endpoint) for endpoint in signal.get("destinations", []))
+    memory_macro_names = {
+        str(macro.get("name") or "") for macro in spec_json.get("memory_macros", [])
+        if isinstance(macro, dict) and macro.get("name")
+    }
+    for module in spec_json["hierarchy"].get("modules", []):
+        module_name = str(module.get("name") or "")
+        if module_name in memory_macro_names:
+            continue
+        ports = {
+            str(port.get("name")): str(port.get("direction") or "").lower()
+            for port in module.get("ports", []) if isinstance(port, dict) and port.get("name")
+        }
+        for port_name in module.get("must_receive", []) or []:
+            endpoint = f"{module_name}.{port_name}"
+            if ports.get(str(port_name)) in {"input", "inout"} and endpoint not in driven_child_inputs:
+                raise ValueError(
+                    f"Required child input '{endpoint}' has no source in top_level_connections or "
+                    "inter_module_signals. Add an explicit top-level input connection or a real child producer."
+                )
+
 
 def _validate_spec_contract(spec_json: dict, mode: str) -> None:
     if mode == "flat":

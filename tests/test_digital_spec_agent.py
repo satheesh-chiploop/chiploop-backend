@@ -881,3 +881,27 @@ def test_normalize_accepts_hierarchical_modules_alias_and_preserves_top_dirs():
     assert top_ports["clk"] == "input"
     assert top_ports["rd_data"] == "output"
     spec_agent._validate_spec_contract(norm, mode)
+
+
+def test_contract_rejects_required_child_input_without_structural_source():
+    spec = {
+        "hierarchy": {
+            "top_module": {
+                **_module("top"), "rtl_output_file": "top.v",
+                "ports": [_port("clk", "input")],
+            },
+            "modules": [{
+                **_module("consumer"), "rtl_output_file": "consumer.v",
+                "ports": [_port("clk", "input"), _port("result", "output")],
+                "must_receive": ["clk"], "must_drive": ["result"], "must_not_drive": ["clk"],
+            }],
+        },
+        "top_level_connections": [{"top_port": "clk", "connected_to": ["top.clk"]}],
+        "inter_module_signals": [{
+            "name": "result", "width": 1, "source": "consumer.result", "destinations": ["top.clk"]
+        }],
+        "signal_ownership": [{"signal": "result", "owner": "consumer.result"}],
+    }
+
+    with pytest.raises(ValueError, match="Required child input 'consumer.clk' has no source"):
+        spec_agent._validate_spec_contract(spec, "hierarchical")

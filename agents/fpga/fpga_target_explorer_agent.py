@@ -112,6 +112,26 @@ def _make_core_only_netlist(netlist: str, top: str) -> list[str]:
         return []
 
 
+def _source_memory_optimized_away(netlist: str, memory_intent: dict, metrics: dict) -> bool:
+    """Prove a declared array is absent rather than silently mapped to FFs."""
+    declarations = memory_intent.get("declarations") if isinstance(memory_intent.get("declarations"), list) else []
+    names = [str(item.get("name") or "") for item in declarations if isinstance(item, dict) and item.get("name")]
+    if not names or not os.path.exists(netlist):
+        return False
+    try:
+        serialized = json.dumps(json.load(open(netlist, "r", encoding="utf-8")))
+    except (OSError, ValueError, TypeError):
+        return False
+    if any(name in serialized for name in names):
+        return False
+    # If an array had been lowered to registers, at least one FF per retained
+    # bit would be required. This guards against accepting an expensive FF
+    # implementation merely because synthesis renamed the array.
+    declared_bits = int(memory_intent.get("estimated_bits") or 0)
+    realized_ffs = int(metrics.get("flip_flops") or 0)
+    return declared_bits > 0 and realized_ffs < declared_bits
+
+
 def _run_synthesis(state: dict, board_key: str, board: dict, strategy: str) -> dict:
     fpga = state.get("fpga") if isinstance(state.get("fpga"), dict) else {}
     rtl_files = [str(path) for path in fpga.get("rtl_files") or []]
@@ -149,7 +169,11 @@ def _run_synthesis(state: dict, board_key: str, board: dict, strategy: str) -> d
     native_ram_required = bool(memory_intent.get("requires_block_ram"))
     native_ram_supported = bool(((board.get("resources") or {}).get("block_ram_primitive")))
     native_ram_mapped = int(metrics.get("block_ram_blocks_used") or 0) > 0
-    gate_enforced = native_ram_required and native_ram_supported
+    memory_optimized_away = bool(
+        completed and native_ram_required and not native_ram_mapped
+        and _source_memory_optimized_away(netlist, memory_intent, metrics)
+    )
+    gate_enforced = native_ram_required and native_ram_supported and not memory_optimized_away
     gate_passed = not gate_enforced or native_ram_mapped
     status = "completed" if completed and gate_passed else "failed"
     mapping_error = None
@@ -171,11 +195,12 @@ def _run_synthesis(state: dict, board_key: str, board: dict, strategy: str) -> d
         "tool_version": _yosys_version(),
         "memory_intent": memory_intent,
         "memory_mapping_gate": {
-            "status": "pass" if gate_passed else "fail",
+            "status": "not_applicable_optimized_away" if memory_optimized_away else "pass" if gate_passed else "fail",
             "enforced": gate_enforced,
             "required": native_ram_required,
             "supported": native_ram_supported,
             "mapped": native_ram_mapped,
+            "source_memory_optimized_away": memory_optimized_away,
             "primitive": metrics.get("block_ram_primitive"),
         },
         "error": mapping_error or (None if result.get("ok") else result.get("stderr_tail") or result.get("stdout_tail")),
