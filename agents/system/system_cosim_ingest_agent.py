@@ -324,11 +324,11 @@ def _restore_verified_simulation_bundle(
     manifest = _safe_json(manifest_path)
     makefile_path = next((path for path in restored if os.path.basename(path).lower() == "makefile" and "/vv/tb/" in path.replace("\\", "/").lower()), "")
     canonical_rtl_root = os.path.join(restore_root, "handoff", "rtl")
-    rtl_files = [
+    rtl_files = list(dict.fromkeys([
         path for path in restored
         if path.lower().endswith((".v", ".sv"))
         and os.path.dirname(path) == canonical_rtl_root
-    ]
+    ]))
     return {
         "status": "ready" if manifest and makefile_path and rtl_files else "incomplete",
         "source_workflow_id": source_workflow_id,

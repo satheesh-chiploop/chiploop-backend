@@ -20,6 +20,35 @@ def test_physical_ai_hem_default_explores_cross_vendor_fpga_targets():
     assert 'payload.get("candidate_boards") or _hem_physical_ai_fpga_candidates()' in main_source
 
 
+def test_physical_ai_fpga_bitstream_uses_fpga_dashboard():
+    main_source = (Path(__file__).parents[1] / "main.py").read_text(encoding="utf-8")
+    stage_block = main_source.split('"fpga_bitstream": {', 1)[1].split('},', 1)[0]
+    assert '"dashboard_stage": "fpga"' in stage_block
+    assert '"dashboard_stage": "synthesis"' not in stage_block
+
+
+def test_physical_ai_firmware_product_uses_supported_embedded_dashboard():
+    main_source = (Path(__file__).parents[1] / "main.py").read_text(encoding="utf-8")
+    stage_block = main_source.split('"firmware_product": {', 1)[1].split('},', 1)[0]
+    assert '"dashboard_stage": "embedded"' in stage_block
+    assert '"dashboard_stage": "firmware"' not in stage_block
+
+
+def test_system_firmware_uses_supported_embedded_dashboard():
+    main_source = (Path(__file__).parents[1] / "main.py").read_text(encoding="utf-8")
+    stage_block = main_source.split('HEM_SYSTEM_RTL_STAGE_META:', 1)[1].split('HEM_SYSTEM_RTL_FIXED_POLICY:', 1)[0]
+    assert '"System_Firmware": {"title": "HEM: System Firmware", "artifact": "system", "label": "Firmware", "stage": "embedded"' in stage_block
+    assert '"stage": "firmware"' not in stage_block
+
+
+def test_dashboard_heatmap_and_product_summary_recognize_platform_agent_lifecycle():
+    main_source = (Path(__file__).parents[1] / "main.py").read_text(encoding="utf-8")
+    assert '"ACTIVE AGENT:"' in main_source
+    assert '"AGENT COMPLETED:"' in main_source
+    assert '"AGENT FAILED:"' in main_source
+    assert 'ACTIVE\\s+AGENT|AGENT\\s+(?:COMPLETED|FAILED)' in main_source
+
+
 def test_physical_ai_hem_carries_fpga_simulation_lineage_into_product_chain():
     main_source = (Path(__file__).parents[1] / "main.py").read_text(encoding="utf-8")
     assert 'automation_payload["fpga_bitstream_workflow_id"] = child_workflow_id' in main_source

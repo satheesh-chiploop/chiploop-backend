@@ -424,6 +424,19 @@ def run_agent(state: dict) -> dict:
     scenario_results: List[Dict[str, Any]] = []
     for scenario in scenarios:
         scenario_id = str(scenario.get("scenario_id") or "").strip()
+        if scenario.get("enabled") is False:
+            scenario_results.append({
+                "scenario_id": scenario_id,
+                "scenario_type": scenario.get("scenario_type") or scenario.get("type") or "",
+                "execution_status": "not_applicable",
+                "message": "Scenario disabled by the validated co-simulation contract.",
+                "returncode": None,
+                "command_results": [],
+                "expected_behavior": _scenario_expectations(scenario),
+                "observed_behavior": {},
+                "artifacts": {},
+            })
+            continue
         timeout_sec = int(scenario.get("timeout_sec") or 600)
         command_results: List[Dict[str, Any]] = []
         commands = commands_by_scenario.get(scenario_id) or []
@@ -507,6 +520,7 @@ def run_agent(state: dict) -> dict:
     pass_count = sum(1 for x in scenario_results if x.get("execution_status") == "pass")
     fail_count = sum(1 for x in scenario_results if x.get("execution_status") == "fail")
     blocked_count = sum(1 for x in scenario_results if x.get("execution_status") == "blocked")
+    not_applicable_count = sum(1 for x in scenario_results if x.get("execution_status") == "not_applicable")
     execution_status = "pass" if fail_count == 0 and blocked_count == 0 else ("partial_pass" if pass_count > 0 else "fail")
 
     report = {
@@ -517,6 +531,7 @@ def run_agent(state: dict) -> dict:
         "scenario_pass_count": pass_count,
         "scenario_fail_count": fail_count,
         "scenario_blocked_count": blocked_count,
+        "scenario_not_applicable_count": not_applicable_count,
         "evidence_scope": "full_stack" if rtl_command_count else "software_only",
         "rtl_command_count": rtl_command_count,
         "scenario_results": scenario_results,
@@ -530,6 +545,7 @@ def run_agent(state: dict) -> dict:
         f"- Passed: `{pass_count}`",
         f"- Failed: `{fail_count}`",
         f"- Blocked: `{blocked_count}`",
+        f"- Not applicable: `{not_applicable_count}`",
         "",
         "## Scenario results",
     ]

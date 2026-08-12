@@ -5421,7 +5421,7 @@ HEM_SYSTEM_STAGE_TOGGLE_KEYS: Dict[str, str] = {
 HEM_SYSTEM_RTL_STAGE_META: Dict[str, Dict[str, str]] = {
     "System_DQA": {"title": "HEM: System DQA", "artifact": "system", "label": "System DQA", "stage": "dqa", "app": "system"},
     "System_Sim": {"title": "HEM: System Sim", "artifact": "system", "label": "System Sim", "stage": "verification", "app": "system"},
-    "System_Firmware": {"title": "HEM: System Firmware", "artifact": "system", "label": "Firmware", "stage": "firmware", "app": "system"},
+    "System_Firmware": {"title": "HEM: System Firmware", "artifact": "system", "label": "Firmware", "stage": "embedded", "app": "system"},
     "System_Software": {"title": "HEM: System Software", "artifact": "system-software", "label": "Software", "stage": "software", "app": "system-software"},
     "System_Software_Validation_L2": {"title": "HEM: Co-simulation / Validation", "artifact": "system-software-validation", "label": "Co-simulation / Validation", "stage": "validation", "app": "system-software-validation"},
     "System_Product_App_Builder": {"title": "HEM: Product Demo", "artifact": "system-product-builder", "label": "Product Demo", "stage": "product", "app": "system-product-builder"},
@@ -7121,7 +7121,7 @@ HEM_PHYSICAL_AI_STAGE_META: Dict[str, Dict[str, str]] = {
         "artifact": "fpga_bitstream",
         "app_name": "fpga",
         "workflow_name": "FPGA_RTL_to_Bitstream",
-        "dashboard_stage": "synthesis",
+        "dashboard_stage": "fpga",
     },
     "asic_tapeout": {
         "label": "ASIC Implementation",
@@ -7137,7 +7137,7 @@ HEM_PHYSICAL_AI_STAGE_META: Dict[str, Dict[str, str]] = {
         "artifact": "system",
         "app_name": "system",
         "workflow_name": "System_Firmware",
-        "dashboard_stage": "firmware",
+        "dashboard_stage": "embedded",
     },
 }
 
@@ -9005,7 +9005,14 @@ def workflow_token_heatmap(workflow_id: str):
         for line in _workflow_agent_log_lines(combined_logs, max_lines=500):
             running = re.search(r"Running\s+(.+?\sAgent)\b", line, flags=re.IGNORECASE)
             finished = re.search(r"^(.+?\sAgent)\s+(?:done|failed)\b", line, flags=re.IGNORECASE)
-            name = (running.group(1) if running else None) or (finished.group(1) if finished else None)
+            lifecycle = re.search(
+                r"^(?:ACTIVE\s+AGENT|AGENT\s+(?:COMPLETED|FAILED)):\s*(.+?\sAgent)(?:\s*\||$)",
+                line,
+                flags=re.IGNORECASE,
+            )
+            name = (
+                lifecycle.group(1) if lifecycle else None
+            ) or (running.group(1) if running else None) or (finished.group(1) if finished else None)
             if name:
                 item = ensure_agent(name.strip())
                 if not item.get("event_count"):
@@ -9893,7 +9900,12 @@ def _count_workflow_agents_from_logs(logs: Optional[str]) -> Optional[int]:
     for line in _workflow_agent_log_lines(str(logs), max_lines=500):
         running = re.search(r"Running\s+(.+?\sAgent)\b", line, flags=re.IGNORECASE)
         finished = re.search(r"^(.+?\sAgent)\s+(?:done|failed)\b", line, flags=re.IGNORECASE)
-        name = (running.group(1) if running else None) or (finished.group(1) if finished else None)
+        lifecycle = re.search(
+            r"^(?:ACTIVE\s+AGENT|AGENT\s+(?:COMPLETED|FAILED)):\s*(.+?\sAgent)(?:\s*\||$)",
+            line,
+            flags=re.IGNORECASE,
+        )
+        name = (lifecycle.group(1) if lifecycle else None) or (running.group(1) if running else None) or (finished.group(1) if finished else None)
         if name:
             agents.add(name.strip())
     return len(agents) if agents else None
@@ -9907,6 +9919,9 @@ def _workflow_agent_log_lines(logs: Optional[str], max_lines: int = 80) -> List[
         "Running ",
         " done",
         " failed",
+        "ACTIVE AGENT:",
+        "AGENT COMPLETED:",
+        "AGENT FAILED:",
         "Missing agent implementations",
         "No agent implementation found",
         "Workflow crashed",
