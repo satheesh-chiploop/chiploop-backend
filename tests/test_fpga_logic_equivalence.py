@@ -53,7 +53,8 @@ def test_fpga_lec_uses_yosys_equivalence_and_passes(tmp_path, monkeypatch):
     assert "equiv_induct -undef -seq 48" not in script
     assert "equiv_status -assert" in script
     assert published["induction_depths_attempted"] == [12]
-    assert published["mapped_lec"]["timeout_seconds"] == 180
+    assert published["generic_lec"]["timeout_seconds"] == 180
+    assert published["mapped_lec"]["timeout_seconds"] == 1800
 
 
 def test_fpga_lec_checks_generic_and_mapped_checkpoints(tmp_path, monkeypatch):
@@ -81,8 +82,18 @@ def test_fpga_lec_timeout_scales_with_synthesized_design_size(tmp_path):
     state = _state(tmp_path)
     state["fpga"]["synthesis"].update({"flip_flops": 1866, "total_mapped_cells": 5887})
     assert lec._proof_timeout_seconds(state) == 637
+    assert lec._proof_timeout_seconds(state, technology_mapped=True) == 1800
     state["fpga_lec_timeout_seconds"] = 900
     assert lec._proof_timeout_seconds(state) == 900
+    assert lec._proof_timeout_seconds(state, technology_mapped=True) == 900
+
+
+def test_mapped_lec_budget_scales_for_physical_ai_ecp5_design(tmp_path):
+    state = _state(tmp_path)
+    state["fpga"]["synthesis"].update({"flip_flops": 652, "total_mapped_cells": 1643})
+
+    assert lec._proof_timeout_seconds(state) == 327
+    assert lec._proof_timeout_seconds(state, technology_mapped=True) == 1800
 
 
 def test_mapped_lec_tool_error_blocks_even_when_generic_proof_passes(tmp_path, monkeypatch):

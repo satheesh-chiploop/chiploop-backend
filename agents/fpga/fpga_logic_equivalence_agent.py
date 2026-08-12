@@ -33,10 +33,10 @@ def _induction_depths(depth: int) -> list[int]:
     return [max(1, depth)]
 
 
-def _proof_timeout_seconds(state: dict) -> int:
+def _proof_timeout_seconds(state: dict, *, technology_mapped: bool = False) -> int:
     explicit = state.get("fpga_lec_timeout_seconds")
     if explicit not in {None, ""}:
-        return max(60, min(int(explicit), 1200))
+        return max(60, min(int(explicit), 3600))
     fpga = state.get("fpga") if isinstance(state.get("fpga"), dict) else {}
     synthesis = fpga.get("synthesis") if isinstance(fpga.get("synthesis"), dict) else {}
     flip_flops = max(0, int(synthesis.get("flip_flops") or 0))
@@ -45,6 +45,17 @@ def _proof_timeout_seconds(state: dict) -> int:
     # than a current workstation. Scale from measured proof complexity rather
     # than applying the old fixed 180-second ceiling to every design.
     estimated = 180 + round(flip_flops * 0.15) + round(mapped_cells * 0.03)
+    if technology_mapped:
+        # The second proof loads the FPGA primitive simulation library and
+        # compares the generic checkpoint with a primitive-expanded netlist.
+        # Its SAT/structural workload is materially larger than RTL->generic,
+        # even though both represent the same state count.  Give that proof a
+        # size-derived worker budget instead of reusing the generic timeout.
+        # A two-vCPU production worker must be allowed to finish the same
+        # primitive-expanded proof that place-and-route may spend 20 minutes
+        # on. Give mapped LEC the full automatic 30-minute production budget;
+        # this changes only execution time, never acceptance criteria.
+        return 1800
     return max(180, min(estimated, 1200))
 
 
@@ -87,11 +98,11 @@ def _unproven_points(log: str, proven: bool) -> int | None:
 
 
 def _run_proof(state: dict, out_dir: str, name: str, gold_files: list[str], gate_netlist: str,
-               top: str, family: str, depths: list[int]) -> dict:
+               top: str, family: str, depths: list[int], *, technology_mapped: bool = False) -> dict:
     script_path = os.path.abspath(os.path.join(out_dir, f"{name}.ys"))
     log_path = os.path.abspath(os.path.join(out_dir, f"{name}.log"))
     write_text(script_path, _proof_script(gold_files, gate_netlist, top, family, depths))
-    timeout_seconds = _proof_timeout_seconds(state)
+    timeout_seconds = _proof_timeout_seconds(state, technology_mapped=technology_mapped)
     result = run_cmd(["yosys", "-s", script_path], cwd=out_dir, log_path=log_path, timeout=timeout_seconds, state=state)
     log = open(log_path, "r", encoding="utf-8", errors="ignore").read() if os.path.exists(log_path) else ""
     proven = bool(result.get("ok"))
@@ -155,7 +166,10 @@ def run_agent(state: dict) -> dict:
         # not been established.
         if generic_proof["proven"]:
             _progress(state, f"FPGA LEC proof 2/2 started: generic to {family} mapped netlist.")
-            mapped_proof = _run_proof(state, out_dir, "fpga_generic_to_mapped_lec", [generic_netlist], mapped_netlist, top, family, induction_depths)
+            mapped_proof = _run_proof(
+                state, out_dir, "fpga_generic_to_mapped_lec", [generic_netlist],
+                mapped_netlist, top, family, induction_depths, technology_mapped=True,
+            )
             _progress(state, f"FPGA LEC proof 2/2 finished with status {mapped_proof['status']}.")
         else:
             mapped_proof = {
