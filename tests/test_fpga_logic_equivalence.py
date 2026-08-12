@@ -48,11 +48,11 @@ def test_fpga_lec_uses_yosys_equivalence_and_passes(tmp_path, monkeypatch):
     assert "async2sync" in script
     assert "equiv_struct" in script
     assert "equiv_simple -undef -short" in script
-    assert "equiv_induct -undef -seq 4" in script
+    assert "equiv_induct -undef -seq 12" in script
     assert "equiv_induct -undef -seq 24" not in script
     assert "equiv_induct -undef -seq 48" not in script
     assert "equiv_status -assert" in script
-    assert published["induction_depths_attempted"] == [4]
+    assert published["induction_depths_attempted"] == [12]
     assert published["mapped_lec"]["timeout_seconds"] == 180
 
 
@@ -175,7 +175,26 @@ def test_unproven_equivalence_is_reported_as_inconclusive(tmp_path, monkeypatch)
     assert published["unproven_points"] == 9
     assert published["generic_lec"]["unproven_points"] == 9
     assert published["mapped_lec"]["status"] == "blocked"
-    assert "4" in published["reason"]
+    assert "12" in published["reason"]
+
+
+def test_fpga_lec_honors_requested_induction_depth(tmp_path, monkeypatch):
+    state = _state(tmp_path)
+    state["fpga_lec_induct_depth"] = 20
+    published = {}
+    monkeypatch.setattr(lec, "publish_json", lambda _state, _agent, _subdir, _name, data: published.update(data))
+    monkeypatch.setattr(lec, "manifest_update", lambda *_args: None)
+
+    def fake_run(_cmd, cwd, log_path, **_kwargs):
+        Path(log_path).write_text("Equivalence successfully proven!\n", encoding="utf-8")
+        return {"ok": True, "cmd": ["yosys"]}
+
+    monkeypatch.setattr(lec, "run_cmd", fake_run)
+    lec.run_agent(state)
+
+    assert published["induction_depth"] == 20
+    assert published["induction_depths_attempted"] == [20]
+    assert "equiv_induct -undef -seq 20" in Path(published["generic_lec"]["script"]).read_text(encoding="utf-8")
 
 def test_fpga_lec_is_registered_in_supabase_and_all_implementation_flows():
     root = Path(__file__).parents[2]

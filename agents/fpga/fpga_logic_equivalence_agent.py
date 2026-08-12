@@ -26,10 +26,11 @@ def _library_reads(family: str) -> list[str]:
 
 def _induction_depths(depth: int) -> list[int]:
     # Synthesis LEC proves a transformation of the same sequential machine; it
-    # is not an unbounded functional-property proof. One bounded induction
-    # depth avoids repeating an increasingly expensive proof over large FPGA
-    # register banks.
-    return [max(1, min(depth, 4))]
+    # is not an unbounded functional-property proof. Run one proof at the
+    # configured depth: silently clipping a requested depth to four made the
+    # summary claim depth 12 while only attempting four cycles, leaving small
+    # sequential cones incorrectly classified as non-equivalent.
+    return [max(1, depth)]
 
 
 def _proof_timeout_seconds(state: dict) -> int:
