@@ -32,6 +32,77 @@ def _detect_spec_mode(spec_obj: dict) -> str:
     return "unknown"
 
 
+def _parse_int(value, default=0):
+    try:
+        return int(str(value), 0)
+    except (TypeError, ValueError):
+        return default
+
+
+def _register_layout_violations(document: dict) -> list[str]:
+    """Validate the software-visible layout without changing its semantics."""
+    regmap = document.get("regmap") if isinstance(document, dict) else None
+    if not isinstance(regmap, dict):
+        return ["regmap must be a JSON object"]
+    data_width = _parse_int(regmap.get("data_width"), 0)
+    if data_width not in {8, 16, 32, 64}:
+        return [f"regmap.data_width={data_width!r} must be one of 8, 16, 32, or 64"]
+    violations: list[str] = []
+    registers = regmap.get("registers")
+    if not isinstance(registers, list) or not registers:
+        return ["regmap.registers must contain at least one register"]
+    for reg_index, register in enumerate(registers):
+        if not isinstance(register, dict):
+            violations.append(f"registers[{reg_index}] must be an object")
+            continue
+        reg_name = str(register.get("name") or f"registers[{reg_index}]")
+        occupied: list[tuple[int, int, str]] = []
+        for field_index, field in enumerate(register.get("fields") or []):
+            if not isinstance(field, dict):
+                violations.append(f"{reg_name}.fields[{field_index}] must be an object")
+                continue
+            field_name = str(field.get("name") or f"fields[{field_index}]")
+            lsb = _parse_int(field.get("lsb", field.get("bit_offset")), -1)
+            if field.get("msb") is not None:
+                msb = _parse_int(field.get("msb"), -1)
+            else:
+                width = _parse_int(field.get("bit_width", field.get("width")), 1)
+                msb = lsb + width - 1
+            if lsb < 0 or msb < lsb or msb >= data_width:
+                violations.append(f"{reg_name}.{field_name} [{msb}:{lsb}] is outside the {data_width}-bit register word")
+                continue
+            for other_lsb, other_msb, other_name in occupied:
+                if not (msb < other_lsb or lsb > other_msb):
+                    violations.append(f"{reg_name}.{field_name} [{msb}:{lsb}] overlaps {other_name} [{other_msb}:{other_lsb}]")
+            occupied.append((lsb, msb, field_name))
+    return violations
+
+
+def _repair_register_layout(regmap: dict, violations: list[str], spec_obj: dict, state: dict) -> dict:
+    repair_prompt = f"""
+You are repairing a generated SoC register-map JSON contract.
+Return ONLY one raw JSON object with the same top-level schema.
+Preserve every required field and its access semantics, but split fields across additional addressed registers when they do not fit.
+Every field must satisfy 0 <= lsb <= msb < regmap.data_width and fields in one register must not overlap.
+Do not widen the declared data bus beyond the DIGITAL_SPEC_JSON interface.
+Do not remove status, control, fault, ready, or valid semantics.
+
+VALIDATION ERRORS:
+{_safe_dump(violations)}
+
+DIGITAL_SPEC_JSON:
+{_safe_dump(spec_obj)}
+
+INVALID_REGISTER_MAP_JSON:
+{_safe_dump(regmap)}
+""".strip()
+    repaired_text = complete_text(repair_prompt, capability="spec_generation", agent_name="Digital Register Map Agent", state=state)
+    repaired = json.loads(repaired_text.strip())
+    if not isinstance(repaired, dict):
+        raise ValueError("repair did not return a JSON object")
+    return repaired
+
+
 def run_agent(state: dict) -> dict:
     print("\n🗺️ Running Digital Register Map Agent...")
 
@@ -149,6 +220,21 @@ OUTPUT SCHEMA
             "parse_error": str(e),
             "raw": llm_output.strip()
         }
+
+    violations = _register_layout_violations(regmap)
+    if violations:
+        try:
+            regmap = _repair_register_layout(regmap, violations, spec_obj, state)
+        except Exception as exc:
+            state["status"] = f"❌ Register map layout repair failed: {exc}"
+            state["digital_regmap_layout_violations"] = violations
+            return state
+        repaired_violations = _register_layout_violations(regmap)
+        if repaired_violations:
+            state["status"] = "❌ Register map layout remains invalid after repair."
+            state["digital_regmap_layout_violations"] = repaired_violations
+            return state
+        state["digital_regmap_layout_repaired"] = True
 
     out_path = os.path.join(workflow_dir, "digital_regmap.json")
     with open(out_path, "w", encoding="utf-8") as f:
