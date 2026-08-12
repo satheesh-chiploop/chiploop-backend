@@ -275,6 +275,16 @@ def test_fpga_dashboard_prefers_authoritative_formal_result(tmp_path, monkeypatc
     assert published["verification"]["toolchain"]["formal"] == "symbiyosys"
 
 
+def test_fpga_lec_excludes_next_value_helpers_but_keeps_strict_signoff():
+    from agents.fpga.fpga_logic_equivalence_agent import _proof_script
+
+    script = _proof_script(["gold.sv"], "gate.v", "top", "", [12])
+
+    assert script.count("rename -hide w:*_next") == 2
+    assert "equiv_induct -undef -seq 12" in script
+    assert script.rstrip().endswith("equiv_status -assert")
+
+
 def test_balanced_tool_policy_uses_supported_baseline_and_reporting_knobs():
     from agents.fpga.fpga_yosys_synthesis_agent import _yosys_effort_policy
 

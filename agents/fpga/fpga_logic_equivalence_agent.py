@@ -60,7 +60,17 @@ def _proof_timeout_seconds(state: dict, *, technology_mapped: bool = False) -> i
 
 
 def _proof_script(rtl_files: list[str], netlist: str, top: str, family: str, depths: list[int]) -> str:
-    normalize = [f"prep -flatten -top {top}", "async2sync", "opt_clean"]
+    normalize = [
+        f"prep -flatten -top {top}",
+        "async2sync",
+        "opt_clean",
+        # Do not turn procedural next-value helper nets into formal cut
+        # points. Synthesis may legally simplify their values for unreachable
+        # state encodings even though all registers and observable outputs are
+        # equivalent. Hiding these names from equiv_make is a generic
+        # construction rule; ports are never hidden by Yosys rename -hide.
+        "rename -hide w:*_next",
+    ]
     lines = [*(f"read_verilog -sv {path}" for path in rtl_files), *normalize, f"rename {top} gold", "design -stash gold", "design -reset"]
     lines.extend(_library_reads(family))
     lines.extend([
@@ -85,7 +95,8 @@ def _proof_script(rtl_files: list[str], netlist: str, top: str, family: str, dep
         "equiv_struct",
         "equiv_simple -undef -short",
     ])
-    lines.extend(f"equiv_induct -undef -seq {depth}" for depth in depths)
+    for depth in depths:
+        lines.append(f"equiv_induct -undef -seq {depth}")
     lines.append("equiv_status -assert")
     return "\n".join(lines) + "\n"
 
