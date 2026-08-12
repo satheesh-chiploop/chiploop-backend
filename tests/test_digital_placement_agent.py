@@ -113,6 +113,37 @@ def test_placement_failure_reason_detects_no_space():
     assert agent._failure_reason("", 0, None) == "def_missing"
 
 
+def test_placement_density_is_calibrated_from_floorplan_evidence(tmp_path):
+    metrics_dir = tmp_path / "digital" / "floorplan"
+    metrics_dir.mkdir(parents=True)
+    (metrics_dir / "metrics.json").write_text(
+        '{"design__instance__utilization": 0.469118}', encoding="utf-8"
+    )
+    cfg = {"PL_TARGET_DENSITY": 0.25, "DIE_AREA": "0 0 200 200"}
+
+    evidence = agent._calibrate_placement_capacity(cfg, str(tmp_path))
+
+    assert cfg["PL_TARGET_DENSITY"] == 0.516
+    assert cfg["DIE_AREA"] == "0 0 200 200"
+    assert evidence["adjusted"] is True
+    assert evidence["measured_instance_utilization"] == 0.469118
+
+
+def test_placement_capacity_expands_die_above_routability_ceiling(tmp_path):
+    metrics_dir = tmp_path / "digital" / "floorplan"
+    metrics_dir.mkdir(parents=True)
+    (metrics_dir / "metrics.json").write_text(
+        '{"design__instance__utilization": 0.8}', encoding="utf-8"
+    )
+    cfg = {"PL_TARGET_DENSITY": 0.25, "DIE_AREA": "0 0 200 200"}
+
+    evidence = agent._calibrate_placement_capacity(cfg, str(tmp_path))
+
+    assert cfg["PL_TARGET_DENSITY"] == 0.65
+    assert cfg["DIE_AREA"] != "0 0 200 200"
+    assert evidence["die_scale"] > 1.0
+
+
 def test_stage_macro_inputs_dedupes_duplicate_collateral(tmp_path):
     lef = tmp_path / "ana.lef"
     lib = tmp_path / "ana.lib"

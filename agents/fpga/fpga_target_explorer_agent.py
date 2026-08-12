@@ -237,6 +237,9 @@ def _run_pnr(state: dict, board_key: str, board: dict, synthesis: dict, seed: in
         heartbeat_thread.join(timeout=1)
     metrics = _parse_nextpnr(log)
     metrics.update(_parse_nextpnr_report(report, board))
+    target_frequency = _num(state.get("target_frequency_mhz"))
+    if metrics.get("timing_met") is None and _num(metrics.get("max_frequency_mhz")) > 0 and target_frequency > 0:
+        metrics["timing_met"] = _num(metrics.get("max_frequency_mhz")) >= target_frequency
     produced = os.path.exists(routed)
     for artifact in (log, report if os.path.exists(report) else None, routed if produced else None):
         _record_file(state, board_key, f"{synthesis.get('strategy') or 'baseline'}/seed_{seed}", artifact)
@@ -247,6 +250,9 @@ def _run_pnr(state: dict, board_key: str, board: dict, synthesis: dict, seed: in
         "status": "completed" if produced else "failed",
         "timing_met": metrics.get("timing_met"),
         "max_frequency_mhz": metrics.get("max_frequency_mhz"),
+        "timing_basis": metrics.get("timing_basis") or "register_to_register_fmax",
+        "boundary_path_delay_ns": metrics.get("boundary_path_delay_ns"),
+        "interior_timing_paths_present": metrics.get("interior_timing_paths_present", True),
         "logic_cells_used": metrics.get("logical_cells_used"),
         "logic_cells_available": metrics.get("logical_cells_available") or ((board.get("resources") or {}).get("logic_cells")),
         "logic_utilization_percent": metrics.get("logic_utilization_percent"),

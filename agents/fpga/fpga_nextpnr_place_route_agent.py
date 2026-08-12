@@ -178,6 +178,33 @@ def _parse_nextpnr_report(report_path: str, board: dict) -> dict:
             out["max_frequency_mhz"] = round(float(min(achieved)), 3)
         if achieved and constraints:
             out["timing_met"] = min(achieved) >= max(constraints)
+    elif isinstance(data, dict):
+        # nextpnr legitimately emits an empty fmax object when a design has no
+        # register-to-register path (for example, input logic feeding an output
+        # register).  The route is still valid and the input-to-register
+        # critical path is the relevant sampling-rate evidence.  Preserve that
+        # distinction instead of reporting the implementation as failed.
+        boundary_delays = []
+        for critical_path in data.get("critical_paths") or []:
+            if not isinstance(critical_path, dict):
+                continue
+            source = str(critical_path.get("from") or "").lower()
+            destination = str(critical_path.get("to") or "").lower()
+            if source != "<async>" or not re.search(r"\b(?:pos|neg)edge\b", destination):
+                continue
+            delay = sum(
+                float(segment.get("delay") or 0.0)
+                for segment in (critical_path.get("path") or [])
+                if isinstance(segment, dict) and isinstance(segment.get("delay"), (int, float))
+            )
+            if delay > 0:
+                boundary_delays.append(delay)
+        if boundary_delays:
+            worst_delay = max(boundary_delays)
+            out["max_frequency_mhz"] = round(1000.0 / worst_delay, 3)
+            out["boundary_path_delay_ns"] = round(worst_delay, 3)
+            out["timing_basis"] = "input_to_register_boundary"
+            out["interior_timing_paths_present"] = False
     return out
 
 

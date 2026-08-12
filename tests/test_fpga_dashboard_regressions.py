@@ -33,6 +33,37 @@ def test_nextpnr_report_exposes_routed_lut4_cells(tmp_path):
     assert parsed["routed_lut4_cells_available"] == 5280
 
 
+def test_nextpnr_report_uses_boundary_path_when_interior_fmax_is_not_applicable(tmp_path):
+    report = tmp_path / "nextpnr.json"
+    report.write_text(
+        json.dumps(
+            {
+                "fmax": {},
+                "critical_paths": [
+                    {
+                        "from": "<async>",
+                        "to": "posedge clk",
+                        "path": [{"delay": 4.0}, {"delay": 16.0}],
+                    },
+                    {
+                        "from": "posedge clk",
+                        "to": "<async>",
+                        "path": [{"delay": 2.5}],
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    parsed = _parse_nextpnr_report(str(report), {"family": "ecp5"})
+
+    assert parsed["max_frequency_mhz"] == 50.0
+    assert parsed["boundary_path_delay_ns"] == 20.0
+    assert parsed["timing_basis"] == "input_to_register_boundary"
+    assert parsed["interior_timing_paths_present"] is False
+
+
 def test_fpga_dashboard_embeds_verification_and_authoritative_agent_count(tmp_path, monkeypatch):
     verification_path = tmp_path / "simulation_summary_coverage.json"
     verification = {

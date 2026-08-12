@@ -5,6 +5,7 @@ import shutil
 import subprocess
 import re
 import logging
+import math
 from datetime import datetime
 logger = logging.getLogger("chiploop")
 
@@ -59,6 +60,50 @@ def _scaled_die_area(raw: str, scale: float) -> str | None:
     half_w = max((urx - llx) * scale / 2.0, 1.0)
     half_h = max((ury - lly) * scale / 2.0, 1.0)
     return f"{cx - half_w:g} {cy - half_h:g} {cx + half_w:g} {cy + half_h:g}"
+
+
+def _calibrate_placement_capacity(cfg: dict, workflow_dir: str) -> dict:
+    """Size placement from measured floorplan utilization, not design identity."""
+    metrics = _read_json(os.path.join(workflow_dir, "digital", "floorplan", "metrics.json"))
+    utilization = _first_number(
+        metrics.get("design__instance__utilization"),
+        metrics.get("design__instance__utilization__stdcell"),
+    )
+    requested = _first_number(cfg.get("PL_TARGET_DENSITY"), cfg.get("PLACE_DENSITY"))
+    evidence = {
+        "source": "digital/floorplan/metrics.json",
+        "measured_instance_utilization": utilization,
+        "requested_density": requested,
+        "adjusted": False,
+    }
+    if utilization is None or utilization <= 0 or requested is None:
+        return evidence
+
+    # Ten percent placement headroom avoids GPL-0302 while keeping density
+    # tied to actual synthesized cell area. Above the routability ceiling,
+    # enlarge the die and rerun the placement-owned OpenLane prefix.
+    required = float(utilization) * 1.10
+    routable_ceiling = 0.65
+    if float(requested) + 1e-9 >= required:
+        return evidence
+    if required <= routable_ceiling:
+        cfg["PL_TARGET_DENSITY"] = round(required, 4)
+    else:
+        scale = math.sqrt(required / routable_ceiling)
+        scaled_die = _scaled_die_area(cfg.get("DIE_AREA"), scale)
+        if scaled_die:
+            cfg["DIE_AREA"] = scaled_die
+            cfg["FP_SIZING"] = "absolute"
+            evidence["die_scale"] = round(scale, 4)
+        cfg["PL_TARGET_DENSITY"] = routable_ceiling
+    cfg["PL_TARGET_DENSITY_PCT"] = round(float(cfg["PL_TARGET_DENSITY"]) * 100.0, 3)
+    evidence.update({
+        "adjusted": True,
+        "effective_density": cfg["PL_TARGET_DENSITY"],
+        "effective_die_area": cfg.get("DIE_AREA"),
+        "headroom_policy": "measured_floorplan_utilization_plus_10_percent",
+    })
+    return evidence
 
 
 def _severe_drc_from_plan(plan: dict) -> bool:
@@ -555,6 +600,7 @@ def run_agent(state: dict) -> dict:
 
     closure_overrides = _closure_overrides(state, workflow_dir, "placement")
     cfg.update(closure_overrides)
+    capacity_calibration = _calibrate_placement_capacity(cfg, workflow_dir)
     if cfg.get("DIE_AREA"):
         cfg["FP_SIZING"] = "absolute"
 
@@ -603,6 +649,7 @@ def run_agent(state: dict) -> dict:
         f"macro_placement_cfg={cfg.get('MACRO_PLACEMENT_CFG')}",
         f"macro_placement_cfg_path={macro_placement_cfg}",
         f"closure_overrides={json.dumps(closure_overrides, sort_keys=True)}",
+        f"capacity_calibration={json.dumps(capacity_calibration, sort_keys=True)}",
     ]) + "\n"
     _write_text(os.path.join(logs_dir, "placement_input_resolution.log"), input_log)
 
@@ -646,6 +693,7 @@ docker run --rm \
         "run_tag": run_tag,
         "die_area": cfg.get("DIE_AREA"),
         "fp_sizing": cfg.get("FP_SIZING"),
+        "capacity_calibration": capacity_calibration,
     }
     started_path = os.path.join(stage_dir, "placement_started.json")
     _write_text(started_path, json.dumps(started_payload, indent=2))
@@ -675,6 +723,7 @@ docker run --rm \
         "status": "ok" if rc == 0 else "failed",
         "return_code": rc,
         "reason": failure_reason,
+        "capacity_calibration": capacity_calibration,
         "outputs": {
             "sdc": f"digital/place/constraints/{sdc_basename}",
             "metrics_json": "digital/place/metrics.json" if metrics_path else None,
