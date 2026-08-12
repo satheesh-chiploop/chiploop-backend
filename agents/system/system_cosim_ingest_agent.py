@@ -292,6 +292,8 @@ def _restore_verified_simulation_bundle(
             or lower.startswith("handoff/rtl/")
             or lower.startswith("verification/handoff/rtl/")
             or lower.startswith("fpga/handoff/rtl/")
+            or lower.startswith("system/imported_rtl/")
+            or lower.startswith("digital/system/imported_rtl/")
         ):
             continue
         if lower.endswith((".v", ".sv", ".svh", ".vh", ".py", ".json", ".mk", ".md")) or os.path.basename(lower) == "makefile":
@@ -323,11 +325,15 @@ def _restore_verified_simulation_bundle(
     manifest_path = next((path for path in restored if os.path.basename(path).lower() == "simulation_manifest.json"), "")
     manifest = _safe_json(manifest_path)
     makefile_path = next((path for path in restored if os.path.basename(path).lower() == "makefile" and "/vv/tb/" in path.replace("\\", "/").lower()), "")
-    canonical_rtl_root = os.path.join(restore_root, "handoff", "rtl")
+    canonical_rtl_roots = {
+        os.path.join(restore_root, "handoff", "rtl"),
+        os.path.join(restore_root, "system", "imported_rtl"),
+        os.path.join(restore_root, "digital", "system", "imported_rtl"),
+    }
     rtl_files = list(dict.fromkeys([
         path for path in restored
         if path.lower().endswith((".v", ".sv"))
-        and os.path.dirname(path) == canonical_rtl_root
+        and os.path.dirname(path) in canonical_rtl_roots
     ]))
     return {
         "status": "ready" if manifest and makefile_path and rtl_files else "incomplete",

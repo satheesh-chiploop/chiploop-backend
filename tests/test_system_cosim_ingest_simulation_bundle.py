@@ -109,3 +109,24 @@ def test_verified_simulation_bundle_deduplicates_same_rtl_from_multiple_handoffs
 
     assert bundle["status"] == "ready"
     assert len(bundle["rtl_files"]) == 1
+
+
+def test_verified_simulation_bundle_restores_imported_rtl_used_by_makefile(tmp_path):
+    workflow_id = "mixed-signal-workflow"
+    prefix = f"backend/workflows/{workflow_id}"
+    paths = {
+        f"{prefix}/vv/tb/simulation_manifest.json": json.dumps({"top_module": "temp_monitor_soc_sim"}).encode(),
+        f"{prefix}/vv/tb/Makefile": b"include rtl_sources.mk\n",
+        f"{prefix}/vv/tb/rtl_sources.mk": b"VERILOG_SOURCES += ../../system/imported_rtl/temp_sensor_adc_model.v\n",
+        f"{prefix}/system/imported_rtl/temp_sensor_adc_model.v": b"module temp_sensor_adc_model; endmodule\n",
+    }
+    row = {"id": workflow_id, "user_id": "user", "artifacts": list(paths)}
+
+    bundle = ingest._restore_verified_simulation_bundle(
+        {"supabase_client": _Supabase(row, paths)}, str(tmp_path), workflow_id
+    )
+
+    restored_model = Path(bundle["restore_root"]) / "system" / "imported_rtl" / "temp_sensor_adc_model.v"
+    assert bundle["status"] == "ready"
+    assert restored_model.is_file()
+    assert str(restored_model) in bundle["rtl_files"]

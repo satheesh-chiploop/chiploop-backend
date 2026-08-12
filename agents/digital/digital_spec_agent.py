@@ -1147,10 +1147,9 @@ def _ensure_hierarchical_port_closure(spec_json: dict) -> dict:
             if "." in dst:
                 referenced.append(dst)
 
-    for own in spec_json.get("signal_ownership", []):
-        owner = own.get("owner", "")
-        if "." in owner:
-            referenced.append(owner)
+    # Ownership is a validation assertion, not a declaration mechanism. A
+    # model cannot make a nonexistent port valid merely by naming it as an
+    # owner; only actual connectivity endpoints may participate in closure.
 
     for ep in referenced:
         mod_name, port_name = ep.split(".", 1)
@@ -1239,9 +1238,9 @@ def _reconcile_hierarchical_signal_directions(spec_json: dict, mode: str) -> dic
         for dst in sig.get("destinations", []) or []:
             mark(dst, "input")
 
-    for owner in spec_json.get("signal_ownership", []) or []:
-        if isinstance(owner, dict):
-            mark(owner.get("owner"), "output")
+    # Do not create ports from ownership assertions. Ownership is valid only
+    # after an endpoint has been declared by the module contract or real
+    # connectivity; the sanitizer below removes stale assertions.
 
     for (module_name, port_name), direction in desired.items():
         _set_reconciled_port_direction(module_map[module_name], port_name, direction)
@@ -1508,9 +1507,8 @@ def _sanitize_hierarchical_connectivity(spec_json: dict) -> dict:
         owner = str(item.get("owner") or "").strip()
         owner_mod, owner_port = _normalize_endpoint_port(owner)
         key = (signal, owner)
-        valid_top_owner = owner_mod == top_name and (
-            top_dirs.get(owner_port) != "input" or signal == owner_port
-        )
+        owner_top_dir = top_dirs.get(owner_port)
+        valid_top_owner = owner_mod == top_name and owner_top_dir in {"output", "inout"}
         if signal and owner and key not in seen and (valid_top_owner or endpoint_dir(owner) in {"output", "inout"}):
             ownership.append(dict(item))
             seen.add(key)
@@ -1617,6 +1615,10 @@ def _compile_spec_contract(
     if mode == "hierarchical":
         spec_json = _ensure_hierarchical_top_level_connections(spec_json)
         spec_json = _ensure_hierarchical_inter_module_signals(spec_json)
+        # Reject stale endpoints against the declared contract before port
+        # closure. Otherwise an invalid connection/ownership claim can create
+        # the very port that makes itself appear valid.
+        spec_json = _sanitize_hierarchical_connectivity(spec_json)
         spec_json = _ensure_hierarchical_port_closure(spec_json)
         spec_json = _reconcile_hierarchical_signal_directions(spec_json, mode)
         spec_json = _sanitize_hierarchical_connectivity(spec_json)

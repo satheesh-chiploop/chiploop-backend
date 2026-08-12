@@ -349,6 +349,29 @@ def _normalize_emitted_rtl_filenames(verilog_map: Dict[str, str], expected_files
             normalized[expected] = normalized[candidate]
             if candidate != expected:
                 normalized.pop(candidate, None)
+
+    # Some models emit the complete hierarchy inside the top file's named
+    # block. Canonicalize that valid multi-module payload before a targeted
+    # repair is merged. Otherwise replacing only the top block also discards
+    # every child module that happened to share its original container.
+    # Matching an expected filename stem to an actual module declaration is
+    # deterministic and does not synthesize or guess any RTL.
+    modules_by_name: Dict[str, str] = {}
+    for code in verilog_map.values():
+        modules_by_name.update(_extract_verilog_modules(code))
+    for expected in expected_files:
+        if expected in normalized:
+            expected_stem = os.path.splitext(expected)[0]
+            expected_code = normalized[expected]
+            expected_modules = _extract_verilog_modules(expected_code)
+            # A canonical file already containing only its expected module
+            # must remain byte-for-byte intact, including local helper text.
+            if set(expected_modules) == {expected_stem}:
+                continue
+        else:
+            expected_stem = os.path.splitext(expected)[0]
+        if expected_stem in modules_by_name:
+            normalized[expected] = modules_by_name[expected_stem]
     return normalized
 
 

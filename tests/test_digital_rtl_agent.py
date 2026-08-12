@@ -998,6 +998,23 @@ def test_repair_context_falls_back_to_complete_hierarchy_when_log_has_no_file():
     assert targets == ["top.v"]
 
 
+def test_partial_repair_preserves_children_emitted_inside_original_top_block():
+    previous = """---BEGIN top.v---
+module top; child u_child(); endmodule
+module child(output ready); assign ready = 1'b1; endmodule
+---END top.v---"""
+    repaired = """---BEGIN top.v---
+module top; wire ready; child u_child(.ready(ready)); endmodule
+---END top.v---"""
+
+    merged = agent._merge_rtl_repair_output(previous, repaired, ["top.v", "child.v"])
+    blocks = agent._parse_named_verilog_blocks(merged)
+
+    assert set(blocks) == {"top.v", "child.v"}
+    assert "wire ready" in blocks["top.v"]
+    assert "module child(output ready)" in blocks["child.v"]
+
+
 def test_sanitize_connects_contract_mirrored_top_outputs_from_child_inputs():
     code = """
 module top(

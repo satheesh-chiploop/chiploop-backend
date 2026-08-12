@@ -667,6 +667,33 @@ def test_single_module_hierarchy_generates_top_self_connections_when_missing():
     ]
 
 
+def test_sanitizer_drops_ownership_for_nonexistent_top_port():
+    spec = {
+        "hierarchy": {
+            "top_module": {
+                **_module("uart_packet_engine"),
+                "ports": [_port("clk", "input"), _port("irq", "output")],
+            },
+            "modules": [],
+        },
+        "top_level_connections": [
+            {"top_port": "clk", "connected_to": ["uart_packet_engine.clk"]},
+            {"top_port": "irq", "connected_to": ["uart_packet_engine.irq"]},
+        ],
+        "inter_module_signals": [],
+        "signal_ownership": [
+            {"signal": "internal_status_o", "owner": "uart_packet_engine.internal_status_o"},
+            {"signal": "irq", "owner": "uart_packet_engine.irq"},
+        ],
+    }
+
+    closed = spec_agent._ensure_hierarchical_port_closure(spec)
+    out = spec_agent._sanitize_hierarchical_connectivity(closed)
+
+    assert {port["name"] for port in out["hierarchy"]["top_module"]["ports"]} == {"clk", "irq"}
+    assert out["signal_ownership"] == [{"signal": "irq", "owner": "uart_packet_engine.irq"}]
+
+
 def test_requested_top_module_overrides_mmio_suffix_in_flat_spec():
     spec = {
         "name": "pwm_controller_mmio",
