@@ -119,6 +119,37 @@ def test_frequency_relaxation_only_after_target_miss():
     assert passed["frequency_relaxation"]["recommended_mhz"] is None
 
 
+def test_allowed_frequency_relaxation_continues_with_programming_ready_board(monkeypatch):
+    monkeypatch.setattr(explorer, "_run_synthesis", lambda *_args, **_kwargs: {
+        "status": "completed", "strategy": "baseline", "netlist": "demo.json",
+        "logical_cells_used": 3000, "block_ram_blocks_used": 0,
+    })
+    monkeypatch.setattr(explorer, "_run_pnr", lambda _state, _board, cfg, _synth, seed, effort: {
+        "status": "completed", "seed": seed, "effort": effort,
+        "max_frequency_mhz": 44.0, "timing_met": False,
+        "logic_cells_used": 3000, "logic_cells_available": cfg["resources"]["logic_cells"],
+    })
+    monkeypatch.setattr(explorer, "publish_json", lambda *_args: None)
+    state = {
+        "workflow_id": "wf", "target_frequency_mhz": 50,
+        "allow_frequency_relaxation": True,
+        "candidate_boards": ["ulx3s_ecp5_45f"],
+        "fpga": {"top_module": "top", "rtl_files": ["top.sv"]},
+        "fpga_explorer_io_mapping": {
+            "mappings": [{"board": "ulx3s_ecp5_45f", "programming_ready": True, "mapped_ports": ["clk"], "unmapped_ports": []}],
+        },
+    }
+
+    explorer.run_agent(state)
+    continuation = state["fpga_target_explorer"]["continuation"]
+
+    assert continuation["selected_board"] == "ulx3s_ecp5_45f"
+    assert continuation["selection_mode"] == "relaxed_frequency"
+    assert continuation["requested_target_frequency_mhz"] == 50
+    assert continuation["target_frequency_mhz"] == 39.6
+    assert continuation["blocked_reason"] is None
+
+
 def test_explorer_reuses_identical_implementation_targets(monkeypatch):
     synth_calls = []
     pnr_calls = []

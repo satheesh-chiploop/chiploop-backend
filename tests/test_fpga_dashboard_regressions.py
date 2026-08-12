@@ -608,10 +608,13 @@ def test_rtl_memory_intent_detects_substantial_unpacked_array(tmp_path):
     assert intent["declarations"][0]["bits"] == 8192
 
 
-def test_physical_ai_fpga_candidates_use_registered_ulx3s_key():
+def test_physical_ai_fpga_candidates_are_derived_from_registry():
     source = (Path(__file__).parents[1] / "main.py").read_text(encoding="utf-8")
 
-    assert '["orangecrab_ecp5_85f", "ulx3s_ecp5_45f"]' in source
+    assert "def _hem_physical_ai_fpga_candidates()" in source
+    assert "for board_id, profile in BOARD_REGISTRY.items()" in source
+    assert 'str(profile.get("support_tier") or "production").lower() != "unavailable"' in source
+    assert 'payload.get("candidate_boards") or _hem_physical_ai_fpga_candidates()' in source
     assert '"ulx3s_45f"' not in source
 
 def test_nextpnr_terminal_failure_propagates_without_timing_closure(tmp_path, monkeypatch):

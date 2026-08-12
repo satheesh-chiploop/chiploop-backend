@@ -7050,6 +7050,22 @@ async def apps_fpga_target_explorer_run(request: Request, background_tasks: Back
 
 
 HEM_PHYSICAL_AI_POLICY_KEY = "physical_ai_fpga_prototype_v1"
+
+
+def _hem_physical_ai_fpga_candidates() -> List[str]:
+    """Return every runnable physical board from the shared FPGA registry."""
+    from agents.fpga.fpga_common import BOARD_REGISTRY
+
+    return [
+        board_id
+        for board_id, profile in BOARD_REGISTRY.items()
+        if str(profile.get("support_tier") or "production").lower() != "unavailable"
+        and profile.get("nextpnr_tool")
+        and profile.get("device")
+        and not board_id.startswith("custom_")
+    ]
+
+
 HEM_PHYSICAL_AI_STAGE_META: Dict[str, Dict[str, str]] = {
     "arch2rtl": {
         "label": "RTL Generation",
@@ -7272,7 +7288,7 @@ def _hem_physical_ai_child_payload(root_workflow_id: str, root_run_id: str, payl
     if stage == "fpga_exploration":
         return {
             **common,
-            "candidate_boards": payload.get("candidate_boards") or ["orangecrab_ecp5_85f", "ulx3s_ecp5_45f"],
+            "candidate_boards": payload.get("candidate_boards") or _hem_physical_ai_fpga_candidates(),
             "requested_recommendation_profile": str(payload.get("requested_recommendation_profile") or "best_overall"),
             "baseline_seed_count": int(payload.get("baseline_seed_count") or 1),
             "closure_seed_count": int(payload.get("closure_seed_count") or 1),
@@ -7414,6 +7430,9 @@ def _hem_continue_physical_ai_after_success(*, root_workflow_id: str, root_run_i
                         )
                         return
                     automation_payload["board"] = selected_board
+                    continuation_frequency = continuation.get("target_frequency_mhz")
+                    if continuation_frequency not in {None, ""}:
+                        automation_payload["target_frequency_mhz"] = float(continuation_frequency)
                     from agents.fpga.fpga_common import BOARD_REGISTRY
                     board_profile = BOARD_REGISTRY.get(str(selected_board)) or {}
                     compute_host = board_profile.get("compute_host") if isinstance(board_profile.get("compute_host"), dict) else {}
@@ -7450,7 +7469,7 @@ def _hem_continue_physical_ai_after_success(*, root_workflow_id: str, root_run_i
                     automation_payload["explorer_winning_configuration"] = continuation.get("winning_configuration") or {}
                     append_log_workflow(
                         root_workflow_id,
-                        f"HEM selected FPGA board {selected_board} from Target Explorer evidence ({explorer_source}).",
+                        f"HEM selected FPGA board {selected_board} at {automation_payload.get('target_frequency_mhz')} MHz from Target Explorer evidence ({explorer_source}).",
                         phase="hem_running",
                     )
                 except Exception as exc:

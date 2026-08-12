@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 import pytest
 
@@ -8,6 +9,15 @@ import agents.physical_ai.physical_ai_partitioning_agent as partitioning_agent
 from physical_ai.model_registry import get_physics_model, list_physics_models
 from physical_ai.workflow import run_physical_ai_workflow
 from studio_contract.registry import load_registry
+
+
+def test_physical_ai_hem_default_explores_cross_vendor_fpga_targets():
+    main_source = (Path(__file__).parents[1] / "main.py").read_text(encoding="utf-8")
+    assert 'from agents.fpga.fpga_common import BOARD_REGISTRY' in main_source
+    assert 'profile.get("support_tier") or "production"' in main_source
+    assert 'profile.get("nextpnr_tool")' in main_source
+    assert 'profile.get("device")' in main_source
+    assert 'payload.get("candidate_boards") or _hem_physical_ai_fpga_candidates()' in main_source
 
 
 def test_pmsm_equation_model_is_ready_and_fpga_compatible():

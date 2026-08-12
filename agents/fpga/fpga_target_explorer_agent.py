@@ -566,12 +566,26 @@ def run_agent(state: dict) -> dict:
         item for item in results
         if item.get("target_met") and item.get("programming_ready")
     ]
+    relaxed_target_used = False
+    if not implementation_results and bool(state.get("allow_frequency_relaxation")):
+        implementation_results = [
+            item for item in results
+            if item.get("programming_ready")
+            and _num((item.get("frequency_relaxation") or {}).get("recommended_mhz")) > 0
+            and isinstance(item.get("winning_run"), dict)
+            and item["winning_run"].get("status") == "completed"
+        ]
+        relaxed_target_used = bool(implementation_results)
     implementation_recommendations = _recommend(implementation_results)
     implementation_board = implementation_recommendations.get(requested_profile)
     implementation_result = next((item for item in results if item.get("board") == implementation_board), None)
     implementation_winning_run = (
         (implementation_result or {}).get("winning_run")
         if isinstance((implementation_result or {}).get("winning_run"), dict) else {}
+    )
+    continuation_target = (
+        _num(((implementation_result or {}).get("frequency_relaxation") or {}).get("recommended_mhz"))
+        if relaxed_target_used else target
     )
     interface_adapter = io_mapping.get("interface_adapter") if isinstance(io_mapping.get("interface_adapter"), dict) else {}
     spi_transport_ready = bool(
@@ -615,12 +629,16 @@ def run_agent(state: dict) -> dict:
             "label": "Continue to FPGA Prototyping",
             "selected_board": implementation_board,
             "programming_ready": bool(implementation_board),
+            "selection_mode": "relaxed_frequency" if relaxed_target_used else "requested_target",
             "host_transport": "spi" if spi_transport_ready else None,
             "transport_contract_ready": spi_transport_ready,
             "host_driver_ready": spi_transport_ready,
             "unmapped_ports": (implementation_result or {}).get("unmapped_ports") or [],
-            "blocked_reason": None if implementation_board else "No explored board both met the target and had a verified complete pin map.",
-            "target_frequency_mhz": target,
+            "blocked_reason": None if implementation_board else (
+                "No explored board met the requested target with a verified complete pin map, and no programming-ready relaxed-frequency result was permitted or available."
+            ),
+            "requested_target_frequency_mhz": target,
+            "target_frequency_mhz": continuation_target,
             "source_workflow_id": state.get("workflow_id"),
             "top_module": top,
             "winning_configuration": {
