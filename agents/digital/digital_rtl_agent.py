@@ -155,6 +155,39 @@ def _validate_memory_macro_instances(spec_json: dict, verilog_map: Dict[str, str
     return issues
 
 
+def _align_memory_macro_instance_ports(verilog_map: Dict[str, str], spec_json: dict) -> Dict[str, str]:
+    """Apply the canonical-role to concrete-port mapping declared by memory_macros."""
+    out = dict(verilog_map)
+    for macro in spec_json.get("memory_macros", []) or []:
+        if not isinstance(macro, dict):
+            continue
+        cell = str(macro.get("name") or macro.get("cell") or "").strip()
+        instance = str(macro.get("instance_name") or "").strip()
+        ports = macro.get("ports") if isinstance(macro.get("ports"), dict) else {}
+        if not cell or not instance or not ports:
+            continue
+        instance_pattern = re.compile(
+            rf"(?P<head>\b{re.escape(cell)}\s+{re.escape(instance)}\s*\()(?P<body>.*?)(?P<tail>\)\s*;)",
+            flags=re.DOTALL,
+        )
+        for filename, code in list(out.items()):
+            def repair(match: re.Match) -> str:
+                body = match.group("body")
+                for role, concrete in ports.items():
+                    role_name = str(role or "").strip()
+                    concrete_name = str(concrete or "").strip()
+                    if not role_name or not concrete_name or role_name == concrete_name:
+                        continue
+                    body = re.sub(
+                        rf"\.{re.escape(role_name)}\s*\(",
+                        f".{concrete_name}(",
+                        body,
+                    )
+                return f"{match.group('head')}{body}{match.group('tail')}"
+            out[filename] = instance_pattern.sub(repair, code)
+    return out
+
+
 def _stage_memory_macro_models_for_rtl_validation(spec_json: dict, rtl_dir: str, suffix: str = "") -> List[str]:
     staged: List[str] = []
     cells = _memory_macro_cells(spec_json)
@@ -189,6 +222,11 @@ def _stage_memory_macro_models_for_rtl_validation(spec_json: dict, rtl_dir: str,
     return sorted(dict.fromkeys(staged))
 
 
+def _is_fpga_bram_kind(value: object) -> bool:
+    kind = re.sub(r"[^a-z0-9]+", "_", str(value or "").strip().lower()).strip("_")
+    return kind in {"fpga_bram", "fpga_block_ram", "fpga_blockram"}
+
+
 def _materialize_declared_fpga_bram_wrappers(spec_json: dict, materialize_dir: str) -> List[str]:
     """Materialize synthesizable inferred-RAM wrappers declared by the spec.
 
@@ -198,7 +236,7 @@ def _materialize_declared_fpga_bram_wrappers(spec_json: dict, materialize_dir: s
     """
     generated: List[str] = []
     for macro in spec_json.get("memory_macros", []) or []:
-        if not isinstance(macro, dict) or str(macro.get("kind") or "").lower() != "fpga_bram":
+        if not isinstance(macro, dict) or not _is_fpga_bram_kind(macro.get("kind") or macro.get("macro_kind")):
             continue
         name = str(macro.get("name") or "").strip()
         if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_$]*", name):
@@ -3358,6 +3396,7 @@ def _validate_and_materialize_rtl(
     expected_files = _collect_expected_rtl_files(spec_json, mode)
     verilog_map = _normalize_emitted_rtl_filenames(verilog_map, expected_files)
     verilog_map = _align_verilog_map_to_expected_modules(verilog_map, spec_json, mode)
+    verilog_map = _align_memory_macro_instance_ports(verilog_map, spec_json)
     verilog_map = _repair_directional_port_aliases_from_spec(verilog_map, spec_json, mode)
     verilog_map = _repair_module_port_directions_from_spec(verilog_map, spec_json, mode)
     verilog_map = _remove_writes_to_spec_input_ports(verilog_map, spec_json, mode)

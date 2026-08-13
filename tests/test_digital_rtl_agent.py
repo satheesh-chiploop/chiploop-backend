@@ -305,6 +305,44 @@ def test_materializes_declared_fpga_bram_as_deliverable_rtl(tmp_path):
     assert "mem[index] <= write_data" in rtl
 
 
+def test_materializes_fpga_block_ram_kind_alias(tmp_path):
+    spec = {
+        "memory_macros": [{
+            "kind": "fpga_block_ram",
+            "name": "fpga_block_ram_generic",
+            "depth": 16,
+            "data_width": 128,
+            "addr_width": 4,
+            "ports": {"clk": "clk", "csb": "mem_csb", "we": "mem_we", "addr": "mem_addr", "din": "mem_din", "dout": "mem_dout"},
+        }]
+    }
+
+    paths = agent._materialize_declared_fpga_bram_wrappers(spec, str(tmp_path))
+
+    assert [os.path.basename(path) for path in paths] == ["fpga_block_ram_generic.v"]
+    rtl = open(paths[0], encoding="utf-8").read()
+    assert "reg [127:0] mem [0:15]" in rtl
+
+
+def test_aligns_memory_role_labels_to_declared_concrete_ports():
+    spec = {
+        "memory_macros": [{
+            "name": "fpga_block_ram_generic",
+            "instance_name": "u_history",
+            "ports": {"clk": "clock_i", "csb": "enable_n", "we": "write_en", "addr": "index", "din": "write_data", "dout": "read_data"},
+        }]
+    }
+    files = {
+        "top.v": """module top; fpga_block_ram_generic u_history (
+            .clk(clk), .csb(csb), .we(we), .addr(addr), .din(din), .dout(dout)); endmodule"""
+    }
+
+    repaired = agent._align_memory_macro_instance_ports(files, spec)["top.v"]
+
+    for concrete in ("clock_i", "enable_n", "write_en", "index", "write_data", "read_data"):
+        assert f".{concrete}(" in repaired
+
+
 def test_connectivity_contract_allows_top_internal_signals_to_child_memory_ports():
     spec = {
         "hierarchy": {
