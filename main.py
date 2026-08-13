@@ -7152,7 +7152,10 @@ def _hem_physical_ai_stage_plan(payload: Dict[str, Any]) -> List[str]:
     if path in {"digital_ip_asic", "fpga_then_asic"}:
         plan.append("asic_tapeout")
     toggles = payload.get("hem_stage_toggles") if isinstance(payload.get("hem_stage_toggles"), dict) else {}
-    if str(payload.get("hem_goal") or "product_demo") == "product_demo" and bool(toggles.get("firmware_product", True)):
+    deployment_architecture = str(payload.get("deployment_architecture") or "automatic").strip().lower()
+    firmware_inapplicable = deployment_architecture in {"fpga_external_host", "asic_companion", "asic_digital_ip"}
+    if (str(payload.get("hem_goal") or "product_demo") == "product_demo"
+            and bool(toggles.get("firmware_product", True)) and not firmware_inapplicable):
         plan.append("firmware_product")
     return plan
 
@@ -7173,6 +7176,30 @@ def _hem_physical_ai_child_payload(root_workflow_id: str, root_run_id: str, payl
     }
     if stage == "arch2rtl":
         implementation_path = str(payload.get("implementation_path") or "fpga_prototype")
+        deployment_architecture = str(payload.get("deployment_architecture") or "automatic").strip().lower()
+        firmware_requested = (
+            str(payload.get("hem_goal") or "product_demo") == "product_demo"
+            and bool((payload.get("hem_stage_toggles") or {}).get("firmware_product", True))
+        )
+        firmware_mmio_modes = {"automatic", "fpga_onboard_cpu", "fpga_soft_cpu", "asic_soc"}
+        external_host_modes = {"fpga_external_host", "asic_companion", "asic_digital_ip"}
+        if firmware_requested and deployment_architecture in firmware_mmio_modes:
+            firmware_interface_contract = (
+                "\nFIRMWARE CONTROL-PLANE CONTRACT (mandatory): this product journey requests generated firmware. "
+                "The synthesizable top must expose a real firmware-visible CSR/MMIO interface with address, "
+                "write-data, read-data, transaction-valid/write-enable, and response/ready semantics. "
+                "DIGITAL_SPEC_JSON.register_contract must describe the implemented registers and fields. Every "
+                "declared register must be reachable through RTL decode; do not label inaccessible internal state "
+                "as software-visible. The streaming transport may coexist with, but cannot replace, this interface.\n"
+            )
+        elif deployment_architecture in external_host_modes:
+            firmware_interface_contract = (
+                "\nEXTERNAL-HOST CONTROL CONTRACT: control belongs to the external host or companion processor. "
+                "Do not invent MMIO registers unless the top-level RTL implements them. Record device firmware as "
+                "not applicable and preserve the host transport contract.\n"
+            )
+        else:
+            firmware_interface_contract = ""
         memory_contract = (
             "\nASIC MEMORY CONTRACT (mandatory): instantiate sky130_sram_1kbyte_1rw1r_32x256_8 for bulk "
             "payload/history/FIFO storage using clk0, csb0, web0, wmask0[3:0], addr0[7:0], din0[31:0], "
@@ -7196,7 +7223,7 @@ def _hem_physical_ai_child_payload(root_workflow_id: str, root_run_id: str, payl
                 f"The required synthesizable top module is {top_module}. Do not substitute a status, telemetry, "
                 "register-bank, or leaf module as the design top. The top must implement the selected Physical AI "
                 "application contract, external model request/response transport, validation, safety, timeout, "
-                "fallback, and bounded actuator-command behavior.\n" + transport_contract + base_spec + memory_contract
+                "fallback, and bounded actuator-command behavior.\n" + transport_contract + firmware_interface_contract + base_spec + memory_contract
             ),
             "top_module": top_module,
             "design_language": "SystemVerilog",

@@ -1547,6 +1547,37 @@ def _publish_stage_file(workflow_id: str, filename: str, path: str) -> None:
         save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital/mbist_rtl_insertion", filename, _read_text(path))
 
 
+def _publish_integrated_rtl_closure(workflow_id: str, rtl_files: list[str]) -> dict[str, Any]:
+    """Persist the exact linted RTL closure used by downstream workflows."""
+    published: list[dict[str, str]] = []
+    missing: list[str] = []
+    seen_names: set[str] = set()
+    unique_paths = sorted(dict.fromkeys(str(item) for item in rtl_files if item))
+    for path in unique_paths:
+        if not os.path.isfile(path):
+            missing.append(path)
+            continue
+        filename = os.path.basename(path)
+        if filename in seen_names:
+            raise RuntimeError(f"Integrated MBIST RTL contains duplicate filename '{filename}'")
+        seen_names.add(filename)
+        storage_path = save_text_artifact_and_record(
+            workflow_id,
+            AGENT_NAME,
+            "digital/mbist_rtl_insertion/integrated_rtl",
+            filename,
+            _read_text(path),
+        )
+        if not storage_path:
+            raise RuntimeError(f"Failed to persist integrated MBIST RTL artifact '{filename}'")
+        published.append({"filename": filename, "storage_path": storage_path})
+    if missing:
+        raise RuntimeError("Integrated MBIST RTL disappeared before publication: " + ", ".join(missing))
+    if len(published) != len(unique_paths):
+        raise RuntimeError("Integrated MBIST RTL publication is incomplete")
+    return {"status": "complete", "file_count": len(published), "files": published}
+
+
 def _stage_behavioral_models_for_integrated_lint(memory_results: list[dict[str, Any]], final_rtl_dir: str) -> list[str]:
     staged: list[str] = []
     _ensure_dir(final_rtl_dir)
@@ -1880,6 +1911,7 @@ def run_agent(state: dict) -> dict:
         })
         _write_publish_summary(workflow_id, stage_dir, summary)
         raise RuntimeError(f"MBIST RTL insertion failed: {summary['reason']}.")
+    rtl_publication = _publish_integrated_rtl_closure(workflow_id, final_files)
     integration_status = "wrapper_replaced_memory_instance"
     wrapper_modules = [item.get("wrapper_module") for item in integration_wrapper_items if item.get("wrapper_module")]
     summary.update({
@@ -1898,6 +1930,7 @@ def run_agent(state: dict) -> dict:
         "patched_sources": patched_sources,
         "integrated_rtl_dir": final_rtl_dir,
         "final_rtl_files": final_files,
+        "integrated_rtl_publication": rtl_publication,
         "staged_behavioral_models": staged_behavioral_models,
         "deduped_functional_rtl": deduped_functional_rtl,
         "integration_note": (

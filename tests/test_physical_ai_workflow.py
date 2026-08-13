@@ -34,6 +34,20 @@ def test_physical_ai_firmware_product_uses_supported_embedded_dashboard():
     assert '"dashboard_stage": "firmware"' not in stage_block
 
 
+def test_physical_ai_product_arch2rtl_requires_real_firmware_control_plane():
+    main_source = (Path(__file__).parents[1] / "main.py").read_text(encoding="utf-8")
+    assert "FIRMWARE CONTROL-PLANE CONTRACT (mandatory)" in main_source
+    assert "DIGITAL_SPEC_JSON.register_contract must describe the implemented registers and fields" in main_source
+    assert "EXTERNAL-HOST CONTROL CONTRACT" in main_source
+    assert 'firmware_mmio_modes = {"automatic", "fpga_onboard_cpu", "fpga_soft_cpu", "asic_soc"}' in main_source
+
+
+def test_external_host_physical_ai_plan_does_not_queue_mmio_firmware():
+    main_source = (Path(__file__).parents[1] / "main.py").read_text(encoding="utf-8")
+    assert 'firmware_inapplicable = deployment_architecture in {"fpga_external_host", "asic_companion", "asic_digital_ip"}' in main_source
+    assert "and bool(toggles.get(\"firmware_product\", True)) and not firmware_inapplicable" in main_source
+
+
 def test_system_firmware_uses_supported_embedded_dashboard():
     main_source = (Path(__file__).parents[1] / "main.py").read_text(encoding="utf-8")
     stage_block = main_source.split('HEM_SYSTEM_RTL_STAGE_META:', 1)[1].split('HEM_SYSTEM_RTL_FIXED_POLICY:', 1)[0]

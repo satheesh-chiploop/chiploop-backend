@@ -48,7 +48,7 @@ def _spec_requires_register_map(spec_obj: dict) -> bool:
         ports = spec_obj.get("ports") or []
     names = {str(port.get("name") or "").lower() for port in ports if isinstance(port, dict)}
     address = any(name in names for name in {"cfg_addr", "reg_addr", "csr_addr", "apb_paddr", "axi_awaddr", "i2c_addr"})
-    transaction = any(name in names for name in {"cfg_we", "cfg_write", "reg_we", "csr_write", "apb_psel", "axi_awvalid", "i2c_scl"})
+    transaction = any(name in names for name in {"cfg_we", "cfg_write", "cfg_valid", "reg_we", "reg_valid", "csr_write", "csr_valid", "apb_psel", "axi_awvalid", "i2c_scl"})
     data = any(name in names for name in {"cfg_wdata", "reg_wdata", "csr_wdata", "apb_pwdata", "axi_wdata", "i2c_sda"})
     return address and transaction and data
 

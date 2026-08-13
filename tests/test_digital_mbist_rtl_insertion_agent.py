@@ -2,10 +2,42 @@ import json
 import os
 from pathlib import Path
 
+import pytest
+
 os.environ.setdefault("SUPABASE_URL", "http://localhost")
 os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test")
 
 from agents.digital import digital_mbist_rtl_insertion_agent as agent
+
+
+def test_publish_integrated_rtl_closure_records_every_source(tmp_path, monkeypatch):
+    top = tmp_path / "top.sv"
+    macro = tmp_path / "macro.v"
+    top.write_text("module top; macro u_macro(); endmodule\n", encoding="utf-8")
+    macro.write_text("module macro; endmodule\n", encoding="utf-8")
+    uploads = []
+
+    def fake_save(workflow_id, agent_name, subdir, filename, content):
+        uploads.append((workflow_id, subdir, filename, content))
+        return f"backend/workflows/{workflow_id}/{subdir}/{filename}"
+
+    monkeypatch.setattr(agent, "save_text_artifact_and_record", fake_save)
+
+    result = agent._publish_integrated_rtl_closure("wf", [str(top), str(macro)])
+
+    assert result["status"] == "complete"
+    assert result["file_count"] == 2
+    assert {item[2] for item in uploads} == {"top.sv", "macro.v"}
+    assert all(item[1] == "digital/mbist_rtl_insertion/integrated_rtl" for item in uploads)
+
+
+def test_publish_integrated_rtl_closure_fails_if_upload_is_missing(tmp_path, monkeypatch):
+    rtl = tmp_path / "top.sv"
+    rtl.write_text("module top; endmodule\n", encoding="utf-8")
+    monkeypatch.setattr(agent, "save_text_artifact_and_record", lambda *args, **kwargs: None)
+
+    with pytest.raises(RuntimeError, match="Failed to persist integrated MBIST RTL artifact"):
+        agent._publish_integrated_rtl_closure("wf", [str(rtl)])
 
 
 def test_mbist_rtl_insertion_disabled_by_default(tmp_path):

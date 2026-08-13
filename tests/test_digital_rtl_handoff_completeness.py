@@ -6,7 +6,7 @@ import pytest
 os.environ.setdefault("SUPABASE_URL", "http://localhost:54321")
 os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-service-role-key")
 
-from agents.digital.digital_rtl_handoff_ingest_agent import _declared_modules, run_agent
+from agents.digital.digital_rtl_handoff_ingest_agent import _complete_local_rtl_module_closure, _declared_modules, run_agent
 
 
 def test_declared_modules_reads_complete_rtl_set(tmp_path: Path):
@@ -46,3 +46,28 @@ def test_handoff_preserves_all_existing_rtl_files(tmp_path: Path):
 
     assert result["top_module"] == "top"
     assert {Path(path).name for path in result["rtl_files"]} == {"child.v", "top.v"}
+
+
+def test_handoff_module_closure_adds_required_upstream_macro(tmp_path: Path):
+    source = tmp_path / "source"
+    work = tmp_path / "work"
+    source.mkdir()
+    work.mkdir()
+    top = work / "wrapper.v"
+    macro = source / "qualified_sram.v"
+    top.write_text("module wrapper(input clk);\nqualified_sram u_mem(.clk(clk));\nendmodule\n", encoding="utf-8")
+    macro.write_text("module qualified_sram(input clk); endmodule\n", encoding="utf-8")
+
+    files, unresolved = _complete_local_rtl_module_closure([str(top)], [source], str(work))
+
+    assert unresolved == []
+    assert {Path(path).name for path in files} == {"wrapper.v", "qualified_sram.v"}
+
+
+def test_handoff_module_closure_reports_missing_nonprimitive_module(tmp_path: Path):
+    top = tmp_path / "top.v"
+    top.write_text("module top(input a, output y);\nmissing_child u(.a(a));\nbuf b(y, a);\nendmodule\n", encoding="utf-8")
+
+    _files, unresolved = _complete_local_rtl_module_closure([str(top)], [], str(tmp_path))
+
+    assert unresolved == ["missing_child"]

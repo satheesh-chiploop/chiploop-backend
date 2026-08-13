@@ -122,6 +122,65 @@ def _find_local_files(roots: Iterable[Path], predicate) -> List[Path]:
     return found
 
 
+def _rtl_module_definitions(path: Path | str) -> set[str]:
+    try:
+        text = Path(path).read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return set()
+    text = re.sub(r"/\*.*?\*/|//[^\r\n]*", "", text, flags=re.DOTALL)
+    return {escaped or plain for escaped, plain in re.findall(
+        r"\bmodule\s+(?:\\([^\s]+)|([A-Za-z_][A-Za-z0-9_$]*))", text
+    ) if escaped or plain}
+
+
+def _rtl_instantiated_modules(path: Path | str) -> set[str]:
+    try:
+        text = Path(path).read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return set()
+    text = re.sub(r"/\*.*?\*/|//[^\r\n]*", "", text, flags=re.DOTALL)
+    keywords = {
+        "module", "if", "for", "while", "case", "casex", "casez", "end", "else", "begin", "assign", "always", "initial", "function", "task", "integer", "generate", "endgenerate",
+        "and", "nand", "or", "nor", "xor", "xnor", "not", "buf", "bufif0", "bufif1", "notif0", "notif1",
+        "tran", "rtran", "tranif0", "tranif1", "rtranif0", "rtranif1", "pullup", "pulldown", "pmos", "nmos",
+    }
+    return {
+        name for name in re.findall(
+            r"(?m)^\s*([A-Za-z_][A-Za-z0-9_$]*)\b\s*(?:#\s*\([^;]*?\)\s*)?[A-Za-z_][A-Za-z0-9_$]*\s*\(",
+            text,
+        ) if name.lower() not in keywords
+    }
+
+
+def _complete_local_rtl_module_closure(imported_rtl: List[str], roots: Iterable[Path], workflow_dir: str) -> Tuple[List[str], List[str]]:
+    """Add upstream RTL collateral needed to close instantiated module references."""
+    imported = list(dict.fromkeys(imported_rtl))
+    candidates = _find_local_files(roots, lambda p: p.name.lower().endswith(RTL_EXTENSIONS))
+    candidate_defs = [(path, _rtl_module_definitions(path)) for path in candidates]
+    added: List[str] = []
+    for _ in range(MAX_RTL_FILES):
+        defined = set().union(*(_rtl_module_definitions(path) for path in imported)) if imported else set()
+        referenced = set().union(*(_rtl_instantiated_modules(path) for path in imported)) if imported else set()
+        unresolved = sorted(referenced - defined)
+        if not unresolved:
+            break
+        progress = False
+        for module in unresolved:
+            source = next((path for path, definitions in candidate_defs if module in definitions), None)
+            if source is None:
+                continue
+            destination = _write_local(workflow_dir, f"handoff/rtl/{source.name}", source.read_bytes())
+            if destination not in imported:
+                imported.append(destination)
+                added.append(destination)
+                progress = True
+        if not progress:
+            break
+    defined = set().union(*(_rtl_module_definitions(path) for path in imported)) if imported else set()
+    referenced = set().union(*(_rtl_instantiated_modules(path) for path in imported)) if imported else set()
+    return imported, sorted(referenced - defined)
+
+
 def _artifact_candidates(client: Any, source_workflow_id: str) -> Tuple[List[str], List[str], List[str], List[str], List[str]]:
     response = (
         client.table("workflows")
@@ -212,6 +271,13 @@ def _copy_supabase_arch2rtl(state: Dict[str, Any], workflow_dir: str) -> Dict[st
         state["regmap_json"] = regmap_json
         state["digital_regmap_json_path"] = regmap_path
 
+    imported_rtl, unresolved_modules = _complete_local_rtl_module_closure(imported_rtl, roots, workflow_dir)
+    if unresolved_modules:
+        raise RuntimeError(
+            "Arch2RTL handoff is not module-complete; unresolved instantiated modules: "
+            + ", ".join(unresolved_modules[:20])
+        )
+
     imported_upf: List[str] = []
     for path in upf_paths:
         raw = _download(client, path)
@@ -248,6 +314,7 @@ def _copy_supabase_arch2rtl(state: Dict[str, Any], workflow_dir: str) -> Dict[st
         "sdc_files": imported_sdc,
         "spec_imported": bool(spec_json),
         "regmap_imported": bool(regmap_json),
+        "module_closure_complete": True,
     }
 
 
