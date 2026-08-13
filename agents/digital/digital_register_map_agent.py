@@ -32,6 +32,46 @@ def _detect_spec_mode(spec_obj: dict) -> str:
     return "unknown"
 
 
+def _spec_requires_register_map(spec_obj: dict) -> bool:
+    """Return true only when the authoritative interface exposes software-visible control."""
+    contract = spec_obj.get("register_contract") if isinstance(spec_obj, dict) else None
+    if isinstance(contract, list) and contract:
+        return True
+    if isinstance(contract, dict) and (contract.get("registers") or contract.get("bus") or contract.get("bus_type")):
+        return True
+    if not isinstance(spec_obj, dict):
+        return False
+    ports = []
+    if isinstance(spec_obj.get("hierarchy"), dict):
+        ports = ((spec_obj["hierarchy"].get("top_module") or {}).get("ports") or [])
+    else:
+        ports = spec_obj.get("ports") or []
+    names = {str(port.get("name") or "").lower() for port in ports if isinstance(port, dict)}
+    address = any(name in names for name in {"cfg_addr", "reg_addr", "csr_addr", "apb_paddr", "axi_awaddr", "i2c_addr"})
+    transaction = any(name in names for name in {"cfg_we", "cfg_write", "reg_we", "csr_write", "apb_psel", "axi_awvalid", "i2c_scl"})
+    data = any(name in names for name in {"cfg_wdata", "reg_wdata", "csr_wdata", "apb_pwdata", "axi_wdata", "i2c_sda"})
+    return address and transaction and data
+
+
+def _no_register_map_document(spec_mode: str) -> dict:
+    return {
+        "derived_from_spec_only": True,
+        "spec_mode": spec_mode,
+        "register_map_required": False,
+        "regmap": {
+            "status": "not_applicable",
+            "bus": "none",
+            "base_address": None,
+            "addr_width": 0,
+            "data_width": 0,
+            "registers": [],
+        },
+        "interrupts": {"sources": []},
+        "software_driver_intent": {"init_sequence": [], "polling_sequence": [], "irq_sequence": []},
+        "consistency_notes": ["The authoritative design contract exposes no software-visible register interface."],
+    }
+
+
 def _parse_int(value, default=0):
     try:
         return int(str(value), 0)
@@ -44,6 +84,8 @@ def _register_layout_violations(document: dict) -> list[str]:
     regmap = document.get("regmap") if isinstance(document, dict) else None
     if not isinstance(regmap, dict):
         return ["regmap must be a JSON object"]
+    if document.get("register_map_required") is False and regmap.get("status") == "not_applicable":
+        return []
     data_width = _parse_int(regmap.get("data_width"), 0)
     if data_width not in {8, 16, 32, 64}:
         return [f"regmap.data_width={data_width!r} must be one of 8, 16, 32, or 64"]
@@ -125,6 +167,37 @@ def run_agent(state: dict) -> dict:
         return state
 
     spec_mode = _detect_spec_mode(spec_obj)
+
+    if not _spec_requires_register_map(spec_obj):
+        regmap = _no_register_map_document(spec_mode)
+        raw_path = os.path.join(workflow_dir, "digital_regmap_raw_output.txt")
+        out_path = os.path.join(workflow_dir, "digital_regmap.json")
+        with open(raw_path, "w", encoding="utf-8") as f:
+            f.write(json.dumps(regmap, indent=2))
+        with open(out_path, "w", encoding="utf-8") as f:
+            json.dump(regmap, f, indent=2)
+        try:
+            for filename, path in (("digital_regmap_raw_output.txt", raw_path), ("digital_regmap.json", out_path)):
+                with open(path, "r", encoding="utf-8") as f:
+                    save_text_artifact_and_record(
+                        workflow_id=workflow_id, agent_name=agent_name, subdir="digital",
+                        filename=filename, content=f.read(),
+                    )
+        except Exception as e:
+            print(f"Failed to upload no-register-map artifacts: {e}")
+        rel_regmap_path = "digital/digital_regmap.json"
+        digital = state.setdefault("digital", {})
+        digital.update({
+            "regmap": regmap, "digital_regmap": regmap,
+            "digital_regmap_path": rel_regmap_path, "register_map_path": rel_regmap_path,
+        })
+        state.update({
+            "status": "Digital register map not required by the design contract.",
+            "digital_regmap": regmap, "digital_regmap_path": rel_regmap_path,
+            "digital_register_map_path": rel_regmap_path, "digital_regmap_json": out_path,
+            "register_map_required": False, "workflow_id": workflow_id, "workflow_dir": workflow_dir,
+        })
+        return state
 
     prompt = f"""
 You are a senior SoC register architect.

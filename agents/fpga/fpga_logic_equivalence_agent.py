@@ -59,8 +59,11 @@ def _proof_timeout_seconds(state: dict, *, technology_mapped: bool = False) -> i
     return max(180, min(estimated, 1200))
 
 
-def _proof_script(rtl_files: list[str], netlist: str, top: str, family: str, depths: list[int]) -> str:
+def _proof_script(rtl_files: list[str], netlist: str, top: str, family: str, depths: list[int],
+                  blackbox_modules: list[str] | None = None) -> str:
+    blackboxes = [name for name in (blackbox_modules or []) if name and name != top]
     normalize = [
+        *(f"blackbox {name}" for name in blackboxes),
         f"prep -flatten -top {top}",
         "async2sync",
         # Normalize inferred memories on both sides before equiv_make. The
@@ -115,30 +118,113 @@ def _unproven_points(log: str, proven: bool) -> int | None:
 
 
 def _run_proof(state: dict, out_dir: str, name: str, gold_files: list[str], gate_netlist: str,
-               top: str, family: str, depths: list[int], *, technology_mapped: bool = False) -> dict:
+               top: str, family: str, depths: list[int], *, technology_mapped: bool = False,
+               blackbox_modules: list[str] | None = None, timeout_override: int | None = None) -> dict:
     script_path = os.path.abspath(os.path.join(out_dir, f"{name}.ys"))
     log_path = os.path.abspath(os.path.join(out_dir, f"{name}.log"))
-    write_text(script_path, _proof_script(gold_files, gate_netlist, top, family, depths))
-    timeout_seconds = _proof_timeout_seconds(state, technology_mapped=technology_mapped)
+    write_text(script_path, _proof_script(gold_files, gate_netlist, top, family, depths, blackbox_modules))
+    timeout_seconds = int(timeout_override or _proof_timeout_seconds(state, technology_mapped=technology_mapped))
     result = run_cmd(["yosys", "-s", script_path], cwd=out_dir, log_path=log_path, timeout=timeout_seconds, state=state)
     log = open(log_path, "r", encoding="utf-8", errors="ignore").read() if os.path.exists(log_path) else ""
     proven = bool(result.get("ok"))
     unproven = _unproven_points(log, proven)
-    status = "pass" if proven else "inconclusive" if unproven else "fail"
+    result_error = str(result.get("error") or "")
+    timed_out = bool(re.search(r"timed out after|timeout", result_error, re.IGNORECASE))
+    status = "pass" if proven else "inconclusive" if (unproven is not None or timed_out) else "fail"
     proof = {
         "status": status, "proven": proven, "gold": gold_files,
         "gate": gate_netlist, "script": script_path, "log": log_path,
         "command": result, "unproven_points": unproven, "timeout_seconds": timeout_seconds,
     }
     if not proven:
-        proof["failure_kind"] = "proof_incomplete" if unproven else "tool_error"
+        proof["failure_kind"] = "resource_inconclusive" if timed_out else "proof_incomplete" if unproven is not None else "tool_error"
         proof["reason"] = (
+            f"Yosys reached the {timeout_seconds}-second proof budget without a proof result."
+            if timed_out else
             f"Yosys could not prove {unproven} equivalence points after induction depths "
             f"{', '.join(str(value) for value in depths)}."
-            if unproven else
+            if unproven is not None else
             result.get("stderr_tail") or result.get("stdout_tail") or result.get("error") or "Yosys equivalence proof failed."
         )
     return proof
+
+
+def _module_names(path: str) -> set[str]:
+    names: set[str] = set()
+    try:
+        text = open(path, "r", encoding="utf-8", errors="ignore").read()
+    except OSError:
+        return names
+    text = re.sub(r"/\*.*?\*/|//[^\r\n]*", "", text, flags=re.DOTALL)
+    for escaped, plain in re.findall(r"\bmodule\s+(?:\\([^\s]+)|([A-Za-z_][A-Za-z0-9_$]*))", text):
+        name = escaped or plain
+        if name and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_$]*", name):
+            names.add(name)
+    return names
+
+
+def _mapped_lec_strategy(state: dict, generic_netlist: str, mapped_netlist: str, top: str) -> dict:
+    requested = str(state.get("fpga_mapped_lec_strategy") or "auto").strip().lower()
+    requested = requested if requested in {"auto", "monolithic", "hierarchical"} else "auto"
+    fpga = state.get("fpga") if isinstance(state.get("fpga"), dict) else {}
+    synthesis = fpga.get("synthesis") if isinstance(fpga.get("synthesis"), dict) else {}
+    cells = max(0, int(synthesis.get("total_mapped_cells") or 0))
+    flip_flops = max(0, int(synthesis.get("flip_flops") or 0))
+    shared = sorted((_module_names(generic_netlist) & _module_names(mapped_netlist)) - {top})
+    large = cells >= max(1, int(state.get("fpga_hierarchical_lec_cell_threshold") or 4000)) or flip_flops >= 1000
+    use_hierarchical = bool(shared and (requested == "hierarchical" or (requested == "auto" and large)))
+    return {
+        "requested": requested,
+        "selected": "hierarchical" if use_hierarchical else "monolithic",
+        "shared_partitions": shared,
+        "mapped_cells": cells,
+        "flip_flops": flip_flops,
+        "large_design": large,
+        "reason": "shared hierarchy and complexity threshold" if use_hierarchical else "monolithic proof selected",
+    }
+
+
+def _run_hierarchical_mapped_proof(state: dict, out_dir: str, generic_netlist: str, mapped_netlist: str,
+                                   top: str, family: str, depths: list[int], partitions: list[str]) -> dict:
+    proofs = []
+    for index, module in enumerate(partitions, start=1):
+        safe = re.sub(r"[^A-Za-z0-9_.-]+", "_", module)
+        _progress(state, f"FPGA mapped LEC partition {index}/{len(partitions)} started: {module}.")
+        proof = _run_proof(
+            state, out_dir, f"fpga_mapped_partition_{safe}", [generic_netlist], mapped_netlist,
+            module, family, depths, technology_mapped=True, timeout_override=900,
+        )
+        proof["module"] = module
+        proofs.append(proof)
+        _progress(state, f"FPGA mapped LEC partition {index}/{len(partitions)} finished with status {proof['status']}.")
+        if proof["status"] == "fail":
+            break
+    top_proof = None
+    if len(proofs) == len(partitions) and all(proof["proven"] for proof in proofs):
+        _progress(state, "FPGA mapped LEC top-level connectivity proof started.")
+        top_proof = _run_proof(
+            state, out_dir, "fpga_mapped_top_connectivity_lec", [generic_netlist], mapped_netlist,
+            top, family, depths, technology_mapped=True, blackbox_modules=partitions, timeout_override=600,
+        )
+        _progress(state, f"FPGA mapped LEC top-level connectivity proof finished with status {top_proof['status']}.")
+    all_proofs = [*proofs, *([top_proof] if top_proof else [])]
+    proven = bool(top_proof and top_proof.get("proven") and len(proofs) == len(partitions) and all(p.get("proven") for p in proofs))
+    incomplete = next((proof for proof in all_proofs if proof and proof.get("status") == "inconclusive"), None)
+    failed = next((proof for proof in all_proofs if proof and proof.get("status") == "fail"), None)
+    cause = failed or incomplete
+    return {
+        "status": "pass" if proven else "inconclusive" if incomplete else "fail",
+        "proven": proven,
+        "strategy": "hierarchical",
+        "gold": [generic_netlist], "gate": mapped_netlist,
+        "partitions": proofs, "top_connectivity": top_proof,
+        "partition_count": len(partitions), "partitions_attempted": len(proofs),
+        "partitions_proven": sum(1 for proof in proofs if proof.get("proven")),
+        "coverage_complete": proven,
+        "unproven_points": sum(int(proof.get("unproven_points") or 0) for proof in all_proofs if proof) or None,
+        "failure_kind": None if proven else (cause or {}).get("failure_kind") or "coverage_incomplete",
+        "reason": None if proven else (cause or {}).get("reason") or "Hierarchical proof coverage was incomplete.",
+    }
 
 
 def run_agent(state: dict) -> dict:
@@ -175,6 +261,8 @@ def run_agent(state: dict) -> dict:
           or not os.path.exists(generic_netlist) or not os.path.exists(mapped_netlist)):
         summary["reason"] = "LEC requires completed synthesis, source RTL, and both generic and FPGA-mapped netlists."
     else:
+        mapped_strategy = _mapped_lec_strategy(state, generic_netlist, mapped_netlist, top)
+        summary["mapped_lec_strategy"] = mapped_strategy
         _progress(state, f"FPGA LEC proof 1/2 started: RTL to generic synthesis netlist (size-aware timeout {_proof_timeout_seconds(state)}s).")
         generic_proof = _run_proof(state, out_dir, "fpga_rtl_to_generic_lec", rtl_files, generic_netlist, top, "", induction_depths)
         _progress(state, f"FPGA LEC proof 1/2 finished with status {generic_proof['status']}.")
@@ -182,11 +270,18 @@ def run_agent(state: dict) -> dict:
         # another full timeout proving a mapped netlist whose golden source has
         # not been established.
         if generic_proof["proven"]:
-            _progress(state, f"FPGA LEC proof 2/2 started: generic to {family} mapped netlist.")
-            mapped_proof = _run_proof(
-                state, out_dir, "fpga_generic_to_mapped_lec", [generic_netlist],
-                mapped_netlist, top, family, induction_depths, technology_mapped=True,
-            )
+            _progress(state, f"FPGA LEC proof 2/2 started: generic to {family} mapped netlist ({mapped_strategy['selected']}).")
+            if mapped_strategy["selected"] == "hierarchical":
+                mapped_proof = _run_hierarchical_mapped_proof(
+                    state, out_dir, generic_netlist, mapped_netlist, top, family,
+                    induction_depths, mapped_strategy["shared_partitions"],
+                )
+            else:
+                mapped_proof = _run_proof(
+                    state, out_dir, "fpga_generic_to_mapped_lec", [generic_netlist],
+                    mapped_netlist, top, family, induction_depths, technology_mapped=True,
+                )
+                mapped_proof["strategy"] = "monolithic"
             _progress(state, f"FPGA LEC proof 2/2 finished with status {mapped_proof['status']}.")
         else:
             mapped_proof = {
@@ -201,7 +296,7 @@ def run_agent(state: dict) -> dict:
         failed_proof = generic_proof if generic_proof["status"] != "pass" else mapped_proof
         unproven_points = sum(int(proof.get("unproven_points") or 0) for proof in (generic_proof, mapped_proof)) or None
         summary.update({
-            "status": "pass" if proven else "inconclusive" if unproven_points else "fail",
+            "status": "pass" if proven else "inconclusive" if (mapped_inconclusive or unproven_points) else "fail",
             "gate_status": "pass" if proven else "pass_with_advisory" if mapped_inconclusive else "fail",
             "generic_lec": generic_proof, "mapped_lec": mapped_proof,
             "generic_proven": generic_proof["proven"], "mapped_proven": mapped_proof["proven"],

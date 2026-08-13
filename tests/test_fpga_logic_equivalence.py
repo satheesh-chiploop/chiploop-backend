@@ -97,6 +97,52 @@ def test_mapped_lec_budget_scales_for_physical_ai_ecp5_design(tmp_path):
     assert lec._proof_timeout_seconds(state, technology_mapped=True) == 1800
 
 
+def test_auto_strategy_selects_shared_hierarchy_for_large_design(tmp_path):
+    generic = tmp_path / "generic.v"
+    mapped = tmp_path / "mapped.v"
+    hierarchy = "module core(input a, output y); assign y=a; endmodule\nmodule top(input a, output y); core u(.a(a),.y(y)); endmodule\n"
+    generic.write_text(hierarchy, encoding="utf-8")
+    mapped.write_text(hierarchy, encoding="utf-8")
+    state = {"fpga": {"synthesis": {"total_mapped_cells": 6417, "flip_flops": 1500}}}
+
+    strategy = lec._mapped_lec_strategy(state, str(generic), str(mapped), "top")
+
+    assert strategy["selected"] == "hierarchical"
+    assert strategy["shared_partitions"] == ["core"]
+
+
+def test_hierarchical_mapped_lec_proves_partitions_and_top_connectivity(tmp_path, monkeypatch):
+    state = _state(tmp_path)
+    generic = Path(state["fpga"]["synthesis"]["equivalence_netlist"])
+    mapped = Path(state["fpga"]["synthesis"]["verilog_netlist"])
+    hierarchy = "module core(input clk, output reg q); always @(posedge clk) q <= ~q; endmodule\nmodule top(input clk, output q); core u(.clk(clk),.q(q)); endmodule\n"
+    generic.write_text(hierarchy, encoding="utf-8")
+    mapped.write_text(hierarchy, encoding="utf-8")
+    state["fpga"]["synthesis"].update({
+        "mapped_equivalence_netlist": str(mapped),
+        "total_mapped_cells": 5000,
+        "flip_flops": 1200,
+    })
+    published = {}
+    monkeypatch.setattr(lec, "publish_json", lambda _state, _agent, _subdir, _name, data: published.update(data))
+    monkeypatch.setattr(lec, "manifest_update", lambda *_args: None)
+
+    def fake_run(_cmd, cwd, log_path, **_kwargs):
+        Path(log_path).write_text("Equivalence successfully proven!\n", encoding="utf-8")
+        return {"ok": True}
+
+    monkeypatch.setattr(lec, "run_cmd", fake_run)
+    lec.run_agent(state)
+
+    assert published["status"] == "pass"
+    assert published["mapped_lec_strategy"]["selected"] == "hierarchical"
+    assert published["mapped_lec"]["strategy"] == "hierarchical"
+    assert published["mapped_lec"]["partitions_proven"] == 1
+    assert published["mapped_lec"]["coverage_complete"] is True
+    top_script = Path(published["mapped_lec"]["top_connectivity"]["script"]).read_text(encoding="utf-8")
+    assert top_script.count("blackbox core") == 2
+
+
 def test_mapped_lec_tool_error_blocks_even_when_generic_proof_passes(tmp_path, monkeypatch):
     state = _state(tmp_path)
     monkeypatch.setattr(lec, "publish_json", lambda *_args: None)
@@ -116,6 +162,33 @@ def test_mapped_lec_tool_error_blocks_even_when_generic_proof_passes(tmp_path, m
     with pytest.raises(RuntimeError, match="LEC did not pass"):
         lec.run_agent(state)
     assert calls == 2
+
+
+def test_mapped_lec_timeout_is_resource_advisory_after_generic_proof_passes(tmp_path, monkeypatch):
+    state = _state(tmp_path)
+    published = {}
+    monkeypatch.setattr(lec, "publish_json", lambda _state, _agent, _subdir, _name, data: published.update(data))
+    monkeypatch.setattr(lec, "manifest_update", lambda *_args: None)
+    calls = 0
+
+    def fake_run(_cmd, cwd, log_path, **_kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            Path(log_path).write_text("Equivalence successfully proven!\n", encoding="utf-8")
+            return {"ok": True}
+        Path(log_path).write_text("", encoding="utf-8")
+        return {"ok": False, "error": "Command ['yosys'] timed out after 1800 seconds"}
+
+    monkeypatch.setattr(lec, "run_cmd", fake_run)
+    lec.run_agent(state)
+
+    assert published["status"] == "inconclusive"
+    assert published["gate_status"] == "pass_with_advisory"
+    assert published["generic_proven"] is True
+    assert published["mapped_proven"] is False
+    assert published["mapped_lec"]["failure_kind"] == "resource_inconclusive"
+    assert published["mapped_lec"]["timeout_seconds"] == 1800
 
 
 def test_mapped_lec_inconclusive_is_advisory_after_generic_proof_passes(tmp_path, monkeypatch):
