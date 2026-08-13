@@ -127,6 +127,34 @@ def _memory_macro_cells(spec_json: dict) -> List[str]:
     return sorted(dict.fromkeys(cells))
 
 
+def _validate_memory_macro_instances(spec_json: dict, verilog_map: Dict[str, str]) -> List[str]:
+    """Enforce the authoritative macro cell/instance identity from the spec."""
+    issues: List[str] = []
+    text = _strip_verilog_comments("\n".join(verilog_map.values()))
+    for macro in spec_json.get("memory_macros", []) or []:
+        if not isinstance(macro, dict):
+            continue
+        cell = str(macro.get("name") or macro.get("cell") or macro.get("openram_cell") or "").strip()
+        instance = str(macro.get("instance_name") or "").strip()
+        if not cell:
+            continue
+        if instance:
+            pattern = rf"\b{re.escape(cell)}\s+{re.escape(instance)}\s*\("
+            count = len(re.findall(pattern, text))
+            if count != 1:
+                issues.append(
+                    f"❌ Required memory macro instance mismatch: expected exactly one "
+                    f"'{cell} {instance}(...)', found {count}. memory_macros[] is authoritative; "
+                    "do not substitute a wrapper, behavioral model, or invented module name."
+                )
+        elif not re.search(rf"\b{re.escape(cell)}\s+[A-Za-z_][A-Za-z0-9_$]*\s*\(", text):
+            issues.append(
+                f"❌ Required memory macro cell '{cell}' is not instantiated. "
+                "memory_macros[] is authoritative."
+            )
+    return issues
+
+
 def _stage_memory_macro_models_for_rtl_validation(spec_json: dict, rtl_dir: str, suffix: str = "") -> List[str]:
     staged: List[str] = []
     cells = _memory_macro_cells(spec_json)
@@ -1851,6 +1879,26 @@ def _validate_generated_complexity(spec_json: dict, mode: str, verilog_map: Dict
 
     min_flops = _minimum_expected_flops(spec_json, mode)
     assigned_bits, targets = _assigned_storage_bits(full_text)
+    continuous_assignments = re.findall(r"\bassign\s+[A-Za-z_][A-Za-z0-9_$]*(?:\s*\[[^\]]+\])?\s*=\s*([^;]+);", scan)
+    direct_constant_assignments = [
+        rhs for rhs in continuous_assignments
+        if re.fullmatch(r"\s*(?:\d+\s*'\s*[s]?[bodh]\s*[0-9a-f_xz?]+|\d+)\s*", rhs, re.IGNORECASE)
+    ]
+    data_inputs = [
+        name for _width, names in re.findall(r"\binput\s*(\[[^\]]+\])?\s*([^;]+);", scan)
+        for name in re.findall(r"[a-z_][a-z0-9_$]*", names)
+        if name not in {"clk", "clock", "reset", "reset_n", "rst", "rst_n"}
+    ]
+    if (
+        assigned_bits == 0
+        and data_inputs
+        and continuous_assignments
+        and len(direct_constant_assignments) == len(continuous_assignments)
+    ):
+        issues.append(
+            "❌ RTL is a constant-output shell: it has functional inputs but no state and every continuous output assignment is a literal constant. "
+            "Implement the specified datapath, registers, counters, interfaces, and control behavior."
+        )
     # Approximate resource prose is an architecture-size estimate rather than
     # an exact functional register contract. The parsed threshold is already
     # conservative; allow a bounded 20% estimation tolerance before calling
@@ -2176,6 +2224,9 @@ You are a senior ASIC RTL engineer.
 
 The input DIGITAL_SPEC_JSON is the single source of truth.
 You must implement it exactly.
+Your output is production-intent, functional, synthesizable, and directly verifiable RTL—not a syntax demonstration.
+Implement every required behavior, state element, interface transaction, register semantic, datapath operation, status response, and reset rule described by the supplied contracts.
+Compile and lint success are necessary but not sufficient: the design must perform its specified function and expose observable behavior suitable for automated simulation, formal checks, firmware access, FPGA prototyping, and ASIC implementation.
 The top-level module name is {_top_module_name(spec_json, mode)}.
 The top-level RTL file is {_top_rtl_file(spec_json, mode)}.
 Child/internal modules may use wrapper or interface suffixes when they are present in DIGITAL_SPEC_JSON.
@@ -2438,7 +2489,7 @@ UNUSED SIGNAL HYGIENE
 - Every declared input, status input, and internal register should be either:
   - functionally used in logic, or
   - intentionally consumed in a harmless deterministic way so that lint does not report it as unused.
-- For smoke-test stubs, avoid leaving declared ports completely unused when a simple legal reference can be added.
+- For minimal smoke-test implementations, avoid leaving declared ports completely unused when a functional legal path can be implemented.
 - Example acceptable pattern:
   - use a signal in a benign conditional branch
   - fold status inputs into a readback/status register if consistent with the spec
@@ -2478,15 +2529,18 @@ UNUSED SIGNAL HYGIENE
   - implement here
   - fill in later
 - Every assignment RHS must be a legal Verilog expression.
-- If protocol behavior is underspecified, generate the simplest deterministic legal stub logic instead of placeholders.
-- For smoke-test RTL, it is acceptable to drive outputs to constant-safe defaults or simple 
+- If some protocol detail is underspecified, implement the smallest deterministic FUNCTIONAL subset justified by the declared ports, register map, behavior rules, and verification requirements. Document the chosen behavior in ordinary RTL comments.
+- Underspecification is never permission to return a stub, constant-output shell, inactive interface, empty module, or compile-only implementation.
+- Safe constants are permitted only as reset/default values or for outputs explicitly specified as unused. At least one legal input transaction must exercise every required functional block and produce observable state or output changes.
+- For register-mapped designs, implement writable storage, readable status/data, address decode, reset behavior, and side effects described by the register map.
+- For sensor/control designs, capture valid input samples, update counters/status, implement thresholds/alerts where specified, and make results observable through outputs or readback.
+- Generate RTL that is directly verifiable: deterministic reset state, finite bounded transactions, explicit valid/ready or request/response behavior when declared, stable readback semantics, and no hidden initialization dependency.
 - Do NOT derive semantic configuration or control signals from raw bus signals unless explicitly defined in DIGITAL_SPEC_JSON.
 - If a module input is named cfg_*, enable, start, mode, threshold, data, etc.,
   it MUST be driven from an explicitly declared inter_module signal source.
 - Forbidden example:
   cfg_* ← reg_wdata[x:y]
-- If contract is missing, do NOT guess mapping.
-  Use constant-safe default instead of inventing semantic meaning.
+- If a required mapping is missing, do NOT guess or hide the omission with a constant-safe tie-off. Report the missing contract so generation fails visibly.
   - Distinguish raw external signals from derived internal signals.
 - If an inter-module signal is owned by a child module according to signal_ownership, the top module MUST NOT recreate, shortcut, alias, or directly assign that signal from a top-level input or any other source.
 - The top module may only connect child-owned internal signals structurally through wires and port connections.
@@ -2690,15 +2744,10 @@ and must be owned by the producing submodule, not by the top module.
   while (/* ... */)
   case (/* ... */)
   assign x = /* ... */;
-- For underspecified protocol modules, generate the simplest deterministic legal smoke-test stub that compiles cleanly.
-- Acceptable fallback behavior for an underspecified protocol slave:
-  - hold outputs at reset-safe defaults
-  - deassert reg_wr_en and reg_rd_en by default
-  - hold reg_addr and reg_wdata at zero unless a fully defined legal condition is available
-  - keep state transitions driven only by legal constants or declared signals
-- If you cannot justify a real transaction condition from the spec, use a compile-safe constant-false condition such as:
-  if (1'b0) begin
-  rather than any placeholder text.
+- For underspecified protocol modules, implement a minimal functional transaction path using the declared interface contract; do not emit a compile-only stub.
+- Reset-safe defaults are required, but after reset declared legal inputs must be able to cause observable protocol, state, status, or readback behavior.
+- Never disable required behavior with constant-false conditions such as `if (1'b0)` and never tie required enables, requests, read/write strobes, or outputs permanently inactive.
+- If the specification genuinely lacks enough information to implement any legal transaction, fail generation and report the missing behavioral contract instead of inventing semantics or emitting nonfunctional RTL.
 - Every if/else/case condition must be a legal Verilog expression using only literals, declared signals, parameters, or valid operators.
 
 1. FSM coding rules
@@ -2764,7 +2813,7 @@ SELF-CHECK BEFORE OUTPUT
 15. RO registers described in DIGITAL_REGMAP_JSON must map to declared status/input signals or explicitly declared shadow regs; never use undeclared symbolic register names from the regmap.
 14. No comments or placeholder text may appear inside executable expressions.
 15. No assignment may contain /* ... */ on the RHS.
-16. If protocol details are unknown, emit a minimal deterministic compile-safe implementation, not pseudo-code.
+16. If protocol details are incomplete, emit the smallest deterministic functional implementation supported by the contract; never emit pseudo-code or a compile-only stub.
 17. For every inter-module signal owned by a child module:
     - the top module contains exactly one wire of that signal name
     - the wire is driven only by the declared owner child port
@@ -2778,8 +2827,10 @@ SELF-CHECK BEFORE OUTPUT
 22. If cfg_* outputs are derived from a writable control register, the control register declaration and bit usage must be mutually consistent.
 23. No executable statement may contain comment text as an expression or condition.
 24. Every if, case, while, and ternary condition must be a legal Verilog expression.
-25. For underspecified protocol modules, emit a compile-safe stub, not protocol pseudo-code.
-26. Search generated RTL for forbidden placeholder patterns before output:
+25. For underspecified protocol modules, emit a minimal functional transaction path, not protocol pseudo-code, inactive logic, or a compile-safe stub.
+26. Every required functional input can influence observable state, status, readback, or output behavior through at least one legal bounded transaction after reset.
+27. The design is suitable for automated verification: reset is deterministic, state transitions are bounded, register semantics are stable, and expected behavior is observable at declared ports.
+28. Search generated RTL for forbidden placeholder patterns before output:
     - if (/*
     - case (/*
     - = /* 
@@ -2933,9 +2984,15 @@ REPAIR RULES:
 - Return every repair target as a complete named-file block. Unlisted hierarchy files are preserved automatically.
 - Do NOT return explanations
 - Do NOT return snippets or diff fragments
+- Preserve all implemented functional behavior and verification observability while repairing structural or tool errors.
+- Never repair an error by tying a functional output, enable, request, interrupt, status, readback, or state transition to a constant.
+- Never replace a functional block with an empty module, inactive branch, constant-output shell, or compile-only stub.
+- After repair, every behavior required by DIGITAL_SPEC_JSON and DIGITAL_REGMAP_JSON must remain implemented and reachable through legal declared inputs.
+- If DIGITAL_SPEC_JSON contains memory_macros[], that array overrides conflicting descriptive prose: instantiate each exact memory_macros[].name using its exact instance_name. Never substitute a wrapper, fallback model, inferred array, or invented SRAM module name.
+- For a missing-module error at an SRAM instance, replace the invented module identity with the exact authoritative memory macro cell identity and preserve the declared macro port-role mapping.
 
 PRIMARY OBJECTIVE:
-Make the MINIMUM NECESSARY change to fix correctness errors.
+Make the MINIMUM NECESSARY change to fix correctness errors without reducing functionality or verifiability.
 
 - Do NOT redesign architecture
 - Do NOT rename modules/ports/files
@@ -3302,6 +3359,7 @@ def _validate_and_materialize_rtl(
     scan_text = _strip_verilog_comments(full_text)
 
     issues.extend(_validate_generated_complexity(spec_json, mode, verilog_map))
+    issues.extend(_validate_memory_macro_instances(spec_json, verilog_map))
 
     for pat in forbidden_sv_patterns:
         if pat == r"\blogic\b":

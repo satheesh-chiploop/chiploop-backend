@@ -9,6 +9,27 @@ os.environ.setdefault("OPENAI_API_KEY", "test-openai-key")
 from agents.digital import digital_synthesis_agent as agent
 
 
+def test_count_netlist_cells_identifies_constant_only_netlist(tmp_path):
+    netlist = tmp_path / "constant_only.v"
+    netlist.write_text(
+        """
+module top(output y, output z);
+  sky130_fd_sc_hd__conb_1 c0 (
+    .HI(y),
+    .LO(z)
+  );
+endmodule
+""",
+        encoding="utf-8",
+    )
+
+    metrics = agent._count_netlist_cells(str(netlist))
+
+    assert metrics["chiploop__mapped_cell_count"] == 1
+    assert metrics["chiploop__constant_cell_count"] == 1
+    assert metrics["chiploop__functional_cell_count"] == 0
+
+
 def test_normalizes_nonconstant_async_reset_for_sky130_mapping(tmp_path):
     rtl = tmp_path / "safe_fallback_manager.v"
     rtl.write_text(

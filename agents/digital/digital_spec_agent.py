@@ -1954,6 +1954,9 @@ RULES
 - Preserve exact fixed clock frequency if the user specifies it.
 - If the user asks for SRAM/OpenRAM/prebuilt SRAM/MBIST/memory macro behavior, include memory_macros[] with exact SRAM macro requirements.
 - memory_macros[].name must be the SRAM macro module/cell name the RTL should instantiate.
+- memory_macros[] is the authoritative implementation contract. Do not introduce a differently named wrapper, fallback model, behavioral SRAM module, or inferred-memory alternative in module descriptions, responsibilities, functionality, or behavior_rules.
+- When kind is prebuilt_sky130_sram, prebuilt_sram, or precompiled_sram_macro, the controller must instantiate memory_macros[].name directly using memory_macros[].instance_name; descriptive prose must not offer a substitute implementation.
+- A simulation model may be supplied as external collateral under the exact same memory_macros[].name. Do not create a second RTL module identity for simulation.
 - memory_macros[].kind must distinguish intent, for example openram_sram for generated OpenRAM or prebuilt_sky130_sram/prebuilt_sram for explicit existing macro collateral.
 - memory_macros[].depth, data_width, and addr_width must match the requested memory capacity.
 - memory_macros[].ports must map canonical roles clk, csb, we, addr, din, dout to real RTL port names.

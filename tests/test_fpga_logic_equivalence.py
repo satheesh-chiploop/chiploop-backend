@@ -46,6 +46,7 @@ def test_fpga_lec_uses_yosys_equivalence_and_passes(tmp_path, monkeypatch):
     script = Path(published["mapped_lec"]["script"]).read_text(encoding="utf-8")
     assert "equiv_make gold gate equiv" in script
     assert "async2sync" in script
+    assert script.count("memory\n") == 2
     assert "equiv_struct" in script
     assert "equiv_simple -undef -short" in script
     assert "equiv_induct -undef -seq 12" in script

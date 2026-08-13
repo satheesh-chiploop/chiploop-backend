@@ -63,6 +63,12 @@ def _proof_script(rtl_files: list[str], netlist: str, top: str, family: str, dep
     normalize = [
         f"prep -flatten -top {top}",
         "async2sync",
+        # Normalize inferred memories on both sides before equiv_make. The
+        # generic synthesis checkpoint is emitted after Yosys' full memory
+        # lowering pass; comparing it to unlowered RTL otherwise creates
+        # independent unconstrained read-state registers and leaves one
+        # unproven point per data bit despite an identical memory machine.
+        "memory",
         "opt_clean",
         # Do not turn procedural next-value helper nets into formal cut
         # points. Synthesis may legally simplify their values for unreachable

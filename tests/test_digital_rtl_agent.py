@@ -7,6 +7,57 @@ os.environ.setdefault("OPENAI_API_KEY", "test-openai-key")
 from agents.digital import digital_rtl_agent as agent
 
 
+def test_generated_complexity_rejects_constant_output_shell():
+    rtl = """
+module sensor_hub(
+  input clk, input reset_n, input wr_en, input [15:0] sensor_data,
+  output [31:0] rd_data, output alert_irq
+);
+assign rd_data = 32'd0;
+assign alert_irq = 1'b0;
+endmodule
+"""
+
+    issues = agent._validate_generated_complexity({}, "flat", {"sensor_hub.v": rtl})
+
+    assert any("constant-output shell" in issue for issue in issues)
+
+
+def test_generation_and_repair_prompts_require_functional_verifiable_rtl():
+    spec = {
+        "name": "sensor_hub",
+        "rtl_output_file": "sensor_hub.v",
+        "ports": [
+            {"name": "clk", "direction": "input", "width": 1},
+            {"name": "reset_n", "direction": "input", "width": 1},
+            {"name": "sensor_valid", "direction": "input", "width": 1},
+            {"name": "sample_count", "direction": "output", "width": 32},
+        ],
+    }
+    prompt = agent._build_generation_prompt(spec, "flat", None, None, None)
+    repair = agent._build_rtl_repair_prompt(prompt, "", "compile failed", "", ["sensor_hub.v"])
+
+    assert "production-intent, functional, synthesizable, and directly verifiable RTL" in prompt
+    assert "constant-output shell" in prompt
+    assert "compile and lint success are necessary but not sufficient" in prompt.lower()
+    assert "Never repair an error by tying a functional output" in repair
+    assert "without reducing functionality or verifiability" in repair
+
+
+def test_memory_macro_contract_rejects_invented_fallback_module():
+    spec = {
+        "memory_macros": [{
+            "name": "sky130_sram_1kbyte_1rw1r_32x256_8",
+            "instance_name": "u_sram",
+        }],
+    }
+    bad = {"top.v": "module top; demo_sram_32x256_model u_sram(); endmodule"}
+    good = {"top.v": "module top; sky130_sram_1kbyte_1rw1r_32x256_8 u_sram(); endmodule"}
+
+    assert any("Required memory macro instance mismatch" in issue for issue in agent._validate_memory_macro_instances(spec, bad))
+    assert agent._validate_memory_macro_instances(spec, good) == []
+
+
 def test_rtl_completion_retries_one_empty_provider_response(monkeypatch):
     calls = []
 

@@ -169,10 +169,16 @@ def _count_netlist_cells(netlist_path: str | None) -> dict:
 
     flop_count = 0
     latch_count = 0
+    mapped_cell_count = 0
+    constant_cell_count = 0
     for raw in lower.splitlines():
         line = raw.strip()
         if not line or line.startswith("//"):
             continue
+        if re.match(r"^[a-z_][a-z0-9_$]*__[a-z0-9_$]+\s+[\\a-z_][a-z0-9_.$\\]*\s*\($", line):
+            mapped_cell_count += 1
+            if "__conb" in line or "__tie" in line:
+                constant_cell_count += 1
         if any(marker in line for marker in ff_markers):
             flop_count += 1
         elif any(marker in line for marker in latch_markers):
@@ -182,6 +188,9 @@ def _count_netlist_cells(netlist_path: str | None) -> dict:
         "chiploop__netlist_present": True,
         "chiploop__flipflop_count": flop_count,
         "chiploop__latch_count": latch_count,
+        "chiploop__mapped_cell_count": mapped_cell_count,
+        "chiploop__constant_cell_count": constant_cell_count,
+        "chiploop__functional_cell_count": max(0, mapped_cell_count - constant_cell_count),
     }
 
 def _augment_synth_metrics(metrics_path: str, netlist_path: str | None) -> dict:
@@ -1906,6 +1915,23 @@ echo "Done. Inspect /work/runs/{run_tag} or latest run folder under /work/runs/"
             "enriched_metrics": bool(enriched_metrics),
         }
     }
+
+    # A netlist containing only tie/constant cells is not a functional
+    # implementation. Stop HEM here instead of allowing physical design to
+    # fail later on disconnected pins. This gate uses synthesized evidence and
+    # is independent of application, design name, and PDK.
+    mapped_cells = int(enriched_metrics.get("chiploop__mapped_cell_count") or 0)
+    functional_cells = int(enriched_metrics.get("chiploop__functional_cell_count") or 0)
+    if rc == 0 and stable_netlist_path and mapped_cells > 0 and functional_cells == 0:
+        summary["status"] = "failed"
+        summary["failure_reason"] = "constant_only_synthesized_netlist"
+        summary["quality_gate"] = {
+            "status": "failed",
+            "mapped_cell_count": mapped_cells,
+            "constant_cell_count": int(enriched_metrics.get("chiploop__constant_cell_count") or 0),
+            "functional_cell_count": functional_cells,
+            "reason": "Synthesis produced no functional cells; the RTL is a constant-output shell.",
+        }
 
     summary_json_path = os.path.join(stage_dir, "synth_summary.json")
     summary_md_path = os.path.join(stage_dir, "synth_summary.md")

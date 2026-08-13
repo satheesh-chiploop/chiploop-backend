@@ -345,7 +345,7 @@ HELP_TOPICS = [
         "category": "Journeys",
         "summary": "Run a large visual image-processing pipeline demo targeting roughly 25k flip-flops through RTL, verification, firmware, software, validation, and product app.",
         "body": [
-            "Image DMA Pipeline Reference Journey is the large visual demo. It uses the same reusable ChipLoop apps and agents as the PWM and UART journeys, but starts from an image-processing pipeline with DMA read/write engines, register-based line buffers, 3x3 filtering, thresholding, histogram counters, and interrupts.",
+            "Image DMA Pipeline Reference Journey is the large visual demo. It uses the same reusable ChipLoop apps and agents as the PWM and UART journeys, but starts from an image-processing pipeline with DMA read/write engines, Sky130 SRAM-backed line buffers and histogram storage, 3x3 filtering, thresholding, and interrupts.",
             "The Arch2RTL spec explicitly asks for synthesizable register-based line buffers rather than inferred SRAM macros so the demo can target roughly 25,000 flip-flops. Exact counts depend on generated implementation and synthesis interpretation.",
             "The Verify stage uses image-specific intent covering reset, frame configuration, DMA progress, line-buffer window validity, filter modes, threshold behavior, histogram updates, frame_done interrupt behavior, and DMA backpressure.",
             "The Embedded and System Software stages produce a Rust image pipeline driver, image-processing CLI, and frame-processing service. Full Validation checks that software commands become firmware register operations and the imported RTL shows expected frame_done interrupts, DMA byte counts, output signatures, and histogram updates.",
