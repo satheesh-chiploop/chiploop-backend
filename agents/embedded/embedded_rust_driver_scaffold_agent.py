@@ -140,7 +140,7 @@ def _build_deterministic_driver(regmap_obj: dict, driver_name: str) -> str:
             fident = _safe_identifier(fname)
             bit_width = int(field.get("bit_width") or 1)
             rust_type = _field_rust_type(bit_width)
-            field_access = str(field.get("access") or access).upper()
+            field_access = "RO" if access == "RO" else str(field.get("access") or access).upper()
             hal_get = f"get_{reg_ident}_{fident}"
             hal_set = f"set_{reg_ident}_{fident}"
 
@@ -378,7 +378,7 @@ Write to firmware/drivers/driver_scaffold.rs
         for field in reg.get("fields") or []:
             field_name = field.get("name") or "UNNAMED_FIELD"
             field_ident = _safe_identifier(field_name)
-            field_access = str(field.get("access") or reg_access).upper()
+            field_access = "RO" if reg_access == "RO" else str(field.get("access") or reg_access).upper()
 
             driver_get = f"get_{reg_ident}_{field_ident}"
             if driver_get not in out:
@@ -472,6 +472,5 @@ Write to firmware/drivers/driver_scaffold.rs
     logger.info("%s generated driver %s", AGENT_NAME, driver_name)
     state["status"] = f"✅ {AGENT_NAME} done"
     return state
-
 
 

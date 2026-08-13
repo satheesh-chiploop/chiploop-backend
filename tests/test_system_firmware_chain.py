@@ -62,6 +62,27 @@ def test_rust_hal_preserves_32_bit_mmio_for_narrow_registers():
     assert "fn read_reg(offset: usize) -> u32" in rust
 
 
+def test_parent_read_only_register_overrides_incorrect_writable_field_access():
+    regmap = {
+        "base_address": "0x40000000",
+        "registers": [{
+            "name": "STATUS",
+            "offset": "0x4",
+            "access": "RO",
+            "fields": [{"name": "READY", "bit_offset": 0, "bit_width": 1, "access": "RW"}],
+        }],
+    }
+
+    rust = embedded_rust_register_layer_generator_agent._default_hal_from_regmap(regmap)
+
+    assert "pub fn read_status()" in rust
+    assert "pub fn get_status_ready()" in rust
+    assert "write_status" not in rust
+    assert "set_status_ready" not in rust
+    report = embedded_register_validation_agent._validate(regmap, rust, "")
+    assert report["status"] == "pass"
+
+
 def test_embedded_handoff_ingests_regmap_from_system_rtl_package(tmp_path, monkeypatch):
     monkeypatch.setattr(common, "save_text_artifact_and_record", lambda **_kwargs: None)
 

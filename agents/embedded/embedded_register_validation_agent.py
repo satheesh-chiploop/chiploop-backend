@@ -114,7 +114,7 @@ def _validate(regmap: dict, hal_code: str, driver_code: str) -> dict:
         if reg_access not in {"RO"} and f"write_{reg_ident}" not in hal_code:
             findings.append({"severity": "error", "category": "hal", "message": f"Missing HAL write helper write_{reg_ident}"})
         if reg_access in {"RO"} and f"write_{reg_ident}" in hal_code:
-            findings.append({"severity": "warning", "category": "hal", "message": f"RO register {reg_name} exposes HAL write helper write_{reg_ident}"})
+            findings.append({"severity": "error", "category": "hal", "message": f"RO register {reg_name} exposes HAL write helper write_{reg_ident}"})
 
         if driver_code:
             if f"read_{reg_ident}" not in driver_code:
@@ -125,7 +125,7 @@ def _validate(regmap: dict, hal_code: str, driver_code: str) -> dict:
         for field in reg.get("fields") or []:
             field_name = field.get("name") or "UNNAMED_FIELD"
             field_ident = _safe_identifier(field_name)
-            field_access = str(field.get("access") or reg_access).upper()
+            field_access = "RO" if reg_access == "RO" else str(field.get("access") or reg_access).upper()
 
             hal_get = f"get_{reg_ident}_{field_ident}"
             if hal_get not in hal_code:
@@ -135,7 +135,7 @@ def _validate(regmap: dict, hal_code: str, driver_code: str) -> dict:
             if field_access not in {"RO"} and hal_set not in hal_code:
                 findings.append({"severity": "error", "category": "hal", "message": f"Missing HAL field setter {hal_set}"})
             if field_access in {"RO"} and hal_set in hal_code:
-                findings.append({"severity": "warning", "category": "hal", "message": f"RO field {reg_name}.{field_name} exposes HAL field setter {hal_set}"})
+                findings.append({"severity": "error", "category": "hal", "message": f"RO field {reg_name}.{field_name} exposes HAL field setter {hal_set}"})
 
             if driver_code:
                 drv_get = f"get_{reg_ident}_{field_ident}"

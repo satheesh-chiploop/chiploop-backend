@@ -80,6 +80,33 @@ def test_product_ingest_loads_l2_validation_summary_from_nested_artifact_path():
     assert result["data"] == payload
 
 
+def test_product_ingest_prefers_final_summary_over_earlier_harness_artifact():
+    workflow_id = "validation-workflow"
+    harness_path = (
+        "backend/workflows/validation-workflow/"
+        "system/software_validation/cosim/harness/system_cosim_harness_manifest.json"
+    )
+    summary_path = (
+        "backend/workflows/validation-workflow/"
+        "system/software_validation/cosim/summary/system_software_validation_summary_l2.json"
+    )
+    # Reproduce Supabase returning the harness first in its artifact index.
+    row = {"id": workflow_id, "artifacts": {"harness": harness_path, "summary": summary_path}}
+    payloads = {
+        harness_path: {"harness_status": "ready"},
+        summary_path: {"final_system_correctness_verdict": "pass"},
+    }
+
+    result = ingest._workflow_artifact_json(
+        {"supabase_client": _Supabase(row, payloads)},
+        workflow_id,
+        ingest.VALIDATION_ARTIFACT_CANDIDATES,
+    )
+
+    assert result["path"] == summary_path
+    assert result["data"]["final_system_correctness_verdict"] == "pass"
+
+
 def test_product_signoff_requires_completed_lineage_and_passing_cosim():
     lineage = {
         "arch2rtl_workflow_id": "rtl",

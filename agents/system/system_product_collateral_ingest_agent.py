@@ -126,12 +126,18 @@ def _workflow_artifact_json(state: Dict[str, Any], workflow_id: str, filenames: 
     prefix = f"backend/workflows/{workflow_id}"
     for filename in filenames:
         paths.append(f"{prefix}/{filename}")
-    wanted = {name.lower() for name in filenames}
-    for path in dict.fromkeys(paths):
-        if any(path.lower().endswith(name) for name in wanted):
-            obj = _download_json(state, path)
-            if obj:
-                return {"path": path, "data": obj}
+    # ``filenames`` is a semantic priority list. Supabase artifact indexes are
+    # not ordered by product-signoff authority, so searching paths first can
+    # select a harness/trace manifest before the final validation summary. Walk
+    # candidates first and return the highest-priority available evidence.
+    unique_paths = list(dict.fromkeys(paths))
+    for filename in filenames:
+        wanted = filename.lower().replace("\\", "/")
+        for path in unique_paths:
+            if path.lower().replace("\\", "/").endswith(wanted):
+                obj = _download_json(state, path)
+                if obj:
+                    return {"path": path, "data": obj}
     return {}
 
 

@@ -199,7 +199,8 @@ def _default_hal_from_regmap(regmap: dict) -> str:
             fname = field.get("name") or "UNNAMED_FIELD"
             fident = _safe_identifier(fname)
             prefix = _field_const_prefix(reg_name, fname)
-            access = str(field.get("access") or reg_access).upper()
+            # The containing register is the upper bound on field access.
+            access = "RO" if reg_access == "RO" else str(field.get("access") or reg_access).upper()
 
             helper_lines.extend(
                 [
@@ -411,6 +412,7 @@ Write to firmware/hal/registers.rs
     missing_offset_consts = []
     missing_reg_helpers = []
     missing_field_helpers = []
+    forbidden_write_helpers = []
 
     for reg in normalized_regmap.get("registers", []):
         reg_name = reg.get("name") or "UNNAMED"
@@ -433,7 +435,7 @@ Write to firmware/hal/registers.rs
         for field in reg.get("fields") or []:
             field_name = field.get("name") or "UNNAMED_FIELD"
             field_ident = _safe_identifier(field_name)
-            field_access = str(field.get("access") or reg_access).upper()
+            field_access = "RO" if reg_access == "RO" else str(field.get("access") or reg_access).upper()
 
             getter = f"get_{reg_ident}_{field_ident}"
             if getter not in out:
@@ -442,14 +444,20 @@ Write to firmware/hal/registers.rs
             setter = f"set_{reg_ident}_{field_ident}"
             if field_access not in {"RO"} and setter not in out:
                 missing_field_helpers.append(setter)
+            if field_access == "RO" and setter in out:
+                forbidden_write_helpers.append(setter)
 
-    if missing_offset_consts or missing_reg_helpers or missing_field_helpers:
+        if reg_access == "RO" and f"write_{reg_ident}" in out:
+            forbidden_write_helpers.append(f"write_{reg_ident}")
+
+    if missing_offset_consts or missing_reg_helpers or missing_field_helpers or forbidden_write_helpers:
         logger.warning(
-            "%s output missing required HAL contract pieces; offsets=%s reg_helpers=%s field_helpers=%s. Using deterministic fallback HAL",
+            "%s output violates the HAL contract; offsets=%s reg_helpers=%s field_helpers=%s forbidden_writes=%s. Using deterministic fallback HAL",
             AGENT_NAME,
             missing_offset_consts[:5],
             missing_reg_helpers[:5],
             missing_field_helpers[:5],
+            forbidden_write_helpers[:5],
         )
         out = _default_hal_from_regmap(normalized_regmap)
 
