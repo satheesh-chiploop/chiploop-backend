@@ -283,6 +283,28 @@ def test_stages_prebuilt_sram_model_for_rtl_validation(tmp_path, monkeypatch):
     assert "%m" in model.read_text(encoding="utf-8")
 
 
+def test_materializes_declared_fpga_bram_as_deliverable_rtl(tmp_path):
+    spec = {
+        "memory_macros": [{
+            "kind": "fpga_bram",
+            "name": "telemetry_history_wrapper",
+            "depth": 64,
+            "data_width": 32,
+            "addr_width": 6,
+            "ports": {"clk": "clock", "csb": "enable_n", "we": "write_en", "addr": "index", "din": "write_data", "dout": "read_data"},
+        }]
+    }
+
+    paths = agent._materialize_declared_fpga_bram_wrappers(spec, str(tmp_path))
+
+    assert [os.path.basename(path) for path in paths] == ["telemetry_history_wrapper.v"]
+    rtl = open(paths[0], encoding="utf-8").read()
+    assert "module telemetry_history_wrapper" in rtl
+    assert "reg [31:0] mem [0:63]" in rtl
+    assert "if (!enable_n)" in rtl
+    assert "mem[index] <= write_data" in rtl
+
+
 def test_connectivity_contract_allows_top_internal_signals_to_child_memory_ports():
     spec = {
         "hierarchy": {

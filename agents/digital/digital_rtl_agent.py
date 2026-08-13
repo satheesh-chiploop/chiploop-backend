@@ -189,6 +189,59 @@ def _stage_memory_macro_models_for_rtl_validation(spec_json: dict, rtl_dir: str,
     return sorted(dict.fromkeys(staged))
 
 
+def _materialize_declared_fpga_bram_wrappers(spec_json: dict, materialize_dir: str) -> List[str]:
+    """Materialize synthesizable inferred-RAM wrappers declared by the spec.
+
+    ``fpga_bram`` is a technology-neutral RTL component, not an external PDK
+    macro. Its implementation therefore has to travel with the generated RTL.
+    The module identity, geometry, and port names all come from the contract.
+    """
+    generated: List[str] = []
+    for macro in spec_json.get("memory_macros", []) or []:
+        if not isinstance(macro, dict) or str(macro.get("kind") or "").lower() != "fpga_bram":
+            continue
+        name = str(macro.get("name") or "").strip()
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_$]*", name):
+            continue
+        depth = int(macro.get("depth") or 0)
+        data_width = int(macro.get("data_width") or 0)
+        addr_width = int(macro.get("addr_width") or 0)
+        if depth <= 0 or data_width <= 0 or addr_width <= 0 or (1 << addr_width) < depth:
+            continue
+        ports = macro.get("ports") if isinstance(macro.get("ports"), dict) else {}
+        clk = str(ports.get("clk") or "clk")
+        csb = str(ports.get("csb") or "csb")
+        we = str(ports.get("we") or ports.get("web") or "we")
+        addr = str(ports.get("addr") or "addr")
+        din = str(ports.get("din") or "din")
+        dout = str(ports.get("dout") or "dout")
+        port_names = (clk, csb, we, addr, din, dout)
+        if not all(re.fullmatch(r"[A-Za-z_][A-Za-z0-9_$]*", port) for port in port_names):
+            continue
+        code = f"""module {name} (
+    input {clk},
+    input {csb},
+    input {we},
+    input [{addr_width - 1}:0] {addr},
+    input [{data_width - 1}:0] {din},
+    output reg [{data_width - 1}:0] {dout}
+);
+    reg [{data_width - 1}:0] mem [0:{depth - 1}];
+    always @(posedge {clk}) begin
+        if (!{csb}) begin
+            if ({we})
+                mem[{addr}] <= {din};
+            {dout} <= mem[{addr}];
+        end
+    end
+endmodule
+"""
+        path = os.path.join(materialize_dir, f"{name}.v")
+        Path(path).write_text(code, encoding="utf-8")
+        generated.append(path)
+    return sorted(dict.fromkeys(generated))
+
+
 def _normalize_spec_json(spec_json: dict) -> Tuple[dict, str]:
     if not isinstance(spec_json, dict):
         raise ValueError("Spec JSON must be a dictionary.")
@@ -3337,6 +3390,12 @@ def _validate_and_materialize_rtl(
         with open(fpath, "w", encoding="utf-8") as vf:
             vf.write(code + "\n")
         artifact_list.append(fpath)
+
+    # FPGA BRAM wrappers are declared implementation components. Keep them in
+    # the deliverable RTL file set so synthesis receives the same closure that
+    # compile/lint validated.
+    artifact_list.extend(_materialize_declared_fpga_bram_wrappers(spec_json, materialize_dir))
+    artifact_list = sorted(dict.fromkeys(artifact_list))
 
     top_rtl_file = _top_rtl_file(spec_json, mode)
     top_rtl_path = os.path.join(materialize_dir, top_rtl_file)
