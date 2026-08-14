@@ -16,6 +16,7 @@ sys.modules.setdefault("utils.artifact_utils", artifact_stub)
 from agents.digital.digital_rtl_agent import (
     _flatten_constant_part_select_bit_selects,
     _remove_comb_blocking_assigns_to_sequential_regs,
+    _repair_empty_case_statements,
     _sanitize_single_driver_rtl,
 )
 
@@ -95,3 +96,16 @@ def test_constant_chained_part_select_is_flattened():
     assert _flatten_constant_part_select_bit_selects(rtl) == (
         "if (rsp_payload_reg[96]) valid = 1'b1;"
     )
+
+
+def test_empty_case_left_by_driver_cleanup_gets_legal_default_item():
+    rtl = """
+always @(*) begin
+    case (cfg_addr)
+    endcase
+end
+"""
+
+    repaired = _repair_empty_case_statements(rtl)
+
+    assert "case (cfg_addr)\n        default: ;\n    endcase" in repaired

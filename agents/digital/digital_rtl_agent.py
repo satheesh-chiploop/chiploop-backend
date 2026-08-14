@@ -1052,6 +1052,23 @@ def _flatten_constant_part_select_bit_selects(code: str) -> str:
     return pattern.sub(replace, code or "")
 
 
+def _repair_empty_case_statements(code: str) -> str:
+    """Keep sanitizer output syntactically valid when all case items vanish."""
+    pattern = re.compile(
+        r"(?P<header>\bcase[xz]?\s*\([^\n]*\)\s*\n)"
+        r"(?P<indent>[ \t]*)"
+        r"(?P<end>endcase\b)",
+        flags=re.IGNORECASE,
+    )
+    return pattern.sub(
+        lambda match: (
+            f"{match.group('header')}{match.group('indent')}    default: ;\n"
+            f"{match.group('indent')}{match.group('end')}"
+        ),
+        code or "",
+    )
+
+
 def _convert_procedural_wire_declarations(code: str) -> str:
     text = code or ""
     for _module_name, module_code in _extract_verilog_modules(text).items():
@@ -1080,14 +1097,16 @@ def _convert_procedural_wire_declarations(code: str) -> str:
 
 def _sanitize_single_driver_rtl(verilog_map: Dict[str, str]) -> Dict[str, str]:
     return {
-        fname: _flatten_constant_part_select_bit_selects(
-            _convert_procedural_wire_declarations(
-                _remove_comb_blocking_assigns_to_sequential_regs(
-                    # Reset-only sequential writes are redundant when the
-                    # signal is owned by a complete combinational mux. Remove
-                    # those first; otherwise the next pass deletes every case
-                    # item and leaves a syntactically empty case statement.
-                    _remove_reset_only_seq_assigns_for_comb_targets(code)
+        fname: _repair_empty_case_statements(
+            _flatten_constant_part_select_bit_selects(
+                _convert_procedural_wire_declarations(
+                    _remove_comb_blocking_assigns_to_sequential_regs(
+                        # Reset-only sequential writes are redundant when the
+                        # signal is owned by a complete combinational mux. Remove
+                        # those first; otherwise the next pass deletes every case
+                        # item and leaves a syntactically empty case statement.
+                        _remove_reset_only_seq_assigns_for_comb_targets(code)
+                    )
                 )
             )
         )
