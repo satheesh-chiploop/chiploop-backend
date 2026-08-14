@@ -40,6 +40,24 @@ def test_system_firmware_default_starts_with_system_rtl_generation():
     assert '"System_Firmware",' in _between(text, "LOCAL_RUNTIME_WORKFLOW_OVERRIDES =", "# Dynamically load")
 
 
+def test_system_software_production_chain_builds_tests_and_audits_before_cosim():
+    text = MAIN_PY.read_text(encoding="utf-8")
+    software = _between(text, "SYSTEM_SOFTWARE_DEFINITION =", "SYSTEM_SOFTWARE_VALIDATION_L2_DEFINITION =")
+    validation = _between(text, "SYSTEM_SOFTWARE_VALIDATION_L2_DEFINITION =", "SYSTEM_RTL_AGENT_SEQUENCE =")
+
+    assert software.index('"System Software Build System Agent"') < software.index('"System Software Unit Test Agent"')
+    assert software.index('"System Software Unit Test Agent"') < software.index('"System Software Packaging Agent"')
+    assert '"System Software Mock Runtime Agent"' in software
+    assert validation.index('"System Software Build Validation Agent"') < validation.index('"System Software CoSim Execution Agent"')
+    assert validation.index('"System Software Test Execution Agent"') < validation.index('"System Software CoSim Execution Agent"')
+    assert validation.index('"System Software Package Audit Agent"') < validation.index('"System Software CoSim Execution Agent"')
+
+    migration = (MAIN_PY.parent / "supabase" / "migrations" / "phase_20260813_system_software_production_signoff.sql").read_text(encoding="utf-8")
+    assert "System Software Build Validation Agent" in migration
+    assert "System Software Test Execution Agent" in migration
+    assert "workflow.user_id is null" in migration
+
+
 def test_system_rtl_default_publishes_register_map_before_rtl():
     text = MAIN_PY.read_text(encoding="utf-8")
     block = _between(text, "SYSTEM_RTL_AGENT_SEQUENCE =", "SYSTEM_RTL_DEFINITION =")

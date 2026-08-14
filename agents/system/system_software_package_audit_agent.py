@@ -178,4 +178,6 @@ def run_agent(state: dict) -> dict:
     state["system_software_package_audit"] = report
     state["package_status"] = package_status
     state["status"] = "✅ package audit complete" if package_status == "complete" else "⚠️ package audit found missing required items"
+    if package_status != "complete" and state.get("_fail_fast_on_agent_error"):
+        raise RuntimeError("System software package audit failed: required artifacts are missing")
     return state

@@ -144,6 +144,8 @@ def run_agent(state: dict) -> dict:
 
     state["system_software_validation_summary_l2"] = validation_report
     state["system_software_validation_summary_l2_path"] = f"{OUTPUT_SUBDIR}/{REPORT_JSON}"
-    state["system_software_l2_ready"] = final_verdict in {"pass", "partial_pass"}
+    state["system_software_l2_ready"] = final_verdict == "pass"
     state["status"] = "✅ System software validation summary (L2) complete" if final_verdict in {"pass", "partial_pass", "blocked"} else "⚠️ System software validation summary (L2) failed"
+    if final_verdict != "pass" and state.get("_fail_fast_on_agent_error"):
+        raise RuntimeError(f"System software L2 production signoff did not pass (verdict={final_verdict})")
     return state

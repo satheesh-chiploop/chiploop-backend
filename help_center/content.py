@@ -364,7 +364,7 @@ HELP_TOPICS = [
         "body": [
             "SRAM MBIST Reference Journey is a compact Memory / DFT demo. It starts from a small memory-mapped SRAM scratchpad controller instead of a large image pipeline.",
             "The current Arch2RTL configuration exposes Insert MBIST and MBIST algorithm controls. The supported algorithms are march-c and march-raw. These controls are available both in the standalone Arch2RTL app and when Arch2RTL is used as a Product stage.",
-            "The Arch2RTL spec asks for a 32x256 SRAM macro-style contract with a synthesizable model wrapper, so downstream synthesis and DFT agents can detect memory intent.",
+            "The Arch2RTL spec requires the qualified 32x256 Sky130 SRAM macro. AutoMBIST generates and inserts its MBIST wrapper/controller, runs the standalone wrapper simulation, and publishes the integrated RTL; the journey fails if any proof is missing.",
             "After Arch2RTL, open Synthesis or add Arch2Synthesis/Arch2Tapeout as downstream Product stages to inspect synthesis metrics, logic-equivalence evidence, scan DFT evidence, open-source ATPG readiness, and MBIST applicability.",
             "Scan DFT is backed by OpenROAD/OpenLane2 where supported. ATPG and MBIST report real coverage or insertion only when the corresponding open-source/customer tool adapter is configured. Missing adapter output is reported as unavailable or failed, not as a fake pass.",
             "Segment: Memory / DFT.",

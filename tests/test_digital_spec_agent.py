@@ -60,6 +60,36 @@ def test_normalize_flat_design_name_alias_preserves_register_contract():
     assert out["register_contract"]["registers"][0]["name"] == "CONTROL"
 
 
+def test_mandatory_firmware_control_plane_rejects_direct_configuration_pins():
+    spec = {
+        **_module("adaptive_aero_control_top"),
+        "ports": [_port("clk", "input"), _port("cfg_cmd_min_a", "input", 12)],
+        "register_contract": {},
+    }
+    with pytest.raises(ValueError, match="missing a concrete register_contract"):
+        spec_agent._validate_mandatory_firmware_control_plane(
+            spec, "flat", "FIRMWARE CONTROL-PLANE CONTRACT (mandatory)",
+        )
+
+
+def test_mandatory_firmware_control_plane_accepts_concrete_custom_csr_bus():
+    spec = {
+        **_module("adaptive_aero_control_top"),
+        "ports": [
+            _port("cfg_addr", "input", 8), _port("cfg_wdata", "input", 32),
+            _port("cfg_rdata", "output", 32), _port("cfg_valid", "input"),
+            _port("cfg_write", "input"), _port("cfg_ready", "output"),
+        ],
+        "register_contract": {
+            "bus_type": "custom",
+            "registers": [{"name": "CONTROL", "offset": "0x00"}],
+        },
+    }
+    spec_agent._validate_mandatory_firmware_control_plane(
+        spec, "flat", "FIRMWARE CONTROL-PLANE CONTRACT (mandatory)",
+    )
+
+
 def test_parse_llm_json_object_prefers_last_spec_shaped_object():
     text = (
         '{"design_name":"draft","hierarchy":{"top_module":{"name":"draft"}}}'
@@ -397,6 +427,41 @@ Memory intent:
         {"name": "rd_data", "direction": "output", "width": 32},
         {"name": "ready", "direction": "output", "width": 1},
     ]
+
+
+def test_explicit_prompt_memory_macro_overrides_model_fallback_identity():
+    generated = {
+        "name": "controller",
+        "memory_macros": [{"name": "demo_sram_32x256_model", "kind": "inferred"}],
+    }
+    prompt = """
+memory_macros[0].name = sky130_sram_1kbyte_1rw1r_32x256_8
+memory_macros[0].kind = prebuilt_sky130_sram
+memory_macros[0].depth = 256
+memory_macros[0].data_width = 32
+memory_macros[0].addr_width = 8
+memory_macros[0].instance_name = u_sram
+memory_macros[0].requires_mbist = true
+memory_macros[0].ports.clk = clk
+memory_macros[0].ports.csb = csb
+memory_macros[0].ports.we = web
+memory_macros[0].ports.addr = addr
+memory_macros[0].ports.din = din
+memory_macros[0].ports.dout = dout
+"""
+
+    result = spec_agent._merge_prompt_memory_macros(generated, prompt)
+
+    assert result["memory_macros"] == [{
+        "name": "sky130_sram_1kbyte_1rw1r_32x256_8",
+        "kind": "prebuilt_sky130_sram",
+        "depth": 256,
+        "data_width": 32,
+        "addr_width": 8,
+        "instance_name": "u_sram",
+        "requires_mbist": True,
+        "ports": {"clk": "clk", "csb": "csb", "we": "web", "addr": "addr", "din": "din", "dout": "dout"},
+    }]
 
 
 def test_compile_spec_contract_repairs_empty_flat_ports_from_prompt(tmp_path):

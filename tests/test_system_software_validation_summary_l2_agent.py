@@ -1,5 +1,7 @@
 import os
 
+import pytest
+
 os.environ.setdefault("SUPABASE_URL", "https://example.supabase.co")
 os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-service-role-key")
 
@@ -67,3 +69,19 @@ def test_summary_blocks_software_only_evidence(monkeypatch):
 
     assert summary["final_system_correctness_verdict"] == "blocked"
     assert summary["evidence_scope"] == "software_only"
+
+
+def test_summary_fail_fast_rejects_blocked_production_signoff(monkeypatch):
+    monkeypatch.setattr(agent, "_record_text", lambda *args, **kwargs: None)
+    state = {
+        "workflow_id": "wf-test",
+        "_fail_fast_on_agent_error": True,
+        "system_software_cosim_harness_manifest": {"harness_status": "blocked"},
+        "system_software_cosim_execution_report": {"execution_status": "fail", "evidence_scope": "software_only"},
+        "system_software_cosim_trace_validation_report": {"trace_validation_status": "blocked"},
+    }
+
+    with pytest.raises(RuntimeError, match="production signoff did not pass"):
+        agent.run_agent(state)
+
+    assert state["system_software_l2_ready"] is False

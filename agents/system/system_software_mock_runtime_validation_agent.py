@@ -234,6 +234,8 @@ def run_agent(state: dict) -> dict:
         }, indent=2))
         state["system_software_mock_runtime_validation"] = report
         state["mock_runtime_status"] = "environment_missing"
+        if state.get("_fail_fast_on_agent_error"):
+            raise RuntimeError("System software mock-runtime validation requires Cargo, but Cargo is unavailable")
         state["status"] = "⚠️ mock runtime environment missing"
         return state
 
@@ -315,4 +317,6 @@ def run_agent(state: dict) -> dict:
     state["system_software_mock_runtime_validation"] = report
     state["mock_runtime_status"] = mock_runtime_status
     state["status"] = "✅ mock runtime validation complete" if mock_runtime_status == "pass" else "⚠️ mock runtime validation failed"
+    if mock_runtime_status != "pass" and state.get("_fail_fast_on_agent_error"):
+        raise RuntimeError(f"System software mock-runtime validation failed (returncode={final_attempt['returncode']})")
     return state

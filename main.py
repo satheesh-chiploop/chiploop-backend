@@ -1450,11 +1450,19 @@ SYSTEM_SOFTWARE_DEFINITION = _linear_workflow_definition([
     "System Software Core Service Agent",
     "System Software Application Scaffold Agent",
     "System Software Build System Agent",
+    "System Software Unit Test Agent",
+    "System Software Mock Runtime Agent",
     "System Software Packaging Agent",
+    "System Software Executive Summary Agent",
 ])
 
 SYSTEM_SOFTWARE_VALIDATION_L2_DEFINITION = _linear_workflow_definition([
     "System Software Validation Ingest Agent",
+    "System Software Build Validation Agent",
+    "System Software Test Execution Agent",
+    "System Software Contract Consistency Agent",
+    "System Software Mock Runtime Validation Agent",
+    "System Software Package Audit Agent",
     "System CoSim Ingest Agent",
     "System CoSim Contract Agent",
     "System CoSim Scenario Generator Agent",
@@ -6226,7 +6234,7 @@ def _hem_build_system_child_payload(
             "system_firmware_workflow_id": firmware_id,
             "software_goal": parent_payload.get("software_goal") or "Build software control, diagnostics, and demo services for the generated system.",
             "app_names": parent_payload.get("app_names") or ["control_service", "diagnostics", "demo_cli"],
-            "toolchain": parent_payload.get("software_toolchain") or {"language": "python"},
+            "toolchain": parent_payload.get("software_toolchain") or {"language": "rust", "build_system": "cargo"},
         }
     if next_template == "System_Software_Validation_L2":
         firmware_id = upstream.get("firmware") or upstream.get("system_firmware") or parent_payload.get("system_firmware_workflow_id")

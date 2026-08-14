@@ -50,4 +50,6 @@ def run_agent(state: dict) -> dict:
 
     state["contract_status"] = status
     state["status"] = "✅ contract ok" if status == "pass" else "⚠️ contract issues"
+    if status != "pass" and state.get("_fail_fast_on_agent_error"):
+        raise RuntimeError("System software API/SDK contract consistency validation failed")
     return state

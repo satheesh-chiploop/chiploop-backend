@@ -1691,11 +1691,13 @@ def run_agent(state: dict) -> dict:
         state["status"] = f"{AGENT_NAME}: disabled"
         return state
     if not memories:
-        summary["status"] = "skipped_no_openram_sram_detected"
+        summary["status"] = "failed"
+        summary["reason"] = "mbist_enabled_but_no_sram_detected"
         _write_publish_summary(workflow_id, stage_dir, summary)
         state.setdefault("digital", {})["mbist_rtl_insertion"] = summary
-        state["status"] = f"{AGENT_NAME}: no OpenRAM/SRAM memory detected"
-        return state
+        raise RuntimeError(
+            "MBIST RTL insertion was enabled, but no qualified SRAM macro or functional SRAM instance was detected."
+        )
     memory_config_issues = _validate_memory_config_names(memories)
     if memory_config_issues:
         summary["status"] = "failed"

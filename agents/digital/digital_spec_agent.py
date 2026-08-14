@@ -214,10 +214,13 @@ def _enforce_prompt_top_ports_after_hierarchy_repair(spec_json: dict, mode: str,
 
 
 def _merge_prompt_memory_macros(spec_json: dict, prompt_text: str) -> dict:
-    if not isinstance(spec_json, dict) or spec_json.get("memory_macros"):
+    if not isinstance(spec_json, dict):
         return spec_json
     prompt_macros = _extract_memory_macros_from_prompt(prompt_text)
     if prompt_macros:
+        # Explicit dotted memory_macros[] declarations in the source request
+        # are authoritative. Do not let model-generated fallback/inferred
+        # memory identities replace a qualified macro contract.
         spec_json["memory_macros"] = prompt_macros
     return spec_json
 
@@ -1659,8 +1662,48 @@ def _compile_spec_contract(
         json.dump(spec_json, nf, indent=2)
 
     _validate_spec_contract(spec_json, mode)
+    _validate_mandatory_firmware_control_plane(spec_json, mode, source_prompt)
     logger.info(f"✅ Digital Spec Agent contract compile passed suffix='{suffix or 'pass1'}'")
     return spec_json, mode, raw_output_path, normalized_path
+
+
+def _validate_mandatory_firmware_control_plane(spec_json: dict, mode: str, source_prompt: str) -> None:
+    """Reject a spec that drops an explicitly required firmware control plane."""
+    if "FIRMWARE CONTROL-PLANE CONTRACT (mandatory)" not in str(source_prompt or ""):
+        return
+    contract = spec_json.get("register_contract") if isinstance(spec_json, dict) else None
+    registers = contract.get("registers") if isinstance(contract, dict) else None
+    bus = str((contract or {}).get("bus_type") or (contract or {}).get("bus") or "").strip()
+    if not bus or not isinstance(registers, list) or not registers:
+        raise ValueError(
+            "Mandatory firmware control-plane contract is missing a concrete register_contract bus and registers"
+        )
+    if mode == "hierarchical":
+        top = ((spec_json.get("hierarchy") or {}).get("top_module") or {})
+    else:
+        top = spec_json
+    names = {str(port.get("name") or "").lower() for port in (top.get("ports") or []) if isinstance(port, dict)}
+
+    def has_any(tokens: tuple[str, ...]) -> bool:
+        return any(any(token in name for token in tokens) for name in names)
+
+    missing = []
+    if not has_any(("addr", "address")):
+        missing.append("address")
+    if not has_any(("wdata", "wr_data", "write_data", "pwdata")):
+        missing.append("write-data")
+    if not has_any(("rdata", "rd_data", "read_data", "prdata")):
+        missing.append("read-data")
+    if not has_any(("valid", "select", "sel", "enable", "psel", "cyc", "stb")):
+        missing.append("transaction-valid/select")
+    if not has_any(("write", "wr_en", "write_en", "pwrite")):
+        missing.append("write-enable")
+    if not has_any(("ready", "response", "resp", "ack", "pready")):
+        missing.append("response/ready")
+    if missing:
+        raise ValueError(
+            "Mandatory firmware control-plane top interface is incomplete; missing " + ", ".join(missing)
+        )
 
 
 def _write_contract_failure_log(spec_dir: str, filename: str, err: Exception) -> str:
@@ -1955,7 +1998,7 @@ RULES
 - If the user asks for SRAM/OpenRAM/prebuilt SRAM/MBIST/memory macro behavior, include memory_macros[] with exact SRAM macro requirements.
 - memory_macros[].name must be the SRAM macro module/cell name the RTL should instantiate.
 - memory_macros[] is the authoritative implementation contract. Do not introduce a differently named wrapper, fallback model, behavioral SRAM module, or inferred-memory alternative in module descriptions, responsibilities, functionality, or behavior_rules.
-- When kind is prebuilt_sky130_sram, prebuilt_sram, or precompiled_sram_macro, the controller must instantiate memory_macros[].name directly using memory_macros[].instance_name; descriptive prose must not offer a substitute implementation.
+- When kind is prebuilt_sky130_sram, prebuilt_sram, or precompiled_sram_macro, the functional RTL hierarchy must instantiate memory_macros[].name using memory_macros[].instance_name, either directly in the controller or through an explicitly requested functional wrapper; descriptive prose must not offer a substitute implementation.
 - A simulation model may be supplied as external collateral under the exact same memory_macros[].name. Do not create a second RTL module identity for simulation.
 - memory_macros[].kind must distinguish intent, for example openram_sram for generated OpenRAM or prebuilt_sky130_sram/prebuilt_sram for explicit existing macro collateral.
 - memory_macros[].depth, data_width, and addr_width must match the requested memory capacity.

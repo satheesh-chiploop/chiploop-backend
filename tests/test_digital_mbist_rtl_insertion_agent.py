@@ -61,7 +61,7 @@ def test_mbist_rtl_insertion_disabled_by_default(tmp_path):
     assert out["digital"]["mbist_rtl_insertion"]["status"] == "disabled"
 
 
-def test_mbist_rtl_insertion_enabled_without_openram_skips(tmp_path):
+def test_mbist_rtl_insertion_enabled_without_sram_fails_closed(tmp_path):
     workflow_dir = tmp_path / "wf"
     rtl_dir = workflow_dir / "rtl"
     rtl_dir.mkdir(parents=True)
@@ -73,11 +73,13 @@ def test_mbist_rtl_insertion_enabled_without_openram_skips(tmp_path):
         "toggles": {"insert_mbist": True},
     }
 
-    out = agent.run_agent(state)
+    with pytest.raises(RuntimeError, match="no qualified SRAM macro"):
+        agent.run_agent(state)
 
-    summary = out["digital"]["mbist_rtl_insertion"]
+    summary = state["digital"]["mbist_rtl_insertion"]
     assert summary["enabled"] is True
-    assert summary["status"] == "skipped_no_openram_sram_detected"
+    assert summary["status"] == "failed"
+    assert summary["reason"] == "mbist_enabled_but_no_sram_detected"
     assert summary["detected_memory"] is None
 
 

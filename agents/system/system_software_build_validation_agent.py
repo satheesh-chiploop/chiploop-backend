@@ -207,6 +207,8 @@ def run_agent(state: dict) -> dict:
         state["system_software_build_validation"] = report
         state["system_software_build_root"] = build_root
         state["build_status"] = "environment_missing"
+        if state.get("_fail_fast_on_agent_error"):
+            raise RuntimeError("System software build validation requires Cargo, but Cargo is unavailable")
         state["status"] = "⚠️ build environment missing"
         return state
 
@@ -260,4 +262,6 @@ def run_agent(state: dict) -> dict:
     state["system_software_build_root"] = build_root
     state["build_status"] = build_status
     state["status"] = "✅ build validation complete" if build_status == "pass" else "⚠️ build failed"
+    if build_status != "pass" and state.get("_fail_fast_on_agent_error"):
+        raise RuntimeError(f"System software build validation failed (returncode={result['returncode']})")
     return state

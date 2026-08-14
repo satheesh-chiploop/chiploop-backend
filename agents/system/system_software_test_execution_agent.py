@@ -194,6 +194,8 @@ def run_agent(state: dict) -> dict:
         _record(workflow_id, DEBUG_JSON, json.dumps(debug, indent=2))
         state["system_software_test_execution"] = report
         state["test_status"] = "not_present"
+        if state.get("_fail_fast_on_agent_error"):
+            raise RuntimeError("System software test execution has no resolvable Cargo workspace/test root")
         state["status"] = "⚠️ test root not present"
         return state
 
@@ -226,6 +228,8 @@ def run_agent(state: dict) -> dict:
         }, indent=2))
         state["system_software_test_execution"] = report
         state["test_status"] = "environment_missing"
+        if state.get("_fail_fast_on_agent_error"):
+            raise RuntimeError("System software test execution requires Cargo, but Cargo is unavailable")
         state["status"] = "⚠️ test environment missing"
         return state
 
@@ -297,4 +301,6 @@ def run_agent(state: dict) -> dict:
     state["system_software_test_execution"] = report
     state["test_status"] = test_status
     state["status"] = "✅ tests passed" if test_status == "pass" else "⚠️ tests failed"
+    if test_status != "pass" and state.get("_fail_fast_on_agent_error"):
+        raise RuntimeError(f"System software tests failed (returncode={final_attempt['returncode']})")
     return state

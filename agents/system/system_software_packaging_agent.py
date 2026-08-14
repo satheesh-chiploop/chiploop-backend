@@ -357,6 +357,11 @@ def run_agent(state: dict) -> dict:
     state["system_software_entry"] = manifest.get("entry") or {}
     state["system_software_entry_command"] = ((manifest.get("entry") or {}).get("command") or [])
     state["package_status"] = manifest.get("package_status") or "unknown"
+    if manifest.get("package_status") != "complete" and state.get("_fail_fast_on_agent_error"):
+        raise RuntimeError(
+            "System software package is incomplete: "
+            + ", ".join(manifest.get("missing_required_files") or ["entry point unresolved"])
+        )
     state["status"] = "✅ System software package generated" if manifest.get("package_status") == "complete" else "⚠️ System software package incomplete"
 
 
