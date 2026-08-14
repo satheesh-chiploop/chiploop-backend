@@ -209,7 +209,7 @@ def test_normalize_derives_only_unique_child_to_child_inter_module_signals():
             "top_module": {
                 **_module("controller"),
                 "functionality": "Controller instantiates sram_wrapper.",
-                "ports": [_port("clk", "input"), _port("rd_data", "output", 32)],
+                "ports": [_port("clk", "input"), _port("csb", "input"), _port("rd_data", "output", 32)],
                 "rtl_output_file": "controller.v",
             },
             "modules": [
@@ -231,7 +231,8 @@ def test_normalize_derives_only_unique_child_to_child_inter_module_signals():
             ],
         },
         "top_level_connections": [
-            {"top_port": "clk", "connected_to": ["sram_wrapper.clk"]},
+            {"top_port": "clk", "connected_to": ["sram_wrapper.clk", "fallback_model.clk"]},
+            {"top_port": "csb", "connected_to": ["sram_wrapper.csb"]},
             {"top_port": "rd_data", "connected_to": ["sram_wrapper.dout"]},
         ],
         "inter_module_signals": [],
@@ -252,6 +253,50 @@ def test_normalize_derives_only_unique_child_to_child_inter_module_signals():
     assert all(sig["name"] != "sram_wrapper_dout" for sig in out["inter_module_signals"])
     assert all(not endpoint.startswith("controller.") for sig in out["inter_module_signals"] for endpoint in [sig["source"], *sig["destinations"]])
     spec_agent._validate_spec_contract(out, mode)
+
+
+def test_partial_inter_module_graph_is_completed_and_orphans_are_rejected():
+    spec = {
+        "design_name": "top",
+        "hierarchy": {
+            "top_module": {
+                **_module("top"),
+                "ports": [_port("clk", "input")],
+                "rtl_output_file": "top.v",
+            },
+            "modules": [
+                {
+                    **_module("producer"),
+                    "ports": [_port("clk", "input"), _port("data", "output", 8), _port("valid", "output")],
+                    "rtl_output_file": "producer.v",
+                },
+                {
+                    **_module("consumer"),
+                    "ports": [_port("clk", "input"), _port("data", "input", 8), _port("valid", "input"), _port("orphan", "input")],
+                    "rtl_output_file": "consumer.v",
+                },
+            ],
+        },
+        "top_level_connections": [
+            {"top_port": "clk", "connected_to": ["producer.clk", "consumer.clk"]},
+        ],
+        "inter_module_signals": [
+            {"name": "valid", "width": 1, "source": "producer.valid", "destinations": ["consumer.valid"]},
+        ],
+        "signal_ownership": [{"signal": "valid", "owner": "producer.valid"}],
+    }
+
+    out = spec_agent._ensure_hierarchical_inter_module_signals(spec)
+    edges = {
+        (signal["source"], destination)
+        for signal in out["inter_module_signals"]
+        for destination in signal["destinations"]
+    }
+    assert ("producer.valid", "consumer.valid") in edges
+    assert ("producer.data", "consumer.data") in edges
+
+    with pytest.raises(ValueError, match="consumer.orphan.*has no source"):
+        spec_agent._validate_spec_contract(out, "hierarchical")
 
 
 def test_sanitize_connectivity_keeps_one_width_compatible_producer_per_input():

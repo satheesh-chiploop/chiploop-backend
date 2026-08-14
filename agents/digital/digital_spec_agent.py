@@ -695,8 +695,10 @@ def _validate_hierarchical_endpoint_coverage(spec_json: dict) -> None:
                 f"signal_ownership[{i}] owner port '{omod}.{oport}' must be output/inout, got '{owner_dir}'."
             )
 
-    # Required child inputs must have an explicit structural source. A port
+    # Every child input must have an explicit structural source. A port
     # declaration by itself otherwise becomes an undriven internal RTL wire.
+    # Checking only must_receive allowed an incomplete LLM topology to pass
+    # spec validation and fail much later during RTL interface repair.
     driven_child_inputs = set()
     for connection in spec_json.get("top_level_connections", []):
         driven_child_inputs.update(str(endpoint) for endpoint in connection.get("connected_to", []))
@@ -714,9 +716,9 @@ def _validate_hierarchical_endpoint_coverage(spec_json: dict) -> None:
             str(port.get("name")): str(port.get("direction") or "").lower()
             for port in module.get("ports", []) if isinstance(port, dict) and port.get("name")
         }
-        for port_name in module.get("must_receive", []) or []:
+        for port_name, direction in ports.items():
             endpoint = f"{module_name}.{port_name}"
-            if ports.get(str(port_name)) in {"input", "inout"} and endpoint not in driven_child_inputs:
+            if direction in {"input", "inout"} and endpoint not in driven_child_inputs:
                 raise ValueError(
                     f"Required child input '{endpoint}' has no source in top_level_connections or "
                     "inter_module_signals. Add an explicit top-level input connection or a real child producer."
@@ -1328,8 +1330,6 @@ def _ensure_hierarchical_top_level_connections(spec_json: dict) -> dict:
 def _ensure_hierarchical_inter_module_signals(spec_json: dict) -> dict:
     if not isinstance(spec_json.get("hierarchy"), dict):
         return spec_json
-    if isinstance(spec_json.get("inter_module_signals"), list) and spec_json["inter_module_signals"]:
-        return spec_json
 
     hier = spec_json["hierarchy"]
     top_connected_endpoints = set()
@@ -1363,7 +1363,25 @@ def _ensure_hierarchical_inter_module_signals(spec_json: dict) -> dict:
             if direction in {"input", "inout"}:
                 inputs.append(record)
 
-    signals = []
+    # Treat model-provided connectivity as a partial graph. A single valid
+    # edge must not suppress deterministic completion of other uniquely
+    # matchable child ports.
+    signals = [
+        dict(signal)
+        for signal in (spec_json.get("inter_module_signals") or [])
+        if isinstance(signal, dict)
+    ]
+    connected_destinations = {
+        str(destination or "").strip()
+        for signal in signals
+        for destination in (signal.get("destinations") or [])
+        if str(destination or "").strip()
+    }
+    existing_edges = {
+        (str(signal.get("source") or "").strip(), str(destination or "").strip())
+        for signal in signals
+        for destination in (signal.get("destinations") or [])
+    }
     output_groups = {}
     for output in outputs:
         output_groups.setdefault((output["port"], output["width"]), []).append(output)
@@ -1374,7 +1392,11 @@ def _ensure_hierarchical_inter_module_signals(spec_json: dict) -> dict:
         destinations = [
             item["endpoint"]
             for item in inputs
-            if item["module"] != source["module"] and item["port"] == port_name and item["width"] == width
+            if item["module"] != source["module"]
+            and item["port"] == port_name
+            and item["width"] == width
+            and item["endpoint"] not in connected_destinations
+            and (source["endpoint"], item["endpoint"]) not in existing_edges
         ]
         if not destinations:
             continue
@@ -1386,8 +1408,7 @@ def _ensure_hierarchical_inter_module_signals(spec_json: dict) -> dict:
             "description": f"Derived child-to-child signal from the unique matching producer {source['endpoint']}.",
         })
 
-    if signals:
-        spec_json["inter_module_signals"] = signals
+    spec_json["inter_module_signals"] = signals
     return spec_json
 
 
