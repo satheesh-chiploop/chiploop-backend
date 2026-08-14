@@ -378,6 +378,10 @@ def test_main_registers_generic_physical_ai_endpoints():
     assert 'automation_payload["fpga_source_workflow_id"] = child_workflow_id' in main
     assert 'payload.get("fpga_source_workflow_id") or source_arch2rtl' in main
     assert '"_fail_fast_on_agent_error": True' in main
+    assert '"rtl_source_mode": "from_workflow"' in main
+    assert "direct Arch2RTL hydration deferred to Embedded Digital RTL Handoff Ingest Agent" in main
+    assert "def _hem_child_failure_summary" in main
+    assert 'filename="system_app_failure.json"' in main
     assert 'dashboard_stage=next_meta.get("stage") or next_template.lower()' in main
     assert 'nested_status = _hem_run_status' in main
     assert 'nested_status != "completed"' in main
@@ -392,6 +396,7 @@ def test_physical_ai_reuses_existing_firmware_and_software_collateral_contracts(
 
     assert '"system_rtl_workflow_id": source_arch2rtl' in main
     assert '"from_workflow_id": source_arch2rtl' in main
+    assert '"rtl_source_mode": "from_workflow"' in main
     assert 'digital/digital_regmap.json' in firmware_ingest
     assert 'system/package/system_rtl_package.json' in firmware_ingest
     assert 'REQUIRED_FIRMWARE_MANIFEST = "firmware/firmware_manifest.json"' in firmware_package

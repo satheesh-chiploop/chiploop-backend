@@ -7150,6 +7150,27 @@ HEM_PHYSICAL_AI_STAGE_META: Dict[str, Dict[str, str]] = {
 }
 
 
+def _hem_child_failure_summary(workflow_id: str, *, max_lines: int = 8) -> str:
+    """Return a bounded actionable child failure tail for the parent HEM log."""
+    try:
+        rows = (
+            supabase.table("workflows").select("logs").eq("id", workflow_id).limit(1).execute().data
+            or []
+        )
+        logs = str((rows[0] if rows else {}).get("logs") or "")
+    except Exception:
+        logs = ""
+    lines = [line.strip() for line in logs.splitlines() if line.strip()]
+    useful = [
+        line for line in lines
+        if any(token in line.lower() for token in (
+            "failed", "error", "exception", "traceback", "runtimeerror",
+            "filenotfounderror", "crashed", "missing", "no existing rtl",
+        ))
+    ]
+    return _truncate_tail(" | ".join((useful or lines)[-max_lines:]), 1800)
+
+
 def _hem_physical_ai_stage_plan(payload: Dict[str, Any]) -> List[str]:
     path = str(payload.get("implementation_path") or "fpga_prototype")
     if path == "architecture_only":
@@ -7299,7 +7320,10 @@ def _hem_physical_ai_child_payload(root_workflow_id: str, root_run_id: str, payl
         )
         return {
             "project_name": project_name,
-            "rtl_source_mode": "from_system_rtl",
+            # The source is the completed Digital Arch2RTL child. Its RTL and
+            # register map are hydrated by the established Embedded handoff
+            # agent directly from Supabase.
+            "rtl_source_mode": "from_workflow",
             "system_rtl_workflow_id": source_arch2rtl,
             "source_system_rtl_workflow_id": source_arch2rtl,
             "source_system_sim_workflow_id": payload.get("source_system_sim_workflow_id") or payload.get("fpga_bitstream_workflow_id"),
@@ -7452,7 +7476,10 @@ def _hem_continue_physical_ai_after_success(*, root_workflow_id: str, root_run_i
         )
         append_log_workflow(root_workflow_id, f"HEM {meta['label']} finished with status {child_status}.", phase="hem_running" if child_status == "completed" else "hem_failed")
         if child_status != "completed":
+            failure_detail = _hem_child_failure_summary(child_workflow_id)
             message = f"HEM stopped after {meta['label']} because the child workflow status is {child_status}."
+            if failure_detail:
+                message += f" Child failure: {failure_detail}"
             append_log_workflow(root_workflow_id, message, status="failed", phase="hem_failed")
             append_log_run(root_run_id, message, status="failed")
             _hem_update_run_record(str(hem_run_id) if hem_run_id else None, status="failed", metadata={"source": "physical_ai", "path": plan, "completed": completed, "failed_stage": stage, "failed_workflow_id": child_workflow_id})
@@ -14097,6 +14124,16 @@ def execute_system_app_background(
                 if active_top:
                     shared_state["top_module"] = active_top
                     shared_state["system_top_module"] = active_top
+            elif template_workflow_name == "System_Firmware" and rtl_source_mode in {"from_workflow", "workflow"}:
+                append_log_workflow(
+                    workflow_id,
+                    "System_Firmware: direct Arch2RTL hydration deferred to Embedded Digital RTL Handoff Ingest Agent.",
+                    phase="system_rtl_source",
+                )
+                append_log_run(
+                    run_id,
+                    "System_Firmware: direct Arch2RTL hydration deferred to Embedded Digital RTL Handoff Ingest Agent.",
+                )
             elif template_workflow_name in {"System_Sim", "System_Firmware"}:
                 source_hint = (
                     shared_state.get("system_rtl_workflow_id")
@@ -14663,6 +14700,31 @@ def execute_system_app_background(
 
     except Exception as e:
         err = f"❌ System App crashed ({template_workflow_name}): {type(e).__name__}: {e}\n{traceback.format_exc()}"
+        failure_document = {
+            "schema": "chiploop.system.app_failure.v1",
+            "status": "failed",
+            "workflow_id": workflow_id,
+            "run_id": run_id,
+            "template_workflow": template_workflow_name,
+            "app_name": app_name,
+            "exception_type": type(e).__name__,
+            "message": str(e),
+            "traceback": traceback.format_exc(),
+        }
+        try:
+            os.makedirs(artifact_dir, exist_ok=True)
+            failure_text = json.dumps(failure_document, indent=2)
+            with open(os.path.join(artifact_dir, "system_app_failure.json"), "w", encoding="utf-8") as fh:
+                fh.write(failure_text)
+            save_text_artifact_and_record(
+                workflow_id=workflow_id,
+                agent_name="System App Preflight",
+                subdir="system/failure",
+                filename="system_app_failure.json",
+                content=failure_text,
+            )
+        except Exception as artifact_exc:
+            err += f"\nFailure artifact publication warning: {artifact_exc}"
         append_log_workflow(workflow_id, err, status="failed", phase="error")
         append_log_run(run_id, err, status="failed")
 
