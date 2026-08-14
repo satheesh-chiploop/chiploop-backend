@@ -186,3 +186,22 @@ def test_cfg_bus_ports_require_register_map_even_without_explicit_contract():
     }
 
     assert digital_register_map_agent._spec_requires_register_map(spec) is True
+
+
+def test_csr_wen_ren_bus_requires_model_generated_register_map():
+    spec = {
+        "name": "adaptive_controller",
+        "rtl_output_file": "adaptive_controller.v",
+        "ports": [
+            {"name": "clk", "direction": "input"},
+            {"name": "csr_addr", "direction": "input", "width": 8},
+            {"name": "csr_wdata", "direction": "input", "width": 64},
+            {"name": "csr_wen", "direction": "input"},
+            {"name": "csr_ren", "direction": "input"},
+            {"name": "csr_rdata", "direction": "output", "width": 64},
+            {"name": "csr_ready", "direction": "output"},
+        ],
+        "register_contract": {},
+    }
+
+    assert digital_register_map_agent._spec_requires_register_map(spec) is True

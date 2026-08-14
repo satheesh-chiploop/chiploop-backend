@@ -48,9 +48,33 @@ def _spec_requires_register_map(spec_obj: dict) -> bool:
     else:
         ports = spec_obj.get("ports") or []
     names = {str(port.get("name") or "").lower() for port in ports if isinstance(port, dict)}
-    address = any(name in names for name in {"cfg_addr", "reg_addr", "csr_addr", "apb_paddr", "axi_awaddr", "i2c_addr"})
-    transaction = any(name in names for name in {"cfg_we", "cfg_write", "cfg_valid", "reg_we", "reg_valid", "csr_write", "csr_valid", "apb_psel", "axi_awvalid", "i2c_scl"})
-    data = any(name in names for name in {"cfg_wdata", "reg_wdata", "csr_wdata", "apb_pwdata", "axi_wdata", "i2c_sda"})
+
+    def prefixed_signal(prefixes: tuple[str, ...], suffixes: tuple[str, ...]) -> bool:
+        return any(
+            name.startswith(prefix) and any(name == f"{prefix}{suffix}" or name.endswith(suffix) for suffix in suffixes)
+            for name in names
+            for prefix in prefixes
+        )
+
+    # Classify the interface contract; do not infer register contents here.
+    # Common CSR buses use *_wen/*_ren while others use *_we/*_valid. Both are
+    # real transaction controls and must route through model-generated regmap
+    # creation instead of the no-register-map bypass.
+    address = (
+        any(name in names for name in {"apb_paddr", "axi_awaddr", "i2c_addr"})
+        or prefixed_signal(("cfg_", "reg_", "csr_"), ("addr", "address"))
+    )
+    transaction = (
+        any(name in names for name in {"apb_psel", "axi_awvalid", "i2c_scl"})
+        or prefixed_signal(
+            ("cfg_", "reg_", "csr_"),
+            ("we", "wen", "write", "write_en", "write_enable", "valid", "ren", "read_en", "read_enable"),
+        )
+    )
+    data = (
+        any(name in names for name in {"apb_pwdata", "axi_wdata", "i2c_sda"})
+        or prefixed_signal(("cfg_", "reg_", "csr_"), ("wdata", "write_data"))
+    )
     return address and transaction and data
 
 
@@ -291,6 +315,13 @@ Do NOT force AXI/APB if not implied by the spec.
 If the spec clearly implies an I2C/custom byte-register interface, prefer a custom 8-bit register bus description.
 If a value wider than the data bus must be exposed, split it across multiple byte registers.
 Define field-level semantics explicitly.
+
+CONTROL-PLANE EXAMPLES
+- GOOD: ports csr_addr + csr_wdata + csr_wen/csr_ren + csr_rdata describe a real custom CSR bus; generate concrete addressed registers whose access and fields follow DIGITAL_SPEC_JSON.
+- GOOD: ports cfg_addr + cfg_wdata + cfg_we/cfg_valid describe a real configuration bus; preserve its exact width and handshake instead of renaming it to APB or AXI.
+- BAD: return bus "none", status "not_applicable", or an empty registers list when address, write-data, and transaction-control ports are present.
+- BAD: invent register meanings that are absent from DIGITAL_SPEC_JSON, USER_REQUEST, ARCHITECTURE_JSON, and MICROARCH_JSON.
+- The generated RTL consumes this register map. Every generated register and field must therefore be implementable through the declared top-level control interface.
 
 OUTPUT SCHEMA
 {{
