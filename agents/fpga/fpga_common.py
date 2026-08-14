@@ -339,6 +339,11 @@ def _upstream_rtl_priority(path: str) -> int | None:
     # Recognize it before excluding other FPGA implementation products.
     if "/fpga/handoff/rtl/" in normalized:
         return 0
+    # Target Explorer may add a board-facing transport shell after native pin
+    # compatibility is evaluated. It is part of the exact Explorer handoff to
+    # FPGA Prototyping and must travel with the unchanged core RTL.
+    if "/fpga/target_explorer/interface_adapter/" in normalized:
+        return 0
     if (
         basename.startswith("tb_")
         or "testbench" in basename

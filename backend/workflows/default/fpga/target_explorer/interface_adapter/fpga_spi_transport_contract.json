@@ -1,0 +1,25 @@
+{
+  "schema": "chiploop.fpga.spi_transport.v1",
+  "mode": 0,
+  "bit_order": "msb_first",
+  "frame_bits": 4,
+  "frame_bytes": 1,
+  "command_commit": "chip_select_rising_edge",
+  "response_latency_frames": 1,
+  "input_bits": 4,
+  "output_bits": 4,
+  "input_bit_map": [
+    {
+      "port": "debug_addr",
+      "width": 4,
+      "lsb": 0
+    }
+  ],
+  "output_bit_map": [
+    {
+      "port": "led",
+      "width": 4,
+      "lsb": 0
+    }
+  ]
+}

@@ -6,7 +6,10 @@ os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-service-role-key")
 import pytest
 
 from agents.digital import digital_register_map_agent
-from agents.digital.digital_register_map_agent import _register_layout_violations
+from agents.digital.digital_register_map_agent import (
+    _register_layout_violations,
+    _repair_overlapping_fields_deterministically,
+)
 
 
 def test_register_layout_rejects_fields_beyond_declared_bus_width():
@@ -59,6 +62,70 @@ def test_register_layout_rejects_overlapping_fields():
     }
 
     assert _register_layout_violations(document) == ["CONTROL.ENABLE [3:3] overlaps MODE [3:0]"]
+
+
+def test_deterministic_repair_places_mbist_address_in_free_aligned_byte():
+    document = {
+        "regmap": {
+            "data_width": 32,
+            "registers": [{
+                "name": "BIST_STATUS",
+                "offset": "0x1C",
+                "fields": [
+                    {"name": "done", "lsb": 0, "msb": 0, "access": "RO"},
+                    {"name": "fail", "lsb": 1, "msb": 1, "access": "RO"},
+                    {"name": "running", "lsb": 2, "msb": 2, "access": "RO"},
+                    {"name": "last_fail_addr", "lsb": 0, "msb": 7, "access": "RO"},
+                ],
+            }],
+        },
+    }
+
+    repaired, changed = _repair_overlapping_fields_deterministically(document)
+
+    assert changed is True
+    assert _register_layout_violations(repaired) == []
+    last_fail = repaired["regmap"]["registers"][0]["fields"][3]
+    assert (last_fail["msb"], last_fail["lsb"]) == (15, 8)
+    assert last_fail["access"] == "RO"
+
+
+def test_arch2rtl_uses_deterministic_overlap_repair_without_second_llm_call(tmp_path, monkeypatch):
+    invalid = {
+        "derived_from_spec_only": True,
+        "regmap": {
+            "data_width": 32,
+            "registers": [{
+                "name": "BIST_STATUS", "offset": "0x1C", "fields": [
+                    {"name": "done", "lsb": 0, "msb": 0},
+                    {"name": "fail", "lsb": 1, "msb": 1},
+                    {"name": "running", "lsb": 2, "msb": 2},
+                    {"name": "last_fail_addr", "lsb": 0, "msb": 7},
+                ],
+            }],
+        },
+    }
+    calls = []
+    monkeypatch.setattr(
+        digital_register_map_agent,
+        "complete_text",
+        lambda *_args, **_kwargs: calls.append(1) or __import__("json").dumps(invalid),
+    )
+    monkeypatch.setattr(digital_register_map_agent, "save_text_artifact_and_record", lambda **_kwargs: None)
+    state = {
+        "workflow_id": "mbist-overlap",
+        "workflow_dir": str(tmp_path),
+        "digital_spec_json": {
+            "name": "mbist", "rtl_output_file": "mbist.sv",
+            "ports": [{"name": "cfg_addr"}, {"name": "cfg_we"}, {"name": "cfg_wdata"}],
+        },
+    }
+
+    digital_register_map_agent.run_agent(state)
+
+    assert len(calls) == 1
+    assert state["digital_regmap_layout_repair_method"] == "deterministic_free_bit_placement"
+    assert _register_layout_violations(state["digital_regmap"]) == []
 
 
 def test_arch2rtl_fails_hard_when_register_layout_repair_remains_invalid(tmp_path, monkeypatch):

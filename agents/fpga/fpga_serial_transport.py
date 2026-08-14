@@ -142,14 +142,20 @@ class ChipLoopSpiDevice:
 '''
 
 
-def add_spi_transport_if_needed(state: dict, *, threshold_bits: int = 64) -> dict | None:
+def add_spi_transport_if_needed(
+    state: dict, *, threshold_bits: int = 64, force_for_board_mapping: bool = False
+) -> dict | None:
     """Add an FPGA-only SPI shell when the core's parallel interface is too wide."""
     fpga = state.get("fpga") if isinstance(state.get("fpga"), dict) else {}
     rtl_files = [str(path) for path in fpga.get("rtl_files") or []]
     core_top = str(fpga.get("top_module") or state.get("top_module") or "")
     ports = _top_ports(rtl_files, core_top)
     total_bits = sum(int(port["width"]) for port in ports)
-    if not ports or total_bits <= threshold_bits or state.get("auto_serialize_wide_io") is False:
+    if (
+        not ports
+        or state.get("auto_serialize_wide_io") is False
+        or (total_bits <= threshold_bits and not force_for_board_mapping)
+    ):
         return None
     if any(port["direction"] == "inout" for port in ports):
         return {"status": "not_generated", "reason": "inout_ports_require_explicit_board_adapter", "core_top_module": core_top}
@@ -303,6 +309,11 @@ def add_spi_transport_if_needed(state: dict, *, threshold_bits: int = 64) -> dic
         "host_driver_ready": True,
         "scope": "FPGA only; ASIC uses the original core top module.",
         "hardware_readiness": "requires CDC/protocol verification and board pin assignment before programming hardware",
+        "generation_reason": (
+            "no_candidate_board_had_a_complete_verified_native_pin_map"
+            if force_for_board_mapping
+            else "native_top_level_io_exceeded_serialization_threshold"
+        ),
     }
     publish_json(state, "FPGA Explorer I/O Mapping Agent", "target_explorer", "fpga_serial_transport.json", report)
     state["fpga_serial_transport"] = report

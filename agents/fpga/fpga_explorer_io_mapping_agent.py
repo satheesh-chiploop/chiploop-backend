@@ -32,17 +32,40 @@ def run_agent(state: dict) -> dict:
         fpga = state.get("fpga") if isinstance(state.get("fpga"), dict) else {}
         rtl_files = [str(path) for path in fpga.get("rtl_files") or []]
         top = str(fpga.get("top_module") or state.get("top_module") or top)
-    ports = _extract_port_bits_from_rtl(rtl_files, top)
     frequency = float(state.get("target_frequency_mhz") or 75.0)
     requested = state.get("candidate_boards") if isinstance(state.get("candidate_boards"), list) else []
-    mappings = []
-    for board_key in requested:
-        if board_key not in BOARD_REGISTRY:
-            continue
-        board = deepcopy(BOARD_REGISTRY[board_key])
-        if str(board.get("support_tier") or "").lower() == "unavailable":
-            continue
-        mappings.append(_mapping_for_board(board_key, board, top, ports, frequency))
+
+    def build_mappings() -> tuple[list[str], list[dict]]:
+        current_ports = _extract_port_bits_from_rtl(rtl_files, top)
+        current_mappings = []
+        for board_key in requested:
+            if board_key not in BOARD_REGISTRY:
+                continue
+            board = deepcopy(BOARD_REGISTRY[board_key])
+            if str(board.get("support_tier") or "").lower() == "unavailable":
+                continue
+            current_mappings.append(
+                _mapping_for_board(board_key, board, top, current_ports, frequency)
+            )
+        return current_ports, current_mappings
+
+    ports, mappings = build_mappings()
+    # Width alone is not a sufficient deployability test. A modest parallel
+    # interface can still have no complete verified mapping on any candidate
+    # board. In automatic mode, preserve the verified core and add the standard
+    # FPGA-only SPI shell, then evaluate the actual adapted interface.
+    if (
+        adapter is None
+        and mappings
+        and not any(item["all_ports_mapped"] for item in mappings)
+        and state.get("auto_serialize_wide_io") is not False
+    ):
+        adapter = add_spi_transport_if_needed(state, force_for_board_mapping=True)
+        if adapter and adapter.get("status") == "generated":
+            fpga = state.get("fpga") if isinstance(state.get("fpga"), dict) else {}
+            rtl_files = [str(path) for path in fpga.get("rtl_files") or []]
+            top = str(fpga.get("top_module") or state.get("top_module") or top)
+            ports, mappings = build_mappings()
     summary = {
         "agent": agent, "status": "completed", "top_module": top, "top_level_ports": ports,
         "interface_adapter": adapter,

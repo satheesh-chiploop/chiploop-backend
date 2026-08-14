@@ -1,0 +1,36 @@
+{
+  "core_top_module": "bus_top",
+  "fpga_top_level_io_bits": 7,
+  "fpga_top_module": "bus_top_spi_fpga_top",
+  "generation_reason": "no_candidate_board_had_a_complete_verified_native_pin_map",
+  "hardware_readiness": "requires CDC/protocol verification and board pin assignment before programming hardware",
+  "host_driver": "C:\\Users\\satheesh\\chiploop-saas\\backend\\backend\\workflows\\default\\fpga\\target_explorer\\interface_adapter\\chiploop_spi_driver.py",
+  "host_driver_ready": true,
+  "input_bit_map": [
+    {
+      "lsb": 0,
+      "port": "debug_addr",
+      "width": 4
+    }
+  ],
+  "original_top_level_io_bits": 9,
+  "output_bit_map": [
+    {
+      "lsb": 0,
+      "port": "led",
+      "width": 4
+    }
+  ],
+  "output_frame_order_msb_first": [
+    "led"
+  ],
+  "protocol_contract": "C:\\Users\\satheesh\\chiploop-saas\\backend\\backend\\workflows\\default\\fpga\\target_explorer\\interface_adapter\\fpga_spi_transport_contract.json",
+  "protocol_contract_ready": true,
+  "scope": "FPGA only; ASIC uses the original core top module.",
+  "serialized_input_bits": 4,
+  "serialized_output_bits": 4,
+  "status": "generated",
+  "transaction_model": "MSB-first full-duplex frames; command N is committed when CS rises and response N is read in the following frame.",
+  "transport": "spi_mode_0_shift_transport",
+  "wrapper_rtl": "C:\\Users\\satheesh\\chiploop-saas\\backend\\backend\\workflows\\default\\fpga\\target_explorer\\interface_adapter\\bus_top_spi_fpga_top.sv"
+}

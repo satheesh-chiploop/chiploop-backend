@@ -15,6 +15,9 @@ from agents.fpga import fpga_serial_transport
 def test_supabase_fpga_handoff_rtl_is_preferred_over_derived_outputs():
     packaged = "backend/workflows/wf/fpga/handoff/rtl/core.sv"
     assert _upstream_rtl_priority(packaged) == 0
+    assert _upstream_rtl_priority(
+        "backend/workflows/wf/fpga/target_explorer/interface_adapter/core_spi_fpga_top.sv"
+    ) == 0
     assert _upstream_rtl_priority("backend/workflows/wf/fpga/build/core.sv") is None
 
 
@@ -146,6 +149,63 @@ def test_ulx3s_has_verified_spi_wrapper_pin_mapping(tmp_path, monkeypatch):
     assert mapping["mapped_ports"] == ["clk", "reset_n", "spi_sclk", "spi_cs_n", "spi_mosi", "spi_miso", "fault_indicator"]
 
 
+def test_native_interface_without_any_complete_board_map_gets_spi_adapter(tmp_path, monkeypatch):
+    rtl = tmp_path / "adaptive_aero_control_top.v"
+    rtl.write_text(
+        "module adaptive_aero_control_top(input clk,input reset_n,"
+        "input [15:0] safe_cmd_value,input [1:0] safe_cmd_mode,input safe_cmd_valid,"
+        "output act_cmd_valid,output act_cmd_enable,output [15:0] act_cmd_value,"
+        "output [1:0] act_cmd_mode); assign act_cmd_valid=safe_cmd_valid;"
+        "assign act_cmd_enable=safe_cmd_valid; assign act_cmd_value=safe_cmd_value;"
+        "assign act_cmd_mode=safe_cmd_mode; endmodule\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mapping_agent, "publish_json", lambda *_args: None)
+    monkeypatch.setattr(fpga_serial_transport, "publish_json", lambda *_args: None)
+    state = {
+        "workflow_id": "wf",
+        "workflow_dir": str(tmp_path),
+        "candidate_boards": ["ulx3s_ecp5_45f", "orangecrab_ecp5_85f"],
+        "fpga": {"top_module": "adaptive_aero_control_top", "rtl_files": [str(rtl)]},
+    }
+
+    mapping_agent.run_agent(state)
+
+    summary = state["fpga_explorer_io_mapping"]
+    assert summary["interface_adapter"]["status"] == "generated"
+    assert summary["interface_adapter"]["generation_reason"] == (
+        "no_candidate_board_had_a_complete_verified_native_pin_map"
+    )
+    assert summary["interface_adapter"]["original_top_level_io_bits"] == 41
+    assert summary["top_module"] == "adaptive_aero_control_top_spi_fpga_top"
+    assert summary["fully_mapped_board_count"] >= 1
+    ulx3s = next(item for item in summary["mappings"] if item["board"] == "ulx3s_ecp5_45f")
+    assert ulx3s["programming_ready"] is True
+    assert ulx3s["unmapped_ports"] == []
+
+
+def test_board_mapping_spi_adapter_honors_explicit_opt_out(tmp_path, monkeypatch):
+    rtl = tmp_path / "parallel_top.v"
+    rtl.write_text(
+        "module parallel_top(input clk,input reset_n,input [15:0] command,output [15:0] response);"
+        "assign response=command; endmodule\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mapping_agent, "publish_json", lambda *_args: None)
+    state = {
+        "candidate_boards": ["ulx3s_ecp5_45f"],
+        "auto_serialize_wide_io": False,
+        "fpga": {"top_module": "parallel_top", "rtl_files": [str(rtl)]},
+    }
+
+    mapping_agent.run_agent(state)
+
+    summary = state["fpga_explorer_io_mapping"]
+    assert summary["interface_adapter"] is None
+    assert summary["fully_mapped_board_count"] == 0
+    assert summary["mappings"][0]["programming_ready"] is False
+
+
 def test_gowin_mapping_reports_every_unmapped_top_level_port(tmp_path, monkeypatch):
     rtl = tmp_path / "top.v"
     rtl.write_text(
@@ -157,6 +217,7 @@ def test_gowin_mapping_reports_every_unmapped_top_level_port(tmp_path, monkeypat
     state = {
         "candidate_boards": ["gowin_tang_nano_9k"],
         "target_frequency_mhz": 30,
+        "auto_serialize_wide_io": False,
         "fpga": {"top_module": "top", "rtl_files": [str(rtl)]},
     }
 
@@ -222,6 +283,7 @@ def test_io_mapping_enumerates_every_bus_bit(tmp_path, monkeypatch):
     monkeypatch.setattr(mapping_agent, "publish_json", lambda _state, _agent, _subdir, _name, data: published.update(data))
     mapping_agent.run_agent({
         "candidate_boards": ["gowin_tang_nano_9k"],
+        "auto_serialize_wide_io": False,
         "fpga": {"top_module": "bus_top", "rtl_files": [str(rtl)]},
     })
 

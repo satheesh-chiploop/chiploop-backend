@@ -1,5 +1,6 @@
 import os
 import json
+from copy import deepcopy
 from model_gateway import complete_text
 from utils.artifact_utils import save_text_artifact_and_record
 
@@ -118,6 +119,60 @@ def _register_layout_violations(document: dict) -> list[str]:
                     violations.append(f"{reg_name}.{field_name} [{msb}:{lsb}] overlaps {other_name} [{other_msb}:{other_lsb}]")
             occupied.append((lsb, msb, field_name))
     return violations
+
+
+def _repair_overlapping_fields_deterministically(document: dict) -> tuple[dict, bool]:
+    """Relocate only overlapping fields into free bits without changing semantics.
+
+    Byte-aligned locations are preferred for byte-sized fields. Out-of-range
+    fields are deliberately left to the stricter LLM split-register repair,
+    because silently moving those can change an explicitly addressed contract.
+    """
+    repaired = deepcopy(document)
+    regmap = repaired.get("regmap") if isinstance(repaired, dict) else None
+    if not isinstance(regmap, dict):
+        return repaired, False
+    data_width = _parse_int(regmap.get("data_width"), 0)
+    if data_width not in {8, 16, 32, 64}:
+        return repaired, False
+    changed = False
+    for register in regmap.get("registers") or []:
+        if not isinstance(register, dict):
+            continue
+        occupied: set[int] = set()
+        for field in register.get("fields") or []:
+            if not isinstance(field, dict):
+                continue
+            lsb = _parse_int(field.get("lsb", field.get("bit_offset")), -1)
+            if field.get("msb") is not None:
+                msb = _parse_int(field.get("msb"), -1)
+            else:
+                width_value = _parse_int(field.get("bit_width", field.get("width")), 1)
+                msb = lsb + width_value - 1
+            width = msb - lsb + 1
+            if lsb < 0 or width <= 0 or msb >= data_width:
+                continue
+            requested = set(range(lsb, msb + 1))
+            if requested.isdisjoint(occupied):
+                occupied.update(requested)
+                continue
+            aligned = list(range(0, data_width - width + 1, 8)) if width >= 8 else []
+            candidates = [*aligned, *range(0, data_width - width + 1)]
+            new_lsb = next(
+                (
+                    candidate
+                    for candidate in dict.fromkeys(candidates)
+                    if set(range(candidate, candidate + width)).isdisjoint(occupied)
+                ),
+                None,
+            )
+            if new_lsb is None:
+                continue
+            field["lsb"] = new_lsb
+            field["msb"] = new_lsb + width - 1
+            occupied.update(range(new_lsb, new_lsb + width))
+            changed = True
+    return repaired, changed
 
 
 def _repair_register_layout(regmap: dict, violations: list[str], spec_obj: dict, state: dict) -> dict:
@@ -296,6 +351,14 @@ OUTPUT SCHEMA
 
     violations = _register_layout_violations(regmap)
     if violations:
+        deterministic_regmap, deterministic_changed = _repair_overlapping_fields_deterministically(regmap)
+        deterministic_violations = _register_layout_violations(deterministic_regmap)
+        if deterministic_changed and not deterministic_violations:
+            regmap = deterministic_regmap
+            violations = []
+            state["digital_regmap_layout_repaired"] = True
+            state["digital_regmap_layout_repair_method"] = "deterministic_free_bit_placement"
+    if violations:
         try:
             regmap = _repair_register_layout(regmap, violations, spec_obj, state)
         except Exception as exc:
@@ -310,6 +373,7 @@ OUTPUT SCHEMA
                 f"{state['status']} Violations: {'; '.join(repaired_violations[:8])}"
             )
         state["digital_regmap_layout_repaired"] = True
+        state["digital_regmap_layout_repair_method"] = "llm_split_register_repair"
 
     out_path = os.path.join(workflow_dir, "digital_regmap.json")
     with open(out_path, "w", encoding="utf-8") as f:
