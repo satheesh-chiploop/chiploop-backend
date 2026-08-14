@@ -13,7 +13,11 @@ artifact_stub = types.ModuleType("utils.artifact_utils")
 artifact_stub.save_text_artifact_and_record = lambda *args, **kwargs: None
 sys.modules.setdefault("utils.artifact_utils", artifact_stub)
 
-from agents.digital.digital_rtl_agent import _remove_comb_blocking_assigns_to_sequential_regs
+from agents.digital.digital_rtl_agent import (
+    _flatten_constant_part_select_bit_selects,
+    _remove_comb_blocking_assigns_to_sequential_regs,
+    _sanitize_single_driver_rtl,
+)
 
 
 def test_relational_less_equal_is_not_treated_as_nonblocking_assignment():
@@ -56,3 +60,38 @@ end
 
     assert "state = next_state;" not in sanitized
     assert "state <= next_state;" in sanitized
+
+
+def test_reset_only_write_does_not_destroy_combinational_readback_case():
+    rtl = """
+module readback(input clk, input rst_n, input [7:0] addr, output [31:0] rdata);
+reg [31:0] rdata_reg;
+assign rdata = rdata_reg;
+always @(*) begin
+    rdata_reg = 32'h0;
+    case (addr)
+        8'h00: rdata_reg = 32'h12345678;
+        default: rdata_reg = 32'h0;
+    endcase
+end
+always @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+        rdata_reg <= 32'h0;
+    end
+end
+endmodule
+"""
+
+    sanitized = _sanitize_single_driver_rtl({"readback.v": rtl})["readback.v"]
+
+    assert "8'h00: rdata_reg = 32'h12345678;" in sanitized
+    assert "default: rdata_reg = 32'h0;" in sanitized
+    assert "rdata_reg <= 32'h0;" not in sanitized
+
+
+def test_constant_chained_part_select_is_flattened():
+    rtl = "if (rsp_payload_reg[127:96][0]) valid = 1'b1;"
+
+    assert _flatten_constant_part_select_bit_selects(rtl) == (
+        "if (rsp_payload_reg[96]) valid = 1'b1;"
+    )

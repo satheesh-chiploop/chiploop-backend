@@ -1026,6 +1026,32 @@ def _remove_reset_only_seq_assigns_for_comb_targets(code: str) -> str:
     return "\n".join(out).rstrip()
 
 
+def _flatten_constant_part_select_bit_selects(code: str) -> str:
+    """Rewrite ``signal[msb:lsb][bit]`` into a Verilog-2005 bit select.
+
+    Generated RTL occasionally uses a SystemVerilog-style chained select that
+    is not accepted consistently by Icarus. Constant bounds make the exact
+    equivalent deterministic: ``value[127:96][0]`` becomes ``value[96]``.
+    """
+    pattern = re.compile(
+        r"\b(?P<name>[A-Za-z_][A-Za-z0-9_$]*)\s*"
+        r"\[\s*(?P<msb>\d+)\s*:\s*(?P<lsb>\d+)\s*\]\s*"
+        r"\[\s*(?P<bit>\d+)\s*\]"
+    )
+
+    def replace(match: re.Match) -> str:
+        msb = int(match.group("msb"))
+        lsb = int(match.group("lsb"))
+        bit = int(match.group("bit"))
+        width = abs(msb - lsb) + 1
+        if bit >= width:
+            return match.group(0)
+        absolute = lsb + bit if msb >= lsb else lsb - bit
+        return f"{match.group('name')}[{absolute}]"
+
+    return pattern.sub(replace, code or "")
+
+
 def _convert_procedural_wire_declarations(code: str) -> str:
     text = code or ""
     for _module_name, module_code in _extract_verilog_modules(text).items():
@@ -1054,9 +1080,15 @@ def _convert_procedural_wire_declarations(code: str) -> str:
 
 def _sanitize_single_driver_rtl(verilog_map: Dict[str, str]) -> Dict[str, str]:
     return {
-        fname: _convert_procedural_wire_declarations(
-            _remove_reset_only_seq_assigns_for_comb_targets(
-                _remove_comb_blocking_assigns_to_sequential_regs(code)
+        fname: _flatten_constant_part_select_bit_selects(
+            _convert_procedural_wire_declarations(
+                _remove_comb_blocking_assigns_to_sequential_regs(
+                    # Reset-only sequential writes are redundant when the
+                    # signal is owned by a complete combinational mux. Remove
+                    # those first; otherwise the next pass deletes every case
+                    # item and leaves a syntactically empty case statement.
+                    _remove_reset_only_seq_assigns_for_comb_targets(code)
+                )
             )
         )
         for fname, code in verilog_map.items()
