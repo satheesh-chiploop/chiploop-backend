@@ -100,6 +100,27 @@ def test_contract_repair_prompt_teaches_coherent_firmware_interface_repair():
     assert "do not patch only the validation message" in prompt
 
 
+def test_contract_repair_prompt_preserves_late_register_contract_from_large_json():
+    previous = {
+        "design_name": "large_design",
+        "hierarchy": {"top_module": {"name": "large_top"}, "modules": []},
+        "large_early_section": "x" * 20000,
+        "register_contract": {
+            "bus_type": "csr",
+            "registers": [{"name": "CONTROL", "offset": "0x00", "access": "RW"}],
+        },
+    }
+
+    prompt = spec_agent._build_repair_prompt(
+        "base",
+        json.dumps(previous, indent=2),
+        "Mandatory firmware control-plane contract is missing a concrete register_contract bus and registers",
+    )
+
+    assert '"register_contract"' in prompt
+    assert '"CONTROL"' in prompt
+
+
 def test_hierarchical_contract_rejects_children_nested_inside_top_module():
     child = {
         **_module("child"),

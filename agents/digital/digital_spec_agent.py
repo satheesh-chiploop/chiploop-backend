@@ -1603,6 +1603,7 @@ def _build_repair_prompt(base_prompt: str, previous_json_text: str, failure_log_
 
 FIRMWARE CONTROL-PLANE REPAIR EXAMPLES:
 - GOOD: keep application-specific configuration semantics, expose them through a declared CSR/MMIO address/write-data/read-data/write-enable/ready interface, and describe the exact implemented registers and fields in register_contract.
+- GOOD SHAPE: "register_contract":{"bus_type":"csr","registers":[{"name":"CONTROL","offset":"0x00","access":"RW","fields":[{"name":"enable","lsb":0,"msb":0,"access":"RW"}]}]}; declare and implement the matching bus ports in the top module.
 - GOOD: direct real-time streaming ports may coexist with the CSR interface.
 - BAD: expose only dozens of direct cfg_* value pins while claiming firmware can configure the block.
 - BAD: add register_contract JSON without adding the matching synthesizable top-level bus, or add a bus without concrete addressed registers.
@@ -1628,6 +1629,20 @@ FPGA MEMORY REPAIR EXAMPLES:
 - BAD: declare openram_sram, prebuilt_sky130_sram, or another ASIC hard macro in an FPGA-only contract.
 - BAD: instantiate a memory module that has neither an RTL deliverable nor explicit external simulation/synthesis collateral.
 """
+    # Preserve the complete prior contract across semantic repair passes.
+    # Pretty model output can exceed a short excerpt and previously lost late
+    # sections (notably register_contract). Compact valid JSON first so the
+    # prompt retains substantially more contract information.
+    previous_contract = str(previous_json_text or "")
+    try:
+        previous_contract = json.dumps(
+            _parse_llm_json_object(previous_contract),
+            separators=(",", ":"),
+            ensure_ascii=False,
+        )
+    except (JSONDecodeError, ValueError, TypeError):
+        pass
+
     return f"""
 ==============================
 REPAIR MODE (SECOND PASS)
@@ -1638,10 +1653,10 @@ Your previous JSON did not pass contract validation.
 You MUST preserve the same architecture unless a structural change is strictly required to fix the validation errors.
 
 ORIGINAL GENERATION CONTRACT EXCERPT:
-{_truncate_text(base_prompt, 9000)}
+{_truncate_text(base_prompt, 24000)}
 
 PREVIOUS JSON:
-{_truncate_text(previous_json_text, 12000)}
+{_truncate_text(previous_contract, 70000)}
 
 VALIDATION FAILURE LOG:
 {_truncate_text(failure_log_text, 4000)}
@@ -2456,17 +2471,31 @@ Return JSON only.
             _write_text(pass2_log_path, f"Digital Spec Agent parse/normalize failure:\n{e2}\n")
             _write_text(pass2_exc_path, repr(e2))
 
-            syntax_repair_prompt = _build_json_syntax_repair_prompt(
-                previous_json_text=llm_output_pass2,
-                failure_text=_json_error_context(llm_output_pass2, e2),
-            )
+            # A syntax-only pass intentionally preserves keys, so it cannot
+            # repair semantic failures such as a missing register contract or
+            # invalid connectivity. Route semantic failures back through the
+            # full contract repair prompt.
+            if isinstance(e2, JSONDecodeError):
+                pass3_prompt = _build_json_syntax_repair_prompt(
+                    previous_json_text=llm_output_pass2,
+                    failure_text=_json_error_context(llm_output_pass2, e2),
+                )
+                pass3_mode = "syntax_repair"
+            else:
+                pass3_prompt = _build_repair_prompt(
+                    base_prompt=prompt,
+                    previous_json_text=llm_output_pass2,
+                    failure_log_text=str(e2),
+                )
+                pass3_mode = "contract_repair_pass3"
+            llm_output_pass3 = llm_output_pass2
             try:
-                logger.info("Digital Spec Agent invoking final JSON syntax repair flow")
-                logger.info(f"Digital Spec Agent syntax repair prompt size: {len(syntax_repair_prompt)} chars")
+                logger.info(f"Digital Spec Agent invoking pass3 {pass3_mode} flow")
+                logger.info(f"Digital Spec Agent pass3 prompt size: {len(pass3_prompt)} chars")
                 t0 = time.monotonic()
-                llm_output_pass3 = _complete_spec_generation(syntax_repair_prompt, agent_name, state, "syntax_repair")
-                logger.info(f"Digital Spec Agent syntax repair LLM elapsed: {time.monotonic() - t0:.2f}s")
-                logger.info(f"Digital Spec Agent syntax repair LLM output size: {len(llm_output_pass3)} chars")
+                llm_output_pass3 = _complete_spec_generation(pass3_prompt, agent_name, state, pass3_mode)
+                logger.info(f"Digital Spec Agent pass3 LLM elapsed: {time.monotonic() - t0:.2f}s")
+                logger.info(f"Digital Spec Agent pass3 LLM output size: {len(llm_output_pass3)} chars")
                 spec_json, mode, raw_output_path_pass3, normalized_path_pass3 = _compile_spec_contract(
                     llm_output=llm_output_pass3,
                     spec_dir=spec_dir,
@@ -2479,7 +2508,7 @@ Return JSON only.
             except Exception as e3:
                 pass3_log_path = os.path.join(spec_dir, "spec_agent_contract_pass3.log")
                 pass3_exc_path = os.path.join(spec_dir, "spec_agent_exception_pass3.txt")
-                _write_text(pass3_log_path, f"Digital Spec Agent JSON syntax repair failure:\n{e3}\n")
+                _write_text(pass3_log_path, f"Digital Spec Agent pass3 repair failure ({pass3_mode}):\n{e3}\n")
                 _write_text(pass3_exc_path, repr(e3))
 
                 final_contract_repair_prompt = _build_repair_prompt(
