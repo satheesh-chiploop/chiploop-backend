@@ -39,34 +39,18 @@ def _norm(path: str) -> str:
     return str(path or "").strip().replace("\\", "/")
 
 
-def _derive_adapter_required_files(package_manifest: Dict[str, Any], discovered_assets: Dict[str, Any]) -> List[str]:
-    adapter_manifest = discovered_assets.get("adapter_manifest") or {}
-    adapter_path = (
-        adapter_manifest.get("path")
-        or adapter_manifest.get("artifact_path")
-        or adapter_manifest.get("resolved_path")
-        or ""
-    )
-    adapter_path = _norm(adapter_path)
-
-    if adapter_path.endswith(".json"):
-        adapter_path = adapter_path.rsplit("/", 1)[0]
-
+def _derive_adapter_required_files(adapter_manifest: Dict[str, Any]) -> List[str]:
+    """Use the generated adapter contract, never its storage-manifest location."""
+    adapter_path = _norm(adapter_manifest.get("adapter_path") or "").rstrip("/")
     adapter_crate = str(
         adapter_manifest.get("adapter_crate")
-        or package_manifest.get("adapter_crate")
         or adapter_manifest.get("adapter_package_name")
         or ""
     ).strip()
-
+    if not adapter_path and adapter_crate:
+        adapter_path = f"system/software/adapter/{adapter_crate}"
     if not adapter_path:
-        adapter_path = f"system/software/adapter/{adapter_crate}"
-    elif adapter_path.endswith("/adapter"):
-        adapter_path = f"{adapter_path}/{adapter_crate}"
-    elif adapter_crate and not adapter_path.endswith(f"/{adapter_crate}"):    
-        adapter_path = f"system/software/adapter/{adapter_crate}"
-
-    adapter_path = adapter_path.rstrip("/")
+        return []
     return [
         f"{adapter_path}/Cargo.toml",
         f"{adapter_path}/src/lib.rs",
@@ -108,14 +92,21 @@ def run_agent(state: dict) -> dict:
     }
 
     package_files = {_norm(p) for p in (package_manifest.get("files") or []) if _norm(p)}
-    required_adapter_files = _derive_adapter_required_files(package_manifest, discovered_assets)
+    adapter_contract = state.get("system_software_adapter_manifest") or {}
+    required_adapter_files = _derive_adapter_required_files(adapter_contract)
     missing_adapter_package_files = []
+    package_checks = {
+        _norm(item.get("path")): bool(item.get("exists"))
+        for item in package_file_checks
+        if isinstance(item, dict) and _norm(item.get("path"))
+    }
+    restored_root = str(state.get("system_software_validation_local_root") or "").strip()
 
     for path in required_adapter_files:
-        if workflow_dir:
-            full_path = os.path.join(workflow_dir, path)
-            if not os.path.isfile(full_path):
-                missing_adapter_package_files.append(path)
+        packaged = path in package_files or package_checks.get(path, False)
+        restored = bool(restored_root and os.path.isfile(os.path.join(restored_root, *path.split("/"))))
+        if not packaged and not restored:
+            missing_adapter_package_files.append(path)
 
 
     package_status = "complete"
