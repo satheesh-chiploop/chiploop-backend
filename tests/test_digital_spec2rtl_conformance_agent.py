@@ -79,3 +79,30 @@ endmodule
 
     assert status == "matched"
     assert "IRQ_CLEAR.sample_done clear" in evidence
+
+
+def test_register_evidence_merges_duplicate_register_and_prefers_address():
+    spec = {
+        "register_contract": {
+            "registers": [{"name": "CONTROL", "fields": [{"name": "enable"}]}],
+        }
+    }
+    regmap = {
+        "registers": [{"name": "CONTROL", "offset": "0x00", "fields": [{"name": "enable"}]}],
+    }
+    rtl = """
+reg enable_r;
+always @(*) begin
+  case (csr_addr)
+    8'h00: csr_rdata = {63'd0, enable_r};
+    default: csr_rdata = 64'd0;
+  endcase
+end
+"""
+
+    evidence = agent._register_evidence("", rtl, {}, spec, regmap)
+
+    assert evidence["expected_registers"] == ["CONTROL"]
+    assert evidence["matched_registers"] == ["CONTROL"]
+    assert evidence["expected_addresses"] == ["0x00"]
+    assert evidence["matched_addresses"] == ["0x00"]

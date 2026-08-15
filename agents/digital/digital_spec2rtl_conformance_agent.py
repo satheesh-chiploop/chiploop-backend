@@ -572,9 +572,21 @@ def _register_evidence(spec: str, rtl_text: str, state: Dict[str, Any], spec_obj
         addr_int = int(value, 16)
         if re.search(rf"\b\d+'h0*{addr_int:x}\b", rtl_text, re.I) or re.search(rf"\b{re.escape(value)}\b", rtl_text, re.I):
             matched_addresses.append(value)
+    # The normalized spec and generated regmap legitimately describe the same
+    # register. One source may omit its address while the other supplies it;
+    # merge those records by name and prefer concrete evidence before sorting.
+    # Sorting raw (name, address) tuples can compare None with str and crash a
+    # successful RTL run during its reporting/signoff step.
+    registers_by_name: Dict[str, Optional[str]] = {}
+    for reg_name, address in registers:
+        current = registers_by_name.get(reg_name)
+        if reg_name not in registers_by_name or (not current and address):
+            registers_by_name[reg_name] = address
+    canonical_registers = sorted(registers_by_name.items(), key=lambda item: item[0].lower())
+
     matched_registers = []
     missing_registers = []
-    for reg_name, address in sorted(dict.fromkeys(registers)):
+    for reg_name, address in canonical_registers:
         address_matched = bool(address and address in matched_addresses)
         name_matched = bool(re.search(rf"\b{re.escape(reg_name)}\b", rtl_text, re.I) or re.search(rf"\b{re.escape(reg_name.lower())}\b", rtl_text, re.I))
         if address_matched or name_matched:
@@ -586,7 +598,7 @@ def _register_evidence(spec: str, rtl_text: str, state: Dict[str, Any], spec_obj
     return {
         "expected": unique,
         "matched": matched,
-        "expected_registers": [r[0] for r in sorted(dict.fromkeys(registers))],
+        "expected_registers": [r[0] for r in canonical_registers],
         "matched_registers": matched_registers,
         "expected_addresses": sorted(dict.fromkeys(addresses)),
         "matched_addresses": matched_addresses,
