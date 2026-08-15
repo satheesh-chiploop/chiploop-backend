@@ -1584,6 +1584,17 @@ def _sanitize_hierarchical_connectivity(spec_json: dict) -> dict:
 
 
 def _build_repair_prompt(base_prompt: str, previous_json_text: str, failure_log_text: str) -> str:
+    firmware_examples = ""
+    if "firmware control-plane" in str(failure_log_text or "").lower() or "register_contract" in str(failure_log_text or ""):
+        firmware_examples = """
+
+FIRMWARE CONTROL-PLANE REPAIR EXAMPLES:
+- GOOD: keep application-specific configuration semantics, expose them through a declared CSR/MMIO address/write-data/read-data/write-enable/ready interface, and describe the exact implemented registers and fields in register_contract.
+- GOOD: direct real-time streaming ports may coexist with the CSR interface.
+- BAD: expose only dozens of direct cfg_* value pins while claiming firmware can configure the block.
+- BAD: add register_contract JSON without adding the matching synthesizable top-level bus, or add a bus without concrete addressed registers.
+- Repair the complete specification coherently; do not patch only the validation message.
+"""
     return f"""
 ==============================
 REPAIR MODE (SECOND PASS)
@@ -1609,6 +1620,7 @@ REPAIR RULES:
 - Return ONE full corrected JSON object only
 - Do NOT return partial edits
 - Do NOT return explanations
+{firmware_examples}
 """.strip()
 
 
@@ -1641,6 +1653,7 @@ def _compile_spec_contract(
     suffix: str = "",
     requested_top: str = "",
     source_prompt: str = "",
+    require_firmware_control_plane: bool = False,
 ):
     logger.info(f"🔍 Digital Spec Agent compile start suffix='{suffix or 'pass1'}'")
     raw_name = f"llm_raw_output{suffix}.txt"
@@ -1683,14 +1696,25 @@ def _compile_spec_contract(
         json.dump(spec_json, nf, indent=2)
 
     _validate_spec_contract(spec_json, mode)
-    _validate_mandatory_firmware_control_plane(spec_json, mode, source_prompt)
+    _validate_mandatory_firmware_control_plane(
+        spec_json,
+        mode,
+        source_prompt,
+        required=require_firmware_control_plane,
+    )
     logger.info(f"✅ Digital Spec Agent contract compile passed suffix='{suffix or 'pass1'}'")
     return spec_json, mode, raw_output_path, normalized_path
 
 
-def _validate_mandatory_firmware_control_plane(spec_json: dict, mode: str, source_prompt: str) -> None:
+def _validate_mandatory_firmware_control_plane(
+    spec_json: dict,
+    mode: str,
+    source_prompt: str,
+    *,
+    required: bool = False,
+) -> None:
     """Reject a spec that drops an explicitly required firmware control plane."""
-    if "FIRMWARE CONTROL-PLANE CONTRACT (mandatory)" not in str(source_prompt or ""):
+    if not required and "FIRMWARE CONTROL-PLANE CONTRACT (mandatory)" not in str(source_prompt or ""):
         return
     contract = spec_json.get("register_contract") if isinstance(spec_json, dict) else None
     registers = contract.get("registers") if isinstance(contract, dict) else None
@@ -1708,6 +1732,9 @@ def _validate_mandatory_firmware_control_plane(spec_json: dict, mode: str, sourc
     def has_any(tokens: tuple[str, ...]) -> bool:
         return any(any(token in name for token in tokens) for name in names)
 
+    def has_strobe(suffixes: tuple[str, ...]) -> bool:
+        return any(any(name.endswith(suffix) for suffix in suffixes) for name in names)
+
     missing = []
     if not has_any(("addr", "address")):
         missing.append("address")
@@ -1715,9 +1742,15 @@ def _validate_mandatory_firmware_control_plane(spec_json: dict, mode: str, sourc
         missing.append("write-data")
     if not has_any(("rdata", "rd_data", "read_data", "prdata")):
         missing.append("read-data")
-    if not has_any(("valid", "select", "sel", "enable", "psel", "cyc", "stb")):
+    if not (
+        has_any(("valid", "select", "sel", "enable", "psel", "cyc", "stb"))
+        or has_strobe(("_we", "_wen", "_re", "_ren", "_write", "_read"))
+    ):
         missing.append("transaction-valid/select")
-    if not has_any(("write", "wr_en", "write_en", "pwrite")):
+    if not (
+        has_any(("write", "wr_en", "write_en", "pwrite"))
+        or has_strobe(("_we", "_wen"))
+    ):
         missing.append("write-enable")
     if not has_any(("ready", "response", "resp", "ack", "pready")):
         missing.append("response/ready")
@@ -2277,6 +2310,7 @@ Return JSON only.
 
     pass1_error = None
     pass2_error = None
+    require_firmware_control_plane = bool(state.get("require_firmware_control_plane"))
 
     try:
         spec_json, mode, raw_output_path, normalized_path = _compile_spec_contract(
@@ -2285,6 +2319,7 @@ Return JSON only.
             suffix="",
             requested_top=requested_top,
             source_prompt=user_prompt,
+            require_firmware_control_plane=require_firmware_control_plane,
         )
     except Exception as e:
         pass1_error = e
@@ -2345,6 +2380,7 @@ Return JSON only.
                 suffix="_pass2",
                 requested_top=requested_top,
                 source_prompt=user_prompt,
+                require_firmware_control_plane=require_firmware_control_plane,
             )
             raw_output_path = raw_output_path_pass2
             
@@ -2373,6 +2409,7 @@ Return JSON only.
                     suffix="_pass3",
                     requested_top=requested_top,
                     source_prompt=user_prompt,
+                    require_firmware_control_plane=require_firmware_control_plane,
                 )
                 raw_output_path = raw_output_path_pass3
             except Exception as e3:
@@ -2399,6 +2436,7 @@ Return JSON only.
                         suffix="_pass4",
                         requested_top=requested_top,
                         source_prompt=user_prompt,
+                        require_firmware_control_plane=require_firmware_control_plane,
                     )
                     raw_output_path = raw_output_path_pass4
                 except Exception as e4:

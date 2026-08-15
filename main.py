@@ -7255,6 +7255,12 @@ def _hem_physical_ai_child_payload(root_workflow_id: str, root_run_id: str, payl
                 "fallback, and bounded actuator-command behavior.\n" + transport_contract + firmware_interface_contract + base_spec + memory_contract
             ),
             "top_module": top_module,
+            # Structured invariant consumed by Digital Spec Agent. The prose
+            # remains useful to the model, but correctness must not depend on
+            # finding a marker string in a reconstructed prompt.
+            "require_firmware_control_plane": bool(
+                firmware_requested and deployment_architecture in firmware_mmio_modes
+            ),
             "design_language": "SystemVerilog",
             "toggles": {"run_spec2rtl_check": True},
         }
@@ -7485,6 +7491,46 @@ def _hem_continue_physical_ai_after_success(*, root_workflow_id: str, root_run_i
             _hem_update_run_record(str(hem_run_id) if hem_run_id else None, status="failed", metadata={"source": "physical_ai", "path": plan, "completed": completed, "failed_stage": stage, "failed_workflow_id": child_workflow_id})
             return
         if stage == "arch2rtl":
+            if bool(child_payload.get("require_firmware_control_plane")):
+                regmap_artifact, regmap_source = _hem_load_json_artifact(
+                    child_workflow_id,
+                    "digital_regmap.json",
+                    child_artifact_dir,
+                    base_dir,
+                )
+                nested_regmap = (
+                    regmap_artifact.get("regmap")
+                    if isinstance(regmap_artifact, dict) and isinstance(regmap_artifact.get("regmap"), dict)
+                    else regmap_artifact
+                )
+                concrete_registers = (
+                    nested_regmap.get("registers")
+                    if isinstance(nested_regmap, dict)
+                    else None
+                )
+                if not isinstance(concrete_registers, list) or not concrete_registers:
+                    message = (
+                        "HEM stopped after RTL Generation because firmware/software were requested but the "
+                        "Supabase-backed Arch2RTL handoff has no concrete register map. The digital spec must "
+                        "be repaired before verification, firmware, software, or co-simulation can continue."
+                    )
+                    if regmap_source:
+                        message += f" Register-map evidence: {regmap_source}."
+                    append_log_workflow(root_workflow_id, message, status="failed", phase="hem_failed")
+                    append_log_run(root_run_id, message, status="failed")
+                    _hem_update_run_record(
+                        str(hem_run_id) if hem_run_id else None,
+                        status="failed",
+                        metadata={
+                            "source": "physical_ai",
+                            "path": plan,
+                            "completed": completed,
+                            "failed_stage": stage,
+                            "failed_workflow_id": child_workflow_id,
+                            "reason": "missing_concrete_firmware_register_map",
+                        },
+                    )
+                    return
             automation_payload["source_arch2rtl_workflow_id"] = child_workflow_id
             automation_payload["from_workflow_id"] = child_workflow_id
             append_log_workflow(root_workflow_id, f"HEM will use generated RTL workflow {child_workflow_id} for verification and implementation.", phase="hem_running")

@@ -72,6 +72,34 @@ def test_mandatory_firmware_control_plane_rejects_direct_configuration_pins():
         )
 
 
+def test_structured_firmware_requirement_does_not_depend_on_prompt_marker():
+    spec = {
+        **_module("adaptive_aero_control_top"),
+        "ports": [_port("clk", "input"), _port("cfg_cmd_min", "input", 12)],
+        "register_contract": {},
+    }
+    with pytest.raises(ValueError, match="missing a concrete register_contract"):
+        spec_agent._validate_mandatory_firmware_control_plane(
+            spec,
+            "flat",
+            "ordinary application specification",
+            required=True,
+        )
+
+
+def test_contract_repair_prompt_teaches_coherent_firmware_interface_repair():
+    prompt = spec_agent._build_repair_prompt(
+        "base contract",
+        '{"register_contract": {}}',
+        "Mandatory firmware control-plane contract is missing a concrete register_contract bus and registers",
+    )
+
+    assert "FIRMWARE CONTROL-PLANE REPAIR EXAMPLES" in prompt
+    assert "GOOD:" in prompt
+    assert "BAD:" in prompt
+    assert "do not patch only the validation message" in prompt
+
+
 def test_mandatory_firmware_control_plane_accepts_concrete_custom_csr_bus():
     spec = {
         **_module("adaptive_aero_control_top"),
@@ -87,6 +115,31 @@ def test_mandatory_firmware_control_plane_accepts_concrete_custom_csr_bus():
     }
     spec_agent._validate_mandatory_firmware_control_plane(
         spec, "flat", "FIRMWARE CONTROL-PLANE CONTRACT (mandatory)",
+    )
+
+
+def test_mandatory_firmware_control_plane_accepts_csr_wen_ren_strobes():
+    spec = {
+        **_module("adaptive_aero_control_top"),
+        "ports": [
+            _port("csr_addr", "input", 8),
+            _port("csr_wdata", "input", 32),
+            _port("csr_rdata", "output", 32),
+            _port("csr_wen", "input"),
+            _port("csr_ren", "input"),
+            _port("csr_ready", "output"),
+        ],
+        "register_contract": {
+            "bus_type": "custom_csr",
+            "registers": [{"name": "CONTROL", "offset": "0x00"}],
+        },
+    }
+
+    spec_agent._validate_mandatory_firmware_control_plane(
+        spec,
+        "flat",
+        "ordinary application specification",
+        required=True,
     )
 
 
