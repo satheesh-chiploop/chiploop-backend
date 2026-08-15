@@ -17,7 +17,16 @@ def test_physical_ai_hem_default_explores_cross_vendor_fpga_targets():
     assert 'profile.get("support_tier") or "production"' in main_source
     assert 'profile.get("nextpnr_tool")' in main_source
     assert 'profile.get("device")' in main_source
-    assert 'payload.get("candidate_boards") or _hem_physical_ai_fpga_candidates()' in main_source
+    assert '"candidate_boards": _hem_reference_fpga_candidates(payload)' in main_source
+
+
+def test_application_intelligence_fpga_shortlist_is_supabase_governed():
+    root = Path(__file__).parents[1]
+    migration = (root / "supabase" / "migrations" / "phase_20260815_application_intelligence_fpga_shortlist.sql").read_text(encoding="utf-8")
+    assert "reference_fpga_candidate_boards" in migration
+    assert "ulx3s_ecp5_45f" in migration
+    assert "orangecrab_ecp5_85f" in migration
+    assert "nvidia.domino.automotive_aero" in migration
 
 
 def test_physical_ai_fpga_bitstream_uses_fpga_dashboard():

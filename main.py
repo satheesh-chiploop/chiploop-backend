@@ -3775,6 +3775,7 @@ class PhysicalAiWorkflowIn(BaseModel):
     hem_mode: Literal["fixed", "adaptive"] = "fixed"
     hem_goal: Literal["fpga_prototype", "product_demo"] = "product_demo"
     hem_stage_toggles: Dict[str, bool] = Field(default_factory=lambda: {"fpga_exploration": True, "fpga_bitstream": True, "firmware_product": True})
+    candidate_boards: Optional[List[str]] = None
 
 
 class DigitalArch2SynthesisAppIn(DigitalArch2RTLAppIn, DigitalRTLSourceIn):
@@ -7098,6 +7099,24 @@ def _hem_physical_ai_fpga_candidates() -> List[str]:
     ]
 
 
+def _hem_reference_fpga_candidates(payload: Dict[str, Any]) -> List[str]:
+    """Resolve a governed reference-journey shortlist against runnable boards."""
+    requested = payload.get("candidate_boards")
+    if isinstance(requested, list) and requested:
+        candidates = requested
+    elif str(payload.get("journey_id") or "") == "application_intelligence_active_aero":
+        model = payload.get("physics_model_record") if isinstance(payload.get("physics_model_record"), dict) else {}
+        configuration = model.get("configuration") if isinstance(model.get("configuration"), dict) else {}
+        candidates = configuration.get("reference_fpga_candidate_boards")
+        if not isinstance(candidates, list):
+            candidates = []
+    else:
+        return _hem_physical_ai_fpga_candidates()
+
+    runnable = set(_hem_physical_ai_fpga_candidates())
+    return list(dict.fromkeys(str(board).strip() for board in candidates if str(board).strip() in runnable))
+
+
 HEM_PHYSICAL_AI_STAGE_META: Dict[str, Dict[str, str]] = {
     "arch2rtl": {
         "label": "RTL Generation",
@@ -7384,7 +7403,7 @@ def _hem_physical_ai_child_payload(root_workflow_id: str, root_run_id: str, payl
     if stage == "fpga_exploration":
         return {
             **common,
-            "candidate_boards": payload.get("candidate_boards") or _hem_physical_ai_fpga_candidates(),
+            "candidate_boards": _hem_reference_fpga_candidates(payload),
             "requested_recommendation_profile": str(payload.get("requested_recommendation_profile") or "best_overall"),
             "baseline_seed_count": int(payload.get("baseline_seed_count") or 1),
             "closure_seed_count": int(payload.get("closure_seed_count") or 1),
