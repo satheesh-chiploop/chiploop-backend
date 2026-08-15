@@ -43,6 +43,7 @@ def test_physical_ai_product_arch2rtl_requires_real_firmware_control_plane():
     assert '"require_firmware_control_plane": bool(' in main_source
     assert "missing_concrete_firmware_register_map" in main_source
     assert "Supabase-backed Arch2RTL handoff has no concrete register map" in main_source
+    assert '"_fail_fast_on_agent_error": True' in main_source
 
 
 def test_external_host_physical_ai_plan_does_not_queue_mmio_firmware():

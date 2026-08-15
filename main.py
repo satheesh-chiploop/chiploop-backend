@@ -7202,6 +7202,7 @@ def _hem_physical_ai_child_payload(root_workflow_id: str, root_run_id: str, payl
         "hem_root_run_id": root_run_id,
         "hem_stage": stage,
         "hem_stage_label": HEM_PHYSICAL_AI_STAGE_META.get(stage, {}).get("label", stage.replace("_", " ").title()),
+        "_fail_fast_on_agent_error": True,
     }
     if stage == "arch2rtl":
         implementation_path = str(payload.get("implementation_path") or "fpga_prototype")

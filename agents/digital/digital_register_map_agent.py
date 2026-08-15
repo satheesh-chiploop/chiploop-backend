@@ -135,7 +135,13 @@ def _register_layout_violations(document: dict) -> list[str]:
             else:
                 width = _parse_int(field.get("bit_width", field.get("width")), 1)
                 msb = lsb + width - 1
-            if lsb < 0 or msb < lsb or msb >= data_width:
+            if msb < lsb:
+                violations.append(
+                    f"{reg_name}.{field_name} has reversed bit ordering: lsb={lsb}, msb={msb}; "
+                    "require 0 <= lsb <= msb"
+                )
+                continue
+            if lsb < 0 or msb >= data_width:
                 violations.append(f"{reg_name}.{field_name} [{msb}:{lsb}] is outside the {data_width}-bit register word")
                 continue
             for other_lsb, other_msb, other_name in occupied:
@@ -199,7 +205,14 @@ def _repair_overlapping_fields_deterministically(document: dict) -> tuple[dict, 
     return repaired, changed
 
 
-def _repair_register_layout(regmap: dict, violations: list[str], spec_obj: dict, state: dict) -> dict:
+def _repair_register_layout(
+    regmap: dict,
+    violations: list[str],
+    spec_obj: dict,
+    state: dict,
+    *,
+    repair_pass: int,
+) -> tuple[dict, str]:
     repair_prompt = f"""
 You are repairing a generated SoC register-map JSON contract.
 Return ONLY one raw JSON object with the same top-level schema.
@@ -207,6 +220,16 @@ Preserve every required field and its access semantics, but split fields across 
 Every field must satisfy 0 <= lsb <= msb < regmap.data_width and fields in one register must not overlap.
 Do not widen the declared data bus beyond the DIGITAL_SPEC_JSON interface.
 Do not remove status, control, fault, ready, or valid semantics.
+
+BIT-RANGE EXAMPLES FOR A 64-BIT REGISTER
+- GOOD 16-bit low field: {{"lsb": 0, "msb": 15}}. It is conventionally displayed as [15:0].
+- GOOD 16-bit next field: {{"lsb": 16, "msb": 31}}. It is displayed as [31:16].
+- GOOD 32-bit upper field: {{"lsb": 32, "msb": 63}}. It is displayed as [63:32].
+- BAD: {{"lsb": 15, "msb": 0}}, {{"lsb": 31, "msb": 16}}, or {{"lsb": 63, "msb": 32}}. These reverse lsb/msb.
+- BAD: infer ordering from the textual [msb:lsb] diagnostic. JSON always stores the smaller bit index in lsb and the larger bit index in msb.
+- Repair the complete map coherently and return every register, field, address, access type, and reset value.
+
+REPAIR PASS: {repair_pass} of 4
 
 VALIDATION ERRORS:
 {_safe_dump(violations)}
@@ -221,7 +244,7 @@ INVALID_REGISTER_MAP_JSON:
     repaired = json.loads(repaired_text.strip())
     if not isinstance(repaired, dict):
         raise ValueError("repair did not return a JSON object")
-    return repaired
+    return repaired, repaired_text
 
 
 def run_agent(state: dict) -> dict:
@@ -316,6 +339,11 @@ If the spec clearly implies an I2C/custom byte-register interface, prefer a cust
 If a value wider than the data bus must be exposed, split it across multiple byte registers.
 Define field-level semantics explicitly.
 
+FIELD BIT ORDERING
+- JSON field ranges always use lsb <= msb.
+- For a 64-bit word, bits [15:0] are {{"lsb": 0, "msb": 15}}, bits [31:16] are {{"lsb": 16, "msb": 31}}, and bits [63:32] are {{"lsb": 32, "msb": 63}}.
+- Never reverse these values. {{"lsb": 15, "msb": 0}} is invalid.
+
 CONTROL-PLANE EXAMPLES
 - GOOD: ports csr_addr + csr_wdata + csr_wen/csr_ren + csr_rdata describe a real custom CSR bus; generate concrete addressed registers whose access and fields follow DIGITAL_SPEC_JSON.
 - GOOD: ports cfg_addr + cfg_wdata + cfg_we/cfg_valid describe a real configuration bus; preserve its exact width and handshake instead of renaming it to APB or AXI.
@@ -389,22 +417,38 @@ OUTPUT SCHEMA
             violations = []
             state["digital_regmap_layout_repaired"] = True
             state["digital_regmap_layout_repair_method"] = "deterministic_free_bit_placement"
+    repair_paths = []
     if violations:
-        try:
-            regmap = _repair_register_layout(regmap, violations, spec_obj, state)
-        except Exception as exc:
-            state["status"] = f"❌ Register map layout repair failed: {exc}"
+        # Pass 1 is initial generation. Passes 2-4 are complete model repairs
+        # followed by strict validation; never silently swap lsb/msb.
+        for repair_pass in range(2, 5):
+            try:
+                regmap, repair_text = _repair_register_layout(
+                    regmap,
+                    violations,
+                    spec_obj,
+                    state,
+                    repair_pass=repair_pass,
+                )
+            except Exception as exc:
+                state["status"] = f"❌ Register map layout repair pass {repair_pass} failed: {exc}"
+                state["digital_regmap_layout_violations"] = violations
+                raise RuntimeError(state["status"]) from exc
+            repair_path = os.path.join(workflow_dir, f"digital_regmap_repair_pass{repair_pass}.txt")
+            with open(repair_path, "w", encoding="utf-8") as f:
+                f.write(repair_text)
+            repair_paths.append((repair_pass, repair_path))
+            violations = _register_layout_violations(regmap)
+            if not violations:
+                state["digital_regmap_layout_repaired"] = True
+                state["digital_regmap_layout_repair_method"] = f"llm_contract_repair_pass{repair_pass}"
+                break
+        if violations:
+            state["status"] = "❌ Register map layout remains invalid after Pass 4."
             state["digital_regmap_layout_violations"] = violations
-            raise RuntimeError(state["status"]) from exc
-        repaired_violations = _register_layout_violations(regmap)
-        if repaired_violations:
-            state["status"] = "❌ Register map layout remains invalid after repair."
-            state["digital_regmap_layout_violations"] = repaired_violations
             raise RuntimeError(
-                f"{state['status']} Violations: {'; '.join(repaired_violations[:8])}"
+                f"{state['status']} Violations: {'; '.join(violations[:8])}"
             )
-        state["digital_regmap_layout_repaired"] = True
-        state["digital_regmap_layout_repair_method"] = "llm_split_register_repair"
 
     out_path = os.path.join(workflow_dir, "digital_regmap.json")
     with open(out_path, "w", encoding="utf-8") as f:
@@ -427,6 +471,15 @@ OUTPUT SCHEMA
                 filename="digital_regmap.json",
                 content=f.read(),
             )
+        for repair_pass, repair_path in repair_paths:
+            with open(repair_path, "r", encoding="utf-8") as f:
+                save_text_artifact_and_record(
+                    workflow_id=workflow_id,
+                    agent_name=agent_name,
+                    subdir="digital",
+                    filename=f"digital_regmap_repair_pass{repair_pass}.txt",
+                    content=f.read(),
+                )
     except Exception as e:
         print(f"⚠️ Failed to upload regmap artifacts: {e}")
 

@@ -141,12 +141,72 @@ def test_arch2rtl_fails_hard_when_register_layout_repair_remains_invalid(tmp_pat
         },
     }
 
-    with pytest.raises(RuntimeError, match="remains invalid after repair"):
+    with pytest.raises(RuntimeError, match="remains invalid after Pass 4"):
         digital_register_map_agent.run_agent(state)
 
     assert state["digital_regmap_layout_violations"] == [
         "CTRL_STATUS.STATUS [79:69] is outside the 64-bit register word"
     ]
+
+
+def test_reversed_lsb_msb_uses_validated_model_repairs_through_pass4(tmp_path, monkeypatch):
+    import json
+
+    reversed_map = {
+        "regmap": {
+            "bus": "minimal",
+            "data_width": 64,
+            "registers": [{
+                "name": "CTRL_TIMEOUTS",
+                "offset": "0x18",
+                "fields": [
+                    {"name": "REQUEST_TIMEOUT_THRESHOLD", "lsb": 15, "msb": 0},
+                    {"name": "RESPONSE_AGE_THRESHOLD", "lsb": 31, "msb": 16},
+                ],
+            }],
+        },
+    }
+    valid_map = {
+        "regmap": {
+            "bus": "minimal",
+            "data_width": 64,
+            "registers": [{
+                "name": "CTRL_TIMEOUTS",
+                "offset": "0x18",
+                "fields": [
+                    {"name": "REQUEST_TIMEOUT_THRESHOLD", "lsb": 0, "msb": 15},
+                    {"name": "RESPONSE_AGE_THRESHOLD", "lsb": 16, "msb": 31},
+                ],
+            }],
+        },
+    }
+    prompts = []
+
+    def complete(prompt, **_kwargs):
+        prompts.append(prompt)
+        return json.dumps(valid_map if len(prompts) == 3 else reversed_map)
+
+    monkeypatch.setattr(digital_register_map_agent, "complete_text", complete)
+    monkeypatch.setattr(digital_register_map_agent, "save_text_artifact_and_record", lambda **_kwargs: None)
+    state = {
+        "workflow_id": "reversed-bits",
+        "workflow_dir": str(tmp_path),
+        "digital_spec_json": {
+            "name": "demo",
+            "rtl_output_file": "demo.v",
+            "ports": [{"name": "csr_addr"}, {"name": "csr_wen"}, {"name": "csr_wdata"}],
+        },
+    }
+
+    digital_register_map_agent.run_agent(state)
+
+    assert len(prompts) == 3
+    assert "GOOD 16-bit low field" in prompts[1]
+    assert "BAD:" in prompts[1]
+    assert state["digital_regmap_layout_repair_method"] == "llm_contract_repair_pass3"
+    assert _register_layout_violations(state["digital_regmap"]) == []
+    assert (tmp_path / "digital_regmap_repair_pass2.txt").is_file()
+    assert (tmp_path / "digital_regmap_repair_pass3.txt").is_file()
 
 
 def test_self_contained_fpga_design_skips_register_map_generation(tmp_path, monkeypatch):

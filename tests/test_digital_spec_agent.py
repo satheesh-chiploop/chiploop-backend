@@ -100,6 +100,48 @@ def test_contract_repair_prompt_teaches_coherent_firmware_interface_repair():
     assert "do not patch only the validation message" in prompt
 
 
+def test_hierarchical_contract_rejects_children_nested_inside_top_module():
+    child = {
+        **_module("child"),
+        "ports": [_port("clk", "input")],
+        "rtl_output_file": "child.v",
+    }
+    spec = {
+        "hierarchy": {
+            "top_module": {
+                **_module("top"),
+                "ports": [_port("clk", "input")],
+                "rtl_output_file": "top.v",
+                "submodules": [child],
+            },
+            "modules": [],
+        },
+        "top_level_connections": [{"top_port": "clk", "connected_to": ["top.clk"]}],
+        "inter_module_signals": [],
+        "signal_ownership": [{"signal": "clk", "owner": "top.clk"}],
+    }
+
+    with pytest.raises(ValueError, match="hierarchy.modules.*top_module.submodules"):
+        spec_agent._validate_spec_contract(spec, "hierarchical")
+
+    prompt = spec_agent._build_repair_prompt("base", "{}", "Child module definitions must be declared in hierarchy.modules, not hierarchy.top_module.submodules")
+    assert "HIERARCHY DELIVERABLE REPAIR EXAMPLES" in prompt
+    assert "every instantiated child" in prompt
+
+
+def test_fpga_memory_contract_rejects_openram_hard_macro():
+    spec = {
+        "memory_macros": [{"name": "staging_ram", "kind": "openram_sram"}],
+    }
+
+    with pytest.raises(ValueError, match="FPGA-only.*openram_sram"):
+        spec_agent._validate_fpga_memory_contract(spec, "FPGA MEMORY CONTRACT (mandatory)")
+
+    prompt = spec_agent._build_repair_prompt("base", "{}", "FPGA memory contract is FPGA-only and cannot use openram_sram")
+    assert "FPGA MEMORY REPAIR EXAMPLES" in prompt
+    assert "technology-neutral wrapper" in prompt
+
+
 def test_mandatory_firmware_control_plane_accepts_concrete_custom_csr_bus():
     spec = {
         **_module("adaptive_aero_control_top"),

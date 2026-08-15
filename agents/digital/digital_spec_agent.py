@@ -734,6 +734,19 @@ def _validate_spec_contract(spec_json: dict, mode: str) -> None:
     top = hier["top_module"]
     modules = hier.get("modules", [])
 
+    nested_submodules = top.get("submodules") if isinstance(top, dict) else None
+    if isinstance(nested_submodules, list) and nested_submodules:
+        names = [
+            str(module.get("name") or "").strip()
+            for module in nested_submodules
+            if isinstance(module, dict) and str(module.get("name") or "").strip()
+        ]
+        raise ValueError(
+            "Child module definitions must be declared in hierarchy.modules, not "
+            "hierarchy.top_module.submodules. Each child requires a unique name and "
+            f"rtl_output_file. Nested children found: {', '.join(names[:8]) or 'unnamed'}."
+        )
+
     seen_mods = set()
     seen_files = set()
 
@@ -1595,6 +1608,26 @@ FIRMWARE CONTROL-PLANE REPAIR EXAMPLES:
 - BAD: add register_contract JSON without adding the matching synthesizable top-level bus, or add a bus without concrete addressed registers.
 - Repair the complete specification coherently; do not patch only the validation message.
 """
+    hierarchy_examples = ""
+    if "hierarchy.top_module.submodules" in str(failure_log_text or "") or "child module definitions" in str(failure_log_text or "").lower():
+        hierarchy_examples = """
+
+HIERARCHY DELIVERABLE REPAIR EXAMPLES:
+- GOOD: hierarchy.top_module contains only the top contract; every instantiated child is a separate object in hierarchy.modules with its own unique rtl_output_file.
+- GOOD: top-level connectivity references the exact ports declared by those hierarchy.modules children.
+- BAD: place full child definitions under hierarchy.top_module.submodules, responsibilities, behavior_rules, or prose. Those locations do not create RTL deliverables.
+- BAD: let the top instantiate a module that is absent from hierarchy.modules and the expected RTL file list.
+- Return the complete corrected hierarchy and connectivity; do not merely remove the nested definitions.
+"""
+    fpga_memory_examples = ""
+    if "fpga memory contract" in str(failure_log_text or "").lower() or "fpga-only contract" in str(failure_log_text or "").lower():
+        fpga_memory_examples = """
+
+FPGA MEMORY REPAIR EXAMPLES:
+- GOOD: declare a technology-neutral wrapper in hierarchy.modules with its own rtl_output_file and synthesizable inferred-memory behavior suitable for native FPGA block RAM mapping.
+- BAD: declare openram_sram, prebuilt_sky130_sram, or another ASIC hard macro in an FPGA-only contract.
+- BAD: instantiate a memory module that has neither an RTL deliverable nor explicit external simulation/synthesis collateral.
+"""
     return f"""
 ==============================
 REPAIR MODE (SECOND PASS)
@@ -1621,6 +1654,8 @@ REPAIR RULES:
 - Do NOT return partial edits
 - Do NOT return explanations
 {firmware_examples}
+{hierarchy_examples}
+{fpga_memory_examples}
 """.strip()
 
 
@@ -1702,6 +1737,7 @@ def _compile_spec_contract(
         source_prompt,
         required=require_firmware_control_plane,
     )
+    _validate_fpga_memory_contract(spec_json, source_prompt)
     logger.info(f"✅ Digital Spec Agent contract compile passed suffix='{suffix or 'pass1'}'")
     return spec_json, mode, raw_output_path, normalized_path
 
@@ -1757,6 +1793,34 @@ def _validate_mandatory_firmware_control_plane(
     if missing:
         raise ValueError(
             "Mandatory firmware control-plane top interface is incomplete; missing " + ", ".join(missing)
+        )
+
+
+def _validate_fpga_memory_contract(spec_json: dict, source_prompt: str) -> None:
+    """Keep FPGA-only specifications free of ASIC/generated hard macros."""
+    prompt = str(source_prompt or "")
+    if "FPGA MEMORY CONTRACT (mandatory)" not in prompt:
+        return
+    forbidden_kinds = {
+        "openram_sram",
+        "prebuilt_sky130_sram",
+        "prebuilt_sram",
+        "precompiled_sram_macro",
+        "sky130_sram",
+    }
+    violations = []
+    for macro in spec_json.get("memory_macros", []) or []:
+        if not isinstance(macro, dict):
+            continue
+        kind = str(macro.get("kind") or "").strip().lower()
+        if kind in forbidden_kinds:
+            violations.append(f"{macro.get('name') or 'unnamed'} ({kind})")
+    if violations:
+        raise ValueError(
+            "FPGA memory contract is FPGA-only and cannot use ASIC/OpenRAM hard macros: "
+            + ", ".join(violations[:8])
+            + ". Use a technology-neutral inferred-memory wrapper declared in hierarchy.modules "
+              "with its own rtl_output_file."
         )
 
 
