@@ -121,6 +121,21 @@ def test_contract_repair_prompt_preserves_late_register_contract_from_large_json
     assert '"CONTROL"' in prompt
 
 
+def test_contract_repair_prompt_teaches_complete_generic_connectivity_closure():
+    prompt = spec_agent._build_repair_prompt(
+        "base",
+        "{}",
+        "Required child input 'consumer.status_valid_in' has no source in "
+        "top_level_connections or inter_module_signals. Other required child inputs "
+        "without sources: 'monitor.status_valid'.",
+    )
+
+    assert "HIERARCHICAL CONNECTIVITY-CLOSURE REPAIR EXAMPLES" in prompt
+    assert "producer status_valid_out and consumer status_valid_in" in prompt
+    assert "repair one listed endpoint" in prompt
+    assert "exactly one semantically valid structural source" in prompt
+
+
 def test_hierarchical_contract_rejects_children_nested_inside_top_module():
     child = {
         **_module("child"),
@@ -1131,3 +1146,38 @@ def test_contract_rejects_required_child_input_without_structural_source():
 
     with pytest.raises(ValueError, match="Required child input 'consumer.clk' has no source"):
         spec_agent._validate_spec_contract(spec, "hierarchical")
+
+
+def test_contract_reports_all_required_child_inputs_without_sources():
+    spec = {
+        "hierarchy": {
+            "top_module": {
+                **_module("top"), "rtl_output_file": "top.v", "ports": [_port("clk", "input")],
+            },
+            "modules": [{
+                **_module("consumer"),
+                "rtl_output_file": "consumer.v",
+                "ports": [
+                    _port("status_valid_in", "input"),
+                    _port("status_data_in", "input", 8),
+                    _port("result", "output"),
+                ],
+                "must_receive": ["status_valid_in", "status_data_in"],
+                "must_drive": ["result"],
+                "must_not_drive": ["status_valid_in", "status_data_in"],
+            }],
+        },
+        "top_level_connections": [{"top_port": "clk", "connected_to": ["top.clk"]}],
+        "inter_module_signals": [{
+            "name": "result", "width": 1, "source": "consumer.result", "destinations": ["top.clk"],
+        }],
+        "signal_ownership": [{"signal": "result", "owner": "consumer.result"}],
+    }
+
+    with pytest.raises(ValueError) as exc_info:
+        spec_agent._validate_spec_contract(spec, "hierarchical")
+
+    message = str(exc_info.value)
+    assert "'consumer.status_valid_in'" in message
+    assert "'consumer.status_data_in'" in message
+    assert "Repair every listed input in the same response" in message

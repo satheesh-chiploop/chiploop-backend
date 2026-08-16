@@ -708,6 +708,7 @@ def _validate_hierarchical_endpoint_coverage(spec_json: dict) -> None:
         str(macro.get("name") or "") for macro in spec_json.get("memory_macros", [])
         if isinstance(macro, dict) and macro.get("name")
     }
+    missing_child_inputs = []
     for module in spec_json["hierarchy"].get("modules", []):
         module_name = str(module.get("name") or "")
         if module_name in memory_macro_names:
@@ -719,10 +720,21 @@ def _validate_hierarchical_endpoint_coverage(spec_json: dict) -> None:
         for port_name, direction in ports.items():
             endpoint = f"{module_name}.{port_name}"
             if direction in {"input", "inout"} and endpoint not in driven_child_inputs:
-                raise ValueError(
-                    f"Required child input '{endpoint}' has no source in top_level_connections or "
-                    "inter_module_signals. Add an explicit top-level input connection or a real child producer."
-                )
+                missing_child_inputs.append(endpoint)
+
+    if missing_child_inputs:
+        first_endpoint = missing_child_inputs[0]
+        remaining = missing_child_inputs[1:]
+        detail = ""
+        if remaining:
+            detail = " Other required child inputs without sources: " + ", ".join(
+                f"'{endpoint}'" for endpoint in remaining
+            ) + "."
+        raise ValueError(
+            f"Required child input '{first_endpoint}' has no source in top_level_connections or "
+            "inter_module_signals. Add an explicit top-level input connection or a real child producer."
+            f"{detail} Repair every listed input in the same response."
+        )
 
 
 def _validate_spec_contract(spec_json: dict, mode: str) -> None:
@@ -1620,6 +1632,23 @@ HIERARCHY DELIVERABLE REPAIR EXAMPLES:
 - BAD: let the top instantiate a module that is absent from hierarchy.modules and the expected RTL file list.
 - Return the complete corrected hierarchy and connectivity; do not merely remove the nested definitions.
 """
+    connectivity_examples = ""
+    failure_text_lower = str(failure_log_text or "").lower()
+    if "required child input" in failure_text_lower and "has no source" in failure_text_lower:
+        connectivity_examples = """
+
+HIERARCHICAL CONNECTIVITY-CLOSURE REPAIR EXAMPLES:
+- Repair EVERY unconnected child input listed in the validation failure log in this single response, not only the first one.
+- GOOD: connect an externally driven child input through top_level_connections from a compatible top-level input port.
+- GOOD: connect an internally driven child input through one inter_module_signals entry whose source is a real output/inout child port and whose destinations contain the real input/inout child port.
+- GOOD: when producer and consumer ports express the same semantic signal with directional suffixes (for example producer status_valid_out and consumer status_valid_in or status_valid), connect those exact declared endpoints when their widths match.
+- GOOD: if several consumers use the same produced signal, place every compatible consumer endpoint in that signal's destinations list.
+- GOOD: if no real producer exists, add a coherent producer output port to the responsible existing module and update that module's must_drive, behavior contract, inter_module_signals, and signal_ownership together.
+- BAD: rename or delete a required consumer input merely to silence validation.
+- BAD: use an input port as a source, use an output port as a destination, connect incompatible widths, invent an undeclared endpoint, or connect unrelated signals merely because widths match.
+- BAD: repair one listed endpoint while leaving the other endpoints from the failure log structurally undriven.
+- Before returning JSON, audit every child input against top_level_connections and inter_module_signals and ensure each has exactly one semantically valid structural source.
+"""
     fpga_memory_examples = ""
     if "fpga memory contract" in str(failure_log_text or "").lower() or "fpga-only contract" in str(failure_log_text or "").lower():
         fpga_memory_examples = """
@@ -1670,6 +1699,7 @@ REPAIR RULES:
 - Do NOT return explanations
 {firmware_examples}
 {hierarchy_examples}
+{connectivity_examples}
 {fpga_memory_examples}
 """.strip()
 
