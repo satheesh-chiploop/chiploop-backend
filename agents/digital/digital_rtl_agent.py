@@ -155,6 +155,96 @@ def _validate_memory_macro_instances(spec_json: dict, verilog_map: Dict[str, str
     return issues
 
 
+def _validate_memory_macro_reachability(spec_json: dict, verilog_map: Dict[str, str]) -> List[str]:
+    """Reject required memories that synthesis can prove are functionally dead.
+
+    This is intentionally a diagnostic gate, not an RTL rewrite. The model gets
+    the concrete finding in the normal repair prompt and decides how the memory
+    participates in the application behavior described by the specification.
+    """
+    issues: List[str] = []
+    text = _strip_verilog_comments("\n".join(verilog_map.values()))
+
+    def connected_ports(body: str) -> Dict[str, str]:
+        return {
+            match.group(1): match.group(2).strip()
+            for match in re.finditer(
+                r"\.([A-Za-z_][A-Za-z0-9_$]*)\s*\(\s*([^()]*)\s*\)", body
+            )
+        }
+
+    def constant_value(expression: str) -> Optional[int]:
+        expression = str(expression or "").strip()
+        match = re.fullmatch(r"(?:(\d+)'[bBdDhH])?([0-9a-fA-F_xXzZ]+)", expression)
+        if not match or re.search(r"[xXzZ_]", match.group(2)):
+            return None
+        base = 10
+        if "'" in expression:
+            radix = expression.split("'", 1)[1][:1].lower()
+            base = {"b": 2, "d": 10, "h": 16}.get(radix, 10)
+        try:
+            return int(match.group(2), base)
+        except ValueError:
+            return None
+
+    def resolved_constant(expression: str) -> Optional[int]:
+        direct = constant_value(expression)
+        if direct is not None:
+            return direct
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_$]*", expression):
+            return None
+        assignments = re.findall(
+            rf"\bassign\s+{re.escape(expression)}\s*=\s*([^;]+);", text
+        )
+        if len(assignments) != 1:
+            return None
+        return constant_value(assignments[0])
+
+    for macro in spec_json.get("memory_macros", []) or []:
+        if not isinstance(macro, dict) or macro.get("unused") is True or macro.get("required") is False:
+            continue
+        cell = str(macro.get("name") or macro.get("cell") or macro.get("openram_cell") or "").strip()
+        instance = str(macro.get("instance_name") or "").strip()
+        if not cell:
+            continue
+        instance_name = re.escape(instance) if instance else r"[A-Za-z_][A-Za-z0-9_$]*"
+        match = re.search(
+            rf"\b{re.escape(cell)}\s+(?P<instance>{instance_name})\s*\((?P<body>.*?)\)\s*;",
+            text,
+            flags=re.DOTALL,
+        )
+        if not match:
+            continue
+        ports = macro.get("ports") if isinstance(macro.get("ports"), dict) else {}
+        connections = connected_ports(match.group("body"))
+        cs_port = str(ports.get("csb") or "csb")
+        dout_port = str(ports.get("dout") or "dout")
+        cs_expression = connections.get(cs_port, "")
+        dout_expression = connections.get(dout_port, "")
+        inactive_select = resolved_constant(cs_expression) == 1
+        simple_dout = re.fullmatch(r"[A-Za-z_][A-Za-z0-9_$]*", dout_expression or "")
+        unconsumed_output = bool(
+            simple_dout
+            and (
+                "unused" in dout_expression.lower()
+                or len(re.findall(rf"\b{re.escape(dout_expression)}\b", text)) <= 2
+            )
+        )
+        if inactive_select or unconsumed_output:
+            reasons = []
+            if inactive_select:
+                reasons.append(f"active-low select '{cs_port}' is permanently inactive via '{cs_expression}'")
+            if unconsumed_output:
+                reasons.append(f"read output '{dout_port}' connects to unconsumed signal '{dout_expression}'")
+            issues.append(
+                f"❌ Required memory '{cell} {match.group('instance')}' is functionally unreachable: "
+                + "; ".join(reasons)
+                + ". Implement a legal input-driven read/write transaction and make read data observable; "
+                "do not preserve the instance with constant tie-offs or an unused output."
+            )
+    return issues
+
+
 def _align_memory_macro_instance_ports(verilog_map: Dict[str, str], spec_json: dict) -> Dict[str, str]:
     """Apply the canonical-role to concrete-port mapping declared by memory_macros."""
     out = dict(verilog_map)
@@ -2622,6 +2712,9 @@ SCALE AND COMPLETENESS RULES
 - A declared SRAM macro used by functional requirements must be functionally reachable. Do not tie chip-select inactive, write-enable inactive, address, data, or output paths to constants unless the spec explicitly says the macro is unused.
 - If the controller has software/register/port-driven memory read or write semantics, connect those transactions to the SRAM macro csb/we/web/addr/din/dout roles with real sequential/control logic.
 - Any emitted simulation-only SRAM abstraction must implement writable/readable memory behavior for clk/csb/we-or-web/addr/din/dout. A constant-zero dout shell is allowed only for an explicitly unused placeholder macro.
+- A required memory must survive synthesis as functional storage. Its chip-select must be asserted by at least one legal input-driven transaction, its address/write/data controls must come from real control or datapath logic, and its read data must affect an observable output, status/readback path, request/response path, or other required state transition.
+- BAD required-memory implementation: tie active-low csb to 1'b1, tie all controls to constants, and connect dout to an *_unused wire. This is a dead instance and synthesis will remove it.
+- GOOD required-memory implementation: decode a declared command/register/stream event into bounded read/write controls, retain the required synchronous-read timing, and consume dout in a declared functional or observable path.
 - If Insert MBIST is enabled downstream, the SRAM macro instance is the integration point for the AutoMBIST wrapper. Do not hide the memory inside unrelated procedural logic.
 - If the spec says FIFO, implement explicit FIFO storage, pointers, levels, full/empty status, push/pop behavior, and reset.
 - If the spec says line buffer, histogram, frame buffer, or pipeline metadata, implement explicit storage arrays/counters/registers and update them in clocked logic.
@@ -3132,6 +3225,13 @@ REPAIR RULES:
 - After repair, every behavior required by DIGITAL_SPEC_JSON and DIGITAL_REGMAP_JSON must remain implemented and reachable through legal declared inputs.
 - If DIGITAL_SPEC_JSON contains memory_macros[], that array overrides conflicting descriptive prose: instantiate each exact memory_macros[].name using its exact instance_name. Never substitute a wrapper, fallback model, inferred array, or invented SRAM module name.
 - For a missing-module error at an SRAM instance, replace the invented module identity with the exact authoritative memory macro cell identity and preserve the declared macro port-role mapping.
+- If the correctness log reports a functionally unreachable required memory, repair the application RTL so a legal declared input transaction can enable and address it and its read data reaches an observable functional path. Do not remove the memory, mark it unused, or merely rename the unused signal.
+
+REQUIRED-MEMORY REPAIR EXAMPLES:
+- BAD: assign mem_csb = 1'b1; assign mem_addr = '0; connect .dout(mem_dout_unused).
+- BAD: keep the memory instantiated only to satisfy hierarchy while all behavior bypasses it.
+- GOOD: derive select, write-enable, address, and write data from declared controller/register/stream state, and use read data in declared readback, buffering, response, or datapath behavior.
+- GOOD: preserve active polarity and synchronous-read latency from the memory contract; make at least one bounded legal transaction exercise storage and expose its result.
 
 PRIMARY OBJECTIVE:
 Make the MINIMUM NECESSARY change to fix correctness errors without reducing functionality or verifiability.
@@ -3509,6 +3609,7 @@ def _validate_and_materialize_rtl(
 
     issues.extend(_validate_generated_complexity(spec_json, mode, verilog_map))
     issues.extend(_validate_memory_macro_instances(spec_json, verilog_map))
+    issues.extend(_validate_memory_macro_reachability(spec_json, verilog_map))
 
     for pat in forbidden_sv_patterns:
         if pat == r"\blogic\b":

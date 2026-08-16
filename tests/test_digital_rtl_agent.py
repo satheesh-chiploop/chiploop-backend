@@ -40,8 +40,12 @@ def test_generation_and_repair_prompts_require_functional_verifiable_rtl():
     assert "production-intent, functional, synthesizable, and directly verifiable RTL" in prompt
     assert "constant-output shell" in prompt
     assert "compile and lint success are necessary but not sufficient" in prompt.lower()
+    assert "A required memory must survive synthesis as functional storage" in prompt
+    assert "connect dout to an *_unused wire" in prompt
     assert "Never repair an error by tying a functional output" in repair
     assert "without reducing functionality or verifiability" in repair
+    assert "REQUIRED-MEMORY REPAIR EXAMPLES" in repair
+    assert "functionally unreachable required memory" in repair
 
 
 def test_memory_macro_contract_rejects_invented_fallback_module():
@@ -322,6 +326,48 @@ def test_materializes_fpga_block_ram_kind_alias(tmp_path):
     assert [os.path.basename(path) for path in paths] == ["fpga_block_ram_generic.v"]
     rtl = open(paths[0], encoding="utf-8").read()
     assert "reg [127:0] mem [0:15]" in rtl
+
+
+def test_required_memory_reachability_rejects_inactive_unconsumed_instance():
+    spec = {"memory_macros": [{
+        "kind": "fpga_bram",
+        "name": "history_ram",
+        "instance_name": "u_history",
+        "ports": {"clk": "clk", "csb": "csb", "we": "we", "addr": "addr", "din": "din", "dout": "dout"},
+    }]}
+    files = {"top.v": """
+module top(input clk);
+  wire mem_csb; wire [31:0] mem_dout_unused;
+  assign mem_csb = 1'b1;
+  history_ram u_history(.clk(clk), .csb(mem_csb), .we(1'b0), .addr(8'h00), .din(32'h0), .dout(mem_dout_unused));
+endmodule
+"""}
+
+    issues = agent._validate_memory_macro_reachability(spec, files)
+
+    assert len(issues) == 1
+    assert "functionally unreachable" in issues[0]
+    assert "permanently inactive" in issues[0]
+    assert "unconsumed signal" in issues[0]
+
+
+def test_required_memory_reachability_accepts_input_driven_observable_instance():
+    spec = {"memory_macros": [{
+        "kind": "fpga_bram",
+        "name": "history_ram",
+        "instance_name": "u_history",
+        "ports": {"clk": "clk", "csb": "csb", "we": "we", "addr": "addr", "din": "din", "dout": "dout"},
+    }]}
+    files = {"top.v": """
+module top(input clk, input request_valid, input [7:0] request_addr, output [31:0] readback);
+  wire mem_csb; wire [31:0] mem_dout;
+  assign mem_csb = ~request_valid;
+  assign readback = mem_dout;
+  history_ram u_history(.clk(clk), .csb(mem_csb), .we(1'b0), .addr(request_addr), .din(32'h0), .dout(mem_dout));
+endmodule
+"""}
+
+    assert agent._validate_memory_macro_reachability(spec, files) == []
 
 
 def test_aligns_memory_role_labels_to_declared_concrete_ports():
