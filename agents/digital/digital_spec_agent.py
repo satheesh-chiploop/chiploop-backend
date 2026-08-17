@@ -1684,10 +1684,12 @@ HIERARCHICAL CONNECTIVITY-CLOSURE REPAIR EXAMPLES:
 - GOOD: if several consumers use the same produced signal, place every compatible consumer endpoint in that signal's destinations list.
 - GOOD: if no real producer exists, add a coherent producer output port to the responsible existing module and update that module's must_drive, behavior contract, inter_module_signals, and signal_ownership together.
 - GOOD: if the orphan is state computed by the consumer module itself (for example an age counter, occupancy, or sticky status that its behavior says it tracks), remove the redundant input port and keep or add the module's output/status port. Internal state is not an external consumer.
+- GOOD: when firmware writes a CSR command/setpoint and downstream logic needs a command-valid event, make the CSR/MMIO register block produce an explicit write/accept pulse and connect it to the consumer, or have the consumer derive validity from already-connected control fields and remove the redundant input.
 - GOOD: if a wholly optional helper module has no externally required behavior and none of its outputs are consumed, remove that entire module and its stale connectivity/ownership entries coherently instead of inventing meaningless traffic for it.
 - BAD: rename or delete a required consumer input merely to silence validation.
 - BAD: add a replacement consumer input to the same or another module without connecting it in the same response.
 - BAD: invent a producer for a value that the consumer's own behavior explicitly computes internally.
+- BAD: treat a consumer module's filtered/qualified valid output as the source of that same module's raw valid input; that leaves the original input orphaned or creates feedback.
 - BAD: use an input port as a source, use an output port as a destination, connect incompatible widths, invent an undeclared endpoint, or connect unrelated signals merely because widths match.
 - BAD: repair one listed endpoint while leaving the other endpoints from the failure log structurally undriven.
 - Before returning JSON, audit every child input against top_level_connections and inter_module_signals and ensure each has exactly one semantically valid structural source.

@@ -505,6 +505,8 @@ def test_connectivity_repair_prompt_prevents_orphan_migration():
     assert "Inputs are consumers" in prompt
     assert "memory read-data input" in prompt
     assert "memory wrapper's dout is the producer" in prompt
+    assert "CSR/MMIO register block produce an explicit write/accept pulse" in prompt
+    assert "creates feedback" in prompt
 
 
 def test_pass5_graph_closure_prompt_requires_a_concrete_new_repair():

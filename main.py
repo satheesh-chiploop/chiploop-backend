@@ -7277,6 +7277,17 @@ def _hem_physical_ai_child_payload(root_workflow_id: str, root_run_id: str, payl
             else "\nFPGA MEMORY CONTRACT (mandatory): describe bulk payload/history/FIFO storage through a technology-neutral memory wrapper that the FPGA flow can map to native block RAM; do not flatten it into registers."
         )
         base_spec = str(payload.get("rtl_spec_text") or payload.get("objective") or "Generate the Physical AI support digital IP.")
+        base_spec_lower = base_spec.lower()
+        hardware_model_transport = deployment_architecture != "fpga_soft_cpu" or any(
+            marker in base_spec_lower
+            for marker in (
+                "model transport bridge",
+                "model-request valid",
+                "model request valid",
+                "model_req_valid",
+                "request messages",
+            )
+        )
         transport_contract = (
             "\nEXTERNAL MODEL TRANSPORT DIRECTION CONTRACT (mandatory; this takes precedence over ambiguous "
             "ingress/egress wording in upstream prose): the RTL emits model-request valid/data as outputs and "
@@ -7284,13 +7295,18 @@ def _hem_physical_ai_child_payload(root_workflow_id: str, root_run_id: str, payl
             "emits model-response ready as an output. Apply this rule by data flow even when application-specific "
             "ports use cmd_*, req_*, rsp_*, or response_* names. A top-level output must have a real RTL driver; "
             "never connect a required top-level output only to a child input.\n"
+            if hardware_model_transport
+            else "\nSOFT-CPU MODEL TRANSPORT CONTRACT: external model/reference execution is firmware-mediated through the declared CSR/MMIO command and status registers. Do not invent a hardware streaming transport at the top level when the application contract assigns command acceptance to firmware.\n"
+        )
+        top_transport_responsibility = (
+            "external model request/response transport, " if hardware_model_transport else "firmware-mediated command acceptance, "
         )
         return {
             **common_digital,
             "spec_text": (
                 f"The required synthesizable top module is {top_module}. Do not substitute a status, telemetry, "
                 "register-bank, or leaf module as the design top. The top must implement the selected Physical AI "
-                "application contract, external model request/response transport, validation, safety, timeout, "
+                f"application contract, {top_transport_responsibility}validation, safety, timeout, "
                 "fallback, and bounded actuator-command behavior.\n" + transport_contract + firmware_interface_contract + soft_cpu_contract + asic_cpu_contract + base_spec + memory_contract
             ),
             "top_module": top_module,

@@ -485,6 +485,8 @@ def test_main_registers_generic_physical_ai_endpoints():
     assert '"partition_plan": result.get("partition") or {}' in main
     assert '"asic_cpu_config": result.get("asic_cpu") or {}' in main
     assert "ASIC CPU IP INTEGRATION CONTRACT" in main
+    assert 'hardware_model_transport = deployment_architecture != "fpga_soft_cpu"' in main
+    assert "SOFT-CPU MODEL TRANSPORT CONTRACT" in main
     assert '"cpu_ip_integration_gate": (payload.get("asic_cpu_config") or {}).get("integration_gate")' in main
     assert '"software_goal": f"Build the host control' in main
     assert '"Device Layer / Firmware"' in main
