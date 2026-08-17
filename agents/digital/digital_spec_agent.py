@@ -1929,7 +1929,13 @@ def _validate_mandatory_firmware_control_plane(
         top = ((spec_json.get("hierarchy") or {}).get("top_module") or {})
     else:
         top = spec_json
-    names = {str(port.get("name") or "").lower() for port in (top.get("ports") or []) if isinstance(port, dict)}
+    port_directions = {
+        str(port.get("name") or "").lower(): str(port.get("direction") or "").lower()
+        for port in (top.get("ports") or [])
+        if isinstance(port, dict) and str(port.get("name") or "").strip()
+    }
+    names = set(port_directions)
+    is_wishbone = "wishbone" in bus.lower()
     # Interface signals commonly carry a final direction suffix (for example,
     # ``csr_we_i`` or ``apb_pwrite_i``).  Ignore that suffix when matching
     # semantic strobe endings so conventional HDL port names are accepted.
@@ -1947,11 +1953,19 @@ def _validate_mandatory_firmware_control_plane(
         return any(any(name.endswith(suffix) for suffix in suffixes) for name in strobe_names)
 
     missing = []
-    if not has_any(("addr", "address")):
+    if not has_any(("addr", "address", "adr")):
         missing.append("address")
-    if not has_any(("wdata", "wr_data", "write_data", "pwdata")):
+    wishbone_write_data = is_wishbone and any(
+        ("dat" in name or "data" in name) and direction in {"input", "inout"}
+        for name, direction in port_directions.items()
+    )
+    wishbone_read_data = is_wishbone and any(
+        ("dat" in name or "data" in name) and direction in {"output", "inout"}
+        for name, direction in port_directions.items()
+    )
+    if not has_any(("wdata", "wr_data", "write_data", "pwdata")) and not wishbone_write_data:
         missing.append("write-data")
-    if not has_any(("rdata", "rd_data", "read_data", "prdata")):
+    if not has_any(("rdata", "rd_data", "read_data", "prdata")) and not wishbone_read_data:
         missing.append("read-data")
     if not (
         has_any(("valid", "select", "sel", "enable", "psel", "cyc", "stb"))
