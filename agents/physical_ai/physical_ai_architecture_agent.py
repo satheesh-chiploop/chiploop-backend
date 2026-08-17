@@ -15,6 +15,23 @@ def _json_object(text: str) -> Dict[str, Any]:
     return value
 
 
+def _syntax_repair_prompt(output: str, error: json.JSONDecodeError) -> str:
+    start = max(0, error.pos - 240)
+    end = min(len(output), error.pos + 240)
+    return f"""You are repairing JSON syntax only.
+Return one complete JSON object and no markdown or explanation.
+Preserve every architecture field, module, interface, requirement, and value from the previous response.
+Fix only JSON syntax such as a missing colon/comma, quote, bracket, or truncated wrapper.
+
+JSON ERROR: {error.msg} at line {error.lineno}, column {error.colno}, character {error.pos}
+ERROR CONTEXT:
+{output[start:end]}
+
+PREVIOUS RESPONSE:
+{output}
+"""
+
+
 def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     requirements = state["requirements_contract"]
     model = state["selected_physics_model"]
@@ -54,23 +71,39 @@ SELECTED PHYSICS MODEL:
 AVAILABLE EVIDENCE:
 {json.dumps(evidence, indent=2, default=str)}
 """
+    root = Path(state["artifact_dir"])
+    root.mkdir(parents=True, exist_ok=True)
+    raw_path = root / "model_generated_architecture_raw.txt"
+    repaired_raw_path = root / "model_generated_architecture_repaired_raw.txt"
     output = complete_text(prompt, capability="spec_generation", agent_name="Physical AI Architecture Agent", state=state)
-    architecture = _json_object(output)
+    # Persist before parsing so malformed model output is present in the
+    # Supabase-backed artifact bundle and can be diagnosed after failure.
+    raw_path.write_text(output, encoding="utf-8")
+    try:
+        architecture = _json_object(output)
+    except json.JSONDecodeError as exc:
+        repaired_output = complete_text(
+            _syntax_repair_prompt(output, exc),
+            capability="spec_generation",
+            agent_name="Physical AI Architecture Agent",
+            state=state,
+        )
+        repaired_raw_path.write_text(repaired_output, encoding="utf-8")
+        architecture = _json_object(repaired_output)
     required = {"product_name", "product_summary", "blocks", "interfaces", "rtl_spec_text", "verification_goals"}
     missing = sorted(required - set(architecture))
     if missing:
         raise ValueError(f"architecture model response missing fields: {', '.join(missing)}")
     digital_ip_spec = execution.get("digital_ip_spec") if isinstance(execution.get("digital_ip_spec"), dict) else {}
     architecture.setdefault("top_module", digital_ip_spec.get("top_module") or model.get("digital_ip_top_module"))
-    root = Path(state["artifact_dir"])
     path = root / "model_generated_architecture.json"
-    raw_path = root / "model_generated_architecture_raw.txt"
     path.write_text(json.dumps(architecture, indent=2, sort_keys=True), encoding="utf-8")
-    raw_path.write_text(output, encoding="utf-8")
     execution = dict(execution)
     execution["architecture"] = architecture
     execution.setdefault("files", {})["model_generated_architecture"] = str(path)
     execution["files"]["model_generated_architecture_raw"] = str(raw_path)
+    if repaired_raw_path.exists():
+        execution["files"]["model_generated_architecture_repaired_raw"] = str(repaired_raw_path)
     return {
         **state,
         "physics_execution": execution,

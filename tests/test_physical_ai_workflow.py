@@ -450,6 +450,48 @@ def test_selected_agent_model_generates_rtl_ready_architecture(tmp_path, monkeyp
     assert result["loop"]["child_handoff"]["rtl_spec_text"] == response["rtl_spec_text"]
 
 
+def test_architecture_agent_repairs_json_syntax_and_persists_both_outputs(tmp_path, monkeypatch):
+    response = {
+        "product_name": "Active Aero Controller",
+        "top_module": "adaptive_aero_control_top",
+        "product_summary": "Safe controller.",
+        "architecture_decisions": ["Firmware-mediated commands"],
+        "blocks": ["command_guard"],
+        "interfaces": ["Wishbone"],
+        "safety_requirements": ["Safe fallback"],
+        "rtl_spec_text": "Build a synthesizable bounded command controller.",
+        "verification_goals": ["Verify fallback"],
+    }
+    outputs = iter(['{"product_name" "broken"}', json.dumps(response)])
+    calls = []
+    monkeypatch.setattr(
+        architecture_agent,
+        "complete_text",
+        lambda prompt, **kwargs: calls.append((prompt, kwargs)) or next(outputs),
+    )
+
+    result = run_physical_ai_workflow(
+        {
+            "physics_domain": "automotive_aerodynamics",
+            "physics_model_id": "nvidia.domino.automotive_aero",
+            "implementation_target": "fpga",
+            "execution_mode": "architecture",
+            "implementation_path": "fpga_prototype",
+            "generate_architecture_with_model": True,
+            "model_policy": {"mode": "standard", "selected_model": "nvidia_nemotron"},
+            "processor_ip_policy": TEST_PROCESSOR_POLICY,
+        },
+        str(tmp_path),
+    )
+
+    assert len(calls) == 2
+    assert "JSON ERROR:" in calls[1][0]
+    assert result["physics_execution"]["architecture"]["top_module"] == "adaptive_aero_control_top"
+    artifact_root = tmp_path / "physical_ai"
+    assert (artifact_root / "model_generated_architecture_raw.txt").read_text(encoding="utf-8") == '{"product_name" "broken"}'
+    assert json.loads((artifact_root / "model_generated_architecture_repaired_raw.txt").read_text(encoding="utf-8"))["product_name"] == "Active Aero Controller"
+
+
 def test_physical_ai_agents_and_workflow_are_registered():
     registry = load_registry("registry")
     workflow = registry.workflows["Physical_AI_Loop"]
