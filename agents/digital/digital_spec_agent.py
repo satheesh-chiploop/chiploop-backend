@@ -1291,6 +1291,42 @@ def _set_reconciled_port_direction(module: dict, port_name: str, direction: str)
         module["must_drive"] = [p for p in (module.get("must_drive") or []) if p != port_name]
 
 
+def _normalize_memory_wrapper_port_directions(spec_json: dict, mode: str) -> dict:
+    """Correct the standard producer/consumer direction of explicit wrappers.
+
+    Model output sometimes reverses an entire BRAM wrapper interface, making
+    address/write-data outputs and read-data an input. Apply this only to small
+    modules explicitly named/described as memory wrappers, before connectivity
+    sanitization has a chance to discard otherwise valid edges.
+    """
+    if mode != "hierarchical":
+        return spec_json
+    hierarchy = spec_json.get("hierarchy") or {}
+    for module in hierarchy.get("modules") or []:
+        if not isinstance(module, dict):
+            continue
+        identity = " ".join(
+            str(module.get(key) or "").lower()
+            for key in ("name", "description", "functionality")
+        )
+        ports = [port for port in (module.get("ports") or []) if isinstance(port, dict)]
+        port_names = {str(port.get("name") or "").strip().lower() for port in ports}
+        is_explicit_wrapper = (
+            "wrapper" in identity
+            and any(token in identity for token in ("bram", "sram", "memory"))
+            and any(name in port_names for name in ("dout", "rdata", "data_out", "q"))
+            and any(name in port_names for name in ("addr", "address"))
+        )
+        if not is_explicit_wrapper:
+            continue
+        for port in ports:
+            name = str(port.get("name") or "").strip()
+            role = name.lower()
+            direction = "output" if role in {"dout", "rdata", "data_out", "q"} else "input"
+            _set_reconciled_port_direction(module, name, direction)
+    return spec_json
+
+
 def _reconcile_hierarchical_signal_directions(spec_json: dict, mode: str) -> dict:
     if mode != "hierarchical":
         return spec_json
@@ -1685,6 +1721,7 @@ HIERARCHICAL CONNECTIVITY-CLOSURE REPAIR EXAMPLES:
 - GOOD: if no real producer exists, add a coherent producer output port to the responsible existing module and update that module's must_drive, behavior contract, inter_module_signals, and signal_ownership together.
 - GOOD: if the orphan is state computed by the consumer module itself (for example an age counter, occupancy, or sticky status that its behavior says it tracks), remove the redundant input port and keep or add the module's output/status port. Internal state is not an external consumer.
 - GOOD: when firmware writes a CSR command/setpoint and downstream logic needs a command-valid event, make the CSR/MMIO register block produce an explicit write/accept pulse and connect it to the consumer, or have the consumer derive validity from already-connected control fields and remove the redundant input.
+- GOOD: in firmware-mediated request/response designs, every response field consumed by a transport, validator, or safety block must be produced by explicit CSR/MMIO register-block outputs, and the response write/commit event must produce the corresponding push/valid pulse. Do not leave firmware-written payload fields as source-less child inputs.
 - GOOD: if a wholly optional helper module has no externally required behavior and none of its outputs are consumed, remove that entire module and its stale connectivity/ownership entries coherently instead of inventing meaningless traffic for it.
 - BAD: rename or delete a required consumer input merely to silence validation.
 - BAD: add a replacement consumer input to the same or another module without connecting it in the same response.
@@ -1840,6 +1877,7 @@ def _compile_spec_contract(
     _reject_requested_top_memory_interface(spec_json, mode, requested_top)
 
     if mode == "hierarchical":
+        spec_json = _normalize_memory_wrapper_port_directions(spec_json, mode)
         spec_json = _ensure_hierarchical_top_level_connections(spec_json)
         spec_json = _ensure_hierarchical_inter_module_signals(spec_json)
         # Reject stale endpoints against the declared contract before port

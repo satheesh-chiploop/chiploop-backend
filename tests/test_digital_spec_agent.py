@@ -329,6 +329,33 @@ def test_normalize_hierarchical_spec_derives_missing_rtl_output_files():
     assert out["hierarchy"]["modules"][0]["rtl_output_file"] == "pwm_core.v"
 
 
+def test_memory_wrapper_direction_normalization_restores_read_data_producer():
+    wrapper = {
+        **_module("fpga_bram_history_wrapper"),
+        "description": "Technology-neutral BRAM memory wrapper.",
+        "ports": [
+            _port("clk", "input"),
+            _port("csb", "output"),
+            _port("web", "output"),
+            _port("addr", "output", 7),
+            _port("din", "output", 32),
+            _port("dout", "input", 32),
+        ],
+    }
+    spec = {
+        "hierarchy": {"top_module": _module("top"), "modules": [wrapper]},
+    }
+
+    out = spec_agent._normalize_memory_wrapper_port_directions(spec, "hierarchical")
+    directions = {port["name"]: port["direction"] for port in out["hierarchy"]["modules"][0]["ports"]}
+
+    assert directions == {
+        "clk": "input", "csb": "input", "web": "input",
+        "addr": "input", "din": "input", "dout": "output",
+    }
+    assert out["hierarchy"]["modules"][0]["must_drive"] == ["dout"]
+
+
 def test_normalize_hierarchical_spec_uses_root_rtl_output_file_for_top():
     spec = {
         "design_name": "pwm_controller",
@@ -506,6 +533,7 @@ def test_connectivity_repair_prompt_prevents_orphan_migration():
     assert "memory read-data input" in prompt
     assert "memory wrapper's dout is the producer" in prompt
     assert "CSR/MMIO register block produce an explicit write/accept pulse" in prompt
+    assert "response write/commit event" in prompt
     assert "creates feedback" in prompt
 
 
