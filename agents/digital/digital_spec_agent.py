@@ -915,6 +915,30 @@ def _loads_model_json(text: str):
     return json.loads(text, object_pairs_hook=_prefer_informative_duplicate_pairs)
 
 
+def _hierarchical_candidate_completeness(candidate: dict) -> tuple[int, int]:
+    """Rank full contracts above nested hierarchy fragments.
+
+    The object extractor intentionally returns nested JSON objects as well as
+    the outer response. A nested ``hierarchy`` object has ``top_module`` and
+    ``modules`` and can therefore look like a contract, but it omits root-level
+    connectivity, ownership, and register metadata. Prefer structural coverage
+    first and information volume second; caller position remains the tie-break.
+    """
+    hierarchy = candidate.get("hierarchy") if isinstance(candidate.get("hierarchy"), dict) else {}
+    top = hierarchy.get("top_module") if isinstance(hierarchy.get("top_module"), dict) else {}
+    modules = hierarchy.get("modules") if isinstance(hierarchy.get("modules"), list) else []
+    structural_fields = (
+        bool(top.get("name")),
+        bool(top.get("ports")),
+        bool(modules),
+        bool(candidate.get("top_level_connections")),
+        bool(candidate.get("inter_module_signals")),
+        bool(candidate.get("signal_ownership")),
+        bool(candidate.get("register_contract")),
+    )
+    return sum(structural_fields), _json_information_score(candidate)
+
+
 def _parse_llm_json_object(llm_output: str) -> dict:
     candidates = _extract_json_object_texts(llm_output)
     hierarchical_candidates: list[dict] = []
@@ -955,7 +979,10 @@ def _parse_llm_json_object(llm_output: str) -> dict:
         if isinstance(parsed_item, dict) and is_flat_spec:
             flat_candidates.append(parsed_item)
     if hierarchical_candidates:
-        return hierarchical_candidates[-1]
+        return max(
+            enumerate(hierarchical_candidates),
+            key=lambda item: (_hierarchical_candidate_completeness(item[1]), item[0]),
+        )[1]
     if flat_candidates:
         return flat_candidates[-1]
 

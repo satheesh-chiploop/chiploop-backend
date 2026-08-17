@@ -503,6 +503,19 @@ def test_main_registers_generic_physical_ai_endpoints():
     assert 'Preserve that deeper Supabase state' in main
 
 
+def test_physical_ai_parent_status_is_not_overwritten_by_downstream_hem_failure():
+    main = open("main.py", encoding="utf-8").read()
+    continuation = main.split(
+        "def _hem_continue_physical_ai_after_success", 1
+    )[1].split("def execute_physical_ai_motor_control_background", 1)[0]
+
+    assert 'append_log_workflow(root_workflow_id, message, status="failed"' not in continuation
+    assert 'append_log_run(root_run_id, message, status="failed")' not in continuation
+    assert '_hem_update_run_record' in continuation
+    assert 'status="failed"' in continuation
+    assert "the child and HEM run remain the" in continuation
+
+
 def test_physical_ai_reuses_existing_firmware_and_software_collateral_contracts():
     main = open("main.py", encoding="utf-8").read()
     firmware_ingest = open("agents/embedded/embedded_digital_handoff_ingest_agent.py", encoding="utf-8").read()

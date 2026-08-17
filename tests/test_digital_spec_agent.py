@@ -259,6 +259,38 @@ def test_parse_llm_json_object_prefers_last_spec_shaped_object():
     assert parsed["top_level_connections"][0]["top_port"] == "clk"
 
 
+def test_parse_llm_json_prefers_complete_outer_contract_over_nested_hierarchy_fragment():
+    text = json.dumps({
+        "design_name": "soft_cpu_top",
+        "hierarchy": {
+            "top_module": {**_module("soft_cpu_top"), "ports": [_port("clk", "input")]},
+            "modules": [
+                {**_module("cpu"), "ports": [_port("req", "output")]},
+                {**_module("peripheral"), "ports": [_port("req", "input")]},
+            ],
+        },
+        "top_level_connections": [
+            {"top_port": "clk", "connected_to": ["soft_cpu_top.clk"]},
+        ],
+        "inter_module_signals": [{
+            "name": "req",
+            "width": 1,
+            "source": "cpu.req",
+            "destinations": ["peripheral.req"],
+            "description": "CPU request.",
+        }],
+        "signal_ownership": [{"signal": "req", "owner": "cpu.req"}],
+        "register_contract": {"bus_type": "wishbone", "registers": [{"name": "CTRL"}]},
+    })
+
+    parsed = spec_agent._parse_llm_json_object(text)
+
+    assert parsed["design_name"] == "soft_cpu_top"
+    assert len(parsed["inter_module_signals"]) == 1
+    assert parsed["inter_module_signals"][0]["source"] == "cpu.req"
+    assert parsed["register_contract"]["bus_type"] == "wishbone"
+
+
 def test_parse_llm_json_preserves_nonempty_contract_when_duplicate_keys_end_empty():
     text = """{
       "design_name": "adaptive_aero_control_top",
