@@ -269,6 +269,26 @@ def test_mandatory_firmware_control_plane_accepts_standard_wishbone_names():
     )
 
 
+def test_mandatory_firmware_control_plane_accepts_bare_direction_suffixed_wishbone_strobes():
+    spec = {
+        **_module("soft_cpu_top"),
+        "ports": [
+            _port("adr_i", "input", 32), _port("dat_i", "input", 32),
+            _port("dat_o", "output", 32), _port("we_i", "input"),
+            _port("cyc_i", "input"), _port("stb_i", "input"),
+            _port("ack_o", "output"),
+        ],
+        "register_contract": {
+            "bus_type": "wishbone",
+            "registers": [{"name": "CONTROL", "offset": "0x00"}],
+        },
+    }
+
+    spec_agent._validate_mandatory_firmware_control_plane(
+        spec, "flat", "ordinary application specification", required=True,
+    )
+
+
 def test_parse_llm_json_object_prefers_last_spec_shaped_object():
     text = (
         '{"design_name":"draft","hierarchy":{"top_module":{"name":"draft"}}}'

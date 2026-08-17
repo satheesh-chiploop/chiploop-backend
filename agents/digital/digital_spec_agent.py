@@ -1950,7 +1950,10 @@ def _validate_mandatory_firmware_control_plane(
         return any(any(token in name for token in tokens) for name in names)
 
     def has_strobe(suffixes: tuple[str, ...]) -> bool:
-        return any(any(name.endswith(suffix) for suffix in suffixes) for name in strobe_names)
+        return any(
+            any(name.endswith(suffix) or name == suffix.lstrip("_") for suffix in suffixes)
+            for name in strobe_names
+        )
 
     missing = []
     if not has_any(("addr", "address", "adr")):
