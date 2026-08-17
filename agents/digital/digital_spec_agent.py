@@ -1097,10 +1097,14 @@ def _upload_spec_debug_artifacts(workflow_id, agent_name, spec_dir):
         "spec_agent_contract_pass4.log",
         "llm_raw_output_pass4.txt",
         "spec_agent_exception_pass4.txt",
+        "spec_agent_contract_pass5.log",
+        "llm_raw_output_pass5.txt",
+        "spec_agent_exception_pass5.txt",
         "spec_agent_normalized.json",
         "spec_agent_normalized_pass2.json",
         "spec_agent_normalized_pass3.json",
         "spec_agent_normalized_pass4.json",
+        "spec_agent_normalized_pass5.json",
     ]:
         _record_text_artifact_safe(
             workflow_id=workflow_id,
@@ -1608,7 +1612,13 @@ def _sanitize_hierarchical_connectivity(spec_json: dict) -> dict:
     return spec_json
 
 
-def _build_repair_prompt(base_prompt: str, previous_json_text: str, failure_log_text: str) -> str:
+def _build_repair_prompt(
+    base_prompt: str,
+    previous_json_text: str,
+    failure_log_text: str,
+    *,
+    strict_connectivity: bool = False,
+) -> str:
     firmware_examples = ""
     if "firmware control-plane" in str(failure_log_text or "").lower() or "register_contract" in str(failure_log_text or ""):
         firmware_examples = """
@@ -1639,15 +1649,47 @@ HIERARCHY DELIVERABLE REPAIR EXAMPLES:
 
 HIERARCHICAL CONNECTIVITY-CLOSURE REPAIR EXAMPLES:
 - Repair EVERY unconnected child input listed in the validation failure log in this single response, not only the first one.
+- Do not add any new child input ports while repairing missing sources. That only moves the orphan and is not a repair.
 - GOOD: connect an externally driven child input through top_level_connections from a compatible top-level input port.
 - GOOD: connect an internally driven child input through one inter_module_signals entry whose source is a real output/inout child port and whose destinations contain the real input/inout child port.
 - GOOD: when producer and consumer ports express the same semantic signal with directional suffixes (for example producer status_valid_out and consumer status_valid_in or status_valid), connect those exact declared endpoints when their widths match.
 - GOOD: if several consumers use the same produced signal, place every compatible consumer endpoint in that signal's destinations list.
 - GOOD: if no real producer exists, add a coherent producer output port to the responsible existing module and update that module's must_drive, behavior contract, inter_module_signals, and signal_ownership together.
+- GOOD: if the orphan is state computed by the consumer module itself (for example an age counter, occupancy, or sticky status that its behavior says it tracks), remove the redundant input port and keep or add the module's output/status port. Internal state is not an external consumer.
+- GOOD: if a wholly optional helper module has no externally required behavior and none of its outputs are consumed, remove that entire module and its stale connectivity/ownership entries coherently instead of inventing meaningless traffic for it.
 - BAD: rename or delete a required consumer input merely to silence validation.
+- BAD: add a replacement consumer input to the same or another module without connecting it in the same response.
+- BAD: invent a producer for a value that the consumer's own behavior explicitly computes internally.
 - BAD: use an input port as a source, use an output port as a destination, connect incompatible widths, invent an undeclared endpoint, or connect unrelated signals merely because widths match.
 - BAD: repair one listed endpoint while leaving the other endpoints from the failure log structurally undriven.
 - Before returning JSON, audit every child input against top_level_connections and inter_module_signals and ensure each has exactly one semantically valid structural source.
+"""
+        if strict_connectivity:
+            connectivity_examples += """
+
+STRICT PASS3/PASS4 CONNECTIVITY REPAIR:
+- Treat the previous JSON as a graph: child output/inout ports are producers; child input/inout ports are consumers; top-level inputs are external producers.
+- First make a private checklist of every endpoint named in VALIDATION FAILURE LOG. Return JSON only, but do not finish until every checklist item has a source.
+- Prefer a semantically matching declared producer of the same width. Direction suffixes may differ: producer.payload_out may drive consumer.payload_in.
+- If no producer exists for a required consumer, add an OUTPUT to the responsible producer module, never another INPUT. Update that producer's behavior_rules and must_drive, then add the inter_module_signals and signal_ownership entries.
+- If an optional helper has no required externally visible behavior and none of its outputs are consumed, remove the whole helper and all references to it.
+- After editing, rebuild the consumer checklist from the returned JSON, including any ports you added. Every child input/inout must occur exactly once in either top_level_connections[].connected_to or inter_module_signals[].destinations.
+
+GOOD EXAMPLE — reuse a semantic producer:
+producer ports: payload_out(output, width 16)
+consumer ports: payload_in(input, width 16)
+inter_module_signals: [{"name":"payload","width":16,"source":"producer.payload_out","destinations":["consumer.payload_in"],"description":"Payload transfer."}]
+
+GOOD EXAMPLE — create the missing producer side:
+Before: sink.trigger_in is unconnected and controller has no trigger output.
+After: add controller.trigger_out as output width 1, require controller to drive it, and connect controller.trigger_out to sink.trigger_in.
+
+BAD EXAMPLE — migrate the orphan:
+Before: sink.trigger_in is unconnected.
+Wrong repair: add helper.trigger_in as another input, or add controller.trigger_in and use it as a source. Inputs are consumers and cannot repair a missing producer.
+
+BAD EXAMPLE — meaningless width match:
+Do not drive fifo.write_data from an unrelated status_word merely because both are the same width. Either identify the real semantic producer or remove an optional unused FIFO coherently.
 """
     fpga_memory_examples = ""
     if "fpga memory contract" in str(failure_log_text or "").lower() or "fpga-only contract" in str(failure_log_text or "").lower():
@@ -1809,12 +1851,21 @@ def _validate_mandatory_firmware_control_plane(
     else:
         top = spec_json
     names = {str(port.get("name") or "").lower() for port in (top.get("ports") or []) if isinstance(port, dict)}
+    # Interface signals commonly carry a final direction suffix (for example,
+    # ``csr_we_i`` or ``apb_pwrite_i``).  Ignore that suffix when matching
+    # semantic strobe endings so conventional HDL port names are accepted.
+    strobe_names = names | {
+        name[: -len(direction_suffix)]
+        for name in names
+        for direction_suffix in ("_in", "_out", "_i", "_o")
+        if name.endswith(direction_suffix)
+    }
 
     def has_any(tokens: tuple[str, ...]) -> bool:
         return any(any(token in name for token in tokens) for name in names)
 
     def has_strobe(suffixes: tuple[str, ...]) -> bool:
-        return any(any(name.endswith(suffix) for suffix in suffixes) for name in names)
+        return any(any(name.endswith(suffix) for suffix in suffixes) for name in strobe_names)
 
     missing = []
     if not has_any(("addr", "address")):
@@ -2516,6 +2567,7 @@ Return JSON only.
                     base_prompt=prompt,
                     previous_json_text=llm_output_pass2,
                     failure_log_text=str(e2),
+                    strict_connectivity=True,
                 )
                 pass3_mode = "contract_repair_pass3"
             llm_output_pass3 = llm_output_pass2
@@ -2545,6 +2597,7 @@ Return JSON only.
                     base_prompt=prompt,
                     previous_json_text=llm_output_pass3,
                     failure_log_text=str(e3),
+                    strict_connectivity=True,
                 )
                 try:
                     logger.info("Digital Spec Agent invoking final contract repair after syntax repair")
@@ -2568,23 +2621,56 @@ Return JSON only.
                     _write_text(pass4_log_path, f"Digital Spec Agent final contract repair failure:\n{e4}\n")
                     _write_text(pass4_exc_path, repr(e4))
 
-                    state.update({
-                        "status": f"❌ JSON parse/normalize failed after final contract repair: {e4}",
-                        "artifact": None,
-                        "artifact_list": [],
-                        "artifact_log": log_path,
-                        "workflow_dir": workflow_dir,
-                        "workflow_id": workflow_id,
-                        "issues": [
-                            f"Pass1 JSON parse/normalize failed: {pass1_error}",
-                            f"Pass2 JSON parse/normalize failed: {pass2_error}",
-                            f"Syntax repair JSON parse/normalize failed: {e3}",
-                            f"Final contract repair failed: {e4}",
-                        ],
-                    })
+                    pass5_prompt = _build_repair_prompt(
+                        base_prompt=prompt,
+                        previous_json_text=llm_output_pass4,
+                        failure_log_text=str(e4),
+                        strict_connectivity=True,
+                    )
+                    try:
+                        logger.info("Digital Spec Agent invoking pass5 focused contract repair")
+                        logger.info(f"Digital Spec Agent pass5 prompt size: {len(pass5_prompt)} chars")
+                        t0 = time.monotonic()
+                        llm_output_pass5 = _complete_spec_generation(
+                            pass5_prompt, agent_name, state, "contract_repair_pass5"
+                        )
+                        logger.info(f"Digital Spec Agent pass5 LLM elapsed: {time.monotonic() - t0:.2f}s")
+                        spec_json, mode, raw_output_path_pass5, normalized_path_pass5 = _compile_spec_contract(
+                            llm_output=llm_output_pass5,
+                            spec_dir=spec_dir,
+                            suffix="_pass5",
+                            requested_top=requested_top,
+                            source_prompt=user_prompt,
+                            require_firmware_control_plane=require_firmware_control_plane,
+                        )
+                        raw_output_path = raw_output_path_pass5
+                        e5 = None
+                    except Exception as pass5_error:
+                        e5 = pass5_error
+                        pass5_log_path = os.path.join(spec_dir, "spec_agent_contract_pass5.log")
+                        pass5_exc_path = os.path.join(spec_dir, "spec_agent_exception_pass5.txt")
+                        _write_text(pass5_log_path, f"Digital Spec Agent pass5 contract repair failure:\n{e5}\n")
+                        _write_text(pass5_exc_path, repr(e5))
 
-                    _upload_spec_debug_artifacts(workflow_id, agent_name, spec_dir)
-                    return state
+                    if e5 is not None:
+                        state.update({
+                            "status": f"❌ JSON parse/normalize failed after pass5 contract repair: {e5}",
+                            "artifact": None,
+                            "artifact_list": [],
+                            "artifact_log": log_path,
+                            "workflow_dir": workflow_dir,
+                            "workflow_id": workflow_id,
+                            "issues": [
+                                f"Pass1 JSON parse/normalize failed: {pass1_error}",
+                                f"Pass2 JSON parse/normalize failed: {pass2_error}",
+                                f"Pass3 JSON parse/normalize failed: {e3}",
+                                f"Pass4 contract repair failed: {e4}",
+                                f"Pass5 contract repair failed: {e5}",
+                            ],
+                        })
+
+                        _upload_spec_debug_artifacts(workflow_id, agent_name, spec_dir)
+                        return state
 
     module_name = spec_json["name"] if mode == "flat" else spec_json["hierarchy"]["top_module"]["name"]
 

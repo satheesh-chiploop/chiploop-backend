@@ -221,6 +221,31 @@ def test_mandatory_firmware_control_plane_accepts_csr_wen_ren_strobes():
     )
 
 
+def test_mandatory_firmware_control_plane_accepts_direction_suffixed_csr_strobes():
+    spec = {
+        **_module("adaptive_aero_control_top"),
+        "ports": [
+            _port("csr_addr_i", "input", 8),
+            _port("csr_wdata_i", "input", 32),
+            _port("csr_rdata_o", "output", 32),
+            _port("csr_valid_i", "input"),
+            _port("csr_we_i", "input"),
+            _port("csr_ready_o", "output"),
+        ],
+        "register_contract": {
+            "bus_type": "csr/mmio",
+            "registers": [{"name": "CONTROL", "offset": "0x00"}],
+        },
+    }
+
+    spec_agent._validate_mandatory_firmware_control_plane(
+        spec,
+        "flat",
+        "ordinary application specification",
+        required=True,
+    )
+
+
 def test_parse_llm_json_object_prefers_last_spec_shaped_object():
     text = (
         '{"design_name":"draft","hierarchy":{"top_module":{"name":"draft"}}}'
@@ -428,6 +453,24 @@ def test_partial_inter_module_graph_is_completed_and_orphans_are_rejected():
 
     with pytest.raises(ValueError, match="consumer.orphan.*has no source"):
         spec_agent._validate_spec_contract(out, "hierarchical")
+
+
+def test_connectivity_repair_prompt_prevents_orphan_migration():
+    prompt = spec_agent._build_repair_prompt(
+        base_prompt="Generate a hierarchy.",
+        previous_json_text='{"design_name":"top"}',
+        failure_log_text="Required child input 'fifo.wr_en' has no source",
+        strict_connectivity=True,
+    )
+
+    assert "Do not add any new child input ports" in prompt
+    assert "remove that entire module" in prompt
+    assert "without connecting it in the same response" in prompt
+    assert "state computed by the consumer module itself" in prompt
+    assert "Internal state is not an external consumer" in prompt
+    assert "STRICT PASS3/PASS4 CONNECTIVITY REPAIR" in prompt
+    assert "producer.payload_out" in prompt
+    assert "Inputs are consumers" in prompt
 
 
 def test_sanitize_connectivity_keeps_one_width_compatible_producer_per_input():
