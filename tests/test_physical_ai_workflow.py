@@ -7,8 +7,17 @@ import agents.physical_ai.physical_ai_architecture_agent as architecture_agent
 import agents.physical_ai.physical_ai_application_intelligence_agent as application_intelligence_agent
 import agents.physical_ai.physical_ai_partitioning_agent as partitioning_agent
 from physical_ai.model_registry import get_physics_model, list_physics_models
+from physical_ai.soft_cpu import resolve_soft_cpu_config
+from physical_ai.asic_cpu import resolve_asic_cpu_config
 from physical_ai.workflow import run_physical_ai_workflow
 from studio_contract.registry import load_registry
+
+TEST_PROCESSOR_POLICY = {
+    "schema": "chiploop.application_intelligence.processor_ip_policy.v1",
+    "automatic_asic_deployment": "asic_digital_ip",
+    "fpga_soft_cpu": {"default_core": "picorv32", "defaults": {"isa": "automatic", "bus": "automatic", "clock_mhz": 50, "instruction_memory_kib": 32, "data_memory_kib": 16, "interrupts": True, "uart": True, "debug": False}, "cores": {"serv": {"label": "SERV", "license": "ISC", "profile": "minimum_area", "default_isa": "rv32i", "supported_isas": ["rv32i", "rv32im"], "default_bus": "wishbone", "estimated_logic_cells": 900, "estimated_bram_blocks": 8}, "picorv32": {"label": "PicoRV32", "license": "ISC", "profile": "balanced", "default_isa": "rv32imc", "supported_isas": ["rv32i", "rv32im", "rv32imc"], "default_bus": "wishbone", "estimated_logic_cells": 3000, "estimated_bram_blocks": 12}}},
+    "asic_soc_cpu": {"default_core": "picorv32", "defaults": {"isa": "automatic", "bus": "automatic", "clock_mhz": 100, "boot_rom_kib": 16, "sram_kib": 64, "interrupts": True, "debug": False, "clock_gating": True, "dft_scan_required": True}, "allowed_buses": ["apb", "axi4_lite", "wishbone", "native"], "cores": {"picorv32": {"label": "PicoRV32", "license": "ISC", "profile": "balanced", "default_isa": "rv32imc", "supported_isas": ["rv32i", "rv32im", "rv32imc"], "default_bus": "apb"}, "vexriscv": {"label": "VexRiscv", "license": "MIT", "profile": "performance", "default_isa": "rv32imc", "supported_isas": ["rv32imc"], "default_bus": "axi4_lite"}}, "integration_gate": {"cpu_rtl_required": True, "memory_macro_mapping_required": True, "complete_soc_synthesis_required": True, "default_status": "pending_cpu_rtl"}},
+}
 
 
 def test_physical_ai_hem_default_explores_cross_vendor_fpga_targets():
@@ -27,6 +36,17 @@ def test_application_intelligence_fpga_shortlist_is_supabase_governed():
     assert "ulx3s_ecp5_45f" in migration
     assert "orangecrab_ecp5_85f" in migration
     assert "nvidia.domino.automotive_aero" in migration
+
+
+def test_processor_ip_defaults_are_supabase_governed():
+    migration = (Path(__file__).parents[1] / "supabase" / "migrations" / "phase_20260816_application_intelligence_processor_ip_policy.sql").read_text(encoding="utf-8")
+    assert "processor_ip_policy" in migration
+    assert "chiploop.application_intelligence.processor_ip_policy.v1" in migration
+    assert "automatic_asic_deployment', 'asic_digital_ip" in migration
+    assert "fpga_soft_cpu" in migration
+    assert "asic_soc_cpu" in migration
+    assert "pending_cpu_rtl" in migration
+    assert "where name = 'Physical_AI_Loop' and user_id is null" in migration
 
 
 def test_physical_ai_fpga_bitstream_uses_fpga_dashboard():
@@ -103,6 +123,7 @@ def test_generic_physical_ai_parent_workflow_executes_motor_adapter(tmp_path):
             "implementation_target": "fpga",
             "maximum_error_percent": 3.0,
             "parameters": {"rated_speed_rpm": 3000, "load_torque_nm": 0.15},
+            "processor_ip_policy": TEST_PROCESSOR_POLICY,
         },
         str(tmp_path),
         workflow_id="parent-123",
@@ -141,6 +162,7 @@ def test_unavailable_gpu_model_is_not_executed(tmp_path):
                 "physics_domain": "automotive_aerodynamics",
                 "physics_model_id": "nvidia.domino.automotive_aero",
                 "implementation_target": "gpu_service",
+                "processor_ip_policy": TEST_PROCESSOR_POLICY,
             },
             str(tmp_path),
         )
@@ -216,6 +238,34 @@ def test_active_aero_cpu_reference_builds_application_partition_and_policy(tmp_p
     assert len(result["physics_execution"]["cpu_reference"]["operating_points"]) == 5
 
 
+def test_soft_cpu_beginner_defaults_resolve_to_balanced_reproducible_contract(tmp_path):
+    result = run_physical_ai_workflow({
+        "application": "intelligent_active_aerodynamics_controller",
+        "physics_domain": "automotive_aerodynamics",
+        "physics_model_id": "nvidia.domino.automotive_aero",
+        "execution_mode": "architecture",
+        "implementation_path": "fpga_prototype",
+        "deployment_architecture": "fpga_soft_cpu",
+        "soft_cpu_config": {"core": "automatic", "isa": "automatic", "bus": "automatic"},
+        "processor_ip_policy": TEST_PROCESSOR_POLICY,
+        "hem_enabled": False,
+    }, str(tmp_path))
+    cpu = result["soft_cpu"]
+    assert cpu["core"] == "picorv32"
+    assert cpu["isa"] == "rv32imc"
+    assert cpu["bus"] == "wishbone"
+    assert cpu["selection_mode"] == "automatic"
+    assert result["partition"]["partition_phases"]["target_refinement"]["soft_cpu"] == cpu
+
+
+def test_soft_cpu_advanced_override_validates_core_isa():
+    cpu = resolve_soft_cpu_config({"core": "serv", "isa": "rv32i", "bus": "wishbone"}, deployment_architecture="fpga_soft_cpu", policy=TEST_PROCESSOR_POLICY)
+    assert cpu["selection_mode"] == "advanced_override"
+    assert cpu["license"] == "ISC"
+    with pytest.raises(ValueError, match="does not support"):
+        resolve_soft_cpu_config({"core": "serv", "isa": "rv32imc"}, deployment_architecture="fpga_soft_cpu", policy=TEST_PROCESSOR_POLICY)
+
+
 def test_asic_partition_records_explicit_soc_architecture(tmp_path):
     result = run_physical_ai_workflow(
         {
@@ -225,6 +275,7 @@ def test_asic_partition_records_explicit_soc_architecture(tmp_path):
             "execution_mode": "architecture",
             "implementation_path": "digital_ip_asic",
             "deployment_architecture": "asic_soc",
+            "processor_ip_policy": TEST_PROCESSOR_POLICY,
             "hem_enabled": False,
         },
         str(tmp_path),
@@ -234,6 +285,52 @@ def test_asic_partition_records_explicit_soc_architecture(tmp_path):
     assert refinement["status"] == "selected"
     assert refinement["selected_mode"] == "asic_soc"
     assert "asic_digital_ip" in refinement["candidate_modes"]
+    assert refinement["asic_cpu"]["core"] == "picorv32"
+    assert refinement["asic_cpu"]["bus"] == "apb"
+    assert refinement["asic_cpu"]["integration_gate"]["status"] == "pending_cpu_rtl"
+
+
+def test_automatic_asic_defaults_to_reusable_digital_ip(tmp_path):
+    result = run_physical_ai_workflow({
+        "physics_domain": "automotive_aerodynamics",
+        "physics_model_id": "nvidia.domino.automotive_aero",
+        "execution_mode": "architecture",
+        "implementation_path": "digital_ip_asic",
+        "deployment_architecture": "automatic",
+        "processor_ip_policy": TEST_PROCESSOR_POLICY,
+        "hem_enabled": False,
+    }, str(tmp_path))
+    refinement = result["partition"]["partition_phases"]["target_refinement"]
+    assert refinement["selected_mode"] == "asic_digital_ip"
+    assert refinement["status"] == "selected"
+    assert refinement["asic_cpu"] is None
+
+
+def test_asic_cpu_advanced_override_and_validation():
+    cpu = resolve_asic_cpu_config({"core": "vexriscv", "isa": "rv32imc", "bus": "axi4_lite", "clock_mhz": 200}, deployment_architecture="asic_soc", policy=TEST_PROCESSOR_POLICY)
+    assert cpu["selection_mode"] == "advanced_override"
+    assert cpu["clock_mhz"] == 200
+    assert cpu["dft_scan_required"] is True
+    with pytest.raises(ValueError, match="unsupported ASIC CPU bus"):
+        resolve_asic_cpu_config({"core": "picorv32", "bus": "invalid"}, deployment_architecture="asic_soc", policy=TEST_PROCESSOR_POLICY)
+
+
+def test_cpu_enabled_runs_require_supabase_policy():
+    with pytest.raises(ValueError, match="Supabase processor_ip_policy"):
+        resolve_soft_cpu_config({"core": "automatic"}, deployment_architecture="fpga_soft_cpu")
+    with pytest.raises(ValueError, match="Supabase processor_ip_policy"):
+        resolve_asic_cpu_config({"core": "automatic"}, deployment_architecture="asic_soc")
+
+
+def test_processor_resolvers_use_supabase_policy_snapshot():
+    policy = {
+        "fpga_soft_cpu": {"default_core": "serv", "defaults": {"clock_mhz": 40, "instruction_memory_kib": 16, "data_memory_kib": 8, "interrupts": True, "uart": True, "debug": False}, "cores": {"serv": {"label": "Governed SERV", "license": "ISC", "profile": "minimum_area", "default_isa": "rv32i", "supported_isas": ["rv32i"], "default_bus": "wishbone", "estimated_logic_cells": 777, "estimated_bram_blocks": 5}}},
+        "asic_soc_cpu": {"default_core": "vexriscv", "defaults": {"clock_mhz": 150, "boot_rom_kib": 16, "sram_kib": 64, "interrupts": True, "debug": False, "clock_gating": True, "dft_scan_required": True}, "allowed_buses": ["axi4_lite"], "cores": {"vexriscv": {"label": "Governed Vex", "license": "MIT", "profile": "performance", "default_isa": "rv32imc", "supported_isas": ["rv32imc"], "default_bus": "axi4_lite"}}, "integration_gate": {"cpu_rtl_required": True, "memory_macro_mapping_required": True, "complete_soc_synthesis_required": True, "default_status": "pending_cpu_rtl"}},
+    }
+    fpga = resolve_soft_cpu_config({"core": "automatic"}, deployment_architecture="fpga_soft_cpu", policy=policy)
+    asic = resolve_asic_cpu_config({"core": "automatic"}, deployment_architecture="asic_soc", policy=policy)
+    assert fpga["core"] == "serv" and fpga["estimated_reservation"]["logic_cells"] == 777
+    assert asic["core"] == "vexriscv" and asic["bus"] == "axi4_lite"
 
 
 def test_application_intelligence_and_partition_use_selected_agent_model(tmp_path, monkeypatch):
@@ -289,6 +386,7 @@ def test_application_intelligence_and_partition_use_selected_agent_model(tmp_pat
             "implementation_path": "fpga_prototype",
             "generate_architecture_with_model": True,
             "model_policy": {"mode": "standard", "selected_model": "nvidia_nemotron"},
+            "processor_ip_policy": TEST_PROCESSOR_POLICY,
         },
         str(tmp_path),
     )
@@ -341,6 +439,7 @@ def test_selected_agent_model_generates_rtl_ready_architecture(tmp_path, monkeyp
             "implementation_path": "digital_ip_asic",
             "generate_architecture_with_model": True,
             "model_policy": {"mode": "standard", "selected_model": "nvidia_nemotron"},
+            "processor_ip_policy": TEST_PROCESSOR_POLICY,
         },
         str(tmp_path),
     )
@@ -384,10 +483,13 @@ def test_main_registers_generic_physical_ai_endpoints():
     assert '"system_validation": True' in main
     assert '"system_product": True' in main
     assert '"partition_plan": result.get("partition") or {}' in main
+    assert '"asic_cpu_config": result.get("asic_cpu") or {}' in main
+    assert "ASIC CPU IP INTEGRATION CONTRACT" in main
+    assert '"cpu_ip_integration_gate": (payload.get("asic_cpu_config") or {}).get("integration_gate")' in main
     assert '"software_goal": f"Build the host control' in main
     assert '"Device Layer / Firmware"' in main
     assert 'device_layer_role = "host_device_layer" if external_host else "embedded_firmware"' in main
-    assert '"x86_64-unknown-linux-gnu" if external_host else "riscv32imac-unknown-none-elf"' in main
+    assert '"x86_64-unknown-linux-gnu" if external_host else str(processor.get("target_triple")' in main
     assert 'automation_payload["fpga_source_workflow_id"] = child_workflow_id' in main
     assert 'payload.get("fpga_source_workflow_id") or source_arch2rtl' in main
     assert '"_fail_fast_on_agent_error": True' in main
@@ -473,6 +575,7 @@ def test_model_selection_accepts_supabase_snapshot(tmp_path):
             "physics_model_id": "chiploop.pmsm.dq.v1",
             "physics_model_record": model,
             "implementation_target": "fpga",
+            "processor_ip_policy": TEST_PROCESSOR_POLICY,
         },
         str(tmp_path),
     )

@@ -96,6 +96,8 @@ def run_physical_ai_workflow(
         "physics_model": state["selected_physics_model"],
         "model_qualification": state["surrogate_mapping"],
         "partition": state["partition_plan"],
+        "soft_cpu": state["requirements_contract"].get("soft_cpu") or {},
+        "asic_cpu": state["requirements_contract"].get("asic_cpu") or {},
         "architecture_generation": state.get("architecture_generation") or {},
         "physics_execution": execution_result,
         "loop": state["physical_ai_loop"],

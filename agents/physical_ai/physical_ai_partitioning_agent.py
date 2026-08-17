@@ -34,12 +34,16 @@ def _target_refinement(req: Dict[str, Any]) -> Dict[str, Any]:
         else ["asic_digital_ip", "asic_soc", "asic_companion"]
     )
     selected = requested if requested != "automatic" else None
+    soft_cpu = req.get("soft_cpu") if isinstance(req.get("soft_cpu"), dict) else {}
+    asic_cpu = req.get("asic_cpu") if isinstance(req.get("asic_cpu"), dict) else {}
     return {
         "status": "pending_board_selection" if is_fpga else ("pending_asic_architecture" if selected is None else "selected"),
         "requested_mode": requested,
         "selected_mode": selected,
         "candidate_modes": candidates,
         "selection_owner": "fpga_target_explorer" if is_fpga else "application_intelligence",
+        "soft_cpu": soft_cpu if selected == "fpga_soft_cpu" else None,
+        "asic_cpu": asic_cpu if selected == "asic_soc" else None,
         "firmware_gate": {
             "ready": False,
             "reason": "Finalize CPU/host, bus, address map, interrupts, and register-map version before deployable firmware generation.",

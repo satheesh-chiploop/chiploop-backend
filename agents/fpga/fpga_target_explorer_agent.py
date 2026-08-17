@@ -293,7 +293,7 @@ def _run_pnr(state: dict, board_key: str, board: dict, synthesis: dict, seed: in
     }
 
 
-def _capacity_preflight(synthesis: dict, board: dict, io_required: int) -> dict:
+def _capacity_preflight(synthesis: dict, board: dict, io_required: int, soft_cpu: dict | None = None) -> dict:
     """Reject a candidate before P&R when synthesis proves it cannot fit."""
     resources = board.get("resources") if isinstance(board.get("resources"), dict) else {}
     cell_counts = synthesis.get("cell_type_counts") if isinstance(synthesis.get("cell_type_counts"), dict) else {}
@@ -301,10 +301,12 @@ def _capacity_preflight(synthesis: dict, board: dict, io_required: int) -> dict:
         int(_num(count)) for cell, count in cell_counts.items()
         if any(marker in str(cell).upper() for marker in ("MULT18", "DSP", "ALU54"))
     )
+    soft_cpu = soft_cpu if isinstance(soft_cpu, dict) and soft_cpu.get("enabled") else {}
+    reserve = soft_cpu.get("estimated_reservation") if isinstance(soft_cpu.get("estimated_reservation"), dict) else {}
     checks = {
         "io_cells": {"required": int(io_required), "available": resources.get("io_cells")},
-        "logic_cells": {"required": int(_num(synthesis.get("logical_cells_used"))), "available": resources.get("logic_cells")},
-        "block_ram_blocks": {"required": int(_num(synthesis.get("block_ram_blocks_used"))), "available": resources.get("block_ram_blocks")},
+        "logic_cells": {"required": int(_num(synthesis.get("logical_cells_used"))) + int(_num(reserve.get("logic_cells"))), "application_required": int(_num(synthesis.get("logical_cells_used"))), "soft_cpu_reserved": int(_num(reserve.get("logic_cells"))), "available": resources.get("logic_cells")},
+        "block_ram_blocks": {"required": int(_num(synthesis.get("block_ram_blocks_used"))) + int(_num(reserve.get("block_ram_blocks"))), "application_required": int(_num(synthesis.get("block_ram_blocks_used"))), "soft_cpu_reserved": int(_num(reserve.get("block_ram_blocks"))), "available": resources.get("block_ram_blocks")},
         "dsp_blocks": {"required": dsp_used, "available": resources.get("dsp_blocks")},
     }
     failures = []
@@ -318,7 +320,8 @@ def _capacity_preflight(synthesis: dict, board: dict, io_required: int) -> dict:
         "status": "reject" if failures else "pass",
         "checks": checks,
         "failure_reasons": failures,
-        "policy": "P&R runs only when every known synthesized resource requirement fits the device.",
+        "soft_cpu": soft_cpu or None,
+        "policy": "P&R runs only when application synthesis plus any governed soft-CPU reservation fits the device; final readiness requires complete-system synthesis.",
     }
 
 
@@ -510,7 +513,7 @@ def run_agent(state: dict) -> dict:
             continue
         io_available = ((board.get("resources") or {}).get("io_cells"))
         if io_required and io_available is not None and io_required > int(io_available):
-            capacity_preflight = _capacity_preflight({}, board, io_required)
+            capacity_preflight = _capacity_preflight({}, board, io_required, state.get("soft_cpu_config"))
             summary = _summarize_board(board_key, board, [], [], target, capacity_preflight)
             implementation_cache[implementation_key] = deepcopy(summary)
             results.append(summary)
@@ -525,7 +528,7 @@ def run_agent(state: dict) -> dict:
         _progress(state, f"{board_key}: baseline synthesis {baseline.get('status')}.")
         synthesis_runs = [baseline]
         pnr_runs: list[dict] = []
-        capacity_preflight = _capacity_preflight(baseline, board, io_required) if baseline.get("status") == "completed" else None
+        capacity_preflight = _capacity_preflight(baseline, board, io_required, state.get("soft_cpu_config")) if baseline.get("status") == "completed" else None
         if capacity_preflight and capacity_preflight.get("status") == "reject":
             reasons = "; ".join(capacity_preflight.get("failure_reasons") or [])
             _progress(state, f"{board_key}: rejected before P&R because synthesized capacity cannot fit ({reasons}).")

@@ -3765,6 +3765,8 @@ class PhysicalAiWorkflowIn(BaseModel):
     execution_mode: Literal["validated", "architecture", "cpu_reference"] = "validated"
     implementation_path: Literal["architecture_only", "digital_ip_asic", "fpga_prototype", "fpga_then_asic"] = "digital_ip_asic"
     deployment_architecture: Literal["automatic", "fpga_onboard_cpu", "fpga_soft_cpu", "fpga_external_host", "asic_digital_ip", "asic_soc", "asic_companion"] = "automatic"
+    soft_cpu_config: Dict[str, Any] = Field(default_factory=lambda: {"core": "automatic", "isa": "automatic", "bus": "automatic"})
+    asic_cpu_config: Dict[str, Any] = Field(default_factory=lambda: {"core": "automatic", "isa": "automatic", "bus": "automatic"})
     generate_architecture_with_model: bool = True
     maximum_error_percent: float = 3.0
     safety_constraints: List[str] = Field(default_factory=list)
@@ -7202,8 +7204,9 @@ def _hem_physical_ai_stage_plan(payload: Dict[str, Any]) -> List[str]:
     toggles = payload.get("hem_stage_toggles") if isinstance(payload.get("hem_stage_toggles"), dict) else {}
     deployment_architecture = str(payload.get("deployment_architecture") or "automatic").strip().lower()
     firmware_inapplicable = deployment_architecture in {"fpga_external_host", "asic_companion", "asic_digital_ip"}
+    # Host-device software is still required for external-host and companion modes.
     if (str(payload.get("hem_goal") or "product_demo") == "product_demo"
-            and bool(toggles.get("firmware_product", True)) and not firmware_inapplicable):
+            and bool(toggles.get("firmware_product", True))):
         plan.append("firmware_product")
     return plan
 
@@ -7249,6 +7252,22 @@ def _hem_physical_ai_child_payload(root_workflow_id: str, root_run_id: str, payl
             )
         else:
             firmware_interface_contract = ""
+        soft_cpu = payload.get("soft_cpu_config") if isinstance(payload.get("soft_cpu_config"), dict) else {}
+        soft_cpu_contract = (
+            "\nSOFT CPU INTEGRATION CONTRACT: preserve the resolved CPU contract in generated architecture, "
+            f"firmware, and handoff metadata: {json.dumps(soft_cpu, sort_keys=True)}. The application RTL must expose "
+            "the selected bus and MMIO interface. Do not claim the CPU is instantiated or board-ready until its RTL, "
+            "memory/interconnect, and application RTL are synthesized and routed together.\n"
+            if deployment_architecture == "fpga_soft_cpu" else ""
+        )
+        asic_cpu = payload.get("asic_cpu_config") if isinstance(payload.get("asic_cpu_config"), dict) else {}
+        asic_cpu_contract = (
+            "\nASIC CPU IP INTEGRATION CONTRACT: include the selected synthesizable CPU IP, bus/interconnect, "
+            f"boot ROM, SRAM interfaces, interrupts, debug, clock gating, and DFT requirements: {json.dumps(asic_cpu, sort_keys=True)}. "
+            "The CPU, memories, interconnect, and application logic must be part of the same synthesis and signoff hierarchy. "
+            "Do not claim SoC tapeout readiness while integration_gate.status is pending_cpu_rtl.\n"
+            if deployment_architecture == "asic_soc" else ""
+        )
         memory_contract = (
             "\nASIC MEMORY CONTRACT (mandatory): instantiate sky130_sram_1kbyte_1rw1r_32x256_8 for bulk "
             "payload/history/FIFO storage using clk0, csb0, web0, wmask0[3:0], addr0[7:0], din0[31:0], "
@@ -7272,7 +7291,7 @@ def _hem_physical_ai_child_payload(root_workflow_id: str, root_run_id: str, payl
                 f"The required synthesizable top module is {top_module}. Do not substitute a status, telemetry, "
                 "register-bank, or leaf module as the design top. The top must implement the selected Physical AI "
                 "application contract, external model request/response transport, validation, safety, timeout, "
-                "fallback, and bounded actuator-command behavior.\n" + transport_contract + firmware_interface_contract + base_spec + memory_contract
+                "fallback, and bounded actuator-command behavior.\n" + transport_contract + firmware_interface_contract + soft_cpu_contract + asic_cpu_contract + base_spec + memory_contract
             ),
             "top_module": top_module,
             # Structured invariant consumed by Digital Spec Agent. The prose
@@ -7281,6 +7300,8 @@ def _hem_physical_ai_child_payload(root_workflow_id: str, root_run_id: str, payl
             "require_firmware_control_plane": bool(
                 firmware_requested and deployment_architecture in firmware_mmio_modes
             ),
+            "soft_cpu_config": soft_cpu,
+            "asic_cpu_config": asic_cpu,
             "design_language": "SystemVerilog",
             "toggles": {"run_spec2rtl_check": True},
         }
@@ -7295,6 +7316,10 @@ def _hem_physical_ai_child_payload(root_workflow_id: str, root_run_id: str, payl
             "seed_count": 4,
         }
     if stage == "asic_tapeout":
+        deployment = str(payload.get("deployment_architecture") or "asic_digital_ip").strip().lower()
+        gate = payload.get("cpu_ip_integration_gate") if isinstance(payload.get("cpu_ip_integration_gate"), dict) else {}
+        if deployment == "asic_soc" and str(gate.get("status") or "") != "ready":
+            raise RuntimeError("ASIC SoC tapeout is blocked until CPU RTL, memory mapping, and complete-system synthesis evidence are ready")
         return {
             **common_digital,
             "rtl_source_mode": "from_arch2rtl",
@@ -7310,6 +7335,9 @@ def _hem_physical_ai_child_payload(root_workflow_id: str, root_run_id: str, payl
             "run_fill": True,
             "run_drc": True,
             "run_lvs": True,
+            "deployment_architecture": str(payload.get("deployment_architecture") or "asic_digital_ip"),
+            "asic_cpu_config": payload.get("asic_cpu_config") or {},
+            "cpu_ip_integration_gate": (payload.get("asic_cpu_config") or {}).get("integration_gate") or {},
         }
     if stage == "firmware_product":
         partition_plan = payload.get("partition_plan") if isinstance(payload.get("partition_plan"), dict) else {}
@@ -7338,6 +7366,8 @@ def _hem_physical_ai_child_payload(root_workflow_id: str, root_run_id: str, payl
         platform_note = json.dumps(target_refinement, default=str)[:6000]
         deployment = str(target_refinement.get("deployment_architecture") or payload.get("deployment_architecture") or "automatic")
         external_host = deployment in {"fpga_external_host", "asic_companion", "asic_digital_ip"}
+        processor = payload.get("asic_cpu_config") if deployment == "asic_soc" else payload.get("soft_cpu_config")
+        processor = processor if isinstance(processor, dict) else {}
         device_layer_role = "host_device_layer" if external_host else "embedded_firmware"
         device_layer_goal = (
             f"Build the host-side SPI device layer and portable driver service for {application_name}"
@@ -7367,7 +7397,7 @@ def _hem_physical_ai_child_payload(root_workflow_id: str, root_run_id: str, payl
             "target_frequency_mhz": float(payload.get("target_frequency_mhz") or 50.0),
             "execute_cosim": True,
             "run_cosim": True,
-            "toolchain": {"language": "rust", "target_triple": "x86_64-unknown-linux-gnu" if external_host else "riscv32imac-unknown-none-elf"},
+            "toolchain": {"language": "rust", "target_triple": "x86_64-unknown-linux-gnu" if external_host else str(processor.get("target_triple") or "riscv32-unknown-none-elf"), "target_cpu": processor.get("core"), "target_isa": processor.get("isa"), "target_abi": processor.get("abi")},
             "firmware_role": device_layer_role,
             "deployment_architecture": deployment,
             "target_refinement": target_refinement,
@@ -7404,6 +7434,7 @@ def _hem_physical_ai_child_payload(root_workflow_id: str, root_run_id: str, payl
         return {
             **common,
             "candidate_boards": _hem_reference_fpga_candidates(payload),
+            "soft_cpu_config": payload.get("soft_cpu_config") or {},
             "requested_recommendation_profile": str(payload.get("requested_recommendation_profile") or "best_overall"),
             "baseline_seed_count": int(payload.get("baseline_seed_count") or 1),
             "closure_seed_count": int(payload.get("closure_seed_count") or 1),
@@ -7785,6 +7816,7 @@ def execute_physical_ai_workflow_background(workflow_id: str, run_id: str, user_
                     user_id=user_id,
                     payload={
                         **data,
+                        "deployment_architecture": result.get("requirements", {}).get("deployment_architecture") or data.get("deployment_architecture"),
                         "generated_architecture": generated,
                         "digital_ip_spec": digital_ip_spec,
                         "model_top_module": selected_model.get("digital_ip_top_module"),
@@ -7794,6 +7826,8 @@ def execute_physical_ai_workflow_background(workflow_id: str, run_id: str, user_
                         "application_contract": result.get("application_intelligence") or {},
                         "surrogate_mapping": result.get("model_qualification") or {},
                         "partition_plan": result.get("partition") or {},
+                        "soft_cpu_config": result.get("soft_cpu") or {},
+                        "asic_cpu_config": result.get("asic_cpu") or {},
                         "control_policy": result.get("physics_execution", {}).get("control_policy") or {},
                         "surrogate_interface_contract": result.get("physics_execution", {}).get("interface") or {},
                         "validation_plan": result.get("physics_execution", {}).get("validation") or {},
@@ -7812,6 +7846,7 @@ def execute_physical_ai_workflow_background(workflow_id: str, run_id: str, user_
                 user_id=user_id,
                 payload={
                     **data,
+                    "deployment_architecture": result.get("requirements", {}).get("deployment_architecture") or data.get("deployment_architecture"),
                     "generated_architecture": generated,
                     "digital_ip_spec": digital_ip_spec,
                     "model_top_module": selected_model.get("digital_ip_top_module"),
@@ -7821,6 +7856,8 @@ def execute_physical_ai_workflow_background(workflow_id: str, run_id: str, user_
                     "application_contract": result.get("application_intelligence") or {},
                     "surrogate_mapping": result.get("model_qualification") or {},
                     "partition_plan": result.get("partition") or {},
+                    "soft_cpu_config": result.get("soft_cpu") or {},
+                    "asic_cpu_config": result.get("asic_cpu") or {},
                     "control_policy": result.get("physics_execution", {}).get("control_policy") or {},
                     "surrogate_interface_contract": result.get("physics_execution", {}).get("interface") or {},
                     "validation_plan": result.get("physics_execution", {}).get("validation") or {},
@@ -8100,6 +8137,7 @@ async def apps_physical_ai_run(request: Request, background_tasks: BackgroundTas
     data = payload.dict()
     data["physics_model_record"] = model_record
     data["physics_model_catalog"] = catalog_rows
+    data["processor_ip_policy"] = model_configuration.get("processor_ip_policy") if isinstance(model_configuration.get("processor_ip_policy"), dict) else {}
     background_tasks.add_task(execute_physical_ai_workflow_background, workflow_id, run_id, user_id, artifact_dir, data)
     return {"ok": True, "workflow_id": workflow_id, "run_id": run_id, "dashboard_path": f"/apps/physical-ai/results/{workflow_id}"}
 

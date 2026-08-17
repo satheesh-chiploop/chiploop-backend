@@ -2,6 +2,16 @@ from agents.fpga import fpga_target_explorer_agent as explorer
 import json
 
 
+def test_capacity_preflight_reserves_soft_cpu_resources():
+    board = {"resources": {"logic_cells": 5000, "block_ram_blocks": 20, "io_cells": 100, "dsp_blocks": 4}}
+    synthesis = {"logical_cells_used": 2500, "block_ram_blocks_used": 4, "cell_type_counts": {}}
+    cpu = {"enabled": True, "core": "picorv32", "estimated_reservation": {"logic_cells": 3000, "block_ram_blocks": 12}}
+    result = explorer._capacity_preflight(synthesis, board, 10, cpu)
+    assert result["status"] == "reject"
+    assert result["checks"]["logic_cells"]["required"] == 5500
+    assert result["checks"]["logic_cells"]["soft_cpu_reserved"] == 3000
+
+
 def test_capacity_preflight_rejects_impossible_io_before_place_and_route():
     synthesis = {
         "logical_cells_used": 1457,
