@@ -503,6 +503,25 @@ def test_connectivity_repair_prompt_prevents_orphan_migration():
     assert "STRICT PASS3/PASS4 CONNECTIVITY REPAIR" in prompt
     assert "producer.payload_out" in prompt
     assert "Inputs are consumers" in prompt
+    assert "memory read-data input" in prompt
+    assert "memory wrapper's dout is the producer" in prompt
+
+
+def test_pass5_graph_closure_prompt_requires_a_concrete_new_repair():
+    ordinary = spec_agent._build_repair_prompt(
+        "base", "{}", "Required child input 'cpu.imem_dout' has no source",
+        strict_connectivity=True,
+    )
+    final = spec_agent._build_repair_prompt(
+        "base", "{}", "Required child input 'cpu.imem_dout' has no source",
+        strict_connectivity=True,
+        final_graph_closure=True,
+    )
+
+    assert "FINAL GRAPH-CLOSURE PASS" not in ordinary
+    assert "FINAL GRAPH-CLOSURE PASS" in final
+    assert "Do not return the previous JSON unchanged" in final
+    assert ordinary != final
 
 
 def test_sanitize_connectivity_keeps_one_width_compatible_producer_per_input():

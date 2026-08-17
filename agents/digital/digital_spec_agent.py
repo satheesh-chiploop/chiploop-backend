@@ -1645,6 +1645,7 @@ def _build_repair_prompt(
     failure_log_text: str,
     *,
     strict_connectivity: bool = False,
+    final_graph_closure: bool = False,
 ) -> str:
     firmware_examples = ""
     if "firmware control-plane" in str(failure_log_text or "").lower() or "register_contract" in str(failure_log_text or ""):
@@ -1699,6 +1700,8 @@ STRICT PASS3/PASS4 CONNECTIVITY REPAIR:
 - First make a private checklist of every endpoint named in VALIDATION FAILURE LOG. Return JSON only, but do not finish until every checklist item has a source.
 - Prefer a semantically matching declared producer of the same width. Direction suffixes may differ: producer.payload_out may drive consumer.payload_in.
 - If no producer exists for a required consumer, add an OUTPUT to the responsible producer module, never another INPUT. Update that producer's behavior_rules and must_drive, then add the inter_module_signals and signal_ownership entries.
+- If an orphan is a memory read-data input and memory_macros declares its memory, materialize that declared technology-neutral wrapper as a hierarchy.modules RTL deliverable and connect the complete request/read-data interface in both directions. The memory wrapper's dout is the producer; do not delete the CPU/mailbox read-data input.
+- A memory_macros metadata object alone is not an instantiated child producer. Its wrapper module and exact ports must exist in hierarchy.modules and connectivity.
 - If an optional helper has no required externally visible behavior and none of its outputs are consumed, remove the whole helper and all references to it.
 - After editing, rebuild the consumer checklist from the returned JSON, including any ports you added. Every child input/inout must occur exactly once in either top_level_connections[].connected_to or inter_module_signals[].destinations.
 
@@ -1717,6 +1720,15 @@ Wrong repair: add helper.trigger_in as another input, or add controller.trigger_
 
 BAD EXAMPLE — meaningless width match:
 Do not drive fifo.write_data from an unrelated status_word merely because both are the same width. Either identify the real semantic producer or remove an optional unused FIFO coherently.
+"""
+        if final_graph_closure:
+            connectivity_examples += """
+
+FINAL GRAPH-CLOSURE PASS:
+- Earlier repair output still failed validation. Do not return the previous JSON unchanged.
+- Start from the complete previous JSON and make a concrete structural change for every endpoint in the newest validation failure log.
+- Re-audit every child input after those edits so the repair does not migrate or recreate an orphan.
+- Preserve already-valid connectivity and architecture; this pass is focused on the remaining graph gaps.
 """
     fpga_memory_examples = ""
     if "fpga memory contract" in str(failure_log_text or "").lower() or "fpga-only contract" in str(failure_log_text or "").lower():
@@ -2653,6 +2665,7 @@ Return JSON only.
                         previous_json_text=llm_output_pass4,
                         failure_log_text=str(e4),
                         strict_connectivity=True,
+                        final_graph_closure=True,
                     )
                     try:
                         logger.info("Digital Spec Agent invoking pass5 focused contract repair")
