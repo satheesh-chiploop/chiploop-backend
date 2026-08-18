@@ -1675,6 +1675,82 @@ def _sanitize_hierarchical_connectivity(spec_json: dict) -> dict:
     return spec_json
 
 
+def _build_connectivity_repair_diagnostics(previous_json_text: str) -> str:
+    """Explain structurally invalid attempted edges without changing the contract."""
+    def positive_width(value) -> int:
+        try:
+            width = int(value)
+        except (TypeError, ValueError):
+            return 1
+        return width if width > 0 else 1
+
+    try:
+        parsed = _parse_llm_json_object(str(previous_json_text or ""))
+        spec_json, mode = _normalize_spec_json(parsed)
+    except (JSONDecodeError, ValueError, TypeError):
+        return ""
+    if mode != "hierarchical":
+        return ""
+
+    top = spec_json.get("hierarchy", {}).get("top_module", {})
+    modules = spec_json.get("hierarchy", {}).get("modules", [])
+    ports = {}
+    for module in [top, *modules]:
+        module_name = str(module.get("name") or "").strip()
+        for port in module.get("ports") or []:
+            endpoint = f"{module_name}.{str(port.get('name') or '').strip()}"
+            ports[endpoint] = (
+                str(port.get("direction") or "").lower(),
+                positive_width(port.get("width")),
+            )
+
+    findings = []
+    sink_sources = {}
+    for index, signal in enumerate(spec_json.get("inter_module_signals") or []):
+        if not isinstance(signal, dict):
+            continue
+        source = str(signal.get("source") or "").strip()
+        source_contract = ports.get(source)
+        signal_width = positive_width(signal.get("width"))
+        source_problem = None
+        if source_contract is None:
+            source_problem = "source endpoint is undeclared"
+        elif source_contract[0] not in {"output", "inout"}:
+            source_problem = f"source is a {source_contract[0] or 'directionless'} consumer port"
+        elif source_contract[1] != signal_width:
+            source_problem = f"source width {source_contract[1]} does not match signal width {signal_width}"
+        for destination in signal.get("destinations") or []:
+            destination = str(destination or "").strip()
+            destination_contract = ports.get(destination)
+            problems = []
+            if source_problem:
+                problems.append(source_problem)
+            if destination_contract is None:
+                problems.append("destination endpoint is undeclared")
+            else:
+                if destination_contract[0] not in {"input", "inout"}:
+                    problems.append(f"destination is a {destination_contract[0] or 'directionless'} producer port")
+                if destination_contract[1] != signal_width:
+                    problems.append(
+                        f"destination width {destination_contract[1]} does not match signal width {signal_width}"
+                    )
+            if problems:
+                findings.append(f"- REJECT edge {source} -> {destination}: {'; '.join(problems)}.")
+            else:
+                sink_sources.setdefault(destination, []).append((index, source))
+
+    for destination, attempts in sink_sources.items():
+        unique_sources = list(dict.fromkeys(source for _, source in attempts))
+        if len(unique_sources) > 1:
+            findings.append(
+                f"- REJECT duplicate drivers for {destination}: {', '.join(unique_sources)}. "
+                "Choose one real producer or create an explicit combining/aggregation output."
+            )
+    if not findings:
+        return ""
+    return "\n\nSTRUCTURAL GRAPH DIAGNOSTICS FROM THE PREVIOUS JSON:\n" + "\n".join(findings[:80])
+
+
 def _build_repair_prompt(
     base_prompt: str,
     previous_json_text: str,
@@ -1683,6 +1759,7 @@ def _build_repair_prompt(
     strict_connectivity: bool = False,
     final_graph_closure: bool = False,
 ) -> str:
+    graph_diagnostics = _build_connectivity_repair_diagnostics(previous_json_text)
     firmware_examples = ""
     if "firmware control-plane" in str(failure_log_text or "").lower() or "register_contract" in str(failure_log_text or ""):
         firmware_examples = """
@@ -1768,6 +1845,7 @@ FINAL GRAPH-CLOSURE PASS:
 - Start from the complete previous JSON and make a concrete structural change for every endpoint in the newest validation failure log.
 - Re-audit every child input after those edits so the repair does not migrate or recreate an orphan.
 - Preserve already-valid connectivity and architecture; this pass is focused on the remaining graph gaps.
+- Use the graph diagnostics below to replace rejected attempts; do not repeat an edge whose source direction or width is invalid, and do not leave multiple producers on one child input.
 """
     fpga_memory_examples = ""
     if "fpga memory contract" in str(failure_log_text or "").lower() or "fpga-only contract" in str(failure_log_text or "").lower():
@@ -1820,6 +1898,7 @@ REPAIR RULES:
 {firmware_examples}
 {hierarchy_examples}
 {connectivity_examples}
+{graph_diagnostics}
 {fpga_memory_examples}
 """.strip()
 

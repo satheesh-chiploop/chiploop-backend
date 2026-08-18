@@ -597,6 +597,38 @@ def test_pass5_graph_closure_prompt_requires_a_concrete_new_repair():
     assert ordinary != final
 
 
+def test_connectivity_repair_prompt_explains_rejected_graph_edges():
+    previous = {
+        "design_name": "top",
+        "hierarchy": {
+            "top_module": {**_module("top"), "ports": [], "rtl_output_file": "top.v"},
+            "modules": [
+                {**_module("status"), "ports": [_port("pending", "input"), _port("age", "output", 32)], "rtl_output_file": "status.v"},
+                {**_module("safety"), "ports": [_port("fault", "input")], "rtl_output_file": "safety.v"},
+            ],
+        },
+        "top_level_connections": [],
+        "inter_module_signals": [
+            {"name": "feedback", "width": 1, "source": "status.pending", "destinations": ["safety.fault"]},
+            {"name": "bad_width", "width": 32, "source": "status.age", "destinations": ["safety.fault"]},
+        ],
+        "signal_ownership": [],
+    }
+
+    prompt = spec_agent._build_repair_prompt(
+        "base",
+        json.dumps(previous),
+        "Required child input 'safety.fault' has no source",
+        strict_connectivity=True,
+        final_graph_closure=True,
+    )
+
+    assert "STRUCTURAL GRAPH DIAGNOSTICS FROM THE PREVIOUS JSON" in prompt
+    assert "status.pending -> safety.fault" in prompt
+    assert "source is a input consumer port" in prompt
+    assert "destination width 1 does not match signal width 32" in prompt
+
+
 def test_sanitize_connectivity_keeps_one_width_compatible_producer_per_input():
     spec = {
         "hierarchy": {
