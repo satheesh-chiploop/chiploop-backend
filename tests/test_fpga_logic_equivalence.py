@@ -48,6 +48,7 @@ def test_fpga_lec_uses_yosys_equivalence_and_passes(tmp_path, monkeypatch):
     assert "async2sync" in script
     assert script.count("memory\n") == 2
     assert "equiv_struct" in script
+    assert "rename -hide w:next_*" in script
     assert "equiv_simple -undef -short" in script
     assert "equiv_induct -undef -seq 12" in script
     assert "equiv_induct -undef -seq 24" not in script
@@ -141,6 +142,43 @@ def test_hierarchical_mapped_lec_proves_partitions_and_top_connectivity(tmp_path
     assert published["mapped_lec"]["coverage_complete"] is True
     top_script = Path(published["mapped_lec"]["top_connectivity"]["script"]).read_text(encoding="utf-8")
     assert top_script.count("blackbox core") == 2
+
+
+def test_generic_lec_retries_hierarchically_after_monolithic_incomplete(tmp_path, monkeypatch):
+    state = _state(tmp_path)
+    rtl = Path(state["fpga"]["rtl_files"][0])
+    generic = Path(state["fpga"]["synthesis"]["equivalence_netlist"])
+    mapped = Path(state["fpga"]["synthesis"]["verilog_netlist"])
+    hierarchy = (
+        "module core(input clk, output reg q); always @(posedge clk) q <= ~q; endmodule\n"
+        "module top(input clk, output q); core u(.clk(clk),.q(q)); endmodule\n"
+    )
+    for path in (rtl, generic, mapped):
+        path.write_text(hierarchy, encoding="utf-8")
+    published = {}
+    monkeypatch.setattr(lec, "publish_json", lambda _state, _agent, _subdir, _name, data: published.update(data))
+    monkeypatch.setattr(lec, "manifest_update", lambda *_args: None)
+    calls = 0
+
+    def fake_run(_cmd, cwd, log_path, **_kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            Path(log_path).write_text("ERROR: Found 20 unproven $equiv cells\n", encoding="utf-8")
+            return {"ok": False, "stderr_tail": "20 unproven points"}
+        Path(log_path).write_text("Equivalence successfully proven!\n", encoding="utf-8")
+        return {"ok": True}
+
+    monkeypatch.setattr(lec, "run_cmd", fake_run)
+
+    lec.run_agent(state)
+
+    assert published["status"] == "pass"
+    assert published["generic_lec"]["strategy"] == "hierarchical"
+    assert published["generic_lec"]["coverage_complete"] is True
+    assert published["generic_lec"]["monolithic_attempt"]["unproven_points"] == 20
+    assert published["generic_lec"]["partitions_proven"] == 1
+    assert calls == 4
 
 
 def test_mapped_lec_tool_error_blocks_even_when_generic_proof_passes(tmp_path, monkeypatch):
@@ -261,6 +299,30 @@ def test_unproven_equivalence_is_reported_as_inconclusive(tmp_path, monkeypatch)
     assert published["generic_lec"]["unproven_points"] == 9
     assert published["mapped_lec"]["status"] == "blocked"
     assert "12" in published["reason"]
+
+
+def test_required_generic_proof_incomplete_remains_blocking_without_hierarchical_closure(tmp_path, monkeypatch):
+    state = _state(tmp_path)
+    published = {}
+    monkeypatch.setattr(lec, "publish_json", lambda _state, _agent, _subdir, _name, data: published.update(data))
+    monkeypatch.setattr(lec, "manifest_update", lambda *_args: None)
+
+    def incomplete_run(_cmd, cwd, log_path, **_kwargs):
+        Path(log_path).write_text(
+            "ERROR: Found 744 unproven $equiv cells in 'equiv_status -assert'.\n",
+            encoding="utf-8",
+        )
+        return {"ok": False, "stderr_tail": "ERROR: Found 744 unproven $equiv cells"}
+
+    monkeypatch.setattr(lec, "run_cmd", incomplete_run)
+
+    with pytest.raises(RuntimeError, match="LEC did not pass"):
+        lec.run_agent(state)
+
+    assert published["status"] == "inconclusive"
+    assert published["gate_status"] == "fail"
+    assert published["generic_lec"]["failure_kind"] == "proof_incomplete"
+    assert published["unproven_points"] == 744
 
 
 def test_fpga_lec_honors_requested_induction_depth(tmp_path, monkeypatch):

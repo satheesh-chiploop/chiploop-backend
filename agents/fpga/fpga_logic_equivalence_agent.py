@@ -79,6 +79,7 @@ def _proof_script(rtl_files: list[str], netlist: str, top: str, family: str, dep
         # equivalent. Hiding these names from equiv_make is a generic
         # construction rule; ports are never hidden by Yosys rename -hide.
         "rename -hide w:*_next",
+        "rename -hide w:next_*",
     ]
     lines = [*(f"read_verilog -sv {path}" for path in rtl_files), *normalize, f"rename {top} gold", "design -stash gold", "design -reset"]
     lines.extend(_library_reads(family))
@@ -227,6 +228,57 @@ def _run_hierarchical_mapped_proof(state: dict, out_dir: str, generic_netlist: s
     }
 
 
+def _run_hierarchical_generic_proof(state: dict, out_dir: str, rtl_files: list[str], generic_netlist: str,
+                                    top: str, depths: list[int], partitions: list[str]) -> dict:
+    """Prove leaf/state partitions, then top-level connectivity.
+
+    Large hierarchical RTL can leave hundreds of internal helper/state points
+    unproven in one flattened induction cone. Each partition is checked with
+    the other shared partitions blackboxed, avoiding duplicate nested proofs;
+    a final top proof blackboxes all proven partitions and checks integration.
+    """
+    proofs = []
+    for index, module in enumerate(partitions, start=1):
+        safe = re.sub(r"[^A-Za-z0-9_.-]+", "_", module)
+        _progress(state, f"FPGA generic LEC partition {index}/{len(partitions)} started: {module}.")
+        proof = _run_proof(
+            state, out_dir, f"fpga_generic_partition_{safe}", rtl_files, generic_netlist,
+            module, "", depths,
+            blackbox_modules=[candidate for candidate in partitions if candidate != module],
+            timeout_override=600,
+        )
+        proof["module"] = module
+        proofs.append(proof)
+        _progress(state, f"FPGA generic LEC partition {index}/{len(partitions)} finished with status {proof['status']}.")
+        if not proof.get("proven"):
+            break
+    top_proof = None
+    if len(proofs) == len(partitions) and all(proof.get("proven") for proof in proofs):
+        top_proof = _run_proof(
+            state, out_dir, "fpga_generic_top_connectivity_lec", rtl_files, generic_netlist,
+            top, "", depths, blackbox_modules=partitions, timeout_override=600,
+        )
+    proven = bool(top_proof and top_proof.get("proven") and all(proof.get("proven") for proof in proofs))
+    all_proofs = [*proofs, *([top_proof] if top_proof else [])]
+    cause = next((proof for proof in all_proofs if proof and not proof.get("proven")), None)
+    return {
+        "status": "pass" if proven else (cause or {}).get("status") or "fail",
+        "proven": proven,
+        "strategy": "hierarchical",
+        "gold": rtl_files,
+        "gate": generic_netlist,
+        "partitions": proofs,
+        "top_connectivity": top_proof,
+        "partition_count": len(partitions),
+        "partitions_attempted": len(proofs),
+        "partitions_proven": sum(1 for proof in proofs if proof.get("proven")),
+        "coverage_complete": proven,
+        "unproven_points": sum(int(proof.get("unproven_points") or 0) for proof in all_proofs if proof) or None,
+        "failure_kind": None if proven else (cause or {}).get("failure_kind") or "coverage_incomplete",
+        "reason": None if proven else (cause or {}).get("reason") or "Hierarchical generic proof coverage was incomplete.",
+    }
+
+
 def run_agent(state: dict) -> dict:
     fpga = state.get("fpga") if isinstance(state.get("fpga"), dict) else {}
     enabled = bool(state.get("run_fpga_lec", True))
@@ -265,6 +317,18 @@ def run_agent(state: dict) -> dict:
         summary["mapped_lec_strategy"] = mapped_strategy
         _progress(state, f"FPGA LEC proof 1/2 started: RTL to generic synthesis netlist (size-aware timeout {_proof_timeout_seconds(state)}s).")
         generic_proof = _run_proof(state, out_dir, "fpga_rtl_to_generic_lec", rtl_files, generic_netlist, top, "", induction_depths)
+        if (
+            not generic_proof.get("proven")
+            and generic_proof.get("failure_kind") == "proof_incomplete"
+            and mapped_strategy.get("shared_partitions")
+        ):
+            monolithic_attempt = generic_proof
+            _progress(state, "FPGA generic LEC retrying with hierarchical partition proof.")
+            generic_proof = _run_hierarchical_generic_proof(
+                state, out_dir, rtl_files, generic_netlist, top,
+                induction_depths, mapped_strategy["shared_partitions"],
+            )
+            generic_proof["monolithic_attempt"] = monolithic_attempt
         _progress(state, f"FPGA LEC proof 1/2 finished with status {generic_proof['status']}.")
         # A failed RTL-to-generic proof already blocks the chain. Do not spend
         # another full timeout proving a mapped netlist whose golden source has
