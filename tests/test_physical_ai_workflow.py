@@ -60,6 +60,45 @@ def _mock_upstream_model_planners(monkeypatch):
     )
 
 
+def test_partitioning_agent_repairs_json_syntax_without_fallback(tmp_path, monkeypatch):
+    repaired = {
+        "decision": "heterogeneous",
+        "jobs": [{
+            "id": "control",
+            "target": "fpga_or_asic",
+            "status": "ready_for_rtl",
+            "responsibility": "bounded control",
+            "inputs": [],
+            "outputs": [],
+            "latency_budget": "bounded",
+            "rationale": "deterministic execution",
+        }],
+        "interfaces": [],
+        "decision_factors": ["determinism"],
+        "tradeoffs": [],
+    }
+    outputs = iter(['{"decision":"heterogeneous" "jobs":[]}', json.dumps(repaired)])
+    monkeypatch.setattr(partitioning_agent, "complete_text", lambda *_args, **_kwargs: next(outputs))
+    state = {
+        "artifact_dir": str(tmp_path),
+        "generate_architecture_with_model": True,
+        "requirements_contract": {
+            "application": "test",
+            "implementation_path": "fpga_prototype",
+            "deployment_architecture": "fpga_soft_cpu",
+        },
+        "selected_physics_model": {"model_id": "test-model"},
+        "physics_execution": {"inference_status": "not_executed", "architecture": {}},
+        "application_contract": {},
+    }
+
+    result = partitioning_agent.run_agent(state)
+
+    assert result["partition_plan"]["generation_status"] == "model_generated"
+    assert Path(result["partition_plan"]["generation_artifacts"]["raw"]).exists()
+    assert Path(result["partition_plan"]["generation_artifacts"]["syntax_repaired_raw"]).exists()
+
+
 def test_physical_ai_hem_default_explores_cross_vendor_fpga_targets():
     main_source = (Path(__file__).parents[1] / "main.py").read_text(encoding="utf-8")
     assert 'from agents.fpga.fpga_common import BOARD_REGISTRY' in main_source

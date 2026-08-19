@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 from typing import Any, Dict
 
 from model_gateway import complete_text
@@ -66,6 +67,23 @@ def _json_object(text: str) -> Dict[str, Any]:
     return value
 
 
+def _syntax_repair_prompt(output: str, error: json.JSONDecodeError) -> str:
+    start = max(0, error.pos - 240)
+    end = min(len(output), error.pos + 240)
+    return f"""You are repairing JSON syntax only.
+Return one complete JSON object and no markdown or explanation.
+Preserve every partition job, interface, decision, factor, tradeoff, field, and value.
+Fix only JSON syntax such as a missing colon/comma, quote, bracket, or truncated wrapper.
+
+JSON ERROR: {error.msg} at line {error.lineno}, column {error.colno}, character {error.pos}
+ERROR CONTEXT:
+{output[start:end]}
+
+PREVIOUS RESPONSE:
+{output}
+"""
+
+
 def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     req = state["requirements_contract"]
     model = state["selected_physics_model"]
@@ -116,12 +134,28 @@ ARCHITECTURE:
 IMPLEMENTATION PATH: {req.get("implementation_path")}
 """
     try:
-        generated = _json_object(complete_text(
+        root = Path(state["artifact_dir"])
+        root.mkdir(parents=True, exist_ok=True)
+        raw_path = root / "model_generated_partition_raw.txt"
+        repaired_raw_path = root / "model_generated_partition_repaired_raw.txt"
+        output = complete_text(
             prompt,
             capability="planner",
             agent_name="Hardware Software Partitioning Agent",
             state=state,
-        ))
+        )
+        raw_path.write_text(output, encoding="utf-8")
+        try:
+            generated = _json_object(output)
+        except json.JSONDecodeError as parse_error:
+            repaired_output = complete_text(
+                _syntax_repair_prompt(output, parse_error),
+                capability="planner",
+                agent_name="Hardware Software Partitioning Agent",
+                state=state,
+            )
+            repaired_raw_path.write_text(repaired_output, encoding="utf-8")
+            generated = _json_object(repaired_output)
         jobs = generated.get("jobs")
         if not isinstance(jobs, list) or not jobs:
             raise ValueError("partitioning response has no jobs")
@@ -135,6 +169,10 @@ IMPLEMENTATION PATH: {req.get("implementation_path")}
             "implementation_path": req.get("implementation_path"),
             "partition_phases": baseline["partition_phases"],
             "generation_status": "model_generated",
+            "generation_artifacts": {
+                "raw": str(raw_path),
+                "syntax_repaired_raw": str(repaired_raw_path) if repaired_raw_path.exists() else None,
+            },
         }
     except Exception as exc:
         raise RuntimeError(f"Hardware Software Partitioning Agent model generation failed: {type(exc).__name__}: {exc}") from exc
