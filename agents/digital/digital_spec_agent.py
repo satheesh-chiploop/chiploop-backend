@@ -2940,6 +2940,14 @@ Return JSON only.
         lf.write(f"Resolved via: {'pass2' if pass1_error else 'pass1'}\n")
         lf.write(f"Spec JSON: {spec_json_path}\n")
 
+    summary_path = os.path.join(spec_dir, "spec_agent_summary.txt")
+    _write_text(
+        summary_path,
+        f"✅ Digital Spec Agent completed successfully.\n\n"
+        f"Spec mode: {mode}\n"
+        f"Spec JSON: {spec_json_path}\n",
+    )
+
     try:
         agent_name = "Digital Spec Agent"
         with open(raw_output_path, "r", encoding="utf-8") as f:

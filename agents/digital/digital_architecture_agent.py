@@ -74,6 +74,23 @@ def _normalize_spec(spec_obj: dict):
     raise ValueError("Unsupported spec JSON format")
 
 
+def _parse_architecture_json(text: str) -> dict:
+    """Parse one architecture object, tolerating only raw JSON control chars.
+
+    Streaming model responses occasionally contain a literal newline or tab
+    inside a quoted JSON string. ``strict=False`` accepts that JSON lexical
+    defect without repairing, replacing, or inventing architecture content.
+    """
+    raw = str(text or "").strip()
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError:
+        value = json.loads(raw, strict=False)
+    if not isinstance(value, dict):
+        raise ValueError("digital architecture response must be one JSON object")
+    return value
+
+
 def run_agent(state: dict) -> dict:
     print("\n🏗️ Running Digital Architecture Agent...")
 
@@ -214,7 +231,7 @@ Return JSON only.
         f.write(llm_output)
 
     try:
-        arch = json.loads(llm_output.strip())
+        arch = _parse_architecture_json(llm_output)
     except Exception as e:
         state["status"] = f"❌ Digital architecture JSON parse failed: {e}"
         save_text_artifact_and_record(
