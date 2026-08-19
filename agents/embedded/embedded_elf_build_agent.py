@@ -248,7 +248,14 @@ def _cargo_target_directory(target_triple: str) -> str:
     return target_triple
 
 
-def _attempt_build(workflow_dir: str, target_triple: str, bin_name: str, cargo_path: Optional[str]) -> tuple[bool, bool, str, str, str]:
+def _attempt_build(
+    workflow_dir: str,
+    target_triple: str,
+    bin_name: str,
+    cargo_path: Optional[str],
+    *,
+    allow_target_install: bool = True,
+) -> tuple[bool, bool, str, str, str]:
     cargo_workspace_dir = os.path.join(workflow_dir, "firmware", "build")
     target_argument = _cargo_target_argument(workflow_dir, target_triple)
     cargo_target_abs = os.path.join(cargo_workspace_dir, "target", _cargo_target_directory(target_triple), "release", bin_name)
@@ -272,7 +279,40 @@ def _attempt_build(workflow_dir: str, target_triple: str, bin_name: str, cargo_p
             )
             stdout = proc.stdout or ""
             stderr = proc.stderr or ""
-            build_succeeded = proc.returncode == 0 
+            build_succeeded = proc.returncode == 0
+            missing_standard_target = (
+                not build_succeeded
+                and not str(target_triple).lower().endswith(".json")
+                and ("can't find crate for `core`" in stderr or "target may not be installed" in stderr)
+            )
+            if missing_standard_target and allow_target_install:
+                rustup_path = shutil.which("rustup")
+                if rustup_path:
+                    provision = run_command(
+                        {},
+                        "embedded_rust_target_install",
+                        [rustup_path, "target", "add", target_triple],
+                        cwd=cargo_workspace_dir,
+                        timeout_sec=180,
+                    )
+                    stdout += "\n[rustup target add]\n" + (provision.stdout or "")
+                    stderr += "\n[rustup target add]\n" + (provision.stderr or "")
+                    if provision.returncode == 0:
+                        retry = run_command(
+                            {},
+                            "embedded_firmware_build_retry",
+                            [cargo_path, "build", "--release", "--target", target_argument],
+                            cwd=cargo_workspace_dir,
+                            timeout_sec=180,
+                        )
+                        stdout += "\n[cargo retry]\n" + (retry.stdout or "")
+                        stderr += "\n[cargo retry]\n" + (retry.stderr or "")
+                        build_succeeded = retry.returncode == 0
+                else:
+                    stderr += (
+                        "\nAutomatic target provisioning was required but rustup was not found. "
+                        f"Preinstall Rust target {target_triple!r} in the execution image.\n"
+                    )
         except Exception as exc:
             stderr = str(exc)
     return build_attempted, build_succeeded, stdout, stderr, cargo_target_abs
@@ -435,7 +475,15 @@ def run_agent(state: dict) -> dict:
         return state
 
         
-    build_attempted, build_succeeded, build_stdout, build_stderr, cargo_target_abs = _attempt_build(workflow_dir, target_triple, bin_name, cargo_path)
+    toolchain = state.get("toolchain") if isinstance(state.get("toolchain"), dict) else {}
+    allow_target_install = bool(toolchain.get("allow_target_install", True))
+    build_attempted, build_succeeded, build_stdout, build_stderr, cargo_target_abs = _attempt_build(
+        workflow_dir,
+        target_triple,
+        bin_name,
+        cargo_path,
+        allow_target_install=allow_target_install,
+    )
 
 
 

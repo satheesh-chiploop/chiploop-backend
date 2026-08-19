@@ -307,3 +307,70 @@ def test_elf_builder_canonicalizes_riscv_rust_targets(configured_target, target_
     target, _ = embedded_elf_build_agent._resolve_toolchain(state, {})
 
     assert target == expected
+
+
+def test_elf_builder_installs_missing_standard_target_and_retries(tmp_path, monkeypatch):
+    workspace = tmp_path / "firmware" / "build"
+    workspace.mkdir(parents=True)
+    calls = []
+
+    class Result:
+        def __init__(self, returncode, stdout="", stderr=""):
+            self.returncode = returncode
+            self.stdout = stdout
+            self.stderr = stderr
+
+    results = iter([
+        Result(1, stderr="error[E0463]: can't find crate for `core`; target may not be installed"),
+        Result(0, stdout="installed"),
+        Result(0, stdout="compiled"),
+    ])
+
+    def fake_run(_state, capability, command, **kwargs):
+        calls.append((capability, command, kwargs))
+        return next(results)
+
+    monkeypatch.setattr(embedded_elf_build_agent, "run_command", fake_run)
+    monkeypatch.setattr(embedded_elf_build_agent.shutil, "which", lambda name: "/usr/bin/rustup" if name == "rustup" else None)
+
+    attempted, succeeded, stdout, stderr, _ = embedded_elf_build_agent._attempt_build(
+        str(tmp_path), "riscv32imc-unknown-none-elf", "firmware_app", "/usr/bin/cargo"
+    )
+
+    assert attempted is True
+    assert succeeded is True
+    assert [call[0] for call in calls] == [
+        "embedded_firmware_build",
+        "embedded_rust_target_install",
+        "embedded_firmware_build_retry",
+    ]
+    assert calls[1][1] == ["/usr/bin/rustup", "target", "add", "riscv32imc-unknown-none-elf"]
+    assert "compiled" in stdout
+    assert "can't find crate" in stderr
+
+
+def test_elf_builder_does_not_install_custom_json_target(tmp_path, monkeypatch):
+    workspace = tmp_path / "firmware" / "build"
+    workspace.mkdir(parents=True)
+    target = tmp_path / "custom.json"
+    target.write_text("{}", encoding="utf-8")
+    calls = []
+
+    class Result:
+        returncode = 1
+        stdout = ""
+        stderr = "error[E0463]: can't find crate for `core`; target may not be installed"
+
+    def fake_run(_state, capability, command, **kwargs):
+        calls.append((capability, command))
+        return Result()
+
+    monkeypatch.setattr(embedded_elf_build_agent, "run_command", fake_run)
+    monkeypatch.setattr(embedded_elf_build_agent.shutil, "which", lambda _name: "/usr/bin/rustup")
+
+    _, succeeded, _, _, _ = embedded_elf_build_agent._attempt_build(
+        str(tmp_path), "custom.json", "firmware_app", "/usr/bin/cargo"
+    )
+
+    assert succeeded is False
+    assert [call[0] for call in calls] == ["embedded_firmware_build"]
