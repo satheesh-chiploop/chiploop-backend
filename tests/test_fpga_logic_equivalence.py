@@ -144,6 +144,39 @@ def test_hierarchical_mapped_lec_proves_partitions_and_top_connectivity(tmp_path
     assert top_script.count("blackbox core") == 2
 
 
+def test_large_design_starts_generic_lec_hierarchically_without_monolithic_attempt(tmp_path, monkeypatch):
+    state = _state(tmp_path)
+    rtl = Path(state["fpga"]["rtl_files"][0])
+    generic = Path(state["fpga"]["synthesis"]["equivalence_netlist"])
+    mapped = Path(state["fpga"]["synthesis"]["verilog_netlist"])
+    hierarchy = (
+        "module core(input clk, output reg q); always @(posedge clk) q <= ~q; endmodule\n"
+        "module top(input clk, output q); core u(.clk(clk),.q(q)); endmodule\n"
+    )
+    for path in (rtl, generic, mapped):
+        path.write_text(hierarchy, encoding="utf-8")
+    state["fpga"]["synthesis"].update({"total_mapped_cells": 5000, "flip_flops": 1200})
+    published = {}
+    scripts = []
+    monkeypatch.setattr(lec, "publish_json", lambda _state, _agent, _subdir, _name, data: published.update(data))
+    monkeypatch.setattr(lec, "manifest_update", lambda *_args: None)
+
+    def fake_run(cmd, cwd, log_path, **_kwargs):
+        scripts.append(Path(cmd[-1]).name)
+        Path(log_path).write_text("Equivalence successfully proven!\n", encoding="utf-8")
+        return {"ok": True}
+
+    monkeypatch.setattr(lec, "run_cmd", fake_run)
+    lec.run_agent(state)
+
+    assert published["status"] == "pass"
+    assert published["generic_lec_strategy"]["selected"] == "hierarchical"
+    assert published["generic_lec"]["strategy"] == "hierarchical"
+    assert "monolithic_attempt" not in published["generic_lec"]
+    assert "fpga_rtl_to_generic_lec.ys" not in scripts
+    assert scripts[0] == "fpga_generic_partition_core.ys"
+
+
 def test_generic_lec_retries_hierarchically_after_monolithic_incomplete(tmp_path, monkeypatch):
     state = _state(tmp_path)
     rtl = Path(state["fpga"]["rtl_files"][0])

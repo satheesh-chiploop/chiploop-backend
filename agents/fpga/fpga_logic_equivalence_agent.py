@@ -315,8 +315,30 @@ def run_agent(state: dict) -> dict:
     else:
         mapped_strategy = _mapped_lec_strategy(state, generic_netlist, mapped_netlist, top)
         summary["mapped_lec_strategy"] = mapped_strategy
-        _progress(state, f"FPGA LEC proof 1/2 started: RTL to generic synthesis netlist (size-aware timeout {_proof_timeout_seconds(state)}s).")
-        generic_proof = _run_proof(state, out_dir, "fpga_rtl_to_generic_lec", rtl_files, generic_netlist, top, "", induction_depths)
+        generic_strategy = mapped_strategy["selected"]
+        summary["generic_lec_strategy"] = {
+            **mapped_strategy,
+            "reason": (
+                "shared hierarchy and complexity threshold; applied before the first proof"
+                if generic_strategy == "hierarchical"
+                else "monolithic proof selected"
+            ),
+        }
+        _progress(
+            state,
+            f"FPGA LEC proof 1/2 started: RTL to generic synthesis netlist ({generic_strategy}).",
+        )
+        if generic_strategy == "hierarchical":
+            generic_proof = _run_hierarchical_generic_proof(
+                state, out_dir, rtl_files, generic_netlist, top,
+                induction_depths, mapped_strategy["shared_partitions"],
+            )
+        else:
+            generic_proof = _run_proof(
+                state, out_dir, "fpga_rtl_to_generic_lec", rtl_files,
+                generic_netlist, top, "", induction_depths,
+            )
+            generic_proof["strategy"] = "monolithic"
         if (
             not generic_proof.get("proven")
             and generic_proof.get("failure_kind") == "proof_incomplete"
