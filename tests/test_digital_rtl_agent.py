@@ -389,6 +389,33 @@ def test_aligns_memory_role_labels_to_declared_concrete_ports():
         assert f".{concrete}(" in repaired
 
 
+def test_aligns_memory_bindings_to_emitted_canonical_wrapper_ports():
+    spec = {
+        "memory_macros": [{
+            "name": "generic_memory",
+            "instance_name": "u_memory",
+            "ports": {"clk": "memory_clk", "csb": "memory_csb", "we": "memory_we", "addr": "memory_addr", "din": "memory_din", "dout": "memory_dout"},
+        }]
+    }
+    files = {
+        "top.v": """module top; generic_memory u_memory (
+            .memory_clk(clk), .memory_csb(csb), .memory_we(we),
+            .memory_addr(addr), .memory_din(din), .memory_dout(dout)); endmodule""",
+        "generic_memory.v": """module generic_memory(clk, csb, we, addr, din, dout);
+            input clk, csb, we;
+            input [7:0] addr;
+            input [31:0] din;
+            output [31:0] dout;
+            endmodule""",
+    }
+
+    repaired = agent._align_memory_macro_instance_ports(files, spec)["top.v"]
+
+    for canonical in ("clk", "csb", "we", "addr", "din", "dout"):
+        assert f".{canonical}(" in repaired
+    assert ".memory_csb(" not in repaired
+
+
 def test_connectivity_contract_allows_top_internal_signals_to_child_memory_ports():
     spec = {
         "hierarchy": {

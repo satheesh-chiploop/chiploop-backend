@@ -246,8 +246,17 @@ def _validate_memory_macro_reachability(spec_json: dict, verilog_map: Dict[str, 
 
 
 def _align_memory_macro_instance_ports(verilog_map: Dict[str, str], spec_json: dict) -> Dict[str, str]:
-    """Apply the canonical-role to concrete-port mapping declared by memory_macros."""
+    """Align macro instance bindings to the ports actually emitted by its module.
+
+    ``memory_macros[].ports`` maps canonical roles to preferred concrete names,
+    but generated technology-neutral wrappers may legally expose the canonical
+    role names themselves.  The emitted module declaration is authoritative.
+    """
     out = dict(verilog_map)
+    declared_by_cell: Dict[str, set[str]] = {}
+    for code in out.values():
+        for module_name, module_code in _extract_verilog_modules(code).items():
+            declared_by_cell[module_name] = set(_declared_ports(module_code))
     for macro in spec_json.get("memory_macros", []) or []:
         if not isinstance(macro, dict):
             continue
@@ -263,16 +272,27 @@ def _align_memory_macro_instance_ports(verilog_map: Dict[str, str], spec_json: d
         for filename, code in list(out.items()):
             def repair(match: re.Match) -> str:
                 body = match.group("body")
+                declared = declared_by_cell.get(cell)
                 for role, concrete in ports.items():
                     role_name = str(role or "").strip()
                     concrete_name = str(concrete or "").strip()
-                    if not role_name or not concrete_name or role_name == concrete_name:
+                    if not role_name or not concrete_name:
                         continue
-                    body = re.sub(
-                        rf"\.{re.escape(role_name)}\s*\(",
-                        f".{concrete_name}(",
-                        body,
-                    )
+                    if declared:
+                        if concrete_name in declared:
+                            desired_name = concrete_name
+                        elif role_name in declared:
+                            desired_name = role_name
+                        else:
+                            continue
+                    else:
+                        desired_name = concrete_name
+                    for alias in {role_name, concrete_name} - {desired_name}:
+                        body = re.sub(
+                            rf"\.{re.escape(alias)}\s*\(",
+                            f".{desired_name}(",
+                            body,
+                        )
                 return f"{match.group('head')}{body}{match.group('tail')}"
             out[filename] = instance_pattern.sub(repair, code)
     return out
