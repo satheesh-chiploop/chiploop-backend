@@ -16,7 +16,7 @@ def _json_object(text: str) -> Dict[str, Any]:
 
 def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     req = state["requirements_contract"]
-    fallback = {
+    baseline = {
         "schema": "chiploop.application_intelligence.contract.v1",
         "name": req["application"],
         "objective": req["objective"],
@@ -44,7 +44,7 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
         "source_of_truth": "supabase",
     }
     if not bool(state.get("generate_architecture_with_model", False)):
-        return {**state, "application_contract": fallback}
+        return {**state, "application_contract": {**baseline, "generation_status": "deterministic_mode"}}
 
     prompt = f"""You are ChipLoop's Application Intelligence Agent.
 Convert the supplied application requirements into a technology-neutral product contract.
@@ -67,7 +67,7 @@ REQUIREMENTS:
         for key in ("required_capabilities", "acceptance_gates", "workloads", "interfaces"):
             if not isinstance(generated.get(key), list):
                 raise ValueError(f"application intelligence response missing list field {key}")
-        application = {**fallback, **generated, "source_of_truth": "supabase", "generation_status": "model_generated"}
+        application = {**baseline, **generated, "source_of_truth": "supabase", "generation_status": "model_generated"}
     except Exception as exc:
-        application = {**fallback, "generation_status": "deterministic_fallback", "generation_warning": f"{type(exc).__name__}: {exc}"}
+        raise RuntimeError(f"Application Intelligence Agent model generation failed: {type(exc).__name__}: {exc}") from exc
     return {**state, "application_contract": application}

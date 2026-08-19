@@ -7278,6 +7278,18 @@ def _hem_physical_ai_child_payload(root_workflow_id: str, root_run_id: str, payl
         )
         base_spec = str(payload.get("rtl_spec_text") or payload.get("objective") or "Generate the Physical AI support digital IP.")
         base_spec_lower = base_spec.lower()
+        allow_command_fallback = payload.get("allow_command_fallback") is True
+        actuator_fault_contract = (
+            "\nEXPLICIT COMMAND FALLBACK CONTRACT: the authoritative application policy explicitly permits a "
+            "substitute command on faults. Implement only the fallback behavior and registers stated in the "
+            "source application contract.\n"
+            if allow_command_fallback
+            else "\nNO COMMAND FALLBACK CONTRACT (mandatory; overrides conflicting generated prose): do not "
+            "create a fallback command, fallback register, fallback status, fallback controller, substitute "
+            "command, or fallback-on-reset behavior. On invalid, stale, timeout, reset, or fault conditions, "
+            "inhibit/deassert actuator output validity and latch the fault for software handling. Do not silently "
+            "replace the requested command.\n"
+        )
         hardware_model_transport = deployment_architecture != "fpga_soft_cpu" or any(
             marker in base_spec_lower
             for marker in (
@@ -7307,7 +7319,7 @@ def _hem_physical_ai_child_payload(root_workflow_id: str, root_run_id: str, payl
                 f"The required synthesizable top module is {top_module}. Do not substitute a status, telemetry, "
                 "register-bank, or leaf module as the design top. The top must implement the selected Physical AI "
                 f"application contract, {top_transport_responsibility}validation, safety, timeout, "
-                "fallback, and bounded actuator-command behavior.\n" + transport_contract + firmware_interface_contract + soft_cpu_contract + asic_cpu_contract + base_spec + memory_contract
+                "and bounded actuator-command behavior.\n" + transport_contract + firmware_interface_contract + soft_cpu_contract + asic_cpu_contract + base_spec + memory_contract + actuator_fault_contract
             ),
             "top_module": top_module,
             # Structured invariant consumed by Digital Spec Agent. The prose
@@ -7318,6 +7330,7 @@ def _hem_physical_ai_child_payload(root_workflow_id: str, root_run_id: str, payl
             ),
             "soft_cpu_config": soft_cpu,
             "asic_cpu_config": asic_cpu,
+            "allow_command_fallback": allow_command_fallback,
             "design_language": "SystemVerilog",
             "toggles": {"run_spec2rtl_check": True},
         }

@@ -22,6 +22,44 @@ TEST_PROCESSOR_POLICY = {
 }
 
 
+def _mock_upstream_model_planners(monkeypatch):
+    monkeypatch.setattr(
+        application_intelligence_agent,
+        "complete_text",
+        lambda *_args, **_kwargs: json.dumps({
+            "name": "Test application",
+            "objective": "Test objective",
+            "physics_domain": "automotive_aerodynamics",
+            "operating_envelope": {},
+            "constraints": {},
+            "required_capabilities": ["bounded control"],
+            "acceptance_gates": ["outputs are bounded"],
+            "workloads": ["control"],
+            "interfaces": ["control/status"],
+        }),
+    )
+    monkeypatch.setattr(
+        partitioning_agent,
+        "complete_text",
+        lambda *_args, **_kwargs: json.dumps({
+            "decision": "heterogeneous",
+            "jobs": [{
+                "id": "control",
+                "target": "fpga_or_asic",
+                "status": "ready_for_rtl",
+                "responsibility": "bounded control",
+                "inputs": [],
+                "outputs": [],
+                "latency_budget": "bounded",
+                "rationale": "deterministic execution",
+            }],
+            "interfaces": [],
+            "decision_factors": ["determinism"],
+            "tradeoffs": [],
+        }),
+    )
+
+
 def test_physical_ai_hem_default_explores_cross_vendor_fpga_targets():
     main_source = (Path(__file__).parents[1] / "main.py").read_text(encoding="utf-8")
     assert 'from agents.fpga.fpga_common import BOARD_REGISTRY' in main_source
@@ -68,6 +106,8 @@ def test_physical_ai_firmware_product_uses_supported_embedded_dashboard():
 def test_physical_ai_product_arch2rtl_requires_real_firmware_control_plane():
     main_source = (Path(__file__).parents[1] / "main.py").read_text(encoding="utf-8")
     assert "FIRMWARE CONTROL-PLANE CONTRACT (mandatory)" in main_source
+    assert "NO COMMAND FALLBACK CONTRACT (mandatory" in main_source
+    assert 'payload.get("allow_command_fallback") is True' in main_source
     assert "DIGITAL_SPEC_JSON.register_contract must describe the implemented registers and fields" in main_source
     assert "EXTERNAL-HOST CONTROL CONTRACT" in main_source
     assert 'firmware_mmio_modes = {"automatic", "fpga_onboard_cpu", "fpga_soft_cpu", "asic_soc"}' in main_source
@@ -427,6 +467,7 @@ def test_architecture_only_stops_before_rtl(tmp_path):
 
 
 def test_selected_agent_model_generates_rtl_ready_architecture(tmp_path, monkeypatch):
+    _mock_upstream_model_planners(monkeypatch)
     response = {
         "product_name": "Active Aero Controller",
         "product_summary": "Controls active aerodynamic surfaces safely.",
@@ -460,6 +501,7 @@ def test_selected_agent_model_generates_rtl_ready_architecture(tmp_path, monkeyp
 
 
 def test_architecture_agent_repairs_json_syntax_and_persists_both_outputs(tmp_path, monkeypatch):
+    _mock_upstream_model_planners(monkeypatch)
     response = {
         "product_name": "Active Aero Controller",
         "top_module": "adaptive_aero_control_top",

@@ -70,7 +70,7 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     req = state["requirements_contract"]
     model = state["selected_physics_model"]
     execution = state["physics_execution"]
-    fallback = {
+    baseline = {
         "schema": "chiploop.application_intelligence.partition.v2",
         "application": req["application"],
         "decision": "heterogeneous",
@@ -93,7 +93,7 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
         "decision_factors": ["latency", "determinism", "power", "cost", "accuracy", "interface fit", "runtime availability"],
     }
     if not bool(state.get("generate_architecture_with_model", False)):
-        return {**state, "partition_plan": fallback}
+        return {**state, "partition_plan": {**baseline, "generation_status": "deterministic_mode"}}
 
     prompt = f"""You are ChipLoop's hardware/software partitioning agent.
 Partition the supplied application workloads around the selected physics model and generated architecture.
@@ -129,13 +129,13 @@ IMPLEMENTATION PATH: {req.get("implementation_path")}
             if not isinstance(job, dict) or str(job.get("target")) not in ALLOWED_TARGETS:
                 raise ValueError("partitioning response contains an invalid target")
         partition = {
-            **fallback,
+            **baseline,
             **generated,
             "application": req["application"],
             "implementation_path": req.get("implementation_path"),
-            "partition_phases": fallback["partition_phases"],
+            "partition_phases": baseline["partition_phases"],
             "generation_status": "model_generated",
         }
     except Exception as exc:
-        partition = {**fallback, "generation_status": "deterministic_fallback", "generation_warning": f"{type(exc).__name__}: {exc}"}
+        raise RuntimeError(f"Hardware Software Partitioning Agent model generation failed: {type(exc).__name__}: {exc}") from exc
     return {**state, "partition_plan": partition}

@@ -77,7 +77,7 @@ def build_surrogate_architecture_package(
             "Fail safe when surrogate command is stale or invalid",
             "Clamp every actuator command to software-programmable limits",
             "Expose timestamp, validity, fault, and model-version registers",
-            "Permit deterministic fallback control without the GPU service",
+            "Inhibit actuator command validity when the GPU service is unavailable",
         ],
         "downstream_loop": None if implementation_path == "architecture_only" else "Digital Design Loop",
         "surrogate_is_not_rtl": True,
@@ -87,7 +87,7 @@ def build_surrogate_architecture_package(
         "architecture_gate": "passed",
         "surrogate_inference_gate": "not_executed",
         "required_before_validated_mode": ["Connect NVIDIA NIM or GPU worker", "Run reference geometry", "Persist real predictions", "Compare against CFD reference evidence"],
-        "digital_ip_tests": ["register access", "stale-command timeout", "limit clamping", "fallback transition", "fault interrupt", "telemetry ordering"],
+        "digital_ip_tests": ["register access", "stale-command timeout", "limit clamping", "fault output inhibition", "fault interrupt", "telemetry ordering"],
     }
     product_map = {
         "schema": "chiploop.physical_ai.product_map.v1",
