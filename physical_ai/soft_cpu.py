@@ -1,5 +1,7 @@
 from typing import Any, Dict
 
+from .toolchain_targets import resolve_rust_toolchain
+
 
 def resolve_soft_cpu_config(raw: Any, *, deployment_architecture: str, policy: Any = None) -> Dict[str, Any]:
     enabled = deployment_architecture == "fpga_soft_cpu"
@@ -28,4 +30,5 @@ def resolve_soft_cpu_config(raw: Any, *, deployment_architecture: str, policy: A
     clock_mhz = float(requested["clock_mhz"])
     if min(instruction_kib, data_kib) < 4 or clock_mhz <= 0:
         raise ValueError("soft CPU memories must be at least 4 KiB and clock must be positive")
-    return {"schema": "chiploop.fpga.soft_cpu.v1", "policy_schema": policy.get("schema"), "enabled": True, "selection_mode": "automatic" if core_request == "automatic" else "advanced_override", "core": core, "core_label": spec.get("label"), "license": spec.get("license"), "profile": spec.get("profile"), "isa": isa, "abi": "ilp32", "target_triple": f"{isa}-unknown-none-elf", "compiler_arch": isa, "bus": bus, "clock_mhz": clock_mhz, "instruction_memory_kib": instruction_kib, "data_memory_kib": data_kib, "interrupts": bool(requested.get("interrupts")), "uart": bool(requested.get("uart")), "debug": bool(requested.get("debug")), "estimated_reservation": {"logic_cells": int(spec["estimated_logic_cells"]), "block_ram_blocks": int(spec["estimated_bram_blocks"]), "basis": "supabase_governed_reference_estimate", "must_be_replaced_by_complete_system_synthesis": True}}
+    toolchain = resolve_rust_toolchain(spec, isa, default_abi="ilp32")
+    return {"schema": "chiploop.fpga.soft_cpu.v1", "policy_schema": policy.get("schema"), "enabled": True, "selection_mode": "automatic" if core_request == "automatic" else "advanced_override", "core": core, "core_label": spec.get("label"), "license": spec.get("license"), "profile": spec.get("profile"), "isa": isa, "abi": toolchain["target_abi"], **toolchain, "compiler_arch": isa, "bus": bus, "clock_mhz": clock_mhz, "instruction_memory_kib": instruction_kib, "data_memory_kib": data_kib, "interrupts": bool(requested.get("interrupts")), "uart": bool(requested.get("uart")), "debug": bool(requested.get("debug")), "estimated_reservation": {"logic_cells": int(spec["estimated_logic_cells"]), "block_ram_blocks": int(spec["estimated_bram_blocks"]), "basis": "supabase_governed_reference_estimate", "must_be_replaced_by_complete_system_synthesis": True}}

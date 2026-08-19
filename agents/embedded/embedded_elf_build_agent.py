@@ -2,12 +2,14 @@
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 from typing import Optional
 
 from ._embedded_common import ensure_workflow_dir, write_artifact
 from tooling.runner import run_command, tool_path
+from physical_ai.toolchain_targets import canonical_rust_target_triple
 
 logger = logging.getLogger(__name__)
 
@@ -53,17 +55,21 @@ def _write_json_artifact(state: dict, relpath: str, payload: dict) -> None:
 
 def _resolve_toolchain(state: dict, manifest: dict) -> tuple[str, str]:
     toolchain = state.get("toolchain") or {}
-    target_triple = (
+    raw_target_triple = (
         toolchain.get("target_triple")
         or state.get("target_triple")
         or (manifest.get("build") or {}).get("target_triple")
         or "x86_64-unknown-linux-gnu"
     ).strip()
+    target_isa = toolchain.get("target_isa") or state.get("target_isa") or ""
+    target_triple = canonical_rust_target_triple(raw_target_triple, target_isa)
     bin_name = (
         toolchain.get("bin_name")
         or state.get("firmware_bin_name")
         or "firmware_app"
     ).strip()
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", bin_name):
+        raise ValueError("firmware binary name may contain only letters, digits, underscore, and hyphen")
     return target_triple, bin_name
 
 
@@ -84,14 +90,23 @@ codegen-units = 1
 """
 
 
-def _default_cargo_config(target_triple: str) -> str:
+def _default_cargo_config(target_triple: str, compiler_features: Optional[list[str]] = None) -> str:
     config = f"""[build]
-target = "{target_triple}"
+target = {json.dumps(target_triple)}
 """
+    rustflags = []
+    for feature in compiler_features or []:
+        feature = str(feature or "").strip()
+        if not re.fullmatch(r"[A-Za-z0-9_.+-]+", feature):
+            raise ValueError(f"invalid Rust compiler target feature: {feature!r}")
+        rustflags.extend(["-C", f"target-feature={feature if feature.startswith(('+', '-')) else '+' + feature}"])
     if target_triple.endswith("-linux-gnu"):
+        rustflags.extend(["-C", "link-arg=-nostartfiles"])
+    if rustflags:
+        target_key = _cargo_target_directory(target_triple)
         config += f"""
-[target.{target_triple}]
-rustflags = ["-C", "link-arg=-nostartfiles"]
+[target.{json.dumps(target_key)}]
+rustflags = {json.dumps(rustflags)}
 """
     return config
 
@@ -187,11 +202,12 @@ ls firmware/build/target/{target_triple}/release/{bin_name}.elf
 """
 
 def _write_workspace_files(state: dict, workflow_dir: str, target_triple: str, bin_name: str) -> list[str]:
+    toolchain = state.get("toolchain") if isinstance(state.get("toolchain"), dict) else {}
     hal_read_helper = _discover_hal_read_helper(state, workflow_dir)
 
     files = {
         OUTPUT_CARGO_TOML: _default_cargo_toml(bin_name),
-        OUTPUT_CARGO_CFG: _default_cargo_config(target_triple),
+        OUTPUT_CARGO_CFG: _default_cargo_config(target_triple, toolchain.get("compiler_features") or []),
         OUTPUT_MEMORY_X: _default_memory_x(),
         OUTPUT_MAIN_RS: _default_main_rs(hal_read_helper),
         OUTPUT_PANIC_RS: _default_panic_rs(),
@@ -210,9 +226,32 @@ def _write_workspace_files(state: dict, workflow_dir: str, target_triple: str, b
 
 
 
+def _cargo_target_argument(workflow_dir: str, target_triple: str) -> str:
+    if not str(target_triple).lower().endswith(".json"):
+        return target_triple
+    workflow_root = os.path.realpath(workflow_dir)
+    candidate = os.path.realpath(target_triple if os.path.isabs(target_triple) else os.path.join(workflow_root, target_triple))
+    try:
+        contained = os.path.commonpath([workflow_root, candidate]) == workflow_root
+    except ValueError:
+        contained = False
+    if not contained:
+        raise ValueError("custom Rust target JSON must be contained within the workflow directory")
+    if not os.path.isfile(candidate):
+        raise ValueError(f"custom Rust target JSON does not exist: {candidate}")
+    return candidate
+
+
+def _cargo_target_directory(target_triple: str) -> str:
+    if str(target_triple).lower().endswith(".json"):
+        return os.path.splitext(os.path.basename(target_triple))[0]
+    return target_triple
+
+
 def _attempt_build(workflow_dir: str, target_triple: str, bin_name: str, cargo_path: Optional[str]) -> tuple[bool, bool, str, str, str]:
     cargo_workspace_dir = os.path.join(workflow_dir, "firmware", "build")
-    cargo_target_abs = os.path.join(cargo_workspace_dir, "target", target_triple, "release", bin_name)
+    target_argument = _cargo_target_argument(workflow_dir, target_triple)
+    cargo_target_abs = os.path.join(cargo_workspace_dir, "target", _cargo_target_directory(target_triple), "release", bin_name)
     build_attempted = False
     build_succeeded = False
     stdout = ""
@@ -227,7 +266,7 @@ def _attempt_build(workflow_dir: str, target_triple: str, bin_name: str, cargo_p
             proc = run_command(
                 {},
                 "embedded_firmware_build",
-                [cargo_path, "build", "--release", "--target", target_triple],
+                [cargo_path, "build", "--release", "--target", target_argument],
                 cwd=cargo_workspace_dir,
                 timeout_sec=180,
             )
@@ -314,9 +353,10 @@ def run_agent(state: dict) -> dict:
         },
     )
 
-    elf_relpath = f"firmware/build/target/{target_triple}/release/{bin_name}.elf"
+    target_directory = _cargo_target_directory(target_triple)
+    elf_relpath = f"firmware/build/target/{target_directory}/release/{bin_name}.elf"
     elf_abs = os.path.join(workflow_dir, elf_relpath)
-    cargo_target_abs = os.path.join(cargo_workspace_dir, "target", target_triple, "release", bin_name)
+    cargo_target_abs = os.path.join(cargo_workspace_dir, "target", target_directory, "release", bin_name)
 
     build_attempted = False
     build_succeeded = False

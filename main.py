@@ -7382,8 +7382,48 @@ def _hem_physical_ai_child_payload(root_workflow_id: str, root_run_id: str, payl
         platform_note = json.dumps(target_refinement, default=str)[:6000]
         deployment = str(target_refinement.get("deployment_architecture") or payload.get("deployment_architecture") or "automatic")
         external_host = deployment in {"fpga_external_host", "asic_companion", "asic_digital_ip"}
-        processor = payload.get("asic_cpu_config") if deployment == "asic_soc" else payload.get("soft_cpu_config")
+        compute_host = target_refinement.get("compute_host") if isinstance(target_refinement.get("compute_host"), dict) else {}
+
+        def _processor_with_toolchain(contract: Any) -> Dict[str, Any]:
+            resolved = dict(contract) if isinstance(contract, dict) else {}
+            nested = resolved.get("toolchain") if isinstance(resolved.get("toolchain"), dict) else {}
+            host_toolchain = compute_host.get("toolchain") if isinstance(compute_host.get("toolchain"), dict) else {}
+            resolved = {**resolved, **nested, **host_toolchain}
+            resolved.setdefault("isa", compute_host.get("isa") or compute_host.get("architecture"))
+            resolved.setdefault("abi", compute_host.get("abi"))
+            return resolved
+
+        if deployment == "asic_soc":
+            processor = _processor_with_toolchain(payload.get("asic_cpu_config"))
+        elif deployment == "fpga_soft_cpu":
+            processor = _processor_with_toolchain(payload.get("soft_cpu_config"))
+        elif deployment == "fpga_onboard_cpu":
+            hard_cpu = compute_host.get("hard_cpu")
+            processor = _processor_with_toolchain(hard_cpu)
+            if hard_cpu and not processor.get("core"):
+                processor["core"] = str(hard_cpu)
+            if not (processor.get("target_triple") or processor.get("custom_target_json")):
+                raise RuntimeError(
+                    "FPGA onboard CPU firmware requires the selected board compute_host contract "
+                    "to declare a Rust target_triple; no CPU architecture is inferred."
+                )
+        elif external_host:
+            processor = _processor_with_toolchain(
+                payload.get("external_host_config") or payload.get("host_toolchain") or compute_host
+            )
+        else:
+            processor = {}
         processor = processor if isinstance(processor, dict) else {}
+        target_triple = str(processor.get("target_triple") or processor.get("custom_target_json") or "").strip()
+        if external_host and not target_triple:
+            host_arch = str(processor.get("isa") or processor.get("architecture") or "").strip().lower()
+            if host_arch and host_arch not in {"x86", "x86_64", "amd64"}:
+                raise RuntimeError(
+                    f"External host architecture {host_arch!r} requires an explicit Rust target_triple."
+                )
+            target_triple = "x86_64-unknown-linux-gnu"
+        elif not target_triple:
+            target_triple = "riscv32-unknown-none-elf"
         device_layer_role = "host_device_layer" if external_host else "embedded_firmware"
         device_layer_goal = (
             f"Build the host-side SPI device layer and portable driver service for {application_name}"
@@ -7413,7 +7453,7 @@ def _hem_physical_ai_child_payload(root_workflow_id: str, root_run_id: str, payl
             "target_frequency_mhz": float(payload.get("target_frequency_mhz") or 50.0),
             "execute_cosim": True,
             "run_cosim": True,
-            "toolchain": {"language": "rust", "target_triple": "x86_64-unknown-linux-gnu" if external_host else str(processor.get("target_triple") or "riscv32-unknown-none-elf"), "target_cpu": processor.get("core"), "target_isa": processor.get("isa"), "target_abi": processor.get("abi")},
+            "toolchain": {"language": "rust", "target_triple": target_triple, "target_cpu": processor.get("core"), "target_isa": processor.get("isa"), "target_abi": processor.get("target_abi") or processor.get("abi"), "compiler_features": processor.get("compiler_features") or [], "custom_target_json": processor.get("custom_target_json")},
             "firmware_role": device_layer_role,
             "deployment_architecture": deployment,
             "target_refinement": target_refinement,

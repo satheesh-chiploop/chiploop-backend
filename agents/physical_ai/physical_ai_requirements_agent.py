@@ -10,6 +10,7 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     application = str(raw.get("application") or "pmsm_motor_control")
     deployment_architecture = str(raw.get("deployment_architecture") or "automatic")
     processor_policy = raw.get("processor_ip_policy") if isinstance(raw.get("processor_ip_policy"), dict) else {}
+    processor_policy = validate_processor_policy(processor_policy)
     implementation_path = str(raw.get("implementation_path") or "digital_ip_asic")
     resolved_deployment = deployment_architecture
     if deployment_architecture == "automatic" and implementation_path in {"digital_ip_asic", "fpga_then_asic"}:

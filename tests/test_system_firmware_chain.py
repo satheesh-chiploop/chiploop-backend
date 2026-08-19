@@ -1,6 +1,8 @@
 import json
 import os
 
+import pytest
+
 os.environ.setdefault("SUPABASE_URL", "http://localhost:54321")
 os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-service-role-key")
 os.environ.setdefault("OPENAI_API_KEY", "test-openai-key")
@@ -287,3 +289,21 @@ endmodule
     assert execution["inputs"]["test_paths"] == ["firmware/validate/test_firmware_smoke.py"]
     assert execution["inputs"]["firmware_elf_placeholder"] is True
     assert state["system_firmware_coverage_summary"]["coverage_metrics"]["coverage_available"] is False
+
+@pytest.mark.parametrize(
+    ("configured_target", "target_isa", "expected"),
+    [
+        ("rv32imc-unknown-none-elf", "rv32imc", "riscv32imc-unknown-none-elf"),
+        ("rv32i", "rv32i", "riscv32i-unknown-none-elf"),
+        ("riscv32-unknown-none-elf", "rv32im", "riscv32im-unknown-none-elf"),
+        ("riscv32imc-unknown-none-elf", "rv32imc", "riscv32imc-unknown-none-elf"),
+        ("thumbv7em-none-eabihf", "", "thumbv7em-none-eabihf"),
+        ("custom-target.json", "", "custom-target.json"),
+    ],
+)
+def test_elf_builder_canonicalizes_riscv_rust_targets(configured_target, target_isa, expected):
+    state = {"toolchain": {"target_triple": configured_target, "target_isa": target_isa}}
+
+    target, _ = embedded_elf_build_agent._resolve_toolchain(state, {})
+
+    assert target == expected
