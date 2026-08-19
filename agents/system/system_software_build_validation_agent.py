@@ -38,15 +38,10 @@ def _tail(text: str, limit: int = 4000) -> str:
 
 
 def _tool_env() -> Dict[str, str]:
-    env = tool_env()
-    preferred_bin = "/root/.cargo/bin"
-    current_path = env.get("PATH", "")
-    path_parts = current_path.split(":") if current_path else []
-    if preferred_bin not in path_parts:
-        env["PATH"] = preferred_bin + (":" + current_path if current_path else "")
-    env.setdefault("CARGO_HOME", "/root/.cargo")
-    env.setdefault("RUSTUP_HOME", "/root/.rustup")
-    return env
+    # The execution profile/image owns PATH, CARGO_HOME, and RUSTUP_HOME.
+    # Repointing them at root's home breaks non-root containers and can make
+    # Cargo and rustup resolve different toolchain installations.
+    return tool_env()
 
 
 def _find_cargo() -> str:
@@ -82,12 +77,12 @@ def _detect_tool_versions(cargo_bin: str) -> Dict[str, str]:
     rustc_version = ""
 
     if cargo_bin:
-        result = _run_cmd([cargo_bin, "--version"], cwd="/root")
+        result = _run_cmd([cargo_bin, "--version"], cwd=os.getcwd())
         cargo_version = (result.get("stdout") or result.get("stderr") or "").strip()
 
     rustc_bin = tool_path("rustc")
     if rustc_bin:
-        result = _run_cmd([rustc_bin, "--version"], cwd="/root")
+        result = _run_cmd([rustc_bin, "--version"], cwd=os.getcwd())
         rustc_version = (result.get("stdout") or result.get("stderr") or "").strip()
 
     return {

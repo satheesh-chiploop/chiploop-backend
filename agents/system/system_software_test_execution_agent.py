@@ -38,16 +38,7 @@ def _tail(text: str, limit: int = 4000) -> str:
 
 
 def _tool_env() -> Dict[str, str]:
-    env = tool_env()
-    preferred_bin = "/root/.cargo/bin"
-    path_parts = env.get("PATH", "").split(":") if env.get("PATH") else []
-    if preferred_bin not in path_parts:
-        env["PATH"] = preferred_bin + (":" + env["PATH"] if env.get("PATH") else "")
-    if not env.get("CARGO_HOME"):
-        env["CARGO_HOME"] = "/root/.cargo"
-    if not env.get("RUSTUP_HOME"):
-        env["RUSTUP_HOME"] = "/root/.rustup"
-    return env
+    return tool_env()
 
 
 def _find_cargo() -> str:
@@ -82,11 +73,11 @@ def _detect_tool_versions(cargo_bin: str) -> Dict[str, str]:
     cargo_version = ""
     rustc_version = ""
     if cargo_bin:
-        cargo_result = _run_cmd([cargo_bin, "--version"], cwd="/root")
+        cargo_result = _run_cmd([cargo_bin, "--version"], cwd=os.getcwd())
         cargo_version = (cargo_result.get("stdout") or cargo_result.get("stderr") or "").strip()
     rustc_bin = tool_path("rustc")
     if rustc_bin:
-        rustc_result = _run_cmd([rustc_bin, "--version"], cwd="/root")
+        rustc_result = _run_cmd([rustc_bin, "--version"], cwd=os.getcwd())
         rustc_version = (rustc_result.get("stdout") or rustc_result.get("stderr") or "").strip()
     return {
         "cargo_bin": cargo_bin,
