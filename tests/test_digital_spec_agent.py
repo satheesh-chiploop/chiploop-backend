@@ -601,6 +601,54 @@ def test_pass5_graph_closure_prompt_requires_a_concrete_new_repair():
     assert ordinary != final
 
 
+def test_removes_undriven_self_owned_alias_input_without_signal_name_rules():
+    module = {
+        **_module("controller"),
+        "ports": [
+            _port("trigger_state", "input"),
+            _port("trigger_status", "output"),
+        ],
+        "must_receive": ["trigger_state"],
+        "must_not_drive": ["trigger_state"],
+        "must_drive": ["trigger_status"],
+    }
+    spec = {
+        "hierarchy": {
+            "top_module": {**_module("top"), "ports": [], "rtl_output_file": "top.v"},
+            "modules": [module],
+        },
+        "top_level_connections": [],
+        "inter_module_signals": [],
+        "signal_ownership": [{"signal": "trigger_state", "owner": "controller.trigger_status"}],
+    }
+
+    out = spec_agent._remove_self_owned_alias_inputs(spec)
+
+    assert [port["name"] for port in out["hierarchy"]["modules"][0]["ports"]] == ["trigger_status"]
+    assert out["hierarchy"]["modules"][0]["must_receive"] == []
+    assert out["hierarchy"]["modules"][0]["must_not_drive"] == []
+
+
+def test_preserves_self_owned_alias_input_when_it_has_real_external_source():
+    module = {
+        **_module("controller"),
+        "ports": [_port("trigger_state", "input"), _port("trigger_status", "output")],
+    }
+    spec = {
+        "hierarchy": {
+            "top_module": {**_module("top"), "ports": [_port("trigger", "input")], "rtl_output_file": "top.v"},
+            "modules": [module],
+        },
+        "top_level_connections": [{"top_port": "trigger", "connected_to": ["controller.trigger_state"]}],
+        "inter_module_signals": [],
+        "signal_ownership": [{"signal": "trigger_state", "owner": "controller.trigger_status"}],
+    }
+
+    out = spec_agent._remove_self_owned_alias_inputs(spec)
+
+    assert {port["name"] for port in out["hierarchy"]["modules"][0]["ports"]} == {"trigger_state", "trigger_status"}
+
+
 def test_connectivity_repair_prompt_explains_rejected_graph_edges():
     previous = {
         "design_name": "top",

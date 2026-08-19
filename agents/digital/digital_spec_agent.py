@@ -1751,6 +1751,69 @@ def _build_connectivity_repair_diagnostics(previous_json_text: str) -> str:
     return "\n\nSTRUCTURAL GRAPH DIAGNOSTICS FROM THE PREVIOUS JSON:\n" + "\n".join(findings[:80])
 
 
+def _remove_self_owned_alias_inputs(spec_json: dict) -> dict:
+    """Remove undriven child inputs explicitly owned by the same child's output.
+
+    This contract shape describes internally computed state twice: once as an
+    input consumer and once as a same-module output owner.  Keeping both would
+    require artificial self-feedback.  Ownership and port directions provide
+    the complete deterministic proof; signal names are not interpreted.
+    """
+    hierarchy = spec_json.get("hierarchy") if isinstance(spec_json.get("hierarchy"), dict) else {}
+    modules = hierarchy.get("modules") if isinstance(hierarchy.get("modules"), list) else []
+    driven = {
+        str(endpoint)
+        for connection in spec_json.get("top_level_connections", []) or []
+        if isinstance(connection, dict)
+        for endpoint in connection.get("connected_to", []) or []
+    }
+    driven.update(
+        str(endpoint)
+        for signal in spec_json.get("inter_module_signals", []) or []
+        if isinstance(signal, dict)
+        for endpoint in signal.get("destinations", []) or []
+    )
+    module_by_name = {
+        str(module.get("name") or "").strip(): module
+        for module in modules if isinstance(module, dict) and module.get("name")
+    }
+    removable: dict[str, set[str]] = {}
+    for ownership in spec_json.get("signal_ownership", []) or []:
+        if not isinstance(ownership, dict):
+            continue
+        alias = str(ownership.get("signal") or "").strip()
+        owner = str(ownership.get("owner") or "").strip()
+        if not alias or "." not in owner:
+            continue
+        owner_module, owner_port = owner.split(".", 1)
+        module = module_by_name.get(owner_module)
+        if not module:
+            continue
+        directions = {
+            str(port.get("name") or "").strip(): str(port.get("direction") or "").lower()
+            for port in module.get("ports", []) or [] if isinstance(port, dict)
+        }
+        alias_endpoint = f"{owner_module}.{alias}"
+        if (
+            alias != owner_port
+            and directions.get(alias) == "input"
+            and directions.get(owner_port) in {"output", "inout"}
+            and alias_endpoint not in driven
+        ):
+            removable.setdefault(owner_module, set()).add(alias)
+
+    for module_name, aliases in removable.items():
+        module = module_by_name[module_name]
+        module["ports"] = [
+            port for port in module.get("ports", []) or []
+            if not (isinstance(port, dict) and str(port.get("name") or "").strip() in aliases)
+        ]
+        for field in ("must_receive", "must_not_drive"):
+            if isinstance(module.get(field), list):
+                module[field] = [name for name in module[field] if str(name).strip() not in aliases]
+    return spec_json
+
+
 def _build_repair_prompt(
     base_prompt: str,
     previous_json_text: str,
@@ -1978,6 +2041,7 @@ def _compile_spec_contract(
         spec_json = _ensure_hierarchical_port_closure(spec_json)
         spec_json = _reconcile_hierarchical_signal_directions(spec_json, mode)
         spec_json = _sanitize_hierarchical_connectivity(spec_json)
+        spec_json = _remove_self_owned_alias_inputs(spec_json)
         spec_json = _enforce_prompt_top_ports_after_hierarchy_repair(spec_json, mode, source_prompt)
         logger.info(f"🔍 Digital Spec Agent hierarchical port closure done suffix='{suffix or 'pass1'}'")
 
