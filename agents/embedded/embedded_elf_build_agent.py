@@ -286,7 +286,16 @@ def _attempt_build(
                 and ("can't find crate for `core`" in stderr or "target may not be installed" in stderr)
             )
             if missing_standard_target and allow_target_install:
-                rustup_path = shutil.which("rustup")
+                # Cargo may be resolved from the governed tool profile while
+                # the long-running API process has an older PATH snapshot.
+                # rustup installations place both launchers in the same bin
+                # directory, so also resolve it through the registry and as a
+                # companion of the selected Cargo executable.
+                rustup_path = shutil.which("rustup") or tool_path("rustup")
+                if not rustup_path and cargo_path:
+                    companion = os.path.join(os.path.dirname(os.path.abspath(cargo_path)), "rustup")
+                    if os.path.isfile(companion) and os.access(companion, os.X_OK):
+                        rustup_path = companion
                 if rustup_path:
                     provision = run_command(
                         {},

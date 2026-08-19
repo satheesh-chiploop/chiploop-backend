@@ -377,6 +377,46 @@ def test_elf_builder_does_not_install_custom_json_target(tmp_path, monkeypatch):
     assert [call[0] for call in calls] == ["embedded_firmware_build"]
 
 
+def test_elf_builder_finds_rustup_beside_profile_resolved_cargo(tmp_path, monkeypatch):
+    workspace = tmp_path / "firmware" / "build"
+    workspace.mkdir(parents=True)
+    tool_bin = tmp_path / "toolchain" / "bin"
+    tool_bin.mkdir(parents=True)
+    cargo = tool_bin / "cargo"
+    rustup = tool_bin / "rustup"
+    cargo.write_text("", encoding="utf-8")
+    rustup.write_text("", encoding="utf-8")
+    rustup.chmod(0o755)
+    calls = []
+
+    class Result:
+        def __init__(self, returncode, stderr=""):
+            self.returncode = returncode
+            self.stdout = ""
+            self.stderr = stderr
+
+    results = iter([
+        Result(1, "can't find crate for `core`; target may not be installed"),
+        Result(0),
+        Result(0),
+    ])
+
+    def fake_run(_state, capability, command, **_kwargs):
+        calls.append((capability, command))
+        return next(results)
+
+    monkeypatch.setattr(embedded_elf_build_agent, "run_command", fake_run)
+    monkeypatch.setattr(embedded_elf_build_agent.shutil, "which", lambda _name: None)
+    monkeypatch.setattr(embedded_elf_build_agent, "tool_path", lambda _name: None)
+
+    _, succeeded, _, _, _ = embedded_elf_build_agent._attempt_build(
+        str(tmp_path), "riscv32imc-unknown-none-elf", "firmware_app", str(cargo)
+    )
+
+    assert succeeded is True
+    assert calls[1][1] == [str(rustup), "target", "add", "riscv32imc-unknown-none-elf"]
+
+
 def test_backend_image_preinstalls_embedded_rust_toolchain_matrix():
     dockerfile = (Path(__file__).parents[1] / "Dockerfile").read_text(encoding="utf-8")
 
