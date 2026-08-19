@@ -1842,6 +1842,9 @@ Do not drive fifo.write_data from an unrelated status_word merely because both a
 
 FINAL GRAPH-CLOSURE PASS:
 - Earlier repair output still failed validation. Do not return the previous JSON unchanged.
+- The VALIDATION FAILURE LOG is the authoritative checklist for this pass. For each named endpoint, make exactly one explicit decision: connect it to a declared output/inout producer, connect it to a compatible top-level input, or remove it only when the owning module computes that state internally.
+- Status, sticky-fault, pending, and aggregate-fault consumers are not exempt from connectivity closure. A readback/status input needs a real status producer; internally held state must not also be modeled as an input; a combined fault needs an explicit aggregator output rather than an implicit Boolean expression in prose.
+- Do not preserve an orphan merely because it appears in must_receive, must_not_drive, responsibilities, or behavior text. Those sections must be updated together with the port and graph decision.
 - Start from the complete previous JSON and make a concrete structural change for every endpoint in the newest validation failure log.
 - Re-audit every child input after those edits so the repair does not migrate or recreate an orphan.
 - Preserve already-valid connectivity and architecture; this pass is focused on the remaining graph gaps.
@@ -1870,6 +1873,12 @@ FPGA MEMORY REPAIR EXAMPLES:
     except (JSONDecodeError, ValueError, TypeError):
         pass
 
+    original_contract_excerpt = (
+        "Omitted in final graph-closure mode; the complete previous JSON below is the authoritative design."
+        if final_graph_closure
+        else _truncate_text(base_prompt, 24000)
+    )
+    failure_section = _truncate_text(failure_log_text, 4000)
     return f"""
 ==============================
 REPAIR MODE (SECOND PASS)
@@ -1877,16 +1886,19 @@ REPAIR MODE (SECOND PASS)
 
 Your previous JSON did not pass contract validation.
 
+VALIDATION FAILURE LOG (AUTHORITATIVE REPAIR CHECKLIST):
+{failure_section}
+
 You MUST preserve the same architecture unless a structural change is strictly required to fix the validation errors.
 
 ORIGINAL GENERATION CONTRACT EXCERPT:
-{_truncate_text(base_prompt, 24000)}
+{original_contract_excerpt}
 
 PREVIOUS JSON:
 {_truncate_text(previous_contract, 70000)}
 
 VALIDATION FAILURE LOG:
-{_truncate_text(failure_log_text, 4000)}
+{failure_section}
 
 REPAIR RULES:
 - Do NOT redesign the architecture unless required to resolve the errors

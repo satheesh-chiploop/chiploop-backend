@@ -594,6 +594,10 @@ def test_pass5_graph_closure_prompt_requires_a_concrete_new_repair():
     assert "FINAL GRAPH-CLOSURE PASS" not in ordinary
     assert "FINAL GRAPH-CLOSURE PASS" in final
     assert "Do not return the previous JSON unchanged" in final
+    assert "authoritative checklist" in final
+    assert "complete previous JSON below is the authoritative design" in final
+    assert "combined fault needs an explicit aggregator output" in final
+    assert "base" not in final
     assert ordinary != final
 
 
