@@ -179,7 +179,7 @@ def _discover_hal_read_helper(state: dict, workflow_dir: str) -> Optional[str]:
 
 def _default_build_instructions(target_triple: str, bin_name: str) -> str:
     return f"""<!-- ASSUMPTION: Build executed inside the ChipLoop runtime image -->
-<!-- ASSUMPTION: Cargo and the requested target toolchain are already installed -->
+<!-- Cargo/rustup are runtime-image requirements; standard targets are preinstalled and other explicitly selected standard targets are provisioned before retry. -->
 
 # Build Instructions
 

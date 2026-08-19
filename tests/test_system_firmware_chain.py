@@ -1,5 +1,6 @@
 import json
 import os
+from pathlib import Path
 
 import pytest
 
@@ -374,3 +375,14 @@ def test_elf_builder_does_not_install_custom_json_target(tmp_path, monkeypatch):
 
     assert succeeded is False
     assert [call[0] for call in calls] == ["embedded_firmware_build"]
+
+
+def test_backend_image_preinstalls_embedded_rust_toolchain_matrix():
+    dockerfile = (Path(__file__).parents[1] / "Dockerfile").read_text(encoding="utf-8")
+
+    assert "RUSTUP_HOME=/opt/rustup" in dockerfile
+    assert "CARGO_HOME=/opt/cargo" in dockerfile
+    assert "riscv32imc-unknown-none-elf" in dockerfile
+    assert "riscv64gc-unknown-none-elf" in dockerfile
+    assert "thumbv7em-none-eabihf" in dockerfile
+    assert "/opt/rustup /opt/cargo" in dockerfile

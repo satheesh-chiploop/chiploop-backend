@@ -59,7 +59,13 @@
       "name": "cargo",
       "description": "Rust cargo tooling used by embedded Rust flows.",
       "kind": "external_tool",
-      "optional": true
+      "optional": false
+    },
+    {
+      "name": "rustup",
+      "description": "Rust target toolchain manager used to provision explicitly selected embedded targets.",
+      "kind": "external_tool",
+      "optional": false
     },
     {
       "name": "git",
