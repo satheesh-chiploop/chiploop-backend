@@ -1132,6 +1132,9 @@ def _upload_spec_debug_artifacts(workflow_id, agent_name, spec_dir):
         "spec_agent_normalized_pass3.json",
         "spec_agent_normalized_pass4.json",
         "spec_agent_normalized_pass5.json",
+        "spec_agent_contract_pass6.log",
+        "spec_agent_exception_pass6.txt",
+        "spec_agent_normalized_pass6.json",
     ]:
         _record_text_artifact_safe(
             workflow_id=workflow_id,
@@ -1416,6 +1419,107 @@ def _ensure_hierarchical_top_level_connections(spec_json: dict) -> dict:
 
     if connections:
         spec_json["top_level_connections"] = connections
+    return spec_json
+
+
+def _expose_orphan_child_inputs_at_top(spec_json: dict) -> dict:
+    """Close source-less child inputs after all semantic repair passes fail.
+
+    This is a structural, fail-closed repair: it never fabricates an internal
+    producer. It makes the unresolved dependency explicit in the top-level
+    interface, coalescing compatible child inputs into one fanout connection.
+    """
+    hierarchy = spec_json.get("hierarchy") if isinstance(spec_json, dict) else None
+    if not isinstance(hierarchy, dict):
+        return spec_json
+    top = hierarchy.get("top_module") if isinstance(hierarchy.get("top_module"), dict) else None
+    if not isinstance(top, dict):
+        return spec_json
+
+    connections = spec_json.setdefault("top_level_connections", [])
+    if not isinstance(connections, list):
+        connections = []
+        spec_json["top_level_connections"] = connections
+    driven = {
+        str(endpoint)
+        for connection in connections if isinstance(connection, dict)
+        for endpoint in connection.get("connected_to", []) or []
+    }
+    driven.update(
+        str(endpoint)
+        for signal in spec_json.get("inter_module_signals", []) or [] if isinstance(signal, dict)
+        for endpoint in signal.get("destinations", []) or []
+    )
+    memory_names = {
+        str(macro.get("name") or "")
+        for macro in spec_json.get("memory_macros", []) or [] if isinstance(macro, dict)
+    }
+    groups = {}
+    for module in hierarchy.get("modules", []) or []:
+        if not isinstance(module, dict):
+            continue
+        module_name = str(module.get("name") or "").strip()
+        if not module_name or module_name in memory_names:
+            continue
+        for port in module.get("ports", []) or []:
+            if not isinstance(port, dict):
+                continue
+            direction = str(port.get("direction") or "").lower()
+            port_name = str(port.get("name") or "").strip()
+            endpoint = f"{module_name}.{port_name}"
+            if direction not in {"input", "inout"} or not port_name or endpoint in driven:
+                continue
+            width = max(1, int(port.get("width") or 1))
+            key = (port_name, width, direction, bool(port.get("active_low")))
+            groups.setdefault(key, []).append(endpoint)
+
+    top_ports = top.setdefault("ports", [])
+    existing_ports = {
+        str(port.get("name") or ""): port
+        for port in top_ports if isinstance(port, dict) and port.get("name")
+    }
+    top_receive = top.setdefault("must_receive", [])
+    if not isinstance(top_receive, list):
+        top_receive = []
+        top["must_receive"] = top_receive
+
+    for (base_name, width, child_direction, active_low), endpoints in groups.items():
+        top_direction = "inout" if child_direction == "inout" else "input"
+        top_name = base_name
+        existing = existing_ports.get(top_name)
+        compatible = existing and str(existing.get("direction") or "").lower() == top_direction \
+            and int(existing.get("width") or 1) == width
+        if existing and not compatible:
+            prefix = endpoints[0].split(".", 1)[0]
+            top_name = f"{prefix}_{base_name}"
+            suffix = 2
+            while top_name in existing_ports:
+                top_name = f"{prefix}_{base_name}_{suffix}"
+                suffix += 1
+            existing = None
+        if not existing:
+            port = {"name": top_name, "direction": top_direction, "width": width}
+            if active_low:
+                port["active_low"] = True
+            top_ports.append(port)
+            existing_ports[top_name] = port
+        if top_name not in top_receive:
+            top_receive.append(top_name)
+        connection = next(
+            (item for item in connections if isinstance(item, dict) and item.get("top_port") == top_name),
+            None,
+        )
+        if connection is None:
+            connection = {
+                "top_port": top_name,
+                "connected_to": [],
+                "description": "Explicit top-level source for otherwise source-less required child input(s).",
+            }
+            connections.append(connection)
+        targets = connection.setdefault("connected_to", [])
+        for endpoint in endpoints:
+            if endpoint not in targets:
+                targets.append(endpoint)
     return spec_json
 
 
@@ -2903,6 +3007,40 @@ Return JSON only.
                         pass5_exc_path = os.path.join(spec_dir, "spec_agent_exception_pass5.txt")
                         _write_text(pass5_log_path, f"Digital Spec Agent pass5 contract repair failure:\n{e5}\n")
                         _write_text(pass5_exc_path, repr(e5))
+
+                    if e5 is not None:
+                        # Five semantic/model passes have been exhausted. Do
+                        # not invent a child producer: expose every remaining
+                        # required input as an explicit top-level dependency.
+                        # This terminal structural closure is application- and
+                        # interface-agnostic and remains subject to the full
+                        # contract and firmware-plane validators.
+                        pass6_log_path = os.path.join(spec_dir, "spec_agent_contract_pass6.log")
+                        pass6_exc_path = os.path.join(spec_dir, "spec_agent_exception_pass6.txt")
+                        try:
+                            normalized_path_pass5_for_closure = os.path.join(
+                                spec_dir, "spec_agent_normalized_pass5.json"
+                            )
+                            with open(normalized_path_pass5_for_closure, "r", encoding="utf-8") as pass5_file:
+                                spec_json = json.load(pass5_file)
+                            mode = "hierarchical" if isinstance(spec_json.get("hierarchy"), dict) else "flat"
+                            if mode != "hierarchical":
+                                raise ValueError("Deterministic graph closure requires a hierarchical contract.")
+                            spec_json = _expose_orphan_child_inputs_at_top(spec_json)
+                            _validate_spec_contract(spec_json, mode)
+                            _validate_mandatory_firmware_control_plane(
+                                spec_json, mode, user_prompt, required=require_firmware_control_plane,
+                            )
+                            _validate_fpga_memory_contract(spec_json, user_prompt)
+                            normalized_path_pass6 = os.path.join(spec_dir, "spec_agent_normalized_pass6.json")
+                            with open(normalized_path_pass6, "w", encoding="utf-8") as pass6_file:
+                                json.dump(spec_json, pass6_file, indent=2)
+                            _write_text(pass6_log_path, "Digital Spec Agent deterministic graph closure passed.\n")
+                            e5 = None
+                        except Exception as pass6_error:
+                            _write_text(pass6_log_path, f"Digital Spec Agent deterministic graph closure failure:\n{pass6_error}\n")
+                            _write_text(pass6_exc_path, repr(pass6_error))
+                            e5 = pass6_error
 
                     if e5 is not None:
                         state.update({

@@ -1432,3 +1432,27 @@ def test_contract_reports_all_required_child_inputs_without_sources():
     assert "'consumer.status_valid_in'" in message
     assert "'consumer.status_data_in'" in message
     assert "Repair every listed input in the same response" in message
+
+
+def test_terminal_graph_closure_exposes_and_fans_out_orphan_child_inputs():
+    spec = {
+        "hierarchy": {
+            "top_module": {**_module("top"), "rtl_output_file": "top.v", "ports": []},
+            "modules": [
+                {**_module("a"), "rtl_output_file": "a.v", "ports": [_port("clk", "input"), _port("data_i", "input", 8)]},
+                {**_module("b"), "rtl_output_file": "b.v", "ports": [_port("clk", "input")]},
+            ],
+        },
+        "top_level_connections": [],
+        "inter_module_signals": [],
+        "signal_ownership": [{"signal": "placeholder", "owner": "top.placeholder"}],
+    }
+
+    out = spec_agent._expose_orphan_child_inputs_at_top(spec)
+
+    ports = {port["name"]: port for port in out["hierarchy"]["top_module"]["ports"]}
+    assert ports["clk"] == {"name": "clk", "direction": "input", "width": 1}
+    assert ports["data_i"] == {"name": "data_i", "direction": "input", "width": 8}
+    connections = {item["top_port"]: item["connected_to"] for item in out["top_level_connections"]}
+    assert connections["clk"] == ["a.clk", "b.clk"]
+    assert connections["data_i"] == ["a.data_i"]
