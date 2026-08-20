@@ -192,6 +192,24 @@ IRQ shall assert when period completes.
     )
 
 
+def test_spec2rtl_file_collection_is_isolated_from_sibling_workflows(tmp_path):
+    workflow_a = tmp_path / "workflow_a"
+    workflow_b = tmp_path / "workflow_b"
+    workflow_a.mkdir()
+    workflow_b.mkdir()
+    selected = workflow_a / "top.sv"
+    foreign = workflow_b / "top.sv"
+    selected.write_text("module top(input clk, output done); endmodule\n", encoding="utf-8")
+    foreign.write_text("module top(input wrong_port); endmodule\n", encoding="utf-8")
+
+    files = spec2rtl_agent._collect_rtl_files({
+        "artifact_dir": str(workflow_a),
+        "rtl_files": [str(selected)],
+    })
+
+    assert files == [str(selected)]
+
+
 def test_spec2rtl_uses_structured_spec_and_regmap_without_prose_port_false_misses(tmp_path, monkeypatch):
     spec_dir = tmp_path / "spec"
     digital_dir = tmp_path / "digital"

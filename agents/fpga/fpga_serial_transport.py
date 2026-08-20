@@ -146,6 +146,11 @@ def add_spi_transport_if_needed(
     state: dict, *, threshold_bits: int = 64, force_for_board_mapping: bool = False
 ) -> dict | None:
     """Add an FPGA-only SPI shell when the core's parallel interface is too wide."""
+    deployment = str(state.get("deployment_architecture") or "automatic").strip().lower()
+    interface_plan = state.get("host_interface_plan") if isinstance(state.get("host_interface_plan"), dict) else {}
+    if deployment == "fpga_external_host":
+        from physical_ai.interface_contract import validate_external_host_interface_plan
+        interface_plan = validate_external_host_interface_plan(interface_plan)
     fpga = state.get("fpga") if isinstance(state.get("fpga"), dict) else {}
     rtl_files = [str(path) for path in fpga.get("rtl_files") or []]
     core_top = str(fpga.get("top_module") or state.get("top_module") or "")
@@ -283,6 +288,9 @@ def add_spi_transport_if_needed(
         "output_bits": output_bits,
         "input_bit_map": input_map,
         "output_bit_map": output_map,
+        "maximum_spi_clock_mhz": interface_plan.get("clock_mhz") if interface_plan else None,
+        "interrupt_signaling": interface_plan.get("interrupt_signaling") if interface_plan else None,
+        "source_interface_plan": interface_plan or None,
     }
     protocol_path = write_text(os.path.join(out_dir, "fpga_spi_transport_contract.json"), json.dumps(protocol, indent=2))
     driver_path = write_text(os.path.join(out_dir, "chiploop_spi_driver.py"), _host_driver_source(input_bits, output_bits, input_map, output_map))
@@ -307,6 +315,8 @@ def add_spi_transport_if_needed(
         "host_driver": os.path.abspath(driver_path),
         "protocol_contract_ready": True,
         "host_driver_ready": True,
+        "maximum_spi_clock_mhz": interface_plan.get("clock_mhz") if interface_plan else None,
+        "source_interface_plan": interface_plan or None,
         "scope": "FPGA only; ASIC uses the original core top module.",
         "hardware_readiness": "requires CDC/protocol verification and board pin assignment before programming hardware",
         "generation_reason": (

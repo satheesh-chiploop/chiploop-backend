@@ -43,6 +43,19 @@ CANDIDATE_BOARDS = [
 PROFILE_KEYS = {"best_overall", "best_performance", "best_low_cost", "best_for_growth"}
 
 
+def _deployment_capability(board: dict, deployment_architecture: str) -> tuple[bool, str | None]:
+    """Qualify board compute placement before implementation ranking."""
+    deployment = str(deployment_architecture or "automatic").strip().lower()
+    host = board.get("compute_host") if isinstance(board.get("compute_host"), dict) else {}
+    if deployment == "fpga_onboard_cpu" and not host.get("hard_cpu"):
+        return False, "no qualified hard onboard CPU contract"
+    if deployment == "fpga_soft_cpu" and not bool(host.get("soft_cpu_supported")):
+        return False, "soft CPU integration is not qualified"
+    if deployment == "fpga_external_host" and not bool(host.get("external_host_supported")):
+        return False, "external-host transport is not qualified"
+    return True, None
+
+
 def _progress(state: dict, message: str) -> None:
     callback = state.get("_progress_callback")
     if callable(callback):
@@ -482,6 +495,21 @@ def run_agent(state: dict) -> dict:
     ))
     if not board_keys:
         raise RuntimeError("Select at least one supported FPGA board/device to explore.")
+    deployment_architecture = str(state.get("deployment_architecture") or "automatic").strip().lower()
+    capability_rejections = {
+        key: reason
+        for key in board_keys
+        for supported, reason in [_deployment_capability(BOARD_REGISTRY[key], deployment_architecture)]
+        if not supported
+    }
+    board_keys = [key for key in board_keys if key not in capability_rejections]
+    if not board_keys:
+        detail = "; ".join(f"{key}: {reason}" for key, reason in capability_rejections.items())
+        raise RuntimeError(
+            f"No selected runnable FPGA board satisfies deployment architecture {deployment_architecture!r}. "
+            f"Capability results: {detail}. Add a board with a qualified compute_host contract or choose a "
+            "different processor placement."
+        )
     baseline_seed_count = max(1, min(int(_num(state.get("baseline_seed_count"), 1)), 10))
     closure_seed_count = max(1, min(int(_num(state.get("closure_seed_count"), 1)), 10))
     closure_near_miss_ratio = max(0.5, min(_num(state.get("closure_near_miss_ratio"), 0.85), 1.0))
@@ -628,6 +656,21 @@ def run_agent(state: dict) -> dict:
         and interface_adapter.get("protocol_contract_ready")
         and interface_adapter.get("host_driver_ready")
     )
+    selected_compute_host = (
+        (BOARD_REGISTRY.get(str(implementation_board)) or {}).get("compute_host")
+        if implementation_board else {}
+    )
+    selected_compute_host = selected_compute_host if isinstance(selected_compute_host, dict) else {}
+    onboard_integration_ready = bool(
+        selected_compute_host.get("hard_cpu")
+        and selected_compute_host.get("fabric_interface")
+        and selected_compute_host.get("integration_wrapper_ready")
+    )
+    integration_contract_ready = (
+        onboard_integration_ready if deployment_architecture == "fpga_onboard_cpu"
+        else spi_transport_ready if deployment_architecture == "fpga_external_host"
+        else bool(implementation_board)
+    )
     summary = {
         "type": "fpga_target_explorer",
         "status": "completed" if results else "failed",
@@ -637,6 +680,8 @@ def run_agent(state: dict) -> dict:
         "design_intent": str(state.get("spec_text") or state.get("spec") or "").strip() or None,
         "target_frequency_mhz": target,
         "requested_profile": requested_profile,
+        "deployment_architecture": deployment_architecture,
+        "capability_rejections": capability_rejections,
         "seed_policy": {"baseline_seed_count": baseline_seed_count, "closure_seed_count": closure_seed_count, "closure_is_conditional": True},
         "closure_policy": {
             "near_miss_ratio": closure_near_miss_ratio,
@@ -667,6 +712,12 @@ def run_agent(state: dict) -> dict:
             "host_transport": "spi" if spi_transport_ready else None,
             "transport_contract_ready": spi_transport_ready,
             "host_driver_ready": spi_transport_ready,
+            "deployment_architecture": deployment_architecture,
+            "compute_host": selected_compute_host,
+            "integration_contract_ready": integration_contract_ready,
+            "integration_reverification_required": deployment_architecture in {
+                "fpga_onboard_cpu", "fpga_external_host", "fpga_soft_cpu",
+            },
             "unmapped_ports": (implementation_result or {}).get("unmapped_ports") or [],
             "blocked_reason": None if implementation_board else (
                 "No explored board met the requested target with a verified complete pin map, and no programming-ready relaxed-frequency result was permitted or available."

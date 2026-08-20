@@ -1,5 +1,6 @@
 from agents.fpga import fpga_target_explorer_agent as explorer
 import json
+import pytest
 
 
 def test_capacity_preflight_reserves_soft_cpu_resources():
@@ -10,6 +11,46 @@ def test_capacity_preflight_reserves_soft_cpu_resources():
     assert result["status"] == "reject"
     assert result["checks"]["logic_cells"]["required"] == 5500
     assert result["checks"]["logic_cells"]["soft_cpu_reserved"] == 3000
+
+
+def test_onboard_cpu_exploration_rejects_fpga_only_candidates_before_tools(monkeypatch):
+    monkeypatch.setattr(explorer, "_run_synthesis", lambda *_args: pytest.fail("incompatible boards must not run synthesis"))
+    state = {
+        "workflow_id": "wf",
+        "deployment_architecture": "fpga_onboard_cpu",
+        "candidate_boards": ["ulx3s_ecp5_45f", "orangecrab_ecp5_85f"],
+        "fpga": {"top_module": "top", "rtl_files": ["top.sv"]},
+    }
+
+    with pytest.raises(RuntimeError, match="No selected runnable FPGA board satisfies.*fpga_onboard_cpu"):
+        explorer.run_agent(state)
+
+
+def test_onboard_cpu_exploration_only_ranks_qualified_compute_host(monkeypatch):
+    qualified = dict(explorer.BOARD_REGISTRY["orangecrab_ecp5_85f"])
+    qualified["compute_host"] = {
+        "hard_cpu": {"core": "qualified_cpu", "target_triple": "riscv64gc-unknown-none-elf"},
+        "soft_cpu_supported": True,
+        "external_host_supported": True,
+    }
+    monkeypatch.setitem(explorer.BOARD_REGISTRY, "orangecrab_ecp5_85f", qualified)
+    synthesis_calls = []
+    monkeypatch.setattr(explorer, "_run_synthesis", lambda _state, board, _cfg, strategy: synthesis_calls.append(board) or {"status": "completed", "strategy": strategy, "netlist": "demo.json"})
+    monkeypatch.setattr(explorer, "_run_pnr", lambda _state, board, cfg, _synth, seed, effort: {"status": "completed", "seed": seed, "effort": effort, "max_frequency_mhz": 90, "timing_met": True, "logic_cells_used": 3000, "logic_cells_available": cfg["resources"]["logic_cells"]})
+    monkeypatch.setattr(explorer, "publish_json", lambda *_args: None)
+    state = {
+        "workflow_id": "wf",
+        "deployment_architecture": "fpga_onboard_cpu",
+        "candidate_boards": ["ulx3s_ecp5_45f", "orangecrab_ecp5_85f"],
+        "fpga": {"top_module": "top", "rtl_files": ["top.sv"]},
+    }
+
+    explorer.run_agent(state)
+
+    assert synthesis_calls == ["orangecrab_ecp5_85f"]
+    assert state["fpga_target_explorer"]["capability_rejections"] == {
+        "ulx3s_ecp5_45f": "no qualified hard onboard CPU contract"
+    }
 
 
 def test_capacity_preflight_rejects_impossible_io_before_place_and_route():

@@ -78,6 +78,7 @@ def test_wide_core_gets_fpga_only_spi_transport(tmp_path, monkeypatch):
     assert ".s_axis_cmd(core_s_axis_cmd)" in wrapper
     protocol = json.loads(Path(report["protocol_contract"]).read_text(encoding="utf-8"))
     assert protocol["schema"] == "chiploop.fpga.spi_transport.v1"
+
     assert protocol["mode"] == 0
     assert protocol["response_latency_frames"] == 1
     assert report["protocol_contract_ready"] is True
@@ -107,6 +108,55 @@ def test_wide_core_gets_fpga_only_spi_transport(tmp_path, monkeypatch):
         )
         completed = subprocess.run(["yosys", "-s", str(script)], capture_output=True, text=True, check=False)
         assert completed.returncode == 0, completed.stderr + completed.stdout[-2000:]
+
+
+@pytest.mark.parametrize("deployment", ["fpga_onboard_cpu", "fpga_soft_cpu"])
+def test_cpu_integrated_modes_never_receive_automatic_spi_shell(tmp_path, monkeypatch, deployment):
+    rtl = tmp_path / "top.sv"
+    rtl.write_text("module top(input clk, input rst_n, output done); assign done=rst_n; endmodule\n", encoding="utf-8")
+    monkeypatch.setattr(mapping_agent, "add_spi_transport_if_needed", lambda *_args, **_kwargs: pytest.fail("CPU-integrated modes must not invent SPI"))
+    monkeypatch.setattr(mapping_agent, "publish_json", lambda *_args: None)
+    state = {
+        "workflow_id": "wf", "workflow_dir": str(tmp_path),
+        "deployment_architecture": deployment,
+        "candidate_boards": ["ulx3s_ecp5_45f"],
+        "fpga": {"top_module": "top", "rtl_files": [str(rtl)]},
+    }
+
+    mapping_agent.run_agent(state)
+
+    assert state["fpga_explorer_io_mapping"]["interface_adapter"] is None
+    assert state["fpga_explorer_io_mapping"]["deployment_architecture"] == deployment
+
+
+def test_external_host_forces_contracted_spi_endpoint_for_narrow_core(tmp_path, monkeypatch):
+    rtl = tmp_path / "top.sv"
+    rtl.write_text("module top(input clk, input rst_n, output done); assign done=rst_n; endmodule\n", encoding="utf-8")
+    calls = []
+
+    def fake_adapter(_state, **kwargs):
+        calls.append(kwargs)
+        return None
+
+    monkeypatch.setattr(mapping_agent, "add_spi_transport_if_needed", fake_adapter)
+    monkeypatch.setattr(mapping_agent, "publish_json", lambda *_args: None)
+    state = {
+        "workflow_id": "wf", "workflow_dir": str(tmp_path),
+        "deployment_architecture": "fpga_external_host",
+        "host_interface_plan": {
+            "protocol": "spi", "role": "fpga_peripheral", "clock_mhz": 10,
+            "data_width_bits": 8, "framing": "register_command_response",
+            "flow_control": "chip_select_and_status", "interrupt_signaling": "optional_gpio",
+            "register_access": "addressed_read_write",
+        },
+        "candidate_boards": ["ulx3s_ecp5_45f"],
+        "fpga": {"top_module": "top", "rtl_files": [str(rtl)]},
+    }
+
+    mapping_agent.run_agent(state)
+
+    assert calls[0]["force_for_board_mapping"] is True
+
 
 
 def test_non_ansi_reg_prefixed_ports_are_serialized_and_connected(tmp_path, monkeypatch):

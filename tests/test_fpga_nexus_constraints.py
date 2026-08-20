@@ -2,12 +2,18 @@ import pytest
 
 from agents.fpga.fpga_common import BOARD_REGISTRY
 from agents.fpga.fpga_constraint_setup_agent import (
+    _clock_constraints_from_text,
     _constrained_ports_from_text,
     _starter_cst,
     _starter_lpf,
     _starter_pcf,
     _starter_pdc,
 )
+
+
+def test_lpf_clock_constraints_are_recorded_per_port() -> None:
+    text = 'FREQUENCY PORT "clk" 25 MHz;\nFREQUENCY PORT "spi_sclk" 10 MHz;\n'
+    assert _clock_constraints_from_text("lpf", text) == {"clk": 25.0, "spi_sclk": 10.0}
 
 
 def test_certus_nx_versa_starter_pdc_maps_default_clock_and_led() -> None:

@@ -63,6 +63,29 @@ def test_constraint_signoff_blocks_unconstrained_ports(tmp_path):
         run_constraint_signoff(state)
 
 
+def test_constraint_signoff_blocks_secondary_clock_without_frequency(tmp_path):
+    rtl = tmp_path / "top.sv"
+    rtl.write_text(
+        "module top(input clk, input spi_sclk, output reg q); "
+        "always @(posedge clk) q <= 1'b0; always @(posedge spi_sclk) q <= 1'b1; endmodule"
+    )
+    state = {
+        "workflow_id": "signoff-two-clocks",
+        "workflow_dir": str(tmp_path),
+        "target_frequency_mhz": 25,
+        "fpga": {
+            "rtl_files": [str(rtl)],
+            "constraints": {
+                "unconstrained_ports": [],
+                "target_frequency_mhz": 25,
+                "clock_constraints_mhz": {"clk": 25},
+            },
+        },
+    }
+    with pytest.raises(RuntimeError, match="spi_sclk"):
+        run_constraint_signoff(state)
+
+
 def test_hardware_validation_defaults_to_not_requested(tmp_path):
     state = {"workflow_id": "bringup-disabled", "workflow_dir": str(tmp_path), "fpga": {}}
     result = run_bringup(state)

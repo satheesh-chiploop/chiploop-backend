@@ -642,6 +642,52 @@ def test_main_registers_generic_physical_ai_endpoints():
     assert 'Preserve that deeper Supabase state' in main
 
 
+def test_external_host_requires_complete_interface_plan_before_workflow_creation():
+    from physical_ai.interface_contract import validate_external_host_interface_plan
+
+    with pytest.raises(ValueError, match="interface plan before RTL generation"):
+        validate_external_host_interface_plan({})
+
+    validate_external_host_interface_plan({
+        "protocol": "spi", "role": "fpga_peripheral", "clock_mhz": 10,
+        "data_width_bits": 8, "framing": "register_command_response",
+        "flow_control": "chip_select_and_status", "interrupt_signaling": "optional_gpio",
+        "register_access": "addressed_read_write",
+    })
+
+
+def test_external_host_rejects_unqualified_transport():
+    from physical_ai.interface_contract import validate_external_host_interface_plan
+
+    with pytest.raises(ValueError, match="not yet qualified"):
+        validate_external_host_interface_plan({
+            "protocol": "pcie", "role": "fpga_peripheral", "clock_mhz": 100,
+            "data_width_bits": 32, "framing": "tlp", "flow_control": "credits",
+            "interrupt_signaling": "msi", "register_access": "bar_mmio",
+        })
+
+
+@pytest.mark.parametrize("field,value", [
+    ("clock_mhz", 0),
+    ("clock_mhz", 101),
+    ("data_width_bits", 16),
+    ("role", "fpga_controller"),
+    ("framing", "raw_stream"),
+])
+def test_external_host_rejects_unimplemented_spi_contract_variants(field, value):
+    from physical_ai.interface_contract import validate_external_host_interface_plan
+
+    plan = {
+        "protocol": "spi", "role": "fpga_peripheral", "clock_mhz": 10,
+        "data_width_bits": 8, "framing": "register_command_response",
+        "flow_control": "chip_select_and_status", "interrupt_signaling": "optional_gpio",
+        "register_access": "addressed_read_write",
+    }
+    plan[field] = value
+    with pytest.raises(ValueError):
+        validate_external_host_interface_plan(plan)
+
+
 def test_physical_ai_parent_status_is_not_overwritten_by_downstream_hem_failure():
     main = open("main.py", encoding="utf-8").read()
     continuation = main.split(

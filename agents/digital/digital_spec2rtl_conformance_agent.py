@@ -89,11 +89,15 @@ def _collect_rtl_files(state: Dict[str, Any]) -> List[str]:
         value = state.get(key)
         if isinstance(value, list):
             files.extend(str(p) for p in value if isinstance(p, str) and Path(p).suffix.lower() in RTL_EXTENSIONS)
+    explicit_paths = {str(Path(path).resolve()) for path in files if Path(path).exists()}
 
-    roots = [
-        Path(str(state.get("artifact_dir") or "")),
-        Path(str(state.get("artifact_dir") or "")).parent,
-    ]
+    # Search only roots that belong to this workflow. Scanning artifact_dir's
+    # parent can ingest a same-named RTL file from another concurrent workflow
+    # (or pytest worker) and produce false conformance failures.
+    roots = [Path(str(state.get("artifact_dir") or ""))]
+    workflow_dir = Path(str(state.get("workflow_dir") or ""))
+    if str(state.get("workflow_dir") or "").strip():
+        roots.append(workflow_dir)
     for root in roots:
         if root.exists():
             files.extend(str(p) for p in root.rglob("*") if p.is_file() and p.suffix.lower() in RTL_EXTENSIONS)
@@ -105,7 +109,11 @@ def _collect_rtl_files(state: Dict[str, Any]) -> List[str]:
             continue
         key = p.name
         current = seen.get(key)
-        if current is None or "handoff" in p.parts:
+        # Explicit inputs are inserted first and remain authoritative. Within
+        # discovered collateral, a handoff copy may replace another discovered
+        # copy, but never an explicit state-provided source.
+        current_is_explicit = bool(current) and str(Path(current).resolve()) in explicit_paths
+        if current is None or ("handoff" in p.parts and not current_is_explicit):
             seen[key] = str(p)
     return sorted(seen.values())
 

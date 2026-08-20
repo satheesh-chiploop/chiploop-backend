@@ -27,7 +27,20 @@ def run_agent(state: dict) -> dict:
     fpga = state.get("fpga") if isinstance(state.get("fpga"), dict) else {}
     rtl_files = [str(path) for path in fpga.get("rtl_files") or []]
     top = str(fpga.get("top_module") or state.get("top_module") or "top")
-    adapter = add_spi_transport_if_needed(state)
+    deployment = str(state.get("deployment_architecture") or "automatic").strip().lower()
+    interface_plan = state.get("host_interface_plan") if isinstance(state.get("host_interface_plan"), dict) else {}
+    transport_allowed = deployment not in {"fpga_onboard_cpu", "fpga_soft_cpu"}
+    if deployment == "fpga_external_host" and str(interface_plan.get("protocol") or "").lower() != "spi":
+        raise RuntimeError("External-host FPGA integration requires the qualified SPI interface plan before exploration.")
+    # An explicitly selected external host always needs the promised SPI
+    # endpoint, even when the native core is narrow enough for board headers.
+    adapter = (
+        add_spi_transport_if_needed(
+            state,
+            force_for_board_mapping=deployment == "fpga_external_host",
+        )
+        if transport_allowed else None
+    )
     if adapter and adapter.get("status") == "generated":
         fpga = state.get("fpga") if isinstance(state.get("fpga"), dict) else {}
         rtl_files = [str(path) for path in fpga.get("rtl_files") or []]
@@ -55,7 +68,8 @@ def run_agent(state: dict) -> dict:
     # board. In automatic mode, preserve the verified core and add the standard
     # FPGA-only SPI shell, then evaluate the actual adapted interface.
     if (
-        adapter is None
+        transport_allowed
+        and adapter is None
         and mappings
         and not any(item["all_ports_mapped"] for item in mappings)
         and state.get("auto_serialize_wide_io") is not False
@@ -69,6 +83,8 @@ def run_agent(state: dict) -> dict:
     summary = {
         "agent": agent, "status": "completed", "top_module": top, "top_level_ports": ports,
         "interface_adapter": adapter,
+        "deployment_architecture": deployment,
+        "host_interface_plan": interface_plan,
         "board_count": len(mappings), "fully_mapped_board_count": sum(1 for item in mappings if item["all_ports_mapped"]),
         "mappings": mappings,
         "policy": "Never invent physical pins. Unmapped I/O is explicit; Explorer uses core-only implementation while Prototyping blocks until every physical I/O is verified.",

@@ -3767,6 +3767,8 @@ class PhysicalAiWorkflowIn(BaseModel):
     deployment_architecture: Literal["automatic", "fpga_onboard_cpu", "fpga_soft_cpu", "fpga_external_host", "asic_digital_ip", "asic_soc", "asic_companion"] = "automatic"
     soft_cpu_config: Dict[str, Any] = Field(default_factory=lambda: {"core": "automatic", "isa": "automatic", "bus": "automatic"})
     asic_cpu_config: Dict[str, Any] = Field(default_factory=lambda: {"core": "automatic", "isa": "automatic", "bus": "automatic"})
+    host_interface_plan: Dict[str, Any] = Field(default_factory=dict)
+    external_host_config: Dict[str, Any] = Field(default_factory=dict)
     generate_architecture_with_model: bool = True
     maximum_error_percent: float = 3.0
     safety_constraints: List[str] = Field(default_factory=list)
@@ -7217,6 +7219,9 @@ def _hem_physical_ai_child_payload(root_workflow_id: str, root_run_id: str, payl
     common_digital = {
         "project_name": project_name,
         "parent_workflow_id": root_workflow_id,
+        "deployment_architecture": str(payload.get("deployment_architecture") or "automatic"),
+        "host_interface_plan": payload.get("host_interface_plan") or {},
+        "external_host_config": payload.get("external_host_config") or {},
         "hem_enabled": False,
         "hem_mode": _hem_normalized_mode(str(payload.get("hem_mode") or "fixed")),
         "hem_run_id": hem_run_id,
@@ -7245,10 +7250,12 @@ def _hem_physical_ai_child_payload(root_workflow_id: str, root_run_id: str, payl
                 "as software-visible. The streaming transport may coexist with, but cannot replace, this interface.\n"
             )
         elif deployment_architecture in external_host_modes:
+            host_interface_plan = payload.get("host_interface_plan") if isinstance(payload.get("host_interface_plan"), dict) else {}
             firmware_interface_contract = (
                 "\nEXTERNAL-HOST CONTROL CONTRACT: control belongs to the external host or companion processor. "
                 "Do not invent MMIO registers unless the top-level RTL implements them. Record device firmware as "
-                "not applicable and preserve the host transport contract.\n"
+                "not applicable and preserve this mandatory host transport contract exactly: "
+                f"{json.dumps(host_interface_plan, sort_keys=True)}.\n"
             )
         else:
             firmware_interface_contract = ""
@@ -7493,6 +7500,12 @@ def _hem_physical_ai_child_payload(root_workflow_id: str, root_run_id: str, payl
         "target_frequency_mhz": float(payload.get("target_frequency_mhz") or 50.0),
         "target": "fpga",
         "verification_domain": "fpga",
+        # Target Explorer must qualify compute placement before ranking boards;
+        # checking only after selection can choose an FPGA-only board for an
+        # onboard-CPU request and silently stop the HEM chain.
+        "deployment_architecture": str(payload.get("deployment_architecture") or "automatic"),
+        "host_interface_plan": payload.get("host_interface_plan") or {},
+        "external_host_config": payload.get("external_host_config") or {},
         "hem_enabled": False,
         "hem_mode": _hem_normalized_mode(str(payload.get("hem_mode") or "fixed")),
         "hem_run_id": hem_run_id,
@@ -7713,7 +7726,18 @@ def _hem_continue_physical_ai_after_success(*, root_workflow_id: str, root_run_i
                         raise RuntimeError(f"selected board {selected_board} has no supported hard onboard CPU")
                     if selected_host == "fpga_soft_cpu" and not bool(compute_host.get("soft_cpu_supported")):
                         raise RuntimeError(f"selected board {selected_board} is not qualified for a soft CPU")
-                    transport = str(automation_payload.get("host_transport") or "")
+                    if selected_host in {"fpga_onboard_cpu", "fpga_external_host"} and not bool(
+                        continuation.get("integration_contract_ready")
+                    ):
+                        raise RuntimeError(
+                            f"selected board {selected_board} has no completed {selected_host} integration "
+                            "wrapper contract; bitstream and firmware cannot start before integrated RTL reverification"
+                        )
+                    interface_plan = (
+                        automation_payload.get("host_interface_plan")
+                        if isinstance(automation_payload.get("host_interface_plan"), dict) else {}
+                    )
+                    transport = str(interface_plan.get("protocol") or automation_payload.get("host_transport") or "")
                     if not transport and continuation.get("transport_contract_ready") and continuation.get("host_driver_ready"):
                         transport = str(continuation.get("host_transport") or "")
                     deployable_ready = bool(transport) and selected_host != "fpga_soft_cpu"
@@ -7738,6 +7762,10 @@ def _hem_continue_physical_ai_after_success(*, root_workflow_id: str, root_run_i
                     # wide digital-IP top from Arch2RTL.
                     automation_payload["fpga_source_workflow_id"] = child_workflow_id
                     automation_payload["explorer_winning_configuration"] = continuation.get("winning_configuration") or {}
+                    automation_payload["integration_contract_ready"] = bool(continuation.get("integration_contract_ready"))
+                    automation_payload["integration_reverification_required"] = bool(
+                        continuation.get("integration_reverification_required")
+                    )
                     append_log_workflow(
                         root_workflow_id,
                         f"HEM selected FPGA board {selected_board} at {automation_payload.get('target_frequency_mhz')} MHz from Target Explorer evidence ({explorer_source}).",
@@ -8173,9 +8201,37 @@ async def apps_physical_ai_result(workflow_id: str, request: Request):
     return {"status": "completed", "phase": workflow.get("phase"), "logs": workflow.get("logs") or "", "workflow_id": workflow_id, "result": result, "plots": plots, "hem_children": hem_children}
 
 
+def _validate_physical_ai_interface_plan(payload: PhysicalAiWorkflowIn) -> None:
+    if (
+        payload.hem_enabled
+        and "fpga" in payload.implementation_path
+        and payload.deployment_architecture == "automatic"
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Automatic FPGA continuation cannot defer CPU/host placement until after RTL generation. "
+                "Select onboard CPU, soft CPU, or external host so its interface is included in RTL and verification."
+            ),
+        )
+    if payload.deployment_architecture == "fpga_external_host":
+        from physical_ai.interface_contract import validate_external_host_interface_plan
+        try:
+            validate_external_host_interface_plan(payload.host_interface_plan)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        target_triple = str((payload.external_host_config or {}).get("target_triple") or "").strip()
+        if not target_triple:
+            raise HTTPException(
+                status_code=422,
+                detail="External-host FPGA mode requires external_host_config.target_triple before software generation.",
+            )
+
+
 @app.post("/apps/physical-ai/run")
 async def apps_physical_ai_run(request: Request, background_tasks: BackgroundTasks, payload: PhysicalAiWorkflowIn):
     user_id = _require_user_id(request)
+    _validate_physical_ai_interface_plan(payload)
     try:
         model_rows = (
             supabase.table("physical_ai_models")

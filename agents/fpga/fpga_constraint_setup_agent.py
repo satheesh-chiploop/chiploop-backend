@@ -397,6 +397,18 @@ def _constrained_ports_from_text(fmt: str, text: str) -> list[str]:
     return ports
 
 
+def _clock_constraints_from_text(fmt: str, text: str) -> dict[str, float]:
+    clocks: dict[str, float] = {}
+    if fmt == "lpf":
+        for port, frequency in re.findall(
+            r'FREQUENCY\s+PORT\s+"([^"]+)"\s+([0-9]+(?:\.[0-9]+)?)\s+MHz',
+            text,
+            flags=re.IGNORECASE,
+        ):
+            clocks[port] = float(frequency)
+    return clocks
+
+
 def run_agent(state: dict) -> dict:
     agent = "FPGA Constraint Setup Agent"
     out_dir = fpga_dir(state, "constraints")
@@ -440,6 +452,17 @@ def run_agent(state: dict) -> dict:
         generated = True
     else:
         constrained_ports = _constrained_cst_ports(constraint_text) if fmt == "cst" else _constrained_ports_from_text(fmt, constraint_text)
+    interface_plan = state.get("host_interface_plan") if isinstance(state.get("host_interface_plan"), dict) else {}
+    if (
+        generated
+        and fmt == "lpf"
+        and str(interface_plan.get("protocol") or "").lower() == "spi"
+        and "spi_sclk" in constrained_ports
+    ):
+        spi_frequency = float(interface_plan.get("clock_mhz") or 0)
+        if spi_frequency > 0 and not re.search(r'FREQUENCY\s+PORT\s+"spi_sclk"', constraint_text, re.IGNORECASE):
+            constraint_text += f'FREQUENCY PORT "spi_sclk" {spi_frequency:g} MHz;\n'
+    clock_constraints = _clock_constraints_from_text(fmt, constraint_text)
     constraint_path = os.path.abspath(write_text(f"{out_dir}/{top}.{fmt}", constraint_text))
     summary = {
         "agent": agent,
@@ -454,6 +477,7 @@ def run_agent(state: dict) -> dict:
         "lpf_path": constraint_path if fmt == "lpf" else None,
         "cst_path": constraint_path if fmt == "cst" else None,
         "target_frequency_mhz": frequency,
+        "clock_constraints_mhz": clock_constraints,
         "board": board.get("board"),
         "note": "Generated demo constraints cover verified pins only. Custom interfaces must provide board-verified PCF, LPF, PDC, or CST assignments.",
     }
