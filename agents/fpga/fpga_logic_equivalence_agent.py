@@ -110,6 +110,12 @@ def _proof_script(rtl_files: list[str], netlist: str, top: str, family: str, dep
         # construction rule; ports are never hidden by Yosys rename -hide.
         "rename -hide w:*_next",
         "rename -hide w:next_*",
+        # Procedural mux temporaries are implementation helpers too. Their
+        # downstream registers/ports remain compared, so hiding these names
+        # prevents equiv_make from creating redundant points on a cone that
+        # synthesis is free to rewrite without weakening observable proof.
+        "rename -hide w:*_mux",
+        "rename -hide w:mux_*",
     ]
     lines = [*(f"read_verilog -sv {path}" for path in rtl_files), *normalize, f"rename {top} gold", "design -stash gold", "design -reset"]
     lines.extend(_library_reads(family))

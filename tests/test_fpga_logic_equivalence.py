@@ -49,6 +49,8 @@ def test_fpga_lec_uses_yosys_equivalence_and_passes(tmp_path, monkeypatch):
     assert script.count("memory\n") == 2
     assert "equiv_struct" in script
     assert "rename -hide w:next_*" in script
+    assert "rename -hide w:*_mux" in script
+    assert "rename -hide w:mux_*" in script
     assert "equiv_simple -undef -short" in script
     assert "equiv_induct -undef -seq 12" in script
     assert "equiv_induct -undef -seq 24" not in script
