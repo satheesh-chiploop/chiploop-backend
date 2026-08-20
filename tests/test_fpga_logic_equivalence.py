@@ -90,6 +90,12 @@ def test_fpga_lec_timeout_scales_with_synthesized_design_size(tmp_path):
     assert lec._proof_timeout_seconds(state, technology_mapped=True) == 900
 
 
+def test_incomplete_proof_refinement_depths_are_bounded_and_stronger():
+    assert lec._refinement_depths({}, [12]) == [24, 48]
+    assert lec._refinement_depths({"fpga_lec_max_induct_depth": 30}, [12]) == [24, 30]
+    assert lec._refinement_depths({"fpga_lec_max_induct_depth": 12}, [12]) == []
+
+
 def test_mapped_lec_budget_scales_for_physical_ai_ecp5_design(tmp_path):
     state = _state(tmp_path)
     state["fpga"]["synthesis"].update({"flip_flops": 652, "total_mapped_cells": 1643})
@@ -175,6 +181,41 @@ def test_large_design_starts_generic_lec_hierarchically_without_monolithic_attem
     assert "monolithic_attempt" not in published["generic_lec"]
     assert "fpga_rtl_to_generic_lec.ys" not in scripts
     assert scripts[0] == "fpga_generic_partition_core.ys"
+
+
+def test_hierarchical_generic_lec_refines_incomplete_partition_before_failing(tmp_path, monkeypatch):
+    state = _state(tmp_path)
+    rtl = Path(state["fpga"]["rtl_files"][0])
+    generic = Path(state["fpga"]["synthesis"]["equivalence_netlist"])
+    hierarchy = (
+        "module core(input clk, output reg q); always @(posedge clk) q <= ~q; endmodule\n"
+        "module top(input clk, output q); core u(.clk(clk),.q(q)); endmodule\n"
+    )
+    rtl.write_text(hierarchy, encoding="utf-8")
+    generic.write_text(hierarchy, encoding="utf-8")
+    calls = []
+
+    def fake_run(cmd, cwd, log_path, **_kwargs):
+        calls.append(Path(cmd[-1]).name)
+        if len(calls) == 1:
+            Path(log_path).write_text("ERROR: Found 10 unproven $equiv cells\n", encoding="utf-8")
+            return {"ok": False, "stderr_tail": "10 unproven points"}
+        Path(log_path).write_text("Equivalence successfully proven!\n", encoding="utf-8")
+        return {"ok": True}
+
+    monkeypatch.setattr(lec, "run_cmd", fake_run)
+    proof = lec._run_hierarchical_generic_proof(
+        state, str(tmp_path), [str(rtl)], str(generic), "top", [12], ["core"]
+    )
+
+    assert proof["proven"] is True
+    assert proof["partitions"][0]["refinement_depths"] == [24, 48]
+    assert proof["partitions"][0]["initial_attempt"]["unproven_points"] == 10
+    assert calls == [
+        "fpga_generic_partition_core.ys",
+        "fpga_generic_partition_core_refined.ys",
+        "fpga_generic_top_connectivity_lec.ys",
+    ]
 
 
 def test_generic_lec_retries_hierarchically_after_monolithic_incomplete(tmp_path, monkeypatch):

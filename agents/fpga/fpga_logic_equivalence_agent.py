@@ -33,6 +33,36 @@ def _induction_depths(depth: int) -> list[int]:
     return [max(1, depth)]
 
 
+def _refinement_depths(state: dict, attempted_depths: list[int]) -> list[int]:
+    """Return bounded, strictly stronger induction depths for incomplete proofs."""
+    attempted = max(attempted_depths or [1])
+    maximum = max(attempted, min(int(state.get("fpga_lec_max_induct_depth") or 48), 128))
+    depths = []
+    candidate = attempted * 2
+    while candidate <= maximum:
+        depths.append(candidate)
+        candidate *= 2
+    if maximum > attempted and (not depths or depths[-1] != maximum):
+        depths.append(maximum)
+    return depths
+
+
+def _refine_incomplete_proof(state: dict, proof: dict, out_dir: str, name: str,
+                             gold_files: list[str], gate_netlist: str, top: str,
+                             family: str, attempted_depths: list[int], **kwargs) -> dict:
+    """Strengthen induction after a real incomplete result; never waive it."""
+    depths = _refinement_depths(state, attempted_depths)
+    if proof.get("failure_kind") != "proof_incomplete" or not depths:
+        return proof
+    initial_attempt = proof
+    refined = _run_proof(
+        state, out_dir, name, gold_files, gate_netlist, top, family, depths, **kwargs,
+    )
+    refined["initial_attempt"] = initial_attempt
+    refined["refinement_depths"] = depths
+    return refined
+
+
 def _proof_timeout_seconds(state: dict, *, technology_mapped: bool = False) -> int:
     explicit = state.get("fpga_lec_timeout_seconds")
     if explicit not in {None, ""}:
@@ -247,6 +277,12 @@ def _run_hierarchical_generic_proof(state: dict, out_dir: str, rtl_files: list[s
             blackbox_modules=[candidate for candidate in partitions if candidate != module],
             timeout_override=600,
         )
+        proof = _refine_incomplete_proof(
+            state, proof, out_dir, f"fpga_generic_partition_{safe}_refined",
+            rtl_files, generic_netlist, module, "", depths,
+            blackbox_modules=[candidate for candidate in partitions if candidate != module],
+            timeout_override=600,
+        )
         proof["module"] = module
         proofs.append(proof)
         _progress(state, f"FPGA generic LEC partition {index}/{len(partitions)} finished with status {proof['status']}.")
@@ -257,6 +293,11 @@ def _run_hierarchical_generic_proof(state: dict, out_dir: str, rtl_files: list[s
         top_proof = _run_proof(
             state, out_dir, "fpga_generic_top_connectivity_lec", rtl_files, generic_netlist,
             top, "", depths, blackbox_modules=partitions, timeout_override=600,
+        )
+        top_proof = _refine_incomplete_proof(
+            state, top_proof, out_dir, "fpga_generic_top_connectivity_lec_refined",
+            rtl_files, generic_netlist, top, "", depths,
+            blackbox_modules=partitions, timeout_override=600,
         )
     proven = bool(top_proof and top_proof.get("proven") and all(proof.get("proven") for proof in proofs))
     all_proofs = [*proofs, *([top_proof] if top_proof else [])]
@@ -340,7 +381,8 @@ def run_agent(state: dict) -> dict:
             )
             generic_proof["strategy"] = "monolithic"
         if (
-            not generic_proof.get("proven")
+            generic_strategy == "monolithic"
+            and not generic_proof.get("proven")
             and generic_proof.get("failure_kind") == "proof_incomplete"
             and mapped_strategy.get("shared_partitions")
         ):
