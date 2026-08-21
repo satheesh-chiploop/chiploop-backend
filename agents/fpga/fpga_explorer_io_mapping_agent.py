@@ -29,7 +29,13 @@ def run_agent(state: dict) -> dict:
     top = str(fpga.get("top_module") or state.get("top_module") or "top")
     deployment = str(state.get("deployment_architecture") or "automatic").strip().lower()
     interface_plan = state.get("host_interface_plan") if isinstance(state.get("host_interface_plan"), dict) else {}
-    transport_allowed = deployment not in {"fpga_onboard_cpu", "fpga_soft_cpu"}
+    requested_boards = state.get("candidate_boards") if isinstance(state.get("candidate_boards"), list) else []
+    onboard_spi_boards = [
+        board_key for board_key in requested_boards
+        if str((((BOARD_REGISTRY.get(str(board_key)) or {}).get("compute_host") or {}).get("fabric_interface") or {}).get("protocol") or "").startswith("spi")
+    ]
+    onboard_spi_contract = deployment == "fpga_onboard_cpu" and bool(onboard_spi_boards)
+    transport_allowed = deployment not in {"fpga_onboard_cpu", "fpga_soft_cpu"} or onboard_spi_contract
     if deployment == "fpga_external_host" and str(interface_plan.get("protocol") or "").lower() != "spi":
         raise RuntimeError("External-host FPGA integration requires the qualified SPI interface plan before exploration.")
     # An explicitly selected external host always needs the promised SPI
@@ -37,7 +43,7 @@ def run_agent(state: dict) -> dict:
     adapter = (
         add_spi_transport_if_needed(
             state,
-            force_for_board_mapping=deployment == "fpga_external_host",
+            force_for_board_mapping=deployment == "fpga_external_host" or onboard_spi_contract,
         )
         if transport_allowed else None
     )
@@ -70,6 +76,7 @@ def run_agent(state: dict) -> dict:
     if (
         transport_allowed
         and adapter is None
+        and not onboard_spi_contract
         and mappings
         and not any(item["all_ports_mapped"] for item in mappings)
         and state.get("auto_serialize_wide_io") is not False
@@ -85,6 +92,7 @@ def run_agent(state: dict) -> dict:
         "interface_adapter": adapter,
         "deployment_architecture": deployment,
         "host_interface_plan": interface_plan,
+        "onboard_spi_contract_boards": onboard_spi_boards,
         "board_count": len(mappings), "fully_mapped_board_count": sum(1 for item in mappings if item["all_ports_mapped"]),
         "mappings": mappings,
         "policy": "Never invent physical pins. Unmapped I/O is explicit; Explorer uses core-only implementation while Prototyping blocks until every physical I/O is verified.",

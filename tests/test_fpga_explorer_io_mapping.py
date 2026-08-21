@@ -74,13 +74,21 @@ def test_wide_core_gets_fpga_only_spi_transport(tmp_path, monkeypatch):
     assert state["fpga"]["top_module"] == "adaptive_aero_control_top_spi_fpga_top"
     wrapper = Path(report["wrapper_rtl"]).read_text(encoding="utf-8")
     assert "input  logic spi_sclk" in wrapper
+    assert "!spi_cs_n ? (spi_active ? tx_shift[FRAME_BITS-1] : tx_snapshot[FRAME_BITS-1]) : 1'bz" in wrapper
     assert "adaptive_aero_control_top u_core" in wrapper
     assert ".s_axis_cmd(core_s_axis_cmd)" in wrapper
     protocol = json.loads(Path(report["protocol_contract"]).read_text(encoding="utf-8"))
     assert protocol["schema"] == "chiploop.fpga.spi_transport.v1"
 
     assert protocol["mode"] == 0
-    assert protocol["response_latency_frames"] == 1
+    assert protocol["response_latency_frames"] == 2
+    assert protocol["minimum_interframe_delay_us"] == 1
+    assert protocol["frame_bits"] == 136
+    assert protocol["frame_bytes"] == 17
+    assert protocol["command_leading_padding_bits"] == 7
+    assert protocol["response_trailing_padding_bits"] == 7
+    assert "localparam integer FRAME_BITS = 136;" in wrapper
+    assert "Bundled-data CDC" in wrapper
     assert report["protocol_contract_ready"] is True
     assert report["host_driver_ready"] is True
     spec = importlib.util.spec_from_file_location("generated_chiploop_spi_driver", report["host_driver"])
@@ -89,6 +97,9 @@ def test_wide_core_gets_fpga_only_spi_transport(tmp_path, monkeypatch):
     spec.loader.exec_module(driver)
     command = driver.pack_command({"s_axis_cmd": 0x1234, "s_axis_valid": 1})
     assert len(command) == protocol["frame_bytes"]
+    response_value = (0x55 << 1) | 1
+    response = driver.unpack_response((response_value << 7).to_bytes(17, "big"))
+    assert response == {"m_axis_resp": 0x55, "fault_flag": 1}
     with pytest.raises(ValueError, match="exceeds"):
         driver.pack_command({"s_axis_valid": 2})
     if shutil.which("iverilog"):
@@ -156,6 +167,44 @@ def test_external_host_forces_contracted_spi_endpoint_for_narrow_core(tmp_path, 
     mapping_agent.run_agent(state)
 
     assert calls[0]["force_for_board_mapping"] is True
+
+
+def test_ulx3s_onboard_esp32_forces_board_contracted_spi_endpoint(tmp_path, monkeypatch):
+    rtl = tmp_path / "top.sv"
+    rtl.write_text("module top(input clk, input reset_n, output done); assign done=reset_n; endmodule\n", encoding="utf-8")
+    calls = []
+    monkeypatch.setattr(mapping_agent, "add_spi_transport_if_needed", lambda _state, **kwargs: calls.append(kwargs) or None)
+    monkeypatch.setattr(mapping_agent, "publish_json", lambda *_args: None)
+    state = {
+        "workflow_id": "wf", "workflow_dir": str(tmp_path),
+        "deployment_architecture": "fpga_onboard_cpu",
+        "candidate_boards": ["ulx3s_ecp5_45f_esp32"],
+        "fpga": {"top_module": "top", "rtl_files": [str(rtl)]},
+    }
+
+    mapping_agent.run_agent(state)
+
+    assert calls == [{"force_for_board_mapping": True}]
+    assert state["fpga_explorer_io_mapping"]["onboard_spi_contract_boards"] == ["ulx3s_ecp5_45f_esp32"]
+
+
+def test_onboard_cpu_rejects_incompatible_candidate_spi_contracts(tmp_path, monkeypatch):
+    rtl = tmp_path / "top.sv"
+    rtl.write_text("module top(input clk, input reset_n, output done); assign done=reset_n; endmodule\n", encoding="utf-8")
+    monkeypatch.setitem(mapping_agent.BOARD_REGISTRY, "incompatible_spi_board", {
+        "compute_host": {"fabric_interface": {
+            "protocol": "spi_register", "mode": 1, "frame_order": "msb_first", "maximum_clock_mhz": 5,
+        }}
+    })
+    state = {
+        "workflow_id": "wf", "workflow_dir": str(tmp_path),
+        "deployment_architecture": "fpga_onboard_cpu",
+        "candidate_boards": ["ulx3s_ecp5_45f_esp32", "incompatible_spi_board"],
+        "fpga": {"top_module": "top", "rtl_files": [str(rtl)]},
+    }
+
+    with pytest.raises(RuntimeError, match="incompatible SPI transport contracts"):
+        mapping_agent.run_agent(state)
 
 
 

@@ -188,7 +188,7 @@ def _starter_pcf(top_module: str, frequency_mhz: float, board_key: str, ports: l
 
 
 def _pin_for_lpf_port(board_key: str, port: str) -> str | None:
-    if board_key == "ulx3s_ecp5_45f":
+    if board_key in {"ulx3s_ecp5_45f", "ulx3s_ecp5_45f_esp32"}:
         pins = {
             "clk": "G2",
             "clock": "G2",
@@ -221,6 +221,14 @@ def _pin_for_lpf_port(board_key: str, port: str) -> str | None:
             "spi_miso": "B9",   # GP3 / J1_11+
             "fault_indicator": "B2",
         }
+        if board_key == "ulx3s_ecp5_45f_esp32":
+            pins.update({
+                # ESP32 GPIO14/13/15/2 on the SD-shared ULX3S v2/v3 traces.
+                "spi_sclk": "H2",
+                "spi_cs_n": "K2",
+                "spi_mosi": "J1",
+                "spi_miso": "J3",
+            })
         return _lookup_pin(pins, port)
     if board_key == "orangecrab_ecp5_85f":
         pins = {
@@ -453,13 +461,16 @@ def run_agent(state: dict) -> dict:
     else:
         constrained_ports = _constrained_cst_ports(constraint_text) if fmt == "cst" else _constrained_ports_from_text(fmt, constraint_text)
     interface_plan = state.get("host_interface_plan") if isinstance(state.get("host_interface_plan"), dict) else {}
+    compute_host = board.get("compute_host") if isinstance(board.get("compute_host"), dict) else {}
+    fabric_interface = compute_host.get("fabric_interface") if isinstance(compute_host.get("fabric_interface"), dict) else {}
+    spi_protocol = str(interface_plan.get("protocol") or fabric_interface.get("protocol") or "").lower()
+    spi_frequency = float(interface_plan.get("clock_mhz") or fabric_interface.get("maximum_clock_mhz") or 0)
     if (
         generated
         and fmt == "lpf"
-        and str(interface_plan.get("protocol") or "").lower() == "spi"
+        and spi_protocol.startswith("spi")
         and "spi_sclk" in constrained_ports
     ):
-        spi_frequency = float(interface_plan.get("clock_mhz") or 0)
         if spi_frequency > 0 and not re.search(r'FREQUENCY\s+PORT\s+"spi_sclk"', constraint_text, re.IGNORECASE):
             constraint_text += f'FREQUENCY PORT "spi_sclk" {spi_frequency:g} MHz;\n'
     clock_constraints = _clock_constraints_from_text(fmt, constraint_text)

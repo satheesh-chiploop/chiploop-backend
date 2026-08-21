@@ -311,7 +311,7 @@ def test_active_aero_cpu_reference_builds_application_partition_and_policy(tmp_p
     assert result["partition"]["partition_phases"]["functional"] == {"status": "completed", "target_independent": True}
     refinement = result["partition"]["partition_phases"]["target_refinement"]
     assert refinement["status"] == "pending_board_selection"
-    assert refinement["selected_mode"] is None
+    assert refinement["selected_mode"] == "fpga_external_host"
     assert refinement["firmware_gate"]["ready"] is False
     assert "fpga_onboard_cpu" in refinement["candidate_modes"]
     assert "fpga_external_host" in refinement["candidate_modes"]
@@ -390,6 +390,23 @@ def test_automatic_asic_defaults_to_reusable_digital_ip(tmp_path):
     assert refinement["selected_mode"] == "asic_digital_ip"
     assert refinement["status"] == "selected"
     assert refinement["asic_cpu"] is None
+
+
+def test_automatic_fpga_uses_supabase_governed_deployment(tmp_path):
+    result = run_physical_ai_workflow({
+        "physics_domain": "automotive_aerodynamics",
+        "physics_model_id": "nvidia.domino.automotive_aero",
+        "execution_mode": "architecture",
+        "implementation_path": "fpga_prototype",
+        "deployment_architecture": "automatic",
+        "processor_ip_policy": TEST_PROCESSOR_POLICY,
+        "hem_enabled": False,
+    }, str(tmp_path))
+    requirements = result["requirements"]
+    refinement = result["partition"]["partition_phases"]["target_refinement"]
+    assert requirements["deployment_architecture_requested"] == "automatic"
+    assert requirements["deployment_architecture"] == "fpga_external_host"
+    assert refinement["selected_mode"] == "fpga_external_host"
 
 
 def test_asic_cpu_advanced_override_and_validation():

@@ -13,10 +13,15 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     processor_policy = validate_processor_policy(processor_policy)
     implementation_path = str(raw.get("implementation_path") or "digital_ip_asic")
     resolved_deployment = deployment_architecture
-    if deployment_architecture == "automatic" and implementation_path in {"digital_ip_asic", "fpga_then_asic"}:
-        if not processor_policy.get("automatic_asic_deployment"):
-            raise ValueError("Supabase processor_ip_policy.automatic_asic_deployment is required")
-        resolved_deployment = str(processor_policy["automatic_asic_deployment"])
+    if deployment_architecture == "automatic":
+        policy_key = (
+            "automatic_fpga_deployment"
+            if implementation_path in {"fpga_prototype", "fpga_then_asic"}
+            else "automatic_asic_deployment"
+        )
+        if not processor_policy.get(policy_key):
+            raise ValueError(f"Supabase processor_ip_policy.{policy_key} is required")
+        resolved_deployment = str(processor_policy[policy_key])
     soft_cpu = resolve_soft_cpu_config(raw.get("soft_cpu_config"), deployment_architecture=resolved_deployment, policy=processor_policy)
     asic_cpu = resolve_asic_cpu_config(raw.get("asic_cpu_config"), deployment_architecture=resolved_deployment, policy=processor_policy)
     requirements = {

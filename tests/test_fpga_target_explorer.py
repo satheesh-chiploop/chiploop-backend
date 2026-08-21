@@ -26,6 +26,29 @@ def test_onboard_cpu_exploration_rejects_fpga_only_candidates_before_tools(monke
         explorer.run_agent(state)
 
 
+def test_ulx3s_esp32_board_has_complete_onboard_cpu_contract():
+    board = explorer.BOARD_REGISTRY["ulx3s_ecp5_45f_esp32"]
+    supported, reason = explorer._deployment_capability(board, "fpga_onboard_cpu")
+    assert supported is True
+    assert reason is None
+    assert board["board_requirements"]["esp32_module_populated"] is True
+    assert board["compute_host"]["hard_cpu"]["firmware_platform"] == "esp-idf"
+    assert board["compute_host"]["fabric_interface"]["esp32_gpio"] == {
+        "sclk": 14, "cs_n": 13, "mosi": 15, "miso": 2,
+    }
+
+
+def test_soft_cpu_requires_complete_system_evidence():
+    assert explorer._soft_cpu_system_ready({}) is False
+    assert explorer._soft_cpu_system_ready({"soft_cpu_integration_contract": {
+        "status": "verified",
+        "cpu_rtl_files": ["rtl/picorv32.v"],
+        "memory_interconnect_integrated": True,
+        "complete_system_synthesis_passed": True,
+        "bsp_ready": True,
+    }}) is True
+
+
 def test_onboard_cpu_exploration_only_ranks_qualified_compute_host(monkeypatch):
     qualified = dict(explorer.BOARD_REGISTRY["orangecrab_ecp5_85f"])
     qualified["compute_host"] = {

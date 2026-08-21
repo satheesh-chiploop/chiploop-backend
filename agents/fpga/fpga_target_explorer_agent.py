@@ -31,6 +31,7 @@ CANDIDATE_BOARDS = [
     "ice40_hx8k_breakout",
     "colorlight_5a_75b",
     "ulx3s_ecp5_45f",
+    "ulx3s_ecp5_45f_esp32",
     "orangecrab_ecp5_85f",
     "certus_nx_versa_40",
     "crosslink_nx_eval_40",
@@ -54,6 +55,20 @@ def _deployment_capability(board: dict, deployment_architecture: str) -> tuple[b
     if deployment == "fpga_external_host" and not bool(host.get("external_host_supported")):
         return False, "external-host transport is not qualified"
     return True, None
+
+
+def _soft_cpu_system_ready(state: dict) -> bool:
+    """Require evidence for the complete synthesized CPU subsystem, not estimates."""
+    contract = state.get("soft_cpu_integration_contract")
+    if not isinstance(contract, dict):
+        return False
+    return bool(
+        str(contract.get("status") or "").lower() == "verified"
+        and contract.get("cpu_rtl_files")
+        and contract.get("memory_interconnect_integrated") is True
+        and contract.get("complete_system_synthesis_passed") is True
+        and contract.get("bsp_ready") is True
+    )
 
 
 def _progress(state: dict, message: str) -> None:
@@ -661,14 +676,18 @@ def run_agent(state: dict) -> dict:
         if implementation_board else {}
     )
     selected_compute_host = selected_compute_host if isinstance(selected_compute_host, dict) else {}
+    onboard_requires_spi = str((selected_compute_host.get("fabric_interface") or {}).get("protocol") or "").startswith("spi")
     onboard_integration_ready = bool(
         selected_compute_host.get("hard_cpu")
         and selected_compute_host.get("fabric_interface")
         and selected_compute_host.get("integration_wrapper_ready")
+        and (spi_transport_ready or not onboard_requires_spi)
     )
+    soft_cpu_system_ready = _soft_cpu_system_ready(state)
     integration_contract_ready = (
         onboard_integration_ready if deployment_architecture == "fpga_onboard_cpu"
         else spi_transport_ready if deployment_architecture == "fpga_external_host"
+        else soft_cpu_system_ready if deployment_architecture == "fpga_soft_cpu"
         else bool(implementation_board)
     )
     summary = {
@@ -712,9 +731,25 @@ def run_agent(state: dict) -> dict:
             "host_transport": "spi" if spi_transport_ready else None,
             "transport_contract_ready": spi_transport_ready,
             "host_driver_ready": spi_transport_ready,
+            "transport_contract": {
+                "transport": interface_adapter.get("transport"),
+                "serialized_input_bits": interface_adapter.get("serialized_input_bits"),
+                "serialized_output_bits": interface_adapter.get("serialized_output_bits"),
+                "frame_bits": interface_adapter.get("frame_bits"),
+                "frame_bytes": interface_adapter.get("frame_bytes"),
+                "command_leading_padding_bits": interface_adapter.get("command_leading_padding_bits"),
+                "response_trailing_padding_bits": interface_adapter.get("response_trailing_padding_bits"),
+                "response_latency_frames": interface_adapter.get("response_latency_frames"),
+                "minimum_interframe_delay_us": interface_adapter.get("minimum_interframe_delay_us"),
+                "input_bit_map": interface_adapter.get("input_bit_map") or [],
+                "output_bit_map": interface_adapter.get("output_bit_map") or [],
+                "maximum_spi_clock_mhz": interface_adapter.get("maximum_spi_clock_mhz"),
+                "transaction_model": interface_adapter.get("transaction_model"),
+            } if spi_transport_ready else {},
             "deployment_architecture": deployment_architecture,
             "compute_host": selected_compute_host,
             "integration_contract_ready": integration_contract_ready,
+            "soft_cpu_system_ready": soft_cpu_system_ready,
             "integration_reverification_required": deployment_architecture in {
                 "fpga_onboard_cpu", "fpga_external_host", "fpga_soft_cpu",
             },

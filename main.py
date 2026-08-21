@@ -7117,8 +7117,16 @@ def _hem_reference_fpga_candidates(payload: Dict[str, Any]) -> List[str]:
     else:
         return _hem_physical_ai_fpga_candidates()
 
-    runnable = set(_hem_physical_ai_fpga_candidates())
-    return list(dict.fromkeys(str(board).strip() for board in candidates if str(board).strip() in runnable))
+    runnable_boards = _hem_physical_ai_fpga_candidates()
+    runnable = set(runnable_boards)
+    resolved = [str(board).strip() for board in candidates if str(board).strip() in runnable]
+    if str(payload.get("deployment_architecture") or "") == "fpga_onboard_cpu":
+        from agents.fpga.fpga_common import BOARD_REGISTRY
+        resolved.extend(
+            board_id for board_id in runnable_boards
+            if ((BOARD_REGISTRY.get(board_id) or {}).get("compute_host") or {}).get("hard_cpu")
+        )
+    return list(dict.fromkeys(resolved))
 
 
 HEM_PHYSICAL_AI_STAGE_META: Dict[str, Dict[str, str]] = {
@@ -7422,10 +7430,13 @@ def _hem_physical_ai_child_payload(root_workflow_id: str, root_run_id: str, payl
             processor = _processor_with_toolchain(hard_cpu)
             if hard_cpu and not processor.get("core"):
                 processor["core"] = str(hard_cpu)
-            if not (processor.get("target_triple") or processor.get("custom_target_json")):
+            firmware_platform = str(processor.get("firmware_platform") or processor.get("sdk") or "").lower()
+            if firmware_platform not in {"esp-idf", "esp_idf"} and not (
+                processor.get("target_triple") or processor.get("custom_target_json")
+            ):
                 raise RuntimeError(
                     "FPGA onboard CPU firmware requires the selected board compute_host contract "
-                    "to declare a Rust target_triple; no CPU architecture is inferred."
+                    "to declare an executable toolchain target; no CPU architecture is inferred."
                 )
         elif external_host:
             processor = _processor_with_toolchain(
@@ -7442,7 +7453,7 @@ def _hem_physical_ai_child_payload(root_workflow_id: str, root_run_id: str, payl
                     f"External host architecture {host_arch!r} requires an explicit Rust target_triple."
                 )
             target_triple = "x86_64-unknown-linux-gnu"
-        elif not target_triple:
+        elif not target_triple and str(processor.get("firmware_platform") or processor.get("sdk") or "").lower() not in {"esp-idf", "esp_idf"}:
             target_triple = "riscv32-unknown-none-elf"
         device_layer_role = "host_device_layer" if external_host else "embedded_firmware"
         device_layer_goal = (
@@ -7473,7 +7484,18 @@ def _hem_physical_ai_child_payload(root_workflow_id: str, root_run_id: str, payl
             "target_frequency_mhz": float(payload.get("target_frequency_mhz") or 50.0),
             "execute_cosim": True,
             "run_cosim": True,
-            "toolchain": {"language": "rust", "target_triple": target_triple, "target_cpu": processor.get("core"), "target_isa": processor.get("isa"), "target_abi": processor.get("target_abi") or processor.get("abi"), "compiler_features": processor.get("compiler_features") or [], "custom_target_json": processor.get("custom_target_json")},
+            "toolchain": {
+                "language": str(processor.get("language") or "rust"),
+                "build_system": processor.get("build_system") or ("cargo" if str(processor.get("language") or "rust") == "rust" else "cmake"),
+                "sdk": processor.get("sdk"),
+                "idf_target": processor.get("idf_target"),
+                "target_triple": target_triple,
+                "target_cpu": processor.get("core"),
+                "target_isa": processor.get("isa"),
+                "target_abi": processor.get("target_abi") or processor.get("abi"),
+                "compiler_features": processor.get("compiler_features") or [],
+                "custom_target_json": processor.get("custom_target_json"),
+            },
             "firmware_role": device_layer_role,
             "deployment_architecture": deployment,
             "target_refinement": target_refinement,
@@ -7726,6 +7748,11 @@ def _hem_continue_physical_ai_after_success(*, root_workflow_id: str, root_run_i
                         raise RuntimeError(f"selected board {selected_board} has no supported hard onboard CPU")
                     if selected_host == "fpga_soft_cpu" and not bool(compute_host.get("soft_cpu_supported")):
                         raise RuntimeError(f"selected board {selected_board} is not qualified for a soft CPU")
+                    if selected_host == "fpga_soft_cpu" and not bool(continuation.get("soft_cpu_system_ready")):
+                        raise RuntimeError(
+                            "soft-CPU deployment cannot continue to bitstream or firmware until CPU RTL, "
+                            "memory/interconnect, complete-system synthesis, and the BSP are verified"
+                        )
                     if selected_host in {"fpga_onboard_cpu", "fpga_external_host"} and not bool(
                         continuation.get("integration_contract_ready")
                     ):
@@ -7748,6 +7775,7 @@ def _hem_continue_physical_ai_after_success(*, root_workflow_id: str, root_run_i
                         "deployment_architecture": selected_host,
                         "compute_host": compute_host,
                         "host_transport": transport or "not_selected",
+                        "transport_contract": continuation.get("transport_contract") or {},
                         "firmware_gate": {
                             "portable_source_ready": True,
                             "deployable_binary_ready": deployable_ready,
@@ -8201,20 +8229,19 @@ async def apps_physical_ai_result(workflow_id: str, request: Request):
     return {"status": "completed", "phase": workflow.get("phase"), "logs": workflow.get("logs") or "", "workflow_id": workflow_id, "result": result, "plots": plots, "hem_children": hem_children}
 
 
-def _validate_physical_ai_interface_plan(payload: PhysicalAiWorkflowIn) -> None:
-    if (
-        payload.hem_enabled
-        and "fpga" in payload.implementation_path
-        and payload.deployment_architecture == "automatic"
-    ):
-        raise HTTPException(
-            status_code=422,
-            detail=(
-                "Automatic FPGA continuation cannot defer CPU/host placement until after RTL generation. "
-                "Select onboard CPU, soft CPU, or external host so its interface is included in RTL and verification."
-            ),
-        )
-    if payload.deployment_architecture == "fpga_external_host":
+def _validate_physical_ai_interface_plan(
+    payload: PhysicalAiWorkflowIn, processor_policy: Optional[Dict[str, Any]] = None
+) -> None:
+    deployment = payload.deployment_architecture
+    if deployment == "automatic" and "fpga" in payload.implementation_path:
+        policy = processor_policy if isinstance(processor_policy, dict) else {}
+        deployment = str(policy.get("automatic_fpga_deployment") or "")
+        if deployment not in {"fpga_onboard_cpu", "fpga_soft_cpu", "fpga_external_host"}:
+            raise HTTPException(
+                status_code=422,
+                detail="Supabase processor_ip_policy.automatic_fpga_deployment must resolve to a qualified FPGA deployment mode.",
+            )
+    if deployment == "fpga_external_host":
         from physical_ai.interface_contract import validate_external_host_interface_plan
         try:
             validate_external_host_interface_plan(payload.host_interface_plan)
@@ -8231,7 +8258,6 @@ def _validate_physical_ai_interface_plan(payload: PhysicalAiWorkflowIn) -> None:
 @app.post("/apps/physical-ai/run")
 async def apps_physical_ai_run(request: Request, background_tasks: BackgroundTasks, payload: PhysicalAiWorkflowIn):
     user_id = _require_user_id(request)
-    _validate_physical_ai_interface_plan(payload)
     try:
         model_rows = (
             supabase.table("physical_ai_models")
@@ -8251,6 +8277,8 @@ async def apps_physical_ai_run(request: Request, background_tasks: BackgroundTas
         raise HTTPException(status_code=409, detail=f"Physical AI model is not executable: {model_rows[0].get('availability')}")
     model_record = dict(model_rows[0])
     model_configuration = model_record.get("configuration") if isinstance(model_record.get("configuration"), dict) else {}
+    processor_policy = model_configuration.get("processor_ip_policy") if isinstance(model_configuration.get("processor_ip_policy"), dict) else {}
+    _validate_physical_ai_interface_plan(payload, processor_policy)
     for governed_key in ("digital_ip_top_module", "digital_ip_project_name", "architecture_definition_supported"):
         if governed_key in model_configuration:
             model_record[governed_key] = model_configuration[governed_key]
@@ -8266,7 +8294,7 @@ async def apps_physical_ai_run(request: Request, background_tasks: BackgroundTas
     data = payload.dict()
     data["physics_model_record"] = model_record
     data["physics_model_catalog"] = catalog_rows
-    data["processor_ip_policy"] = model_configuration.get("processor_ip_policy") if isinstance(model_configuration.get("processor_ip_policy"), dict) else {}
+    data["processor_ip_policy"] = processor_policy
     background_tasks.add_task(execute_physical_ai_workflow_background, workflow_id, run_id, user_id, artifact_dir, data)
     return {"ok": True, "workflow_id": workflow_id, "run_id": run_id, "dashboard_path": f"/apps/physical-ai/results/{workflow_id}"}
 

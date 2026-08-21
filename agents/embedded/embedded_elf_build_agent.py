@@ -328,6 +328,10 @@ def _attempt_build(
 
 
 def run_agent(state: dict) -> dict:
+    toolchain = state.get("toolchain") if isinstance(state.get("toolchain"), dict) else {}
+    if str(toolchain.get("sdk") or "").lower() in {"esp-idf", "esp_idf"}:
+        from .embedded_esp_idf_build import run_esp_idf_build
+        return run_esp_idf_build(state)
     print(f"\n🚀 Running {AGENT_NAME}...")
     logger.info("Starting %s", AGENT_NAME)
     ensure_workflow_dir(state)

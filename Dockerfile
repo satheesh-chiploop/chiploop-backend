@@ -5,7 +5,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     CHIPLOOP_PRIVATE_ARTIFACT_ROOT=/var/lib/chiploop/artifacts \
     RUSTUP_HOME=/opt/rustup \
     CARGO_HOME=/opt/cargo \
-    PATH=/opt/cargo/bin:${PATH}
+    IDF_PATH=/opt/esp-idf \
+    IDF_TOOLS_PATH=/opt/espressif \
+    PATH=/opt/esp-idf/tools:/opt/cargo/bin:${PATH}
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     bash \
@@ -30,6 +32,12 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
       thumbv7em-none-eabi \
       thumbv7em-none-eabihf
 
+# The ULX3S onboard-CPU profile uses a populated classic ESP32 module. Pin a
+# stable ESP-IDF release and install only the ESP32 toolchain; firmware builds
+# fail closed if this governed compiler is absent.
+RUN git clone --branch v5.5.3 --depth 1 --recursive https://github.com/espressif/esp-idf.git /opt/esp-idf \
+    && /opt/esp-idf/install.sh esp32
+
 WORKDIR /app/backend
 COPY requirements.txt /app/backend/requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
@@ -37,7 +45,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . /app/backend
 RUN useradd --create-home --uid 10001 chiploop \
     && mkdir -p /app/backend/backend/workflows /var/lib/chiploop/artifacts /var/lib/chiploop/tmp \
-    && chown -R chiploop:chiploop /app/backend /var/lib/chiploop /opt/rustup /opt/cargo
+    && chown -R chiploop:chiploop /app/backend /var/lib/chiploop /opt/rustup /opt/cargo /opt/esp-idf /opt/espressif
 
 USER chiploop
 EXPOSE 8000

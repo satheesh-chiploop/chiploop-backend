@@ -96,19 +96,21 @@ def _shift_expression(name: str, width: int, bit: str) -> str:
 
 
 def _host_driver_source(input_bits: int, output_bits: int, input_map: list[dict[str, Any]], output_map: list[dict[str, Any]]) -> str:
-    frame_bits = max(input_bits, output_bits)
+    frame_bits = ((max(input_bits, output_bits) + 7) // 8) * 8
     return f'''"""Generated ChipLoop SPI Mode-0 host transport.
 
-Command N is committed when chip-select rises.  The response visible during
-that exchange is the previous core snapshot, so callers should pipeline or
-perform a second exchange when they need the response to command N.
+Command N is committed when chip-select rises. The held response mailbox is
+captured at the next frame commit, so response N is visible during frame N+2.
+Callers must pipeline two exchanges or issue two explicit polling frames.
 """
 from typing import Callable, Mapping
 
 INPUT_BITS = {input_bits}
 OUTPUT_BITS = {output_bits}
 FRAME_BITS = {frame_bits}
-FRAME_BYTES = (FRAME_BITS + 7) // 8
+FRAME_BYTES = FRAME_BITS // 8
+COMMAND_LEADING_PADDING_BITS = FRAME_BITS - INPUT_BITS
+RESPONSE_TRAILING_PADDING_BITS = FRAME_BITS - OUTPUT_BITS
 INPUT_MAP = {input_map!r}
 OUTPUT_MAP = {output_map!r}
 
@@ -151,6 +153,36 @@ def add_spi_transport_if_needed(
     if deployment == "fpga_external_host":
         from physical_ai.interface_contract import validate_external_host_interface_plan
         interface_plan = validate_external_host_interface_plan(interface_plan)
+    elif deployment == "fpga_onboard_cpu" and not interface_plan:
+        from .fpga_common import BOARD_REGISTRY
+        requested = state.get("candidate_boards") if isinstance(state.get("candidate_boards"), list) else []
+        board_interfaces = [
+            (((BOARD_REGISTRY.get(str(board)) or {}).get("compute_host") or {}).get("fabric_interface") or {})
+            for board in requested
+        ]
+        qualified = [contract for contract in board_interfaces if str(contract.get("protocol") or "").startswith("spi")]
+        if qualified:
+            compatibility = {
+                (
+                    str(contract.get("protocol") or "").lower(),
+                    int(contract.get("mode") or 0),
+                    str(contract.get("frame_order") or "msb_first").lower(),
+                )
+                for contract in qualified
+            }
+            if len(compatibility) != 1:
+                raise RuntimeError(
+                    "Onboard-CPU FPGA candidates declare incompatible SPI transport contracts; "
+                    "select a board before generating the integration wrapper."
+                )
+            protocol, mode, frame_order = next(iter(compatibility))
+            interface_plan = {
+                "protocol": protocol,
+                "mode": mode,
+                "frame_order": frame_order,
+                "clock_mhz": min(float(contract.get("maximum_clock_mhz") or 0) for contract in qualified),
+                "source": "board_compute_host_contract",
+            }
     fpga = state.get("fpga") if isinstance(state.get("fpga"), dict) else {}
     rtl_files = [str(path) for path in fpga.get("rtl_files") or []]
     core_top = str(fpga.get("top_module") or state.get("top_module") or "")
@@ -169,6 +201,7 @@ def add_spi_transport_if_needed(
     payload_outputs = [port for port in ports if port["direction"] == "output"]
     input_bits = max(1, sum(int(port["width"]) for port in payload_inputs))
     output_bits = max(1, sum(int(port["width"]) for port in payload_outputs))
+    frame_bits = ((max(input_bits, output_bits) + 7) // 8) * 8
     wrapper_top = f"{core_top}_spi_fpga_top"
     lines = [
         "// Auto-generated FPGA-only serialized transport shell.",
@@ -184,8 +217,10 @@ def add_spi_transport_if_needed(
         ");",
         f"  localparam integer INPUT_BITS = {input_bits};",
         f"  localparam integer OUTPUT_BITS = {output_bits};",
-        "  logic [INPUT_BITS-1:0] rx_shift, rx_active;",
-        "  logic [OUTPUT_BITS-1:0] tx_shift, tx_snapshot;",
+        f"  localparam integer FRAME_BITS = {frame_bits};",
+        "  logic [FRAME_BITS-1:0] rx_shift;",
+        "  logic [INPUT_BITS-1:0] rx_active;",
+        "  logic [FRAME_BITS-1:0] tx_shift, tx_snapshot;",
         "  logic spi_active;",
         "  logic spi_cs_meta, spi_cs_sync, spi_cs_prev;",
     ]
@@ -199,6 +234,7 @@ def add_spi_transport_if_needed(
     response_items = [f"core_{port['name']}" for port in payload_outputs]
     response = "{" + ", ".join(response_items) + "}" if len(response_items) > 1 else (response_items[0] if response_items else "1'b0")
     lines.append(f"  wire [OUTPUT_BITS-1:0] core_response = {response};")
+    lines.append("  wire [FRAME_BITS-1:0] framed_response = {core_response, {(FRAME_BITS-OUTPUT_BITS){1'b0}}};")
     fault = next((port for port in payload_outputs if port["name"].lower() in {"fault", "fault_flag", "error", "error_flag"}), None)
     fault_signal = f"core_{fault['name']}" if fault else "1'b0"
     lines.append(f"  assign fault_indicator = {fault_signal};")
@@ -212,9 +248,9 @@ def add_spi_transport_if_needed(
         "  end",
         "  always_ff @(posedge spi_sclk) begin",
         "    if (!spi_cs_n) begin",
-        f"      rx_shift <= {_shift_expression('rx_shift', input_bits, 'spi_mosi')};",
-        f"      if (!spi_active) tx_shift <= {_shift_expression('tx_snapshot', output_bits, zero_bit)};",
-        f"      else tx_shift <= {_shift_expression('tx_shift', output_bits, zero_bit)};",
+        f"      rx_shift <= {_shift_expression('rx_shift', frame_bits, 'spi_mosi')};",
+        f"      if (!spi_active) tx_shift <= {_shift_expression('tx_snapshot', frame_bits, zero_bit)};",
+        f"      else tx_shift <= {_shift_expression('tx_shift', frame_bits, zero_bit)};",
         "    end",
         "  end",
         "  // Synchronize frame completion into the core clock domain. The host",
@@ -225,11 +261,16 @@ def add_spi_transport_if_needed(
         "      rx_active <= '0; tx_snapshot <= '0;",
         "    end else begin",
         "      spi_cs_meta <= spi_cs_n; spi_cs_sync <= spi_cs_meta; spi_cs_prev <= spi_cs_sync;",
-        "      if (spi_cs_sync && !spi_cs_prev) rx_active <= rx_shift;",
-        "      tx_snapshot <= core_response;",
+        "      if (spi_cs_sync && !spi_cs_prev) begin",
+        "        rx_active <= rx_shift[INPUT_BITS-1:0];",
+        "        // Bundled-data CDC: capture once, then hold this mailbox stable",
+        "        // until the next completed frame. The host observes response N in frame N+2.",
+        "        tx_snapshot <= framed_response;",
+        "      end",
         "    end",
         "  end",
-        "  always_comb spi_miso = spi_active ? tx_shift[OUTPUT_BITS-1] : tx_snapshot[OUTPUT_BITS-1];",
+        "  // Release the shared MISO/SD net whenever chip select is inactive.",
+        "  always_comb spi_miso = !spi_cs_n ? (spi_active ? tx_shift[FRAME_BITS-1] : tx_snapshot[FRAME_BITS-1]) : 1'bz;",
         f"  {core_top} u_core (",
     ])
     connections = []
@@ -275,15 +316,18 @@ def add_spi_transport_if_needed(
         output_map.append({"port": port["name"], "width": int(port["width"]), "lsb": output_lsb})
         output_lsb += int(port["width"])
     output_map.reverse()
-    frame_bits = max(input_bits, output_bits)
     protocol = {
         "schema": "chiploop.fpga.spi_transport.v1",
         "mode": 0,
         "bit_order": "msb_first",
         "frame_bits": frame_bits,
-        "frame_bytes": (frame_bits + 7) // 8,
+        "frame_bytes": frame_bits // 8,
+        "command_leading_padding_bits": frame_bits - input_bits,
+        "response_trailing_padding_bits": frame_bits - output_bits,
         "command_commit": "chip_select_rising_edge",
-        "response_latency_frames": 1,
+        "response_latency_frames": 2,
+        "minimum_interframe_delay_us": 1,
+        "cdc_model": "bundled_data_mailboxes_held_stable_between_frame_commits",
         "input_bits": input_bits,
         "output_bits": output_bits,
         "input_bit_map": input_map,
@@ -306,10 +350,15 @@ def add_spi_transport_if_needed(
         "core_top_module": core_top, "fpga_top_module": wrapper_top,
         "original_top_level_io_bits": total_bits, "fpga_top_level_io_bits": 7,
         "serialized_input_bits": input_bits, "serialized_output_bits": output_bits,
+        "frame_bits": frame_bits, "frame_bytes": frame_bits // 8,
+        "command_leading_padding_bits": frame_bits - input_bits,
+        "response_trailing_padding_bits": frame_bits - output_bits,
+        "response_latency_frames": 2,
+        "minimum_interframe_delay_us": 1,
         "input_bit_map": input_map,
         "output_bit_map": output_map,
         "output_frame_order_msb_first": [port["name"] for port in payload_outputs],
-        "transaction_model": "MSB-first full-duplex frames; command N is committed when CS rises and response N is read in the following frame.",
+        "transaction_model": "MSB-first byte-aligned full-duplex frames; command N commits when CS rises and response N is read in frame N+2.",
         "wrapper_rtl": wrapper_path,
         "protocol_contract": os.path.abspath(protocol_path),
         "host_driver": os.path.abspath(driver_path),

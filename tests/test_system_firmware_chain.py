@@ -426,3 +426,10 @@ def test_backend_image_preinstalls_embedded_rust_toolchain_matrix():
     assert "riscv64gc-unknown-none-elf" in dockerfile
     assert "thumbv7em-none-eabihf" in dockerfile
     assert "/opt/rustup /opt/cargo" in dockerfile
+
+
+def test_backend_image_pins_esp_idf_for_ulx3s_onboard_cpu():
+    dockerfile = Path("Dockerfile").read_text(encoding="utf-8")
+    assert "IDF_PATH=/opt/esp-idf" in dockerfile
+    assert "--branch v5.5.3" in dockerfile
+    assert "/opt/esp-idf/install.sh esp32" in dockerfile
