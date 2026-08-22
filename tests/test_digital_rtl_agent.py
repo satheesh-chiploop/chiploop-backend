@@ -1182,6 +1182,19 @@ def test_repair_context_falls_back_to_complete_hierarchy_when_log_has_no_file():
     assert targets == ["top.v"]
 
 
+def test_final_structural_closure_prompt_names_all_blockers():
+    prompt = agent._build_structural_closure_prompt(
+        "contract", "---BEGIN top.v---\nmodule top; endmodule\n---END top.v---", "compile ok",
+        "%Warning-UNDRIVEN: pass3/top.v:8: Signal is not driven: 'fault_code_w'\n"
+        "%Warning-MULTIDRIVEN: pass3/top.v:9: Signal has multiple driving blocks: 'ready_w'",
+        ["top.v"],
+    )
+    assert "FINAL STRUCTURAL CLOSURE PASS" in prompt
+    assert "fault_code_w" in prompt
+    assert "ready_w" in prompt
+    assert "exactly one real producer" in prompt
+
+
 def test_partial_repair_preserves_children_emitted_inside_original_top_block():
     previous = """---BEGIN top.v---
 module top; child u_child(); endmodule

@@ -3155,6 +3155,11 @@ def _upload_rtl_debug_artifacts(workflow_id, agent_name, rtl_dir):
         "rtl_agent_summary_pass3.txt",
         "rtl_agent_exception_pass3.txt",
         "rtl_llm_raw_output_pass3.txt",
+        "rtl_agent_compile_pass4.log",
+        "rtl_verilator_lint_pass4.log",
+        "rtl_agent_summary_pass4.txt",
+        "rtl_agent_exception_pass4.txt",
+        "rtl_llm_raw_output_pass4.txt",
         "rtl_quality_gate.json",
         "rtl_agent_final_status.log",
         "rtl_agent_final_summary.txt",
@@ -3410,6 +3415,33 @@ SELF-CHECK BEFORE RETURNING RTL
 - No illegal reg/wire connections
 - No latch inference
 - Interfaces unchanged
+""".strip()
+
+
+def _build_structural_closure_prompt(base_prompt: str, previous_llm_output: str,
+                                     compile_log_text: str, verilator_log_text: str,
+                                     expected_files: Optional[List[str]] = None) -> str:
+    """Final bounded retry focused only on remaining structural blockers."""
+    blockers = [
+        line.strip() for line in (verilator_log_text or "").splitlines()
+        if re.search(r"%Warning-(?:UNDRIVEN|MULTIDRIVEN)\b|%Error:", line)
+    ]
+    blocker_text = "\n".join(blockers) or "See the supplied latest compile and Verilator logs."
+    return _build_rtl_repair_prompt(
+        base_prompt, previous_llm_output, compile_log_text, verilator_log_text, expected_files
+    ) + f"""
+
+==============================
+FINAL STRUCTURAL CLOSURE PASS
+==============================
+This is the last bounded repair attempt. Do not redesign or clean warning-only style issues.
+Repair every blocker listed below in the same response:
+{blocker_text}
+
+For every UNDRIVEN signal, trace all consumers and connect it to exactly one real producer that
+implements the existing specification. A declaration or consumer connection is not a driver.
+Do not tie functional status, data, fault, valid, ready, enable, or control signals to constants.
+Before returning, audit every named blocker and confirm it has exactly one legal source.
 """.strip()
 
 
@@ -4195,9 +4227,45 @@ def _run(context: AgentContext) -> dict:
                     state=state,
                 )
                 if not pass3["ok"]:
-                    return _fail_and_upload("RTL failed checks in pass1, pass2, and pass3.")
-                final_result = pass3
-                final_suffix = "pass3"
+                    pass3_compile_log = ""
+                    if os.path.exists(pass3["compile_log_path"]):
+                        with open(pass3["compile_log_path"], "r", encoding="utf-8") as f:
+                            pass3_compile_log = f.read()
+                    pass3_verilator_log = ""
+                    if os.path.exists(pass3["verilator_log_path"]):
+                        with open(pass3["verilator_log_path"], "r", encoding="utf-8") as f:
+                            pass3_verilator_log = f.read()
+                    repair_prompt_pass4 = _build_structural_closure_prompt(
+                        prompt, llm_output_pass3, pass3_compile_log, pass3_verilator_log,
+                        _collect_expected_rtl_files(spec_json, mode),
+                    )
+                    _stage("starting_llm_call_pass4_structural_closure")
+                    try:
+                        llm_output_pass4 = _complete_rtl_text(
+                            repair_prompt_pass4, agent_name=agent_name, state=state, stage_label="llm_pass4"
+                        )
+                    except Exception as e4:
+                        return _fail_and_upload("Pass3 failed and Pass4 structural closure generation failed.", e4)
+                    llm_output_pass4 = _merge_rtl_repair_output(
+                        llm_output_pass3, llm_output_pass4,
+                        _collect_expected_rtl_files(spec_json, mode),
+                    )
+                    pass4 = _validate_and_materialize_rtl(
+                        llm_output=llm_output_pass4,
+                        rtl_dir=rtl_dir,
+                        spec_json=spec_json,
+                        mode=mode,
+                        suffix="pass4",
+                        materialize_subdir="pass4",
+                        state=state,
+                    )
+                    if not pass4["ok"]:
+                        return _fail_and_upload("RTL failed checks in pass1 through pass4.")
+                    final_result = pass4
+                    final_suffix = "pass4"
+                else:
+                    final_result = pass3
+                    final_suffix = "pass3"
 
             promoted_files = _promote_rtl_files_to_root(rtl_dir, final_result["artifact_list"])
             final_result["artifact_list"] = promoted_files
