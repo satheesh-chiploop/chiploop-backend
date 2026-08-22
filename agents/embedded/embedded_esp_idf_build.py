@@ -19,15 +19,36 @@ def _field(bit_map: list, name: str) -> dict:
     return next((item for item in bit_map if str(item.get("port") or "").lower() == name), {})
 
 
+_REGISTER_FIELD_ALIASES = {
+    "valid": ("reg_valid", "mmio_valid", "csr_valid"),
+    "write": ("reg_we", "reg_write", "mmio_write", "mmio_we", "csr_write", "csr_we"),
+    "address": ("reg_addr", "mmio_addr", "csr_addr"),
+    "write_data": ("reg_wdata", "mmio_wdata", "csr_wdata"),
+    "read_data": ("reg_rdata", "mmio_rdata", "csr_rdata"),
+    "ready": ("reg_ready", "mmio_ready", "csr_ready"),
+}
+
+
+def _register_fields(inputs: list, outputs: list) -> dict[str, dict]:
+    """Resolve conventional register-bus port names by semantic role."""
+    input_roles = {"valid", "write", "address", "write_data"}
+    resolved: dict[str, dict] = {}
+    for role, aliases in _REGISTER_FIELD_ALIASES.items():
+        bit_map = inputs if role in input_roles else outputs
+        resolved[role] = next((field for alias in aliases if (field := _field(bit_map, alias))), {})
+    return resolved
+
+
 def _main_source(interface: dict, frame_bytes: int, transport: dict | None = None) -> str:
     gpio = interface.get("esp32_gpio") if isinstance(interface.get("esp32_gpio"), dict) else {}
     clock_hz = int(float(interface.get("maximum_clock_mhz") or 10) * 1_000_000)
     transport = transport if isinstance(transport, dict) else {}
     inputs = transport.get("input_bit_map") if isinstance(transport.get("input_bit_map"), list) else []
     outputs = transport.get("output_bit_map") if isinstance(transport.get("output_bit_map"), list) else []
-    reg_valid, reg_we = _field(inputs, "reg_valid"), _field(inputs, "reg_we")
-    reg_addr, reg_wdata = _field(inputs, "reg_addr"), _field(inputs, "reg_wdata")
-    reg_rdata, reg_ready = _field(outputs, "reg_rdata"), _field(outputs, "reg_ready")
+    fields = _register_fields(inputs, outputs)
+    reg_valid, reg_we = fields["valid"], fields["write"]
+    reg_addr, reg_wdata = fields["address"], fields["write_data"]
+    reg_rdata, reg_ready = fields["read_data"], fields["ready"]
     has_register_api = all((reg_valid, reg_we, reg_addr, reg_wdata, reg_rdata, reg_ready))
     register_api = ""
     if has_register_api:
@@ -176,14 +197,16 @@ def run_esp_idf_build(state: dict) -> dict:
         raise RuntimeError("ESP-IDF build rejected inconsistent byte-aligned FPGA frame metadata.")
     if int(transport.get("response_latency_frames") or 0) != 2:
         raise RuntimeError("ESP-IDF build requires the qualified two-frame bundled-data response contract.")
-    required_inputs = {"reg_valid", "reg_we", "reg_addr", "reg_wdata"}
-    required_outputs = {"reg_rdata", "reg_ready"}
-    input_names = {str(item.get("port") or "").lower() for item in transport.get("input_bit_map") or [] if isinstance(item, dict)}
-    output_names = {str(item.get("port") or "").lower() for item in transport.get("output_bit_map") or [] if isinstance(item, dict)}
-    if not required_inputs.issubset(input_names) or not required_outputs.issubset(output_names):
-        raise RuntimeError("ULX3S ESP32 integration requires reg_valid/reg_we/reg_addr/reg_wdata/reg_rdata/reg_ready in the FPGA transport map.")
+    fields = _register_fields(transport.get("input_bit_map") or [], transport.get("output_bit_map") or [])
+    if not all(fields.values()):
+        missing = [role for role, field in fields.items() if not field]
+        raise RuntimeError(
+            "ESP32 integration requires a complete semantic register transport map; missing roles: "
+            + ", ".join(missing)
+        )
+    selected_ports = {str(field.get("port") or "").lower() for field in fields.values()}
     for item in [*(transport.get("input_bit_map") or []), *(transport.get("output_bit_map") or [])]:
-        if isinstance(item, dict) and str(item.get("port") or "").lower() in required_inputs | required_outputs and int(item.get("width") or 0) > 32:
+        if isinstance(item, dict) and str(item.get("port") or "").lower() in selected_ports and int(item.get("width") or 0) > 32:
             raise RuntimeError("ESP-IDF register API currently supports register fields up to 32 bits.")
 
     write_artifact(state, "firmware/esp_idf/CMakeLists.txt", 'cmake_minimum_required(VERSION 3.16)\ninclude($ENV{IDF_PATH}/tools/cmake/project.cmake)\nproject(chiploop_fpga_host)\n', key="esp_idf_cmake")

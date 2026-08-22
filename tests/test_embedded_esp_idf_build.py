@@ -48,6 +48,27 @@ def test_esp_idf_source_generates_register_transactions_from_transport_map():
     assert 'ESP_RETURN_ON_FALSE(frame_get_u32(response, REG_READY_LSB, 1)' in source
 
 
+def test_esp_idf_source_accepts_semantic_mmio_register_aliases():
+    transport = {
+        "serialized_output_bits": 33,
+        "input_bit_map": [
+            {"port": "mmio_valid", "lsb": 0, "width": 1},
+            {"port": "mmio_write", "lsb": 1, "width": 1},
+            {"port": "mmio_addr", "lsb": 2, "width": 8},
+            {"port": "mmio_wdata", "lsb": 10, "width": 32},
+        ],
+        "output_bit_map": [
+            {"port": "mmio_rdata", "lsb": 1, "width": 32},
+            {"port": "mmio_ready", "lsb": 0, "width": 1},
+        ],
+    }
+    source = _main_source({"esp32_gpio": {}}, 6, transport)
+    assert "#define REG_VALID_LSB 0" in source
+    assert "#define REG_WE_LSB 1" in source
+    assert "chiploop_register_write" in source
+    assert "chiploop_register_read" in source
+
+
 def _state(tmp_path, transport):
     transport = {
         "input_bit_map": [
@@ -89,4 +110,24 @@ def test_esp_idf_build_fails_closed_without_qualified_compiler(tmp_path, monkeyp
         esp_build.run_esp_idf_build(_state(tmp_path, {
             "serialized_input_bits": 108, "serialized_output_bits": 132,
             "frame_bits": 136, "frame_bytes": 17, "response_latency_frames": 2,
+        }))
+
+
+def test_esp_idf_build_accepts_mmio_transport_before_compiler_gate(tmp_path, monkeypatch):
+    monkeypatch.setattr(esp_build, "write_artifact", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(esp_build, "_idf_tool", lambda: None)
+    with pytest.raises(RuntimeError, match="no alternate compiler"):
+        esp_build.run_esp_idf_build(_state(tmp_path, {
+            "input_bit_map": [
+                {"port": "mmio_valid", "lsb": 0, "width": 1},
+                {"port": "mmio_write", "lsb": 1, "width": 1},
+                {"port": "mmio_addr", "lsb": 2, "width": 8},
+                {"port": "mmio_wdata", "lsb": 10, "width": 32},
+            ],
+            "output_bit_map": [
+                {"port": "mmio_rdata", "lsb": 1, "width": 32},
+                {"port": "mmio_ready", "lsb": 0, "width": 1},
+            ],
+            "serialized_input_bits": 42, "serialized_output_bits": 33,
+            "frame_bits": 48, "frame_bytes": 6, "response_latency_frames": 2,
         }))
