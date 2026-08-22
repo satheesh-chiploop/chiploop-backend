@@ -8132,10 +8132,11 @@ async def apps_physical_ai_result(workflow_id: str, request: Request):
     # log. Logs may be truncated as long implementation stages run and must not
     # make completed child workflows disappear from the UI.
     hem_children: List[Dict[str, Any]] = []
+    hem_rows: List[Dict[str, Any]] = []
     try:
         hem_rows = (
             supabase.table("hem_runs")
-            .select("id,current_workflow_id,current_run_id,current_stage,status,metadata")
+            .select("id,current_workflow_id,current_run_id,current_stage,status,metadata,created_at")
             .eq("root_workflow_id", workflow_id)
             .eq("user_id", user_id)
             .order("created_at", desc=True)
@@ -8223,6 +8224,12 @@ async def apps_physical_ai_result(workflow_id: str, request: Request):
             .data
             or []
         )
+        latest_hem_created_at = str((hem_rows[0] if hem_rows else {}).get("created_at") or "")
+        if latest_hem_created_at:
+            linked_rows = [
+                row for row in linked_rows
+                if str(row.get("created_at") or "") >= latest_hem_created_at
+            ]
         existing_ids = {str(item.get("workflow_id") or "") for item in hem_children}
         for linked in linked_rows:
             child_id = str(linked.get("id") or "").strip()
@@ -8342,6 +8349,7 @@ async def resume_physical_ai_hem(
         raise HTTPException(status_code=422, detail=f"Stage {payload.start_stage!r} is not part of this Physical AI implementation path.")
     start_index = full_plan.index(payload.start_stage)
     required_predecessors = full_plan[:start_index]
+    resume_plan = full_plan[start_index:]
     upstream_ids = {
         str(stage): str(source_id).strip()
         for stage, source_id in payload.upstream_workflow_ids.items()
@@ -8496,7 +8504,7 @@ async def resume_physical_ai_hem(
     append_log_workflow(
         workflow_id,
         f"HEM resume queued at {payload.start_stage} using completed predecessor evidence {upstream_ids}; "
-        f"requirements evidence: {requirements_source or 'not indexed'}.",
+        f"only these stages will execute: {resume_plan}; requirements evidence: {requirements_source or 'not indexed'}.",
         phase="hem_resume_queued",
     )
     background_tasks.add_task(
@@ -8512,6 +8520,7 @@ async def resume_physical_ai_hem(
         "start_stage": payload.start_stage,
         "reused_workflows": resume_payload["upstream_workflows"],
         "required_predecessor_stages": required_predecessors,
+        "execution_plan": resume_plan,
         "message": f"HEM resume queued at {payload.start_stage} from completed Supabase evidence; preceding stages will not rerun.",
     }
 

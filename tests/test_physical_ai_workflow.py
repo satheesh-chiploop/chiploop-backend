@@ -626,6 +626,8 @@ def test_main_registers_generic_physical_ai_endpoints():
     assert '"message": f"HEM resume queued at {payload.start_stage} from completed Supabase evidence; preceding stages will not rerun."' in main
     assert "upstream_workflow_ids" in main
     assert "plan = plan[plan.index(start_stage):]" in main
+    assert '"execution_plan": resume_plan' in main
+    assert "latest_hem_created_at" in main
     assert 'hem_enabled: bool = True' in main
     assert 'def _hem_continue_physical_ai_after_success' in main
     assert '"App: Application Intelligence - Active Aero"' in main

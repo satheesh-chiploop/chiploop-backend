@@ -74,7 +74,8 @@ def test_wide_core_gets_fpga_only_spi_transport(tmp_path, monkeypatch):
     assert state["fpga"]["top_module"] == "adaptive_aero_control_top_spi_fpga_top"
     wrapper = Path(report["wrapper_rtl"]).read_text(encoding="utf-8")
     assert "input  logic spi_sclk" in wrapper
-    assert "!spi_cs_n ? (spi_active ? tx_shift[FRAME_BITS-1] : tx_snapshot[FRAME_BITS-1]) : 1'bz" in wrapper
+    assert "!spi_cs_n ? (spi_active ? tx_shift[FRAME_BITS-1] : tx_snapshot[FRAME_BITS-1]) : 1'b0" in wrapper
+    assert "1'bz" not in wrapper
     assert "adaptive_aero_control_top u_core" in wrapper
     assert ".s_axis_cmd(core_s_axis_cmd)" in wrapper
     protocol = json.loads(Path(report["protocol_contract"]).read_text(encoding="utf-8"))

@@ -269,8 +269,12 @@ def add_spi_transport_if_needed(
         "      end",
         "    end",
         "  end",
-        "  // Release the shared MISO/SD net whenever chip select is inactive.",
-        "  always_comb spi_miso = !spi_cs_n ? (spi_active ? tx_shift[FRAME_BITS-1] : tx_snapshot[FRAME_BITS-1]) : 1'bz;",
+        "  // MISO is a dedicated top-level output. Drive a defined idle value",
+        "  // instead of inferring an internal tri-state cell, which is not a",
+        "  // portable fabric primitive and breaks mapped equivalence on targets",
+        "  // such as ECP5. Board-specific shared-data buses require an explicit",
+        "  // vendor I/O-buffer wrapper outside this transport shell.",
+        "  always_comb spi_miso = !spi_cs_n ? (spi_active ? tx_shift[FRAME_BITS-1] : tx_snapshot[FRAME_BITS-1]) : 1'b0;",
         f"  {core_top} u_core (",
     ])
     connections = []
