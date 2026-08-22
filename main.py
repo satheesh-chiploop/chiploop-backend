@@ -3783,10 +3783,11 @@ class PhysicalAiWorkflowIn(BaseModel):
 
 
 class PhysicalAiHemResumeIn(BaseModel):
-    source_arch2rtl_workflow_id: str
-    source_verification_workflow_id: str
-    start_stage: Literal["fpga_exploration"] = "fpga_exploration"
-    deployment_architecture: Optional[Literal["fpga_onboard_cpu", "fpga_soft_cpu", "fpga_external_host"]] = None
+    start_stage: Literal["arch2rtl", "verify", "fpga_exploration", "fpga_bitstream", "asic_tapeout", "firmware_product"]
+    upstream_workflow_ids: Dict[str, str] = Field(default_factory=dict)
+    source_arch2rtl_workflow_id: Optional[str] = None
+    source_verification_workflow_id: Optional[str] = None
+    deployment_architecture: Optional[Literal["fpga_onboard_cpu", "fpga_soft_cpu", "fpga_external_host", "asic_digital_ip", "asic_soc", "asic_companion"]] = None
     candidate_boards: Optional[List[str]] = None
     target_frequency_mhz: Optional[float] = None
     requested_recommendation_profile: Literal["best_overall", "best_performance", "best_low_cost", "best_for_growth"] = "best_overall"
@@ -8326,7 +8327,41 @@ async def resume_physical_ai_hem(
 ):
     """Resume costly Physical-AI HEM after verified upstream stages using Supabase evidence."""
     user_id = _require_user_id(request)
-    requested_ids = [workflow_id, payload.source_arch2rtl_workflow_id, payload.source_verification_workflow_id]
+    requirements, requirements_source = _hem_load_json_artifact(workflow_id, "requirements_contract.json")
+    requirements = requirements if isinstance(requirements, dict) else {}
+    implementation_path = str(requirements.get("implementation_path") or "fpga_prototype")
+    deployment = str(payload.deployment_architecture or requirements.get("deployment_architecture") or "")
+    planning_payload = {
+        "implementation_path": implementation_path,
+        "deployment_architecture": deployment,
+        "hem_goal": payload.hem_goal,
+        "hem_stage_toggles": {"fpga_exploration": True, "fpga_bitstream": True, "firmware_product": True},
+    }
+    full_plan = _hem_physical_ai_stage_plan(planning_payload)
+    if payload.start_stage not in full_plan:
+        raise HTTPException(status_code=422, detail=f"Stage {payload.start_stage!r} is not part of this Physical AI implementation path.")
+    start_index = full_plan.index(payload.start_stage)
+    required_predecessors = full_plan[:start_index]
+    upstream_ids = {
+        str(stage): str(source_id).strip()
+        for stage, source_id in payload.upstream_workflow_ids.items()
+        if str(stage) in HEM_PHYSICAL_AI_STAGE_META and str(source_id).strip()
+    }
+    # Backward-compatible fields remain accepted while the UI migrates to the
+    # stage-keyed map.
+    if payload.source_arch2rtl_workflow_id:
+        upstream_ids.setdefault("arch2rtl", payload.source_arch2rtl_workflow_id.strip())
+    if payload.source_verification_workflow_id:
+        upstream_ids.setdefault("verify", payload.source_verification_workflow_id.strip())
+    absent_stages = [stage for stage in required_predecessors if not upstream_ids.get(stage)]
+    if absent_stages:
+        raise HTTPException(
+            status_code=422,
+            detail="Resume requires completed workflow IDs for preceding stages: " + ", ".join(absent_stages),
+        )
+    requested_ids = [workflow_id, *(upstream_ids[stage] for stage in required_predecessors)]
+    if len(set(requested_ids)) != len(requested_ids):
+        raise HTTPException(status_code=422, detail="Every resumed stage must reference a distinct predecessor workflow ID.")
     rows = (
         supabase.table("workflows")
         .select("id,user_id,status,loop_type")
@@ -8342,9 +8377,7 @@ async def resume_physical_ai_hem(
         raise HTTPException(status_code=404, detail="One or more resume workflows were not found for this user: " + ", ".join(missing))
     if str(by_id[workflow_id].get("loop_type") or "") != "physical_ai":
         raise HTTPException(status_code=422, detail="HEM resume root must be a Physical AI workflow.")
-    if payload.source_arch2rtl_workflow_id == payload.source_verification_workflow_id:
-        raise HTTPException(status_code=422, detail="RTL generation and verification must reference distinct completed workflows.")
-    for source_id in (payload.source_arch2rtl_workflow_id, payload.source_verification_workflow_id):
+    for source_id in requested_ids[1:]:
         if str(by_id[source_id].get("status") or "") != "completed":
             raise HTTPException(status_code=409, detail=f"Resume source workflow {source_id} is not completed.")
     run_rows = (
@@ -8373,11 +8406,8 @@ async def resume_physical_ai_hem(
     )
     if active_hem:
         raise HTTPException(status_code=409, detail="A HEM continuation is already active for this Physical AI workflow.")
-    requirements, requirements_source = _hem_load_json_artifact(workflow_id, "requirements_contract.json")
-    requirements = requirements if isinstance(requirements, dict) else {}
-    deployment = str(payload.deployment_architecture or requirements.get("deployment_architecture") or "")
-    if deployment not in {"fpga_onboard_cpu", "fpga_soft_cpu", "fpga_external_host"}:
-        raise HTTPException(status_code=422, detail="Resume requires a resolved FPGA deployment architecture.")
+    if deployment not in {"fpga_onboard_cpu", "fpga_soft_cpu", "fpga_external_host", "asic_digital_ip", "asic_soc", "asic_companion"}:
+        raise HTTPException(status_code=422, detail="Resume requires a resolved deployment architecture.")
     if deployment == "fpga_external_host":
         from physical_ai.interface_contract import validate_external_host_interface_plan
         try:
@@ -8394,11 +8424,11 @@ async def resume_physical_ai_hem(
         "hem_mode": payload.hem_mode,
         "hem_goal": payload.hem_goal,
         "hem_stage_toggles": {"fpga_exploration": True, "fpga_bitstream": True, "firmware_product": True},
-        "implementation_path": str(requirements.get("implementation_path") or "fpga_prototype"),
+        "implementation_path": implementation_path,
         "deployment_architecture": deployment,
-        "source_arch2rtl_workflow_id": payload.source_arch2rtl_workflow_id,
-        "source_verification_workflow_id": payload.source_verification_workflow_id,
-        "from_workflow_id": payload.source_arch2rtl_workflow_id,
+        "source_arch2rtl_workflow_id": upstream_ids.get("arch2rtl"),
+        "source_verification_workflow_id": upstream_ids.get("verify"),
+        "from_workflow_id": upstream_ids.get("arch2rtl"),
         "candidate_boards": payload.candidate_boards,
         "soft_cpu_config": requirements.get("soft_cpu") if isinstance(requirements.get("soft_cpu"), dict) else {},
         "target_frequency_mhz": payload.target_frequency_mhz or 50.0,
@@ -8407,16 +8437,66 @@ async def resume_physical_ai_hem(
         "closure_seed_count": payload.closure_seed_count,
         "host_interface_plan": payload.host_interface_plan,
         "external_host_config": payload.external_host_config,
-        "upstream_workflows": {
-            "physical_ai": workflow_id,
-            "arch2rtl": payload.source_arch2rtl_workflow_id,
-            "verify": payload.source_verification_workflow_id,
-        },
+        "upstream_workflows": {"physical_ai": workflow_id, **upstream_ids},
     }
+    # Starting at RTL still needs the model-generated architecture/spec, but
+    # it is hydrated from the completed Physical AI workflow rather than
+    # invoking Physical AI agents again.
+    if payload.start_stage == "arch2rtl":
+        digital_ip_spec, _ = _hem_load_json_artifact(workflow_id, "digital_ip_spec.json")
+        product_architecture, _ = _hem_load_json_artifact(workflow_id, "product_architecture.json")
+        digital_ip_spec = digital_ip_spec if isinstance(digital_ip_spec, dict) else {}
+        product_architecture = product_architecture if isinstance(product_architecture, dict) else {}
+        resume_payload["digital_ip_spec"] = digital_ip_spec
+        resume_payload["generated_architecture"] = product_architecture
+        resume_payload["rtl_spec_text"] = str(
+            product_architecture.get("rtl_spec_text") or digital_ip_spec.get("rtl_spec_text") or requirements.get("objective") or ""
+        )
+        resume_payload["top_module"] = product_architecture.get("digital_ip_top_module") or digital_ip_spec.get("top_module")
+    # Later FPGA stages need the exact selected wrapper, board, frequency, and
+    # transport contract from the completed Explorer workflow.
+    explorer_id = upstream_ids.get("fpga_exploration")
+    if explorer_id:
+        explorer, explorer_source = _hem_load_json_artifact(explorer_id, "fpga_target_explorer.json")
+        if not isinstance(explorer, dict):
+            raise HTTPException(status_code=409, detail="Completed FPGA Explorer workflow has no authoritative continuation artifact.")
+        continuation = explorer.get("continuation") if isinstance(explorer.get("continuation"), dict) else {}
+        selected_board = continuation.get("selected_board") or explorer.get("selected_implementation_recommendation")
+        if not selected_board or not bool(continuation.get("integration_contract_ready")):
+            raise HTTPException(status_code=409, detail="FPGA Explorer evidence is not integration-ready for downstream resume.")
+        from agents.fpga.fpga_common import BOARD_REGISTRY
+        board_profile = BOARD_REGISTRY.get(str(selected_board)) or {}
+        compute_host = board_profile.get("compute_host") if isinstance(board_profile.get("compute_host"), dict) else {}
+        transport = str(continuation.get("host_transport") or "")
+        resume_payload.update({
+            "board": selected_board,
+            "top_module": continuation.get("top_module") or explorer.get("top_module"),
+            "target_frequency_mhz": continuation.get("target_frequency_mhz") or resume_payload["target_frequency_mhz"],
+            "fpga_source_workflow_id": explorer_id,
+            "explorer_winning_configuration": continuation.get("winning_configuration") or {},
+            "integration_contract_ready": True,
+            "integration_reverification_required": bool(continuation.get("integration_reverification_required")),
+            "target_refinement": {
+                "schema": "chiploop.application_intelligence.target_refinement.v1",
+                "status": "resolved",
+                "selected_board": selected_board,
+                "deployment_architecture": deployment,
+                "compute_host": compute_host,
+                "host_transport": transport,
+                "transport_contract": continuation.get("transport_contract") or {},
+                "firmware_gate": {"portable_source_ready": True, "deployable_binary_ready": True, "missing": []},
+                "evidence_source": explorer_source,
+            },
+        })
+    if upstream_ids.get("fpga_bitstream"):
+        resume_payload["fpga_bitstream_workflow_id"] = upstream_ids["fpga_bitstream"]
+        resume_payload["source_system_sim_workflow_id"] = upstream_ids["fpga_bitstream"]
+    if upstream_ids.get("asic_tapeout"):
+        resume_payload["asic_tapeout_workflow_id"] = upstream_ids["asic_tapeout"]
     append_log_workflow(
         workflow_id,
-        f"HEM resume queued at {payload.start_stage} using completed RTL {payload.source_arch2rtl_workflow_id} "
-        f"and verification {payload.source_verification_workflow_id}; requirements evidence: {requirements_source or 'not indexed'}.",
+        f"HEM resume queued at {payload.start_stage} using completed predecessor evidence {upstream_ids}; "
+        f"requirements evidence: {requirements_source or 'not indexed'}.",
         phase="hem_resume_queued",
     )
     background_tasks.add_task(
@@ -8431,7 +8511,8 @@ async def resume_physical_ai_hem(
         "workflow_id": workflow_id,
         "start_stage": payload.start_stage,
         "reused_workflows": resume_payload["upstream_workflows"],
-        "message": "HEM resume queued from completed Supabase evidence; Physical AI, RTL generation, and verification will not rerun.",
+        "required_predecessor_stages": required_predecessors,
+        "message": f"HEM resume queued at {payload.start_stage} from completed Supabase evidence; preceding stages will not rerun.",
     }
 
 
