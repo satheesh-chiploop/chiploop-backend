@@ -8333,6 +8333,25 @@ async def resume_physical_ai_hem(
     workflow_id: str, request: Request, background_tasks: BackgroundTasks, payload: PhysicalAiHemResumeIn
 ):
     """Resume costly Physical-AI HEM after verified upstream stages using Supabase evidence."""
+    def normalize_workflow_id(value: Any, label: str) -> str:
+        candidate = str(value or "").strip()
+        # Accept IDs copied from artifact bundle names as well as canonical UUIDs.
+        # Supabase UUID columns otherwise surface malformed input as an HTTP 500.
+        if candidate.lower().endswith(".zip"):
+            candidate = candidate[:-4]
+        if candidate.startswith("workflow_"):
+            candidate = candidate[len("workflow_"):]
+        if candidate.endswith("_artifacts_full"):
+            candidate = candidate[:-len("_artifacts_full")]
+        try:
+            return str(uuid.UUID(candidate))
+        except (ValueError, AttributeError, TypeError) as exc:
+            raise HTTPException(
+                status_code=422,
+                detail=f"{label} must be a workflow UUID (a workflow_<uuid>_artifacts_full.zip name is also accepted).",
+            ) from exc
+
+    workflow_id = normalize_workflow_id(workflow_id, "Physical AI workflow ID")
     user_id = _require_user_id(request)
     requirements, requirements_source = _hem_load_json_artifact(workflow_id, "requirements_contract.json")
     requirements = requirements if isinstance(requirements, dict) else {}
@@ -8351,16 +8370,16 @@ async def resume_physical_ai_hem(
     required_predecessors = full_plan[:start_index]
     resume_plan = full_plan[start_index:]
     upstream_ids = {
-        str(stage): str(source_id).strip()
+        str(stage): normalize_workflow_id(source_id, f"{str(stage).replace('_', ' ').title()} workflow ID")
         for stage, source_id in payload.upstream_workflow_ids.items()
         if str(stage) in HEM_PHYSICAL_AI_STAGE_META and str(source_id).strip()
     }
     # Backward-compatible fields remain accepted while the UI migrates to the
     # stage-keyed map.
     if payload.source_arch2rtl_workflow_id:
-        upstream_ids.setdefault("arch2rtl", payload.source_arch2rtl_workflow_id.strip())
+        upstream_ids.setdefault("arch2rtl", normalize_workflow_id(payload.source_arch2rtl_workflow_id, "RTL generation workflow ID"))
     if payload.source_verification_workflow_id:
-        upstream_ids.setdefault("verify", payload.source_verification_workflow_id.strip())
+        upstream_ids.setdefault("verify", normalize_workflow_id(payload.source_verification_workflow_id, "RTL verification workflow ID"))
     absent_stages = [stage for stage in required_predecessors if not upstream_ids.get(stage)]
     if absent_stages:
         raise HTTPException(
