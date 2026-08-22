@@ -188,6 +188,34 @@ def test_ulx3s_onboard_esp32_forces_board_contracted_spi_endpoint(tmp_path, monk
     assert state["fpga_explorer_io_mapping"]["onboard_spi_contract_boards"] == ["ulx3s_ecp5_45f_esp32"]
 
 
+def test_io_mapping_reuses_handoff_spi_adapter_without_double_wrapping(tmp_path, monkeypatch):
+    wrapper = tmp_path / "top_spi_fpga_top.sv"
+    wrapper.write_text(
+        "module top_spi_fpga_top(input clk,input reset_n,input spi_sclk,input spi_cs_n,input spi_mosi,output spi_miso,output fault_indicator); endmodule\n",
+        encoding="utf-8",
+    )
+    existing = {
+        "status": "generated", "fpga_top_module": "top_spi_fpga_top",
+        "protocol_contract_ready": True, "host_driver_ready": True,
+    }
+    monkeypatch.setattr(mapping_agent, "add_spi_transport_if_needed", lambda *_args, **_kwargs: pytest.fail("must reuse existing adapter"))
+    monkeypatch.setattr(mapping_agent, "publish_json", lambda *_args: None)
+    state = {
+        "workflow_id": "wf", "workflow_dir": str(tmp_path),
+        "deployment_architecture": "fpga_onboard_cpu",
+        "candidate_boards": ["ulx3s_ecp5_45f_esp32"],
+        "fpga": {
+            "top_module": "top_spi_fpga_top", "rtl_files": [str(wrapper)],
+            "handoff_ingest": {"interface_adapter": existing},
+        },
+    }
+
+    mapping_agent.run_agent(state)
+
+    assert state["fpga"]["top_module"] == "top_spi_fpga_top"
+    assert state["fpga_explorer_io_mapping"]["interface_adapter"] is existing
+
+
 def test_onboard_cpu_rejects_incompatible_candidate_spi_contracts(tmp_path, monkeypatch):
     rtl = tmp_path / "top.sv"
     rtl.write_text("module top(input clk, input reset_n, output done); assign done=reset_n; endmodule\n", encoding="utf-8")

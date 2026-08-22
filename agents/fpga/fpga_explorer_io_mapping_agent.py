@@ -40,7 +40,9 @@ def run_agent(state: dict) -> dict:
         raise RuntimeError("External-host FPGA integration requires the qualified SPI interface plan before exploration.")
     # An explicitly selected external host always needs the promised SPI
     # endpoint, even when the native core is narrow enough for board headers.
-    adapter = (
+    handoff = fpga.get("handoff_ingest") if isinstance(fpga.get("handoff_ingest"), dict) else {}
+    existing_adapter = handoff.get("interface_adapter") if isinstance(handoff.get("interface_adapter"), dict) else None
+    adapter = existing_adapter or (
         add_spi_transport_if_needed(
             state,
             force_for_board_mapping=deployment == "fpga_external_host" or onboard_spi_contract,

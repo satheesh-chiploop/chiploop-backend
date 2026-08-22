@@ -621,6 +621,10 @@ def test_main_registers_generic_physical_ai_endpoints():
     assert '@app.get("/apps/physical-ai/{workflow_id}/result")' in main
     assert '@app.post("/apps/physical-ai/run")' in main
     assert 'dashboard_path": f"/apps/physical-ai/results/{workflow_id}"' in main
+    assert '@app.post("/apps/physical-ai/{workflow_id}/hem/resume")' in main
+    assert "class PhysicalAiHemResumeIn" in main
+    assert '"message": "HEM resume queued from completed Supabase evidence; Physical AI, RTL generation, and verification will not rerun."' in main
+    assert "plan = plan[plan.index(start_stage):]" in main
     assert 'hem_enabled: bool = True' in main
     assert 'def _hem_continue_physical_ai_after_success' in main
     assert '"App: Application Intelligence - Active Aero"' in main
