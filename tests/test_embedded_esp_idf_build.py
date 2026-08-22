@@ -45,7 +45,9 @@ def test_esp_idf_source_generates_register_transactions_from_transport_map():
     assert "chiploop_register_read" in source
     assert "pipeline frame 1" in source
     assert "REG_RDATA_LSB 1" in source
-    assert 'ESP_RETURN_ON_FALSE(frame_get_u32(response, REG_READY_LSB, 1)' in source
+    assert 'ESP_RETURN_ON_FALSE(frame_get_flag(response, REG_READY_LSB)' in source
+    assert "frame_set_bits" in source
+    assert "frame_get_bits" in source
 
 
 def test_esp_idf_source_accepts_semantic_mmio_register_aliases():
@@ -130,4 +132,24 @@ def test_esp_idf_build_accepts_mmio_transport_before_compiler_gate(tmp_path, mon
             ],
             "serialized_input_bits": 42, "serialized_output_bits": 33,
             "frame_bits": 48, "frame_bytes": 6, "response_latency_frames": 2,
+        }))
+
+
+def test_esp_idf_build_accepts_register_data_wider_than_32_bits(tmp_path, monkeypatch):
+    monkeypatch.setattr(esp_build, "write_artifact", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(esp_build, "_idf_tool", lambda: None)
+    with pytest.raises(RuntimeError, match="no alternate compiler"):
+        esp_build.run_esp_idf_build(_state(tmp_path, {
+            "input_bit_map": [
+                {"port": "mmio_valid", "lsb": 0, "width": 1},
+                {"port": "mmio_write", "lsb": 1, "width": 1},
+                {"port": "mmio_addr", "lsb": 2, "width": 8},
+                {"port": "mmio_wdata", "lsb": 10, "width": 64},
+            ],
+            "output_bit_map": [
+                {"port": "mmio_ready", "lsb": 0, "width": 1},
+                {"port": "mmio_rdata", "lsb": 1, "width": 64},
+            ],
+            "serialized_input_bits": 74, "serialized_output_bits": 65,
+            "frame_bits": 80, "frame_bytes": 10, "response_latency_frames": 2,
         }))

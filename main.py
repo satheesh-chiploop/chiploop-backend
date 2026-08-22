@@ -8351,6 +8351,26 @@ async def resume_physical_ai_hem(
                 detail=f"{label} must be a workflow UUID (a workflow_<uuid>_artifacts_full.zip name is also accepted).",
             ) from exc
 
+    def execute_resume_query(query: Any, operation: str) -> List[Dict[str, Any]]:
+        """Execute resume preflight reads without leaking platform failures as opaque 500s."""
+        try:
+            response = query.execute()
+            return response.data or []
+        except HTTPException:
+            raise
+        except Exception as exc:
+            reference = str(uuid.uuid4())[:8]
+            logger.exception(
+                "HEM resume preflight failed operation=%s reference=%s root=%s",
+                operation,
+                reference,
+                workflow_id,
+            )
+            raise HTTPException(
+                status_code=503,
+                detail=f"HEM resume could not {operation}. Retry after checking Supabase connectivity/schema (reference {reference}).",
+            ) from exc
+
     workflow_id = normalize_workflow_id(workflow_id, "Physical AI workflow ID")
     user_id = _require_user_id(request)
     requirements, requirements_source = _hem_load_json_artifact(workflow_id, "requirements_contract.json")
@@ -8389,14 +8409,12 @@ async def resume_physical_ai_hem(
     requested_ids = [workflow_id, *(upstream_ids[stage] for stage in required_predecessors)]
     if len(set(requested_ids)) != len(requested_ids):
         raise HTTPException(status_code=422, detail="Every resumed stage must reference a distinct predecessor workflow ID.")
-    rows = (
+    rows = execute_resume_query(
         supabase.table("workflows")
         .select("id,user_id,status,loop_type")
         .in_("id", requested_ids)
-        .eq("user_id", user_id)
-        .execute()
-        .data
-        or []
+        .eq("user_id", user_id),
+        "validate predecessor workflows",
     )
     by_id = {str(row.get("id")): row for row in rows}
     missing = [source_id for source_id in requested_ids if source_id not in by_id]
@@ -8407,29 +8425,25 @@ async def resume_physical_ai_hem(
     for source_id in requested_ids[1:]:
         if str(by_id[source_id].get("status") or "") != "completed":
             raise HTTPException(status_code=409, detail=f"Resume source workflow {source_id} is not completed.")
-    run_rows = (
+    run_rows = execute_resume_query(
         supabase.table("runs")
         .select("id")
         .eq("workflow_id", workflow_id)
         .eq("user_id", user_id)
         .order("created_at", desc=True)
-        .limit(1)
-        .execute()
-        .data
-        or []
+        .limit(1),
+        "load the Physical AI root run",
     )
     if not run_rows:
         raise HTTPException(status_code=409, detail="Physical AI root workflow has no authoritative Supabase run record.")
-    active_hem = (
+    active_hem = execute_resume_query(
         supabase.table("hem_runs")
         .select("id")
         .eq("root_workflow_id", workflow_id)
         .eq("user_id", user_id)
         .in_("status", ["running", "continuing"])
-        .limit(1)
-        .execute()
-        .data
-        or []
+        .limit(1),
+        "check for an active HEM continuation",
     )
     if active_hem:
         raise HTTPException(status_code=409, detail="A HEM continuation is already active for this Physical AI workflow.")

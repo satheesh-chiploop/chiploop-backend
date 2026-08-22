@@ -64,23 +64,32 @@ def _main_source(interface: dict, frame_bytes: int, transport: dict | None = Non
 #define REG_READY_LSB {int(reg_ready["lsb"])}
 #define RESPONSE_PADDING_BITS {frame_bytes * 8 - int(transport.get("serialized_output_bits") or 0)}
 
-static void frame_set_u32(uint8_t *frame, unsigned lsb, unsigned width, uint32_t value) {{
+static void frame_set_bits(uint8_t *frame, unsigned lsb, unsigned width,
+                           const uint8_t *value, size_t value_bytes) {{
     for (unsigned bit = 0; bit < width; ++bit) {{
         const unsigned physical = lsb + bit;
         const unsigned byte = CHIPLOOP_FRAME_BYTES - 1u - physical / 8u;
         const uint8_t mask = (uint8_t)(1u << (physical % 8u));
-        if ((value >> bit) & 1u) frame[byte] |= mask; else frame[byte] &= (uint8_t)~mask;
+        const uint8_t source = bit / 8u < value_bytes ? value[bit / 8u] : 0u;
+        if ((source >> (bit % 8u)) & 1u) frame[byte] |= mask; else frame[byte] &= (uint8_t)~mask;
     }}
 }}
 
-static uint32_t frame_get_u32(const uint8_t *frame, unsigned lsb, unsigned width) {{
-    uint32_t value = 0;
+static void frame_get_bits(const uint8_t *frame, unsigned lsb, unsigned width,
+                           uint8_t *value, size_t value_bytes) {{
+    memset(value, 0, value_bytes);
     for (unsigned bit = 0; bit < width; ++bit) {{
         const unsigned physical = RESPONSE_PADDING_BITS + lsb + bit;
         const unsigned byte = CHIPLOOP_FRAME_BYTES - 1u - physical / 8u;
-        value |= (uint32_t)((frame[byte] >> (physical % 8u)) & 1u) << bit;
+        if (bit / 8u < value_bytes)
+            value[bit / 8u] |= (uint8_t)(((frame[byte] >> (physical % 8u)) & 1u) << (bit % 8u));
     }}
-    return value;
+}}
+
+static bool frame_get_flag(const uint8_t *frame, unsigned lsb) {{
+    uint8_t value = 0;
+    frame_get_bits(frame, lsb, 1, &value, 1);
+    return value != 0;
 }}
 
 static esp_err_t chiploop_complete_command(uint8_t *request, uint8_t *response) {{
@@ -90,29 +99,39 @@ static esp_err_t chiploop_complete_command(uint8_t *request, uint8_t *response) 
     return chiploop_fpga_exchange(idle, response);
 }}
 
-esp_err_t chiploop_register_write(uint32_t address, uint32_t value) {{
+esp_err_t chiploop_register_write(const uint8_t *address, size_t address_bytes,
+                                  const uint8_t *value, size_t value_bytes) {{
+    const uint8_t asserted = 1;
+    ESP_RETURN_ON_FALSE(address && value, ESP_ERR_INVALID_ARG, "chiploop", "register write buffers");
+    ESP_RETURN_ON_FALSE(address_bytes * 8u >= REG_ADDR_WIDTH && value_bytes * 8u >= REG_WDATA_WIDTH,
+                        ESP_ERR_INVALID_SIZE, "chiploop", "register write buffer width");
     uint8_t request[CHIPLOOP_FRAME_BYTES] = {{0}}, response[CHIPLOOP_FRAME_BYTES] = {{0}};
-    frame_set_u32(request, REG_VALID_LSB, 1, 1);
-    frame_set_u32(request, REG_WE_LSB, 1, 1);
-    frame_set_u32(request, REG_ADDR_LSB, REG_ADDR_WIDTH, address);
-    frame_set_u32(request, REG_WDATA_LSB, REG_WDATA_WIDTH, value);
+    frame_set_bits(request, REG_VALID_LSB, 1, &asserted, 1);
+    frame_set_bits(request, REG_WE_LSB, 1, &asserted, 1);
+    frame_set_bits(request, REG_ADDR_LSB, REG_ADDR_WIDTH, address, address_bytes);
+    frame_set_bits(request, REG_WDATA_LSB, REG_WDATA_WIDTH, value, value_bytes);
     ESP_RETURN_ON_ERROR(chiploop_complete_command(request, response), "chiploop", "register write");
-    ESP_RETURN_ON_FALSE(frame_get_u32(response, REG_READY_LSB, 1), ESP_ERR_INVALID_RESPONSE, "chiploop", "register not ready");
+    ESP_RETURN_ON_FALSE(frame_get_flag(response, REG_READY_LSB), ESP_ERR_INVALID_RESPONSE, "chiploop", "register not ready");
     return ESP_OK;
 }}
 
-esp_err_t chiploop_register_read(uint32_t address, uint32_t *value) {{
-    ESP_RETURN_ON_FALSE(value, ESP_ERR_INVALID_ARG, "chiploop", "read destination");
+esp_err_t chiploop_register_read(const uint8_t *address, size_t address_bytes,
+                                 uint8_t *value, size_t value_bytes) {{
+    const uint8_t asserted = 1;
+    ESP_RETURN_ON_FALSE(address && value, ESP_ERR_INVALID_ARG, "chiploop", "register read buffers");
+    ESP_RETURN_ON_FALSE(address_bytes * 8u >= REG_ADDR_WIDTH && value_bytes * 8u >= REG_RDATA_WIDTH,
+                        ESP_ERR_INVALID_SIZE, "chiploop", "register read buffer width");
     uint8_t request[CHIPLOOP_FRAME_BYTES] = {{0}}, response[CHIPLOOP_FRAME_BYTES] = {{0}};
-    frame_set_u32(request, REG_VALID_LSB, 1, 1);
-    frame_set_u32(request, REG_ADDR_LSB, REG_ADDR_WIDTH, address);
+    frame_set_bits(request, REG_VALID_LSB, 1, &asserted, 1);
+    frame_set_bits(request, REG_ADDR_LSB, REG_ADDR_WIDTH, address, address_bytes);
     ESP_RETURN_ON_ERROR(chiploop_complete_command(request, response), "chiploop", "register read");
-    ESP_RETURN_ON_FALSE(frame_get_u32(response, REG_READY_LSB, 1), ESP_ERR_INVALID_RESPONSE, "chiploop", "register not ready");
-    *value = frame_get_u32(response, REG_RDATA_LSB, REG_RDATA_WIDTH);
+    ESP_RETURN_ON_FALSE(frame_get_flag(response, REG_READY_LSB), ESP_ERR_INVALID_RESPONSE, "chiploop", "register not ready");
+    frame_get_bits(response, REG_RDATA_LSB, REG_RDATA_WIDTH, value, value_bytes);
     return ESP_OK;
 }}
 '''
-    return f'''#include <stdint.h>
+    return f'''#include <stdbool.h>
+#include <stdint.h>
 #include <string.h>
 #include "driver/spi_master.h"
 #include "esp_check.h"
@@ -204,10 +223,8 @@ def run_esp_idf_build(state: dict) -> dict:
             "ESP32 integration requires a complete semantic register transport map; missing roles: "
             + ", ".join(missing)
         )
-    selected_ports = {str(field.get("port") or "").lower() for field in fields.values()}
-    for item in [*(transport.get("input_bit_map") or []), *(transport.get("output_bit_map") or [])]:
-        if isinstance(item, dict) and str(item.get("port") or "").lower() in selected_ports and int(item.get("width") or 0) > 32:
-            raise RuntimeError("ESP-IDF register API currently supports register fields up to 32 bits.")
+    if any(int(field.get("width") or 0) <= 0 for field in fields.values()):
+        raise RuntimeError("ESP32 integration requires positive widths for every semantic register transport field.")
 
     write_artifact(state, "firmware/esp_idf/CMakeLists.txt", 'cmake_minimum_required(VERSION 3.16)\ninclude($ENV{IDF_PATH}/tools/cmake/project.cmake)\nproject(chiploop_fpga_host)\n', key="esp_idf_cmake")
     write_artifact(state, "firmware/esp_idf/main/CMakeLists.txt", 'idf_component_register(SRCS "main.c" INCLUDE_DIRS ".")\n', key="esp_idf_main_cmake")
