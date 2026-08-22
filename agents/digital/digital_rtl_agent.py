@@ -3160,6 +3160,11 @@ def _upload_rtl_debug_artifacts(workflow_id, agent_name, rtl_dir):
         "rtl_agent_summary_pass4.txt",
         "rtl_agent_exception_pass4.txt",
         "rtl_llm_raw_output_pass4.txt",
+        "rtl_agent_compile_pass5.log",
+        "rtl_verilator_lint_pass5.log",
+        "rtl_agent_summary_pass5.txt",
+        "rtl_agent_exception_pass5.txt",
+        "rtl_llm_raw_output_pass5.txt",
         "rtl_quality_gate.json",
         "rtl_agent_final_status.log",
         "rtl_agent_final_summary.txt",
@@ -3424,7 +3429,7 @@ def _build_structural_closure_prompt(base_prompt: str, previous_llm_output: str,
     """Final bounded retry focused only on remaining structural blockers."""
     blockers = [
         line.strip() for line in (verilator_log_text or "").splitlines()
-        if re.search(r"%Warning-(?:UNDRIVEN|MULTIDRIVEN)\b|%Error:", line)
+        if re.search(r"%Warning-(?:UNDRIVEN|MULTIDRIVEN|UNOPTFLAT)\b|%Error:", line)
     ]
     blocker_text = "\n".join(blockers) or "See the supplied latest compile and Verilator logs."
     return _build_rtl_repair_prompt(
@@ -3442,6 +3447,42 @@ For every UNDRIVEN signal, trace all consumers and connect it to exactly one rea
 implements the existing specification. A declaration or consumer connection is not a driver.
 Do not tie functional status, data, fault, valid, ready, enable, or control signals to constants.
 Before returning, audit every named blocker and confirm it has exactly one legal source.
+""".strip()
+
+
+def _build_contract_closure_prompt(base_prompt: str, previous_llm_output: str,
+                                   compile_log_text: str, verilator_log_text: str,
+                                   validation_issues: List[str],
+                                   expected_files: Optional[List[str]] = None) -> str:
+    """Last retry for tool-clean RTL that still violates declared hierarchy contracts."""
+    expected = list(expected_files or [])
+    module_requirements = "\n".join(
+        f"- File {name} must contain required module {os.path.splitext(os.path.basename(name))[0]}."
+        for name in expected
+    ) or "- Preserve every required filename and module identity from the original contract."
+    issue_text = "\n".join(f"- {issue}" for issue in validation_issues) or "- See latest validator logs."
+    return _build_rtl_repair_prompt(
+        base_prompt, previous_llm_output, compile_log_text, verilator_log_text, expected
+    ) + f"""
+
+==============================
+FINAL CONTRACT CLOSURE PASS
+==============================
+The latest RTL is tool-clean or near tool-clean but violates one or more declared hierarchy,
+module-identity, memory-instance, ownership, or reachability contracts. Repair every validator
+issue below together without renaming or deleting any required hierarchy module.
+
+LATEST VALIDATOR ISSUES:
+{issue_text}
+
+REQUIRED FILE/MODULE IDENTITIES:
+{module_requirements}
+
+Memory macro requirements and hierarchy requirements are simultaneous. If a required hierarchy
+module must use a named memory macro or wrapper, keep the required hierarchy module and instantiate
+the exact macro/wrapper inside it (or include an additional legal module definition); never satisfy
+the macro contract by renaming the required hierarchy module. Preserve exact required instance names
+and port roles. Return complete named-file blocks for all affected files and no explanation.
 """.strip()
 
 
@@ -3525,7 +3566,7 @@ def _classify_verilator_result(verilator_ok: bool, verilator_output: str) -> str
     # Structural warnings are implementation blockers even when Verilator was
     # invoked with warning-fatal behavior disabled. OpenLane/Yosys promotes an
     # undriven bus to synthesis-check errors, so HEM must stop or repair here.
-    if re.search(r"%Warning-(?:UNDRIVEN|MULTIDRIVEN)\b", text):
+    if re.search(r"%Warning-(?:UNDRIVEN|MULTIDRIVEN|UNOPTFLAT)\b", text):
         return "fatal"
 
     if verilator_ok:
@@ -4260,9 +4301,45 @@ def _run(context: AgentContext) -> dict:
                         state=state,
                     )
                     if not pass4["ok"]:
-                        return _fail_and_upload("RTL failed checks in pass1 through pass4.")
-                    final_result = pass4
-                    final_suffix = "pass4"
+                        pass4_compile_log = ""
+                        if os.path.exists(pass4["compile_log_path"]):
+                            with open(pass4["compile_log_path"], "r", encoding="utf-8") as f:
+                                pass4_compile_log = f.read()
+                        pass4_verilator_log = ""
+                        if os.path.exists(pass4["verilator_log_path"]):
+                            with open(pass4["verilator_log_path"], "r", encoding="utf-8") as f:
+                                pass4_verilator_log = f.read()
+                        repair_prompt_pass5 = _build_contract_closure_prompt(
+                            prompt, llm_output_pass4, pass4_compile_log, pass4_verilator_log,
+                            pass4.get("issues") or [], _collect_expected_rtl_files(spec_json, mode),
+                        )
+                        _stage("starting_llm_call_pass5_contract_closure")
+                        try:
+                            llm_output_pass5 = _complete_rtl_text(
+                                repair_prompt_pass5, agent_name=agent_name, state=state, stage_label="llm_pass5"
+                            )
+                        except Exception as e5:
+                            return _fail_and_upload("Pass4 failed and Pass5 contract closure generation failed.", e5)
+                        llm_output_pass5 = _merge_rtl_repair_output(
+                            llm_output_pass4, llm_output_pass5,
+                            _collect_expected_rtl_files(spec_json, mode),
+                        )
+                        pass5 = _validate_and_materialize_rtl(
+                            llm_output=llm_output_pass5,
+                            rtl_dir=rtl_dir,
+                            spec_json=spec_json,
+                            mode=mode,
+                            suffix="pass5",
+                            materialize_subdir="pass5",
+                            state=state,
+                        )
+                        if not pass5["ok"]:
+                            return _fail_and_upload("RTL failed checks in pass1 through pass5.")
+                        final_result = pass5
+                        final_suffix = "pass5"
+                    else:
+                        final_result = pass4
+                        final_suffix = "pass4"
                 else:
                     final_result = pass3
                     final_suffix = "pass3"

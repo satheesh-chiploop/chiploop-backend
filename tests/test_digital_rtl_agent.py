@@ -1131,6 +1131,12 @@ def test_verilator_undriven_warning_is_structural_failure_even_with_zero_exit():
     assert agent._classify_verilator_result(True, output) == "fatal"
 
 
+def test_verilator_combinational_loop_is_structural_failure_even_with_zero_exit():
+    output = "%Warning-UNOPTFLAT: top.v:43: Signal unoptimizable: Circular combinational logic: 'host_cmd_valid'"
+
+    assert agent._classify_verilator_result(True, output) == "fatal"
+
+
 def test_final_input_contract_cleanup_removes_feedback_assignment():
     spec = {
         "hierarchy": {
@@ -1193,6 +1199,19 @@ def test_final_structural_closure_prompt_names_all_blockers():
     assert "fault_code_w" in prompt
     assert "ready_w" in prompt
     assert "exactly one real producer" in prompt
+
+
+def test_final_contract_closure_preserves_hierarchy_around_memory_macro():
+    prompt = agent._build_contract_closure_prompt(
+        "contract", "---BEGIN history_store.v---\nmodule macro; endmodule\n---END history_store.v---",
+        "compile ok", "lint ok",
+        ["Module 'history_store' not found in file 'history_store.v'."],
+        ["top.v", "history_store.v"],
+    )
+    assert "FINAL CONTRACT CLOSURE PASS" in prompt
+    assert "File history_store.v must contain required module history_store" in prompt
+    assert "instantiate" in prompt and "exact macro/wrapper inside it" in prompt
+    assert "Module 'history_store' not found" in prompt
 
 
 def test_partial_repair_preserves_children_emitted_inside_original_top_block():
