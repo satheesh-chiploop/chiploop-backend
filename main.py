@@ -5768,8 +5768,8 @@ def _hem_build_child_payload(
     return common
 
 
-def _hem_load_json_artifact(workflow_id: str, filename: str, *local_roots: Any) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
-    """Resolve a HEM handoff from the Supabase artifact index/storage first."""
+def _hem_load_json_artifact(workflow_id: str, filename: str, *_ignored_local_roots: Any) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    """Resolve a HEM handoff exclusively from Supabase index/storage."""
     try:
         rows = (
             supabase.table("workflows")
@@ -5793,7 +5793,7 @@ def _hem_load_json_artifact(workflow_id: str, filename: str, *local_roots: Any) 
         logger.warning("HEM artifact index lookup failed workflow=%s file=%s: %s", workflow_id, filename, exc)
 
     # A storage upload can succeed just before its JSONB index update becomes
-    # visible. Try the canonical key before falling back to local disk.
+    # visible. The canonical Supabase Storage key remains authoritative.
     canonical_storage_path = f"backend/workflows/{workflow_id}/fpga/target_explorer/{filename}"
     try:
         raw = supabase.storage.from_(ARTIFACT_BUCKET).download(canonical_storage_path)
@@ -5804,23 +5804,6 @@ def _hem_load_json_artifact(workflow_id: str, filename: str, *local_roots: Any) 
     except Exception:
         pass
 
-    roots = [Path(root) for root in local_roots if root]
-    roots.append(Path("backend") / "workflows" / workflow_id)
-    seen: set[str] = set()
-    for root in roots:
-        try:
-            resolved = str(root.resolve())
-            if resolved in seen or not root.exists():
-                continue
-            seen.add(resolved)
-            matches = list(root.rglob(filename))
-            if not matches:
-                continue
-            data = json.loads(matches[-1].read_text(encoding="utf-8"))
-            if isinstance(data, dict):
-                return data, f"local:{matches[-1]}"
-        except Exception as exc:
-            logger.warning("HEM local artifact lookup failed root=%s file=%s: %s", root, filename, exc)
     return None, None
 
 

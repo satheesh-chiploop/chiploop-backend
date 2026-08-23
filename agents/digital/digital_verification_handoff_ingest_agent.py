@@ -1,5 +1,6 @@
 import json
 import os
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -324,9 +325,120 @@ def _fpga_inline_handoff(state: Dict[str, Any]) -> Dict[str, Any]:
     return state
 
 
+def _fpga_supabase_handoff(state: Dict[str, Any], source_workflow_id: str) -> Dict[str, Any]:
+    """Import an Explorer-selected FPGA wrapper from authoritative storage."""
+    client = state.get("supabase_client")
+    if client is None:
+        raise RuntimeError("supabase_client missing while importing FPGA integration RTL")
+    workflow_id = str(state.get("workflow_id") or "default")
+    workflow_dir = str(state.get("workflow_dir") or f"backend/workflows/{workflow_id}")
+    os.makedirs(workflow_dir, exist_ok=True)
+    state["workflow_dir"] = workflow_dir
+
+    response = client.table("workflows").select("id,status,artifacts").eq("id", source_workflow_id).single().execute()
+    source = response.data or {}
+    if str(source.get("status") or "") != "completed":
+        raise RuntimeError(f"FPGA integration source workflow {source_workflow_id} is not completed")
+    prefix = f"backend/workflows/{source_workflow_id}"
+    paths = list(dict.fromkeys(_storage_paths(source.get("artifacts") or {}) + _list_storage_tree(client, prefix)))
+    candidates = [
+        path for path in paths
+        if path.lower().endswith((".sv", ".v"))
+        and any(marker in path.lower() for marker in ("/handoff/rtl/", "/interface_adapter/", "/upstream/"))
+    ]
+    # Prefer the published handoff package and de-duplicate mirrored Explorer
+    # paths by filename while retaining all core modules required by the wrapper.
+    candidates.sort(key=lambda path: (0 if "/handoff/rtl/" in path.lower() else 1, path))
+    rtl_files: List[str] = []
+    imported: List[str] = []
+    seen_names: set[str] = set()
+    for source_path in candidates:
+        name = os.path.basename(source_path)
+        if name.lower() in seen_names:
+            continue
+        raw = _download(client, source_path)
+        if not raw:
+            continue
+        seen_names.add(name.lower())
+        rtl_files.append(_write_local(workflow_dir, f"handoff/rtl/{name}", raw))
+        imported.append(source_path)
+        save_text_artifact_and_record(
+            workflow_id, AGENT_NAME, "verification/handoff/rtl", name,
+            raw.decode("utf-8", errors="replace"),
+        )
+    if not rtl_files:
+        raise RuntimeError(
+            f"Completed FPGA Explorer workflow {source_workflow_id} has no authoritative wrapper RTL handoff in Supabase"
+        )
+
+    requested_top = str(state.get("top_module") or "").strip()
+    top_module = requested_top or _detect_top_from_rtl(rtl_files)
+    if requested_top and not any(
+        re.search(rf"\bmodule\s+{re.escape(requested_top)}\b", _read_first_text([path]))
+        for path in rtl_files
+    ):
+        raise RuntimeError(f"Explorer-selected top module {requested_top} is absent from the Supabase RTL handoff")
+    spec = {
+        "name": top_module,
+        "source": "supabase_fpga_explorer_handoff",
+        "target": "fpga",
+        "source_workflow_id": source_workflow_id,
+        "test_intent": state.get("test_intent"),
+        "verification_plan": state.get("verification_plan"),
+    }
+    spec_text = json.dumps(spec, indent=2)
+    local_spec = _write_local(workflow_dir, "spec/fpga_verification_source_spec.json", spec_text.encode("utf-8"))
+    save_text_artifact_and_record(
+        workflow_id, AGENT_NAME, "verification/handoff/spec", "fpga_verification_source_spec.json", spec_text,
+    )
+    clock_intent = build_clock_intent(
+        spec=spec, rtl_files=rtl_files, sdc_text="",
+        requested=state.get("clock_constraints") or state.get("clocks"),
+    )
+    manifest = {
+        "type": "fpga_verification_source_handoff",
+        "source_workflow_id": source_workflow_id,
+        "source_of_truth": "supabase",
+        "rtl_source_paths": imported,
+        "rtl_source_kind": "fpga_explorer_selected_wrapper",
+        "top_module": top_module,
+        "local_spec_path": local_spec,
+        "local_rtl_files": rtl_files,
+        "clock_intent": clock_intent,
+    }
+    save_text_artifact_and_record(
+        workflow_id, AGENT_NAME, "verification/handoff", "verification_source_handoff.json",
+        json.dumps(manifest, indent=2),
+    )
+    state["spec_json"] = local_spec
+    state["digital_spec_json"] = local_spec
+    state["rtl_files"] = rtl_files
+    state["rtl_inputs"] = rtl_files
+    state["top_module"] = top_module
+    state["clock_intent"] = clock_intent
+    state.setdefault("digital", {})["clock_intent"] = clock_intent
+    state["verification_source_handoff"] = manifest
+    state["status"] = "Imported Explorer-selected FPGA wrapper RTL from Supabase."
+    return state
+
+
 def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     if str(state.get("verification_domain") or state.get("target") or "").strip().lower() == "fpga":
-        return _fpga_inline_handoff(state)
+        fpga = state.get("fpga") if isinstance(state.get("fpga"), dict) else {}
+        local_sources = fpga.get("rtl_files") or state.get("rtl_files") or state.get("rtl_inputs") or []
+        if any(isinstance(path, str) and Path(path).exists() for path in local_sources):
+            return _fpga_inline_handoff(state)
+        upstream = state.get("upstream_workflows") if isinstance(state.get("upstream_workflows"), dict) else {}
+        source_workflow_id = str(
+            state.get("from_workflow_id")
+            or state.get("source_arch2rtl_workflow_id")
+            or upstream.get("fpga_exploration")
+            or upstream.get("arch2rtl")
+            or ""
+        ).strip()
+        if not source_workflow_id:
+            raise RuntimeError("FPGA verification requires a completed Supabase Explorer workflow source")
+        return _fpga_supabase_handoff(state, source_workflow_id)
 
     source_mode = str(state.get("rtl_source_mode") or "").strip()
     upstream = state.get("upstream_workflows") if isinstance(state.get("upstream_workflows"), dict) else {}
@@ -374,11 +486,8 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     ])
     spec_source_path, spec_raw = _first_download(client, spec_candidates)
     if not spec_raw:
-        spec_source_path, spec_raw = _first_local(source_workflow_id, "spec", ("_spec.json",))
-    if not spec_raw:
         raise RuntimeError(
-            f"No generated digital spec artifact found in Arch2RTL workflow {source_workflow_id}. "
-            "Run Arch2RTL again after deploying the current backend if this is an older workflow."
+            f"No authoritative digital spec artifact found in Supabase for Arch2RTL workflow {source_workflow_id}."
         )
     try:
         spec = json.loads(spec_raw.decode("utf-8"))
@@ -414,32 +523,7 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
             raw.decode("utf-8", errors="replace"),
         )
     if not rtl_files:
-        for local_rtl_path, local_rtl_raw in _local_integrated_mbist_rtl(_source_local_roots(client, source_workflow_id)):
-            rtl_name = os.path.basename(local_rtl_path)
-            local_rtl = _write_local(workflow_dir, f"handoff/rtl/{rtl_name}", local_rtl_raw)
-            rtl_files.append(local_rtl)
-            imported_rtl_paths.append(local_rtl_path)
-            save_text_artifact_and_record(
-                workflow_id, AGENT_NAME, "verification/handoff/rtl", rtl_name,
-                local_rtl_raw.decode("utf-8", errors="replace"),
-            )
-        if rtl_files:
-            mbist_rtl_candidates = imported_rtl_paths[:]
-    if not rtl_files:
-        local_rtl_path, local_rtl_raw = _first_local_in_roots(
-            _source_local_roots(client, source_workflow_id), (".sv", ".v")
-        )
-        if local_rtl_raw:
-            rtl_name = os.path.basename(local_rtl_path)
-            local_rtl = _write_local(workflow_dir, f"handoff/rtl/{rtl_name}", local_rtl_raw)
-            rtl_files.append(local_rtl)
-            imported_rtl_paths.append(local_rtl_path)
-            save_text_artifact_and_record(
-                workflow_id, AGENT_NAME, "verification/handoff/rtl", rtl_name,
-                local_rtl_raw.decode("utf-8", errors="replace"),
-            )
-    if not rtl_files:
-        raise RuntimeError(f"No generated RTL artifact found in Arch2RTL workflow {source_workflow_id}")
+        raise RuntimeError(f"No authoritative RTL artifact found in Supabase for Arch2RTL workflow {source_workflow_id}")
 
     sdc_candidates = [
         path for path in available_paths

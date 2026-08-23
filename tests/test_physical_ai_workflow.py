@@ -640,6 +640,8 @@ def test_main_registers_generic_physical_ai_endpoints():
     assert 'if force_platform_definition:' in main
     assert 'Required Supabase platform workflow is missing' in main
     assert 'Supabase platform workflow has no executable nodes' in main
+    assert 'Resolve a HEM handoff exclusively from Supabase index/storage' in main
+    assert 'return data, f"local:' not in main
 
 
 def test_hem_resume_persistence_repair_migration_is_idempotent():

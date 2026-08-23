@@ -1,6 +1,7 @@
 import json
 import os
 from pathlib import Path
+import pytest
 
 os.environ.setdefault("SUPABASE_URL", "http://localhost:54321")
 os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-service-role-key")
@@ -74,7 +75,36 @@ class _Client:
     def table(self, name):
         if name == "runs":
             return _Table(self._run_rows)
-        return _Table({"id": "source-wf", "artifacts": self._artifacts})
+        return _Table({"id": "source-wf", "status": "completed", "artifacts": self._artifacts})
+
+
+def test_imports_fpga_explorer_wrapper_from_supabase(tmp_path, monkeypatch):
+    prefix = "backend/workflows/source-wf/fpga/handoff/rtl"
+    wrapper = f"{prefix}/control_spi_fpga_top.sv"
+    core = f"{prefix}/control.v"
+    files = {
+        wrapper: b"module control_spi_fpga_top(input clk); control u_core(); endmodule\n",
+        core: b"module control; endmodule\n",
+    }
+    uploads = []
+    monkeypatch.setattr(agent, "save_text_artifact_and_record", lambda *args, **kwargs: uploads.append(args))
+    state = {
+        "workflow_id": "verify-wf",
+        "workflow_dir": str(tmp_path),
+        "verification_domain": "fpga",
+        "from_workflow_id": "source-wf",
+        "top_module": "control_spi_fpga_top",
+        "supabase_client": _Client({"rtl": [wrapper, core]}, files),
+    }
+
+    result = agent.run_agent(state)
+
+    handoff = result["verification_source_handoff"]
+    assert handoff["source_of_truth"] == "supabase"
+    assert handoff["source_workflow_id"] == "source-wf"
+    assert handoff["rtl_source_kind"] == "fpga_explorer_selected_wrapper"
+    assert {Path(path).name for path in result["rtl_files"]} == {"control_spi_fpga_top.sv", "control.v"}
+    assert result["top_module"] == "control_spi_fpga_top"
 
 
 def test_imports_arch2rtl_spec_and_rtl_for_verify(tmp_path, monkeypatch):
@@ -195,7 +225,7 @@ def test_imports_integrated_mbist_rtl_for_verify(tmp_path, monkeypatch):
     ]
 
 
-def test_imports_rtl_from_arch2rtl_app_working_directory(tmp_path, monkeypatch):
+def test_rejects_local_only_arch2rtl_working_directory(tmp_path, monkeypatch):
     spec_path = "backend/workflows/source-wf/spec/pwm_controller_spec.json"
     artifact_root = tmp_path / "source-run" / "digital"
     rtl_path = artifact_root / "arch2rtl" / "rtl" / "pwm_controller.v"
@@ -217,13 +247,11 @@ def test_imports_rtl_from_arch2rtl_app_working_directory(tmp_path, monkeypatch):
         ),
     }
 
-    result = agent.run_agent(state)
-
-    assert Path(result["rtl_files"][0]).read_text(encoding="utf-8") == "module pwm_controller; endmodule\n"
-    assert result["verification_source_handoff"]["rtl_source_paths"] == [str(rtl_path.resolve())]
+    with pytest.raises(RuntimeError, match="No authoritative RTL artifact found in Supabase"):
+        agent.run_agent(state)
 
 
-def test_imports_integrated_mbist_rtl_from_local_run_when_storage_index_misses_it(tmp_path, monkeypatch):
+def test_rejects_local_only_integrated_mbist_rtl(tmp_path, monkeypatch):
     spec_path = "backend/workflows/source-wf/spec/sram_mbist_demo_controller_spec.json"
     artifact_root = tmp_path / "source-run"
     integrated_root = artifact_root / "arch2rtl" / "digital" / "mbist_rtl_insertion" / "integrated_rtl"
@@ -254,15 +282,8 @@ def test_imports_integrated_mbist_rtl_from_local_run_when_storage_index_misses_i
         ),
     }
 
-    result = agent.run_agent(state)
-
-    handoff = result["verification_source_handoff"]
-    assert handoff["mbist_integrated_rtl"] is True
-    assert handoff["rtl_source_kind"] == "integrated_mbist_rtl"
-    assert {Path(path).name for path in result["rtl_files"]} == {
-        "sram_mbist_demo_controller.v",
-        "sky130_sram_mbist.v",
-    }
+    with pytest.raises(RuntimeError, match="No authoritative RTL artifact found in Supabase"):
+        agent.run_agent(state)
 
 
 def test_rejects_verify_run_without_arch2rtl_source():
