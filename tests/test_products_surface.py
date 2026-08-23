@@ -100,6 +100,9 @@ def test_product_api_routes_are_registered():
     assert "_update_product_status" in source
     assert "resume_product_run_id" in source
     assert "_seed_product_upstream_from_prior_run" in source
+    assert "upstream_workflow_ids: Dict[str, str]" in source
+    assert "Product resume could not validate Supabase predecessor evidence" in source
+    assert "Product resume requires completed predecessor workflows" in source
     assert "_product_upstream_key_for_app" in source
     assert "_append_product_run_log" in source
     assert "run_config_json" in source
@@ -142,6 +145,8 @@ def test_product_api_routes_are_registered():
     assert "deleted_product_run_id" in source
     assert "deleteRunHistory" in frontend_source
     assert "apiDelete<{ status: string; deleted_product_run_id: string }>" in frontend_source
+    assert "Resume from any product stage" in frontend_source
+    assert "Resume Product Journey" in frontend_source
 
 
 def test_product_stage_schema_seed_has_latest_digital_controls():

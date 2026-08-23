@@ -3192,6 +3192,7 @@ class ProductRunStartIn(BaseModel):
     start_stage: Optional[str] = None
     max_stages: Optional[int] = None
     resume_product_run_id: Optional[str] = None
+    upstream_workflow_ids: Dict[str, str] = Field(default_factory=dict)
 
 
 PRODUCT_REFERENCE_JOURNEYS: List[Dict[str, Any]] = [
@@ -11654,6 +11655,7 @@ def execute_product_run_background(
     max_stages: Optional[int] = None,
     start_stage: Optional[str] = None,
     resume_product_run_id: Optional[str] = None,
+    resume_upstream_workflows: Optional[Dict[str, str]] = None,
 ) -> None:
     upstream: Dict[str, str] = _seed_product_upstream_from_prior_run(
         resume_product_run_id,
@@ -11661,6 +11663,7 @@ def execute_product_run_background(
         user_id,
         start_stage,
     )
+    upstream.update(resume_upstream_workflows or {})
     stage_results: Dict[str, Any] = {}
     try:
         product_rows = (
@@ -11813,6 +11816,71 @@ async def start_product_run(product_id: str, payload: ProductRunStartIn, request
     product = await get_product(product_id, request)
     if not product.get("product"):
         raise HTTPException(status_code=404, detail="Product not found")
+    product_record = product["product"]
+    resume_upstream: Dict[str, str] = {}
+    if payload.start_stage:
+        stages = (
+            (product_record.get("stage_config") or {}).get("stages") or []
+            if isinstance(product_record.get("stage_config"), dict) else []
+        )
+        enabled = [stage for stage in stages if isinstance(stage, dict) and _product_stage_enabled(stage)]
+        start_index = next((
+            index for index, stage in enumerate(enabled)
+            if str(stage.get("id") or "") == str(payload.start_stage)
+            or str(stage.get("app") or "") == str(payload.start_stage)
+        ), -1)
+        if start_index < 0:
+            raise HTTPException(status_code=422, detail=f"Start stage {payload.start_stage!r} is not an enabled product stage.")
+        resume_upstream = _seed_product_upstream_from_prior_run(
+            payload.resume_product_run_id, product_id, user_id, payload.start_stage,
+        )
+
+        def normalize_product_workflow_id(value: Any, stage_label: str) -> str:
+            candidate = str(value or "").strip()
+            if candidate.lower().endswith(".zip"):
+                candidate = candidate[:-4]
+            if candidate.startswith("workflow_"):
+                candidate = candidate[len("workflow_"):]
+            if candidate.endswith("_artifacts_full"):
+                candidate = candidate[:-len("_artifacts_full")]
+            try:
+                return str(uuid.UUID(candidate))
+            except (ValueError, AttributeError, TypeError) as exc:
+                raise HTTPException(status_code=422, detail=f"{stage_label} predecessor must be a workflow UUID.") from exc
+
+        explicit_by_stage = payload.upstream_workflow_ids if isinstance(payload.upstream_workflow_ids, dict) else {}
+        for stage in enabled[:start_index]:
+            key = _product_upstream_key_for_app(str(stage.get("app") or ""))
+            if not key:
+                continue
+            supplied = explicit_by_stage.get(str(stage.get("id") or "")) or explicit_by_stage.get(str(stage.get("app") or ""))
+            if supplied:
+                resume_upstream[key] = normalize_product_workflow_id(supplied, str(stage.get("label") or stage.get("id") or key))
+            if not resume_upstream.get(key):
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Resume from {payload.start_stage!r} requires completed predecessor evidence for {stage.get('label') or stage.get('id')}.",
+                )
+        workflow_ids = list(dict.fromkeys(value for value in resume_upstream.values() if value))
+        if workflow_ids:
+            try:
+                workflow_rows = (
+                    supabase.table("workflows")
+                    .select("id,user_id,status")
+                    .in_("id", workflow_ids)
+                    .eq("user_id", user_id)
+                    .execute()
+                ).data or []
+            except Exception as exc:
+                logger.exception("Product resume Supabase validation failed product=%s", product_id)
+                raise HTTPException(status_code=503, detail="Product resume could not validate Supabase predecessor evidence.") from exc
+            by_workflow_id = {str(row.get("id")): row for row in workflow_rows}
+            missing = [workflow_id for workflow_id in workflow_ids if workflow_id not in by_workflow_id]
+            if missing:
+                raise HTTPException(status_code=404, detail="Product resume predecessor workflows were not found: " + ", ".join(missing))
+            incomplete = [workflow_id for workflow_id in workflow_ids if str(by_workflow_id[workflow_id].get("status") or "") != "completed"]
+            if incomplete:
+                raise HTTPException(status_code=409, detail="Product resume requires completed predecessor workflows: " + ", ".join(incomplete))
     record = {
         "product_id": product_id,
         "user_id": user_id,
@@ -11837,6 +11905,7 @@ async def start_product_run(product_id: str, payload: ProductRunStartIn, request
         payload.max_stages,
         payload.start_stage,
         payload.resume_product_run_id,
+        resume_upstream,
     )
     return {"status": "ok", "product_run": product_run}
 
