@@ -71,6 +71,29 @@ def test_esp_idf_source_accepts_semantic_mmio_register_aliases():
     assert "chiploop_register_read" in source
 
 
+def test_esp_idf_source_accepts_semantic_cfg_register_aliases():
+    transport = {
+        "serialized_output_bits": 65,
+        "input_bit_map": [
+            {"port": "cfg_valid", "lsb": 0, "width": 1},
+            {"port": "cfg_write", "lsb": 1, "width": 1},
+            {"port": "cfg_addr", "lsb": 2, "width": 64},
+            {"port": "cfg_wdata", "lsb": 66, "width": 64},
+        ],
+        "output_bit_map": [
+            {"port": "cfg_rdata", "lsb": 1, "width": 64},
+            {"port": "cfg_ready", "lsb": 0, "width": 1},
+        ],
+    }
+    source = _main_source({"esp32_gpio": {}}, 17, transport)
+    assert "#define REG_VALID_LSB 0" in source
+    assert "#define REG_ADDR_WIDTH 64" in source
+    assert "#define REG_WDATA_WIDTH 64" in source
+    assert "#define REG_RDATA_WIDTH 64" in source
+    assert "chiploop_register_write" in source
+    assert "chiploop_register_read" in source
+
+
 def _state(tmp_path, transport):
     transport = {
         "input_bit_map": [
