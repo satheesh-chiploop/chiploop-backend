@@ -110,6 +110,13 @@ def _proof_script(rtl_files: list[str], netlist: str, top: str, family: str, dep
         # construction rule; ports are never hidden by Yosys rename -hide.
         "rename -hide w:*_next",
         "rename -hide w:next_*",
+        # ``*_n`` is the other common spelling for a combinational next-value
+        # helper paired with a registered ``*_r`` signal (for example FSM
+        # state_n/state_r).  Synthesis may rewrite its value for unreachable
+        # encodings, so comparing the helper itself can leave false unproven
+        # points even when the state register and every output prove.  Verilog
+        # ports are not hidden by this Yosys command and remain proof points.
+        "rename -hide w:*_n",
         # Procedural mux temporaries are implementation helpers too. Their
         # downstream registers/ports remain compared, so hiding these names
         # prevents equiv_make from creating redundant points on a cone that
