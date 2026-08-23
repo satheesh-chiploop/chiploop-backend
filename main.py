@@ -1821,9 +1821,6 @@ def _load_workflow_def_by_name(
               "edges": (defn.get("edges") if isinstance(defn, dict) else None) or row.get("edges") or [],
         }
 
-    if force_platform_definition and name in LOCAL_RUNTIME_WORKFLOW_OVERRIDES:
-        return LOCAL_PREBUILT_WORKFLOW_DEFINITIONS[name]
-
     # 1) User-owned custom workflow. App execution can force the platform
     # prebuilt path so a same-name private workflow cannot shadow source of truth.
     if user_id and not force_platform_definition:
@@ -1839,9 +1836,10 @@ def _load_workflow_def_by_name(
         if r.data:
             return unpack(r.data[0])
 
-    # Platform-owned runtime overrides keep shipped app execution in sync with
-    # executable agent registrations even if an older global template remains.
-    if name in LOCAL_RUNTIME_WORKFLOW_OVERRIDES:
+    # Local templates are available only to explicitly non-platform callers.
+    # Production app execution sets force_platform_definition and must use the
+    # Supabase platform row as its source of truth.
+    if not force_platform_definition and name in LOCAL_RUNTIME_WORKFLOW_OVERRIDES:
         return LOCAL_PREBUILT_WORKFLOW_DEFINITIONS[name]
 
     # 2) Global prebuilt workflow. user_id is intentionally ignored.
@@ -1854,7 +1852,14 @@ def _load_workflow_def_by_name(
         .execute()
     )
     if r2.data:
-        return unpack(r2.data[0])
+        definition = unpack(r2.data[0])
+        if definition["nodes"]:
+            return definition
+        if force_platform_definition:
+            raise HTTPException(status_code=503, detail=f"Supabase platform workflow has no executable nodes: {name}")
+
+    if force_platform_definition:
+        raise HTTPException(status_code=503, detail=f"Required Supabase platform workflow is missing: {name}")
 
     if name in LOCAL_PREBUILT_WORKFLOW_DEFINITIONS:
         return LOCAL_PREBUILT_WORKFLOW_DEFINITIONS[name]
@@ -3783,7 +3788,7 @@ class PhysicalAiWorkflowIn(BaseModel):
 
 
 class PhysicalAiHemResumeIn(BaseModel):
-    start_stage: Literal["arch2rtl", "verify", "fpga_exploration", "fpga_bitstream", "asic_tapeout", "firmware_product"]
+    start_stage: Literal["arch2rtl", "verify", "fpga_exploration", "fpga_fabric_integration", "fpga_bitstream", "asic_tapeout", "firmware_product"]
     upstream_workflow_ids: Dict[str, str] = Field(default_factory=dict)
     source_arch2rtl_workflow_id: Optional[str] = None
     source_verification_workflow_id: Optional[str] = None
@@ -7175,6 +7180,14 @@ HEM_PHYSICAL_AI_STAGE_META: Dict[str, Dict[str, str]] = {
         "workflow_name": "FPGA_Target_Explorer",
         "dashboard_stage": "fpga_target_explorer",
     },
+    "fpga_fabric_integration": {
+        "label": "FPGA Fabric Integration & Simulation",
+        "title": "HEM: Physical AI FPGA Fabric Integration",
+        "artifact": "fpga_verify",
+        "app_name": "fpga_verify",
+        "workflow_name": "FPGA_Verify",
+        "dashboard_stage": "verification",
+    },
     "fpga_bitstream": {
         "label": "FPGA RTL to Bitstream",
         "title": "HEM: Physical AI FPGA RTL to Bitstream",
@@ -7229,7 +7242,7 @@ def _hem_physical_ai_stage_plan(payload: Dict[str, Any]) -> List[str]:
         return []
     plan = ["arch2rtl", "verify"]
     if path in {"fpga_prototype", "fpga_then_asic"}:
-        plan.extend(["fpga_exploration", "fpga_bitstream"])
+        plan.extend(["fpga_exploration", "fpga_fabric_integration", "fpga_bitstream"])
     if path in {"digital_ip_asic", "fpga_then_asic"}:
         plan.append("asic_tapeout")
     toggles = payload.get("hem_stage_toggles") if isinstance(payload.get("hem_stage_toggles"), dict) else {}
@@ -7538,9 +7551,9 @@ def _hem_physical_ai_child_payload(root_workflow_id: str, root_run_id: str, payl
         "rtl_source_mode": "from_arch2rtl",
         # Explorer may create a board wrapper. Only bitstream consumes that
         # child; firmware/software require the original RTL workflow regmap.
-        "from_workflow_id": str(payload.get("fpga_source_workflow_id") or source_arch2rtl) if stage == "fpga_bitstream" else source_arch2rtl,
-        "source_workflow_id": str(payload.get("fpga_source_workflow_id") or source_arch2rtl) if stage == "fpga_bitstream" else source_arch2rtl,
-        "source_arch2rtl_workflow_id": str(payload.get("fpga_source_workflow_id") or source_arch2rtl) if stage == "fpga_bitstream" else source_arch2rtl,
+        "from_workflow_id": str(payload.get("fpga_source_workflow_id") or source_arch2rtl) if stage in {"fpga_fabric_integration", "fpga_bitstream"} else source_arch2rtl,
+        "source_workflow_id": str(payload.get("fpga_source_workflow_id") or source_arch2rtl) if stage in {"fpga_fabric_integration", "fpga_bitstream"} else source_arch2rtl,
+        "source_arch2rtl_workflow_id": str(payload.get("fpga_source_workflow_id") or source_arch2rtl) if stage in {"fpga_fabric_integration", "fpga_bitstream"} else source_arch2rtl,
         "parent_workflow_id": root_workflow_id,
         "upstream_workflows": {"physical_ai": root_workflow_id},
         "top_module": top_module,
@@ -7572,7 +7585,18 @@ def _hem_physical_ai_child_payload(root_workflow_id: str, root_run_id: str, payl
             "generate_bitstream": False,
             "allow_frequency_relaxation": True,
         }
-    return {**common, "explorer_winning_configuration": payload.get("explorer_winning_configuration") or {}, "run_fpga_verification": True, "generate_bitstream": True, "run_fpga_hardware_validation": False}
+    return {
+        **common,
+        "explorer_winning_configuration": payload.get("explorer_winning_configuration") or {},
+        "fpga_integration_workflow_id": payload.get("fpga_integration_workflow_id"),
+        "source_verification_workflow_id": (
+            payload.get("fpga_integration_workflow_id")
+            if stage == "fpga_bitstream" else payload.get("source_verification_workflow_id")
+        ),
+        "run_fpga_verification": stage == "fpga_fabric_integration" or not bool(payload.get("fpga_integration_workflow_id")),
+        "generate_bitstream": stage == "fpga_bitstream",
+        "run_fpga_hardware_validation": False,
+    }
 
 
 def _hem_continue_physical_ai_after_success(*, root_workflow_id: str, root_run_id: str, user_id: str, payload: Dict[str, Any]) -> None:
@@ -7729,6 +7753,9 @@ def _hem_continue_physical_ai_after_success(*, root_workflow_id: str, root_run_i
                 "fpga": child_workflow_id,
                 "system_sim": child_workflow_id,
             }
+        if stage == "fpga_fabric_integration":
+            automation_payload["fpga_integration_workflow_id"] = child_workflow_id
+            automation_payload["source_verification_workflow_id"] = child_workflow_id
         if stage == "fpga_exploration":
             explorer, explorer_source = _hem_load_json_artifact(
                 child_workflow_id,
@@ -8550,6 +8577,9 @@ async def resume_physical_ai_hem(
     if upstream_ids.get("fpga_bitstream"):
         resume_payload["fpga_bitstream_workflow_id"] = upstream_ids["fpga_bitstream"]
         resume_payload["source_system_sim_workflow_id"] = upstream_ids["fpga_bitstream"]
+    if upstream_ids.get("fpga_fabric_integration"):
+        resume_payload["fpga_integration_workflow_id"] = upstream_ids["fpga_fabric_integration"]
+        resume_payload["source_verification_workflow_id"] = upstream_ids["fpga_fabric_integration"]
     if upstream_ids.get("asic_tapeout"):
         resume_payload["asic_tapeout_workflow_id"] = upstream_ids["asic_tapeout"]
     append_log_workflow(

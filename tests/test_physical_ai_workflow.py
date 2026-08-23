@@ -637,6 +637,9 @@ def test_main_registers_generic_physical_ai_endpoints():
     assert '"validate predecessor workflows"' in main
     assert '"load the Physical AI root run"' in main
     assert '"check for an active HEM continuation"' in main
+    assert 'if force_platform_definition:' in main
+    assert 'Required Supabase platform workflow is missing' in main
+    assert 'Supabase platform workflow has no executable nodes' in main
 
 
 def test_hem_resume_persistence_repair_migration_is_idempotent():
