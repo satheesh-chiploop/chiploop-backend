@@ -642,6 +642,12 @@ def test_main_registers_generic_physical_ai_endpoints():
     assert 'Supabase platform workflow has no executable nodes' in main
     assert 'Resolve a HEM handoff exclusively from Supabase index/storage' in main
     assert 'return data, f"local:' not in main
+    assert '"software_product", "cosim_validation", "product_demo"' in main
+    assert '"cosim_validation": ("software_product", "System_Software")' in main
+    assert '"product_demo": ("cosim_validation", "System_Software_Validation_L2")' in main
+    assert '"load the selected system predecessor run"' in main
+    assert "_hem_continue_system_rtl_after_success" in main
+    assert 'resume_payload["source_system_sim_workflow_id"] = upstream_ids["fpga_fabric_integration"]' in main
 
 
 def test_hem_resume_persistence_repair_migration_is_idempotent():

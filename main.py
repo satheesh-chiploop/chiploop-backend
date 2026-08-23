@@ -3788,7 +3788,11 @@ class PhysicalAiWorkflowIn(BaseModel):
 
 
 class PhysicalAiHemResumeIn(BaseModel):
-    start_stage: Literal["arch2rtl", "verify", "fpga_exploration", "fpga_fabric_integration", "fpga_bitstream", "asic_tapeout", "firmware_product"]
+    start_stage: Literal[
+        "arch2rtl", "verify", "fpga_exploration", "fpga_fabric_integration",
+        "fpga_bitstream", "asic_tapeout", "firmware_product",
+        "software_product", "cosim_validation", "product_demo",
+    ]
     upstream_workflow_ids: Dict[str, str] = Field(default_factory=dict)
     source_arch2rtl_workflow_id: Optional[str] = None
     source_verification_workflow_id: Optional[str] = None
@@ -7729,7 +7733,10 @@ def _hem_continue_physical_ai_after_success(*, root_workflow_id: str, root_run_i
             append_log_workflow(root_workflow_id, f"HEM will use generated RTL workflow {child_workflow_id} for verification and implementation.", phase="hem_running")
         if stage == "fpga_bitstream":
             automation_payload["fpga_bitstream_workflow_id"] = child_workflow_id
-            automation_payload["source_system_sim_workflow_id"] = child_workflow_id
+            # A bitstream is programming evidence, not an executable RTL
+            # co-simulation harness. Preserve the verified fabric-integration
+            # workflow as the simulation source when it exists.
+            automation_payload.setdefault("source_system_sim_workflow_id", child_workflow_id)
             upstream_workflows = automation_payload.get("upstream_workflows") if isinstance(automation_payload.get("upstream_workflows"), dict) else {}
             automation_payload["upstream_workflows"] = {
                 **upstream_workflows,
@@ -7739,6 +7746,7 @@ def _hem_continue_physical_ai_after_success(*, root_workflow_id: str, root_run_i
         if stage == "fpga_fabric_integration":
             automation_payload["fpga_integration_workflow_id"] = child_workflow_id
             automation_payload["source_verification_workflow_id"] = child_workflow_id
+            automation_payload["source_system_sim_workflow_id"] = child_workflow_id
         if stage == "fpga_exploration":
             explorer, explorer_source = _hem_load_json_artifact(
                 child_workflow_id,
@@ -8412,15 +8420,25 @@ async def resume_physical_ai_hem(
         "hem_stage_toggles": {"fpga_exploration": True, "fpga_bitstream": True, "firmware_product": True},
     }
     full_plan = _hem_physical_ai_stage_plan(planning_payload)
-    if payload.start_stage not in full_plan:
+    # System_Firmware normally hands off to the nested System HEM chain.  For
+    # an explicit resume, expose those real boundaries so an operator can
+    # restart an expensive product journey without regenerating firmware or
+    # software.  These are orchestration stage keys; the authoritative
+    # predecessor records and artifacts remain in Supabase.
+    late_system_stages = ["software_product", "cosim_validation", "product_demo"]
+    if "firmware_product" in full_plan:
+        full_resume_plan = [*full_plan, *late_system_stages]
+    else:
+        full_resume_plan = full_plan
+    if payload.start_stage not in full_resume_plan:
         raise HTTPException(status_code=422, detail=f"Stage {payload.start_stage!r} is not part of this Physical AI implementation path.")
-    start_index = full_plan.index(payload.start_stage)
-    required_predecessors = full_plan[:start_index]
-    resume_plan = full_plan[start_index:]
+    start_index = full_resume_plan.index(payload.start_stage)
+    required_predecessors = full_resume_plan[:start_index]
+    resume_plan = full_resume_plan[start_index:]
     upstream_ids = {
         str(stage): normalize_workflow_id(source_id, f"{str(stage).replace('_', ' ').title()} workflow ID")
         for stage, source_id in payload.upstream_workflow_ids.items()
-        if str(stage) in HEM_PHYSICAL_AI_STAGE_META and str(source_id).strip()
+        if str(stage) in {*HEM_PHYSICAL_AI_STAGE_META, *late_system_stages} and str(source_id).strip()
     }
     # Backward-compatible fields remain accepted while the UI migrates to the
     # stage-keyed map.
@@ -8559,25 +8577,83 @@ async def resume_physical_ai_hem(
         })
     if upstream_ids.get("fpga_bitstream"):
         resume_payload["fpga_bitstream_workflow_id"] = upstream_ids["fpga_bitstream"]
-        resume_payload["source_system_sim_workflow_id"] = upstream_ids["fpga_bitstream"]
+        resume_payload.setdefault("source_system_sim_workflow_id", upstream_ids["fpga_bitstream"])
     if upstream_ids.get("fpga_fabric_integration"):
         resume_payload["fpga_integration_workflow_id"] = upstream_ids["fpga_fabric_integration"]
         resume_payload["source_verification_workflow_id"] = upstream_ids["fpga_fabric_integration"]
+        resume_payload["source_system_sim_workflow_id"] = upstream_ids["fpga_fabric_integration"]
     if upstream_ids.get("asic_tapeout"):
         resume_payload["asic_tapeout_workflow_id"] = upstream_ids["asic_tapeout"]
+
+    late_stage_predecessor = {
+        "software_product": ("firmware_product", "System_Firmware"),
+        "cosim_validation": ("software_product", "System_Software"),
+        "product_demo": ("cosim_validation", "System_Software_Validation_L2"),
+    }.get(payload.start_stage)
+    if late_stage_predecessor:
+        predecessor_stage, predecessor_template = late_stage_predecessor
+        predecessor_workflow_id = upstream_ids[predecessor_stage]
+        predecessor_runs = execute_resume_query(
+            supabase.table("runs")
+            .select("id")
+            .eq("workflow_id", predecessor_workflow_id)
+            .eq("user_id", user_id)
+            .order("created_at", desc=True)
+            .limit(1),
+            "load the selected system predecessor run",
+        )
+        if not predecessor_runs:
+            raise HTTPException(status_code=409, detail="Selected system predecessor has no authoritative Supabase run record.")
+        resume_payload.update({
+            "system_rtl_workflow_id": upstream_ids.get("arch2rtl"),
+            "source_system_rtl_workflow_id": upstream_ids.get("arch2rtl"),
+            "system_firmware_workflow_id": upstream_ids.get("firmware_product"),
+            "system_software_workflow_id": upstream_ids.get("software_product"),
+            "system_validation_workflow_id": upstream_ids.get("cosim_validation"),
+            "hem_root_workflow_id": workflow_id,
+            "hem_root_run_id": str(run_rows[0]["id"]),
+            "upstream_workflows": {
+                **resume_payload["upstream_workflows"],
+                "system_rtl": upstream_ids.get("arch2rtl"),
+                "firmware": upstream_ids.get("firmware_product"),
+                "system_firmware": upstream_ids.get("firmware_product"),
+                "software": upstream_ids.get("software_product"),
+                "system_software": upstream_ids.get("software_product"),
+                "validation": upstream_ids.get("cosim_validation"),
+                "system_validation": upstream_ids.get("cosim_validation"),
+                "fpga": upstream_ids.get("fpga_bitstream"),
+                "system_sim": upstream_ids.get("fpga_bitstream"),
+            },
+            "hem_stage_toggles": {
+                "system_software": True,
+                "system_validation": True,
+                "system_product": True,
+            },
+        })
     append_log_workflow(
         workflow_id,
         f"HEM resume queued at {payload.start_stage} using completed predecessor evidence {upstream_ids}; "
         f"only these stages will execute: {resume_plan}; requirements evidence: {requirements_source or 'not indexed'}.",
         phase="hem_resume_queued",
     )
-    background_tasks.add_task(
-        _hem_continue_physical_ai_after_success,
-        root_workflow_id=workflow_id,
-        root_run_id=str(run_rows[0]["id"]),
-        user_id=user_id,
-        payload=resume_payload,
-    )
+    if late_stage_predecessor:
+        background_tasks.add_task(
+            _hem_continue_system_rtl_after_success,
+            current_template=late_stage_predecessor[1],
+            current_workflow_id=upstream_ids[late_stage_predecessor[0]],
+            current_run_id=str(predecessor_runs[0]["id"]),
+            user_id=user_id,
+            parent_payload=resume_payload,
+            hem_mode=payload.hem_mode,
+        )
+    else:
+        background_tasks.add_task(
+            _hem_continue_physical_ai_after_success,
+            root_workflow_id=workflow_id,
+            root_run_id=str(run_rows[0]["id"]),
+            user_id=user_id,
+            payload=resume_payload,
+        )
     return {
         "ok": True,
         "workflow_id": workflow_id,
