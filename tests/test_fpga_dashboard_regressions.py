@@ -655,7 +655,8 @@ def test_physical_ai_fpga_candidates_are_derived_from_registry():
     assert "def _hem_physical_ai_fpga_candidates()" in source
     assert "for board_id, profile in BOARD_REGISTRY.items()" in source
     assert 'str(profile.get("support_tier") or "production").lower() != "unavailable"' in source
-    assert 'payload.get("candidate_boards") or _hem_physical_ai_fpga_candidates()' in source
+    assert '"candidate_boards": _hem_reference_fpga_candidates(payload)' in source
+    assert "def _hem_reference_fpga_candidates" in source
     assert '"ulx3s_45f"' not in source
 
 def test_nextpnr_terminal_failure_propagates_without_timing_closure(tmp_path, monkeypatch):

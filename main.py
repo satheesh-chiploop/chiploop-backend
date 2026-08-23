@@ -3737,6 +3737,13 @@ class FpgaBitstreamAppIn(DigitalRTLSourceIn):
     context_mode: Optional[str] = "smart"
     hem_enabled: Optional[bool] = False
     hem_mode: Optional[str] = "fixed"
+    deployment_architecture: Optional[Literal["fpga_onboard_cpu", "fpga_soft_cpu", "fpga_external_host"]] = "fpga_external_host"
+    host_interface_plan: Dict[str, Any] = Field(default_factory=dict)
+    external_host_config: Dict[str, Any] = Field(default_factory=dict)
+    soft_cpu_config: Dict[str, Any] = Field(default_factory=dict)
+    soft_cpu_integration_contract: Dict[str, Any] = Field(default_factory=dict)
+    automatic_board_convergence: Optional[bool] = False
+    max_fpga_board_convergence_attempts: int = Field(default=3, ge=1, le=10)
 
 
 class PhysicalAiMotorControlIn(BaseModel):
@@ -3786,6 +3793,7 @@ class PhysicalAiWorkflowIn(BaseModel):
     hem_goal: Literal["fpga_prototype", "product_demo"] = "product_demo"
     hem_stage_toggles: Dict[str, bool] = Field(default_factory=lambda: {"fpga_exploration": True, "fpga_bitstream": True, "firmware_product": True})
     candidate_boards: Optional[List[str]] = None
+    max_fpga_board_convergence_attempts: int = Field(default=3, ge=1, le=10)
 
 
 class PhysicalAiHemResumeIn(BaseModel):
@@ -3807,6 +3815,7 @@ class PhysicalAiHemResumeIn(BaseModel):
     external_host_config: Dict[str, Any] = Field(default_factory=dict)
     hem_mode: Literal["fixed", "adaptive"] = "fixed"
     hem_goal: Literal["fpga_prototype", "product_demo"] = "product_demo"
+    recover_stale_hem: bool = False
 
 
 class DigitalArch2SynthesisAppIn(DigitalArch2RTLAppIn, DigitalRTLSourceIn):
@@ -4329,6 +4338,19 @@ def execute_digital_app_background(
         app_loop_type = "fpga" if app_name in {"fpga", "fpga2rtl", "fpga_verify", "fpga_formal", "fpga_verify_closure_loop", "fpga_synthesis", "fpga_implementation", "fpga_target_explorer"} or str(template_workflow_name).startswith("FPGA") else "digital"
         app_loop_label = "FPGA" if app_loop_type == "fpga" else "Digital"
         execution_loop_type = "digital" if app_name in {"fpga_verify", "fpga_formal", "fpga_verify_closure_loop"} else app_loop_type
+        if (
+            app_loop_type == "fpga"
+            and bool((payload or {}).get("automatic_board_convergence"))
+            and not bool((payload or {}).get("_fpga_convergence_child"))
+            and app_name in {"fpga", "fpga2rtl", "fpga_implementation"}
+        ):
+            _execute_standalone_fpga_convergence(
+                workflow_id=workflow_id,
+                run_id=run_id,
+                user_id=user_id,
+                payload={**(payload or {}), "standalone_fpga_root_app": app_name},
+            )
+            return
 
         shared_state = {
             "workflow_id": workflow_id,
@@ -5265,6 +5287,28 @@ def _hem_update_run_record(hem_run_id: Optional[str], **patch: Any) -> None:
         logger.warning("HEM: could not update hem_runs id=%s: %s", hem_run_id, exc)
 
 
+def _hem_update_required_run_record(hem_run_id: Optional[str], **patch: Any) -> None:
+    """Update convergence state or fail; Supabase is the authoritative ledger."""
+    if not hem_run_id:
+        raise RuntimeError("FPGA product convergence has no authoritative Supabase HEM run")
+    patch["updated_at"] = datetime.utcnow().isoformat()
+    try:
+        supabase.table("hem_runs").update(patch).eq("id", hem_run_id).execute()
+        rows = (
+            supabase.table("hem_runs")
+            .select("id")
+            .eq("id", hem_run_id)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        if not rows:
+            raise RuntimeError(f"Supabase HEM run {hem_run_id} disappeared during convergence")
+    except Exception as exc:
+        raise RuntimeError("Unable to update the authoritative Supabase HEM run") from exc
+
+
 def _hem_run_status(hem_run_id: Optional[str]) -> Optional[str]:
     """Read the authoritative HEM terminal state from Supabase."""
     if not hem_run_id:
@@ -5314,6 +5358,171 @@ def _hem_insert_event(
         }).execute()
     except Exception as exc:
         logger.warning("HEM: could not insert hem_run_events record for workflow=%s: %s", workflow_id, exc)
+
+
+def _hem_insert_fpga_board_attempt(
+    *, hem_run_id: Optional[str], user_id: str, board_id: str, attempt_number: int,
+    explorer_workflow_id: str, deployment_architecture: str,
+) -> Optional[str]:
+    """Persist board convergence state; there is intentionally no local fallback."""
+    if not hem_run_id:
+        raise RuntimeError("FPGA board convergence requires an authoritative Supabase HEM run")
+    attempt_id = str(uuid.uuid4())
+    now = datetime.utcnow().isoformat()
+    try:
+        supabase.table("hem_fpga_board_attempts").insert({
+            "id": attempt_id,
+            "hem_run_id": hem_run_id,
+            "user_id": user_id,
+            "attempt_number": attempt_number,
+            "board_id": board_id,
+            "deployment_architecture": deployment_architecture,
+            "explorer_workflow_id": explorer_workflow_id,
+            "status": "selected",
+            "evidence": {},
+            "created_at": now,
+            "updated_at": now,
+        }).execute()
+    except Exception as exc:
+        raise RuntimeError(
+            "Supabase FPGA board-attempt persistence is unavailable; apply the board convergence migration"
+        ) from exc
+    return attempt_id
+
+
+def _hem_update_fpga_board_attempt(attempt_id: Optional[str], **patch: Any) -> None:
+    if not attempt_id:
+        raise RuntimeError("FPGA board convergence attempt has no Supabase identity")
+    patch["updated_at"] = datetime.utcnow().isoformat()
+    try:
+        supabase.table("hem_fpga_board_attempts").update(patch).eq("id", attempt_id).execute()
+        rows = (
+            supabase.table("hem_fpga_board_attempts")
+            .select("id")
+            .eq("id", attempt_id)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        if not rows:
+            raise RuntimeError(f"Supabase FPGA board attempt {attempt_id} disappeared")
+    except Exception as exc:
+        raise RuntimeError("Unable to update the Supabase FPGA board-attempt ledger") from exc
+
+
+def _hem_load_fpga_board_attempts(hem_run_id: Optional[str], user_id: str) -> List[Dict[str, Any]]:
+    """Load convergence state exclusively from Supabase before each decision."""
+    if not hem_run_id:
+        raise RuntimeError("FPGA board convergence requires an authoritative Supabase HEM run")
+    try:
+        return list(
+            supabase.table("hem_fpga_board_attempts")
+            .select("id,attempt_number,board_id,status,failure_class,failure_reason,evidence,explorer_workflow_id,integration_workflow_id,implementation_workflow_id")
+            .eq("hem_run_id", hem_run_id)
+            .eq("user_id", user_id)
+            .order("attempt_number")
+            .execute()
+            .data
+            or []
+        )
+    except Exception as exc:
+        raise RuntimeError("Unable to load the authoritative Supabase FPGA board-attempt ledger") from exc
+
+
+def _hem_seed_reused_fpga_board_attempt(
+    *, hem_run_id: str, user_id: str, payload: Dict[str, Any],
+) -> Optional[str]:
+    """Create this HEM run's ledger row from validated predecessor evidence."""
+    explorer_id = str(payload.get("reused_fpga_explorer_workflow_id") or "").strip()
+    board_id = str(payload.get("board") or "").strip()
+    if not explorer_id or not board_id:
+        return None
+    attempt_id = _hem_insert_fpga_board_attempt(
+        hem_run_id=hem_run_id,
+        user_id=user_id,
+        board_id=board_id,
+        attempt_number=1,
+        explorer_workflow_id=explorer_id,
+        deployment_architecture=str(payload.get("deployment_architecture") or ""),
+    )
+    integration_id = str(payload.get("fpga_integration_workflow_id") or "").strip()
+    if integration_id:
+        _hem_update_fpga_board_attempt(
+            attempt_id,
+            integration_workflow_id=integration_id,
+            evidence={
+                "integration_workflow_status": "completed",
+                "resume_source": "supabase_predecessor_evidence",
+            },
+        )
+    return attempt_id
+
+
+def _hem_fpga_retryable_fit_failure(
+    workflow_id: str, failure_detail: str, child_artifact_dir: str, base_dir: str,
+) -> tuple[bool, Dict[str, Any]]:
+    """Classify only measured capacity/timing failures as board-reselection candidates."""
+    evidence: Dict[str, Any] = {"failure_detail": failure_detail}
+    for filename, key in (
+        ("fpga_synthesis_summary.json", "synthesis"),
+        ("fpga_place_route_summary.json", "place_route"),
+        ("fpga_timing_drc_summary.json", "timing_drc"),
+    ):
+        artifact, source = _hem_load_json_artifact(workflow_id, filename, child_artifact_dir, base_dir)
+        if isinstance(artifact, dict) and artifact:
+            evidence[key] = artifact
+            evidence[f"{key}_source"] = source
+    synthesis = evidence.get("synthesis") if isinstance(evidence.get("synthesis"), dict) else {}
+    place_route = evidence.get("place_route") if isinstance(evidence.get("place_route"), dict) else {}
+    timing = evidence.get("timing_drc") if isinstance(evidence.get("timing_drc"), dict) else {}
+    utilization_values = [
+        item.get("logic_utilization_percent")
+        for item in (synthesis, place_route)
+        if isinstance(item, dict)
+    ]
+    over_capacity = any(
+        isinstance(value, (int, float)) and float(value) > 100.0
+        for value in utilization_values
+    )
+    timing_failed = timing.get("timing_met") is False or place_route.get("timing_met") is False
+    # Text logs alone are not fit evidence: a missing nextpnr executable can
+    # also say "route failed". Only structured implementation artifacts may
+    # authorize spending another board attempt.
+    pnr_error = str(place_route.get("error") or place_route.get("reason") or "").lower()
+    measured_capacity_tokens = (
+        "does not fit", "over-util", "overutil", "failed to place", "placement capacity",
+        "device capacity", "too many cells",
+    )
+    structured_capacity_failure = bool(place_route) and any(
+        token in pnr_error for token in measured_capacity_tokens
+    )
+    retryable = bool(over_capacity or timing_failed or structured_capacity_failure)
+    evidence["classification"] = "capacity_or_timing" if retryable else "non_fit_failure"
+    evidence["measured_fit_evidence"] = bool(retryable)
+    return retryable, evidence
+
+
+def _hem_fpga_implementation_fit_verdict(
+    workflow_id: str, child_artifact_dir: str, base_dir: str,
+) -> tuple[str, Dict[str, Any]]:
+    retryable, evidence = _hem_fpga_retryable_fit_failure(
+        workflow_id, "", child_artifact_dir, base_dir,
+    )
+    if retryable:
+        return "fit_failed", evidence
+    synthesis = evidence.get("synthesis") if isinstance(evidence.get("synthesis"), dict) else {}
+    place_route = evidence.get("place_route") if isinstance(evidence.get("place_route"), dict) else {}
+    timing = evidence.get("timing_drc") if isinstance(evidence.get("timing_drc"), dict) else {}
+    verified = bool(
+        synthesis.get("status") == "completed"
+        and place_route.get("status") == "completed"
+        and timing.get("status") in {"completed", "pass"}
+        and timing.get("timing_met") is True
+    )
+    evidence["classification"] = "fit_verified" if verified else "fit_evidence_incomplete"
+    evidence["measured_fit_evidence"] = verified
+    return ("fit_verified" if verified else "fit_evidence_incomplete"), evidence
 
 
 def _hem_link_child_workflow(
@@ -5799,15 +6008,22 @@ def _hem_load_json_artifact(workflow_id: str, filename: str, *_ignored_local_roo
 
     # A storage upload can succeed just before its JSONB index update becomes
     # visible. The canonical Supabase Storage key remains authoritative.
-    canonical_storage_path = f"backend/workflows/{workflow_id}/fpga/target_explorer/{filename}"
-    try:
-        raw = supabase.storage.from_(ARTIFACT_BUCKET).download(canonical_storage_path)
-        text = raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else str(raw)
-        data = json.loads(text)
-        if isinstance(data, dict):
-            return data, f"supabase:{canonical_storage_path}"
-    except Exception:
-        pass
+    canonical_stages = {
+        "fpga_target_explorer.json": ("target_explorer",),
+        "fpga_synthesis_summary.json": ("synth",),
+        "fpga_place_route_summary.json": ("pnr",),
+        "fpga_timing_drc_summary.json": ("reports",),
+    }.get(filename, ())
+    for stage in canonical_stages:
+        canonical_storage_path = f"backend/workflows/{workflow_id}/fpga/{stage}/{filename}"
+        try:
+            raw = supabase.storage.from_(ARTIFACT_BUCKET).download(canonical_storage_path)
+            text = raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else str(raw)
+            data = json.loads(text)
+            if isinstance(data, dict):
+                return data, f"supabase:{canonical_storage_path}"
+        except Exception:
+            continue
 
     return None, None
 
@@ -7055,6 +7271,47 @@ def _start_fpga_specialty_app(background_tasks: BackgroundTasks, user_id: str, p
     return {"ok": True, "workflow_id": workflow_id, "run_id": run_id}
 
 
+@app.get("/apps/fpga/{workflow_id}/convergence")
+async def apps_fpga_convergence_status(workflow_id: str, request: Request):
+    user_id = _require_user_id(request)
+    workflow_rows = (
+        supabase.table("workflows").select("id,status,phase").eq("id", workflow_id).eq("user_id", user_id).limit(1).execute().data or []
+    )
+    if not workflow_rows:
+        raise HTTPException(status_code=404, detail="FPGA workflow not found")
+    hem_rows = (
+        supabase.table("hem_runs")
+        .select("id,status,current_stage,current_workflow_id,next_stage")
+        .eq("root_workflow_id", workflow_id)
+        .eq("user_id", user_id)
+        .eq("policy_key", HEM_FPGA_PRODUCT_CONVERGENCE_POLICY_KEY)
+        .order("created_at", desc=True)
+        .limit(1)
+        .execute().data or []
+    )
+    if not hem_rows:
+        return {"workflow": workflow_rows[0], "hem": None, "attempts": [], "children": []}
+    hem = hem_rows[0]
+    attempts = (
+        supabase.table("hem_fpga_board_attempts")
+        .select("attempt_number,board_id,deployment_architecture,status,failure_class,failure_reason,explorer_workflow_id,integration_workflow_id,implementation_workflow_id")
+        .eq("hem_run_id", hem["id"])
+        .eq("user_id", user_id)
+        .order("attempt_number")
+        .execute().data or []
+    )
+    events = (
+        supabase.table("hem_run_events")
+        .select("workflow_id,stage,status,metadata,created_at")
+        .eq("hem_run_id", hem["id"])
+        .eq("user_id", user_id)
+        .eq("event_type", "stage_finished")
+        .order("created_at")
+        .execute().data or []
+    )
+    return {"workflow": workflow_rows[0], "hem": hem, "attempts": attempts, "children": events}
+
+
 @app.post("/apps/fpga/constraint-signoff/run")
 async def apps_fpga_constraint_signoff_run(request: Request, background_tasks: BackgroundTasks, payload: FpgaBitstreamAppIn):
     return _start_fpga_specialty_app(background_tasks, _require_user_id(request), payload, title="App: FPGA Constraint + CDC/RDC Signoff", artifact_name="fpga_constraint_signoff", app_name="fpga_constraint_signoff", workflow_name="FPGA_Synthesis", overrides={"run_fpga_constraint_signoff": True, "require_fpga_constraint_signoff": True, "run_fpga_verification": False, "generate_bitstream": False})
@@ -7101,6 +7358,8 @@ async def apps_fpga_target_explorer_run(request: Request, background_tasks: Back
 
 
 HEM_PHYSICAL_AI_POLICY_KEY = "physical_ai_fpga_prototype_v1"
+HEM_FPGA_PRODUCT_CONVERGENCE_POLICY_KEY = "fpga_product_convergence_v1"
+FPGA_BOARD_CONVERGENCE_DEPLOYMENTS = {"fpga_onboard_cpu", "fpga_soft_cpu", "fpga_external_host"}
 
 
 def _hem_physical_ai_fpga_candidates() -> List[str]:
@@ -7224,20 +7483,30 @@ def _hem_child_failure_summary(workflow_id: str, *, max_lines: int = 8) -> str:
     return _truncate_tail(" | ".join((useful or lines)[-max_lines:]), 1800)
 
 
-def _hem_physical_ai_stage_plan(payload: Dict[str, Any]) -> List[str]:
+def _fpga_product_stage_plan(payload: Dict[str, Any]) -> List[str]:
     path = str(payload.get("implementation_path") or "fpga_prototype")
     if path == "architecture_only":
         return []
-    plan = ["arch2rtl", "verify"]
+    convergence_only = bool(payload.get("standalone_fpga_convergence")) and not bool(payload.get("standalone_generate_arch2rtl"))
+    plan = [] if convergence_only else ["arch2rtl", "verify"]
     if path in {"fpga_prototype", "fpga_then_asic"}:
-        plan.extend(["fpga_exploration", "fpga_fabric_integration", "fpga_bitstream"])
-    if path in {"digital_ip_asic", "fpga_then_asic"}:
+        deployment = str(payload.get("deployment_architecture") or "automatic").strip().lower()
+        if deployment == "fpga_soft_cpu":
+            # A soft CPU, its memories and interconnect are fabric RTL. Build
+            # and verify that complete portable system before selecting a
+            # device so Explorer measures the real integrated design.
+            plan.extend(["fpga_fabric_integration", "fpga_exploration", "fpga_bitstream"])
+        else:
+            # Hard onboard CPUs and external interfaces are board properties;
+            # select the board before producing its board-specific wrapper.
+            plan.extend(["fpga_exploration", "fpga_fabric_integration", "fpga_bitstream"])
+    if not convergence_only and path in {"digital_ip_asic", "fpga_then_asic"}:
         plan.append("asic_tapeout")
     toggles = payload.get("hem_stage_toggles") if isinstance(payload.get("hem_stage_toggles"), dict) else {}
     deployment_architecture = str(payload.get("deployment_architecture") or "automatic").strip().lower()
     firmware_inapplicable = deployment_architecture in {"fpga_external_host", "asic_companion", "asic_digital_ip"}
     # Host-device software is still required for external-host and companion modes.
-    if (str(payload.get("hem_goal") or "product_demo") == "product_demo"
+    if (not convergence_only and str(payload.get("hem_goal") or "product_demo") == "product_demo"
             and bool(toggles.get("firmware_product", True))):
         plan.append("firmware_product")
     start_stage = str(payload.get("hem_start_stage") or "").strip()
@@ -7267,6 +7536,33 @@ def _hem_physical_ai_child_payload(root_workflow_id: str, root_run_id: str, payl
         "_fail_fast_on_agent_error": True,
     }
     if stage == "arch2rtl":
+        if payload.get("standalone_fpga_convergence"):
+            deployment = str(payload.get("deployment_architecture") or "fpga_external_host")
+            generic_spec = str(
+                payload.get("rtl_spec_text")
+                or payload.get("spec_text")
+                or payload.get("objective")
+                or "Generate synthesizable FPGA RTL from the supplied design intent."
+            ).strip()
+            interface_plan = payload.get("host_interface_plan") if isinstance(payload.get("host_interface_plan"), dict) else {}
+            soft_cpu = payload.get("soft_cpu_config") if isinstance(payload.get("soft_cpu_config"), dict) else {}
+            deployment_contract = (
+                "Preserve this explicit external-host interface contract: " + json.dumps(interface_plan, sort_keys=True)
+                if deployment == "fpga_external_host"
+                else "Integrate the supplied soft CPU, memory, interconnect, and application RTL contract: " + json.dumps(soft_cpu, sort_keys=True)
+                if deployment == "fpga_soft_cpu"
+                else "Keep application RTL portable; the qualified onboard CPU and board wrapper are selected after FPGA exploration."
+            )
+            return {
+                **common_digital,
+                "spec_text": generic_spec + "\nFPGA DEPLOYMENT CONTRACT: " + deployment_contract,
+                "top_module": top_module,
+                "design_language": "SystemVerilog",
+                "soft_cpu_config": soft_cpu,
+                "soft_cpu_integration_contract": payload.get("soft_cpu_integration_contract") or {},
+                "toggles": {"run_spec2rtl_check": True},
+                "generic_fpga_product_contract": True,
+            }
         implementation_path = str(payload.get("implementation_path") or "fpga_prototype")
         deployment_architecture = str(payload.get("deployment_architecture") or "automatic").strip().lower()
         firmware_requested = (
@@ -7535,15 +7831,34 @@ def _hem_physical_ai_child_payload(root_workflow_id: str, root_run_id: str, payl
             "hem_stage_toggles": {"system_software": True, "system_validation": True, "system_product": True},
             "product_intent": str(payload.get("product_intent") or f"Build a safe simulator-backed {application_name} product from the approved application, model, partition, device-layer, and software contracts; physical programming requires explicit approval."),
         }
+    fpga_source_workflow_id = str(payload.get("fpga_source_workflow_id") or "").strip()
+    generated_source_ready = bool(
+        payload.get("standalone_generate_arch2rtl")
+        and source_arch2rtl
+        and source_arch2rtl != root_workflow_id
+    )
+    direct_standalone_source = bool(
+        payload.get("standalone_fpga_convergence")
+        and not fpga_source_workflow_id
+        and not generated_source_ready
+    )
+    selected_source_workflow_id = fpga_source_workflow_id or source_arch2rtl
     common = {
-        "rtl_source_mode": "from_arch2rtl",
+        # Direct pasted/repository RTL is allowed only until the first governed
+        # child handoff exists. Every later stage must ingest that Supabase
+        # workflow so board wrappers and integration changes cannot be skipped.
+        "rtl_source_mode": str(payload.get("rtl_source_mode") or "from_arch2rtl") if direct_standalone_source else "from_arch2rtl",
         # Explorer may create a board wrapper. Only bitstream consumes that
         # child; firmware/software require the original RTL workflow regmap.
-        "from_workflow_id": str(payload.get("fpga_source_workflow_id") or source_arch2rtl) if stage in {"fpga_fabric_integration", "fpga_bitstream"} else source_arch2rtl,
-        "source_workflow_id": str(payload.get("fpga_source_workflow_id") or source_arch2rtl) if stage in {"fpga_fabric_integration", "fpga_bitstream"} else source_arch2rtl,
-        "source_arch2rtl_workflow_id": str(payload.get("fpga_source_workflow_id") or source_arch2rtl) if stage in {"fpga_fabric_integration", "fpga_bitstream"} else source_arch2rtl,
+        "from_workflow_id": selected_source_workflow_id,
+        "source_workflow_id": selected_source_workflow_id,
+        "source_arch2rtl_workflow_id": selected_source_workflow_id,
         "parent_workflow_id": root_workflow_id,
-        "upstream_workflows": {"physical_ai": root_workflow_id},
+        "upstream_workflows": (
+            {"fpga_product": root_workflow_id, "rtl_source": selected_source_workflow_id}
+            if payload.get("standalone_fpga_convergence")
+            else {"physical_ai": root_workflow_id}
+        ),
         "top_module": top_module,
         "board": str(payload.get("board") or "orangecrab_ecp5_85f"),
         "target_frequency_mhz": float(payload.get("target_frequency_mhz") or 50.0),
@@ -7555,12 +7870,18 @@ def _hem_physical_ai_child_payload(root_workflow_id: str, root_run_id: str, payl
         "deployment_architecture": str(payload.get("deployment_architecture") or "automatic"),
         "host_interface_plan": payload.get("host_interface_plan") or {},
         "external_host_config": payload.get("external_host_config") or {},
+        "soft_cpu_integration_contract": payload.get("soft_cpu_integration_contract") or {},
         "hem_enabled": False,
         "hem_mode": _hem_normalized_mode(str(payload.get("hem_mode") or "fixed")),
         "hem_run_id": hem_run_id,
         "hem_root_workflow_id": root_workflow_id,
         "hem_root_run_id": root_run_id,
+        "_fpga_convergence_child": True,
     }
+    if direct_standalone_source:
+        for source_key in ("rtl_text", "pasted_rtl_files", "repo_path", "repo_ref", "repo_subdir", "spec_text"):
+            if payload.get(source_key) is not None:
+                common[source_key] = payload.get(source_key)
     if stage == "fpga_exploration":
         return {
             **common,
@@ -7582,17 +7903,17 @@ def _hem_physical_ai_child_payload(root_workflow_id: str, root_run_id: str, payl
             if stage == "fpga_bitstream" else payload.get("source_verification_workflow_id")
         ),
         "run_fpga_verification": stage == "fpga_fabric_integration" or not bool(payload.get("fpga_integration_workflow_id")),
-        "generate_bitstream": stage == "fpga_bitstream",
+        "generate_bitstream": stage == "fpga_bitstream" and not bool(payload.get("standalone_fpga_implementation_only")),
         "run_fpga_hardware_validation": False,
     }
 
 
-def _hem_continue_physical_ai_after_success(*, root_workflow_id: str, root_run_id: str, user_id: str, payload: Dict[str, Any]) -> None:
+def _continue_fpga_product_journey(*, root_workflow_id: str, root_run_id: str, user_id: str, payload: Dict[str, Any]) -> None:
     if not bool(payload.get("hem_enabled")):
         append_log_workflow(root_workflow_id, "HEM Automatic Runs disabled; FPGA child workflows were not started.", phase="done")
         return
     mode = _hem_normalized_mode(str(payload.get("hem_mode") or "fixed"))
-    plan = _hem_physical_ai_stage_plan(payload)
+    plan = _fpga_product_stage_plan(payload)
     if not plan:
         append_log_workflow(root_workflow_id, "Architecture-only journey completed; no downstream implementation was requested.", phase="hem_complete")
         return
@@ -7606,14 +7927,45 @@ def _hem_continue_physical_ai_after_success(*, root_workflow_id: str, root_run_i
         current_stage="physical_ai",
         next_stage=plan[0],
         status="continuing",
-        policy_key=HEM_PHYSICAL_AI_POLICY_KEY,
+        policy_key=(
+            HEM_FPGA_PRODUCT_CONVERGENCE_POLICY_KEY
+            if payload.get("standalone_fpga_convergence")
+            else HEM_PHYSICAL_AI_POLICY_KEY
+        ),
         metadata={"source": "physical_ai", "goal": "fpga_prototype", "path": plan, "completed": []},
     )
+    if not hem_run_id:
+        raise RuntimeError("FPGA product convergence could not create its authoritative Supabase HEM run")
     completed: List[str] = []
     previous_stage = "physical_ai"
     automation_payload = dict(payload)
-    for index, stage in enumerate(plan):
-        meta = HEM_PHYSICAL_AI_STAGE_META[stage]
+    attempt_id = _hem_seed_reused_fpga_board_attempt(
+        hem_run_id=str(hem_run_id), user_id=user_id, payload=payload,
+    )
+    if attempt_id:
+        automation_payload["fpga_board_attempt_id"] = attempt_id
+    max_board_attempts = max(1, min(int(payload.get("max_fpga_board_convergence_attempts") or 3), 10))
+    index = 0
+    while index < len(plan):
+        ledger_status = _hem_run_status(str(hem_run_id))
+        if ledger_status not in {"running", "continuing"}:
+            append_log_workflow(
+                root_workflow_id,
+                f"HEM FPGA continuation stopped because its authoritative Supabase status is {ledger_status or 'missing'}.",
+                phase="hem_superseded" if ledger_status == "superseded" else "hem_failed",
+            )
+            return
+        stage = plan[index]
+        meta = dict(HEM_PHYSICAL_AI_STAGE_META[stage])
+        if stage == "fpga_bitstream" and payload.get("standalone_fpga_implementation_only"):
+            meta.update({
+                "label": "FPGA Implementation",
+                "title": "FPGA Product Convergence: Implementation",
+                "artifact": "fpga_implementation",
+                "app_name": "fpga_implementation",
+                "workflow_name": "FPGA_Implementation",
+                "dashboard_stage": "fpga",
+            })
         append_log_workflow(root_workflow_id, f"HEM Automatic Run ({mode}) queued {meta['label']} because {previous_stage} completed successfully.", phase="hem_queued")
         child_loop_type = "system" if stage == "firmware_product" else ("fpga" if stage.startswith("fpga_") else "digital")
         child_workflow_id, child_run_id, base_dir = _create_app_workflow_and_run(user_id, meta["title"], child_loop_type)
@@ -7645,7 +7997,7 @@ def _hem_continue_physical_ai_after_success(*, root_workflow_id: str, root_run_i
             message=f"HEM started {meta['label']} from Physical AI.",
             metadata={"label": meta["label"], "dashboard_stage": meta["dashboard_stage"]},
         )
-        _hem_update_run_record(
+        _hem_update_required_run_record(
             str(hem_run_id) if hem_run_id else None,
             current_workflow_id=child_workflow_id,
             current_run_id=child_run_id,
@@ -7663,6 +8015,17 @@ def _hem_continue_physical_ai_after_success(*, root_workflow_id: str, root_run_i
             append_log_workflow(child_workflow_id, f"HEM child execution crashed: {type(exc).__name__}: {exc}", status="failed", phase="error")
         child_rows = supabase.table("workflows").select("status").eq("id", child_workflow_id).limit(1).execute().data or []
         child_status = str((child_rows[0] if child_rows else {}).get("status") or "unknown")
+        implementation_fit_evidence: Dict[str, Any] = {}
+        if (
+            child_status == "completed"
+            and stage == "fpga_bitstream"
+            and str(automation_payload.get("deployment_architecture") or "") in FPGA_BOARD_CONVERGENCE_DEPLOYMENTS
+        ):
+            fit_verdict, implementation_fit_evidence = _hem_fpga_implementation_fit_verdict(
+                child_workflow_id, child_artifact_dir, base_dir,
+            )
+            if fit_verdict != "fit_verified":
+                child_status = fit_verdict
         _hem_insert_event(
             hem_run_id=str(hem_run_id) if hem_run_id else None,
             user_id=user_id,
@@ -7677,6 +8040,77 @@ def _hem_continue_physical_ai_after_success(*, root_workflow_id: str, root_run_i
         append_log_workflow(root_workflow_id, f"HEM {meta['label']} finished with status {child_status}.", phase="hem_running" if child_status == "completed" else "hem_failed")
         if child_status != "completed":
             failure_detail = _hem_child_failure_summary(child_workflow_id)
+            deployment = str(automation_payload.get("deployment_architecture") or "")
+            if stage == "fpga_bitstream" and deployment in FPGA_BOARD_CONVERGENCE_DEPLOYMENTS:
+                retryable, fit_evidence = _hem_fpga_retryable_fit_failure(
+                    child_workflow_id, failure_detail, child_artifact_dir, base_dir,
+                )
+                selected_board = str(automation_payload.get("board") or "")
+                authoritative_attempts = _hem_load_fpga_board_attempts(
+                    str(hem_run_id) if hem_run_id else None, user_id,
+                )
+                current_attempt = next(
+                    (row for row in authoritative_attempts if str(row.get("board_id") or "") == selected_board),
+                    None,
+                )
+                attempt_id = str((current_attempt or {}).get("id") or "") or None
+                if attempt_id:
+                    _hem_update_fpga_board_attempt(
+                        attempt_id,
+                        implementation_workflow_id=child_workflow_id,
+                        status="fit_failed" if retryable else "integration_failed",
+                        failure_class=fit_evidence.get("classification"),
+                        failure_reason=failure_detail,
+                        evidence=fit_evidence,
+                    )
+                authoritative_attempts = _hem_load_fpga_board_attempts(
+                    str(hem_run_id) if hem_run_id else None, user_id,
+                )
+                failed_boards = {
+                    str(row.get("board_id") or "")
+                    for row in authoritative_attempts
+                    if str(row.get("status") or "") == "fit_failed"
+                }
+                if retryable and selected_board and len(authoritative_attempts) < max_board_attempts:
+                    remaining = [
+                        board for board in _hem_reference_fpga_candidates(payload)
+                        if board not in failed_boards
+                    ]
+                    if remaining:
+                        message = (
+                            f"FPGA {deployment} convergence rejected {selected_board} after measured integrated "
+                            f"capacity/timing failure; returning to Explorer with {len(remaining)} candidate(s)."
+                        )
+                        append_log_workflow(root_workflow_id, message, phase="hem_board_convergence")
+                        append_log_run(root_run_id, message)
+                        _hem_insert_event(
+                            hem_run_id=str(hem_run_id) if hem_run_id else None,
+                            user_id=user_id,
+                            workflow_id=child_workflow_id,
+                            run_id=child_run_id,
+                            stage=stage,
+                            event_type="board_reselection_requested",
+                            status="continuing",
+                            message=message,
+                            metadata={
+                                "attempt_number": (current_attempt or {}).get("attempt_number"),
+                                "failed_board": selected_board,
+                                "remaining_candidates": remaining,
+                                "evidence": fit_evidence,
+                            },
+                        )
+                        automation_payload["candidate_boards"] = remaining
+                        automation_payload.pop("board", None)
+                        automation_payload.pop("fpga_source_workflow_id", None)
+                        automation_payload.pop("fpga_board_attempt_id", None)
+                        automation_payload.pop("fpga_integration_workflow_id", None)
+                        automation_payload.pop("source_verification_workflow_id", None)
+                        automation_payload.pop("source_system_sim_workflow_id", None)
+                        automation_payload.pop("explorer_winning_configuration", None)
+                        automation_payload.pop("target_refinement", None)
+                        index = plan.index("fpga_exploration")
+                        previous_stage = "fpga_bitstream_fit_failure"
+                        continue
             message = f"HEM stopped after {meta['label']} because the child workflow status is {child_status}."
             if failure_detail:
                 message += f" Child failure: {failure_detail}"
@@ -7686,7 +8120,7 @@ def _hem_continue_physical_ai_after_success(*, root_workflow_id: str, root_run_i
             # authoritative failed records.
             append_log_workflow(root_workflow_id, message, phase="hem_failed")
             append_log_run(root_run_id, message)
-            _hem_update_run_record(str(hem_run_id) if hem_run_id else None, status="failed", metadata={"source": "physical_ai", "path": plan, "completed": completed, "failed_stage": stage, "failed_workflow_id": child_workflow_id})
+            _hem_update_required_run_record(str(hem_run_id), status="failed", metadata={"source": "physical_ai", "path": plan, "completed": completed, "failed_stage": stage, "failed_workflow_id": child_workflow_id})
             return
         if stage == "arch2rtl":
             if bool(child_payload.get("require_firmware_control_plane")):
@@ -7716,7 +8150,7 @@ def _hem_continue_physical_ai_after_success(*, root_workflow_id: str, root_run_i
                         message += f" Register-map evidence: {regmap_source}."
                     append_log_workflow(root_workflow_id, message, phase="hem_failed")
                     append_log_run(root_run_id, message)
-                    _hem_update_run_record(
+                    _hem_update_required_run_record(
                         str(hem_run_id) if hem_run_id else None,
                         status="failed",
                         metadata={
@@ -7734,6 +8168,23 @@ def _hem_continue_physical_ai_after_success(*, root_workflow_id: str, root_run_i
             append_log_workflow(root_workflow_id, f"HEM will use generated RTL workflow {child_workflow_id} for verification and implementation.", phase="hem_running")
         if stage == "fpga_bitstream":
             automation_payload["fpga_bitstream_workflow_id"] = child_workflow_id
+            if str(automation_payload.get("deployment_architecture") or "") in FPGA_BOARD_CONVERGENCE_DEPLOYMENTS:
+                authoritative_attempts = _hem_load_fpga_board_attempts(
+                    str(hem_run_id) if hem_run_id else None, user_id,
+                )
+                selected_board = str(automation_payload.get("board") or "")
+                current_attempt = next(
+                    (row for row in authoritative_attempts if str(row.get("board_id") or "") == selected_board),
+                    None,
+                )
+                _hem_update_fpga_board_attempt(
+                    str((current_attempt or {}).get("id") or "") or None,
+                    implementation_workflow_id=child_workflow_id,
+                    status="fit_verified",
+                    failure_class=None,
+                    failure_reason=None,
+                    evidence=implementation_fit_evidence,
+                )
             # A bitstream is programming evidence, not an executable RTL
             # co-simulation harness. Preserve the verified fabric-integration
             # workflow as the simulation source when it exists.
@@ -7742,12 +8193,24 @@ def _hem_continue_physical_ai_after_success(*, root_workflow_id: str, root_run_i
             automation_payload["upstream_workflows"] = {
                 **upstream_workflows,
                 "fpga": child_workflow_id,
-                "system_sim": child_workflow_id,
+                "system_sim": automation_payload["source_system_sim_workflow_id"],
             }
         if stage == "fpga_fabric_integration":
             automation_payload["fpga_integration_workflow_id"] = child_workflow_id
+            # For soft CPU this feeds the integrated CPU/memory/interconnect
+            # RTL into Explorer. For board-dependent modes it feeds the
+            # selected-board wrapper into bitstream generation.
+            automation_payload["fpga_source_workflow_id"] = child_workflow_id
             automation_payload["source_verification_workflow_id"] = child_workflow_id
             automation_payload["source_system_sim_workflow_id"] = child_workflow_id
+            attempt_id = str(automation_payload.get("fpga_board_attempt_id") or "") or None
+            if attempt_id:
+                _hem_update_fpga_board_attempt(
+                    attempt_id,
+                    integration_workflow_id=child_workflow_id,
+                    status="selected",
+                    evidence={"integration_workflow_status": "completed"},
+                )
         if stage == "fpga_exploration":
             explorer, explorer_source = _hem_load_json_artifact(
                 child_workflow_id,
@@ -7770,7 +8233,7 @@ def _hem_continue_physical_ai_after_success(*, root_workflow_id: str, root_run_i
                         message = f"HEM stopped after FPGA Explorer: {reason}"
                         append_log_workflow(root_workflow_id, message, phase="hem_failed")
                         append_log_run(root_run_id, message)
-                        _hem_update_run_record(
+                        _hem_update_required_run_record(
                             str(hem_run_id) if hem_run_id else None,
                             status="failed",
                             metadata={
@@ -7794,11 +8257,9 @@ def _hem_continue_physical_ai_after_success(*, root_workflow_id: str, root_run_i
                         raise RuntimeError(f"selected board {selected_board} has no supported hard onboard CPU")
                     if selected_host == "fpga_soft_cpu" and not bool(compute_host.get("soft_cpu_supported")):
                         raise RuntimeError(f"selected board {selected_board} is not qualified for a soft CPU")
-                    if selected_host == "fpga_soft_cpu" and not bool(continuation.get("soft_cpu_system_ready")):
-                        raise RuntimeError(
-                            "soft-CPU deployment cannot continue to bitstream or firmware until CPU RTL, "
-                            "memory/interconnect, complete-system synthesis, and the BSP are verified"
-                        )
+                    # Soft-CPU integration precedes Explorer in the HEM plan;
+                    # the completed source workflow is its authoritative
+                    # evidence. Explorer only needs to qualify board support.
                     if selected_host in {"fpga_onboard_cpu", "fpga_external_host"} and not bool(
                         continuation.get("integration_contract_ready")
                     ):
@@ -7806,6 +8267,36 @@ def _hem_continue_physical_ai_after_success(*, root_workflow_id: str, root_run_i
                             f"selected board {selected_board} has no completed {selected_host} integration "
                             "wrapper contract; bitstream and firmware cannot start before integrated RTL reverification"
                         )
+                    if selected_host in FPGA_BOARD_CONVERGENCE_DEPLOYMENTS:
+                        authoritative_attempts = _hem_load_fpga_board_attempts(
+                            str(hem_run_id) if hem_run_id else None, user_id,
+                        )
+                        if any(str(row.get("board_id") or "") == str(selected_board) for row in authoritative_attempts):
+                            raise RuntimeError(
+                                f"FPGA Explorer reselected previously attempted board {selected_board}; "
+                                "Supabase convergence exclusions were not honored"
+                            )
+                        attempt_number = max(
+                            (int(row.get("attempt_number") or 0) for row in authoritative_attempts),
+                            default=0,
+                        ) + 1
+                        if attempt_number > max_board_attempts:
+                            raise RuntimeError("FPGA board convergence attempt limit was reached")
+                        automation_payload["fpga_board_attempt_id"] = _hem_insert_fpga_board_attempt(
+                            hem_run_id=str(hem_run_id) if hem_run_id else None,
+                            user_id=user_id,
+                            board_id=str(selected_board),
+                            attempt_number=attempt_number,
+                            explorer_workflow_id=child_workflow_id,
+                            deployment_architecture=selected_host,
+                        )
+                        prior_integration_id = str(automation_payload.get("fpga_integration_workflow_id") or "").strip()
+                        if prior_integration_id:
+                            _hem_update_fpga_board_attempt(
+                                automation_payload["fpga_board_attempt_id"],
+                                integration_workflow_id=prior_integration_id,
+                                evidence={"integration_workflow_status": "completed", "integration_scope": "portable_soft_cpu"},
+                            )
                     interface_plan = (
                         automation_payload.get("host_interface_plan")
                         if isinstance(automation_payload.get("host_interface_plan"), dict) else {}
@@ -7849,13 +8340,13 @@ def _hem_continue_physical_ai_after_success(*, root_workflow_id: str, root_run_i
                     message = f"HEM stopped after FPGA Explorer because its recommendation handoff is invalid: {type(exc).__name__}: {exc}"
                     append_log_workflow(root_workflow_id, message, phase="hem_failed")
                     append_log_run(root_run_id, message)
-                    _hem_update_run_record(str(hem_run_id) if hem_run_id else None, status="failed", metadata={"source": "physical_ai", "path": plan, "completed": completed, "failed_stage": stage, "failed_workflow_id": child_workflow_id, "reason": message})
+                    _hem_update_required_run_record(str(hem_run_id), status="failed", metadata={"source": "physical_ai", "path": plan, "completed": completed, "failed_stage": stage, "failed_workflow_id": child_workflow_id, "reason": message})
                     return
             else:
                 message = "HEM stopped after FPGA Explorer because fpga_target_explorer.json is absent from its Supabase artifact index/storage and canonical workflow directory."
                 append_log_workflow(root_workflow_id, message, phase="hem_failed")
                 append_log_run(root_run_id, message)
-                _hem_update_run_record(
+                _hem_update_required_run_record(
                     str(hem_run_id) if hem_run_id else None,
                     status="failed",
                     metadata={"source": "physical_ai", "path": plan, "completed": completed, "failed_stage": stage, "failed_workflow_id": child_workflow_id},
@@ -7873,7 +8364,7 @@ def _hem_continue_physical_ai_after_success(*, root_workflow_id: str, root_run_i
                 )
                 append_log_workflow(root_workflow_id, message, phase="hem_failed")
                 append_log_run(root_run_id, message)
-                _hem_update_run_record(
+                _hem_update_required_run_record(
                     str(hem_run_id) if hem_run_id else None,
                     status="failed",
                     next_stage=None,
@@ -7889,10 +8380,95 @@ def _hem_continue_physical_ai_after_success(*, root_workflow_id: str, root_run_i
                 return
         completed.append(meta["label"])
         previous_stage = stage
+        index += 1
     message = f"HEM Automatic Run ({mode}) completed with respect to Physical AI: {', '.join(completed)} completed."
     append_log_workflow(root_workflow_id, message, phase="hem_complete")
     append_log_run(root_run_id, message)
-    _hem_update_run_record(str(hem_run_id) if hem_run_id else None, status="completed", next_stage=None, metadata={"source": "physical_ai", "goal": "fpga_prototype", "path": plan, "completed_stages": completed, "summary": message})
+    _hem_update_required_run_record(str(hem_run_id), status="completed", next_stage=None, metadata={"source": "physical_ai", "goal": "fpga_prototype", "path": plan, "completed_stages": completed, "summary": message})
+
+
+def _execute_standalone_fpga_convergence(
+    *, workflow_id: str, run_id: str, user_id: str, payload: Dict[str, Any],
+) -> None:
+    """Run the same Supabase-backed FPGA product journey used by Physical AI."""
+    deployment = str(payload.get("deployment_architecture") or "fpga_external_host")
+    if deployment not in {"fpga_onboard_cpu", "fpga_soft_cpu", "fpga_external_host"}:
+        raise RuntimeError("Standalone FPGA convergence requires an explicit FPGA deployment architecture")
+    if deployment == "fpga_external_host":
+        from physical_ai.interface_contract import validate_external_host_interface_plan
+        try:
+            validate_external_host_interface_plan(
+                payload.get("host_interface_plan") if isinstance(payload.get("host_interface_plan"), dict) else {}
+            )
+        except ValueError as exc:
+            raise RuntimeError(f"Standalone external-host FPGA convergence requires a qualified interface plan: {exc}") from exc
+    if deployment == "fpga_soft_cpu":
+        config = payload.get("soft_cpu_config") if isinstance(payload.get("soft_cpu_config"), dict) else {}
+        contract = payload.get("soft_cpu_integration_contract") if isinstance(payload.get("soft_cpu_integration_contract"), dict) else {}
+        missing = []
+        if not str(config.get("core") or "").strip():
+            missing.append("soft_cpu_config.core")
+        if not str(config.get("bus") or "").strip():
+            missing.append("soft_cpu_config.bus")
+        if not contract.get("cpu_rtl_files"):
+            missing.append("soft_cpu_integration_contract.cpu_rtl_files")
+        if contract.get("memory_interconnect_defined") is not True:
+            missing.append("soft_cpu_integration_contract.memory_interconnect_defined=true")
+        if contract.get("application_bus_connected") is not True:
+            missing.append("soft_cpu_integration_contract.application_bus_connected=true")
+        if missing:
+            raise RuntimeError(
+                "Standalone soft-CPU convergence requires real CPU RTL and a defined memory/interconnect contract: "
+                + ", ".join(missing)
+            )
+        if payload.get("standalone_fpga_root_app") == "fpga2rtl":
+            raise RuntimeError(
+                "FPGA2RTL soft-CPU generation requires a governed CPU-IP source provider; use supplied integrated RTL "
+                "with FPGA Bitstream/Implementation until that provider is configured"
+            )
+    convergence_payload = {
+        **payload,
+        "standalone_fpga_convergence": True,
+        "standalone_generate_arch2rtl": payload.get("standalone_fpga_root_app") == "fpga2rtl",
+        "implementation_path": "fpga_prototype",
+        "hem_enabled": True,
+        "hem_goal": "fpga_prototype",
+        "deployment_architecture": deployment,
+        "standalone_fpga_implementation_only": payload.get("standalone_fpga_root_app") == "fpga_implementation",
+        "rtl_spec_text": payload.get("rtl_spec_text") or payload.get("spec_text") or payload.get("notes"),
+        "objective": payload.get("objective") or payload.get("spec_text") or payload.get("notes") or "Generate synthesizable FPGA RTL",
+        "source_arch2rtl_workflow_id": (
+            payload.get("source_arch2rtl_workflow_id")
+            or payload.get("source_workflow_id")
+            or payload.get("from_workflow_id")
+            or workflow_id
+        ),
+    }
+    append_log_workflow(workflow_id, "Starting shared FPGA product convergence journey.", phase="fpga_convergence")
+    append_log_run(run_id, "Starting shared FPGA product convergence journey.")
+    _continue_fpga_product_journey(
+        root_workflow_id=workflow_id,
+        root_run_id=run_id,
+        user_id=user_id,
+        payload=convergence_payload,
+    )
+    rows = (
+        supabase.table("hem_runs")
+        .select("status")
+        .eq("root_workflow_id", workflow_id)
+        .eq("user_id", user_id)
+        .eq("policy_key", HEM_FPGA_PRODUCT_CONVERGENCE_POLICY_KEY)
+        .order("created_at", desc=True)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    status = str((rows[0] if rows else {}).get("status") or "")
+    if status != "completed":
+        raise RuntimeError(f"Standalone FPGA product convergence did not complete (status={status or 'missing'})")
+    append_log_workflow(workflow_id, "Shared FPGA product convergence completed.", status="completed", phase="done")
+    append_log_run(run_id, "Shared FPGA product convergence completed.", status="completed")
 
 
 def execute_physical_ai_motor_control_background(workflow_id: str, run_id: str, artifact_dir: str, data: Dict[str, Any]):
@@ -7985,7 +8561,7 @@ def execute_physical_ai_workflow_background(workflow_id: str, run_id: str, user_
                 generated = result["physics_execution"].get("architecture") or {}
                 digital_ip_spec = result["physics_execution"].get("digital_ip_spec") or {}
                 selected_model = result.get("physics_model") or {}
-                _hem_continue_physical_ai_after_success(
+                _continue_fpga_product_journey(
                     root_workflow_id=workflow_id,
                     root_run_id=run_id,
                     user_id=user_id,
@@ -8015,7 +8591,7 @@ def execute_physical_ai_workflow_background(workflow_id: str, run_id: str, user_
             generated = result["physics_execution"].get("architecture") or {}
             digital_ip_spec = result["physics_execution"].get("digital_ip_spec") or {}
             selected_model = result.get("physics_model") or {}
-            _hem_continue_physical_ai_after_success(
+            _continue_fpga_product_journey(
                 root_workflow_id=workflow_id,
                 root_run_id=run_id,
                 user_id=user_id,
@@ -8292,7 +8868,22 @@ async def apps_physical_ai_result(workflow_id: str, request: Request):
         hem_children.sort(key=lambda item: stage_order.get(str(item.get("stage")), 99))
     except Exception as exc:
         logger.warning("Physical AI HEM linked-workflow fallback unavailable: %s", exc)
-    return {"status": "completed", "phase": workflow.get("phase"), "logs": workflow.get("logs") or "", "workflow_id": workflow_id, "result": result, "plots": plots, "hem_children": hem_children}
+    fpga_board_attempts: List[Dict[str, Any]] = []
+    if hem_rows:
+        try:
+            fpga_board_attempts = (
+                supabase.table("hem_fpga_board_attempts")
+                .select("attempt_number,board_id,status,failure_class,failure_reason,evidence,explorer_workflow_id,integration_workflow_id,implementation_workflow_id,created_at,updated_at")
+                .eq("hem_run_id", hem_rows[0]["id"])
+                .eq("user_id", user_id)
+                .order("attempt_number")
+                .execute()
+                .data
+                or []
+            )
+        except Exception as exc:
+            logger.warning("Physical AI FPGA board convergence ledger unavailable from Supabase: %s", exc)
+    return {"status": "completed", "phase": workflow.get("phase"), "logs": workflow.get("logs") or "", "workflow_id": workflow_id, "result": result, "plots": plots, "hem_children": hem_children, "fpga_board_attempts": fpga_board_attempts}
 
 
 def _validate_physical_ai_interface_plan(
@@ -8420,7 +9011,7 @@ async def resume_physical_ai_hem(
         "hem_goal": payload.hem_goal,
         "hem_stage_toggles": {"fpga_exploration": True, "fpga_bitstream": True, "firmware_product": True},
     }
-    full_plan = _hem_physical_ai_stage_plan(planning_payload)
+    full_plan = _fpga_product_stage_plan(planning_payload)
     # System_Firmware normally hands off to the nested System HEM chain.  For
     # an explicit resume, expose those real boundaries so an operator can
     # restart an expensive product journey without regenerating firmware or
@@ -8485,7 +9076,7 @@ async def resume_physical_ai_hem(
         raise HTTPException(status_code=409, detail="Physical AI root workflow has no authoritative Supabase run record.")
     active_hem = execute_resume_query(
         supabase.table("hem_runs")
-        .select("id")
+        .select("id,current_workflow_id,current_stage,status,updated_at")
         .eq("root_workflow_id", workflow_id)
         .eq("user_id", user_id)
         .in_("status", ["running", "continuing"])
@@ -8493,7 +9084,38 @@ async def resume_physical_ai_hem(
         "check for an active HEM continuation",
     )
     if active_hem:
-        raise HTTPException(status_code=409, detail="A HEM continuation is already active for this Physical AI workflow.")
+        active = active_hem[0]
+        if not payload.recover_stale_hem:
+            raise HTTPException(
+                status_code=409,
+                detail="A HEM continuation is already active. If its current child is terminal after a backend restart, retry with recover_stale_hem=true.",
+            )
+        active_child_id = str(active.get("current_workflow_id") or "").strip()
+        child_rows = execute_resume_query(
+            supabase.table("workflows")
+            .select("id,status")
+            .eq("id", active_child_id)
+            .eq("user_id", user_id)
+            .limit(1),
+            "validate stale HEM child",
+        ) if active_child_id else []
+        active_child_status = str((child_rows[0] if child_rows else {}).get("status") or "")
+        if active_child_status not in {"completed", "failed", "cancelled", "canceled"}:
+            raise HTTPException(
+                status_code=409,
+                detail=f"HEM recovery refused because current child {active_child_id or 'missing'} is not terminal (status={active_child_status or 'missing'}).",
+            )
+        _hem_update_required_run_record(
+            str(active.get("id") or ""),
+            status="superseded",
+            next_stage=None,
+            metadata={
+                "recovery": "explicit_operator_resume",
+                "superseded_current_workflow_id": active_child_id,
+                "superseded_current_stage": active.get("current_stage"),
+                "superseded_child_status": active_child_status,
+            },
+        )
     if deployment not in {"fpga_onboard_cpu", "fpga_soft_cpu", "fpga_external_host", "asic_digital_ip", "asic_soc", "asic_companion"}:
         raise HTTPException(status_code=422, detail="Resume requires a resolved deployment architecture.")
     if deployment == "fpga_external_host":
@@ -8561,6 +9183,7 @@ async def resume_physical_ai_hem(
             "top_module": continuation.get("top_module") or explorer.get("top_module"),
             "target_frequency_mhz": continuation.get("target_frequency_mhz") or resume_payload["target_frequency_mhz"],
             "fpga_source_workflow_id": explorer_id,
+            "reused_fpga_explorer_workflow_id": explorer_id,
             "explorer_winning_configuration": continuation.get("winning_configuration") or {},
             "integration_contract_ready": True,
             "integration_reverification_required": bool(continuation.get("integration_reverification_required")),
@@ -8623,7 +9246,7 @@ async def resume_physical_ai_hem(
                 "validation": upstream_ids.get("cosim_validation"),
                 "system_validation": upstream_ids.get("cosim_validation"),
                 "fpga": upstream_ids.get("fpga_bitstream"),
-                "system_sim": upstream_ids.get("fpga_bitstream"),
+                "system_sim": upstream_ids.get("fpga_fabric_integration") or upstream_ids.get("fpga_bitstream"),
             },
             "hem_stage_toggles": {
                 "system_software": True,
@@ -8649,7 +9272,7 @@ async def resume_physical_ai_hem(
         )
     else:
         background_tasks.add_task(
-            _hem_continue_physical_ai_after_success,
+            _continue_fpga_product_journey,
             root_workflow_id=workflow_id,
             root_run_id=str(run_rows[0]["id"]),
             user_id=user_id,

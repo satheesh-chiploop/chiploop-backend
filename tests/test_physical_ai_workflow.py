@@ -1,3 +1,4 @@
+import ast
 import json
 from pathlib import Path
 
@@ -658,7 +659,7 @@ def test_hem_resume_persistence_repair_migration_is_idempotent():
     assert "create table if not exists public.hem_run_events" in migration
     main = (backend_root / "main.py").read_text(encoding="utf-8")
     assert 'hem_enabled: bool = True' in main
-    assert 'def _hem_continue_physical_ai_after_success' in main
+    assert 'def _continue_fpga_product_journey' in main
     assert '"App: Application Intelligence - Active Aero"' in main
     assert '"FPGA_Target_Explorer"' in main
     assert '"FPGA_RTL_to_Bitstream"' in main
@@ -683,7 +684,32 @@ def test_hem_resume_persistence_repair_migration_is_idempotent():
     assert 'compute_host.get("hard_cpu")' in main
     assert "no CPU architecture is inferred" in main
     assert 'automation_payload["fpga_source_workflow_id"] = child_workflow_id' in main
-    assert 'payload.get("fpga_source_workflow_id") or source_arch2rtl' in main
+    assert "selected_source_workflow_id = fpga_source_workflow_id or source_arch2rtl" in main
+    assert 'if deployment == "fpga_soft_cpu":' in main
+    assert 'plan.extend(["fpga_fabric_integration", "fpga_exploration", "fpga_bitstream"])' in main
+    assert 'plan.extend(["fpga_exploration", "fpga_fabric_integration", "fpga_bitstream"])' in main
+    assert "max_fpga_board_convergence_attempts" in main
+    assert "def _hem_fpga_retryable_fit_failure" in main
+    assert 'event_type="board_reselection_requested"' in main
+    assert 'supabase.table("hem_fpga_board_attempts")' in main
+
+
+def test_hem_fpga_board_convergence_migration_is_authoritative_and_bounded():
+    backend_root = Path(__file__).resolve().parents[1]
+    main = (backend_root / "main.py").read_text(encoding="utf-8")
+    migration = (backend_root / "supabase" / "migrations" / "phase_20260823_hem_fpga_board_convergence.sql").read_text(encoding="utf-8")
+    assert "create table if not exists public.hem_fpga_board_attempts" in migration
+    assert "hem_run_id uuid not null references public.hem_runs(id)" in migration
+    assert "attempt_number between 1 and 10" in migration
+    assert "unique (hem_run_id, attempt_number)" in migration
+    assert "unique (hem_run_id, board_id)" in migration
+    assert "evidence jsonb not null" in migration
+    assert "implementation_workflow_id" in migration
+    assert "enable row level security" in migration
+    assert "FPGA_RTL_to_Bitstream" in migration
+    assert "FPGA_Implementation" in migration
+    assert "automatic_board_convergence" in migration
+    assert "deployment_architecture" in migration
     assert '"_fail_fast_on_agent_error": True' in main
     assert '"rtl_source_mode": "from_workflow"' in main
     assert "direct Arch2RTL hydration deferred to Embedded Digital RTL Handoff Ingest Agent" in main
@@ -693,6 +719,67 @@ def test_hem_resume_persistence_repair_migration_is_idempotent():
     assert 'nested_status = _hem_run_status' in main
     assert 'nested_status != "completed"' in main
     assert 'Preserve that deeper Supabase state' in main
+
+
+def test_standalone_fpga_apps_reuse_shared_product_convergence_orchestrator():
+    backend_root = Path(__file__).resolve().parents[1]
+    main = (backend_root / "main.py").read_text(encoding="utf-8")
+    assert "def _execute_standalone_fpga_convergence" in main
+    assert 'app_name in {"fpga", "fpga2rtl", "fpga_implementation"}' in main
+    assert 'and bool((payload or {}).get("automatic_board_convergence"))' in main
+    assert "_continue_fpga_product_journey(" in main
+    assert 'standalone_fpga_convergence": True' in main
+    assert '@app.get("/apps/fpga/{workflow_id}/convergence")' in main
+    assert 'HEM_FPGA_PRODUCT_CONVERGENCE_POLICY_KEY = "fpga_product_convergence_v1"' in main
+    assert "direct_standalone_source" in main
+    assert '"rtl_source_mode": str(payload.get("rtl_source_mode") or "from_arch2rtl") if direct_standalone_source else "from_arch2rtl"' in main
+    assert '"generic_fpga_product_contract": True' in main
+    assert "if payload.get(\"standalone_fpga_convergence\")" in main
+    assert "Standalone soft-CPU convergence requires real CPU RTL" in main
+    assert "FPGA2RTL soft-CPU generation requires a governed CPU-IP source provider" in main
+
+
+def _load_fpga_convergence_functions(artifacts):
+    backend_root = Path(__file__).resolve().parents[1]
+    tree = ast.parse((backend_root / "main.py").read_text(encoding="utf-8"))
+    wanted = {"_hem_fpga_retryable_fit_failure", "_hem_fpga_implementation_fit_verdict"}
+    nodes = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name in wanted]
+    namespace = {
+        "Any": object,
+        "Dict": dict,
+        "_hem_load_json_artifact": lambda _workflow, filename, *_args: (artifacts.get(filename, {}), f"supabase:{filename}"),
+    }
+    exec(compile(ast.Module(body=nodes, type_ignores=[]), "main.py", "exec"), namespace)
+    return namespace
+
+
+def test_fpga_board_convergence_requires_structured_fit_evidence():
+    functions = _load_fpga_convergence_functions({})
+    retryable, evidence = functions["_hem_fpga_retryable_fit_failure"](
+        "workflow", "route failed because nextpnr is missing", "child", "base",
+    )
+    assert retryable is False
+    assert evidence["classification"] == "non_fit_failure"
+
+
+def test_fpga_board_convergence_detects_measured_timing_failure_and_verified_fit():
+    failed = _load_fpga_convergence_functions({
+        "fpga_synthesis_summary.json": {"status": "completed", "logic_utilization_percent": 70.0},
+        "fpga_place_route_summary.json": {"status": "completed", "timing_met": False},
+        "fpga_timing_drc_summary.json": {"status": "completed", "timing_met": False},
+    })
+    verdict, evidence = failed["_hem_fpga_implementation_fit_verdict"]("workflow", "child", "base")
+    assert verdict == "fit_failed"
+    assert evidence["classification"] == "capacity_or_timing"
+
+    passed = _load_fpga_convergence_functions({
+        "fpga_synthesis_summary.json": {"status": "completed", "logic_utilization_percent": 70.0},
+        "fpga_place_route_summary.json": {"status": "completed", "timing_met": True},
+        "fpga_timing_drc_summary.json": {"status": "completed", "timing_met": True},
+    })
+    verdict, evidence = passed["_hem_fpga_implementation_fit_verdict"]("workflow", "child", "base")
+    assert verdict == "fit_verified"
+    assert evidence["measured_fit_evidence"] is True
 
 
 def test_external_host_requires_complete_interface_plan_before_workflow_creation():
@@ -744,14 +831,92 @@ def test_external_host_rejects_unimplemented_spi_contract_variants(field, value)
 def test_physical_ai_parent_status_is_not_overwritten_by_downstream_hem_failure():
     main = open("main.py", encoding="utf-8").read()
     continuation = main.split(
-        "def _hem_continue_physical_ai_after_success", 1
+        "def _continue_fpga_product_journey", 1
     )[1].split("def execute_physical_ai_motor_control_background", 1)[0]
 
     assert 'append_log_workflow(root_workflow_id, message, status="failed"' not in continuation
     assert 'append_log_run(root_run_id, message, status="failed")' not in continuation
-    assert '_hem_update_run_record' in continuation
+    assert '_hem_update_required_run_record' in continuation
     assert 'status="failed"' in continuation
     assert "the child and HEM run remain the" in continuation
+
+
+def test_fpga_convergence_soft_cpu_attempt_is_created_after_portable_integration():
+    main = open("main.py", encoding="utf-8").read()
+    continuation = main.split(
+        "def _continue_fpga_product_journey", 1
+    )[1].split("def execute_physical_ai_motor_control_background", 1)[0]
+
+    integration = continuation.split('if stage == "fpga_fabric_integration":', 1)[1].split(
+        'if stage == "fpga_exploration":', 1
+    )[0]
+    assert 'attempt_id = str(automation_payload.get("fpga_board_attempt_id")' in integration
+    assert "if attempt_id:" in integration
+    exploration = continuation.split('if stage == "fpga_exploration":', 1)[1]
+    assert 'prior_integration_id = str(automation_payload.get("fpga_integration_workflow_id")' in exploration
+    assert '"integration_scope": "portable_soft_cpu"' in exploration
+
+
+def test_fpga_convergence_uses_stage_specific_supabase_storage_keys():
+    main = open("main.py", encoding="utf-8").read()
+    loader = main.split("def _hem_load_json_artifact", 1)[1].split(
+        "def _hem_continue_digital_rtl_after_success", 1
+    )[0]
+    assert '"fpga_target_explorer.json": ("target_explorer",)' in loader
+    assert '"fpga_synthesis_summary.json": ("synth",)' in loader
+    assert '"fpga_place_route_summary.json": ("pnr",)' in loader
+    assert '"fpga_timing_drc_summary.json": ("reports",)' in loader
+    assert 'f"backend/workflows/{workflow_id}/fpga/{stage}/{filename}"' in loader
+
+
+def test_resumed_fpga_convergence_seeds_new_supabase_attempt_at_runtime():
+    backend_root = Path(__file__).resolve().parents[1]
+    tree = ast.parse((backend_root / "main.py").read_text(encoding="utf-8"))
+    node = next(
+        item for item in tree.body
+        if isinstance(item, ast.FunctionDef) and item.name == "_hem_seed_reused_fpga_board_attempt"
+    )
+    calls = []
+
+    def insert_attempt(**kwargs):
+        calls.append(("insert", kwargs))
+        return "new-attempt"
+
+    def update_attempt(attempt_id, **kwargs):
+        calls.append(("update", {"attempt_id": attempt_id, **kwargs}))
+
+    namespace = {
+        "Any": object,
+        "Dict": dict,
+        "Optional": __import__("typing").Optional,
+        "_hem_insert_fpga_board_attempt": insert_attempt,
+        "_hem_update_fpga_board_attempt": update_attempt,
+    }
+    exec(compile(ast.Module(body=[node], type_ignores=[]), "main.py", "exec"), namespace)
+    attempt_id = namespace["_hem_seed_reused_fpga_board_attempt"](
+        hem_run_id="new-hem",
+        user_id="user",
+        payload={
+            "reused_fpga_explorer_workflow_id": "old-explorer",
+            "fpga_integration_workflow_id": "old-integration",
+            "board": "qualified-board",
+            "deployment_architecture": "fpga_onboard_cpu",
+        },
+    )
+
+    assert attempt_id == "new-attempt"
+    assert calls[0] == ("insert", {
+        "hem_run_id": "new-hem",
+        "user_id": "user",
+        "board_id": "qualified-board",
+        "attempt_number": 1,
+        "explorer_workflow_id": "old-explorer",
+        "deployment_architecture": "fpga_onboard_cpu",
+    })
+    assert calls[1][0] == "update"
+    assert calls[1][1]["attempt_id"] == "new-attempt"
+    assert calls[1][1]["integration_workflow_id"] == "old-integration"
+    assert calls[1][1]["evidence"]["resume_source"] == "supabase_predecessor_evidence"
 
 
 def test_physical_ai_reuses_existing_firmware_and_software_collateral_contracts():

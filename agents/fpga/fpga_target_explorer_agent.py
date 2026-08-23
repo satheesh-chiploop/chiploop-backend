@@ -684,10 +684,16 @@ def run_agent(state: dict) -> dict:
         and (spi_transport_ready or not onboard_requires_spi)
     )
     soft_cpu_system_ready = _soft_cpu_system_ready(state)
+    # Explorer selects a board using the governed CPU resource reservation.  A
+    # complete CPU subsystem is deliberately verified by the following fabric
+    # integration stage, so it must not be a prerequisite for board selection.
+    soft_cpu_board_ready = bool(
+        implementation_board and selected_compute_host.get("soft_cpu_supported")
+    )
     integration_contract_ready = (
         onboard_integration_ready if deployment_architecture == "fpga_onboard_cpu"
         else spi_transport_ready if deployment_architecture == "fpga_external_host"
-        else soft_cpu_system_ready if deployment_architecture == "fpga_soft_cpu"
+        else soft_cpu_board_ready if deployment_architecture == "fpga_soft_cpu"
         else bool(implementation_board)
     )
     summary = {
