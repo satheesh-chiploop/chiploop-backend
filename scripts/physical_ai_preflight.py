@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+from pathlib import Path
 import sys
 import urllib.error
 import urllib.request
@@ -55,6 +56,18 @@ def _api_check() -> bool:
     return ok
 
 
+def _esp_idf_check() -> bool:
+    idf_path = (os.getenv("IDF_PATH") or "").strip()
+    tool = Path(idf_path) / "tools" / "idf.py" if idf_path else None
+    export = Path(idf_path) / "export.sh" if idf_path else None
+    ok = bool(tool and tool.is_file() and export and export.is_file())
+    (_pass if ok else _fail)(
+        "governed ESP-IDF toolchain is available through IDF_PATH"
+        if ok else "IDF_PATH must identify an ESP-IDF installation containing tools/idf.py and export.sh"
+    )
+    return ok
+
+
 def main() -> int:
     try:
         url, key = _require_environment()
@@ -97,6 +110,8 @@ def main() -> int:
         ("artifacts Storage bucket is readable", lambda: client.storage.from_(os.getenv("ARTIFACT_BUCKET_NAME", "artifacts")).list("") is not None),
     ]
     failures = 0
+    if not _esp_idf_check():
+        failures += 1
     for label, check in checks:
         try:
             ok = bool(check())

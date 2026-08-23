@@ -433,3 +433,6 @@ def test_backend_image_pins_esp_idf_for_ulx3s_onboard_cpu():
     assert "IDF_PATH=/opt/esp-idf" in dockerfile
     assert "--branch v5.5.3" in dockerfile
     assert "/opt/esp-idf/install.sh esp32" in dockerfile
+    preflight = (Path("scripts") / "physical_ai_preflight.py").read_text(encoding="utf-8")
+    assert "def _esp_idf_check" in preflight
+    assert 'Path(idf_path) / "tools" / "idf.py"' in preflight
