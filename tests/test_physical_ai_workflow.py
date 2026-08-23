@@ -635,6 +635,15 @@ def test_main_registers_generic_physical_ai_endpoints():
     assert '"validate predecessor workflows"' in main
     assert '"load the Physical AI root run"' in main
     assert '"check for an active HEM continuation"' in main
+
+
+def test_hem_resume_persistence_repair_migration_is_idempotent():
+    backend_root = Path(__file__).resolve().parents[1]
+    migration = (backend_root / "supabase" / "migrations" / "phase_20260822_hem_resume_persistence_repair.sql").read_text(encoding="utf-8")
+    assert "create table if not exists public.hem_runs" in migration
+    assert "alter table public.hem_runs add column if not exists status" in migration
+    assert "create table if not exists public.hem_run_events" in migration
+    main = (backend_root / "main.py").read_text(encoding="utf-8")
     assert 'hem_enabled: bool = True' in main
     assert 'def _hem_continue_physical_ai_after_success' in main
     assert '"App: Application Intelligence - Active Aero"' in main
