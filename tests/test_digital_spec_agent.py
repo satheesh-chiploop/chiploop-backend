@@ -205,6 +205,41 @@ def test_fpga_terminal_closure_normalizes_hard_macro_without_changing_geometry()
     )
 
 
+def test_fpga_memory_name_collision_keeps_functional_wrapper_ports_authoritative():
+    wrapper = {
+        **_module("history_bram_if"),
+        "ports": [
+            _port("clk", "input"), _port("rst_n", "input"),
+            _port("wr_en", "input"), _port("wr_addr", "input", 6),
+            _port("wr_data", "input", 64), _port("rd_en", "input"),
+            _port("rd_addr", "input", 6), _port("rd_data", "output", 64),
+        ],
+        "rtl_output_file": "history_bram_if.v",
+    }
+    spec = {
+        "memory_macros": [{
+            "name": "history_bram_if", "kind": "openram_sram", "depth": 64,
+            "data_width": 64, "addr_width": 6, "instance_name": "u_history",
+            "ports": {"clk": "clk", "csb": "csb", "we": "we", "addr": "addr", "din": "din", "dout": "dout"},
+        }],
+        "hierarchy": {"top_module": _module("top"), "modules": [wrapper]},
+    }
+
+    normalized = spec_agent._normalize_fpga_memory_contract(
+        spec, "FPGA MEMORY CONTRACT (mandatory)",
+    )
+
+    assert normalized["memory_macros"] == []
+    kept = normalized["hierarchy"]["modules"][0]
+    assert [port["name"] for port in kept["ports"]] == [
+        "clk", "rst_n", "wr_en", "wr_addr", "wr_data", "rd_en", "rd_addr", "rd_data",
+    ]
+    assert kept["memory_implementation"] == {
+        "kind": "fpga_bram", "depth": 64, "data_width": 64,
+        "addr_width": 6, "technology_binding": "technology_neutral_inferred_memory",
+    }
+
+
 def test_mandatory_firmware_control_plane_accepts_concrete_custom_csr_bus():
     spec = {
         **_module("adaptive_aero_control_top"),

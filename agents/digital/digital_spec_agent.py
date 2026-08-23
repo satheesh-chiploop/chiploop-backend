@@ -2291,10 +2291,11 @@ def _normalize_fpga_memory_contract(spec_json: dict, source_prompt: str) -> dict
     }
     hierarchy = spec_json.get("hierarchy") if isinstance(spec_json.get("hierarchy"), dict) else {}
     modules = hierarchy.get("modules") if isinstance(hierarchy.get("modules"), list) else []
-    module_names = {
-        str(module.get("name") or "").strip()
-        for module in modules if isinstance(module, dict)
+    module_by_name = {
+        str(module.get("name") or "").strip(): module
+        for module in modules if isinstance(module, dict) and module.get("name")
     }
+    normalized_macros = []
     for macro in spec_json.get("memory_macros", []) or []:
         if not isinstance(macro, dict):
             continue
@@ -2302,9 +2303,40 @@ def _normalize_fpga_memory_contract(spec_json: dict, source_prompt: str) -> dict
             macro["kind"] = "fpga_bram"
             macro["technology_binding"] = "technology_neutral_inferred_memory"
         name = str(macro.get("name") or "").strip()
-        if name and name not in module_names:
+        existing_module = module_by_name.get(name)
+        macro_ports = {
+            str(value or "").strip()
+            for value in ((macro.get("ports") or {}).values() if isinstance(macro.get("ports"), dict) else [])
+            if str(value or "").strip()
+        }
+        existing_ports = {
+            str(port.get("name") or "").strip()
+            for port in ((existing_module or {}).get("ports") or [])
+            if isinstance(port, dict) and port.get("name")
+        }
+        if existing_module and macro_ports and existing_ports != macro_ports:
+            # The named hierarchy module is a functional read/write wrapper,
+            # not the primitive interface described by memory_macros. Keep its
+            # declared ports authoritative and carry the geometry on that real
+            # RTL deliverable so the RTL agent infers BRAM inside it. Retaining
+            # a same-named primitive would create two incompatible modules.
+            existing_module["memory_implementation"] = {
+                "kind": "fpga_bram",
+                "depth": macro.get("depth"),
+                "data_width": macro.get("data_width"),
+                "addr_width": macro.get("addr_width"),
+                "technology_binding": "technology_neutral_inferred_memory",
+            }
+            rules = existing_module.setdefault("behavior_rules", [])
+            rule = "Implement storage as a synthesizable inferred memory compatible with native FPGA block RAM."
+            if rule not in rules:
+                rules.append(rule)
+            continue
+        normalized_macros.append(macro)
+        if name and name not in module_by_name:
             modules.append(_memory_macro_module(macro))
-            module_names.add(name)
+            module_by_name[name] = modules[-1]
+    spec_json["memory_macros"] = normalized_macros
     if hierarchy:
         hierarchy["modules"] = modules
     return spec_json
