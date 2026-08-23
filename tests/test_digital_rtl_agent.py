@@ -622,6 +622,33 @@ endmodule
     assert "rd_data_reg <= 8'h5a;" in out
 
 
+def test_single_driver_sanitizer_detects_case_labeled_nonblocking_fifo_write():
+    code = """
+module fifo(input clk, input [1:0] rd_ptr, input [127:0] mem_dout, output [127:0] pop_data);
+reg [127:0] pop_data_r;
+reg [127:0] mem0, mem1, mem2, mem3;
+assign pop_data = pop_data_r;
+always @(*) begin
+  pop_data_r = mem_dout;
+end
+always @(posedge clk) begin
+  case (rd_ptr)
+    2'd0: pop_data_r <= mem0;
+    2'd1: pop_data_r <= mem1;
+    2'd2: pop_data_r <= mem2;
+    2'd3: pop_data_r <= mem3;
+    default: pop_data_r <= mem0;
+  endcase
+end
+endmodule
+"""
+
+    out = agent._sanitize_single_driver_rtl({"fifo.v": code})["fifo.v"]
+
+    assert "pop_data_r = mem_dout;" not in out
+    assert "2'd3: pop_data_r <= mem3;" in out
+
+
 def test_iverilog_port_width_warnings_are_structural_failures():
     output = """
 top.v:47: warning: Port 4 (addr) of demo_sram_32x64_model expects 6 bits, got 1.

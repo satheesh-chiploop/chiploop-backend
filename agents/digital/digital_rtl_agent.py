@@ -1034,7 +1034,8 @@ def _remove_comb_blocking_assigns_to_sequential_regs(code: str) -> str:
     # this sanitizer to delete the real combinational assignments to ``age``,
     # leaving an empty/invalid if statement in materialized RTL.
     nonblocking_statement = re.compile(
-        r"^\s*(?:(?:else\s+)?if\s*\([^;]+\)\s*|else\s+)?"
+        r"^\s*(?:(?:default|[^:;]+)\s*:\s*)?"
+        r"(?:(?:else\s+)?if\s*\([^;]+\)\s*|else\s+)?"
         r"([A-Za-z_][A-Za-z0-9_$]*(?:\[[^\]]+\])?)\s*<=\s*[^=]",
         flags=re.MULTILINE,
     )
