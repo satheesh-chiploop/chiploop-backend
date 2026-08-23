@@ -178,6 +178,33 @@ def test_fpga_memory_contract_rejects_openram_hard_macro():
     assert "technology-neutral wrapper" in prompt
 
 
+def test_fpga_terminal_closure_normalizes_hard_macro_without_changing_geometry():
+    spec = {
+        "memory_macros": [{
+            "name": "history_store", "kind": "openram_sram", "depth": 256,
+            "data_width": 128, "addr_width": 8, "instance_name": "u_history",
+            "ports": {"clk": "clk", "we": "we", "addr": "addr", "din": "din", "dout": "dout"},
+        }],
+        "hierarchy": {"top_module": _module("top"), "modules": []},
+    }
+
+    normalized = spec_agent._normalize_fpga_memory_contract(
+        spec, "FPGA MEMORY CONTRACT (mandatory)",
+    )
+
+    macro = normalized["memory_macros"][0]
+    assert macro["kind"] == "fpga_bram"
+    assert macro["depth"] == 256
+    assert macro["data_width"] == 128
+    assert macro["instance_name"] == "u_history"
+    wrapper = normalized["hierarchy"]["modules"][0]
+    assert wrapper["name"] == "history_store"
+    assert wrapper["rtl_output_file"] == "history_store.v"
+    spec_agent._validate_fpga_memory_contract(
+        normalized, "FPGA MEMORY CONTRACT (mandatory)",
+    )
+
+
 def test_mandatory_firmware_control_plane_accepts_concrete_custom_csr_bus():
     spec = {
         **_module("adaptive_aero_control_top"),

@@ -2123,6 +2123,7 @@ def _compile_spec_contract(
     parsed_json = _merge_prompt_memory_macros(parsed_json, source_prompt)
     logger.info(f"🔍 Digital Spec Agent JSON parsed suffix='{suffix or 'pass1'}'")
     spec_json, mode = _normalize_spec_json(parsed_json)
+    spec_json = _normalize_fpga_memory_contract(spec_json, source_prompt)
     logger.info(f"🔍 Digital Spec Agent normalized mode={mode} suffix='{suffix or 'pass1'}'")
     spec_json = _apply_requested_top_module(spec_json, mode, requested_top)
     spec_json = _repair_empty_top_ports_from_prompt(spec_json, mode, source_prompt)
@@ -2273,6 +2274,40 @@ def _validate_fpga_memory_contract(spec_json: dict, source_prompt: str) -> None:
             + ". Use a technology-neutral inferred-memory wrapper declared in hierarchy.modules "
               "with its own rtl_output_file."
         )
+
+
+def _normalize_fpga_memory_contract(spec_json: dict, source_prompt: str) -> dict:
+    """Convert model-selected hard macros to the mandated portable FPGA form.
+
+    The macro identity, geometry, ports, and instance remain model/spec data;
+    only the technology binding is normalized. This does not invent storage or
+    a child producer and is safe for arbitrary FPGA applications.
+    """
+    if "FPGA MEMORY CONTRACT (mandatory)" not in str(source_prompt or ""):
+        return spec_json
+    forbidden_kinds = {
+        "openram_sram", "prebuilt_sky130_sram", "prebuilt_sram",
+        "precompiled_sram_macro", "sky130_sram",
+    }
+    hierarchy = spec_json.get("hierarchy") if isinstance(spec_json.get("hierarchy"), dict) else {}
+    modules = hierarchy.get("modules") if isinstance(hierarchy.get("modules"), list) else []
+    module_names = {
+        str(module.get("name") or "").strip()
+        for module in modules if isinstance(module, dict)
+    }
+    for macro in spec_json.get("memory_macros", []) or []:
+        if not isinstance(macro, dict):
+            continue
+        if str(macro.get("kind") or "").strip().lower() in forbidden_kinds:
+            macro["kind"] = "fpga_bram"
+            macro["technology_binding"] = "technology_neutral_inferred_memory"
+        name = str(macro.get("name") or "").strip()
+        if name and name not in module_names:
+            modules.append(_memory_macro_module(macro))
+            module_names.add(name)
+    if hierarchy:
+        hierarchy["modules"] = modules
+    return spec_json
 
 
 def _write_contract_failure_log(spec_dir: str, filename: str, err: Exception) -> str:
@@ -3027,6 +3062,7 @@ Return JSON only.
                             if mode != "hierarchical":
                                 raise ValueError("Deterministic graph closure requires a hierarchical contract.")
                             spec_json = _expose_orphan_child_inputs_at_top(spec_json)
+                            spec_json = _normalize_fpga_memory_contract(spec_json, user_prompt)
                             _validate_spec_contract(spec_json, mode)
                             _validate_mandatory_firmware_control_plane(
                                 spec_json, mode, user_prompt, required=require_firmware_control_plane,
