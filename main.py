@@ -5314,6 +5314,7 @@ def _hem_link_child_workflow(
     stage: str,
     label: str,
     dashboard_stage: str,
+    hem_run_id: Optional[str] = None,
 ) -> None:
     """Persist the HEM parent/child relation on the child workflow itself."""
     try:
@@ -5322,6 +5323,7 @@ def _hem_link_child_workflow(
         definitions.update({
             "hem_root_workflow_id": root_workflow_id,
             "hem_root_run_id": root_run_id,
+            "hem_run_id": hem_run_id,
             "hem_stage": stage,
             "hem_stage_label": label,
             "hem_dashboard_stage": dashboard_stage,
@@ -5929,6 +5931,7 @@ def _hem_continue_digital_rtl_after_success(
         workflow_id=child_workflow_id,
         root_workflow_id=root_workflow_id,
         root_run_id=root_run_id,
+        hem_run_id=str(hem_run_id) if hem_run_id else None,
         stage=next_app,
         label=next_label,
         dashboard_stage={
@@ -6405,6 +6408,7 @@ def _hem_continue_system_rtl_after_success(
         workflow_id=child_workflow_id,
         root_workflow_id=root_workflow_id,
         root_run_id=root_run_id,
+        hem_run_id=str(hem_run_id) if hem_run_id else None,
         stage=next_template,
         label=next_label,
         dashboard_stage=next_meta.get("stage") or next_template.lower(),
@@ -7605,6 +7609,7 @@ def _hem_continue_physical_ai_after_success(*, root_workflow_id: str, root_run_i
             workflow_id=child_workflow_id,
             root_workflow_id=root_workflow_id,
             root_run_id=root_run_id,
+            hem_run_id=str(hem_run_id) if hem_run_id else None,
             stage=stage,
             label=meta["label"],
             dashboard_stage=meta["dashboard_stage"],
@@ -8224,12 +8229,25 @@ async def apps_physical_ai_result(workflow_id: str, request: Request):
             .data
             or []
         )
-        latest_hem_created_at = str((hem_rows[0] if hem_rows else {}).get("created_at") or "")
-        if latest_hem_created_at:
-            linked_rows = [
+        latest_hem = hem_rows[0] if hem_rows else {}
+        latest_hem_id = str(latest_hem.get("id") or "")
+        latest_hem_created_at = str(latest_hem.get("created_at") or "")
+        if latest_hem_id:
+            exact_run_rows = [
                 row for row in linked_rows
-                if str(row.get("created_at") or "") >= latest_hem_created_at
+                if str(((row.get("definitions") or {}) if isinstance(row.get("definitions"), dict) else {}).get("hem_run_id") or "")
+                == latest_hem_id
             ]
+            # Event rows are authoritative for runs created before child
+            # definitions carried hem_run_id. Never merge root-linked history
+            # into a successfully loaded latest-run event set.
+            if exact_run_rows or hem_children:
+                linked_rows = exact_run_rows
+            elif latest_hem_created_at:
+                linked_rows = [
+                    row for row in linked_rows
+                    if str(row.get("created_at") or "") >= latest_hem_created_at
+                ]
         existing_ids = {str(item.get("workflow_id") or "") for item in hem_children}
         for linked in linked_rows:
             child_id = str(linked.get("id") or "").strip()

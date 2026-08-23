@@ -628,6 +628,8 @@ def test_main_registers_generic_physical_ai_endpoints():
     assert "plan = plan[plan.index(start_stage):]" in main
     assert '"execution_plan": resume_plan' in main
     assert "latest_hem_created_at" in main
+    assert 'get("hem_run_id")' in main
+    assert "if exact_run_rows or hem_children" in main
     assert "def normalize_workflow_id" in main
     assert 'candidate.startswith("workflow_")' in main
     assert 'candidate.endswith("_artifacts_full")' in main
