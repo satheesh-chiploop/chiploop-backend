@@ -7,7 +7,7 @@ import pytest
 
 from agents.fpga import fpga_explorer_io_mapping_agent as mapping_agent
 from agents.fpga import fpga_target_explorer_agent as explorer
-from agents.fpga.fpga_common import BOARD_REGISTRY, _upstream_rtl_priority
+from agents.fpga.fpga_common import BOARD_REGISTRY, _copy_tree_rtl, _upstream_rtl_priority
 from agents.fpga import fpga_rtl_handoff_ingest_agent as handoff_agent
 from agents.fpga import fpga_serial_transport
 
@@ -19,6 +19,28 @@ def test_supabase_fpga_handoff_rtl_is_preferred_over_derived_outputs():
         "backend/workflows/wf/fpga/target_explorer/interface_adapter/core_spi_fpga_top.sv"
     ) == 0
     assert _upstream_rtl_priority("backend/workflows/wf/fpga/build/core.sv") is None
+
+
+def test_local_workflow_copy_excludes_verification_and_coverage_collateral(tmp_path):
+    source = tmp_path / "workflow"
+    destination = tmp_path / "fpga_src"
+    design = source / "rtl" / "core.sv"
+    formal = source / "vv" / "formal" / "core_formal.sv"
+    assertions = source / "vv" / "tb" / "core_assertions_bind.sv"
+    annotated = source / "vv" / "tb" / "reports" / "verilator_coverage_annotated" / "core.sv"
+    for path, text in (
+        (design, "module core; endmodule\n"),
+        (formal, "module core_formal; endmodule\n"),
+        (assertions, "module core_assertions_bind; endmodule\n"),
+        (annotated, "module core; endmodule\n"),
+    ):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+
+    copied = _copy_tree_rtl(str(source), str(destination))
+
+    assert [Path(path).name for path in copied] == ["core.sv"]
+    assert Path(copied[0]).read_text(encoding="utf-8") == "module core; endmodule\n"
 
 
 def test_handoff_publishes_complete_rtl_package_with_collision_safe_names(tmp_path, monkeypatch):

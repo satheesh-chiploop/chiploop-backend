@@ -349,11 +349,38 @@ def _safe_rel(path: str) -> str:
     return normalized
 
 
+def _is_verification_collateral(path: str) -> bool:
+    """Return true for verification products that must not enter FPGA implementation.
+
+    Apply the same policy to Supabase downloads and locally materialized workflow
+    trees.  In particular, coverage-annotated RTL is a report product, not a
+    source-of-truth replacement for the design RTL.
+    """
+    normalized = "/" + str(path or "").replace("\\", "/").lower().strip("/")
+    basename = os.path.basename(normalized)
+    return (
+        basename.startswith("tb_")
+        or "testbench" in basename
+        or "_tb." in basename
+        or "_assertions." in basename
+        or "_assertions_bind." in basename
+        or "_formal." in basename
+        or any(part in normalized for part in (
+            "/verification/", "/vv/", "/formal/", "/tb/", "/testbench/",
+            "/sim/", "/simulation/", "/sim_build/", "/reports/",
+            "/coverage/", "/coverage_annotated/",
+        ))
+    )
+
+
 def _copy_tree_rtl(source_dir: str, dest_dir: str) -> List[str]:
     copied: List[str] = []
     for pattern in ("**/*.v", "**/*.sv"):
         for src in glob.glob(os.path.join(source_dir, pattern), recursive=True):
-            if any(skip in src.replace("\\", "/").lower() for skip in ("/sim_build/", "/node_modules/", "/.git/", "/fpga/src/")):
+            if (
+                _is_verification_collateral(src)
+                or any(skip in src.replace("\\", "/").lower() for skip in ("/node_modules/", "/.git/", "/fpga/src/"))
+            ):
                 continue
             rel = os.path.relpath(src, source_dir)
             dst = os.path.join(dest_dir, rel)
@@ -394,12 +421,9 @@ def _upstream_rtl_priority(path: str) -> int | None:
     if "/fpga/target_explorer/interface_adapter/" in normalized:
         return 0
     if (
-        basename.startswith("tb_")
-        or "testbench" in basename
-        or "_tb." in basename
-        or "_assertions." in basename
+        _is_verification_collateral(normalized)
         or any(part in normalized for part in (
-            "/verification/", "/vv/", "/fpga/", "/sim/", "/simulation/",
+            "/fpga/",
             "/pass1/", "/pass2/", "/pass3/", "/repair/", "/repaired/",
         ))
     ):
@@ -539,9 +563,7 @@ def resolve_rtl_sources(state: Dict[str, Any]) -> List[str]:
     unique_paths = list(dict.fromkeys(os.path.abspath(path) for path in sources if os.path.exists(path)))
     unique_paths = [
         path for path in unique_paths
-        if not os.path.basename(path).lower().startswith("tb_")
-        and "testbench" not in os.path.basename(path).lower()
-        and "_tb." not in os.path.basename(path).lower()
+        if not _is_verification_collateral(path)
     ]
     deduped: List[str] = []
     ignored: List[Dict[str, Any]] = []
