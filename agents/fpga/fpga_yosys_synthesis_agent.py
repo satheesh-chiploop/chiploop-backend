@@ -151,6 +151,26 @@ def _rtl_memory_intent(rtl_files: list[str], threshold_bits: int = 4096) -> dict
     }
 
 
+def _source_memory_optimized_away(netlist: str, memory_intent: dict, metrics: dict) -> bool:
+    """Prove a declared array is absent rather than silently mapped to FFs."""
+    declarations = memory_intent.get("declarations") if isinstance(memory_intent.get("declarations"), list) else []
+    names = [str(item.get("name") or "") for item in declarations if isinstance(item, dict) and item.get("name")]
+    if not names or not os.path.exists(netlist):
+        return False
+    try:
+        with open(netlist, "r", encoding="utf-8") as handle:
+            serialized = json.dumps(json.load(handle))
+    except (OSError, ValueError, TypeError):
+        return False
+    if any(name in serialized for name in names):
+        return False
+    # A register implementation needs at least one FF per retained bit. This
+    # prevents an expensive renamed FF array from being classified as removed.
+    declared_bits = int(memory_intent.get("estimated_bits") or 0)
+    realized_ffs = int(metrics.get("flip_flops") or 0)
+    return declared_bits > 0 and realized_ffs < declared_bits
+
+
 @lru_cache(maxsize=4)
 def _yosys_help(synth_cmd: str) -> str:
     try:
@@ -288,13 +308,18 @@ def run_agent(state: dict) -> dict:
     native_ram_required = bool(memory_intent.get("requires_block_ram"))
     native_ram_supported = bool(((board.get("resources") or {}).get("block_ram_primitive")))
     native_ram_mapped = int(summary.get("block_ram_blocks_used") or 0) > 0
-    native_ram_gate_enforced = native_ram_required and native_ram_supported
+    memory_optimized_away = bool(
+        summary["status"] == "completed" and native_ram_required and not native_ram_mapped
+        and _source_memory_optimized_away(json_path, memory_intent, summary)
+    )
+    native_ram_gate_enforced = native_ram_required and native_ram_supported and not memory_optimized_away
     summary["memory_mapping_gate"] = {
-        "status": "pass" if not native_ram_gate_enforced or native_ram_mapped else "fail",
+        "status": "not_applicable_optimized_away" if memory_optimized_away else "pass" if not native_ram_gate_enforced or native_ram_mapped else "fail",
         "enforced": native_ram_gate_enforced,
         "required": native_ram_required,
         "supported": native_ram_supported,
         "mapped": native_ram_mapped,
+        "source_memory_optimized_away": memory_optimized_away,
         "primitive": summary.get("block_ram_primitive"),
     }
     if summary["status"] == "completed" and summary["memory_mapping_gate"]["status"] == "fail":

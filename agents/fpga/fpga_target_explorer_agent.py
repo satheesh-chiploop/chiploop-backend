@@ -18,6 +18,7 @@ from .fpga_nextpnr_place_route_agent import (
 from .fpga_yosys_synthesis_agent import (
     _architecture_synth_options,
     _rtl_memory_intent,
+    _source_memory_optimized_away,
     _yosys_cell_metrics,
     _yosys_help,
     _yosys_version,
@@ -138,26 +139,6 @@ def _make_core_only_netlist(netlist: str, top: str) -> list[str]:
         return stripped
     except (OSError, ValueError, TypeError):
         return []
-
-
-def _source_memory_optimized_away(netlist: str, memory_intent: dict, metrics: dict) -> bool:
-    """Prove a declared array is absent rather than silently mapped to FFs."""
-    declarations = memory_intent.get("declarations") if isinstance(memory_intent.get("declarations"), list) else []
-    names = [str(item.get("name") or "") for item in declarations if isinstance(item, dict) and item.get("name")]
-    if not names or not os.path.exists(netlist):
-        return False
-    try:
-        serialized = json.dumps(json.load(open(netlist, "r", encoding="utf-8")))
-    except (OSError, ValueError, TypeError):
-        return False
-    if any(name in serialized for name in names):
-        return False
-    # If an array had been lowered to registers, at least one FF per retained
-    # bit would be required. This guards against accepting an expensive FF
-    # implementation merely because synthesis renamed the array.
-    declared_bits = int(memory_intent.get("estimated_bits") or 0)
-    realized_ffs = int(metrics.get("flip_flops") or 0)
-    return declared_bits > 0 and realized_ffs < declared_bits
 
 
 def _run_synthesis(state: dict, board_key: str, board: dict, strategy: str) -> dict:

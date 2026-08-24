@@ -631,7 +631,7 @@ def test_ecp5_yosys_metrics_report_native_block_ram(tmp_path):
 
 
 def test_rtl_memory_intent_detects_substantial_unpacked_array(tmp_path):
-    from agents.fpga.fpga_yosys_synthesis_agent import _rtl_memory_intent
+    from agents.fpga.fpga_yosys_synthesis_agent import _rtl_memory_intent, _source_memory_optimized_away
 
     rtl = tmp_path / "memory.sv"
     rtl.write_text(
@@ -647,6 +647,13 @@ def test_rtl_memory_intent_detects_substantial_unpacked_array(tmp_path):
     assert intent["requires_block_ram"] is True
     assert intent["estimated_bits"] == 8224
     assert intent["declarations"][0]["bits"] == 8192
+
+    netlist = tmp_path / "mapped.json"
+    netlist.write_text(json.dumps({"modules": {"top": {"cells": {"logic": {"type": "LUT4"}}}}}), encoding="utf-8")
+    assert _source_memory_optimized_away(str(netlist), intent, {"flip_flops": 32}) is True
+
+    netlist.write_text(json.dumps({"modules": {"top": {"cells": {"payload_mem[0]": {"type": "DFF"}}}}}), encoding="utf-8")
+    assert _source_memory_optimized_away(str(netlist), intent, {"flip_flops": 8192}) is False
 
 
 def test_physical_ai_fpga_candidates_are_derived_from_registry():
