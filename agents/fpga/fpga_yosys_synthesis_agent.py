@@ -151,6 +151,22 @@ def _rtl_memory_intent(rtl_files: list[str], threshold_bits: int = 4096) -> dict
     }
 
 
+def _block_ram_style_commands(memory_intent: dict) -> list[str]:
+    """Tell Yosys to honor substantial inferred memories as block RAM.
+
+    The source contract may require FPGA block memory without embedding a
+    vendor-specific primitive or synthesis attribute.  Apply the portable
+    intent at synthesis time, scoped to the detected substantial arrays.
+    """
+    declarations = memory_intent.get("declarations") if isinstance(memory_intent.get("declarations"), list) else []
+    names = sorted({
+        str(item.get("name") or "")
+        for item in declarations
+        if isinstance(item, dict) and item.get("requires_block_ram") and item.get("name")
+    })
+    return [f'setattr -set ram_style "block" m:{name}' for name in names]
+
+
 def _source_memory_optimized_away(netlist: str, memory_intent: dict, metrics: dict) -> bool:
     """Prove a declared array is absent rather than silently mapped to FFs."""
     declarations = memory_intent.get("declarations") if isinstance(memory_intent.get("declarations"), list) else []
@@ -284,6 +300,7 @@ def run_agent(state: dict) -> dict:
     steps = [f"read_verilog -sv {path}" for path in rtl_files]
     steps.extend([
         f"hierarchy -check -top {top}",
+        *_block_ram_style_commands(memory_intent),
         "design -save lec_source",
         "proc; opt; memory; opt_clean",
         f"write_verilog -noattr {equivalence_netlist_path}",

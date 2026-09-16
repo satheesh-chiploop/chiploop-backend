@@ -17,6 +17,7 @@ from .fpga_nextpnr_place_route_agent import (
 )
 from .fpga_yosys_synthesis_agent import (
     _architecture_synth_options,
+    _block_ram_style_commands,
     _rtl_memory_intent,
     _source_memory_optimized_away,
     _yosys_cell_metrics,
@@ -161,7 +162,13 @@ def _run_synthesis(state: dict, board_key: str, board: dict, strategy: str) -> d
         options.append("-noiopads")
     elif family == "nexus" and "-noiopad" in help_text and "-noiopad" not in options:
         options.append("-noiopad")
+    memory_intent = _rtl_memory_intent(
+        rtl_files,
+        max(1, int(state.get("fpga_block_memory_threshold_bits") or 4096)),
+    )
     steps = [f"read_verilog -sv {path}" for path in rtl_files]
+    steps.append(f"hierarchy -check -top {top}")
+    steps.extend(_block_ram_style_commands(memory_intent))
     option_text = " ".join(options)
     steps.append(f"{synth_cmd} -top {top} {option_text} -json {netlist}".replace("  ", " "))
     write_text(script_path, "\n".join(steps) + "\n")
@@ -171,10 +178,6 @@ def _run_synthesis(state: dict, board_key: str, board: dict, strategy: str) -> d
         _record_file(state, board_key, f"{strategy}/synth", artifact)
     completed = bool(result.get("ok") and os.path.exists(netlist))
     metrics = _yosys_cell_metrics(netlist, board) if completed else {}
-    memory_intent = _rtl_memory_intent(
-        rtl_files,
-        max(1, int(state.get("fpga_block_memory_threshold_bits") or 4096)),
-    )
     native_ram_required = bool(memory_intent.get("requires_block_ram"))
     native_ram_supported = bool(((board.get("resources") or {}).get("block_ram_primitive")))
     native_ram_mapped = int(metrics.get("block_ram_blocks_used") or 0) > 0

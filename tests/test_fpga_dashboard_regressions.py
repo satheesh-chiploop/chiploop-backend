@@ -656,6 +656,20 @@ def test_rtl_memory_intent_detects_substantial_unpacked_array(tmp_path):
     assert _source_memory_optimized_away(str(netlist), intent, {"flip_flops": 8192}) is False
 
 
+def test_block_ram_style_commands_target_only_substantial_arrays():
+    from agents.fpga.fpga_yosys_synthesis_agent import _block_ram_style_commands
+
+    commands = _block_ram_style_commands({
+        "declarations": [
+            {"name": "payload_mem", "requires_block_ram": True},
+            {"name": "tiny_history", "requires_block_ram": False},
+            {"name": "payload_mem", "requires_block_ram": True},
+        ],
+    })
+
+    assert commands == ['setattr -set ram_style "block" m:payload_mem']
+
+
 def test_physical_ai_fpga_candidates_are_derived_from_registry():
     source = (Path(__file__).parents[1] / "main.py").read_text(encoding="utf-8")
 
