@@ -223,6 +223,14 @@ def test_allowed_frequency_relaxation_continues_with_programming_ready_board(mon
         "fpga": {"top_module": "top", "rtl_files": ["top.sv"]},
         "fpga_explorer_io_mapping": {
             "mappings": [{"board": "ulx3s_ecp5_45f", "programming_ready": True, "mapped_ports": ["clk"], "unmapped_ports": []}],
+            "interface_adapter": {
+                "protocol_contract_ready": True,
+                "host_driver_ready": True,
+                "status": "generated",
+                "transport": "spi_mode_0_shift_transport",
+                "cdc_model": "bundled_data_mailboxes_held_stable_between_frame_commits",
+                "cdc_classification": {"reset_release": "asynchronous_assertion_synchronous_two_flop_release"},
+            },
         },
     }
 
@@ -234,6 +242,8 @@ def test_allowed_frequency_relaxation_continues_with_programming_ready_board(mon
     assert continuation["requested_target_frequency_mhz"] == 50
     assert continuation["target_frequency_mhz"] == 39.6
     assert continuation["blocked_reason"] is None
+    assert continuation["transport_contract"]["cdc_model"] == "bundled_data_mailboxes_held_stable_between_frame_commits"
+    assert continuation["transport_contract"]["cdc_classification"]["reset_release"] == "asynchronous_assertion_synchronous_two_flop_release"
 
 
 def test_explorer_reuses_identical_implementation_targets(monkeypatch):

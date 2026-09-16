@@ -185,6 +185,7 @@ def test_physical_ai_hem_carries_fpga_simulation_lineage_into_product_chain():
     assert 'automation_payload["source_system_sim_workflow_id"] = child_workflow_id' in main_source
     assert '"source_system_sim_workflow_id": payload.get("source_system_sim_workflow_id") or payload.get("fpga_bitstream_workflow_id")' in main_source
     assert '"fpga_bitstream_workflow_id": common.get("fpga_bitstream_workflow_id")' in main_source
+    assert '"verify_workflow_id": (' in main_source
 
 
 def test_pmsm_equation_model_is_ready_and_fpga_compatible():

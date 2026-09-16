@@ -119,6 +119,8 @@ def test_wide_core_gets_fpga_only_spi_transport(tmp_path, monkeypatch):
     assert "!spi_cs_n ? (spi_active ? tx_shift[FRAME_BITS-1] : tx_snapshot[FRAME_BITS-1]) : 1'b0" in wrapper
     assert "1'bz" not in wrapper
     assert "adaptive_aero_control_top u_core" in wrapper
+    assert "reset_sync <= reset_meta" in wrapper
+    assert ".rst_n(reset_sync)" in wrapper
     assert ".s_axis_cmd(core_s_axis_cmd)" in wrapper
     protocol = json.loads(Path(report["protocol_contract"]).read_text(encoding="utf-8"))
     assert protocol["schema"] == "chiploop.fpga.spi_transport.v1"
@@ -126,6 +128,7 @@ def test_wide_core_gets_fpga_only_spi_transport(tmp_path, monkeypatch):
     assert protocol["mode"] == 0
     assert protocol["response_latency_frames"] == 2
     assert protocol["minimum_interframe_delay_us"] == 1
+    assert protocol["cdc_classification"]["reset_release"] == "asynchronous_assertion_synchronous_two_flop_release"
     assert protocol["frame_bits"] == 136
     assert protocol["frame_bytes"] == 17
     assert protocol["command_leading_padding_bits"] == 7

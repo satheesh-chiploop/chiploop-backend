@@ -99,6 +99,39 @@ def test_parse_verilator_annotated_points_reports_toggle_coverage(tmp_path):
 
 def test_testbench_generator_can_select_directed_random_or_both():
     assert tb_agent._selected_default_tests("directed") == ["smoke_test"]
+
+
+def test_spi_wrapper_gets_complete_frame_directed_test(tmp_path):
+    rtl = tmp_path / "wrapper.sv"
+    rtl.write_text(
+        "module wrapper(input clk,input reset_n,input spi_sclk,input spi_cs_n,input spi_mosi,output spi_miso); "
+        "localparam integer FRAME_BITS = 224; assign spi_miso=1'b0; endmodule",
+        encoding="utf-8",
+    )
+    ports = [
+        {"name": "clk", "direction": "input"},
+        {"name": "reset_n", "direction": "input"},
+        {"name": "spi_sclk", "direction": "input"},
+        {"name": "spi_cs_n", "direction": "input"},
+        {"name": "spi_mosi", "direction": "input"},
+        {"name": "spi_miso", "direction": "output"},
+    ]
+    spec = {"ports": ports}
+
+    tests = tb_agent._detected_directed_tests(ports, spec, [str(rtl)])
+    generated = tb_agent._gen_cocotb_test(
+        spec, "wrapper", ["clk", "spi_sclk"], [{"name": "reset_n", "active_low": True}], [str(rtl)]
+    )
+
+    assert "spi_transport_frame_directed" in tests
+    assert "for bit in range(224 - 1, -1, -1)" in generated
+    assert "response = await transfer(0)" in generated
+    manifest = tb_agent._build_testcases_manifest(
+        "wrapper", ["clk", "spi_sclk"], [{"name": "reset_n"}], "digital", "both", tests
+    )
+    spi_case = next(item for item in manifest["tests"] if item["name"] == "spi_transport_frame_directed")
+    assert spi_case["timeout_ns"] == 25000
+    assert "spi_transport_frame_directed" in manifest["default_tests"]
     assert tb_agent._selected_default_tests("random") == ["constrained_random_sanity"]
     assert tb_agent._selected_default_tests("both") == ["smoke_test", "constrained_random_sanity"]
 

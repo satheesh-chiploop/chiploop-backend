@@ -53,6 +53,15 @@ def run_agent(state: dict) -> dict:
     crossings.extend(_findings(str(state.get("cdc_report_path") or os.path.join(workflow_root, "digital", "cdc_findings.json")), "cdc"))
     crossings.extend(_findings(str(state.get("reset_integrity_report_path") or os.path.join(workflow_root, "digital", "reset_integrity_findings.json")), "rdc"))
     unsafe_crossings = [item for item in crossings if str((item or {}).get("severity", "")).lower() in {"error", "critical", "unsafe"}]
+    refinement = state.get("target_refinement") if isinstance(state.get("target_refinement"), dict) else {}
+    transport = refinement.get("transport_contract") if isinstance(refinement.get("transport_contract"), dict) else {}
+    serial = state.get("fpga_serial_transport") if isinstance(state.get("fpga_serial_transport"), dict) else {}
+    cdc_model = str(transport.get("cdc_model") or serial.get("cdc_model") or "")
+    qualified_mailbox_cdc = cdc_model == "bundled_data_mailboxes_held_stable_between_frame_commits"
+    reset_release_synchronized = bool(re.search(
+        r"reset_meta\s*<=\s*1'b1\s*;\s*reset_sync\s*<=\s*reset_meta",
+        rtl,
+    ))
     # Reset-less RTL is valid when there is no asynchronous reset structure.
     # Preserve the heuristic finding as an advisory without holding signoff.
     advisory_findings = [
@@ -61,7 +70,7 @@ def run_agent(state: dict) -> dict:
         and not async_resets
     ]
     warnings = []
-    if len(sequential_clocks) > 1 and not crossings:
+    if len(sequential_clocks) > 1 and not crossings and not qualified_mailbox_cdc:
         warnings.append("Multiple RTL clock signals were detected; provide CDC classifications or run structural CDC analysis.")
     warnings.extend(
         str(item.get("msg") or item.get("message") or item.get("type"))
@@ -69,7 +78,8 @@ def run_agent(state: dict) -> dict:
         if str(item.get("severity", "")).lower() == "warning"
         and item not in advisory_findings
     )
-    if async_resets and not state.get("fpga_rdc_reviewed"):
+    reset_like_async = [name for name in async_resets if re.search(r"rst|reset|por", name, re.IGNORECASE)]
+    if reset_like_async and not state.get("fpga_rdc_reviewed") and not reset_release_synchronized:
         warnings.append("Asynchronous reset usage was detected; reset release synchronization requires review.")
     errors = []
     if unconstrained_ports:
@@ -93,6 +103,8 @@ def run_agent(state: dict) -> dict:
         "rtl_file_count": len(rtl_files),
         "detected_clocks": sequential_clocks,
         "detected_async_resets": async_resets,
+        "qualified_cdc_model": cdc_model or None,
+        "reset_release_synchronized": reset_release_synchronized,
         "unconstrained_ports": unconstrained_ports,
         "cdc_rdc_findings": crossings,
         "advisories": [

@@ -249,6 +249,7 @@ def add_spi_transport_if_needed(
         "  logic [FRAME_BITS-1:0] tx_shift, tx_snapshot;",
         "  logic spi_active;",
         "  logic spi_cs_meta, spi_cs_sync, spi_cs_prev;",
+        "  logic reset_meta, reset_sync;",
     ]
     lines.extend(_decl("logic", port) for port in payload_inputs)
     lines.extend(_decl("wire", port) for port in payload_outputs)
@@ -266,6 +267,11 @@ def add_spi_transport_if_needed(
     lines.append(f"  assign fault_indicator = {fault_signal};")
     zero_bit = "1'b0"
     lines.extend([
+        "  // Asynchronous assertion, synchronous release into the core domain.",
+        "  always_ff @(posedge clk or negedge reset_n) begin",
+        "    if (!reset_n) begin reset_meta <= 1'b0; reset_sync <= 1'b0; end",
+        "    else begin reset_meta <= 1'b1; reset_sync <= reset_meta; end",
+        "  end",
         "  // Chip select asynchronously clears only the frame-state bit. Data",
         "  // registers use SPI clock alone, which is legal in ECP5 fabric.",
         "  always_ff @(posedge spi_sclk or posedge spi_cs_n) begin",
@@ -281,8 +287,8 @@ def add_spi_transport_if_needed(
         "  end",
         "  // Synchronize frame completion into the core clock domain. The host",
         "  // keeps MOSI stable around CS rising as required by the protocol.",
-        "  always_ff @(posedge clk or negedge reset_n) begin",
-        "    if (!reset_n) begin",
+        "  always_ff @(posedge clk) begin",
+        "    if (!reset_sync) begin",
         "      spi_cs_meta <= 1'b1; spi_cs_sync <= 1'b1; spi_cs_prev <= 1'b1;",
         "      rx_active <= '0; tx_snapshot <= '0;",
         "    end else begin",
@@ -308,8 +314,8 @@ def add_spi_transport_if_needed(
         name = port["name"]
         signal = (
             "clk" if _is_clock_port(name)
-            else "reset_n" if _is_active_low_reset_port(name)
-            else "~reset_n" if _is_active_high_reset_port(name)
+            else "reset_sync" if _is_active_low_reset_port(name)
+            else "~reset_sync" if _is_active_high_reset_port(name)
             else f"core_{name}"
         )
         connections.append(f"    .{port['name']}({signal})")
@@ -363,6 +369,12 @@ def add_spi_transport_if_needed(
         "response_latency_frames": 2,
         "minimum_interframe_delay_us": 1,
         "cdc_model": "bundled_data_mailboxes_held_stable_between_frame_commits",
+        "cdc_classification": {
+            "control_path": "spi_cs_n_two_flop_synchronized_into_core_clock",
+            "command_data_path": "bundled_data_held_stable_until_synchronized_commit",
+            "response_data_path": "snapshot_held_stable_for_complete_spi_frames",
+            "reset_release": "asynchronous_assertion_synchronous_two_flop_release",
+        },
         "input_bits": input_bits,
         "output_bits": output_bits,
         "input_bit_map": input_map,
@@ -390,6 +402,8 @@ def add_spi_transport_if_needed(
         "response_trailing_padding_bits": frame_bits - output_bits,
         "response_latency_frames": 2,
         "minimum_interframe_delay_us": 1,
+        "cdc_model": protocol["cdc_model"],
+        "cdc_classification": protocol["cdc_classification"],
         "input_bit_map": input_map,
         "output_bit_map": output_map,
         "output_frame_order_msb_first": [port["name"] for port in payload_outputs],

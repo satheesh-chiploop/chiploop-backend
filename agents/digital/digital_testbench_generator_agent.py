@@ -728,7 +728,24 @@ def _detected_directed_tests(ports: List[Dict[str, Any]], spec: Optional[Dict[st
         tests.append("register_mapped_control_directed")
     if _has_register_mapped_memory_bist_intent(spec, ports, rtl_files):
         tests.append("register_mapped_memory_bist_directed")
+    if (
+        all(_has_port(ports, name, "input") for name in ("spi_sclk", "spi_cs_n", "spi_mosi"))
+        and _has_port(ports, "spi_miso", "output")
+    ):
+        tests.append("spi_transport_frame_directed")
     return tests
+
+
+def _spi_frame_bits(rtl_files: Optional[List[str]]) -> int:
+    for path in rtl_files or []:
+        try:
+            text = open(path, "r", encoding="utf-8", errors="ignore").read()
+        except OSError:
+            continue
+        match = re.search(r"localparam\s+(?:integer\s+)?FRAME_BITS\s*=\s*(\d+)", text)
+        if match:
+            return max(8, int(match.group(1)))
+    return 8
 
 
 def _register_write_plan(register_map: Dict[str, int], register_bit_roles: Dict[str, Dict[str, int]]) -> List[Dict[str, Any]]:
@@ -786,6 +803,40 @@ def _render_directed_tests(
     register_map = _collect_register_map(spec, rtl_files)
     register_bit_roles = _collect_register_bit_roles(spec)
     register_write_plan = _register_write_plan(register_map, register_bit_roles)
+    if "spi_transport_frame_directed" in tests:
+        blocks.append(
+            '''
+@cocotb.test()
+async def spi_transport_frame_directed(dut):
+    """Exercise complete SPI frames and the qualified two-frame response pipeline."""
+    cocotb.start_soon(Clock(dut.clk, 10, unit="ns").start())
+    dut.spi_sclk.value = 0
+    dut.spi_cs_n.value = 1
+    dut.spi_mosi.value = 0
+
+{reset_seq}
+
+    async def transfer(value):
+        observed = 0
+        dut.spi_cs_n.value = 0
+        for bit in range({spi_frame_bits} - 1, -1, -1):
+            dut.spi_mosi.value = (int(value) >> bit) & 1
+            await Timer(10, unit="ns")
+            dut.spi_sclk.value = 1
+            await Timer(10, unit="ns")
+            observed = (observed << 1) | int(dut.spi_miso.value)
+            dut.spi_sclk.value = 0
+        dut.spi_cs_n.value = 1
+        await Timer(1000, unit="ns")
+        return observed
+
+    await transfer(0)
+    await transfer(0)
+    response = await transfer(0)
+    assert isinstance(response, int)
+    _assert_outputs_known(dut, {observable_outputs_json})
+'''
+        )
     if "memory_write_read_directed" in tests:
         blocks.append(
             '''
@@ -1040,6 +1091,7 @@ async def register_mapped_memory_bist_directed(dut):
         register_map_json=json.dumps(register_map, indent=2, sort_keys=True),
         register_bit_roles_json=json.dumps(register_bit_roles, indent=2, sort_keys=True),
         register_write_plan_json=json.dumps(register_write_plan, indent=2, sort_keys=True),
+        spi_frame_bits=_spi_frame_bits(rtl_files),
     )
 
 
@@ -1295,7 +1347,7 @@ def _build_testcases_manifest(
                 "clock_names": clock_names,
                 "reset_names": reset_names,
                 "tags": ["directed", "coverage"],
-                "timeout_ns": 2000,
+                "timeout_ns": 25000 if name == "spi_transport_frame_directed" else 2000,
             }
         )
 

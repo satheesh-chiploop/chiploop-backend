@@ -1,6 +1,7 @@
 import datetime
 import json
 import os
+import re
 from typing import Any, Dict, List, Optional, Tuple
 
 from utils.artifact_utils import save_text_artifact_and_record
@@ -334,7 +335,13 @@ def _optional_manifest_path(manifest: Dict[str, Any], key: str) -> str:
 # Other discovery helpers (non-authoritative)
 # -----------------------------------------------------------------------------
 def _find_system_integration_intent_path(state: Dict[str, Any], workflow_dir: str, supabase, prefixes: List[str]) -> str:
-    direct = _first_path_from_keys(state, ["system_integration_intent_json", "integration_json_path"])
+    direct = _first_path_from_keys(state, [
+        "system_integration_intent_path",
+        "digital_system_integration_intent_path",
+        "integration_intent_path",
+        "system_integration_intent_json",
+        "integration_json_path",
+    ])
     for candidate in [direct, "system/integration/system_integration_intent.json", "system_integration_intent.json"]:
         candidate = _norm_path(candidate)
         if not candidate:
@@ -393,7 +400,7 @@ def _find_rtl_filelist(state: Dict[str, Any], workflow_dir: str) -> Tuple[str, L
                 if cleaned:
                     list_from_state.extend(cleaned)
 
-    list_from_state = _dedupe_keep_order(list_from_state)
+    list_from_state = _dedupe_rtl_module_sources(list_from_state, workflow_dir)
     if list_from_state:
         return "", list_from_state
 
@@ -402,15 +409,33 @@ def _find_rtl_filelist(state: Dict[str, Any], workflow_dir: str) -> Tuple[str, L
         abs_p = _join_workflow_path(workflow_dir, direct)
         if os.path.isfile(abs_p):
             lines = [ln.strip() for ln in _safe_read_text(abs_p).splitlines() if ln.strip()]
-            return direct, _dedupe_keep_order(lines)
+            return direct, _dedupe_rtl_module_sources(lines, workflow_dir)
 
     for rel in ("system/integration/system_rtl_filelist_sim.txt", "firmware/validate/verilator_rtl_filelist.f"):
         abs_p = _join_workflow_path(workflow_dir, rel)
         if os.path.isfile(abs_p):
             lines = [ln.strip() for ln in _safe_read_text(abs_p).splitlines() if ln.strip()]
-            return rel, _dedupe_keep_order(lines)
+            return rel, _dedupe_rtl_module_sources(lines, workflow_dir)
 
     return "", []
+
+
+def _dedupe_rtl_module_sources(paths: List[str], workflow_dir: str) -> List[str]:
+    """Remove duplicate RTL copies by declared module identity, preserving order."""
+    unique: List[str] = []
+    claimed_modules: set[str] = set()
+    for path in _dedupe_keep_order(paths):
+        if not str(path).lower().endswith((".v", ".sv")):
+            unique.append(path)
+            continue
+        absolute = path if os.path.isabs(path) else _join_workflow_path(workflow_dir, path)
+        text = _safe_read_text(absolute)
+        modules = set(re.findall(r"\bmodule\s+([A-Za-z_][A-Za-z0-9_$]*)\b", text))
+        if modules and modules.issubset(claimed_modules):
+            continue
+        unique.append(path)
+        claimed_modules.update(modules)
+    return unique
 
 
 def _find_elf_info(state: Dict[str, Any], workflow_dir: str, supabase, prefixes: List[str], firmware_manifest: Dict[str, Any]) -> Dict[str, Any]:

@@ -390,7 +390,14 @@ def run_agent(state: dict) -> dict:
                 }
             )
         except Exception as e:
-            run_result.update({"returncode": -1, "error": str(e)})
+            error = str(e)
+            timed_out = "timed out" in error.lower() or "timeout" in error.lower()
+            run_result.update({
+                "returncode": -1,
+                "error": error,
+                "status": "inconclusive" if timed_out else "fail",
+                "reason": "formal_resource_timeout" if timed_out else "formal_tool_error",
+            })
 
     artifacts: Dict[str, Any] = {}
     artifacts["sby"] = _record_text(workflow_id, agent_name, "vv/formal", f"{top}.sby", sby_txt)

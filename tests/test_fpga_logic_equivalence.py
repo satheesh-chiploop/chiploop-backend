@@ -357,6 +357,36 @@ def test_mapped_lec_inconclusive_is_advisory_after_generic_proof_passes(tmp_path
     assert published["mapped_proven"] is False
 
 
+def test_incomplete_monolithic_mapped_lec_retries_hierarchically(tmp_path, monkeypatch):
+    state = _state(tmp_path)
+    published = {}
+    monkeypatch.setattr(lec, "publish_json", lambda _state, _agent, _subdir, _name, data: published.update(data))
+    monkeypatch.setattr(lec, "manifest_update", lambda *_args: None)
+    monkeypatch.setattr(lec, "_mapped_lec_strategy", lambda *_args: {
+        "requested": "auto", "selected": "monolithic", "shared_partitions": ["leaf"],
+        "mapped_cells": 100, "flip_flops": 20, "large_design": False,
+        "reason": "monolithic proof selected",
+    })
+    calls = 0
+
+    def fake_run(_cmd, cwd, log_path, **_kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            Path(log_path).write_text("ERROR: Found 4 unproven $equiv cells\n", encoding="utf-8")
+            return {"ok": False, "stderr_tail": "4 unproven points"}
+        Path(log_path).write_text("Equivalence successfully proven!\n", encoding="utf-8")
+        return {"ok": True}
+
+    monkeypatch.setattr(lec, "run_cmd", fake_run)
+    lec.run_agent(state)
+
+    assert published["status"] == "pass"
+    assert published["mapped_proven"] is True
+    assert published["mapped_lec"]["strategy"] == "hierarchical"
+    assert published["mapped_lec"]["monolithic_attempt"]["unproven_points"] == 4
+
+
 def test_fpga_lec_disabled_by_user_is_recorded(tmp_path, monkeypatch):
     state = _state(tmp_path)
     state["run_fpga_lec"] = False

@@ -731,6 +731,8 @@ def run_agent(state: dict) -> dict:
                 "response_trailing_padding_bits": interface_adapter.get("response_trailing_padding_bits"),
                 "response_latency_frames": interface_adapter.get("response_latency_frames"),
                 "minimum_interframe_delay_us": interface_adapter.get("minimum_interframe_delay_us"),
+                "cdc_model": interface_adapter.get("cdc_model"),
+                "cdc_classification": interface_adapter.get("cdc_classification") or {},
                 "input_bit_map": interface_adapter.get("input_bit_map") or [],
                 "output_bit_map": interface_adapter.get("output_bit_map") or [],
                 "maximum_spi_clock_mhz": interface_adapter.get("maximum_spi_clock_mhz"),

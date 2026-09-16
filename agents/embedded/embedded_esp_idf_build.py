@@ -264,6 +264,35 @@ def run_esp_idf_build(state: dict) -> dict:
         raise RuntimeError("ESP-IDF compilation failed for the ULX3S onboard ESP32 firmware.")
     summary = {**contract, "status": "built", "elf_path": elf_path, "tool": idf}
     write_artifact(state, "firmware/debug/elf_build_result.json", json.dumps(summary, indent=2), key="elf_build_result")
-    state.setdefault("firmware", {})["elf_build"] = summary
+    firmware = state.setdefault("firmware", {})
+    firmware["elf_build"] = summary
+    # Keep the canonical firmware manifest aligned with the actual qualified
+    # build. Earlier generic register-extraction stages may have populated a
+    # host Rust target; once ESP-IDF succeeds that value is stale and must not
+    # leak into software/product handoffs.
+    manifest = state.get("firmware_manifest") or firmware.get("manifest") or {}
+    if isinstance(manifest, dict):
+        manifest = dict(manifest)
+        manifest["build"] = {
+            **(manifest.get("build") if isinstance(manifest.get("build"), dict) else {}),
+            "platform": "esp-idf",
+            "sdk": "esp-idf",
+            "idf_target": "esp32",
+            "architecture": "xtensa",
+            "target_triple": None,
+            "build_system": "cmake",
+            "elf_path": elf_path,
+            "build_succeeded": True,
+        }
+        manifest["elf_path"] = elf_path
+        manifest["target_refinement"] = {
+            "deployment_architecture": "fpga_onboard_cpu",
+            "fabric_interface": interface,
+        }
+        write_artifact(state, "firmware/firmware_manifest.json", json.dumps(manifest, indent=2), key="firmware_manifest")
+        state["firmware_manifest"] = manifest
+        state["firmware_manifest_path"] = "firmware/firmware_manifest.json"
+        firmware["manifest"] = manifest
+        firmware["manifest_path"] = "firmware/firmware_manifest.json"
     state["firmware_elf_path"] = elf_path
     return state

@@ -6497,6 +6497,11 @@ def _hem_build_system_child_payload(
             **common,
             "_require_product_upstream_signoff": True,
             "arch2rtl_workflow_id": source_system_rtl_workflow_id,
+            "verify_workflow_id": (
+                parent_payload.get("verify_workflow_id")
+                or common.get("source_system_sim_workflow_id")
+                or upstream.get("system_sim")
+            ),
             "system_firmware_workflow_id": firmware_id,
             "system_software_workflow_id": software_id,
             "system_validation_workflow_id": validation_id,

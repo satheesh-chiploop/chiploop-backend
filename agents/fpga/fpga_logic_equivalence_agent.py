@@ -442,6 +442,18 @@ def run_agent(state: dict) -> dict:
                     mapped_netlist, top, family, induction_depths, technology_mapped=True,
                 )
                 mapped_proof["strategy"] = "monolithic"
+                if (
+                    not mapped_proof.get("proven")
+                    and mapped_proof.get("failure_kind") == "proof_incomplete"
+                    and mapped_strategy.get("shared_partitions")
+                ):
+                    monolithic_attempt = mapped_proof
+                    _progress(state, "FPGA mapped LEC retrying with hierarchical partition proof.")
+                    mapped_proof = _run_hierarchical_mapped_proof(
+                        state, out_dir, generic_netlist, mapped_netlist, top, family,
+                        induction_depths, mapped_strategy["shared_partitions"],
+                    )
+                    mapped_proof["monolithic_attempt"] = monolithic_attempt
             _progress(state, f"FPGA LEC proof 2/2 finished with status {mapped_proof['status']}.")
         else:
             mapped_proof = {

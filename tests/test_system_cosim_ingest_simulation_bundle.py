@@ -1,7 +1,12 @@
 import json
+import os
 from pathlib import Path
 
+os.environ.setdefault("SUPABASE_URL", "https://example.supabase.co")
+os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-service-role-key")
+
 from agents.system import system_cosim_ingest_agent as ingest
+from agents.system import system_software_handoff_package_agent as handoff
 
 
 class _Result:
@@ -175,3 +180,26 @@ def test_simulation_bundle_falls_back_from_fpga_handoff_to_verified_rtl_flow(tmp
             "reason": "",
         },
     ]
+
+
+def test_software_handoff_discovers_explicit_integration_intent_and_deduplicates_rtl_modules(tmp_path):
+    intent = tmp_path / "integration.json"
+    intent.write_text('{"intent_type":"system_integration"}', encoding="utf-8")
+    first = tmp_path / "rtl" / "core.v"
+    duplicate = tmp_path / "system" / "imported_rtl" / "core.v"
+    wrapper = tmp_path / "rtl" / "wrapper.sv"
+    first.parent.mkdir(parents=True)
+    duplicate.parent.mkdir(parents=True)
+    first.write_text("module core; endmodule\n", encoding="utf-8")
+    duplicate.write_text("module core; endmodule\n", encoding="utf-8")
+    wrapper.write_text("module wrapper; core u_core(); endmodule\n", encoding="utf-8")
+
+    state = {
+        "system_integration_intent_path": str(intent),
+        "rtl_inputs": [str(first), str(duplicate), str(wrapper)],
+    }
+    resolved_intent = handoff._find_system_integration_intent_path(state, str(tmp_path), None, [])
+    _, rtl_files = handoff._find_rtl_filelist(state, str(tmp_path))
+
+    assert resolved_intent == str(intent).replace("\\", "/")
+    assert rtl_files == [str(first).replace("\\", "/"), str(wrapper).replace("\\", "/")]
