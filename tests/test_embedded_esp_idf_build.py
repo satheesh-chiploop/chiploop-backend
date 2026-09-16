@@ -121,6 +121,28 @@ def test_esp_idf_source_accepts_generated_cfg_bus_aliases():
     assert "chiploop_register_read" in source
 
 
+def test_esp_idf_source_accepts_reg_write_enable_alias_from_generated_rtl():
+    transport = {
+        "serialized_output_bits": 220,
+        "input_bit_map": [
+            {"port": "reg_addr", "lsb": 0, "width": 8},
+            {"port": "reg_wdata", "lsb": 8, "width": 64},
+            {"port": "reg_valid", "lsb": 72, "width": 1},
+            {"port": "reg_write_en", "lsb": 73, "width": 1},
+        ],
+        "output_bit_map": [
+            {"port": "reg_rdata", "lsb": 156, "width": 64},
+            {"port": "reg_ready", "lsb": 155, "width": 1},
+        ],
+    }
+
+    source = _main_source({"esp32_gpio": {}}, 28, transport)
+
+    assert "#define REG_WE_LSB 73" in source
+    assert "chiploop_register_write" in source
+    assert "chiploop_register_read" in source
+
+
 def _state(tmp_path, transport):
     transport = {
         "input_bit_map": [

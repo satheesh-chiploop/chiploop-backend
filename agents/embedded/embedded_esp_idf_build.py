@@ -21,7 +21,14 @@ def _field(bit_map: list, name: str) -> dict:
 
 _REGISTER_FIELD_ALIASES = {
     "valid": ("reg_valid", "mmio_valid", "csr_valid", "cfg_valid", "cfg_bus_valid"),
-    "write": ("reg_we", "reg_write", "mmio_write", "mmio_we", "csr_write", "csr_we", "cfg_write", "cfg_we", "cfg_bus_write", "cfg_bus_we"),
+    "write": (
+        "reg_we", "reg_write", "reg_write_en", "reg_wr_en",
+        "mmio_write", "mmio_we", "mmio_write_en", "mmio_wr_en",
+        "csr_write", "csr_we", "csr_write_en", "csr_wr_en",
+        "cfg_write", "cfg_we", "cfg_write_en", "cfg_wr_en",
+        "cfg_bus_write", "cfg_bus_we", "cfg_bus_write_en", "cfg_bus_wr_en",
+        "write_enable", "write_en", "wr_en",
+    ),
     "address": ("reg_addr", "mmio_addr", "csr_addr", "cfg_addr", "cfg_bus_addr"),
     "write_data": ("reg_wdata", "mmio_wdata", "csr_wdata", "cfg_wdata", "cfg_bus_wdata"),
     "read_data": ("reg_rdata", "mmio_rdata", "csr_rdata", "cfg_rdata", "cfg_bus_rdata"),
