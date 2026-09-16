@@ -71,6 +71,26 @@ def test_handoff_publishes_complete_rtl_package_with_collision_safe_names(tmp_pa
     }
 
 
+def test_handoff_replaces_stale_requested_top_with_unique_rtl_root(tmp_path):
+    top = tmp_path / "adaptive_aero_control_top.v"
+    child = tmp_path / "aero_child.v"
+    top.write_text(
+        "module adaptive_aero_control_top(input clk);\n"
+        "aero_child u_child(.clk(clk));\n"
+        "endmodule\n",
+        encoding="utf-8",
+    )
+    child.write_text("module aero_child(input clk); endmodule\n", encoding="utf-8")
+
+    resolved, evidence = handoff_agent._resolve_top_from_rtl(
+        "physical_ai_product_top", [str(top), str(child)]
+    )
+
+    assert resolved == "adaptive_aero_control_top"
+    assert evidence["resolution"] == "unique_rtl_hierarchy_root"
+    assert evidence["requested_top"] == "physical_ai_product_top"
+
+
 def test_wide_core_gets_fpga_only_spi_transport(tmp_path, monkeypatch):
     rtl = tmp_path / "adaptive_aero_control_top.sv"
     rtl.write_text(

@@ -1,8 +1,52 @@
 import hashlib
+import re
 from pathlib import Path
 
 from .fpga_common import board_config, detect_top_module, fpga_dir, manifest_update, publish_json, resolve_rtl_sources, tool_status
 from .fpga_serial_transport import add_spi_transport_if_needed
+
+
+def _resolve_top_from_rtl(requested_top: str, sources: list[str]) -> tuple[str, dict]:
+    """Resolve stale workflow metadata against the actual RTL hierarchy."""
+    defined: set[str] = set()
+    instantiated: set[str] = set()
+    keywords = {
+        "module", "if", "for", "while", "case", "casex", "casez", "end", "else", "begin",
+        "assign", "always", "initial", "function", "task", "integer", "generate", "endgenerate",
+        "and", "nand", "or", "nor", "xor", "xnor", "not", "buf",
+    }
+    for source in sources:
+        try:
+            text = Path(source).read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        text = re.sub(r"/\*.*?\*/|//[^\r\n]*", "", text, flags=re.DOTALL)
+        defined.update(re.findall(r"\bmodule\s+([A-Za-z_][A-Za-z0-9_$]*)\b", text))
+        instantiated.update(
+            name for name in re.findall(
+                r"(?m)^\s*([A-Za-z_][A-Za-z0-9_$]*)\b\s*(?:#\s*\([^;]*?\)\s*)?[A-Za-z_][A-Za-z0-9_$]*\s*\(",
+                text,
+            ) if name.lower() not in keywords
+        )
+    requested = str(requested_top or "").strip()
+    if requested and requested in defined:
+        return requested, {"resolution": "requested_top_found", "requested_top": requested}
+    roots = sorted(defined - instantiated)
+    if len(roots) == 1:
+        return roots[0], {
+            "resolution": "unique_rtl_hierarchy_root",
+            "requested_top": requested or None,
+            "resolved_top": roots[0],
+            "defined_modules": sorted(defined),
+        }
+    fallback = detect_top_module(sources) or requested
+    return fallback, {
+        "resolution": "fallback_first_module" if fallback else "unresolved",
+        "requested_top": requested or None,
+        "resolved_top": fallback or None,
+        "hierarchy_roots": roots,
+        "defined_modules": sorted(defined),
+    }
 
 
 def _save_rtl_artifact(workflow_id: str, agent: str, filename: str, content: str):
@@ -64,7 +108,9 @@ def run_agent(state: dict) -> dict:
     agent = "FPGA RTL Handoff Ingest Agent"
     out_dir = fpga_dir(state, "handoff")
     sources = resolve_rtl_sources(state)
-    top = state.get("top_module") or detect_top_module(sources)
+    requested_top = str(state.get("top_module") or "")
+    top, top_resolution = _resolve_top_from_rtl(requested_top, sources)
+    state["top_module"] = top
     board = board_config(state)
     # Establish the canonical FPGA handoff before applying an FPGA-only board
     # adapter. This keeps the verified core unchanged and makes the same
@@ -86,6 +132,7 @@ def run_agent(state: dict) -> dict:
         "ignored_rtl_files": state.get("fpga_rtl_ignored_sources") or [],
         "top_module": effective_top,
         "core_top_module": top,
+        "top_resolution": top_resolution,
         "interface_adapter": adapter,
         "rtl_package": rtl_package,
         "target": board,
