@@ -226,7 +226,15 @@ def _mapped_lec_strategy(state: dict, generic_netlist: str, mapped_netlist: str,
     cells = max(0, int(synthesis.get("total_mapped_cells") or 0))
     flip_flops = max(0, int(synthesis.get("flip_flops") or 0))
     shared = sorted((_module_names(generic_netlist) & _module_names(mapped_netlist)) - {top})
-    large = cells >= max(1, int(state.get("fpga_hierarchical_lec_cell_threshold") or 4000)) or flip_flops >= 1000
+    cell_threshold = max(1, int(state.get("fpga_hierarchical_lec_cell_threshold") or 4000))
+    flop_threshold = max(1, int(state.get("fpga_hierarchical_lec_flop_threshold") or 2000))
+    # A modest register-heavy wrapper is often easier and more accurate to
+    # prove monolithically. Partitioning it can promote an internal interface
+    # to a proof boundary and leave helper/alias points inconclusive even when
+    # the complete externally observable design proves quickly. Reserve the
+    # hierarchical-first strategy for materially large cell or state counts;
+    # callers can still tune either threshold for their worker capacity.
+    large = cells >= cell_threshold or flip_flops >= flop_threshold
     use_hierarchical = bool(shared and (requested == "hierarchical" or (requested == "auto" and large)))
     return {
         "requested": requested,

@@ -121,6 +121,20 @@ def test_auto_strategy_selects_shared_hierarchy_for_large_design(tmp_path):
     assert strategy["shared_partitions"] == ["core"]
 
 
+def test_auto_strategy_keeps_mid_sized_register_heavy_wrapper_monolithic(tmp_path):
+    generic = tmp_path / "generic.v"
+    mapped = tmp_path / "mapped.v"
+    hierarchy = "module core(input a, output y); assign y=a; endmodule\nmodule top(input a, output y); core u(.a(a),.y(y)); endmodule\n"
+    generic.write_text(hierarchy, encoding="utf-8")
+    mapped.write_text(hierarchy, encoding="utf-8")
+    state = {"fpga": {"synthesis": {"total_mapped_cells": 2781, "flip_flops": 1176}}}
+
+    strategy = lec._mapped_lec_strategy(state, str(generic), str(mapped), "top")
+
+    assert strategy["selected"] == "monolithic"
+    assert strategy["large_design"] is False
+
+
 def test_hierarchical_mapped_lec_proves_partitions_and_top_connectivity(tmp_path, monkeypatch):
     state = _state(tmp_path)
     generic = Path(state["fpga"]["synthesis"]["equivalence_netlist"])
