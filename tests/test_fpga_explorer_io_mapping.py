@@ -280,6 +280,31 @@ def test_non_ansi_reg_prefixed_ports_are_serialized_and_connected(tmp_path, monk
     assert ".reg_re(core_reg_re)" in wrapper
 
 
+def test_prefixed_clock_and_reset_ports_use_wrapper_infrastructure(tmp_path, monkeypatch):
+    rtl = tmp_path / "register_control.v"
+    rtl.write_text(
+        "module register_control(reg_clk, reg_rst_n, payload, result);\n"
+        "input reg_clk; input reg_rst_n; input [127:0] payload; output [127:0] result;\n"
+        "always @(posedge reg_clk or negedge reg_rst_n) begin end\n"
+        "assign result = payload; endmodule\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(fpga_serial_transport, "publish_json", lambda *_args: None)
+    state = {
+        "workflow_id": "wf", "workflow_dir": str(tmp_path),
+        "fpga": {"top_module": "register_control", "rtl_files": [str(rtl)]},
+    }
+
+    report = fpga_serial_transport.add_spi_transport_if_needed(state)
+    wrapper = Path(report["wrapper_rtl"]).read_text(encoding="utf-8")
+
+    assert {item["port"] for item in report["input_bit_map"]} == {"payload"}
+    assert "core_reg_clk" not in wrapper
+    assert "core_reg_rst_n" not in wrapper
+    assert ".reg_clk(clk)" in wrapper
+    assert ".reg_rst_n(reset_n)" in wrapper
+
+
 def test_ulx3s_has_verified_spi_wrapper_pin_mapping(tmp_path, monkeypatch):
     rtl = tmp_path / "spi_top.sv"
     rtl.write_text(

@@ -11,6 +11,26 @@ _RESET_LOW_NAMES = {"reset_n", "rst_n", "aresetn"}
 _RESET_HIGH_NAMES = {"reset", "rst", "areset"}
 
 
+def _is_clock_port(name: str) -> bool:
+    """Recognize conventional top-level clock names without matching enables."""
+    lower = str(name or "").strip().lower()
+    return lower in _CLOCK_NAMES or lower.endswith(("_clk", "_clock"))
+
+
+def _is_active_low_reset_port(name: str) -> bool:
+    lower = str(name or "").strip().lower()
+    return lower in _RESET_LOW_NAMES or lower.endswith(("_reset_n", "_rst_n", "_aresetn"))
+
+
+def _is_active_high_reset_port(name: str) -> bool:
+    lower = str(name or "").strip().lower()
+    return lower in _RESET_HIGH_NAMES or lower.endswith(("_reset", "_rst", "_areset"))
+
+
+def _is_clock_or_reset_port(name: str) -> bool:
+    return _is_clock_port(name) or _is_active_low_reset_port(name) or _is_active_high_reset_port(name)
+
+
 def _top_ports(paths: list[str], top: str) -> list[dict[str, Any]]:
     for path in paths:
         try:
@@ -197,7 +217,13 @@ def add_spi_transport_if_needed(
     if any(port["direction"] == "inout" for port in ports):
         return {"status": "not_generated", "reason": "inout_ports_require_explicit_board_adapter", "core_top_module": core_top}
 
-    payload_inputs = [port for port in ports if port["direction"] == "input" and port["name"].lower() not in _CLOCK_NAMES | _RESET_LOW_NAMES | _RESET_HIGH_NAMES]
+    # Clock/reset inputs belong to the FPGA wrapper infrastructure. They must
+    # never become host-programmable payload bits: doing so creates derived
+    # clocks from the SPI mailbox and leaves implementation clocks undefined.
+    payload_inputs = [
+        port for port in ports
+        if port["direction"] == "input" and not _is_clock_or_reset_port(port["name"])
+    ]
     payload_outputs = [port for port in ports if port["direction"] == "output"]
     input_bits = max(1, sum(int(port["width"]) for port in payload_inputs))
     output_bits = max(1, sum(int(port["width"]) for port in payload_outputs))
@@ -279,8 +305,13 @@ def add_spi_transport_if_needed(
     ])
     connections = []
     for port in ports:
-        lower = port["name"].lower()
-        signal = "clk" if lower in _CLOCK_NAMES else "reset_n" if lower in _RESET_LOW_NAMES else "~reset_n" if lower in _RESET_HIGH_NAMES else f"core_{port['name']}"
+        name = port["name"]
+        signal = (
+            "clk" if _is_clock_port(name)
+            else "reset_n" if _is_active_low_reset_port(name)
+            else "~reset_n" if _is_active_high_reset_port(name)
+            else f"core_{name}"
+        )
         connections.append(f"    .{port['name']}({signal})")
     lines.append(",\n".join(connections))
     lines.extend(["  );", "endmodule", ""])
