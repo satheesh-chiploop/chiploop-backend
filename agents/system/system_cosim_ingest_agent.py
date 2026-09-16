@@ -349,6 +349,48 @@ def _restore_verified_simulation_bundle(
     }
 
 
+def _restore_first_verified_simulation_bundle(
+    state: Dict[str, Any],
+    workflow_dir: str,
+    source_workflow_ids: List[Any],
+) -> Dict[str, Any]:
+    """Resolve simulation collateral across the preserved workflow lineage.
+
+    FPGA integration/implementation workflows are valid RTL sources, but they
+    do not necessarily republish the Digital Verification ``vv/tb`` bundle.
+    Prefer the nearest source that has a complete executable bundle and retain
+    every attempted source for auditability.
+    """
+    candidates: List[str] = []
+    for value in source_workflow_ids:
+        candidate = str(value or "").strip()
+        if candidate and candidate not in candidates:
+            candidates.append(candidate)
+
+    attempts: List[Dict[str, Any]] = []
+    best_incomplete: Dict[str, Any] = {}
+    for candidate in candidates:
+        bundle = _restore_verified_simulation_bundle(state, workflow_dir, candidate)
+        attempts.append({
+            "source_workflow_id": candidate,
+            "status": bundle.get("status") or "not_found",
+            "restored_file_count": int(bundle.get("restored_file_count") or 0),
+            "reason": bundle.get("reason") or "",
+        })
+        if bundle.get("status") == "ready":
+            return {**bundle, "resolution_attempts": attempts}
+        if int(bundle.get("restored_file_count") or 0) > int(best_incomplete.get("restored_file_count") or 0):
+            best_incomplete = bundle
+
+    if best_incomplete:
+        return {**best_incomplete, "resolution_attempts": attempts}
+    return {
+        "status": "not_found",
+        "source_workflow_id": candidates[0] if candidates else "",
+        "resolution_attempts": attempts,
+    }
+
+
 def _build_rtl_package_from_arch2rtl(
     state: Dict[str, Any],
     workflow_dir: str,
@@ -751,15 +793,20 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
             existing_debug=rtl_dbg,
         )
 
-    simulation_source_workflow_id = (
-        state.get("source_system_sim_workflow_id")
-        or state.get("fpga_bitstream_workflow_id")
-        or state.get("system_rtl_workflow_id")
-    )
-    simulation_bundle = _restore_verified_simulation_bundle(
+    simulation_bundle = _restore_first_verified_simulation_bundle(
         state,
         workflow_dir,
-        str(simulation_source_workflow_id) if simulation_source_workflow_id else None,
+        [
+            state.get("source_system_sim_workflow_id"),
+            state.get("fpga_integration_workflow_id"),
+            state.get("source_verification_workflow_id"),
+            state.get("fpga_bitstream_workflow_id"),
+            state.get("system_rtl_workflow_id"),
+            state.get("source_system_rtl_workflow_id"),
+            state.get("source_rtl_workflow_id"),
+            state.get("source_arch2rtl_workflow_id"),
+            state.get("from_workflow_id"),
+        ],
     )
     if simulation_bundle.get("status") == "ready":
         rtl_pkg = dict(rtl_pkg or {})

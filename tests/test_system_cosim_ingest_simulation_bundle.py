@@ -130,3 +130,48 @@ def test_verified_simulation_bundle_restores_imported_rtl_used_by_makefile(tmp_p
     assert bundle["status"] == "ready"
     assert restored_model.is_file()
     assert str(restored_model) in bundle["rtl_files"]
+
+
+def test_simulation_bundle_falls_back_from_fpga_handoff_to_verified_rtl_flow(tmp_path, monkeypatch):
+    calls = []
+
+    def fake_restore(_state, _workflow_dir, workflow_id):
+        calls.append(workflow_id)
+        if workflow_id == "fpga-integration":
+            return {
+                "status": "incomplete",
+                "source_workflow_id": workflow_id,
+                "restored_file_count": 7,
+                "rtl_files": ["integrated_top.sv"],
+            }
+        return {
+            "status": "ready",
+            "source_workflow_id": workflow_id,
+            "restored_file_count": 12,
+            "makefile_path": "vv/tb/Makefile",
+            "rtl_files": ["core.v"],
+        }
+
+    monkeypatch.setattr(ingest, "_restore_verified_simulation_bundle", fake_restore)
+
+    bundle = ingest._restore_first_verified_simulation_bundle(
+        {}, str(tmp_path), ["fpga-integration", "fpga-integration", "rtl-generation"]
+    )
+
+    assert calls == ["fpga-integration", "rtl-generation"]
+    assert bundle["status"] == "ready"
+    assert bundle["source_workflow_id"] == "rtl-generation"
+    assert bundle["resolution_attempts"] == [
+        {
+            "source_workflow_id": "fpga-integration",
+            "status": "incomplete",
+            "restored_file_count": 7,
+            "reason": "",
+        },
+        {
+            "source_workflow_id": "rtl-generation",
+            "status": "ready",
+            "restored_file_count": 12,
+            "reason": "",
+        },
+    ]
