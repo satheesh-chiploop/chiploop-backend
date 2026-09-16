@@ -150,7 +150,20 @@ def test_hierarchical_mapped_lec_proves_partitions_and_top_connectivity(tmp_path
     assert published["mapped_lec"]["partitions_proven"] == 1
     assert published["mapped_lec"]["coverage_complete"] is True
     top_script = Path(published["mapped_lec"]["top_connectivity"]["script"]).read_text(encoding="utf-8")
-    assert top_script.count("blackbox core") == 2
+    assert top_script.count("expose -evert t:core") == 2
+    assert "blackbox core" not in top_script
+
+
+def test_hierarchical_top_proof_uses_shared_partition_cut_ports():
+    script = lec._proof_script(
+        ["gold.sv"], "gate.v", "top", "", [12],
+        blackbox_modules=["core_a", "core_b"],
+    )
+
+    assert script.count("expose -evert t:core_a t:core_b") == 2
+    assert script.count("hierarchy -check -top top") == 2
+    assert "blackbox core_a" not in script
+    assert script.rstrip().endswith("equiv_status -assert")
 
 
 def test_large_design_starts_generic_lec_hierarchically_without_monolithic_attempt(tmp_path, monkeypatch):

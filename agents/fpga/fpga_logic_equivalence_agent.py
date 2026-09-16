@@ -92,8 +92,19 @@ def _proof_timeout_seconds(state: dict, *, technology_mapped: bool = False) -> i
 def _proof_script(rtl_files: list[str], netlist: str, top: str, family: str, depths: list[int],
                   blackbox_modules: list[str] | None = None) -> str:
     blackboxes = [name for name in (blackbox_modules or []) if name and name != top]
+    # In a compositional top proof, leaf partitions have already been proven.
+    # Convert their instance boundaries to matching top-level cut ports. Gold
+    # and gate then share arbitrary partition outputs while all partition
+    # inputs and surrounding connectivity remain proof obligations. Merely
+    # blackboxing each copy gives the two copies independent nondeterministic
+    # outputs and produces false failures in downstream response bits.
+    partition_cut = [
+        f"hierarchy -check -top {top}",
+        "proc; opt; memory; opt_clean",
+        "expose -evert " + " ".join(f"t:{name}" for name in blackboxes),
+    ] if blackboxes else []
     normalize = [
-        *(f"blackbox {name}" for name in blackboxes),
+        *partition_cut,
         f"prep -flatten -top {top}",
         "async2sync",
         # Normalize inferred memories on both sides before equiv_make. The

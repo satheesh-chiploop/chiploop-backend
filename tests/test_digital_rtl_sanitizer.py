@@ -16,6 +16,7 @@ sys.modules.setdefault("utils.artifact_utils", artifact_stub)
 from agents.digital.digital_rtl_agent import (
     _flatten_constant_part_select_bit_selects,
     _remove_comb_blocking_assigns_to_sequential_regs,
+    _remove_writes_to_spec_input_ports,
     _repair_empty_case_statements,
     _sanitize_single_driver_rtl,
 )
@@ -61,6 +62,66 @@ end
 
     assert "state = next_state;" not in sanitized
     assert "state <= next_state;" in sanitized
+
+
+def test_input_write_cleanup_preserves_multiline_less_equal_comparisons():
+    rtl = """
+module packet_filter(input [127:0] packet, input [15:0] upper_limit, output reg accepted);
+always @(*) begin
+    accepted = 1'b0;
+    if (packet[47:32] >= 16'd20 &&
+        packet[47:32] <= upper_limit &&
+        packet[15:0] <= 16'd100) begin
+        accepted = 1'b1;
+    end
+end
+endmodule
+"""
+    spec = {
+        "hierarchy": {"top_module": {
+            "name": "packet_filter",
+            "rtl_output_file": "packet_filter.v",
+            "ports": [
+                {"name": "packet", "direction": "input", "width": 128},
+                {"name": "upper_limit", "direction": "input", "width": 16},
+                {"name": "accepted", "direction": "output", "width": 1},
+            ],
+        }, "modules": []},
+    }
+
+    sanitized = _remove_writes_to_spec_input_ports(
+        {"packet_filter.v": rtl}, spec, "hierarchical"
+    )["packet_filter.v"]
+
+    assert "packet[47:32] <= upper_limit &&" in sanitized
+    assert "packet[15:0] <= 16'd100) begin" in sanitized
+    assert "accepted = 1'b1;" in sanitized
+
+
+def test_input_write_cleanup_still_removes_real_input_assignments():
+    rtl = """
+module invalid_driver(input request, input clk);
+always @(posedge clk) begin
+    request <= 1'b0;
+end
+endmodule
+"""
+    spec = {
+        "hierarchy": {"top_module": {
+            "name": "invalid_driver",
+            "rtl_output_file": "invalid_driver.v",
+            "ports": [
+                {"name": "request", "direction": "input", "width": 1},
+                {"name": "clk", "direction": "input", "width": 1},
+            ],
+        }, "modules": []},
+    }
+
+    sanitized = _remove_writes_to_spec_input_ports(
+        {"invalid_driver.v": rtl}, spec, "hierarchical"
+    )["invalid_driver.v"]
+
+    assert "request <= 1'b0;" not in sanitized
 
 
 def test_reset_only_write_does_not_destroy_combinational_readback_case():

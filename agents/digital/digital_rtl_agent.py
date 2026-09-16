@@ -872,8 +872,8 @@ def _remove_writes_to_spec_input_ports(verilog_map: Dict[str, str], spec_json: d
             # search corrupts ordinary comparisons such as
             # ``if (input_name <= limit)``.
             statement = re.compile(
-                rf"^(?P<indent>\s*)(?P<guard>if\s*\([^;\n]*\)\s*)?"
-                rf"{re.escape(name)}(?:\s*\[[^\]]+\])?\s*(?:<=|=(?!=))\s*[^;]+;\s*$",
+                rf"^(?P<indent>[ \t]*)(?P<guard>if[ \t]*\([^;\n]*\)[ \t]*)?"
+                rf"{re.escape(name)}(?:[ \t]*\[[^\]\n]+\])?[ \t]*(?:<=|=(?!=))[ \t]*[^;\n]+;[ \t]*$",
                 flags=re.MULTILINE,
             )
             code = statement.sub(lambda match: f"{match.group('indent')}{match.group('guard') or ''};", code)
