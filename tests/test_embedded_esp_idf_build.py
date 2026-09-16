@@ -94,6 +94,33 @@ def test_esp_idf_source_accepts_semantic_cfg_register_aliases():
     assert "chiploop_register_read" in source
 
 
+def test_esp_idf_source_accepts_generated_cfg_bus_aliases():
+    transport = {
+        "serialized_output_bits": 220,
+        "input_bit_map": [
+            {"port": "cfg_bus_addr", "lsb": 0, "width": 8},
+            {"port": "cfg_bus_wdata", "lsb": 8, "width": 64},
+            {"port": "cfg_bus_valid", "lsb": 72, "width": 1},
+            {"port": "cfg_bus_write", "lsb": 73, "width": 1},
+        ],
+        "output_bit_map": [
+            {"port": "cfg_bus_rdata", "lsb": 156, "width": 64},
+            {"port": "cfg_bus_ready", "lsb": 155, "width": 1},
+        ],
+    }
+
+    source = _main_source({"esp32_gpio": {}}, 28, transport)
+
+    assert "#define REG_VALID_LSB 72" in source
+    assert "#define REG_WE_LSB 73" in source
+    assert "#define REG_ADDR_WIDTH 8" in source
+    assert "#define REG_WDATA_WIDTH 64" in source
+    assert "#define REG_RDATA_WIDTH 64" in source
+    assert "#define REG_READY_LSB 155" in source
+    assert "chiploop_register_write" in source
+    assert "chiploop_register_read" in source
+
+
 def _state(tmp_path, transport):
     transport = {
         "input_bit_map": [

@@ -20,12 +20,12 @@ def _field(bit_map: list, name: str) -> dict:
 
 
 _REGISTER_FIELD_ALIASES = {
-    "valid": ("reg_valid", "mmio_valid", "csr_valid", "cfg_valid"),
-    "write": ("reg_we", "reg_write", "mmio_write", "mmio_we", "csr_write", "csr_we", "cfg_write", "cfg_we"),
-    "address": ("reg_addr", "mmio_addr", "csr_addr", "cfg_addr"),
-    "write_data": ("reg_wdata", "mmio_wdata", "csr_wdata", "cfg_wdata"),
-    "read_data": ("reg_rdata", "mmio_rdata", "csr_rdata", "cfg_rdata"),
-    "ready": ("reg_ready", "mmio_ready", "csr_ready", "cfg_ready"),
+    "valid": ("reg_valid", "mmio_valid", "csr_valid", "cfg_valid", "cfg_bus_valid"),
+    "write": ("reg_we", "reg_write", "mmio_write", "mmio_we", "csr_write", "csr_we", "cfg_write", "cfg_we", "cfg_bus_write", "cfg_bus_we"),
+    "address": ("reg_addr", "mmio_addr", "csr_addr", "cfg_addr", "cfg_bus_addr"),
+    "write_data": ("reg_wdata", "mmio_wdata", "csr_wdata", "cfg_wdata", "cfg_bus_wdata"),
+    "read_data": ("reg_rdata", "mmio_rdata", "csr_rdata", "cfg_rdata", "cfg_bus_rdata"),
+    "ready": ("reg_ready", "mmio_ready", "csr_ready", "cfg_ready", "cfg_bus_ready"),
 }
 
 
