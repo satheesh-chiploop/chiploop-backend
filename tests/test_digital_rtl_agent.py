@@ -42,10 +42,13 @@ def test_generation_and_repair_prompts_require_functional_verifiable_rtl():
     assert "compile and lint success are necessary but not sufficient" in prompt.lower()
     assert "A required memory must survive synthesis as functional storage" in prompt
     assert "connect dout to an *_unused wire" in prompt
+    assert "feature_contracts entry as a functional acceptance requirement" in prompt
+    assert "resetting only an upstream register is insufficient" in prompt
     assert "Never repair an error by tying a functional output" in repair
     assert "without reducing functionality or verifiability" in repair
     assert "REQUIRED-MEMORY REPAIR EXAMPLES" in repair
     assert "functionally unreachable required memory" in repair
+    assert "feature_contracts stimulus and expected map" in repair
 
 
 def test_memory_macro_contract_rejects_invented_fallback_module():

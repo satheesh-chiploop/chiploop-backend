@@ -2699,6 +2699,8 @@ Every combinational always @(*) block must:
 - In structural top modules, outputs may be exposed through wiring from the owning child module.
 - Do not force procedural driving at the top unless the top module owns the signal.
 - Use DIGITAL_SPEC_JSON module functionality, responsibilities, must_drive, must_receive, must_not_drive, reset_behavior, and behavior_rules as hard requirements.
+- Treat every executable DIGITAL_SPEC_JSON feature_contracts entry as a functional acceptance requirement. Implement its exact stimulus-to-expected behavior within the declared cycle bound; do not treat feature contracts as verification-only prose.
+- Before returning RTL, mentally execute every feature-contract stimulus sequence across clock/reset edges and confirm every expected top-level output. If a reset scenario expects an output value, all sequential and combinational paths driving that output must satisfy it while reset is asserted; resetting only an upstream register is insufficient when other live inputs can contradict the expected output.
 - Use DERIVED_INTERFACE_CONTRACT as the exact wiring contract.
 - For each top-level connection, connect the declared top port to the listed module ports.
 - For each internal signal, create exactly one internal wire of the declared width.
@@ -3254,6 +3256,7 @@ REPAIR RULES:
 - Never repair an error by tying a functional output, enable, request, interrupt, status, readback, or state transition to a constant.
 - Never replace a functional block with an empty module, inactive branch, constant-output shell, or compile-only stub.
 - After repair, every behavior required by DIGITAL_SPEC_JSON and DIGITAL_REGMAP_JSON must remain implemented and reachable through legal declared inputs.
+- Recheck every executable DIGITAL_SPEC_JSON feature_contracts stimulus and expected map after repair. These are authoritative acceptance examples, including reset-time expectations on combinational outputs.
 - If DIGITAL_SPEC_JSON contains memory_macros[], that array overrides conflicting descriptive prose: instantiate each exact memory_macros[].name using its exact instance_name. Never substitute a wrapper, fallback model, inferred array, or invented SRAM module name.
 - For a missing-module error at an SRAM instance, replace the invented module identity with the exact authoritative memory macro cell identity and preserve the declared macro port-role mapping.
 - If the correctness log reports a functionally unreachable required memory, repair the application RTL so a legal declared input transaction can enable and address it and its read data reaches an observable functional path. Do not remove the memory, mark it unused, or merely rename the unused signal.

@@ -2723,6 +2723,7 @@ RULES
 - Multi-cycle stimulus must use `"stimulus":{{"steps":[{{"signals":{{"port":value}},"cycles":1}}]}}`. Never invent suffixed pseudo-signals such as port_2 or port_3.
 - expected values may be exact scalars or objects containing eq, min, and/or max.
 - Every feature contract must define within_cycles. Never emit prose-only or unbound feature contracts.
+- Feature contracts, reset_behavior, behavior_rules, functionality, and operating assumptions must be mutually consistent. For each scenario, evaluate the declared stimulus numerically and ensure no stated combinational rule contradicts its expected outputs.
 - If user intent cannot be represented by observable top-level behavior, expose the required observation/control port in the contract instead of inventing an expectation.
 - direction must be input/output/inout.
 - width must be integer >= 1.
