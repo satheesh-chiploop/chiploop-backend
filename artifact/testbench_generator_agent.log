@@ -1,0 +1,11 @@
+Digital Testbench Generator Agent Log
+[2026-09-16T18:43:40.912048] [INFO] Starting Digital Testbench Generator Agent...
+[2026-09-16T18:43:40.913048] [INFO] resolved_contract={
+  "mode": "digital",
+  "spec_path": "C:\\Users\\satheesh\\AppData\\Local\\Temp\\pytest-of-satheesh\\pytest-1141\\test_testbench_run_rejects_fea0\\digital_spec.json",
+  "spec_source": "state",
+  "rtl_source": "fallback_scan",
+  "rtl_file_count": 0,
+  "top_module": "alarm_top",
+  "soc_mode": false
+}

@@ -4,7 +4,7 @@ from typing import Any, Dict, Iterable, List
 
 
 REQUIREMENT_KEYS = (
-    "features", "requirements", "functional_requirements", "verification_requirements", "behavior_rules",
+    "feature_contracts", "features", "requirements", "functional_requirements", "verification_requirements", "behavior_rules",
 )
 
 
@@ -13,6 +13,14 @@ def _items(spec: Dict[str, Any]) -> Iterable[Any]:
     hierarchy = spec.get("hierarchy") if isinstance(spec.get("hierarchy"), dict) else {}
     top = hierarchy.get("top_module") if isinstance(hierarchy.get("top_module"), dict) else {}
     owners.append(top)
+    explicit = []
+    for owner in owners:
+        value = owner.get("feature_contracts")
+        if isinstance(value, list):
+            explicit.extend(value)
+    if explicit:
+        yield from explicit
+        return
     for owner in owners:
         for key in REQUIREMENT_KEYS:
             value = owner.get(key)

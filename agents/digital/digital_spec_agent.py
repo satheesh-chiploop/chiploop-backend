@@ -737,7 +737,23 @@ def _validate_hierarchical_endpoint_coverage(spec_json: dict) -> None:
         )
 
 
-def _validate_spec_contract(spec_json: dict, mode: str) -> None:
+def _validate_spec_contract(spec_json: dict, mode: str, require_feature_contracts: bool = False) -> None:
+    if require_feature_contracts:
+        from .feature_contract_compiler import compile_feature_contracts
+        if mode == "flat":
+            feature_ports = spec_json.get("ports") or []
+        else:
+            feature_ports = ((spec_json.get("hierarchy") or {}).get("top_module") or {}).get("ports") or []
+        contracts = compile_feature_contracts(spec_json, feature_ports)
+        if not contracts:
+            raise ValueError("feature_contracts must contain at least one executable feature checker contract.")
+        incomplete = [item for item in contracts if not item.get("executable")]
+        if incomplete:
+            detail = "; ".join(
+                f"{item.get('feature_id')}: {item.get('non_executable_reason')}"
+                for item in incomplete[:12]
+            )
+            raise ValueError(f"Every feature_contracts entry must compile to an executable checker. {detail}")
     if mode == "flat":
         _validate_module(spec_json, "spec", require_non_empty_ports=False)
         return
@@ -2112,6 +2128,7 @@ def _compile_spec_contract(
     requested_top: str = "",
     source_prompt: str = "",
     require_firmware_control_plane: bool = False,
+    require_feature_contracts: bool = False,
 ):
     logger.info(f"🔍 Digital Spec Agent compile start suffix='{suffix or 'pass1'}'")
     raw_name = f"llm_raw_output{suffix}.txt"
@@ -2156,7 +2173,7 @@ def _compile_spec_contract(
     with open(normalized_path, "w", encoding="utf-8") as nf:
         json.dump(spec_json, nf, indent=2)
 
-    _validate_spec_contract(spec_json, mode)
+    _validate_spec_contract(spec_json, mode, require_feature_contracts=require_feature_contracts)
     _validate_mandatory_firmware_control_plane(
         spec_json,
         mode,
@@ -2508,6 +2525,15 @@ VALID FORM A — Flat single-module form:
   "must_not_drive": ["..."],
   "reset_behavior": "Describe reset behavior.",
   "behavior_rules": ["..."],
+  "feature_contracts": [
+    {{
+      "id": "stable_unique_feature_id",
+      "description": "Feature behavior being verified.",
+      "stimulus": {{"enable": 1}},
+      "expected": {{"count": {{"min": 1, "max": 15}}}},
+      "within_cycles": 2
+    }}
+  ],
   "rtl_output_file": "module_name.v"
 }}
 
@@ -2610,7 +2636,16 @@ VALID FORM B — Hierarchical multi-module form:
   "register_contract": {{
     "bus_type": "custom|i2c|abstract|minimal",
     "registers": []
-  }}
+  }},
+  "feature_contracts": [
+    {{
+      "id": "stable_unique_feature_id",
+      "description": "Feature behavior being verified.",
+      "stimulus": {{"top_input_name": 1}},
+      "expected": {{"top_output_name": 1}},
+      "within_cycles": 1
+    }}
+  ]
 }}
 
 RULES
@@ -2624,6 +2659,11 @@ RULES
 - Define exact ports.
 - Define exact rtl_output_file names.
 - Every port must include name, direction, width.
+- feature_contracts is mandatory and must contain one entry for every externally observable feature.
+- Every feature contract must provide explicit stimulus and expected maps using exact declared top-level port names.
+- expected values may be exact scalars or objects containing eq, min, and/or max.
+- Every feature contract must define within_cycles. Never emit prose-only or unbound feature contracts.
+- If user intent cannot be represented by observable top-level behavior, expose the required observation/control port in the contract instead of inventing an expectation.
 - direction must be input/output/inout.
 - width must be integer >= 1.
 - For EVERY module, preserve rich functionality from the user datasheet/spec.
@@ -2902,6 +2942,7 @@ Return JSON only.
             requested_top=requested_top,
             source_prompt=user_prompt,
             require_firmware_control_plane=require_firmware_control_plane,
+            require_feature_contracts=True,
         )
     except Exception as e:
         pass1_error = e
@@ -2963,6 +3004,7 @@ Return JSON only.
                 requested_top=requested_top,
                 source_prompt=user_prompt,
                 require_firmware_control_plane=require_firmware_control_plane,
+                require_feature_contracts=True,
             )
             raw_output_path = raw_output_path_pass2
             
@@ -3007,6 +3049,7 @@ Return JSON only.
                     requested_top=requested_top,
                     source_prompt=user_prompt,
                     require_firmware_control_plane=require_firmware_control_plane,
+                    require_feature_contracts=True,
                 )
                 raw_output_path = raw_output_path_pass3
             except Exception as e3:
@@ -3035,6 +3078,7 @@ Return JSON only.
                         requested_top=requested_top,
                         source_prompt=user_prompt,
                         require_firmware_control_plane=require_firmware_control_plane,
+                        require_feature_contracts=True,
                     )
                     raw_output_path = raw_output_path_pass4
                 except Exception as e4:
@@ -3065,6 +3109,7 @@ Return JSON only.
                             requested_top=requested_top,
                             source_prompt=user_prompt,
                             require_firmware_control_plane=require_firmware_control_plane,
+                            require_feature_contracts=True,
                         )
                         raw_output_path = raw_output_path_pass5
                         e5 = None

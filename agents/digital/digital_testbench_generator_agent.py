@@ -1819,6 +1819,20 @@ def run_agent(state: dict) -> dict:
     directed_tests = _detected_directed_tests(ports, spec, rtl_files)
     application_stimulus_plan = _application_stimulus_plan(spec, ports, clocks, resets)
     feature_contracts = compile_feature_contracts(spec, ports, _collect_register_map(spec, rtl_files))
+    if not feature_contracts:
+        raise RuntimeError(
+            "Application specification is not verification-complete: no executable feature_contracts were declared."
+        )
+    incomplete_features = [item for item in feature_contracts if not item.get("executable")]
+    if incomplete_features:
+        details = "; ".join(
+            f"{item.get('feature_id')}: {item.get('non_executable_reason')}"
+            for item in incomplete_features[:12]
+        )
+        raise RuntimeError(
+            "Application specification is not verification-complete. Every feature requires an explicit, "
+            f"fully bound expected checker contract. {details}"
+        )
 
     _log(log_path, f"resolved_mode={mode}")
     _log(log_path, f"spec_path={spec_path}")

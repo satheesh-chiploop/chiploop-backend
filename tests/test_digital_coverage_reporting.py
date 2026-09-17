@@ -3,6 +3,8 @@ import os
 import sys
 from pathlib import Path
 
+import pytest
+
 os.environ.setdefault("SUPABASE_URL", "https://example.supabase.co")
 os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-service-role-key")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -196,6 +198,22 @@ def test_free_text_feature_is_traceable_but_does_not_invent_checker():
     assert contracts[0]["monitors"] == ["alarm"]
     assert contracts[0]["expected"] == {}
     assert contracts[0]["non_executable_reason"]
+
+
+def test_testbench_run_rejects_feature_without_executable_checker(tmp_path, monkeypatch):
+    spec_path = tmp_path / "digital_spec.json"
+    spec_path.write_text(json.dumps({
+        "name": "alarm_top",
+        "ports": [{"name": "alarm", "direction": "output", "width": 1}],
+        "requirements": ["Alarm shall indicate a hazardous condition."],
+    }), encoding="utf-8")
+    monkeypatch.setattr(tb_agent, "_record_text", lambda *_args, **_kwargs: None)
+    with pytest.raises(RuntimeError, match="Every feature requires an explicit"):
+        tb_agent.run_agent({
+            "workflow_id": "strict-features", "workflow_dir": str(tmp_path),
+            "digital_spec_json": str(spec_path), "top_module": "alarm_top",
+            "rtl_files": [],
+        })
     assert tb_agent._selected_default_tests("random") == ["constrained_random_sanity"]
     assert tb_agent._selected_default_tests("both") == ["smoke_test", "constrained_random_sanity"]
 
