@@ -3987,6 +3987,10 @@ def _validate_and_materialize_rtl(
             repair_lines = [f"Static Spec2RTL result: {detail}."]
             repair_lines.extend(
                 f"{item.get('id')}: {item.get('status')} - {item.get('requirement')}"
+                + (
+                    f" (checker evidence: {', '.join(str(token) for token in item.get('evidence_tokens') or [])})"
+                    if item.get("evidence_tokens") else ""
+                )
                 for item in failed_requirements[:20]
             )
             failed_features = [

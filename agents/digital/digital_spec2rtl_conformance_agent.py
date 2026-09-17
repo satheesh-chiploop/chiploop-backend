@@ -283,15 +283,48 @@ def _match_score(requirement: str, rtl_text: str, rtl_names: Iterable[str]) -> T
             re.I | re.M | re.S,
         )
         if match.group(1).lower() not in {
-            "module", "always", "always_ff", "always_comb", "if", "else", "for", "while", "case", "assign",
+            "module", "always", "always_ff", "always_comb", "begin", "end", "if", "else", "for", "while", "case", "assign",
         }
     ]
-    if "no internal hierarchy" in req_lower and len(re.findall(r"\bmodule\b", rtl_text, re.I)) == 1 and not instance_types:
+    no_hierarchy_required = bool(
+        "no internal hierarchy" in req_lower
+        or re.search(r"\bdoes\s+not\s+contain\b.*\bhierarchical\s+submodules?\b", req_lower)
+    )
+    if no_hierarchy_required and len(re.findall(r"\bmodule\b", rtl_text, re.I)) == 1 and not instance_types:
         evidence.append("no_internal_hierarchy")
-    if re.search(r"\bno\s+(?:internal\s+)?memory\s+macros?\b", req_lower) and not any(
+    no_memory_required = bool(
+        re.search(r"\bno\s+(?:internal\s+)?memory\s+macros?\b", req_lower)
+        or re.search(r"\bdoes\s+not\s+contain\b.*\bmemory\s+macros?\b", req_lower)
+    )
+    if no_memory_required and not any(
         re.search(r"(?:sram|ram|rom|memory|mem_macro)", kind, re.I) for kind in instance_types
     ):
         evidence.append("no_memory_macros")
+    if re.search(r"\bsynthesiz", req_lower) and not re.search(
+        r"(^|[^A-Za-z_])(initial|force|release|fork|join)\b|#[ \t]*\d+",
+        _strip_comments(rtl_text),
+        re.I,
+    ):
+        evidence.append("synthesizable_rtl_subset")
+    if re.search(r"\b(?:must\s+not|no)\b.*\blatch", req_lower):
+        combinational_blocks = re.findall(
+            r"\balways(?:_comb)?\s*(?:@\s*\(\s*\*\s*\))?\s*begin\b(.*?)\bend\b",
+            rtl_text,
+            re.I | re.S,
+        )
+        if not re.search(r"\balways\s*@\s*\(\s*\*\s*\)|\balways_comb\b", rtl_text, re.I):
+            evidence.append("no_combinational_latch_sites")
+        elif combinational_blocks and all("else" in block.lower() or "default:" in block.lower() for block in combinational_blocks):
+            evidence.append("complete_combinational_assignment_structure")
+    arithmetic_width = re.search(r"\bunsigned\b.*?\b(\d+)\s*-?bit\b", req_lower)
+    if arithmetic_width:
+        width = int(arithmetic_width.group(1))
+        declared_widths = [
+            abs(int(msb) - int(lsb)) + 1
+            for msb, lsb in re.findall(r"\[\s*(\d+)\s*:\s*(\d+)\s*\]", rtl_text)
+        ]
+        if "signed" not in rtl_text.lower() and declared_widths and all(item == width for item in declared_widths):
+            evidence.append(f"unsigned_{width}bit_arithmetic")
     for name in sorted(names):
         if "_" not in name or len(name) < 5:
             continue
@@ -536,6 +569,9 @@ def _match_score(requirement: str, rtl_text: str, rtl_names: Iterable[str]) -> T
         "clear side effects limited to specified status bits",
         "dedicated temp_code/threshold_code outputs",
         "period_rollover_logic",
+        "synthesizable_rtl_subset",
+        "no_combinational_latch_sites",
+        "complete_combinational_assignment_structure",
     }
     if (
         re.search(r"\bsynchronous(?:ly)?\b", req_lower)
@@ -547,10 +583,19 @@ def _match_score(requirement: str, rtl_text: str, rtl_names: Iterable[str]) -> T
         )
     ):
         return "missing", ["asynchronous_reset_sensitivity_conflicts_with_synchronous_requirement"]
+    if (
+        "pwm_out" in req_lower
+        and ("combinational" in req_lower or "level-based" in req_lower)
+        and not (
+            re.search(r"\bassign\s+pwm_out\s*=\s*[^;]*(?:counter\w*\s*<\s*duty_cycle|duty_cycle\s*>\s*counter\w*)", rtl_text, re.I)
+            or re.search(r"\balways(?:_comb)?\s*@?\s*\(\s*\*\s*\).*?\bpwm_out\s*=", rtl_text, re.I | re.S)
+        )
+    ):
+        return "missing", ["pwm_out_combinational_compare_not_implemented"]
     negative_structure_expectations = []
-    if "no internal hierarchy" in req_lower:
+    if no_hierarchy_required:
         negative_structure_expectations.append("no_internal_hierarchy")
-    if re.search(r"\bno\s+(?:internal\s+)?memory\s+macros?\b", req_lower):
+    if no_memory_required:
         negative_structure_expectations.append("no_memory_macros")
     if negative_structure_expectations:
         return (
@@ -558,6 +603,9 @@ def _match_score(requirement: str, rtl_text: str, rtl_names: Iterable[str]) -> T
             if all(item in evidence for item in negative_structure_expectations)
             else ("missing", evidence[:8])
         )
+    if arithmetic_width:
+        arithmetic_evidence = f"unsigned_{int(arithmetic_width.group(1))}bit_arithmetic"
+        return ("matched", evidence[:8]) if arithmetic_evidence in evidence else ("missing", evidence[:8])
     if semantic_hits.intersection(evidence):
         return "matched", evidence[:8]
     if addresses and not any(item.startswith("0x") for item in evidence):

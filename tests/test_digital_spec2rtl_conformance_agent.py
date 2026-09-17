@@ -67,6 +67,46 @@ end
     assert evidence == ["asynchronous_reset_sensitivity_conflicts_with_synchronous_requirement"]
 
 
+def test_match_score_uses_structural_evidence_for_implementation_properties():
+    rtl = """
+module pwm_controller(input clk, input [7:0] period, output [7:0] counter_value);
+reg [7:0] counter_reg;
+assign counter_value = counter_reg;
+always @(posedge clk) begin
+  if (counter_reg >= period) counter_reg <= 8'h00;
+  else counter_reg <= counter_reg + 8'h01;
+end
+endmodule
+"""
+    requirements = [
+        "The design must remain synthesizable using only registers, comparators, and simple control logic.",
+        "The design must not infer latches.",
+        "All arithmetic is unsigned and 8-bit wide.",
+        "The controller does not contain memory macros or hierarchical submodules.",
+    ]
+
+    for requirement in requirements:
+        status, _ = agent._match_score(requirement, rtl, {"clk", "period", "counter_value", "counter_reg"})
+        assert status == "matched", requirement
+
+
+def test_match_score_requires_direct_combinational_pwm_compare():
+    registered = """
+reg pwm_out_r;
+assign pwm_out = pwm_out_r;
+always @(posedge clk) pwm_out_r <= (counter_reg < duty_cycle);
+"""
+    combinational = "assign pwm_out = reset_n && (counter_reg < duty_cycle);"
+    requirement = "The comparison for pwm_out is level-based: pwm_out is 1 when counter_value < duty_cycle, else 0."
+
+    bad_status, bad_evidence = agent._match_score(requirement, registered, {"pwm_out", "counter_value", "duty_cycle"})
+    good_status, _ = agent._match_score(requirement, combinational, {"pwm_out", "counter_value", "duty_cycle"})
+
+    assert bad_status == "missing"
+    assert bad_evidence == ["pwm_out_combinational_compare_not_implemented"]
+    assert good_status == "matched"
+
+
 def test_match_score_recognizes_high_level_temp_monitor_evidence():
     rtl = """
 module temp_monitor_digital(
