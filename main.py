@@ -13671,12 +13671,24 @@ def download_workflow_zip(workflow_id: str, full: bool = False):
     # 2) Build ZIP in-memory
     # --------------------------
     buf = io.BytesIO()
+    download_errors = []
     with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         for sp in storage_paths:
+            last_error = None
+            res = None
+            for attempt in range(3):
+                try:
+                    res = supabase.storage.from_(ARTIFACT_BUCKET).download(sp)
+                    if res:
+                        break
+                except Exception as exc:
+                    last_error = exc
+                    if attempt < 2:
+                        import time
+                        time.sleep(0.1 * (2 ** attempt))
             try:
-                res = supabase.storage.from_(ARTIFACT_BUCKET).download(sp)
                 if not res:
-                    continue
+                    raise RuntimeError(str(last_error or "storage returned no content"))
 
                 # Put in zip with a friendly name relative to workflow folder if possible
                 arcname = sp
@@ -13685,10 +13697,17 @@ def download_workflow_zip(workflow_id: str, full: bool = False):
 
                 zf.writestr(arcname, res)
             except Exception as e:
+                download_errors.append({"path": sp, "error": str(e)})
                 zf.writestr(
                     f"errors/{sp.replace('/', '_')}.error.txt",
                     f"Failed to download {sp}\n{e}\n"
                 )
+
+    if full and download_errors:
+        raise HTTPException(
+            status_code=503,
+            detail={"message": "Full artifact ZIP could not be completed; retry the download.", "failures": download_errors},
+        )
 
     buf.seek(0)
 

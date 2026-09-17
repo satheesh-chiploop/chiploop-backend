@@ -229,3 +229,56 @@ def save_text_artifact_and_record(
             f"agent={agent_name}, file={filename}: {exc}"
         )
         return None
+
+
+def save_binary_artifact_and_record(
+    workflow_id: str,
+    agent_name: str,
+    subdir: str,
+    filename: str,
+    content: bytes,
+    content_type: str = "application/octet-stream",
+    tenant: str = "backend",
+) -> Optional[str]:
+    """Persist a deployable binary and index it exactly like a text artifact."""
+    try:
+        if not content:
+            logger.warning("artifact_utils: Empty binary for %s/%s; skipping upload", agent_name, filename)
+            return None
+        policy = active_artifact_policy()
+        if not artifact_may_sync(filename, policy):
+            root = os.getenv("CHIPLOOP_PRIVATE_ARTIFACT_ROOT", "private_artifacts")
+            local_path = os.path.abspath(os.path.join(root, "workflows", workflow_id, subdir.strip("/"), filename))
+            os.makedirs(os.path.dirname(local_path), exist_ok=True)
+            with open(local_path, "wb") as handle:
+                handle.write(content)
+            return local_path
+
+        storage_path = f"{tenant}/workflows/{workflow_id}/{subdir.rstrip('/')}/{filename}"
+        storage = supabase.storage.from_(ARTIFACT_BUCKET)
+        options = {"content-type": content_type}
+        try:
+            storage.upload(storage_path, content, options)
+        except Exception:
+            storage.update(storage_path, content, options)
+        append_artifact_record(workflow_id, agent_name, filename, storage_path)
+        return storage_path
+    except Exception as exc:
+        logger.exception(
+            "artifact_utils: Failed to upload binary workflow=%s agent=%s file=%s: %s",
+            workflow_id, agent_name, filename, exc,
+        )
+        return None
+
+
+def save_binary_file_artifact_and_record(
+    workflow_id: str,
+    agent_name: str,
+    subdir: str,
+    source_path: str,
+    content_type: str = "application/octet-stream",
+) -> Optional[str]:
+    with open(source_path, "rb") as handle:
+        return save_binary_artifact_and_record(
+            workflow_id, agent_name, subdir, os.path.basename(source_path), handle.read(), content_type
+        )

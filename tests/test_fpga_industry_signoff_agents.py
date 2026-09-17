@@ -119,6 +119,33 @@ def test_qualified_spi_mailbox_and_synchronized_reset_complete_cdc_review(tmp_pa
     assert summary["signoff"]["cdc_rdc_review_complete"] is True
 
 
+def test_cdc_qualification_survives_reconstructed_fpga_handoff_state(tmp_path):
+    rtl = tmp_path / "spi_top.sv"
+    rtl.write_text(
+        "module spi_top(input clk,input reset_n,input spi_sclk,output reg q); "
+        "reg reset_meta,reset_sync; always @(posedge clk or negedge reset_n) "
+        "if(!reset_n) begin reset_meta<=0; reset_sync<=0; end else begin "
+        "reset_meta<=1'b1; reset_sync<=reset_meta; end always @(posedge spi_sclk) q<=1; endmodule",
+        encoding="utf-8",
+    )
+    state = {
+        "workflow_id": "qualified-handoff", "workflow_dir": str(tmp_path),
+        "fpga": {
+            "rtl_files": [str(rtl)],
+            "constraints": {"unconstrained_ports": [], "target_frequency_mhz": 50,
+                            "clock_constraints_mhz": {"clk": 50, "spi_sclk": 10}},
+            "handoff_ingest": {"interface_adapter": {
+                "cdc_model": "bundled_data_mailboxes_held_stable_between_frame_commits",
+                "cdc_classification": {"reset_release": "asynchronous_assertion_synchronous_two_flop_release"},
+            }},
+        },
+    }
+    summary = run_constraint_signoff(state)["fpga"]["constraint_cdc_signoff"]
+    assert summary["status"] == "pass"
+    assert summary["qualified_cdc_model"] == "bundled_data_mailboxes_held_stable_between_frame_commits"
+    assert summary["cdc_classification"]["reset_release"].startswith("asynchronous_assertion")
+
+
 def test_hardware_validation_defaults_to_not_requested(tmp_path):
     state = {"workflow_id": "bringup-disabled", "workflow_dir": str(tmp_path), "fpga": {}}
     result = run_bringup(state)

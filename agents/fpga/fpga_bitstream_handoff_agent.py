@@ -1,6 +1,7 @@
 import hashlib
 import os
 from .fpga_common import board_config, fpga_dir, manifest_update, publish_json, run_cmd
+from utils.artifact_utils import save_binary_file_artifact_and_record
 
 
 def _sha256(path: str) -> str | None:
@@ -87,6 +88,15 @@ def run_agent(state: dict) -> dict:
     if os.path.exists(bitstream) and programmer_board:
         summary["programming_command"] = f"openFPGALoader -b {programmer_board} {os.path.basename(bitstream)}"
     summary["hardware_launch"] = _hardware_launch(board, bitstream, summary.get("programming_command"), state)
+    if summary.get("artifact_produced"):
+        storage_path = save_binary_file_artifact_and_record(
+            str(state.get("workflow_id") or ""), agent, "fpga/bitstream", bitstream,
+            "application/octet-stream",
+        )
+        summary["bitstream_storage_path"] = storage_path
+        if not storage_path:
+            summary["status"] = "failed"
+            summary["error"] = "Bitstream was generated locally but could not be persisted to artifact storage."
     publish_json(state, agent, "bitstream", "fpga_bitstream_summary.json", summary)
     manifest_update(state, "bitstream", summary)
     if summary["status"] == "failed":

@@ -125,13 +125,77 @@ def test_spi_wrapper_gets_complete_frame_directed_test(tmp_path):
 
     assert "spi_transport_frame_directed" in tests
     assert "for bit in range(224 - 1, -1, -1)" in generated
-    assert "response = await transfer(0)" in generated
+    assert "application_vectors" in generated
+    assert "frame_mask" in generated
     manifest = tb_agent._build_testcases_manifest(
         "wrapper", ["clk", "spi_sclk"], [{"name": "reset_n"}], "digital", "both", tests
     )
     spi_case = next(item for item in manifest["tests"] if item["name"] == "spi_transport_frame_directed")
-    assert spi_case["timeout_ns"] == 25000
+    assert spi_case["timeout_ns"] == 120000
     assert "spi_transport_frame_directed" in manifest["default_tests"]
+
+
+def test_application_spec_generates_boundary_stimulus_instead_of_fixed_cases():
+    ports = [
+        {"name": "clk", "direction": "input"},
+        {"name": "reset_n", "direction": "input"},
+        {"name": "mode", "direction": "input", "width": 2},
+        {"name": "threshold", "direction": "input", "width": 8},
+        {"name": "alarm", "direction": "output"},
+    ]
+    spec = {"ports": ports, "requirements": [{"name": "Raise alarm above threshold"}]}
+    clocks, resets = tb_agent._infer_clocks_resets(spec, ports)
+    plan = tb_agent._application_stimulus_plan(spec, ports, clocks, resets)
+    generated = tb_agent._gen_cocotb_test(spec, "monitor", clocks, resets)
+
+    assert [point["name"] for point in plan] == ["mode", "threshold"]
+    assert plan[0]["values"] == [0, 1, 3, 2]
+    assert 255 in plan[1]["values"] and 128 in plan[1]["values"] and 85 in plan[1]["values"]
+    assert "application_spec_boundary_directed" in generated
+    assert "stimulus_plan" in generated
+
+
+def test_structured_feature_contract_generates_monitor_checker_and_traceability():
+    ports = [
+        {"name": "clk", "direction": "input"},
+        {"name": "reset_n", "direction": "input"},
+        {"name": "request", "direction": "input"},
+        {"name": "mode", "direction": "input", "width": 2},
+        {"name": "done", "direction": "output"},
+        {"name": "result", "direction": "output", "width": 8},
+    ]
+    spec = {
+        "ports": ports,
+        "features": [{
+            "id": "mode_one_completion",
+            "description": "Mode one request completes with the specified result.",
+            "stimulus": {"request": 1, "mode": 1},
+            "expected": {"done": 1, "result": {"min": 1, "max": 255}},
+            "within_cycles": 4,
+        }],
+    }
+    contracts = tb_agent.compile_feature_contracts(spec, ports)
+    generated = tb_agent._gen_cocotb_test(spec, "feature_top", ["clk"], [{"name": "reset_n", "active_low": True}])
+
+    assert contracts[0]["status"] == "executable"
+    assert contracts[0]["monitors"][:2] == ["done", "result"]
+    assert {"request", "mode"}.issubset(contracts[0]["monitors"])
+    assert contracts[0]["coverage_bins"] == [
+        "mode_one_completion.stimulus_applied", "mode_one_completion.expected_observed"
+    ]
+    assert "async def feature_contract_directed" in generated
+    assert 'if "min" in rule' in generated
+
+
+def test_free_text_feature_is_traceable_but_does_not_invent_checker():
+    ports = [{"name": "alarm", "direction": "output"}]
+    contracts = tb_agent.compile_feature_contracts(
+        {"requirements": ["Alarm shall indicate a hazardous condition."]}, ports
+    )
+    assert contracts[0]["status"] == "trace_only"
+    assert contracts[0]["monitors"] == ["alarm"]
+    assert contracts[0]["expected"] == {}
+    assert contracts[0]["non_executable_reason"]
     assert tb_agent._selected_default_tests("random") == ["constrained_random_sanity"]
     assert tb_agent._selected_default_tests("both") == ["smoke_test", "constrained_random_sanity"]
 

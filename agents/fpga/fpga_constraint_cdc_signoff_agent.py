@@ -27,6 +27,27 @@ def _findings(path: str, source: str) -> list[dict]:
     except Exception:
         return []
 
+
+def _transport_contract(state: dict, fpga: dict) -> dict:
+    """Resolve the qualified transport from continuation or reconstructed handoff state."""
+    candidates = []
+    for owner in (state, fpga):
+        refinement = owner.get("target_refinement") if isinstance(owner.get("target_refinement"), dict) else {}
+        candidates.append(refinement.get("transport_contract"))
+    handoff = fpga.get("handoff_ingest") if isinstance(fpga.get("handoff_ingest"), dict) else {}
+    adapter = handoff.get("interface_adapter") if isinstance(handoff.get("interface_adapter"), dict) else {}
+    candidates.extend([
+        state.get("fpga_transport_contract"),
+        fpga.get("transport_contract"),
+        adapter.get("protocol"),
+        adapter,
+        state.get("fpga_serial_transport"),
+    ])
+    for candidate in candidates:
+        if isinstance(candidate, dict) and (candidate.get("cdc_model") or candidate.get("cdc_classification")):
+            return candidate
+    return {}
+
 def run_agent(state: dict) -> dict:
     fpga = state.get("fpga") if isinstance(state.get("fpga"), dict) else {}
     constraints = fpga.get("constraints") if isinstance(fpga.get("constraints"), dict) else {}
@@ -53,8 +74,7 @@ def run_agent(state: dict) -> dict:
     crossings.extend(_findings(str(state.get("cdc_report_path") or os.path.join(workflow_root, "digital", "cdc_findings.json")), "cdc"))
     crossings.extend(_findings(str(state.get("reset_integrity_report_path") or os.path.join(workflow_root, "digital", "reset_integrity_findings.json")), "rdc"))
     unsafe_crossings = [item for item in crossings if str((item or {}).get("severity", "")).lower() in {"error", "critical", "unsafe"}]
-    refinement = state.get("target_refinement") if isinstance(state.get("target_refinement"), dict) else {}
-    transport = refinement.get("transport_contract") if isinstance(refinement.get("transport_contract"), dict) else {}
+    transport = _transport_contract(state, fpga)
     serial = state.get("fpga_serial_transport") if isinstance(state.get("fpga_serial_transport"), dict) else {}
     cdc_model = str(transport.get("cdc_model") or serial.get("cdc_model") or "")
     qualified_mailbox_cdc = cdc_model == "bundled_data_mailboxes_held_stable_between_frame_commits"
@@ -104,6 +124,7 @@ def run_agent(state: dict) -> dict:
         "detected_clocks": sequential_clocks,
         "detected_async_resets": async_resets,
         "qualified_cdc_model": cdc_model or None,
+        "cdc_classification": transport.get("cdc_classification") or {},
         "reset_release_synchronized": reset_release_synchronized,
         "unconstrained_ports": unconstrained_ports,
         "cdc_rdc_findings": crossings,

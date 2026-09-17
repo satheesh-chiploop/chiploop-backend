@@ -269,7 +269,14 @@ def run_esp_idf_build(state: dict) -> dict:
     elf_path = os.path.join(project_dir, "build", "chiploop_fpga_host.elf")
     if completed.returncode != 0 or not os.path.isfile(elf_path):
         raise RuntimeError("ESP-IDF compilation failed for the ULX3S onboard ESP32 firmware.")
-    summary = {**contract, "status": "built", "elf_path": elf_path, "tool": idf}
+    from utils.artifact_utils import save_binary_file_artifact_and_record
+    elf_storage_path = save_binary_file_artifact_and_record(
+        str(state.get("workflow_id") or ""), "Embedded ESP-IDF Build Agent",
+        "firmware/esp_idf/build", elf_path, "application/x-elf",
+    )
+    if not elf_storage_path:
+        raise RuntimeError("ESP-IDF ELF was built but could not be persisted to artifact storage.")
+    summary = {**contract, "status": "built", "elf_path": elf_path, "elf_storage_path": elf_storage_path, "tool": idf}
     write_artifact(state, "firmware/debug/elf_build_result.json", json.dumps(summary, indent=2), key="elf_build_result")
     firmware = state.setdefault("firmware", {})
     firmware["elf_build"] = summary
@@ -289,9 +296,11 @@ def run_esp_idf_build(state: dict) -> dict:
             "target_triple": None,
             "build_system": "cmake",
             "elf_path": elf_path,
+            "elf_storage_path": elf_storage_path,
             "build_succeeded": True,
         }
         manifest["elf_path"] = elf_path
+        manifest["elf_storage_path"] = elf_storage_path
         manifest["target_refinement"] = {
             "deployment_architecture": "fpga_onboard_cpu",
             "fabric_interface": interface,

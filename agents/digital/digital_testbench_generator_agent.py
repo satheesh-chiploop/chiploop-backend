@@ -20,6 +20,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from utils.artifact_utils import save_text_artifact_and_record
 from tooling.runner import tool_path
+from .feature_contract_compiler import compile_feature_contracts
 
 python_exe = sys.executable
 logger = logging.getLogger("chiploop")
@@ -712,6 +713,8 @@ def _has_register_mapped_control_intent(spec: Dict[str, Any], ports: List[Dict[s
 def _detected_directed_tests(ports: List[Dict[str, Any]], spec: Optional[Dict[str, Any]] = None, rtl_files: Optional[List[str]] = None) -> List[str]:
     spec = spec or {}
     tests: List[str] = []
+    if any(contract.get("executable") for contract in compile_feature_contracts(spec, ports, _collect_register_map(spec, rtl_files))):
+        tests.append("feature_contract_directed")
     has_memory_access = all(
         _has_port(ports, name, "input")
         for name in ("wr_en", "wr_addr", "wr_data", "rd_en", "rd_addr")
@@ -733,7 +736,32 @@ def _detected_directed_tests(ports: List[Dict[str, Any]], spec: Optional[Dict[st
         and _has_port(ports, "spi_miso", "output")
     ):
         tests.append("spi_transport_frame_directed")
+    else:
+        clocks, resets = _infer_clocks_resets(spec, ports)
+        if _build_randomizable_inputs(ports, clocks, resets):
+            tests.append("application_spec_boundary_directed")
     return tests
+
+
+def _application_stimulus_plan(
+    spec: Dict[str, Any], ports: List[Dict[str, Any]], clocks: List[str], resets: List[Dict[str, Any]]
+) -> List[Dict[str, Any]]:
+    """Build deterministic, high-value vectors from the application I/O contract."""
+    plan: List[Dict[str, Any]] = []
+    for port in _build_randomizable_inputs(ports, clocks, resets):
+        width = _parse_int(port.get("width_expr")) or 1
+        width = max(1, min(width, 256))
+        maximum = (1 << width) - 1
+        alternating = sum(1 << bit for bit in range(0, width, 2))
+        values = [0, 1, maximum]
+        if width > 1:
+            values.extend([1 << (width - 1), maximum >> 1, alternating])
+        plan.append({
+            "name": port["name"], "width": width,
+            "values": list(dict.fromkeys(values)),
+            "source": "application_spec_port_boundary",
+        })
+    return plan
 
 
 def _spi_frame_bits(rtl_files: Optional[List[str]]) -> int:
@@ -803,6 +831,10 @@ def _render_directed_tests(
     register_map = _collect_register_map(spec, rtl_files)
     register_bit_roles = _collect_register_bit_roles(spec)
     register_write_plan = _register_write_plan(register_map, register_bit_roles)
+    feature_contracts = compile_feature_contracts(spec, ports, register_map)
+    executable_feature_contracts = [contract for contract in feature_contracts if contract.get("executable")]
+    clocks, resets = _infer_clocks_resets(spec, ports)
+    application_stimulus_plan = _application_stimulus_plan(spec, ports, clocks, resets)
     if "spi_transport_frame_directed" in tests:
         blocks.append(
             '''
@@ -830,11 +862,113 @@ async def spi_transport_frame_directed(dut):
         await Timer(1000, unit="ns")
         return observed
 
-    await transfer(0)
-    await transfer(0)
-    response = await transfer(0)
-    assert isinstance(response, int)
+    cov = CoverageModel() if CoverageModel else None
+    if cov:
+        cov.start(dut)
+    frame_mask = (1 << {spi_frame_bits}) - 1
+    application_vectors = [0, 1, frame_mask, frame_mask >> 1,
+                           sum(1 << bit for bit in range(0, {spi_frame_bits}, 2)),
+                           1 << ({spi_frame_bits} - 1)]
+    responses = []
+    for value in application_vectors + [0, 0]:
+        responses.append(await transfer(value))
+        if cov:
+            try:
+                cov.sample()
+            except Exception:
+                pass
+    assert all(isinstance(response, int) for response in responses)
+    if cov:
+        try:
+            cov.stop()
+            cov.write_reports()
+        except Exception:
+            pass
     _assert_outputs_known(dut, {observable_outputs_json})
+'''
+        )
+    if "application_spec_boundary_directed" in tests:
+        blocks.append(
+            '''
+@cocotb.test()
+async def application_spec_boundary_directed(dut):
+    """Exercise boundary and transition vectors derived from the application specification."""
+
+{clock_start}
+
+{reset_seq}
+
+{input_init}
+
+    stimulus_plan = {application_stimulus_plan_json}
+    cov = CoverageModel() if CoverageModel else None
+    if cov:
+        cov.start(dut)
+    for point in stimulus_plan:
+        if not hasattr(dut, point["name"]):
+            continue
+        signal = getattr(dut, point["name"])
+        for value in point["values"]:
+            signal.value = _fit_to_signal(signal, value)
+            await _advance_time(dut)
+            if cov:
+                try:
+                    cov.sample()
+                except Exception:
+                    pass
+    for phase in range(2):
+        for point in stimulus_plan:
+            if hasattr(dut, point["name"]):
+                signal = getattr(dut, point["name"])
+                signal.value = _fit_to_signal(signal, point["values"][-1 if phase else 0])
+        await _advance_time(dut)
+        if cov:
+            try:
+                cov.sample()
+            except Exception:
+                pass
+    _assert_outputs_known(dut, {observable_outputs_json})
+    if cov:
+        try:
+            cov.stop()
+            cov.write_reports()
+        except Exception:
+            pass
+'''
+        )
+    if "feature_contract_directed" in tests:
+        blocks.append(
+            '''
+@cocotb.test()
+async def feature_contract_directed(dut):
+    """Execute feature scenarios compiled from explicit application-spec expectations."""
+
+{clock_start}
+
+{reset_seq}
+
+{input_init}
+
+    feature_contracts = {feature_contracts_json}
+    for feature in feature_contracts:
+        for name, value in feature["stimulus"].items():
+            assert hasattr(dut, name), f"{{feature['feature_id']}} stimulus signal {{name}} is unavailable"
+            signal = getattr(dut, name)
+            signal.value = _fit_to_signal(signal, value)
+        for _ in range(int(feature.get("wait_cycles", 1))):
+            await _advance_time(dut)
+        for name, rule in feature["expected"].items():
+            assert hasattr(dut, name), f"{{feature['feature_id']}} monitor signal {{name}} is unavailable"
+            actual = int(getattr(dut, name).value)
+            if isinstance(rule, dict):
+                if "eq" in rule:
+                    assert actual == int(rule["eq"]), f"{{feature['feature_id']}}: {{name}}={{actual}}, expected {{rule['eq']}}"
+                if "min" in rule:
+                    assert actual >= int(rule["min"]), f"{{feature['feature_id']}}: {{name}}={{actual}} below {{rule['min']}}"
+                if "max" in rule:
+                    assert actual <= int(rule["max"]), f"{{feature['feature_id']}}: {{name}}={{actual}} above {{rule['max']}}"
+            else:
+                assert actual == int(rule), f"{{feature['feature_id']}}: {{name}}={{actual}}, expected {{rule}}"
 '''
         )
     if "memory_write_read_directed" in tests:
@@ -1091,6 +1225,8 @@ async def register_mapped_memory_bist_directed(dut):
         register_map_json=json.dumps(register_map, indent=2, sort_keys=True),
         register_bit_roles_json=json.dumps(register_bit_roles, indent=2, sort_keys=True),
         register_write_plan_json=json.dumps(register_write_plan, indent=2, sort_keys=True),
+        application_stimulus_plan_json=json.dumps(application_stimulus_plan, indent=2, sort_keys=True),
+        feature_contracts_json=json.dumps(executable_feature_contracts, indent=2, sort_keys=True),
         spi_frame_bits=_spi_frame_bits(rtl_files),
     )
 
@@ -1336,18 +1472,23 @@ def _build_testcases_manifest(
             "timeout_ns": 1000,
         },
     ]
+    descriptions = {
+        "application_spec_boundary_directed": "Boundary, transition, and cross-input scenarios synthesized from the application I/O specification.",
+        "spi_transport_frame_directed": "Complete protocol frames using boundary and alternating patterns derived from the qualified frame width.",
+        "feature_contract_directed": "Feature scenarios with monitors and pass/fail checkers compiled from explicit application-spec expectations.",
+    }
     for name in directed_tests or []:
         tests.append(
             {
                 "name": name,
-                "description": "Directed test generated from detected spec-declared interface semantics.",
+                "description": descriptions.get(name, "Directed test generated from detected spec-declared interface semantics."),
                 "kind": "directed",
                 "top_module": top,
                 "mode": mode,
                 "clock_names": clock_names,
                 "reset_names": reset_names,
                 "tags": ["directed", "coverage"],
-                "timeout_ns": 25000 if name == "spi_transport_frame_directed" else 2000,
+                "timeout_ns": 120000 if name == "spi_transport_frame_directed" else 10000,
             }
         )
 
@@ -1534,6 +1675,15 @@ def _generate_coverage_plan(cov_spec: Dict[str, Any]) -> str:
         lines.extend(["", "## Uploaded Coverage Plan Points"])
         for point in user_points:
             lines.append(f"- {point.get('name')}")
+    feature_contracts = cov_spec.get("feature_contracts") or []
+    if feature_contracts:
+        lines.extend(["", "## Feature Coverage"])
+        for contract in feature_contracts:
+            lines.append(
+                f"- `{contract.get('feature_id')}`: "
+                f"{', '.join(contract.get('coverage_bins') or [])} "
+                f"({contract.get('status')})"
+            )
     lines.extend(
         [
             "",
@@ -1568,6 +1718,7 @@ def _generate_monitor_checker_plan(
     observed_outputs = [str(p.get("name")) for p in outputs if p.get("name")][:16]
     output_cov_names = [f"`{p.get('name')}`" for p in cov_spec.get("output_points", []) if p.get("name")]
     input_cov_names = [f"`{p.get('name')}`" for p in cov_spec.get("input_points", []) if p.get("name")]
+    feature_contracts = cov_spec.get("feature_contracts") or []
 
     lines = [
         "# Monitor And Checker Plan",
@@ -1599,6 +1750,13 @@ def _generate_monitor_checker_plan(
         "## Coverage Coupling",
         f"- Functional output points: {', '.join(output_cov_names) or 'none'}",
         f"- Functional input points: {', '.join(input_cov_names) or 'none'}",
+        "",
+        "## Feature Checkers",
+        *( [
+            f"- `{item.get('feature_id')}`: monitors={item.get('monitors') or []}; "
+            f"status={item.get('status')}; reason={item.get('non_executable_reason') or 'explicit expected behavior'}"
+            for item in feature_contracts
+        ] or ["- No application feature requirements were declared in the resolved specification."] ),
         "",
         "## Review Checklist",
         "- Confirm each important requirement has a monitor point.",
@@ -1659,6 +1817,8 @@ def run_agent(state: dict) -> dict:
         port_source = "rtl_fallback" if ports else "unresolved"
     clocks, resets = _infer_clocks_resets(spec, ports)
     directed_tests = _detected_directed_tests(ports, spec, rtl_files)
+    application_stimulus_plan = _application_stimulus_plan(spec, ports, clocks, resets)
+    feature_contracts = compile_feature_contracts(spec, ports, _collect_register_map(spec, rtl_files))
 
     _log(log_path, f"resolved_mode={mode}")
     _log(log_path, f"spec_path={spec_path}")
@@ -1702,6 +1862,7 @@ def run_agent(state: dict) -> dict:
     monitor_checker_plan_source = "uploaded" if uploaded_monitor_checker_plan.strip() else "generated_from_spec"
     coverage_plan_source = "uploaded" if uploaded_coverage_plan.strip() else "generated_from_spec"
     cov_plan_spec = _coverage_points_from_ports(top, ports)
+    cov_plan_spec["feature_contracts"] = feature_contracts
     verification_plan = uploaded_verification_plan.strip() or _generate_verification_plan(
         spec, top, ports, clocks, resets, test_intent
     )
@@ -1736,6 +1897,8 @@ def run_agent(state: dict) -> dict:
         "generated_rtl_sources_mk": "vv/tb/rtl_sources.mk",
         "generated_verification_sources_mk": "vv/tb/verification_sources.mk",
         "generated_testcases_manifest": "vv/tb/testcases.json",
+        "generated_application_stimulus_plan": "vv/tb/application_stimulus_plan.json",
+        "generated_feature_contracts": "vv/tb/feature_contracts.json",
         "verification_plan_path": "vv/tb/verification_plan.md",
         "verification_plan_source": verification_plan_source,
         "monitor_checker_plan_path": "vv/tb/monitor_checker_plan.md",
@@ -1778,6 +1941,21 @@ python run_regression.py --tests smoke_test constrained_random_sanity --seeds 1 
 """
 
     testcase_manifest_txt = json.dumps(testcase_manifest, indent=2)
+    application_stimulus_plan_txt = json.dumps({
+        "type": "application_spec_stimulus_plan",
+        "top_module": top,
+        "source": "resolved_application_spec",
+        "points": application_stimulus_plan,
+        "directed_tests": directed_tests,
+    }, indent=2)
+    feature_contracts_txt = json.dumps({
+        "type": "application_feature_contracts",
+        "top_module": top,
+        "source": "resolved_application_spec",
+        "contracts": feature_contracts,
+        "executable_count": sum(1 for item in feature_contracts if item.get("executable")),
+        "trace_only_count": sum(1 for item in feature_contracts if not item.get("executable")),
+    }, indent=2)
     tb_contract_txt = json.dumps(tb_contract, indent=2)
 
     _write_file(os.path.join(tb_root, f"test_{top}.py"), test_py)
@@ -1785,6 +1963,8 @@ python run_regression.py --tests smoke_test constrained_random_sanity --seeds 1 
     _write_file(os.path.join(tb_root, "rtl_sources.mk"), rtl_sources_mk)
     _write_file(os.path.join(tb_root, "README.md"), readme)
     _write_file(os.path.join(tb_root, "testcases.json"), testcase_manifest_txt)
+    _write_file(os.path.join(tb_root, "application_stimulus_plan.json"), application_stimulus_plan_txt)
+    _write_file(os.path.join(tb_root, "feature_contracts.json"), feature_contracts_txt)
     _write_file(os.path.join(tb_root, "tb_contract.json"), tb_contract_txt)
     _write_file(os.path.join(tb_root, "verification_plan.md"), verification_plan.strip() + "\n")
     _write_file(os.path.join(tb_root, "monitor_checker_plan.md"), monitor_checker_plan.strip() + "\n")
@@ -1803,6 +1983,12 @@ python run_regression.py --tests smoke_test constrained_random_sanity --seeds 1 
     artifacts["tb_rtl_sources_mk"] = _record_text(workflow_id, agent_name, "vv/tb", "rtl_sources.mk", rtl_sources_mk)
     artifacts["tb_readme"] = _record_text(workflow_id, agent_name, "vv/tb", "README.md", readme)
     artifacts["testcases_manifest"] = _record_text(workflow_id, agent_name, "vv/tb", "testcases.json", testcase_manifest_txt)
+    artifacts["application_stimulus_plan"] = _record_text(
+        workflow_id, agent_name, "vv/tb", "application_stimulus_plan.json", application_stimulus_plan_txt
+    )
+    artifacts["feature_contracts"] = _record_text(
+        workflow_id, agent_name, "vv/tb", "feature_contracts.json", feature_contracts_txt
+    )
     artifacts["tb_contract"] = _record_text(workflow_id, agent_name, "vv/tb", "tb_contract.json", tb_contract_txt)
     artifacts["verification_plan"] = _record_text(workflow_id, agent_name, "vv/tb", "verification_plan.md", verification_plan.strip() + "\n")
     artifacts["monitor_checker_plan"] = _record_text(workflow_id, agent_name, "vv/tb", "monitor_checker_plan.md", monitor_checker_plan.strip() + "\n")
@@ -1819,6 +2005,9 @@ python run_regression.py --tests smoke_test constrained_random_sanity --seeds 1 
         "resets": resets,
         "generated_dir": "vv/tb",
         "default_tests": testcase_manifest["default_tests"],
+        "application_stimulus_point_count": len(application_stimulus_plan),
+        "feature_contract_count": len(feature_contracts),
+        "executable_feature_contract_count": sum(1 for item in feature_contracts if item.get("executable")),
         "closure_testcase_intents": closure_testcase_intents,
         "test_selection": testcase_manifest["test_selection"],
         "uploaded_plans": {
