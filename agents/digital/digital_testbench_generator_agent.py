@@ -443,7 +443,9 @@ def _render_reset_sequence(resets: List[Dict[str, Any]]) -> str:
             f"    if hasattr(dut, {json.dumps(rst)}):\n"
             f"        getattr(dut, {json.dumps(rst)}).value = {assert_val}"
         )
-    lines.append("    await Timer(5, units='ns')")
+    # A fixed fractional-clock delay can entirely miss the active edge of a
+    # synchronous reset when scenarios begin at arbitrary clock phases.
+    lines.append("    await _advance_time(dut)")
     for r in resets:
         rst = r["name"]
         active_low = bool(r.get("active_low", False))

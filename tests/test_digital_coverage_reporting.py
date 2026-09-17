@@ -194,6 +194,8 @@ def test_structured_feature_contract_generates_monitor_checker_and_traceability(
     assert '"executable": true' not in generated
     feature_loop = generated.split("for feature in feature_contracts:", 1)[1]
     assert feature_loop.index('getattr(dut, "reset_n").value = 0') < feature_loop.index('for step in feature.get("stimulus_steps", [])')
+    reset_prefix = feature_loop.split('for step in feature.get("stimulus_steps", [])', 1)[0]
+    assert "await _advance_time(dut)" in reset_prefix
     ast.parse(generated)
 
 
