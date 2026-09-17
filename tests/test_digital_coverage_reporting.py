@@ -1,4 +1,5 @@
 import json
+import ast
 import os
 import sys
 from pathlib import Path
@@ -187,6 +188,9 @@ def test_structured_feature_contract_generates_monitor_checker_and_traceability(
     ]
     assert "async def feature_contract_directed" in generated
     assert 'if "min" in rule' in generated
+    assert "'executable': True" in generated
+    assert '"executable": true' not in generated
+    ast.parse(generated)
 
 
 def test_feature_contract_compiler_normalizes_multicycle_port_suffixes_to_steps():

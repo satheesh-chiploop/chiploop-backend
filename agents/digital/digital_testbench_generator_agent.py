@@ -12,6 +12,7 @@ Design goals:
 import json
 import logging
 import os
+import pprint
 import re
 import shutil
 import sys
@@ -24,6 +25,11 @@ from .feature_contract_compiler import compile_feature_contracts
 
 python_exe = sys.executable
 logger = logging.getLogger("chiploop")
+
+
+def _python_literal(value: Any) -> str:
+    """Render structured data as valid deterministic Python source."""
+    return pprint.pformat(value, sort_dicts=True, width=100)
 
 
 def _now() -> str:
@@ -1226,12 +1232,12 @@ async def register_mapped_memory_bist_directed(dut):
         clock_start=_render_clock_start(_infer_clocks_resets(spec, ports)[0]),
         reset_seq=_render_reset_sequence(_infer_clocks_resets(spec, ports)[1]),
         input_init=_render_input_init(ports, _infer_clocks_resets(spec, ports)[0], _infer_clocks_resets(spec, ports)[1]),
-        observable_outputs_json=json.dumps(observable_outputs, indent=2),
-        register_map_json=json.dumps(register_map, indent=2, sort_keys=True),
-        register_bit_roles_json=json.dumps(register_bit_roles, indent=2, sort_keys=True),
-        register_write_plan_json=json.dumps(register_write_plan, indent=2, sort_keys=True),
-        application_stimulus_plan_json=json.dumps(application_stimulus_plan, indent=2, sort_keys=True),
-        feature_contracts_json=json.dumps(executable_feature_contracts, indent=2, sort_keys=True),
+        observable_outputs_json=_python_literal(observable_outputs),
+        register_map_json=_python_literal(register_map),
+        register_bit_roles_json=_python_literal(register_bit_roles),
+        register_write_plan_json=_python_literal(register_write_plan),
+        application_stimulus_plan_json=_python_literal(application_stimulus_plan),
+        feature_contracts_json=_python_literal(executable_feature_contracts),
         spi_frame_bits=_spi_frame_bits(rtl_files),
     )
 
@@ -1423,12 +1429,12 @@ async def constrained_random_sanity(dut):
 '''
     return template.format(
         top=top,
-        clocks_json=json.dumps(clocks, indent=2),
+        clocks_json=_python_literal(clocks),
         clock_start=clock_start.rstrip(),
         reset_seq=reset_seq.rstrip(),
         input_init=input_init,
-        randomizable_inputs_json=json.dumps(randomizable_inputs, indent=2),
-        observable_outputs_json=json.dumps(observable_outputs, indent=2),
+        randomizable_inputs_json=_python_literal(randomizable_inputs),
+        observable_outputs_json=_python_literal(observable_outputs),
         directed_tests=directed_tests,
     )
 
