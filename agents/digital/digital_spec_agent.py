@@ -2720,7 +2720,7 @@ RULES
 - Every port must include name, direction, width.
 - feature_contracts is mandatory and must contain one entry for every externally observable feature.
 - Every feature contract must provide explicit stimulus and expected maps using exact declared top-level port names.
-- Multi-cycle stimulus must use `"stimulus":{"steps":[{"signals":{"port":value},"cycles":1}]}`. Never invent suffixed pseudo-signals such as port_2 or port_3.
+- Multi-cycle stimulus must use `"stimulus":{{"steps":[{{"signals":{{"port":value}},"cycles":1}}]}}`. Never invent suffixed pseudo-signals such as port_2 or port_3.
 - expected values may be exact scalars or objects containing eq, min, and/or max.
 - Every feature contract must define within_cycles. Never emit prose-only or unbound feature contracts.
 - If user intent cannot be represented by observable top-level behavior, expose the required observation/control port in the contract instead of inventing an expectation.

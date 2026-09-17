@@ -12,6 +12,28 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from agents.digital import digital_spec_agent as spec_agent
 
 
+def test_generation_prompt_renders_multicycle_json_example(tmp_path, monkeypatch):
+    prompts = []
+
+    def stop_after_prompt(prompt, agent_name, state, phase):
+        prompts.append(prompt)
+        raise RuntimeError("intentional prompt capture")
+
+    monkeypatch.setattr(spec_agent, "_complete_spec_generation", stop_after_prompt)
+    monkeypatch.setattr(spec_agent, "_upload_spec_debug_artifacts", lambda *args, **kwargs: None)
+
+    result = spec_agent.run_agent({
+        "workflow_id": "prompt-render-test",
+        "workflow_dir": str(tmp_path),
+        "spec": "Create a counter with enable and observable count output.",
+        "top_module": "counter_top",
+    })
+
+    assert prompts
+    assert '"stimulus":{"steps":[{"signals":{"port":value},"cycles":1}]}' in prompts[0]
+    assert "intentional prompt capture" in result["status"]
+
+
 def _module(name: str):
     return {
         "name": name,
