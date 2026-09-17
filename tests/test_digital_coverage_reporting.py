@@ -156,6 +156,8 @@ def test_application_spec_generates_boundary_stimulus_instead_of_fixed_cases():
     assert 255 in plan[1]["values"] and 128 in plan[1]["values"] and 85 in plan[1]["values"]
     assert "application_spec_boundary_directed" in generated
     assert "stimulus_plan" in generated
+    advance = generated.split("async def _advance_time", 1)[1].split("def _safe_drive_random", 1)[0]
+    assert advance.index("await RisingEdge") < advance.index('await Timer(1, units="ns")')
 
 
 def test_structured_feature_contract_generates_monitor_checker_and_traceability():

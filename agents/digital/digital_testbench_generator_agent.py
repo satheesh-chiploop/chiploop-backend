@@ -1305,6 +1305,11 @@ async def _advance_time(dut):
     for clk_name in clocks:
         if hasattr(dut, clk_name):
             await RisingEdge(getattr(dut, clk_name))
+            # RisingEdge wakes in the signal-update phase, before clocked
+            # nonblocking assignments and dependent combinational logic are
+            # guaranteed observable. Move beyond that edge before sampling or
+            # driving the next scenario step.
+            await Timer(1, units="ns")
             return
     await Timer(10, units="ns")
 
