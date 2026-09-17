@@ -190,6 +190,8 @@ def test_structured_feature_contract_generates_monitor_checker_and_traceability(
     assert 'if "min" in rule' in generated
     assert "'executable': True" in generated
     assert '"executable": true' not in generated
+    feature_loop = generated.split("for feature in feature_contracts:", 1)[1]
+    assert feature_loop.index('getattr(dut, "reset_n").value = 0') < feature_loop.index('for step in feature.get("stimulus_steps", [])')
     ast.parse(generated)
 
 
@@ -209,6 +211,26 @@ def test_feature_contract_compiler_normalizes_multicycle_port_suffixes_to_steps(
         {"signals": {"wr_en": 1, "wr_addr": 4}, "cycles": 1},
         {"signals": {"wr_en": 1, "wr_addr": 8}, "cycles": 1},
     ]
+
+
+def test_feature_contract_deadline_does_not_double_count_stimulus_cycles():
+    ports = [
+        {"name": "enable", "direction": "input"},
+        {"name": "count", "direction": "output", "width": 8},
+    ]
+    contracts = tb_agent.compile_feature_contracts({"feature_contracts": [{
+        "id": "two_enabled_cycles",
+        "stimulus": {"steps": [
+            {"signals": {"enable": 1}, "cycles": 1},
+            {"signals": {"enable": 1}, "cycles": 1},
+        ]},
+        "expected": {"count": 2},
+        "within_cycles": 2,
+    }]}, ports)
+
+    assert contracts[0]["stimulus_cycles"] == 2
+    assert contracts[0]["deadline_cycles"] == 2
+    assert contracts[0]["wait_cycles"] == 0
 
 
 def test_free_text_feature_is_traceable_but_does_not_invent_checker():

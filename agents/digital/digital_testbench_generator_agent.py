@@ -16,6 +16,7 @@ import pprint
 import re
 import shutil
 import sys
+import textwrap
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -957,6 +958,10 @@ async def feature_contract_directed(dut):
 
     feature_contracts = {feature_contracts_json}
     for feature in feature_contracts:
+{feature_reset_seq}
+
+{feature_input_init}
+
         for step in feature.get("stimulus_steps", []):
             for name, value in step.get("signals", {{}}).items():
                 assert hasattr(dut, name), f"{{feature['feature_id']}} stimulus signal {{name}} is unavailable"
@@ -1238,6 +1243,11 @@ async def register_mapped_memory_bist_directed(dut):
         register_write_plan_json=_python_literal(register_write_plan),
         application_stimulus_plan_json=_python_literal(application_stimulus_plan),
         feature_contracts_json=_python_literal(executable_feature_contracts),
+        feature_reset_seq=textwrap.indent(_render_reset_sequence(_infer_clocks_resets(spec, ports)[1]), "    "),
+        feature_input_init=textwrap.indent(
+            _render_input_init(ports, _infer_clocks_resets(spec, ports)[0], _infer_clocks_resets(spec, ports)[1]),
+            "    ",
+        ),
         spi_frame_bits=_spi_frame_bits(rtl_files),
     )
 

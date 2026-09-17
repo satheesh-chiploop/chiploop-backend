@@ -142,9 +142,19 @@ def compile_feature_contracts(
         expected, unresolved_expected = _resolve_map(expected_raw, port_names)
         mentioned = [name for key, name in port_names.items() if re.search(rf"\b{re.escape(key)}\b", statement.lower())]
         mentioned_registers = [name for key, name in register_names.items() if re.search(rf"\b{re.escape(key)}\b", statement.lower())]
-        wait_cycles = _integer(item.get("wait_cycles") or item.get("deadline_cycles") or item.get("within_cycles") or 1)
-        if not isinstance(wait_cycles, (int, float)):
-            wait_cycles = 1
+        stimulus_cycles = sum(int(step.get("cycles") or 1) for step in stimulus_steps)
+        explicit_wait = item.get("wait_cycles")
+        deadline_cycles = _integer(item.get("deadline_cycles") or item.get("within_cycles") or stimulus_cycles or 1)
+        if not isinstance(deadline_cycles, (int, float)):
+            deadline_cycles = stimulus_cycles or 1
+        if explicit_wait is not None:
+            wait_cycles = _integer(explicit_wait)
+            if not isinstance(wait_cycles, (int, float)):
+                wait_cycles = 0
+        else:
+            # within/deadline is the total scenario budget, not an additional
+            # delay after the stimulus sequence has already consumed cycles.
+            wait_cycles = max(0, int(deadline_cycles) - stimulus_cycles)
         executable = bool(expected) and not unresolved_stimulus and not unresolved_expected
         contracts.append({
             "feature_id": feature_id,
@@ -152,7 +162,9 @@ def compile_feature_contracts(
             "stimulus": stimulus,
             "stimulus_steps": stimulus_steps,
             "expected": expected,
-            "wait_cycles": max(1, int(wait_cycles)),
+            "stimulus_cycles": stimulus_cycles,
+            "deadline_cycles": max(stimulus_cycles, int(deadline_cycles)),
+            "wait_cycles": max(0, int(wait_cycles)),
             "monitors": list(dict.fromkeys([*expected.keys(), *mentioned])),
             "registers": mentioned_registers,
             "coverage_bins": [f"{feature_id}.stimulus_applied", f"{feature_id}.expected_observed"],
