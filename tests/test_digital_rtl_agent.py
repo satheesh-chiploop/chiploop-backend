@@ -1,10 +1,146 @@
+import json
 import os
+from types import SimpleNamespace
 
 os.environ.setdefault("SUPABASE_URL", "http://localhost:54321")
 os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-service-role-key")
 os.environ.setdefault("OPENAI_API_KEY", "test-openai-key")
 
 from agents.digital import digital_rtl_agent as agent
+
+
+def test_missing_named_blocks_produces_complete_consolidated_failure(tmp_path):
+    spec = {
+        "name": "top",
+        "rtl_output_file": "top.v",
+        "ports": [],
+    }
+
+    result = agent._validate_and_materialize_rtl(
+        "not a named RTL block", str(tmp_path), spec, "flat", suffix="pass3"
+    )
+
+    assert result["ok"] is False
+    assert result["pass_name"] == "pass3"
+    assert result["compile_passed"] is None
+    assert result["lint_passed"] is None
+    assert result["consolidated_checks"]["checks"]["compile"]["status"] == "not_run"
+    assert os.path.exists(result["compile_log_path"])
+    assert os.path.exists(result["summary_path"])
+    assert os.path.exists(result["consolidated_checks_path"])
+
+
+def test_closure_history_orders_attempted_passes_and_uses_final_status(tmp_path):
+    for index, passed in ((1, False), (2, False), (3, True)):
+        (tmp_path / f"rtl_consolidated_checks_pass{index}.json").write_text(
+            json.dumps({
+                "pass": f"pass{index}",
+                "passed": passed,
+                "checks": {"compile": {"status": "pass"}},
+                "issues": [] if passed else ["failure"],
+            }),
+            encoding="utf-8",
+        )
+    (tmp_path / "rtl_consolidated_checks_pass5.json").write_text(
+        json.dumps({"pass": "pass5", "passed": False, "checks": {}, "issues": ["stale"]}),
+        encoding="utf-8",
+    )
+
+    path, history = agent._write_rtl_closure_history(str(tmp_path), "pass3")
+
+    assert os.path.exists(path)
+    assert history["status"] == "pass"
+    assert history["attempt_count"] == 3
+    assert history["final_pass"] == "pass3"
+    assert [item["pass"] for item in history["passes"]] == ["pass1", "pass2", "pass3"]
+
+    _, precheck = agent._write_rtl_closure_history(str(tmp_path), "precheck")
+    assert precheck["status"] == "not_run"
+    assert precheck["attempt_count"] == 0
+
+
+def test_validation_consolidates_structural_compile_lint_and_compliance(monkeypatch, tmp_path):
+    spec = {
+        "name": "top",
+        "rtl_output_file": "top.v",
+        "ports": [
+            {"name": "a", "direction": "input", "width": 1},
+            {"name": "y", "direction": "output", "width": 1},
+        ],
+        "must_receive": ["a"],
+        "must_drive": ["y"],
+    }
+    tool_result = SimpleNamespace(
+        stdout="", stderr="", error=None, returncode=0, status="completed",
+        to_dict=lambda: {"status": "completed", "returncode": 0},
+    )
+    monkeypatch.setattr(agent, "run_tool", lambda *args, **kwargs: tool_result)
+    monkeypatch.setattr(
+        agent, "_run_verilator_lint",
+        lambda **kwargs: (True, str(tmp_path / "rtl_verilator_lint.log"), "", {"status": "completed"}),
+    )
+    monkeypatch.setattr(
+        agent, "run_spec2rtl_conformance",
+        lambda state: {"spec2rtl_conformance": {
+            "status": "pass", "summary": {"checked": 2, "matched": 2},
+            "requirements": [], "feature_contracts": {"features": []},
+        }},
+    )
+
+    result = agent._validate_and_materialize_rtl(
+        "---BEGIN top.v---\nmodule top(input a, output y); assign y = a; endmodule\n---END top.v---",
+        str(tmp_path), spec, "flat",
+    )
+
+    checks = result["consolidated_checks"]["checks"]
+    assert result["ok"] is True
+    assert checks["structural"]["status"] == "pass"
+    assert checks["compile"]["status"] == "pass"
+    assert checks["lint"]["status"] == "pass"
+    assert checks["static_spec2rtl"]["status"] == "pass"
+
+
+def test_rtl_normalization_preserves_feature_and_register_contracts():
+    feature_contracts = [{
+        "id": "rollover",
+        "stimulus": {"period": 3},
+        "expected": {"counter_value": 0},
+    }]
+    register_contract = {"required": False, "registers": []}
+    normalized, mode = agent._normalize_spec_json({
+        "name": "pwm_controller",
+        "rtl_output_file": "pwm_controller.v",
+        "ports": [],
+        "feature_contracts": feature_contracts,
+        "register_contract": register_contract,
+    })
+
+    assert mode == "flat"
+    assert normalized["feature_contracts"] == feature_contracts
+    assert normalized["register_contract"] == register_contract
+
+
+def test_hierarchical_rtl_normalization_preserves_root_feature_contracts():
+    feature_contracts = [{
+        "id": "ready_after_start",
+        "stimulus": {"start": 1},
+        "expected": {"ready": 1},
+    }]
+    normalized, mode = agent._normalize_spec_json({
+        "design_name": "controller",
+        "feature_contracts": feature_contracts,
+        "hierarchy": {
+            "top_module": {
+                "name": "controller",
+                "rtl_output_file": "controller.sv",
+                "ports": [],
+            },
+            "modules": [],
+        },
+    })
+
+    assert mode == "hierarchical"
+    assert normalized["feature_contracts"] == feature_contracts
 
 
 def test_generated_complexity_rejects_constant_output_shell():

@@ -310,6 +310,12 @@ def _match_score(requirement: str, rtl_text: str, rtl_names: Iterable[str]) -> T
         evidence.append("increment_logic")
     if re.search(r"\bwrap", req_lower) and re.search(r">=|==", rtl_text) and re.search(r"<=\s*(?:\d+'h00|\d+'d0|0)\b", rtl_text, re.I):
         evidence.append("wrap_logic")
+    if (
+        ("rollover" in req_lower or "reload" in req_lower or ("period" in req_lower and "counter" in req_lower))
+        and re.search(r"\b[A-Za-z_][A-Za-z0-9_$]*\s*(?:==|>=)\s*[A-Za-z0-9_$]*period[A-Za-z0-9_$]*\b", rtl_text, re.I)
+        and re.search(r"\b[A-Za-z0-9_$]*(?:count|counter)[A-Za-z0-9_$]*\s*<=\s*(?:\d+'h0+|\d+'d0|\d+'b0|0)\b", rtl_text, re.I)
+    ):
+        evidence.append("period_rollover_logic")
     if "unmapped" in req_lower and re.search(r"\bdefault\s*:", rtl_text, re.I) and re.search(r"default\s*:\s*[A-Za-z_][A-Za-z0-9_$]*\s*<=\s*(?:\d+'h00|\d+'d0|0)", rtl_text, re.I):
         evidence.append("default_zero")
 
@@ -511,6 +517,7 @@ def _match_score(requirement: str, rtl_text: str, rtl_names: Iterable[str]) -> T
         "sticky status/interrupt indicators",
         "clear side effects limited to specified status bits",
         "dedicated temp_code/threshold_code outputs",
+        "period_rollover_logic",
     }
     if semantic_hits.intersection(evidence):
         return "matched", evidence[:8]

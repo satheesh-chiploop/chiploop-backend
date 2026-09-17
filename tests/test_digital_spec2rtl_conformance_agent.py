@@ -7,6 +7,27 @@ os.environ.setdefault("OPENAI_API_KEY", "test-openai-key")
 from agents.digital import digital_spec2rtl_conformance_agent as agent
 
 
+def test_match_score_recognizes_programmable_period_rollover_logic():
+    rtl = """
+reg [7:0] counter_reg;
+always @(posedge clk) begin
+  if (!reset_n) counter_reg <= 8'h00;
+  else if (enable) begin
+    if (counter_reg == period) counter_reg <= 8'h00;
+    else counter_reg <= counter_reg + 8'h01;
+  end
+end
+"""
+    names = set(rtl.replace(";", " ").replace("(", " ").replace(")", " ").split())
+
+    status, evidence = agent._match_score(
+        "Support programmable period-based rollover behavior.", rtl, names
+    )
+
+    assert status == "matched"
+    assert "period_rollover_logic" in evidence
+
+
 def test_match_score_recognizes_high_level_temp_monitor_evidence():
     rtl = """
 module temp_monitor_digital(

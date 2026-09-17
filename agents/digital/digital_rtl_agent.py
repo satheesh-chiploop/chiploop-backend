@@ -414,6 +414,7 @@ def _normalize_spec_json(spec_json: dict) -> Tuple[dict, str]:
             "design_summary": spec_json.get("design_summary", ""),
             "implementation_requirements": spec_json.get("implementation_requirements", []),
             "verification_requirements": spec_json.get("verification_requirements", []),
+            "feature_contracts": spec_json.get("feature_contracts", []),
             "memory_macros": spec_json.get("memory_macros", []),
             "hierarchy": {
                 "top_module": top,
@@ -433,6 +434,7 @@ def _normalize_spec_json(spec_json: dict) -> Tuple[dict, str]:
             "design_summary": spec_json.get("design_summary", ""),
             "implementation_requirements": spec_json.get("implementation_requirements", []),
             "verification_requirements": spec_json.get("verification_requirements", []),
+            "feature_contracts": spec_json.get("feature_contracts", []),
             "memory_macros": spec_json.get("memory_macros", []),
             "ports": spec_json.get("ports", []),
             "functionality": spec_json.get("functionality", ""),
@@ -443,6 +445,7 @@ def _normalize_spec_json(spec_json: dict) -> Tuple[dict, str]:
             "reset_behavior": spec_json.get("reset_behavior", ""),
             "behavior_rules": spec_json.get("behavior_rules", []),
             "operating_constraints": spec_json.get("operating_constraints", {}),
+            "register_contract": spec_json.get("register_contract", {}),
             "rtl_output_file": spec_json["rtl_output_file"],
         }, "flat"
 
@@ -3174,6 +3177,12 @@ def _upload_rtl_debug_artifacts(workflow_id, agent_name, rtl_dir):
         "rtl_spec2rtl_conformance_pass3.json",
         "rtl_spec2rtl_conformance_pass4.json",
         "rtl_spec2rtl_conformance_pass5.json",
+        "rtl_consolidated_checks_pass1.json",
+        "rtl_consolidated_checks_pass2.json",
+        "rtl_consolidated_checks_pass3.json",
+        "rtl_consolidated_checks_pass4.json",
+        "rtl_consolidated_checks_pass5.json",
+        "rtl_closure_history.json",
         "rtl_quality_gate.json",
         "rtl_agent_final_status.log",
         "rtl_agent_final_summary.txt",
@@ -3190,6 +3199,38 @@ def _append_text(path: str, content: str) -> None:
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "a", encoding="utf-8") as f:
         f.write(content)
+
+
+def _write_rtl_closure_history(rtl_dir: str, final_pass: Optional[str] = None) -> tuple[str, dict]:
+    """Publish one machine-readable view of every attempted RTL closure pass."""
+    passes = []
+    match = re.fullmatch(r"pass([1-5])", str(final_pass or ""))
+    final_index = 0 if final_pass == "precheck" else int(match.group(1)) if match else 5
+    for index in range(1, final_index + 1):
+        path = os.path.join(rtl_dir, f"rtl_consolidated_checks_pass{index}.json")
+        if not os.path.exists(path):
+            continue
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                report = json.load(handle)
+        except Exception as exc:
+            report = {
+                "pass": f"pass{index}",
+                "passed": False,
+                "checks": {},
+                "issues": [f"Unable to load consolidated pass result: {exc}"],
+            }
+        passes.append(report)
+    final = passes[-1] if passes else {}
+    history = {
+        "status": "pass" if final.get("passed") is True else "fail" if passes else "not_run",
+        "attempt_count": len(passes),
+        "final_pass": final.get("pass"),
+        "passes": passes,
+    }
+    path = os.path.join(rtl_dir, "rtl_closure_history.json")
+    Path(path).write_text(json.dumps(history, indent=2), encoding="utf-8")
+    return path, history
 
 
 def _targeted_rtl_repair_context(previous_llm_output: str, compile_log_text: str,
@@ -3637,14 +3678,49 @@ def _validate_and_materialize_rtl(
 
     verilog_map = _parse_named_verilog_blocks(llm_output)
     if not verilog_map:
+        pass_name = suffix or "pass1"
+        compile_log_path = os.path.join(rtl_dir, compile_log_name)
+        summary_path = os.path.join(rtl_dir, summary_name)
+        consolidated_path = os.path.join(rtl_dir, f"rtl_consolidated_checks_{pass_name}.json")
+        issue = "Missing named Verilog file blocks in LLM output."
+        consolidated = {
+            "pass": pass_name,
+            "passed": False,
+            "checks": {
+                "structural": {"status": "fail", "issues": [issue]},
+                "compile": {"status": "not_run"},
+                "lint": {"status": "not_run"},
+                "static_spec2rtl": {"status": "not_run"},
+            },
+            "issues": [issue],
+        }
+        Path(compile_log_path).write_text(issue + "\n", encoding="utf-8")
+        Path(summary_path).write_text(
+            f"RTL Agent Summary\n=================\nPass: {pass_name}\nIssue count: 1\n\nIssues:\n- {issue}\n",
+            encoding="utf-8",
+        )
+        Path(consolidated_path).write_text(json.dumps(consolidated, indent=2), encoding="utf-8")
         return {
             "ok": False,
             "message": "LLM output did not contain any named Verilog file blocks in the required format.",
             "issues": ["❌ Missing named Verilog file blocks in LLM output."],
-            "compile_log_path": os.path.join(rtl_dir, compile_log_name),
-            "summary_path": os.path.join(rtl_dir, summary_name),
+            "compile_log_path": compile_log_path,
+            "summary_path": summary_path,
             "raw_output_path": raw_output_path,
             "artifact_list": [],
+            "verilator_log_path": os.path.join(
+                rtl_dir, "rtl_verilator_lint.log" if not suffix else f"rtl_verilator_lint_{suffix}.log"
+            ),
+            "verilator_output": "",
+            "verilator_severity": "not_run",
+            "compile_passed": None,
+            "lint_passed": None,
+            "static_spec2rtl_passed": None,
+            "spec2rtl_conformance": {"status": "not_run"},
+            "spec2rtl_conformance_path": None,
+            "consolidated_checks": consolidated,
+            "consolidated_checks_path": consolidated_path,
+            "pass_name": pass_name,
         }
 
     expected_files = _collect_expected_rtl_files(spec_json, mode)
@@ -3732,8 +3808,6 @@ def _validate_and_materialize_rtl(
     for name in suspicious_grouped_buses:
         if re.search(rf"\b{re.escape(name)}\b", full_text) and not re.search(rf"\b{re.escape(name)}\b", spec_text):
             issues.append(f"❌ Invented grouped bus '{name}' found in RTL but not declared in spec.")
-
-
     top_rtl_file = _top_rtl_file(spec_json, mode)
     top_rtl_path = os.path.join(materialize_dir, top_rtl_file)
 
@@ -3766,7 +3840,10 @@ def _validate_and_materialize_rtl(
             if _module_procedurally_assigns_signal(top_code, sig):
                 issues.append(f"❌ Top module appears to procedurally drive child-owned signal '{sig}'.")
 
-        _stage(f"iverilog_compile_start_{suffix or 'pass1'}")
+    # Keep pre-tool validation separate from compile, lint, and compliance so
+    # the consolidated result identifies the actual failing production gate.
+    structural_issues = list(issues)
+    _stage(f"iverilog_compile_start_{suffix or 'pass1'}")
     compile_args = [
         "-g2005",
         "-o",
@@ -3900,6 +3977,25 @@ def _validate_and_materialize_rtl(
                 f"{item.get('id')}: {item.get('status')} - {item.get('requirement')}"
                 for item in failed_requirements[:20]
             )
+            failed_features = [
+                item for item in (conformance_report.get("feature_contracts") or {}).get("features") or []
+                if str(item.get("status") or "").lower() != "pass"
+            ]
+            repair_lines.extend(
+                "FEATURE {feature}: {details}".format(
+                    feature=item.get("feature_id") or "unnamed",
+                    details=", ".join(
+                        f"{key}={item.get(key)}" for key in (
+                            "missing_stimulus_signals",
+                            "missing_expected_signals",
+                            "wrong_stimulus_directions",
+                            "wrong_expected_directions",
+                            "unresolved_bindings",
+                        ) if item.get(key)
+                    ) or "feature contract is not executable",
+                )
+                for item in failed_features[:20]
+            )
             _append_text(
                 compile_log_path,
                 "\n=== STATIC SPEC2RTL REPAIR CHECKLIST ===\n"
@@ -3923,6 +4019,44 @@ def _validate_and_materialize_rtl(
         )
 
 
+
+    pass_name = suffix or "pass1"
+    consolidated_path = os.path.join(rtl_dir, f"rtl_consolidated_checks_{pass_name}.json")
+    consolidated_checks = {
+        "pass": pass_name,
+        "passed": len(issues) == 0,
+        "checks": {
+            "structural": {
+                "status": "pass" if not structural_issues else "fail",
+                "issue_count": len(structural_issues),
+                "issues": structural_issues,
+            },
+            "compile": {
+                "status": "pass" if not iverilog_failed else "fail",
+                "log": compile_log_path,
+            },
+            "lint": {
+                "status": "pass" if verilator_severity == "pass" else verilator_severity,
+                "blocking": verilator_severity == "fatal",
+                "log": verilator_log_path,
+            },
+            "static_spec2rtl": {
+                "status": str(conformance_report.get("status") or "setup_issue"),
+                "blocking": str(conformance_report.get("status") or "").lower() != "pass",
+                "report": conformance_path,
+                "summary": conformance_report.get("summary") or {},
+            },
+        },
+        "issue_count": len(issues),
+        "issues": issues,
+    }
+    Path(consolidated_path).write_text(json.dumps(consolidated_checks, indent=2), encoding="utf-8")
+    _append_text(
+        compile_log_path,
+        "\n=== CONSOLIDATED RTL CHECK RESULTS ===\n"
+        + json.dumps(consolidated_checks, indent=2)
+        + "\n",
+    )
 
     summary_path = os.path.join(rtl_dir, summary_name)
     with open(summary_path, "w", encoding="utf-8") as sf:
@@ -3960,6 +4094,12 @@ def _validate_and_materialize_rtl(
         "verilator_log_path": verilator_log_path,
         "verilator_output": verilator_output,
         "verilator_severity": verilator_severity,
+        "compile_passed": not iverilog_failed,
+        "lint_passed": verilator_severity != "fatal",
+        "static_spec2rtl_passed": str(conformance_report.get("status") or "").lower() == "pass",
+        "consolidated_checks_path": consolidated_path,
+        "consolidated_checks": consolidated_checks,
+        "pass_name": pass_name,
         "spec2rtl_conformance_path": conformance_path,
         "spec2rtl_conformance": conformance_report,
         "tool_profile": profile_summary(state or {}),
@@ -3986,19 +4126,37 @@ def _run(context: AgentContext) -> dict:
     rtl_dir = os.path.join(workflow_dir, "rtl")
     os.makedirs(rtl_dir, exist_ok=True)
 
-    def _fail_and_upload(msg: str, exc: Exception = None) -> dict:
+    last_result_for_failure: Optional[dict] = None
+
+    def _fail_and_upload(
+        msg: str,
+        exc: Exception = None,
+        last_result: Optional[dict] = None,
+        failure_issues: Optional[List[str]] = None,
+    ) -> dict:
         # Do NOT overwrite pass1/pass2 logs. Preserve them.
         final_log_path = os.path.join(rtl_dir, "rtl_agent_final_status.log")
         final_summary_path = os.path.join(rtl_dir, "rtl_agent_final_summary.txt")
         error_file = os.path.join(rtl_dir, "rtl_agent_exception.txt")
         quality_gate_path = os.path.join(rtl_dir, "rtl_quality_gate.json")
+        effective_result = last_result or last_result_for_failure
+        closure_history_path, closure_history = _write_rtl_closure_history(
+            rtl_dir, effective_result.get("pass_name") if effective_result else "precheck"
+        )
         failed_quality_gate = {
             "passed": False,
-            "compile_passed": False,
-            "lint_passed": False,
-            "static_spec2rtl_passed": False,
-            "final_pass": "failed",
+            "compile_passed": effective_result.get("compile_passed") if effective_result else None,
+            "lint_passed": effective_result.get("lint_passed") if effective_result else None,
+            "static_spec2rtl_passed": effective_result.get("static_spec2rtl_passed") if effective_result else None,
+            "static_spec2rtl_status": (
+                (effective_result.get("spec2rtl_conformance") or {}).get("status") if effective_result else None
+            ),
+            "final_pass": effective_result.get("pass_name") if effective_result else "precheck",
             "reason": msg,
+            "issue_count": len(failure_issues or (effective_result.get("issues") if effective_result else []) or []),
+            "consolidated_checks": effective_result.get("consolidated_checks_path") if effective_result else None,
+            "closure_history": closure_history_path,
+            "attempt_count": closure_history.get("attempt_count", 0),
         }
 
         with open(final_log_path, "w", encoding="utf-8") as lf:
@@ -4029,7 +4187,7 @@ def _run(context: AgentContext) -> dict:
             "artifact": None,
             "artifact_list": [],
             "artifact_log": final_log_path,
-            "issues": [msg] + ([str(exc)] if exc is not None else []),
+            "issues": list(failure_issues or [msg]) + ([str(exc)] if exc is not None else []),
             "rtl_quality_gate": failed_quality_gate,
             "workflow_id": workflow_id,
             "workflow_dir": workflow_dir,
@@ -4077,8 +4235,10 @@ def _run(context: AgentContext) -> dict:
             "workflow_id": workflow_id,
             "workflow_dir": workflow_dir,
         })
-        _upload_rtl_debug_artifacts(workflow_id, agent_name, rtl_dir)
-        return state
+        return _fail_and_upload(
+            "Missing digital spec JSON for RTL generation.",
+            failure_issues=["Missing digital spec JSON for RTL generation."],
+        )
 
     try:
         _stage("normalizing_spec")
@@ -4117,8 +4277,10 @@ def _run(context: AgentContext) -> dict:
             "workflow_id": workflow_id,
             "workflow_dir": workflow_dir,
         })
-        _upload_rtl_debug_artifacts(workflow_id, agent_name, rtl_dir)
-        return state
+        return _fail_and_upload(
+            "Invalid spec connectivity contract for RTL generation.",
+            failure_issues=pre_issues,
+        )
 
     _stage("loading_regmap")
 
@@ -4211,8 +4373,7 @@ def _run(context: AgentContext) -> dict:
             "workflow_id": workflow_id,
             "workflow_dir": workflow_dir,
         })
-        _upload_rtl_debug_artifacts(workflow_id, agent_name, rtl_dir)
-        return state
+        return _fail_and_upload("RTL generation failed before RTL materialization.", e)
     try:
         _stage("pass1_validate_and_materialize")
 
@@ -4225,6 +4386,7 @@ def _run(context: AgentContext) -> dict:
             materialize_subdir="",      # keep pass1 exactly as today
             state=state,
         )
+        last_result_for_failure = pass1
 
 
         if not pass1["ok"]:
@@ -4279,7 +4441,7 @@ def _run(context: AgentContext) -> dict:
                     sf.write(f"Exception type: {type(e2).__name__}\n")
                     sf.write(f"Exception: {e2}\n")
 
-                return _fail_and_upload("Pass1 failed and Pass2 LLM generation failed.", e2)
+                return _fail_and_upload("Pass1 failed and Pass2 LLM generation failed.", e2, pass1)
 
             llm_output_pass2 = _merge_rtl_repair_output(
                 llm_output,
@@ -4297,6 +4459,7 @@ def _run(context: AgentContext) -> dict:
                 materialize_subdir="pass2", # isolate pass2 RTL
                 state=state,
             )
+            last_result_for_failure = pass2
 
             final_result = pass2
             final_suffix = "pass2"
@@ -4329,7 +4492,7 @@ def _run(context: AgentContext) -> dict:
                         repair_prompt_pass3, agent_name=agent_name, state=state, stage_label="llm_pass3"
                     )
                 except Exception as e3:
-                    return _fail_and_upload("Pass2 failed and Pass3 LLM generation failed.", e3)
+                    return _fail_and_upload("Pass2 failed and Pass3 LLM generation failed.", e3, pass2)
 
                 llm_output_pass3 = _merge_rtl_repair_output(
                     llm_output_pass2,
@@ -4346,6 +4509,7 @@ def _run(context: AgentContext) -> dict:
                     materialize_subdir="pass3",
                     state=state,
                 )
+                last_result_for_failure = pass3
                 if not pass3["ok"]:
                     pass3_compile_log = ""
                     if os.path.exists(pass3["compile_log_path"]):
@@ -4365,7 +4529,7 @@ def _run(context: AgentContext) -> dict:
                             repair_prompt_pass4, agent_name=agent_name, state=state, stage_label="llm_pass4"
                         )
                     except Exception as e4:
-                        return _fail_and_upload("Pass3 failed and Pass4 structural closure generation failed.", e4)
+                        return _fail_and_upload("Pass3 failed and Pass4 structural closure generation failed.", e4, pass3)
                     llm_output_pass4 = _merge_rtl_repair_output(
                         llm_output_pass3, llm_output_pass4,
                         _collect_expected_rtl_files(spec_json, mode),
@@ -4379,6 +4543,7 @@ def _run(context: AgentContext) -> dict:
                         materialize_subdir="pass4",
                         state=state,
                     )
+                    last_result_for_failure = pass4
                     if not pass4["ok"]:
                         pass4_compile_log = ""
                         if os.path.exists(pass4["compile_log_path"]):
@@ -4398,7 +4563,7 @@ def _run(context: AgentContext) -> dict:
                                 repair_prompt_pass5, agent_name=agent_name, state=state, stage_label="llm_pass5"
                             )
                         except Exception as e5:
-                            return _fail_and_upload("Pass4 failed and Pass5 contract closure generation failed.", e5)
+                            return _fail_and_upload("Pass4 failed and Pass5 contract closure generation failed.", e5, pass4)
                         llm_output_pass5 = _merge_rtl_repair_output(
                             llm_output_pass4, llm_output_pass5,
                             _collect_expected_rtl_files(spec_json, mode),
@@ -4412,8 +4577,9 @@ def _run(context: AgentContext) -> dict:
                             materialize_subdir="pass5",
                             state=state,
                         )
+                        last_result_for_failure = pass5
                         if not pass5["ok"]:
-                            return _fail_and_upload("RTL failed checks in pass1 through pass5.")
+                            return _fail_and_upload("RTL failed checks in pass1 through pass5.", last_result=pass5)
                         final_result = pass5
                         final_suffix = "pass5"
                     else:
@@ -4450,6 +4616,7 @@ def _run(context: AgentContext) -> dict:
             except Exception as e:
                 print(f"⚠️ Failed to upload RTL artifact {path}: {e}")
 
+        closure_history_path, closure_history = _write_rtl_closure_history(rtl_dir, final_suffix)
         _upload_rtl_debug_artifacts(workflow_id, agent_name, rtl_dir)
         tool_profile_text = json.dumps(final_result.get("tool_profile") or profile_summary(state), indent=2)
         tool_summary = {
@@ -4459,13 +4626,16 @@ def _run(context: AgentContext) -> dict:
         }
         rtl_quality_gate = {
             "passed": True,
-            "compile_passed": True,
-            "lint_passed": True,
-            "static_spec2rtl_passed": True,
+            "compile_passed": final_result.get("compile_passed") is True,
+            "lint_passed": final_result.get("lint_passed") is True,
+            "static_spec2rtl_passed": final_result.get("static_spec2rtl_passed") is True,
             "static_spec2rtl_status": (final_result.get("spec2rtl_conformance") or {}).get("status"),
             "static_spec2rtl_report": final_result.get("spec2rtl_conformance_path"),
             "final_pass": final_suffix,
             "issue_count": len(issues),
+            "consolidated_checks": final_result.get("consolidated_checks_path"),
+            "closure_history": closure_history_path,
+            "attempt_count": closure_history.get("attempt_count", 0),
         }
         tool_summary_text = json.dumps(tool_summary, indent=2)
         with open(os.path.join(rtl_dir, "tool_profile_used.json"), "w", encoding="utf-8") as f:
