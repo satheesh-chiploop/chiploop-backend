@@ -1,7 +1,7 @@
 import ast
 import json
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 
 def _load_gate():
@@ -21,6 +21,45 @@ def _load_gate():
     }
     exec(compile(ast.Module(body=[function], type_ignores=[]), str(main_path), "exec"), namespace)
     return namespace["_digital_app_gate_failure"]
+
+
+def _load_node_order_validator():
+    main_path = Path(__file__).resolve().parents[1] / "main.py"
+    tree = ast.parse(main_path.read_text(encoding="utf-8"))
+    function = next(
+        node for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == "_validate_required_app_node_order"
+    )
+    namespace = {"Any": Any, "Dict": Dict, "List": List}
+    exec(compile(ast.Module(body=[function], type_ignores=[]), str(main_path), "exec"), namespace)
+    return namespace["_validate_required_app_node_order"]
+
+
+def test_arch2rtl_platform_definition_requires_complete_ordered_pipeline():
+    validate = _load_node_order_validator()
+    required = [
+        "Digital Spec Agent", "Digital Architecture Agent", "Digital Microarchitecture Agent",
+        "Digital Register Map Agent", "Digital RTL Agent", "Digital IP Packaging & Handoff Agent",
+        "Digital Arch2RTL Dashboard Agent",
+    ]
+    validate("arch2rtl", [{"label": label} for label in required])
+
+    try:
+        validate("arch2rtl", [{"label": "Digital RTL Agent"}, {"label": "Digital IP Packaging & Handoff Agent"}])
+    except RuntimeError as exc:
+        assert "Supabase platform workflow" in str(exc)
+        assert "Digital Spec Agent" in str(exc)
+    else:
+        raise AssertionError("incomplete Arch2RTL platform workflow was accepted")
+
+    out_of_order = required.copy()
+    out_of_order[0], out_of_order[4] = out_of_order[4], out_of_order[0]
+    try:
+        validate("arch2rtl", [{"label": label} for label in out_of_order])
+    except RuntimeError as exc:
+        assert "out of order" in str(exc)
+    else:
+        raise AssertionError("out-of-order Arch2RTL platform workflow was accepted")
 
 
 def test_arch2rtl_final_tool_summary_overrides_later_partial_status(tmp_path):

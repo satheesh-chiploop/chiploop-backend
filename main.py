@@ -1949,6 +1949,33 @@ def _insert_node_before_once(
     return out
 
 
+def _validate_required_app_node_order(app_name: str, nodes: List[Dict[str, Any]]) -> None:
+    """Reject incomplete platform workflows before producing partial artifacts."""
+    required_by_app = {
+        "arch2rtl": [
+            "Digital Spec Agent",
+            "Digital Architecture Agent",
+            "Digital Microarchitecture Agent",
+            "Digital Register Map Agent",
+            "Digital RTL Agent",
+            "Digital IP Packaging & Handoff Agent",
+            "Digital Arch2RTL Dashboard Agent",
+        ],
+    }
+    required = required_by_app.get(str(app_name or "").strip().lower())
+    if not required:
+        return
+    labels = [str((node or {}).get("label") or "").strip() for node in nodes]
+    missing = [label for label in required if label not in labels]
+    positions = [labels.index(label) for label in required if label in labels]
+    if missing or positions != sorted(positions):
+        detail = f"missing: {', '.join(missing)}" if missing else "required stages are out of order"
+        raise RuntimeError(
+            f"Supabase platform workflow for {app_name} is invalid ({detail}). "
+            "Republish the canonical prebuilt workflow before running."
+        )
+
+
 def _execute_agent_with_runtime(
     agent_name: str,
     agent_fn: Any,
@@ -4414,7 +4441,7 @@ def execute_digital_app_background(
         # Normalize spec fields (Arch2RTL agents often expect state["spec"])
         if shared_state.get("spec_text"):
             shared_state["spec"] = shared_state["spec_text"]
-        if app_name in {"verify", "arch2synthesis", "arch2tapeout", "fpga_verify", "fpga", "fpga2rtl"}:
+        if app_name in {"arch2rtl", "verify", "arch2synthesis", "arch2tapeout", "fpga_verify", "fpga", "fpga2rtl"}:
             shared_state["_fail_fast_on_agent_error"] = True
         if app_loop_type == "fpga":
             shared_state["_fail_fast_on_agent_error"] = True
@@ -4448,6 +4475,7 @@ def execute_digital_app_background(
             force_platform_definition=True,
         )
         nodes = _definition_to_executor_nodes(defn)
+        _validate_required_app_node_order(app_name, nodes)
         if app_name == "fpga_target_explorer":
             nodes = _insert_node_before_once(nodes, "FPGA Explorer I/O Mapping Agent", "FPGA Target Explorer Agent")
             nodes = _insert_node_before_once(nodes, "FPGA RTL Quality Gate Agent", "FPGA Explorer I/O Mapping Agent")
@@ -6785,6 +6813,11 @@ def _hem_continue_system_rtl_after_success(
 async def apps_arch2rtl_run(request: Request, background_tasks: BackgroundTasks, payload: DigitalArch2RTLAppIn):
     user_id = _require_user_id(request)
     payload_dict = payload.dict()
+    if not str(payload_dict.get("spec_text") or "").strip():
+        raise HTTPException(
+            status_code=422,
+            detail="Arch2RTL requires non-empty spec_text when starting a new workflow.",
+        )
     demo_run = False
     try:
         checkout_started = _checkout_started_for_request(request, user_id)
