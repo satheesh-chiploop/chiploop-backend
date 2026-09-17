@@ -979,6 +979,18 @@ def _promote_procedurally_assigned_outputs(verilog_map: Dict[str, str]) -> Dict[
             for signal_name in output_names:
                 if not _module_procedurally_assigns_signal(module_code, signal_name):
                     continue
+                # Classic Verilog declares the port direction and variable
+                # type separately (``output y; reg y;``). That form is already
+                # legal; promoting it to ``output reg y`` would duplicate the
+                # existing variable declaration.
+                separate_variable = re.search(
+                    rf"^\s*(?:reg|logic)\b(?:\s+signed)?\s*(?:\[[^\]]+\]\s*)?"
+                    rf"[^;]*\b{re.escape(signal_name)}\b[^;]*;",
+                    module_code,
+                    flags=re.IGNORECASE | re.MULTILINE,
+                )
+                if separate_variable:
+                    continue
                 # Verilog-2005 requires a procedural output to be a variable.
                 # Preserve its signedness/range and leave output logic/reg alone.
                 declaration = re.compile(

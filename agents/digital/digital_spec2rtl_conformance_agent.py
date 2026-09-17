@@ -274,6 +274,24 @@ def _match_score(requirement: str, rtl_text: str, rtl_names: Iterable[str]) -> T
     names = {n.lower() for n in rtl_names}
     unique_words = list(dict.fromkeys(words))
     evidence = [w for w in unique_words if w in names or re.search(rf"\b{re.escape(w)}\b", rtl_text, re.I)]
+    instance_types = [
+        match.group(1).lower()
+        for match in re.finditer(
+            r"(?:^|[;])\s*([A-Za-z_][A-Za-z0-9_$]*)\s+(?:#\s*\([^;]*?\)\s*)?"
+            r"[A-Za-z_][A-Za-z0-9_$]*\s*\(",
+            _strip_comments(rtl_text),
+            re.I | re.M | re.S,
+        )
+        if match.group(1).lower() not in {
+            "module", "always", "always_ff", "always_comb", "if", "else", "for", "while", "case", "assign",
+        }
+    ]
+    if "no internal hierarchy" in req_lower and len(re.findall(r"\bmodule\b", rtl_text, re.I)) == 1 and not instance_types:
+        evidence.append("no_internal_hierarchy")
+    if re.search(r"\bno\s+(?:internal\s+)?memory\s+macros?\b", req_lower) and not any(
+        re.search(r"(?:sram|ram|rom|memory|mem_macro)", kind, re.I) for kind in instance_types
+    ):
+        evidence.append("no_memory_macros")
     for name in sorted(names):
         if "_" not in name or len(name) < 5:
             continue
@@ -519,6 +537,27 @@ def _match_score(requirement: str, rtl_text: str, rtl_names: Iterable[str]) -> T
         "dedicated temp_code/threshold_code outputs",
         "period_rollover_logic",
     }
+    if (
+        re.search(r"\bsynchronous(?:ly)?\b", req_lower)
+        and re.search(r"\breset", req_lower)
+        and re.search(
+            r"\balways\s*@\s*\([^)]*\bor\s+(?:pos|neg)edge\s+(?:reset|reset_n|rst|rst_n)\b",
+            rtl_text,
+            re.I,
+        )
+    ):
+        return "missing", ["asynchronous_reset_sensitivity_conflicts_with_synchronous_requirement"]
+    negative_structure_expectations = []
+    if "no internal hierarchy" in req_lower:
+        negative_structure_expectations.append("no_internal_hierarchy")
+    if re.search(r"\bno\s+(?:internal\s+)?memory\s+macros?\b", req_lower):
+        negative_structure_expectations.append("no_memory_macros")
+    if negative_structure_expectations:
+        return (
+            ("matched", evidence[:8])
+            if all(item in evidence for item in negative_structure_expectations)
+            else ("missing", evidence[:8])
+        )
     if semantic_hits.intersection(evidence):
         return "matched", evidence[:8]
     if addresses and not any(item.startswith("0x") for item in evidence):

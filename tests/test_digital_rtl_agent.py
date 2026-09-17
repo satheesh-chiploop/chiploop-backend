@@ -159,6 +159,29 @@ endmodule
     assert any("constant-output shell" in issue for issue in issues)
 
 
+def test_output_promotion_preserves_legal_classic_output_reg_declaration():
+    rtl = """
+module pwm_controller(clk, pwm_out, counter_value);
+input clk;
+output pwm_out;
+output [7:0] counter_value;
+reg pwm_out;
+reg [7:0] counter_value;
+always @(posedge clk) begin
+  pwm_out <= 1'b1;
+  counter_value <= counter_value + 1'b1;
+end
+endmodule
+"""
+
+    repaired = agent._promote_procedurally_assigned_outputs({"pwm_controller.v": rtl})["pwm_controller.v"]
+
+    assert "output reg pwm_out" not in repaired
+    assert "output reg [7:0] counter_value" not in repaired
+    assert repaired.count("reg pwm_out;") == 1
+    assert repaired.count("reg [7:0] counter_value;") == 1
+
+
 def test_generation_and_repair_prompts_require_functional_verifiable_rtl():
     spec = {
         "name": "sensor_hub",

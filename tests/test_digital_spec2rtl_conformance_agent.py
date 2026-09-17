@@ -28,6 +28,45 @@ end
     assert "period_rollover_logic" in evidence
 
 
+def test_match_score_proves_absent_hierarchy_and_memory_macros():
+    rtl = "module pwm_controller(input clk, output pwm_out); assign pwm_out = clk; endmodule"
+
+    status, evidence = agent._match_score(
+        "The module has no internal hierarchy and no memory macros.", rtl, {"clk", "pwm_out"}
+    )
+
+    assert status == "matched"
+    assert "no_internal_hierarchy" in evidence
+    assert "no_memory_macros" in evidence
+
+    hierarchical_rtl = rtl.replace(
+        "assign pwm_out = clk;", "child u_child(.clk(clk), .out(pwm_out));"
+    )
+    failed_status, _ = agent._match_score(
+        "The module has no internal hierarchy and no memory macros.",
+        hierarchical_rtl,
+        {"clk", "pwm_out"},
+    )
+    assert failed_status == "missing"
+
+
+def test_match_score_rejects_async_reset_for_synchronous_requirement():
+    rtl = """
+always @(posedge clk or negedge reset_n) begin
+  if (!reset_n) counter_value <= 8'h00;
+end
+"""
+
+    status, evidence = agent._match_score(
+        "Synchronously clear the counter to zero when reset_n is low.",
+        rtl,
+        {"clk", "reset_n", "counter_value"},
+    )
+
+    assert status == "missing"
+    assert evidence == ["asynchronous_reset_sensitivity_conflicts_with_synchronous_requirement"]
+
+
 def test_match_score_recognizes_high_level_temp_monitor_evidence():
     rtl = """
 module temp_monitor_digital(
