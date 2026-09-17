@@ -10,6 +10,7 @@ from .policies import apply_model_policy
 DEFAULT_MODEL_PROFILE_ID = "chiploop_saas_default"
 DEFAULT_MODEL_PROVIDER = "openai"
 DEFAULT_MODEL = "gpt-5.4-mini"
+DEFAULT_MODEL_NOT_FOUND_FALLBACKS = ["gpt-5-mini"]
 
 
 def _default_profile() -> Dict[str, Any]:
@@ -17,16 +18,16 @@ def _default_profile() -> Dict[str, Any]:
         "model_profile_id": DEFAULT_MODEL_PROFILE_ID,
         "provider": DEFAULT_MODEL_PROVIDER,
         "routing": {
-            "default": {"model": DEFAULT_MODEL, "stream": True},
-            "planner": {"model": DEFAULT_MODEL, "stream": True},
-            "rtl_generation": {"model": DEFAULT_MODEL, "max_completion_tokens": 32000, "timeout_sec": 360, "max_retries": 2, "stream": True},
-            "spec_generation": {"model": DEFAULT_MODEL, "max_completion_tokens": 24000, "timeout_sec": 150, "max_retries": 1, "stream": True},
-            "verification_debug": {"model": DEFAULT_MODEL, "stream": True},
-            "embedded_generation": {"model": DEFAULT_MODEL, "stream": True},
-            "analog_generation": {"model": DEFAULT_MODEL, "stream": True},
-            "summarizer": {"model": DEFAULT_MODEL, "stream": True},
-            "doc_generation": {"model": DEFAULT_MODEL, "stream": True},
-            "inspection": {"model": DEFAULT_MODEL, "stream": True, "max_completion_tokens": 4096, "timeout_sec": 150, "max_retries": 1},
+            "default": {"model": DEFAULT_MODEL, "fallback_models": DEFAULT_MODEL_NOT_FOUND_FALLBACKS, "stream": True},
+            "planner": {"model": DEFAULT_MODEL, "fallback_models": DEFAULT_MODEL_NOT_FOUND_FALLBACKS, "stream": True},
+            "rtl_generation": {"model": DEFAULT_MODEL, "fallback_models": DEFAULT_MODEL_NOT_FOUND_FALLBACKS, "max_completion_tokens": 32000, "timeout_sec": 360, "max_retries": 2, "stream": True},
+            "spec_generation": {"model": DEFAULT_MODEL, "fallback_models": DEFAULT_MODEL_NOT_FOUND_FALLBACKS, "max_completion_tokens": 24000, "timeout_sec": 150, "max_retries": 1, "stream": True},
+            "verification_debug": {"model": DEFAULT_MODEL, "fallback_models": DEFAULT_MODEL_NOT_FOUND_FALLBACKS, "stream": True},
+            "embedded_generation": {"model": DEFAULT_MODEL, "fallback_models": DEFAULT_MODEL_NOT_FOUND_FALLBACKS, "stream": True},
+            "analog_generation": {"model": DEFAULT_MODEL, "fallback_models": DEFAULT_MODEL_NOT_FOUND_FALLBACKS, "stream": True},
+            "summarizer": {"model": DEFAULT_MODEL, "fallback_models": DEFAULT_MODEL_NOT_FOUND_FALLBACKS, "stream": True},
+            "doc_generation": {"model": DEFAULT_MODEL, "fallback_models": DEFAULT_MODEL_NOT_FOUND_FALLBACKS, "stream": True},
+            "inspection": {"model": DEFAULT_MODEL, "fallback_models": DEFAULT_MODEL_NOT_FOUND_FALLBACKS, "stream": True, "max_completion_tokens": 4096, "timeout_sec": 150, "max_retries": 1},
             "embeddings": {"model": "text-embedding-3-small"},
         },
         "agents": {},

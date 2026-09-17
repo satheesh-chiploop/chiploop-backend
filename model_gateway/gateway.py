@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 from openai import AzureOpenAI, OpenAI
-from openai import APITimeoutError, APIConnectionError, RateLimitError, BadRequestError
+from openai import RateLimitError, NotFoundError
 
 try:
     from portkey_ai import Portkey
@@ -94,6 +94,25 @@ def _bool_route_value(route: Dict[str, Any], key: str, env_key: str, default: bo
     if isinstance(raw, str) and raw:
         return raw.strip().lower() in ("1", "true", "yes", "on")
     return default
+
+
+def _model_candidates(route: Dict[str, Any], primary: str) -> List[str]:
+    """Return an ordered, de-duplicated route list for model-unavailable errors only."""
+    raw = route.get("fallback_models")
+    fallbacks = raw if isinstance(raw, list) else []
+    env_fallbacks = os.getenv("CHIPLOOP_MODEL_NOT_FOUND_FALLBACKS", "")
+    if env_fallbacks.strip():
+        fallbacks = [*fallbacks, *env_fallbacks.split(",")]
+    return list(dict.fromkeys(
+        model for model in [primary, *(str(item).strip() for item in fallbacks)] if model
+    ))
+
+
+def _is_model_not_found(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return isinstance(exc, NotFoundError) or (
+        "404" in message and ("model" in message or "not found" in message)
+    )
 
 
 def _wrap_model_error(provider: str, model: str, exc: Exception) -> RuntimeError:
@@ -395,28 +414,34 @@ def complete_text(
             "max_retries": int(route.get("max_retries") or os.getenv("CHIPLOOP_LLM_MAX_RETRIES", "1")),
         }
         client = OpenAI(api_key=api_key, **client_kwargs) if api_key else OpenAI(**client_kwargs)
-        started_at = _log_call_start(provider, model, capability, agent_name, prompt)
-        try:
-            resp = client.chat.completions.create(
-                model=model,
-                messages=messages,
-                stream=stream,
-                **_max_completion_args(route),
-                **({"temperature": temperature} if temperature is not None else {}),
-            )
-        except (APITimeoutError, APIConnectionError, RateLimitError, BadRequestError) as exc:
-            _record_failure(state=state, profile=profile, route=route, provider=provider, model=model, capability=capability, agent_name=agent_name, prompt=prompt, exc=exc, stream=stream, started_at=started_at)
-            raise _wrap_model_error(provider, model, exc) from exc
-        except Exception as exc:
-            _record_failure(state=state, profile=profile, route=route, provider=provider, model=model, capability=capability, agent_name=agent_name, prompt=prompt, exc=exc, stream=stream, started_at=started_at)
-            raise _wrap_model_error(provider, model, exc) from exc
-        if stream:
-            text = _collect_stream_text(resp, provider, model, started_at)
-            _record_success(state=state, profile=profile, route=route, provider=provider, model=model, capability=capability, agent_name=agent_name, prompt=prompt, output=text, stream=True, started_at=started_at)
+        candidates = _model_candidates(route, model)
+        for index, candidate in enumerate(candidates):
+            started_at = _log_call_start(provider, candidate, capability, agent_name, prompt)
+            try:
+                resp = client.chat.completions.create(
+                    model=candidate,
+                    messages=messages,
+                    stream=stream,
+                    **_max_completion_args(route),
+                    **({"temperature": temperature} if temperature is not None else {}),
+                )
+            except Exception as exc:
+                _record_failure(state=state, profile=profile, route=route, provider=provider, model=candidate, capability=capability, agent_name=agent_name, prompt=prompt, exc=exc, stream=stream, started_at=started_at)
+                if _is_model_not_found(exc) and index + 1 < len(candidates):
+                    logger.warning(
+                        "model.call.fallback provider=%s unavailable_model=%s fallback_model=%s capability=%s agent=%s",
+                        provider, candidate, candidates[index + 1], capability, agent_name or "",
+                    )
+                    continue
+                raise _wrap_model_error(provider, candidate, exc) from exc
+            if stream:
+                text = _collect_stream_text(resp, provider, candidate, started_at)
+                _record_success(state=state, profile=profile, route=route, provider=provider, model=candidate, capability=capability, agent_name=agent_name, prompt=prompt, output=text, stream=True, started_at=started_at)
+                return text
+            text = _extract_chat_text(resp, provider, candidate, started_at)
+            _record_success(state=state, profile=profile, route=route, provider=provider, model=candidate, capability=capability, agent_name=agent_name, prompt=prompt, output=text, provider_usage=getattr(resp, "usage", None), started_at=started_at)
             return text
-        text = _extract_chat_text(resp, provider, model, started_at)
-        _record_success(state=state, profile=profile, route=route, provider=provider, model=model, capability=capability, agent_name=agent_name, prompt=prompt, output=text, provider_usage=getattr(resp, "usage", None), started_at=started_at)
-        return text
+        raise RuntimeError(f"No OpenAI model candidates configured for capability={capability}")
 
     if provider == "anthropic":
         api_key = _env_value(profile, "ANTHROPIC_API_KEY")

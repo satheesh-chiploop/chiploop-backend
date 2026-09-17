@@ -5,6 +5,7 @@ from model_gateway.profiles import get_model_profile
 def test_standard_default_preserves_current_model():
     profile = get_model_profile({"model_policy": {"mode": "standard", "selected_model": "chiploop_default"}})
     assert profile["routing"]["default"]["model"] == "gpt-5.4-mini"
+    assert profile["routing"]["default"]["fallback_models"] == ["gpt-5-mini"]
 
 
 def test_standard_nemotron_routes_all_chat_capabilities():
