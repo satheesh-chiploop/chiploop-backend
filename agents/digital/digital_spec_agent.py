@@ -2724,6 +2724,9 @@ RULES
 - expected values may be exact scalars or objects containing eq, min, and/or max.
 - Every feature contract must define within_cycles. Never emit prose-only or unbound feature contracts.
 - Feature contracts, reset_behavior, behavior_rules, functionality, and operating assumptions must be mutually consistent. For each scenario, evaluate the declared stimulus numerically and ensure no stated combinational rule contradicts its expected outputs.
+- Compute each expected value from the exact stimulus values and state established by that scenario. Do not assume an output becomes zero merely because enable/request/write is inactive; held state and combinational outputs must still follow their declared equations.
+- Keep expected maps feature-focused: include an output only when the scenario directly constrains it and its value can be derived unambiguously. Never add a convenient default expectation for an unrelated output.
+- A hold/disable scenario must either establish the state it expects within its own stimulus steps or explicitly rely on the declared reset baseline. Its expected values must match any live combinational logic applied to that held state.
 - If user intent cannot be represented by observable top-level behavior, expose the required observation/control port in the contract instead of inventing an expectation.
 - direction must be input/output/inout.
 - width must be integer >= 1.

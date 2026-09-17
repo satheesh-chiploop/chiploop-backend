@@ -31,6 +31,8 @@ def test_generation_prompt_renders_multicycle_json_example(tmp_path, monkeypatch
 
     assert prompts
     assert '"stimulus":{"steps":[{"signals":{"port":value},"cycles":1}]}' in prompts[0]
+    assert "Do not assume an output becomes zero merely because enable/request/write is inactive" in prompts[0]
+    assert "Keep expected maps feature-focused" in prompts[0]
     assert "intentional prompt capture" in result["status"]
 
 
