@@ -468,6 +468,7 @@ def _normalize_spec_json(spec_json: dict):
             "operating_constraints": spec_json.get("operating_constraints", {}),
             "implementation_requirements": spec_json.get("implementation_requirements", []),
             "verification_requirements": spec_json.get("verification_requirements", []),
+            "feature_contracts": spec_json.get("feature_contracts", []),
             "memory_macros": spec_json.get("memory_macros", []),
             "hierarchy": {
                 "top_module": top,
@@ -490,6 +491,7 @@ def _normalize_spec_json(spec_json: dict):
             "operating_constraints": spec_json.get("operating_constraints", {}),
             "implementation_requirements": spec_json.get("implementation_requirements", []),
             "verification_requirements": spec_json.get("verification_requirements", []),
+            "feature_contracts": spec_json.get("feature_contracts", []),
             "memory_macros": spec_json.get("memory_macros", []),
             "ports": spec_json.get("ports", []),
             "functionality": spec_json.get("functionality", ""),
@@ -812,6 +814,62 @@ def _validate_spec_contract(spec_json: dict, mode: str, require_feature_contract
         _validate_ownership(o, f"signal_ownership[{i}]")
 
     _validate_hierarchical_endpoint_coverage(spec_json)
+    _validate_required_memory_observability(spec_json)
+
+
+def _validate_required_memory_observability(spec_json: dict) -> None:
+    """Require every declared memory read port to reach a functional consumer.
+
+    A memory macro is an implementation requirement, not merely metadata.  Its
+    read data must either feed another child input or be exposed through a
+    top-level output.  Catching this in the spec prevents repeated RTL repair
+    attempts from preserving an instantiated but functionally dead memory.
+    """
+    hierarchy = spec_json.get("hierarchy") or {}
+    modules = hierarchy.get("modules") or []
+    module_ports = {
+        str(module.get("name") or ""): {
+            str(port.get("name") or ""): str(port.get("direction") or "").lower()
+            for port in module.get("ports") or [] if isinstance(port, dict)
+        }
+        for module in modules if isinstance(module, dict)
+    }
+    top_ports = {
+        str(port.get("name") or ""): str(port.get("direction") or "").lower()
+        for port in ((hierarchy.get("top_module") or {}).get("ports") or [])
+        if isinstance(port, dict)
+    }
+    inter_sources = {
+        str(signal.get("source") or ""): signal.get("destinations") or []
+        for signal in spec_json.get("inter_module_signals") or []
+        if isinstance(signal, dict)
+    }
+    top_consumers = set()
+    for connection in spec_json.get("top_level_connections") or []:
+        if not isinstance(connection, dict):
+            continue
+        if top_ports.get(str(connection.get("top_port") or "")) != "output":
+            continue
+        top_consumers.update(str(endpoint) for endpoint in connection.get("connected_to") or [])
+
+    failures = []
+    for macro in spec_json.get("memory_macros") or []:
+        if not isinstance(macro, dict):
+            continue
+        name = str(macro.get("name") or "").strip()
+        ports = macro.get("ports") or {}
+        dout = str(ports.get("dout") or ports.get("data_out") or ports.get("rdata") or "").strip()
+        endpoint = f"{name}.{dout}" if name and dout else ""
+        if not endpoint or module_ports.get(name, {}).get(dout) != "output":
+            failures.append(f"{name or 'unnamed memory'} has no declared read-data output")
+        elif not inter_sources.get(endpoint) and endpoint not in top_consumers:
+            failures.append(
+                f"{endpoint} is unconsumed; connect it to a real child input or a top-level output"
+            )
+    if failures:
+        raise ValueError(
+            "Required memory read data must be functionally observable: " + "; ".join(failures[:8])
+        )
 
 def _write_text(path: str, content: str) -> None:
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -2001,6 +2059,7 @@ STRICT PASS3/PASS4 CONNECTIVITY REPAIR:
 - If no producer exists for a required consumer, add an OUTPUT to the responsible producer module, never another INPUT. Update that producer's behavior_rules and must_drive, then add the inter_module_signals and signal_ownership entries.
 - If an orphan is a memory read-data input and memory_macros declares its memory, materialize that declared technology-neutral wrapper as a hierarchy.modules RTL deliverable and connect the complete request/read-data interface in both directions. The memory wrapper's dout is the producer; do not delete the CPU/mailbox read-data input.
 - A memory_macros metadata object alone is not an instantiated child producer. Its wrapper module and exact ports must exist in hierarchy.modules and connectivity.
+- Every declared memory dout must be consumed by a real child input through inter_module_signals or exposed through a top-level output. An unused, tied-off, or duplicate controller output is not a consumer.
 - If an optional helper has no required externally visible behavior and none of its outputs are consumed, remove the whole helper and all references to it.
 - After editing, rebuild the consumer checklist from the returned JSON, including any ports you added. Every child input/inout must occur exactly once in either top_level_connections[].connected_to or inter_module_signals[].destinations.
 
@@ -2661,6 +2720,7 @@ RULES
 - Every port must include name, direction, width.
 - feature_contracts is mandatory and must contain one entry for every externally observable feature.
 - Every feature contract must provide explicit stimulus and expected maps using exact declared top-level port names.
+- Multi-cycle stimulus must use `"stimulus":{"steps":[{"signals":{"port":value},"cycles":1}]}`. Never invent suffixed pseudo-signals such as port_2 or port_3.
 - expected values may be exact scalars or objects containing eq, min, and/or max.
 - Every feature contract must define within_cycles. Never emit prose-only or unbound feature contracts.
 - If user intent cannot be represented by observable top-level behavior, expose the required observation/control port in the contract instead of inventing an expectation.
@@ -2679,6 +2739,7 @@ RULES
 - memory_macros[].kind must distinguish intent, for example openram_sram for generated OpenRAM or prebuilt_sky130_sram/prebuilt_sram for explicit existing macro collateral.
 - memory_macros[].depth, data_width, and addr_width must match the requested memory capacity.
 - memory_macros[].ports must map canonical roles clk, csb, we, addr, din, dout to real RTL port names.
+- The declared memory dout is an output producer. Connect it to a real controller/reader input through inter_module_signals, or expose it through a top-level output; never leave it unconsumed.
 - If MBIST is requested or likely required, set memory_macros[].requires_mbist true; otherwise false.
 - Do not replace an OpenRAM SRAM requirement with a register array in the spec.
 - For hierarchical designs, top_level_connections, inter_module_signals, and signal_ownership are mandatory and must be non-empty.
@@ -3140,7 +3201,7 @@ Return JSON only.
                                 raise ValueError("Deterministic graph closure requires a hierarchical contract.")
                             spec_json = _expose_orphan_child_inputs_at_top(spec_json)
                             spec_json = _normalize_fpga_memory_contract(spec_json, user_prompt)
-                            _validate_spec_contract(spec_json, mode)
+                            _validate_spec_contract(spec_json, mode, require_feature_contracts=True)
                             _validate_mandatory_firmware_control_plane(
                                 spec_json, mode, user_prompt, required=require_firmware_control_plane,
                             )

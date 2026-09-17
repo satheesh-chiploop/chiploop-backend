@@ -189,6 +189,24 @@ def test_structured_feature_contract_generates_monitor_checker_and_traceability(
     assert 'if "min" in rule' in generated
 
 
+def test_feature_contract_compiler_normalizes_multicycle_port_suffixes_to_steps():
+    ports = [
+        {"name": "wr_en", "direction": "input"},
+        {"name": "wr_addr", "direction": "input", "width": 8},
+        {"name": "done", "direction": "output"},
+    ]
+    contracts = tb_agent.compile_feature_contracts({"feature_contracts": [{
+        "id": "two_writes", "stimulus": {
+            "wr_en": 1, "wr_addr": 4, "wr_en_2": 1, "wr_addr_2": 8,
+        }, "expected": {"done": 1}, "within_cycles": 1,
+    }]}, ports)
+    assert contracts[0]["status"] == "executable"
+    assert contracts[0]["stimulus_steps"] == [
+        {"signals": {"wr_en": 1, "wr_addr": 4}, "cycles": 1},
+        {"signals": {"wr_en": 1, "wr_addr": 8}, "cycles": 1},
+    ]
+
+
 def test_free_text_feature_is_traceable_but_does_not_invent_checker():
     ports = [{"name": "alarm", "direction": "output"}]
     contracts = tb_agent.compile_feature_contracts(

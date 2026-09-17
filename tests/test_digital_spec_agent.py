@@ -1496,6 +1496,20 @@ def test_contract_reports_all_required_child_inputs_without_sources():
     assert "Repair every listed input in the same response" in message
 
 
+def test_flat_normalization_preserves_executable_feature_contracts():
+    feature = {
+        "id": "enable_done", "stimulus": {"enable": 1},
+        "expected": {"done": 1}, "within_cycles": 2,
+    }
+    normalized, mode = spec_agent._normalize_spec_json({
+        "name": "feature_top", "ports": [_port("enable", "input"), _port("done", "output")],
+        "feature_contracts": [feature],
+    })
+    assert mode == "flat"
+    assert normalized["feature_contracts"] == [feature]
+    spec_agent._validate_spec_contract(normalized, mode, require_feature_contracts=True)
+
+
 def test_terminal_graph_closure_exposes_and_fans_out_orphan_child_inputs():
     spec = {
         "hierarchy": {
@@ -1518,3 +1532,48 @@ def test_terminal_graph_closure_exposes_and_fans_out_orphan_child_inputs():
     connections = {item["top_port"]: item["connected_to"] for item in out["top_level_connections"]}
     assert connections["clk"] == ["a.clk", "b.clk"]
     assert connections["data_i"] == ["a.data_i"]
+
+
+def test_contract_rejects_unconsumed_required_memory_read_data():
+    spec = {
+        "memory_macros": [{
+            "name": "history_bram", "ports": {"clk": "clk", "dout": "rdata"},
+        }],
+        "hierarchy": {
+            "top_module": {**_module("top"), "rtl_output_file": "top.v", "ports": [_port("clk", "input")]},
+            "modules": [{
+                **_module("history_bram"), "rtl_output_file": "history_bram.v",
+                "ports": [_port("clk", "input"), _port("rdata", "output", 32)],
+            }],
+        },
+        "top_level_connections": [{"top_port": "clk", "connected_to": ["history_bram.clk"]}],
+        "inter_module_signals": [{
+            "name": "placeholder", "width": 1, "source": "top.clk", "destinations": ["history_bram.clk"],
+        }],
+        "signal_ownership": [{"signal": "placeholder", "owner": "top.clk"}],
+    }
+
+    with pytest.raises(ValueError, match="history_bram.rdata is unconsumed"):
+        spec_agent._validate_spec_contract(spec, "hierarchical")
+
+
+def test_contract_accepts_required_memory_read_data_consumed_by_child():
+    spec = {
+        "memory_macros": [{
+            "name": "history_bram", "ports": {"clk": "clk", "dout": "rdata"},
+        }],
+        "hierarchy": {
+            "top_module": {**_module("top"), "rtl_output_file": "top.v", "ports": [_port("clk", "input")]},
+            "modules": [
+                {**_module("history_bram"), "rtl_output_file": "history_bram.v", "ports": [_port("clk", "input"), _port("rdata", "output", 32)]},
+                {**_module("reader"), "rtl_output_file": "reader.v", "ports": [_port("rdata", "input", 32)]},
+            ],
+        },
+        "top_level_connections": [{"top_port": "clk", "connected_to": ["history_bram.clk"]}],
+        "inter_module_signals": [{
+            "name": "memory_rdata", "width": 32, "source": "history_bram.rdata", "destinations": ["reader.rdata"],
+        }],
+        "signal_ownership": [{"signal": "memory_rdata", "owner": "history_bram.rdata"}],
+    }
+
+    spec_agent._validate_spec_contract(spec, "hierarchical")

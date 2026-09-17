@@ -951,16 +951,21 @@ async def feature_contract_directed(dut):
 
     feature_contracts = {feature_contracts_json}
     for feature in feature_contracts:
-        for name, value in feature["stimulus"].items():
-            assert hasattr(dut, name), f"{{feature['feature_id']}} stimulus signal {{name}} is unavailable"
-            signal = getattr(dut, name)
-            signal.value = _fit_to_signal(signal, value)
+        for step in feature.get("stimulus_steps", []):
+            for name, value in step.get("signals", {{}}).items():
+                assert hasattr(dut, name), f"{{feature['feature_id']}} stimulus signal {{name}} is unavailable"
+                signal = getattr(dut, name)
+                signal.value = _fit_to_signal(signal, value)
+            for _ in range(int(step.get("cycles", 1))):
+                await _advance_time(dut)
         for _ in range(int(feature.get("wait_cycles", 1))):
             await _advance_time(dut)
         for name, rule in feature["expected"].items():
             assert hasattr(dut, name), f"{{feature['feature_id']}} monitor signal {{name}} is unavailable"
             actual = int(getattr(dut, name).value)
             if isinstance(rule, dict):
+                if "value" in rule:
+                    assert actual == int(rule["value"]), f"{{feature['feature_id']}}: {{name}}={{actual}}, expected {{rule['value']}}"
                 if "eq" in rule:
                     assert actual == int(rule["eq"]), f"{{feature['feature_id']}}: {{name}}={{actual}}, expected {{rule['eq']}}"
                 if "min" in rule:

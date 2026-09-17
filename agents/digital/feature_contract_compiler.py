@@ -38,6 +38,43 @@ def _mapping(item: Dict[str, Any], keys: tuple[str, ...]) -> Dict[str, Any]:
     return {}
 
 
+def _stimulus_steps(item: Dict[str, Any], names: Dict[str, str]) -> tuple[List[Dict[str, Any]], List[str]]:
+    raw = item.get("stimulus") or item.get("inputs") or item.get("given") or item.get("preconditions") or {}
+    raw_steps = raw.get("steps") if isinstance(raw, dict) and isinstance(raw.get("steps"), list) else raw
+    if not isinstance(raw_steps, list):
+        if isinstance(raw_steps, dict):
+            grouped: Dict[int, Dict[str, Any]] = {}
+            for raw_name, value in raw_steps.items():
+                raw_key = str(raw_name).strip()
+                step_index = 1
+                base_name = raw_key
+                if raw_key.lower() not in names:
+                    suffix = re.fullmatch(r"(.+)_([2-9][0-9]*)", raw_key)
+                    if suffix and suffix.group(1).lower() in names:
+                        base_name = suffix.group(1)
+                        step_index = int(suffix.group(2))
+                grouped.setdefault(step_index, {})[base_name] = value
+            raw_steps = [
+                {"signals": signals, "cycles": 1}
+                for _, signals in sorted(grouped.items())
+            ]
+        else:
+            raw_steps = [{"signals": raw_steps, "cycles": 1}]
+    steps: List[Dict[str, Any]] = []
+    unresolved: List[str] = []
+    for raw_step in raw_steps:
+        if not isinstance(raw_step, dict):
+            continue
+        signals = raw_step.get("signals") or raw_step.get("drive") or raw_step.get("values")
+        if not isinstance(signals, dict):
+            signals = {key: value for key, value in raw_step.items() if key not in {"cycles", "wait_cycles"}}
+        resolved, missing = _resolve_map(signals, names)
+        unresolved.extend(missing)
+        cycles = _integer(raw_step.get("cycles") or raw_step.get("wait_cycles") or 1)
+        steps.append({"signals": resolved, "cycles": max(1, int(cycles)) if isinstance(cycles, (int, float)) else 1})
+    return steps, unresolved
+
+
 def _integer(value: Any) -> Any:
     if isinstance(value, dict):
         return {str(key): _integer(item) for key, item in value.items()}
@@ -97,9 +134,11 @@ def compile_feature_contracts(
             continue
         seen.add(feature_id)
 
-        stimulus_raw = _mapping(item, ("stimulus", "inputs", "given", "preconditions"))
+        stimulus_steps, unresolved_stimulus = _stimulus_steps(item, port_names)
+        stimulus = stimulus_steps[0]["signals"] if len(stimulus_steps) == 1 else {}
         expected_raw = _mapping(item, ("expected", "expected_behavior", "outputs", "then"))
-        stimulus, unresolved_stimulus = _resolve_map(stimulus_raw, port_names)
+        if isinstance(expected_raw.get("signal_map"), dict):
+            expected_raw = expected_raw["signal_map"]
         expected, unresolved_expected = _resolve_map(expected_raw, port_names)
         mentioned = [name for key, name in port_names.items() if re.search(rf"\b{re.escape(key)}\b", statement.lower())]
         mentioned_registers = [name for key, name in register_names.items() if re.search(rf"\b{re.escape(key)}\b", statement.lower())]
@@ -111,6 +150,7 @@ def compile_feature_contracts(
             "feature_id": feature_id,
             "statement": statement,
             "stimulus": stimulus,
+            "stimulus_steps": stimulus_steps,
             "expected": expected,
             "wait_cycles": max(1, int(wait_cycles)),
             "monitors": list(dict.fromkeys([*expected.keys(), *mentioned])),
