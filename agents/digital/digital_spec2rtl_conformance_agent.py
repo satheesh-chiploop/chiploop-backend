@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from utils.artifact_utils import save_text_artifact_and_record
+from .feature_contract_compiler import compile_feature_contracts
 
 AGENT_NAME = "Digital Spec2RTL Conformance Agent"
 RTL_EXTENSIONS = {".v", ".sv", ".vh", ".svh"}
@@ -632,6 +633,71 @@ def _structured_requirements(spec_obj: Optional[Dict[str, Any]], spec: str) -> L
     return _extract_requirements(spec)
 
 
+def _feature_contract_evidence(
+    spec_obj: Optional[Dict[str, Any]], modules: List[Dict[str, Any]], top_module: str
+) -> Dict[str, Any]:
+    """Statically bind extracted feature stimulus/checkers to the RTL interface.
+
+    This proves structural executability only; cycle-accurate behavior remains
+    the responsibility of the independent Verification workflow.
+    """
+    top_spec = _top_spec_module(spec_obj, top_module) or {}
+    spec_ports = top_spec.get("ports") if isinstance(top_spec.get("ports"), list) else []
+    contracts = compile_feature_contracts(spec_obj or {}, spec_ports)
+    rtl_top = next((module for module in modules if module.get("name") == top_module), None)
+    if rtl_top is None and len(modules) == 1:
+        rtl_top = modules[0]
+    rtl_ports = {
+        str(port.get("name") or ""): str(port.get("direction") or "").lower()
+        for port in ((rtl_top or {}).get("ports") or []) if isinstance(port, dict)
+    }
+    results = []
+    for contract in contracts:
+        stimulus_names = sorted({
+            str(name)
+            for step in contract.get("stimulus_steps") or []
+            for name in (step.get("signals") or {}).keys()
+        })
+        expected_names = sorted(str(name) for name in (contract.get("expected") or {}).keys())
+        missing_stimulus = [name for name in stimulus_names if name not in rtl_ports]
+        missing_expected = [name for name in expected_names if name not in rtl_ports]
+        wrong_stimulus_direction = [
+            name for name in stimulus_names
+            if name in rtl_ports and rtl_ports[name] not in {"input", "inout"}
+        ]
+        wrong_expected_direction = [
+            name for name in expected_names
+            if name in rtl_ports and rtl_ports[name] not in {"output", "inout"}
+        ]
+        passed = bool(contract.get("executable")) and not any((
+            missing_stimulus, missing_expected,
+            wrong_stimulus_direction, wrong_expected_direction,
+            contract.get("unresolved_bindings") or [],
+        ))
+        results.append({
+            "feature_id": contract.get("feature_id"),
+            "status": "pass" if passed else "issues",
+            "stimulus_signals": stimulus_names,
+            "expected_signals": expected_names,
+            "missing_stimulus_signals": missing_stimulus,
+            "missing_expected_signals": missing_expected,
+            "wrong_stimulus_directions": wrong_stimulus_direction,
+            "wrong_expected_directions": wrong_expected_direction,
+            "unresolved_bindings": contract.get("unresolved_bindings") or [],
+        })
+    if not contracts:
+        return {"status": "not_applicable", "checked": 0, "passed": 0, "failed": 0, "features": []}
+    failed = sum(1 for item in results if item["status"] != "pass")
+    return {
+        "status": "pass" if failed == 0 else "issues",
+        "checked": len(results),
+        "passed": len(results) - failed,
+        "failed": failed,
+        "features": results,
+        "scope": "static interface binding; behavioral results are verified separately",
+    }
+
+
 def _add_check(counts: Dict[str, int], status: str) -> None:
     if status == "not_applicable":
         return
@@ -730,10 +796,12 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
 
     register_check = _register_evidence(spec, rtl_text, state, spec_obj, regmap_obj)
     clock_reset_check = _clock_reset_evidence(spec, modules)
+    feature_contract_check = _feature_contract_evidence(spec_obj, modules, top_module)
     _add_check(counts, top_status)
     _add_check(counts, interface_status)
     _add_check(counts, register_check["status"])
     _add_check(counts, clock_reset_check["status"])
+    _add_check(counts, feature_contract_check["status"])
 
     status = _overall_status(counts, setup_issues)
     report = {
@@ -751,6 +819,7 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
         },
         "register_map": register_check,
         "clock_reset": clock_reset_check,
+        "feature_contracts": feature_contract_check,
         "requirements": requirement_results,
         "rtl_files": rtl_files,
         "modules": modules,
@@ -774,6 +843,7 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
         f"- Interface: {interface_status}",
         f"- Register map: {register_check['status']}",
         f"- Clock/reset: {clock_reset_check['status']}",
+        f"- Feature contracts: {feature_contract_check['status']} ({feature_contract_check['passed']}/{feature_contract_check['checked']} statically bound)",
         "",
         "## Missing Or Partial Requirements",
     ]
@@ -785,8 +855,9 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
 
     report_text = json.dumps(report, indent=2)
     md_text = "\n".join(md_lines).strip() + "\n"
-    save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital/spec2rtl", "spec2rtl_conformance.json", report_text)
-    save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital/spec2rtl", "SPEC2RTL_CONFORMANCE.md", md_text)
+    if not state.get("_spec2rtl_embedded"):
+        save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital/spec2rtl", "spec2rtl_conformance.json", report_text)
+        save_text_artifact_and_record(workflow_id, AGENT_NAME, "digital/spec2rtl", "SPEC2RTL_CONFORMANCE.md", md_text)
 
     state["spec2rtl_conformance"] = report
     state["spec2rtl_status"] = status

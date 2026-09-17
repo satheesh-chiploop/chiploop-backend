@@ -106,3 +106,58 @@ end
     assert evidence["matched_registers"] == ["CONTROL"]
     assert evidence["expected_addresses"] == ["0x00"]
     assert evidence["matched_addresses"] == ["0x00"]
+
+
+def test_feature_contracts_are_statically_bound_to_rtl_interface():
+    spec = {
+        "name": "counter_top",
+        "ports": [
+            {"name": "enable", "direction": "input", "width": 1},
+            {"name": "count", "direction": "output", "width": 8},
+        ],
+        "feature_contracts": [{
+            "id": "increment", "stimulus": {"enable": 1},
+            "expected": {"count": {"min": 1}}, "within_cycles": 1,
+        }],
+    }
+    modules = [{
+        "name": "counter_top",
+        "ports": [
+            {"name": "enable", "direction": "input"},
+            {"name": "count", "direction": "output"},
+        ],
+    }]
+
+    result = agent._feature_contract_evidence(spec, modules, "counter_top")
+
+    assert result["status"] == "pass"
+    assert result["checked"] == 1
+    assert result["features"][0]["stimulus_signals"] == ["enable"]
+    assert result["features"][0]["expected_signals"] == ["count"]
+
+
+def test_feature_contract_binding_rejects_missing_or_wrong_direction_ports():
+    spec = {
+        "name": "counter_top",
+        "ports": [
+            {"name": "enable", "direction": "input", "width": 1},
+            {"name": "count", "direction": "output", "width": 8},
+        ],
+        "feature_contracts": [{
+            "id": "increment", "stimulus": {"enable": 1},
+            "expected": {"count": 1}, "within_cycles": 1,
+        }],
+    }
+    modules = [{
+        "name": "counter_top",
+        "ports": [
+            {"name": "enable", "direction": "output"},
+        ],
+    }]
+
+    result = agent._feature_contract_evidence(spec, modules, "counter_top")
+
+    assert result["status"] == "issues"
+    feature = result["features"][0]
+    assert feature["missing_expected_signals"] == ["count"]
+    assert feature["wrong_stimulus_directions"] == ["enable"]

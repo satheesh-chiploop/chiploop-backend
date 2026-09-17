@@ -15,6 +15,7 @@ from model_gateway import complete_text
 from tooling.profiles import profile_summary
 from tooling.runner import run_tool
 from utils.artifact_utils import save_text_artifact_and_record
+from .digital_spec2rtl_conformance_agent import run_agent as run_spec2rtl_conformance
 
 AGENT_NAME = "Digital RTL Agent"
 PORTKEY_API_KEY = os.getenv("PORTKEY_API_KEY")
@@ -3168,6 +3169,11 @@ def _upload_rtl_debug_artifacts(workflow_id, agent_name, rtl_dir):
         "rtl_agent_summary_pass5.txt",
         "rtl_agent_exception_pass5.txt",
         "rtl_llm_raw_output_pass5.txt",
+        "rtl_spec2rtl_conformance_pass1.json",
+        "rtl_spec2rtl_conformance_pass2.json",
+        "rtl_spec2rtl_conformance_pass3.json",
+        "rtl_spec2rtl_conformance_pass4.json",
+        "rtl_spec2rtl_conformance_pass5.json",
         "rtl_quality_gate.json",
         "rtl_agent_final_status.log",
         "rtl_agent_final_summary.txt",
@@ -3851,6 +3857,71 @@ def _validate_and_materialize_rtl(
         )
         _stage(f"verilator_lint_passed_{suffix or 'pass1'}")
 
+    # Run the same static Spec2RTL evaluator on every generation/repair pass.
+    # It shares the pass budget with compile/lint so one consolidated repair
+    # can address all failures without a second independent closure loop.
+    conformance_suffix = suffix or "pass1"
+    conformance_path = os.path.join(rtl_dir, f"rtl_spec2rtl_conformance_{conformance_suffix}.json")
+    conformance_report = {}
+    try:
+        conformance_state = dict(state or {})
+        conformance_state.update({
+            "workflow_id": str((state or {}).get("workflow_id") or "default"),
+            "artifact_dir": materialize_dir,
+            "workflow_dir": str((state or {}).get("workflow_dir") or ""),
+            "spec_json": spec_json,
+            "digital_spec_json": spec_json,
+            "rtl_files": list(artifact_list),
+            "artifact_list": list(artifact_list),
+            "top_module": _top_module_name(spec_json, mode),
+            "_spec2rtl_embedded": True,
+        })
+        conformance_result = run_spec2rtl_conformance(conformance_state)
+        conformance_report = conformance_result.get("spec2rtl_conformance") or {}
+        with open(conformance_path, "w", encoding="utf-8") as cf:
+            json.dump(conformance_report, cf, indent=2)
+        conformance_status = str(conformance_report.get("status") or "inconclusive").lower()
+        if conformance_status != "pass":
+            summary = conformance_report.get("summary") or {}
+            setup = conformance_report.get("setup_issues") or []
+            detail = (
+                f"status={conformance_status}, missing={summary.get('missing', 0)}, "
+                f"partial={summary.get('partial', 0)}, inconclusive={summary.get('inconclusive', 0)}"
+            )
+            if setup:
+                detail += f", setup_issues={','.join(str(item) for item in setup)}"
+            issues.append(f"❌ Static Spec2RTL compliance failed: {detail}.")
+            failed_requirements = [
+                item for item in conformance_report.get("requirements") or []
+                if str(item.get("status") or "").lower() not in {"matched", "pass"}
+            ]
+            repair_lines = [f"Static Spec2RTL result: {detail}."]
+            repair_lines.extend(
+                f"{item.get('id')}: {item.get('status')} - {item.get('requirement')}"
+                for item in failed_requirements[:20]
+            )
+            _append_text(
+                compile_log_path,
+                "\n=== STATIC SPEC2RTL REPAIR CHECKLIST ===\n"
+                + "\n".join(repair_lines)
+                + "\n",
+            )
+        _append_text(
+            compile_log_path,
+            "\n=== STATIC SPEC2RTL COMPLIANCE ===\n"
+            + json.dumps(conformance_report, indent=2)
+            + "\n",
+        )
+        _stage(f"spec2rtl_{conformance_status}_{conformance_suffix}")
+    except Exception as conformance_error:
+        issues.append(f"❌ Static Spec2RTL compliance check failed to execute: {conformance_error}")
+        with open(conformance_path, "w", encoding="utf-8") as cf:
+            json.dump({"status": "setup_issue", "error": str(conformance_error)}, cf, indent=2)
+        _append_text(
+            compile_log_path,
+            f"\n=== STATIC SPEC2RTL COMPLIANCE FAILURE ===\n{conformance_error}\n",
+        )
+
 
 
     summary_path = os.path.join(rtl_dir, summary_name)
@@ -3867,6 +3938,7 @@ def _validate_and_materialize_rtl(
         sf.write(f"Reset ports: {sorted(set(reset_ports))}\n")
         sf.write(f"Icarus compile: {'fail' if iverilog_failed else 'pass'}\n")
         sf.write(f"Verilator lint: {verilator_severity}\n")
+        sf.write(f"Static Spec2RTL compliance: {conformance_report.get('status', 'setup_issue')}\n")
         sf.write(f"Issue count: {len(issues)}\n")
         if issues:
             sf.write("\nIssues:\n")
@@ -3888,6 +3960,8 @@ def _validate_and_materialize_rtl(
         "verilator_log_path": verilator_log_path,
         "verilator_output": verilator_output,
         "verilator_severity": verilator_severity,
+        "spec2rtl_conformance_path": conformance_path,
+        "spec2rtl_conformance": conformance_report,
         "tool_profile": profile_summary(state or {}),
         "tool_executions": tool_executions,
         "llm_output": llm_output,
@@ -3922,6 +3996,7 @@ def _run(context: AgentContext) -> dict:
             "passed": False,
             "compile_passed": False,
             "lint_passed": False,
+            "static_spec2rtl_passed": False,
             "final_pass": "failed",
             "reason": msg,
         }
@@ -4386,6 +4461,9 @@ def _run(context: AgentContext) -> dict:
             "passed": True,
             "compile_passed": True,
             "lint_passed": True,
+            "static_spec2rtl_passed": True,
+            "static_spec2rtl_status": (final_result.get("spec2rtl_conformance") or {}).get("status"),
+            "static_spec2rtl_report": final_result.get("spec2rtl_conformance_path"),
             "final_pass": final_suffix,
             "issue_count": len(issues),
         }
