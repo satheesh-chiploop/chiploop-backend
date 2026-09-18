@@ -266,6 +266,7 @@ def _extract_spec_ports(spec: str) -> List[str]:
 
 def _match_score(requirement: str, rtl_text: str, rtl_names: Iterable[str]) -> Tuple[str, List[str]]:
     req_lower = requirement.lower()
+    rtl_without_comments = _strip_comments(rtl_text)
     words = [
         w.lower()
         for w in re.findall(r"[A-Za-z_][A-Za-z0-9_]{2,}", requirement)
@@ -279,27 +280,63 @@ def _match_score(requirement: str, rtl_text: str, rtl_names: Iterable[str]) -> T
         for match in re.finditer(
             r"(?:^|[;])\s*([A-Za-z_][A-Za-z0-9_$]*)\s+(?:#\s*\([^;]*?\)\s*)?"
             r"[A-Za-z_][A-Za-z0-9_$]*\s*\(",
-            _strip_comments(rtl_text),
+            rtl_without_comments,
             re.I | re.M | re.S,
         )
         if match.group(1).lower() not in {
             "module", "always", "always_ff", "always_comb", "begin", "end", "if", "else", "for", "while", "case", "assign",
         }
     ]
+    # Negative structural requirements are commonly emitted as coordinated
+    # lists (for example, "no memories, buses, or submodules").  Recognize the
+    # individual nouns instead of depending on one exact sentence template.
+    structure_noun = r"(?:memor(?:y|ies)|ram|rom|storage\s+arrays?|bus(?:es)?|interconnects?|submodules?|child\s+modules?|hierarchy|component\s+instances?)"
+    has_negative_structure_clause = bool(
+        re.search(rf"\b(?:no|without)\b[^.\n]*\b{structure_noun}\b", req_lower)
+        or re.search(rf"\bfree\s+of\b[^.\n]*\b{structure_noun}\b", req_lower)
+        or re.search(rf"\bneither\b[^.\n]*\b{structure_noun}\b", req_lower)
+        or re.search(r"\b(?:does|do|shall|must)\s+not\s+(?:contain|include|instantiate|use)\b", req_lower)
+    )
     no_hierarchy_required = bool(
         "no internal hierarchy" in req_lower
         or re.search(r"\bdoes\s+not\s+contain\b.*\bhierarchical\s+submodules?\b", req_lower)
+        or (has_negative_structure_clause and re.search(
+            r"\b(?:submodules?|hierarchy|hierarchical|child\s+modules?|component\s+instances?)\b", req_lower
+        ))
     )
-    if no_hierarchy_required and len(re.findall(r"\bmodule\b", rtl_text, re.I)) == 1 and not instance_types:
+    if no_hierarchy_required and len(re.findall(r"\bmodule\b", rtl_without_comments, re.I)) == 1 and not instance_types:
         evidence.append("no_internal_hierarchy")
     no_memory_required = bool(
         re.search(r"\bno\s+(?:internal\s+)?memory\s+macros?\b", req_lower)
         or re.search(r"\bdoes\s+not\s+contain\b.*\bmemory\s+macros?\b", req_lower)
+        or (has_negative_structure_clause and re.search(
+            r"\b(?:memor(?:y|ies)|ram|rom|storage\s+arrays?)\b", req_lower
+        ))
     )
-    if no_memory_required and not any(
+    inferred_memories = re.findall(
+        r"\b(?:reg|logic)\b\s*(?:\[[^\]]+\]\s*)?[A-Za-z_][A-Za-z0-9_$]*\s*\[[^\]]+\]\s*;",
+        rtl_without_comments,
+        re.I,
+    )
+    if no_memory_required and not inferred_memories and not any(
         re.search(r"(?:sram|ram|rom|memory|mem_macro)", kind, re.I) for kind in instance_types
     ):
-        evidence.append("no_memory_macros")
+        evidence.append("no_memories")
+    no_bus_required = bool(
+        has_negative_structure_clause and re.search(r"\b(?:bus(?:es)?|interconnects?)\b", req_lower)
+    )
+    rtl_identifiers = {
+        item.lower() for item in re.findall(r"\b[A-Za-z_][A-Za-z0-9_$]*\b", rtl_without_comments)
+    }
+    protocol_bus_markers = re.compile(
+        r"(?:^|_)(?:axi\d*|axil|apb|ahb|wishbone|avalon|tilelink|ace|chi|ocp|plb)(?:_|$)|"
+        r"(?:^|_)(?:awvalid|awready|awaddr|arvalid|arready|araddr|wvalid|wready|wdata|wstrb|"
+        r"bvalid|bready|bresp|rvalid|rready|rdata|rresp|paddr|psel|penable|pwrite|pwdata|"
+        r"prdata|pready|pslverr|haddr|htrans|hwrite|hwdata|hrdata|hready|hresp|cyc_i|stb_i)(?:_|$)",
+        re.I,
+    )
+    if no_bus_required and not any(protocol_bus_markers.search(item) for item in rtl_identifiers):
+        evidence.append("no_bus_interfaces")
     if re.search(r"\bsynthesiz", req_lower) and not re.search(
         r"(^|[^A-Za-z_])(initial|force|release|fork|join)\b|#[ \t]*\d+",
         _strip_comments(rtl_text),
@@ -596,7 +633,9 @@ def _match_score(requirement: str, rtl_text: str, rtl_names: Iterable[str]) -> T
     if no_hierarchy_required:
         negative_structure_expectations.append("no_internal_hierarchy")
     if no_memory_required:
-        negative_structure_expectations.append("no_memory_macros")
+        negative_structure_expectations.append("no_memories")
+    if no_bus_required:
+        negative_structure_expectations.append("no_bus_interfaces")
     if negative_structure_expectations:
         return (
             ("matched", evidence[:8])

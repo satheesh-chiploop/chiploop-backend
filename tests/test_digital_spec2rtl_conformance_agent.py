@@ -37,7 +37,7 @@ def test_match_score_proves_absent_hierarchy_and_memory_macros():
 
     assert status == "matched"
     assert "no_internal_hierarchy" in evidence
-    assert "no_memory_macros" in evidence
+    assert "no_memories" in evidence
 
     hierarchical_rtl = rtl.replace(
         "assign pwm_out = clk;", "child u_child(.clk(clk), .out(pwm_out));"
@@ -48,6 +48,78 @@ def test_match_score_proves_absent_hierarchy_and_memory_macros():
         {"clk", "pwm_out"},
     )
     assert failed_status == "missing"
+
+
+def test_match_score_proves_coordinated_negative_structure_list():
+    rtl = """
+module pwm_controller(input clk, input [7:0] period, output pwm_out);
+  assign pwm_out = clk & (period != 8'h00);
+endmodule
+"""
+
+    status, evidence = agent._match_score(
+        "The design contains no memories, buses, or submodules.",
+        rtl,
+        {"clk", "period", "pwm_out"},
+    )
+
+    assert status == "matched"
+    assert "no_memories" in evidence
+    assert "no_bus_interfaces" in evidence
+    assert "no_internal_hierarchy" in evidence
+
+
+def test_match_score_rejects_negative_structure_list_when_memory_exists():
+    rtl = """
+module queue(input clk, input [2:0] addr, output [7:0] data);
+  reg [7:0] storage [0:7];
+  assign data = storage[addr];
+endmodule
+"""
+
+    status, evidence = agent._match_score(
+        "The design contains no memories, buses, or submodules.",
+        rtl,
+        {"clk", "addr", "data", "storage"},
+    )
+
+    assert status == "missing"
+    assert "no_memories" not in evidence
+
+
+def test_match_score_recognizes_negative_structure_synonyms_and_ignores_comments():
+    rtl = """
+// This module intentionally has no child implementation.
+module controller(input clk, output done);
+  assign done = clk;
+endmodule
+"""
+    variants = [
+        "The controller contains neither RAM nor child modules.",
+        "The controller is free of storage arrays and component instances.",
+        "Implement the block without memory or hierarchy.",
+    ]
+
+    for requirement in variants:
+        status, _ = agent._match_score(requirement, rtl, {"clk", "done"})
+        assert status == "matched", requirement
+
+
+def test_match_score_detects_prefixed_protocol_bus_signals():
+    rtl = """
+module controller(input clk, input s_axi_awvalid, input [31:0] s_axi_awaddr, output s_axi_awready);
+  assign s_axi_awready = s_axi_awvalid & clk;
+endmodule
+"""
+
+    status, evidence = agent._match_score(
+        "The controller has no memory, bus, or submodule instances.",
+        rtl,
+        {"clk", "s_axi_awvalid", "s_axi_awaddr", "s_axi_awready"},
+    )
+
+    assert status == "missing"
+    assert "no_bus_interfaces" not in evidence
 
 
 def test_match_score_rejects_async_reset_for_synchronous_requirement():
