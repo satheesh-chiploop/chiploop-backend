@@ -28,6 +28,28 @@ end
     assert "period_rollover_logic" in evidence
 
 
+def test_match_score_recognizes_enabled_periodic_count_sequence():
+    rtl = """
+always @(posedge clk) begin
+  if (!reset_n) begin
+    state_q <= 8'h00;
+  end else if (run_enable) begin
+    if (state_q == terminal_limit) state_q <= 8'h00;
+    else state_q <= state_q + 8'h01;
+  end
+end
+"""
+
+    status, evidence = agent._match_score(
+        "Generate a periodic count sequence under enable control.",
+        rtl,
+        {"clk", "reset_n", "run_enable", "state_q", "terminal_limit"},
+    )
+
+    assert status == "matched"
+    assert "enabled_periodic_count_sequence" in evidence
+
+
 def test_match_score_proves_absent_hierarchy_and_memory_macros():
     rtl = "module pwm_controller(input clk, output pwm_out); assign pwm_out = clk; endmodule"
 

@@ -539,6 +539,45 @@ def _match_score(requirement: str, rtl_text: str, rtl_names: Iterable[str]) -> T
                 unproven_reset_low_outputs.append(output_name)
     if re.search(r"\bincrement", req_lower) and re.search(r"\+\s*(?:\d+'[bdh])?0*1\b|\+\s*1'b1\b", rtl_text, re.I):
         evidence.append("increment_logic")
+    if re.search(r"\b(?:periodic|repeating|cyclic)\b", req_lower) and re.search(r"\bcount", req_lower):
+        enable_conditions = re.findall(
+            r"(?:else\s+)?if\s*\(\s*([A-Za-z_][A-Za-z0-9_$]*)\s*\)",
+            rtl_without_comments,
+            re.I,
+        )
+        has_enable_control = any(
+            signal.lower() == "enable"
+            or signal.lower().endswith("_en")
+            or "enable" in signal.lower()
+            for signal in enable_conditions
+        )
+        incremented_states = list(dict.fromkeys(
+            match.group(1) or match.group(2)
+            for match in re.finditer(
+                r"\b([A-Za-z_][A-Za-z0-9_$]*)\s*<=\s*\1\s*\+\s*(?:\d+'[bdh])?0*1\b|"
+                r"\b([A-Za-z_][A-Za-z0-9_$]*)\s*<=\s*\2\s*\+\s*1'b1\b",
+                rtl_without_comments,
+                re.I,
+            )
+        ))
+        for state_name in incremented_states if has_enable_control else []:
+            terminal_compares = re.findall(
+                rf"\b{re.escape(state_name)}\s*(?:==|>=)\s*([A-Za-z_][A-Za-z0-9_$]*)\b",
+                rtl_without_comments,
+                re.I,
+            )
+            has_terminal_compare = any(
+                re.search(r"(?:period|limit|terminal|reload|modulus)", signal, re.I)
+                for signal in terminal_compares
+            )
+            has_wrap_to_zero = bool(re.search(
+                rf"\b{re.escape(state_name)}\s*<=\s*(?:\d+'[bdh]0+|0)\b",
+                rtl_without_comments,
+                re.I,
+            ))
+            if has_terminal_compare and has_wrap_to_zero:
+                evidence.append("enabled_periodic_count_sequence")
+                break
     if re.search(r"\bwrap", req_lower) and re.search(r">=|==", rtl_text) and re.search(r"<=\s*(?:\d+'h00|\d+'d0|0)\b", rtl_text, re.I):
         evidence.append("wrap_logic")
     if (
@@ -749,6 +788,7 @@ def _match_score(requirement: str, rtl_text: str, rtl_names: Iterable[str]) -> T
         "clear side effects limited to specified status bits",
         "dedicated temp_code/threshold_code outputs",
         "period_rollover_logic",
+        "enabled_periodic_count_sequence",
         "synthesizable_rtl_subset",
         "no_combinational_latch_sites",
         "complete_combinational_assignment_structure",
