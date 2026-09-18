@@ -115,13 +115,71 @@ def _coverage_pct(hit: int, found: int) -> Optional[float]:
     return round(100.0 * hit / found, 2)
 
 
+def _rtl_control_branch_totals(lcov_path: str, lines: list[str]) -> Optional[tuple[int, int]]:
+    """Separate RTL control-flow branches from Verilator expression/toggle points.
+
+    Verilator's LCOV writer emits BRDA records for several coverage point types,
+    including points attached to declarations and vector bits. Counting all of
+    them as branches produces severely misleading branch/condition percentages.
+    Source-backed filtering retains only records on RTL control-flow statements.
+    """
+    source_cache: Dict[str, list[str]] = {}
+    current_source: Optional[str] = None
+    found = hit = 0
+    saw_brda = False
+    excluded_non_control = False
+    lcov_dir = os.path.dirname(os.path.abspath(lcov_path))
+    candidate_roots = [os.path.dirname(lcov_dir), lcov_dir]
+
+    for line in lines:
+        if line.startswith("SF:"):
+            raw_source = line.split(":", 1)[1].strip()
+            candidates = [raw_source] if os.path.isabs(raw_source) else [
+                os.path.normpath(os.path.join(root, raw_source)) for root in candidate_roots
+            ]
+            current_source = next((item for item in candidates if os.path.isfile(item)), None)
+            if current_source and current_source not in source_cache:
+                try:
+                    with open(current_source, "r", encoding="utf-8", errors="ignore") as source_file:
+                        source_cache[current_source] = source_file.readlines()
+                except OSError:
+                    current_source = None
+        elif line.startswith("BRDA:"):
+            saw_brda = True
+            parts = line.split(":", 1)[1].split(",")
+            if len(parts) < 4 or not current_source or current_source not in source_cache:
+                continue
+            try:
+                line_number = int(parts[0])
+            except ValueError:
+                continue
+            source_lines = source_cache[current_source]
+            source_line = source_lines[line_number - 1] if 0 < line_number <= len(source_lines) else ""
+            source_line = re.sub(r"//.*$", "", source_line).strip()
+            is_control = bool(re.search(r"\b(?:if|case|casez|casex|while|for)\s*\(|\?", source_line))
+            if not is_control:
+                excluded_non_control = True
+                continue
+            if parts[3] in {"", "-"}:
+                continue
+            found += 1
+            try:
+                if int(parts[3] or 0) > 0:
+                    hit += 1
+            except ValueError:
+                pass
+    if not saw_brda or not excluded_non_control or found <= 0:
+        return None
+    return found, hit
+
+
 def _parse_lcov_info(path: str) -> Dict[str, Any]:
     line_found = line_hit = branch_found = branch_hit = 0
     saw_da_lines = False
     try:
         with open(path, "r", encoding="utf-8", errors="ignore") as f:
-            for raw in f:
-                line = raw.strip()
+            all_lines = [raw.strip() for raw in f]
+            for line in all_lines:
                 if line.startswith("LF:"):
                     line_found += int(line.split(":", 1)[1] or 0)
                 elif line.startswith("LH:"):
@@ -156,8 +214,7 @@ def _parse_lcov_info(path: str) -> Dict[str, Any]:
     if saw_da_lines:
         # Verilator emits DA/BRDA records but may omit LF/LH. If BRF/BRH are also
         # present they are authoritative for branch totals, so avoid double count.
-        with open(path, "r", encoding="utf-8", errors="ignore") as f:
-            text = f.read()
+        text = "\n".join(all_lines)
         if "BRF:" in text or "BRH:" in text:
             branch_found = branch_hit = 0
             for line in text.splitlines():
@@ -165,6 +222,20 @@ def _parse_lcov_info(path: str) -> Dict[str, Any]:
                     branch_found += int(line.split(":", 1)[1] or 0)
                 elif line.startswith("BRH:"):
                     branch_hit += int(line.split(":", 1)[1] or 0)
+    control_totals = _rtl_control_branch_totals(path, all_lines)
+    branch_source = "verilator_lcov_branch_proxy" if branch_found else "unavailable"
+    condition_found: Optional[int] = branch_found
+    condition_hit: Optional[int] = branch_hit
+    condition_pct = _coverage_pct(branch_hit, branch_found)
+    condition_source = "verilator_lcov_branch_proxy" if branch_found else "unavailable"
+    if control_totals is not None:
+        branch_found, branch_hit = control_totals
+        branch_source = "rtl_control_flow_from_verilator_lcov"
+        # LCOV does not identify independent Boolean condition outcomes. Do not
+        # relabel the branch proxy as true condition coverage.
+        condition_found = condition_hit = None
+        condition_pct = None
+        condition_source = "unavailable_from_verilator_lcov"
     branch_pct = _coverage_pct(branch_hit, branch_found)
     return {
         "line_found": line_found,
@@ -173,10 +244,11 @@ def _parse_lcov_info(path: str) -> Dict[str, Any]:
         "branch_found": branch_found,
         "branch_hit": branch_hit,
         "branch_coverage_pct": branch_pct,
-        "condition_found": branch_found,
-        "condition_hit": branch_hit,
-        "condition_coverage_pct": branch_pct,
-        "condition_source": "verilator_lcov_branch_proxy" if branch_found else "unavailable",
+        "branch_source": branch_source,
+        "condition_found": condition_found,
+        "condition_hit": condition_hit,
+        "condition_coverage_pct": condition_pct,
+        "condition_source": condition_source,
         "toggle_found": None,
         "toggle_hit": None,
         "toggle_coverage_pct": None,

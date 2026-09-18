@@ -76,6 +76,56 @@ def test_parse_verilator_lcov_da_records_reports_line_coverage(tmp_path):
     assert parsed["toggle_source"] == "not_reported_by_verilator_lcov"
 
 
+def test_parse_verilator_lcov_excludes_declaration_points_from_rtl_branch_coverage(tmp_path):
+    rtl_dir = tmp_path / "handoff" / "rtl"
+    rtl_dir.mkdir(parents=True)
+    rtl = rtl_dir / "controller.v"
+    rtl.write_text(
+        "\n".join([
+            "module controller(input clk, input reset_n, input enable);",
+            "  reg [7:0] counter;",
+            "  always @(posedge clk) begin",
+            "    if (!reset_n) counter <= 0;",
+            "    else if (enable) counter <= counter + 1;",
+            "  end",
+            "endmodule",
+        ]),
+        encoding="utf-8",
+    )
+    reports = tmp_path / "tb" / "reports"
+    reports.mkdir(parents=True)
+    info = reports / "code_coverage.info"
+    info.write_text(
+        "\n".join([
+            "TN:verilator_coverage",
+            "SF:../../handoff/rtl/controller.v",
+            "DA:1,10",
+            "DA:4,5",
+            "DA:5,4",
+            "BRDA:1,0,0,10",
+            "BRDA:1,0,1,0",
+            "BRDA:2,0,0,5",
+            "BRDA:4,0,0,5",
+            "BRDA:4,0,1,1",
+            "BRDA:5,0,0,4",
+            "BRDA:5,0,1,2",
+            "BRF:7",
+            "BRH:5",
+            "end_of_record",
+        ]),
+        encoding="utf-8",
+    )
+
+    parsed = execution_agent._parse_lcov_info(str(info))
+
+    assert parsed["branch_found"] == 4
+    assert parsed["branch_hit"] == 4
+    assert parsed["branch_coverage_pct"] == 100.0
+    assert parsed["branch_source"] == "rtl_control_flow_from_verilator_lcov"
+    assert parsed["condition_coverage_pct"] is None
+    assert parsed["condition_source"] == "unavailable_from_verilator_lcov"
+
+
 def test_parse_verilator_annotated_points_reports_toggle_coverage(tmp_path):
     annotated = tmp_path / "annotated"
     annotated.mkdir()

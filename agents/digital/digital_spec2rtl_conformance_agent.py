@@ -394,6 +394,52 @@ def _match_score(requirement: str, rtl_text: str, rtl_names: Iterable[str]) -> T
         evidence.append("counter_value")
     if "reset" in req_lower and re.search(r"\breset_n\b", rtl_text, re.I) and re.search(r"<=\s*(?:\d+'h00|\d+'d0|1'b0|0)\b", rtl_text, re.I):
         evidence.append("reset_zero")
+    # Prove reset requirements per named output. A reset assignment to some
+    # unrelated state register must not satisfy prose such as "pwm_out is
+    # driven low". This catches combinational outputs that remain active while
+    # reset is asserted.
+    reset_low_outputs = list(dict.fromkeys(
+        group
+        for match in re.finditer(
+            r"\b([A-Za-z_][A-Za-z0-9_$]*)\b\s+(?:is|shall\s+be|must\s+be)\s+"
+            r"(?:driven|forced|set)\s+(?:to\s+)?(?:low|zero|0)\b|"
+            r"\b([A-Za-z_][A-Za-z0-9_$]*)\b\s+(?:is|shall\s+be|must\s+be)\s+"
+            r"(?:cleared|deasserted)\b",
+            requirement,
+            re.I,
+        )
+        for group in match.groups()
+        if group
+    ))
+    reset_signal_match = re.search(r"\b(reset_n|rst_n|reset|rst)\b", requirement, re.I)
+    reset_signal = reset_signal_match.group(1) if reset_signal_match else None
+    unproven_reset_low_outputs = []
+    if reset_signal:
+        active_low_reset = reset_signal.lower().endswith("_n") or bool(
+            re.search(r"\bactive[- ]low\b", req_lower)
+        )
+        asserted_condition = rf"!\s*{re.escape(reset_signal)}" if active_low_reset else re.escape(reset_signal)
+        for output_name in reset_low_outputs:
+            output_pattern = re.escape(output_name)
+            sequential_reset_assignment = bool(re.search(
+                rf"if\s*\(\s*{asserted_condition}\s*\)\s*(?:begin\b.*?)?\b{output_pattern}\s*<=\s*"
+                rf"(?:\d+'[bdh]0+|1'b0|0)\b",
+                rtl_without_comments,
+                re.I | re.S,
+            ))
+            continuous_assignment = re.search(
+                rf"\bassign\s+{output_pattern}\s*=\s*(?P<expr>[^;]+);",
+                rtl_without_comments,
+                re.I,
+            )
+            combinational_reset_gate = bool(
+                continuous_assignment
+                and re.search(rf"\b{re.escape(reset_signal)}\b", continuous_assignment.group("expr"), re.I)
+            )
+            if sequential_reset_assignment or combinational_reset_gate:
+                evidence.append(f"reset_low_{output_name}")
+            else:
+                unproven_reset_low_outputs.append(output_name)
     if re.search(r"\bincrement", req_lower) and re.search(r"\+\s*(?:\d+'[bdh])?0*1\b|\+\s*1'b1\b", rtl_text, re.I):
         evidence.append("increment_logic")
     if re.search(r"\bwrap", req_lower) and re.search(r">=|==", rtl_text) and re.search(r"<=\s*(?:\d+'h00|\d+'d0|0)\b", rtl_text, re.I):
@@ -620,6 +666,10 @@ def _match_score(requirement: str, rtl_text: str, rtl_names: Iterable[str]) -> T
         )
     ):
         return "missing", ["asynchronous_reset_sensitivity_conflicts_with_synchronous_requirement"]
+    if unproven_reset_low_outputs:
+        return "missing", [
+            f"reset_low_not_implemented:{name}" for name in unproven_reset_low_outputs[:8]
+        ]
     if (
         "pwm_out" in req_lower
         and ("combinational" in req_lower or "level-based" in req_lower)

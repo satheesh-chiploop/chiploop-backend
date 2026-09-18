@@ -139,6 +139,36 @@ end
     assert evidence == ["asynchronous_reset_sensitivity_conflicts_with_synchronous_requirement"]
 
 
+def test_match_score_requires_named_combinational_output_to_be_reset_gated():
+    requirement = (
+        "When reset_n is low, the counter state is synchronously cleared to zero "
+        "and pwm_out is driven low."
+    )
+    ungated = """
+module pwm_controller(input reset_n, input [7:0] duty_cycle, output pwm_out);
+  reg [7:0] counter_value_r;
+  always @(posedge clk) if (!reset_n) counter_value_r <= 8'h00;
+  assign pwm_out = counter_value_r < duty_cycle;
+endmodule
+"""
+    gated = ungated.replace(
+        "assign pwm_out = counter_value_r < duty_cycle;",
+        "assign pwm_out = reset_n && (counter_value_r < duty_cycle);",
+    )
+
+    bad_status, bad_evidence = agent._match_score(
+        requirement, ungated, {"reset_n", "duty_cycle", "pwm_out", "counter_value_r"}
+    )
+    good_status, good_evidence = agent._match_score(
+        requirement, gated, {"reset_n", "duty_cycle", "pwm_out", "counter_value_r"}
+    )
+
+    assert bad_status == "missing"
+    assert bad_evidence == ["reset_low_not_implemented:pwm_out"]
+    assert good_status == "matched"
+    assert "reset_low_pwm_out" in good_evidence
+
+
 def test_match_score_uses_structural_evidence_for_implementation_properties():
     rtl = """
 module pwm_controller(input clk, input [7:0] period, output [7:0] counter_value);
