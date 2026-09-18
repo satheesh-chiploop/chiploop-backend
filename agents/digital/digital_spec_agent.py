@@ -809,6 +809,147 @@ def _validate_reset_feature_consistency(spec_json: dict, feature_ports: list, co
         raise ValueError("Reset behavior contradicts executable feature contracts. " + "; ".join(conflicts[:8]))
 
 
+def _project_internal_feature_stimulus_to_register_bus(spec_json: dict, mode: str) -> dict:
+    """Compile writable internal config stimuli into top-level register writes."""
+    top = (((spec_json.get("hierarchy") or {}).get("top_module") or {})
+           if mode == "hierarchical" else spec_json)
+    ports = [port for port in (top.get("ports") or []) if isinstance(port, dict)]
+    canonical = {
+        str(port.get("name") or "").strip().lower(): str(port.get("name") or "").strip()
+        for port in ports if str(port.get("name") or "").strip()
+    }
+    directions = {
+        str(port.get("name") or "").strip().lower(): str(port.get("direction") or "").strip().lower()
+        for port in ports if str(port.get("name") or "").strip()
+    }
+
+    def input_port(*names: str) -> str:
+        return next((canonical[name] for name in names
+                     if name in canonical and directions.get(name) in {"input", "inout"}), "")
+
+    bus = {
+        "addr": input_port("mmio_addr", "csr_addr", "reg_addr"),
+        "wdata": input_port("mmio_wdata", "csr_wdata", "reg_wdata"),
+        "write": input_port("mmio_write", "csr_write", "csr_we", "reg_write", "reg_we"),
+        "valid": input_port("mmio_valid", "csr_valid", "reg_valid"),
+        "read": input_port("mmio_read", "csr_read", "csr_re", "reg_read", "reg_re"),
+    }
+    if not all(bus[key] for key in ("addr", "wdata", "write")):
+        return spec_json
+
+    def integer(value):
+        if isinstance(value, bool):
+            return int(value)
+        if isinstance(value, (int, float)):
+            return int(value)
+        if isinstance(value, str):
+            aliases = {"true": 1, "high": 1, "asserted": 1, "on": 1,
+                       "false": 0, "low": 0, "deasserted": 0, "off": 0}
+            text = value.strip().lower()
+            if text in aliases:
+                return aliases[text]
+            try:
+                return int(text, 0)
+            except ValueError:
+                pass
+        return None
+
+    field_index = {}
+    registers = (spec_json.get("register_contract") or {}).get("registers") or []
+    for register in registers:
+        if not isinstance(register, dict):
+            continue
+        address = integer(register.get("address", register.get("offset")))
+        if address is None:
+            continue
+        register_access = str(register.get("access") or "rw").lower()
+        for field in register.get("fields") or []:
+            if not isinstance(field, dict) or not field.get("name"):
+                continue
+            access = str(field.get("access") or register_access).lower()
+            lsb = integer(field.get("lsb"))
+            msb = integer(field.get("msb", field.get("lsb")))
+            if "w" not in access or lsb is None or msb is None or lsb < 0 or msb < lsb:
+                continue
+            field_index.setdefault(str(field["name"]).strip().lower(), set()).add((address, lsb, msb))
+
+    def field_for_signal(raw_name: str):
+        name = str(raw_name or "").strip().lower()
+        candidates = [name]
+        for prefix in ("cfg_", "config_", "csr_", "reg_"):
+            if name.startswith(prefix):
+                candidates.append(name[len(prefix):])
+        matches = {
+            binding
+            for candidate in candidates
+            for binding in field_index.get(candidate, set())
+        }
+        return next(iter(matches)) if len(matches) == 1 else None
+
+    output_names = {name for name, direction in directions.items() if direction == "output"}
+    for feature in spec_json.get("feature_contracts") or []:
+        if not isinstance(feature, dict):
+            continue
+        stimulus = feature.get("stimulus")
+        raw_steps = stimulus.get("steps") if isinstance(stimulus, dict) else None
+        if isinstance(raw_steps, list):
+            steps = raw_steps
+        elif isinstance(stimulus, dict):
+            steps = [{"signals": dict(stimulus), "cycles": 1}]
+        else:
+            continue
+        writes = {}
+        projected = False
+        cleaned_steps = []
+        for raw_step in steps:
+            if not isinstance(raw_step, dict):
+                cleaned_steps.append(raw_step)
+                continue
+            signals = raw_step.get("signals") or raw_step.get("drive") or raw_step.get("values")
+            if not isinstance(signals, dict):
+                signals = {key: value for key, value in raw_step.items()
+                           if key not in {"cycles", "wait_cycles"}}
+            cleaned = {}
+            for raw_name, raw_value in signals.items():
+                lower_name = str(raw_name).strip().lower()
+                if lower_name in output_names:
+                    projected = True
+                    continue
+                if lower_name not in canonical:
+                    field = field_for_signal(lower_name)
+                    value = integer(raw_value)
+                    if field is not None and value is not None:
+                        address, lsb, msb = field
+                        width = msb - lsb + 1
+                        mask = ((1 << width) - 1) << lsb
+                        old_value, old_mask = writes.get(address, (0, 0))
+                        writes[address] = ((old_value & ~mask) | ((value << lsb) & mask), old_mask | mask)
+                        projected = True
+                        continue
+                cleaned[raw_name] = raw_value
+            cleaned_steps.append({"signals": cleaned,
+                                  "cycles": raw_step.get("cycles") or raw_step.get("wait_cycles") or 1})
+        if not projected:
+            continue
+        setup_steps = []
+        for address, (write_data, _mask) in sorted(writes.items()):
+            signals = {bus["addr"]: address, bus["wdata"]: write_data, bus["write"]: 1}
+            if bus["valid"]:
+                signals[bus["valid"]] = 1
+            if bus["read"]:
+                signals[bus["read"]] = 0
+            setup_steps.append({"signals": signals, "cycles": 1})
+        if setup_steps and cleaned_steps:
+            operational = cleaned_steps[0].get("signals") or {}
+            operational[bus["write"]] = 0
+            if bus["valid"]:
+                operational[bus["valid"]] = 0
+            if bus["read"]:
+                operational[bus["read"]] = 0
+        feature["stimulus"] = {"steps": [*setup_steps, *cleaned_steps]}
+    return spec_json
+
+
 def _validate_spec_contract(spec_json: dict, mode: str, require_feature_contracts: bool = False) -> None:
     if require_feature_contracts:
         from .feature_contract_compiler import compile_feature_contracts
@@ -2298,6 +2439,8 @@ def _compile_spec_contract(
         logger.info(f"🔍 Digital Spec Agent hierarchical port closure done suffix='{suffix or 'pass1'}'")
 
    
+    spec_json = _project_internal_feature_stimulus_to_register_bus(spec_json, mode)
+
     normalized_name = "spec_agent_normalized.json" if not suffix else f"spec_agent_normalized{suffix}.json"
     normalized_path = os.path.join(spec_dir, normalized_name)
     with open(normalized_path, "w", encoding="utf-8") as nf:

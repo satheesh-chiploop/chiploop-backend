@@ -10,6 +10,66 @@ os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-service-role-key")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from agents.digital import digital_spec_agent as spec_agent
+from agents.digital.feature_contract_compiler import compile_feature_contracts
+
+
+def test_internal_config_feature_is_projected_through_mmio_register_contract():
+    spec = {
+        "ports": [
+            {"name": "mmio_addr", "direction": "input", "width": 8},
+            {"name": "mmio_wdata", "direction": "input", "width": 32},
+            {"name": "mmio_write", "direction": "input", "width": 1},
+            {"name": "mmio_read", "direction": "input", "width": 1},
+            {"name": "mmio_valid", "direction": "input", "width": 1},
+            {"name": "rsp_valid", "direction": "input", "width": 1},
+            {"name": "rsp_ready", "direction": "output", "width": 1},
+        ],
+        "register_contract": {"registers": [{
+            "name": "CTRL", "address": 4, "access": "rw",
+            "fields": [{"name": "enable", "lsb": 2, "msb": 2, "access": "rw"}],
+        }]},
+        "feature_contracts": [{
+            "id": "accept_response", "description": "Accept a response when enabled.",
+            "stimulus": {"cfg_enable": 1, "rsp_valid": 1, "rsp_ready": 1},
+            "expected": {"rsp_ready": 1}, "within_cycles": 1,
+        }],
+    }
+
+    spec_agent._project_internal_feature_stimulus_to_register_bus(spec, "flat")
+
+    steps = spec["feature_contracts"][0]["stimulus"]["steps"]
+    assert steps[0]["signals"] == {
+        "mmio_addr": 4, "mmio_wdata": 4, "mmio_write": 1,
+        "mmio_valid": 1, "mmio_read": 0,
+    }
+    assert steps[1]["signals"] == {
+        "rsp_valid": 1, "mmio_write": 0, "mmio_valid": 0, "mmio_read": 0,
+    }
+    compiled = compile_feature_contracts(spec, spec["ports"])
+    assert compiled[0]["executable"] is True
+    assert compiled[0]["stimulus_cycles"] == 2
+
+
+def test_unknown_internal_feature_signal_is_not_silently_removed():
+    spec = {
+        "ports": [
+            {"name": "mmio_addr", "direction": "input", "width": 8},
+            {"name": "mmio_wdata", "direction": "input", "width": 32},
+            {"name": "mmio_write", "direction": "input", "width": 1},
+            {"name": "done", "direction": "output", "width": 1},
+        ],
+        "register_contract": {"registers": []},
+        "feature_contracts": [{
+            "id": "unknown", "description": "Unknown internal control.",
+            "stimulus": {"cfg_missing": 1}, "expected": {"done": 1},
+        }],
+    }
+
+    spec_agent._project_internal_feature_stimulus_to_register_bus(spec, "flat")
+
+    compiled = compile_feature_contracts(spec, spec["ports"])
+    assert compiled[0]["executable"] is False
+    assert compiled[0]["unresolved_bindings"] == ["cfg_missing"]
 
 
 def test_generation_prompt_renders_multicycle_json_example(tmp_path, monkeypatch):
