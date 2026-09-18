@@ -1,5 +1,7 @@
 import os
 
+import pytest
+
 os.environ.setdefault("SUPABASE_URL", "http://localhost:54321")
 os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-service-role-key")
 os.environ.setdefault("OPENAI_API_KEY", "test-openai-key")
@@ -557,6 +559,66 @@ endmodule
 
     assert status == "matched"
     assert "IRQ_CLEAR.sample_done clear" in evidence
+
+
+@pytest.mark.parametrize("requirement,expected_evidence", [
+    ("Clamp actuator commands to programmable min/max limits.", "programmable_min_max_clamp"),
+    ("Optionally apply simple slew-rate limiting when enabled.", "bounded_slew_delta"),
+    ("Deassert actuator command validity on invalid, stale, timeout, reset, or fault conditions.", "output_validity_inhibition"),
+    ("No fallback command or substitute command is allowed.", "no_fallback_value_and_validity_inhibited"),
+])
+def test_generic_application_control_behavior_proofs(requirement, expected_evidence):
+    rtl = """
+module control(input clk, input [31:0] pkt_command, input [31:0] min_bound,
+ input [31:0] max_bound, input [7:0] slew_step, output reg actuator_cmd_valid);
+reg [31:0] clamped_cmd, slew_cmd, last_cmd_reg, diff_val;
+always @(*) begin
+  clamped_cmd = pkt_command;
+  if (pkt_command < min_bound) clamped_cmd = min_bound;
+  else if (pkt_command > max_bound) clamped_cmd = max_bound;
+  diff_val = clamped_cmd - last_cmd_reg;
+  slew_cmd = clamped_cmd;
+  if (diff_val > slew_step) slew_cmd = last_cmd_reg + slew_step;
+end
+always @(posedge clk) begin
+  if (pkt_command[31]) actuator_cmd_valid <= 1'b1;
+  else actuator_cmd_valid <= 1'b0;
+end
+endmodule
+"""
+    status, evidence = agent._match_score(requirement, rtl, set(), {})
+    assert status == "matched"
+    assert expected_evidence in evidence
+
+
+def test_reset_prose_generic_state_word_is_not_treated_as_output():
+    rtl = """
+module top(input clk, input rst_n, output reg ready);
+reg state;
+always @(posedge clk or negedge rst_n) begin
+  if (!rst_n) begin state <= 1'b0; ready <= 1'b0; end
+  else ready <= state;
+end
+endmodule
+"""
+    status, evidence = agent._match_score(
+        "On rst_n deassertion low, pending state is cleared and ready is deasserted.",
+        rtl,
+        {"clk", "rst_n", "ready", "state"},
+        {"output_ports": {"ready"}},
+    )
+    assert status == "matched"
+    assert "reset_low_not_implemented:state" not in evidence
+
+
+def test_register_evidence_accepts_descriptive_field_suffix_alias(tmp_path):
+    spec = {"register_contract": {"registers": [{
+        "name": "TELEMETRY", "address": "0x18",
+        "fields": [{"name": "telemetry_word", "lsb": 0, "msb": 31}],
+    }]}}
+    rtl = "always @(*) case (csr_addr) 8'h18: csr_rdata = telemetry_shadow; endcase"
+    result = agent._register_evidence("", rtl, {}, spec, None)
+    assert result["missing"] == []
 
 
 def test_register_evidence_merges_duplicate_register_and_prefers_address():

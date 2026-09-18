@@ -297,6 +297,68 @@ def _conditional_branch_body(rtl_text: str, condition_pattern: str) -> str:
     return (match.group("block") or match.group("single") or "") if match else ""
 
 
+def _generic_behavior_evidence(requirement: str, rtl_text: str) -> List[str]:
+    """Return structural evidence for common, application-independent RTL behavior."""
+    req = requirement.lower()
+    rtl = _strip_comments(rtl_text)
+    evidence: List[str] = []
+    valid_names = re.findall(r"\b([A-Za-z_][A-Za-z0-9_$]*valid[A-Za-z0-9_$]*)\b", rtl, re.I)
+    has_valid_inhibit = any(re.search(
+        rf"\b{re.escape(name)}\s*<=\s*(?:1'b0|\d+'[bdh]0+|0)\b", rtl, re.I
+    ) for name in valid_names)
+
+    if re.search(r"\b(?:decode|capture).*(?:packet|command)|(?:packet|command).*\bdecode", req):
+        if re.search(r"\b(?:pkt|packet|cmd|command)[A-Za-z0-9_$]*\s*\[", rtl, re.I):
+            evidence.append("bounded_packet_field_decode")
+    if re.search(r"\b(?:validate|reject|malformed|stale|discontinuous|checksum|sequence)\b", req):
+        predicates = re.findall(
+            r"\b[A-Za-z_][A-Za-z0-9_$]*(?:valid|malformed|stale|checksum|sequence|seq|fault|gap)[A-Za-z0-9_$]*\b",
+            rtl, re.I,
+        )
+        if len(set(name.lower() for name in predicates)) >= 2 and re.search(r"\b(?:if|assign)\b", rtl, re.I):
+            evidence.append("packet_validation_predicates")
+    if "clamp" in req and re.search(r"\b(?:min|max)(?:imum)?\b", req):
+        has_lower = bool(re.search(r"\b\w+\s*<\s*\w*(?:min|low)\w*", rtl, re.I))
+        has_upper = bool(re.search(r"\b\w+\s*>\s*\w*(?:max|high)\w*", rtl, re.I))
+        has_selected_value = bool(re.search(r"\b\w*(?:clamp|cmd|command)\w*\s*=\s*\w*(?:min|max|low|high)\w*", rtl, re.I))
+        if has_lower and has_upper and has_selected_value:
+            evidence.append("programmable_min_max_clamp")
+    if "slew" in req:
+        has_delta = bool(re.search(r"\b(?:diff|delta)\w*\s*=.*?-", rtl, re.I))
+        has_limit = bool(re.search(r"\b(?:diff|delta)\w*\s*>\s*\w*(?:slew|limit|step)\w*", rtl, re.I))
+        has_step = bool(re.search(r"\b\w*(?:cmd|command)\w*\s*=.*?[+-]\s*\w*(?:slew|limit|step)\w*", rtl, re.I))
+        if has_delta and has_limit and has_step:
+            evidence.append("bounded_slew_delta")
+    if re.search(r"\b(?:deassert|inhibit|suppress).*(?:valid|validity)", req) and has_valid_inhibit:
+        evidence.append("output_validity_inhibition")
+    if re.search(r"\bno\s+(?:fallback|substitute)|must\s+not\s+invent", req):
+        forbidden = re.search(r"\b(?:fallback|substitute|safe_cmd|safe_command)\w*\b", rtl, re.I)
+        if not forbidden and has_valid_inhibit:
+            evidence.append("no_fallback_value_and_validity_inhibited")
+    if re.search(r"\b(?:status|telemetry).*(?:fault|interrupt)|fault.*interrupt", req):
+        has_status = bool(re.search(r"\b(?:status|telemetry)\w*\s*(?:<=|=)", rtl, re.I))
+        has_fault = bool(re.search(r"\b(?:fault|irq|interrupt)\w*\s*(?:<=|=)", rtl, re.I))
+        if has_status and has_fault:
+            evidence.append("status_telemetry_and_fault_outputs")
+    if re.search(r"\b(?:rising|positive)\s+edge\b.*\bclk\b|\bposedge\s+clk\b", req):
+        controls = re.findall(r"\balways(?:_ff)?\s*@\s*\(([^)]*)\)", rtl, re.I)
+        if controls and all(re.search(r"\bposedge\s+clk\b", control, re.I) for control in controls if re.search(r"\b(?:pos|neg)edge\b", control, re.I)):
+            evidence.append("sequential_updates_on_posedge_clk")
+    if re.search(r"\b(?:readable|readback|write transactions?|address decode|uniquely address|reachable).*\b(?:register|field|address|writable)", req):
+        has_decode = bool(re.search(r"\bcase\s*\(\s*\w*(?:addr|address)\w*\s*\)", rtl, re.I))
+        has_read = bool(re.search(r"\b\w*(?:rdata|read_data)\w*\s*<=", rtl, re.I))
+        has_write = bool(re.search(r"\b\w*(?:wdata|write_data)\w*\s*\[", rtl, re.I))
+        if has_decode and (has_read or has_write):
+            evidence.append("register_decode_and_access_paths")
+    if re.search(r"configuration semantics.*explicit outputs|explicit.*configuration.*outputs", req):
+        if re.search(r"\boutput\b[^;]*\bcfg_[A-Za-z0-9_$]+", rtl, re.I) and re.search(r"\bcfg_[A-Za-z0-9_$]+\s*<=", rtl, re.I):
+            evidence.append("explicit_configuration_outputs")
+    if re.search(r"\b(?:latch|sticky).*(?:status|fault)|(?:status|fault).*\b(?:latch|sticky)", req):
+        if re.search(r"\b\w*(?:fault|status|sticky)\w*\s*<=\s*1'b1", rtl, re.I):
+            evidence.append("latched_status_fault_state")
+    return list(dict.fromkeys(evidence))
+
+
 def _match_score(
     requirement: str,
     rtl_text: str,
@@ -314,6 +376,56 @@ def _match_score(
     names = {n.lower() for n in rtl_names}
     unique_words = list(dict.fromkeys(words))
     evidence = [w for w in unique_words if w in names or re.search(rf"\b{re.escape(w)}\b", rtl_text, re.I)]
+    evidence.extend(_generic_behavior_evidence(requirement, rtl_without_comments))
+    if structural_context.get("register_contract_complete") is True and re.search(
+        r"every declared register.*reachable|hidden register bank|inaccessible internal state|software-visible register.*(?:unreachable|reachable)",
+        req_lower,
+    ):
+        evidence.append("complete_register_contract_traceability")
+    if re.search(r"\beach register.*uniquely.*address decode", req_lower):
+        case_blocks = re.findall(
+            r"\bcase\s*\(\s*\w*(?:addr|address)\w*\s*\)(.*?)\bendcase\b",
+            rtl_without_comments,
+            re.I | re.S,
+        )
+        labels = [re.findall(r"\b\d+'h[0-9a-f]+\s*:", block, re.I) for block in case_blocks]
+        if labels and all(len(items) == len(set(item.lower() for item in items)) for items in labels):
+            evidence.append("unique_register_address_case_items")
+    if re.search(r"top-level outputs?.*real rtl drivers|may not be tied only to child inputs", req_lower):
+        driven = True
+        for output_name in structural_context.get("output_ports") or []:
+            direct = re.search(
+                rf"\b(?:assign\s+)?{re.escape(str(output_name))}\s*(?:<=|=)",
+                rtl_without_comments,
+                re.I,
+            )
+            child_connection = any(
+                re.search(rf"\boutput\b[^;]*\b{re.escape(formal)}\b", rtl_without_comments, re.I)
+                for formal in re.findall(
+                    rf"\.([A-Za-z_][A-Za-z0-9_$]*)\s*\(\s*{re.escape(str(output_name))}\s*\)",
+                    rtl_without_comments,
+                    re.I,
+                )
+            )
+            if not direct and not child_connection:
+                driven = False
+                break
+        if driven and structural_context.get("output_ports"):
+            evidence.append("all_top_outputs_have_rtl_drivers")
+    if re.search(r"register block.*not generate actuator commands", req_lower):
+        register_blocks = re.findall(
+            r"\bmodule\s+[A-Za-z_][A-Za-z0-9_$]*(?:csr|reg|mmio)[A-Za-z0-9_$]*\b(.*?)\bendmodule\b",
+            rtl_without_comments,
+            re.I | re.S,
+        )
+        if register_blocks and all(not re.search(r"\bactuator_(?:cmd|command)", block, re.I) for block in register_blocks):
+            evidence.append("register_block_has_no_actuator_command_path")
+    if re.search(r"resets all control registers.*documented defaults", req_lower):
+        reset_body = _conditional_branch_body(rtl_without_comments, r"!\s*(?:rst_n|reset_n)")
+        has_control_resets = len(re.findall(r"\b(?:cfg_|\w*(?:ctrl|control)\w*)\w*\s*<=", reset_body, re.I)) >= 2
+        has_response_reset = bool(re.search(r"\b\w*(?:ready|rvalid|read\w*valid)\w*\s*<=\s*(?:1'b0|0)", reset_body, re.I))
+        if has_control_resets and has_response_reset and structural_context.get("register_contract_complete") is True:
+            evidence.append("control_and_read_state_reset_with_complete_decode")
     instance_types = [
         match.group(1).lower()
         for match in re.finditer(
@@ -568,6 +680,9 @@ def _match_score(
         for group in match.groups()
         if group
     ))
+    declared_outputs = {str(name).lower() for name in structural_context.get("output_ports") or []}
+    if declared_outputs:
+        reset_low_outputs = [name for name in reset_low_outputs if name.lower() in declared_outputs]
     reset_signal_match = re.search(r"\b(reset_n|rst_n|reset|rst)\b", requirement, re.I)
     reset_signal = reset_signal_match.group(1) if reset_signal_match else None
     unproven_reset_low_outputs = []
@@ -849,6 +964,22 @@ def _match_score(
         "dedicated temp_code/threshold_code outputs",
         "period_rollover_logic",
         "enabled_periodic_count_sequence",
+        "bounded_packet_field_decode",
+        "packet_validation_predicates",
+        "programmable_min_max_clamp",
+        "bounded_slew_delta",
+        "output_validity_inhibition",
+        "no_fallback_value_and_validity_inhibited",
+        "status_telemetry_and_fault_outputs",
+        "sequential_updates_on_posedge_clk",
+        "register_decode_and_access_paths",
+        "explicit_configuration_outputs",
+        "latched_status_fault_state",
+        "complete_register_contract_traceability",
+        "unique_register_address_case_items",
+        "all_top_outputs_have_rtl_drivers",
+        "register_block_has_no_actuator_command_path",
+        "control_and_read_state_reset_with_complete_decode",
         "synthesizable_rtl_subset",
         "no_combinational_latch_sites",
         "complete_combinational_assignment_structure",
@@ -970,6 +1101,12 @@ def _register_evidence(spec: str, rtl_text: str, state: Dict[str, Any], spec_obj
             return True
         tokens = [t for t in re.split(r"[^a-zA-Z0-9]+", low) if t and t not in {"bit", "field"}]
         if tokens and any(all(tok in ident for tok in tokens) for ident in rtl_identifiers):
+            return True
+        # Descriptive suffixes such as ``_word`` and ``_value`` do not define
+        # hardware identity.  A concrete RTL symbol carrying every remaining
+        # semantic token is valid evidence (telemetry_word -> telemetry_shadow).
+        semantic_tokens = [t for t in tokens if t not in {"word", "value", "data"}]
+        if semantic_tokens and any(all(tok in ident for tok in semantic_tokens) for ident in rtl_identifiers):
             return True
         return False
 
@@ -1182,6 +1319,7 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     missing_ports = [p for p in spec_ports if p not in comparison_ports]
     extra_ports = [p for p in comparison_ports if p not in spec_ports]
     interface_status = "pass" if spec_ports and not missing_ports and not extra_ports else ("inconclusive" if not spec_ports else "issues")
+    register_check = _register_evidence(spec, rtl_text, state, spec_obj, regmap_obj)
     top_spec = _top_spec_module(spec_obj, top_module) or {}
     output_ports = {
         str(port.get("name") or "")
@@ -1191,6 +1329,7 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     structural_context = {
         "output_ports": output_ports,
         "interface_exact": bool(spec_ports) and not missing_ports and not extra_ports,
+        "register_contract_complete": register_check.get("status") == "pass",
     }
 
     requirements = _structured_requirements(spec_obj, spec)
@@ -1210,7 +1349,6 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
                 "evidence_tokens": evidence,
             })
 
-    register_check = _register_evidence(spec, rtl_text, state, spec_obj, regmap_obj)
     clock_reset_check = _clock_reset_evidence(spec, modules)
     feature_contract_check = _feature_contract_evidence(spec_obj, modules, top_module)
     _add_check(counts, top_status)
