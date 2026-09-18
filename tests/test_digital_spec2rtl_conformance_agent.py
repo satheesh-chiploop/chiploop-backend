@@ -109,6 +109,100 @@ endmodule
     assert "no_memories" not in evidence
 
 
+def test_match_score_proves_no_hidden_state_memory_or_extra_interface():
+    rtl = """
+module controller(input clk, output [7:0] count_out);
+  reg [7:0] count_q;
+  always @(posedge clk) begin
+    count_q <= count_q + 8'h01;
+  end
+  assign count_out = count_q;
+endmodule
+"""
+    context = {"output_ports": {"count_out"}, "interface_exact": True}
+
+    status, evidence = agent._match_score(
+        "Avoid any hidden state, memory, or extra handshakes beyond the declared interface.",
+        rtl,
+        {"clk", "count_out", "count_q"},
+        context,
+    )
+
+    assert status == "matched"
+    assert "no_hidden_sequential_state" in evidence
+    assert "no_memories" in evidence
+    assert "no_extra_interface_handshakes" in evidence
+
+
+def test_match_score_rejects_unobservable_sequential_state():
+    rtl = """
+module controller(input clk, output done);
+  reg hidden_q;
+  always @(posedge clk) hidden_q <= ~hidden_q;
+  assign done = 1'b0;
+endmodule
+"""
+
+    status, evidence = agent._match_score(
+        "Avoid hidden state or extra handshakes beyond the declared interface.",
+        rtl,
+        {"clk", "done", "hidden_q"},
+        {"output_ports": {"done"}, "interface_exact": True},
+    )
+
+    assert status == "missing"
+    assert "no_hidden_sequential_state" not in evidence
+
+
+def test_hidden_state_checker_sees_later_assignment_after_nested_blocks():
+    rtl = """
+module controller(input clk, input reset_n, output visible);
+  reg visible_q;
+  reg hidden_q;
+  always @(posedge clk) begin
+    if (!reset_n) begin
+      visible_q <= 1'b0;
+    end else begin
+      visible_q <= 1'b1;
+    end
+    hidden_q <= ~hidden_q;
+  end
+  assign visible = visible_q;
+endmodule
+"""
+
+    status, evidence = agent._match_score(
+        "Avoid hidden state beyond the declared interface.",
+        rtl,
+        {"clk", "reset_n", "visible", "visible_q", "hidden_q"},
+        {"output_ports": {"visible"}, "interface_exact": True},
+    )
+
+    assert status == "missing"
+    assert "no_hidden_sequential_state" not in evidence
+
+
+def test_hidden_state_only_requirement_does_not_imply_no_memory_requirement():
+    rtl = """
+module storage(input clk, output [7:0] data);
+  reg [7:0] memory [0:3];
+  reg [7:0] data_q;
+  always @(posedge clk) data_q <= memory[0];
+  assign data = data_q;
+endmodule
+"""
+
+    status, evidence = agent._match_score(
+        "Avoid hidden state beyond the declared interface.",
+        rtl,
+        {"clk", "data", "data_q", "memory"},
+        {"output_ports": {"data"}, "interface_exact": True},
+    )
+
+    assert status == "matched"
+    assert "no_memories" not in evidence
+
+
 def test_match_score_recognizes_negative_structure_synonyms_and_ignores_comments():
     rtl = """
 // This module intentionally has no child implementation.
@@ -247,6 +341,93 @@ endmodule
     assert "all_sequential_state_synchronously_reset_zero" in evidence
 
 
+def test_match_score_rejects_when_only_some_sequential_state_is_reset():
+    rtl = """
+module controller(input clk, input reset_n);
+  reg state_a;
+  reg state_b;
+  always @(posedge clk) begin
+    if (!reset_n) begin
+      state_a <= 1'b0;
+    end else begin
+      state_a <= 1'b1;
+    end
+    state_b <= ~state_b;
+  end
+endmodule
+"""
+
+    status, evidence = agent._match_score(
+        "Synchronously reset all registers to zero.",
+        rtl,
+        {"clk", "reset_n", "state_a", "state_b"},
+    )
+
+    assert status == "missing"
+    assert evidence == ["not_all_sequential_state_has_synchronous_zero_reset"]
+
+
+def test_reset_proof_does_not_take_zero_assignment_from_else_branch():
+    rtl = """
+module controller(input clk, input reset_n);
+  reg state_a;
+  reg state_b;
+  always @(posedge clk) begin
+    if (!reset_n) begin
+      state_a <= 1'b0;
+      state_b <= 1'b1;
+    end else begin
+      state_a <= 1'b1;
+      state_b <= 1'b0;
+    end
+  end
+endmodule
+"""
+
+    status, evidence = agent._match_score(
+        "Synchronously reset all registers to zero.",
+        rtl,
+        {"clk", "reset_n", "state_a", "state_b"},
+    )
+
+    assert status == "missing"
+    assert evidence == ["not_all_sequential_state_has_synchronous_zero_reset"]
+
+
+def test_match_score_rejects_always_ff_async_reset_for_synchronous_requirement():
+    rtl = """
+always_ff @(posedge clk or negedge reset_n) begin
+  if (!reset_n) state_q <= 1'b0;
+  else state_q <= state_d;
+end
+"""
+
+    status, evidence = agent._match_score(
+        "Synchronously reset state_q when reset_n is low.",
+        rtl,
+        {"clk", "reset_n", "state_q", "state_d"},
+    )
+
+    assert status == "missing"
+    assert evidence == ["asynchronous_reset_sensitivity_conflicts_with_synchronous_requirement"]
+
+
+def test_negative_memory_requirement_detects_integer_array():
+    rtl = """
+module controller(input clk, output done);
+  integer storage [0:15];
+  assign done = 1'b0;
+endmodule
+"""
+
+    status, evidence = agent._match_score(
+        "The controller contains no memories.", rtl, {"clk", "done", "storage"}
+    )
+
+    assert status == "missing"
+    assert "no_memories" not in evidence
+
+
 def test_match_score_uses_structural_evidence_for_implementation_properties():
     rtl = """
 module pwm_controller(input clk, input [7:0] period, output [7:0] counter_value);
@@ -285,6 +466,23 @@ always @(posedge clk) pwm_out_r <= (counter_reg < duty_cycle);
     assert bad_status == "missing"
     assert bad_evidence == ["pwm_out_combinational_compare_not_implemented"]
     assert good_status == "matched"
+
+
+def test_match_score_accepts_one_hop_combinational_output_alias():
+    rtl = """
+reg pwm_decode;
+assign pwm_out = pwm_decode;
+always @(*) begin
+  pwm_decode = (counter_reg < duty_cycle) ? 1'b1 : 1'b0;
+end
+"""
+    requirement = "pwm_out is a combinational decode of the registered count and duty_cycle."
+
+    status, _ = agent._match_score(
+        requirement, rtl, {"pwm_out", "pwm_decode", "counter_reg", "duty_cycle"}
+    )
+
+    assert status == "matched"
 
 
 def test_match_score_recognizes_high_level_temp_monitor_evidence():

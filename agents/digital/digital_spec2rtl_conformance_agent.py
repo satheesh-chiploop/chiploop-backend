@@ -264,9 +264,48 @@ def _extract_spec_ports(spec: str) -> List[str]:
     return sorted(ports)
 
 
-def _match_score(requirement: str, rtl_text: str, rtl_names: Iterable[str]) -> Tuple[str, List[str]]:
+def _edge_triggered_assignment_targets(rtl_text: str) -> set[str]:
+    """Collect nonblocking-assignment targets from complete edge-triggered processes."""
+    text = _strip_comments(rtl_text)
+    starts = list(re.finditer(
+        r"\balways(?:_ff)?\s*@\s*\([^)]*\b(?:posedge|negedge)\b[^)]*\)",
+        text,
+        re.I,
+    ))
+    targets: set[str] = set()
+    for index, match in enumerate(starts):
+        next_always = starts[index + 1].start() if index + 1 < len(starts) else len(text)
+        endmodule = text.find("endmodule", match.end(), next_always)
+        end = endmodule if endmodule >= 0 else next_always
+        body = text[match.end():end]
+        targets.update(re.findall(
+            r"(?:^|;|\bbegin\b|\bend\b|\belse\b|\))\s*([A-Za-z_][A-Za-z0-9_$]*)\s*<=",
+            body,
+            re.I,
+        ))
+    return targets
+
+
+def _conditional_branch_body(rtl_text: str, condition_pattern: str) -> str:
+    """Return the immediate branch body without crossing into a later else branch."""
+    match = re.search(
+        rf"\bif\s*\(\s*{condition_pattern}\s*\)\s*"
+        r"(?:begin\b(?P<block>.*?)\bend|(?P<single>[^;]+;))",
+        _strip_comments(rtl_text),
+        re.I | re.S,
+    )
+    return (match.group("block") or match.group("single") or "") if match else ""
+
+
+def _match_score(
+    requirement: str,
+    rtl_text: str,
+    rtl_names: Iterable[str],
+    structural_context: Optional[Dict[str, Any]] = None,
+) -> Tuple[str, List[str]]:
     req_lower = requirement.lower()
     rtl_without_comments = _strip_comments(rtl_text)
+    structural_context = structural_context or {}
     words = [
         w.lower()
         for w in re.findall(r"[A-Za-z_][A-Za-z0-9_]{2,}", requirement)
@@ -314,7 +353,8 @@ def _match_score(requirement: str, rtl_text: str, rtl_names: Iterable[str]) -> T
         ))
     )
     inferred_memories = re.findall(
-        r"\b(?:reg|logic)\b\s*(?:\[[^\]]+\]\s*)?[A-Za-z_][A-Za-z0-9_$]*\s*\[[^\]]+\]\s*;",
+        r"\b(?:reg|logic|bit|integer|wire)\b\s*(?:signed\s*)?(?:\[[^\]]+\]\s*)?"
+        r"[A-Za-z_][A-Za-z0-9_$]*\s*\[[^\]]+\]\s*;",
         rtl_without_comments,
         re.I,
     )
@@ -337,6 +377,43 @@ def _match_score(requirement: str, rtl_text: str, rtl_names: Iterable[str]) -> T
     )
     if no_bus_required and not any(protocol_bus_markers.search(item) for item in rtl_identifiers):
         evidence.append("no_bus_interfaces")
+    architectural_minimality_required = bool(
+        re.search(r"\b(?:avoid|no|without|free\s+of)\b[^.\n]*(?:hidden\s+state|extra\s+handshakes?|undeclared\s+interfaces?)", req_lower)
+    )
+    minimality_expectations = []
+    if architectural_minimality_required:
+        hidden_state_prohibited = bool(re.search(r"\bhidden\s+state\b", req_lower))
+        memory_prohibited = bool(re.search(
+            r"\b(?:no|without|avoid|free\s+of)\b[^.\n]*\b(?:memor(?:y|ies)|ram|rom|storage\s+arrays?)\b",
+            req_lower,
+        ))
+        extra_interface_prohibited = bool(re.search(
+            r"\b(?:extra\s+handshakes?|undeclared\s+interfaces?)\b", req_lower
+        ))
+        sequential_targets = _edge_triggered_assignment_targets(rtl_without_comments)
+        output_names = {str(item) for item in structural_context.get("output_ports") or []}
+        observable_state = set()
+        for target in sequential_targets:
+            if target in output_names or any(re.search(
+                rf"\bassign\s+{re.escape(output_name)}\s*=\s*[^;]*\b{re.escape(target)}\b",
+                rtl_without_comments,
+                re.I,
+            ) for output_name in output_names):
+                observable_state.add(target)
+        if hidden_state_prohibited:
+            if not sequential_targets or observable_state == sequential_targets:
+                evidence.append("no_hidden_sequential_state")
+            minimality_expectations.append("no_hidden_sequential_state")
+        if memory_prohibited:
+            if not inferred_memories and not any(
+                re.search(r"(?:sram|ram|rom|memory|mem_macro)", kind, re.I) for kind in instance_types
+            ):
+                evidence.append("no_memories")
+            minimality_expectations.append("no_memories")
+        if extra_interface_prohibited:
+            if structural_context.get("interface_exact") is True:
+                evidence.append("no_extra_interface_handshakes")
+            minimality_expectations.append("no_extra_interface_handshakes")
     synchronous_clock_match = re.search(
         r"\b(?:fully\s+)?synchronous(?:ly)?\s+to\s+([A-Za-z_][A-Za-z0-9_$]*)\b",
         requirement,
@@ -452,30 +529,13 @@ def _match_score(requirement: str, rtl_text: str, rtl_names: Iterable[str]) -> T
                 reset_name,
             )
         reset_assertion = rf"!\s*{re.escape(reset_name)}" if reset_is_active_low else re.escape(reset_name)
-        sequential_targets = set(re.findall(
-            r"\b([A-Za-z_][A-Za-z0-9_$]*)\s*<=",
-            "\n".join(sequential_event_controls),
-            re.I,
-        ))
-        # Event controls alone contain no block bodies. Collect state targets
-        # from edge-triggered always blocks and prove each target's reset path.
-        sequential_blocks = re.findall(
-            r"\balways(?:_ff)?\s*@\s*\([^)]*\b(?:posedge|negedge)\b[^)]*\)\s*begin\b(.*?)\bend\s*(?=\bend\b|\balways\b|\bassign\b|\bendmodule\b|$)",
-            rtl_without_comments,
-            re.I | re.S,
-        )
-        sequential_targets = {
-            target
-            for block in sequential_blocks
-            for target in re.findall(r"\b([A-Za-z_][A-Za-z0-9_$]*)\s*<=", block, re.I)
-        }
+        sequential_targets = _edge_triggered_assignment_targets(rtl_without_comments)
         proven_targets = set()
         zero_literal = r"(?:\d+'[bdh]0+|1'b0|0)\b"
+        reset_branch_body = _conditional_branch_body(rtl_without_comments, reset_assertion)
         for target in sequential_targets:
             direct_reset = re.search(
-                rf"if\s*\(\s*{reset_assertion}\s*\).*?\b{re.escape(target)}\s*<=\s*{zero_literal}",
-                rtl_without_comments,
-                re.I | re.S,
+                rf"\b{re.escape(target)}\s*<=\s*{zero_literal}", reset_branch_body, re.I
             )
             next_state_assignments = re.findall(
                 rf"\b{re.escape(target)}\s*<=\s*([A-Za-z_][A-Za-z0-9_$]*)\s*;",
@@ -797,7 +857,7 @@ def _match_score(requirement: str, rtl_text: str, rtl_names: Iterable[str]) -> T
         re.search(r"\bsynchronous(?:ly)?\b", req_lower)
         and re.search(r"\breset", req_lower)
         and re.search(
-            r"\balways\s*@\s*\([^)]*\bor\s+(?:pos|neg)edge\s+(?:reset|reset_n|rst|rst_n)\b",
+            r"\balways(?:_ff)?\s*@\s*\([^)]*\bor\s+(?:pos|neg)edge\s+(?:reset|reset_n|rst|rst_n)\b",
             rtl_text,
             re.I,
         )
@@ -815,6 +875,12 @@ def _match_score(requirement: str, rtl_text: str, rtl_names: Iterable[str]) -> T
         and not (
             re.search(r"\bassign\s+pwm_out\s*=\s*[^;]*(?:counter\w*\s*<\s*duty_cycle|duty_cycle\s*>\s*counter\w*)", rtl_text, re.I)
             or re.search(r"\balways(?:_comb)?\s*@?\s*\(\s*\*\s*\).*?\bpwm_out\s*=", rtl_text, re.I | re.S)
+            or any(re.search(
+                rf"\balways(?:_comb)?\s*@?\s*\(\s*\*\s*\).*?\b{re.escape(alias)}\s*=\s*"
+                rf"[^;]*(?:counter\w*\s*<\s*duty_cycle|duty_cycle\s*>\s*counter\w*)",
+                rtl_text,
+                re.I | re.S,
+            ) for alias in re.findall(r"\bassign\s+pwm_out\s*=\s*([A-Za-z_][A-Za-z0-9_$]*)\s*;", rtl_text, re.I))
         )
     ):
         return "missing", ["pwm_out_combinational_compare_not_implemented"]
@@ -829,6 +895,12 @@ def _match_score(requirement: str, rtl_text: str, rtl_names: Iterable[str]) -> T
         return (
             ("matched", evidence[:8])
             if all(item in evidence for item in negative_structure_expectations)
+            else ("missing", evidence[:8])
+        )
+    if minimality_expectations:
+        return (
+            ("matched", evidence[:8])
+            if all(item in evidence for item in minimality_expectations)
             else ("missing", evidence[:8])
         )
     clock_structure_expectations = []
@@ -1108,7 +1180,18 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     comparison_ports = top_module_ports or rtl_ports
     matched_ports = [p for p in spec_ports if p in comparison_ports]
     missing_ports = [p for p in spec_ports if p not in comparison_ports]
-    interface_status = "pass" if spec_ports and not missing_ports else ("inconclusive" if not spec_ports else "issues")
+    extra_ports = [p for p in comparison_ports if p not in spec_ports]
+    interface_status = "pass" if spec_ports and not missing_ports and not extra_ports else ("inconclusive" if not spec_ports else "issues")
+    top_spec = _top_spec_module(spec_obj, top_module) or {}
+    output_ports = {
+        str(port.get("name") or "")
+        for port in (top_spec.get("ports") or [])
+        if isinstance(port, dict) and str(port.get("direction") or "").lower() in {"output", "out", "o", "inout", "io"}
+    }
+    structural_context = {
+        "output_ports": output_ports,
+        "interface_exact": bool(spec_ports) and not missing_ports and not extra_ports,
+    }
 
     requirements = _structured_requirements(spec_obj, spec)
     requirement_results = []
@@ -1118,7 +1201,7 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
             _add_check(counts, "inconclusive")
     else:
         for idx, requirement in enumerate(requirements, start=1):
-            status, evidence = _match_score(requirement, rtl_text, rtl_names)
+            status, evidence = _match_score(requirement, rtl_text, rtl_names, structural_context)
             _add_check(counts, status)
             requirement_results.append({
                 "id": f"REQ-{idx:03d}",
@@ -1148,6 +1231,7 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
             "expected_ports": spec_ports,
             "matched_ports": matched_ports,
             "missing_ports": missing_ports,
+            "extra_ports": extra_ports,
             "rtl_ports": sorted(rtl_ports),
         },
         "register_map": register_check,

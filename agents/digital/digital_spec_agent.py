@@ -752,11 +752,20 @@ def _validate_reset_feature_consistency(spec_json: dict, feature_ports: list, co
         for port in feature_ports if isinstance(port, dict) and port.get("name")
     }
     reset_ports = []
-    for lower_name, canonical in port_names.items():
+    for port in feature_ports:
+        if not isinstance(port, dict) or not port.get("name"):
+            continue
+        canonical = str(port.get("name"))
+        lower_name = canonical.lower()
         if re.search(r"(?:^|_)(?:rst|reset|por)(?:_n)?(?:$|_)", lower_name):
+            polarity = str(port.get("polarity") or "").lower()
             reset_ports.append({
                 "name": canonical,
-                "active_low": lower_name.endswith("_n"),
+                "active_low": bool(
+                    port.get("active_low") is True
+                    or lower_name.endswith("_n")
+                    or polarity in {"active_low", "low", "0"}
+                ),
             })
     declared_values = {}
     for lower_name, canonical in port_names.items():
@@ -773,14 +782,17 @@ def _validate_reset_feature_consistency(spec_json: dict, feature_ports: list, co
     conflicts = []
     for contract in contracts:
         steps = contract.get("stimulus_steps") or []
-        asserted = False
+        final_reset_values = {}
         for step in steps:
             signals = step.get("signals") if isinstance(step, dict) else {}
             for reset in reset_ports:
-                value = signals.get(reset["name"]) if isinstance(signals, dict) else None
-                asserted_value = 0 if reset["active_low"] else 1
-                if value == asserted_value:
-                    asserted = True
+                if isinstance(signals, dict) and reset["name"] in signals:
+                    final_reset_values[reset["name"]] = signals[reset["name"]]
+        asserted = any(
+            final_reset_values.get(reset["name"]) == (0 if reset["active_low"] else 1)
+            for reset in reset_ports
+            if reset["name"] in final_reset_values
+        )
         if not asserted:
             continue
         expected = contract.get("expected") or {}
