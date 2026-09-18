@@ -31,6 +31,24 @@ def test_malformed_outer_json_recovery_preserves_nested_feature_contracts():
     assert parsed["feature_contracts"][0]["id"] == "observable"
 
 
+def test_malformed_final_feature_array_prefers_repaired_outer_contract():
+    contract = {
+        "design_name": "top",
+        "hierarchy": {"top_module": {"name": "top", "ports": []}, "modules": [{"name": "child", "ports": []}]},
+        "top_level_connections": [{"top_port": "clk", "connected_to": ["child.clk"]}],
+        "inter_module_signals": [{"name": "x", "width": 1, "source": "child.x", "destinations": ["top.x"]}],
+        "signal_ownership": [{"signal": "x", "owner": "child.x"}],
+        "feature_contracts": [{"id": "late_feature", "stimulus": {"clk": 1}, "expected": {"done": 1}}],
+    }
+    raw = json.dumps(contract)
+    malformed = raw[:-2] + "}"  # close the final feature as an object instead of closing its array/root
+
+    parsed = spec_agent._parse_llm_json_object(malformed)
+
+    assert parsed["design_name"] == "top"
+    assert parsed["feature_contracts"][0]["id"] == "late_feature"
+
+
 def test_memory_observability_accepts_unambiguous_functional_wrapper_name():
     spec = {
         "memory_macros": [{
@@ -987,6 +1005,54 @@ def test_normalize_adds_referenced_memory_macro_module():
     assert memory_module["rtl_output_file"] == "demo_sram_32x64_model.v"
     assert {p["name"]: p["width"] for p in memory_module["ports"]}["addr"] == 6
     assert {p["name"]: p["width"] for p in memory_module["ports"]}["din"] == 32
+
+
+def test_normalize_materializes_declared_memory_macro_even_before_wiring():
+    spec = {
+        "design_name": "controller",
+        "memory_macros": [{
+            "name": "payload_bram", "kind": "fpga_bram", "data_width": 64, "addr_width": 5,
+            "ports": {"clk": "clk", "csb": "csb", "we": "we", "addr": "addr", "din": "din", "dout": "dout"},
+        }],
+        "hierarchy": {
+            "top_module": {**_module("controller"), "ports": [_port("clk", "input")], "rtl_output_file": "controller.v"},
+            "modules": [],
+        },
+        "top_level_connections": [], "inter_module_signals": [], "signal_ownership": [],
+    }
+
+    normalized, mode = spec_agent._normalize_spec_json(spec)
+
+    assert mode == "hierarchical"
+    assert [module["name"] for module in normalized["hierarchy"]["modules"]] == ["payload_bram"]
+
+
+def test_json_syntax_repair_prompt_preserves_large_contract_middle():
+    marker = "MIDDLE_FEATURE_CONTRACT_MUST_SURVIVE"
+    previous = "A" * 26000 + marker + "B" * 26000
+
+    prompt = spec_agent._build_json_syntax_repair_prompt(previous, "missing final brace")
+
+    assert marker in prompt
+
+
+def test_fpga_memory_contract_rejects_external_data_control_edges_but_allows_clock():
+    spec = {
+        "memory_macros": [{
+            "name": "payload_bram", "kind": "fpga_bram",
+            "ports": {"clk": "clk", "csb": "csb", "addr": "addr", "din": "din", "dout": "dout"},
+        }],
+        "top_level_connections": [
+            {"top_port": "clk", "connected_to": ["payload_bram.clk"]},
+            {"top_port": "mem_addr", "connected_to": ["payload_bram.addr"]},
+        ],
+    }
+
+    with pytest.raises(ValueError, match="connectivity to remain internal.*mem_addr->payload_bram.addr"):
+        spec_agent._validate_fpga_memory_contract(spec, "FPGA MEMORY CONTRACT (mandatory)")
+
+    spec["top_level_connections"] = [{"top_port": "clk", "connected_to": ["payload_bram.clk"]}]
+    spec_agent._validate_fpga_memory_contract(spec, "FPGA MEMORY CONTRACT (mandatory)")
 
 
 def test_extract_memory_macros_from_prompt_contract_lines():

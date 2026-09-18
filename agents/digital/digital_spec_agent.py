@@ -413,13 +413,6 @@ def _normalize_spec_json(spec_json: dict):
         if not isinstance(modules, list):
             raise ValueError("hierarchy.modules must be a list.")
 
-        referenced_modules = set()
-        for sig in spec_json.get("inter_module_signals") or hier.get("inter_module_signals") or []:
-            if isinstance(sig, dict):
-                endpoints = [sig.get("source")] + list(sig.get("destinations") or [])
-                for endpoint in endpoints:
-                    if isinstance(endpoint, str) and "." in endpoint:
-                        referenced_modules.add(endpoint.split(".", 1)[0])
         existing_module_names = {
             str(mod.get("name") or "").strip()
             for mod in modules
@@ -429,7 +422,11 @@ def _normalize_spec_json(spec_json: dict):
             if not isinstance(macro, dict):
                 continue
             macro_name = str(macro.get("name") or "").strip()
-            if macro_name and macro_name in referenced_modules and macro_name not in existing_module_names:
+            # A declared memory macro is an implementation requirement. Always
+            # materialize its contract so topology validation can require real
+            # producers/consumers instead of allowing phantom metadata or an
+            # accidental external-pin workaround.
+            if macro_name and macro_name not in existing_module_names:
                 modules.append(_memory_macro_module(macro))
                 existing_module_names.add(macro_name)
 
@@ -1095,8 +1092,26 @@ def _validate_required_memory_observability(spec_json: dict) -> None:
         if not endpoint or module_ports.get(module_name, {}).get(dout) != "output":
             failures.append(f"{name or 'unnamed memory'} has no declared read-data output")
         elif not inter_sources.get(endpoint) and endpoint not in top_consumers:
+            compatible_inputs = sorted(
+                f"{candidate_name}.{candidate_port}"
+                for candidate_name, candidate_ports in module_ports.items()
+                if candidate_name != module_name
+                for candidate_port, direction in candidate_ports.items()
+                if direction in {"input", "inout"}
+                and (
+                    candidate_port == dout
+                    or candidate_port.lower() in {"mem_dout", "memory_dout", "rdata", "read_data"}
+                )
+            )
+            hint = ""
+            if len(compatible_inputs) == 1:
+                hint = (
+                    f"; add inter_module_signals source '{endpoint}' -> destination "
+                    f"'{compatible_inputs[0]}'. Do not connect read data to a child output or model an internal "
+                    "FPGA memory as an external top-level input"
+                )
             failures.append(
-                f"{endpoint} is unconsumed; connect it to a real child input or a top-level output"
+                f"{endpoint} is unconsumed; connect it to a real child input or a top-level output{hint}"
             )
     if failures:
         raise ValueError(
@@ -1246,6 +1261,36 @@ def _hierarchical_candidate_completeness(candidate: dict) -> tuple[int, int]:
 
 
 def _parse_llm_json_object(llm_output: str) -> dict:
+    # Prefer a recoverable outer contract over valid nested objects. Models
+    # commonly omit only the final array/object closers; scanning nested JSON
+    # first can otherwise select ``hierarchy`` and discard later root-level
+    # feature contracts.
+    outer = _extract_json_object_text(llm_output)
+    repaired_outer = outer
+    try:
+        outer_value = _loads_model_json(outer)
+    except JSONDecodeError as outer_error:
+        repaired_outer = _repair_json_syntax_near_error(outer, outer_error)
+        if repaired_outer == outer:
+            repaired_outer = _repair_json_if_truncated_at_eof(outer, outer_error)
+        try:
+            outer_value = _loads_model_json(repaired_outer)
+        except JSONDecodeError:
+            outer_value = None
+    if isinstance(outer_value, dict):
+        has_complete_hierarchy_root = bool(
+            isinstance(outer_value.get("hierarchy"), dict)
+            and outer_value.get("top_level_connections")
+            and outer_value.get("inter_module_signals")
+            and outer_value.get("signal_ownership")
+        )
+        is_flat_root = bool(
+            outer_value.get("name")
+            and ("functionality" in outer_value or "responsibilities" in outer_value or "rtl_output_file" in outer_value)
+        )
+        if has_complete_hierarchy_root or is_flat_root:
+            return outer_value
+
     candidates = _extract_json_object_texts(llm_output)
     hierarchical_candidates: list[dict] = []
     flat_candidates: list[dict] = []
@@ -2409,7 +2454,7 @@ JSON parse failure:
 {_truncate_text(failure_text, 5000)}
 
 Previous JSON text:
-{_truncate_text(previous_json_text, 24000)}
+{_truncate_text(previous_json_text, 70000)}
 """.strip()
 
 
@@ -2611,18 +2656,46 @@ def _validate_fpga_memory_contract(spec_json: dict, source_prompt: str) -> None:
         "sky130_sram",
     }
     violations = []
+    macro_clock_ports = {}
     for macro in spec_json.get("memory_macros", []) or []:
         if not isinstance(macro, dict):
             continue
         kind = str(macro.get("kind") or "").strip().lower()
         if kind in forbidden_kinds:
             violations.append(f"{macro.get('name') or 'unnamed'} ({kind})")
+        name = str(macro.get("name") or "").strip()
+        ports = macro.get("ports") if isinstance(macro.get("ports"), dict) else {}
+        if name:
+            macro_clock_ports[name] = {
+                str(port_name or "").strip()
+                for role, port_name in ports.items()
+                if str(role).lower() in {"clk", "clock"} and str(port_name or "").strip()
+            }
+    external_memory_edges = []
+    for connection in spec_json.get("top_level_connections") or []:
+        if not isinstance(connection, dict):
+            continue
+        top_port = str(connection.get("top_port") or "").strip()
+        for endpoint in connection.get("connected_to") or []:
+            endpoint = str(endpoint or "").strip()
+            if "." not in endpoint:
+                continue
+            module_name, port_name = endpoint.split(".", 1)
+            if module_name in macro_clock_ports and port_name not in macro_clock_ports[module_name]:
+                external_memory_edges.append(f"{top_port}->{endpoint}")
     if violations:
         raise ValueError(
             "FPGA memory contract is FPGA-only and cannot use ASIC/OpenRAM hard macros: "
             + ", ".join(violations[:8])
             + ". Use a technology-neutral inferred-memory wrapper declared in hierarchy.modules "
               "with its own rtl_output_file."
+        )
+    if external_memory_edges:
+        raise ValueError(
+            "FPGA memory contract requires address/data/control connectivity to remain internal so storage maps to "
+            "native block RAM; only clock fanout may connect directly from the top level to a declared memory macro. "
+            "Replace these external macro edges with child producer/consumer connections: "
+            + ", ".join(external_memory_edges[:12])
         )
 
 
@@ -3271,6 +3344,7 @@ Return JSON only.
 
     pass1_error = None
     pass2_error = None
+    resolved_via = "pass1"
     require_firmware_control_plane = bool(state.get("require_firmware_control_plane"))
 
     try:
@@ -3346,6 +3420,7 @@ Return JSON only.
                 require_feature_contracts=True,
             )
             raw_output_path = raw_output_path_pass2
+            resolved_via = "pass2"
             
         except Exception as e2:
             pass2_error = e2
@@ -3391,6 +3466,7 @@ Return JSON only.
                     require_feature_contracts=True,
                 )
                 raw_output_path = raw_output_path_pass3
+                resolved_via = "pass3"
             except Exception as e3:
                 pass3_log_path = os.path.join(spec_dir, "spec_agent_contract_pass3.log")
                 pass3_exc_path = os.path.join(spec_dir, "spec_agent_exception_pass3.txt")
@@ -3420,6 +3496,7 @@ Return JSON only.
                         require_feature_contracts=True,
                     )
                     raw_output_path = raw_output_path_pass4
+                    resolved_via = "pass4"
                 except Exception as e4:
                     pass4_log_path = os.path.join(spec_dir, "spec_agent_contract_pass4.log")
                     pass4_exc_path = os.path.join(spec_dir, "spec_agent_exception_pass4.txt")
@@ -3451,6 +3528,7 @@ Return JSON only.
                             require_feature_contracts=True,
                         )
                         raw_output_path = raw_output_path_pass5
+                        resolved_via = "pass5"
                         e5 = None
                     except Exception as pass5_error:
                         e5 = pass5_error
@@ -3459,7 +3537,12 @@ Return JSON only.
                         _write_text(pass5_log_path, f"Digital Spec Agent pass5 contract repair failure:\n{e5}\n")
                         _write_text(pass5_exc_path, repr(e5))
 
-                    if e5 is not None:
+                    deterministic_closure_allowed = bool(
+                        e5 is not None
+                        and "required child input" in str(e5).lower()
+                        and "has no source" in str(e5).lower()
+                    )
+                    if deterministic_closure_allowed:
                         # Five semantic/model passes have been exhausted. Do
                         # not invent a child producer: expose every remaining
                         # required input as an explicit top-level dependency.
@@ -3484,10 +3567,12 @@ Return JSON only.
                                 spec_json, mode, user_prompt, required=require_firmware_control_plane,
                             )
                             _validate_fpga_memory_contract(spec_json, user_prompt)
+                            _validate_no_command_fallback_contract(spec_json, user_prompt)
                             normalized_path_pass6 = os.path.join(spec_dir, "spec_agent_normalized_pass6.json")
                             with open(normalized_path_pass6, "w", encoding="utf-8") as pass6_file:
                                 json.dump(spec_json, pass6_file, indent=2)
                             _write_text(pass6_log_path, "Digital Spec Agent deterministic graph closure passed.\n")
+                            resolved_via = "pass6"
                             e5 = None
                         except Exception as pass6_error:
                             _write_text(pass6_log_path, f"Digital Spec Agent deterministic graph closure failure:\n{pass6_error}\n")
@@ -3527,7 +3612,7 @@ Return JSON only.
         lf.write("Digital Spec Agent completed successfully.\n")
         lf.write("Mode: contract-only\n")
         lf.write(f"Spec mode: {mode}\n")
-        lf.write(f"Resolved via: {'pass2' if pass1_error else 'pass1'}\n")
+        lf.write(f"Resolved via: {resolved_via}\n")
         lf.write(f"Spec JSON: {spec_json_path}\n")
 
     summary_path = os.path.join(spec_dir, "spec_agent_summary.txt")

@@ -325,7 +325,7 @@ def test_prefixed_clock_and_reset_ports_use_wrapper_infrastructure(tmp_path, mon
     assert "core_reg_clk" not in wrapper
     assert "core_reg_rst_n" not in wrapper
     assert ".reg_clk(clk)" in wrapper
-    assert ".reg_rst_n(reset_n)" in wrapper
+    assert ".reg_rst_n(reset_sync)" in wrapper
 
 
 def test_ulx3s_has_verified_spi_wrapper_pin_mapping(tmp_path, monkeypatch):
