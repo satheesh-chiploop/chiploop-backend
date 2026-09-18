@@ -122,6 +122,40 @@ endmodule
     assert "no_bus_interfaces" not in evidence
 
 
+def test_match_score_proves_single_clock_synchronous_design_without_clock_gating():
+    rtl = """
+module controller(input clk, input reset_n, input enable, output reg done);
+  always @(posedge clk) begin
+    if (!reset_n) done <= 1'b0;
+    else if (enable) done <= 1'b1;
+  end
+endmodule
+"""
+    requirement = "The design is fully synchronous to clk and contains no internal clock gating."
+
+    status, evidence = agent._match_score(requirement, rtl, {"clk", "reset_n", "enable", "done"})
+
+    assert status == "matched"
+    assert "fully_synchronous_to_clk" in evidence
+    assert "no_internal_clock_gating" in evidence
+
+
+def test_match_score_rejects_derived_gated_clock():
+    rtl = """
+module controller(input clk, input enable, output reg done);
+  wire gated_clk = clk & enable;
+  always @(posedge gated_clk) done <= 1'b1;
+endmodule
+"""
+    requirement = "The design is fully synchronous to clk and contains no internal clock gating."
+
+    status, evidence = agent._match_score(requirement, rtl, {"clk", "enable", "done", "gated_clk"})
+
+    assert status == "missing"
+    assert "fully_synchronous_to_clk" not in evidence
+    assert "no_internal_clock_gating" not in evidence
+
+
 def test_match_score_rejects_async_reset_for_synchronous_requirement():
     rtl = """
 always @(posedge clk or negedge reset_n) begin
@@ -167,6 +201,28 @@ endmodule
     assert bad_evidence == ["reset_low_not_implemented:pwm_out"]
     assert good_status == "matched"
     assert "reset_low_pwm_out" in good_evidence
+
+
+def test_match_score_accepts_synchronous_reset_through_next_state_mux():
+    rtl = """
+module controller(input clk, input reset_n, input enable);
+  reg [7:0] counter_r;
+  wire [7:0] counter_next;
+  assign counter_next = (!reset_n) ? 8'h00 : (enable ? counter_r + 1'b1 : counter_r);
+  always @(posedge clk) begin
+    counter_r <= counter_next;
+  end
+endmodule
+"""
+
+    status, evidence = agent._match_score(
+        "Honor synchronous active-low reset by clearing all registers to zero.",
+        rtl,
+        {"clk", "reset_n", "enable", "counter_r", "counter_next"},
+    )
+
+    assert status == "matched"
+    assert "all_sequential_state_synchronously_reset_zero" in evidence
 
 
 def test_match_score_uses_structural_evidence_for_implementation_properties():

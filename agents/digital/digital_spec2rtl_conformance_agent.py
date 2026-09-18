@@ -337,6 +337,45 @@ def _match_score(requirement: str, rtl_text: str, rtl_names: Iterable[str]) -> T
     )
     if no_bus_required and not any(protocol_bus_markers.search(item) for item in rtl_identifiers):
         evidence.append("no_bus_interfaces")
+    synchronous_clock_match = re.search(
+        r"\b(?:fully\s+)?synchronous(?:ly)?\s+to\s+([A-Za-z_][A-Za-z0-9_$]*)\b",
+        requirement,
+        re.I,
+    )
+    no_clock_gating_required = bool(
+        re.search(r"\bno\s+(?:internal\s+)?clock\s+gating\b", req_lower)
+        or re.search(r"\bno\s+gated\s+clocks?\b", req_lower)
+        or re.search(r"\b(?:must|shall|does|do)\s+not\s+gate\s+(?:the\s+)?clocks?\b", req_lower)
+    )
+    synchronous_clock = synchronous_clock_match.group(1) if synchronous_clock_match else None
+    sequential_event_controls = re.findall(
+        r"\balways(?:_ff)?\s*@\s*\(([^)]*\b(?:posedge|negedge)\b[^)]*)\)",
+        rtl_without_comments,
+        re.I,
+    )
+    sequential_clock_signals = []
+    for event_control in sequential_event_controls:
+        sequential_clock_signals.extend(
+            signal for _, signal in re.findall(
+                r"\b(posedge|negedge)\s+([A-Za-z_][A-Za-z0-9_$]*)\b", event_control, re.I
+            )
+        )
+    if synchronous_clock and sequential_clock_signals and all(
+        signal.lower() == synchronous_clock.lower() for signal in sequential_clock_signals
+    ):
+        evidence.append(f"fully_synchronous_to_{synchronous_clock}")
+    derived_clock_assignment = bool(re.search(
+        rf"\b(?:assign\s+|wire\b[^;=]*\b)(?:[A-Za-z_][A-Za-z0-9_$]*(?:clk|clock)|(?:clk|clock)[A-Za-z0-9_$]*)\s*=\s*"
+        rf"[^;]*\b{re.escape(synchronous_clock or 'clk')}\b[^;]*(?:&|\||\?|\b(?:and|or)\b)",
+        rtl_without_comments,
+        re.I,
+    ))
+    if no_clock_gating_required and not derived_clock_assignment and (
+        not synchronous_clock
+        or not sequential_clock_signals
+        or all(signal.lower() == synchronous_clock.lower() for signal in sequential_clock_signals)
+    ):
+        evidence.append("no_internal_clock_gating")
     if re.search(r"\bsynthesiz", req_lower) and not re.search(
         r"(^|[^A-Za-z_])(initial|force|release|fork|join)\b|#[ \t]*\d+",
         _strip_comments(rtl_text),
@@ -394,6 +433,64 @@ def _match_score(requirement: str, rtl_text: str, rtl_names: Iterable[str]) -> T
         evidence.append("counter_value")
     if "reset" in req_lower and re.search(r"\breset_n\b", rtl_text, re.I) and re.search(r"<=\s*(?:\d+'h00|\d+'d0|1'b0|0)\b", rtl_text, re.I):
         evidence.append("reset_zero")
+    all_state_reset_required = bool(
+        re.search(r"\bsynchronous(?:ly)?\b", req_lower)
+        and re.search(r"\breset\b", req_lower)
+        and re.search(r"\ball\s+(?:registers?|sequential\s+state|state)\b", req_lower)
+    )
+    reset_contract_signal = re.search(r"\b(reset_n|rst_n|reset|rst)\b", requirement, re.I)
+    if all_state_reset_required and reset_contract_signal:
+        reset_name = reset_contract_signal.group(1)
+        reset_is_active_low = reset_name.lower().endswith("_n") or bool(re.search(r"active[- ]low", req_lower))
+        if reset_name.lower() not in rtl_identifiers:
+            preferred_reset_names = (
+                ("reset_n", "rst_n", "por_n") if reset_is_active_low
+                else ("reset", "rst")
+            )
+            reset_name = next(
+                (candidate for candidate in preferred_reset_names if candidate in rtl_identifiers),
+                reset_name,
+            )
+        reset_assertion = rf"!\s*{re.escape(reset_name)}" if reset_is_active_low else re.escape(reset_name)
+        sequential_targets = set(re.findall(
+            r"\b([A-Za-z_][A-Za-z0-9_$]*)\s*<=",
+            "\n".join(sequential_event_controls),
+            re.I,
+        ))
+        # Event controls alone contain no block bodies. Collect state targets
+        # from edge-triggered always blocks and prove each target's reset path.
+        sequential_blocks = re.findall(
+            r"\balways(?:_ff)?\s*@\s*\([^)]*\b(?:posedge|negedge)\b[^)]*\)\s*begin\b(.*?)\bend\s*(?=\bend\b|\balways\b|\bassign\b|\bendmodule\b|$)",
+            rtl_without_comments,
+            re.I | re.S,
+        )
+        sequential_targets = {
+            target
+            for block in sequential_blocks
+            for target in re.findall(r"\b([A-Za-z_][A-Za-z0-9_$]*)\s*<=", block, re.I)
+        }
+        proven_targets = set()
+        zero_literal = r"(?:\d+'[bdh]0+|1'b0|0)\b"
+        for target in sequential_targets:
+            direct_reset = re.search(
+                rf"if\s*\(\s*{reset_assertion}\s*\).*?\b{re.escape(target)}\s*<=\s*{zero_literal}",
+                rtl_without_comments,
+                re.I | re.S,
+            )
+            next_state_assignments = re.findall(
+                rf"\b{re.escape(target)}\s*<=\s*([A-Za-z_][A-Za-z0-9_$]*)\s*;",
+                rtl_without_comments,
+                re.I,
+            )
+            next_state_reset = any(re.search(
+                rf"\bassign\s+{re.escape(next_name)}\s*=\s*\(\s*{reset_assertion}\s*\)\s*\?\s*{zero_literal}",
+                rtl_without_comments,
+                re.I,
+            ) for next_name in next_state_assignments)
+            if direct_reset or next_state_reset:
+                proven_targets.add(target)
+        if sequential_targets and proven_targets == sequential_targets:
+            evidence.append("all_sequential_state_synchronously_reset_zero")
     # Prove reset requirements per named output. A reset assignment to some
     # unrelated state register must not satisfy prose such as "pwm_out is
     # driven low". This catches combinational outputs that remain active while
@@ -670,6 +767,8 @@ def _match_score(requirement: str, rtl_text: str, rtl_names: Iterable[str]) -> T
         return "missing", [
             f"reset_low_not_implemented:{name}" for name in unproven_reset_low_outputs[:8]
         ]
+    if all_state_reset_required and "all_sequential_state_synchronously_reset_zero" not in evidence:
+        return "missing", ["not_all_sequential_state_has_synchronous_zero_reset"]
     if (
         "pwm_out" in req_lower
         and ("combinational" in req_lower or "level-based" in req_lower)
@@ -690,6 +789,17 @@ def _match_score(requirement: str, rtl_text: str, rtl_names: Iterable[str]) -> T
         return (
             ("matched", evidence[:8])
             if all(item in evidence for item in negative_structure_expectations)
+            else ("missing", evidence[:8])
+        )
+    clock_structure_expectations = []
+    if synchronous_clock:
+        clock_structure_expectations.append(f"fully_synchronous_to_{synchronous_clock}")
+    if no_clock_gating_required:
+        clock_structure_expectations.append("no_internal_clock_gating")
+    if clock_structure_expectations:
+        return (
+            ("matched", evidence[:8])
+            if all(item in evidence for item in clock_structure_expectations)
             else ("missing", evidence[:8])
         )
     if arithmetic_width:
