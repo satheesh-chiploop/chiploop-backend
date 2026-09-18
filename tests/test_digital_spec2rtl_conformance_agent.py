@@ -701,3 +701,47 @@ def test_feature_contract_binding_rejects_missing_or_wrong_direction_ports():
     feature = result["features"][0]
     assert feature["missing_expected_signals"] == ["count"]
     assert feature["wrong_stimulus_directions"] == ["enable"]
+
+
+def test_structured_requirements_preserve_all_items_and_module_scope():
+    spec = {
+        "hierarchy": {
+            "top_module": {"name": "top", "responsibilities": [f"top obligation {index}" for index in range(90)]},
+            "modules": [{"name": "child", "behavior_rules": [f"child obligation {index}" for index in range(90)]}],
+        }
+    }
+
+    requirements = agent._structured_requirements(spec, "")
+
+    assert len(requirements) == 180
+    assert requirements[0]["module"] == "top"
+    assert requirements[-1]["module"] == "child"
+
+
+def test_backpressure_evidence_rejects_reset_gated_constant_ready():
+    weak = "assign cmd_ready_out = reset_n & 1'b1;"
+    dynamic = "assign cmd_ready_out = reset_n && !command_fifo_full;"
+
+    assert "dynamic_ready_backpressure" not in agent._generic_behavior_evidence("Provide command-ready backpressure", weak)
+    assert "dynamic_ready_backpressure" in agent._generic_behavior_evidence("Provide command-ready backpressure", dynamic)
+
+
+def test_missing_owner_module_does_not_borrow_evidence_from_other_rtl(tmp_path, monkeypatch):
+    spec = {
+        "hierarchy": {
+            "top_module": {"name": "top", "ports": []},
+            "modules": [{"name": "missing_child", "responsibilities": ["Generate 64-bit status telemetry packets"]}],
+        }
+    }
+    rtl = tmp_path / "top.sv"
+    rtl.write_text("module top; output logic [63:0] status_telemetry; endmodule", encoding="utf-8")
+    monkeypatch.setattr(agent, "save_text_artifact_and_record", lambda *args, **kwargs: None)
+
+    result = agent.run_agent({
+        "workflow_id": "scope-test", "spec_json": spec, "rtl_files": [str(rtl)], "top_module": "top",
+        "_spec2rtl_embedded": True,
+    })["spec2rtl_conformance"]
+
+    item = next(entry for entry in result["requirements"] if entry["module"] == "missing_child")
+    assert item["status"] == "missing"
+    assert item["evidence_tokens"] == ["owner_module_not_found:missing_child"]

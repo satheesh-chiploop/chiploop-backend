@@ -3549,6 +3549,49 @@ and port roles. Return complete named-file blocks for all affected files and no 
 """.strip()
 
 
+def _build_semantic_conformance_prompt(base_prompt: str, previous_llm_output: str,
+                                       compile_log_text: str, verilator_log_text: str,
+                                       expected_files: Optional[List[str]] = None) -> str:
+    """Repair behavior when tools pass but static spec obligations do not."""
+    return _build_rtl_repair_prompt(
+        base_prompt, previous_llm_output, compile_log_text, verilator_log_text, expected_files
+    ) + """
+
+==============================
+SEMANTIC SPEC2RTL CLOSURE PASS
+==============================
+Compilation and lint are already clean. Repair only the failed Static Spec2RTL obligations in the
+repair checklist. Treat each obligation as behavior, not as a request to add matching names or
+comments. Preserve module interfaces and architecture. For temporal/state requirements, make the
+priority explicit in one sequential decision chain so a later nonblocking assignment cannot
+override reset, reload, fault, or rejection behavior. Ensure decoded/configured values have a real
+consumer and required status reaches an observable output. Return complete changed file blocks.
+""".strip()
+
+
+def _semantic_only_failure(result: dict) -> bool:
+    if not (
+        result.get("compile_passed") is True
+        and result.get("lint_passed") is True
+        and result.get("static_spec2rtl_passed") is False
+    ):
+        return False
+    report = result.get("spec2rtl_conformance") or {}
+    aggregate_statuses = [
+        (report.get("top_module") or {}).get("status"),
+        (report.get("interface") or {}).get("status"),
+        (report.get("register_map") or {}).get("status"),
+        (report.get("clock_reset") or {}).get("status"),
+        (report.get("feature_contracts") or {}).get("status"),
+    ]
+    aggregates_pass = all(str(status or "").lower() in {"pass", "not_applicable"} for status in aggregate_statuses)
+    failed_requirements = any(
+        str(item.get("status") or "").lower() not in {"matched", "pass"}
+        for item in report.get("requirements") or []
+    )
+    return aggregates_pass and failed_requirements
+
+
 def _run_verilator_lint(rtl_dir: str, verilog_files: List[str], top_module: str, suffix: str = "", state: Optional[dict] = None) -> Tuple[bool, str, str, dict]:
     log_name = "rtl_verilator_lint.log" if not suffix else f"rtl_verilator_lint_{suffix}.log"
     lint_log_path = os.path.join(rtl_dir, log_name)
@@ -3985,13 +4028,38 @@ def _validate_and_materialize_rtl(
                 if str(item.get("status") or "").lower() not in {"matched", "pass"}
             ]
             repair_lines = [f"Static Spec2RTL result: {detail}."]
+            top_check = conformance_report.get("top_module") or {}
+            if str(top_check.get("status") or "").lower() not in {"pass", "not_applicable"}:
+                repair_lines.append(
+                    f"TOP MODULE: expected={top_check.get('expected')}, found={top_check.get('modules_found')}"
+                )
+            interface_check = conformance_report.get("interface") or {}
+            if str(interface_check.get("status") or "").lower() not in {"pass", "not_applicable"}:
+                repair_lines.append(
+                    "INTERFACE: missing_ports={missing}, extra_ports={extra}".format(
+                        missing=interface_check.get("missing_ports") or [],
+                        extra=interface_check.get("extra_ports") or [],
+                    )
+                )
+            register_check = conformance_report.get("register_map") or {}
+            if str(register_check.get("status") or "").lower() not in {"pass", "not_applicable"}:
+                repair_lines.append(
+                    "REGISTER MAP: missing_fields={fields}, missing_registers={registers}, missing_addresses={addresses}".format(
+                        fields=register_check.get("missing") or [],
+                        registers=register_check.get("missing_registers") or [],
+                        addresses=register_check.get("missing_addresses") or [],
+                    )
+                )
+            clock_check = conformance_report.get("clock_reset") or {}
+            if str(clock_check.get("status") or "").lower() not in {"pass", "not_applicable"}:
+                repair_lines.append(f"CLOCK/RESET: {json.dumps(clock_check, sort_keys=True)}")
             repair_lines.extend(
                 f"{item.get('id')}: {item.get('status')} - {item.get('requirement')}"
                 + (
                     f" (checker evidence: {', '.join(str(token) for token in item.get('evidence_tokens') or [])})"
                     if item.get("evidence_tokens") else ""
                 )
-                for item in failed_requirements[:20]
+                for item in failed_requirements
             )
             failed_features = [
                 item for item in (conformance_report.get("feature_contracts") or {}).get("features") or []
@@ -4010,7 +4078,7 @@ def _validate_and_materialize_rtl(
                         ) if item.get(key)
                     ) or "feature contract is not executable",
                 )
-                for item in failed_features[:20]
+                for item in failed_features
             )
             _append_text(
                 compile_log_path,
@@ -4535,11 +4603,19 @@ def _run(context: AgentContext) -> dict:
                     if os.path.exists(pass3["verilator_log_path"]):
                         with open(pass3["verilator_log_path"], "r", encoding="utf-8") as f:
                             pass3_verilator_log = f.read()
-                    repair_prompt_pass4 = _build_structural_closure_prompt(
-                        prompt, llm_output_pass3, pass3_compile_log, pass3_verilator_log,
-                        _collect_expected_rtl_files(spec_json, mode),
-                    )
-                    _stage("starting_llm_call_pass4_structural_closure")
+                    if _semantic_only_failure(pass3):
+                        repair_prompt_pass4 = _build_semantic_conformance_prompt(
+                            prompt, llm_output_pass3, pass3_compile_log, pass3_verilator_log,
+                            _collect_expected_rtl_files(spec_json, mode),
+                        )
+                        pass4_stage = "starting_llm_call_pass4_semantic_closure"
+                    else:
+                        repair_prompt_pass4 = _build_structural_closure_prompt(
+                            prompt, llm_output_pass3, pass3_compile_log, pass3_verilator_log,
+                            _collect_expected_rtl_files(spec_json, mode),
+                        )
+                        pass4_stage = "starting_llm_call_pass4_structural_closure"
+                    _stage(pass4_stage)
                     try:
                         llm_output_pass4 = _complete_rtl_text(
                             repair_prompt_pass4, agent_name=agent_name, state=state, stage_label="llm_pass4"
@@ -4569,11 +4645,19 @@ def _run(context: AgentContext) -> dict:
                         if os.path.exists(pass4["verilator_log_path"]):
                             with open(pass4["verilator_log_path"], "r", encoding="utf-8") as f:
                                 pass4_verilator_log = f.read()
-                        repair_prompt_pass5 = _build_contract_closure_prompt(
-                            prompt, llm_output_pass4, pass4_compile_log, pass4_verilator_log,
-                            pass4.get("issues") or [], _collect_expected_rtl_files(spec_json, mode),
-                        )
-                        _stage("starting_llm_call_pass5_contract_closure")
+                        if _semantic_only_failure(pass4):
+                            repair_prompt_pass5 = _build_semantic_conformance_prompt(
+                                prompt, llm_output_pass4, pass4_compile_log, pass4_verilator_log,
+                                _collect_expected_rtl_files(spec_json, mode),
+                            )
+                            pass5_stage = "starting_llm_call_pass5_semantic_closure"
+                        else:
+                            repair_prompt_pass5 = _build_contract_closure_prompt(
+                                prompt, llm_output_pass4, pass4_compile_log, pass4_verilator_log,
+                                pass4.get("issues") or [], _collect_expected_rtl_files(spec_json, mode),
+                            )
+                            pass5_stage = "starting_llm_call_pass5_contract_closure"
+                        _stage(pass5_stage)
                         try:
                             llm_output_pass5 = _complete_rtl_text(
                                 repair_prompt_pass5, agent_name=agent_name, state=state, stage_label="llm_pass5"

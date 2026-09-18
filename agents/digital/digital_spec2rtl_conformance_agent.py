@@ -219,7 +219,7 @@ def _extract_modules(rtl_files: List[str]) -> List[Dict[str, Any]]:
                             continue
                         port_seen.add(port_name)
                         ports.append({"name": port_name, "direction": direction, "width": width, "bits": _range_width(width)})
-            modules.append({"name": name, "file": path, "ports": ports})
+            modules.append({"name": name, "file": path, "ports": ports, "rtl_text": match.group(0) + "endmodule"})
     return modules
 
 
@@ -310,6 +310,13 @@ def _generic_behavior_evidence(requirement: str, rtl_text: str) -> List[str]:
     if re.search(r"\b(?:decode|capture).*(?:packet|command)|(?:packet|command).*\bdecode", req):
         if re.search(r"\b(?:pkt|packet|cmd|command)[A-Za-z0-9_$]*\s*\[", rtl, re.I):
             evidence.append("bounded_packet_field_decode")
+    if re.search(r"\b(?:ready|backpressure)\b", req):
+        ready_assignments = re.findall(r"\b\w*ready\w*\s*(?:<=|=)\s*([^;]+)", rtl, re.I)
+        # Reset-and-constant is not backpressure.  Require readiness to depend
+        # on live capacity, occupancy, downstream readiness, or valid state.
+        if any(re.search(r"\b\w*(?:full|empty|count|occup|space|fifo|queue|capacity|downstream)\w*\b", rhs, re.I)
+               for rhs in ready_assignments):
+            evidence.append("dynamic_ready_backpressure")
     if re.search(r"\b(?:validate|reject|malformed|stale|discontinuous|checksum|sequence)\b", req):
         predicates = re.findall(
             r"\b[A-Za-z_][A-Za-z0-9_$]*(?:valid|malformed|stale|checksum|sequence|seq|fault|gap)[A-Za-z0-9_$]*\b",
@@ -331,10 +338,32 @@ def _generic_behavior_evidence(requirement: str, rtl_text: str) -> List[str]:
             evidence.append("bounded_slew_delta")
     if re.search(r"\b(?:deassert|inhibit|suppress).*(?:valid|validity)", req) and has_valid_inhibit:
         evidence.append("output_validity_inhibition")
-    if re.search(r"\bno\s+(?:fallback|substitute)|must\s+not\s+invent", req):
+    if re.search(r"\bno\s+(?:fallback|substitute|replacement)|must\s+not\s+(?:invent|create)", req):
         forbidden = re.search(r"\b(?:fallback|substitute|safe_cmd|safe_command)\w*\b", rtl, re.I)
         if not forbidden and has_valid_inhibit:
             evidence.append("no_fallback_value_and_validity_inhibited")
+    if re.search(r"\b(?:status|telemetry)\b", req) and re.search(r"\b64[- ]bit\b", req):
+        if re.search(r"\boutput\b(?:\s+(?:reg|wire|logic))?\s*\[\s*63\s*:\s*0\s*\]\s*\w*(?:status|telemetry)\w*", rtl, re.I):
+            evidence.append("64bit_status_telemetry_output")
+    if re.search(r"firmware-visible.*(?:csr|mmio)|(?:csr|mmio).*control plane", req):
+        required_roles = ("addr", "wdata", "rdata", "valid", "write", "ready")
+        if all(re.search(rf"\b\w*(?:csr|mmio)\w*{role}\w*\b|\b\w*{role}\w*(?:csr|mmio)\w*\b", rtl, re.I) for role in required_roles):
+            evidence.append("firmware_visible_csr_mmio_interface")
+    if re.search(r"packet format.*packet type|packet type.*format", req):
+        format_ids = set(re.findall(r"\b\w*format(?:_version)?\w*\b", rtl, re.I))
+        type_ids = set(re.findall(r"\b\w*(?:packet|pkt)_type\w*\b", rtl, re.I))
+        compared = lambda name: bool(re.search(rf"\b{re.escape(name)}\b\s*(?:==|!=)", rtl, re.I))
+        if any(compared(name) for name in format_ids) and any(compared(name) for name in type_ids):
+            evidence.append("distinct_packet_format_and_type_checks")
+    if re.search(r"semantic (?:fields|outputs).*(?:controller|explicit ports)|explicit ports.*semantic", req):
+        semantic_outputs = re.findall(r"\boutput\b[^;]*\b(?:cfg_|\w+_cfg(?:_out)?|\w+_out)\w*", rtl, re.I)
+        if len(semantic_outputs) >= 2:
+            evidence.append("explicit_semantic_output_ports")
+    if re.search(r"velocity envelope.*packet validity|packet validity.*velocity envelope", req):
+        has_range = bool(re.search(r"\b\w*velocity\w*\s*>=.*&&.*\b\w*velocity\w*\s*<=", rtl, re.I))
+        has_valid = bool(re.search(r"\b\w*(?:pkt|packet)\w*ok\w*\s*=", rtl, re.I))
+        if has_range and has_valid:
+            evidence.append("velocity_envelope_and_packet_validity")
     if re.search(r"\b(?:status|telemetry).*(?:fault|interrupt)|fault.*interrupt", req):
         has_status = bool(re.search(r"\b(?:status|telemetry)\w*\s*(?:<=|=)", rtl, re.I))
         has_fault = bool(re.search(r"\b(?:fault|irq|interrupt)\w*\s*(?:<=|=)", rtl, re.I))
@@ -975,6 +1004,12 @@ def _match_score(
         "register_decode_and_access_paths",
         "explicit_configuration_outputs",
         "latched_status_fault_state",
+        "dynamic_ready_backpressure",
+        "64bit_status_telemetry_output",
+        "firmware_visible_csr_mmio_interface",
+        "distinct_packet_format_and_type_checks",
+        "explicit_semantic_output_ports",
+        "velocity_envelope_and_packet_validity",
         "complete_register_contract_traceability",
         "unique_register_address_case_items",
         "all_top_outputs_have_rtl_drivers",
@@ -1160,19 +1195,30 @@ def _register_evidence(spec: str, rtl_text: str, state: Dict[str, Any], spec_obj
     }
 
 
-def _structured_requirements(spec_obj: Optional[Dict[str, Any]], spec: str) -> List[str]:
-    reqs: List[str] = []
+def _structured_requirements(spec_obj: Optional[Dict[str, Any]], spec: str) -> List[Dict[str, str]]:
+    reqs: List[Dict[str, str]] = []
     for mod in _structured_spec_modules(spec_obj):
+        module_name = str(mod.get("name") or mod.get("module_name") or "").strip()
         for key in ("responsibilities", "behavior_rules", "must_drive", "must_receive"):
             values = mod.get(key)
             if isinstance(values, list):
-                reqs.extend(str(v).strip() for v in values if str(v).strip())
+                reqs.extend(
+                    {"module": module_name, "section": key, "text": str(v).strip()[:240]}
+                    for v in values if len(str(v).strip()) >= 8
+                )
         for key in ("reset_behavior",):
             if isinstance(mod.get(key), str) and mod[key].strip():
-                reqs.append(mod[key].strip())
+                reqs.append({"module": module_name, "section": key, "text": mod[key].strip()[:240]})
     if reqs:
-        return list(dict.fromkeys(r[:240] for r in reqs if len(r) >= 8))[:80]
-    return _extract_requirements(spec)
+        unique: List[Dict[str, str]] = []
+        seen = set()
+        for item in reqs:
+            identity = (item["module"], item["section"], item["text"])
+            if identity not in seen:
+                seen.add(identity)
+                unique.append(item)
+        return unique
+    return [{"module": "", "section": "free_text", "text": text} for text in _extract_requirements(spec)]
 
 
 def _feature_contract_evidence(
@@ -1339,11 +1385,21 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
         for _ in requirements:
             _add_check(counts, "inconclusive")
     else:
-        for idx, requirement in enumerate(requirements, start=1):
-            status, evidence = _match_score(requirement, rtl_text, rtl_names, structural_context)
+        module_rtl = {str(module.get("name") or ""): str(module.get("rtl_text") or "") for module in modules}
+        for idx, obligation in enumerate(requirements, start=1):
+            requirement = obligation["text"]
+            owner = obligation.get("module") or ""
+            if owner and owner not in module_rtl:
+                status, evidence = "missing", [f"owner_module_not_found:{owner}"]
+            else:
+                scoped_rtl = module_rtl[owner] if owner else rtl_text
+                scoped_names = set(re.findall(r"\b[A-Za-z_][A-Za-z0-9_$]*\b", scoped_rtl))
+                status, evidence = _match_score(requirement, scoped_rtl, scoped_names, structural_context)
             _add_check(counts, status)
             requirement_results.append({
                 "id": f"REQ-{idx:03d}",
+                "module": owner or None,
+                "section": obligation.get("section"),
                 "requirement": requirement,
                 "status": status,
                 "evidence_tokens": evidence,

@@ -1844,3 +1844,32 @@ def test_contract_accepts_required_memory_read_data_consumed_by_child():
     }
 
     spec_agent._validate_spec_contract(spec, "hierarchical")
+
+
+def test_feature_contract_strength_rejects_full_signal_domain():
+    ports = [{"name": "ready", "direction": "output", "width": 1}]
+    contracts = [{"feature_id": "flow_control", "expected": {"ready": {"min": 0, "max": 1}}}]
+
+    with pytest.raises(ValueError, match="behavior-discriminating"):
+        spec_agent._validate_feature_contract_strength(ports, contracts)
+
+
+def test_feature_contract_strength_accepts_exact_or_strict_subrange():
+    ports = [{"name": "ready", "direction": "output", "width": 1}, {"name": "count", "direction": "output", "width": 8}]
+    contracts = [
+        {"feature_id": "blocked", "expected": {"ready": {"eq": 0}}},
+        {"feature_id": "bounded_count", "expected": {"count": {"min": 2, "max": 12}}},
+    ]
+
+    spec_agent._validate_feature_contract_strength(ports, contracts)
+
+
+def test_feature_contract_strength_rejects_weak_signal_even_with_strong_signal():
+    ports = [{"name": "valid", "width": 1}, {"name": "data", "width": 8}]
+    contracts = [{
+        "feature_id": "response",
+        "expected": {"valid": {"eq": 1}, "data": {"min": 0, "max": 255}},
+    }]
+
+    with pytest.raises(ValueError, match="response: data"):
+        spec_agent._validate_feature_contract_strength(ports, contracts)

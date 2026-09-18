@@ -806,6 +806,38 @@ def _validate_reset_feature_consistency(spec_json: dict, feature_ports: list, co
         raise ValueError("Reset behavior contradicts executable feature contracts. " + "; ".join(conflicts[:8]))
 
 
+def _validate_feature_contract_strength(feature_ports: list, contracts: list) -> None:
+    """Reject checkers whose expected range accepts every possible signal value."""
+    widths = {
+        str(port.get("name") or ""): int(port.get("width") or 1)
+        for port in feature_ports if isinstance(port, dict) and port.get("name")
+    }
+    vacuous = []
+    for contract in contracts:
+        weak_signals = []
+        for name, expectation in (contract.get("expected") or {}).items():
+            if not isinstance(expectation, dict) or "eq" in expectation:
+                continue
+            if "min" not in expectation or "max" not in expectation:
+                continue
+            try:
+                lower = int(expectation["min"])
+                upper = int(expectation["max"])
+                width = max(1, widths.get(str(name), 1))
+            except (TypeError, ValueError):
+                continue
+            if lower <= 0 and upper >= (1 << width) - 1:
+                weak_signals.append(str(name))
+        if weak_signals:
+            vacuous.append(f"{contract.get('feature_id')}: {', '.join(weak_signals)}")
+    if vacuous:
+        raise ValueError(
+            "Feature contracts must contain behavior-discriminating checkers; full-domain min/max expectations "
+            "accept every possible output and provide no verification coverage. Use exact expected values or a "
+            "strict subrange derived from the feature scenario. Vacuous contracts: " + "; ".join(vacuous[:12])
+        )
+
+
 def _project_internal_feature_stimulus_to_register_bus(spec_json: dict, mode: str) -> dict:
     """Compile writable internal config stimuli into top-level register writes."""
     top = (((spec_json.get("hierarchy") or {}).get("top_module") or {})
@@ -965,6 +997,7 @@ def _validate_spec_contract(spec_json: dict, mode: str, require_feature_contract
             )
             raise ValueError(f"Every feature_contracts entry must compile to an executable checker. {detail}")
         _validate_reset_feature_consistency(spec_json, feature_ports, contracts)
+        _validate_feature_contract_strength(feature_ports, contracts)
     if mode == "flat":
         _validate_module(spec_json, "spec", require_non_empty_ports=False)
         return
@@ -3537,10 +3570,23 @@ Return JSON only.
                         _write_text(pass5_log_path, f"Digital Spec Agent pass5 contract repair failure:\n{e5}\n")
                         _write_text(pass5_exc_path, repr(e5))
 
+                    closure_error = str(e5 or "")
+                    orphan_matches = re.findall(
+                        r"required child input\s+['\"]?[^.'\"\s]+\.([A-Za-z_][A-Za-z0-9_]*)",
+                        closure_error,
+                        re.I,
+                    )
+                    # Exposing an internal child input at the product boundary is
+                    # only valid when the user explicitly requested that exact
+                    # interface signal.  Otherwise deterministic closure can turn
+                    # a missing internal connection into a bogus external port.
+                    prompt_identifiers = set(re.findall(r"\b[A-Za-z_][A-Za-z0-9_]*\b", user_prompt or ""))
                     deterministic_closure_allowed = bool(
                         e5 is not None
-                        and "required child input" in str(e5).lower()
-                        and "has no source" in str(e5).lower()
+                        and "required child input" in closure_error.lower()
+                        and "has no source" in closure_error.lower()
+                        and orphan_matches
+                        and all(port in prompt_identifiers for port in orphan_matches)
                     )
                     if deterministic_closure_allowed:
                         # Five semantic/model passes have been exhausted. Do

@@ -9,6 +9,26 @@ os.environ.setdefault("OPENAI_API_KEY", "test-openai-key")
 from agents.digital import digital_rtl_agent as agent
 
 
+def test_semantic_only_failure_requires_aggregate_contracts_to_pass():
+    base = {
+        "compile_passed": True,
+        "lint_passed": True,
+        "static_spec2rtl_passed": False,
+        "spec2rtl_conformance": {
+            "top_module": {"status": "pass"},
+            "interface": {"status": "pass"},
+            "register_map": {"status": "pass"},
+            "clock_reset": {"status": "pass"},
+            "feature_contracts": {"status": "pass"},
+            "requirements": [{"status": "missing"}],
+        },
+    }
+
+    assert agent._semantic_only_failure(base)
+    base["spec2rtl_conformance"]["interface"]["status"] = "issues"
+    assert not agent._semantic_only_failure(base)
+
+
 def test_missing_named_blocks_produces_complete_consolidated_failure(tmp_path):
     spec = {
         "name": "top",
