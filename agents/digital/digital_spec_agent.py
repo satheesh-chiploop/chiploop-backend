@@ -1071,8 +1071,28 @@ def _validate_required_memory_observability(spec_json: dict) -> None:
         name = str(macro.get("name") or "").strip()
         ports = macro.get("ports") or {}
         dout = str(ports.get("dout") or ports.get("data_out") or ports.get("rdata") or "").strip()
-        endpoint = f"{name}.{dout}" if name and dout else ""
-        if not endpoint or module_ports.get(name, {}).get(dout) != "output":
+        module_name = name
+        if module_ports.get(module_name, {}).get(dout) != "output":
+            # A technology-neutral functional wrapper may intentionally have
+            # a different module name from the physical macro.  Bind it only
+            # when the complete declared memory interface has one unambiguous
+            # memory-like module match.
+            required_inputs = {
+                str(ports.get(role) or "").strip()
+                for role in ("clk", "csb", "we", "addr", "din")
+                if str(ports.get(role) or "").strip()
+            }
+            candidates = [
+                candidate_name
+                for candidate_name, candidate_ports in module_ports.items()
+                if re.search(r"(?:mem|memory|ram|bram|fifo|sram|wrapper)", candidate_name, re.I)
+                and candidate_ports.get(dout) == "output"
+                and all(candidate_ports.get(port_name) in {"input", "inout"} for port_name in required_inputs)
+            ]
+            if len(candidates) == 1:
+                module_name = candidates[0]
+        endpoint = f"{module_name}.{dout}" if module_name and dout else ""
+        if not endpoint or module_ports.get(module_name, {}).get(dout) != "output":
             failures.append(f"{name or 'unnamed memory'} has no declared read-data output")
         elif not inter_sources.get(endpoint) and endpoint not in top_consumers:
             failures.append(
@@ -1244,6 +1264,7 @@ def _parse_llm_json_object(llm_output: str) -> dict:
                 "operating_constraints": parsed_item.get("operating_constraints", {}),
                 "implementation_requirements": parsed_item.get("implementation_requirements", []),
                 "verification_requirements": parsed_item.get("verification_requirements", []),
+                "feature_contracts": parsed_item.get("feature_contracts", []),
                 "memory_macros": parsed_item.get("memory_macros", []),
                 "hierarchy": {
                     "top_module": parsed_item["top_module"],
@@ -2440,6 +2461,7 @@ def _compile_spec_contract(
 
    
     spec_json = _project_internal_feature_stimulus_to_register_bus(spec_json, mode)
+    _validate_no_command_fallback_contract(spec_json, source_prompt)
 
     normalized_name = "spec_agent_normalized.json" if not suffix else f"spec_agent_normalized{suffix}.json"
     normalized_path = os.path.join(spec_dir, normalized_name)
@@ -2456,6 +2478,44 @@ def _compile_spec_contract(
     _validate_fpga_memory_contract(spec_json, source_prompt)
     logger.info(f"✅ Digital Spec Agent contract compile passed suffix='{suffix or 'pass1'}'")
     return spec_json, mode, raw_output_path, normalized_path
+
+
+def _validate_no_command_fallback_contract(spec_json: dict, source_prompt: str) -> None:
+    """Reject structural fallback/substitute-command interfaces when prohibited."""
+    prompt = str(source_prompt or "")
+    if "NO COMMAND FALLBACK CONTRACT (mandatory" not in prompt:
+        return
+    hierarchy = spec_json.get("hierarchy") if isinstance(spec_json.get("hierarchy"), dict) else {}
+    modules = [hierarchy.get("top_module") or {}, *(hierarchy.get("modules") or [])]
+    if not hierarchy:
+        modules = [spec_json]
+    structural_names = []
+    for module in modules:
+        if not isinstance(module, dict):
+            continue
+        structural_names.append(str(module.get("name") or ""))
+        structural_names.extend(
+            str(port.get("name") or "")
+            for port in module.get("ports") or [] if isinstance(port, dict)
+        )
+    for register in (spec_json.get("register_contract") or {}).get("registers") or []:
+        if not isinstance(register, dict):
+            continue
+        structural_names.append(str(register.get("name") or ""))
+        structural_names.extend(
+            str(field.get("name") or "")
+            for field in register.get("fields") or [] if isinstance(field, dict)
+        )
+    forbidden = sorted({
+        name for name in structural_names
+        if re.search(r"(?:^|_)(?:fallback|substitute)(?:_|$)|(?:^|_)safe_(?:cmd|command|actuator_cmd)(?:_|$)", name, re.I)
+    })
+    if forbidden:
+        raise ValueError(
+            "NO COMMAND FALLBACK CONTRACT forbids fallback/substitute command ports, modules, and register fields. "
+            "Remove these structural interfaces and inhibit actuator validity on invalid, stale, timeout, reset, or "
+            f"fault conditions instead. Forbidden names: {', '.join(forbidden[:16])}."
+        )
 
 
 def _validate_mandatory_firmware_control_plane(

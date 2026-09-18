@@ -13,6 +13,65 @@ from agents.digital import digital_spec_agent as spec_agent
 from agents.digital.feature_contract_compiler import compile_feature_contracts
 
 
+def test_malformed_outer_json_recovery_preserves_nested_feature_contracts():
+    # The outer object is truncated, but its hierarchy object is complete and
+    # contains later root-like fields emitted at the wrong nesting level.
+    raw = json.dumps({
+        "top_module": {"name": "top", "ports": []},
+        "modules": [{"name": "child", "ports": []}],
+        "top_level_connections": [{"top_port": "clk", "connected_to": ["child.clk"]}],
+        "inter_module_signals": [{"name": "x", "width": 1, "source": "child.x", "destinations": ["top.x"]}],
+        "signal_ownership": [{"signal": "x", "owner": "child.x"}],
+        "feature_contracts": [{"id": "observable", "stimulus": {"clk": 1}, "expected": {"done": 1}}],
+    })
+    malformed = '{"design_name":"top","hierarchy":' + raw
+
+    parsed = spec_agent._parse_llm_json_object(malformed)
+
+    assert parsed["feature_contracts"][0]["id"] == "observable"
+
+
+def test_memory_observability_accepts_unambiguous_functional_wrapper_name():
+    spec = {
+        "memory_macros": [{
+            "name": "payload_bram", "ports": {
+                "clk": "clk", "csb": "csb", "we": "we", "addr": "addr", "din": "din", "dout": "dout",
+            },
+        }],
+        "hierarchy": {
+            "top_module": {"name": "top", "ports": []},
+            "modules": [
+                {"name": "payload_fifo_wrapper", "ports": [
+                    {"name": name, "direction": "output" if name == "dout" else "input", "width": 1}
+                    for name in ("clk", "csb", "we", "addr", "din", "dout")
+                ]},
+                {"name": "consumer", "ports": [{"name": "mem_dout", "direction": "input", "width": 1}]},
+            ],
+        },
+        "inter_module_signals": [{
+            "name": "read_data", "width": 1, "source": "payload_fifo_wrapper.dout",
+            "destinations": ["consumer.mem_dout"],
+        }],
+        "top_level_connections": [],
+    }
+
+    spec_agent._validate_required_memory_observability(spec)
+
+
+def test_mandatory_no_fallback_contract_rejects_structural_fallback_interface():
+    spec = {
+        "name": "top",
+        "ports": [{"name": "fallback_active", "direction": "output", "width": 1}],
+        "register_contract": {"registers": [{
+            "name": "CONTROL", "fields": [{"name": "safe_actuator_cmd"}],
+        }]},
+    }
+    with pytest.raises(ValueError, match="fallback_active.*safe_actuator_cmd|safe_actuator_cmd.*fallback_active"):
+        spec_agent._validate_no_command_fallback_contract(
+            spec, "NO COMMAND FALLBACK CONTRACT (mandatory; overrides conflicting generated prose): inhibit validity."
+        )
+
+
 def test_internal_config_feature_is_projected_through_mmio_register_contract():
     spec = {
         "ports": [
