@@ -287,6 +287,19 @@ def test_feature_contract_deadline_does_not_double_count_stimulus_cycles():
     assert contracts[0]["wait_cycles"] == 0
 
 
+def test_feature_contract_compiler_accepts_explicit_empty_wait_step():
+    ports = [{"name": "done", "direction": "output"}]
+    contracts = tb_agent.compile_feature_contracts({"feature_contracts": [{
+        "id": "wait_only",
+        "stimulus": {"steps": [{"signals": {}, "cycles": 2}]},
+        "expected": {"done": {"eq": 1}},
+    }]}, ports)
+
+    assert contracts[0]["executable"] is True
+    assert contracts[0]["unresolved_bindings"] == []
+    assert contracts[0]["stimulus_steps"] == [{"signals": {}, "cycles": 2}]
+
+
 def test_free_text_feature_is_traceable_but_does_not_invent_checker():
     ports = [{"name": "alarm", "direction": "output"}]
     contracts = tb_agent.compile_feature_contracts(

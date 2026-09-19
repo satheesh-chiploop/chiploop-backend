@@ -859,7 +859,7 @@ def _project_internal_feature_stimulus_to_register_bus(spec_json: dict, mode: st
     bus = {
         "addr": input_port("mmio_addr", "csr_addr", "reg_addr"),
         "wdata": input_port("mmio_wdata", "csr_wdata", "reg_wdata"),
-        "write": input_port("mmio_write", "csr_write", "csr_we", "reg_write", "reg_we"),
+        "write": input_port("mmio_write", "mmio_we", "csr_write", "csr_we", "reg_write", "reg_we"),
         "valid": input_port("mmio_valid", "csr_valid", "reg_valid"),
         "read": input_port("mmio_read", "csr_read", "csr_re", "reg_read", "reg_re"),
     }
@@ -898,7 +898,10 @@ def _project_internal_feature_stimulus_to_register_bus(spec_json: dict, mode: st
             access = str(field.get("access") or register_access).lower()
             lsb = integer(field.get("lsb"))
             msb = integer(field.get("msb", field.get("lsb")))
-            if "w" not in access or lsb is None or msb is None or lsb < 0 or msb < lsb:
+            if lsb is not None and msb is not None and lsb > msb:
+                lsb, msb = msb, lsb
+                field["lsb"], field["msb"] = lsb, msb
+            if "w" not in access or lsb is None or msb is None or lsb < 0:
                 continue
             field_index.setdefault(str(field["name"]).strip().lower(), set()).add((address, lsb, msb))
 
@@ -969,7 +972,10 @@ def _project_internal_feature_stimulus_to_register_bus(spec_json: dict, mode: st
                 signals[bus["read"]] = 0
             setup_steps.append({"signals": signals, "cycles": 1})
         if setup_steps and cleaned_steps:
-            operational = cleaned_steps[0].get("signals") or {}
+            operational = cleaned_steps[0].get("signals")
+            if not isinstance(operational, dict):
+                operational = {}
+                cleaned_steps[0]["signals"] = operational
             operational[bus["write"]] = 0
             if bus["valid"]:
                 operational[bus["valid"]] = 0
@@ -993,6 +999,10 @@ def _validate_spec_contract(spec_json: dict, mode: str, require_feature_contract
         if incomplete:
             detail = "; ".join(
                 f"{item.get('feature_id')}: {item.get('non_executable_reason')}"
+                + (
+                    f" Unresolved bindings: {', '.join(str(name) for name in item.get('unresolved_bindings') or [])}."
+                    if item.get("unresolved_bindings") else ""
+                )
                 for item in incomplete[:12]
             )
             raise ValueError(f"Every feature_contracts entry must compile to an executable checker. {detail}")
@@ -2335,6 +2345,18 @@ HIERARCHY DELIVERABLE REPAIR EXAMPLES:
 - BAD: let the top instantiate a module that is absent from hierarchy.modules and the expected RTL file list.
 - Return the complete corrected hierarchy and connectivity; do not merely remove the nested definitions.
 """
+    feature_examples = ""
+    if "feature_contracts" in str(failure_log_text or "").lower() or "executable checker" in str(failure_log_text or "").lower():
+        feature_examples = """
+
+FEATURE-CONTRACT REPAIR RULES:
+- Every stimulus and expected signal must be a declared top-level port after normalization.
+- Register-backed configuration may use the exact register field name (optionally cfg_ prefixed); it is projected to real MMIO/CSR writes only when the field is writable and the top declares the corresponding bus.
+- Never drive internal state such as response age, FIFO occupancy, timeout state, or fault internals directly. Create that state through real top-level transactions and elapsed cycles.
+- Never monitor an undeclared internal flag. Check a declared top-level status/fault output, or perform a real MMIO/CSR read and check the declared read-data output.
+- Expected ranges spanning the complete signal domain are forbidden because they cannot detect incorrect RTL. Use an exact value or a strict feature-derived subrange.
+- Preserve the complete specification JSON and repair only invalid contracts; do not replace the design with a list of prose requirements.
+"""
     connectivity_examples = ""
     failure_text_lower = str(failure_log_text or "").lower()
     if "required child input" in failure_text_lower and "has no source" in failure_text_lower:
@@ -2462,6 +2484,7 @@ REPAIR RULES:
 - Do NOT return explanations
 {firmware_examples}
 {hierarchy_examples}
+{feature_examples}
 {connectivity_examples}
 {graph_diagnostics}
 {fpga_memory_examples}
@@ -3100,8 +3123,12 @@ RULES
 - Every port must include name, direction, width.
 - feature_contracts is mandatory and must contain one entry for every externally observable feature.
 - Every feature contract must provide explicit stimulus and expected maps using exact declared top-level port names.
+- Do not place internal state, child-module ports, register-block outputs, counters, ages, occupancy, or internal fault flags directly in stimulus or expected maps.
+- For firmware-controlled configuration, either use exact writable register field names so they can be compiled into MMIO/CSR writes, or express the explicit top-level bus transaction. Never invent cfg_* top-level pins that are absent from ports.
+- Observe firmware-visible internal status through declared top-level status/fault outputs or an explicit MMIO/CSR read transaction, never through an undeclared internal flag.
 - Multi-cycle stimulus must use `"stimulus":{{"steps":[{{"signals":{{"port":value}},"cycles":1}}]}}`. Never invent suffixed pseudo-signals such as port_2 or port_3.
 - expected values may be exact scalars or objects containing eq, min, and/or max.
+- Never use a min/max range that spans the complete numeric domain of the expected signal; such a checker accepts every implementation and is forbidden.
 - Every feature contract must define within_cycles. Never emit prose-only or unbound feature contracts.
 - Feature contracts, reset_behavior, behavior_rules, functionality, and operating assumptions must be mutually consistent. For each scenario, evaluate the declared stimulus numerically and ensure no stated combinational rule contradicts its expected outputs.
 - Compute each expected value from the exact stimulus values and state established by that scenario. Do not assume an output becomes zero merely because enable/request/write is inactive; held state and combinational outputs must still follow their declared equations.

@@ -127,6 +127,70 @@ def test_internal_config_feature_is_projected_through_mmio_register_contract():
     assert compiled[0]["stimulus_cycles"] == 2
 
 
+def test_internal_config_projection_accepts_mmio_we_alias():
+    spec = {
+        "ports": [
+            {"name": "mmio_addr", "direction": "input", "width": 8},
+            {"name": "mmio_wdata", "direction": "input", "width": 32},
+            {"name": "mmio_we", "direction": "input", "width": 1},
+            {"name": "done", "direction": "output", "width": 1},
+        ],
+        "register_contract": {"registers": [{
+            "name": "CTRL", "address": 0, "access": "rw",
+            "fields": [{"name": "enable", "lsb": 0, "msb": 0, "access": "rw"}],
+        }]},
+        "feature_contracts": [{
+            "id": "enable", "description": "Enable through firmware.",
+            "stimulus": {"cfg_enable": 1}, "expected": {"done": {"eq": 1}},
+        }],
+    }
+
+    spec_agent._project_internal_feature_stimulus_to_register_bus(spec, "flat")
+
+    steps = spec["feature_contracts"][0]["stimulus"]["steps"]
+    assert steps[0]["signals"] == {"mmio_addr": 0, "mmio_wdata": 1, "mmio_we": 1}
+    assert steps[1]["signals"]["mmio_we"] == 0
+
+
+def test_internal_config_projection_canonicalizes_reversed_field_bounds():
+    spec = {
+        "ports": [
+            {"name": "mmio_addr", "direction": "input", "width": 8},
+            {"name": "mmio_wdata", "direction": "input", "width": 32},
+            {"name": "mmio_we", "direction": "input", "width": 1},
+            {"name": "done", "direction": "output", "width": 1},
+        ],
+        "register_contract": {"registers": [{
+            "name": "LIMIT", "address": 4, "access": "rw",
+            "fields": [{"name": "timeout_cycles", "lsb": 15, "msb": 0, "access": "rw"}],
+        }]},
+        "feature_contracts": [{
+            "id": "timeout", "description": "Program timeout.",
+            "stimulus": {"cfg_timeout_cycles": 9}, "expected": {"done": {"eq": 1}},
+        }],
+    }
+
+    spec_agent._project_internal_feature_stimulus_to_register_bus(spec, "flat")
+
+    field = spec["register_contract"]["registers"][0]["fields"][0]
+    assert (field["lsb"], field["msb"]) == (0, 15)
+    assert spec["feature_contracts"][0]["stimulus"]["steps"][0]["signals"]["mmio_wdata"] == 9
+
+
+def test_feature_validation_reports_exact_unresolved_bindings():
+    spec = {
+        "name": "top",
+        "ports": [{"name": "done", "direction": "output", "width": 1}],
+        "feature_contracts": [{
+            "id": "bad_internal", "description": "Do not drive internal state.",
+            "stimulus": {"internal_age": 4}, "expected": {"done": {"eq": 1}},
+        }],
+    }
+
+    with pytest.raises(ValueError, match="Unresolved bindings: internal_age"):
+        spec_agent._validate_spec_contract(spec, "flat", require_feature_contracts=True)
+
+
 def test_unknown_internal_feature_signal_is_not_silently_removed():
     spec = {
         "ports": [

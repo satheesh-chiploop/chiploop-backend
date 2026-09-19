@@ -65,7 +65,11 @@ def _stimulus_steps(item: Dict[str, Any], names: Dict[str, str]) -> tuple[List[D
     for raw_step in raw_steps:
         if not isinstance(raw_step, dict):
             continue
-        signals = raw_step.get("signals") or raw_step.get("drive") or raw_step.get("values")
+        signals = raw_step.get("signals")
+        if not isinstance(signals, dict):
+            signals = raw_step.get("drive")
+        if not isinstance(signals, dict):
+            signals = raw_step.get("values")
         if not isinstance(signals, dict):
             signals = {key: value for key, value in raw_step.items() if key not in {"cycles", "wait_cycles"}}
         resolved, missing = _resolve_map(signals, names)
