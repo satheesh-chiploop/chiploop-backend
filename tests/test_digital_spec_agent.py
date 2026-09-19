@@ -191,6 +191,86 @@ def test_feature_validation_reports_exact_unresolved_bindings():
         spec_agent._validate_spec_contract(spec, "flat", require_feature_contracts=True)
 
 
+def test_unique_top_input_alias_fans_out_to_orphan_child_input():
+    spec = {
+        "hierarchy": {
+            "top_module": {"name": "top", "ports": [{"name": "req_ready", "direction": "input", "width": 1}]},
+            "modules": [{"name": "core", "ports": [{"name": "model_req_ready", "direction": "input", "width": 1}]}],
+        },
+        "top_level_connections": [{"top_port": "req_ready", "connected_to": ["transport.req_ready"]}],
+        "inter_module_signals": [],
+    }
+
+    spec_agent._connect_unique_top_input_aliases(spec)
+
+    assert spec["top_level_connections"][0]["connected_to"] == ["transport.req_ready", "core.model_req_ready"]
+
+
+def test_generic_single_token_top_input_is_not_used_as_suffix_alias():
+    spec = {
+        "hierarchy": {
+            "top_module": {"name": "top", "ports": [{"name": "ready", "direction": "input", "width": 1}]},
+            "modules": [{"name": "core", "ports": [{"name": "request_ready", "direction": "input", "width": 1}]}],
+        },
+        "top_level_connections": [], "inter_module_signals": [],
+    }
+
+    spec_agent._connect_unique_top_input_aliases(spec)
+
+    assert spec["top_level_connections"] == []
+
+
+def test_fpga_inferred_memory_wrapper_internalizes_primitive_pins():
+    module = {
+        "name": "history_store",
+        "description": "Technology-neutral memory storage wrapper",
+        "functionality": "Owns storage mapped to native block RAM.",
+        "behavior_rules": ["Implement storage as an inferred memory."],
+        "ports": [
+            {"name": "mem_addr", "direction": "output", "width": 6},
+            {"name": "mem_din", "direction": "output", "width": 32},
+            {"name": "mem_dout", "direction": "input", "width": 32},
+            {"name": "store_addr", "direction": "input", "width": 6},
+            {"name": "store_wdata", "direction": "input", "width": 32},
+            {"name": "store_rdata", "direction": "output", "width": 32},
+        ],
+        "must_receive": ["mem_dout", "store_addr", "store_wdata"],
+        "must_drive": ["mem_addr", "mem_din", "store_rdata"],
+    }
+    spec = {"hierarchy": {"top_module": {"name": "top", "ports": []}, "modules": [module]}}
+
+    spec_agent._internalize_fpga_inferred_memory_interfaces(spec, "FPGA MEMORY CONTRACT (mandatory)")
+
+    assert {port["name"] for port in module["ports"]} == {"store_addr", "store_wdata", "store_rdata"}
+    assert module["memory_implementation"]["kind"] == "fpga_bram"
+    assert module["memory_implementation"]["depth"] == 64
+    assert module["memory_implementation"]["data_width"] == 32
+    assert "mem_dout" not in module["must_receive"]
+
+
+def test_fpga_wrapper_keeps_primitive_pins_for_declared_macro_interface():
+    ports = [
+        {"name": "mem_addr", "direction": "output", "width": 6},
+        {"name": "mem_din", "direction": "output", "width": 32},
+        {"name": "mem_dout", "direction": "input", "width": 32},
+        {"name": "store_addr", "direction": "input", "width": 6},
+        {"name": "store_rdata", "direction": "output", "width": 32},
+    ]
+    module = {
+        "name": "history_store", "description": "Memory storage wrapper",
+        "functionality": "Storage wrapper", "behavior_rules": ["Instantiate memory macro."], "ports": ports,
+    }
+    spec = {
+        "hierarchy": {"top_module": {"name": "top", "ports": []}, "modules": [module]},
+        "memory_macros": [{"name": "ram", "ports": {"addr": "mem_addr", "din": "mem_din", "dout": "mem_dout"}}],
+    }
+
+    spec_agent._internalize_fpga_inferred_memory_interfaces(spec, "FPGA MEMORY CONTRACT (mandatory)")
+
+    assert module["ports"] == ports
+    assert "memory_implementation" not in module
+
+
 def test_unknown_internal_feature_signal_is_not_silently_removed():
     spec = {
         "ports": [

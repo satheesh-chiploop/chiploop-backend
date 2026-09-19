@@ -1725,6 +1725,145 @@ def _normalize_memory_wrapper_port_directions(spec_json: dict, mode: str) -> dic
     return spec_json
 
 
+def _internalize_fpga_inferred_memory_interfaces(spec_json: dict, source_prompt: str) -> dict:
+    """Remove source-less primitive pins from wrappers that own inferred FPGA storage."""
+    if "FPGA MEMORY CONTRACT (mandatory)" not in str(source_prompt or ""):
+        return spec_json
+    hierarchy = spec_json.get("hierarchy") if isinstance(spec_json.get("hierarchy"), dict) else {}
+    removed_endpoints = set()
+    primitive_roles = re.compile(r"^(?:mem|memory)_(?:csb|ce|en|web|we|addr|din|dout|rdata|wdata)$", re.I)
+    functional_roles = re.compile(r"^(?:store|history|fifo|buffer)_(?:we|re|valid|ready|addr|wdata|rdata|data)$", re.I)
+    declared_macro_port_sets = [
+        {
+            str(port_name or "").strip().lower()
+            for port_name in (macro.get("ports") or {}).values()
+            if str(port_name or "").strip()
+        }
+        for macro in spec_json.get("memory_macros") or []
+        if isinstance(macro, dict) and isinstance(macro.get("ports"), dict)
+    ]
+    for module in hierarchy.get("modules") or []:
+        if not isinstance(module, dict):
+            continue
+        module_name = str(module.get("name") or "").strip()
+        ports = [port for port in module.get("ports") or [] if isinstance(port, dict)]
+        primitive = [port for port in ports if primitive_roles.match(str(port.get("name") or ""))]
+        functional = [port for port in ports if functional_roles.match(str(port.get("name") or ""))]
+        identity = " ".join(str(module.get(key) or "") for key in ("name", "description", "functionality"))
+        rules = " ".join(str(item) for item in (module.get("behavior_rules") or []))
+        owns_inferred_storage = bool(
+            primitive and functional
+            and re.search(r"(?:memory|storage|bram|ram)", identity, re.I)
+            and re.search(r"(?:infer|native block ram|technology.neutral|instantiate.*memory)", rules + " " + identity, re.I)
+        )
+        if not owns_inferred_storage:
+            continue
+        primitive_names = {str(port.get("name") or "") for port in primitive}
+        if any({name.lower() for name in primitive_names}.issubset(port_set) for port_set in declared_macro_port_sets):
+            # A separately declared memory deliverable is the intended
+            # producer/consumer for this complete primitive interface.
+            continue
+        addr_port = next((port for port in functional if re.search(r"_addr$", str(port.get("name") or ""), re.I)), None)
+        data_port = next((port for port in functional if re.search(r"_(?:wdata|rdata|data)$", str(port.get("name") or ""), re.I)), None)
+        try:
+            addr_width = max(1, int((addr_port or {}).get("width") or 1))
+            data_width = max(1, int((data_port or {}).get("width") or 1))
+        except (TypeError, ValueError):
+            addr_width, data_width = 1, 1
+        module["ports"] = [port for port in ports if str(port.get("name") or "") not in primitive_names]
+        for key in ("must_drive", "must_receive", "must_not_drive"):
+            if isinstance(module.get(key), list):
+                module[key] = [name for name in module[key] if str(name) not in primitive_names]
+        module["memory_implementation"] = {
+            "kind": "fpga_bram",
+            "depth": 1 << addr_width,
+            "addr_width": addr_width,
+            "data_width": data_width,
+            "technology_binding": "technology_neutral_inferred_memory",
+        }
+        removed_endpoints.update(f"{module_name}.{name}" for name in primitive_names)
+    if removed_endpoints:
+        spec_json["top_level_connections"] = [
+            {**connection, "connected_to": [endpoint for endpoint in connection.get("connected_to", []) if endpoint not in removed_endpoints]}
+            for connection in spec_json.get("top_level_connections") or [] if isinstance(connection, dict)
+        ]
+        spec_json["inter_module_signals"] = [
+            {**signal, "destinations": [endpoint for endpoint in signal.get("destinations", []) if endpoint not in removed_endpoints]}
+            for signal in spec_json.get("inter_module_signals") or []
+            if isinstance(signal, dict) and str(signal.get("source") or "") not in removed_endpoints
+        ]
+        spec_json["signal_ownership"] = [
+            item for item in spec_json.get("signal_ownership") or []
+            if isinstance(item, dict) and str(item.get("owner") or "") not in removed_endpoints
+        ]
+    return spec_json
+
+
+def _connect_unique_top_input_aliases(spec_json: dict) -> dict:
+    """Fan out a top input to an orphan child input only for one unambiguous semantic suffix match."""
+    hierarchy = spec_json.get("hierarchy") if isinstance(spec_json.get("hierarchy"), dict) else {}
+    top = hierarchy.get("top_module") if isinstance(hierarchy.get("top_module"), dict) else {}
+    top_inputs = [
+        port for port in top.get("ports") or []
+        if isinstance(port, dict) and str(port.get("direction") or "").lower() in {"input", "inout"}
+    ]
+    connections = spec_json.setdefault("top_level_connections", [])
+    driven = {
+        str(endpoint)
+        for connection in connections if isinstance(connection, dict)
+        for endpoint in connection.get("connected_to", []) or []
+    }
+    driven.update(
+        str(endpoint)
+        for signal in spec_json.get("inter_module_signals") or [] if isinstance(signal, dict)
+        for endpoint in signal.get("destinations", []) or []
+    )
+
+    def width(port: dict) -> int:
+        try:
+            return max(1, int(port.get("width") or 1))
+        except (TypeError, ValueError):
+            return 1
+
+    def aliases(child_name: str, top_name: str) -> bool:
+        child = child_name.lower()
+        candidate = top_name.lower()
+        if child == candidate:
+            return True
+        # A one-token top port such as "ready" or "data" is too generic to
+        # infer ownership from suffix alone. Require a protocol-qualified name
+        # such as req_ready, rsp_valid, or command_data.
+        if len([token for token in candidate.split("_") if token]) < 2:
+            return False
+        return child.endswith("_" + candidate)
+
+    by_top = {str(connection.get("top_port") or ""): connection for connection in connections if isinstance(connection, dict)}
+    for module in hierarchy.get("modules") or []:
+        if not isinstance(module, dict):
+            continue
+        module_name = str(module.get("name") or "").strip()
+        for port in module.get("ports") or []:
+            if not isinstance(port, dict) or str(port.get("direction") or "").lower() not in {"input", "inout"}:
+                continue
+            port_name = str(port.get("name") or "").strip()
+            endpoint = f"{module_name}.{port_name}"
+            if endpoint in driven:
+                continue
+            candidates = [top_port for top_port in top_inputs if width(top_port) == width(port) and aliases(port_name, str(top_port.get("name") or ""))]
+            if len(candidates) != 1:
+                continue
+            top_name = str(candidates[0].get("name") or "")
+            connection = by_top.get(top_name)
+            if connection is None:
+                connection = {"top_port": top_name, "connected_to": [], "description": f"Top input {top_name} fanout."}
+                connections.append(connection)
+                by_top[top_name] = connection
+            if endpoint not in connection["connected_to"]:
+                connection["connected_to"].append(endpoint)
+                driven.add(endpoint)
+    return spec_json
+
+
 def _reconcile_hierarchical_signal_directions(spec_json: dict, mode: str) -> dict:
     if mode != "hierarchical":
         return spec_json
@@ -2547,6 +2686,7 @@ def _compile_spec_contract(
 
     if mode == "hierarchical":
         spec_json = _normalize_memory_wrapper_port_directions(spec_json, mode)
+        spec_json = _internalize_fpga_inferred_memory_interfaces(spec_json, source_prompt)
         spec_json = _ensure_hierarchical_top_level_connections(spec_json)
         spec_json = _ensure_hierarchical_inter_module_signals(spec_json)
         # Reject stale endpoints against the declared contract before port
@@ -2555,6 +2695,7 @@ def _compile_spec_contract(
         spec_json = _sanitize_hierarchical_connectivity(spec_json)
         spec_json = _ensure_hierarchical_port_closure(spec_json)
         spec_json = _reconcile_hierarchical_signal_directions(spec_json, mode)
+        spec_json = _connect_unique_top_input_aliases(spec_json)
         spec_json = _sanitize_hierarchical_connectivity(spec_json)
         spec_json = _remove_self_owned_alias_inputs(spec_json)
         spec_json = _enforce_prompt_top_ports_after_hierarchy_repair(spec_json, mode, source_prompt)
