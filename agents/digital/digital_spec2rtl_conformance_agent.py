@@ -489,6 +489,39 @@ def _match_score(
                 break
         if driven and structural_context.get("output_ports"):
             evidence.append("all_top_outputs_have_rtl_drivers")
+    if re.search(r"(?:own|drive).*(?:all|every) top-level outputs?|every top-level output.*(?:driven|internal rtl logic)", req_lower):
+        driven = True
+        for output_name in structural_context.get("output_ports") or []:
+            if not re.search(
+                rf"\bassign\s+{re.escape(str(output_name))}\s*=|\b{re.escape(str(output_name))}\s*<=",
+                rtl_without_comments,
+                re.I,
+            ):
+                driven = False
+                break
+        if driven and structural_context.get("output_ports"):
+            evidence.append("all_top_outputs_have_rtl_drivers")
+    if re.search(r"decode mmio transactions?.*(?:configuration|status)|(?:configuration|status).*mmio.*decode", req_lower):
+        if (
+            re.search(r"\bcase\s*\(\s*\w*mmio\w*(?:addr|address)\w*\s*\)", rtl_without_comments, re.I)
+            and re.search(r"\b\w*mmio\w*wdata\w*\s*\[", rtl_without_comments, re.I)
+            and re.search(r"\b\w*mmio\w*rdata\w*\s*(?:<=|=)", rtl_without_comments, re.I)
+        ):
+            evidence.append("mmio_configuration_and_status_decode")
+    if re.search(r"generate bounded request packets?.*(?:external|surrogate|model)", req_lower):
+        request_fields = re.findall(
+            r"\b\w*req\w*(?:word|data|packet)\w*\s*\[\s*\d+\s*(?::\s*\d+\s*)?\]\s*=",
+            rtl_without_comments,
+            re.I,
+        )
+        if len(request_fields) >= 2 and re.search(r"\bassign\s+\w*req\w*data\w*\s*=|\b\w*req\w*data\w*\s*=", rtl_without_comments, re.I):
+            evidence.append("bounded_request_packet_construction")
+    if re.search(r"top module.*sole design top|sole design top.*top module|must not be substituted by a child", req_lower):
+        if structural_context.get("top_module_present") is True:
+            evidence.append("declared_top_module_present")
+    if re.search(r"no\s+sky130\s+hard macro|must not.*sky130", req_lower):
+        if not re.search(r"\bsky130\w*", rtl_without_comments, re.I):
+            evidence.append("no_sky130_hard_macro")
     if re.search(r"register block.*not generate actuator commands", req_lower):
         register_blocks = re.findall(
             r"\bmodule\s+[A-Za-z_][A-Za-z0-9_$]*(?:csr|reg|mmio)[A-Za-z0-9_$]*\b(.*?)\bendmodule\b",
@@ -704,9 +737,12 @@ def _match_score(
         and re.search(r"\breset\b", req_lower)
         and re.search(r"\ball\s+(?:registers?|sequential\s+state|state)\b", req_lower)
     )
-    reset_contract_signal = re.search(r"\b(reset_n|rst_n|reset|rst)\b", requirement, re.I)
-    if all_state_reset_required and reset_contract_signal:
-        reset_name = reset_contract_signal.group(1)
+    reset_contract_signals = re.findall(r"\b(reset_n|rst_n|reset|rst)\b", requirement, re.I)
+    if all_state_reset_required and reset_contract_signals:
+        reset_name = next(
+            (name for name in reset_contract_signals if name.lower() in rtl_identifiers),
+            reset_contract_signals[0],
+        )
         reset_is_active_low = reset_name.lower().endswith("_n") or bool(re.search(r"active[- ]low", req_lower))
         if reset_name.lower() not in rtl_identifiers:
             preferred_reset_names = (
@@ -722,10 +758,23 @@ def _match_score(
         proven_targets = set()
         zero_literal = r"(?:\d+'[bdh]0+|1'b0|0)\b"
         reset_branch_body = _conditional_branch_body(rtl_without_comments, reset_assertion)
+        all_state_must_be_zero = bool(re.search(
+            r"\ball\s+(?:registers?|sequential\s+state|state)\b[^.\n]*\b(?:zero|0)\b",
+            req_lower,
+        ))
         for target in sequential_targets:
-            direct_reset = re.search(
-                rf"\b{re.escape(target)}\s*<=\s*{zero_literal}", reset_branch_body, re.I
-            )
+            if all_state_must_be_zero:
+                direct_reset = re.search(
+                    rf"\b{re.escape(target)}\s*<=\s*{zero_literal}", reset_branch_body, re.I
+                )
+            else:
+                # "Reset to documented/default values" legitimately includes
+                # non-zero thresholds and symbolic idle states. The reset
+                # branch must assign every sequential target, but the checker
+                # must not rewrite that contract into an all-zero requirement.
+                direct_reset = re.search(
+                    rf"\b{re.escape(target)}\s*<=\s*[^;]+;", reset_branch_body, re.I
+                )
             next_state_assignments = re.findall(
                 rf"\b{re.escape(target)}\s*<=\s*([A-Za-z_][A-Za-z0-9_$]*)\s*;",
                 rtl_without_comments,
@@ -740,6 +789,24 @@ def _match_score(
                 proven_targets.add(target)
         if sequential_targets and proven_targets == sequential_targets:
             evidence.append("all_sequential_state_synchronously_reset_zero")
+    if re.search(r"\bmmio\b.*\bsynchronous|\bsynchronous.*\bmmio\b", req_lower):
+        sequential_blocks = re.findall(
+            r"\balways(?:_ff)?\s*@\s*\([^)]*\bposedge\s+\w+[^)]*\)\s*begin\b(.*?)\bend\b",
+            rtl_without_comments,
+            re.I | re.S,
+        )
+        has_registered_read = any(
+            re.search(r"\b\w*mmio\w*(?:rdata|ready)\w*\s*<=", block, re.I)
+            and re.search(r"\bcase\s*\(\s*\w*mmio\w*(?:addr|address)\w*\s*\)", block, re.I)
+            for block in sequential_blocks
+        )
+        has_registered_write = any(
+            re.search(r"\b\w*mmio\w*(?:valid|we|write)\w*", block, re.I)
+            and re.search(r"\b\w*mmio\w*wdata\w*", block, re.I)
+            for block in sequential_blocks
+        )
+        if has_registered_read and has_registered_write:
+            evidence.append("synchronous_mmio_write_then_read")
     # Prove reset requirements per named output. A reset assignment to some
     # unrelated state register must not satisfy prose such as "pwm_out is
     # driven low". This catches combinational outputs that remain active while
@@ -1070,6 +1137,11 @@ def _match_score(
         "complete_register_contract_traceability",
         "unique_register_address_case_items",
         "all_top_outputs_have_rtl_drivers",
+        "mmio_configuration_and_status_decode",
+        "bounded_request_packet_construction",
+        "declared_top_module_present",
+        "no_sky130_hard_macro",
+        "synchronous_mmio_write_then_read",
         "register_block_has_no_actuator_command_path",
         "control_and_read_state_reset_with_complete_decode",
         "synthesizable_rtl_subset",
@@ -1155,6 +1227,7 @@ def _match_score(
 
 def _register_evidence(spec: str, rtl_text: str, state: Dict[str, Any], spec_obj: Optional[Dict[str, Any]], regmap: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     fields: List[str] = []
+    field_locations: Dict[str, Dict[str, Any]] = {}
     registers: List[Tuple[str, Optional[str]]] = []
 
     def collect_registers(container: Any) -> None:
@@ -1173,13 +1246,21 @@ def _register_evidence(spec: str, rtl_text: str, state: Dict[str, Any], spec_obj
                 registers.append((reg_name, address))
             for field in reg.get("fields") or []:
                 if isinstance(field, dict) and str(field.get("name") or "").strip():
-                    fields.append(str(field["name"]).strip())
+                    field_name = str(field["name"]).strip()
+                    fields.append(field_name)
+                    field_locations[field_name.lower()] = {
+                        "address": address,
+                        "lsb": field.get("lsb"),
+                        "msb": field.get("msb"),
+                        "access": str(field.get("access") or reg.get("access") or "").upper(),
+                    }
 
     if isinstance(regmap, dict):
         collect_registers(regmap.get("regmap") if isinstance(regmap.get("regmap"), dict) else regmap)
     elif isinstance(spec_obj, dict):
         collect_registers(spec_obj.get("register_contract") or {})
-    fields.extend(re.findall(r"\b([A-Za-z_][A-Za-z0-9_]*(?:_reg|_cfg|_ctrl|_status))\b", spec or "", re.I))
+    if not fields:
+        fields.extend(re.findall(r"\b([A-Za-z_][A-Za-z0-9_]*(?:_reg|_cfg|_ctrl|_status))\b", spec or "", re.I))
     unique = sorted(dict.fromkeys(
         f for f in fields if not re.fullmatch(r"reserved(?:_?\d+)?", f.lower())
     ))
@@ -1203,6 +1284,31 @@ def _register_evidence(spec: str, rtl_text: str, state: Dict[str, Any], spec_obj
         semantic_tokens = [t for t in tokens if t not in {"word", "value", "data"}]
         if semantic_tokens and any(all(tok in ident for tok in semantic_tokens) for ident in rtl_identifiers):
             return True
+        location = field_locations.get(low) or {}
+        try:
+            address_int = int(str(location.get("address")), 0)
+            lsb = int(location.get("lsb"))
+            msb = int(location.get("msb"))
+        except (TypeError, ValueError):
+            return False
+        address_blocks = re.findall(
+            rf"\b\d+'h0*{address_int:x}\s*:\s*(?:begin\b)?(.*?)"
+            r"(?=\b\d+'h[0-9a-f]+\s*:|\bdefault\s*:|\bendcase\b)",
+            rtl_text,
+            re.I | re.S,
+        )
+        if not address_blocks:
+            return False
+        access = str(location.get("access") or "").upper()
+        if access != "RO":
+            if lsb == 0 and msb >= 31:
+                bit_evidence = r"\b\w*(?:wdata|write_data)\w*\b"
+            elif lsb == msb:
+                bit_evidence = rf"\b\w*(?:wdata|write_data)\w*\s*\[\s*{lsb}\s*\]"
+            else:
+                bit_evidence = rf"\b\w*(?:wdata|write_data)\w*\s*\[\s*{msb}\s*:\s*{lsb}\s*\]"
+            if any(re.search(bit_evidence, block, re.I) for block in address_blocks):
+                return True
         return False
 
     matched = [
@@ -1455,6 +1561,9 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
         "output_ports": output_ports,
         "interface_exact": bool(spec_ports) and not missing_ports and not extra_ports,
         "register_contract_complete": register_check.get("status") == "pass",
+        "top_module_present": bool(top_module) and any(
+            str(module.get("name") or "") == top_module for module in modules
+        ),
     }
 
     requirements = _structured_requirements(spec_obj, spec)

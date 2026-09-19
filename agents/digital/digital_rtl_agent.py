@@ -165,6 +165,14 @@ def _validate_memory_macro_reachability(spec_json: dict, verilog_map: Dict[str, 
     """
     issues: List[str] = []
     text = _strip_verilog_comments("\n".join(verilog_map.values()))
+    module_defs = {
+        module_name: {
+            "code": module_code,
+            "ports": _declared_ports(module_code),
+        }
+        for code in verilog_map.values()
+        for module_name, module_code in _extract_verilog_modules(code).items()
+    }
 
     def connected_ports(body: str) -> Dict[str, str]:
         return {
@@ -201,6 +209,47 @@ def _validate_memory_macro_reachability(spec_json: dict, verilog_map: Dict[str, 
             return None
         return constant_value(assignments[0])
 
+    def reaches_functional_use(signal: str, parent_text: str) -> bool:
+        assignments = re.findall(
+            r"(?:\bassign\s+)?\b([A-Za-z_][A-Za-z0-9_$]*)"
+            r"(?:\s*\[[^\]]+\])?\s*(?:<=|(?<![=!<>])=(?!=))\s*([^;]+);",
+            parent_text,
+            re.I,
+        )
+        tainted = {signal}
+        changed = True
+        while changed:
+            changed = False
+            for lhs, rhs in assignments:
+                if lhs in tainted:
+                    continue
+                if any(re.search(rf"\b{re.escape(source)}\b", rhs) for source in tainted):
+                    tainted.add(lhs)
+                    changed = True
+
+        parent_ports = _declared_ports(parent_text)
+        if any(parent_ports.get(name, {}).get("direction") in {"output", "inout"} for name in tainted):
+            return True
+        for expression in re.findall(r"\b(?:if|case)\s*\(([^)]*)\)", parent_text, re.I):
+            if any(re.search(rf"\b{re.escape(name)}\b", expression) for name in tainted):
+                return True
+
+        child_names = [re.escape(name) for name in module_defs]
+        if child_names:
+            instance_re = re.compile(
+                rf"\b(?P<cell>{'|'.join(sorted(child_names, key=len, reverse=True))})\s*"
+                r"(?:#\s*\([^;]*?\)\s*)?[A-Za-z_][A-Za-z0-9_$]*\s*\((?P<body>.*?)\)\s*;",
+                re.I | re.S,
+            )
+            for instance_match in instance_re.finditer(parent_text):
+                ports = module_defs.get(instance_match.group("cell"), {}).get("ports", {})
+                for port, expression in connected_ports(instance_match.group("body")).items():
+                    if ports.get(port, {}).get("direction") not in {"input", "inout"}:
+                        continue
+                    if any(re.search(rf"\b{re.escape(name)}\b", expression) for name in tainted):
+                        return True
+        return False
+
     for macro in spec_json.get("memory_macros", []) or []:
         if not isinstance(macro, dict) or macro.get("unused") is True or macro.get("required") is False:
             continue
@@ -216,6 +265,9 @@ def _validate_memory_macro_reachability(spec_json: dict, verilog_map: Dict[str, 
         )
         if not match:
             continue
+        module_start = text.rfind("module", 0, match.start())
+        module_end = text.find("endmodule", match.end())
+        parent_text = text[module_start : module_end if module_end >= 0 else len(text)]
         ports = macro.get("ports") if isinstance(macro.get("ports"), dict) else {}
         connections = connected_ports(match.group("body"))
         cs_port = str(ports.get("csb") or "csb")
@@ -228,7 +280,7 @@ def _validate_memory_macro_reachability(spec_json: dict, verilog_map: Dict[str, 
             simple_dout
             and (
                 "unused" in dout_expression.lower()
-                or len(re.findall(rf"\b{re.escape(dout_expression)}\b", text)) <= 2
+                or not reaches_functional_use(dout_expression, parent_text)
             )
         )
         if inactive_select or unconsumed_output:
@@ -1339,6 +1391,12 @@ def _replace_or_insert_wire_decl(code: str, name: str, width: int) -> str:
     )
     if wire_pat.search(code):
         return wire_pat.sub(decl, code, count=1)
+    internal_variable_pat = re.compile(
+        rf"^\s*(?:reg|logic)\b\s*(?:signed\s*)?(?:\[[^\]]+\]\s*)?{re.escape(name)}\s*;\s*$",
+        flags=re.MULTILINE,
+    )
+    if internal_variable_pat.search(code):
+        return internal_variable_pat.sub(decl, code, count=1)
     declared_pat = re.compile(
         rf"^\s*(?:input|output|inout|reg|logic)\b[^;]*\b{re.escape(name)}\b[^;]*;\s*$",
         flags=re.MULTILINE,
@@ -1515,10 +1573,13 @@ def _sanitize_child_output_instance_connections(verilog_map: Dict[str, str]) -> 
                 elif parent_info and parent_info.get("direction") == "input":
                     new_sig = f"{sig}_from_{inst}"
                     wire_updates[new_sig] = child_width
-                elif not parent_info and sig in signal_widths and sig_width != child_width:
-                    # Internal structural nets inherit the width of their
-                    # child output driver. This corrects scalar-by-default
-                    # declarations without an LLM repair or prompt change.
+                elif not parent_info and sig in signal_widths:
+                    # Internal child-output connections are nets, not parent
+                    # procedural variables. Re-declare them as wires even when
+                    # their width is already correct; Icarus rejects an output
+                    # port driving a parent ``reg``. The parent-driver branch
+                    # above protects genuinely procedural signals by rerouting
+                    # the child output instead.
                     new_sig = sig
                     wire_updates[new_sig] = child_width
                 else:
@@ -3904,8 +3965,27 @@ def _validate_and_materialize_rtl(
     # FPGA BRAM wrappers are declared implementation components. Keep them in
     # the deliverable RTL file set so synthesis receives the same closure that
     # compile/lint validated.
-    artifact_list.extend(_materialize_declared_fpga_bram_wrappers(spec_json, materialize_dir))
+    generated_fpga_wrappers = _materialize_declared_fpga_bram_wrappers(spec_json, materialize_dir)
+    artifact_list.extend(generated_fpga_wrappers)
     artifact_list = sorted(dict.fromkeys(artifact_list))
+
+    if generated_fpga_wrappers:
+        # Generated BRAM wrappers are not present in the LLM response, so the
+        # earlier child-output sanitizer cannot infer their port directions.
+        # Re-run it with those support modules visible, then persist only the
+        # repaired original RTL plus the generated wrappers. This converts an
+        # internal parent ``reg`` connected to a child output into a legal net
+        # before Icarus elaboration without treating support RTL as an extra
+        # LLM-emitted deliverable.
+        support_map = {
+            os.path.basename(path): Path(path).read_text(encoding="utf-8", errors="ignore")
+            for path in generated_fpga_wrappers
+        }
+        support_aware = _sanitize_child_output_instance_connections({**verilog_map, **support_map})
+        for fname in list(verilog_map):
+            repaired_code = support_aware.get(fname, verilog_map[fname])
+            verilog_map[fname] = repaired_code
+            Path(os.path.join(materialize_dir, fname)).write_text(repaired_code + "\n", encoding="utf-8")
 
     top_rtl_file = _top_rtl_file(spec_json, mode)
     top_rtl_path = os.path.join(materialize_dir, top_rtl_file)

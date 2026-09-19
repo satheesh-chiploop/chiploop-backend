@@ -552,6 +552,34 @@ endmodule
     assert agent._validate_memory_macro_reachability(spec, files) == []
 
 
+def test_required_memory_reachability_rejects_dead_alias_but_accepts_functional_use():
+    spec = {"memory_macros": [{
+        "kind": "fpga_bram", "name": "history_ram", "instance_name": "u_history",
+        "ports": {"clk": "clk", "csb": "csb", "we": "we", "addr": "addr", "din": "din", "dout": "dout"},
+    }]}
+    dead = {"top.v": """
+module top(input clk, input request_valid);
+  wire mem_csb; wire [31:0] mem_dout; wire [31:0] renamed_but_unused;
+  assign mem_csb = ~request_valid;
+  assign renamed_but_unused = mem_dout;
+  history_ram u_history(.clk(clk), .csb(mem_csb), .we(1'b0), .addr(8'h0), .din(32'h0), .dout(mem_dout));
+endmodule
+"""}
+    used = {"top.v": dead["top.v"].replace(
+        "module top(input clk, input request_valid);",
+        "module top(input clk, input request_valid, output nonzero_history);",
+    ).replace(
+        "assign renamed_but_unused = mem_dout;",
+        "assign renamed_but_unused = mem_dout;\n  assign nonzero_history = |renamed_but_unused;",
+    )}
+
+    dead_issues = agent._validate_memory_macro_reachability(spec, dead)
+
+    assert len(dead_issues) == 1
+    assert "unconsumed signal 'mem_dout'" in dead_issues[0]
+    assert agent._validate_memory_macro_reachability(spec, used) == []
+
+
 def test_aligns_memory_role_labels_to_declared_concrete_ports():
     spec = {
         "memory_macros": [{
@@ -1104,6 +1132,25 @@ endmodule
 
     assert "wire [15:0] clamped_value;" in out
     assert ".clamped_value(clamped_value)" in out
+
+
+def test_sanitize_child_output_converts_same_width_parent_reg_to_wire():
+    code = """
+module top(input clk);
+  reg [95:0] fifo_dout;
+  request_response_fifo_bram u_fifo(.clk(clk), .dout(fifo_dout));
+endmodule
+
+module request_response_fifo_bram(input clk, output reg [95:0] dout);
+  always @(posedge clk) dout <= 96'b0;
+endmodule
+"""
+
+    out = agent._sanitize_child_output_instance_connections({"top.v": code})["top.v"]
+
+    assert "wire [95:0] fifo_dout;" in out
+    assert "reg [95:0] fifo_dout;" not in out
+    assert ".dout(fifo_dout)" in out
 
 
 def test_connects_spec_inter_module_signal_when_repair_left_consumer_undriven():

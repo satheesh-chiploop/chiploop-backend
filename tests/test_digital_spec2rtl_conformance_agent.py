@@ -343,6 +343,65 @@ endmodule
     assert "all_sequential_state_synchronously_reset_zero" in evidence
 
 
+def test_match_score_accepts_documented_nonzero_synchronous_reset_defaults():
+    rtl = """
+module controller(input clk, input reset_n);
+  reg [3:0] state_q;
+  reg [15:0] timeout_q;
+  always @(posedge clk) begin
+    if (!reset_n) begin
+      state_q <= 4'd0;
+      timeout_q <= 16'd32;
+    end else begin
+      state_q <= state_q;
+      timeout_q <= timeout_q;
+    end
+  end
+endmodule
+"""
+
+    status, evidence = agent._match_score(
+        "All state is synchronously reset by reset_n and registers clear to documented defaults.",
+        rtl,
+        {"clk", "reset_n", "state_q", "timeout_q"},
+    )
+
+    assert status == "matched"
+    assert "all_sequential_state_synchronously_reset_zero" in evidence
+
+
+def test_match_score_requires_registered_mmio_read_and_write_paths():
+    combinational = """
+always @(*) begin
+  case (mmio_addr)
+    8'h00: mmio_rdata = control_q;
+  endcase
+end
+always @(posedge clk) if (mmio_valid && mmio_we) control_q <= mmio_wdata;
+"""
+    synchronous = """
+always @(posedge clk) begin
+  if (mmio_valid) begin
+    case (mmio_addr)
+      8'h00: begin
+        if (mmio_we) control_q <= mmio_wdata;
+        mmio_rdata <= control_q;
+        mmio_ready <= 1'b1;
+      end
+    endcase
+  end
+end
+"""
+    requirement = "MMIO access is synchronous and write-then-read consistent within the selected register map."
+
+    bad_status, _ = agent._match_score(requirement, combinational, set())
+    good_status, good_evidence = agent._match_score(requirement, synchronous, set())
+
+    assert bad_status == "missing"
+    assert good_status == "matched"
+    assert "synchronous_mmio_write_then_read" in good_evidence
+
+
 def test_match_score_rejects_when_only_some_sequential_state_is_reset():
     rtl = """
 module controller(input clk, input reset_n);
@@ -646,6 +705,32 @@ end
     assert evidence["matched_registers"] == ["CONTROL"]
     assert evidence["expected_addresses"] == ["0x00"]
     assert evidence["matched_addresses"] == ["0x00"]
+
+
+def test_register_evidence_matches_renamed_fields_by_address_and_bit_position():
+    regmap = {"registers": [
+        {"name": "CONTROL", "offset": "0x00", "fields": [
+            {"name": "fault_clear", "lsb": 2, "msb": 2, "access": "W1P"},
+        ]},
+        {"name": "CLAMP_MIN", "offset": "0x08", "fields": [
+            {"name": "min_cmd", "lsb": 0, "msb": 31, "access": "RW"},
+        ]},
+    ]}
+    rtl = """
+always @(posedge clk) begin
+  if (mmio_valid && mmio_we) begin
+    case (mmio_addr)
+      8'h00: if (mmio_wdata[2]) fault_latched_q <= 1'b0;
+      8'h08: clamp_min_q <= mmio_wdata;
+    endcase
+  end
+end
+"""
+
+    result = agent._register_evidence("inference_status is descriptive prose", rtl, {}, None, regmap)
+
+    assert result["missing"] == []
+    assert "inference_status" not in result["expected"]
 
 
 def test_feature_contracts_are_statically_bound_to_rtl_interface():
