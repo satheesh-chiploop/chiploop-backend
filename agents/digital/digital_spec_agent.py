@@ -1065,8 +1065,17 @@ def _validate_spec_contract(spec_json: dict, mode: str, require_feature_contract
     for i, o in enumerate(own):
         _validate_ownership(o, f"signal_ownership[{i}]")
 
-    _validate_hierarchical_endpoint_coverage(spec_json)
-    _validate_required_memory_observability(spec_json)
+    graph_errors = []
+    for validator in (
+        _validate_hierarchical_endpoint_coverage,
+        _validate_required_memory_observability,
+    ):
+        try:
+            validator(spec_json)
+        except ValueError as error:
+            graph_errors.append(str(error))
+    if graph_errors:
+        raise ValueError("Hierarchical graph validation failed: " + " | ".join(graph_errors))
 
 
 def _validate_required_memory_observability(spec_json: dict) -> None:
@@ -1105,6 +1114,7 @@ def _validate_required_memory_observability(spec_json: dict) -> None:
         top_consumers.update(str(endpoint) for endpoint in connection.get("connected_to") or [])
 
     failures = []
+    checked_endpoints = set()
     for macro in spec_json.get("memory_macros") or []:
         if not isinstance(macro, dict):
             continue
@@ -1132,6 +1142,8 @@ def _validate_required_memory_observability(spec_json: dict) -> None:
             if len(candidates) == 1:
                 module_name = candidates[0]
         endpoint = f"{module_name}.{dout}" if module_name and dout else ""
+        if endpoint:
+            checked_endpoints.add(endpoint)
         if not endpoint or module_ports.get(module_name, {}).get(dout) != "output":
             failures.append(f"{name or 'unnamed memory'} has no declared read-data output")
         elif not inter_sources.get(endpoint) and endpoint not in top_consumers:
@@ -1155,6 +1167,33 @@ def _validate_required_memory_observability(spec_json: dict) -> None:
                 )
             failures.append(
                 f"{endpoint} is unconsumed; connect it to a real child input or a top-level output{hint}"
+            )
+
+    # In FPGA flows a hard-macro declaration may be normalized into a
+    # technology-neutral wrapper and removed from memory_macros[].  The wrapper
+    # remains a required memory deliverable, so validate its read path too.
+    # Otherwise normalization could accidentally turn a real dead-memory error
+    # into a pass simply by changing where the memory metadata is stored.
+    for module in modules:
+        if not isinstance(module, dict) or not isinstance(module.get("memory_implementation"), dict):
+            continue
+        module_name = str(module.get("name") or "").strip()
+        for port in module.get("ports") or []:
+            if not isinstance(port, dict) or str(port.get("direction") or "").lower() != "output":
+                continue
+            port_name = str(port.get("name") or "").strip()
+            if not re.search(r"(?:^|_)(?:dout|rdata|read_data|data_out|q)$", port_name, re.I):
+                continue
+            endpoint = f"{module_name}.{port_name}"
+            if endpoint in checked_endpoints:
+                continue
+            checked_endpoints.add(endpoint)
+            if inter_sources.get(endpoint) or endpoint in top_consumers:
+                continue
+            failures.append(
+                f"{endpoint} is unconsumed; inferred-memory read data must feed a real child input "
+                "or a top-level output. Add the functional consumer and connectivity, rather than "
+                "retaining a decorative read interface"
             )
     if failures:
         raise ValueError(
@@ -1733,7 +1772,11 @@ def _internalize_fpga_inferred_memory_interfaces(spec_json: dict, source_prompt:
     removed_endpoints = set()
     internalized_top_ports = set()
     primitive_roles = re.compile(r"^(?:mem|memory)_(?:csb|ce|en|web|we|addr|din|dout|rdata|wdata)$", re.I)
-    functional_roles = re.compile(r"^(?:store|history|fifo|buffer)_(?:we|re|valid|ready|addr|din|dout|wdata|rdata|data)$", re.I)
+    functional_roles = re.compile(
+        r"^(?:(?:store|history|fifo|buffer)_(?:we|re|valid|ready|addr|din|dout|wdata|rdata|data)"
+        r"|(?:wr|write|rd|read)_(?:en|addr|data)|wdata|rdata|din|dout)$",
+        re.I,
+    )
     declared_macro_port_sets = [
         {
             str(port_name or "").strip().lower()
@@ -1764,7 +1807,10 @@ def _internalize_fpga_inferred_memory_interfaces(spec_json: dict, source_prompt:
             # A separately declared memory deliverable is the intended
             # producer/consumer for this complete primitive interface.
             continue
-        has_write_enable = any(re.search(r"_(?:we|write_en|wr_en)$", str(port.get("name") or ""), re.I) for port in functional)
+        has_write_enable = any(
+            re.search(r"(?:^|_)(?:we|write_en|wr_en)$", str(port.get("name") or ""), re.I)
+            for port in functional
+        )
         redundant_select_names = {
             str(port.get("name") or "") for port in ports
             if has_write_enable and re.search(r"_(?:csb|chip_select_n)$", str(port.get("name") or ""), re.I)
@@ -2633,13 +2679,21 @@ FINAL GRAPH-CLOSURE PASS:
 - Use the graph diagnostics below to replace rejected attempts; do not repeat an edge whose source direction or width is invalid, and do not leave multiple producers on one child input.
 """
     fpga_memory_examples = ""
-    if "fpga memory contract" in str(failure_log_text or "").lower() or "fpga-only contract" in str(failure_log_text or "").lower():
+    if any(token in str(failure_log_text or "").lower() for token in (
+        "fpga memory contract", "fpga-only contract", "memory read data",
+        "memory read-data", "inferred-memory read data",
+    )):
         fpga_memory_examples = """
 
 FPGA MEMORY REPAIR EXAMPLES:
 - GOOD: declare a technology-neutral wrapper in hierarchy.modules with its own rtl_output_file and synthesizable inferred-memory behavior suitable for native FPGA block RAM mapping.
+- GOOD: connect every wrapper read-data output to the actual functional consumer through inter_module_signals, with matching width and declared output-to-input directions.
+- GOOD: if firmware must inspect stored history, add a real memory-read input on the CSR/readback path and connect the wrapper output to it; update responsibilities and behavior rules coherently.
+- GOOD: if the application only requires write-only capture, remove the read-enable/address/data ports and all read behavior coherently. Do this only when it does not contradict the source application contract.
 - BAD: declare openram_sram, prebuilt_sky130_sram, or another ASIC hard macro in an FPGA-only contract.
 - BAD: instantiate a memory module that has neither an RTL deliverable nor explicit external simulation/synthesis collateral.
+- BAD: leave read_data/dout/rdata unused, tie it off, connect it to another output, or delete only the output while retaining read-control behavior.
+- BAD: retain both a physical hard-macro module and a differently named inferred-memory wrapper for the same FPGA storage.
 """
     # Preserve the complete prior contract across semantic repair passes.
     # Pretty model output can exceed a short excerpt and previously lost late
@@ -2771,21 +2825,32 @@ def _compile_spec_contract(
 
    
     spec_json = _project_internal_feature_stimulus_to_register_bus(spec_json, mode)
-    _validate_no_command_fallback_contract(spec_json, source_prompt)
 
     normalized_name = "spec_agent_normalized.json" if not suffix else f"spec_agent_normalized{suffix}.json"
     normalized_path = os.path.join(spec_dir, normalized_name)
     with open(normalized_path, "w", encoding="utf-8") as nf:
         json.dump(spec_json, nf, indent=2)
 
-    _validate_spec_contract(spec_json, mode, require_feature_contracts=require_feature_contracts)
-    _validate_mandatory_firmware_control_plane(
-        spec_json,
-        mode,
-        source_prompt,
-        required=require_firmware_control_plane,
+    validation_errors = []
+    validators = (
+        lambda: _validate_spec_contract(
+            spec_json, mode, require_feature_contracts=require_feature_contracts,
+        ),
+        lambda: _validate_mandatory_firmware_control_plane(
+            spec_json, mode, source_prompt, required=require_firmware_control_plane,
+        ),
+        lambda: _validate_fpga_memory_contract(spec_json, source_prompt),
+        lambda: _validate_no_command_fallback_contract(spec_json, source_prompt),
     )
-    _validate_fpga_memory_contract(spec_json, source_prompt)
+    for validator in validators:
+        try:
+            validator()
+        except ValueError as error:
+            message = str(error)
+            if message not in validation_errors:
+                validation_errors.append(message)
+    if validation_errors:
+        raise ValueError("Spec contract validation failed: " + " | ".join(validation_errors))
     logger.info(f"✅ Digital Spec Agent contract compile passed suffix='{suffix or 'pass1'}'")
     return spec_json, mode, raw_output_path, normalized_path
 
@@ -2983,11 +3048,48 @@ def _normalize_fpga_memory_contract(spec_json: dict, source_prompt: str) -> dict
         str(module.get("name") or "").strip(): module
         for module in modules if isinstance(module, dict) and module.get("name")
     }
+
+    def positive_width(value, fallback=1):
+        try:
+            return max(1, int(value))
+        except (TypeError, ValueError):
+            return max(1, int(fallback or 1))
+
+    def wrapper_geometry(wrapper: dict, macro: dict) -> tuple[int, int, int]:
+        wrapper_ports = [port for port in (wrapper.get("ports") or []) if isinstance(port, dict)]
+        address_widths = [
+            positive_width(port.get("width")) for port in wrapper_ports
+            if re.search(r"(?:^|_)(?:addr|address)$", str(port.get("name") or ""), re.I)
+        ]
+        data_widths = [
+            positive_width(port.get("width")) for port in wrapper_ports
+            if re.search(r"(?:^|_)(?:din|dout|wdata|rdata|write_data|read_data|data_in|data_out)$", str(port.get("name") or ""), re.I)
+        ]
+        addr_width = max(address_widths or [positive_width(macro.get("addr_width"))])
+        data_width = max(data_widths or [positive_width(macro.get("data_width"))])
+        return 1 << addr_width, data_width, addr_width
+
+    def assign_inferred_memory(wrapper: dict, macro: dict) -> None:
+        depth, data_width, addr_width = wrapper_geometry(wrapper, macro)
+        wrapper["memory_implementation"] = {
+            "kind": "fpga_bram",
+            "depth": depth,
+            "data_width": data_width,
+            "addr_width": addr_width,
+            "technology_binding": "technology_neutral_inferred_memory",
+        }
+        rules = wrapper.setdefault("behavior_rules", [])
+        rule = "Implement storage as a synthesizable inferred memory compatible with native FPGA block RAM."
+        if rule not in rules:
+            rules.append(rule)
+
     normalized_macros = []
+    claimed_wrappers = set()
     for macro in spec_json.get("memory_macros", []) or []:
         if not isinstance(macro, dict):
             continue
-        if str(macro.get("kind") or "").strip().lower() in forbidden_kinds:
+        was_hard_macro = str(macro.get("kind") or "").strip().lower() in forbidden_kinds
+        if was_hard_macro:
             macro["kind"] = "fpga_bram"
             macro["technology_binding"] = "technology_neutral_inferred_memory"
         name = str(macro.get("name") or "").strip()
@@ -3002,24 +3104,74 @@ def _normalize_fpga_memory_contract(spec_json: dict, source_prompt: str) -> dict
             for port in ((existing_module or {}).get("ports") or [])
             if isinstance(port, dict) and port.get("name")
         }
+        existing_is_generated_macro = bool(
+            existing_module
+            and str(existing_module.get("description") or "").strip()
+            == "Memory macro interface module derived from memory_macros."
+        )
         if existing_module and macro_ports and existing_ports != macro_ports:
             # The named hierarchy module is a functional read/write wrapper,
             # not the primitive interface described by memory_macros. Keep its
             # declared ports authoritative and carry the geometry on that real
             # RTL deliverable so the RTL agent infers BRAM inside it. Retaining
             # a same-named primitive would create two incompatible modules.
-            existing_module["memory_implementation"] = {
-                "kind": "fpga_bram",
-                "depth": macro.get("depth"),
-                "data_width": macro.get("data_width"),
-                "addr_width": macro.get("addr_width"),
-                "technology_binding": "technology_neutral_inferred_memory",
-            }
-            rules = existing_module.setdefault("behavior_rules", [])
-            rule = "Implement storage as a synthesizable inferred memory compatible with native FPGA block RAM."
-            if rule not in rules:
-                rules.append(rule)
+            assign_inferred_memory(existing_module, macro)
             continue
+        if was_hard_macro and (not existing_module or existing_is_generated_macro):
+            # Models sometimes describe the same storage twice: once as an
+            # ASIC/OpenRAM primitive and once as a differently named,
+            # controller-facing wrapper.  In an FPGA journey the wrapper is
+            # the real RTL deliverable and must own an inferred BRAM; retaining
+            # the disconnected primitive creates a false second memory whose
+            # read data can never be observed.  Collapse only when one wrapper
+            # explicitly says that it wraps a physical/declared macro.  If the
+            # mapping is ambiguous, retain the normalized macro and let normal
+            # connectivity validation report the incomplete design.
+            wrapper_candidates = []
+            for candidate in modules:
+                if not isinstance(candidate, dict):
+                    continue
+                candidate_name = str(candidate.get("name") or "").strip()
+                if (
+                    not candidate_name
+                    or candidate_name == name
+                    or candidate_name in claimed_wrappers
+                    or str(candidate.get("description") or "").strip()
+                    == "Memory macro interface module derived from memory_macros."
+                ):
+                    continue
+                prose = " ".join(
+                    str(candidate.get(key) or "")
+                    for key in ("name", "description", "functionality")
+                ) + " " + " ".join(str(item) for item in (candidate.get("behavior_rules") or []))
+                ports = [port for port in (candidate.get("ports") or []) if isinstance(port, dict)]
+                input_ports = [port for port in ports if str(port.get("direction") or "").lower() == "input"]
+                output_ports = [port for port in ports if str(port.get("direction") or "").lower() == "output"]
+                has_address = any(re.search(r"(?:^|_)(?:addr|address)$", str(port.get("name") or ""), re.I) for port in input_ports)
+                has_write_data = any(re.search(r"(?:^|_)(?:din|wdata|write_data|data_in)$", str(port.get("name") or ""), re.I) for port in input_ports)
+                has_read_data = any(re.search(r"(?:^|_)(?:dout|rdata|read_data|data_out)$", str(port.get("name") or ""), re.I) for port in output_ports)
+                explicitly_wraps_macro = bool(re.search(
+                    r"\b(?:declared|physical|underlying)\b.{0,48}\b(?:macro|sram)\b|\bmacro\s+(?:identity|interface)\b",
+                    prose,
+                    re.I,
+                ))
+                if explicitly_wraps_macro and has_address and has_write_data and has_read_data:
+                    wrapper_candidates.append((candidate, ports, prose))
+            if len(wrapper_candidates) > 1 and name:
+                named_candidates = [
+                    item for item in wrapper_candidates
+                    if re.search(rf"(?<![A-Za-z0-9_$]){re.escape(name)}(?![A-Za-z0-9_$])", item[2], re.I)
+                ]
+                if len(named_candidates) == 1:
+                    wrapper_candidates = named_candidates
+            if len(wrapper_candidates) == 1:
+                wrapper, _wrapper_ports, _prose = wrapper_candidates[0]
+                assign_inferred_memory(wrapper, macro)
+                claimed_wrappers.add(str(wrapper.get("name") or "").strip())
+                if existing_is_generated_macro:
+                    modules.remove(existing_module)
+                    module_by_name.pop(name, None)
+                continue
         normalized_macros.append(macro)
         if name and name not in module_by_name:
             modules.append(_memory_macro_module(macro))

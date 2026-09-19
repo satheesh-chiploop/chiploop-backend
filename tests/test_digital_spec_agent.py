@@ -248,6 +248,30 @@ def test_fpga_inferred_memory_wrapper_internalizes_primitive_pins():
     assert "mem_dout" not in module["must_receive"]
 
 
+def test_fpga_inferred_memory_detects_conventional_read_write_port_names():
+    module = {
+        "name": "application_history_wrapper",
+        "description": "Technology-neutral memory wrapper for history storage",
+        "functionality": "Own storage mapped to native block RAM.",
+        "behavior_rules": ["Implement storage as an inferred memory."],
+        "ports": [
+            _port("write_en", "input"), _port("read_en", "input"),
+            _port("write_addr", "input", 8), _port("read_addr", "input", 8),
+            _port("write_data", "input", 64), _port("read_data", "output", 64),
+        ],
+    }
+    spec = {"hierarchy": {"top_module": {"name": "top", "ports": []}, "modules": [module]}}
+
+    spec_agent._internalize_fpga_inferred_memory_interfaces(
+        spec, "FPGA MEMORY CONTRACT (mandatory)",
+    )
+
+    assert module["memory_implementation"] == {
+        "kind": "fpga_bram", "depth": 256, "addr_width": 8, "data_width": 64,
+        "technology_binding": "technology_neutral_inferred_memory",
+    }
+
+
 def test_fpga_inferred_wrapper_removes_stale_macro_prose_and_accidental_top_ports():
     module = {
         "name": "history_wrapper", "description": "Technology-neutral memory wrapper",
@@ -577,6 +601,102 @@ def test_fpga_memory_name_collision_keeps_functional_wrapper_ports_authoritative
         "kind": "fpga_bram", "depth": 64, "data_width": 64,
         "addr_width": 6, "technology_binding": "technology_neutral_inferred_memory",
     }
+
+
+def test_fpga_memory_collapses_differently_named_hard_macro_into_explicit_wrapper():
+    wrapper = {
+        **_module("application_history_wrapper"),
+        "description": "Technology-neutral wrapper around the declared physical memory macro.",
+        "functionality": "Preserve the underlying macro interface for history storage.",
+        "ports": [
+            _port("clk", "input"), _port("write_en", "input"),
+            _port("write_addr", "input", 8), _port("write_data", "input", 64),
+            _port("read_en", "input"), _port("read_addr", "input", 8),
+            _port("read_data", "output", 64),
+        ],
+        "rtl_output_file": "application_history_wrapper.v",
+    }
+    spec = {
+        "memory_macros": [{
+            "name": "openram_sram_64x32", "kind": "openram_sram", "depth": 64,
+            "data_width": 32, "addr_width": 6, "instance_name": "u_sram",
+            "ports": {"clk": "clk", "csb": "csb", "we": "web", "addr": "addr", "din": "din", "dout": "dout"},
+        }],
+        "hierarchy": {"top_module": _module("top"), "modules": [wrapper]},
+    }
+
+    normalized = spec_agent._normalize_fpga_memory_contract(
+        spec, "FPGA MEMORY CONTRACT (mandatory)",
+    )
+
+    assert normalized["memory_macros"] == []
+    assert [module["name"] for module in normalized["hierarchy"]["modules"]] == [
+        "application_history_wrapper",
+    ]
+    assert wrapper["memory_implementation"] == {
+        "kind": "fpga_bram", "depth": 256, "data_width": 64,
+        "addr_width": 8, "technology_binding": "technology_neutral_inferred_memory",
+    }
+
+
+def test_fpga_memory_does_not_guess_between_multiple_explicit_wrappers():
+    def wrapper(name):
+        return {
+            **_module(name),
+            "description": "Wrapper around the declared physical memory macro.",
+            "ports": [
+                _port("addr", "input", 6), _port("write_data", "input", 32),
+                _port("read_data", "output", 32),
+            ],
+        }
+
+    spec = {
+        "memory_macros": [{
+            "name": "ram", "kind": "openram_sram", "depth": 64,
+            "data_width": 32, "addr_width": 6,
+        }],
+        "hierarchy": {"top_module": _module("top"), "modules": [wrapper("a"), wrapper("b")]},
+    }
+
+    normalized = spec_agent._normalize_fpga_memory_contract(
+        spec, "FPGA MEMORY CONTRACT (mandatory)",
+    )
+
+    assert len(normalized["memory_macros"]) == 1
+    assert normalized["memory_macros"][0]["kind"] == "fpga_bram"
+    assert all("memory_implementation" not in module for module in normalized["hierarchy"]["modules"][:2])
+
+
+def test_inferred_fpga_memory_read_output_must_remain_observable_after_macro_collapse():
+    memory = {
+        **_module("history_store"),
+        "memory_implementation": {
+            "kind": "fpga_bram", "depth": 64, "data_width": 32, "addr_width": 6,
+        },
+        "ports": [
+            _port("addr", "input", 6), _port("write_data", "input", 32),
+            _port("read_data", "output", 32),
+        ],
+    }
+    spec = {
+        "memory_macros": [],
+        "hierarchy": {"top_module": _module("top"), "modules": [memory]},
+        "inter_module_signals": [], "top_level_connections": [],
+    }
+
+    with pytest.raises(ValueError, match=r"history_store\.read_data is unconsumed"):
+        spec_agent._validate_required_memory_observability(spec)
+
+    consumer = {
+        **_module("reader"),
+        "ports": [_port("history_data", "input", 32)],
+    }
+    spec["hierarchy"]["modules"].append(consumer)
+    spec["inter_module_signals"] = [{
+        "name": "history_data", "width": 32, "source": "history_store.read_data",
+        "destinations": ["reader.history_data"],
+    }]
+    spec_agent._validate_required_memory_observability(spec)
 
 
 def test_mandatory_firmware_control_plane_accepts_concrete_custom_csr_bus():

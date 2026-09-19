@@ -2410,6 +2410,7 @@ def _validate_spec_vs_rtl(spec_json: dict, mode: str, verilog_map: Dict[str, str
             continue
 
         rtl_ports = extracted[mod_name]
+        module_code = _extract_verilog_modules(code).get(mod_name, code)
         missing_ports = [p for p in spec_ports if p not in rtl_ports]
         extra_ports2 = [p for p in rtl_ports if p not in spec_ports]
 
@@ -2418,7 +2419,7 @@ def _validate_spec_vs_rtl(spec_json: dict, mode: str, verilog_map: Dict[str, str
         if extra_ports2:
             issues.append(f"❌ Module '{mod_name}' has extra ports vs spec: {extra_ports2}")
 
-        declared = _declared_ports(_extract_verilog_modules(code).get(mod_name, code))
+        declared = _declared_ports(module_code)
         for p in mod.get("ports", []) or []:
             pname = str(p.get("name") or "")
             if not pname or pname not in declared:
@@ -2442,6 +2443,42 @@ def _validate_spec_vs_rtl(spec_json: dict, mode: str, verilog_map: Dict[str, str
                 clock_ports.append(pname)
             if re.search(r"rst|reset", pname, re.IGNORECASE):
                 reset_ports.append(pname)
+
+        memory_impl = mod.get("memory_implementation")
+        if isinstance(memory_impl, dict) and _is_fpga_bram_kind(memory_impl.get("kind")):
+            # Port conformance alone permits a decorative wrapper or flattened
+            # scalar bank. Require the generic structural shape synthesis tools
+            # use to infer block RAM: an unpacked array with indexed write and
+            # read paths, checked within the owning module only.
+            arrays = re.findall(
+                r"\b(?:reg|logic)\b\s*(?:\[[^;\]]+\]\s*)?"
+                r"([A-Za-z_][A-Za-z0-9_$]*)\s*\[[^;\]]+\]\s*;",
+                module_code,
+                re.I,
+            )
+            functional_arrays = [
+                array_name for array_name in arrays
+                if re.search(
+                    rf"\b{re.escape(array_name)}\s*\[[^\]]+\]\s*(?:<=|=)",
+                    module_code,
+                    re.I,
+                )
+                and re.search(
+                    rf"(?:<=|=)\s*{re.escape(array_name)}\s*\[[^\]]+\]",
+                    module_code,
+                    re.I,
+                )
+            ]
+            if not arrays:
+                issues.append(
+                    f"Module '{mod_name}' declares fpga_bram memory_implementation but has no synthesizable "
+                    "unpacked memory array; implement inferred storage instead of scalar registers."
+                )
+            elif not functional_arrays:
+                issues.append(
+                    f"Module '{mod_name}' declares fpga_bram memory_implementation but its memory array has no "
+                    "detectable indexed write and read path."
+                )
 
     full_text = "\n".join(verilog_map.values())
 
