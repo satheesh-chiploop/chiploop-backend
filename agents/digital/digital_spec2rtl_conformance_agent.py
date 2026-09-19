@@ -327,7 +327,10 @@ def _generic_behavior_evidence(requirement: str, rtl_text: str) -> List[str]:
     if "clamp" in req and re.search(r"\b(?:min|max)(?:imum)?\b", req):
         has_lower = bool(re.search(r"\b\w+\s*<\s*\w*(?:min|low)\w*", rtl, re.I))
         has_upper = bool(re.search(r"\b\w+\s*>\s*\w*(?:max|high)\w*", rtl, re.I))
-        has_selected_value = bool(re.search(r"\b\w*(?:clamp|cmd|command)\w*\s*=\s*\w*(?:min|max|low|high)\w*", rtl, re.I))
+        has_selected_value = bool(
+            re.search(r"\b\w*(?:clamp|cmd|command)\w*\s*=\s*\w*(?:min|max|low|high)\w*", rtl, re.I)
+            or re.search(r"\?.*\b\w*(?:min|low)\w*\s*:.*\?.*\b\w*(?:max|high)\w*\s*:", rtl, re.I)
+        )
         if has_lower and has_upper and has_selected_value:
             evidence.append("programmable_min_max_clamp")
     if "slew" in req:
@@ -373,18 +376,63 @@ def _generic_behavior_evidence(requirement: str, rtl_text: str) -> List[str]:
         controls = re.findall(r"\balways(?:_ff)?\s*@\s*\(([^)]*)\)", rtl, re.I)
         if controls and all(re.search(r"\bposedge\s+clk\b", control, re.I) for control in controls if re.search(r"\b(?:pos|neg)edge\b", control, re.I)):
             evidence.append("sequential_updates_on_posedge_clk")
-    if re.search(r"\b(?:readable|readback|write transactions?|address decode|uniquely address|reachable).*\b(?:register|field|address|writable)", req):
+    if re.search(r"\b(?:readable|readback|write transactions?|address decode|uniquely address|reachable|decode every).*\b(?:register|field|address|writable)", req):
         has_decode = bool(re.search(r"\bcase\s*\(\s*\w*(?:addr|address)\w*\s*\)", rtl, re.I))
         has_read = bool(re.search(r"\b\w*(?:rdata|read_data)\w*\s*<=", rtl, re.I))
         has_write = bool(re.search(r"\b\w*(?:wdata|write_data)\w*\s*\[", rtl, re.I))
         if has_decode and (has_read or has_write):
             evidence.append("register_decode_and_access_paths")
-    if re.search(r"configuration semantics.*explicit outputs|explicit.*configuration.*outputs", req):
+    if re.search(r"configuration semantics.*explicit outputs|explicit.*configuration.*outputs|configuration fields.*explicit semantic outputs", req):
         if re.search(r"\boutput\b[^;]*\bcfg_[A-Za-z0-9_$]+", rtl, re.I) and re.search(r"\bcfg_[A-Za-z0-9_$]+\s*<=", rtl, re.I):
             evidence.append("explicit_configuration_outputs")
+    if re.search(r"all writes?.*only.*targeted register fields", req):
+        if re.search(r"\bif\s*\([^)]*\b\w*(?:valid|write|we)\w*[^)]*\)", rtl, re.I) and re.search(
+            r"\bcase\s*\(\s*\w*(?:addr|address)\w*\s*\)", rtl, re.I
+        ) and re.search(r"\bcfg_[A-Za-z0-9_$]+\s*<=\s*\w*(?:wdata|write_data)\w*\s*\[", rtl, re.I):
+            evidence.append("address_scoped_register_writes")
+    if re.search(r"fault.clear.*bounded pulse", req):
+        if re.search(r"\b\w*fault_clear\w*\s*=\s*1'b0", rtl, re.I) and re.search(
+            r"\b\w*fault_clear\w*\s*(?:<=|=)\s*\w*(?:wdata|write_data)\w*\s*\[", rtl, re.I
+        ):
+            evidence.append("bounded_fault_clear_write_pulse")
     if re.search(r"\b(?:latch|sticky).*(?:status|fault)|(?:status|fault).*\b(?:latch|sticky)", req):
         if re.search(r"\b\w*(?:fault|status|sticky)\w*\s*<=\s*1'b1", rtl, re.I):
             evidence.append("latched_status_fault_state")
+    if re.search(r"model transport direction|request valid/data outputs?.*response ready output", req):
+        declarations = {
+            direction: set(re.findall(rf"\b{direction}\b[^;]*\b([A-Za-z_][A-Za-z0-9_$]*)", rtl, re.I))
+            for direction in ("input", "output")
+        }
+        required = (
+            any(re.search(r"req.*valid", name, re.I) for name in declarations["output"]),
+            any(re.search(r"req.*data", name, re.I) for name in declarations["output"]),
+            any(re.search(r"req.*ready", name, re.I) for name in declarations["input"]),
+            any(re.search(r"rsp.*valid", name, re.I) for name in declarations["input"]),
+            any(re.search(r"rsp.*data", name, re.I) for name in declarations["input"]),
+            any(re.search(r"rsp.*ready", name, re.I) for name in declarations["output"]),
+        )
+        if all(required):
+            evidence.append("model_transport_port_directions")
+    if re.search(r"generate external model requests?.*protocol|model request outputs?.*driven only when", req):
+        if re.search(r"\b\w*req\w*valid\w*\s*=\s*[^;]*(?:&&|\?|valid|enable)", rtl, re.I):
+            evidence.append("conditional_model_request_handshake")
+    if re.search(r"consume external model responses?.*valid.*ready", req):
+        if re.search(r"\bif\s*\([^)]*\b\w*rsp\w*valid\w*\b", rtl, re.I) and re.search(r"\b\w*rsp\w*ready\w*\s*(?:<=|=)", rtl, re.I):
+            evidence.append("model_response_valid_ready_consumption")
+    if re.search(r"write history entries|history.*(?:wrapper|storage)", req):
+        if re.search(r"\b\w*history\w*(?:we|wr_en|write_en)\w*\s*(?:<=|=)", rtl, re.I) and re.search(r"\b\w*history\w*(?:data|wdata|wr_data)\w*\s*(?:<=|=)", rtl, re.I):
+            evidence.append("history_write_interface_driven")
+    inferred_array = bool(re.search(
+        r"\b(?:reg|logic|bit)\b\s*(?:\[[^\]]+\]\s*)?[A-Za-z_][A-Za-z0-9_$]*\s*\[[^\]]+\]\s*;",
+        rtl, re.I,
+    ))
+    if inferred_array and re.search(r"(?:bulk storage|memory,? not registers|not flatten.*register|block ram inference|technology.neutral)", req):
+        evidence.append("inferred_bulk_memory_array")
+    if inferred_array and re.search(r"synchronous access", req) and re.search(r"\balways\s*@\s*\(\s*posedge\s+\w+\s*\)", rtl, re.I):
+        evidence.append("synchronous_inferred_memory_access")
+    if inferred_array and re.search(r"(?:pass|return|keep).*read data|dout consumed", req):
+        if re.search(r"\b\w*(?:dout|rdata|read_data)\w*\s*(?:<=|=)", rtl, re.I):
+            evidence.append("memory_read_data_forwarded")
     return list(dict.fromkeys(evidence))
 
 
@@ -1003,7 +1051,16 @@ def _match_score(
         "sequential_updates_on_posedge_clk",
         "register_decode_and_access_paths",
         "explicit_configuration_outputs",
+        "address_scoped_register_writes",
+        "bounded_fault_clear_write_pulse",
         "latched_status_fault_state",
+        "model_transport_port_directions",
+        "conditional_model_request_handshake",
+        "model_response_valid_ready_consumption",
+        "history_write_interface_driven",
+        "inferred_bulk_memory_array",
+        "synchronous_inferred_memory_access",
+        "memory_read_data_forwarded",
         "dynamic_ready_backpressure",
         "64bit_status_telemetry_output",
         "firmware_visible_csr_mmio_interface",
@@ -1110,7 +1167,8 @@ def _register_evidence(spec: str, rtl_text: str, state: Dict[str, Any], spec_obj
             if not isinstance(reg, dict):
                 continue
             reg_name = str(reg.get("name") or "").strip()
-            address = str(reg.get("offset") or reg.get("address") or "").strip() or None
+            raw_address = reg.get("offset") if reg.get("offset") is not None else reg.get("address")
+            address = str(raw_address).strip() if raw_address is not None else None
             if reg_name:
                 registers.append((reg_name, address))
             for field in reg.get("fields") or []:
@@ -1119,10 +1177,12 @@ def _register_evidence(spec: str, rtl_text: str, state: Dict[str, Any], spec_obj
 
     if isinstance(regmap, dict):
         collect_registers(regmap.get("regmap") if isinstance(regmap.get("regmap"), dict) else regmap)
-    if isinstance(spec_obj, dict):
+    elif isinstance(spec_obj, dict):
         collect_registers(spec_obj.get("register_contract") or {})
     fields.extend(re.findall(r"\b([A-Za-z_][A-Za-z0-9_]*(?:_reg|_cfg|_ctrl|_status))\b", spec or "", re.I))
-    unique = sorted(dict.fromkeys(f for f in fields if f.lower() not in {"reserved"}))
+    unique = sorted(dict.fromkeys(
+        f for f in fields if not re.fullmatch(r"reserved(?:_?\d+)?", f.lower())
+    ))
     rtl_identifiers = {
         name.lower()
         for name in re.findall(r"\b[A-Za-z_][A-Za-z0-9_$]*\b", rtl_text or "")
@@ -1153,6 +1213,16 @@ def _register_evidence(spec: str, rtl_text: str, state: Dict[str, Any], spec_obj
     raw_reg = json.dumps(regmap or spec_obj or {})
     for value in re.findall(r'"(?:offset|address)"\s*:\s*"(0x[0-9a-fA-F]+)"', raw_reg):
         addresses.append(value)
+    for _register_name, raw_address in registers:
+        if raw_address is None:
+            continue
+        try:
+            address_int = int(str(raw_address), 0)
+            existing_ints = {int(value, 16) for value in addresses}
+            if address_int not in existing_ints:
+                addresses.append(f"0x{address_int:X}")
+        except ValueError:
+            continue
     matched_addresses = []
     for value in sorted(dict.fromkeys(addresses)):
         addr_int = int(value, 16)
@@ -1173,7 +1243,16 @@ def _register_evidence(spec: str, rtl_text: str, state: Dict[str, Any], spec_obj
     matched_registers = []
     missing_registers = []
     for reg_name, address in canonical_registers:
-        address_matched = bool(address and address in matched_addresses)
+        normalized_address_int = None
+        if address is not None:
+            try:
+                normalized_address_int = int(str(address), 0)
+            except ValueError:
+                pass
+        address_matched = bool(
+            normalized_address_int is not None
+            and any(int(value, 16) == normalized_address_int for value in matched_addresses)
+        )
         name_matched = bool(re.search(rf"\b{re.escape(reg_name)}\b", rtl_text, re.I) or re.search(rf"\b{re.escape(reg_name.lower())}\b", rtl_text, re.I))
         if address_matched or name_matched:
             matched_registers.append(reg_name)
@@ -1392,7 +1471,10 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
             if owner and owner not in module_rtl:
                 status, evidence = "missing", [f"owner_module_not_found:{owner}"]
             else:
-                scoped_rtl = module_rtl[owner] if owner else rtl_text
+                # Top-level obligations cover orchestration through instantiated
+                # children, so their evidence cone is the complete design. Child
+                # obligations remain strictly scoped to their owning module.
+                scoped_rtl = rtl_text if not owner or owner == top_module else module_rtl[owner]
                 scoped_names = set(re.findall(r"\b[A-Za-z_][A-Za-z0-9_$]*\b", scoped_rtl))
                 status, evidence = _match_score(requirement, scoped_rtl, scoped_names, structural_context)
             _add_check(counts, status)

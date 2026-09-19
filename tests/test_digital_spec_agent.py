@@ -248,6 +248,40 @@ def test_fpga_inferred_memory_wrapper_internalizes_primitive_pins():
     assert "mem_dout" not in module["must_receive"]
 
 
+def test_fpga_inferred_wrapper_removes_stale_macro_prose_and_accidental_top_ports():
+    module = {
+        "name": "history_wrapper", "description": "Technology-neutral memory wrapper",
+        "functionality": "Instantiate the SRAM macro for FPGA block RAM mapping.",
+        "responsibilities": ["Instantiate the required SRAM macro cell using the declared instance name."],
+        "behavior_rules": ["The wrapper shall connect exactly to the declared SRAM macro name and instance."],
+        "ports": [
+            {"name": "clk", "direction": "input", "width": 1},
+            {"name": "history_csb", "direction": "input", "width": 1},
+            {"name": "history_we", "direction": "input", "width": 1},
+            {"name": "history_addr", "direction": "input", "width": 6},
+            {"name": "history_din", "direction": "input", "width": 32},
+            {"name": "history_dout", "direction": "output", "width": 32},
+        ],
+    }
+    spec = {"hierarchy": {
+        "top_module": {"name": "top", "ports": [
+            {"name": "clk", "direction": "input", "width": 1},
+            {"name": "history_dout", "direction": "input", "width": 32},
+        ]},
+        "modules": [module],
+    }}
+
+    spec_agent._internalize_fpga_inferred_memory_interfaces(spec, "FPGA MEMORY CONTRACT (mandatory)")
+
+    assert {port["name"] for port in spec["hierarchy"]["top_module"]["ports"]} == {"clk"}
+    assert "history_csb" not in {port["name"] for port in module["ports"]}
+    assert all("macro" not in item.lower() for item in module["responsibilities"] + module["behavior_rules"])
+    assert module["memory_implementation"] == {
+        "kind": "fpga_bram", "depth": 64, "addr_width": 6, "data_width": 32,
+        "technology_binding": "technology_neutral_inferred_memory",
+    }
+
+
 def test_fpga_wrapper_keeps_primitive_pins_for_declared_macro_interface():
     ports = [
         {"name": "mem_addr", "direction": "output", "width": 6},

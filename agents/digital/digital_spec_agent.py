@@ -1731,8 +1731,9 @@ def _internalize_fpga_inferred_memory_interfaces(spec_json: dict, source_prompt:
         return spec_json
     hierarchy = spec_json.get("hierarchy") if isinstance(spec_json.get("hierarchy"), dict) else {}
     removed_endpoints = set()
+    internalized_top_ports = set()
     primitive_roles = re.compile(r"^(?:mem|memory)_(?:csb|ce|en|web|we|addr|din|dout|rdata|wdata)$", re.I)
-    functional_roles = re.compile(r"^(?:store|history|fifo|buffer)_(?:we|re|valid|ready|addr|wdata|rdata|data)$", re.I)
+    functional_roles = re.compile(r"^(?:store|history|fifo|buffer)_(?:we|re|valid|ready|addr|din|dout|wdata|rdata|data)$", re.I)
     declared_macro_port_sets = [
         {
             str(port_name or "").strip().lower()
@@ -1752,28 +1753,34 @@ def _internalize_fpga_inferred_memory_interfaces(spec_json: dict, source_prompt:
         identity = " ".join(str(module.get(key) or "") for key in ("name", "description", "functionality"))
         rules = " ".join(str(item) for item in (module.get("behavior_rules") or []))
         owns_inferred_storage = bool(
-            primitive and functional
+            functional
             and re.search(r"(?:memory|storage|bram|ram)", identity, re.I)
-            and re.search(r"(?:infer|native block ram|technology.neutral|instantiate.*memory)", rules + " " + identity, re.I)
+            and re.search(r"(?:infer|native block ram|technology.neutral|instantiate.*(?:memory|sram)|macro)", rules + " " + identity, re.I)
         )
         if not owns_inferred_storage:
             continue
         primitive_names = {str(port.get("name") or "") for port in primitive}
-        if any({name.lower() for name in primitive_names}.issubset(port_set) for port_set in declared_macro_port_sets):
+        if primitive_names and any({name.lower() for name in primitive_names}.issubset(port_set) for port_set in declared_macro_port_sets):
             # A separately declared memory deliverable is the intended
             # producer/consumer for this complete primitive interface.
             continue
+        has_write_enable = any(re.search(r"_(?:we|write_en|wr_en)$", str(port.get("name") or ""), re.I) for port in functional)
+        redundant_select_names = {
+            str(port.get("name") or "") for port in ports
+            if has_write_enable and re.search(r"_(?:csb|chip_select_n)$", str(port.get("name") or ""), re.I)
+        }
+        internal_pin_names = primitive_names | redundant_select_names
         addr_port = next((port for port in functional if re.search(r"_addr$", str(port.get("name") or ""), re.I)), None)
-        data_port = next((port for port in functional if re.search(r"_(?:wdata|rdata|data)$", str(port.get("name") or ""), re.I)), None)
+        data_port = next((port for port in functional if re.search(r"_(?:din|dout|wdata|rdata|data)$", str(port.get("name") or ""), re.I)), None)
         try:
             addr_width = max(1, int((addr_port or {}).get("width") or 1))
             data_width = max(1, int((data_port or {}).get("width") or 1))
         except (TypeError, ValueError):
             addr_width, data_width = 1, 1
-        module["ports"] = [port for port in ports if str(port.get("name") or "") not in primitive_names]
+        module["ports"] = [port for port in ports if str(port.get("name") or "") not in internal_pin_names]
         for key in ("must_drive", "must_receive", "must_not_drive"):
             if isinstance(module.get(key), list):
-                module[key] = [name for name in module[key] if str(name) not in primitive_names]
+                module[key] = [name for name in module[key] if str(name) not in internal_pin_names]
         module["memory_implementation"] = {
             "kind": "fpga_bram",
             "depth": 1 << addr_width,
@@ -1781,7 +1788,45 @@ def _internalize_fpga_inferred_memory_interfaces(spec_json: dict, source_prompt:
             "data_width": data_width,
             "technology_binding": "technology_neutral_inferred_memory",
         }
-        removed_endpoints.update(f"{module_name}.{name}" for name in primitive_names)
+        module["functionality"] = (
+            "Own technology-neutral synthesizable bulk storage implemented as an inferred memory suitable for "
+            "native FPGA block RAM mapping. Its declared functional ports are the complete storage interface."
+        )
+        module["responsibilities"] = [
+            item for item in module.get("responsibilities") or []
+            if not re.search(r"\b(?:macro|sram cell)\b", str(item), re.I)
+        ]
+        module["responsibilities"].extend([
+            "Implement bulk storage as an inferred memory rather than a flattened bank of scalar registers.",
+            "Return stored read data through the declared functional output port.",
+        ])
+        module["behavior_rules"] = [
+            item for item in module.get("behavior_rules") or []
+            if not re.search(r"\b(?:macro|sram cell)\b", str(item), re.I)
+        ]
+        module["behavior_rules"].append(
+            "Infer one synthesizable unpacked memory array with synchronous access so FPGA tools can map it to block RAM."
+        )
+        module["reset_behavior"] = (
+            "On reset, hold the declared read-data output benign without clearing stored memory contents. "
+            "No alternate or flattened scalar-register storage is created."
+        )
+        removed_endpoints.update(f"{module_name}.{name}" for name in internal_pin_names)
+
+        # Ports belonging to this internal storage wrapper are not product I/O
+        # unless the user explicitly named that exact interface signal.
+        wrapper_port_names = {
+            str(port.get("name") or "") for port in module["ports"]
+            if str(port.get("name") or "") not in {"clk", "reset_n", "rst_n", "reset"}
+        } | internal_pin_names
+        prompt_identifiers = set(re.findall(r"\b[A-Za-z_][A-Za-z0-9_]*\b", str(source_prompt or "")))
+        removable_top_ports = wrapper_port_names - prompt_identifiers
+        top = hierarchy.get("top_module") if isinstance(hierarchy.get("top_module"), dict) else {}
+        top["ports"] = [
+            port for port in top.get("ports") or []
+            if str(port.get("name") or "") not in removable_top_ports
+        ]
+        internalized_top_ports.update(removable_top_ports)
     if removed_endpoints:
         spec_json["top_level_connections"] = [
             {**connection, "connected_to": [endpoint for endpoint in connection.get("connected_to", []) if endpoint not in removed_endpoints]}
@@ -1796,6 +1841,29 @@ def _internalize_fpga_inferred_memory_interfaces(spec_json: dict, source_prompt:
             item for item in spec_json.get("signal_ownership") or []
             if isinstance(item, dict) and str(item.get("owner") or "") not in removed_endpoints
         ]
+    if internalized_top_ports:
+        retained_features = []
+        for feature in spec_json.get("feature_contracts") or []:
+            if not isinstance(feature, dict):
+                continue
+            expected = feature.get("expected") if isinstance(feature.get("expected"), dict) else {}
+            removed_expected = set(expected).intersection(internalized_top_ports)
+            if removed_expected:
+                feature["expected"] = {name: rule for name, rule in expected.items() if name not in removed_expected}
+            stimulus = feature.get("stimulus")
+            if isinstance(stimulus, dict) and isinstance(stimulus.get("steps"), list):
+                for step in stimulus["steps"]:
+                    signals = step.get("signals") if isinstance(step, dict) else None
+                    if isinstance(signals, dict):
+                        step["signals"] = {name: value for name, value in signals.items() if name not in internalized_top_ports}
+            elif isinstance(stimulus, dict):
+                feature["stimulus"] = {name: value for name, value in stimulus.items() if name not in internalized_top_ports}
+            # An implementation-only memory feature with no external checker is
+            # covered by structural inferred-memory conformance, not a vacuous
+            # top-level simulation assertion.
+            if feature.get("expected"):
+                retained_features.append(feature)
+        spec_json["feature_contracts"] = retained_features
     return spec_json
 
 

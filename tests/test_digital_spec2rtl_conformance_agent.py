@@ -745,3 +745,45 @@ def test_missing_owner_module_does_not_borrow_evidence_from_other_rtl(tmp_path, 
     item = next(entry for entry in result["requirements"] if entry["module"] == "missing_child")
     assert item["status"] == "missing"
     assert item["evidence_tokens"] == ["owner_module_not_found:missing_child"]
+
+
+def test_generic_evidence_recognizes_ternary_clamp_and_inferred_memory():
+    clamp_rtl = "assign bounded_cmd = raw_cmd < cfg_cmd_min ? cfg_cmd_min : (raw_cmd > cfg_cmd_max ? cfg_cmd_max : raw_cmd);"
+    memory_rtl = "reg [63:0] mem [0:1023]; always @(posedge clk) history_dout <= mem[history_addr];"
+
+    assert "programmable_min_max_clamp" in agent._generic_behavior_evidence(
+        "Clamp commands to configured min/max bounds before asserting validity.", clamp_rtl
+    )
+    assert "inferred_bulk_memory_array" in agent._generic_behavior_evidence(
+        "Preserve bulk storage as memory, not registers.", memory_rtl
+    )
+    assert "synchronous_inferred_memory_access" in agent._generic_behavior_evidence(
+        "Support synchronous access under the top-level clock and reset.", memory_rtl
+    )
+
+
+def test_register_evidence_ignores_numbered_reserved_fields():
+    spec = {"register_contract": {"registers": [{
+        "name": "CTRL", "address": "0x00",
+        "fields": [{"name": "enable"}, {"name": "RESERVED0"}, {"name": "reserved_1"}],
+    }]}}
+    rtl = "localparam ADDR_CTRL = 8'h00; reg enable;"
+
+    result = agent._register_evidence("", rtl, {}, spec, None)
+
+    assert result["missing"] == []
+
+
+def test_register_evidence_uses_generated_regmap_addresses_as_source_of_truth():
+    spec = {"register_contract": {"registers": [
+        {"name": "CTRL", "address": 0}, {"name": "STATUS", "address": 1},
+    ]}}
+    regmap = {"regmap": {"registers": [
+        {"name": "CTRL", "offset": "0x00"}, {"name": "STATUS", "offset": "0x04"},
+    ]}}
+    rtl = "localparam ADDR_CTRL=8'h00; localparam ADDR_STATUS=8'h04;"
+
+    result = agent._register_evidence("", rtl, {}, spec, regmap)
+
+    assert result["status"] == "pass"
+    assert result["expected_addresses"] == ["0x00", "0x04"]
