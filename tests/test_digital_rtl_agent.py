@@ -770,6 +770,70 @@ endmodule
     assert not any("memory_implementation" in issue or "memory array" in issue for issue in good_issues)
 
 
+def test_inferred_memory_validation_respects_read_only_and_write_only_interfaces():
+    def validate(module, code):
+        spec = {
+            "hierarchy": {
+                "top_module": {"name": "top", "rtl_output_file": "top.v", "ports": []},
+                "modules": [module],
+            },
+            "top_level_connections": [], "inter_module_signals": [], "signal_ownership": [],
+        }
+        issues, _, _ = agent._validate_spec_vs_rtl(
+            spec, "hierarchical", {"top.v": "module top(); endmodule", module["rtl_output_file"]: code},
+        )
+        return [issue for issue in issues if "memory_implementation" in issue or "memory array" in issue]
+
+    common = {"kind": "fpga_bram", "depth": 16, "data_width": 8, "addr_width": 4}
+    read_only = {
+        "name": "rom", "rtl_output_file": "rom.v", "memory_implementation": common,
+        "ports": [
+            {"name": "addr", "direction": "input", "width": 4},
+            {"name": "rdata", "direction": "output", "width": 8},
+        ],
+    }
+    write_only = {
+        "name": "capture", "rtl_output_file": "capture.v", "memory_implementation": common,
+        "ports": [
+            {"name": "clk", "direction": "input", "width": 1},
+            {"name": "write_en", "direction": "input", "width": 1},
+            {"name": "addr", "direction": "input", "width": 4},
+            {"name": "write_data", "direction": "input", "width": 8},
+        ],
+    }
+
+    assert validate(read_only, """
+module rom(input [3:0] addr, output [7:0] rdata);
+ reg [7:0] mem [0:15];
+ assign rdata = mem[addr];
+endmodule
+""") == []
+    assert validate(write_only, """
+module capture(input clk, input write_en, input [3:0] addr, input [7:0] write_data);
+ reg [7:0] mem [0:15];
+ always @(posedge clk) if (write_en) mem[addr] <= write_data;
+endmodule
+""") == []
+
+    disconnected = validate(read_only, """
+module rom(input [3:0] addr, output [7:0] rdata);
+ reg [7:0] mem [0:15];
+ wire [7:0] unused_read = mem[addr];
+ assign rdata = 8'h00;
+endmodule
+""")
+    assert any("does not drive declared read output" in issue for issue in disconnected)
+
+    assert validate(read_only, """
+module rom(input [3:0] addr, output [7:0] rdata);
+ reg [7:0] mem [0:15];
+ wire [7:0] read_pipe;
+ assign read_pipe = mem[addr];
+ assign rdata = read_pipe;
+endmodule
+""") == []
+
+
 def test_module_procedural_assignment_check_ignores_continuous_wiring():
     continuous_top = """
 module temp_monitor_digital(output [7:0] rd_data);

@@ -2456,28 +2456,77 @@ def _validate_spec_vs_rtl(spec_json: dict, mode: str, verilog_map: Dict[str, str
                 module_code,
                 re.I,
             )
-            functional_arrays = [
+            write_arrays = [
                 array_name for array_name in arrays
                 if re.search(
-                    rf"\b{re.escape(array_name)}\s*\[[^\]]+\]\s*(?:<=|=)",
-                    module_code,
-                    re.I,
-                )
-                and re.search(
-                    rf"(?:<=|=)\s*{re.escape(array_name)}\s*\[[^\]]+\]",
+                    rf"\b{re.escape(array_name)}\s*\[[^\]]+\]\s*(?:<=|(?<![=!<>])=(?!=))",
                     module_code,
                     re.I,
                 )
             ]
+            read_arrays = [
+                array_name for array_name in arrays
+                if re.search(
+                    rf"(?:<=|(?<![=!<>])=(?!=))\s*{re.escape(array_name)}\s*\[[^\]]+\]",
+                    module_code,
+                    re.I,
+                )
+            ]
+            memory_ports = [port for port in (mod.get("ports") or []) if isinstance(port, dict)]
+            expects_write = any(
+                str(port.get("direction") or "").lower() in {"input", "inout"}
+                and re.search(
+                    r"(?:^|_)(?:we|web|write_en|wr_en|wdata|write_data|data_in|din)$",
+                    str(port.get("name") or ""), re.I,
+                )
+                for port in memory_ports
+            )
+            read_output_names = [
+                str(port.get("name") or "") for port in memory_ports
+                if str(port.get("direction") or "").lower() in {"output", "inout"}
+                and re.search(
+                    r"(?:^|_)(?:dout|rdata|read_data|data_out|q)$",
+                    str(port.get("name") or ""), re.I,
+                )
+            ]
+            expects_read = bool(read_output_names)
+            assignments = re.findall(
+                r"(?:\bassign\s+)?\b([A-Za-z_][A-Za-z0-9_$]*)"
+                r"(?:\s*\[[^\]]+\])?\s*(?:<=|(?<![=!<>])=(?!=))\s*([^;]+);",
+                module_code,
+                re.I,
+            )
+            memory_tainted = set(arrays)
+            changed = True
+            while changed:
+                changed = False
+                for lhs, rhs in assignments:
+                    if lhs in memory_tainted:
+                        continue
+                    if any(re.search(rf"\b{re.escape(source)}\b", rhs) for source in memory_tainted):
+                        memory_tainted.add(lhs)
+                        changed = True
+            observable_read_outputs = [name for name in read_output_names if name in memory_tainted]
             if not arrays:
                 issues.append(
                     f"Module '{mod_name}' declares fpga_bram memory_implementation but has no synthesizable "
                     "unpacked memory array; implement inferred storage instead of scalar registers."
                 )
-            elif not functional_arrays:
+            elif expects_write and not write_arrays:
                 issues.append(
-                    f"Module '{mod_name}' declares fpga_bram memory_implementation but its memory array has no "
-                    "detectable indexed write and read path."
+                    f"Module '{mod_name}' declares a writable fpga_bram memory_implementation but its memory "
+                    "array has no detectable indexed write path."
+                )
+            elif expects_read and len(observable_read_outputs) != len(read_output_names):
+                missing_read_outputs = sorted(set(read_output_names) - set(observable_read_outputs))
+                issues.append(
+                    f"Module '{mod_name}' declares a readable fpga_bram memory_implementation but its memory "
+                    f"array does not drive declared read output(s): {missing_read_outputs}."
+                )
+            elif not expects_write and not expects_read and not (write_arrays or read_arrays):
+                issues.append(
+                    f"Module '{mod_name}' declares fpga_bram memory_implementation but exposes no recognizable "
+                    "read/write capability and its memory array has no detectable indexed access."
                 )
 
     full_text = "\n".join(verilog_map.values())
