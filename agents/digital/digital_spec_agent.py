@@ -813,6 +813,12 @@ def _validate_feature_contract_strength(feature_ports: list, contracts: list) ->
         for port in feature_ports if isinstance(port, dict) and port.get("name")
     }
     vacuous = []
+    output_names = {
+        str(port.get("name") or "")
+        for port in feature_ports
+        if isinstance(port, dict) and str(port.get("direction") or "").lower() in {"output", "inout"}
+    }
+    underconstrained = []
     for contract in contracts:
         weak_signals = []
         for name, expectation in (contract.get("expected") or {}).items():
@@ -830,11 +836,34 @@ def _validate_feature_contract_strength(feature_ports: list, contracts: list) ->
                 weak_signals.append(str(name))
         if weak_signals:
             vacuous.append(f"{contract.get('feature_id')}: {', '.join(weak_signals)}")
+        statement = str(contract.get("statement") or "")
+        expected_names = {str(name) for name in (contract.get("expected") or {}).keys()}
+        mentioned_state = {
+            name for name in output_names
+            if re.search(rf"\b{re.escape(name)}\b", statement, re.I)
+        } - expected_names
+        conditional = bool(re.search(
+            r"\b(?:when|if|while|greater\s+than|less\s+than|equal\s+to|at\s+least|at\s+most)\b",
+            statement,
+            re.I,
+        ))
+        if conditional and mentioned_state and int(contract.get("stimulus_cycles") or 0) <= 1:
+            underconstrained.append(
+                f"{contract.get('feature_id')}: condition depends on observable state "
+                + ", ".join(sorted(mentioned_state))
+                + " but the one-cycle scenario neither establishes nor checks that state"
+            )
     if vacuous:
         raise ValueError(
             "Feature contracts must contain behavior-discriminating checkers; full-domain min/max expectations "
             "accept every possible output and provide no verification coverage. Use exact expected values or a "
             "strict subrange derived from the feature scenario. Vacuous contracts: " + "; ".join(vacuous[:12])
+        )
+    if underconstrained:
+        raise ValueError(
+            "Feature contracts with state-dependent expectations must establish and observe their stated precondition. "
+            "Add setup cycles and an expected/precondition check for the referenced state; do not assume reset state "
+            "already satisfies the condition. Underconstrained contracts: " + "; ".join(underconstrained[:12])
         )
 
 

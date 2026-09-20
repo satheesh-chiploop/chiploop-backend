@@ -2162,6 +2162,22 @@ def test_feature_contract_strength_accepts_exact_or_strict_subrange():
     spec_agent._validate_feature_contract_strength(ports, contracts)
 
 
+def test_feature_contract_strength_rejects_unestablished_one_cycle_state_precondition():
+    ports = [
+        {"name": "threshold", "direction": "input", "width": 8},
+        {"name": "state_value", "direction": "output", "width": 8},
+        {"name": "flag", "direction": "output", "width": 1},
+    ]
+    contracts = [{
+        "feature_id": "state_condition",
+        "statement": "The flag deasserts when state_value is greater than or equal to threshold.",
+        "stimulus_cycles": 1,
+        "expected": {"flag": 0},
+    }]
+    with pytest.raises(ValueError, match="state-dependent expectations"):
+        spec_agent._validate_feature_contract_strength(ports, contracts)
+
+
 def test_feature_contract_strength_rejects_weak_signal_even_with_strong_signal():
     ports = [{"name": "valid", "width": 1}, {"name": "data", "width": 8}]
     contracts = [{

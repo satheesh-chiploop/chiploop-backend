@@ -477,7 +477,12 @@ def _behavioral_obligations(spec: Dict[str, Any]) -> List[Dict[str, Any]]:
             "owner_module": owner or None,
             "section": section,
             "requirement": text,
-            "verification_method": verification_method,
+            # This agent owns executable assertion collateral. Preserve the
+            # classifier result for auditability, but do not tell the model an
+            # obligation is "dynamic_simulation" and then reject it for not
+            # producing an SVA checker.
+            "verification_method": "systemverilog_assertion",
+            "requirement_classification": verification_method,
             "status": "checker_generation_required",
         })
     return obligations
@@ -607,6 +612,9 @@ def _maybe_llm_expand(spec: Dict[str, Any], sva: str, log_path: str, sva_spec: D
             "- Generate one labeled assertion for every behavioral_obligation.\n"
             "- Each label MUST exactly equal that obligation's checker_id.\n"
             "- Add a companion cover property named by replacing a_ with c_ in checker_id; cover the assertion antecedent/trigger so vacuity is measurable.\n"
+            "- For behavior that occurs on the next edge/cycle, use non-overlapping implication |=> (or an equivalent explicit one-cycle delay).\n"
+            "- Use overlapping implication |-> only for same-sample combinational relationships.\n"
+            "- For synchronous reset, check the registered result after the reset edge; do not incorrectly require the pre-edge value to be reset.\n"
             "- Preserve requirement IDs in adjacent comments.\n"
             "- If an obligation cannot be expressed using available ports, do not invent signals; omit it so validation reports it missing.\n"
             "- Return SystemVerilog code only. No markdown.\n\n"
@@ -631,6 +639,133 @@ def _maybe_llm_expand(spec: Dict[str, Any], sva: str, log_path: str, sva_spec: D
         _log(log_path, f"LLM expansion skipped/failed: {e}", level="warning")
 
     return sva
+
+
+def _missing_behavioral_checker_ids(sva: str, sva_spec: Dict[str, Any]) -> List[str]:
+    assertions = {
+        item.lower() for item in re.findall(r"\b(a_req_\d+)\s*:\s*assert\s+property\b", sva, re.I)
+    }
+    covers = {
+        item.lower() for item in re.findall(r"\b(c_req_\d+)\s*:\s*cover\s+property\b", sva, re.I)
+    }
+    missing: List[str] = []
+    for obligation in sva_spec.get("behavioral_obligations") or []:
+        if not isinstance(obligation, dict):
+            continue
+        checker = str(obligation.get("checker_id") or "").lower()
+        cover = checker.replace("a_", "c_", 1)
+        if checker not in assertions or cover not in covers:
+            missing.append(str(obligation.get("requirement_id") or checker))
+    return missing
+
+
+def _checker_quality_issues(sva: str, sva_spec: Dict[str, Any]) -> List[Dict[str, str]]:
+    """Detect temporal sampling mistakes that commonly create false RTL failures."""
+    named_properties = {
+        name.lower(): body
+        for name, body in re.findall(r"\bproperty\s+(\w+)\s*;(.*?)\bendproperty\b", sva, re.I | re.S)
+    }
+    assertion_bodies: Dict[str, str] = {}
+    for checker, prop_name in re.findall(
+        r"\b(a_req_\d+)\s*:\s*assert\s+property\s*\(\s*(\w+)\s*\)\s*;",
+        sva,
+        re.I,
+    ):
+        assertion_bodies[checker.lower()] = named_properties.get(prop_name.lower(), "")
+    for checker, body in re.findall(
+        r"\b(a_req_\d+)\s*:\s*assert\s+property\s*\((.*?)\)\s*;",
+        sva,
+        re.I | re.S,
+    ):
+        assertion_bodies.setdefault(checker.lower(), body)
+
+    issues: List[Dict[str, str]] = []
+    for obligation in sva_spec.get("behavioral_obligations") or []:
+        if not isinstance(obligation, dict):
+            continue
+        checker = str(obligation.get("checker_id") or "").lower()
+        requirement = str(obligation.get("requirement") or "")
+        body = assertion_bodies.get(checker, "")
+        if not body:
+            continue
+        req_lower = requirement.lower()
+        sequential_transition = bool(re.search(
+            r"\b(?:next\s+(?:rising\s+)?(?:edge|cycle)|holds?|advances?|increments?|wraps?|"
+            r"synchronous(?:ly)?|on\s+(?:any\s+)?rising\s+edge)\b",
+            req_lower,
+        )) or bool(
+            re.search(r"\breset\w*\b", req_lower)
+            and re.search(r"\b(?:set|clear|zero|driven|forces?)\b", req_lower)
+        )
+        if sequential_transition and "|->" in body and "|=>" not in body and not re.search(r"##\s*1\b", body):
+            issues.append({
+                "requirement_id": str(obligation.get("requirement_id") or ""),
+                "checker_id": str(obligation.get("checker_id") or ""),
+                "issue": "sequential requirement uses same-sample |->; use |=> or explicit ##1",
+            })
+    return issues
+
+
+def _close_missing_checkers(
+    spec: Dict[str, Any],
+    sva: str,
+    log_path: str,
+    sva_spec: Dict[str, Any],
+    state: Dict[str, Any] | None = None,
+) -> tuple[str, int]:
+    """Retry only when deterministic checker inventory proves omissions."""
+    max_attempts = max(1, min(int((state or {}).get("sva_checker_generation_max_attempts") or 3), 3))
+    attempts = 1
+    current = sva
+    while attempts < max_attempts:
+        missing = _missing_behavioral_checker_ids(current, sva_spec)
+        quality_issues = _checker_quality_issues(current, sva_spec)
+        affected = set(missing) | {item["requirement_id"] for item in quality_issues}
+        if not affected:
+            break
+        obligations = [
+            item for item in sva_spec.get("behavioral_obligations") or []
+            if isinstance(item, dict) and item.get("requirement_id") in affected
+        ]
+        prompt = (
+            "You are closing a deterministically detected SVA checker-completeness failure.\n"
+            "Return the COMPLETE corrected SystemVerilog source, not a patch or explanation.\n"
+            "Preserve every module declaration, port list, and existing assertion.\n"
+            "Add exactly one assert property and one non-vacuity cover property for every missing obligation.\n"
+            "Assertion labels must exactly match checker_id; cover labels replace a_ with c_.\n"
+            "Use only ports declared in the owning verification target. Never invent signals.\n"
+            "For next-edge/next-cycle behavior use |=> or an explicit one-cycle delay; reserve |-> for same-sample combinational behavior.\n"
+            "Synchronous reset assertions must check state after the reset edge, not the pre-edge sampled state.\n"
+            f"MISSING_OBLIGATIONS:\n{json.dumps(obligations, indent=2)}\n\n"
+            f"TEMPORAL_QUALITY_ISSUES:\n{json.dumps(quality_issues, indent=2)}\n\n"
+            f"SVA_SPEC:\n{json.dumps(sva_spec, indent=2)}\n\n"
+            f"SPEC_JSON:\n{json.dumps(spec, indent=2)}\n\n"
+            f"CURRENT_SVA:\n{current}\n"
+        )
+        try:
+            candidate = complete_text(
+                prompt,
+                capability="verification_debug",
+                agent_name="Digital Assertions (SVA) Agent",
+                system="Return complete SystemVerilog code only. No markdown.",
+                state=state,
+                temperature=0.1,
+            ).strip()
+            attempts += 1
+            candidate = re.sub(r"^```(?:systemverilog|sv|verilog)?\s*", "", candidate, flags=re.I)
+            candidate = re.sub(r"\s*```\s*$", "", candidate)
+            if candidate:
+                current = candidate
+            _log(
+                log_path,
+                f"SVA completeness attempt {attempts}/{max_attempts}; "
+                f"missing={_missing_behavioral_checker_ids(current, sva_spec)}; "
+                f"quality_issues={_checker_quality_issues(current, sva_spec)}",
+            )
+        except Exception as exc:
+            attempts += 1
+            _log(log_path, f"SVA completeness attempt {attempts}/{max_attempts} failed: {exc}", level="warning")
+    return current, attempts
 
 
 def _gen_bind_sv(top: str, module_name: str, sva_spec: Dict[str, Any]) -> str:
@@ -727,8 +862,12 @@ def run_agent(state: dict) -> dict:
     enable_llm_expand = str(os.getenv("CHIPLOOP_ENABLE_LLM_SVA_EXPAND", "1")).strip().lower() in ("1", "true", "yes")
     if enable_llm_expand:
         sva_sv = _maybe_llm_expand(spec, sva_sv, log_path, sva_spec, state=state)
+        sva_sv, checker_generation_attempts = _close_missing_checkers(
+            spec, sva_sv, log_path, sva_spec, state=state
+        )
     else:
         _log(log_path, "LLM SVA expansion disabled; using deterministic scaffold.")
+        checker_generation_attempts = 0
 
     bind_sv = _gen_bind_sv(top, module_name, sva_spec)
 
@@ -749,6 +888,7 @@ def run_agent(state: dict) -> dict:
         item["requirement_id"] for item in sva_spec.get("behavioral_obligations", [])
         if item.get("status") == "missing_checker"
     ]
+    checker_quality_issues = _checker_quality_issues(sva_sv, sva_spec)
 
     bind_readme = f"""# SVA Usage
 
@@ -810,7 +950,9 @@ The bind file uses only spec-declared signals and is intended to be compiled wit
         "behavioral_obligation_count": len(sva_spec.get("behavioral_obligations", [])),
         "generated_behavioral_checker_count": len(sva_spec.get("behavioral_obligations", [])) - len(missing_checker_ids),
         "missing_behavioral_checker_ids": missing_checker_ids,
-        "checker_generation_status": "pass" if not missing_checker_ids else "issues",
+        "checker_generation_status": "pass" if not missing_checker_ids and not checker_quality_issues else "issues",
+        "checker_generation_attempts": checker_generation_attempts,
+        "checker_quality_issues": checker_quality_issues,
         "artifacts": artifacts,
     }
 
@@ -834,6 +976,16 @@ The bind file uses only spec-declared signals and is intended to be compiled wit
     state["sva_assertions_path"] = os.path.join(out_dir, f"{module_name}.sv")
     state["sva_spec_json"] = os.path.join(out_dir, "sva_spec.json")
     state["sva_bind_path"] = os.path.join(out_dir, f"{module_name}_bind.sv")
+
+    if missing_checker_ids or checker_quality_issues:
+        raise RuntimeError(
+            "SVA checker generation remained incomplete or semantically invalid after "
+            f"{checker_generation_attempts} attempt(s). Missing requirement checkers: "
+            + ", ".join(missing_checker_ids)
+            + "; temporal checker issues: "
+            + ", ".join(item["requirement_id"] for item in checker_quality_issues)
+            + ". See sva_generation_report.json for the exact obligations."
+        )
 
     _log(log_path, f"{agent_name} completed successfully.")
     return state

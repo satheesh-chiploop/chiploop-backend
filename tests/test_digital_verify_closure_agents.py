@@ -46,6 +46,16 @@ def test_behavioral_obligations_have_stable_requirement_and_checker_ids():
     assert all(item["verification_method"] == "systemverilog_assertion" for item in obligations)
 
 
+def test_dynamic_classifier_result_does_not_contradict_sva_generation_contract():
+    spec = {"hierarchy": {"top_module": {
+        "name": "waveform", "ports": [],
+        "responsibilities": ["Generate a programmable waveform from the configured threshold."],
+    }}}
+    obligation = sva_agent._behavioral_obligations(spec)[0]
+    assert obligation["requirement_classification"] == "dynamic_simulation"
+    assert obligation["verification_method"] == "systemverilog_assertion"
+
+
 def test_sva_targets_bind_behavioral_requirements_to_owning_child_module():
     spec = {"hierarchy": {
         "top_module": {"name": "system_top", "ports": [
@@ -84,6 +94,63 @@ def test_sva_target_preserves_flat_top_module_ports():
     assert {port["name"] for port in sva_spec["verification_targets"][0]["ports"]} == {
         "clk", "enable", "done",
     }
+
+
+def test_sva_completeness_retry_closes_model_omissions(tmp_path, monkeypatch):
+    sva_spec = {"behavioral_obligations": [
+        {"requirement_id": "REQ-001", "checker_id": "a_req_001", "requirement": "First"},
+        {"requirement_id": "REQ-002", "checker_id": "a_req_002", "requirement": "Second"},
+    ]}
+    incomplete = """module checks(input logic clk);
+a_req_001: assert property (@(posedge clk) 1'b1);
+c_req_001: cover property (@(posedge clk) 1'b1);
+endmodule
+"""
+    complete = """module checks(input logic clk);
+a_req_001: assert property (@(posedge clk) 1'b1);
+c_req_001: cover property (@(posedge clk) 1'b1);
+a_req_002: assert property (@(posedge clk) 1'b1);
+c_req_002: cover property (@(posedge clk) 1'b1);
+endmodule
+"""
+    calls = []
+    monkeypatch.setattr(sva_agent, "complete_text", lambda prompt, **kwargs: calls.append(prompt) or complete)
+    closed, attempts = sva_agent._close_missing_checkers(
+        {}, incomplete, str(tmp_path / "sva.log"), sva_spec, state={}
+    )
+    assert attempts == 2
+    assert sva_agent._missing_behavioral_checker_ids(closed, sva_spec) == []
+    assert "REQ-002" in calls[0]
+
+
+def test_sva_completeness_retry_is_bounded_when_model_keeps_omitting(tmp_path, monkeypatch):
+    spec = {"behavioral_obligations": [
+        {"requirement_id": "REQ-001", "checker_id": "a_req_001", "requirement": "First"},
+    ]}
+    source = "module checks(input logic clk); endmodule\n"
+    monkeypatch.setattr(sva_agent, "complete_text", lambda *args, **kwargs: source)
+    closed, attempts = sva_agent._close_missing_checkers(
+        {}, source, str(tmp_path / "sva.log"), spec, state={}
+    )
+    assert attempts == 3
+    assert sva_agent._missing_behavioral_checker_ids(closed, spec) == ["REQ-001"]
+
+
+def test_sva_quality_rejects_overlapping_implication_for_next_edge_behavior():
+    spec = {"behavioral_obligations": [{
+        "requirement_id": "REQ-010", "checker_id": "a_req_010",
+        "requirement": "When enable is high, counter increments on the next rising edge.",
+    }]}
+    bad = """property p_req_010;
+@(posedge clk) enable |-> counter == $past(counter) + 1;
+endproperty
+a_req_010: assert property (p_req_010);
+c_req_010: cover property (@(posedge clk) enable);
+"""
+    good = bad.replace("|->", "|=>")
+    issues = sva_agent._checker_quality_issues(bad, spec)
+    assert issues[0]["requirement_id"] == "REQ-010"
+    assert sva_agent._checker_quality_issues(good, spec) == []
 
 
 def test_simulation_assertion_failure_maps_to_requirement():
