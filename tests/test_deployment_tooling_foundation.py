@@ -1,3 +1,6 @@
+import sys
+import time
+
 from deployment_modes import active_deployment_mode, deployment_summary
 from deployment_readiness import build_readiness_payload
 from artifact_policy import artifact_may_sync
@@ -58,6 +61,22 @@ def test_strict_tool_profile_disables_path_fallback():
     assert resolve_tool("definitely-not-configured", state) is None
     result = run_command(state, "test", ["definitely-not-configured", "--version"])
     assert result.status == "tool_unavailable"
+
+
+def test_runner_timeout_terminates_descendant_process_tree():
+    child_script = (
+        "import subprocess,sys; "
+        "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)']); "
+        "print('child-started', flush=True); "
+        "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)']).wait()"
+    )
+    started = time.monotonic()
+    result = run_command({}, "test", [sys.executable, "-c", child_script], timeout_sec=1)
+
+    assert result.status == "exception"
+    assert "timed out" in result.error.lower()
+    assert "child-started" in result.stdout
+    assert time.monotonic() - started < 12
 
 
 def test_artifact_policy_blocks_private_sync():

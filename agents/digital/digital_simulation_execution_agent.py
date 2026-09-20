@@ -85,9 +85,22 @@ def _assertion_failures(log_lines: list[str], sva_spec: Dict[str, Any]) -> list[
     return failures
 
 
-def _test_passed(returncode: int, assertion_failures: list[Dict[str, Any]]) -> bool:
+def _test_passed(returncode: Any, assertion_failures: list[Dict[str, Any]]) -> bool:
     """A requirement assertion is authoritative even if the simulator exits 0."""
-    return int(returncode) == 0 and not assertion_failures
+    try:
+        return int(returncode) == 0 and not assertion_failures
+    except (TypeError, ValueError):
+        return False
+
+
+def _simulation_test_timeout_sec(state: Dict[str, Any]) -> int:
+    """Bound every simulator invocation so a workflow always reaches a terminal state."""
+    raw = state.get("simulation_test_timeout_sec") or state.get("simulation_timeout_sec") or 180
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        value = 180
+    return max(30, min(value, 1800))
 
 
 def _nonvacuity_results(tb_root: str, reports_dir: str, sva_spec: Dict[str, Any]) -> list[Dict[str, Any]]:
@@ -555,7 +568,10 @@ def run_agent(state: dict) -> dict:
         )
         results = []
         runtime_coverage_summaries: list[Dict[str, Any]] = []
+        simulation_timeout_sec = _simulation_test_timeout_sec(state)
+        _log(log_path, f"simulation_test_timeout_sec={simulation_timeout_sec}")
 
+        abort_regression = False
         for t in tests:
             for s in seeds:
                 _log(log_path, f"Running testcase={t} seed={s}")
@@ -570,6 +586,7 @@ def run_agent(state: dict) -> dict:
                         ["make", f"TESTCASE={t}"],
                         cwd=tb_root,
                         env=env,
+                        timeout_sec=simulation_timeout_sec,
                     )
 
                     stdout_lines = (p.stdout or "").splitlines()
@@ -590,6 +607,7 @@ def run_agent(state: dict) -> dict:
                     # an early assertion failure must not disappear behind a
                     # long simulator/coverage epilogue.
                     assertion_failures = _assertion_failures([*stdout_lines, *stderr_lines], sva_spec)
+                    timed_out = p.status == "exception" and "timed out" in str(p.error or "").lower()
                     results.append({
                         "testcase": t,
                         "seed": s,
@@ -602,11 +620,21 @@ def run_agent(state: dict) -> dict:
                         "stdout_tail": stdout_tail,
                         "stderr_tail": stderr_tail,
                         "tool_execution": p.to_dict(),
+                        "timeout_sec": simulation_timeout_sec,
+                        "timed_out": timed_out,
                         "assertion_failures": assertion_failures,
                     })
                     run_coverage = _safe_read_json(coverage_json_path)
                     if run_coverage:
                         runtime_coverage_summaries.append(run_coverage)
+                    if timed_out:
+                        abort_regression = True
+                        _log(
+                            log_path,
+                            f"Aborting remaining regression after simulator timeout testcase={t} seed={s}",
+                            level="error",
+                        )
+                        break
 
                 except Exception as e:
                     _log(log_path, f"Execution failed testcase={t} seed={s}: {e}", level="error")
@@ -616,6 +644,8 @@ def run_agent(state: dict) -> dict:
                         "pass": False,
                         "error": str(e),
                     })
+            if abort_regression:
+                break
 
         aggregated_coverage = _merge_functional_coverage_summaries(runtime_coverage_summaries)
         if aggregated_coverage:

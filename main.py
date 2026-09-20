@@ -1779,6 +1779,18 @@ def append_log_run(run_id: str, line: str, status: Optional[str] = None,
 
         supabase.table("runs").update(update).eq("id", run_id).execute()
     except Exception as e:
+        # Do not let a log read/append problem strand a terminal run as
+        # `running`. Retry with a compact replacement log and status only.
+        try:
+            fallback = {"logs": _truncate_tail(str(line or ""), 200)}
+            if status:
+                fallback["status"] = status
+            if artifacts_path is not None:
+                fallback["artifacts_path"] = artifacts_path
+            supabase.table("runs").update(fallback).eq("id", run_id).execute()
+            return
+        except Exception:
+            pass
         logger.warning(f"⚠️ append_log_run failed: {e}")
 
 # ==========================================================
@@ -4008,7 +4020,7 @@ class DigitalVerifyClosureAppIn(BaseModel):
     coverage_targets: Optional[str] = None
     seed_count: Optional[int] = None
     seed_budget: Optional[int] = None
-    max_iterations: Optional[int] = 1
+    max_iterations: Optional[int] = 3
     rerun_mode: Optional[str] = "coverage_targeted"
     random_vs_directed: Optional[str] = None
     enable_failure_debug: Optional[bool] = False

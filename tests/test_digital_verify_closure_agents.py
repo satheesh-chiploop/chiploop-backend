@@ -187,6 +187,21 @@ def test_assertion_failure_is_not_hidden_by_zero_simulator_return_code():
     failures = [{"requirement_id": "REQ-092", "checker_id": "a_req_092"}]
     assert execution_agent._test_passed(0, failures) is False
     assert execution_agent._test_passed(0, []) is True
+    assert execution_agent._test_passed(None, []) is False
+
+
+def test_simulation_timeout_is_bounded_and_configurable():
+    assert execution_agent._simulation_test_timeout_sec({}) == 180
+    assert execution_agent._simulation_test_timeout_sec({"simulation_test_timeout_sec": 5}) == 30
+    assert execution_agent._simulation_test_timeout_sec({"simulation_test_timeout_sec": 99999}) == 1800
+
+
+def test_run_status_has_terminal_fallback_and_closure_defaults_to_three_attempts():
+    main_source = (Path(__file__).resolve().parents[1] / "main.py").read_text(encoding="utf-8")
+    append_run = main_source.split("def append_log_run", 1)[1].split("# ==========================================================", 1)[0]
+    assert 'supabase.table("runs").update(fallback)' in append_run
+    closure_model = main_source.split("class DigitalVerifyClosureAppIn", 1)[1].split("class DigitalSmokeAppIn", 1)[0]
+    assert "max_iterations: Optional[int] = 3" in closure_model
 
 
 def test_nonvacuity_coverage_does_not_mistake_requirement_number_for_hit_count(tmp_path):

@@ -1,4 +1,5 @@
 import os
+import signal
 import subprocess
 import time
 from datetime import datetime, timezone
@@ -161,6 +162,72 @@ def tool_env(state: Optional[Dict[str, Any]] = None, extra_env: Optional[Dict[st
     return _build_env(get_tool_profile(state or {}), extra_env)
 
 
+def _run_process_tree(
+    command: List[str],
+    *,
+    cwd: Optional[str],
+    timeout_sec: Optional[int],
+    env: Dict[str, str],
+) -> subprocess.CompletedProcess[str]:
+    """Run a tool in its own process group and terminate all descendants on timeout."""
+    popen_kwargs: Dict[str, Any] = {
+        "cwd": cwd,
+        "stdout": subprocess.PIPE,
+        "stderr": subprocess.PIPE,
+        "text": True,
+        "env": env,
+    }
+    if os.name == "nt":
+        popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+    else:
+        popen_kwargs["start_new_session"] = True
+
+    proc = subprocess.Popen(command, **popen_kwargs)
+    try:
+        stdout, stderr = proc.communicate(timeout=timeout_sec)
+    except subprocess.TimeoutExpired as timeout_exc:
+        # Killing only the immediate process (often `make`) can leave simulator
+        # children holding output pipes open, causing communicate() to wait forever.
+        if os.name == "nt":
+            try:
+                subprocess.run(
+                    ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    timeout=10,
+                )
+            except Exception:
+                proc.kill()
+        else:
+            try:
+                os.killpg(proc.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            try:
+                proc.communicate(timeout=2)
+            except subprocess.TimeoutExpired:
+                try:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+        try:
+            stdout, stderr = proc.communicate(timeout=5)
+        except subprocess.TimeoutExpired as drain_exc:
+            # Never let timeout cleanup become a second unbounded wait. A
+            # detached descendant may still own an inherited pipe on Windows.
+            proc.kill()
+            if proc.stdout:
+                proc.stdout.close()
+            if proc.stderr:
+                proc.stderr.close()
+            stdout = drain_exc.output or timeout_exc.output or ""
+            stderr = drain_exc.stderr or timeout_exc.stderr or ""
+        raise subprocess.TimeoutExpired(command, timeout_sec, output=stdout, stderr=stderr)
+
+    return subprocess.CompletedProcess(command, proc.returncode, stdout, stderr)
+
+
 def _result_from_exception(
     state: Optional[Dict[str, Any]],
     capability: str,
@@ -173,6 +240,8 @@ def _result_from_exception(
     start: float,
 ) -> RunResult:
     summary = profile_summary(state or {})
+    stdout = exc.output if isinstance(exc, subprocess.TimeoutExpired) else ""
+    stderr = exc.stderr if isinstance(exc, subprocess.TimeoutExpired) else ""
     return RunResult(
         profile_id=str(summary["profile_id"]),
         runner=str(summary["runner"]),
@@ -182,6 +251,8 @@ def _result_from_exception(
         command=command,
         cwd=cwd,
         returncode=None,
+        stdout=str(stdout or ""),
+        stderr=str(stderr or ""),
         status="exception",
         error=str(exc),
         started_at=started_at,
@@ -237,13 +308,10 @@ def run_tool(
         )
 
     try:
-        proc = subprocess.run(
+        proc = _run_process_tree(
             command,
             cwd=cwd,
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=timeout_sec,
+            timeout_sec=timeout_sec,
             env=_build_env(profile, request.env),
         )
         status = "success" if proc.returncode == 0 else "failed"
@@ -333,13 +401,10 @@ def run_command(
     start = time.monotonic()
     command_str = [str(x) for x in command]
     try:
-        proc = subprocess.run(
+        proc = _run_process_tree(
             command_str,
             cwd=cwd,
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=timeout_sec,
+            timeout_sec=timeout_sec,
             env=_build_env(profile, env),
         )
         return RunResult(
