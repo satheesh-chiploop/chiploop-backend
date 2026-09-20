@@ -765,15 +765,21 @@ def _validate_reset_feature_consistency(spec_json: dict, feature_ports: list, co
                 ),
             })
     declared_values = {}
+    value_token = r"(0|1|low|zero|deasserted|high|one|asserted)"
     for lower_name, canonical in port_names.items():
-        match = re.search(
-            rf"\b{re.escape(canonical)}\b[^.\n;]{{0,80}}?\b(?:is|shall\s+be|must\s+be|evaluates?|becomes?|remains?|driven|forced|set)\b"
-            r"[^.\n;]{0,24}?\b(low|zero|deasserted|high|one|asserted)\b",
-            reset_behavior,
-            re.I,
+        # Only accept an explicit grammatical assignment to this signal. The
+        # prior broad matcher could bind a later pronoun phrase in the same
+        # sentence (for example, "counter_value and duty_cycle, it evaluates
+        # high") and falsely declare counter_value=1.
+        patterns = (
+            rf"\b{re.escape(canonical)}\b\s+(?:is\s+)?(?:set|forced|driven)\s+(?:to\s+)?{value_token}\b",
+            rf"\b{re.escape(canonical)}\b\s+(?:is|shall\s+be|must\s+be|becomes?|remains?)\s+{value_token}\b",
+            rf"\b{re.escape(canonical)}\b\s*=\s*{value_token}\b",
         )
+        match = next((candidate for pattern in patterns if (candidate := re.search(pattern, reset_behavior, re.I))), None)
         if match:
-            declared_values[canonical] = 0 if match.group(1).lower() in {"low", "zero", "deasserted"} else 1
+            token = next(group for group in match.groups() if group is not None).lower()
+            declared_values[canonical] = 0 if token in {"0", "low", "zero", "deasserted"} else 1
     if not declared_values or not reset_ports:
         return
     conflicts = []

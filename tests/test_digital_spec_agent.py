@@ -2178,6 +2178,28 @@ def test_feature_contract_strength_rejects_unestablished_one_cycle_state_precond
         spec_agent._validate_feature_contract_strength(ports, contracts)
 
 
+def test_reset_consistency_does_not_attribute_pronoun_value_to_wrong_signal():
+    spec = {
+        "reset_behavior": (
+            "When reset_n is low at a clock edge, counter_value is set to 0. "
+            "Because pwm_out is purely combinational from counter_value and duty_cycle, "
+            "it evaluates high when duty_cycle is nonzero."
+        ),
+    }
+    ports = [
+        {"name": "reset_n", "direction": "input", "active_low": True},
+        {"name": "duty_cycle", "direction": "input", "width": 8},
+        {"name": "counter_value", "direction": "output", "width": 8},
+        {"name": "pwm_out", "direction": "output", "width": 1},
+    ]
+    contracts = [{
+        "feature_id": "reset_clears_counter",
+        "stimulus_steps": [{"signals": {"reset_n": 0, "duty_cycle": 8}, "cycles": 1}],
+        "expected": {"counter_value": 0, "pwm_out": 1},
+    }]
+    spec_agent._validate_reset_feature_consistency(spec, ports, contracts)
+
+
 def test_feature_contract_strength_rejects_weak_signal_even_with_strong_signal():
     ports = [{"name": "valid", "width": 1}, {"name": "data", "width": 8}]
     contracts = [{
