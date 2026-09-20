@@ -18,7 +18,9 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     gaps = gap.get("gaps") if isinstance(gap.get("gaps"), list) else []
     functional_gaps = gap.get("functional_gaps") if isinstance(gap.get("functional_gaps"), list) else []
     failures = triage.get("failures") if isinstance(triage.get("failures"), list) else []
-    summary = state.get("source_simulation_summary_coverage") if isinstance(state.get("source_simulation_summary_coverage"), dict) else {}
+    summary = state.get("closure_cumulative_summary_coverage") if isinstance(state.get("closure_cumulative_summary_coverage"), dict) else {}
+    if not summary:
+        summary = state.get("source_simulation_summary_coverage") if isinstance(state.get("source_simulation_summary_coverage"), dict) else {}
     coverage = summary.get("coverage") if isinstance(summary.get("coverage"), dict) else {}
     code = coverage.get("code") if isinstance(coverage.get("code"), dict) else {}
     functional = coverage.get("functional") if isinstance(coverage.get("functional"), dict) else {}
@@ -107,9 +109,12 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
         },
         "recommended_actions": actions,
         "rerun_policy": {
-            "automatic_rtl_edit": False,
+            "automatic_rtl_edit": bool(any(f.get("assertion_failures") for f in failures if isinstance(f, dict))),
+            "automatic_rtl_edit_scope": "requirement_linked_assertion_failures_only",
             "automatic_coverage_model_edit": False,
-            "rerun_requires_human_approval": True,
+            "rerun_requires_human_approval": not bool(any(
+                f.get("assertion_failures") for f in failures if isinstance(f, dict)
+            )),
         },
     }
     txt = json.dumps(plan, indent=2)

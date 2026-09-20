@@ -1,4 +1,5 @@
 import json
+import hashlib
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -63,6 +64,7 @@ def _classify_failure(failure: Dict[str, Any], options: Dict[str, Any]) -> Dict[
         or (fix_domain in {"rtl_or_scoreboard", "rtl_or_assertion"} and options["auto_apply_rtl_fixes"])
     )
 
+    assertion_failures = [item for item in failure.get("assertion_failures") or [] if isinstance(item, dict)]
     return {
         "testcase": testcase,
         "seed": seed,
@@ -84,6 +86,43 @@ def _classify_failure(failure: Dict[str, Any], options: Dict[str, Any]) -> Dict[
             "enable_waveform": vcd_recommended,
             "scope": "single_testcase_seed",
         },
+        "assertion_failures": assertion_failures,
+    }
+
+
+def _rtl_repair_request(debug_items: List[Dict[str, Any]], state: Dict[str, Any]) -> Dict[str, Any]:
+    failures = [
+        failure
+        for item in debug_items
+        for failure in item.get("assertion_failures") or []
+        if isinstance(failure, dict)
+    ]
+    normalized = sorted({
+        f"{item.get('requirement_id')}|{item.get('checker_id')}|{item.get('owner_module')}"
+        for item in failures
+    })
+    fingerprint = hashlib.sha256("\n".join(normalized).encode("utf-8")).hexdigest() if normalized else None
+    history = state.get("behavioral_repair_history") if isinstance(state.get("behavioral_repair_history"), list) else []
+    repeated = sum(1 for item in history if isinstance(item, dict) and item.get("fingerprint") == fingerprint)
+    max_attempts = max(1, int(state.get("behavioral_repair_max_attempts") or 3))
+    return {
+        "type": "behavioral_rtl_repair_request",
+        "required": bool(failures),
+        "fingerprint": fingerprint,
+        "attempt": repeated + 1 if failures else 0,
+        "max_attempts": max_attempts,
+        "status": (
+            "not_required" if not failures
+            else "blocked_nonconvergent" if repeated >= max_attempts
+            else "ready_for_targeted_rtl_repair"
+        ),
+        "rules": {
+            "preserve_interfaces": True,
+            "incremental_module_only": True,
+            "rerun_failed_test_first": True,
+            "run_full_regression_after_focused_pass": True,
+        },
+        "failures": failures,
     }
 
 
@@ -96,9 +135,15 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     options = _debug_options(state)
     triage = state.get("failure_triage") if isinstance(state.get("failure_triage"), dict) else {}
     failures = [item for item in (triage.get("failures") or []) if isinstance(item, dict)]
-    debug_items: List[Dict[str, Any]] = []
-    if options["enabled"]:
-        debug_items = [_classify_failure(failure, options) for failure in failures]
+    # Requirement-linked assertion failures are safe to process automatically:
+    # they already carry an executable checker ID and exact RTL requirement.
+    # The UI debug toggle still controls heuristic debugging of unstructured
+    # failures, but must not silently disable the behavioral repair strategy.
+    structured_failures = [failure for failure in failures if failure.get("assertion_failures")]
+    selected_failures = failures if options["enabled"] else structured_failures
+    debug_items: List[Dict[str, Any]] = [
+        _classify_failure(failure, options) for failure in selected_failures
+    ]
 
     report = {
         "type": "failure_debug",
@@ -108,11 +153,14 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
         "debugged_failure_count": len(debug_items),
         "items": debug_items,
         "summary": (
-            "disabled" if not options["enabled"]
+            "structured_assertion_failures_auto_debugged" if structured_failures and not options["enabled"]
+            else "disabled" if not options["enabled"]
             else "no_failures" if not failures
             else "debug_recommendations_generated"
         ),
     }
+    repair_request = _rtl_repair_request(debug_items, state)
+    report["rtl_repair_request"] = repair_request
     txt = json.dumps(report, indent=2)
     md_lines = [
         "# Failure Debug",
@@ -136,7 +184,17 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     md = "\n".join(md_lines)
     (out_dir / "failure_debug.json").write_text(txt, encoding="utf-8")
     (out_dir / "failure_debug.md").write_text(md, encoding="utf-8")
+    repair_txt = json.dumps(repair_request, indent=2)
+    (out_dir / "rtl_repair_request.json").write_text(repair_txt, encoding="utf-8")
     save_text_artifact_and_record(workflow_id, AGENT_NAME, "verify_closure", "failure_debug.json", txt)
     save_text_artifact_and_record(workflow_id, AGENT_NAME, "verify_closure", "failure_debug.md", md)
+    save_text_artifact_and_record(workflow_id, AGENT_NAME, "verify_closure", "rtl_repair_request.json", repair_txt)
     state["failure_debug"] = report
+    state["rtl_repair_request"] = repair_request
+    if repair_request.get("required"):
+        history = state.get("behavioral_repair_history") if isinstance(state.get("behavioral_repair_history"), list) else []
+        state["behavioral_repair_history"] = [*history, {
+            "fingerprint": repair_request.get("fingerprint"),
+            "attempt": repair_request.get("attempt"),
+        }]
     return state

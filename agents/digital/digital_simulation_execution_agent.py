@@ -50,6 +50,84 @@ def _safe_read_json(path: Optional[str]) -> Dict[str, Any]:
     return {}
 
 
+def _assertion_failures(log_lines: list[str], sva_spec: Dict[str, Any]) -> list[Dict[str, Any]]:
+    """Map simulator assertion labels back to specification requirements."""
+    by_checker = {
+        str(item.get("checker_id") or "").lower(): item
+        for item in sva_spec.get("behavioral_obligations") or []
+        if isinstance(item, dict) and item.get("checker_id")
+    }
+    failures: list[Dict[str, Any]] = []
+    seen = set()
+    for line in log_lines:
+        lower = str(line).lower()
+        if not re.search(r"assert(?:ion)?|%error|property.*fail", lower):
+            continue
+        for checker_id, obligation in by_checker.items():
+            if checker_id not in lower:
+                continue
+            # One actionable record per checker/testcase is sufficient. A
+            # sticky assertion can otherwise emit on every cycle, exploding
+            # artifacts and repair prompts without adding semantic evidence.
+            if checker_id in seen:
+                continue
+            seen.add(checker_id)
+            cycle = re.search(r"(?:time|cycle)\s*[=:]\s*(\d+)", str(line), re.I)
+            failures.append({
+                "requirement_id": obligation.get("requirement_id"),
+                "checker_id": obligation.get("checker_id"),
+                "owner_module": obligation.get("owner_module"),
+                "requirement": obligation.get("requirement"),
+                "failure_cycle_or_time": int(cycle.group(1)) if cycle else None,
+                "log_evidence": str(line).strip(),
+                "repair_class": "behavioral_rtl",
+            })
+    return failures
+
+
+def _test_passed(returncode: int, assertion_failures: list[Dict[str, Any]]) -> bool:
+    """A requirement assertion is authoritative even if the simulator exits 0."""
+    return int(returncode) == 0 and not assertion_failures
+
+
+def _nonvacuity_results(tb_root: str, reports_dir: str, sva_spec: Dict[str, Any]) -> list[Dict[str, Any]]:
+    """Resolve companion cover execution from Verilator coverage artifacts."""
+    obligations = [item for item in sva_spec.get("behavioral_obligations") or [] if isinstance(item, dict)]
+    searchable: list[str] = []
+    annotation_dir = os.path.join(reports_dir, "verilator_coverage_annotated")
+    for root in (annotation_dir, tb_root):
+        if not os.path.isdir(root):
+            continue
+        for current, _, files in os.walk(root):
+            for name in files:
+                if root == tb_root and not ("coverage" in name.lower() and name.lower().endswith(".dat")):
+                    continue
+                path = os.path.join(current, name)
+                try:
+                    searchable.extend(open(path, "r", encoding="utf-8", errors="ignore").read().splitlines())
+                except OSError:
+                    pass
+    results: list[Dict[str, Any]] = []
+    for obligation in obligations:
+        cover_id = str(obligation.get("cover_id") or "")
+        matching = [line for line in searchable if cover_id and cover_id.lower() in line.lower()]
+        counts = []
+        for line in matching:
+            sanitized = re.sub(re.escape(cover_id), "", line, flags=re.I)
+            for pattern in (r"^\s*[%+]?\s*(\d+)\s+", r"\bcount\s*[:=]\s*(\d+)\b"):
+                match = re.search(pattern, sanitized, re.I)
+                if match:
+                    counts.append(int(match.group(1)))
+        status = "hit" if any(value > 0 for value in counts) else "missed" if counts else "not_measured"
+        results.append({
+            "requirement_id": obligation.get("requirement_id"),
+            "checker_id": obligation.get("checker_id"),
+            "cover_id": cover_id,
+            "status": status,
+        })
+    return results
+
+
 def _write_file(path: str, content: str) -> None:
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
@@ -441,6 +519,18 @@ def run_agent(state: dict) -> dict:
             raise FileNotFoundError("simulation_manifest.json not found")
 
         manifest = _safe_read_json(manifest_path)
+        sva_spec_path = state.get("sva_spec_json") or os.path.join(tb_root, "sva_spec.json")
+        sva_spec = _safe_read_json(sva_spec_path)
+        missing_checkers = [
+            item.get("requirement_id")
+            for item in sva_spec.get("behavioral_obligations") or []
+            if isinstance(item, dict) and item.get("status") != "generated_pending_execution"
+        ]
+        if missing_checkers:
+            raise RuntimeError(
+                "Behavioral verification cannot start because requirements lack compiled checker collateral: "
+                + ", ".join(str(item) for item in missing_checkers)
+            )
         tests = manifest.get("default_tests", [])
         if not isinstance(tests, list):
             tests = []
@@ -482,8 +572,10 @@ def run_agent(state: dict) -> dict:
                         env=env,
                     )
 
-                    stdout_tail = (p.stdout or "").splitlines()[-120:]
-                    stderr_tail = (p.stderr or "").splitlines()[-120:]
+                    stdout_lines = (p.stdout or "").splitlines()
+                    stderr_lines = (p.stderr or "").splitlines()
+                    stdout_tail = stdout_lines[-120:]
+                    stderr_tail = stderr_lines[-120:]
 
                     _write_file(
                         os.path.join(run_logs_dir, f"{t}__seed_{s}.stdout.log"),
@@ -494,14 +586,23 @@ def run_agent(state: dict) -> dict:
                         "\n".join(stderr_tail) + "\n",
                     )
 
+                    # Parse the complete process output before truncating logs;
+                    # an early assertion failure must not disappear behind a
+                    # long simulator/coverage epilogue.
+                    assertion_failures = _assertion_failures([*stdout_lines, *stderr_lines], sva_spec)
                     results.append({
                         "testcase": t,
                         "seed": s,
-                        "pass": p.returncode == 0,
+                        # Some simulators/logging configurations report an SVA
+                        # failure without propagating a non-zero process code.
+                        # Requirement failures are test failures regardless of
+                        # shell return-code behavior.
+                        "pass": _test_passed(p.returncode, assertion_failures),
                         "rc": p.returncode,
                         "stdout_tail": stdout_tail,
                         "stderr_tail": stderr_tail,
                         "tool_execution": p.to_dict(),
+                        "assertion_failures": assertion_failures,
                     })
                     run_coverage = _safe_read_json(coverage_json_path)
                     if run_coverage:
@@ -546,6 +647,7 @@ def run_agent(state: dict) -> dict:
 
         toolchain = state.get("toolchain") if isinstance(state.get("toolchain"), dict) else {}
         code_coverage = _collect_code_coverage(state, tb_root, reports_dir, log_path, toolchain)
+        nonvacuity = _nonvacuity_results(tb_root, reports_dir, sva_spec)
         code_coverage_path = os.path.join(reports_dir, "code_coverage_summary.json")
         code_coverage_txt = json.dumps(code_coverage, indent=2)
         _write_file(code_coverage_path, code_coverage_txt)
@@ -566,6 +668,11 @@ def run_agent(state: dict) -> dict:
                 open(info_path, "r", encoding="utf-8", errors="ignore").read(),
             )
 
+        assertion_failures = [
+            {**failure, "testcase": result.get("testcase"), "seed": result.get("seed")}
+            for result in results
+            for failure in result.get("assertion_failures") or []
+        ]
         summary = {
             "type": "simulation_execution_summary",
             "total": len(results),
@@ -583,6 +690,15 @@ def run_agent(state: dict) -> dict:
                 "code_coverage": toolchain.get("code_coverage") or "verilator_coverage",
             },
             "results": results,
+            "assertion_failures": assertion_failures,
+            "assertion_failure_count": len(assertion_failures),
+            "behavioral_repair_required": bool(assertion_failures),
+            "behavioral_repair_history": state.get("behavioral_repair_history")
+            if isinstance(state.get("behavioral_repair_history"), list) else [],
+            "behavioral_rtl_repair": state.get("behavioral_rtl_repair")
+            if isinstance(state.get("behavioral_rtl_repair"), dict) else None,
+            "assertion_nonvacuity": nonvacuity,
+            "assertion_nonvacuity_complete": all(item.get("status") == "hit" for item in nonvacuity),
         }
 
         
@@ -654,12 +770,18 @@ def run_agent(state: dict) -> dict:
         state["simulation_execution_report_json"] = report_path
         state["code_coverage_summary_json"] = code_coverage_path
         state["verification_quality_gate"] = {
-            "passed": summary["pass"] > 0 and summary["fail"] == 0,
+            "passed": (
+                summary["pass"] > 0 and summary["fail"] == 0 and not assertion_failures
+                and summary["assertion_nonvacuity_complete"]
+            ),
             "total": summary["total"],
             "pass": summary["pass"],
             "fail": summary["fail"],
             "simulator": summary["toolchain"].get("simulator"),
+            "assertion_failure_count": len(assertion_failures),
+            "assertion_nonvacuity_complete": summary["assertion_nonvacuity_complete"],
         }
+        state["behavioral_assertion_failures"] = assertion_failures
         state.setdefault("vv", {})
         state["vv"]["simulation_execution"] = report
 

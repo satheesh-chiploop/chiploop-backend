@@ -690,6 +690,42 @@
       }
     },
     {
+      "name": "Digital Behavioral RTL Repair Agent",
+      "loop_type": "digital",
+      "domain": "digital",
+      "description": "Applies a bounded, requirement-linked RTL repair after executable assertions fail, then reruns compile, lint, and static structural closure before verification resumes.",
+      "entrypoint": "agents.digital.digital_behavioral_rtl_repair_agent:run_agent",
+      "execution_mode": "legacy_adapter",
+      "inputs": [
+        "verify_closure/rtl_repair_request.json",
+        "*.v",
+        "*.sv",
+        "*_spec.json"
+      ],
+      "outputs": [
+        "verify_closure/behavioral_rtl_repair.json"
+      ],
+      "artifact_paths": [
+        "verify_closure/behavioral_rtl_repair.json"
+      ],
+      "artifact_types": ["report", "rtl"],
+      "required_skills": ["artifact_publish"],
+      "required_tools": ["iverilog", "verilator", "supabase"],
+      "hooks": [
+        "pre_run_validate_inputs",
+        "post_run_collect_artifacts",
+        "post_run_update_state",
+        "on_failure_capture_traceback",
+        "on_failure_preserve_logs",
+        "artifact_publish_to_supabase"
+      ],
+      "metadata": {
+        "registry_source": "DIGITAL_AGENT_FUNCTIONS",
+        "variable": "digital_behavioral_rtl_repair_agent",
+        "studio_contract_version": "v1"
+      }
+    },
+    {
       "name": "Digital Assertions (SVA) Agent",
       "loop_type": "digital",
       "domain": "digital",

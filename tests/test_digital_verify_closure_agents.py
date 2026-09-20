@@ -11,6 +11,12 @@ from agents.digital import digital_closure_recommendation_agent as recommendatio
 from agents.digital import digital_closure_rerun_planner_agent as rerun_planner_agent
 from agents.digital import digital_coverage_gap_analysis_agent as gap_agent
 from agents.digital import digital_failure_triage_agent as triage_agent
+from agents.digital import digital_failure_debug_agent as debug_agent
+from agents.digital import digital_simulation_execution_agent as execution_agent
+from agents.digital import digital_sva_assertions_agent as sva_agent
+from agents.digital import digital_behavioral_rtl_repair_agent as behavioral_repair_agent
+from agents.digital import digital_closure_iteration_judge_agent as iteration_judge_agent
+from agents.digital import digital_verification_handoff_ingest_agent as verification_handoff_agent
 from agents.digital import digital_testcase_seed_update_agent as testcase_seed_agent
 from agents.digital import digital_verify_closure_ingest_agent as ingest_agent
 
@@ -19,9 +25,276 @@ def _stub_upload(monkeypatch):
     monkeypatch.setattr(ingest_agent, "save_text_artifact_and_record", lambda *args, **kwargs: None)
     monkeypatch.setattr(gap_agent, "save_text_artifact_and_record", lambda *args, **kwargs: None)
     monkeypatch.setattr(triage_agent, "save_text_artifact_and_record", lambda *args, **kwargs: None)
+    monkeypatch.setattr(debug_agent, "save_text_artifact_and_record", lambda *args, **kwargs: None)
     monkeypatch.setattr(recommendation_agent, "save_text_artifact_and_record", lambda *args, **kwargs: None)
     monkeypatch.setattr(testcase_seed_agent, "save_text_artifact_and_record", lambda *args, **kwargs: None)
     monkeypatch.setattr(rerun_planner_agent, "save_text_artifact_and_record", lambda *args, **kwargs: None)
+
+
+def test_behavioral_obligations_have_stable_requirement_and_checker_ids():
+    spec = {"hierarchy": {"top_module": {
+        "name": "controller",
+        "responsibilities": ["Expose configuration outputs."],
+        "behavior_rules": [
+            "When clear_fault is asserted, sticky_fault clears on the next cycle.",
+            "Clamp the response before asserting response_valid.",
+        ],
+    }}}
+    obligations = sva_agent._behavioral_obligations(spec)
+    assert [item["requirement_id"] for item in obligations] == ["REQ-002", "REQ-003"]
+    assert [item["checker_id"] for item in obligations] == ["a_req_002", "a_req_003"]
+    assert all(item["verification_method"] == "systemverilog_assertion" for item in obligations)
+
+
+def test_sva_targets_bind_behavioral_requirements_to_owning_child_module():
+    spec = {"hierarchy": {
+        "top_module": {"name": "system_top", "ports": [
+            {"name": "clk", "direction": "input"},
+        ]},
+        "modules": [{
+            "name": "watchdog", "ports": [
+                {"name": "clk", "direction": "input"},
+                {"name": "kick", "direction": "input"},
+                {"name": "expired", "direction": "output"},
+            ],
+            "behavior_rules": ["When kick is asserted, expired clears on the next cycle."],
+        }],
+    }}
+    sva_spec = sva_agent._build_sva_spec(spec, "system_top")
+    child = next(item for item in sva_spec["verification_targets"] if item["module"] == "watchdog")
+    assert {port["name"] for port in child["ports"]} == {"clk", "kick", "expired"}
+    assert child["behavioral_obligations"][0]["owner_module"] == "watchdog"
+    bind = sva_agent._gen_bind_sv("system_top", "system_top_assertions", sva_spec)
+    assert "bind watchdog watchdog_assertions" in bind
+    assert ".expired(expired)" in bind
+
+
+def test_sva_target_preserves_flat_top_module_ports():
+    spec = {"top_module": {
+        "name": "counter",
+        "ports": [
+            {"name": "clk", "direction": "input"},
+            {"name": "enable", "direction": "input"},
+            {"name": "done", "direction": "output"},
+        ],
+        "behavior_rules": ["When enable is asserted, done pulses on the next cycle."],
+    }}
+    sva_spec = sva_agent._build_sva_spec(spec, "counter")
+    assert len(sva_spec["behavioral_obligations"]) == 1
+    assert {port["name"] for port in sva_spec["verification_targets"][0]["ports"]} == {
+        "clk", "enable", "done",
+    }
+
+
+def test_simulation_assertion_failure_maps_to_requirement():
+    sva_spec = {"behavioral_obligations": [{
+        "requirement_id": "REQ-092", "checker_id": "a_req_092",
+        "owner_module": "controller", "requirement": "Fault clear has priority.",
+    }]}
+    failures = execution_agent._assertion_failures(
+        ["%Error: a_req_092: Assertion failed at time=42"], sva_spec
+    )
+    assert failures == [{
+        "requirement_id": "REQ-092", "checker_id": "a_req_092",
+        "owner_module": "controller", "requirement": "Fault clear has priority.",
+        "failure_cycle_or_time": 42,
+        "log_evidence": "%Error: a_req_092: Assertion failed at time=42",
+        "repair_class": "behavioral_rtl",
+    }]
+
+
+def test_repeated_assertion_log_is_collapsed_to_first_actionable_failure():
+    sva_spec = {"behavioral_obligations": [{
+        "requirement_id": "REQ-092", "checker_id": "a_req_092",
+        "owner_module": "controller", "requirement": "Fault clear has priority.",
+    }]}
+    failures = execution_agent._assertion_failures([
+        "a_req_092: Assertion failed at time=42",
+        "a_req_092: Assertion failed at time=43",
+    ], sva_spec)
+    assert len(failures) == 1
+    assert failures[0]["failure_cycle_or_time"] == 42
+
+
+def test_assertion_failure_is_not_hidden_by_zero_simulator_return_code():
+    failures = [{"requirement_id": "REQ-092", "checker_id": "a_req_092"}]
+    assert execution_agent._test_passed(0, failures) is False
+    assert execution_agent._test_passed(0, []) is True
+
+
+def test_nonvacuity_coverage_does_not_mistake_requirement_number_for_hit_count(tmp_path):
+    reports = tmp_path / "reports"
+    annotated = reports / "verilator_coverage_annotated"
+    annotated.mkdir(parents=True)
+    spec = {"behavioral_obligations": [{
+        "requirement_id": "REQ-092", "checker_id": "a_req_092", "cover_id": "c_req_092",
+    }]}
+    (annotated / "assertions.sv").write_text("c_req_092: cover property(trigger);\n", encoding="utf-8")
+    result = execution_agent._nonvacuity_results(str(tmp_path), str(reports), spec)
+    assert result[0]["status"] == "not_measured"
+    (annotated / "assertions.sv").write_text("% 3 c_req_092: cover property(trigger);\n", encoding="utf-8")
+    result = execution_agent._nonvacuity_results(str(tmp_path), str(reports), spec)
+    assert result[0]["status"] == "hit"
+
+
+def test_behavioral_repair_request_is_bounded_by_failure_fingerprint():
+    debug_items = [{"assertion_failures": [{
+        "requirement_id": "REQ-092", "checker_id": "a_req_092",
+        "owner_module": "controller", "log_evidence": "failed at time=42",
+    }]}]
+    first = debug_agent._rtl_repair_request(debug_items, {})
+    state = {"behavioral_repair_max_attempts": 2, "behavioral_repair_history": [
+        {"fingerprint": first["fingerprint"]}, {"fingerprint": first["fingerprint"]},
+    ]}
+    blocked = debug_agent._rtl_repair_request(debug_items, state)
+    assert blocked["status"] == "blocked_nonconvergent"
+    assert blocked["attempt"] == 3
+
+
+def test_structured_assertion_failure_triggers_repair_when_optional_debug_is_disabled(tmp_path, monkeypatch):
+    _stub_upload(monkeypatch)
+    state = {
+        "workflow_id": "closure", "workflow_dir": str(tmp_path / "closure"),
+        "enable_failure_debug": False,
+        "failure_triage": {"failures": [{
+            "testcase": "smoke_test", "seed": 1, "stdout_tail": [], "stderr_tail": [],
+            "assertion_failures": [{
+                "requirement_id": "REQ-092", "checker_id": "a_req_092",
+                "owner_module": "controller", "log_evidence": "a_req_092 failed",
+            }],
+        }]},
+    }
+    debug_agent.run_agent(state)
+    assert state["rtl_repair_request"]["required"] is True
+    assert state["rtl_repair_request"]["status"] == "ready_for_targeted_rtl_repair"
+    assert state["failure_debug"]["summary"] == "structured_assertion_failures_auto_debugged"
+
+
+def test_failure_fingerprint_ignores_cycle_specific_log_text():
+    base = {"requirement_id": "REQ-092", "checker_id": "a_req_092", "owner_module": "controller"}
+    first = debug_agent._rtl_repair_request(
+        [{"assertion_failures": [{**base, "log_evidence": "failed at time=42"}]}], {}
+    )
+    second = debug_agent._rtl_repair_request(
+        [{"assertion_failures": [{**base, "log_evidence": "failed at time=99"}]}], {}
+    )
+    assert first["fingerprint"] == second["fingerprint"]
+
+
+def test_failure_triage_prefers_latest_closure_iteration_summary(tmp_path, monkeypatch):
+    _stub_upload(monkeypatch)
+    workflow_dir = tmp_path / "closure"
+    reports = workflow_dir / "vv" / "tb" / "reports"
+    reports.mkdir(parents=True)
+    latest = reports / "simulation_execution_summary.json"
+    latest.write_text(json.dumps({"results": [{
+        "testcase": "new_failure", "seed": 7, "pass": False, "rc": 1,
+        "assertion_failures": [{"requirement_id": "REQ-200", "checker_id": "a_req_200"}],
+    }]}), encoding="utf-8")
+    state = {
+        "workflow_id": "closure", "workflow_dir": str(workflow_dir),
+        "source_verify_workflow_dir": str(tmp_path / "parent"),
+        "simulation_execution_summary_json": str(latest),
+        "source_simulation_execution_summary": {"results": [{
+            "testcase": "old_failure", "seed": 1, "pass": False, "rc": 1,
+        }]},
+    }
+    triage_agent.run_agent(state)
+    assert state["failure_triage"]["failures"][0]["testcase"] == "new_failure"
+    assert state["failure_triage"]["failures"][0]["assertion_failures"][0]["checker_id"] == "a_req_200"
+
+
+def test_later_closure_iteration_preserves_validated_repaired_rtl(tmp_path):
+    repaired = tmp_path / "controller_repaired.sv"
+    repaired.write_text("module controller_repaired; endmodule\n", encoding="utf-8")
+    state = {
+        "closure_iteration_index": 2,
+        "rtl_files": [str(repaired)],
+        "behavioral_rtl_repair": {
+            "status": "candidate_validated_pending_focused_verification",
+        },
+        # These would normally force a Supabase import if preservation failed.
+        "rtl_source_mode": "from_arch2rtl",
+        "source_arch2rtl_workflow_id": "parent",
+    }
+    verification_handoff_agent.run_agent(state)
+    assert state["rtl_files"] == [str(repaired)]
+    assert state["status"].startswith("Preserved validated behavioral RTL repair")
+
+
+def test_behavioral_rtl_repair_validates_candidate_before_verification_resume(tmp_path, monkeypatch):
+    rtl = tmp_path / "controller.v"
+    rtl.write_text("module controller(input clk); endmodule\n", encoding="utf-8")
+    monkeypatch.setattr(behavioral_repair_agent, "_complete_rtl_text", lambda *args, **kwargs:
+        "---BEGIN controller.v---\nmodule controller(input clk); endmodule\n---END controller.v---")
+    monkeypatch.setattr(behavioral_repair_agent, "_validate_and_materialize_rtl", lambda **kwargs: {
+        "ok": True, "artifact_list": [str(rtl)], "compile_passed": True,
+        "lint_passed": True, "static_spec2rtl_passed": True,
+    })
+    monkeypatch.setattr(behavioral_repair_agent, "save_text_artifact_and_record", lambda *args, **kwargs: None)
+    state = {
+        "workflow_id": "repair-child", "workflow_dir": str(tmp_path / "workflow"),
+        "rtl_files": [str(rtl)], "digital_spec": {"top_module": {"name": "controller"}},
+        "rtl_repair_request": {
+            "required": True, "status": "ready_for_targeted_rtl_repair", "attempt": 1,
+            "fingerprint": "abc", "failures": [{"requirement_id": "REQ-092"}],
+        },
+    }
+    behavioral_repair_agent.run_agent(state)
+    assert state["behavioral_rtl_repair"]["status"] == "candidate_validated_pending_focused_verification"
+    assert state["behavioral_rtl_repair"]["requirements"] == ["REQ-092"]
+
+
+def test_behavioral_repair_context_is_scoped_to_owning_module(tmp_path):
+    owner = tmp_path / "watchdog.sv"
+    unrelated = tmp_path / "packetizer.sv"
+    owner.write_text("module watchdog; endmodule\n", encoding="utf-8")
+    unrelated.write_text("module packetizer; endmodule\n", encoding="utf-8")
+    selected = behavioral_repair_agent._repair_context_files(
+        [str(owner), str(unrelated)],
+        {"failures": [{"owner_module": "watchdog"}]},
+    )
+    assert selected == [str(owner)]
+
+
+def test_closure_judge_continues_bounded_behavioral_repair_without_coverage_delta(tmp_path, monkeypatch):
+    monkeypatch.setattr(iteration_judge_agent, "save_text_artifact_and_record", lambda *args, **kwargs: None)
+    workflow_dir = tmp_path / "workflow"
+    reports = workflow_dir / "vv" / "tb" / "reports"
+    reports.mkdir(parents=True)
+    summary_path = reports / "simulation_summary_coverage.json"
+    summary_path.write_text(json.dumps({
+        "coverage": {"functional_coverage_pct": 50},
+        "simulation": {"total": 1, "pass": 0, "fail": 1},
+    }), encoding="utf-8")
+    state = {
+        "workflow_id": "closure-child",
+        "workflow_dir": str(workflow_dir),
+        "closure_iteration_index": 1,
+        "simulation_summary_coverage_json": str(summary_path),
+        "behavioral_assertion_failures": [{"checker_id": "a_req_092"}],
+        "behavioral_repair_history": [{"fingerprint": "abc", "attempt": 1}],
+        "behavioral_repair_max_attempts": 3,
+        "verification_quality_gate": {"passed": False},
+    }
+    iteration_judge_agent.run_agent(state)
+    judgement = state["closure_iteration_judgement"]
+    assert judgement["stop_reason"] == "behavioral_repair_retry"
+    assert judgement["continue_recommended"] is True
+
+
+def test_closure_registry_orders_repair_and_sva_before_testbench_generation():
+    registry_path = Path(__file__).resolve().parents[1] / "registry" / "workflows.yaml"
+    workflows = json.loads(registry_path.read_text(encoding="utf-8"))["workflows"]
+    closure = next(item for item in workflows if item.get("name") == "Digital_Verify_Closure_Loop")
+    agents = closure["agents"]
+    assert agents.index("Digital Verification Handoff Ingest Agent") < agents.index("Digital Behavioral RTL Repair Agent")
+    assert agents.index("Digital Behavioral RTL Repair Agent") < agents.index("Digital Assertions (SVA) Agent")
+    assert agents.index("Digital Assertions (SVA) Agent") < agents.index("Digital Testbench Generator Agent")
+    migration = (Path(__file__).resolve().parents[1] / "supabase" / "migrations" /
+                 "phase_20260920_behavioral_rtl_verification_repair.sql").read_text(encoding="utf-8")
+    digital_verify = migration.split("'Digital_Verify'", 1)[1].split("'Digital_Verify_Closure_Loop'", 1)[0]
+    assert digital_verify.index("Digital Assertions (SVA) Agent") < digital_verify.index("Digital Testbench Generator Agent")
 
 
 def test_verify_closure_agents_generate_plan_from_parent_verify_artifacts(tmp_path, monkeypatch):

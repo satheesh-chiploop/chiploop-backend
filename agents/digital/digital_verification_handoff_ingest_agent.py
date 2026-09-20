@@ -423,6 +423,26 @@ def _fpga_supabase_handoff(state: Dict[str, Any], source_workflow_id: str) -> Di
 
 
 def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
+    # In a closure loop, a validated behavioral repair is the new candidate
+    # under verification. Re-importing the parent Arch2RTL artifacts on the
+    # next iteration would silently discard that repair and prevent cumulative
+    # convergence. The initial iteration still performs the authoritative
+    # Supabase handoff as usual.
+    repair = state.get("behavioral_rtl_repair") if isinstance(state.get("behavioral_rtl_repair"), dict) else {}
+    repaired_files = [
+        path for path in (state.get("rtl_files") or [])
+        if isinstance(path, str) and Path(path).is_file()
+    ]
+    if (
+        int(state.get("closure_iteration_index") or 0) > 1
+        and repair.get("status") == "candidate_validated_pending_focused_verification"
+        and repaired_files
+    ):
+        state["rtl_files"] = repaired_files
+        state["rtl_inputs"] = repaired_files
+        state["status"] = "Preserved validated behavioral RTL repair for closure verification."
+        return state
+
     if str(state.get("verification_domain") or state.get("target") or "").strip().lower() == "fpga":
         fpga = state.get("fpga") if isinstance(state.get("fpga"), dict) else {}
         local_sources = fpga.get("rtl_files") or state.get("rtl_files") or state.get("rtl_inputs") or []

@@ -466,6 +466,7 @@ from agents.digital.digital_verify_closure_ingest_agent import run_agent as digi
 from agents.digital.digital_coverage_gap_analysis_agent import run_agent as digital_coverage_gap_analysis_agent
 from agents.digital.digital_failure_triage_agent import run_agent as digital_failure_triage_agent
 from agents.digital.digital_failure_debug_agent import run_agent as digital_failure_debug_agent
+from agents.digital.digital_behavioral_rtl_repair_agent import run_agent as digital_behavioral_rtl_repair_agent
 from agents.digital.digital_closure_recommendation_agent import run_agent as digital_closure_recommendation_agent
 from agents.digital.digital_verification_plan_update_agent import run_agent as digital_verification_plan_update_agent
 from agents.digital.digital_coverage_plan_update_agent import run_agent as digital_coverage_plan_update_agent
@@ -531,6 +532,7 @@ DIGITAL_AGENT_FUNCTIONS: Dict[str, Any] = {
     "Digital Coverage Gap Analysis Agent": digital_coverage_gap_analysis_agent,
     "Digital Failure Triage Agent": digital_failure_triage_agent,
     "Digital Failure Debug Agent": digital_failure_debug_agent,
+    "Digital Behavioral RTL Repair Agent": digital_behavioral_rtl_repair_agent,
     "Digital Closure Recommendation Agent": digital_closure_recommendation_agent,
     "Digital Verification Plan Update Agent": digital_verification_plan_update_agent,
     "Digital Coverage Plan Update Agent": digital_coverage_plan_update_agent,
@@ -857,6 +859,7 @@ SYSTEM_AGENT_FUNCTIONS: Dict[str,Any] = {
     "Digital Coverage Gap Analysis Agent": digital_coverage_gap_analysis_agent,
     "Digital Failure Triage Agent": digital_failure_triage_agent,
     "Digital Failure Debug Agent": digital_failure_debug_agent,
+    "Digital Behavioral RTL Repair Agent": digital_behavioral_rtl_repair_agent,
     "Digital Closure Recommendation Agent": digital_closure_recommendation_agent,
     "Digital Verification Plan Update Agent": digital_verification_plan_update_agent,
     "Digital Coverage Plan Update Agent": digital_coverage_plan_update_agent,
@@ -1112,9 +1115,9 @@ DIGITAL_SPEC2RTL_CHECK_DEFINITION = _linear_workflow_definition([
 
 DIGITAL_VERIFY_DEFINITION = _linear_workflow_definition([
     "Digital Verification Handoff Ingest Agent",
+    "Digital Assertions (SVA) Agent",
     "Digital Functional Coverage Agent",
     "Digital Testbench Generator Agent",
-    "Digital Assertions (SVA) Agent",
     "Digital Simulation Control Agent",
     "Digital Simulation Execution Agent",
     "Digital Simulation Summary Coverage Agent",
@@ -1139,9 +1142,10 @@ DIGITAL_VERIFY_CLOSURE_LOOP_DEFINITION = _linear_workflow_definition([
     "Digital Testcase Seed Update Agent",
     "Digital Closure Rerun Planner Agent",
     "Digital Verification Handoff Ingest Agent",
-    "Digital Testbench Generator Agent",
+    "Digital Behavioral RTL Repair Agent",
     "Digital Assertions (SVA) Agent",
     "Digital Functional Coverage Agent",
+    "Digital Testbench Generator Agent",
     "Digital Simulation Control Agent",
     "Digital Simulation Execution Agent",
     "Digital Simulation Summary Coverage Agent",
@@ -4717,7 +4721,15 @@ def execute_digital_app_background(
 
         # Run nodes (loop_type="digital" so it uses DIGITAL_AGENT_FUNCTIONS)
         if app_name in {"verify_closure_loop", "fpga_verify_closure_loop"}:
-            max_iterations = max(1, min(int(shared_state.get("max_iterations") or 1), 10))
+            # Behavioral closure needs enough iterations to verify a repair and,
+            # when necessary, make the next bounded attempt.  Keep an explicit
+            # workflow override authoritative while using the repair bound as
+            # the production default.
+            max_iterations = max(1, min(int(
+                shared_state.get("max_iterations")
+                or shared_state.get("behavioral_repair_max_attempts")
+                or 3
+            ), 10))
 
             def _node_label(node: Dict[str, Any]) -> str:
                 return ((node.get("data") or {}).get("backendLabel") or node.get("label") or "").strip()

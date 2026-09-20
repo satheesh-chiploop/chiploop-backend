@@ -14,6 +14,14 @@ def _read_tail(path: Path, limit: int = 120) -> List[str]:
         return []
 
 
+def _read_json(path: Path) -> Dict[str, Any]:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+        return value if isinstance(value, dict) else {}
+    except Exception:
+        return {}
+
+
 def _classify(result: Dict[str, Any], stdout: List[str], stderr: List[str]) -> Dict[str, Any]:
     text = "\n".join(stdout + stderr).lower()
     if "assert" in text or "sva" in text:
@@ -41,10 +49,19 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     out_dir = workflow_dir / "verify_closure"
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    sim = state.get("source_simulation_execution_summary") if isinstance(state.get("source_simulation_execution_summary"), dict) else {}
+    # Iteration one analyzes the linked parent Verify run. Later iterations
+    # must analyze the simulation that just completed in this closure workflow;
+    # otherwise a newly exposed checker failure repairs the stale parent defect.
+    current_summary_path = state.get("simulation_execution_summary_json")
+    current_sim = _read_json(Path(current_summary_path)) if isinstance(current_summary_path, str) else {}
+    source_sim = state.get("source_simulation_execution_summary") if isinstance(state.get("source_simulation_execution_summary"), dict) else {}
+    sim = current_sim if isinstance(current_sim.get("results"), list) else source_sim
     results = sim.get("results") if isinstance(sim.get("results"), list) else []
     failed = [r for r in results if isinstance(r, dict) and not r.get("pass")]
-    log_dir = source_dir / "vv" / "tb" / "reports" / "run_logs"
+    log_dir = (
+        workflow_dir / "vv" / "tb" / "reports" / "run_logs"
+        if sim is current_sim else source_dir / "vv" / "tb" / "reports" / "run_logs"
+    )
 
     triage = []
     for result in failed:
@@ -67,6 +84,9 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
             },
             "stdout_tail": stdout[-20:],
             "stderr_tail": stderr[-20:],
+            "assertion_failures": [
+                item for item in (result.get("assertion_failures") or []) if isinstance(item, dict)
+            ],
         })
 
     report = {

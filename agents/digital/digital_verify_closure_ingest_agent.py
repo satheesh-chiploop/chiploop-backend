@@ -387,6 +387,9 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     }
     for key, value in loaded.items():
         state[f"source_{key}"] = value
+    source_execution = loaded.get("simulation_execution_summary") or {}
+    if isinstance(source_execution.get("behavioral_repair_history"), list):
+        state["behavioral_repair_history"] = source_execution["behavioral_repair_history"]
     for key, value in text_artifacts.items():
         state[f"source_{key}"] = value
 

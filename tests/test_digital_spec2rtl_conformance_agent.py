@@ -872,3 +872,123 @@ def test_register_evidence_uses_generated_regmap_addresses_as_source_of_truth():
 
     assert result["status"] == "pass"
     assert result["expected_addresses"] == ["0x00", "0x04"]
+
+
+def test_generic_mmio_evidence_is_structural_and_application_independent():
+    rtl = """
+module regs(input clk, input valid, input write, input [7:0] addr,
+ input [31:0] wdata, output cfg_enable, output [7:0] cfg_mode,
+ output clear_fault, input status_fault);
+reg [31:0] ctrl_reg, mode_reg, rdata_reg;
+reg clear_fault_r;
+assign cfg_enable = ctrl_reg[0];
+assign cfg_mode = mode_reg[7:0];
+assign clear_fault = clear_fault_r;
+always @(posedge clk) begin
+  clear_fault_r <= 1'b0;
+  if (valid && write) case (addr)
+    8'h00: begin ctrl_reg[0] <= wdata[0]; if (wdata[4]) clear_fault_r <= 1'b1; end
+    8'h04: mode_reg[7:0] <= wdata[7:0];
+  endcase
+  if (valid && !write) case (addr)
+    8'h00: rdata_reg <= ctrl_reg;
+    8'h04: rdata_reg <= mode_reg;
+    8'h08: rdata_reg <= status_fault;
+  endcase
+end
+endmodule
+"""
+    cases = {
+        "Produce semantic configuration outputs for the controller core.": "driven_semantic_configuration_outputs",
+        "Register writes update only the defined fields and preserve reserved bits as zero or ignored.": "defined_field_writes_reserved_ignored",
+        "A write to the clear-fault register bit produces a clear pulse for the controller core.": "bounded_fault_clear_write_pulse",
+        "Read data must reflect current configuration and live status fields exactly as defined by the register contract.": "configuration_and_live_status_readback",
+        "The block must not infer wide payload FIFOs; it is limited to compact scalar CSR state.": "scalar_csr_state_without_payload_fifo",
+    }
+    for requirement, expected in cases.items():
+        assert expected in agent._generic_behavior_evidence(requirement, rtl)
+
+
+def test_fault_clear_requires_final_nonblocking_assignment_priority():
+    unsafe = """
+always @(posedge clk) begin
+  if (clear_faults) fault_sticky <= 1'b0;
+  if (timeout) fault_sticky <= 1'b1;
+end
+"""
+    safe = """
+always @(posedge clk) begin
+  if (timeout) fault_sticky <= 1'b1;
+  if (clear_faults) fault_sticky <= 1'b0;
+end
+"""
+    requirement = "Honor explicit fault-clear control from the MMIO block."
+    token = "fault_clear_has_final_assignment_priority"
+    assert token not in agent._generic_behavior_evidence(requirement, unsafe)
+    assert token in agent._generic_behavior_evidence(requirement, safe)
+    status, evidence = agent._match_score(requirement, unsafe, {"clear_faults", "fault_sticky"})
+    assert status == "missing"
+    assert evidence == ["fault_clear_priority_can_be_overridden"]
+
+
+def test_compact_transport_and_configured_clamp_evidence():
+    transport = """
+module top(output request_valid, output [7:0] request_data);
+core u_core(.request_valid(request_valid), .request_data(request_data));
+endmodule
+"""
+    clamp = "assign cmd = raw < cfg_lower ? cfg_lower : (raw > cfg_upper ? cfg_upper : raw);"
+    assert "compact_request_transport_outputs" in agent._generic_behavior_evidence(
+        "Emit compact request transport signals to an external estimator.", transport
+    )
+    assert "configured_bounds_clamp" in agent._generic_behavior_evidence(
+        "Clamp actuator command values to configured bounds.", clamp
+    )
+
+
+def test_payload_fifo_absence_evidence_rejects_real_array_storage():
+    rtl = "reg [31:0] ctrl_reg, status_reg; reg [63:0] payload_fifo [0:31];"
+    requirement = "The block must not infer wide payload FIFOs; it is limited to compact scalar CSR state."
+    assert "scalar_csr_state_without_payload_fifo" not in agent._generic_behavior_evidence(requirement, rtl)
+
+
+def test_reset_safety_follows_zero_aliases_and_and_gates():
+    rtl = """
+module top(input reset_n, output request_valid, output response_ready);
+reg pending_r;
+reg enable_r;
+always @(posedge clk or negedge reset_n) begin
+  if (!reset_n) begin pending_r <= 1'b0; enable_r <= 1'b0; end
+end
+assign request_issue = enable_r & !pending_r;
+assign request_valid = request_issue;
+assign response_ready = pending_r;
+endmodule
+"""
+    requirement = "On reset, request_valid is deasserted and response_ready is deasserted."
+    status, evidence = agent._match_score(
+        requirement, rtl, {"request_valid", "response_ready", "reset_n"},
+        {"output_ports": {"request_valid", "response_ready"}},
+    )
+    assert status == "matched"
+    assert "reset_low_request_valid" in evidence
+    assert "reset_low_response_ready" in evidence
+
+
+def test_behavioral_miss_routes_to_verification_without_weakening_structural_gate(tmp_path, monkeypatch):
+    spec = {"hierarchy": {"top_module": {
+        "name": "controller", "ports": [],
+        "behavior_rules": ["When clear_fault is asserted, sticky_fault clears on the next cycle."],
+    }}}
+    rtl = tmp_path / "controller.sv"
+    rtl.write_text("module controller; endmodule\n", encoding="utf-8")
+    monkeypatch.setattr(agent, "save_text_artifact_and_record", lambda *args, **kwargs: None)
+    report = agent.run_agent({
+        "workflow_id": "route-test", "spec_json": spec, "rtl_files": [str(rtl)],
+        "top_module": "controller", "_spec2rtl_embedded": True,
+    })["spec2rtl_conformance"]
+    item = report["requirements"][0]
+    assert item["status"] == "pending_verification"
+    assert item["static_precheck_status"] == "missing"
+    assert item["verification_method"] == "systemverilog_assertion"
+    assert item["blocks_rtl_generation"] is False

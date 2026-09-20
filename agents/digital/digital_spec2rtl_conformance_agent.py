@@ -168,6 +168,13 @@ def _structured_spec_modules(spec_obj: Optional[Dict[str, Any]]) -> List[Dict[st
             mods.append(hierarchy["top_module"])
         mods.extend(m for m in hierarchy.get("modules", []) if isinstance(m, dict))
         return mods
+    # Flat normalized specs may place the complete module contract under
+    # top_module without a hierarchy wrapper.  Treat it identically so those
+    # requirements are not silently omitted from static or behavioral checks.
+    if isinstance(spec_obj.get("top_module"), dict):
+        mods = [spec_obj["top_module"]]
+        mods.extend(m for m in spec_obj.get("modules", []) if isinstance(m, dict))
+        return mods
     return [spec_obj] if isinstance(spec_obj.get("ports"), list) else []
 
 
@@ -333,6 +340,18 @@ def _generic_behavior_evidence(requirement: str, rtl_text: str) -> List[str]:
         )
         if has_lower and has_upper and has_selected_value:
             evidence.append("programmable_min_max_clamp")
+    # Specifications often say only "configured bounds" even though the RTL
+    # necessarily names the two bounds min/max (or low/high).  Keep the proof
+    # structural: both comparisons and both selected bounds must be present.
+    if "clamp" in req and re.search(r"\b(?:configured|programmable)\s+bounds?\b", req):
+        has_lower = bool(re.search(r"\b\w+\s*<\s*\w*(?:min|low|lower)\w*", rtl, re.I))
+        has_upper = bool(re.search(r"\b\w+\s*>\s*\w*(?:max|high|upper)\w*", rtl, re.I))
+        selected_bounds = bool(re.search(
+            r"\?.*\b\w*(?:min|low|lower)\w*\s*:.*\?.*\b\w*(?:max|high|upper)\w*\s*:",
+            rtl, re.I | re.S,
+        ))
+        if has_lower and has_upper and selected_bounds:
+            evidence.append("configured_bounds_clamp")
     if "slew" in req:
         has_delta = bool(re.search(r"\b(?:diff|delta)\w*\s*=.*?-", rtl, re.I))
         has_limit = bool(re.search(r"\b(?:diff|delta)\w*\s*>\s*\w*(?:slew|limit|step)\w*", rtl, re.I))
@@ -385,16 +404,123 @@ def _generic_behavior_evidence(requirement: str, rtl_text: str) -> List[str]:
     if re.search(r"configuration semantics.*explicit outputs|explicit.*configuration.*outputs|configuration fields.*explicit semantic outputs", req):
         if re.search(r"\boutput\b[^;]*\bcfg_[A-Za-z0-9_$]+", rtl, re.I) and re.search(r"\bcfg_[A-Za-z0-9_$]+\s*<=", rtl, re.I):
             evidence.append("explicit_configuration_outputs")
+    if re.search(r"(?:produce|emit|drive).*semantic configuration outputs?|semantic configuration outputs?", req):
+        output_clauses = re.findall(
+            r"\boutput\b(?P<body>.*?)(?=\b(?:input|output|inout)\b|[;)]|$)", rtl, re.I | re.S
+        )
+        cfg_outputs = {
+            name for clause in output_clauses
+            for name in re.findall(r"\b(cfg_[A-Za-z_][A-Za-z0-9_$]*)\b", clause, re.I)
+        }
+        driven_cfg = {
+            name for name in cfg_outputs
+            if re.search(rf"\bassign\s+{re.escape(name)}\s*=|\b{re.escape(name)}\s*<=", rtl, re.I)
+        }
+        if len(driven_cfg) >= 2:
+            evidence.append("driven_semantic_configuration_outputs")
     if re.search(r"all writes?.*only.*targeted register fields", req):
         if re.search(r"\bif\s*\([^)]*\b\w*(?:valid|write|we)\w*[^)]*\)", rtl, re.I) and re.search(
             r"\bcase\s*\(\s*\w*(?:addr|address)\w*\s*\)", rtl, re.I
         ) and re.search(r"\bcfg_[A-Za-z0-9_$]+\s*<=\s*\w*(?:wdata|write_data)\w*\s*\[", rtl, re.I):
             evidence.append("address_scoped_register_writes")
-    if re.search(r"fault.clear.*bounded pulse", req):
-        if re.search(r"\b\w*fault_clear\w*\s*=\s*1'b0", rtl, re.I) and re.search(
-            r"\b\w*fault_clear\w*\s*(?:<=|=)\s*\w*(?:wdata|write_data)\w*\s*\[", rtl, re.I
-        ):
-            evidence.append("bounded_fault_clear_write_pulse")
+    if re.search(r"writes?.*(?:defined|targeted).*fields?.*(?:reserved|ignored|zero)|reserved bits?.*(?:ignored|zero)", req):
+        has_addressed_write = bool(re.search(
+            r"\bif\s*\([^)]*\b\w*(?:valid|write|we)\w*[^)]*\).*?"
+            r"\bcase\s*\(\s*\w*(?:addr|address)\w*\s*\)", rtl, re.I | re.S
+        ))
+        sliced_writes = re.findall(
+            r"\b([A-Za-z_][A-Za-z0-9_$]*)\s*\[[^\]]+\]\s*<=\s*\w*(?:wdata|write_data)\w*\s*\[[^\]]+\]",
+            rtl, re.I,
+        )
+        whole_word_overwrite = any(re.search(
+            rf"\b{re.escape(reg_name)}\s*<=\s*\w*(?:wdata|write_data)\w*\s*;", rtl, re.I
+        ) for reg_name in set(sliced_writes))
+        if has_addressed_write and sliced_writes and not whole_word_overwrite:
+            evidence.append("defined_field_writes_reserved_ignored")
+    if re.search(r"(?:clear[- ]?fault|fault[- ]?clear).*(?:write|pulse)|write.*(?:clear[- ]?fault|fault[- ]?clear)", req):
+        pulse_names = {
+            name for name in re.findall(r"\b[A-Za-z_][A-Za-z0-9_$]*\b", rtl)
+            if re.search(r"clear\w*fault|fault\w*clear", name, re.I)
+        }
+        for name in pulse_names:
+            deasserted = re.search(rf"\b{re.escape(name)}\s*<=\s*(?:1'b0|0)\b", rtl, re.I)
+            asserted = re.search(rf"\b{re.escape(name)}\s*<=\s*(?:1'b1|\w*(?:wdata|write_data)\w*\s*\[)", rtl, re.I)
+            if deasserted and asserted:
+                evidence.append("bounded_fault_clear_write_pulse")
+                break
+    if re.search(r"honou?r.*(?:fault[- ]?clear|clear[- ]?fault)|explicit.*(?:fault[- ]?clear|clear[- ]?fault)", req):
+        # Nonblocking assignments are last-assignment-wins.  A clear branch
+        # appearing before an independent fault-set branch is not a reliable
+        # clear: timeout/error logic can silently override it in the same tick.
+        clear_branches = list(re.finditer(
+            r"\bif\s*\([^)]*\b(?:\w*clear\w*fault\w*|\w*fault\w*clear\w*)\b[^)]*\)\s*"
+            r"(?:begin\b(?P<body>.*?)\bend|(?P<single>[^;]+;))",
+            rtl, re.I | re.S,
+        ))
+        fault_sets = list(re.finditer(r"\b\w*fault\w*\s*<=\s*1'b1\b", rtl, re.I))
+        for branch in clear_branches:
+            body = branch.group("body") or branch.group("single") or ""
+            clears_fault = re.search(r"\b\w*fault\w*\s*<=\s*1'b0\b", body, re.I)
+            later_set = any(item.start() > branch.end() for item in fault_sets)
+            if clears_fault and not later_set:
+                evidence.append("fault_clear_has_final_assignment_priority")
+                break
+    if re.search(r"read data.*(?:configuration|live status)|(?:configuration|live status).*read data", req):
+        address_cases = re.findall(
+            r"\bcase\s*\(\s*\w*(?:addr|address)\w*\s*\)(.*?)\bendcase\b",
+            rtl, re.I | re.S,
+        )
+        if address_cases:
+            sources = re.findall(
+                r"\b\w*(?:rdata|read_data)\w*\s*<=\s*([A-Za-z_][A-Za-z0-9_$]*)",
+                "\n".join(address_cases), re.I,
+            )
+            has_cfg = any(re.search(r"(?:cfg|ctrl|limit|input|seq)", source, re.I) for source in sources)
+            has_status = any(re.search(r"(?:status|fault|health|actuator)", source, re.I) for source in sources)
+            if has_cfg and has_status:
+                evidence.append("configuration_and_live_status_readback")
+    if re.search(r"(?:must not|no)\s+infer.*(?:wide|payload).*fifo|limited to.*scalar csr", req):
+        unpacked_arrays = re.search(
+            r"\b(?:reg|logic|bit)\b\s*(?:\[[^\]]+\]\s*)?[A-Za-z_]\w*\s*\[[^\]]+\]\s*;", rtl, re.I
+        )
+        fifo_instance = re.search(r"\b[A-Za-z_]\w*fifo\w*\s+(?:#\s*\([^;]*?\)\s*)?[A-Za-z_]\w*\s*\(", rtl, re.I | re.S)
+        scalar_declarations = re.findall(
+            r"\b(?:reg|logic)\b\s*(?:\[[^\]]+\]\s*)?([^;]+);", rtl, re.I
+        )
+        scalar_csrs = sum(
+            1 for declaration in scalar_declarations
+            for name in re.findall(r"\b[A-Za-z_][A-Za-z0-9_$]*\b", declaration)
+            if re.search(r"(?:reg|csr)", name, re.I)
+        )
+        if not unpacked_arrays and not fifo_instance and scalar_csrs >= 2:
+            evidence.append("scalar_csr_state_without_payload_fifo")
+    if re.search(r"compact.*(?:request|model).*transport|request transport.*(?:external|model|estimator)", req):
+        output_clauses = re.findall(
+            r"\boutput\b(?P<body>.*?)(?=\b(?:input|output|inout)\b|[;)]|$)", rtl, re.I | re.S
+        )
+        request_outputs = {
+            name for clause in output_clauses
+            for name in re.findall(r"\b((?:request|req)_[A-Za-z_][A-Za-z0-9_$]*)\b", clause, re.I)
+        }
+        driven = {name for name in request_outputs if re.search(rf"\bassign\s+{re.escape(name)}\s*=", rtl, re.I)}
+        child_connected = {
+            name for name in request_outputs
+            if re.search(rf"\.\s*{re.escape(name)}\s*\(\s*{re.escape(name)}\s*\)", rtl, re.I)
+        }
+        proven = driven | child_connected
+        if len(proven) >= 2 and any(re.search(r"valid", name, re.I) for name in proven):
+            evidence.append("compact_request_transport_outputs")
+    if re.search(r"short combinational.*(?:timing|fpga)|combinational depth.*short.*(?:timing|fpga)", req):
+        forbidden_expensive = re.search(r"(?<![/])/(?![/])|%|\*\s*\w", rtl)
+        has_simple_control = bool(re.search(r"\b(?:case|if)\s*\(", rtl, re.I))
+        has_counter_or_fsm = bool(re.search(r"\b(?:state|counter|_cnt|cnt_)\w*\b", rtl, re.I))
+        module_instances = re.findall(
+            r"^\s*([A-Za-z_][A-Za-z0-9_$]*)\s+(?:#\s*\([^;]*?\)\s*)?[A-Za-z_][A-Za-z0-9_$]*\s*\(",
+            rtl, re.I | re.M | re.S,
+        )
+        shallow_hierarchical_top = len(module_instances) >= 2 and not re.search(r"\balways(?:_comb)?\b", rtl, re.I)
+        if not forbidden_expensive and (has_simple_control or has_counter_or_fsm or shallow_hierarchical_top):
+            evidence.append("bounded_combinational_control_complexity")
     if re.search(r"\b(?:latch|sticky).*(?:status|fault)|(?:status|fault).*\b(?:latch|sticky)", req):
         if re.search(r"\b\w*(?:fault|status|sticky)\w*\s*<=\s*1'b1", rtl, re.I):
             evidence.append("latched_status_fault_state")
@@ -829,12 +955,67 @@ def _match_score(
         reset_low_outputs = [name for name in reset_low_outputs if name.lower() in declared_outputs]
     reset_signal_match = re.search(r"\b(reset_n|rst_n|reset|rst)\b", requirement, re.I)
     reset_signal = reset_signal_match.group(1) if reset_signal_match else None
+    declared_reset_signals = re.findall(
+        r"\binput\b[^;)]*?\b(reset_n|rst_n|reset|rst)\b", rtl_without_comments, re.I
+    )
+    if declared_reset_signals and (
+        not reset_signal
+        or reset_signal.lower() not in {item.lower() for item in declared_reset_signals}
+        or reset_signal.lower() in {"reset", "rst"}
+    ):
+        reset_signal = next(
+            (item for item in declared_reset_signals if item.lower().endswith("_n")),
+            declared_reset_signals[0],
+        )
     unproven_reset_low_outputs = []
     if reset_signal:
         active_low_reset = reset_signal.lower().endswith("_n") or bool(
             re.search(r"\bactive[- ]low\b", req_lower)
         )
         asserted_condition = rf"!\s*{re.escape(reset_signal)}" if active_low_reset else re.escape(reset_signal)
+        reset_blocks = re.findall(
+            rf"\bif\s*\(\s*{asserted_condition}\s*\)\s*begin\b(.*?)\bend",
+            rtl_without_comments,
+            re.I | re.S,
+        )
+        reset_zero_signals = {
+            name
+            for block in reset_blocks
+            for name in re.findall(
+                r"\b([A-Za-z_][A-Za-z0-9_$]*)\s*<=\s*(?:\d+'[bdh]0+|1'b0|0)\b",
+                block,
+                re.I,
+            )
+        }
+        continuous_drivers = {
+            name: expr
+            for name, expr in re.findall(
+                r"\bassign\s+([A-Za-z_][A-Za-z0-9_$]*)\s*=\s*([^;]+);",
+                rtl_without_comments,
+                re.I,
+            )
+        }
+        # Conservative reset-zero propagation through direct aliases/slices
+        # and AND gates. An AND output is guaranteed low when any non-inverted
+        # operand is known low; OR/ternary/arithmetic expressions are not
+        # assumed safe.
+        changed = True
+        while changed:
+            changed = False
+            for driven_name, expression in continuous_drivers.items():
+                if driven_name in reset_zero_signals:
+                    continue
+                direct = re.fullmatch(r"\s*([A-Za-z_]\w*)(?:\s*\[[^\]]+\])?\s*", expression)
+                positive_terms = [
+                    match.group(1)
+                    for match in re.finditer(r"(?<![!~A-Za-z0-9_$])([A-Za-z_]\w*)(?:\s*\[[^\]]+\])?", expression)
+                ]
+                guaranteed_zero = bool(direct and direct.group(1) in reset_zero_signals)
+                if not guaranteed_zero and re.search(r"(?:&&|&)", expression):
+                    guaranteed_zero = any(term in reset_zero_signals for term in positive_terms)
+                if guaranteed_zero:
+                    reset_zero_signals.add(driven_name)
+                    changed = True
         for output_name in reset_low_outputs:
             output_pattern = re.escape(output_name)
             sequential_reset_assignment = bool(re.search(
@@ -852,7 +1033,7 @@ def _match_score(
                 continuous_assignment
                 and re.search(rf"\b{re.escape(reset_signal)}\b", continuous_assignment.group("expr"), re.I)
             )
-            if sequential_reset_assignment or combinational_reset_gate:
+            if sequential_reset_assignment or combinational_reset_gate or output_name in reset_zero_signals:
                 evidence.append(f"reset_low_{output_name}")
             else:
                 unproven_reset_low_outputs.append(output_name)
@@ -1212,6 +1393,12 @@ def _match_score(
     if arithmetic_width:
         arithmetic_evidence = f"unsigned_{int(arithmetic_width.group(1))}bit_arithmetic"
         return ("matched", evidence[:8]) if arithmetic_evidence in evidence else ("missing", evidence[:8])
+    if re.search(r"honou?r.*(?:fault[- ]?clear|clear[- ]?fault)|explicit.*(?:fault[- ]?clear|clear[- ]?fault)", req_lower):
+        if "fault_clear_has_final_assignment_priority" not in evidence:
+            has_clear_path = re.search(r"\b(?:\w*clear\w*fault\w*|\w*fault\w*clear\w*)\b", rtl_without_comments, re.I)
+            has_fault_set = re.search(r"\b\w*fault\w*\s*<=\s*1'b1\b", rtl_without_comments, re.I)
+            counterevidence = ["fault_clear_priority_can_be_overridden"] if has_clear_path and has_fault_set else []
+            return "missing", counterevidence
     if semantic_hits.intersection(evidence):
         return "matched", evidence[:8]
     if addresses and not any(item.startswith("0x") for item in evidence):
@@ -1406,6 +1593,25 @@ def _structured_requirements(spec_obj: Optional[Dict[str, Any]], spec: str) -> L
     return [{"module": "", "section": "free_text", "text": text} for text in _extract_requirements(spec)]
 
 
+def _requirement_verification_method(requirement: str, section: str = "") -> str:
+    """Select the sign-off mechanism without treating prose matching as proof."""
+    text = f"{section} {requirement}".lower()
+    if section in {"must_drive", "must_receive"} or re.search(
+        r"\b(?:port|width|interface|transport signals?|module|instance|hierarchy|register|address|"
+        r"reset value|clock|memory|fifo|csr|mmio|connect|driver|combinational depth|"
+        r"(?:expose|produce|emit|drive)[^.]{0,40}outputs?)\b",
+        text,
+    ):
+        return "static_structural"
+    if re.search(
+        r"\b(?:when|whenever|after|before|until|cycle|pulse|sticky|timeout|priority|handshake|"
+        r"sequence|newer|older|latch|reload|reject|accept|clamp|fault|valid|ready)\b",
+        text,
+    ):
+        return "systemverilog_assertion"
+    return "dynamic_simulation"
+
+
 def _feature_contract_evidence(
     spec_obj: Optional[Dict[str, Any]], modules: List[Dict[str, Any]], top_module: str
 ) -> Dict[str, Any]:
@@ -1568,7 +1774,8 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
 
     requirements = _structured_requirements(spec_obj, spec)
     requirement_results = []
-    counts = {"checked": 0, "matched": 0, "partial": 0, "missing": 0, "inconclusive": 0}
+    counts = {"checked": 0, "matched": 0, "partial": 0, "missing": 0, "inconclusive": 0, "pending_verification": 0}
+    blocking_counts = {"checked": 0, "matched": 0, "partial": 0, "missing": 0, "inconclusive": 0}
     if setup_issues:
         for _ in requirements:
             _add_check(counts, "inconclusive")
@@ -1577,8 +1784,12 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
         for idx, obligation in enumerate(requirements, start=1):
             requirement = obligation["text"]
             owner = obligation.get("module") or ""
+            verification_method = _requirement_verification_method(
+                requirement, str(obligation.get("section") or "")
+            )
             if owner and owner not in module_rtl:
                 status, evidence = "missing", [f"owner_module_not_found:{owner}"]
+                verification_method = "static_structural"
             else:
                 # Top-level obligations cover orchestration through instantiated
                 # children, so their evidence cone is the complete design. Child
@@ -1586,13 +1797,24 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
                 scoped_rtl = rtl_text if not owner or owner == top_module else module_rtl[owner]
                 scoped_names = set(re.findall(r"\b[A-Za-z_][A-Za-z0-9_$]*\b", scoped_rtl))
                 status, evidence = _match_score(requirement, scoped_rtl, scoped_names, structural_context)
-            _add_check(counts, status)
+            raw_static_status = status
+            if verification_method != "static_structural" and status not in {"matched", "pass"}:
+                status = "pending_verification"
+                counts["checked"] += 1
+                counts["pending_verification"] += 1
+            else:
+                _add_check(counts, status)
+            if verification_method == "static_structural":
+                _add_check(blocking_counts, raw_static_status)
             requirement_results.append({
                 "id": f"REQ-{idx:03d}",
                 "module": owner or None,
                 "section": obligation.get("section"),
                 "requirement": requirement,
                 "status": status,
+                "static_precheck_status": raw_static_status,
+                "verification_method": verification_method,
+                "blocks_rtl_generation": verification_method == "static_structural",
                 "evidence_tokens": evidence,
             })
 
@@ -1603,12 +1825,15 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     _add_check(counts, register_check["status"])
     _add_check(counts, clock_reset_check["status"])
     _add_check(counts, feature_contract_check["status"])
+    for aggregate_status in (top_status, interface_status, register_check["status"], clock_reset_check["status"], feature_contract_check["status"]):
+        _add_check(blocking_counts, aggregate_status)
 
-    status = _overall_status(counts, setup_issues)
+    status = _overall_status(blocking_counts, setup_issues)
     report = {
         "agent": AGENT_NAME,
         "status": status,
         "summary": counts,
+        "blocking_summary": blocking_counts,
         "setup_issues": setup_issues,
         "top_module": {"expected": top_module or None, "modules_found": module_names, "status": top_status},
         "interface": {
@@ -1628,6 +1853,7 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
         "notes": [
             "This is a conformance analysis, not a formal proof.",
             "Missing or partial items should be reviewed and turned into executable assertions/tests where needed.",
+            "Behavioral obligations are nonblocking here only when routed to executable RTL verification checkers.",
             "Inconclusive is preserved when the checker lacks enough evidence; no fake pass is reported.",
         ],
     }

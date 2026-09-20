@@ -404,13 +404,83 @@ def _build_sva_spec(spec: Dict[str, Any], top: str, soc_mode: bool = False) -> D
             }
         )
 
+    obligations = _behavioral_obligations(spec)
+    # Assertions are bound to the module that owns each requirement.  A
+    # top-only wrapper cannot legally observe child-local state/ports and would
+    # turn hierarchical specs into permanent "missing checker" failures.
+    from .digital_spec2rtl_conformance_agent import _structured_spec_modules
+    module_specs = {
+        str(module.get("name") or module.get("module_name") or "").strip(): module
+        for module in _structured_spec_modules(spec)
+        if str(module.get("name") or module.get("module_name") or "").strip()
+    }
+    targets: List[Dict[str, Any]] = []
+    owner_names = list(dict.fromkeys(
+        str(item.get("owner_module") or top) for item in obligations
+    )) or [top]
+    for owner in owner_names:
+        module_spec = module_specs.get(owner) or (module_specs.get(top) if owner == top else {})
+        owner_ports = [
+            dict(port) for port in (module_spec.get("ports") or [])
+            if isinstance(port, dict) and port.get("name")
+        ]
+        if owner == top and not owner_ports:
+            owner_ports = [dict(port) for port in ports]
+        owner_clocks, owner_resets = _infer_clocks_resets(module_spec or spec, owner_ports)
+        targets.append({
+            "module": owner,
+            "assertion_module": f"{owner}_assertions",
+            "clock_names": owner_clocks,
+            "reset_signals": owner_resets,
+            "ports": [{
+                "name": str(port.get("name")),
+                "direction": _normalize_direction(port.get("direction")),
+                "width_expr": _port_width_expr(port),
+            } for port in owner_ports],
+            "behavioral_obligations": [
+                item for item in obligations if str(item.get("owner_module") or top) == owner
+            ],
+        })
     return {
         "top_module": top,
         "soc_mode": soc_mode,
         "clock_names": clocks,
         "reset_signals": resets,
         "ports": port_points,
+        "behavioral_obligations": obligations,
+        "verification_targets": targets,
     }
+
+
+def _behavioral_obligations(spec: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Create stable requirement/checker identities for behavioral verification."""
+    # Reuse the exact Spec2RTL enumeration so REQ identifiers remain stable
+    # from generation through assertion failure and RTL repair.
+    from .digital_spec2rtl_conformance_agent import (
+        _requirement_verification_method,
+        _structured_requirements,
+    )
+    candidates = _structured_requirements(spec, "")
+
+    obligations: List[Dict[str, Any]] = []
+    for index, candidate in enumerate(candidates, start=1):
+        owner = str(candidate.get("module") or "")
+        section = str(candidate.get("section") or "")
+        text = str(candidate.get("text") or "")
+        verification_method = _requirement_verification_method(text, section)
+        if verification_method == "static_structural":
+            continue
+        requirement_id = f"REQ-{index:03d}"
+        obligations.append({
+            "requirement_id": requirement_id,
+            "checker_id": f"a_{requirement_id.lower().replace('-', '_')}",
+            "owner_module": owner or None,
+            "section": section,
+            "requirement": text,
+            "verification_method": verification_method,
+            "status": "checker_generation_required",
+        })
+    return obligations
 
 
 def _default_sva_module(module_name: str, sva_spec: Dict[str, Any]) -> str:
@@ -515,6 +585,16 @@ endmodule
 """
 
 
+def _default_sva_modules(sva_spec: Dict[str, Any]) -> str:
+    targets = sva_spec.get("verification_targets") if isinstance(sva_spec.get("verification_targets"), list) else []
+    if not targets:
+        return _default_sva_module(f"{sva_spec.get('top_module')}_assertions", sva_spec)
+    return "\n".join(
+        _default_sva_module(str(target.get("assertion_module")), target)
+        for target in targets if isinstance(target, dict)
+    )
+
+
 def _maybe_llm_expand(spec: Dict[str, Any], sva: str, log_path: str, sva_spec: Dict[str, Any], state: Dict[str, Any] | None = None) -> str:
     try:
         prompt = (
@@ -524,7 +604,11 @@ def _maybe_llm_expand(spec: Dict[str, Any], sva: str, log_path: str, sva_spec: D
             "- Use ONLY signal names present verbatim in SVA_SPEC or SPEC_JSON.\n"
             "- Do NOT invent any signal names, buses, protocols, or interfaces.\n"
             "- Keep the module name and port list intact.\n"
-            "- Prefer simple reset/X-checking and generic safety properties.\n"
+            "- Generate one labeled assertion for every behavioral_obligation.\n"
+            "- Each label MUST exactly equal that obligation's checker_id.\n"
+            "- Add a companion cover property named by replacing a_ with c_ in checker_id; cover the assertion antecedent/trigger so vacuity is measurable.\n"
+            "- Preserve requirement IDs in adjacent comments.\n"
+            "- If an obligation cannot be expressed using available ports, do not invent signals; omit it so validation reports it missing.\n"
             "- Return SystemVerilog code only. No markdown.\n\n"
             f"SVA_SPEC:\n{json.dumps(sva_spec, indent=2)}\n\n"
             f"SPEC_JSON:\n{json.dumps(spec, indent=2)}\n\n"
@@ -539,6 +623,8 @@ def _maybe_llm_expand(spec: Dict[str, Any], sva: str, log_path: str, sva_spec: D
             temperature=0.1,
         ).strip()
         if out:
+            out = re.sub(r"^```(?:systemverilog|sv|verilog)?\s*", "", out, flags=re.I)
+            out = re.sub(r"\s*```\s*$", "", out)
             _log(log_path, "LLM expansion completed.")
             return out
     except Exception as e:
@@ -548,6 +634,27 @@ def _maybe_llm_expand(spec: Dict[str, Any], sva: str, log_path: str, sva_spec: D
 
 
 def _gen_bind_sv(top: str, module_name: str, sva_spec: Dict[str, Any]) -> str:
+    targets = sva_spec.get("verification_targets") if isinstance(sva_spec.get("verification_targets"), list) else []
+    if targets:
+        blocks: List[str] = ["/* Auto-generated module-scoped SVA bindings. */"]
+        for target in targets:
+            if not isinstance(target, dict):
+                continue
+            owner = str(target.get("module") or "").strip()
+            assertion_module = str(target.get("assertion_module") or "").strip()
+            if not owner or not assertion_module:
+                continue
+            conns = [
+                f"  .{port.get('name')}({port.get('name')})"
+                for port in target.get("ports") or []
+                if isinstance(port, dict) and port.get("name")
+            ]
+            blocks.append(
+                f"bind {owner} {assertion_module} u_{assertion_module} (\n"
+                + ",\n".join(conns)
+                + "\n);"
+            )
+        return "\n\n".join(blocks) + "\n"
     conns: List[str] = []
     for p in sva_spec.get("ports", []):
         nm = p.get("name")
@@ -615,15 +722,33 @@ def run_agent(state: dict) -> dict:
     module_name = f"{top}_assertions"
 
 
-    sva_sv = _default_sva_module(module_name, sva_spec)
+    sva_sv = _default_sva_modules(sva_spec)
 
-    enable_llm_expand = str(os.getenv("CHIPLOOP_ENABLE_LLM_SVA_EXPAND", "0")).strip().lower() in ("1", "true", "yes")
+    enable_llm_expand = str(os.getenv("CHIPLOOP_ENABLE_LLM_SVA_EXPAND", "1")).strip().lower() in ("1", "true", "yes")
     if enable_llm_expand:
         sva_sv = _maybe_llm_expand(spec, sva_sv, log_path, sva_spec, state=state)
     else:
         _log(log_path, "LLM SVA expansion disabled; using deterministic scaffold.")
 
     bind_sv = _gen_bind_sv(top, module_name, sva_spec)
+
+    checker_labels = set(re.findall(r"\b(a_req_\d+)\s*:\s*assert\s+property\b", sva_sv, re.I))
+    cover_labels = set(re.findall(r"\b(c_req_\d+)\s*:\s*cover\s+property\b", sva_sv, re.I))
+    for obligation in sva_spec.get("behavioral_obligations", []):
+        checker_id = str(obligation.get("checker_id") or "")
+        cover_id = checker_id.replace("a_", "c_", 1)
+        assertion_present = checker_id.lower() in {item.lower() for item in checker_labels}
+        cover_present = cover_id.lower() in {item.lower() for item in cover_labels}
+        obligation["cover_id"] = cover_id
+        obligation["assertion_generated"] = assertion_present
+        obligation["nonvacuity_cover_generated"] = cover_present
+        obligation["status"] = (
+            "generated_pending_execution" if assertion_present and cover_present else "missing_checker"
+        )
+    missing_checker_ids = [
+        item["requirement_id"] for item in sva_spec.get("behavioral_obligations", [])
+        if item.get("status") == "missing_checker"
+    ]
 
     bind_readme = f"""# SVA Usage
 
@@ -676,8 +801,16 @@ The bind file uses only spec-declared signals and is intended to be compiled wit
         "primary_reset_active_low": primary_reset_active_low,
         "generated_dir": "vv/tb",
         "sva_module_name": module_name,
+        "sva_module_names": [
+            target.get("assertion_module") for target in sva_spec.get("verification_targets", [])
+            if isinstance(target, dict) and target.get("assertion_module")
+        ],
         "sva_bind_file": f"{module_name}_bind.sv",
         "assertion_output_signals": [p["name"] for p in sva_spec["ports"] if p["direction"] == "output"][:12],
+        "behavioral_obligation_count": len(sva_spec.get("behavioral_obligations", [])),
+        "generated_behavioral_checker_count": len(sva_spec.get("behavioral_obligations", [])) - len(missing_checker_ids),
+        "missing_behavioral_checker_ids": missing_checker_ids,
+        "checker_generation_status": "pass" if not missing_checker_ids else "issues",
         "artifacts": artifacts,
     }
 

@@ -1,3 +1,4 @@
+import hashlib
 import json
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -209,13 +210,42 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     }
     positive_delta = any(isinstance(value, (int, float)) and value > 0 for value in deltas.values())
     failures_after = merged_m.get("simulation_fail")
+    assertion_failures = state.get("behavioral_assertion_failures")
+    if not isinstance(assertion_failures, list):
+        assertion_failures = []
+    quality_gate = state.get("verification_quality_gate") if isinstance(state.get("verification_quality_gate"), dict) else {}
     gap_analysis = state.get("coverage_gap_analysis") if isinstance(state.get("coverage_gap_analysis"), dict) else {}
     closed = (
         failures_after == 0
+        and not assertion_failures
+        and quality_gate.get("passed") is True
         and all(value is None or value >= 0 for value in deltas.values())
         and not gap_analysis.get("gap_count")
     )
-    stop_reason = "closure_achieved" if closed else ("coverage_improved" if positive_delta else "no_measurable_improvement")
+    history = state.get("behavioral_repair_history") if isinstance(state.get("behavioral_repair_history"), list) else []
+    max_repair_attempts = max(1, int(state.get("behavioral_repair_max_attempts") or 3))
+    active_checker_ids = {
+        str(item.get("checker_id") or "") for item in assertion_failures if isinstance(item, dict)
+    }
+    normalized_failures = sorted({
+        f"{item.get('requirement_id')}|{item.get('checker_id')}|{item.get('owner_module')}"
+        for item in assertion_failures if isinstance(item, dict)
+    })
+    active_fingerprint = (
+        hashlib.sha256("\n".join(normalized_failures).encode("utf-8")).hexdigest()
+        if normalized_failures else None
+    )
+    attempted_repairs = len([
+        item for item in history
+        if isinstance(item, dict) and item.get("fingerprint") == active_fingerprint
+    ])
+    repair_retry = bool(active_checker_ids) and attempted_repairs < max_repair_attempts
+    stop_reason = (
+        "closure_achieved" if closed
+        else "behavioral_repair_retry" if repair_retry
+        else "coverage_improved" if positive_delta
+        else "no_measurable_improvement"
+    )
     judgement = {
         "type": "closure_iteration_judgement",
         "iteration": iteration,
@@ -231,7 +261,11 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
             "total_bins": merged_functional.get("total_bins"),
             "functional_coverage_pct": merged_functional.get("functional_coverage_pct"),
         },
-        "continue_recommended": not closed and positive_delta,
+        "continue_recommended": repair_retry or (not closed and positive_delta),
+        "active_behavioral_checker_ids": sorted(active_checker_ids),
+        "behavioral_repair_attempts": attempted_repairs,
+        "behavioral_repair_max_attempts": max_repair_attempts,
+        "verification_quality_gate_passed": quality_gate.get("passed") is True,
         "stop_reason": stop_reason,
     }
     prior_chart = state.get("closure_chart") if isinstance(state.get("closure_chart"), dict) else {}
