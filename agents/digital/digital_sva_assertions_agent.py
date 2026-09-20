@@ -468,7 +468,7 @@ def _behavioral_obligations(spec: Dict[str, Any]) -> List[Dict[str, Any]]:
         section = str(candidate.get("section") or "")
         text = str(candidate.get("text") or "")
         verification_method = _requirement_verification_method(text, section)
-        if verification_method == "static_structural":
+        if verification_method in {"static_structural", "constraints_sta"}:
             continue
         requirement_id = f"REQ-{index:03d}"
         obligations.append({

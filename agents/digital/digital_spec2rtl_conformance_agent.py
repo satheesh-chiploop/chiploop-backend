@@ -1596,6 +1596,16 @@ def _structured_requirements(spec_obj: Optional[Dict[str, Any]], spec: str) -> L
 def _requirement_verification_method(requirement: str, section: str = "") -> str:
     """Select the sign-off mechanism without treating prose matching as proof."""
     text = f"{section} {requirement}".lower()
+    # Frequency and path-performance targets are implemented in SDC and proven
+    # by synthesis/STA. They cannot be established by changing synthesizable
+    # RTL syntax, so they must never deadlock the RTL structural closure loop.
+    if re.search(
+        r"\b(?:timing\s+(?:intent|target|constraint|closure)|frequency\s+(?:target|constraint)|"
+        r"target\s+(?:frequency|clock)|clock\s+period|fmax|setup\s+time|hold\s+time|"
+        r"worst\s+slack|critical\s+path|\d+(?:\.\d+)?\s*(?:mhz|ghz|khz|ns|ps))\b",
+        text,
+    ):
+        return "constraints_sta"
     if section in {"must_drive", "must_receive"} or re.search(
         r"\b(?:port|width|interface|transport signals?|module|instance|hierarchy|register|address|"
         r"reset value|clock|memory|fifo|csr|mmio|connect|driver|combinational depth|"

@@ -190,6 +190,15 @@ def test_assertion_failure_is_not_hidden_by_zero_simulator_return_code():
     assert execution_agent._test_passed(None, []) is False
 
 
+def test_sva_handoff_excludes_constraints_and_sta_obligations():
+    spec = {"hierarchy": {"top_module": {
+        "name": "pwm_controller",
+        "ports": [{"name": "clk", "direction": "input"}],
+        "behavior_rules": ["Meet a nominal 50 MHz timing target."],
+    }}}
+    assert sva_agent._behavioral_obligations(spec) == []
+
+
 def test_simulation_timeout_is_bounded_and_configurable():
     assert execution_agent._simulation_test_timeout_sec({}) == 180
     assert execution_agent._simulation_test_timeout_sec({"simulation_test_timeout_sec": 5}) == 30

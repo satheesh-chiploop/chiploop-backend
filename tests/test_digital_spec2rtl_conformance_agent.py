@@ -992,3 +992,28 @@ def test_behavioral_miss_routes_to_verification_without_weakening_structural_gat
     assert item["static_precheck_status"] == "missing"
     assert item["verification_method"] == "systemverilog_assertion"
     assert item["blocks_rtl_generation"] is False
+
+
+def test_frequency_target_routes_to_constraints_sta_without_blocking_rtl(tmp_path, monkeypatch):
+    requirement = "Timing intent is single-clock, single-register-path control with a nominal 50 MHz target."
+    assert agent._requirement_verification_method(requirement, "behavior_rules") == "constraints_sta"
+    spec = {"hierarchy": {"top_module": {
+        "name": "pwm_controller",
+        "ports": [{"name": "clk", "direction": "input"}],
+        "behavior_rules": [requirement],
+    }}}
+    rtl = tmp_path / "pwm_controller.sv"
+    rtl.write_text("module pwm_controller(input clk); endmodule\n", encoding="utf-8")
+    monkeypatch.setattr(agent, "save_text_artifact_and_record", lambda *args, **kwargs: None)
+
+    report = agent.run_agent({
+        "workflow_id": "timing-route-test",
+        "spec_json": spec,
+        "rtl_files": [str(rtl)],
+        "top_module": "pwm_controller",
+        "_spec2rtl_embedded": True,
+    })["spec2rtl_conformance"]
+    item = report["requirements"][0]
+    assert item["verification_method"] == "constraints_sta"
+    assert item["blocks_rtl_generation"] is False
+    assert item["status"] in {"matched", "pending_verification"}
