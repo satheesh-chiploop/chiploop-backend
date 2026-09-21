@@ -29,6 +29,28 @@ def test_semantic_only_failure_requires_aggregate_contracts_to_pass():
     assert not agent._semantic_only_failure(base)
 
 
+def test_semantic_only_failure_routes_field_only_register_gap_to_semantic_repair():
+    result = {
+        "compile_passed": True,
+        "lint_passed": True,
+        "static_spec2rtl_passed": False,
+        "spec2rtl_conformance": {
+            "top_module": {"status": "pass"},
+            "interface": {"status": "pass"},
+            "register_map": {
+                "status": "issues", "missing": ["ENABLE"],
+                "missing_registers": [], "missing_addresses": [],
+            },
+            "clock_reset": {"status": "pass"},
+            "feature_contracts": {"status": "pass"},
+            "requirements": [],
+        },
+    }
+    assert agent._semantic_only_failure(result)
+    result["spec2rtl_conformance"]["register_map"]["missing_addresses"] = ["0x00"]
+    assert not agent._semantic_only_failure(result)
+
+
 def test_missing_named_blocks_produces_complete_consolidated_failure(tmp_path):
     spec = {
         "name": "top",
@@ -161,6 +183,24 @@ def test_hierarchical_rtl_normalization_preserves_root_feature_contracts():
 
     assert mode == "hierarchical"
     assert normalized["feature_contracts"] == feature_contracts
+
+
+def test_rtl_repair_inventory_excludes_pending_verification_obligations():
+    report = {"requirements": [
+        {
+            "id": "REQ-001", "status": "missing", "verification_method": "static_structural",
+            "blocks_rtl_generation": True,
+        },
+        {
+            "id": "REQ-002", "status": "pending_verification",
+            "verification_method": "systemverilog_assertion", "blocks_rtl_generation": False,
+        },
+        {
+            "id": "REQ-003", "status": "missing",
+            "verification_method": "dynamic_simulation", "blocks_rtl_generation": False,
+        },
+    ]}
+    assert [item["id"] for item in agent._blocking_failed_requirements(report)] == ["REQ-001"]
 
 
 def test_generated_complexity_rejects_constant_output_shell():

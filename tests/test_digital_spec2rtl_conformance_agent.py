@@ -1068,3 +1068,61 @@ endmodule
 def test_conditional_output_safety_rule_routes_to_executable_verification():
     requirement = "Drive actuator command outputs only when request acceptance and safety checks succeed."
     assert agent._requirement_verification_method(requirement, "responsibilities") == "systemverilog_assertion"
+
+
+def test_negative_small_storage_and_control_plane_requirements_use_positive_structure():
+    buffer_rtl = "module cmd_buffer(input clk); reg [15:0] last_cmd; always @(posedge clk) last_cmd <= 0; endmodule"
+    csr_rtl = "module regs(input csr_valid, input [5:0] csr_addr, output reg [31:0] csr_rdata); endmodule"
+    cases = [
+        ("The buffer shall not implement a large FIFO or learned-history structure.", buffer_rtl,
+         "no_large_fifo_or_learned_history"),
+        ("The buffer shall not infer ASIC-style payload memory; it is a small FPGA-friendly storage block only.",
+         buffer_rtl, "no_asic_payload_memory_macro"),
+        ("The register block shall not replace the streaming transport; it supplements it.", csr_rtl,
+         "register_block_is_control_plane_only"),
+    ]
+    for requirement, rtl, token in cases:
+        status, evidence = agent._match_score(requirement, rtl, set())
+        assert status == "matched"
+        assert token in evidence
+
+
+def test_w1c_field_matches_decimal_decode_but_unrelated_rw_bit_does_not():
+    regmap = {"registers": [{
+        "name": "CONTROL", "offset": "0x00", "fields": [
+            {"name": "ENABLE", "lsb": 0, "msb": 0, "access": "RW"},
+            {"name": "CLEAR_STICKY_FAULTS", "lsb": 1, "msb": 1, "access": "W1C"},
+        ],
+    }]}
+    rtl = '''
+module regs(input [5:0] csr_addr, input [31:0] csr_wdata);
+reg safe_state, sticky_fault;
+always @(*) case (csr_addr)
+  6'd0: begin
+    if (csr_wdata[0]) safe_state <= 1'b0;
+    if (csr_wdata[1]) sticky_fault <= 1'b0;
+  end
+endcase
+endmodule
+'''
+    report = agent._register_evidence("", rtl, {}, None, regmap)
+    assert report["missing"] == ["ENABLE"]
+    assert report["matched"] == ["CLEAR_STICKY_FAULTS"]
+    assert report["missing_field_details"] == [{
+        "field": "ENABLE", "address": "0x00", "lsb": 0, "msb": 0, "access": "RW",
+    }]
+
+
+def test_w1c_field_does_not_pass_when_write_bit_clears_unrelated_state():
+    regmap = {"registers": [{
+        "name": "CONTROL", "offset": "0x00", "fields": [
+            {"name": "CLEAR_STICKY_FAULTS", "lsb": 1, "msb": 1, "access": "W1C"},
+        ],
+    }]}
+    rtl = '''
+always @(*) case (csr_addr)
+  6'd0: if (csr_wdata[1]) unrelated_counter <= 1'b0;
+endcase
+'''
+    report = agent._register_evidence("", rtl, {}, None, regmap)
+    assert report["missing"] == ["CLEAR_STICKY_FAULTS"]

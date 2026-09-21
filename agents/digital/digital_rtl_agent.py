@@ -3716,6 +3716,26 @@ consumer and required status reaches an observable output. Return complete chang
 """.strip()
 
 
+def _blocking_failed_requirements(report: dict) -> List[dict]:
+    """Return only failed obligations owned by RTL-generation closure."""
+    failed = []
+    for item in report.get("requirements") or []:
+        if not isinstance(item, dict):
+            continue
+        status = str(item.get("status") or "").lower()
+        if status in {"matched", "pass", "pending_verification"}:
+            continue
+        blocking = item.get("blocks_rtl_generation") is True
+        # Preserve compatibility with reports produced before the explicit
+        # ownership flag while never routing SVA/simulation work into RTL repair.
+        if "blocks_rtl_generation" not in item:
+            method = str(item.get("verification_method") or "")
+            blocking = method == "static_structural" or not method
+        if blocking:
+            failed.append(item)
+    return failed
+
+
 def _semantic_only_failure(result: dict) -> bool:
     if not (
         result.get("compile_passed") is True
@@ -3727,16 +3747,21 @@ def _semantic_only_failure(result: dict) -> bool:
     aggregate_statuses = [
         (report.get("top_module") or {}).get("status"),
         (report.get("interface") or {}).get("status"),
-        (report.get("register_map") or {}).get("status"),
         (report.get("clock_reset") or {}).get("status"),
         (report.get("feature_contracts") or {}).get("status"),
     ]
     aggregates_pass = all(str(status or "").lower() in {"pass", "not_applicable"} for status in aggregate_statuses)
-    failed_requirements = any(
-        str(item.get("status") or "").lower() not in {"matched", "pass"}
-        for item in report.get("requirements") or []
+    register_map = report.get("register_map") or {}
+    register_status = str(register_map.get("status") or "").lower()
+    register_field_only_failure = (
+        register_status == "issues"
+        and bool(register_map.get("missing") or [])
+        and not (register_map.get("missing_registers") or [])
+        and not (register_map.get("missing_addresses") or [])
     )
-    return aggregates_pass and failed_requirements
+    register_semantic_ok = register_status in {"pass", "not_applicable"} or register_field_only_failure
+    failed_requirements = bool(_blocking_failed_requirements(report))
+    return aggregates_pass and register_semantic_ok and (failed_requirements or register_field_only_failure)
 
 
 def _run_verilator_lint(rtl_dir: str, verilog_files: List[str], top_module: str, suffix: str = "", state: Optional[dict] = None) -> Tuple[bool, str, str, dict]:
@@ -4189,10 +4214,7 @@ def _validate_and_materialize_rtl(
             if setup:
                 detail += f", setup_issues={','.join(str(item) for item in setup)}"
             issues.append(f"❌ Static Spec2RTL compliance failed: {detail}.")
-            failed_requirements = [
-                item for item in conformance_report.get("requirements") or []
-                if str(item.get("status") or "").lower() not in {"matched", "pass"}
-            ]
+            failed_requirements = _blocking_failed_requirements(conformance_report)
             repair_lines = [f"Static Spec2RTL result: {detail}."]
             top_check = conformance_report.get("top_module") or {}
             if str(top_check.get("status") or "").lower() not in {"pass", "not_applicable"}:
@@ -4210,8 +4232,10 @@ def _validate_and_materialize_rtl(
             register_check = conformance_report.get("register_map") or {}
             if str(register_check.get("status") or "").lower() not in {"pass", "not_applicable"}:
                 repair_lines.append(
-                    "REGISTER MAP: missing_fields={fields}, missing_registers={registers}, missing_addresses={addresses}".format(
+                    "REGISTER MAP: missing_fields={fields}, missing_field_details={details}, "
+                    "missing_registers={registers}, missing_addresses={addresses}".format(
                         fields=register_check.get("missing") or [],
+                        details=register_check.get("missing_field_details") or [],
                         registers=register_check.get("missing_registers") or [],
                         addresses=register_check.get("missing_addresses") or [],
                     )

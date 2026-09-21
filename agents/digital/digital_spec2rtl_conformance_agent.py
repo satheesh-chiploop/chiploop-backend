@@ -422,6 +422,20 @@ def _generic_behavior_evidence(requirement: str, rtl_text: str) -> List[str]:
         has_reset_control = bool(re.search(r"\b(?:rst|reset)(?:_n)?\b", rtl, re.I))
         if has_memory_array and not has_reset_control:
             evidence.append("memory_contents_have_no_reset_path")
+    if re.search(r"\bnot implement\b.*\b(?:large fifo|learned[- ]history)|\b(?:large fifo|learned[- ]history)\b.*\bnot implement", req):
+        has_array_storage = bool(re.search(r"\b(?:reg|logic)\b\s*\[[^\]]+\]\s+\w+\s*\[[^\]]+\]", rtl, re.I))
+        has_fifo_structure = bool(re.search(r"\b(?:wr|write|rd|read)_?ptr\b|\bfifo\b", rtl, re.I))
+        if not has_array_storage and not has_fifo_structure:
+            evidence.append("no_large_fifo_or_learned_history")
+    if re.search(r"\bnot infer\b.*\b(?:asic|payload memory)|\bsmall fpga[- ]friendly storage", req):
+        has_hard_macro = bool(re.search(r"\b(?:sky130|sram\w*macro|asic\w*mem)\b", rtl, re.I))
+        if not has_hard_macro:
+            evidence.append("no_asic_payload_memory_macro")
+    if re.search(r"\bregister block\b.*\bnot replace\b.*\bstreaming transport", req):
+        has_csr = bool(re.search(r"\b(?:csr|mmio)_?(?:addr|valid|rdata|wdata)\b", rtl, re.I))
+        has_stream_transport = bool(re.search(r"\b(?:req|request|rsp|response)_?(?:valid|ready|data)\b", rtl, re.I))
+        if has_csr and not has_stream_transport:
+            evidence.append("register_block_is_control_plane_only")
     if re.search(r"configuration semantics.*explicit outputs|explicit.*configuration.*outputs|configuration fields.*explicit semantic outputs", req):
         if re.search(r"\boutput\b[^;]*\bcfg_[A-Za-z0-9_$]+", rtl, re.I) and re.search(r"\bcfg_[A-Za-z0-9_$]+\s*<=", rtl, re.I):
             evidence.append("explicit_configuration_outputs")
@@ -1351,6 +1365,9 @@ def _match_score(
         "complete_combinational_assignment_structure",
         "declared_memory_macro_port_interface",
         "memory_contents_have_no_reset_path",
+        "no_large_fifo_or_learned_history",
+        "no_asic_payload_memory_macro",
+        "register_block_is_control_plane_only",
     }
     if (
         re.search(r"\bsynchronous(?:ly)?\b", req_lower)
@@ -1463,6 +1480,7 @@ def _register_evidence(spec: str, rtl_text: str, state: Dict[str, Any], spec_obj
                         "lsb": field.get("lsb"),
                         "msb": field.get("msb"),
                         "access": str(field.get("access") or reg.get("access") or "").upper(),
+                        "register": reg_name,
                     }
 
     if isinstance(regmap, dict):
@@ -1501,15 +1519,37 @@ def _register_evidence(spec: str, rtl_text: str, state: Dict[str, Any], spec_obj
             msb = int(location.get("msb"))
         except (TypeError, ValueError):
             return False
+        address_literal = (
+            rf"(?:\b\d+\s*'\s*h\s*0*{address_int:x}\b|"
+            rf"\b\d+\s*'\s*d\s*0*{address_int}\b|\b0x0*{address_int:x}\b)"
+        )
+        next_item = r"(?:\b\d+\s*'\s*[hd]\s*[0-9a-f]+\b|\b0x[0-9a-f]+\b)\s*:"
         address_blocks = re.findall(
-            rf"\b\d+'h0*{address_int:x}\s*:\s*(?:begin\b)?(.*?)"
-            r"(?=\b\d+'h[0-9a-f]+\s*:|\bdefault\s*:|\bendcase\b)",
+            rf"{address_literal}\s*:\s*(?:begin\b)?(.*?)(?={next_item}|\bdefault\s*:|\bendcase\b)",
             rtl_text,
             re.I | re.S,
         )
         if not address_blocks:
             return False
         access = str(location.get("access") or "").upper()
+        if ("W1" in access or "clear" in low) and lsb == msb:
+            action = rf"\bif\s*\([^)]*\w*(?:wdata|write_data)\w*\s*\[\s*{lsb}\s*\][^)]*\)"
+            semantic_clear_tokens = {
+                token for token in re.split(r"[^a-z0-9]+", low)
+                if token not in {"clear", "w1c", "w1p", "bit", "field"}
+            }
+            for block in address_blocks:
+                if not re.search(action, block, re.I):
+                    continue
+                cleared_targets = re.findall(
+                    r"\b([A-Za-z_]\w*)\s*<=\s*(?:1'b0|'?0)\b", block, re.I
+                )
+                if any(
+                    any(token in target.lower() for token in semantic_clear_tokens)
+                    or bool(re.search(r"sticky|fault|error|status", target, re.I))
+                    for target in cleared_targets
+                ):
+                    return True
         if access != "RO":
             if lsb == 0 and msb >= 31:
                 bit_evidence = r"\b\w*(?:wdata|write_data)\w*\b"
@@ -1517,8 +1557,23 @@ def _register_evidence(spec: str, rtl_text: str, state: Dict[str, Any], spec_obj
                 bit_evidence = rf"\b\w*(?:wdata|write_data)\w*\s*\[\s*{lsb}\s*\]"
             else:
                 bit_evidence = rf"\b\w*(?:wdata|write_data)\w*\s*\[\s*{msb}\s*:\s*{lsb}\s*\]"
-            if any(re.search(bit_evidence, block, re.I) for block in address_blocks):
-                return True
+            field_tokens = [token for token in re.split(r"[^a-z0-9]+", low) if token not in {"cmd", "value", "field"}]
+            register_tokens = [
+                token for token in re.split(r"[^a-z0-9]+", str(location.get("register") or "").lower()) if token
+            ]
+            for block in address_blocks:
+                targets = re.findall(
+                    rf"\b([A-Za-z_]\w*)\s*<=\s*(?:{bit_evidence}|\w*(?:wdata|write_data)\w*)",
+                    block,
+                    re.I,
+                )
+                if any(
+                    (field_tokens and all(token in target.lower() for token in field_tokens))
+                    or (register_tokens and all(token in target.lower() for token in register_tokens))
+                    for target in targets
+                ):
+                    return True
+            # A bit slice alone is not proof: it may drive unrelated state.
         return False
 
     matched = [
@@ -1582,6 +1637,16 @@ def _register_evidence(spec: str, rtl_text: str, state: Dict[str, Any], spec_obj
         else:
             missing_registers.append(reg_name)
     missing_fields = [f for f in unique if f not in matched]
+    missing_field_details = [
+        {
+            "field": field,
+            **{
+                key: value for key, value in (field_locations.get(field.lower()) or {}).items()
+                if key in {"address", "lsb", "msb", "access"}
+            },
+        }
+        for field in missing_fields
+    ]
     missing_addresses = [a for a in sorted(dict.fromkeys(addresses)) if a not in matched_addresses]
     return {
         "expected": unique,
@@ -1591,6 +1656,7 @@ def _register_evidence(spec: str, rtl_text: str, state: Dict[str, Any], spec_obj
         "expected_addresses": sorted(dict.fromkeys(addresses)),
         "matched_addresses": matched_addresses,
         "missing": missing_fields,
+        "missing_field_details": missing_field_details,
         "missing_registers": missing_registers,
         "missing_addresses": missing_addresses,
         "status": "pass" if (unique or addresses or registers) and not missing_fields and not missing_addresses and not missing_registers else ("not_applicable" if not unique and not addresses and not registers else "issues"),
