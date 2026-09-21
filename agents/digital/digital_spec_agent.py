@@ -921,6 +921,98 @@ def _validate_feature_contract_strength(feature_ports: list, contracts: list) ->
         )
 
 
+def _validate_feature_contract_feasibility(spec_json: dict, feature_ports: list, contracts: list) -> None:
+    """Reject request scenarios that can only pass by ignoring a reset-disabled control plane."""
+    register_contract = spec_json.get("register_contract") if isinstance(spec_json.get("register_contract"), dict) else {}
+    registers = register_contract.get("registers") if isinstance(register_contract.get("registers"), list) else []
+    enable_location = None
+    for register in registers:
+        if not isinstance(register, dict):
+            continue
+        for field in register.get("fields") or []:
+            if not isinstance(field, dict):
+                continue
+            name = str(field.get("name") or "").lower()
+            description = str(field.get("description") or "").lower()
+            if (
+                (name == "enable" or name.endswith("_enable"))
+                and int(field.get("reset") or 0) == 0
+                and re.search(r"\b(?:global|request|command|acceptance|propagation)\b", description)
+            ):
+                try:
+                    raw_address = register.get("address", register.get("offset"))
+                    address = int(raw_address, 0) if isinstance(raw_address, str) else int(raw_address)
+                    enable_location = (address, int(field.get("lsb") or 0))
+                except (TypeError, ValueError):
+                    continue
+                break
+        if enable_location:
+            break
+    if not enable_location:
+        return
+
+    directions = {
+        str(port.get("name") or "").lower(): str(port.get("direction") or "").lower()
+        for port in feature_ports if isinstance(port, dict) and port.get("name")
+    }
+
+    def find_input(*roles: str) -> str:
+        return next((name for name, direction in directions.items()
+                     if direction in {"input", "inout"} and all(role in name for role in roles)), "")
+
+    bus_addr = find_input("csr", "addr") or find_input("mmio", "addr")
+    bus_wdata = find_input("csr", "wdata") or find_input("mmio", "wdata")
+    bus_write = find_input("csr", "write") or find_input("mmio", "write")
+    bus_valid = find_input("csr", "valid") or find_input("mmio", "valid")
+    request_valids = {
+        name for name, direction in directions.items()
+        if direction in {"input", "inout"}
+        and re.search(r"(?:^|_)(?:req|request|cmd|command)_?valid$", name)
+        and name not in {bus_valid}
+    }
+    if not all((bus_addr, bus_wdata, bus_write)) or not request_valids:
+        return
+
+    enable_address, enable_bit = enable_location
+    infeasible = []
+    for contract in contracts:
+        enabled = False
+        for step in contract.get("stimulus_steps") or []:
+            signals = step.get("signals") if isinstance(step, dict) else {}
+            if not isinstance(signals, dict):
+                continue
+            for name, value in signals.items():
+                if not isinstance(value, (bool, int, float)):
+                    continue
+                reset_match = re.search(r"(?:^|_)(?:rst|reset)(?:_n)?$", str(name), re.I)
+                active_low = str(name).lower().endswith("_n")
+                if reset_match and int(value) == (0 if active_low else 1):
+                    enabled = False
+            request_attempt = any(signals.get(name) in {1, True} for name in request_valids)
+            if request_attempt and not enabled:
+                infeasible.append(
+                    f"{contract.get('feature_id')}: drives request-valid while the global enable field is still "
+                    "at its reset-disabled value; add a prior CSR/MMIO enable write"
+                )
+                break
+            try:
+                is_enable_write = (
+                    int(signals.get(bus_addr)) == enable_address
+                    and int(signals.get(bus_write)) == 1
+                    and (not bus_valid or int(signals.get(bus_valid, 1)) == 1)
+                    and ((int(signals.get(bus_wdata)) >> enable_bit) & 1) == 1
+                )
+            except (TypeError, ValueError):
+                is_enable_write = False
+            if is_enable_write:
+                enabled = True
+    if infeasible:
+        raise ValueError(
+            "Feature contracts must establish reset-disabled control-plane prerequisites before exercising requests. "
+            + "; ".join(infeasible[:12])
+        )
+
+
 def _project_internal_feature_stimulus_to_register_bus(spec_json: dict, mode: str) -> dict:
     """Compile writable internal config stimuli into top-level register writes."""
     top = (((spec_json.get("hierarchy") or {}).get("top_module") or {})
@@ -1091,6 +1183,7 @@ def _validate_spec_contract(spec_json: dict, mode: str, require_feature_contract
             raise ValueError(f"Every feature_contracts entry must compile to an executable checker. {detail}")
         _validate_reset_feature_consistency(spec_json, feature_ports, contracts)
         _validate_feature_contract_strength(feature_ports, contracts)
+        _validate_feature_contract_feasibility(spec_json, feature_ports, contracts)
     if mode == "flat":
         _validate_module(spec_json, "spec", require_non_empty_ports=False)
         return

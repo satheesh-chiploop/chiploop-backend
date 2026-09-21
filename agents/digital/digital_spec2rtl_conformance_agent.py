@@ -395,12 +395,33 @@ def _generic_behavior_evidence(requirement: str, rtl_text: str) -> List[str]:
         controls = re.findall(r"\balways(?:_ff)?\s*@\s*\(([^)]*)\)", rtl, re.I)
         if controls and all(re.search(r"\bposedge\s+clk\b", control, re.I) for control in controls if re.search(r"\b(?:pos|neg)edge\b", control, re.I)):
             evidence.append("sequential_updates_on_posedge_clk")
-    if re.search(r"\b(?:readable|readback|write transactions?|address decode|uniquely address|reachable|decode every).*\b(?:register|field|address|writable)", req):
+    if re.search(
+        r"\b(?:readable|readback|write transactions?|address decode|uniquely address|reachable|decode every).*"
+        r"\b(?:register|field|address|writable)|\b(?:register|field)s?.*\b(?:reachable|decode map)",
+        req,
+    ):
         has_decode = bool(re.search(r"\bcase\s*\(\s*\w*(?:addr|address)\w*\s*\)", rtl, re.I))
         has_read = bool(re.search(r"\b\w*(?:rdata|read_data)\w*\s*<=", rtl, re.I))
         has_write = bool(re.search(r"\b\w*(?:wdata|write_data)\w*\s*\[", rtl, re.I))
         if has_decode and (has_read or has_write):
             evidence.append("register_decode_and_access_paths")
+    if re.search(r"\b(?:expose|preserve).*\bmemory macro.*\b(?:port )?interface|\bmemory macro.*\b(?:port )?interface", req):
+        memory_roles = ("clk", "csb", "we", "addr", "din", "dout")
+        declared_ports = {
+            name.lower()
+            for name in re.findall(
+                r"\b(?:input|output|inout)\b(?:\s+(?:reg|wire|logic))?(?:\s*\[[^\]]+\])?\s+([A-Za-z_]\w*)",
+                rtl,
+                re.I,
+            )
+        }
+        if all(any(role in name for name in declared_ports) for role in memory_roles):
+            evidence.append("declared_memory_macro_port_interface")
+    if re.search(r"\bmemory macro contents?\b.*\bnot reset|\bnot reset\b.*\bmemory macro contents?", req):
+        has_memory_array = bool(re.search(r"\b(?:reg|logic)\b\s*\[[^\]]+\]\s+\w+\s*\[[^\]]+\]", rtl, re.I))
+        has_reset_control = bool(re.search(r"\b(?:rst|reset)(?:_n)?\b", rtl, re.I))
+        if has_memory_array and not has_reset_control:
+            evidence.append("memory_contents_have_no_reset_path")
     if re.search(r"configuration semantics.*explicit outputs|explicit.*configuration.*outputs|configuration fields.*explicit semantic outputs", req):
         if re.search(r"\boutput\b[^;]*\bcfg_[A-Za-z0-9_$]+", rtl, re.I) and re.search(r"\bcfg_[A-Za-z0-9_$]+\s*<=", rtl, re.I):
             evidence.append("explicit_configuration_outputs")
@@ -1328,6 +1349,8 @@ def _match_score(
         "synthesizable_rtl_subset",
         "no_combinational_latch_sites",
         "complete_combinational_assignment_structure",
+        "declared_memory_macro_port_interface",
+        "memory_contents_have_no_reset_path",
     }
     if (
         re.search(r"\bsynchronous(?:ly)?\b", req_lower)
@@ -1519,7 +1542,14 @@ def _register_evidence(spec: str, rtl_text: str, state: Dict[str, Any], spec_obj
     matched_addresses = []
     for value in sorted(dict.fromkeys(addresses)):
         addr_int = int(value, 16)
-        if re.search(rf"\b\d+'h0*{addr_int:x}\b", rtl_text, re.I) or re.search(rf"\b{re.escape(value)}\b", rtl_text, re.I):
+        literal = (
+            rf"(?:\b\d+\s*'\s*h\s*0*{addr_int:x}\b|"
+            rf"\b\d+\s*'\s*d\s*0*{addr_int}\b|"
+            rf"\b0x0*{addr_int:x}\b)"
+        )
+        case_item = rf"{literal}\s*:"
+        declared_constant = rf"\blocalparam\b[^;=]*\b[A-Za-z_]\w*\s*=\s*{literal}\s*;"
+        if re.search(case_item, rtl_text, re.I) or re.search(declared_constant, rtl_text, re.I):
             matched_addresses.append(value)
     # The normalized spec and generated regmap legitimately describe the same
     # register. One source may omit its address while the other supplies it;
@@ -1606,6 +1636,10 @@ def _requirement_verification_method(requirement: str, section: str = "") -> str
         text,
     ):
         return "constraints_sta"
+    # A conditional output rule is behavioral even though it names an output
+    # port. Its truth requires temporal stimulus/checking, not interface shape.
+    if re.search(r"\b(?:drive|assert|deassert|produce|emit)\b.*\boutputs?\b.*\b(?:only\s+when|when|if|unless)\b", text):
+        return "systemverilog_assertion"
     if section in {"must_drive", "must_receive"} or re.search(
         r"\b(?:port|width|interface|transport signals?|module|instance|hierarchy|register|address|"
         r"reset value|clock|memory|fifo|csr|mmio|connect|driver|combinational depth|"

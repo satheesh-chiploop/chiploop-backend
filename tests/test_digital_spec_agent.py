@@ -2222,6 +2222,41 @@ def test_reset_consistency_rejects_expected_value_that_contradicts_declared_comp
         spec_agent._validate_reset_feature_consistency(spec, ports, contracts)
 
 
+def test_feature_contract_requires_enable_write_before_request_when_reset_disabled():
+    spec = {"register_contract": {"registers": [{
+        "name": "CTRL", "address": 0,
+        "fields": [{
+            "name": "enable", "lsb": 0, "reset": 0,
+            "description": "Global enable for request acceptance and command propagation.",
+        }],
+    }]}}
+    ports = [
+        {"name": "csr_valid", "direction": "input"},
+        {"name": "csr_write", "direction": "input"},
+        {"name": "csr_addr", "direction": "input"},
+        {"name": "csr_wdata", "direction": "input"},
+        {"name": "req_valid", "direction": "input"},
+        {"name": "req_ready", "direction": "output"},
+    ]
+    bad = [{
+        "feature_id": "accept_request",
+        "stimulus_steps": [{"signals": {"req_valid": 1}, "cycles": 1}],
+        "expected": {"req_ready": 1},
+    }]
+    with pytest.raises(ValueError, match="prior CSR/MMIO enable write"):
+        spec_agent._validate_feature_contract_feasibility(spec, ports, bad)
+
+    good = [{
+        "feature_id": "accept_request",
+        "stimulus_steps": [
+            {"signals": {"csr_valid": 1, "csr_write": 1, "csr_addr": 0, "csr_wdata": 1}, "cycles": 1},
+            {"signals": {"req_valid": 1}, "cycles": 1},
+        ],
+        "expected": {"req_ready": 1},
+    }]
+    spec_agent._validate_feature_contract_feasibility(spec, ports, good)
+
+
 def test_feature_contract_strength_rejects_weak_signal_even_with_strong_signal():
     ports = [{"name": "valid", "width": 1}, {"name": "data", "width": 8}]
     contracts = [{

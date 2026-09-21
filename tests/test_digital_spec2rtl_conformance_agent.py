@@ -1017,3 +1017,54 @@ def test_frequency_target_routes_to_constraints_sta_without_blocking_rtl(tmp_pat
     assert item["verification_method"] == "constraints_sta"
     assert item["blocks_rtl_generation"] is False
     assert item["status"] in {"matched", "pending_verification"}
+
+
+def test_register_map_accepts_equivalent_sized_decimal_case_addresses():
+    regmap = {"registers": [
+        {"name": "CTRL", "offset": "0x00", "fields": [{"name": "ENABLE", "lsb": 0, "msb": 0, "access": "RW"}]},
+        {"name": "WATCHDOG", "offset": "0x02", "fields": [{"name": "WATCHDOG_LIMIT", "lsb": 0, "msb": 15, "access": "RW"}]},
+    ]}
+    rtl = '''
+module csr(input [5:0] csr_addr, input [31:0] csr_wdata, output reg [31:0] csr_rdata);
+reg cfg_enable; reg [15:0] cfg_watchdog_limit;
+always @(*) case (csr_addr)
+  6'd0: csr_rdata = {31'd0, cfg_enable};
+  6'd2: csr_rdata = {16'd0, cfg_watchdog_limit};
+endcase
+always @(*) case (csr_addr)
+  6'd0: cfg_enable = csr_wdata[0];
+  6'd2: cfg_watchdog_limit = csr_wdata[15:0];
+endcase
+endmodule
+'''
+    report = agent._register_evidence("", rtl, {}, None, regmap)
+    assert report["status"] == "pass"
+    assert set(report["matched_addresses"]) == {"0x00", "0x02"}
+
+
+def test_memory_macro_interface_and_no_reset_are_positive_structural_evidence():
+    rtl = '''
+module ram(input clk, input mem_csb, input mem_we, input [5:0] mem_addr,
+ input [127:0] mem_din, output reg [127:0] mem_dout);
+reg [127:0] mem [0:63];
+always @(posedge clk) if (!mem_csb) begin
+  if (mem_we) mem[mem_addr] <= mem_din;
+  mem_dout <= mem[mem_addr];
+end
+endmodule
+'''
+    interface_status, interface_evidence = agent._match_score(
+        "Preserve the declared memory macro port interface.", rtl, set()
+    )
+    reset_status, reset_evidence = agent._match_score(
+        "Memory macro contents are not reset by the controller reset.", rtl, set()
+    )
+    assert interface_status == "matched"
+    assert "declared_memory_macro_port_interface" in interface_evidence
+    assert reset_status == "matched"
+    assert "memory_contents_have_no_reset_path" in reset_evidence
+
+
+def test_conditional_output_safety_rule_routes_to_executable_verification():
+    requirement = "Drive actuator command outputs only when request acceptance and safety checks succeed."
+    assert agent._requirement_verification_method(requirement, "responsibilities") == "systemverilog_assertion"
