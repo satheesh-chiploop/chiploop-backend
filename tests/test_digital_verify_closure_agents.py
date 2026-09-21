@@ -199,6 +199,31 @@ def test_sva_handoff_excludes_constraints_and_sta_obligations():
     assert sva_agent._behavioral_obligations(spec) == []
 
 
+def test_sva_quality_rejects_checker_that_drops_explicit_comparison_relation():
+    sva_spec = {"behavioral_obligations": [{
+        "requirement_id": "REQ-005",
+        "checker_id": "a_req_005",
+        "requirement": (
+            "On reset counter_value becomes zero and pwm_out evaluates according to the "
+            "comparison 0 < duty_cycle."
+        ),
+    }]}
+    bad = "property p_req; @(posedge clk) (!reset_n) |=> (pwm_out == 1'b0); endproperty\n" \
+          "a_req_005: assert property(p_req);"
+    issues = sva_agent._checker_quality_issues(bad, sva_spec)
+    assert any("does not preserve explicit relation" in item["issue"] for item in issues)
+
+
+def test_sva_assertion_actions_are_terminal_for_error_and_bare_assertions():
+    source = '''
+a_req_001: assert property(p_one);
+a_req_002: assert property(p_two) else $error("bad");
+'''
+    normalized = sva_agent._make_assertion_failures_terminal(source)
+    assert normalized.count("$fatal(1,") == 2
+    assert "$error" not in normalized
+
+
 def test_simulation_timeout_is_bounded_and_configurable():
     assert execution_agent._simulation_test_timeout_sec({}) == 180
     assert execution_agent._simulation_test_timeout_sec({"simulation_test_timeout_sec": 5}) == 30

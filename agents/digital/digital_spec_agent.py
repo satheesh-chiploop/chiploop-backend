@@ -808,6 +808,54 @@ def _validate_reset_feature_consistency(spec_json: dict, feature_ports: list, co
                     f"{contract.get('feature_id')}: reset_behavior says {signal_name}={declared}, "
                     f"but feature expected is {int(value)}"
                 )
+        # Evaluate explicit reset-time Boolean comparisons as well. This
+        # catches contradictions such as expecting pwm=0 while the same spec
+        # defines pwm as (reset counter 0) < a nonzero duty-cycle stimulus.
+        scenario_values = dict(declared_values)
+        for step in steps:
+            signals = step.get("signals") if isinstance(step, dict) else {}
+            if isinstance(signals, dict):
+                scenario_values.update(signals)
+
+        def operand_value(token: str):
+            canonical = port_names.get(str(token).lower(), str(token))
+            if canonical in scenario_values and isinstance(scenario_values[canonical], (bool, int, float)):
+                return int(scenario_values[canonical])
+            try:
+                return int(str(token), 0)
+            except (TypeError, ValueError):
+                return None
+
+        for output_name, expected_rule in expected.items():
+            relation = re.search(
+                rf"\b{re.escape(str(output_name))}\b.{{0,180}}?\bcomparison\s+"
+                r"([A-Za-z_][A-Za-z0-9_]*|\d+)\s*(<=|>=|==|!=|<|>)\s*"
+                r"([A-Za-z_][A-Za-z0-9_]*|\d+)",
+                reset_behavior,
+                re.I | re.S,
+            )
+            if not relation:
+                continue
+            lhs = operand_value(relation.group(1))
+            rhs = operand_value(relation.group(3))
+            if lhs is None or rhs is None:
+                continue
+            comparator = relation.group(2)
+            relation_value = int({
+                "<": lhs < rhs,
+                "<=": lhs <= rhs,
+                ">": lhs > rhs,
+                ">=": lhs >= rhs,
+                "==": lhs == rhs,
+                "!=": lhs != rhs,
+            }[comparator])
+            expected_value = expected_rule.get("eq") if isinstance(expected_rule, dict) else expected_rule
+            if isinstance(expected_value, (bool, int, float)) and int(expected_value) != relation_value:
+                conflicts.append(
+                    f"{contract.get('feature_id')}: reset_behavior defines {output_name} from "
+                    f"{relation.group(1)} {comparator} {relation.group(3)}={relation_value} for the declared "
+                    f"stimulus, but feature expected is {int(expected_value)}"
+                )
     if conflicts:
         raise ValueError("Reset behavior contradicts executable feature contracts. " + "; ".join(conflicts[:8]))
 

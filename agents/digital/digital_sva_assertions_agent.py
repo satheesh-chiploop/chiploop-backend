@@ -703,7 +703,47 @@ def _checker_quality_issues(sva: str, sva_spec: Dict[str, Any]) -> List[Dict[str
                 "checker_id": str(obligation.get("checker_id") or ""),
                 "issue": "sequential requirement uses same-sample |->; use |=> or explicit ##1",
             })
+        relation = re.search(
+            r"\b([A-Za-z_][A-Za-z0-9_]*)\b\s+"
+            r"(?:evaluates?|is|equals?|shall\s+be)\b.{0,100}?\bcomparison\s+"
+            r"([A-Za-z_][A-Za-z0-9_]*|\d+)\s*(<=|>=|==|!=|<|>)\s*"
+            r"([A-Za-z_][A-Za-z0-9_]*|\d+)",
+            requirement,
+            re.I | re.S,
+        )
+        if relation:
+            output_name, lhs, comparator, rhs = relation.groups()
+            if not (
+                re.search(rf"\b{re.escape(output_name)}\b", body, re.I)
+                and re.search(rf"\b{re.escape(lhs)}\b\s*{re.escape(comparator)}\s*\b{re.escape(rhs)}\b", body, re.I)
+            ):
+                issues.append({
+                    "requirement_id": str(obligation.get("requirement_id") or ""),
+                    "checker_id": str(obligation.get("checker_id") or ""),
+                    "issue": (
+                        f"checker does not preserve explicit relation {output_name} from "
+                        f"{lhs} {comparator} {rhs}"
+                    ),
+                })
     return issues
+
+
+def _make_assertion_failures_terminal(sva: str) -> str:
+    """Ensure simulator assertion failures exit instead of entering an interactive stop."""
+    normalized = re.sub(r"\belse\s+\$error\s*\(", "else $fatal(1, ", sva, flags=re.I)
+    bare = re.compile(
+        r"(?P<label>\b[a-zA-Z_]\w*\s*:\s*assert\s+property\s*\(\s*[a-zA-Z_]\w*\s*\)\s*;)"
+        r"(?!\s*else)",
+        re.I,
+    )
+
+    def add_fatal(match: re.Match) -> str:
+        label_match = re.match(r"\s*([a-zA-Z_]\w*)", match.group("label"))
+        label = label_match.group(1) if label_match else "assertion"
+        assertion = match.group("label").rstrip()
+        return assertion[:-1] + f' else $fatal(1, "Assertion {label} failed.");'
+
+    return bare.sub(add_fatal, normalized)
 
 
 def _close_missing_checkers(
@@ -868,6 +908,8 @@ def run_agent(state: dict) -> dict:
     else:
         _log(log_path, "LLM SVA expansion disabled; using deterministic scaffold.")
         checker_generation_attempts = 0
+
+    sva_sv = _make_assertion_failures_terminal(sva_sv)
 
     bind_sv = _gen_bind_sv(top, module_name, sva_spec)
 

@@ -2200,6 +2200,28 @@ def test_reset_consistency_does_not_attribute_pronoun_value_to_wrong_signal():
     spec_agent._validate_reset_feature_consistency(spec, ports, contracts)
 
 
+def test_reset_consistency_rejects_expected_value_that_contradicts_declared_comparison():
+    spec = {
+        "reset_behavior": (
+            "When reset_n is low, counter_value is set to zero. Consequently pwm_out evaluates "
+            "according to the comparison 0 < duty_cycle, which is true for nonzero duty_cycle."
+        ),
+    }
+    ports = [
+        {"name": "reset_n", "direction": "input", "active_low": True},
+        {"name": "duty_cycle", "direction": "input", "width": 8},
+        {"name": "counter_value", "direction": "output", "width": 8},
+        {"name": "pwm_out", "direction": "output", "width": 1},
+    ]
+    contracts = [{
+        "feature_id": "reset_clears_state",
+        "stimulus_steps": [{"signals": {"reset_n": 0, "duty_cycle": 128}, "cycles": 1}],
+        "expected": {"counter_value": 0, "pwm_out": 0},
+    }]
+    with pytest.raises(ValueError, match=r"pwm_out.*0 < duty_cycle=1.*expected is 0"):
+        spec_agent._validate_reset_feature_consistency(spec, ports, contracts)
+
+
 def test_feature_contract_strength_rejects_weak_signal_even_with_strong_signal():
     ports = [{"name": "valid", "width": 1}, {"name": "data", "width": 8}]
     contracts = [{
