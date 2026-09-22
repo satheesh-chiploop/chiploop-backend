@@ -1191,6 +1191,57 @@ def test_connectivity_diagnostics_explain_unwired_ownership_width_mismatch():
     assert "Ownership metadata is not a wire" in diagnostics
 
 
+def test_connectivity_diagnostics_list_semantic_candidates_for_orphan_inputs():
+    spec = {
+        "design_name": "top",
+        "hierarchy": {
+            "top_module": {**_module("top"), "ports": []},
+            "modules": [
+                {**_module("supervisor"), "ports": [_port("link_health", "output", 4)]},
+                {**_module("regfile"), "ports": [_port("cfg_link_health", "input", 4)]},
+            ],
+        },
+        "top_level_connections": [], "inter_module_signals": [], "signal_ownership": [],
+    }
+
+    diagnostics = spec_agent._build_connectivity_repair_diagnostics(json.dumps(spec))
+
+    assert "UNDRIVEN regfile.cfg_link_health (width 4)" in diagnostics
+    assert "supervisor.link_health (width 4, compatible)" in diagnostics
+
+
+def test_invalid_self_ownership_does_not_hide_real_cross_module_candidate():
+    spec = {
+        "design_name": "top",
+        "hierarchy": {
+            "top_module": {**_module("top"), "ports": []},
+            "modules": [
+                {**_module("supervisor"), "ports": [_port("link_health", "output", 4)]},
+                {**_module("packer"), "ports": [
+                    _port("link_health", "input", 4), _port("req_link_health", "output", 4),
+                ]},
+            ],
+        },
+        "top_level_connections": [], "inter_module_signals": [],
+        "signal_ownership": [{"signal": "link_health", "owner": "packer.req_link_health"}],
+    }
+
+    diagnostics = spec_agent._build_connectivity_repair_diagnostics(json.dumps(spec))
+
+    assert "would create feedback" in diagnostics
+    assert "supervisor.link_health (width 4, compatible)" in diagnostics
+
+
+def test_orphan_endpoint_count_supports_repair_regression_guard():
+    error = (
+        "Required child input 'regfile.fault_status' has no source. "
+        "Other required child inputs without sources: 'history.addr', 'regfile.fault_status'."
+    )
+
+    assert spec_agent._orphan_endpoint_count(error) == 2
+    assert spec_agent._orphan_endpoint_count("Feature contract is invalid") is None
+
+
 def test_connectivity_repair_prompt_prevents_orphan_migration():
     prompt = spec_agent._build_repair_prompt(
         base_prompt="Generate a hierarchy.",

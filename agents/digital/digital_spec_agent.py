@@ -2789,8 +2789,7 @@ def _build_connectivity_repair_diagnostics(previous_json_text: str) -> str:
             if str(item.get("signal") or "").strip().lower() == port_name.lower()
             or str(item.get("signal") or "").strip().lower().endswith("_" + port_name.lower())
         ]
-        if not aliases:
-            continue
+        has_viable_alias = False
         for item in aliases[:3]:
             signal_name = str(item.get("signal") or "").strip()
             owner = str(item.get("owner") or "").strip()
@@ -2799,18 +2798,68 @@ def _build_connectivity_repair_diagnostics(previous_json_text: str) -> str:
                 detail = "the asserted owner endpoint is undeclared"
             elif owner_contract[0] not in {"output", "inout"}:
                 detail = f"the asserted owner is a {owner_contract[0]} consumer"
+            elif _normalize_endpoint_port(owner)[0] == module_name:
+                detail = "the asserted owner is on the same consumer module and would create feedback"
             elif owner_contract[1] != sink_width:
                 detail = f"owner width {owner_contract[1]} does not match consumer width {sink_width}"
             else:
                 detail = "the compatible owner was never connected"
+                has_viable_alias = True
             findings.append(
                 f"- UNDRIVEN {endpoint}: ownership alias '{signal_name}' names {owner}, but {detail}. "
                 "Ownership metadata is not a wire; add one explicit compatible producer-to-consumer edge, "
                 "or add a real packing/aggregation output when the widths or semantics differ."
             )
+        if has_viable_alias:
+            continue
+        sink_tokens = {
+            token for token in re.split(r"_+", port_name.lower())
+            if token and token not in {"cfg", "status", "in", "input", "out", "output"}
+        }
+        candidates = []
+        for candidate, (candidate_direction, candidate_width) in ports.items():
+            candidate_module, candidate_port = _normalize_endpoint_port(candidate)
+            if candidate_module in {top_name, module_name} or candidate_direction not in {"output", "inout"}:
+                continue
+            candidate_tokens = {
+                token for token in re.split(r"_+", candidate_port.lower())
+                if token and token not in {"cfg", "status", "in", "input", "out", "output"}
+            }
+            overlap = len(sink_tokens.intersection(candidate_tokens))
+            if overlap:
+                candidates.append((overlap, candidate_width == sink_width, candidate, candidate_width))
+        candidates.sort(key=lambda item: (item[0], item[1]), reverse=True)
+        if candidates:
+            descriptions = ", ".join(
+                f"{candidate} (width {candidate_width}{', compatible' if compatible else ', mismatch'})"
+                for _, compatible, candidate, candidate_width in candidates[:4]
+            )
+            findings.append(
+                f"- UNDRIVEN {endpoint} (width {sink_width}); semantic producer candidates: {descriptions}. "
+                "Connect exactly one compatible producer only if its meaning matches. Otherwise add one explicit "
+                "producer/packer output of the required width and connect it; do not recreate the consumer elsewhere."
+            )
+        else:
+            findings.append(
+                f"- UNDRIVEN {endpoint} (width {sink_width}) has no semantic producer candidate. Add one explicit "
+                "output on the module that owns this behavior and connect it, or remove the input only if the behavior "
+                "is genuinely internal/optional; do not add another source-less input."
+            )
     if not findings:
         return ""
     return "\n\nSTRUCTURAL GRAPH DIAGNOSTICS FROM THE PREVIOUS JSON:\n" + "\n".join(findings[:80])
+
+
+def _orphan_endpoint_count(error: object) -> int | None:
+    """Return the number of distinct source-less child endpoints in an error."""
+    text = str(error or "")
+    if "required child input" not in text.lower() or "has no source" not in text.lower():
+        return None
+    endpoints = re.findall(
+        r"['\"]([A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*)['\"]",
+        text,
+    )
+    return len(set(endpoints))
 
 
 def _remove_self_owned_alias_inputs(spec_json: dict) -> dict:
@@ -4264,6 +4313,8 @@ Return JSON only.
                         e5 = None
                     except Exception as pass5_error:
                         e5 = pass5_error
+                        best_graph_error = pass5_error
+                        best_graph_normalized_path = os.path.join(spec_dir, "spec_agent_normalized_pass5.json")
                         pass5_log_path = os.path.join(spec_dir, "spec_agent_contract_pass5.log")
                         pass5_exc_path = os.path.join(spec_dir, "spec_agent_exception_pass5.txt")
                         _write_text(pass5_log_path, f"Digital Spec Agent pass5 contract repair failure:\n{e5}\n")
@@ -4306,6 +4357,28 @@ Return JSON only.
                             e5 = pass6_error
                             _write_text(pass6_log_path, f"Digital Spec Agent pass6 focused repair failure:\n{e5}\n")
                             _write_text(pass6_exc_path, repr(e5))
+                            pass5_orphans = _orphan_endpoint_count(best_graph_error)
+                            pass6_orphans = _orphan_endpoint_count(pass6_error)
+                            if (
+                                pass5_orphans is not None
+                                and pass6_orphans is not None
+                                and pass6_orphans > pass5_orphans
+                            ):
+                                # Preserve the objectively better graph for
+                                # any terminal closure and final reporting. A
+                                # later model response must not erase progress
+                                # by recreating additional orphan inputs.
+                                e5 = best_graph_error
+                                with open(pass6_log_path, "a", encoding="utf-8") as pass6_log:
+                                    pass6_log.write(
+                                        f"\nRegression guard retained pass5 graph: "
+                                        f"pass5 orphan count={pass5_orphans}, pass6={pass6_orphans}.\n"
+                                    )
+                            else:
+                                best_graph_error = pass6_error
+                                best_graph_normalized_path = os.path.join(
+                                    spec_dir, "spec_agent_normalized_pass6.json"
+                                )
 
                     closure_error = str(e5 or "")
                     orphan_matches = re.findall(
@@ -4335,12 +4408,7 @@ Return JSON only.
                         pass7_log_path = os.path.join(spec_dir, "spec_agent_contract_pass7.log")
                         pass7_exc_path = os.path.join(spec_dir, "spec_agent_exception_pass7.txt")
                         try:
-                            latest_normalized_for_closure = os.path.join(
-                                spec_dir,
-                                "spec_agent_normalized_pass6.json"
-                                if os.path.exists(os.path.join(spec_dir, "spec_agent_normalized_pass6.json"))
-                                else "spec_agent_normalized_pass5.json",
-                            )
+                            latest_normalized_for_closure = best_graph_normalized_path
                             with open(latest_normalized_for_closure, "r", encoding="utf-8") as closure_file:
                                 spec_json = json.load(closure_file)
                             mode = "hierarchical" if isinstance(spec_json.get("hierarchy"), dict) else "flat"
@@ -4367,7 +4435,7 @@ Return JSON only.
 
                     if e5 is not None:
                         state.update({
-                            "status": f"❌ JSON parse/normalize failed after pass5 contract repair: {e5}",
+                            "status": f"❌ JSON parse/normalize failed after final contract repair: {e5}",
                             "artifact": None,
                             "artifact_list": [],
                             "artifact_log": log_path,
@@ -4378,7 +4446,7 @@ Return JSON only.
                                 f"Pass2 JSON parse/normalize failed: {pass2_error}",
                                 f"Pass3 JSON parse/normalize failed: {e3}",
                                 f"Pass4 contract repair failed: {e4}",
-                                f"Pass5 contract repair failed: {e5}",
+                                f"Final focused/closure repair failed: {e5}",
                             ],
                         })
 
@@ -4390,7 +4458,7 @@ Return JSON only.
     spec_json_path = os.path.join(spec_dir, f"{module_name}_spec.json")
     with open(spec_json_path, "w", encoding="utf-8") as sf:
         json.dump(spec_json, sf, indent=2)
-    logger.info(f"🎉 Digital Spec Agent succeeded via {'pass2' if pass1_error else 'pass1'}")
+    logger.info(f"🎉 Digital Spec Agent succeeded via {resolved_via}")
     logger.info(f"📦 Digital Spec Agent spec JSON saved: {spec_json_path}")
 
     log_path = os.path.join(spec_dir, "spec_agent_contract.log")
