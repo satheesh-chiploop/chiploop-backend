@@ -300,6 +300,28 @@ def test_feature_contract_compiler_accepts_explicit_empty_wait_step():
     assert contracts[0]["stimulus_steps"] == [{"signals": {}, "cycles": 2}]
 
 
+def test_feature_contract_compiler_canonicalizes_duplicated_signals_wrapper_as_wait():
+    ports = [
+        {"name": "enable", "direction": "input"},
+        {"name": "done", "direction": "output"},
+    ]
+    contracts = tb_agent.compile_feature_contracts({"feature_contracts": [{
+        "id": "settle_then_done",
+        "stimulus": {"steps": [
+            {"signals": {"enable": 1}, "cycles": 1},
+            {"signals": {"signals": {}}, "cycles": 3},
+        ]},
+        "expected": {"done": 1},
+    }]}, ports)
+
+    assert contracts[0]["executable"] is True
+    assert contracts[0]["unresolved_bindings"] == []
+    assert contracts[0]["stimulus_steps"] == [
+        {"signals": {"enable": 1}, "cycles": 1},
+        {"signals": {}, "cycles": 3},
+    ]
+
+
 def test_free_text_feature_is_traceable_but_does_not_invent_checker():
     ports = [{"name": "alarm", "direction": "output"}]
     contracts = tb_agent.compile_feature_contracts(

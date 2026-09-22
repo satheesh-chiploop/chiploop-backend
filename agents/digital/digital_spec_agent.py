@@ -934,9 +934,14 @@ def _validate_feature_contract_feasibility(spec_json: dict, feature_ports: list,
                 continue
             name = str(field.get("name") or "").lower()
             description = str(field.get("description") or "").lower()
+            raw_reset = field.get("reset") or 0
+            try:
+                reset_value = int(raw_reset, 0) if isinstance(raw_reset, str) else int(raw_reset)
+            except (TypeError, ValueError):
+                reset_value = None
             if (
                 (name == "enable" or name.endswith("_enable"))
-                and int(field.get("reset") or 0) == 0
+                and reset_value == 0
                 and re.search(r"\b(?:global|request|command|acceptance|propagation)\b", description)
             ):
                 try:
@@ -1112,7 +1117,11 @@ def _project_internal_feature_stimulus_to_register_bus(spec_json: dict, mode: st
             if not isinstance(raw_step, dict):
                 cleaned_steps.append(raw_step)
                 continue
-            signals = raw_step.get("signals") or raw_step.get("drive") or raw_step.get("values")
+            signals = raw_step.get("signals")
+            if not isinstance(signals, dict):
+                signals = raw_step.get("drive")
+            if not isinstance(signals, dict):
+                signals = raw_step.get("values")
             if not isinstance(signals, dict):
                 signals = {key: value for key, value in raw_step.items()
                            if key not in {"cycles", "wait_cycles"}}
@@ -2104,37 +2113,57 @@ def _internalize_fpga_inferred_memory_interfaces(spec_json: dict, source_prompt:
             "data_width": data_width,
             "technology_binding": "technology_neutral_inferred_memory",
         }
-        module["functionality"] = (
+        storage_functionality = (
             "Own technology-neutral synthesizable bulk storage implemented as an inferred memory suitable for "
-            "native FPGA block RAM mapping. Its declared functional ports are the complete storage interface."
+            "native FPGA block RAM mapping. Its declared memory-facing functional ports form the complete storage interface."
+        )
+        existing_functionality = str(module.get("functionality") or "").strip()
+        module["functionality"] = (
+            f"{existing_functionality} {storage_functionality}".strip()
+            if storage_functionality.lower() not in existing_functionality.lower()
+            else existing_functionality
         )
         module["responsibilities"] = [
             item for item in module.get("responsibilities") or []
             if not re.search(r"\b(?:macro|sram cell)\b", str(item), re.I)
         ]
-        module["responsibilities"].extend([
+        responsibility_keys = {str(item).strip().lower() for item in module["responsibilities"]}
+        for responsibility in (
             "Implement bulk storage as an inferred memory rather than a flattened bank of scalar registers.",
             "Return stored read data through the declared functional output port.",
-        ])
+        ):
+            if responsibility.lower() not in responsibility_keys:
+                module["responsibilities"].append(responsibility)
+                responsibility_keys.add(responsibility.lower())
         module["behavior_rules"] = [
             item for item in module.get("behavior_rules") or []
             if not re.search(r"\b(?:macro|sram cell)\b", str(item), re.I)
         ]
-        module["behavior_rules"].append(
+        inferred_memory_rule = (
             "Infer one synthesizable unpacked memory array with synchronous access so FPGA tools can map it to block RAM."
         )
+        if inferred_memory_rule.lower() not in {
+            str(item).strip().lower() for item in module["behavior_rules"]
+        }:
+            module["behavior_rules"].append(inferred_memory_rule)
+        storage_reset = (
+            "For inferred storage on reset, hold the declared read-data output benign without clearing stored memory "
+            "contents; no alternate or flattened scalar-register storage is created."
+        )
+        existing_reset = str(module.get("reset_behavior") or "").strip()
         module["reset_behavior"] = (
-            "On reset, hold the declared read-data output benign without clearing stored memory contents. "
-            "No alternate or flattened scalar-register storage is created."
+            f"{existing_reset} {storage_reset}".strip()
+            if storage_reset.lower() not in existing_reset.lower()
+            else existing_reset
         )
         removed_endpoints.update(f"{module_name}.{name}" for name in internal_pin_names)
 
-        # Ports belonging to this internal storage wrapper are not product I/O
-        # unless the user explicitly named that exact interface signal.
-        wrapper_port_names = {
-            str(port.get("name") or "") for port in module["ports"]
-            if str(port.get("name") or "") not in {"clk", "reset_n", "rst_n", "reset"}
-        } | internal_pin_names
+        # Only proven primitive/macro pins are implementation details. A
+        # module may combine inferred storage with real application behavior
+        # (sensor ingress, packet capture, history readback, etc.); deleting
+        # all of that module's matching top ports would silently rewrite the
+        # product interface and orphan otherwise-correct child inputs.
+        wrapper_port_names = set(internal_pin_names)
         prompt_identifiers = set(re.findall(r"\b[A-Za-z_][A-Za-z0-9_]*\b", str(source_prompt or "")))
         removable_top_ports = wrapper_port_names - prompt_identifiers
         top = hierarchy.get("top_module") if isinstance(hierarchy.get("top_module"), dict) else {}

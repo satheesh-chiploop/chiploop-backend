@@ -72,6 +72,18 @@ def _stimulus_steps(item: Dict[str, Any], names: Dict[str, str]) -> tuple[List[D
             signals = raw_step.get("values")
         if not isinstance(signals, dict):
             signals = {key: value for key, value in raw_step.items() if key not in {"cycles", "wait_cycles"}}
+        # Canonicalize a duplicated schema wrapper emitted by structured
+        # generators: {"signals": {"signals": {...}}, "cycles": N}.  The
+        # inner object is the signal map; an empty map is a legitimate wait
+        # step. Only unwrap a sole wrapper key so a real (though unusual)
+        # top-level port named "signals" is never silently discarded when it
+        # appears alongside other driven ports.
+        while (
+            isinstance(signals, dict)
+            and set(signals) == {"signals"}
+            and isinstance(signals.get("signals"), dict)
+        ):
+            signals = signals["signals"]
         resolved, missing = _resolve_map(signals, names)
         unresolved.extend(missing)
         cycles = _integer(raw_step.get("cycles") or raw_step.get("wait_cycles") or 1)

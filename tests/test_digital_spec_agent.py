@@ -1,5 +1,6 @@
 import os
 import json
+import copy
 import sys
 from pathlib import Path
 
@@ -125,6 +126,33 @@ def test_internal_config_feature_is_projected_through_mmio_register_contract():
     compiled = compile_feature_contracts(spec, spec["ports"])
     assert compiled[0]["executable"] is True
     assert compiled[0]["stimulus_cycles"] == 2
+
+
+def test_internal_config_projection_preserves_empty_wait_step_shape():
+    spec = {
+        "ports": [
+            _port("mmio_addr", "input", 8), _port("mmio_wdata", "input", 32),
+            _port("mmio_write", "input"), _port("done", "output"),
+        ],
+        "register_contract": {"registers": [{
+            "name": "CTRL", "address": 0, "access": "rw",
+            "fields": [{"name": "enable", "lsb": 0, "msb": 0, "access": "rw"}],
+        }]},
+        "feature_contracts": [{
+            "id": "enable_then_wait",
+            "stimulus": {"steps": [
+                {"signals": {"cfg_enable": 1}, "cycles": 1},
+                {"signals": {}, "cycles": 3},
+            ]},
+            "expected": {"done": 1},
+        }],
+    }
+
+    spec_agent._project_internal_feature_stimulus_to_register_bus(spec, "flat")
+
+    steps = spec["feature_contracts"][0]["stimulus"]["steps"]
+    assert steps[-1] == {"signals": {}, "cycles": 3}
+    assert compile_feature_contracts(spec, spec["ports"])[0]["executable"] is True
 
 
 def test_internal_config_projection_accepts_mmio_we_alias():
@@ -300,6 +328,51 @@ def test_fpga_inferred_memory_internalizes_application_prefixed_macro_pin_group(
     assert not {"hist_web", "hist_addr", "hist_din", "hist_dout"}.intersection(
         module["must_drive"] + module["must_receive"]
     )
+
+
+def test_fpga_memory_internalization_preserves_hybrid_module_application_ports():
+    module = {
+        "name": "sensor_ingest_and_history",
+        "description": "Sensor ingress with technology-neutral history storage",
+        "functionality": "Accept sensor samples and own inferred native block RAM storage.",
+        "behavior_rules": ["Implement history storage as an inferred memory."],
+        "ports": [
+            _port("sensor_valid", "input"), _port("sensor_ready", "output"),
+            _port("sensor_data", "input", 32),
+            _port("history_csb", "output"), _port("history_web", "output"),
+            _port("history_addr", "output", 8), _port("history_din", "output", 64),
+            _port("history_dout", "input", 64),
+        ],
+        "must_drive": ["sensor_ready", "history_csb", "history_web", "history_addr", "history_din"],
+        "must_receive": ["sensor_valid", "sensor_data", "history_dout"],
+    }
+    spec = {"hierarchy": {
+        "top_module": {"name": "top", "ports": [
+            _port("sensor_valid", "input"), _port("sensor_ready", "output"),
+            _port("sensor_data", "input", 32),
+            _port("history_dout", "input", 64),
+        ]},
+        "modules": [module],
+    }}
+
+    spec_agent._internalize_fpga_inferred_memory_interfaces(
+        spec, "FPGA MEMORY CONTRACT (mandatory)",
+    )
+
+    assert {port["name"] for port in spec["hierarchy"]["top_module"]["ports"]} == {
+        "sensor_valid", "sensor_ready", "sensor_data",
+    }
+    assert {port["name"] for port in module["ports"]} == {
+        "sensor_valid", "sensor_ready", "sensor_data",
+    }
+    assert module["functionality"].startswith("Accept sensor samples")
+    assert "inferred memory" in module["functionality"]
+
+    once = copy.deepcopy(spec)
+    spec_agent._internalize_fpga_inferred_memory_interfaces(
+        spec, "FPGA MEMORY CONTRACT (mandatory)",
+    )
+    assert spec == once
 
 
 def test_fpga_inferred_wrapper_removes_stale_macro_prose_and_accidental_top_ports():
@@ -2419,6 +2492,34 @@ def test_feature_contract_requires_enable_write_before_request_when_reset_disabl
         "expected": {"req_ready": 1},
     }]
     spec_agent._validate_feature_contract_feasibility(spec, ports, good)
+
+
+def test_feature_contract_feasibility_accepts_hex_register_address_and_reset():
+    spec = {"register_contract": {"registers": [{
+        "name": "CTRL", "address": "0x0",
+        "fields": [{
+            "name": "enable", "lsb": 0, "reset": "0x0",
+            "description": "Global enable for request acceptance and command propagation.",
+        }],
+    }]}}
+    ports = [
+        {"name": "csr_valid", "direction": "input"},
+        {"name": "csr_write", "direction": "input"},
+        {"name": "csr_addr", "direction": "input"},
+        {"name": "csr_wdata", "direction": "input"},
+        {"name": "req_valid", "direction": "input"},
+        {"name": "req_ready", "direction": "output"},
+    ]
+    contracts = [{
+        "feature_id": "accept_request",
+        "stimulus_steps": [
+            {"signals": {"csr_valid": 1, "csr_write": 1, "csr_addr": 0, "csr_wdata": 1}, "cycles": 1},
+            {"signals": {"req_valid": 1}, "cycles": 1},
+        ],
+        "expected": {"req_ready": 1},
+    }]
+
+    spec_agent._validate_feature_contract_feasibility(spec, ports, contracts)
 
 
 def test_feature_contract_strength_rejects_weak_signal_even_with_strong_signal():
