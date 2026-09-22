@@ -1743,8 +1743,12 @@ def _upload_spec_debug_artifacts(workflow_id, agent_name, spec_dir):
         "spec_agent_normalized_pass4.json",
         "spec_agent_normalized_pass5.json",
         "spec_agent_contract_pass6.log",
+        "llm_raw_output_pass6.txt",
         "spec_agent_exception_pass6.txt",
         "spec_agent_normalized_pass6.json",
+        "spec_agent_contract_pass7.log",
+        "spec_agent_exception_pass7.txt",
+        "spec_agent_normalized_pass7.json",
     ]:
         _record_text_artifact_safe(
             workflow_id=workflow_id,
@@ -2048,6 +2052,26 @@ def _internalize_fpga_inferred_memory_interfaces(spec_json: dict, source_prompt:
         )
         if not owns_inferred_storage:
             continue
+        # Models also emit hard-macro-style pin groups under application
+        # prefixes (hist_addr/hist_din/hist_dout/hist_web, fifo_*, cache_*).
+        # When the same module already owns a complete functional read/write
+        # interface and is explicitly normalized to inferred FPGA storage,
+        # those coherent primitive groups are stale implementation pins.
+        # Detect the role set rather than enumerating application prefixes.
+        grouped_roles = {}
+        for port in ports:
+            port_name = str(port.get("name") or "").strip()
+            match = re.match(r"^(.+?)_(csb|ce|en|web|we|addr|din|dout|rdata|wdata)$", port_name, re.I)
+            if match:
+                grouped_roles.setdefault(match.group(1).lower(), {})[match.group(2).lower()] = port
+        for role_group in grouped_roles.values():
+            roles = set(role_group)
+            macro_like = "addr" in roles and bool(roles.intersection({"din", "wdata"})) \
+                and bool(roles.intersection({"dout", "rdata"})) \
+                and bool(roles.intersection({"web", "we", "csb", "ce", "en"}))
+            if macro_like:
+                primitive.extend(role_group.values())
+        primitive = list({str(port.get("name") or ""): port for port in primitive}.values())
         primitive_names = {str(port.get("name") or "") for port in primitive}
         if primitive_names and any({name.lower() for name in primitive_names}.issubset(port_set) for port_set in declared_macro_port_sets):
             # A separately declared memory deliverable is the intended
@@ -2704,6 +2728,12 @@ def _build_connectivity_repair_diagnostics(previous_json_text: str) -> str:
 
     findings = []
     sink_sources = {}
+    driven_destinations = {
+        str(endpoint or "").strip()
+        for connection in spec_json.get("top_level_connections") or []
+        if isinstance(connection, dict)
+        for endpoint in connection.get("connected_to") or []
+    }
     for index, signal in enumerate(spec_json.get("inter_module_signals") or []):
         if not isinstance(signal, dict):
             continue
@@ -2736,6 +2766,7 @@ def _build_connectivity_repair_diagnostics(previous_json_text: str) -> str:
                 findings.append(f"- REJECT edge {source} -> {destination}: {'; '.join(problems)}.")
             else:
                 sink_sources.setdefault(destination, []).append((index, source))
+                driven_destinations.add(destination)
 
     for destination, attempts in sink_sources.items():
         unique_sources = list(dict.fromkeys(source for _, source in attempts))
@@ -2743,6 +2774,39 @@ def _build_connectivity_repair_diagnostics(previous_json_text: str) -> str:
             findings.append(
                 f"- REJECT duplicate drivers for {destination}: {', '.join(unique_sources)}. "
                 "Choose one real producer or create an explicit combining/aggregation output."
+            )
+    ownership = [
+        item for item in spec_json.get("signal_ownership") or []
+        if isinstance(item, dict)
+    ]
+    top_name = str(top.get("name") or "").strip()
+    for endpoint, (direction, sink_width) in ports.items():
+        module_name, port_name = _normalize_endpoint_port(endpoint)
+        if module_name == top_name or direction not in {"input", "inout"} or endpoint in driven_destinations:
+            continue
+        aliases = [
+            item for item in ownership
+            if str(item.get("signal") or "").strip().lower() == port_name.lower()
+            or str(item.get("signal") or "").strip().lower().endswith("_" + port_name.lower())
+        ]
+        if not aliases:
+            continue
+        for item in aliases[:3]:
+            signal_name = str(item.get("signal") or "").strip()
+            owner = str(item.get("owner") or "").strip()
+            owner_contract = ports.get(owner)
+            if owner_contract is None:
+                detail = "the asserted owner endpoint is undeclared"
+            elif owner_contract[0] not in {"output", "inout"}:
+                detail = f"the asserted owner is a {owner_contract[0]} consumer"
+            elif owner_contract[1] != sink_width:
+                detail = f"owner width {owner_contract[1]} does not match consumer width {sink_width}"
+            else:
+                detail = "the compatible owner was never connected"
+            findings.append(
+                f"- UNDRIVEN {endpoint}: ownership alias '{signal_name}' names {owner}, but {detail}. "
+                "Ownership metadata is not a wire; add one explicit compatible producer-to-consumer edge, "
+                "or add a real packing/aggregation output when the widths or semantics differ."
             )
     if not findings:
         return ""
@@ -4205,6 +4269,44 @@ Return JSON only.
                         _write_text(pass5_log_path, f"Digital Spec Agent pass5 contract repair failure:\n{e5}\n")
                         _write_text(pass5_exc_path, repr(e5))
 
+                    # A repair can successfully eliminate the pass4 failure
+                    # class yet reveal a different downstream contract error
+                    # during full validation. Give that newly exposed error
+                    # one focused pass with its own authoritative checklist;
+                    # pass5 was prompted only with the older pass4 failure and
+                    # therefore could not have been expected to repair it.
+                    if e5 is not None and str(e5) != str(e4):
+                        pass6_prompt = _build_repair_prompt(
+                            base_prompt=prompt,
+                            previous_json_text=llm_output_pass5,
+                            failure_log_text=str(e5),
+                            strict_connectivity=True,
+                            final_graph_closure=True,
+                        )
+                        pass6_log_path = os.path.join(spec_dir, "spec_agent_contract_pass6.log")
+                        pass6_exc_path = os.path.join(spec_dir, "spec_agent_exception_pass6.txt")
+                        try:
+                            logger.info("Digital Spec Agent invoking pass6 for newly exposed failure class")
+                            llm_output_pass6 = _complete_spec_generation(
+                                pass6_prompt, agent_name, state, "contract_repair_pass6"
+                            )
+                            spec_json, mode, raw_output_path_pass6, normalized_path_pass6 = _compile_spec_contract(
+                                llm_output=llm_output_pass6,
+                                spec_dir=spec_dir,
+                                suffix="_pass6",
+                                requested_top=requested_top,
+                                source_prompt=user_prompt,
+                                require_firmware_control_plane=require_firmware_control_plane,
+                                require_feature_contracts=True,
+                            )
+                            raw_output_path = raw_output_path_pass6
+                            resolved_via = "pass6"
+                            e5 = None
+                        except Exception as pass6_error:
+                            e5 = pass6_error
+                            _write_text(pass6_log_path, f"Digital Spec Agent pass6 focused repair failure:\n{e5}\n")
+                            _write_text(pass6_exc_path, repr(e5))
+
                     closure_error = str(e5 or "")
                     orphan_matches = re.findall(
                         r"required child input\s+['\"]?[^.'\"\s]+\.([A-Za-z_][A-Za-z0-9_]*)",
@@ -4230,14 +4332,17 @@ Return JSON only.
                         # This terminal structural closure is application- and
                         # interface-agnostic and remains subject to the full
                         # contract and firmware-plane validators.
-                        pass6_log_path = os.path.join(spec_dir, "spec_agent_contract_pass6.log")
-                        pass6_exc_path = os.path.join(spec_dir, "spec_agent_exception_pass6.txt")
+                        pass7_log_path = os.path.join(spec_dir, "spec_agent_contract_pass7.log")
+                        pass7_exc_path = os.path.join(spec_dir, "spec_agent_exception_pass7.txt")
                         try:
-                            normalized_path_pass5_for_closure = os.path.join(
-                                spec_dir, "spec_agent_normalized_pass5.json"
+                            latest_normalized_for_closure = os.path.join(
+                                spec_dir,
+                                "spec_agent_normalized_pass6.json"
+                                if os.path.exists(os.path.join(spec_dir, "spec_agent_normalized_pass6.json"))
+                                else "spec_agent_normalized_pass5.json",
                             )
-                            with open(normalized_path_pass5_for_closure, "r", encoding="utf-8") as pass5_file:
-                                spec_json = json.load(pass5_file)
+                            with open(latest_normalized_for_closure, "r", encoding="utf-8") as closure_file:
+                                spec_json = json.load(closure_file)
                             mode = "hierarchical" if isinstance(spec_json.get("hierarchy"), dict) else "flat"
                             if mode != "hierarchical":
                                 raise ValueError("Deterministic graph closure requires a hierarchical contract.")
@@ -4249,15 +4354,15 @@ Return JSON only.
                             )
                             _validate_fpga_memory_contract(spec_json, user_prompt)
                             _validate_no_command_fallback_contract(spec_json, user_prompt)
-                            normalized_path_pass6 = os.path.join(spec_dir, "spec_agent_normalized_pass6.json")
-                            with open(normalized_path_pass6, "w", encoding="utf-8") as pass6_file:
-                                json.dump(spec_json, pass6_file, indent=2)
-                            _write_text(pass6_log_path, "Digital Spec Agent deterministic graph closure passed.\n")
-                            resolved_via = "pass6"
+                            normalized_path_pass7 = os.path.join(spec_dir, "spec_agent_normalized_pass7.json")
+                            with open(normalized_path_pass7, "w", encoding="utf-8") as pass7_file:
+                                json.dump(spec_json, pass7_file, indent=2)
+                            _write_text(pass7_log_path, "Digital Spec Agent deterministic graph closure passed.\n")
+                            resolved_via = "pass7"
                             e5 = None
                         except Exception as pass6_error:
-                            _write_text(pass6_log_path, f"Digital Spec Agent deterministic graph closure failure:\n{pass6_error}\n")
-                            _write_text(pass6_exc_path, repr(pass6_error))
+                            _write_text(pass7_log_path, f"Digital Spec Agent deterministic graph closure failure:\n{pass6_error}\n")
+                            _write_text(pass7_exc_path, repr(pass6_error))
                             e5 = pass6_error
 
                     if e5 is not None:

@@ -272,6 +272,36 @@ def test_fpga_inferred_memory_detects_conventional_read_write_port_names():
     }
 
 
+def test_fpga_inferred_memory_internalizes_application_prefixed_macro_pin_group():
+    module = {
+        "name": "history_buffer",
+        "description": "Technology-neutral history memory wrapper",
+        "functionality": "Own storage mapped to native block RAM.",
+        "behavior_rules": ["Implement storage as an inferred memory."],
+        "ports": [
+            _port("write_en", "input"), _port("write_addr", "input", 8),
+            _port("write_data", "input", 64), _port("read_addr", "input", 8),
+            _port("read_data", "output", 64),
+            _port("hist_web", "output"), _port("hist_addr", "output", 8),
+            _port("hist_din", "output", 64), _port("hist_dout", "input", 64),
+        ],
+        "must_drive": ["read_data", "hist_web", "hist_addr", "hist_din"],
+        "must_receive": ["write_en", "write_addr", "write_data", "read_addr", "hist_dout"],
+    }
+    spec = {"hierarchy": {"top_module": {"name": "top", "ports": []}, "modules": [module]}}
+
+    spec_agent._internalize_fpga_inferred_memory_interfaces(
+        spec, "FPGA MEMORY CONTRACT (mandatory)",
+    )
+
+    assert {port["name"] for port in module["ports"]} == {
+        "write_en", "write_addr", "write_data", "read_addr", "read_data",
+    }
+    assert not {"hist_web", "hist_addr", "hist_din", "hist_dout"}.intersection(
+        module["must_drive"] + module["must_receive"]
+    )
+
+
 def test_fpga_inferred_wrapper_removes_stale_macro_prose_and_accidental_top_ports():
     module = {
         "name": "history_wrapper", "description": "Technology-neutral memory wrapper",
@@ -1137,6 +1167,28 @@ def test_contract_backed_connection_does_not_trust_unowned_or_undeclared_endpoin
 
     assert producer["ports"] == []
     assert consumer["ports"] == []
+
+
+def test_connectivity_diagnostics_explain_unwired_ownership_width_mismatch():
+    spec = {
+        "design_name": "top",
+        "hierarchy": {
+            "top_module": {**_module("top"), "ports": []},
+            "modules": [
+                {**_module("producer"), "ports": [_port("cmd", "output", 16)]},
+                {**_module("history"), "ports": [_port("write_data", "input", 64)]},
+            ],
+        },
+        "top_level_connections": [],
+        "inter_module_signals": [],
+        "signal_ownership": [{"signal": "history_write_data", "owner": "producer.cmd"}],
+    }
+
+    diagnostics = spec_agent._build_connectivity_repair_diagnostics(json.dumps(spec))
+
+    assert "UNDRIVEN history.write_data" in diagnostics
+    assert "owner width 16 does not match consumer width 64" in diagnostics
+    assert "Ownership metadata is not a wire" in diagnostics
 
 
 def test_connectivity_repair_prompt_prevents_orphan_migration():
