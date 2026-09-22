@@ -1873,6 +1873,76 @@ def _ensure_hierarchical_port_closure(spec_json: dict) -> dict:
     return spec_json
 
 
+def _materialize_contract_backed_connection_ports(spec_json: dict) -> dict:
+    """Restore omitted child ports only when independent contract facts agree.
+
+    A model can describe a real internal signal consistently in must_drive /
+    must_receive, signal_ownership, and inter_module_signals while omitting the
+    corresponding ports[] entry.  Connectivity sanitization must not discard
+    that otherwise closed edge before port closure sees it.  Conversely, a
+    connection or ownership assertion by itself is not allowed to invent a
+    port, so this repair requires all applicable direction evidence.
+    """
+    hierarchy = spec_json.get("hierarchy") if isinstance(spec_json, dict) else None
+    if not isinstance(hierarchy, dict):
+        return spec_json
+
+    modules = [hierarchy.get("top_module")] + list(hierarchy.get("modules") or [])
+    module_map = {
+        str(module.get("name") or "").strip(): module
+        for module in modules
+        if isinstance(module, dict) and str(module.get("name") or "").strip()
+    }
+    declared = {
+        module_name: {
+            str(port.get("name") or "").strip()
+            for port in module.get("ports", []) or []
+            if isinstance(port, dict) and str(port.get("name") or "").strip()
+        }
+        for module_name, module in module_map.items()
+    }
+    owners = {
+        str(item.get("owner") or "").strip()
+        for item in spec_json.get("signal_ownership", []) or []
+        if isinstance(item, dict) and str(item.get("owner") or "").strip()
+    }
+
+    def add(endpoint: str, direction: str, width: int) -> None:
+        module_name, port_name = _normalize_endpoint_port(endpoint)
+        module = module_map.get(module_name)
+        if not module or not port_name or port_name in declared.get(module_name, set()):
+            return
+        required_list = "must_drive" if direction == "output" else "must_receive"
+        required = {
+            str(name or "").strip() for name in module.get(required_list, []) or []
+        }
+        if port_name not in required:
+            return
+        # A producer needs an independent ownership assertion.  For a
+        # consumer, must_receive plus its destination role are sufficient;
+        # consumers are deliberately not signal owners.
+        if direction == "output" and endpoint not in owners:
+            return
+        module.setdefault("ports", []).append({
+            "name": port_name,
+            "direction": direction,
+            "width": width,
+        })
+        declared.setdefault(module_name, set()).add(port_name)
+
+    for signal in spec_json.get("inter_module_signals", []) or []:
+        if not isinstance(signal, dict):
+            continue
+        try:
+            width = max(1, int(signal.get("width") or 1))
+        except (TypeError, ValueError):
+            continue
+        add(str(signal.get("source") or "").strip(), "output", width)
+        for destination in signal.get("destinations", []) or []:
+            add(str(destination or "").strip(), "input", width)
+    return spec_json
+
+
 def _normalize_endpoint_port(endpoint: str):
     if not isinstance(endpoint, str) or "." not in endpoint:
         return "", ""
@@ -2987,6 +3057,7 @@ def _compile_spec_contract(
         spec_json = _internalize_fpga_inferred_memory_interfaces(spec_json, source_prompt)
         spec_json = _ensure_hierarchical_top_level_connections(spec_json)
         spec_json = _ensure_hierarchical_inter_module_signals(spec_json)
+        spec_json = _materialize_contract_backed_connection_ports(spec_json)
         # Reject stale endpoints against the declared contract before port
         # closure. Otherwise an invalid connection/ownership claim can create
         # the very port that makes itself appear valid.

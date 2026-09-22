@@ -1078,6 +1078,67 @@ def test_partial_inter_module_graph_is_completed_and_orphans_are_rejected():
         spec_agent._validate_spec_contract(out, "hierarchical")
 
 
+def test_contract_backed_connection_materializes_omitted_ports_before_sanitizing():
+    producer = {
+        **_module("producer"),
+        "ports": [_port("clk", "input")],
+        "must_drive": ["history_data"],
+        "rtl_output_file": "producer.v",
+    }
+    consumer = {
+        **_module("consumer"),
+        "ports": [_port("clk", "input")],
+        "must_receive": ["history_data"],
+        "rtl_output_file": "consumer.v",
+    }
+    spec = {
+        "design_name": "top",
+        "hierarchy": {
+            "top_module": {**_module("top"), "ports": [_port("clk", "input")]},
+            "modules": [producer, consumer],
+        },
+        "top_level_connections": [
+            {"top_port": "clk", "connected_to": ["producer.clk", "consumer.clk"]},
+        ],
+        "inter_module_signals": [{
+            "name": "history_data",
+            "width": 64,
+            "source": "producer.history_data",
+            "destinations": ["consumer.history_data"],
+        }],
+        "signal_ownership": [{"signal": "history_data", "owner": "producer.history_data"}],
+    }
+
+    out = spec_agent._materialize_contract_backed_connection_ports(spec)
+    producer_port = next(port for port in producer["ports"] if port["name"] == "history_data")
+    consumer_port = next(port for port in consumer["ports"] if port["name"] == "history_data")
+
+    assert producer_port == {"name": "history_data", "direction": "output", "width": 64}
+    assert consumer_port == {"name": "history_data", "direction": "input", "width": 64}
+    assert spec_agent._sanitize_hierarchical_connectivity(out)["inter_module_signals"]
+
+
+def test_contract_backed_connection_does_not_trust_unowned_or_undeclared_endpoints():
+    producer = {**_module("producer"), "ports": [], "must_drive": ["data"]}
+    consumer = {**_module("consumer"), "ports": [], "must_receive": []}
+    spec = {
+        "hierarchy": {
+            "top_module": {**_module("top"), "ports": []},
+            "modules": [producer, consumer],
+        },
+        "inter_module_signals": [{
+            "name": "data", "width": 8, "source": "producer.data",
+            "destinations": ["consumer.data"],
+        }],
+        "signal_ownership": [],
+    }
+
+    spec_agent._materialize_contract_backed_connection_ports(spec)
+
+    assert producer["ports"] == []
+    assert consumer["ports"] == []
+
+
 def test_connectivity_repair_prompt_prevents_orphan_migration():
     prompt = spec_agent._build_repair_prompt(
         base_prompt="Generate a hierarchy.",
