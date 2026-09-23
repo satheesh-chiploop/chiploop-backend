@@ -1,0 +1,27 @@
+RTL Agent Summary
+=================
+Mode: hierarchical
+Top module: adaptive_aero_control_top
+Expected files: ['adaptive_aero_control_top.v', 'adaptive_aero_mmio_csr.v', 'adaptive_aero_request_scheduler.v', 'adaptive_aero_model_transport_bridge.v', 'adaptive_aero_safety_monitor.v', 'adaptive_aero_actuator_controller.v', 'adaptive_aero_history_buffer.v', 'generic_bram_wrapper.v']
+Materialized files: ['adaptive_aero_actuator_controller.v', 'adaptive_aero_control_top.v', 'adaptive_aero_history_buffer.v', 'adaptive_aero_mmio_csr.v', 'adaptive_aero_model_transport_bridge.v', 'adaptive_aero_request_scheduler.v', 'adaptive_aero_safety_monitor.v', 'generic_bram_wrapper.v']
+Clock ports: ['clk']
+Reset ports: ['reset_n']
+Icarus compile: fail
+Verilator lint: pass
+Static Spec2RTL compliance: partial
+Issue count: 13
+
+Issues:
+- ❌ Module 'adaptive_aero_control_top' missing ports vs spec: ['cmd_req_valid', 'cmd_req_data', 'cmd_req_ready', 'cmd_rsp_valid', 'cmd_rsp_data', 'cmd_rsp_ready', 'fault_latched', 'safety_inhibit', 'operating_mode']
+- ❌ Module 'adaptive_aero_request_scheduler' missing ports vs spec: ['cfg_speed_min_mps', 'cfg_speed_max_mps']
+- ❌ Module 'adaptive_aero_request_scheduler' has extra ports vs spec: ['cfg_timeout_cycles', 'cfg_operating_mode', 'fault_latched']
+- ❌ Module 'adaptive_aero_safety_monitor' missing ports vs spec: ['cfg_actuator_min', 'cfg_actuator_max', 'response_valid_seen', 'actuator_cmd_data_in', 'fault_clear', 'operating_mode']
+- ❌ Module 'adaptive_aero_safety_monitor' has extra ports vs spec: ['cfg_enable', 'cfg_clear_fault', 'cfg_operating_mode']
+- ❌ Module 'adaptive_aero_actuator_controller' missing ports vs spec: ['response_valid_seen']
+- ❌ Module 'adaptive_aero_actuator_controller' has extra ports vs spec: ['cfg_operating_mode', 'veh_state_valid']
+- ❌ Module 'adaptive_aero_history_buffer' missing ports vs spec: ['request_token']
+- ❌ Module 'adaptive_aero_history_buffer' has extra ports vs spec: ['model_response_word']
+- Module 'adaptive_aero_history_buffer' declares fpga_bram memory_implementation but has no synthesizable unpacked memory array; implement inferred storage instead of scalar registers.
+- ❌ Module 'generic_bram_wrapper' has extra ports vs spec: ['addr', 'din', 'we', 'en', 'dout']
+- Structural port width mismatch warnings reported by Icarus Verilog.
+- ❌ Static Spec2RTL compliance failed: status=partial, missing=33, partial=0, inconclusive=0.

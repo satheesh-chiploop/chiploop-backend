@@ -2125,7 +2125,11 @@ def _internalize_fpga_inferred_memory_interfaces(spec_json: dict, source_prompt:
             str(port.get("name") or "") for port in ports
             if has_write_enable and re.search(r"_(?:csb|chip_select_n)$", str(port.get("name") or ""), re.I)
         }
-        internal_pin_names = primitive_names | redundant_select_names
+        # A wrapper whose only storage-facing interface is the coherent
+        # address/data/control group must keep those ports: they are its real
+        # child-to-child API. Primitive pins are redundant only when the same
+        # module also exposes an alternate functional/FIFO interface.
+        internal_pin_names = (primitive_names | redundant_select_names) if functional else set()
         address_ports = [
             port for port in ports
             if re.search(r"_(?:addr|address)$", str(port.get("name") or ""), re.I)
@@ -2672,17 +2676,22 @@ def _ensure_hierarchical_inter_module_signals(spec_json: dict) -> dict:
         for signal in (spec_json.get("inter_module_signals") or [])
         if isinstance(signal, dict)
     ]
-    connected_destinations = {
-        str(destination or "").strip()
-        for signal in signals
-        for destination in (signal.get("destinations") or [])
-        if str(destination or "").strip()
-    }
-    existing_edges = {
+    output_endpoints = {item["endpoint"] for item in outputs}
+    input_endpoints = {item["endpoint"] for item in inputs}
+    # An invalid/stale model edge must not reserve a destination. Otherwise a
+    # misspelled producer can suppress the deterministic exact-name edge, then
+    # be removed by sanitization and leave the real consumer orphaned.
+    valid_existing_edges = {
         (str(signal.get("source") or "").strip(), str(destination or "").strip())
         for signal in signals
         for destination in (signal.get("destinations") or [])
+        if str(signal.get("source") or "").strip() in output_endpoints
+        and str(destination or "").strip() in input_endpoints
     }
+    connected_destinations = {
+        destination for _source, destination in valid_existing_edges
+    }
+    existing_edges = valid_existing_edges
     output_groups = {}
     for output in outputs:
         output_groups.setdefault((output["port"], output["width"]), []).append(output)
@@ -3690,6 +3699,16 @@ def _normalize_fpga_memory_contract(spec_json: dict, source_prompt: str) -> dict
             and str(existing_module.get("description") or "").strip()
             == "Memory macro interface module derived from memory_macros."
         )
+        normalized_to_inferred = str(macro.get("kind") or "").strip().lower() in {
+            "fpga_bram", "inferred_memory", "inferred_bram", "technology_neutral",
+        }
+        if normalized_to_inferred and existing_module and existing_ports == macro_ports:
+            # The model declared a real RTL wrapper and repeated its interface
+            # in memory_macros. In an FPGA flow the wrapper itself owns the
+            # inferred array; keeping a second macro deliverable duplicates
+            # storage and confuses RTL ownership.
+            assign_inferred_memory(existing_module, macro)
+            continue
         if existing_module and macro_ports and existing_ports != macro_ports:
             # The named hierarchy module is a functional read/write wrapper,
             # not the primitive interface described by memory_macros. Keep its

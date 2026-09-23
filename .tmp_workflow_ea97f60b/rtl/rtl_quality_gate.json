@@ -1,0 +1,13 @@
+{
+  "passed": false,
+  "compile_passed": true,
+  "lint_passed": false,
+  "static_spec2rtl_passed": false,
+  "static_spec2rtl_status": "partial",
+  "final_pass": "pass5",
+  "reason": "RTL failed checks in pass1 through pass5.",
+  "issue_count": 5,
+  "consolidated_checks": "backend/workflows/ea97f60b-a3ea-4cd4-8c8e-00b176895968/rtl/rtl_consolidated_checks_pass5.json",
+  "closure_history": "backend/workflows/ea97f60b-a3ea-4cd4-8c8e-00b176895968/rtl/rtl_closure_history.json",
+  "attempt_count": 5
+}

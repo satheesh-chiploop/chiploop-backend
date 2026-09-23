@@ -1,0 +1,1909 @@
+{
+  "design_name": "adaptive_aero_control_top",
+  "design_summary": "Synthesizable top-level controller for active aerodynamics over 20\u201355 m/s operation. The design integrates firmware-visible MMIO control/status, a transparent reference and surrogate-evaluation path for NVIDIA DoMINO physics-based prediction, bounded actuator-command generation, stale-data detection, timeout handling, safety interlocks, and latched fault reporting. On invalid, stale, timeout, reset, or fault conditions, actuator command validity is deasserted and the requested command is inhibited rather than replaced.",
+  "operating_constraints": {
+    "clock_domains": [
+      {
+        "name": "clk",
+        "frequency_mhz": 50.0,
+        "period_ns": 20.0
+      }
+    ],
+    "reset_signals": [
+      {
+        "name": "reset_n",
+        "active_low": true,
+        "async": false
+      }
+    ],
+    "fixed_assumptions": [
+      "Single synchronous clock domain.",
+      "Firmware accesses control-plane registers through a real MMIO/CSR interface exposed by the top-level module.",
+      "Streaming model-request/model-response transport coexists with MMIO and follows the mandated direction contract.",
+      "Bulk history/FIFO/storage used for stale-data tracking and request/response buffering is implemented through a technology-neutral memory wrapper intended for native FPGA block RAM mapping.",
+      "Actuator outputs are bounded to valid control ranges configured by firmware and default to invalid/inhibited, never substituted, on reset or fault."
+    ]
+  },
+  "implementation_requirements": [],
+  "verification_requirements": [],
+  "feature_contracts": [
+    {
+      "id": "feature_mmio_register_readback",
+      "description": "Firmware can read and write the control plane registers and observe coherent readback/status behavior through the MMIO interface.",
+      "stimulus": {
+        "steps": [
+          {
+            "signals": {
+              "mmio_valid": 1,
+              "mmio_write": 1,
+              "mmio_addr": 0,
+              "mmio_wdata": 5
+            },
+            "cycles": 1
+          },
+          {
+            "signals": {
+              "mmio_valid": 1,
+              "mmio_write": 0,
+              "mmio_addr": 20
+            },
+            "cycles": 1
+          }
+        ]
+      },
+      "expected": {
+        "mmio_ready": 1,
+        "mmio_rvalid": 1
+      },
+      "within_cycles": 2
+    },
+    {
+      "id": "feature_model_transport_direction",
+      "description": "The top emits model-request valid/data as outputs and accepts model-response valid/data as inputs while driving model-response ready outward.",
+      "stimulus": {
+        "steps": [
+          {
+            "signals": {
+              "veh_state_valid": 1,
+              "veh_speed_mps": 2800,
+              "mmio_valid": 1,
+              "mmio_write": 1,
+              "mmio_addr": 0,
+              "mmio_wdata": 1
+            },
+            "cycles": 1
+          }
+        ]
+      },
+      "expected": {
+        "model_req_valid": 1,
+        "model_rsp_ready": 1
+      },
+      "within_cycles": 1
+    },
+    {
+      "id": "feature_safety_inhibit_on_invalid_state",
+      "description": "Invalid vehicle state causes safety inhibit and fault latch behavior without generating a substitute actuator command.",
+      "stimulus": {
+        "steps": [
+          {
+            "signals": {
+              "veh_state_valid": 0,
+              "veh_speed_mps": 3000,
+              "mmio_valid": 1,
+              "mmio_write": 1,
+              "mmio_addr": 0,
+              "mmio_wdata": 1
+            },
+            "cycles": 1
+          }
+        ]
+      },
+      "expected": {
+        "safety_inhibit": 1,
+        "fault_latched": 1,
+        "actuator_cmd_valid": 0
+      },
+      "within_cycles": 1
+    },
+    {
+      "id": "feature_bounded_actuator_command",
+      "description": "When enabled, with valid state and accepted response, actuator command data remains bounded and valid is asserted only if safe.",
+      "stimulus": {
+        "steps": [
+          {
+            "signals": {
+              "veh_state_valid": 1,
+              "veh_speed_mps": 3200,
+              "mmio_valid": 1,
+              "mmio_write": 1,
+              "mmio_addr": 12,
+              "mmio_wdata": 65538000
+            },
+            "cycles": 1
+          }
+        ]
+      },
+      "expected": {
+        "actuator_cmd_valid": 1
+      },
+      "within_cycles": 2
+    },
+    {
+      "id": "feature_timeout_latches_fault_without_fallback",
+      "description": "Timeout or stale-data conditions latch a fault and inhibit actuator validity rather than substituting a fallback command.",
+      "stimulus": {
+        "steps": [
+          {
+            "signals": {
+              "veh_state_valid": 1,
+              "veh_speed_mps": 4000,
+              "mmio_valid": 1,
+              "mmio_write": 1,
+              "mmio_addr": 16,
+              "mmio_wdata": 10
+            },
+            "cycles": 1
+          },
+          {
+            "signals": {
+              "veh_state_valid": 1,
+              "veh_speed_mps": 4000
+            },
+            "cycles": 10
+          }
+        ]
+      },
+      "expected": {
+        "fault_latched": 1,
+        "actuator_cmd_valid": 0
+      },
+      "within_cycles": 10
+    }
+  ],
+  "memory_macros": [
+    {
+      "name": "generic_bram_wrapper",
+      "kind": "fpga_bram",
+      "depth": 256,
+      "data_width": 64,
+      "addr_width": 8,
+      "instance_name": "u_history_bram",
+      "ports": {
+        "clk": "clk",
+        "csb": "bram_csb",
+        "we": "bram_we",
+        "addr": "bram_addr",
+        "din": "bram_din",
+        "dout": "bram_dout"
+      },
+      "requires_mbist": false,
+      "technology_binding": "technology_neutral_inferred_memory"
+    }
+  ],
+  "hierarchy": {
+    "top_module": {
+      "name": "adaptive_aero_control_top",
+      "description": "Top-level integration of MMIO control/status, model-request/model-response transport, safety monitoring, timeout/stale detection, bounded command generation, and actuator-valid gating.",
+      "ports": [
+        {
+          "name": "clk",
+          "direction": "input",
+          "width": 1
+        },
+        {
+          "name": "reset_n",
+          "direction": "input",
+          "width": 1,
+          "active_low": true
+        },
+        {
+          "name": "mmio_valid",
+          "direction": "input",
+          "width": 1
+        },
+        {
+          "name": "mmio_write",
+          "direction": "input",
+          "width": 1
+        },
+        {
+          "name": "mmio_addr",
+          "direction": "input",
+          "width": 12
+        },
+        {
+          "name": "mmio_wdata",
+          "direction": "input",
+          "width": 32
+        },
+        {
+          "name": "mmio_ready",
+          "direction": "output",
+          "width": 1
+        },
+        {
+          "name": "mmio_rdata",
+          "direction": "output",
+          "width": 32
+        },
+        {
+          "name": "mmio_rvalid",
+          "direction": "output",
+          "width": 1
+        },
+        {
+          "name": "veh_speed_mps",
+          "direction": "input",
+          "width": 16
+        },
+        {
+          "name": "veh_state_valid",
+          "direction": "input",
+          "width": 1
+        },
+        {
+          "name": "cmd_req_valid",
+          "direction": "input",
+          "width": 1
+        },
+        {
+          "name": "cmd_req_data",
+          "direction": "input",
+          "width": 32
+        },
+        {
+          "name": "cmd_req_ready",
+          "direction": "output",
+          "width": 1
+        },
+        {
+          "name": "cmd_rsp_valid",
+          "direction": "output",
+          "width": 1
+        },
+        {
+          "name": "cmd_rsp_data",
+          "direction": "output",
+          "width": 32
+        },
+        {
+          "name": "cmd_rsp_ready",
+          "direction": "input",
+          "width": 1
+        },
+        {
+          "name": "model_req_valid",
+          "direction": "output",
+          "width": 1
+        },
+        {
+          "name": "model_req_data",
+          "direction": "output",
+          "width": 64
+        },
+        {
+          "name": "model_req_ready",
+          "direction": "input",
+          "width": 1
+        },
+        {
+          "name": "model_rsp_valid",
+          "direction": "input",
+          "width": 1
+        },
+        {
+          "name": "model_rsp_data",
+          "direction": "input",
+          "width": 64
+        },
+        {
+          "name": "model_rsp_ready",
+          "direction": "output",
+          "width": 1
+        },
+        {
+          "name": "actuator_cmd_valid",
+          "direction": "output",
+          "width": 1
+        },
+        {
+          "name": "actuator_cmd_data",
+          "direction": "output",
+          "width": 16
+        },
+        {
+          "name": "fault_latched",
+          "direction": "output",
+          "width": 1
+        },
+        {
+          "name": "safety_inhibit",
+          "direction": "output",
+          "width": 1
+        },
+        {
+          "name": "operating_mode",
+          "direction": "output",
+          "width": 2
+        }
+      ],
+      "functionality": "Implements firmware-configurable, bounded active-aerodynamics control for 20\u201355 m/s operation. The top accepts a vehicle-speed sample and a validity indicator, provides a firmware MMIO control/status plane, forwards model requests to a physics-based surrogate evaluation path, consumes model responses, evaluates validity and freshness, and produces bounded actuator commands only when all safety conditions are satisfied. The design explicitly supports transparent reference capture and surrogate evaluation using NVIDIA DoMINO-aligned model transport; however, command validity is inhibited whenever model data is stale, timed out, invalid, or the safety contract is violated. Invalid or faulted conditions do not trigger a substitute command or fallback command; instead, actuator_cmd_valid is deasserted and fault_latched remains asserted until firmware clears it via MMIO.",
+      "responsibilities": [
+        "Provide the firmware-visible MMIO/CSR control and status interface.",
+        "Decode control registers into semantic configuration signals.",
+        "Transport model requests and responses with the mandated directionality.",
+        "Track request age, response freshness, and timeout conditions.",
+        "Gate actuator commands with safety, validity, and range checks.",
+        "Latch faults for firmware handling without synthesizing a substitute command.",
+        "Expose operating mode and safety inhibit status to software and system integration logic."
+      ],
+      "must_drive": [
+        "mmio_ready",
+        "mmio_rdata",
+        "mmio_rvalid",
+        "cmd_req_ready",
+        "cmd_rsp_valid",
+        "cmd_rsp_data",
+        "model_req_valid",
+        "model_req_data",
+        "model_rsp_ready",
+        "actuator_cmd_valid",
+        "actuator_cmd_data",
+        "fault_latched",
+        "safety_inhibit",
+        "operating_mode"
+      ],
+      "must_receive": [
+        "clk",
+        "reset_n",
+        "mmio_valid",
+        "mmio_write",
+        "mmio_addr",
+        "mmio_wdata",
+        "veh_speed_mps",
+        "veh_state_valid",
+        "cmd_req_valid",
+        "cmd_req_data",
+        "cmd_rsp_ready",
+        "model_req_ready",
+        "model_rsp_valid",
+        "model_rsp_data"
+      ],
+      "must_not_drive": [
+        "model_req_ready",
+        "model_rsp_valid",
+        "model_rsp_data",
+        "cmd_req_valid",
+        "cmd_req_data",
+        "veh_speed_mps",
+        "veh_state_valid",
+        "mmio_valid",
+        "mmio_write",
+        "mmio_addr",
+        "mmio_wdata",
+        "cmd_rsp_ready"
+      ],
+      "reset_behavior": "On reset, all outgoing valid signals are deasserted, model_req_valid is low, model_rsp_ready is low until control logic is initialized, actuator_cmd_valid is low, mmio_ready is asserted only when the register interface is able to accept transactions, operating_mode indicates safe/inhibit state, and fault_latched is cleared only by reset. No fallback or substitute command is generated on reset.",
+      "behavior_rules": [
+        "Actuator output validity must be deasserted whenever veh_state_valid is low, model response is invalid, model response is stale, timeout occurs, or safety limits are violated.",
+        "The commanded actuator data must remain bounded to firmware-programmed limits; if the bound check fails, validity is inhibited and the fault is latched.",
+        "The design must not replace an invalid or missing command with a fallback command; instead, it must inhibit output validity.",
+        "Model requests are emitted only when the request path is enabled and the controller is not in fault inhibit mode.",
+        "Model response readiness is asserted only when the response can be safely accepted and processed.",
+        "All firmware-visible registers must be reachable through real MMIO decode.",
+        "Bulk history/FIFO storage is implemented through the declared memory macro and must not be flattened into registers.",
+        "Stale-data detection uses stored request/response age history and latches a fault when age exceeds the configured timeout.",
+        "The transparent reference path shall preserve traceability of speed input, request generation, and response consumption for software analysis."
+      ],
+      "rtl_output_file": "adaptive_aero_control_top.v"
+    },
+    "modules": [
+      {
+        "name": "adaptive_aero_mmio_csr",
+        "description": "Firmware-visible CSR/MMIO register block that decodes address, write-data, write-enable, and transaction-valid handshakes into semantic control outputs and readback status. Implements all declared registers and provides read data and ready/valid response semantics.",
+        "ports": [
+          {
+            "name": "clk",
+            "direction": "input",
+            "width": 1
+          },
+          {
+            "name": "reset_n",
+            "direction": "input",
+            "width": 1,
+            "active_low": true
+          },
+          {
+            "name": "mmio_valid",
+            "direction": "input",
+            "width": 1
+          },
+          {
+            "name": "mmio_write",
+            "direction": "input",
+            "width": 1
+          },
+          {
+            "name": "mmio_addr",
+            "direction": "input",
+            "width": 12
+          },
+          {
+            "name": "mmio_wdata",
+            "direction": "input",
+            "width": 32
+          },
+          {
+            "name": "mmio_ready",
+            "direction": "output",
+            "width": 1
+          },
+          {
+            "name": "mmio_rdata",
+            "direction": "output",
+            "width": 32
+          },
+          {
+            "name": "mmio_rvalid",
+            "direction": "output",
+            "width": 1
+          },
+          {
+            "name": "cfg_enable",
+            "direction": "output",
+            "width": 1
+          },
+          {
+            "name": "cfg_clear_fault",
+            "direction": "output",
+            "width": 1
+          },
+          {
+            "name": "cfg_timeout_cycles",
+            "direction": "output",
+            "width": 16
+          },
+          {
+            "name": "cfg_speed_min_mps",
+            "direction": "output",
+            "width": 16
+          },
+          {
+            "name": "cfg_speed_max_mps",
+            "direction": "output",
+            "width": 16
+          },
+          {
+            "name": "cfg_actuator_min",
+            "direction": "output",
+            "width": 16
+          },
+          {
+            "name": "cfg_actuator_max",
+            "direction": "output",
+            "width": 16
+          },
+          {
+            "name": "cfg_model_req_ttl",
+            "direction": "output",
+            "width": 16
+          },
+          {
+            "name": "cfg_operating_mode",
+            "direction": "output",
+            "width": 2
+          },
+          {
+            "name": "fault_latched_in",
+            "direction": "input",
+            "width": 1
+          },
+          {
+            "name": "safety_inhibit_in",
+            "direction": "input",
+            "width": 1
+          },
+          {
+            "name": "operating_mode_in",
+            "direction": "input",
+            "width": 2
+          }
+        ],
+        "functionality": "Decodes MMIO transactions into firmware-visible semantic control signals, including enable, timeout, speed window, actuator bounds, model request TTL, operating mode, and fault clear strobe. Returns status and readback data for control, status, and fault visibility. All declared registers are reachable through decode. The interface does not synthesize an actuator substitute or fallback; it only configures and reports the controller.",
+        "responsibilities": [
+          "Accept MMIO read/write transactions.",
+          "Generate semantic control registers for the controller.",
+          "Expose latched fault, safety inhibit, and operating mode readback.",
+          "Provide ready/valid semantics for firmware transactions.",
+          "Keep register semantics transparent and directly readable."
+        ],
+        "must_drive": [
+          "mmio_ready",
+          "mmio_rdata",
+          "mmio_rvalid",
+          "cfg_enable",
+          "cfg_clear_fault",
+          "cfg_timeout_cycles",
+          "cfg_speed_min_mps",
+          "cfg_speed_max_mps",
+          "cfg_actuator_min",
+          "cfg_actuator_max",
+          "cfg_model_req_ttl",
+          "cfg_operating_mode"
+        ],
+        "must_receive": [
+          "clk",
+          "reset_n",
+          "mmio_valid",
+          "mmio_write",
+          "mmio_addr",
+          "mmio_wdata",
+          "fault_latched_in",
+          "safety_inhibit_in",
+          "operating_mode_in"
+        ],
+        "must_not_drive": [
+          "fault_latched_in",
+          "safety_inhibit_in",
+          "operating_mode_in"
+        ],
+        "reset_behavior": "All writable control outputs reset to safe disabled values. Readback outputs are valid only after reset deassertion and transaction processing. The register block clears transient transaction state but does not clear external fault state except via reset or explicit firmware clear register action.",
+        "behavior_rules": [
+          "Each declared register must be reachable through decode.",
+          "Write accesses update only the targeted semantic control field.",
+          "Read accesses return the current semantic control or status value.",
+          "The block must not expose inaccessible internal state as software-visible.",
+          "Control outputs are real module outputs and must be consumed by downstream control logic."
+        ],
+        "rtl_output_file": "adaptive_aero_mmio_csr.v"
+      },
+      {
+        "name": "adaptive_aero_request_scheduler",
+        "description": "Generates model requests from vehicle-speed input and firmware configuration, sequences requests, and manages handshakes to the model transport path while preserving transparent traceability for reference analysis.",
+        "ports": [
+          {
+            "name": "clk",
+            "direction": "input",
+            "width": 1
+          },
+          {
+            "name": "reset_n",
+            "direction": "input",
+            "width": 1,
+            "active_low": true
+          },
+          {
+            "name": "veh_speed_mps",
+            "direction": "input",
+            "width": 16
+          },
+          {
+            "name": "veh_state_valid",
+            "direction": "input",
+            "width": 1
+          },
+          {
+            "name": "cfg_enable",
+            "direction": "input",
+            "width": 1
+          },
+          {
+            "name": "cfg_speed_min_mps",
+            "direction": "input",
+            "width": 16
+          },
+          {
+            "name": "cfg_speed_max_mps",
+            "direction": "input",
+            "width": 16
+          },
+          {
+            "name": "cfg_model_req_ttl",
+            "direction": "input",
+            "width": 16
+          },
+          {
+            "name": "model_req_valid",
+            "direction": "output",
+            "width": 1
+          },
+          {
+            "name": "model_req_data",
+            "direction": "output",
+            "width": 64
+          },
+          {
+            "name": "model_req_ready",
+            "direction": "input",
+            "width": 1
+          },
+          {
+            "name": "request_token",
+            "direction": "output",
+            "width": 16
+          },
+          {
+            "name": "request_age",
+            "direction": "output",
+            "width": 16
+          }
+        ],
+        "functionality": "Builds model-request payloads for the surrogate evaluation path using current vehicle speed and firmware-defined operating window. Produces request-valid/data, observes request-ready, and emits request token and age information to downstream safety and history logic. Requests are issued only when enabled and state is valid; otherwise valid is deasserted.",
+        "responsibilities": [
+          "Create model requests from the transparent reference input path.",
+          "Respect the configured active speed range of 20\u201355 m/s or firmware overrides.",
+          "Handshake with the model transport path using valid/ready semantics.",
+          "Expose request token and request age for timeout tracking."
+        ],
+        "must_drive": [
+          "model_req_valid",
+          "model_req_data",
+          "request_token",
+          "request_age"
+        ],
+        "must_receive": [
+          "clk",
+          "reset_n",
+          "veh_speed_mps",
+          "veh_state_valid",
+          "cfg_enable",
+          "cfg_speed_min_mps",
+          "cfg_speed_max_mps",
+          "cfg_model_req_ttl",
+          "model_req_ready"
+        ],
+        "must_not_drive": [
+          "veh_speed_mps",
+          "veh_state_valid",
+          "cfg_enable",
+          "cfg_speed_min_mps",
+          "cfg_speed_max_mps",
+          "cfg_model_req_ttl",
+          "model_req_ready"
+        ],
+        "reset_behavior": "Requests are deasserted on reset. Request token and age counters return to a known reset baseline. No substitute or fallback request is emitted on reset.",
+        "behavior_rules": [
+          "A request may be emitted only when enabled and vehicle-state-valid is asserted.",
+          "Request payloads must encode the current vehicle speed and reference context needed by the surrogate path.",
+          "If the model request is not accepted, valid remains asserted only according to the defined handshake state machine.",
+          "No fallback request or substitute command is allowed."
+        ],
+        "rtl_output_file": "adaptive_aero_request_scheduler.v"
+      },
+      {
+        "name": "adaptive_aero_model_transport_bridge",
+        "description": "Implements the mandated external model transport direction contract, bridging request valid/data outputs and response valid/data inputs while exposing response-ready output. It also forwards request and response metadata for safety and freshness monitoring.",
+        "ports": [
+          {
+            "name": "clk",
+            "direction": "input",
+            "width": 1
+          },
+          {
+            "name": "reset_n",
+            "direction": "input",
+            "width": 1,
+            "active_low": true
+          },
+          {
+            "name": "model_req_valid",
+            "direction": "input",
+            "width": 1
+          },
+          {
+            "name": "model_req_data",
+            "direction": "input",
+            "width": 64
+          },
+          {
+            "name": "model_req_ready",
+            "direction": "output",
+            "width": 1
+          },
+          {
+            "name": "model_rsp_valid",
+            "direction": "input",
+            "width": 1
+          },
+          {
+            "name": "model_rsp_data",
+            "direction": "input",
+            "width": 64
+          },
+          {
+            "name": "model_rsp_ready",
+            "direction": "output",
+            "width": 1
+          },
+          {
+            "name": "model_response_word",
+            "direction": "output",
+            "width": 64
+          },
+          {
+            "name": "response_valid_seen",
+            "direction": "output",
+            "width": 1
+          }
+        ],
+        "functionality": "Passes model-request traffic outward and model-response traffic inward using the required directionality. Provides a registered response-word output and response-valid seen indicator for downstream policy and safety logic. The bridge does not alter control decisions; it only transports and registers model data.",
+        "responsibilities": [
+          "Emit model-request valid/data as outputs.",
+          "Receive model-request ready as an input.",
+          "Receive model-response valid/data as inputs.",
+          "Emit model-response ready as an output.",
+          "Provide a traceable response-word tap for internal checking."
+        ],
+        "must_drive": [
+          "model_req_ready",
+          "model_rsp_ready",
+          "model_response_word",
+          "response_valid_seen"
+        ],
+        "must_receive": [
+          "clk",
+          "reset_n",
+          "model_req_valid",
+          "model_req_data",
+          "model_rsp_valid",
+          "model_rsp_data"
+        ],
+        "must_not_drive": [
+          "model_req_valid",
+          "model_req_data",
+          "model_rsp_valid",
+          "model_rsp_data"
+        ],
+        "reset_behavior": "Response ready and trace indicators are reset to inactive safe values. No response is synthesized on reset. The bridge never substitutes a response and never creates a fallback command.",
+        "behavior_rules": [
+          "The bridge must preserve the mandated request/response direction contract.",
+          "Response-ready may only assert when the system is prepared to accept a response.",
+          "Response data is captured transparently for downstream use.",
+          "No synthetic response or command substitution is permitted."
+        ],
+        "rtl_output_file": "adaptive_aero_model_transport_bridge.v"
+      },
+      {
+        "name": "adaptive_aero_safety_monitor",
+        "description": "Evaluates speed-window compliance, request/response freshness, timeout conditions, and commanded-output range checks. Latches faults and asserts safety inhibit when any safety rule is violated.",
+        "ports": [
+          {
+            "name": "clk",
+            "direction": "input",
+            "width": 1
+          },
+          {
+            "name": "reset_n",
+            "direction": "input",
+            "width": 1,
+            "active_low": true
+          },
+          {
+            "name": "veh_speed_mps",
+            "direction": "input",
+            "width": 16
+          },
+          {
+            "name": "veh_state_valid",
+            "direction": "input",
+            "width": 1
+          },
+          {
+            "name": "cfg_timeout_cycles",
+            "direction": "input",
+            "width": 16
+          },
+          {
+            "name": "cfg_speed_min_mps",
+            "direction": "input",
+            "width": 16
+          },
+          {
+            "name": "cfg_speed_max_mps",
+            "direction": "input",
+            "width": 16
+          },
+          {
+            "name": "cfg_actuator_min",
+            "direction": "input",
+            "width": 16
+          },
+          {
+            "name": "cfg_actuator_max",
+            "direction": "input",
+            "width": 16
+          },
+          {
+            "name": "request_age",
+            "direction": "input",
+            "width": 16
+          },
+          {
+            "name": "response_age",
+            "direction": "input",
+            "width": 16
+          },
+          {
+            "name": "response_valid_seen",
+            "direction": "input",
+            "width": 1
+          },
+          {
+            "name": "actuator_cmd_data_in",
+            "direction": "input",
+            "width": 16
+          },
+          {
+            "name": "fault_clear",
+            "direction": "input",
+            "width": 1
+          },
+          {
+            "name": "fault_latched",
+            "direction": "output",
+            "width": 1
+          },
+          {
+            "name": "safety_inhibit",
+            "direction": "output",
+            "width": 1
+          },
+          {
+            "name": "operating_mode",
+            "direction": "output",
+            "width": 2
+          }
+        ],
+        "functionality": "Monitors operating-envelope compliance for 20\u201355 m/s operation and firmware-configured bounds. Detects stale or timed-out data, invalid state samples, and out-of-range actuator commands. Latches faults until explicitly cleared by firmware and drives safety inhibit and operating mode. The monitor never synthesizes a replacement command.",
+        "responsibilities": [
+          "Detect invalid, stale, and timeout conditions.",
+          "Latch fault state for software handling.",
+          "Assert safety inhibit whenever a violation occurs.",
+          "Report operating mode for integration and readback."
+        ],
+        "must_drive": [
+          "fault_latched",
+          "safety_inhibit",
+          "operating_mode"
+        ],
+        "must_receive": [
+          "clk",
+          "reset_n",
+          "veh_speed_mps",
+          "veh_state_valid",
+          "cfg_timeout_cycles",
+          "cfg_speed_min_mps",
+          "cfg_speed_max_mps",
+          "cfg_actuator_min",
+          "cfg_actuator_max",
+          "request_age",
+          "response_age",
+          "response_valid_seen",
+          "actuator_cmd_data_in",
+          "fault_clear"
+        ],
+        "must_not_drive": [
+          "veh_speed_mps",
+          "veh_state_valid",
+          "cfg_timeout_cycles",
+          "cfg_speed_min_mps",
+          "cfg_speed_max_mps",
+          "cfg_actuator_min",
+          "cfg_actuator_max",
+          "request_age",
+          "response_age",
+          "response_valid_seen",
+          "actuator_cmd_data_in",
+          "fault_clear"
+        ],
+        "reset_behavior": "Faults clear on reset, safety inhibit asserts to safe state, and operating mode indicates inhibited safe state. No command fallback is emitted on reset.",
+        "behavior_rules": [
+          "Faults latch on timeout, stale data, invalid vehicle state, or actuator bound violation.",
+          "Fault clearing is firmware controlled.",
+          "Safety inhibit must be asserted whenever fault_latched is asserted.",
+          "No fallback or substitute actuator behavior is permitted."
+        ],
+        "rtl_output_file": "adaptive_aero_safety_monitor.v"
+      },
+      {
+        "name": "adaptive_aero_actuator_controller",
+        "description": "Computes bounded actuator commands from validated model responses and vehicle state. Emits a command only when enabled and safe; otherwise deasserts command validity without substituting an alternate command.",
+        "ports": [
+          {
+            "name": "clk",
+            "direction": "input",
+            "width": 1
+          },
+          {
+            "name": "reset_n",
+            "direction": "input",
+            "width": 1,
+            "active_low": true
+          },
+          {
+            "name": "cfg_enable",
+            "direction": "input",
+            "width": 1
+          },
+          {
+            "name": "cfg_actuator_min",
+            "direction": "input",
+            "width": 16
+          },
+          {
+            "name": "cfg_actuator_max",
+            "direction": "input",
+            "width": 16
+          },
+          {
+            "name": "fault_latched",
+            "direction": "input",
+            "width": 1
+          },
+          {
+            "name": "safety_inhibit",
+            "direction": "input",
+            "width": 1
+          },
+          {
+            "name": "veh_speed_mps",
+            "direction": "input",
+            "width": 16
+          },
+          {
+            "name": "model_response_word",
+            "direction": "input",
+            "width": 64
+          },
+          {
+            "name": "response_valid_seen",
+            "direction": "input",
+            "width": 1
+          },
+          {
+            "name": "actuator_cmd_valid",
+            "direction": "output",
+            "width": 1
+          },
+          {
+            "name": "actuator_cmd_data",
+            "direction": "output",
+            "width": 16
+          }
+        ],
+        "functionality": "Consumes validated model output and generates a bounded actuator command for active aerodynamics. The output command is clamped to firmware-programmed limits and is valid only when the system is enabled, safety-inhibit is low, and a valid model response has been observed. If any gating condition fails, valid is deasserted and the last command is not replaced with a fallback value.",
+        "responsibilities": [
+          "Convert validated surrogate output into actuator command data.",
+          "Clamp outputs to the configured actuator range.",
+          "Deassert command validity when disabled or faulted.",
+          "Never synthesize a substitute or fallback command."
+        ],
+        "must_drive": [
+          "actuator_cmd_valid",
+          "actuator_cmd_data"
+        ],
+        "must_receive": [
+          "clk",
+          "reset_n",
+          "cfg_enable",
+          "cfg_actuator_min",
+          "cfg_actuator_max",
+          "fault_latched",
+          "safety_inhibit",
+          "veh_speed_mps",
+          "model_response_word",
+          "response_valid_seen"
+        ],
+        "must_not_drive": [
+          "cfg_enable",
+          "cfg_actuator_min",
+          "cfg_actuator_max",
+          "fault_latched",
+          "safety_inhibit",
+          "veh_speed_mps",
+          "model_response_word",
+          "response_valid_seen"
+        ],
+        "reset_behavior": "On reset, actuator_cmd_valid is deasserted and actuator_cmd_data is cleared to a benign internal value. No fallback command is generated.",
+        "behavior_rules": [
+          "Valid command output requires enable, no fault, no safety inhibit, and a valid observed response.",
+          "Command data must remain within configured min/max bounds.",
+          "If bounds or gating conditions fail, output validity must be deasserted rather than replaced.",
+          "The command path must remain bounded and deterministic."
+        ],
+        "rtl_output_file": "adaptive_aero_actuator_controller.v"
+      },
+      {
+        "name": "adaptive_aero_history_buffer",
+        "description": "Technology-neutral history/FIFO storage wrapper intended for FPGA block RAM mapping. Stores request/response metadata and sampled state for stale-data detection and traceability.",
+        "ports": [
+          {
+            "name": "clk",
+            "direction": "input",
+            "width": 1
+          },
+          {
+            "name": "reset_n",
+            "direction": "input",
+            "width": 1,
+            "active_low": true
+          },
+          {
+            "name": "bram_csb",
+            "direction": "output",
+            "width": 1
+          },
+          {
+            "name": "bram_we",
+            "direction": "output",
+            "width": 1
+          },
+          {
+            "name": "bram_addr",
+            "direction": "output",
+            "width": 8
+          },
+          {
+            "name": "bram_din",
+            "direction": "output",
+            "width": 64
+          },
+          {
+            "name": "bram_dout",
+            "direction": "input",
+            "width": 64
+          },
+          {
+            "name": "request_token",
+            "direction": "input",
+            "width": 16
+          },
+          {
+            "name": "request_age",
+            "direction": "input",
+            "width": 16
+          },
+          {
+            "name": "response_valid_seen",
+            "direction": "input",
+            "width": 1
+          },
+          {
+            "name": "response_age",
+            "direction": "output",
+            "width": 16
+          }
+        ],
+        "functionality": "Implements bulk storage for request/response history and timing metadata in a memory-mapped structure suitable for native FPGA block RAM inference or instantiation of the declared macro. Provides traceability and age information for stale-data detection while keeping storage out of the register file.",
+        "responsibilities": [
+          "Store request and response history.",
+          "Present technology-neutral block RAM style interface.",
+          "Support stale-data and timeout analysis.",
+          "Preserve traceability for firmware and validation."
+        ],
+        "must_drive": [
+          "bram_csb",
+          "bram_we",
+          "bram_addr",
+          "bram_din",
+          "response_age"
+        ],
+        "must_receive": [
+          "clk",
+          "reset_n",
+          "bram_dout",
+          "request_token",
+          "request_age",
+          "response_valid_seen"
+        ],
+        "must_not_drive": [
+          "bram_dout",
+          "request_token",
+          "request_age",
+          "response_valid_seen"
+        ],
+        "reset_behavior": "Storage control outputs reset to inactive values. Memory contents are implementation-defined but must not be exposed as register state. No fallback behavior is associated with storage reset.",
+        "behavior_rules": [
+          "Bulk history storage shall remain in memory form and must not be flattened into registers.",
+          "The wrapper exists to support stale-data and timeout evaluation.",
+          "Response age output is derived from stored history and current observation state."
+        ],
+        "rtl_output_file": "adaptive_aero_history_buffer.v"
+      },
+      {
+        "name": "generic_bram_wrapper",
+        "description": "Memory macro interface module derived from memory_macros.",
+        "ports": [
+          {
+            "name": "clk",
+            "direction": "input",
+            "width": 1
+          },
+          {
+            "name": "bram_csb",
+            "direction": "input",
+            "width": 1
+          },
+          {
+            "name": "bram_we",
+            "direction": "input",
+            "width": 1
+          },
+          {
+            "name": "bram_addr",
+            "direction": "input",
+            "width": 8
+          },
+          {
+            "name": "bram_din",
+            "direction": "input",
+            "width": 64
+          },
+          {
+            "name": "bram_dout",
+            "direction": "output",
+            "width": 64
+          }
+        ],
+        "functionality": "Single-port memory macro abstraction.",
+        "responsibilities": [
+          "Expose the memory macro interface for RTL generation and downstream collateral."
+        ],
+        "must_drive": [
+          "bram_dout"
+        ],
+        "must_receive": [
+          "clk",
+          "bram_csb",
+          "bram_we",
+          "bram_addr",
+          "bram_din"
+        ],
+        "must_not_drive": [
+          "clk",
+          "bram_csb",
+          "bram_we",
+          "bram_addr",
+          "bram_din"
+        ],
+        "reset_behavior": "Memory macro contents are not reset by the controller reset.",
+        "behavior_rules": [
+          "Preserve the declared memory macro port interface."
+        ],
+        "rtl_output_file": "generic_bram_wrapper.v"
+      }
+    ]
+  },
+  "top_level_connections": [
+    {
+      "top_port": "clk",
+      "connected_to": [
+        "adaptive_aero_mmio_csr.clk",
+        "adaptive_aero_request_scheduler.clk",
+        "adaptive_aero_model_transport_bridge.clk",
+        "adaptive_aero_safety_monitor.clk",
+        "adaptive_aero_actuator_controller.clk",
+        "adaptive_aero_history_buffer.clk",
+        "generic_bram_wrapper.clk"
+      ],
+      "description": "Clock fanout to all synchronous submodules."
+    },
+    {
+      "top_port": "reset_n",
+      "connected_to": [
+        "adaptive_aero_mmio_csr.reset_n",
+        "adaptive_aero_request_scheduler.reset_n",
+        "adaptive_aero_model_transport_bridge.reset_n",
+        "adaptive_aero_safety_monitor.reset_n",
+        "adaptive_aero_actuator_controller.reset_n",
+        "adaptive_aero_history_buffer.reset_n"
+      ],
+      "description": "Active-low reset distribution to all submodules."
+    },
+    {
+      "top_port": "mmio_valid",
+      "connected_to": [
+        "adaptive_aero_mmio_csr.mmio_valid"
+      ],
+      "description": "Firmware transaction-valid input to the MMIO/CSR block."
+    },
+    {
+      "top_port": "mmio_write",
+      "connected_to": [
+        "adaptive_aero_mmio_csr.mmio_write"
+      ],
+      "description": "Firmware write-enable input to the MMIO/CSR block."
+    },
+    {
+      "top_port": "mmio_addr",
+      "connected_to": [
+        "adaptive_aero_mmio_csr.mmio_addr"
+      ],
+      "description": "Firmware address input to the MMIO/CSR block."
+    },
+    {
+      "top_port": "mmio_wdata",
+      "connected_to": [
+        "adaptive_aero_mmio_csr.mmio_wdata"
+      ],
+      "description": "Firmware write-data input to the MMIO/CSR block."
+    },
+    {
+      "top_port": "veh_speed_mps",
+      "connected_to": [
+        "adaptive_aero_request_scheduler.veh_speed_mps",
+        "adaptive_aero_safety_monitor.veh_speed_mps",
+        "adaptive_aero_actuator_controller.veh_speed_mps"
+      ],
+      "description": "Vehicle speed is distributed to request, safety, and command logic."
+    },
+    {
+      "top_port": "veh_state_valid",
+      "connected_to": [
+        "adaptive_aero_request_scheduler.veh_state_valid",
+        "adaptive_aero_safety_monitor.veh_state_valid"
+      ],
+      "description": "Vehicle state validity is consumed by request and safety logic."
+    },
+    {
+      "top_port": "cmd_req_valid",
+      "connected_to": [
+        "adaptive_aero_request_scheduler.cfg_enable"
+      ],
+      "description": "External request-enable command is used as part of the semantic enable path; the top-level port is consumed into the request scheduler enable control path."
+    },
+    {
+      "top_port": "cmd_req_data",
+      "connected_to": [
+        "adaptive_aero_request_scheduler.cfg_model_req_ttl"
+      ],
+      "description": "External command-data input is used as a firmware/system-provided policy input for request scheduling."
+    },
+    {
+      "top_port": "model_req_ready",
+      "connected_to": [
+        "adaptive_aero_request_scheduler.model_req_ready"
+      ],
+      "description": "Model request ready is observed by the request scheduler."
+    },
+    {
+      "top_port": "model_rsp_valid",
+      "connected_to": [
+        "adaptive_aero_model_transport_bridge.model_rsp_valid"
+      ],
+      "description": "Model response valid is received by the transport bridge."
+    },
+    {
+      "top_port": "model_rsp_data",
+      "connected_to": [
+        "adaptive_aero_model_transport_bridge.model_rsp_data"
+      ],
+      "description": "Model response data is received by the transport bridge."
+    },
+    {
+      "top_port": "model_req_valid",
+      "connected_to": [
+        "adaptive_aero_request_scheduler.model_req_valid"
+      ],
+      "description": "Model request valid is driven from the transport bridge to the external model interface."
+    },
+    {
+      "top_port": "model_req_data",
+      "connected_to": [
+        "adaptive_aero_request_scheduler.model_req_data"
+      ],
+      "description": "Model request data is driven from the transport bridge to the external model interface."
+    },
+    {
+      "top_port": "model_rsp_ready",
+      "connected_to": [
+        "adaptive_aero_model_transport_bridge.model_rsp_ready"
+      ],
+      "description": "Model response ready is driven by the transport bridge."
+    },
+    {
+      "top_port": "actuator_cmd_valid",
+      "connected_to": [
+        "adaptive_aero_actuator_controller.actuator_cmd_valid"
+      ],
+      "description": "Actuator command valid is sourced from the actuator controller."
+    },
+    {
+      "top_port": "actuator_cmd_data",
+      "connected_to": [
+        "adaptive_aero_actuator_controller.actuator_cmd_data"
+      ],
+      "description": "Actuator command data is sourced from the actuator controller."
+    },
+    {
+      "top_port": "fault_latched",
+      "connected_to": [
+        "adaptive_aero_safety_monitor.fault_latched"
+      ],
+      "description": "Latched fault status is driven by the safety monitor."
+    },
+    {
+      "top_port": "safety_inhibit",
+      "connected_to": [
+        "adaptive_aero_safety_monitor.safety_inhibit"
+      ],
+      "description": "Safety inhibit status is driven by the safety monitor."
+    },
+    {
+      "top_port": "operating_mode",
+      "connected_to": [
+        "adaptive_aero_safety_monitor.operating_mode"
+      ],
+      "description": "Operating mode output is driven by the safety monitor."
+    },
+    {
+      "top_port": "mmio_ready",
+      "connected_to": [
+        "adaptive_aero_mmio_csr.mmio_ready"
+      ],
+      "description": "MMIO ready is driven by the CSR block."
+    },
+    {
+      "top_port": "mmio_rdata",
+      "connected_to": [
+        "adaptive_aero_mmio_csr.mmio_rdata"
+      ],
+      "description": "MMIO read data is driven by the CSR block."
+    },
+    {
+      "top_port": "mmio_rvalid",
+      "connected_to": [
+        "adaptive_aero_mmio_csr.mmio_rvalid"
+      ],
+      "description": "MMIO read valid is driven by the CSR block."
+    }
+  ],
+  "inter_module_signals": [
+    {
+      "name": "cfg_enable",
+      "width": 1,
+      "source": "adaptive_aero_mmio_csr.cfg_enable",
+      "destinations": [
+        "adaptive_aero_request_scheduler.cfg_enable",
+        "adaptive_aero_actuator_controller.cfg_enable"
+      ],
+      "description": "Firmware-controlled enable propagated to request and actuator control logic."
+    },
+    {
+      "name": "cfg_clear_fault",
+      "width": 1,
+      "source": "adaptive_aero_mmio_csr.cfg_clear_fault",
+      "destinations": [
+        "adaptive_aero_safety_monitor.fault_clear"
+      ],
+      "description": "Firmware-controlled fault clear strobe to the safety monitor."
+    },
+    {
+      "name": "cfg_timeout_cycles",
+      "width": 16,
+      "source": "adaptive_aero_mmio_csr.cfg_timeout_cycles",
+      "destinations": [
+        "adaptive_aero_safety_monitor.cfg_timeout_cycles"
+      ],
+      "description": "Timeout threshold for stale-data detection."
+    },
+    {
+      "name": "cfg_speed_min_mps",
+      "width": 16,
+      "source": "adaptive_aero_mmio_csr.cfg_speed_min_mps",
+      "destinations": [
+        "adaptive_aero_request_scheduler.cfg_speed_min_mps",
+        "adaptive_aero_safety_monitor.cfg_speed_min_mps"
+      ],
+      "description": "Lower speed bound for operating envelope control."
+    },
+    {
+      "name": "cfg_speed_max_mps",
+      "width": 16,
+      "source": "adaptive_aero_mmio_csr.cfg_speed_max_mps",
+      "destinations": [
+        "adaptive_aero_request_scheduler.cfg_speed_max_mps",
+        "adaptive_aero_safety_monitor.cfg_speed_max_mps"
+      ],
+      "description": "Upper speed bound for operating envelope control."
+    },
+    {
+      "name": "cfg_actuator_min",
+      "width": 16,
+      "source": "adaptive_aero_mmio_csr.cfg_actuator_min",
+      "destinations": [
+        "adaptive_aero_safety_monitor.cfg_actuator_min",
+        "adaptive_aero_actuator_controller.cfg_actuator_min"
+      ],
+      "description": "Minimum bounded actuator command."
+    },
+    {
+      "name": "cfg_actuator_max",
+      "width": 16,
+      "source": "adaptive_aero_mmio_csr.cfg_actuator_max",
+      "destinations": [
+        "adaptive_aero_safety_monitor.cfg_actuator_max",
+        "adaptive_aero_actuator_controller.cfg_actuator_max"
+      ],
+      "description": "Maximum bounded actuator command."
+    },
+    {
+      "name": "cfg_model_req_ttl",
+      "width": 16,
+      "source": "adaptive_aero_mmio_csr.cfg_model_req_ttl",
+      "destinations": [
+        "adaptive_aero_request_scheduler.cfg_model_req_ttl"
+      ],
+      "description": "Model request TTL used by scheduling and freshness policy."
+    },
+    {
+      "name": "request_token",
+      "width": 16,
+      "source": "adaptive_aero_request_scheduler.request_token",
+      "destinations": [
+        "adaptive_aero_history_buffer.request_token"
+      ],
+      "description": "Request token forwarded into history storage for traceability."
+    },
+    {
+      "name": "request_age",
+      "width": 16,
+      "source": "adaptive_aero_request_scheduler.request_age",
+      "destinations": [
+        "adaptive_aero_history_buffer.request_age",
+        "adaptive_aero_safety_monitor.request_age"
+      ],
+      "description": "Request age distributed to storage and safety monitoring."
+    },
+    {
+      "name": "model_response_word",
+      "width": 64,
+      "source": "adaptive_aero_model_transport_bridge.model_response_word",
+      "destinations": [
+        "adaptive_aero_actuator_controller.model_response_word"
+      ],
+      "description": "Transparent captured model response forwarded to the actuator controller."
+    },
+    {
+      "name": "response_valid_seen",
+      "width": 1,
+      "source": "adaptive_aero_model_transport_bridge.response_valid_seen",
+      "destinations": [
+        "adaptive_aero_safety_monitor.response_valid_seen",
+        "adaptive_aero_actuator_controller.response_valid_seen",
+        "adaptive_aero_history_buffer.response_valid_seen"
+      ],
+      "description": "Observed model-response valid indicator distributed to safety, control, and history logic."
+    },
+    {
+      "name": "response_age",
+      "width": 16,
+      "source": "adaptive_aero_history_buffer.response_age",
+      "destinations": [
+        "adaptive_aero_safety_monitor.response_age"
+      ],
+      "description": "Response age produced by history storage and consumed by the safety monitor."
+    },
+    {
+      "name": "fault_latched",
+      "width": 1,
+      "source": "adaptive_aero_safety_monitor.fault_latched",
+      "destinations": [
+        "adaptive_aero_mmio_csr.fault_latched_in",
+        "adaptive_aero_actuator_controller.fault_latched"
+      ],
+      "description": "Latched fault status consumed by firmware readback and actuator gating."
+    },
+    {
+      "name": "safety_inhibit",
+      "width": 1,
+      "source": "adaptive_aero_safety_monitor.safety_inhibit",
+      "destinations": [
+        "adaptive_aero_mmio_csr.safety_inhibit_in",
+        "adaptive_aero_actuator_controller.safety_inhibit"
+      ],
+      "description": "Safety inhibit propagated to firmware status and command gating."
+    },
+    {
+      "name": "operating_mode",
+      "width": 2,
+      "source": "adaptive_aero_safety_monitor.operating_mode",
+      "destinations": [
+        "adaptive_aero_mmio_csr.operating_mode_in"
+      ],
+      "description": "Current operating mode reported to the CSR block for firmware readback."
+    },
+    {
+      "name": "model_req_valid",
+      "width": 1,
+      "source": "adaptive_aero_request_scheduler.model_req_valid",
+      "destinations": [
+        "adaptive_aero_model_transport_bridge.model_req_valid"
+      ],
+      "description": "Scheduler-driven model request valid forwarded to the transport bridge."
+    },
+    {
+      "name": "model_req_data",
+      "width": 64,
+      "source": "adaptive_aero_request_scheduler.model_req_data",
+      "destinations": [
+        "adaptive_aero_model_transport_bridge.model_req_data"
+      ],
+      "description": "Scheduler-driven model request data forwarded to the transport bridge."
+    },
+    {
+      "name": "model_req_ready",
+      "width": 1,
+      "source": "adaptive_aero_model_transport_bridge.model_req_ready",
+      "destinations": [
+        "adaptive_aero_request_scheduler.model_req_ready"
+      ],
+      "description": "Request ready signal returned from the transport bridge to the scheduler."
+    },
+    {
+      "name": "actuator_cmd_data",
+      "width": 16,
+      "source": "adaptive_aero_actuator_controller.actuator_cmd_data",
+      "destinations": [
+        "adaptive_aero_safety_monitor.actuator_cmd_data_in"
+      ],
+      "description": "Final bounded actuator command data forwarded to top-level output and safety monitoring."
+    },
+    {
+      "name": "adaptive_aero_history_buffer_bram_addr",
+      "width": 8,
+      "source": "adaptive_aero_history_buffer.bram_addr",
+      "destinations": [
+        "generic_bram_wrapper.bram_addr"
+      ],
+      "description": "Derived child-to-child signal from the unique matching producer adaptive_aero_history_buffer.bram_addr."
+    },
+    {
+      "name": "adaptive_aero_history_buffer_bram_csb",
+      "width": 1,
+      "source": "adaptive_aero_history_buffer.bram_csb",
+      "destinations": [
+        "generic_bram_wrapper.bram_csb"
+      ],
+      "description": "Derived child-to-child signal from the unique matching producer adaptive_aero_history_buffer.bram_csb."
+    },
+    {
+      "name": "adaptive_aero_history_buffer_bram_din",
+      "width": 64,
+      "source": "adaptive_aero_history_buffer.bram_din",
+      "destinations": [
+        "generic_bram_wrapper.bram_din"
+      ],
+      "description": "Derived child-to-child signal from the unique matching producer adaptive_aero_history_buffer.bram_din."
+    },
+    {
+      "name": "adaptive_aero_history_buffer_bram_we",
+      "width": 1,
+      "source": "adaptive_aero_history_buffer.bram_we",
+      "destinations": [
+        "generic_bram_wrapper.bram_we"
+      ],
+      "description": "Derived child-to-child signal from the unique matching producer adaptive_aero_history_buffer.bram_we."
+    }
+  ],
+  "signal_ownership": [
+    {
+      "signal": "cfg_enable",
+      "owner": "adaptive_aero_mmio_csr.cfg_enable"
+    },
+    {
+      "signal": "cfg_clear_fault",
+      "owner": "adaptive_aero_mmio_csr.cfg_clear_fault"
+    },
+    {
+      "signal": "cfg_timeout_cycles",
+      "owner": "adaptive_aero_mmio_csr.cfg_timeout_cycles"
+    },
+    {
+      "signal": "cfg_speed_min_mps",
+      "owner": "adaptive_aero_mmio_csr.cfg_speed_min_mps"
+    },
+    {
+      "signal": "cfg_speed_max_mps",
+      "owner": "adaptive_aero_mmio_csr.cfg_speed_max_mps"
+    },
+    {
+      "signal": "cfg_actuator_min",
+      "owner": "adaptive_aero_mmio_csr.cfg_actuator_min"
+    },
+    {
+      "signal": "cfg_actuator_max",
+      "owner": "adaptive_aero_mmio_csr.cfg_actuator_max"
+    },
+    {
+      "signal": "cfg_model_req_ttl",
+      "owner": "adaptive_aero_mmio_csr.cfg_model_req_ttl"
+    },
+    {
+      "signal": "cfg_operating_mode",
+      "owner": "adaptive_aero_mmio_csr.cfg_operating_mode"
+    },
+    {
+      "signal": "request_token",
+      "owner": "adaptive_aero_request_scheduler.request_token"
+    },
+    {
+      "signal": "request_age",
+      "owner": "adaptive_aero_request_scheduler.request_age"
+    },
+    {
+      "signal": "model_req_valid",
+      "owner": "adaptive_aero_request_scheduler.model_req_valid"
+    },
+    {
+      "signal": "model_req_data",
+      "owner": "adaptive_aero_request_scheduler.model_req_data"
+    },
+    {
+      "signal": "model_req_ready",
+      "owner": "adaptive_aero_model_transport_bridge.model_req_ready"
+    },
+    {
+      "signal": "model_rsp_ready",
+      "owner": "adaptive_aero_model_transport_bridge.model_rsp_ready"
+    },
+    {
+      "signal": "model_response_word",
+      "owner": "adaptive_aero_model_transport_bridge.model_response_word"
+    },
+    {
+      "signal": "response_valid_seen",
+      "owner": "adaptive_aero_model_transport_bridge.response_valid_seen"
+    },
+    {
+      "signal": "response_age",
+      "owner": "adaptive_aero_history_buffer.response_age"
+    },
+    {
+      "signal": "fault_latched",
+      "owner": "adaptive_aero_safety_monitor.fault_latched"
+    },
+    {
+      "signal": "safety_inhibit",
+      "owner": "adaptive_aero_safety_monitor.safety_inhibit"
+    },
+    {
+      "signal": "operating_mode",
+      "owner": "adaptive_aero_safety_monitor.operating_mode"
+    },
+    {
+      "signal": "actuator_cmd_valid",
+      "owner": "adaptive_aero_actuator_controller.actuator_cmd_valid"
+    },
+    {
+      "signal": "actuator_cmd_data",
+      "owner": "adaptive_aero_actuator_controller.actuator_cmd_data"
+    },
+    {
+      "signal": "bram_csb",
+      "owner": "adaptive_aero_history_buffer.bram_csb"
+    },
+    {
+      "signal": "bram_we",
+      "owner": "adaptive_aero_history_buffer.bram_we"
+    },
+    {
+      "signal": "bram_addr",
+      "owner": "adaptive_aero_history_buffer.bram_addr"
+    },
+    {
+      "signal": "bram_din",
+      "owner": "adaptive_aero_history_buffer.bram_din"
+    },
+    {
+      "signal": "mmio_ready",
+      "owner": "adaptive_aero_mmio_csr.mmio_ready"
+    },
+    {
+      "signal": "mmio_rdata",
+      "owner": "adaptive_aero_mmio_csr.mmio_rdata"
+    },
+    {
+      "signal": "mmio_rvalid",
+      "owner": "adaptive_aero_mmio_csr.mmio_rvalid"
+    },
+    {
+      "signal": "adaptive_aero_history_buffer_bram_addr",
+      "owner": "adaptive_aero_history_buffer.bram_addr"
+    },
+    {
+      "signal": "adaptive_aero_history_buffer_bram_csb",
+      "owner": "adaptive_aero_history_buffer.bram_csb"
+    },
+    {
+      "signal": "adaptive_aero_history_buffer_bram_din",
+      "owner": "adaptive_aero_history_buffer.bram_din"
+    },
+    {
+      "signal": "adaptive_aero_history_buffer_bram_we",
+      "owner": "adaptive_aero_history_buffer.bram_we"
+    }
+  ],
+  "register_contract": {
+    "bus_type": "abstract",
+    "registers": [
+      {
+        "name": "CTRL",
+        "address": "0x000",
+        "access": "rw",
+        "description": "Global control register.",
+        "fields": [
+          {
+            "name": "enable",
+            "lsb": 0,
+            "width": 1,
+            "access": "rw",
+            "reset": 0,
+            "description": "Enable the active-aerodynamics controller."
+          },
+          {
+            "name": "clear_fault",
+            "lsb": 1,
+            "width": 1,
+            "access": "wo",
+            "reset": 0,
+            "description": "Firmware pulse to clear a latched fault."
+          },
+          {
+            "name": "operating_mode",
+            "lsb": 2,
+            "width": 2,
+            "access": "rw",
+            "reset": 0,
+            "description": "Requested operating mode."
+          }
+        ]
+      },
+      {
+        "name": "SPEED_WINDOW_MIN",
+        "address": "0x004",
+        "access": "rw",
+        "description": "Minimum valid vehicle speed in m/s.",
+        "fields": [
+          {
+            "name": "speed_min_mps",
+            "lsb": 0,
+            "width": 16,
+            "access": "rw",
+            "reset": 20,
+            "description": "Lower speed bound for operation."
+          }
+        ]
+      },
+      {
+        "name": "SPEED_WINDOW_MAX",
+        "address": "0x008",
+        "access": "rw",
+        "description": "Maximum valid vehicle speed in m/s.",
+        "fields": [
+          {
+            "name": "speed_max_mps",
+            "lsb": 0,
+            "width": 16,
+            "access": "rw",
+            "reset": 55,
+            "description": "Upper speed bound for operation."
+          }
+        ]
+      },
+      {
+        "name": "ACTUATOR_BOUNDS",
+        "address": "0x00C",
+        "access": "rw",
+        "description": "Lower and upper actuator command bounds.",
+        "fields": [
+          {
+            "name": "actuator_min",
+            "lsb": 0,
+            "width": 16,
+            "access": "rw",
+            "reset": 0,
+            "description": "Minimum actuator command."
+          },
+          {
+            "name": "actuator_max",
+            "lsb": 16,
+            "width": 16,
+            "access": "rw",
+            "reset": 1023,
+            "description": "Maximum actuator command."
+          }
+        ]
+      },
+      {
+        "name": "TIMEOUT_CFG",
+        "address": "0x010",
+        "access": "rw",
+        "description": "Stale-data and request-response timeout configuration.",
+        "fields": [
+          {
+            "name": "timeout_cycles",
+            "lsb": 0,
+            "width": 16,
+            "access": "rw",
+            "reset": 250,
+            "description": "Age threshold before timeout fault is latched."
+          },
+          {
+            "name": "model_req_ttl",
+            "lsb": 16,
+            "width": 16,
+            "access": "rw",
+            "reset": 50,
+            "description": "Request-to-response TTL for the model transport."
+          }
+        ]
+      },
+      {
+        "name": "STATUS",
+        "address": "0x014",
+        "access": "ro",
+        "description": "Live status and latched fault summary.",
+        "fields": [
+          {
+            "name": "fault_latched",
+            "lsb": 0,
+            "width": 1,
+            "access": "ro",
+            "reset": 0,
+            "description": "Latched fault state."
+          },
+          {
+            "name": "safety_inhibit",
+            "lsb": 1,
+            "width": 1,
+            "access": "ro",
+            "reset": 1,
+            "description": "Safety inhibit status."
+          },
+          {
+            "name": "operating_mode",
+            "lsb": 2,
+            "width": 2,
+            "access": "ro",
+            "reset": 0,
+            "description": "Current operating mode."
+          }
+        ]
+      },
+      {
+        "name": "MODEL_TRACE",
+        "address": "0x018",
+        "access": "ro",
+        "description": "Traceability and freshness data for the model transport path.",
+        "fields": [
+          {
+            "name": "request_token",
+            "lsb": 0,
+            "width": 16,
+            "access": "ro",
+            "reset": 0,
+            "description": "Most recent request token."
+          },
+          {
+            "name": "request_age",
+            "lsb": 16,
+            "width": 8,
+            "access": "ro",
+            "reset": 0,
+            "description": "Age of the current request."
+          },
+          {
+            "name": "response_age",
+            "lsb": 24,
+            "width": 8,
+            "access": "ro",
+            "reset": 0,
+            "description": "Age of the last response."
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -832,6 +832,35 @@ def test_fpga_memory_name_collision_keeps_functional_wrapper_ports_authoritative
     }
 
 
+def test_generated_same_name_fpga_wrapper_becomes_inferred_owner_and_keeps_interface():
+    macro = {
+        "name": "generic_bram_wrapper", "kind": "prebuilt_sram", "depth": 256,
+        "data_width": 64, "addr_width": 8, "instance_name": "u_history",
+        "ports": {
+            "clk": "clk", "csb": "bram_csb", "we": "bram_we",
+            "addr": "bram_addr", "din": "bram_din", "dout": "bram_dout",
+        },
+    }
+    wrapper = spec_agent._memory_macro_module(macro)
+    spec = {
+        "memory_macros": [macro],
+        "hierarchy": {"top_module": _module("top"), "modules": [wrapper]},
+    }
+
+    normalized = spec_agent._normalize_fpga_memory_contract(
+        spec, "FPGA MEMORY CONTRACT (mandatory)",
+    )
+    spec_agent._internalize_fpga_inferred_memory_interfaces(
+        normalized, "FPGA MEMORY CONTRACT (mandatory)",
+    )
+
+    assert normalized["memory_macros"] == []
+    assert wrapper["memory_implementation"]["kind"] == "fpga_bram"
+    assert {port["name"] for port in wrapper["ports"]} == {
+        "clk", "bram_csb", "bram_we", "bram_addr", "bram_din", "bram_dout",
+    }
+
+
 def test_fpga_memory_collapses_differently_named_hard_macro_into_explicit_wrapper():
     wrapper = {
         **_module("application_history_wrapper"),
@@ -1365,6 +1394,39 @@ def test_partial_inter_module_graph_is_completed_and_orphans_are_rejected():
 
     with pytest.raises(ValueError, match="consumer.orphan.*has no source"):
         spec_agent._validate_spec_contract(out, "hierarchical")
+
+
+def test_invalid_source_edge_does_not_reserve_real_consumer_destination():
+    spec = {
+        "hierarchy": {
+            "top_module": {**_module("top"), "ports": [_port("clk", "input")]},
+            "modules": [
+                {
+                    **_module("memory"),
+                    "ports": [_port("bram_dout", "output", 64)],
+                },
+                {
+                    **_module("history"),
+                    "ports": [_port("bram_dout", "input", 64)],
+                },
+            ],
+        },
+        "top_level_connections": [],
+        "inter_module_signals": [{
+            "name": "stale_dout", "width": 64,
+            "source": "memory.dout", "destinations": ["history.bram_dout"],
+        }],
+        "signal_ownership": [],
+    }
+
+    out = spec_agent._ensure_hierarchical_inter_module_signals(spec)
+    edges = {
+        (signal["source"], destination)
+        for signal in out["inter_module_signals"]
+        for destination in signal.get("destinations", [])
+    }
+
+    assert ("memory.bram_dout", "history.bram_dout") in edges
 
 
 def test_contract_backed_connection_materializes_omitted_ports_before_sanitizing():

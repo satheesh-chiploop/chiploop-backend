@@ -1239,7 +1239,7 @@ async def register_mapped_memory_bist_directed(dut):
         clock_start=_render_clock_start(_infer_clocks_resets(spec, ports)[0]),
         reset_seq=_render_reset_sequence(_infer_clocks_resets(spec, ports)[1]),
         input_init=_render_input_init(ports, _infer_clocks_resets(spec, ports)[0], _infer_clocks_resets(spec, ports)[1]),
-        observable_outputs_json=_python_literal(observable_outputs),
+        observable_outputs_json=json.dumps(observable_outputs, sort_keys=True),
         register_map_json=_python_literal(register_map),
         register_bit_roles_json=_python_literal(register_bit_roles),
         register_write_plan_json=_python_literal(register_write_plan),
@@ -1451,7 +1451,7 @@ async def constrained_random_sanity(dut):
         reset_seq=reset_seq.rstrip(),
         input_init=input_init,
         randomizable_inputs_json=_python_literal(randomizable_inputs),
-        observable_outputs_json=_python_literal(observable_outputs),
+        observable_outputs_json=json.dumps(observable_outputs, sort_keys=True),
         directed_tests=directed_tests,
     )
 

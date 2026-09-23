@@ -1,0 +1,89 @@
+=== STDOUT ===
+- V e r i l a t i o n   R e p o r t: Verilator 5.047 devel rev v5.046-161-g24918b83b
+- Verilator: Built from 0.221 MB sources in 9 modules, into 0.037 MB in 3 C++ files needing 0.000 MB
+- Verilator: Walltime 0.017 s (elab=0.002, cvt=0.007, bld=0.000); cpu 0.016 s on 1 threads; allocated 32.355 MB
+
+=== STDERR ===
+%Warning-WIDTHEXPAND: pass5/adaptive_aero_safety_monitor.v:64:48: Operator LT expects 32 bits on the LHS, but LHS's VARREF 'actuator_cmd_data_in' generates 16 bits.
+                                                                : ... note: In instance 'adaptive_aero_control_top.u_safety'
+   64 |             end else if ((actuator_cmd_data_in < {16'd0, cfg_actuator_min}) || (actuator_cmd_data_in > {16'd0, cfg_actuator_max})) begin
+      |                                                ^
+                      ... For warning description see https://verilator.org/warn/WIDTHEXPAND?v=5.047
+                      ... Use "/* verilator lint_off WIDTHEXPAND */" and lint_on around source to disable this message.
+%Warning-WIDTHEXPAND: pass5/adaptive_aero_safety_monitor.v:64:102: Operator GT expects 32 bits on the LHS, but LHS's VARREF 'actuator_cmd_data_in' generates 16 bits.
+                                                                 : ... note: In instance 'adaptive_aero_control_top.u_safety'
+   64 |             end else if ((actuator_cmd_data_in < {16'd0, cfg_actuator_min}) || (actuator_cmd_data_in > {16'd0, cfg_actuator_max})) begin
+      |                                                                                                      ^
+%Warning-WIDTHEXPAND: pass5/adaptive_aero_request_scheduler.v:44:30: Operator ASSIGNDLY expects 64 bits on the Assign RHS, but Assign RHS's CONST '32'h0' generates 32 bits.
+                                                                   : ... note: In instance 'adaptive_aero_control_top.u_sched'
+   44 |             model_req_data_r <= 32'd0;
+      |                              ^~
+%Warning-WIDTHEXPAND: pass5/adaptive_aero_model_transport_bridge.v:38:35: Operator ASSIGNDLY expects 64 bits on the Assign RHS, but Assign RHS's CONST '32'h0' generates 32 bits.
+                                                                        : ... note: In instance 'adaptive_aero_control_top.u_bridge'
+   38 |             model_response_word_r <= 32'd0;
+      |                                   ^~
+%Warning-WIDTHTRUNC: pass5/adaptive_aero_actuator_controller.v:37:33: Operator ASSIGNDLY expects 16 bits on the Assign RHS, but Assign RHS's CONST '32'h0' generates 32 bits.
+                                                                    : ... note: In instance 'adaptive_aero_control_top.u_act'
+   37 |             actuator_cmd_data_r <= 32'd0;
+      |                                 ^~
+                     ... For warning description see https://verilator.org/warn/WIDTHTRUNC?v=5.047
+                     ... Use "/* verilator lint_off WIDTHTRUNC */" and lint_on around source to disable this message.
+%Warning-WIDTHTRUNC: pass5/adaptive_aero_actuator_controller.v:50:37: Operator ASSIGNDLY expects 16 bits on the Assign RHS, but Assign RHS's REPLICATE generates 32 bits.
+                                                                    : ... note: In instance 'adaptive_aero_control_top.u_act'
+   50 |                 actuator_cmd_data_r <= {model_response_word[31:16], bounded_cmd_r};
+      |                                     ^~
+%Warning-UNUSEDSIGNAL: pass5/adaptive_aero_control_top.v:50:11: Signal is not used: 'cmd_req_valid'
+                                                              : ... note: In instance 'adaptive_aero_control_top'
+   50 |     input cmd_req_valid;
+      |           ^~~~~~~~~~~~~
+                       ... For warning description see https://verilator.org/warn/UNUSEDSIGNAL?v=5.047
+                       ... Use "/* verilator lint_off UNUSEDSIGNAL */" and lint_on around source to disable this message.
+%Warning-UNUSEDSIGNAL: pass5/adaptive_aero_control_top.v:51:18: Signal is not used: 'cmd_req_data'
+                                                              : ... note: In instance 'adaptive_aero_control_top'
+   51 |     input [31:0] cmd_req_data;
+      |                  ^~~~~~~~~~~~
+%Warning-UNDRIVEN: pass5/adaptive_aero_control_top.v:52:12: Signal is not driven: 'cmd_req_ready'
+                                                          : ... note: In instance 'adaptive_aero_control_top'
+   52 |     output cmd_req_ready;
+      |            ^~~~~~~~~~~~~
+                   ... For warning description see https://verilator.org/warn/UNDRIVEN?v=5.047
+                   ... Use "/* verilator lint_off UNDRIVEN */" and lint_on around source to disable this message.
+%Warning-UNDRIVEN: pass5/adaptive_aero_control_top.v:53:12: Signal is not driven: 'cmd_rsp_valid'
+                                                          : ... note: In instance 'adaptive_aero_control_top'
+   53 |     output cmd_rsp_valid;
+      |            ^~~~~~~~~~~~~
+%Warning-UNDRIVEN: pass5/adaptive_aero_control_top.v:54:19: Signal is not driven: 'cmd_rsp_data'
+                                                          : ... note: In instance 'adaptive_aero_control_top'
+   54 |     output [31:0] cmd_rsp_data;
+      |                   ^~~~~~~~~~~~
+%Warning-UNUSEDSIGNAL: pass5/adaptive_aero_control_top.v:55:11: Signal is not used: 'cmd_rsp_ready'
+                                                              : ... note: In instance 'adaptive_aero_control_top'
+   55 |     input cmd_rsp_ready;
+      |           ^~~~~~~~~~~~~
+%Warning-UNUSEDSIGNAL: pass5/adaptive_aero_control_top.v:76:6: Signal is not used: 'model_req_ready_from_u_bridge'
+                                                             : ... note: In instance 'adaptive_aero_control_top'
+   76 | wire model_req_ready_from_u_bridge;
+      |      ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+%Warning-UNUSEDSIGNAL: pass5/adaptive_aero_actuator_controller.v:24:18: Bits of signal are not used: 'model_response_word'[63:32,15:0]
+                                                                      : ... note: In instance 'adaptive_aero_control_top.u_act'
+   24 |     input [63:0] model_response_word;
+      |                  ^~~~~~~~~~~~~~~~~~~
+%Warning-UNUSEDSIGNAL: pass5/adaptive_aero_history_buffer.v:14:18: Bits of signal are not used: 'model_response_word'[31:16]
+                                                                 : ... note: In instance 'adaptive_aero_control_top.u_hist'
+   14 |     input [31:0] model_response_word;
+      |                  ^~~~~~~~~~~~~~~~~~~
+%Warning-UNUSEDSIGNAL: pass5/adaptive_aero_model_transport_bridge.v:15:11: Signal is not used: 'model_req_valid'
+                                                                         : ... note: In instance 'adaptive_aero_control_top.u_bridge'
+   15 |     input model_req_valid;
+      |           ^~~~~~~~~~~~~~~
+%Warning-UNUSEDSIGNAL: pass5/adaptive_aero_request_scheduler.v:19:18: Signal is not used: 'veh_speed_mps'
+                                                                    : ... note: In instance 'adaptive_aero_control_top.u_sched'
+   19 |     input [15:0] veh_speed_mps;
+      |                  ^~~~~~~~~~~~~
+%Warning-UNDRIVEN: pass5/adaptive_aero_safety_monitor.v:34:18: Signal is not driven: 'operating_mode'
+                                                             : ... note: In instance 'adaptive_aero_control_top.u_safety'
+   34 |     output [1:0] operating_mode;
+      |                  ^~~~~~~~~~~~~~
+
+=== RETURN CODE ===
+0

@@ -1,0 +1,319 @@
+{
+  "status": "fail",
+  "attempt_count": 5,
+  "final_pass": "pass5",
+  "passes": [
+    {
+      "pass": "pass1",
+      "passed": false,
+      "checks": {
+        "structural": {
+          "status": "fail",
+          "issue_count": 34,
+          "issues": [
+            "\u274c Missing expected RTL files: ['adaptive_aero_actuator_controller.v', 'adaptive_aero_control_top.v', 'adaptive_aero_history_buffer.v', 'adaptive_aero_model_transport_bridge.v', 'adaptive_aero_request_scheduler.v', 'adaptive_aero_safety_monitor.v', 'generic_bram_wrapper.v']",
+            "\u26a0 Top-level connection signal 'veh_speed_mps' not clearly visible in RTL text.",
+            "\u26a0 Top-level connection signal 'veh_state_valid' not clearly visible in RTL text.",
+            "\u26a0 Top-level connection signal 'model_req_ready' not clearly visible in RTL text.",
+            "\u26a0 Top-level connection signal 'model_rsp_valid' not clearly visible in RTL text.",
+            "\u26a0 Top-level connection signal 'model_rsp_data' not clearly visible in RTL text.",
+            "\u26a0 Top-level connection signal 'model_req_valid' not clearly visible in RTL text.",
+            "\u26a0 Top-level connection signal 'model_req_data' not clearly visible in RTL text.",
+            "\u26a0 Top-level connection signal 'model_rsp_ready' not clearly visible in RTL text.",
+            "\u26a0 Top-level connection signal 'actuator_cmd_valid' not clearly visible in RTL text.",
+            "\u26a0 Top-level connection signal 'actuator_cmd_data' not clearly visible in RTL text.",
+            "\u274c Inter-module signal 'request_token' not found in RTL.",
+            "\u274c Inter-module signal 'request_age' not found in RTL.",
+            "\u274c Inter-module signal 'model_response_word' not found in RTL.",
+            "\u274c Inter-module signal 'response_valid_seen' not found in RTL.",
+            "\u274c Inter-module signal 'response_age' not found in RTL.",
+            "\u274c Inter-module signal 'model_req_valid' not found in RTL.",
+            "\u274c Inter-module signal 'model_req_data' not found in RTL.",
+            "\u274c Inter-module signal 'model_req_ready' not found in RTL.",
+            "\u274c Inter-module signal 'model_rsp_ready' not found in RTL.",
+            "\u274c Inter-module signal 'actuator_cmd_valid' not found in RTL.",
+            "\u274c Inter-module signal 'actuator_cmd_data' not found in RTL.",
+            "\u26a0 Owned signal 'request_token' from 'adaptive_aero_request_scheduler.request_token' not found in RTL.",
+            "\u26a0 Owned signal 'request_age' from 'adaptive_aero_request_scheduler.request_age' not found in RTL.",
+            "\u26a0 Owned signal 'model_req_valid' from 'adaptive_aero_request_scheduler.model_req_valid' not found in RTL.",
+            "\u26a0 Owned signal 'model_req_data' from 'adaptive_aero_request_scheduler.model_req_data' not found in RTL.",
+            "\u26a0 Owned signal 'model_req_ready' from 'adaptive_aero_model_transport_bridge.model_req_ready' not found in RTL.",
+            "\u26a0 Owned signal 'model_rsp_ready' from 'adaptive_aero_model_transport_bridge.model_rsp_ready' not found in RTL.",
+            "\u26a0 Owned signal 'model_response_word' from 'adaptive_aero_model_transport_bridge.model_response_word' not found in RTL.",
+            "\u26a0 Owned signal 'response_valid_seen' from 'adaptive_aero_model_transport_bridge.response_valid_seen' not found in RTL.",
+            "\u26a0 Owned signal 'response_age' from 'adaptive_aero_history_buffer.response_age' not found in RTL.",
+            "\u26a0 Owned signal 'actuator_cmd_valid' from 'adaptive_aero_actuator_controller.actuator_cmd_valid' not found in RTL.",
+            "\u26a0 Owned signal 'actuator_cmd_data' from 'adaptive_aero_actuator_controller.actuator_cmd_data' not found in RTL.",
+            "\u274c Top RTL file missing after generation: adaptive_aero_control_top.v"
+          ]
+        },
+        "compile": {
+          "status": "pass",
+          "log": "backend/workflows/ea97f60b-a3ea-4cd4-8c8e-00b176895968/rtl/rtl_agent_compile.log"
+        },
+        "lint": {
+          "status": "fatal",
+          "blocking": true,
+          "log": "backend/workflows/ea97f60b-a3ea-4cd4-8c8e-00b176895968/rtl/rtl_verilator_lint.log"
+        },
+        "static_spec2rtl": {
+          "status": "issues",
+          "blocking": true,
+          "report": "backend/workflows/ea97f60b-a3ea-4cd4-8c8e-00b176895968/rtl/rtl_spec2rtl_conformance_pass1.json",
+          "summary": {
+            "checked": 180,
+            "matched": 23,
+            "partial": 0,
+            "missing": 157,
+            "inconclusive": 0,
+            "pending_verification": 6
+          }
+        }
+      },
+      "issue_count": 36,
+      "issues": [
+        "\u274c Missing expected RTL files: ['adaptive_aero_actuator_controller.v', 'adaptive_aero_control_top.v', 'adaptive_aero_history_buffer.v', 'adaptive_aero_model_transport_bridge.v', 'adaptive_aero_request_scheduler.v', 'adaptive_aero_safety_monitor.v', 'generic_bram_wrapper.v']",
+        "\u26a0 Top-level connection signal 'veh_speed_mps' not clearly visible in RTL text.",
+        "\u26a0 Top-level connection signal 'veh_state_valid' not clearly visible in RTL text.",
+        "\u26a0 Top-level connection signal 'model_req_ready' not clearly visible in RTL text.",
+        "\u26a0 Top-level connection signal 'model_rsp_valid' not clearly visible in RTL text.",
+        "\u26a0 Top-level connection signal 'model_rsp_data' not clearly visible in RTL text.",
+        "\u26a0 Top-level connection signal 'model_req_valid' not clearly visible in RTL text.",
+        "\u26a0 Top-level connection signal 'model_req_data' not clearly visible in RTL text.",
+        "\u26a0 Top-level connection signal 'model_rsp_ready' not clearly visible in RTL text.",
+        "\u26a0 Top-level connection signal 'actuator_cmd_valid' not clearly visible in RTL text.",
+        "\u26a0 Top-level connection signal 'actuator_cmd_data' not clearly visible in RTL text.",
+        "\u274c Inter-module signal 'request_token' not found in RTL.",
+        "\u274c Inter-module signal 'request_age' not found in RTL.",
+        "\u274c Inter-module signal 'model_response_word' not found in RTL.",
+        "\u274c Inter-module signal 'response_valid_seen' not found in RTL.",
+        "\u274c Inter-module signal 'response_age' not found in RTL.",
+        "\u274c Inter-module signal 'model_req_valid' not found in RTL.",
+        "\u274c Inter-module signal 'model_req_data' not found in RTL.",
+        "\u274c Inter-module signal 'model_req_ready' not found in RTL.",
+        "\u274c Inter-module signal 'model_rsp_ready' not found in RTL.",
+        "\u274c Inter-module signal 'actuator_cmd_valid' not found in RTL.",
+        "\u274c Inter-module signal 'actuator_cmd_data' not found in RTL.",
+        "\u26a0 Owned signal 'request_token' from 'adaptive_aero_request_scheduler.request_token' not found in RTL.",
+        "\u26a0 Owned signal 'request_age' from 'adaptive_aero_request_scheduler.request_age' not found in RTL.",
+        "\u26a0 Owned signal 'model_req_valid' from 'adaptive_aero_request_scheduler.model_req_valid' not found in RTL.",
+        "\u26a0 Owned signal 'model_req_data' from 'adaptive_aero_request_scheduler.model_req_data' not found in RTL.",
+        "\u26a0 Owned signal 'model_req_ready' from 'adaptive_aero_model_transport_bridge.model_req_ready' not found in RTL.",
+        "\u26a0 Owned signal 'model_rsp_ready' from 'adaptive_aero_model_transport_bridge.model_rsp_ready' not found in RTL.",
+        "\u26a0 Owned signal 'model_response_word' from 'adaptive_aero_model_transport_bridge.model_response_word' not found in RTL.",
+        "\u26a0 Owned signal 'response_valid_seen' from 'adaptive_aero_model_transport_bridge.response_valid_seen' not found in RTL.",
+        "\u26a0 Owned signal 'response_age' from 'adaptive_aero_history_buffer.response_age' not found in RTL.",
+        "\u26a0 Owned signal 'actuator_cmd_valid' from 'adaptive_aero_actuator_controller.actuator_cmd_valid' not found in RTL.",
+        "\u26a0 Owned signal 'actuator_cmd_data' from 'adaptive_aero_actuator_controller.actuator_cmd_data' not found in RTL.",
+        "\u274c Top RTL file missing after generation: adaptive_aero_control_top.v",
+        "\u274c Verilator lint failed.",
+        "\u274c Static Spec2RTL compliance failed: status=issues, missing=157, partial=0, inconclusive=0."
+      ]
+    },
+    {
+      "pass": "pass2",
+      "passed": false,
+      "checks": {
+        "structural": {
+          "status": "fail",
+          "issue_count": 11,
+          "issues": [
+            "\u274c Module 'adaptive_aero_control_top' missing ports vs spec: ['cmd_req_valid', 'cmd_req_data', 'cmd_req_ready', 'cmd_rsp_valid', 'cmd_rsp_data', 'cmd_rsp_ready', 'fault_latched', 'safety_inhibit', 'operating_mode']",
+            "\u274c Module 'adaptive_aero_request_scheduler' missing ports vs spec: ['cfg_speed_min_mps', 'cfg_speed_max_mps']",
+            "\u274c Module 'adaptive_aero_request_scheduler' has extra ports vs spec: ['cfg_timeout_cycles', 'cfg_operating_mode', 'fault_latched']",
+            "\u274c Module 'adaptive_aero_safety_monitor' missing ports vs spec: ['cfg_actuator_min', 'cfg_actuator_max', 'response_valid_seen', 'actuator_cmd_data_in', 'fault_clear', 'operating_mode']",
+            "\u274c Module 'adaptive_aero_safety_monitor' has extra ports vs spec: ['cfg_enable', 'cfg_clear_fault', 'cfg_operating_mode']",
+            "\u274c Module 'adaptive_aero_actuator_controller' missing ports vs spec: ['response_valid_seen']",
+            "\u274c Module 'adaptive_aero_actuator_controller' has extra ports vs spec: ['cfg_operating_mode', 'veh_state_valid']",
+            "\u274c Module 'adaptive_aero_history_buffer' missing ports vs spec: ['request_token']",
+            "\u274c Module 'adaptive_aero_history_buffer' has extra ports vs spec: ['model_response_word']",
+            "Module 'adaptive_aero_history_buffer' declares fpga_bram memory_implementation but has no synthesizable unpacked memory array; implement inferred storage instead of scalar registers.",
+            "\u274c Module 'generic_bram_wrapper' has extra ports vs spec: ['addr', 'din', 'we', 'en', 'dout']"
+          ]
+        },
+        "compile": {
+          "status": "fail",
+          "log": "backend/workflows/ea97f60b-a3ea-4cd4-8c8e-00b176895968/rtl/rtl_agent_compile_pass2.log"
+        },
+        "lint": {
+          "status": "pass",
+          "blocking": false,
+          "log": "backend/workflows/ea97f60b-a3ea-4cd4-8c8e-00b176895968/rtl/rtl_verilator_lint_pass2.log"
+        },
+        "static_spec2rtl": {
+          "status": "partial",
+          "blocking": true,
+          "report": "backend/workflows/ea97f60b-a3ea-4cd4-8c8e-00b176895968/rtl/rtl_spec2rtl_conformance_pass2.json",
+          "summary": {
+            "checked": 125,
+            "matched": 92,
+            "partial": 0,
+            "missing": 33,
+            "inconclusive": 0,
+            "pending_verification": 61
+          }
+        }
+      },
+      "issue_count": 13,
+      "issues": [
+        "\u274c Module 'adaptive_aero_control_top' missing ports vs spec: ['cmd_req_valid', 'cmd_req_data', 'cmd_req_ready', 'cmd_rsp_valid', 'cmd_rsp_data', 'cmd_rsp_ready', 'fault_latched', 'safety_inhibit', 'operating_mode']",
+        "\u274c Module 'adaptive_aero_request_scheduler' missing ports vs spec: ['cfg_speed_min_mps', 'cfg_speed_max_mps']",
+        "\u274c Module 'adaptive_aero_request_scheduler' has extra ports vs spec: ['cfg_timeout_cycles', 'cfg_operating_mode', 'fault_latched']",
+        "\u274c Module 'adaptive_aero_safety_monitor' missing ports vs spec: ['cfg_actuator_min', 'cfg_actuator_max', 'response_valid_seen', 'actuator_cmd_data_in', 'fault_clear', 'operating_mode']",
+        "\u274c Module 'adaptive_aero_safety_monitor' has extra ports vs spec: ['cfg_enable', 'cfg_clear_fault', 'cfg_operating_mode']",
+        "\u274c Module 'adaptive_aero_actuator_controller' missing ports vs spec: ['response_valid_seen']",
+        "\u274c Module 'adaptive_aero_actuator_controller' has extra ports vs spec: ['cfg_operating_mode', 'veh_state_valid']",
+        "\u274c Module 'adaptive_aero_history_buffer' missing ports vs spec: ['request_token']",
+        "\u274c Module 'adaptive_aero_history_buffer' has extra ports vs spec: ['model_response_word']",
+        "Module 'adaptive_aero_history_buffer' declares fpga_bram memory_implementation but has no synthesizable unpacked memory array; implement inferred storage instead of scalar registers.",
+        "\u274c Module 'generic_bram_wrapper' has extra ports vs spec: ['addr', 'din', 'we', 'en', 'dout']",
+        "Structural port width mismatch warnings reported by Icarus Verilog.",
+        "\u274c Static Spec2RTL compliance failed: status=partial, missing=33, partial=0, inconclusive=0."
+      ]
+    },
+    {
+      "pass": "pass3",
+      "passed": false,
+      "checks": {
+        "structural": {
+          "status": "fail",
+          "issue_count": 5,
+          "issues": [
+            "\u274c Module 'adaptive_aero_safety_monitor' missing ports vs spec: ['cfg_actuator_min', 'cfg_actuator_max', 'response_valid_seen', 'actuator_cmd_data_in', 'fault_clear', 'operating_mode']",
+            "\u274c Module 'adaptive_aero_safety_monitor' has extra ports vs spec: ['cfg_enable', 'cfg_clear_fault', 'cfg_operating_mode']",
+            "\u274c Module 'adaptive_aero_history_buffer' has extra ports vs spec: ['model_response_word']",
+            "Module 'adaptive_aero_history_buffer' declares fpga_bram memory_implementation but has no synthesizable unpacked memory array; implement inferred storage instead of scalar registers.",
+            "\u274c Module 'generic_bram_wrapper' has extra ports vs spec: ['addr', 'din', 'we', 'en', 'dout']"
+          ]
+        },
+        "compile": {
+          "status": "fail",
+          "log": "backend/workflows/ea97f60b-a3ea-4cd4-8c8e-00b176895968/rtl/rtl_agent_compile_pass3.log"
+        },
+        "lint": {
+          "status": "fatal",
+          "blocking": true,
+          "log": "backend/workflows/ea97f60b-a3ea-4cd4-8c8e-00b176895968/rtl/rtl_verilator_lint_pass3.log"
+        },
+        "static_spec2rtl": {
+          "status": "partial",
+          "blocking": true,
+          "report": "backend/workflows/ea97f60b-a3ea-4cd4-8c8e-00b176895968/rtl/rtl_spec2rtl_conformance_pass3.json",
+          "summary": {
+            "checked": 125,
+            "matched": 104,
+            "partial": 0,
+            "missing": 21,
+            "inconclusive": 0,
+            "pending_verification": 61
+          }
+        }
+      },
+      "issue_count": 8,
+      "issues": [
+        "\u274c Module 'adaptive_aero_safety_monitor' missing ports vs spec: ['cfg_actuator_min', 'cfg_actuator_max', 'response_valid_seen', 'actuator_cmd_data_in', 'fault_clear', 'operating_mode']",
+        "\u274c Module 'adaptive_aero_safety_monitor' has extra ports vs spec: ['cfg_enable', 'cfg_clear_fault', 'cfg_operating_mode']",
+        "\u274c Module 'adaptive_aero_history_buffer' has extra ports vs spec: ['model_response_word']",
+        "Module 'adaptive_aero_history_buffer' declares fpga_bram memory_implementation but has no synthesizable unpacked memory array; implement inferred storage instead of scalar registers.",
+        "\u274c Module 'generic_bram_wrapper' has extra ports vs spec: ['addr', 'din', 'we', 'en', 'dout']",
+        "\u274c Icarus Verilog compile failed.",
+        "\u274c Verilator lint failed.",
+        "\u274c Static Spec2RTL compliance failed: status=partial, missing=21, partial=0, inconclusive=0."
+      ]
+    },
+    {
+      "pass": "pass4",
+      "passed": false,
+      "checks": {
+        "structural": {
+          "status": "fail",
+          "issue_count": 5,
+          "issues": [
+            "\u274c Module 'adaptive_aero_safety_monitor' missing ports vs spec: ['fault_clear', 'operating_mode']",
+            "\u274c Module 'adaptive_aero_safety_monitor' has extra ports vs spec: ['cfg_clear_fault', 'cfg_operating_mode']",
+            "\u274c Module 'adaptive_aero_history_buffer' has extra ports vs spec: ['model_response_word']",
+            "Module 'adaptive_aero_history_buffer' declares fpga_bram memory_implementation but has no synthesizable unpacked memory array; implement inferred storage instead of scalar registers.",
+            "\u274c Module 'generic_bram_wrapper' has extra ports vs spec: ['addr', 'din', 'we', 'en', 'dout']"
+          ]
+        },
+        "compile": {
+          "status": "pass",
+          "log": "backend/workflows/ea97f60b-a3ea-4cd4-8c8e-00b176895968/rtl/rtl_agent_compile_pass4.log"
+        },
+        "lint": {
+          "status": "fatal",
+          "blocking": true,
+          "log": "backend/workflows/ea97f60b-a3ea-4cd4-8c8e-00b176895968/rtl/rtl_verilator_lint_pass4.log"
+        },
+        "static_spec2rtl": {
+          "status": "partial",
+          "blocking": true,
+          "report": "backend/workflows/ea97f60b-a3ea-4cd4-8c8e-00b176895968/rtl/rtl_spec2rtl_conformance_pass4.json",
+          "summary": {
+            "checked": 125,
+            "matched": 108,
+            "partial": 0,
+            "missing": 17,
+            "inconclusive": 0,
+            "pending_verification": 61
+          }
+        }
+      },
+      "issue_count": 7,
+      "issues": [
+        "\u274c Module 'adaptive_aero_safety_monitor' missing ports vs spec: ['fault_clear', 'operating_mode']",
+        "\u274c Module 'adaptive_aero_safety_monitor' has extra ports vs spec: ['cfg_clear_fault', 'cfg_operating_mode']",
+        "\u274c Module 'adaptive_aero_history_buffer' has extra ports vs spec: ['model_response_word']",
+        "Module 'adaptive_aero_history_buffer' declares fpga_bram memory_implementation but has no synthesizable unpacked memory array; implement inferred storage instead of scalar registers.",
+        "\u274c Module 'generic_bram_wrapper' has extra ports vs spec: ['addr', 'din', 'we', 'en', 'dout']",
+        "\u274c Verilator lint failed.",
+        "\u274c Static Spec2RTL compliance failed: status=partial, missing=17, partial=0, inconclusive=0."
+      ]
+    },
+    {
+      "pass": "pass5",
+      "passed": false,
+      "checks": {
+        "structural": {
+          "status": "fail",
+          "issue_count": 3,
+          "issues": [
+            "\u274c Module 'adaptive_aero_history_buffer' has extra ports vs spec: ['model_response_word']",
+            "Module 'adaptive_aero_history_buffer' declares fpga_bram memory_implementation but has no synthesizable unpacked memory array; implement inferred storage instead of scalar registers.",
+            "\u274c Module 'generic_bram_wrapper' has extra ports vs spec: ['addr', 'din', 'we', 'en', 'dout']"
+          ]
+        },
+        "compile": {
+          "status": "pass",
+          "log": "backend/workflows/ea97f60b-a3ea-4cd4-8c8e-00b176895968/rtl/rtl_agent_compile_pass5.log"
+        },
+        "lint": {
+          "status": "fatal",
+          "blocking": true,
+          "log": "backend/workflows/ea97f60b-a3ea-4cd4-8c8e-00b176895968/rtl/rtl_verilator_lint_pass5.log"
+        },
+        "static_spec2rtl": {
+          "status": "partial",
+          "blocking": true,
+          "report": "backend/workflows/ea97f60b-a3ea-4cd4-8c8e-00b176895968/rtl/rtl_spec2rtl_conformance_pass5.json",
+          "summary": {
+            "checked": 125,
+            "matched": 110,
+            "partial": 0,
+            "missing": 15,
+            "inconclusive": 0,
+            "pending_verification": 61
+          }
+        }
+      },
+      "issue_count": 5,
+      "issues": [
+        "\u274c Module 'adaptive_aero_history_buffer' has extra ports vs spec: ['model_response_word']",
+        "Module 'adaptive_aero_history_buffer' declares fpga_bram memory_implementation but has no synthesizable unpacked memory array; implement inferred storage instead of scalar registers.",
+        "\u274c Module 'generic_bram_wrapper' has extra ports vs spec: ['addr', 'din', 'we', 'en', 'dout']",
+        "\u274c Verilator lint failed.",
+        "\u274c Static Spec2RTL compliance failed: status=partial, missing=15, partial=0, inconclusive=0."
+      ]
+    }
+  ]
+}

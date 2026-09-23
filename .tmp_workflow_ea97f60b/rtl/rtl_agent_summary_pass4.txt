@@ -1,0 +1,21 @@
+RTL Agent Summary
+=================
+Mode: hierarchical
+Top module: adaptive_aero_control_top
+Expected files: ['adaptive_aero_control_top.v', 'adaptive_aero_mmio_csr.v', 'adaptive_aero_request_scheduler.v', 'adaptive_aero_model_transport_bridge.v', 'adaptive_aero_safety_monitor.v', 'adaptive_aero_actuator_controller.v', 'adaptive_aero_history_buffer.v', 'generic_bram_wrapper.v']
+Materialized files: ['adaptive_aero_actuator_controller.v', 'adaptive_aero_control_top.v', 'adaptive_aero_history_buffer.v', 'adaptive_aero_mmio_csr.v', 'adaptive_aero_model_transport_bridge.v', 'adaptive_aero_request_scheduler.v', 'adaptive_aero_safety_monitor.v', 'generic_bram_wrapper.v']
+Clock ports: ['clk']
+Reset ports: ['reset_n']
+Icarus compile: pass
+Verilator lint: fatal
+Static Spec2RTL compliance: partial
+Issue count: 7
+
+Issues:
+- ❌ Module 'adaptive_aero_safety_monitor' missing ports vs spec: ['fault_clear', 'operating_mode']
+- ❌ Module 'adaptive_aero_safety_monitor' has extra ports vs spec: ['cfg_clear_fault', 'cfg_operating_mode']
+- ❌ Module 'adaptive_aero_history_buffer' has extra ports vs spec: ['model_response_word']
+- Module 'adaptive_aero_history_buffer' declares fpga_bram memory_implementation but has no synthesizable unpacked memory array; implement inferred storage instead of scalar registers.
+- ❌ Module 'generic_bram_wrapper' has extra ports vs spec: ['addr', 'din', 'we', 'en', 'dout']
+- ❌ Verilator lint failed.
+- ❌ Static Spec2RTL compliance failed: status=partial, missing=17, partial=0, inconclusive=0.

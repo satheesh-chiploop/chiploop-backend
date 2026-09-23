@@ -1,0 +1,8 @@
+=== STDERR ===
+%Error: Specified --top-module 'adaptive_aero_control_top' was not found in design.
+        ... Suggested alternative: 'adaptive_aero_mmio_csr'
+        ... See the manual at https://verilator.org/verilator_doc.html?v=5.047 for more assistance.
+%Error: Exiting due to 1 error(s)
+
+=== RETURN CODE ===
+1

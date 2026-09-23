@@ -1,0 +1,50 @@
+{
+  "pass": "pass3",
+  "passed": false,
+  "checks": {
+    "structural": {
+      "status": "fail",
+      "issue_count": 5,
+      "issues": [
+        "\u274c Module 'adaptive_aero_safety_monitor' missing ports vs spec: ['cfg_actuator_min', 'cfg_actuator_max', 'response_valid_seen', 'actuator_cmd_data_in', 'fault_clear', 'operating_mode']",
+        "\u274c Module 'adaptive_aero_safety_monitor' has extra ports vs spec: ['cfg_enable', 'cfg_clear_fault', 'cfg_operating_mode']",
+        "\u274c Module 'adaptive_aero_history_buffer' has extra ports vs spec: ['model_response_word']",
+        "Module 'adaptive_aero_history_buffer' declares fpga_bram memory_implementation but has no synthesizable unpacked memory array; implement inferred storage instead of scalar registers.",
+        "\u274c Module 'generic_bram_wrapper' has extra ports vs spec: ['addr', 'din', 'we', 'en', 'dout']"
+      ]
+    },
+    "compile": {
+      "status": "fail",
+      "log": "backend/workflows/ea97f60b-a3ea-4cd4-8c8e-00b176895968/rtl/rtl_agent_compile_pass3.log"
+    },
+    "lint": {
+      "status": "fatal",
+      "blocking": true,
+      "log": "backend/workflows/ea97f60b-a3ea-4cd4-8c8e-00b176895968/rtl/rtl_verilator_lint_pass3.log"
+    },
+    "static_spec2rtl": {
+      "status": "partial",
+      "blocking": true,
+      "report": "backend/workflows/ea97f60b-a3ea-4cd4-8c8e-00b176895968/rtl/rtl_spec2rtl_conformance_pass3.json",
+      "summary": {
+        "checked": 125,
+        "matched": 104,
+        "partial": 0,
+        "missing": 21,
+        "inconclusive": 0,
+        "pending_verification": 61
+      }
+    }
+  },
+  "issue_count": 8,
+  "issues": [
+    "\u274c Module 'adaptive_aero_safety_monitor' missing ports vs spec: ['cfg_actuator_min', 'cfg_actuator_max', 'response_valid_seen', 'actuator_cmd_data_in', 'fault_clear', 'operating_mode']",
+    "\u274c Module 'adaptive_aero_safety_monitor' has extra ports vs spec: ['cfg_enable', 'cfg_clear_fault', 'cfg_operating_mode']",
+    "\u274c Module 'adaptive_aero_history_buffer' has extra ports vs spec: ['model_response_word']",
+    "Module 'adaptive_aero_history_buffer' declares fpga_bram memory_implementation but has no synthesizable unpacked memory array; implement inferred storage instead of scalar registers.",
+    "\u274c Module 'generic_bram_wrapper' has extra ports vs spec: ['addr', 'din', 'we', 'en', 'dout']",
+    "\u274c Icarus Verilog compile failed.",
+    "\u274c Verilator lint failed.",
+    "\u274c Static Spec2RTL compliance failed: status=partial, missing=21, partial=0, inconclusive=0."
+  ]
+}

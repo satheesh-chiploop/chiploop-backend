@@ -1,0 +1,623 @@
+---BEGIN adaptive_aero_control_top.v---
+module adaptive_aero_control_top (
+    clk,
+    reset_n,
+    mmio_valid,
+    mmio_write,
+    mmio_addr,
+    mmio_wdata,
+    mmio_ready,
+    mmio_rdata,
+    mmio_rvalid,
+    veh_state_valid,
+    veh_speed_mps,
+    model_req_valid,
+    model_req_data,
+    model_req_ready,
+    model_rsp_valid,
+    model_rsp_data,
+    model_rsp_ready,
+    actuator_cmd_valid,
+    actuator_cmd_data,
+    cmd_req_valid,
+    cmd_req_data,
+    cmd_req_ready,
+    cmd_rsp_valid,
+    cmd_rsp_data,
+    cmd_rsp_ready,
+    fault_latched,
+    safety_inhibit,
+    operating_mode
+);
+    input clk;
+    input reset_n;
+    input mmio_valid;
+    input mmio_write;
+    input [11:0] mmio_addr;
+    input [31:0] mmio_wdata;
+    output mmio_ready;
+    output [31:0] mmio_rdata;
+    output mmio_rvalid;
+    input veh_state_valid;
+    input [15:0] veh_speed_mps;
+    output model_req_valid;
+    output [31:0] model_req_data;
+    input model_req_ready;
+    input model_rsp_valid;
+    input [31:0] model_rsp_data;
+    output model_rsp_ready;
+    output actuator_cmd_valid;
+    output [31:0] actuator_cmd_data;
+    output cmd_req_valid;
+    output [31:0] cmd_req_data;
+    input cmd_req_ready;
+    input cmd_rsp_valid;
+    input [31:0] cmd_rsp_data;
+    output cmd_rsp_ready;
+    output fault_latched;
+    output safety_inhibit;
+    output [1:0] operating_mode;
+
+    wire cfg_enable;
+    wire cfg_clear_fault;
+    wire [15:0] cfg_timeout_cycles;
+    wire [15:0] cfg_speed_min_mps;
+    wire [15:0] cfg_speed_max_mps;
+    wire [15:0] cfg_actuator_min;
+    wire [15:0] cfg_actuator_max;
+    wire [15:0] cfg_model_req_ttl;
+    wire [1:0] cfg_operating_mode;
+    wire fault_latched_w;
+    wire safety_inhibit_w;
+    wire [15:0] request_token;
+    wire [15:0] request_age;
+    wire [31:0] model_response_word;
+    wire response_valid_seen;
+    wire [15:0] response_age;
+
+    assign cmd_req_valid = model_req_valid;
+    assign cmd_req_data = model_req_data;
+    assign cmd_rsp_ready = model_rsp_ready;
+    assign fault_latched = fault_latched_w;
+    assign safety_inhibit = safety_inhibit_w;
+    assign operating_mode = cfg_operating_mode;
+
+    adaptive_aero_mmio_csr u_mmio (
+        .clk(clk),
+        .reset_n(reset_n),
+        .mmio_valid(mmio_valid),
+        .mmio_write(mmio_write),
+        .mmio_addr(mmio_addr),
+        .mmio_wdata(mmio_wdata),
+        .mmio_ready(mmio_ready),
+        .mmio_rdata(mmio_rdata),
+        .mmio_rvalid(mmio_rvalid),
+        .cfg_enable(cfg_enable),
+        .cfg_clear_fault(cfg_clear_fault),
+        .cfg_timeout_cycles(cfg_timeout_cycles),
+        .cfg_speed_min_mps(cfg_speed_min_mps),
+        .cfg_speed_max_mps(cfg_speed_max_mps),
+        .cfg_actuator_min(cfg_actuator_min),
+        .cfg_actuator_max(cfg_actuator_max),
+        .cfg_model_req_ttl(cfg_model_req_ttl),
+        .cfg_operating_mode(cfg_operating_mode),
+        .fault_latched_in(fault_latched_w),
+        .safety_inhibit_in(safety_inhibit_w),
+        .operating_mode_in(cfg_operating_mode)
+    );
+
+    adaptive_aero_request_scheduler u_sched (
+        .clk(clk),
+        .reset_n(reset_n),
+        .veh_state_valid(veh_state_valid),
+        .veh_speed_mps(veh_speed_mps),
+        .cfg_enable(cfg_enable),
+        .cfg_speed_min_mps(cfg_speed_min_mps),
+        .cfg_speed_max_mps(cfg_speed_max_mps),
+        .cfg_model_req_ttl(cfg_model_req_ttl),
+        .request_token(request_token),
+        .request_age(request_age),
+        .model_req_valid(model_req_valid),
+        .model_req_data(model_req_data),
+        .model_req_ready(model_req_ready)
+    );
+
+    adaptive_aero_model_transport_bridge u_bridge (
+        .clk(clk),
+        .reset_n(reset_n),
+        .model_req_valid(model_req_valid),
+        .model_req_data(model_req_data),
+        .model_req_ready(model_req_ready),
+        .model_rsp_valid(model_rsp_valid),
+        .model_rsp_data(model_rsp_data),
+        .model_rsp_ready(model_rsp_ready),
+        .model_response_word(model_response_word),
+        .response_valid_seen(response_valid_seen)
+    );
+
+    adaptive_aero_history_buffer u_hist (
+        .clk(clk),
+        .reset_n(reset_n),
+        .response_valid_seen(response_valid_seen),
+        .request_token(request_token),
+        .model_response_word(model_response_word),
+        .request_age(request_age),
+        .response_age(response_age)
+    );
+
+    adaptive_aero_safety_monitor u_safety (
+        .clk(clk),
+        .reset_n(reset_n),
+        .veh_state_valid(veh_state_valid),
+        .veh_speed_mps(veh_speed_mps),
+        .cfg_speed_min_mps(cfg_speed_min_mps),
+        .cfg_speed_max_mps(cfg_speed_max_mps),
+        .cfg_actuator_min(cfg_actuator_min),
+        .cfg_actuator_max(cfg_actuator_max),
+        .response_valid_seen(response_valid_seen),
+        .request_age(request_age),
+        .response_age(response_age),
+        .actuator_cmd_data_in(actuator_cmd_data),
+        .fault_clear(cfg_clear_fault),
+        .operating_mode(cfg_operating_mode),
+        .fault_latched(fault_latched_w),
+        .safety_inhibit(safety_inhibit_w)
+    );
+
+    adaptive_aero_actuator_controller u_act (
+        .clk(clk),
+        .reset_n(reset_n),
+        .cfg_enable(cfg_enable),
+        .cfg_actuator_min(cfg_actuator_min),
+        .cfg_actuator_max(cfg_actuator_max),
+        .fault_latched(fault_latched_w),
+        .safety_inhibit(safety_inhibit_w),
+        .response_valid_seen(response_valid_seen),
+        .veh_speed_mps(veh_speed_mps),
+        .model_response_word(model_response_word),
+        .actuator_cmd_valid(actuator_cmd_valid),
+        .actuator_cmd_data(actuator_cmd_data)
+    );
+endmodule
+---END adaptive_aero_control_top.v---
+---BEGIN adaptive_aero_mmio_csr.v---
+module adaptive_aero_mmio_csr (
+    clk,
+    reset_n,
+    mmio_valid,
+    mmio_write,
+    mmio_addr,
+    mmio_wdata,
+    mmio_ready,
+    mmio_rdata,
+    mmio_rvalid,
+    cfg_enable,
+    cfg_clear_fault,
+    cfg_timeout_cycles,
+    cfg_speed_min_mps,
+    cfg_speed_max_mps,
+    cfg_actuator_min,
+    cfg_actuator_max,
+    cfg_model_req_ttl,
+    cfg_operating_mode,
+    fault_latched_in,
+    safety_inhibit_in,
+    operating_mode_in
+);
+    input clk;
+    input reset_n;
+    input mmio_valid;
+    input mmio_write;
+    input [11:0] mmio_addr;
+    input [31:0] mmio_wdata;
+    output mmio_ready;
+    output [31:0] mmio_rdata;
+    output mmio_rvalid;
+    output cfg_enable;
+    output cfg_clear_fault;
+    output [15:0] cfg_timeout_cycles;
+    output [15:0] cfg_speed_min_mps;
+    output [15:0] cfg_speed_max_mps;
+    output [15:0] cfg_actuator_min;
+    output [15:0] cfg_actuator_max;
+    output [15:0] cfg_model_req_ttl;
+    output [1:0] cfg_operating_mode;
+    input fault_latched_in;
+    input safety_inhibit_in;
+    input [1:0] operating_mode_in;
+
+    reg cfg_enable_r;
+    reg cfg_clear_fault_r;
+    reg [15:0] cfg_timeout_cycles_r;
+    reg [15:0] cfg_speed_min_mps_r;
+    reg [15:0] cfg_speed_max_mps_r;
+    reg [15:0] cfg_actuator_min_r;
+    reg [15:0] cfg_actuator_max_r;
+    reg [15:0] cfg_model_req_ttl_r;
+    reg [1:0] cfg_operating_mode_r;
+    reg [31:0] mmio_rdata_r;
+    reg mmio_rvalid_r;
+    reg mmio_ready_r;
+
+    assign cfg_enable = cfg_enable_r;
+    assign cfg_clear_fault = cfg_clear_fault_r;
+    assign cfg_timeout_cycles = cfg_timeout_cycles_r;
+    assign cfg_speed_min_mps = cfg_speed_min_mps_r;
+    assign cfg_speed_max_mps = cfg_speed_max_mps_r;
+    assign cfg_actuator_min = cfg_actuator_min_r;
+    assign cfg_actuator_max = cfg_actuator_max_r;
+    assign cfg_model_req_ttl = cfg_model_req_ttl_r;
+    assign cfg_operating_mode = cfg_operating_mode_r;
+    assign mmio_rdata = mmio_rdata_r;
+    assign mmio_rvalid = mmio_rvalid_r;
+    assign mmio_ready = mmio_ready_r;
+
+    always @(posedge clk or negedge reset_n) begin
+        if (!reset_n) begin
+            cfg_enable_r <= 1'b0;
+            cfg_clear_fault_r <= 1'b0;
+            cfg_timeout_cycles_r <= 16'd250;
+            cfg_speed_min_mps_r <= 16'd20;
+            cfg_speed_max_mps_r <= 16'd55;
+            cfg_actuator_min_r <= 16'd0;
+            cfg_actuator_max_r <= 16'd1023;
+            cfg_model_req_ttl_r <= 16'd50;
+            cfg_operating_mode_r <= 2'd0;
+            mmio_rdata_r <= 32'd0;
+            mmio_rvalid_r <= 1'b0;
+            mmio_ready_r <= 1'b1;
+        end else begin
+            cfg_clear_fault_r <= 1'b0;
+            mmio_rvalid_r <= 1'b0;
+            mmio_ready_r <= 1'b1;
+            if (mmio_valid) begin
+                if (mmio_write) begin
+                    case (mmio_addr)
+                        12'h000: begin
+                            cfg_enable_r <= mmio_wdata[0];
+                            cfg_clear_fault_r <= mmio_wdata[1];
+                            cfg_operating_mode_r <= mmio_wdata[3:2];
+                        end
+                        12'h004: cfg_speed_min_mps_r <= mmio_wdata[15:0];
+                        12'h008: cfg_speed_max_mps_r <= mmio_wdata[15:0];
+                        12'h00C: begin
+                            cfg_actuator_min_r <= mmio_wdata[15:0];
+                            cfg_actuator_max_r <= mmio_wdata[31:16];
+                        end
+                        12'h010: begin
+                            cfg_timeout_cycles_r <= mmio_wdata[15:0];
+                            cfg_model_req_ttl_r <= mmio_wdata[31:16];
+                        end
+                        default: begin
+                        end
+                    endcase
+                end else begin
+                    case (mmio_addr)
+                        12'h000: mmio_rdata_r <= {28'd0, cfg_operating_mode_r, cfg_clear_fault_r, cfg_enable_r};
+                        12'h004: mmio_rdata_r <= {16'd0, cfg_speed_min_mps_r};
+                        12'h008: mmio_rdata_r <= {16'd0, cfg_speed_max_mps_r};
+                        12'h00C: mmio_rdata_r <= {cfg_actuator_max_r, cfg_actuator_min_r};
+                        12'h010: mmio_rdata_r <= {cfg_model_req_ttl_r, cfg_timeout_cycles_r};
+                        12'h014: mmio_rdata_r <= {28'd0, operating_mode_in, safety_inhibit_in, fault_latched_in};
+                        12'h018: mmio_rdata_r <= 32'd0;
+                        12'h01C: mmio_rdata_r <= 32'd0;
+                        12'h020: mmio_rdata_r <= 32'd0;
+                        12'h024: mmio_rdata_r <= 32'd0;
+                        12'h028: mmio_rdata_r <= 32'd0;
+                        12'h02C: mmio_rdata_r <= 32'd0;
+                        default: mmio_rdata_r <= 32'd0;
+                    endcase
+                    mmio_rvalid_r <= 1'b1;
+                end
+            end
+        end
+    end
+endmodule
+---END adaptive_aero_mmio_csr.v---
+---BEGIN adaptive_aero_request_scheduler.v---
+module adaptive_aero_request_scheduler (
+    clk,
+    reset_n,
+    veh_state_valid,
+    veh_speed_mps,
+    cfg_enable,
+    cfg_speed_min_mps,
+    cfg_speed_max_mps,
+    cfg_model_req_ttl,
+    request_token,
+    request_age,
+    model_req_valid,
+    model_req_data,
+    model_req_ready
+);
+    input clk;
+    input reset_n;
+    input veh_state_valid;
+    input [15:0] veh_speed_mps;
+    input cfg_enable;
+    input [15:0] cfg_speed_min_mps;
+    input [15:0] cfg_speed_max_mps;
+    input [15:0] cfg_model_req_ttl;
+    output [15:0] request_token;
+    output [15:0] request_age;
+    output model_req_valid;
+    output [31:0] model_req_data;
+    input model_req_ready;
+
+    reg [15:0] request_token_r;
+    reg [15:0] request_age_r;
+    reg model_req_valid_r;
+    reg [31:0] model_req_data_r;
+
+    assign request_token = request_token_r;
+    assign request_age = request_age_r;
+    assign model_req_valid = model_req_valid_r;
+    assign model_req_data = model_req_data_r;
+
+    always @(posedge clk or negedge reset_n) begin
+        if (!reset_n) begin
+            request_token_r <= 16'd0;
+            request_age_r <= 16'd0;
+            model_req_valid_r <= 1'b0;
+            model_req_data_r <= 32'd0;
+        end else begin
+            if (!cfg_enable) begin
+                model_req_valid_r <= 1'b0;
+            end else if (veh_state_valid && model_req_ready) begin
+                request_token_r <= request_token_r + 16'd1;
+                request_age_r <= 16'd0;
+                model_req_valid_r <= 1'b1;
+                model_req_data_r <= {cfg_speed_max_mps, cfg_speed_min_mps};
+            end else begin
+                if (request_age_r != cfg_model_req_ttl) begin
+                    request_age_r <= request_age_r + 16'd1;
+                end
+                model_req_valid_r <= 1'b0;
+            end
+        end
+    end
+endmodule
+---END adaptive_aero_request_scheduler.v---
+---BEGIN adaptive_aero_model_transport_bridge.v---
+module adaptive_aero_model_transport_bridge (
+    clk,
+    reset_n,
+    model_req_valid,
+    model_req_data,
+    model_req_ready,
+    model_rsp_valid,
+    model_rsp_data,
+    model_rsp_ready,
+    model_response_word,
+    response_valid_seen
+);
+    input clk;
+    input reset_n;
+    input model_req_valid;
+    input [31:0] model_req_data;
+    output model_req_ready;
+    input model_rsp_valid;
+    input [31:0] model_rsp_data;
+    output model_rsp_ready;
+    output [31:0] model_response_word;
+    output response_valid_seen;
+
+    reg model_req_ready_r;
+    reg model_rsp_ready_r;
+    reg [31:0] model_response_word_r;
+    reg response_valid_seen_r;
+
+    assign model_req_ready = model_req_ready_r;
+    assign model_rsp_ready = model_rsp_ready_r;
+    assign model_response_word = model_response_word_r;
+    assign response_valid_seen = response_valid_seen_r;
+
+    always @(posedge clk or negedge reset_n) begin
+        if (!reset_n) begin
+            model_req_ready_r <= 1'b1;
+            model_rsp_ready_r <= 1'b1;
+            model_response_word_r <= 32'd0;
+            response_valid_seen_r <= 1'b0;
+        end else begin
+            model_req_ready_r <= 1'b1;
+            model_rsp_ready_r <= 1'b1;
+            if (model_rsp_valid) begin
+                model_response_word_r <= model_rsp_data ^ model_req_data;
+                response_valid_seen_r <= 1'b1;
+            end else begin
+                response_valid_seen_r <= 1'b0;
+            end
+        end
+    end
+endmodule
+---END adaptive_aero_model_transport_bridge.v---
+---BEGIN adaptive_aero_safety_monitor.v---
+module adaptive_aero_safety_monitor (
+    clk,
+    reset_n,
+    veh_state_valid,
+    veh_speed_mps,
+    cfg_enable,
+    cfg_clear_fault,
+    cfg_timeout_cycles,
+    cfg_speed_min_mps,
+    cfg_speed_max_mps,
+    cfg_operating_mode,
+    response_age,
+    request_age,
+    fault_latched,
+    safety_inhibit
+);
+    input clk;
+    input reset_n;
+    input veh_state_valid;
+    input [15:0] veh_speed_mps;
+    input cfg_enable;
+    input cfg_clear_fault;
+    input [15:0] cfg_timeout_cycles;
+    input [15:0] cfg_speed_min_mps;
+    input [15:0] cfg_speed_max_mps;
+    input [1:0] cfg_operating_mode;
+    input [15:0] response_age;
+    input [15:0] request_age;
+    output fault_latched;
+    output safety_inhibit;
+
+    reg fault_latched_r;
+    reg safety_inhibit_r;
+
+    assign fault_latched = fault_latched_r;
+    assign safety_inhibit = safety_inhibit_r;
+
+    always @(posedge clk or negedge reset_n) begin
+        if (!reset_n) begin
+            fault_latched_r <= 1'b0;
+            safety_inhibit_r <= 1'b0;
+        end else begin
+            safety_inhibit_r <= 1'b0;
+            if (cfg_clear_fault) begin
+                fault_latched_r <= 1'b0;
+            end else if (!veh_state_valid) begin
+                fault_latched_r <= 1'b1;
+                safety_inhibit_r <= 1'b1;
+            end else if (cfg_enable && (veh_speed_mps < cfg_speed_min_mps || veh_speed_mps > cfg_speed_max_mps)) begin
+                fault_latched_r <= 1'b1;
+                safety_inhibit_r <= 1'b1;
+            end else if ((request_age >= cfg_timeout_cycles) || (response_age >= cfg_timeout_cycles)) begin
+                fault_latched_r <= 1'b1;
+                safety_inhibit_r <= 1'b1;
+            end else if (cfg_operating_mode == 2'd3) begin
+                safety_inhibit_r <= 1'b1;
+            end
+        end
+    end
+endmodule
+---END adaptive_aero_safety_monitor.v---
+---BEGIN adaptive_aero_actuator_controller.v---
+module adaptive_aero_actuator_controller (
+    clk,
+    reset_n,
+    cfg_enable,
+    cfg_actuator_min,
+    cfg_actuator_max,
+    fault_latched,
+    safety_inhibit,
+    response_valid_seen,
+    veh_speed_mps,
+    model_response_word,
+    actuator_cmd_valid,
+    actuator_cmd_data
+);
+    input clk;
+    input reset_n;
+    input cfg_enable;
+    input [15:0] cfg_actuator_min;
+    input [15:0] cfg_actuator_max;
+    input fault_latched;
+    input safety_inhibit;
+    input response_valid_seen;
+    input [15:0] veh_speed_mps;
+    input [31:0] model_response_word;
+    output actuator_cmd_valid;
+    output [31:0] actuator_cmd_data;
+
+    reg actuator_cmd_valid_r;
+    reg [31:0] actuator_cmd_data_r;
+    reg [15:0] bounded_cmd_r;
+
+    assign actuator_cmd_valid = actuator_cmd_valid_r;
+    assign actuator_cmd_data = actuator_cmd_data_r;
+
+    always @(posedge clk or negedge reset_n) begin
+        if (!reset_n) begin
+            actuator_cmd_valid_r <= 1'b0;
+            actuator_cmd_data_r <= 32'd0;
+            bounded_cmd_r <= 16'd0;
+        end else begin
+            actuator_cmd_valid_r <= 1'b0;
+            if (cfg_enable && response_valid_seen && !fault_latched && !safety_inhibit) begin
+                if (veh_speed_mps < cfg_actuator_min) begin
+                    bounded_cmd_r <= cfg_actuator_min;
+                end else if (veh_speed_mps > cfg_actuator_max) begin
+                    bounded_cmd_r <= cfg_actuator_max;
+                end else begin
+                    bounded_cmd_r <= veh_speed_mps;
+                end
+                actuator_cmd_valid_r <= 1'b1;
+                actuator_cmd_data_r <= {model_response_word[31:16], bounded_cmd_r};
+            end
+        end
+    end
+endmodule
+---END adaptive_aero_actuator_controller.v---
+---BEGIN adaptive_aero_history_buffer.v---
+module adaptive_aero_history_buffer (
+    clk,
+    reset_n,
+    response_valid_seen,
+    request_token,
+    model_response_word,
+    request_age,
+    response_age
+);
+    input clk;
+    input reset_n;
+    input response_valid_seen;
+    input [15:0] request_token;
+    input [31:0] model_response_word;
+    input [15:0] request_age;
+    output [15:0] response_age;
+
+    reg [15:0] response_age_r;
+    reg [15:0] request_token_latched_r;
+
+    assign response_age = response_age_r;
+
+    always @(posedge clk or negedge reset_n) begin
+        if (!reset_n) begin
+            response_age_r <= 16'd0;
+            request_token_latched_r <= 16'd0;
+        end else begin
+            if (response_valid_seen) begin
+                request_token_latched_r <= request_token;
+                response_age_r <= 16'd0;
+            end else if (request_age != 16'd0) begin
+                response_age_r <= request_age + model_response_word[15:0] + request_token_latched_r;
+            end else begin
+                response_age_r <= response_age_r + 16'd1;
+            end
+        end
+    end
+endmodule
+---END adaptive_aero_history_buffer.v---
+---BEGIN generic_bram_wrapper.v---
+module generic_bram_wrapper (
+    clk,
+    addr,
+    din,
+    we,
+    en,
+    dout
+);
+    input clk;
+    input [9:0] addr;
+    input [31:0] din;
+    input we;
+    input en;
+    output [31:0] dout;
+
+    reg [31:0] mem [0:1023];
+    reg [31:0] dout_r;
+
+    assign dout = dout_r;
+
+    always @(posedge clk) begin
+        if (en) begin
+            if (we) begin
+                mem[addr] <= din;
+            end
+            dout_r <= mem[addr];
+        end
+    end
+endmodule
+---END generic_bram_wrapper.v---

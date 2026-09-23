@@ -1,0 +1,69 @@
+=== STDERR ===
+%Warning-PINMISSING: pass3/adaptive_aero_control_top.v:143:34: Instance has missing pin: 'cfg_enable'
+  143 |     adaptive_aero_safety_monitor u_safety (
+      |                                  ^~~~~~~~
+                     pass3/adaptive_aero_safety_monitor.v:6:5: ... Location of port declaration
+    6 |     cfg_enable,
+      |     ^~~~~~~~~~
+                     ... For warning description see https://verilator.org/warn/PINMISSING?v=5.047
+                     ... Use "/* verilator lint_off PINMISSING */" and lint_on around source to disable this message.
+%Warning-PINMISSING: pass3/adaptive_aero_control_top.v:143:34: Instance has missing pin: 'cfg_clear_fault'
+  143 |     adaptive_aero_safety_monitor u_safety (
+      |                                  ^~~~~~~~
+                     pass3/adaptive_aero_safety_monitor.v:7:5: ... Location of port declaration
+    7 |     cfg_clear_fault,
+      |     ^~~~~~~~~~~~~~~
+%Warning-PINMISSING: pass3/adaptive_aero_control_top.v:143:34: Instance has missing pin: 'cfg_timeout_cycles'
+  143 |     adaptive_aero_safety_monitor u_safety (
+      |                                  ^~~~~~~~
+                     pass3/adaptive_aero_safety_monitor.v:8:5: ... Location of port declaration
+    8 |     cfg_timeout_cycles,
+      |     ^~~~~~~~~~~~~~~~~~
+%Warning-PINMISSING: pass3/adaptive_aero_control_top.v:143:34: Instance has missing pin: 'cfg_operating_mode'
+  143 |     adaptive_aero_safety_monitor u_safety (
+      |                                  ^~~~~~~~
+                     pass3/adaptive_aero_safety_monitor.v:11:5: ... Location of port declaration
+   11 |     cfg_operating_mode,
+      |     ^~~~~~~~~~~~~~~~~~
+%Error-PINNOTFOUND: pass3/adaptive_aero_control_top.v:150:10: Pin not found: 'cfg_actuator_min'
+  150 |         .cfg_actuator_min(cfg_actuator_min),
+      |          ^~~~~~~~~~~~~~~~
+                                                            : ... Location of instance's module declaration
+    1 | module adaptive_aero_safety_monitor (
+      |        ^~~~~~~~~~~~~~~~~~~~~~~~~~~~
+                    ... For error description see https://verilator.org/warn/PINNOTFOUND?v=5.047
+%Error-PINNOTFOUND: pass3/adaptive_aero_control_top.v:151:10: Pin not found: 'cfg_actuator_max'
+  151 |         .cfg_actuator_max(cfg_actuator_max),
+      |          ^~~~~~~~~~~~~~~~
+                                                            : ... Location of instance's module declaration
+    1 | module adaptive_aero_safety_monitor (
+      |        ^~~~~~~~~~~~~~~~~~~~~~~~~~~~
+%Error-PINNOTFOUND: pass3/adaptive_aero_control_top.v:152:10: Pin not found: 'response_valid_seen'
+  152 |         .response_valid_seen(response_valid_seen),
+      |          ^~~~~~~~~~~~~~~~~~~
+                                                            : ... Location of instance's module declaration
+    1 | module adaptive_aero_safety_monitor (
+      |        ^~~~~~~~~~~~~~~~~~~~~~~~~~~~
+%Error-PINNOTFOUND: pass3/adaptive_aero_control_top.v:155:10: Pin not found: 'actuator_cmd_data_in'
+  155 |         .actuator_cmd_data_in(actuator_cmd_data),
+      |          ^~~~~~~~~~~~~~~~~~~~
+                                                            : ... Location of instance's module declaration
+    1 | module adaptive_aero_safety_monitor (
+      |        ^~~~~~~~~~~~~~~~~~~~~~~~~~~~
+%Error-PINNOTFOUND: pass3/adaptive_aero_control_top.v:156:10: Pin not found: 'fault_clear'
+  156 |         .fault_clear(cfg_clear_fault),
+      |          ^~~~~~~~~~~
+                                                            : ... Location of instance's module declaration
+    1 | module adaptive_aero_safety_monitor (
+      |        ^~~~~~~~~~~~~~~~~~~~~~~~~~~~
+%Error-PINNOTFOUND: pass3/adaptive_aero_control_top.v:157:10: Pin not found: 'operating_mode'
+                                                            : ... Suggested alternative: 'cfg_operating_mode'
+  157 |         .operating_mode(cfg_operating_mode),
+      |          ^~~~~~~~~~~~~~
+                                                            : ... Location of instance's module declaration
+    1 | module adaptive_aero_safety_monitor (
+      |        ^~~~~~~~~~~~~~~~~~~~~~~~~~~~
+%Error: Exiting due to 6 error(s)
+
+=== RETURN CODE ===
+1

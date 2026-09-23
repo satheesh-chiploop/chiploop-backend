@@ -1,6 +1,7 @@
 import os
 import signal
 import subprocess
+import tempfile
 import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -170,21 +171,41 @@ def _run_process_tree(
     env: Dict[str, str],
 ) -> subprocess.CompletedProcess[str]:
     """Run a tool in its own process group and terminate all descendants on timeout."""
+    stdout_file = None
+    stderr_file = None
     popen_kwargs: Dict[str, Any] = {
         "cwd": cwd,
-        "stdout": subprocess.PIPE,
-        "stderr": subprocess.PIPE,
         "text": True,
         "env": env,
     }
     if os.name == "nt":
+        # Windows' communicate(timeout=...) reader threads can remain blocked
+        # until descendant processes close inherited PIPE handles, even after
+        # the immediate process is killed. File-backed capture avoids that
+        # hidden 30+ second wait and still preserves flushed diagnostic output.
+        stdout_file = tempfile.TemporaryFile(mode="w+", encoding="utf-8", errors="replace")
+        stderr_file = tempfile.TemporaryFile(mode="w+", encoding="utf-8", errors="replace")
+        popen_kwargs["stdout"] = stdout_file
+        popen_kwargs["stderr"] = stderr_file
         popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
     else:
+        popen_kwargs["stdout"] = subprocess.PIPE
+        popen_kwargs["stderr"] = subprocess.PIPE
         popen_kwargs["start_new_session"] = True
+
+    def captured_text() -> tuple[str, str]:
+        if stdout_file is None or stderr_file is None:
+            return "", ""
+        for stream in (stdout_file, stderr_file):
+            stream.flush()
+            stream.seek(0)
+        return stdout_file.read(), stderr_file.read()
 
     proc = subprocess.Popen(command, **popen_kwargs)
     try:
         stdout, stderr = proc.communicate(timeout=timeout_sec)
+        if os.name == "nt":
+            stdout, stderr = captured_text()
     except subprocess.TimeoutExpired as timeout_exc:
         # Killing only the immediate process (often `make`) can leave simulator
         # children holding output pipes open, causing communicate() to wait forever.
@@ -199,6 +220,11 @@ def _run_process_tree(
                 )
             except Exception:
                 proc.kill()
+            try:
+                proc.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+            stdout, stderr = captured_text()
         else:
             try:
                 os.killpg(proc.pid, signal.SIGTERM)
@@ -211,19 +237,22 @@ def _run_process_tree(
                     os.killpg(proc.pid, signal.SIGKILL)
                 except ProcessLookupError:
                     pass
-        try:
-            stdout, stderr = proc.communicate(timeout=5)
-        except subprocess.TimeoutExpired as drain_exc:
-            # Never let timeout cleanup become a second unbounded wait. A
-            # detached descendant may still own an inherited pipe on Windows.
-            proc.kill()
-            if proc.stdout:
-                proc.stdout.close()
-            if proc.stderr:
-                proc.stderr.close()
-            stdout = drain_exc.output or timeout_exc.output or ""
-            stderr = drain_exc.stderr or timeout_exc.stderr or ""
+            try:
+                stdout, stderr = proc.communicate(timeout=5)
+            except subprocess.TimeoutExpired as drain_exc:
+                proc.kill()
+                if proc.stdout:
+                    proc.stdout.close()
+                if proc.stderr:
+                    proc.stderr.close()
+                stdout = drain_exc.output or timeout_exc.output or ""
+                stderr = drain_exc.stderr or timeout_exc.stderr or ""
         raise subprocess.TimeoutExpired(command, timeout_sec, output=stdout, stderr=stderr)
+    finally:
+        if stdout_file is not None:
+            stdout_file.close()
+        if stderr_file is not None:
+            stderr_file.close()
 
     return subprocess.CompletedProcess(command, proc.returncode, stdout, stderr)
 

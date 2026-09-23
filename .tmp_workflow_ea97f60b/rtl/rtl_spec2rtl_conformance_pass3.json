@@ -1,0 +1,3440 @@
+{
+  "agent": "Digital Spec2RTL Conformance Agent",
+  "status": "partial",
+  "summary": {
+    "checked": 125,
+    "matched": 104,
+    "partial": 0,
+    "missing": 21,
+    "inconclusive": 0,
+    "pending_verification": 61
+  },
+  "total_requirements": 181,
+  "total_evaluations": 186,
+  "blocking_summary": {
+    "checked": 125,
+    "matched": 104,
+    "partial": 0,
+    "missing": 21,
+    "inconclusive": 0
+  },
+  "setup_issues": [],
+  "top_module": {
+    "expected": "adaptive_aero_control_top",
+    "modules_found": [
+      "adaptive_aero_actuator_controller",
+      "adaptive_aero_control_top",
+      "adaptive_aero_history_buffer",
+      "adaptive_aero_mmio_csr",
+      "adaptive_aero_model_transport_bridge",
+      "adaptive_aero_request_scheduler",
+      "adaptive_aero_safety_monitor",
+      "generic_bram_wrapper"
+    ],
+    "status": "pass"
+  },
+  "interface": {
+    "status": "pass",
+    "expected_ports": [
+      "actuator_cmd_data",
+      "actuator_cmd_valid",
+      "clk",
+      "cmd_req_data",
+      "cmd_req_ready",
+      "cmd_req_valid",
+      "cmd_rsp_data",
+      "cmd_rsp_ready",
+      "cmd_rsp_valid",
+      "fault_latched",
+      "mmio_addr",
+      "mmio_rdata",
+      "mmio_ready",
+      "mmio_rvalid",
+      "mmio_valid",
+      "mmio_wdata",
+      "mmio_write",
+      "model_req_data",
+      "model_req_ready",
+      "model_req_valid",
+      "model_rsp_data",
+      "model_rsp_ready",
+      "model_rsp_valid",
+      "operating_mode",
+      "reset_n",
+      "safety_inhibit",
+      "veh_speed_mps",
+      "veh_state_valid"
+    ],
+    "matched_ports": [
+      "actuator_cmd_data",
+      "actuator_cmd_valid",
+      "clk",
+      "cmd_req_data",
+      "cmd_req_ready",
+      "cmd_req_valid",
+      "cmd_rsp_data",
+      "cmd_rsp_ready",
+      "cmd_rsp_valid",
+      "fault_latched",
+      "mmio_addr",
+      "mmio_rdata",
+      "mmio_ready",
+      "mmio_rvalid",
+      "mmio_valid",
+      "mmio_wdata",
+      "mmio_write",
+      "model_req_data",
+      "model_req_ready",
+      "model_req_valid",
+      "model_rsp_data",
+      "model_rsp_ready",
+      "model_rsp_valid",
+      "operating_mode",
+      "reset_n",
+      "safety_inhibit",
+      "veh_speed_mps",
+      "veh_state_valid"
+    ],
+    "missing_ports": [],
+    "extra_ports": [],
+    "rtl_ports": [
+      "actuator_cmd_data",
+      "actuator_cmd_valid",
+      "addr",
+      "cfg_actuator_max",
+      "cfg_actuator_min",
+      "cfg_clear_fault",
+      "cfg_enable",
+      "cfg_model_req_ttl",
+      "cfg_operating_mode",
+      "cfg_speed_max_mps",
+      "cfg_speed_min_mps",
+      "cfg_timeout_cycles",
+      "clk",
+      "cmd_req_data",
+      "cmd_req_ready",
+      "cmd_req_valid",
+      "cmd_rsp_data",
+      "cmd_rsp_ready",
+      "cmd_rsp_valid",
+      "din",
+      "dout",
+      "en",
+      "fault_latched",
+      "fault_latched_in",
+      "mmio_addr",
+      "mmio_rdata",
+      "mmio_ready",
+      "mmio_rvalid",
+      "mmio_valid",
+      "mmio_wdata",
+      "mmio_write",
+      "model_req_data",
+      "model_req_ready",
+      "model_req_valid",
+      "model_response_word",
+      "model_rsp_data",
+      "model_rsp_ready",
+      "model_rsp_valid",
+      "operating_mode",
+      "operating_mode_in",
+      "request_age",
+      "request_token",
+      "reset_n",
+      "response_age",
+      "response_valid_seen",
+      "safety_inhibit",
+      "safety_inhibit_in",
+      "veh_speed_mps",
+      "veh_state_valid",
+      "we"
+    ]
+  },
+  "register_map": {
+    "expected": [
+      "ACTUATOR_CMD_VALID",
+      "ACTUATOR_MAX",
+      "ACTUATOR_MIN",
+      "CLEAR_FAULT",
+      "ENABLE",
+      "FAULT_LATCHED",
+      "MODEL_REQ_DATA_HI",
+      "MODEL_REQ_DATA_LO",
+      "MODEL_REQ_READY",
+      "MODEL_REQ_TTL",
+      "MODEL_REQ_VALID",
+      "MODEL_RSP_DATA_HI",
+      "MODEL_RSP_DATA_LO",
+      "MODEL_RSP_READY",
+      "MODEL_RSP_VALID_SEEN",
+      "OPERATING_MODE",
+      "REQUEST_AGE",
+      "REQUEST_TOKEN",
+      "RESPONSE_AGE",
+      "SAFETY_INHIBIT",
+      "SPEED_MAX_MPS",
+      "SPEED_MIN_MPS",
+      "TIMEOUT_CYCLES"
+    ],
+    "matched": [
+      "ACTUATOR_CMD_VALID",
+      "ACTUATOR_MAX",
+      "ACTUATOR_MIN",
+      "CLEAR_FAULT",
+      "ENABLE",
+      "FAULT_LATCHED",
+      "MODEL_REQ_READY",
+      "MODEL_REQ_TTL",
+      "MODEL_REQ_VALID",
+      "MODEL_RSP_READY",
+      "OPERATING_MODE",
+      "REQUEST_AGE",
+      "REQUEST_TOKEN",
+      "RESPONSE_AGE",
+      "SAFETY_INHIBIT",
+      "SPEED_MAX_MPS",
+      "SPEED_MIN_MPS",
+      "TIMEOUT_CYCLES"
+    ],
+    "expected_registers": [
+      "ACTUATOR_BOUNDS",
+      "CTRL",
+      "DEBUG_STATUS",
+      "MODEL_REQUEST_WORD0",
+      "MODEL_REQUEST_WORD1",
+      "MODEL_RESPONSE_WORD0",
+      "MODEL_RESPONSE_WORD1",
+      "MODEL_TRACE",
+      "SPEED_WINDOW_MAX",
+      "SPEED_WINDOW_MIN",
+      "STATUS",
+      "TIMEOUT_CFG"
+    ],
+    "matched_registers": [
+      "ACTUATOR_BOUNDS",
+      "CTRL",
+      "DEBUG_STATUS",
+      "MODEL_REQUEST_WORD0",
+      "MODEL_REQUEST_WORD1",
+      "MODEL_RESPONSE_WORD0",
+      "MODEL_RESPONSE_WORD1",
+      "MODEL_TRACE",
+      "SPEED_WINDOW_MAX",
+      "SPEED_WINDOW_MIN",
+      "STATUS",
+      "TIMEOUT_CFG"
+    ],
+    "expected_addresses": [
+      "0x000",
+      "0x004",
+      "0x008",
+      "0x00C",
+      "0x010",
+      "0x014",
+      "0x018",
+      "0x01C",
+      "0x020",
+      "0x024",
+      "0x028",
+      "0x02C"
+    ],
+    "matched_addresses": [
+      "0x000",
+      "0x004",
+      "0x008",
+      "0x00C",
+      "0x010",
+      "0x014",
+      "0x018",
+      "0x01C",
+      "0x020",
+      "0x024",
+      "0x028",
+      "0x02C"
+    ],
+    "missing": [
+      "MODEL_REQ_DATA_HI",
+      "MODEL_REQ_DATA_LO",
+      "MODEL_RSP_DATA_HI",
+      "MODEL_RSP_DATA_LO",
+      "MODEL_RSP_VALID_SEEN"
+    ],
+    "missing_field_details": [
+      {
+        "field": "MODEL_REQ_DATA_HI",
+        "address": "0x020",
+        "lsb": 0,
+        "msb": 31,
+        "access": "RO"
+      },
+      {
+        "field": "MODEL_REQ_DATA_LO",
+        "address": "0x01C",
+        "lsb": 0,
+        "msb": 31,
+        "access": "RO"
+      },
+      {
+        "field": "MODEL_RSP_DATA_HI",
+        "address": "0x028",
+        "lsb": 0,
+        "msb": 31,
+        "access": "RO"
+      },
+      {
+        "field": "MODEL_RSP_DATA_LO",
+        "address": "0x024",
+        "lsb": 0,
+        "msb": 31,
+        "access": "RO"
+      },
+      {
+        "field": "MODEL_RSP_VALID_SEEN",
+        "address": "0x02C",
+        "lsb": 2,
+        "msb": 2,
+        "access": "RO"
+      }
+    ],
+    "missing_registers": [],
+    "missing_addresses": [],
+    "status": "issues"
+  },
+  "clock_reset": {
+    "clock_ports": [
+      "clk"
+    ],
+    "reset_ports": [
+      "reset_n"
+    ],
+    "status": "pass"
+  },
+  "feature_contracts": {
+    "status": "pass",
+    "checked": 5,
+    "passed": 5,
+    "failed": 0,
+    "features": [
+      {
+        "feature_id": "feature_mmio_register_readback",
+        "status": "pass",
+        "stimulus_signals": [
+          "mmio_addr",
+          "mmio_valid",
+          "mmio_wdata",
+          "mmio_write"
+        ],
+        "expected_signals": [
+          "mmio_ready",
+          "mmio_rvalid"
+        ],
+        "missing_stimulus_signals": [],
+        "missing_expected_signals": [],
+        "wrong_stimulus_directions": [],
+        "wrong_expected_directions": [],
+        "unresolved_bindings": []
+      },
+      {
+        "feature_id": "feature_model_transport_direction",
+        "status": "pass",
+        "stimulus_signals": [
+          "mmio_addr",
+          "mmio_valid",
+          "mmio_wdata",
+          "mmio_write",
+          "veh_speed_mps",
+          "veh_state_valid"
+        ],
+        "expected_signals": [
+          "model_req_valid",
+          "model_rsp_ready"
+        ],
+        "missing_stimulus_signals": [],
+        "missing_expected_signals": [],
+        "wrong_stimulus_directions": [],
+        "wrong_expected_directions": [],
+        "unresolved_bindings": []
+      },
+      {
+        "feature_id": "feature_safety_inhibit_on_invalid_state",
+        "status": "pass",
+        "stimulus_signals": [
+          "mmio_addr",
+          "mmio_valid",
+          "mmio_wdata",
+          "mmio_write",
+          "veh_speed_mps",
+          "veh_state_valid"
+        ],
+        "expected_signals": [
+          "actuator_cmd_valid",
+          "fault_latched",
+          "safety_inhibit"
+        ],
+        "missing_stimulus_signals": [],
+        "missing_expected_signals": [],
+        "wrong_stimulus_directions": [],
+        "wrong_expected_directions": [],
+        "unresolved_bindings": []
+      },
+      {
+        "feature_id": "feature_bounded_actuator_command",
+        "status": "pass",
+        "stimulus_signals": [
+          "mmio_addr",
+          "mmio_valid",
+          "mmio_wdata",
+          "mmio_write",
+          "veh_speed_mps",
+          "veh_state_valid"
+        ],
+        "expected_signals": [
+          "actuator_cmd_valid"
+        ],
+        "missing_stimulus_signals": [],
+        "missing_expected_signals": [],
+        "wrong_stimulus_directions": [],
+        "wrong_expected_directions": [],
+        "unresolved_bindings": []
+      },
+      {
+        "feature_id": "feature_timeout_latches_fault_without_fallback",
+        "status": "pass",
+        "stimulus_signals": [
+          "mmio_addr",
+          "mmio_valid",
+          "mmio_wdata",
+          "mmio_write",
+          "veh_speed_mps",
+          "veh_state_valid"
+        ],
+        "expected_signals": [
+          "actuator_cmd_valid",
+          "fault_latched"
+        ],
+        "missing_stimulus_signals": [],
+        "missing_expected_signals": [],
+        "wrong_stimulus_directions": [],
+        "wrong_expected_directions": [],
+        "unresolved_bindings": []
+      }
+    ],
+    "scope": "static interface binding; behavioral results are verified separately"
+  },
+  "requirements": [
+    {
+      "id": "REQ-001",
+      "module": "adaptive_aero_control_top",
+      "section": "responsibilities",
+      "requirement": "Provide the firmware-visible MMIO/CSR control and status interface.",
+      "status": "matched",
+      "static_precheck_status": "matched",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": [
+        "firmware_visible_csr_mmio_interface",
+        "mmio_write"
+      ]
+    },
+    {
+      "id": "REQ-002",
+      "module": "adaptive_aero_control_top",
+      "section": "responsibilities",
+      "requirement": "Decode control registers into semantic configuration signals.",
+      "status": "pending_verification",
+      "static_precheck_status": "missing",
+      "verification_method": "dynamic_simulation",
+      "blocks_rtl_generation": false,
+      "evidence_tokens": []
+    },
+    {
+      "id": "REQ-003",
+      "module": "adaptive_aero_control_top",
+      "section": "responsibilities",
+      "requirement": "Transport model requests and responses with the mandated directionality.",
+      "status": "pending_verification",
+      "static_precheck_status": "missing",
+      "verification_method": "dynamic_simulation",
+      "blocks_rtl_generation": false,
+      "evidence_tokens": []
+    },
+    {
+      "id": "REQ-004",
+      "module": "adaptive_aero_control_top",
+      "section": "responsibilities",
+      "requirement": "Track request age, response freshness, and timeout conditions.",
+      "status": "pending_verification",
+      "static_precheck_status": "matched",
+      "verification_method": "systemverilog_assertion",
+      "blocks_rtl_generation": false,
+      "evidence_tokens": [
+        "request_age",
+        "response_age"
+      ]
+    },
+    {
+      "id": "REQ-005",
+      "module": "adaptive_aero_control_top",
+      "section": "responsibilities",
+      "requirement": "Gate actuator commands with safety, validity, and range checks.",
+      "status": "pending_verification",
+      "static_precheck_status": "missing",
+      "verification_method": "dynamic_simulation",
+      "blocks_rtl_generation": false,
+      "evidence_tokens": []
+    },
+    {
+      "id": "REQ-006",
+      "module": "adaptive_aero_control_top",
+      "section": "responsibilities",
+      "requirement": "Latch faults for firmware handling without synthesizing a substitute command.",
+      "status": "pending_verification",
+      "static_precheck_status": "matched",
+      "verification_method": "systemverilog_assertion",
+      "blocks_rtl_generation": false,
+      "evidence_tokens": [
+        "latched_status_fault_state",
+        "synthesizable_rtl_subset"
+      ]
+    },
+    {
+      "id": "REQ-007",
+      "module": "adaptive_aero_control_top",
+      "section": "responsibilities",
+      "requirement": "Expose operating mode and safety inhibit status to software and system integration logic.",
+      "status": "pending_verification",
+      "static_precheck_status": "matched",
+      "verification_method": "dynamic_simulation",
+      "blocks_rtl_generation": false,
+      "evidence_tokens": [
+        "operating_mode",
+        "safety_inhibit"
+      ]
+    },
+    {
+      "id": "REQ-008",
+      "module": "adaptive_aero_control_top",
+      "section": "behavior_rules",
+      "requirement": "Actuator output validity must be deasserted whenever veh_state_valid is low, model response is invalid, model response is stale, timeout occurs, or safety limits are violated.",
+      "status": "pending_verification",
+      "static_precheck_status": "matched",
+      "verification_method": "systemverilog_assertion",
+      "blocks_rtl_generation": false,
+      "evidence_tokens": [
+        "veh_state_valid",
+        "packet_validation_predicates",
+        "output_validity_inhibition"
+      ]
+    },
+    {
+      "id": "REQ-009",
+      "module": "adaptive_aero_control_top",
+      "section": "behavior_rules",
+      "requirement": "The commanded actuator data must remain bounded to firmware-programmed limits; if the bound check fails, validity is inhibited and the fault is latched.",
+      "status": "pending_verification",
+      "static_precheck_status": "matched",
+      "verification_method": "systemverilog_assertion",
+      "blocks_rtl_generation": false,
+      "evidence_tokens": [
+        "latched_status_fault_state",
+        "fault_clear",
+        "fault_latched"
+      ]
+    },
+    {
+      "id": "REQ-010",
+      "module": "adaptive_aero_control_top",
+      "section": "behavior_rules",
+      "requirement": "The design must not replace an invalid or missing command with a fallback command; instead, it must inhibit output validity.",
+      "status": "pending_verification",
+      "static_precheck_status": "matched",
+      "verification_method": "dynamic_simulation",
+      "blocks_rtl_generation": false,
+      "evidence_tokens": [
+        "output_validity_inhibition"
+      ]
+    },
+    {
+      "id": "REQ-011",
+      "module": "adaptive_aero_control_top",
+      "section": "behavior_rules",
+      "requirement": "Model requests are emitted only when the request path is enabled and the controller is not in fault inhibit mode.",
+      "status": "pending_verification",
+      "static_precheck_status": "matched",
+      "verification_method": "systemverilog_assertion",
+      "blocks_rtl_generation": false,
+      "evidence_tokens": [
+        "fault_clear"
+      ]
+    },
+    {
+      "id": "REQ-012",
+      "module": "adaptive_aero_control_top",
+      "section": "behavior_rules",
+      "requirement": "Model response readiness is asserted only when the response can be safely accepted and processed.",
+      "status": "pending_verification",
+      "static_precheck_status": "missing",
+      "verification_method": "systemverilog_assertion",
+      "blocks_rtl_generation": false,
+      "evidence_tokens": []
+    },
+    {
+      "id": "REQ-013",
+      "module": "adaptive_aero_control_top",
+      "section": "behavior_rules",
+      "requirement": "All firmware-visible registers must be reachable through real MMIO decode.",
+      "status": "matched",
+      "static_precheck_status": "matched",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": [
+        "firmware_visible_csr_mmio_interface",
+        "register_decode_and_access_paths",
+        "mmio_write"
+      ]
+    },
+    {
+      "id": "REQ-014",
+      "module": "adaptive_aero_control_top",
+      "section": "behavior_rules",
+      "requirement": "Bulk history/FIFO storage is implemented through the declared memory macro and must not be flattened into registers.",
+      "status": "missing",
+      "static_precheck_status": "missing",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": []
+    },
+    {
+      "id": "REQ-015",
+      "module": "adaptive_aero_control_top",
+      "section": "behavior_rules",
+      "requirement": "Stale-data detection uses stored request/response age history and latches a fault when age exceeds the configured timeout.",
+      "status": "pending_verification",
+      "static_precheck_status": "matched",
+      "verification_method": "systemverilog_assertion",
+      "blocks_rtl_generation": false,
+      "evidence_tokens": [
+        "packet_validation_predicates",
+        "latched_status_fault_state",
+        "fault_clear",
+        "request_age",
+        "response_age"
+      ]
+    },
+    {
+      "id": "REQ-016",
+      "module": "adaptive_aero_control_top",
+      "section": "behavior_rules",
+      "requirement": "The transparent reference path shall preserve traceability of speed input, request generation, and response consumption for software analysis.",
+      "status": "pending_verification",
+      "static_precheck_status": "missing",
+      "verification_method": "dynamic_simulation",
+      "blocks_rtl_generation": false,
+      "evidence_tokens": []
+    },
+    {
+      "id": "REQ-017",
+      "module": "adaptive_aero_control_top",
+      "section": "must_drive",
+      "requirement": "mmio_ready",
+      "status": "matched",
+      "static_precheck_status": "matched",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": [
+        "mmio_ready"
+      ]
+    },
+    {
+      "id": "REQ-018",
+      "module": "adaptive_aero_control_top",
+      "section": "must_drive",
+      "requirement": "mmio_rdata",
+      "status": "matched",
+      "static_precheck_status": "matched",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": [
+        "mmio_rdata"
+      ]
+    },
+    {
+      "id": "REQ-019",
+      "module": "adaptive_aero_control_top",
+      "section": "must_drive",
+      "requirement": "mmio_rvalid",
+      "status": "matched",
+      "static_precheck_status": "matched",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": [
+        "mmio_rvalid"
+      ]
+    },
+    {
+      "id": "REQ-020",
+      "module": "adaptive_aero_control_top",
+      "section": "must_drive",
+      "requirement": "cmd_req_ready",
+      "status": "matched",
+      "static_precheck_status": "matched",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": [
+        "cmd_req_ready"
+      ]
+    },
+    {
+      "id": "REQ-021",
+      "module": "adaptive_aero_control_top",
+      "section": "must_drive",
+      "requirement": "cmd_rsp_valid",
+      "status": "matched",
+      "static_precheck_status": "matched",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": [
+        "cmd_rsp_valid"
+      ]
+    },
+    {
+      "id": "REQ-022",
+      "module": "adaptive_aero_control_top",
+      "section": "must_drive",
+      "requirement": "cmd_rsp_data",
+      "status": "matched",
+      "static_precheck_status": "matched",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": [
+        "cmd_rsp_data"
+      ]
+    },
+    {
+      "id": "REQ-023",
+      "module": "adaptive_aero_control_top",
+      "section": "must_drive",
+      "requirement": "model_req_valid",
+      "status": "matched",
+      "static_precheck_status": "matched",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": [
+        "model_req_valid"
+      ]
+    },
+    {
+      "id": "REQ-024",
+      "module": "adaptive_aero_control_top",
+      "section": "must_drive",
+      "requirement": "model_req_data",
+      "status": "matched",
+      "static_precheck_status": "matched",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": [
+        "model_req_data"
+      ]
+    },
+    {
+      "id": "REQ-025",
+      "module": "adaptive_aero_control_top",
+      "section": "must_drive",
+      "requirement": "model_rsp_ready",
+      "status": "matched",
+      "static_precheck_status": "matched",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": [
+        "model_rsp_ready"
+      ]
+    },
+    {
+      "id": "REQ-026",
+      "module": "adaptive_aero_control_top",
+      "section": "must_drive",
+      "requirement": "actuator_cmd_valid",
+      "status": "matched",
+      "static_precheck_status": "matched",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": [
+        "actuator_cmd_valid"
+      ]
+    },
+    {
+      "id": "REQ-027",
+      "module": "adaptive_aero_control_top",
+      "section": "must_drive",
+      "requirement": "actuator_cmd_data",
+      "status": "matched",
+      "static_precheck_status": "matched",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": [
+        "actuator_cmd_data"
+      ]
+    },
+    {
+      "id": "REQ-028",
+      "module": "adaptive_aero_control_top",
+      "section": "must_drive",
+      "requirement": "fault_latched",
+      "status": "matched",
+      "static_precheck_status": "matched",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": [
+        "fault_latched"
+      ]
+    },
+    {
+      "id": "REQ-029",
+      "module": "adaptive_aero_control_top",
+      "section": "must_drive",
+      "requirement": "safety_inhibit",
+      "status": "matched",
+      "static_precheck_status": "matched",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": [
+        "safety_inhibit"
+      ]
+    },
+    {
+      "id": "REQ-030",
+      "module": "adaptive_aero_control_top",
+      "section": "must_drive",
+      "requirement": "operating_mode",
+      "status": "matched",
+      "static_precheck_status": "matched",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": [
+        "operating_mode"
+      ]
+    },
+    {
+      "id": "REQ-031",
+      "module": "adaptive_aero_control_top",
+      "section": "must_receive",
+      "requirement": "mmio_valid",
+      "status": "matched",
+      "static_precheck_status": "matched",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": [
+        "mmio_valid"
+      ]
+    },
+    {
+      "id": "REQ-032",
+      "module": "adaptive_aero_control_top",
+      "section": "must_receive",
+      "requirement": "mmio_write",
+      "status": "matched",
+      "static_precheck_status": "matched",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": [
+        "mmio_write"
+      ]
+    },
+    {
+      "id": "REQ-033",
+      "module": "adaptive_aero_control_top",
+      "section": "must_receive",
+      "requirement": "mmio_addr",
+      "status": "matched",
+      "static_precheck_status": "matched",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": [
+        "mmio_addr"
+      ]
+    },
+    {
+      "id": "REQ-034",
+      "module": "adaptive_aero_control_top",
+      "section": "must_receive",
+      "requirement": "mmio_wdata",
+      "status": "matched",
+      "static_precheck_status": "matched",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": [
+        "mmio_wdata"
+      ]
+    },
+    {
+      "id": "REQ-035",
+      "module": "adaptive_aero_control_top",
+      "section": "must_receive",
+      "requirement": "veh_speed_mps",
+      "status": "matched",
+      "static_precheck_status": "matched",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": [
+        "veh_speed_mps"
+      ]
+    },
+    {
+      "id": "REQ-036",
+      "module": "adaptive_aero_control_top",
+      "section": "must_receive",
+      "requirement": "veh_state_valid",
+      "status": "matched",
+      "static_precheck_status": "matched",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": [
+        "veh_state_valid"
+      ]
+    },
+    {
+      "id": "REQ-037",
+      "module": "adaptive_aero_control_top",
+      "section": "must_receive",
+      "requirement": "cmd_req_valid",
+      "status": "matched",
+      "static_precheck_status": "matched",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": [
+        "cmd_req_valid"
+      ]
+    },
+    {
+      "id": "REQ-038",
+      "module": "adaptive_aero_control_top",
+      "section": "must_receive",
+      "requirement": "cmd_req_data",
+      "status": "matched",
+      "static_precheck_status": "matched",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": [
+        "cmd_req_data"
+      ]
+    },
+    {
+      "id": "REQ-039",
+      "module": "adaptive_aero_control_top",
+      "section": "must_receive",
+      "requirement": "cmd_rsp_ready",
+      "status": "matched",
+      "static_precheck_status": "matched",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": [
+        "cmd_rsp_ready"
+      ]
+    },
+    {
+      "id": "REQ-040",
+      "module": "adaptive_aero_control_top",
+      "section": "must_receive",
+      "requirement": "model_req_ready",
+      "status": "matched",
+      "static_precheck_status": "matched",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": [
+        "model_req_ready"
+      ]
+    },
+    {
+      "id": "REQ-041",
+      "module": "adaptive_aero_control_top",
+      "section": "must_receive",
+      "requirement": "model_rsp_valid",
+      "status": "matched",
+      "static_precheck_status": "matched",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": [
+        "model_rsp_valid"
+      ]
+    },
+    {
+      "id": "REQ-042",
+      "module": "adaptive_aero_control_top",
+      "section": "must_receive",
+      "requirement": "model_rsp_data",
+      "status": "matched",
+      "static_precheck_status": "matched",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": [
+        "model_rsp_data"
+      ]
+    },
+    {
+      "id": "REQ-043",
+      "module": "adaptive_aero_control_top",
+      "section": "reset_behavior",
+      "requirement": "On reset, all outgoing valid signals are deasserted, model_req_valid is low, model_rsp_ready is low until control logic is initialized, actuator_cmd_valid is low, mmio_ready is asserted only when the register interface is able to accept tra",
+      "status": "matched",
+      "static_precheck_status": "matched",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": [
+        "model_req_valid",
+        "model_rsp_ready",
+        "actuator_cmd_valid",
+        "mmio_ready",
+        "output_validity_inhibition",
+        "reset_zero"
+      ]
+    },
+    {
+      "id": "REQ-044",
+      "module": "adaptive_aero_mmio_csr",
+      "section": "responsibilities",
+      "requirement": "Accept MMIO read/write transactions.",
+      "status": "matched",
+      "static_precheck_status": "matched",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": [
+        "mmio_write"
+      ]
+    },
+    {
+      "id": "REQ-045",
+      "module": "adaptive_aero_mmio_csr",
+      "section": "responsibilities",
+      "requirement": "Generate semantic control registers for the controller.",
+      "status": "pending_verification",
+      "static_precheck_status": "missing",
+      "verification_method": "dynamic_simulation",
+      "blocks_rtl_generation": false,
+      "evidence_tokens": []
+    },
+    {
+      "id": "REQ-046",
+      "module": "adaptive_aero_mmio_csr",
+      "section": "responsibilities",
+      "requirement": "Expose latched fault, safety inhibit, and operating mode readback.",
+      "status": "pending_verification",
+      "static_precheck_status": "missing",
+      "verification_method": "systemverilog_assertion",
+      "blocks_rtl_generation": false,
+      "evidence_tokens": []
+    },
+    {
+      "id": "REQ-047",
+      "module": "adaptive_aero_mmio_csr",
+      "section": "responsibilities",
+      "requirement": "Provide ready/valid semantics for firmware transactions.",
+      "status": "pending_verification",
+      "static_precheck_status": "missing",
+      "verification_method": "systemverilog_assertion",
+      "blocks_rtl_generation": false,
+      "evidence_tokens": []
+    },
+    {
+      "id": "REQ-048",
+      "module": "adaptive_aero_mmio_csr",
+      "section": "responsibilities",
+      "requirement": "Keep register semantics transparent and directly readable.",
+      "status": "missing",
+      "static_precheck_status": "missing",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": []
+    },
+    {
+      "id": "REQ-049",
+      "module": "adaptive_aero_mmio_csr",
+      "section": "behavior_rules",
+      "requirement": "Each declared register must be reachable through decode.",
+      "status": "matched",
+      "static_precheck_status": "matched",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": [
+        "register_decode_and_access_paths"
+      ]
+    },
+    {
+      "id": "REQ-050",
+      "module": "adaptive_aero_mmio_csr",
+      "section": "behavior_rules",
+      "requirement": "Write accesses update only the targeted semantic control field.",
+      "status": "pending_verification",
+      "static_precheck_status": "missing",
+      "verification_method": "dynamic_simulation",
+      "blocks_rtl_generation": false,
+      "evidence_tokens": []
+    },
+    {
+      "id": "REQ-051",
+      "module": "adaptive_aero_mmio_csr",
+      "section": "behavior_rules",
+      "requirement": "Read accesses return the current semantic control or status value.",
+      "status": "pending_verification",
+      "static_precheck_status": "missing",
+      "verification_method": "dynamic_simulation",
+      "blocks_rtl_generation": false,
+      "evidence_tokens": []
+    },
+    {
+      "id": "REQ-052",
+      "module": "adaptive_aero_mmio_csr",
+      "section": "behavior_rules",
+      "requirement": "The block must not expose inaccessible internal state as software-visible.",
+      "status": "pending_verification",
+      "static_precheck_status": "missing",
+      "verification_method": "dynamic_simulation",
+      "blocks_rtl_generation": false,
+      "evidence_tokens": []
+    },
+    {
+      "id": "REQ-053",
+      "module": "adaptive_aero_mmio_csr",
+      "section": "behavior_rules",
+      "requirement": "Control outputs are real module outputs and must be consumed by downstream control logic.",
+      "status": "missing",
+      "static_precheck_status": "missing",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": []
+    },
+    {
+      "id": "REQ-054",
+      "module": "adaptive_aero_mmio_csr",
+      "section": "must_drive",
+      "requirement": "mmio_ready",
+      "status": "matched",
+      "static_precheck_status": "matched",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": [
+        "mmio_ready"
+      ]
+    },
+    {
+      "id": "REQ-055",
+      "module": "adaptive_aero_mmio_csr",
+      "section": "must_drive",
+      "requirement": "mmio_rdata",
+      "status": "matched",
+      "static_precheck_status": "matched",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": [
+        "mmio_rdata"
+      ]
+    },
+    {
+      "id": "REQ-056",
+      "module": "adaptive_aero_mmio_csr",
+      "section": "must_drive",
+      "requirement": "mmio_rvalid",
+      "status": "matched",
+      "static_precheck_status": "matched",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": [
+        "mmio_rvalid"
+      ]
+    },
+    {
+      "id": "REQ-057",
+      "module": "adaptive_aero_mmio_csr",
+      "section": "must_drive",
+      "requirement": "cfg_enable",
+      "status": "matched",
+      "static_precheck_status": "matched",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": [
+        "cfg_enable"
+      ]
+    },
+    {
+      "id": "REQ-058",
+      "module": "adaptive_aero_mmio_csr",
+      "section": "must_drive",
+      "requirement": "cfg_clear_fault",
+      "status": "matched",
+      "static_precheck_status": "matched",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": [
+        "cfg_clear_fault"
+      ]
+    },
+    {
+      "id": "REQ-059",
+      "module": "adaptive_aero_mmio_csr",
+      "section": "must_drive",
+      "requirement": "cfg_timeout_cycles",
+      "status": "matched",
+      "static_precheck_status": "matched",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": [
+        "cfg_timeout_cycles"
+      ]
+    },
+    {
+      "id": "REQ-060",
+      "module": "adaptive_aero_mmio_csr",
+      "section": "must_drive",
+      "requirement": "cfg_speed_min_mps",
+      "status": "matched",
+      "static_precheck_status": "matched",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": [
+        "cfg_speed_min_mps"
+      ]
+    },
+    {
+      "id": "REQ-061",
+      "module": "adaptive_aero_mmio_csr",
+      "section": "must_drive",
+      "requirement": "cfg_speed_max_mps",
+      "status": "matched",
+      "static_precheck_status": "matched",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": [
+        "cfg_speed_max_mps"
+      ]
+    },
+    {
+      "id": "REQ-062",
+      "module": "adaptive_aero_mmio_csr",
+      "section": "must_drive",
+      "requirement": "cfg_actuator_min",
+      "status": "matched",
+      "static_precheck_status": "matched",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": [
+        "cfg_actuator_min"
+      ]
+    },
+    {
+      "id": "REQ-063",
+      "module": "adaptive_aero_mmio_csr",
+      "section": "must_drive",
+      "requirement": "cfg_actuator_max",
+      "status": "matched",
+      "static_precheck_status": "matched",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": [
+        "cfg_actuator_max"
+      ]
+    },
+    {
+      "id": "REQ-064",
+      "module": "adaptive_aero_mmio_csr",
+      "section": "must_drive",
+      "requirement": "cfg_model_req_ttl",
+      "status": "matched",
+      "static_precheck_status": "matched",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": [
+        "cfg_model_req_ttl"
+      ]
+    },
+    {
+      "id": "REQ-065",
+      "module": "adaptive_aero_mmio_csr",
+      "section": "must_drive",
+      "requirement": "cfg_operating_mode",
+      "status": "matched",
+      "static_precheck_status": "matched",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": [
+        "cfg_operating_mode"
+      ]
+    },
+    {
+      "id": "REQ-066",
+      "module": "adaptive_aero_mmio_csr",
+      "section": "must_receive",
+      "requirement": "mmio_valid",
+      "status": "matched",
+      "static_precheck_status": "matched",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": [
+        "mmio_valid"
+      ]
+    },
+    {
+      "id": "REQ-067",
+      "module": "adaptive_aero_mmio_csr",
+      "section": "must_receive",
+      "requirement": "mmio_write",
+      "status": "matched",
+      "static_precheck_status": "matched",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": [
+        "mmio_write"
+      ]
+    },
+    {
+      "id": "REQ-068",
+      "module": "adaptive_aero_mmio_csr",
+      "section": "must_receive",
+      "requirement": "mmio_addr",
+      "status": "matched",
+      "static_precheck_status": "matched",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": [
+        "mmio_addr"
+      ]
+    },
+    {
+      "id": "REQ-069",
+      "module": "adaptive_aero_mmio_csr",
+      "section": "must_receive",
+      "requirement": "mmio_wdata",
+      "status": "matched",
+      "static_precheck_status": "matched",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": [
+        "mmio_wdata"
+      ]
+    },
+    {
+      "id": "REQ-070",
+      "module": "adaptive_aero_mmio_csr",
+      "section": "must_receive",
+      "requirement": "fault_latched_in",
+      "status": "matched",
+      "static_precheck_status": "matched",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": [
+        "fault_latched_in"
+      ]
+    },
+    {
+      "id": "REQ-071",
+      "module": "adaptive_aero_mmio_csr",
+      "section": "must_receive",
+      "requirement": "safety_inhibit_in",
+      "status": "matched",
+      "static_precheck_status": "matched",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": [
+        "safety_inhibit_in"
+      ]
+    },
+    {
+      "id": "REQ-072",
+      "module": "adaptive_aero_mmio_csr",
+      "section": "must_receive",
+      "requirement": "operating_mode_in",
+      "status": "matched",
+      "static_precheck_status": "matched",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": [
+        "operating_mode_in"
+      ]
+    },
+    {
+      "id": "REQ-073",
+      "module": "adaptive_aero_mmio_csr",
+      "section": "reset_behavior",
+      "requirement": "All writable control outputs reset to safe disabled values. Readback outputs are valid only after reset deassertion and transaction processing. The register block clears transient transaction state but does not clear external fault state ex",
+      "status": "matched",
+      "static_precheck_status": "matched",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": [
+        "register_decode_and_access_paths",
+        "reset_zero"
+      ]
+    },
+    {
+      "id": "REQ-074",
+      "module": "adaptive_aero_request_scheduler",
+      "section": "responsibilities",
+      "requirement": "Create model requests from the transparent reference input path.",
+      "status": "pending_verification",
+      "static_precheck_status": "missing",
+      "verification_method": "dynamic_simulation",
+      "blocks_rtl_generation": false,
+      "evidence_tokens": []
+    },
+    {
+      "id": "REQ-075",
+      "module": "adaptive_aero_request_scheduler",
+      "section": "responsibilities",
+      "requirement": "Respect the configured active speed range of 20\u201355 m/s or firmware overrides.",
+      "status": "pending_verification",
+      "static_precheck_status": "missing",
+      "verification_method": "dynamic_simulation",
+      "blocks_rtl_generation": false,
+      "evidence_tokens": []
+    },
+    {
+      "id": "REQ-076",
+      "module": "adaptive_aero_request_scheduler",
+      "section": "responsibilities",
+      "requirement": "Handshake with the model transport path using valid/ready semantics.",
+      "status": "pending_verification",
+      "static_precheck_status": "missing",
+      "verification_method": "systemverilog_assertion",
+      "blocks_rtl_generation": false,
+      "evidence_tokens": []
+    },
+    {
+      "id": "REQ-077",
+      "module": "adaptive_aero_request_scheduler",
+      "section": "responsibilities",
+      "requirement": "Expose request token and request age for timeout tracking.",
+      "status": "pending_verification",
+      "static_precheck_status": "matched",
+      "verification_method": "systemverilog_assertion",
+      "blocks_rtl_generation": false,
+      "evidence_tokens": [
+        "request_age",
+        "request_token"
+      ]
+    },
+    {
+      "id": "REQ-078",
+      "module": "adaptive_aero_request_scheduler",
+      "section": "behavior_rules",
+      "requirement": "A request may be emitted only when enabled and vehicle-state-valid is asserted.",
+      "status": "pending_verification",
+      "static_precheck_status": "missing",
+      "verification_method": "systemverilog_assertion",
+      "blocks_rtl_generation": false,
+      "evidence_tokens": []
+    },
+    {
+      "id": "REQ-079",
+      "module": "adaptive_aero_request_scheduler",
+      "section": "behavior_rules",
+      "requirement": "Request payloads must encode the current vehicle speed and reference context needed by the surrogate path.",
+      "status": "pending_verification",
+      "static_precheck_status": "missing",
+      "verification_method": "dynamic_simulation",
+      "blocks_rtl_generation": false,
+      "evidence_tokens": []
+    },
+    {
+      "id": "REQ-080",
+      "module": "adaptive_aero_request_scheduler",
+      "section": "behavior_rules",
+      "requirement": "If the model request is not accepted, valid remains asserted only according to the defined handshake state machine.",
+      "status": "pending_verification",
+      "static_precheck_status": "missing",
+      "verification_method": "systemverilog_assertion",
+      "blocks_rtl_generation": false,
+      "evidence_tokens": []
+    },
+    {
+      "id": "REQ-081",
+      "module": "adaptive_aero_request_scheduler",
+      "section": "behavior_rules",
+      "requirement": "No fallback request or substitute command is allowed.",
+      "status": "pending_verification",
+      "static_precheck_status": "matched",
+      "verification_method": "dynamic_simulation",
+      "blocks_rtl_generation": false,
+      "evidence_tokens": [
+        "no_fallback_value_and_validity_inhibited"
+      ]
+    },
+    {
+      "id": "REQ-082",
+      "module": "adaptive_aero_request_scheduler",
+      "section": "must_drive",
+      "requirement": "model_req_valid",
+      "status": "matched",
+      "static_precheck_status": "matched",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": [
+        "model_req_valid"
+      ]
+    },
+    {
+      "id": "REQ-083",
+      "module": "adaptive_aero_request_scheduler",
+      "section": "must_drive",
+      "requirement": "model_req_data",
+      "status": "matched",
+      "static_precheck_status": "matched",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": [
+        "model_req_data"
+      ]
+    },
+    {
+      "id": "REQ-084",
+      "module": "adaptive_aero_request_scheduler",
+      "section": "must_drive",
+      "requirement": "request_token",
+      "status": "matched",
+      "static_precheck_status": "matched",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": [
+        "request_token"
+      ]
+    },
+    {
+      "id": "REQ-085",
+      "module": "adaptive_aero_request_scheduler",
+      "section": "must_drive",
+      "requirement": "request_age",
+      "status": "matched",
+      "static_precheck_status": "matched",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": [
+        "request_age"
+      ]
+    },
+    {
+      "id": "REQ-086",
+      "module": "adaptive_aero_request_scheduler",
+      "section": "must_receive",
+      "requirement": "veh_speed_mps",
+      "status": "matched",
+      "static_precheck_status": "matched",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": [
+        "veh_speed_mps"
+      ]
+    },
+    {
+      "id": "REQ-087",
+      "module": "adaptive_aero_request_scheduler",
+      "section": "must_receive",
+      "requirement": "veh_state_valid",
+      "status": "matched",
+      "static_precheck_status": "matched",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": [
+        "veh_state_valid"
+      ]
+    },
+    {
+      "id": "REQ-088",
+      "module": "adaptive_aero_request_scheduler",
+      "section": "must_receive",
+      "requirement": "cfg_enable",
+      "status": "matched",
+      "static_precheck_status": "matched",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": [
+        "cfg_enable"
+      ]
+    },
+    {
+      "id": "REQ-089",
+      "module": "adaptive_aero_request_scheduler",
+      "section": "must_receive",
+      "requirement": "cfg_speed_min_mps",
+      "status": "matched",
+      "static_precheck_status": "matched",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": [
+        "cfg_speed_min_mps"
+      ]
+    },
+    {
+      "id": "REQ-090",
+      "module": "adaptive_aero_request_scheduler",
+      "section": "must_receive",
+      "requirement": "cfg_speed_max_mps",
+      "status": "matched",
+      "static_precheck_status": "matched",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": [
+        "cfg_speed_max_mps"
+      ]
+    },
+    {
+      "id": "REQ-091",
+      "module": "adaptive_aero_request_scheduler",
+      "section": "must_receive",
+      "requirement": "cfg_model_req_ttl",
+      "status": "matched",
+      "static_precheck_status": "matched",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": [
+        "cfg_model_req_ttl"
+      ]
+    },
+    {
+      "id": "REQ-092",
+      "module": "adaptive_aero_request_scheduler",
+      "section": "must_receive",
+      "requirement": "model_req_ready",
+      "status": "matched",
+      "static_precheck_status": "matched",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": [
+        "model_req_ready"
+      ]
+    },
+    {
+      "id": "REQ-093",
+      "module": "adaptive_aero_request_scheduler",
+      "section": "reset_behavior",
+      "requirement": "Requests are deasserted on reset. Request token and age counters return to a known reset baseline. No substitute or fallback request is emitted on reset.",
+      "status": "pending_verification",
+      "static_precheck_status": "matched",
+      "verification_method": "dynamic_simulation",
+      "blocks_rtl_generation": false,
+      "evidence_tokens": [
+        "no_fallback_value_and_validity_inhibited",
+        "request_age",
+        "request_token",
+        "reset_zero"
+      ]
+    },
+    {
+      "id": "REQ-094",
+      "module": "adaptive_aero_model_transport_bridge",
+      "section": "responsibilities",
+      "requirement": "Emit model-request valid/data as outputs.",
+      "status": "missing",
+      "static_precheck_status": "missing",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": []
+    },
+    {
+      "id": "REQ-095",
+      "module": "adaptive_aero_model_transport_bridge",
+      "section": "responsibilities",
+      "requirement": "Receive model-request ready as an input.",
+      "status": "pending_verification",
+      "static_precheck_status": "missing",
+      "verification_method": "systemverilog_assertion",
+      "blocks_rtl_generation": false,
+      "evidence_tokens": []
+    },
+    {
+      "id": "REQ-096",
+      "module": "adaptive_aero_model_transport_bridge",
+      "section": "responsibilities",
+      "requirement": "Receive model-response valid/data as inputs.",
+      "status": "pending_verification",
+      "static_precheck_status": "missing",
+      "verification_method": "systemverilog_assertion",
+      "blocks_rtl_generation": false,
+      "evidence_tokens": []
+    },
+    {
+      "id": "REQ-097",
+      "module": "adaptive_aero_model_transport_bridge",
+      "section": "responsibilities",
+      "requirement": "Emit model-response ready as an output.",
+      "status": "missing",
+      "static_precheck_status": "missing",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": []
+    },
+    {
+      "id": "REQ-098",
+      "module": "adaptive_aero_model_transport_bridge",
+      "section": "responsibilities",
+      "requirement": "Provide a traceable response-word tap for internal checking.",
+      "status": "pending_verification",
+      "static_precheck_status": "missing",
+      "verification_method": "dynamic_simulation",
+      "blocks_rtl_generation": false,
+      "evidence_tokens": []
+    },
+    {
+      "id": "REQ-099",
+      "module": "adaptive_aero_model_transport_bridge",
+      "section": "behavior_rules",
+      "requirement": "The bridge must preserve the mandated request/response direction contract.",
+      "status": "pending_verification",
+      "static_precheck_status": "missing",
+      "verification_method": "dynamic_simulation",
+      "blocks_rtl_generation": false,
+      "evidence_tokens": []
+    },
+    {
+      "id": "REQ-100",
+      "module": "adaptive_aero_model_transport_bridge",
+      "section": "behavior_rules",
+      "requirement": "Response-ready may only assert when the system is prepared to accept a response.",
+      "status": "pending_verification",
+      "static_precheck_status": "missing",
+      "verification_method": "systemverilog_assertion",
+      "blocks_rtl_generation": false,
+      "evidence_tokens": []
+    },
+    {
+      "id": "REQ-101",
+      "module": "adaptive_aero_model_transport_bridge",
+      "section": "behavior_rules",
+      "requirement": "Response data is captured transparently for downstream use.",
+      "status": "pending_verification",
+      "static_precheck_status": "missing",
+      "verification_method": "dynamic_simulation",
+      "blocks_rtl_generation": false,
+      "evidence_tokens": []
+    },
+    {
+      "id": "REQ-102",
+      "module": "adaptive_aero_model_transport_bridge",
+      "section": "behavior_rules",
+      "requirement": "No synthetic response or command substitution is permitted.",
+      "status": "pending_verification",
+      "static_precheck_status": "missing",
+      "verification_method": "dynamic_simulation",
+      "blocks_rtl_generation": false,
+      "evidence_tokens": []
+    },
+    {
+      "id": "REQ-103",
+      "module": "adaptive_aero_model_transport_bridge",
+      "section": "must_drive",
+      "requirement": "model_req_ready",
+      "status": "matched",
+      "static_precheck_status": "matched",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": [
+        "model_req_ready"
+      ]
+    },
+    {
+      "id": "REQ-104",
+      "module": "adaptive_aero_model_transport_bridge",
+      "section": "must_drive",
+      "requirement": "model_rsp_ready",
+      "status": "matched",
+      "static_precheck_status": "matched",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": [
+        "model_rsp_ready"
+      ]
+    },
+    {
+      "id": "REQ-105",
+      "module": "adaptive_aero_model_transport_bridge",
+      "section": "must_drive",
+      "requirement": "model_response_word",
+      "status": "matched",
+      "static_precheck_status": "matched",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": [
+        "model_response_word"
+      ]
+    },
+    {
+      "id": "REQ-106",
+      "module": "adaptive_aero_model_transport_bridge",
+      "section": "must_drive",
+      "requirement": "response_valid_seen",
+      "status": "matched",
+      "static_precheck_status": "matched",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": [
+        "response_valid_seen"
+      ]
+    },
+    {
+      "id": "REQ-107",
+      "module": "adaptive_aero_model_transport_bridge",
+      "section": "must_receive",
+      "requirement": "model_req_valid",
+      "status": "matched",
+      "static_precheck_status": "matched",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": [
+        "model_req_valid"
+      ]
+    },
+    {
+      "id": "REQ-108",
+      "module": "adaptive_aero_model_transport_bridge",
+      "section": "must_receive",
+      "requirement": "model_req_data",
+      "status": "matched",
+      "static_precheck_status": "matched",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": [
+        "model_req_data"
+      ]
+    },
+    {
+      "id": "REQ-109",
+      "module": "adaptive_aero_model_transport_bridge",
+      "section": "must_receive",
+      "requirement": "model_rsp_valid",
+      "status": "matched",
+      "static_precheck_status": "matched",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": [
+        "model_rsp_valid"
+      ]
+    },
+    {
+      "id": "REQ-110",
+      "module": "adaptive_aero_model_transport_bridge",
+      "section": "must_receive",
+      "requirement": "model_rsp_data",
+      "status": "matched",
+      "static_precheck_status": "matched",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": [
+        "model_rsp_data"
+      ]
+    },
+    {
+      "id": "REQ-111",
+      "module": "adaptive_aero_model_transport_bridge",
+      "section": "reset_behavior",
+      "requirement": "Response ready and trace indicators are reset to inactive safe values. No response is synthesized on reset. The bridge never substitutes a response and never creates a fallback command.",
+      "status": "pending_verification",
+      "static_precheck_status": "matched",
+      "verification_method": "systemverilog_assertion",
+      "blocks_rtl_generation": false,
+      "evidence_tokens": [
+        "synthesizable_rtl_subset",
+        "reset_zero"
+      ]
+    },
+    {
+      "id": "REQ-112",
+      "module": "adaptive_aero_safety_monitor",
+      "section": "responsibilities",
+      "requirement": "Detect invalid, stale, and timeout conditions.",
+      "status": "pending_verification",
+      "static_precheck_status": "matched",
+      "verification_method": "systemverilog_assertion",
+      "blocks_rtl_generation": false,
+      "evidence_tokens": [
+        "packet_validation_predicates"
+      ]
+    },
+    {
+      "id": "REQ-113",
+      "module": "adaptive_aero_safety_monitor",
+      "section": "responsibilities",
+      "requirement": "Latch fault state for software handling.",
+      "status": "pending_verification",
+      "static_precheck_status": "matched",
+      "verification_method": "systemverilog_assertion",
+      "blocks_rtl_generation": false,
+      "evidence_tokens": [
+        "latched_status_fault_state"
+      ]
+    },
+    {
+      "id": "REQ-114",
+      "module": "adaptive_aero_safety_monitor",
+      "section": "responsibilities",
+      "requirement": "Assert safety inhibit whenever a violation occurs.",
+      "status": "pending_verification",
+      "static_precheck_status": "matched",
+      "verification_method": "systemverilog_assertion",
+      "blocks_rtl_generation": false,
+      "evidence_tokens": [
+        "safety_inhibit"
+      ]
+    },
+    {
+      "id": "REQ-115",
+      "module": "adaptive_aero_safety_monitor",
+      "section": "responsibilities",
+      "requirement": "Report operating mode for integration and readback.",
+      "status": "pending_verification",
+      "static_precheck_status": "missing",
+      "verification_method": "dynamic_simulation",
+      "blocks_rtl_generation": false,
+      "evidence_tokens": []
+    },
+    {
+      "id": "REQ-116",
+      "module": "adaptive_aero_safety_monitor",
+      "section": "behavior_rules",
+      "requirement": "Faults latch on timeout, stale data, invalid vehicle state, or actuator bound violation.",
+      "status": "pending_verification",
+      "static_precheck_status": "matched",
+      "verification_method": "systemverilog_assertion",
+      "blocks_rtl_generation": false,
+      "evidence_tokens": [
+        "packet_validation_predicates",
+        "latched_status_fault_state"
+      ]
+    },
+    {
+      "id": "REQ-117",
+      "module": "adaptive_aero_safety_monitor",
+      "section": "behavior_rules",
+      "requirement": "Fault clearing is firmware controlled.",
+      "status": "pending_verification",
+      "static_precheck_status": "missing",
+      "verification_method": "systemverilog_assertion",
+      "blocks_rtl_generation": false,
+      "evidence_tokens": []
+    },
+    {
+      "id": "REQ-118",
+      "module": "adaptive_aero_safety_monitor",
+      "section": "behavior_rules",
+      "requirement": "Safety inhibit must be asserted whenever fault_latched is asserted.",
+      "status": "pending_verification",
+      "static_precheck_status": "matched",
+      "verification_method": "systemverilog_assertion",
+      "blocks_rtl_generation": false,
+      "evidence_tokens": [
+        "fault_latched",
+        "safety_inhibit"
+      ]
+    },
+    {
+      "id": "REQ-119",
+      "module": "adaptive_aero_safety_monitor",
+      "section": "behavior_rules",
+      "requirement": "No fallback or substitute actuator behavior is permitted.",
+      "status": "pending_verification",
+      "static_precheck_status": "missing",
+      "verification_method": "dynamic_simulation",
+      "blocks_rtl_generation": false,
+      "evidence_tokens": []
+    },
+    {
+      "id": "REQ-120",
+      "module": "adaptive_aero_safety_monitor",
+      "section": "must_drive",
+      "requirement": "fault_latched",
+      "status": "matched",
+      "static_precheck_status": "matched",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": [
+        "fault_latched"
+      ]
+    },
+    {
+      "id": "REQ-121",
+      "module": "adaptive_aero_safety_monitor",
+      "section": "must_drive",
+      "requirement": "safety_inhibit",
+      "status": "matched",
+      "static_precheck_status": "matched",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": [
+        "safety_inhibit"
+      ]
+    },
+    {
+      "id": "REQ-122",
+      "module": "adaptive_aero_safety_monitor",
+      "section": "must_drive",
+      "requirement": "operating_mode",
+      "status": "missing",
+      "static_precheck_status": "missing",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": []
+    },
+    {
+      "id": "REQ-123",
+      "module": "adaptive_aero_safety_monitor",
+      "section": "must_receive",
+      "requirement": "veh_speed_mps",
+      "status": "matched",
+      "static_precheck_status": "matched",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": [
+        "veh_speed_mps"
+      ]
+    },
+    {
+      "id": "REQ-124",
+      "module": "adaptive_aero_safety_monitor",
+      "section": "must_receive",
+      "requirement": "veh_state_valid",
+      "status": "matched",
+      "static_precheck_status": "matched",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": [
+        "veh_state_valid"
+      ]
+    },
+    {
+      "id": "REQ-125",
+      "module": "adaptive_aero_safety_monitor",
+      "section": "must_receive",
+      "requirement": "cfg_timeout_cycles",
+      "status": "matched",
+      "static_precheck_status": "matched",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": [
+        "cfg_timeout_cycles"
+      ]
+    },
+    {
+      "id": "REQ-126",
+      "module": "adaptive_aero_safety_monitor",
+      "section": "must_receive",
+      "requirement": "cfg_speed_min_mps",
+      "status": "matched",
+      "static_precheck_status": "matched",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": [
+        "cfg_speed_min_mps"
+      ]
+    },
+    {
+      "id": "REQ-127",
+      "module": "adaptive_aero_safety_monitor",
+      "section": "must_receive",
+      "requirement": "cfg_speed_max_mps",
+      "status": "matched",
+      "static_precheck_status": "matched",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": [
+        "cfg_speed_max_mps"
+      ]
+    },
+    {
+      "id": "REQ-128",
+      "module": "adaptive_aero_safety_monitor",
+      "section": "must_receive",
+      "requirement": "cfg_actuator_min",
+      "status": "missing",
+      "static_precheck_status": "missing",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": []
+    },
+    {
+      "id": "REQ-129",
+      "module": "adaptive_aero_safety_monitor",
+      "section": "must_receive",
+      "requirement": "cfg_actuator_max",
+      "status": "missing",
+      "static_precheck_status": "missing",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": []
+    },
+    {
+      "id": "REQ-130",
+      "module": "adaptive_aero_safety_monitor",
+      "section": "must_receive",
+      "requirement": "request_age",
+      "status": "matched",
+      "static_precheck_status": "matched",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": [
+        "request_age"
+      ]
+    },
+    {
+      "id": "REQ-131",
+      "module": "adaptive_aero_safety_monitor",
+      "section": "must_receive",
+      "requirement": "response_age",
+      "status": "matched",
+      "static_precheck_status": "matched",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": [
+        "response_age"
+      ]
+    },
+    {
+      "id": "REQ-132",
+      "module": "adaptive_aero_safety_monitor",
+      "section": "must_receive",
+      "requirement": "response_valid_seen",
+      "status": "missing",
+      "static_precheck_status": "missing",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": []
+    },
+    {
+      "id": "REQ-133",
+      "module": "adaptive_aero_safety_monitor",
+      "section": "must_receive",
+      "requirement": "actuator_cmd_data_in",
+      "status": "missing",
+      "static_precheck_status": "missing",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": []
+    },
+    {
+      "id": "REQ-134",
+      "module": "adaptive_aero_safety_monitor",
+      "section": "must_receive",
+      "requirement": "fault_clear",
+      "status": "missing",
+      "static_precheck_status": "missing",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": []
+    },
+    {
+      "id": "REQ-135",
+      "module": "adaptive_aero_safety_monitor",
+      "section": "reset_behavior",
+      "requirement": "Faults clear on reset, safety inhibit asserts to safe state, and operating mode indicates inhibited safe state. No command fallback is emitted on reset.",
+      "status": "pending_verification",
+      "static_precheck_status": "matched",
+      "verification_method": "dynamic_simulation",
+      "blocks_rtl_generation": false,
+      "evidence_tokens": [
+        "safety_inhibit",
+        "reset_zero"
+      ]
+    },
+    {
+      "id": "REQ-136",
+      "module": "adaptive_aero_actuator_controller",
+      "section": "responsibilities",
+      "requirement": "Convert validated surrogate output into actuator command data.",
+      "status": "pending_verification",
+      "static_precheck_status": "missing",
+      "verification_method": "dynamic_simulation",
+      "blocks_rtl_generation": false,
+      "evidence_tokens": []
+    },
+    {
+      "id": "REQ-137",
+      "module": "adaptive_aero_actuator_controller",
+      "section": "responsibilities",
+      "requirement": "Clamp outputs to the configured actuator range.",
+      "status": "pending_verification",
+      "static_precheck_status": "missing",
+      "verification_method": "systemverilog_assertion",
+      "blocks_rtl_generation": false,
+      "evidence_tokens": []
+    },
+    {
+      "id": "REQ-138",
+      "module": "adaptive_aero_actuator_controller",
+      "section": "responsibilities",
+      "requirement": "Deassert command validity when disabled or faulted.",
+      "status": "pending_verification",
+      "static_precheck_status": "matched",
+      "verification_method": "systemverilog_assertion",
+      "blocks_rtl_generation": false,
+      "evidence_tokens": [
+        "output_validity_inhibition"
+      ]
+    },
+    {
+      "id": "REQ-139",
+      "module": "adaptive_aero_actuator_controller",
+      "section": "responsibilities",
+      "requirement": "Never synthesize a substitute or fallback command.",
+      "status": "pending_verification",
+      "static_precheck_status": "matched",
+      "verification_method": "dynamic_simulation",
+      "blocks_rtl_generation": false,
+      "evidence_tokens": [
+        "synthesizable_rtl_subset"
+      ]
+    },
+    {
+      "id": "REQ-140",
+      "module": "adaptive_aero_actuator_controller",
+      "section": "behavior_rules",
+      "requirement": "Valid command output requires enable, no fault, no safety inhibit, and a valid observed response.",
+      "status": "pending_verification",
+      "static_precheck_status": "matched",
+      "verification_method": "systemverilog_assertion",
+      "blocks_rtl_generation": false,
+      "evidence_tokens": [
+        "output_validity_inhibition",
+        "safety_inhibit"
+      ]
+    },
+    {
+      "id": "REQ-141",
+      "module": "adaptive_aero_actuator_controller",
+      "section": "behavior_rules",
+      "requirement": "Command data must remain within configured min/max bounds.",
+      "status": "pending_verification",
+      "static_precheck_status": "missing",
+      "verification_method": "dynamic_simulation",
+      "blocks_rtl_generation": false,
+      "evidence_tokens": []
+    },
+    {
+      "id": "REQ-142",
+      "module": "adaptive_aero_actuator_controller",
+      "section": "behavior_rules",
+      "requirement": "If bounds or gating conditions fail, output validity must be deasserted rather than replaced.",
+      "status": "pending_verification",
+      "static_precheck_status": "missing",
+      "verification_method": "dynamic_simulation",
+      "blocks_rtl_generation": false,
+      "evidence_tokens": []
+    },
+    {
+      "id": "REQ-143",
+      "module": "adaptive_aero_actuator_controller",
+      "section": "behavior_rules",
+      "requirement": "The command path must remain bounded and deterministic.",
+      "status": "pending_verification",
+      "static_precheck_status": "missing",
+      "verification_method": "dynamic_simulation",
+      "blocks_rtl_generation": false,
+      "evidence_tokens": []
+    },
+    {
+      "id": "REQ-144",
+      "module": "adaptive_aero_actuator_controller",
+      "section": "must_drive",
+      "requirement": "actuator_cmd_valid",
+      "status": "matched",
+      "static_precheck_status": "matched",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": [
+        "actuator_cmd_valid"
+      ]
+    },
+    {
+      "id": "REQ-145",
+      "module": "adaptive_aero_actuator_controller",
+      "section": "must_drive",
+      "requirement": "actuator_cmd_data",
+      "status": "matched",
+      "static_precheck_status": "matched",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": [
+        "actuator_cmd_data"
+      ]
+    },
+    {
+      "id": "REQ-146",
+      "module": "adaptive_aero_actuator_controller",
+      "section": "must_receive",
+      "requirement": "cfg_enable",
+      "status": "matched",
+      "static_precheck_status": "matched",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": [
+        "cfg_enable"
+      ]
+    },
+    {
+      "id": "REQ-147",
+      "module": "adaptive_aero_actuator_controller",
+      "section": "must_receive",
+      "requirement": "cfg_actuator_min",
+      "status": "matched",
+      "static_precheck_status": "matched",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": [
+        "cfg_actuator_min"
+      ]
+    },
+    {
+      "id": "REQ-148",
+      "module": "adaptive_aero_actuator_controller",
+      "section": "must_receive",
+      "requirement": "cfg_actuator_max",
+      "status": "matched",
+      "static_precheck_status": "matched",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": [
+        "cfg_actuator_max"
+      ]
+    },
+    {
+      "id": "REQ-149",
+      "module": "adaptive_aero_actuator_controller",
+      "section": "must_receive",
+      "requirement": "fault_latched",
+      "status": "matched",
+      "static_precheck_status": "matched",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": [
+        "fault_latched"
+      ]
+    },
+    {
+      "id": "REQ-150",
+      "module": "adaptive_aero_actuator_controller",
+      "section": "must_receive",
+      "requirement": "safety_inhibit",
+      "status": "matched",
+      "static_precheck_status": "matched",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": [
+        "safety_inhibit"
+      ]
+    },
+    {
+      "id": "REQ-151",
+      "module": "adaptive_aero_actuator_controller",
+      "section": "must_receive",
+      "requirement": "veh_speed_mps",
+      "status": "matched",
+      "static_precheck_status": "matched",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": [
+        "veh_speed_mps"
+      ]
+    },
+    {
+      "id": "REQ-152",
+      "module": "adaptive_aero_actuator_controller",
+      "section": "must_receive",
+      "requirement": "model_response_word",
+      "status": "matched",
+      "static_precheck_status": "matched",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": [
+        "model_response_word"
+      ]
+    },
+    {
+      "id": "REQ-153",
+      "module": "adaptive_aero_actuator_controller",
+      "section": "must_receive",
+      "requirement": "response_valid_seen",
+      "status": "matched",
+      "static_precheck_status": "matched",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": [
+        "response_valid_seen"
+      ]
+    },
+    {
+      "id": "REQ-154",
+      "module": "adaptive_aero_actuator_controller",
+      "section": "reset_behavior",
+      "requirement": "On reset, actuator_cmd_valid is deasserted and actuator_cmd_data is cleared to a benign internal value. No fallback command is generated.",
+      "status": "pending_verification",
+      "static_precheck_status": "matched",
+      "verification_method": "dynamic_simulation",
+      "blocks_rtl_generation": false,
+      "evidence_tokens": [
+        "actuator_cmd_valid",
+        "actuator_cmd_data",
+        "no_fallback_value_and_validity_inhibited",
+        "reset_zero",
+        "reset_low_actuator_cmd_valid",
+        "reset_low_actuator_cmd_data"
+      ]
+    },
+    {
+      "id": "REQ-155",
+      "module": "adaptive_aero_history_buffer",
+      "section": "responsibilities",
+      "requirement": "Store request and response history.",
+      "status": "pending_verification",
+      "static_precheck_status": "missing",
+      "verification_method": "dynamic_simulation",
+      "blocks_rtl_generation": false,
+      "evidence_tokens": []
+    },
+    {
+      "id": "REQ-156",
+      "module": "adaptive_aero_history_buffer",
+      "section": "responsibilities",
+      "requirement": "Present technology-neutral block RAM style interface.",
+      "status": "missing",
+      "static_precheck_status": "missing",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": []
+    },
+    {
+      "id": "REQ-157",
+      "module": "adaptive_aero_history_buffer",
+      "section": "responsibilities",
+      "requirement": "Support stale-data and timeout analysis.",
+      "status": "pending_verification",
+      "static_precheck_status": "missing",
+      "verification_method": "systemverilog_assertion",
+      "blocks_rtl_generation": false,
+      "evidence_tokens": []
+    },
+    {
+      "id": "REQ-158",
+      "module": "adaptive_aero_history_buffer",
+      "section": "responsibilities",
+      "requirement": "Preserve traceability for firmware and validation.",
+      "status": "pending_verification",
+      "static_precheck_status": "missing",
+      "verification_method": "dynamic_simulation",
+      "blocks_rtl_generation": false,
+      "evidence_tokens": []
+    },
+    {
+      "id": "REQ-159",
+      "module": "adaptive_aero_history_buffer",
+      "section": "responsibilities",
+      "requirement": "Implement bulk storage as an inferred memory rather than a flattened bank of scalar registers.",
+      "status": "missing",
+      "static_precheck_status": "missing",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": []
+    },
+    {
+      "id": "REQ-160",
+      "module": "adaptive_aero_history_buffer",
+      "section": "responsibilities",
+      "requirement": "Return stored read data through the declared functional output port.",
+      "status": "missing",
+      "static_precheck_status": "missing",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": []
+    },
+    {
+      "id": "REQ-161",
+      "module": "adaptive_aero_history_buffer",
+      "section": "behavior_rules",
+      "requirement": "Bulk history storage shall remain in memory form and must not be flattened into registers.",
+      "status": "missing",
+      "static_precheck_status": "missing",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": []
+    },
+    {
+      "id": "REQ-162",
+      "module": "adaptive_aero_history_buffer",
+      "section": "behavior_rules",
+      "requirement": "The wrapper exists to support stale-data and timeout evaluation.",
+      "status": "pending_verification",
+      "static_precheck_status": "missing",
+      "verification_method": "systemverilog_assertion",
+      "blocks_rtl_generation": false,
+      "evidence_tokens": []
+    },
+    {
+      "id": "REQ-163",
+      "module": "adaptive_aero_history_buffer",
+      "section": "behavior_rules",
+      "requirement": "Response age output is derived from stored history and current observation state.",
+      "status": "pending_verification",
+      "static_precheck_status": "matched",
+      "verification_method": "dynamic_simulation",
+      "blocks_rtl_generation": false,
+      "evidence_tokens": [
+        "response_age"
+      ]
+    },
+    {
+      "id": "REQ-164",
+      "module": "adaptive_aero_history_buffer",
+      "section": "behavior_rules",
+      "requirement": "Block RAM read data is consumed by the wrapper as part of history reconstruction and stale-data tracking.",
+      "status": "pending_verification",
+      "static_precheck_status": "missing",
+      "verification_method": "dynamic_simulation",
+      "blocks_rtl_generation": false,
+      "evidence_tokens": []
+    },
+    {
+      "id": "REQ-165",
+      "module": "adaptive_aero_history_buffer",
+      "section": "behavior_rules",
+      "requirement": "Infer one synthesizable unpacked memory array with synchronous access so FPGA tools can map it to block RAM.",
+      "status": "matched",
+      "static_precheck_status": "matched",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": [
+        "synthesizable_rtl_subset"
+      ]
+    },
+    {
+      "id": "REQ-166",
+      "module": "adaptive_aero_history_buffer",
+      "section": "must_drive",
+      "requirement": "response_age",
+      "status": "matched",
+      "static_precheck_status": "matched",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": [
+        "response_age"
+      ]
+    },
+    {
+      "id": "REQ-167",
+      "module": "adaptive_aero_history_buffer",
+      "section": "must_receive",
+      "requirement": "request_token",
+      "status": "matched",
+      "static_precheck_status": "matched",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": [
+        "request_token"
+      ]
+    },
+    {
+      "id": "REQ-168",
+      "module": "adaptive_aero_history_buffer",
+      "section": "must_receive",
+      "requirement": "request_age",
+      "status": "matched",
+      "static_precheck_status": "matched",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": [
+        "request_age"
+      ]
+    },
+    {
+      "id": "REQ-169",
+      "module": "adaptive_aero_history_buffer",
+      "section": "must_receive",
+      "requirement": "response_valid_seen",
+      "status": "matched",
+      "static_precheck_status": "matched",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": [
+        "response_valid_seen"
+      ]
+    },
+    {
+      "id": "REQ-170",
+      "module": "adaptive_aero_history_buffer",
+      "section": "reset_behavior",
+      "requirement": "Storage control outputs reset to inactive values. Memory contents are implementation-defined but must not be exposed as register state. No fallback behavior is associated with storage reset. For inferred storage on reset, hold the declared ",
+      "status": "matched",
+      "static_precheck_status": "matched",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": [
+        "reset_zero"
+      ]
+    },
+    {
+      "id": "REQ-171",
+      "module": "generic_bram_wrapper",
+      "section": "responsibilities",
+      "requirement": "Map technology-neutral memory behavior to native block RAM.",
+      "status": "matched",
+      "static_precheck_status": "matched",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": [
+        "inferred_bulk_memory_array"
+      ]
+    },
+    {
+      "id": "REQ-172",
+      "module": "generic_bram_wrapper",
+      "section": "responsibilities",
+      "requirement": "Drive memory read data from the storage array to the history buffer.",
+      "status": "missing",
+      "static_precheck_status": "missing",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": []
+    },
+    {
+      "id": "REQ-173",
+      "module": "generic_bram_wrapper",
+      "section": "responsibilities",
+      "requirement": "Preserve the exact width and naming of the declared memory interface.",
+      "status": "missing",
+      "static_precheck_status": "missing",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": []
+    },
+    {
+      "id": "REQ-174",
+      "module": "generic_bram_wrapper",
+      "section": "responsibilities",
+      "requirement": "Avoid introducing any substitute memory model or fallback behavior.",
+      "status": "missing",
+      "static_precheck_status": "missing",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": []
+    },
+    {
+      "id": "REQ-175",
+      "module": "generic_bram_wrapper",
+      "section": "responsibilities",
+      "requirement": "Implement bulk storage as an inferred memory rather than a flattened bank of scalar registers.",
+      "status": "matched",
+      "static_precheck_status": "matched",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": [
+        "inferred_bulk_memory_array"
+      ]
+    },
+    {
+      "id": "REQ-176",
+      "module": "generic_bram_wrapper",
+      "section": "responsibilities",
+      "requirement": "Return stored read data through the declared functional output port.",
+      "status": "matched",
+      "static_precheck_status": "matched",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": [
+        "memory_read_data_forwarded"
+      ]
+    },
+    {
+      "id": "REQ-177",
+      "module": "generic_bram_wrapper",
+      "section": "behavior_rules",
+      "requirement": "The wrapper must drive bram_dout as the observable read data for the history buffer.",
+      "status": "pending_verification",
+      "static_precheck_status": "missing",
+      "verification_method": "dynamic_simulation",
+      "blocks_rtl_generation": false,
+      "evidence_tokens": []
+    },
+    {
+      "id": "REQ-178",
+      "module": "generic_bram_wrapper",
+      "section": "behavior_rules",
+      "requirement": "This module is the real producer of the memory read data consumed by adaptive_aero_history_buffer.",
+      "status": "missing",
+      "static_precheck_status": "missing",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": []
+    },
+    {
+      "id": "REQ-179",
+      "module": "generic_bram_wrapper",
+      "section": "behavior_rules",
+      "requirement": "The memory interface shall remain technology-neutral and suitable for FPGA block RAM mapping.",
+      "status": "matched",
+      "static_precheck_status": "matched",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": [
+        "inferred_bulk_memory_array"
+      ]
+    },
+    {
+      "id": "REQ-180",
+      "module": "generic_bram_wrapper",
+      "section": "behavior_rules",
+      "requirement": "Infer one synthesizable unpacked memory array with synchronous access so FPGA tools can map it to block RAM.",
+      "status": "matched",
+      "static_precheck_status": "matched",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": [
+        "synchronous_inferred_memory_access",
+        "synthesizable_rtl_subset"
+      ]
+    },
+    {
+      "id": "REQ-181",
+      "module": "generic_bram_wrapper",
+      "section": "reset_behavior",
+      "requirement": "Memory contents may be implementation-defined; interface outputs remain structurally valid and no fallback state is synthesized. For inferred storage on reset, hold the declared read-data output benign without clearing stored memory content",
+      "status": "missing",
+      "static_precheck_status": "missing",
+      "verification_method": "static_structural",
+      "blocks_rtl_generation": true,
+      "evidence_tokens": [
+        "synthesizable_rtl_subset"
+      ]
+    }
+  ],
+  "rtl_files": [
+    "backend/workflows/ea97f60b-a3ea-4cd4-8c8e-00b176895968/rtl/pass3/adaptive_aero_actuator_controller.v",
+    "backend/workflows/ea97f60b-a3ea-4cd4-8c8e-00b176895968/rtl/pass3/adaptive_aero_control_top.v",
+    "backend/workflows/ea97f60b-a3ea-4cd4-8c8e-00b176895968/rtl/pass3/adaptive_aero_history_buffer.v",
+    "backend/workflows/ea97f60b-a3ea-4cd4-8c8e-00b176895968/rtl/pass3/adaptive_aero_mmio_csr.v",
+    "backend/workflows/ea97f60b-a3ea-4cd4-8c8e-00b176895968/rtl/pass3/adaptive_aero_model_transport_bridge.v",
+    "backend/workflows/ea97f60b-a3ea-4cd4-8c8e-00b176895968/rtl/pass3/adaptive_aero_request_scheduler.v",
+    "backend/workflows/ea97f60b-a3ea-4cd4-8c8e-00b176895968/rtl/pass3/adaptive_aero_safety_monitor.v",
+    "backend/workflows/ea97f60b-a3ea-4cd4-8c8e-00b176895968/rtl/pass3/generic_bram_wrapper.v"
+  ],
+  "modules": [
+    {
+      "name": "adaptive_aero_actuator_controller",
+      "file": "backend/workflows/ea97f60b-a3ea-4cd4-8c8e-00b176895968/rtl/pass3/adaptive_aero_actuator_controller.v",
+      "ports": [
+        {
+          "name": "clk",
+          "direction": "input",
+          "width": "1",
+          "bits": 1
+        },
+        {
+          "name": "reset_n",
+          "direction": "input",
+          "width": "1",
+          "bits": 1
+        },
+        {
+          "name": "cfg_enable",
+          "direction": "input",
+          "width": "1",
+          "bits": 1
+        },
+        {
+          "name": "cfg_actuator_min",
+          "direction": "input",
+          "width": "[15:0]",
+          "bits": 16
+        },
+        {
+          "name": "cfg_actuator_max",
+          "direction": "input",
+          "width": "[15:0]",
+          "bits": 16
+        },
+        {
+          "name": "fault_latched",
+          "direction": "input",
+          "width": "1",
+          "bits": 1
+        },
+        {
+          "name": "safety_inhibit",
+          "direction": "input",
+          "width": "1",
+          "bits": 1
+        },
+        {
+          "name": "response_valid_seen",
+          "direction": "input",
+          "width": "1",
+          "bits": 1
+        },
+        {
+          "name": "veh_speed_mps",
+          "direction": "input",
+          "width": "[15:0]",
+          "bits": 16
+        },
+        {
+          "name": "model_response_word",
+          "direction": "input",
+          "width": "[63:0]",
+          "bits": 64
+        },
+        {
+          "name": "actuator_cmd_valid",
+          "direction": "output",
+          "width": "1",
+          "bits": 1
+        },
+        {
+          "name": "actuator_cmd_data",
+          "direction": "output",
+          "width": "[15:0]",
+          "bits": 16
+        }
+      ],
+      "rtl_text": "module adaptive_aero_actuator_controller (\n    clk,\n    reset_n,\n    cfg_enable,\n    cfg_actuator_min,\n    cfg_actuator_max,\n    fault_latched,\n    safety_inhibit,\n    response_valid_seen,\n    veh_speed_mps,\n    model_response_word,\n    actuator_cmd_valid,\n    actuator_cmd_data\n);\n    input clk;\n    input reset_n;\n    input cfg_enable;\n    input [15:0] cfg_actuator_min;\n    input [15:0] cfg_actuator_max;\n    input fault_latched;\n    input safety_inhibit;\n    input response_valid_seen;\n    input [15:0] veh_speed_mps;\n    input [63:0] model_response_word;\n    output actuator_cmd_valid;\n    output [15:0] actuator_cmd_data;\n    reg actuator_cmd_valid_r;\n    reg [15:0] actuator_cmd_data_r;\n    reg [15:0] bounded_cmd_r;\n\n    assign actuator_cmd_valid = actuator_cmd_valid_r;\n    assign actuator_cmd_data = actuator_cmd_data_r;\n\n    always @(posedge clk or negedge reset_n) begin\n        if (!reset_n) begin\n            actuator_cmd_valid_r <= 1'b0;\n            actuator_cmd_data_r <= 32'd0;\n            bounded_cmd_r <= 16'd0;\n        end else begin\n            actuator_cmd_valid_r <= 1'b0;\n            if (cfg_enable && response_valid_seen && !fault_latched && !safety_inhibit) begin\n                if (veh_speed_mps < cfg_actuator_min) begin\n                    bounded_cmd_r <= cfg_actuator_min;\n                end else if (veh_speed_mps > cfg_actuator_max) begin\n                    bounded_cmd_r <= cfg_actuator_max;\n                end else begin\n                    bounded_cmd_r <= veh_speed_mps;\n                end\n                actuator_cmd_valid_r <= 1'b1;\n                actuator_cmd_data_r <= {model_response_word[31:16], bounded_cmd_r};\n            end\n        end\n    end\nendmodule"
+    },
+    {
+      "name": "adaptive_aero_control_top",
+      "file": "backend/workflows/ea97f60b-a3ea-4cd4-8c8e-00b176895968/rtl/pass3/adaptive_aero_control_top.v",
+      "ports": [
+        {
+          "name": "clk",
+          "direction": "input",
+          "width": "1",
+          "bits": 1
+        },
+        {
+          "name": "reset_n",
+          "direction": "input",
+          "width": "1",
+          "bits": 1
+        },
+        {
+          "name": "mmio_valid",
+          "direction": "input",
+          "width": "1",
+          "bits": 1
+        },
+        {
+          "name": "mmio_write",
+          "direction": "input",
+          "width": "1",
+          "bits": 1
+        },
+        {
+          "name": "mmio_addr",
+          "direction": "input",
+          "width": "[11:0]",
+          "bits": 12
+        },
+        {
+          "name": "mmio_wdata",
+          "direction": "input",
+          "width": "[31:0]",
+          "bits": 32
+        },
+        {
+          "name": "mmio_ready",
+          "direction": "output",
+          "width": "1",
+          "bits": 1
+        },
+        {
+          "name": "mmio_rdata",
+          "direction": "output",
+          "width": "[31:0]",
+          "bits": 32
+        },
+        {
+          "name": "mmio_rvalid",
+          "direction": "output",
+          "width": "1",
+          "bits": 1
+        },
+        {
+          "name": "veh_state_valid",
+          "direction": "input",
+          "width": "1",
+          "bits": 1
+        },
+        {
+          "name": "veh_speed_mps",
+          "direction": "input",
+          "width": "[15:0]",
+          "bits": 16
+        },
+        {
+          "name": "model_req_valid",
+          "direction": "output",
+          "width": "1",
+          "bits": 1
+        },
+        {
+          "name": "model_req_data",
+          "direction": "output",
+          "width": "[63:0]",
+          "bits": 64
+        },
+        {
+          "name": "model_req_ready",
+          "direction": "input",
+          "width": "1",
+          "bits": 1
+        },
+        {
+          "name": "model_rsp_valid",
+          "direction": "input",
+          "width": "1",
+          "bits": 1
+        },
+        {
+          "name": "model_rsp_data",
+          "direction": "input",
+          "width": "[63:0]",
+          "bits": 64
+        },
+        {
+          "name": "model_rsp_ready",
+          "direction": "output",
+          "width": "1",
+          "bits": 1
+        },
+        {
+          "name": "actuator_cmd_valid",
+          "direction": "output",
+          "width": "1",
+          "bits": 1
+        },
+        {
+          "name": "actuator_cmd_data",
+          "direction": "output",
+          "width": "[15:0]",
+          "bits": 16
+        },
+        {
+          "name": "cmd_req_valid",
+          "direction": "input",
+          "width": "1",
+          "bits": 1
+        },
+        {
+          "name": "cmd_req_data",
+          "direction": "input",
+          "width": "[31:0]",
+          "bits": 32
+        },
+        {
+          "name": "cmd_req_ready",
+          "direction": "output",
+          "width": "1",
+          "bits": 1
+        },
+        {
+          "name": "cmd_rsp_valid",
+          "direction": "output",
+          "width": "1",
+          "bits": 1
+        },
+        {
+          "name": "cmd_rsp_data",
+          "direction": "output",
+          "width": "[31:0]",
+          "bits": 32
+        },
+        {
+          "name": "cmd_rsp_ready",
+          "direction": "input",
+          "width": "1",
+          "bits": 1
+        },
+        {
+          "name": "fault_latched",
+          "direction": "output",
+          "width": "1",
+          "bits": 1
+        },
+        {
+          "name": "safety_inhibit",
+          "direction": "output",
+          "width": "1",
+          "bits": 1
+        },
+        {
+          "name": "operating_mode",
+          "direction": "output",
+          "width": "[1:0]",
+          "bits": 2
+        }
+      ],
+      "rtl_text": "module adaptive_aero_control_top (\n    clk,\n    reset_n,\n    mmio_valid,\n    mmio_write,\n    mmio_addr,\n    mmio_wdata,\n    mmio_ready,\n    mmio_rdata,\n    mmio_rvalid,\n    veh_state_valid,\n    veh_speed_mps,\n    model_req_valid,\n    model_req_data,\n    model_req_ready,\n    model_rsp_valid,\n    model_rsp_data,\n    model_rsp_ready,\n    actuator_cmd_valid,\n    actuator_cmd_data,\n    cmd_req_valid,\n    cmd_req_data,\n    cmd_req_ready,\n    cmd_rsp_valid,\n    cmd_rsp_data,\n    cmd_rsp_ready,\n    fault_latched,\n    safety_inhibit,\n    operating_mode\n);\n    input clk;\n    input reset_n;\n    input mmio_valid;\n    input mmio_write;\n    input [11:0] mmio_addr;\n    input [31:0] mmio_wdata;\n    output mmio_ready;\n    output [31:0] mmio_rdata;\n    output mmio_rvalid;\n    input veh_state_valid;\n    input [15:0] veh_speed_mps;\n    output model_req_valid;\n    output [63:0] model_req_data;\n    input model_req_ready;\n    input model_rsp_valid;\n    input [63:0] model_rsp_data;\n    output model_rsp_ready;\n    output actuator_cmd_valid;\n    output [15:0] actuator_cmd_data;\n    input cmd_req_valid;\n    input [31:0] cmd_req_data;\n    output cmd_req_ready;\n    output cmd_rsp_valid;\n    output [31:0] cmd_rsp_data;\n    input cmd_rsp_ready;\n    output fault_latched;\n    output safety_inhibit;\n    output [1:0] operating_mode;\nwire cfg_enable;\nwire cfg_clear_fault;\nwire [15:0] cfg_timeout_cycles;\nwire [15:0] cfg_speed_min_mps;\nwire [15:0] cfg_speed_max_mps;\nwire [15:0] cfg_actuator_min;\nwire [15:0] cfg_actuator_max;\nwire [15:0] cfg_model_req_ttl;\nwire [1:0] cfg_operating_mode;\nwire fault_latched_w;\nwire safety_inhibit_w;\nwire [15:0] request_token;\nwire [15:0] request_age;\nwire [63:0] model_response_word;\nwire response_valid_seen;\nwire [15:0] response_age;\nwire model_req_ready_from_u_bridge;\n    assign fault_latched = fault_latched_w;\n    assign safety_inhibit = safety_inhibit_w;\n    assign operating_mode = cfg_operating_mode;\n\n    adaptive_aero_mmio_csr u_mmio (\n        .clk(clk),\n        .reset_n(reset_n),\n        .mmio_valid(mmio_valid),\n        .mmio_write(mmio_write),\n        .mmio_addr(mmio_addr),\n        .mmio_wdata(mmio_wdata),\n        .mmio_ready(mmio_ready),\n        .mmio_rdata(mmio_rdata),\n        .mmio_rvalid(mmio_rvalid),\n        .cfg_enable(cfg_enable),\n        .cfg_clear_fault(cfg_clear_fault),\n        .cfg_timeout_cycles(cfg_timeout_cycles),\n        .cfg_speed_min_mps(cfg_speed_min_mps),\n        .cfg_speed_max_mps(cfg_speed_max_mps),\n        .cfg_actuator_min(cfg_actuator_min),\n        .cfg_actuator_max(cfg_actuator_max),\n        .cfg_model_req_ttl(cfg_model_req_ttl),\n        .cfg_operating_mode(cfg_operating_mode),\n        .fault_latched_in(fault_latched_w),\n        .safety_inhibit_in(safety_inhibit_w),\n        .operating_mode_in(cfg_operating_mode)\n    );\n\n    adaptive_aero_request_scheduler u_sched (\n        .clk(clk),\n        .reset_n(reset_n),\n        .veh_state_valid(veh_state_valid),\n        .veh_speed_mps(veh_speed_mps),\n        .cfg_enable(cfg_enable),\n        .cfg_speed_min_mps(cfg_speed_min_mps),\n        .cfg_speed_max_mps(cfg_speed_max_mps),\n        .cfg_model_req_ttl(cfg_model_req_ttl),\n        .request_token(request_token),\n        .request_age(request_age),\n        .model_req_valid(model_req_valid),\n        .model_req_data(model_req_data),\n        .model_req_ready(model_req_ready)\n    );\n\n    adaptive_aero_model_transport_bridge u_bridge (\n        .clk(clk),\n        .reset_n(reset_n),\n        .model_req_valid(model_req_valid),\n        .model_req_data(model_req_data),\n        .model_req_ready(model_req_ready_from_u_bridge),\n        .model_rsp_valid(model_rsp_valid),\n        .model_rsp_data(model_rsp_data),\n        .model_rsp_ready(model_rsp_ready),\n        .model_response_word(model_response_word),\n        .response_valid_seen(response_valid_seen)\n    );\n\n    adaptive_aero_history_buffer u_hist (\n        .clk(clk),\n        .reset_n(reset_n),\n        .response_valid_seen(response_valid_seen),\n        .request_token(request_token),\n        .model_response_word(model_response_word),\n        .request_age(request_age),\n        .response_age(response_age)\n    );\n\n    adaptive_aero_safety_monitor u_safety (\n        .clk(clk),\n        .reset_n(reset_n),\n        .veh_state_valid(veh_state_valid),\n        .veh_speed_mps(veh_speed_mps),\n        .cfg_speed_min_mps(cfg_speed_min_mps),\n        .cfg_speed_max_mps(cfg_speed_max_mps),\n        .cfg_actuator_min(cfg_actuator_min),\n        .cfg_actuator_max(cfg_actuator_max),\n        .response_valid_seen(response_valid_seen),\n        .request_age(request_age),\n        .response_age(response_age),\n        .actuator_cmd_data_in(actuator_cmd_data),\n        .fault_clear(cfg_clear_fault),\n        .operating_mode(cfg_operating_mode),\n        .fault_latched(fault_latched_w),\n        .safety_inhibit(safety_inhibit_w)\n    );\n\n    adaptive_aero_actuator_controller u_act (\n        .clk(clk),\n        .reset_n(reset_n),\n        .cfg_enable(cfg_enable),\n        .cfg_actuator_min(cfg_actuator_min),\n        .cfg_actuator_max(cfg_actuator_max),\n        .fault_latched(fault_latched_w),\n        .safety_inhibit(safety_inhibit_w),\n        .response_valid_seen(response_valid_seen),\n        .veh_speed_mps(veh_speed_mps),\n        .model_response_word(model_response_word),\n        .actuator_cmd_valid(actuator_cmd_valid),\n        .actuator_cmd_data(actuator_cmd_data)\n    );\nendmodule"
+    },
+    {
+      "name": "adaptive_aero_history_buffer",
+      "file": "backend/workflows/ea97f60b-a3ea-4cd4-8c8e-00b176895968/rtl/pass3/adaptive_aero_history_buffer.v",
+      "ports": [
+        {
+          "name": "clk",
+          "direction": "input",
+          "width": "1",
+          "bits": 1
+        },
+        {
+          "name": "reset_n",
+          "direction": "input",
+          "width": "1",
+          "bits": 1
+        },
+        {
+          "name": "response_valid_seen",
+          "direction": "input",
+          "width": "1",
+          "bits": 1
+        },
+        {
+          "name": "request_token",
+          "direction": "input",
+          "width": "[15:0]",
+          "bits": 16
+        },
+        {
+          "name": "model_response_word",
+          "direction": "input",
+          "width": "[31:0]",
+          "bits": 32
+        },
+        {
+          "name": "request_age",
+          "direction": "input",
+          "width": "[15:0]",
+          "bits": 16
+        },
+        {
+          "name": "response_age",
+          "direction": "output",
+          "width": "[15:0]",
+          "bits": 16
+        }
+      ],
+      "rtl_text": "module adaptive_aero_history_buffer (\n    clk,\n    reset_n,\n    response_valid_seen,\n    request_token,\n    model_response_word,\n    request_age,\n    response_age\n);\n    input clk;\n    input reset_n;\n    input response_valid_seen;\n    input [15:0] request_token;\n    input [31:0] model_response_word;\n    input [15:0] request_age;\n    output [15:0] response_age;\n    reg [15:0] response_age_r;\n    reg [15:0] request_token_latched_r;\n\n    assign response_age = response_age_r;\n\n    always @(posedge clk or negedge reset_n) begin\n        if (!reset_n) begin\n            response_age_r <= 16'd0;\n            request_token_latched_r <= 16'd0;\n        end else begin\n            if (response_valid_seen) begin\n                request_token_latched_r <= request_token;\n                response_age_r <= 16'd0;\n            end else if (request_age != 16'd0) begin\n                response_age_r <= request_age + model_response_word[15:0] + request_token_latched_r;\n            end else begin\n                response_age_r <= response_age_r + 16'd1;\n            end\n        end\n    end\nendmodule"
+    },
+    {
+      "name": "adaptive_aero_mmio_csr",
+      "file": "backend/workflows/ea97f60b-a3ea-4cd4-8c8e-00b176895968/rtl/pass3/adaptive_aero_mmio_csr.v",
+      "ports": [
+        {
+          "name": "clk",
+          "direction": "input",
+          "width": "1",
+          "bits": 1
+        },
+        {
+          "name": "reset_n",
+          "direction": "input",
+          "width": "1",
+          "bits": 1
+        },
+        {
+          "name": "mmio_valid",
+          "direction": "input",
+          "width": "1",
+          "bits": 1
+        },
+        {
+          "name": "mmio_write",
+          "direction": "input",
+          "width": "1",
+          "bits": 1
+        },
+        {
+          "name": "mmio_addr",
+          "direction": "input",
+          "width": "[11:0]",
+          "bits": 12
+        },
+        {
+          "name": "mmio_wdata",
+          "direction": "input",
+          "width": "[31:0]",
+          "bits": 32
+        },
+        {
+          "name": "mmio_ready",
+          "direction": "output",
+          "width": "1",
+          "bits": 1
+        },
+        {
+          "name": "mmio_rdata",
+          "direction": "output",
+          "width": "[31:0]",
+          "bits": 32
+        },
+        {
+          "name": "mmio_rvalid",
+          "direction": "output",
+          "width": "1",
+          "bits": 1
+        },
+        {
+          "name": "cfg_enable",
+          "direction": "output",
+          "width": "1",
+          "bits": 1
+        },
+        {
+          "name": "cfg_clear_fault",
+          "direction": "output",
+          "width": "1",
+          "bits": 1
+        },
+        {
+          "name": "cfg_timeout_cycles",
+          "direction": "output",
+          "width": "[15:0]",
+          "bits": 16
+        },
+        {
+          "name": "cfg_speed_min_mps",
+          "direction": "output",
+          "width": "[15:0]",
+          "bits": 16
+        },
+        {
+          "name": "cfg_speed_max_mps",
+          "direction": "output",
+          "width": "[15:0]",
+          "bits": 16
+        },
+        {
+          "name": "cfg_actuator_min",
+          "direction": "output",
+          "width": "[15:0]",
+          "bits": 16
+        },
+        {
+          "name": "cfg_actuator_max",
+          "direction": "output",
+          "width": "[15:0]",
+          "bits": 16
+        },
+        {
+          "name": "cfg_model_req_ttl",
+          "direction": "output",
+          "width": "[15:0]",
+          "bits": 16
+        },
+        {
+          "name": "cfg_operating_mode",
+          "direction": "output",
+          "width": "[1:0]",
+          "bits": 2
+        },
+        {
+          "name": "fault_latched_in",
+          "direction": "input",
+          "width": "1",
+          "bits": 1
+        },
+        {
+          "name": "safety_inhibit_in",
+          "direction": "input",
+          "width": "1",
+          "bits": 1
+        },
+        {
+          "name": "operating_mode_in",
+          "direction": "input",
+          "width": "[1:0]",
+          "bits": 2
+        }
+      ],
+      "rtl_text": "module adaptive_aero_mmio_csr (\n    clk,\n    reset_n,\n    mmio_valid,\n    mmio_write,\n    mmio_addr,\n    mmio_wdata,\n    mmio_ready,\n    mmio_rdata,\n    mmio_rvalid,\n    cfg_enable,\n    cfg_clear_fault,\n    cfg_timeout_cycles,\n    cfg_speed_min_mps,\n    cfg_speed_max_mps,\n    cfg_actuator_min,\n    cfg_actuator_max,\n    cfg_model_req_ttl,\n    cfg_operating_mode,\n    fault_latched_in,\n    safety_inhibit_in,\n    operating_mode_in\n);\n    input clk;\n    input reset_n;\n    input mmio_valid;\n    input mmio_write;\n    input [11:0] mmio_addr;\n    input [31:0] mmio_wdata;\n    output mmio_ready;\n    output [31:0] mmio_rdata;\n    output mmio_rvalid;\n    output cfg_enable;\n    output cfg_clear_fault;\n    output [15:0] cfg_timeout_cycles;\n    output [15:0] cfg_speed_min_mps;\n    output [15:0] cfg_speed_max_mps;\n    output [15:0] cfg_actuator_min;\n    output [15:0] cfg_actuator_max;\n    output [15:0] cfg_model_req_ttl;\n    output [1:0] cfg_operating_mode;\n    input fault_latched_in;\n    input safety_inhibit_in;\n    input [1:0] operating_mode_in;\n    reg cfg_enable_r;\n    reg cfg_clear_fault_r;\n    reg [15:0] cfg_timeout_cycles_r;\n    reg [15:0] cfg_speed_min_mps_r;\n    reg [15:0] cfg_speed_max_mps_r;\n    reg [15:0] cfg_actuator_min_r;\n    reg [15:0] cfg_actuator_max_r;\n    reg [15:0] cfg_model_req_ttl_r;\n    reg [1:0] cfg_operating_mode_r;\n    reg [31:0] mmio_rdata_r;\n    reg mmio_rvalid_r;\n    reg mmio_ready_r;\n\n    assign cfg_enable = cfg_enable_r;\n    assign cfg_clear_fault = cfg_clear_fault_r;\n    assign cfg_timeout_cycles = cfg_timeout_cycles_r;\n    assign cfg_speed_min_mps = cfg_speed_min_mps_r;\n    assign cfg_speed_max_mps = cfg_speed_max_mps_r;\n    assign cfg_actuator_min = cfg_actuator_min_r;\n    assign cfg_actuator_max = cfg_actuator_max_r;\n    assign cfg_model_req_ttl = cfg_model_req_ttl_r;\n    assign cfg_operating_mode = cfg_operating_mode_r;\n    assign mmio_rdata = mmio_rdata_r;\n    assign mmio_rvalid = mmio_rvalid_r;\n    assign mmio_ready = mmio_ready_r;\n\n    always @(posedge clk or negedge reset_n) begin\n        if (!reset_n) begin\n            cfg_enable_r <= 1'b0;\n            cfg_clear_fault_r <= 1'b0;\n            cfg_timeout_cycles_r <= 16'd250;\n            cfg_speed_min_mps_r <= 16'd20;\n            cfg_speed_max_mps_r <= 16'd55;\n            cfg_actuator_min_r <= 16'd0;\n            cfg_actuator_max_r <= 16'd1023;\n            cfg_model_req_ttl_r <= 16'd50;\n            cfg_operating_mode_r <= 2'd0;\n            mmio_rdata_r <= 32'd0;\n            mmio_rvalid_r <= 1'b0;\n            mmio_ready_r <= 1'b1;\n        end else begin\n            cfg_clear_fault_r <= 1'b0;\n            mmio_rvalid_r <= 1'b0;\n            mmio_ready_r <= 1'b1;\n            if (mmio_valid) begin\n                if (mmio_write) begin\n                    case (mmio_addr)\n                        12'h000: begin\n                            cfg_enable_r <= mmio_wdata[0];\n                            cfg_clear_fault_r <= mmio_wdata[1];\n                            cfg_operating_mode_r <= mmio_wdata[3:2];\n                        end\n                        12'h004: cfg_speed_min_mps_r <= mmio_wdata[15:0];\n                        12'h008: cfg_speed_max_mps_r <= mmio_wdata[15:0];\n                        12'h00C: begin\n                            cfg_actuator_min_r <= mmio_wdata[15:0];\n                            cfg_actuator_max_r <= mmio_wdata[31:16];\n                        end\n                        12'h010: begin\n                            cfg_timeout_cycles_r <= mmio_wdata[15:0];\n                            cfg_model_req_ttl_r <= mmio_wdata[31:16];\n                        end\n                        default: begin\n                        end\n                    endcase\n                end else begin\n                    case (mmio_addr)\n                        12'h000: mmio_rdata_r <= {28'd0, cfg_operating_mode_r, cfg_clear_fault_r, cfg_enable_r};\n                        12'h004: mmio_rdata_r <= {16'd0, cfg_speed_min_mps_r};\n                        12'h008: mmio_rdata_r <= {16'd0, cfg_speed_max_mps_r};\n                        12'h00C: mmio_rdata_r <= {cfg_actuator_max_r, cfg_actuator_min_r};\n                        12'h010: mmio_rdata_r <= {cfg_model_req_ttl_r, cfg_timeout_cycles_r};\n                        12'h014: mmio_rdata_r <= {28'd0, operating_mode_in, safety_inhibit_in, fault_latched_in};\n                        12'h018: mmio_rdata_r <= 32'd0;\n                        12'h01C: mmio_rdata_r <= 32'd0;\n                        12'h020: mmio_rdata_r <= 32'd0;\n                        12'h024: mmio_rdata_r <= 32'd0;\n                        12'h028: mmio_rdata_r <= 32'd0;\n                        12'h02C: mmio_rdata_r <= 32'd0;\n                        default: mmio_rdata_r <= 32'd0;\n                    endcase\n                    mmio_rvalid_r <= 1'b1;\n                end\n            end\n        end\n    end\nendmodule"
+    },
+    {
+      "name": "adaptive_aero_model_transport_bridge",
+      "file": "backend/workflows/ea97f60b-a3ea-4cd4-8c8e-00b176895968/rtl/pass3/adaptive_aero_model_transport_bridge.v",
+      "ports": [
+        {
+          "name": "clk",
+          "direction": "input",
+          "width": "1",
+          "bits": 1
+        },
+        {
+          "name": "reset_n",
+          "direction": "input",
+          "width": "1",
+          "bits": 1
+        },
+        {
+          "name": "model_req_valid",
+          "direction": "input",
+          "width": "1",
+          "bits": 1
+        },
+        {
+          "name": "model_req_data",
+          "direction": "input",
+          "width": "[63:0]",
+          "bits": 64
+        },
+        {
+          "name": "model_req_ready",
+          "direction": "output",
+          "width": "1",
+          "bits": 1
+        },
+        {
+          "name": "model_rsp_valid",
+          "direction": "input",
+          "width": "1",
+          "bits": 1
+        },
+        {
+          "name": "model_rsp_data",
+          "direction": "input",
+          "width": "[63:0]",
+          "bits": 64
+        },
+        {
+          "name": "model_rsp_ready",
+          "direction": "output",
+          "width": "1",
+          "bits": 1
+        },
+        {
+          "name": "model_response_word",
+          "direction": "output",
+          "width": "[63:0]",
+          "bits": 64
+        },
+        {
+          "name": "response_valid_seen",
+          "direction": "output",
+          "width": "1",
+          "bits": 1
+        }
+      ],
+      "rtl_text": "module adaptive_aero_model_transport_bridge (\n    clk,\n    reset_n,\n    model_req_valid,\n    model_req_data,\n    model_req_ready,\n    model_rsp_valid,\n    model_rsp_data,\n    model_rsp_ready,\n    model_response_word,\n    response_valid_seen\n);\n    input clk;\n    input reset_n;\n    input model_req_valid;\n    input [63:0] model_req_data;\n    output model_req_ready;\n    input model_rsp_valid;\n    input [63:0] model_rsp_data;\n    output model_rsp_ready;\n    output [63:0] model_response_word;\n    output response_valid_seen;\n\n    reg model_req_ready_r;\n    reg model_rsp_ready_r;\n    reg [63:0] model_response_word_r;\n    reg response_valid_seen_r;\n\n    assign model_req_ready = model_req_ready_r;\n    assign model_rsp_ready = model_rsp_ready_r;\n    assign model_response_word = model_response_word_r;\n    assign response_valid_seen = response_valid_seen_r;\n\n    always @(posedge clk or negedge reset_n) begin\n        if (!reset_n) begin\n            model_req_ready_r <= 1'b1;\n            model_rsp_ready_r <= 1'b1;\n            model_response_word_r <= 32'd0;\n            response_valid_seen_r <= 1'b0;\n        end else begin\n            model_req_ready_r <= 1'b1;\n            model_rsp_ready_r <= 1'b1;\n            if (model_rsp_valid) begin\n                model_response_word_r <= model_rsp_data ^ model_req_data;\n                response_valid_seen_r <= 1'b1;\n            end else begin\n                response_valid_seen_r <= 1'b0;\n            end\n        end\n    end\nendmodule"
+    },
+    {
+      "name": "adaptive_aero_request_scheduler",
+      "file": "backend/workflows/ea97f60b-a3ea-4cd4-8c8e-00b176895968/rtl/pass3/adaptive_aero_request_scheduler.v",
+      "ports": [
+        {
+          "name": "clk",
+          "direction": "input",
+          "width": "1",
+          "bits": 1
+        },
+        {
+          "name": "reset_n",
+          "direction": "input",
+          "width": "1",
+          "bits": 1
+        },
+        {
+          "name": "veh_state_valid",
+          "direction": "input",
+          "width": "1",
+          "bits": 1
+        },
+        {
+          "name": "veh_speed_mps",
+          "direction": "input",
+          "width": "[15:0]",
+          "bits": 16
+        },
+        {
+          "name": "cfg_enable",
+          "direction": "input",
+          "width": "1",
+          "bits": 1
+        },
+        {
+          "name": "cfg_speed_min_mps",
+          "direction": "input",
+          "width": "[15:0]",
+          "bits": 16
+        },
+        {
+          "name": "cfg_speed_max_mps",
+          "direction": "input",
+          "width": "[15:0]",
+          "bits": 16
+        },
+        {
+          "name": "cfg_model_req_ttl",
+          "direction": "input",
+          "width": "[15:0]",
+          "bits": 16
+        },
+        {
+          "name": "request_token",
+          "direction": "output",
+          "width": "[15:0]",
+          "bits": 16
+        },
+        {
+          "name": "request_age",
+          "direction": "output",
+          "width": "[15:0]",
+          "bits": 16
+        },
+        {
+          "name": "model_req_valid",
+          "direction": "output",
+          "width": "1",
+          "bits": 1
+        },
+        {
+          "name": "model_req_data",
+          "direction": "output",
+          "width": "[63:0]",
+          "bits": 64
+        },
+        {
+          "name": "model_req_ready",
+          "direction": "input",
+          "width": "1",
+          "bits": 1
+        }
+      ],
+      "rtl_text": "module adaptive_aero_request_scheduler (\n    clk,\n    reset_n,\n    veh_state_valid,\n    veh_speed_mps,\n    cfg_enable,\n    cfg_speed_min_mps,\n    cfg_speed_max_mps,\n    cfg_model_req_ttl,\n    request_token,\n    request_age,\n    model_req_valid,\n    model_req_data,\n    model_req_ready\n);\n    input clk;\n    input reset_n;\n    input veh_state_valid;\n    input [15:0] veh_speed_mps;\n    input cfg_enable;\n    input [15:0] cfg_speed_min_mps;\n    input [15:0] cfg_speed_max_mps;\n    input [15:0] cfg_model_req_ttl;\n    output [15:0] request_token;\n    output [15:0] request_age;\n    output model_req_valid;\n    output [63:0] model_req_data;\n    input model_req_ready;\n\n    reg [15:0] request_token_r;\n    reg [15:0] request_age_r;\n    reg model_req_valid_r;\n    reg [63:0] model_req_data_r;\n    assign request_token = request_token_r;\n    assign request_age = request_age_r;\n    assign model_req_valid = model_req_valid_r;\n    assign model_req_data = model_req_data_r;\n\n    always @(posedge clk or negedge reset_n) begin\n        if (!reset_n) begin\n            request_token_r <= 16'd0;\n            request_age_r <= 16'd0;\n            model_req_valid_r <= 1'b0;\n            model_req_data_r <= 32'd0;\n        end else begin\n            if (!cfg_enable) begin\n                model_req_valid_r <= 1'b0;\n            end else if (veh_state_valid && model_req_ready) begin\n                request_token_r <= request_token_r + 16'd1;\n                request_age_r <= 16'd0;\n                model_req_valid_r <= 1'b1;\n                model_req_data_r <= {32'b0, cfg_speed_max_mps, cfg_speed_min_mps};\n            end else begin\n                if (request_age_r != cfg_model_req_ttl) begin\n                    request_age_r <= request_age_r + 16'd1;\n                end\n                model_req_valid_r <= 1'b0;\n            end\n        end\n    end\nendmodule"
+    },
+    {
+      "name": "adaptive_aero_safety_monitor",
+      "file": "backend/workflows/ea97f60b-a3ea-4cd4-8c8e-00b176895968/rtl/pass3/adaptive_aero_safety_monitor.v",
+      "ports": [
+        {
+          "name": "clk",
+          "direction": "input",
+          "width": "1",
+          "bits": 1
+        },
+        {
+          "name": "reset_n",
+          "direction": "input",
+          "width": "1",
+          "bits": 1
+        },
+        {
+          "name": "veh_state_valid",
+          "direction": "input",
+          "width": "1",
+          "bits": 1
+        },
+        {
+          "name": "veh_speed_mps",
+          "direction": "input",
+          "width": "[15:0]",
+          "bits": 16
+        },
+        {
+          "name": "cfg_enable",
+          "direction": "input",
+          "width": "1",
+          "bits": 1
+        },
+        {
+          "name": "cfg_clear_fault",
+          "direction": "input",
+          "width": "1",
+          "bits": 1
+        },
+        {
+          "name": "cfg_timeout_cycles",
+          "direction": "input",
+          "width": "[15:0]",
+          "bits": 16
+        },
+        {
+          "name": "cfg_speed_min_mps",
+          "direction": "input",
+          "width": "[15:0]",
+          "bits": 16
+        },
+        {
+          "name": "cfg_speed_max_mps",
+          "direction": "input",
+          "width": "[15:0]",
+          "bits": 16
+        },
+        {
+          "name": "cfg_operating_mode",
+          "direction": "input",
+          "width": "[1:0]",
+          "bits": 2
+        },
+        {
+          "name": "response_age",
+          "direction": "input",
+          "width": "[15:0]",
+          "bits": 16
+        },
+        {
+          "name": "request_age",
+          "direction": "input",
+          "width": "[15:0]",
+          "bits": 16
+        },
+        {
+          "name": "fault_latched",
+          "direction": "output",
+          "width": "1",
+          "bits": 1
+        },
+        {
+          "name": "safety_inhibit",
+          "direction": "output",
+          "width": "1",
+          "bits": 1
+        }
+      ],
+      "rtl_text": "module adaptive_aero_safety_monitor (\n    clk,\n    reset_n,\n    veh_state_valid,\n    veh_speed_mps,\n    cfg_enable,\n    cfg_clear_fault,\n    cfg_timeout_cycles,\n    cfg_speed_min_mps,\n    cfg_speed_max_mps,\n    cfg_operating_mode,\n    response_age,\n    request_age,\n    fault_latched,\n    safety_inhibit\n);\n    input clk;\n    input reset_n;\n    input veh_state_valid;\n    input [15:0] veh_speed_mps;\n    input cfg_enable;\n    input cfg_clear_fault;\n    input [15:0] cfg_timeout_cycles;\n    input [15:0] cfg_speed_min_mps;\n    input [15:0] cfg_speed_max_mps;\n    input [1:0] cfg_operating_mode;\n    input [15:0] response_age;\n    input [15:0] request_age;\n    output fault_latched;\n    output safety_inhibit;\n\n    reg fault_latched_r;\n    reg safety_inhibit_r;\n\n    assign fault_latched = fault_latched_r;\n    assign safety_inhibit = safety_inhibit_r;\n\n    always @(posedge clk or negedge reset_n) begin\n        if (!reset_n) begin\n            fault_latched_r <= 1'b0;\n            safety_inhibit_r <= 1'b0;\n        end else begin\n            safety_inhibit_r <= 1'b0;\n            if (cfg_clear_fault) begin\n                fault_latched_r <= 1'b0;\n            end else if (!veh_state_valid) begin\n                fault_latched_r <= 1'b1;\n                safety_inhibit_r <= 1'b1;\n            end else if (cfg_enable && (veh_speed_mps < cfg_speed_min_mps || veh_speed_mps > cfg_speed_max_mps)) begin\n                fault_latched_r <= 1'b1;\n                safety_inhibit_r <= 1'b1;\n            end else if ((request_age >= cfg_timeout_cycles) || (response_age >= cfg_timeout_cycles)) begin\n                fault_latched_r <= 1'b1;\n                safety_inhibit_r <= 1'b1;\n            end else if (cfg_operating_mode == 2'd3) begin\n                safety_inhibit_r <= 1'b1;\n            end\n        end\n    end\nendmodule"
+    },
+    {
+      "name": "generic_bram_wrapper",
+      "file": "backend/workflows/ea97f60b-a3ea-4cd4-8c8e-00b176895968/rtl/pass3/generic_bram_wrapper.v",
+      "ports": [
+        {
+          "name": "clk",
+          "direction": "input",
+          "width": "1",
+          "bits": 1
+        },
+        {
+          "name": "addr",
+          "direction": "input",
+          "width": "[9:0]",
+          "bits": 10
+        },
+        {
+          "name": "din",
+          "direction": "input",
+          "width": "[31:0]",
+          "bits": 32
+        },
+        {
+          "name": "we",
+          "direction": "input",
+          "width": "1",
+          "bits": 1
+        },
+        {
+          "name": "en",
+          "direction": "input",
+          "width": "1",
+          "bits": 1
+        },
+        {
+          "name": "dout",
+          "direction": "output",
+          "width": "[31:0]",
+          "bits": 32
+        }
+      ],
+      "rtl_text": "module generic_bram_wrapper (\n    clk,\n    addr,\n    din,\n    we,\n    en,\n    dout\n);\n    input clk;\n    input [9:0] addr;\n    input [31:0] din;\n    input we;\n    input en;\n    output [31:0] dout;\n\n    reg [31:0] mem [0:1023];\n    reg [31:0] dout_r;\n\n    assign dout = dout_r;\n\n    always @(posedge clk) begin\n        if (en) begin\n            if (we) begin\n                mem[addr] <= din;\n            end\n            dout_r <= mem[addr];\n        end\n    end\nendmodule"
+    }
+  ],
+  "notes": [
+    "This is a conformance analysis, not a formal proof.",
+    "Missing or partial items should be reviewed and turned into executable assertions/tests where needed.",
+    "Behavioral obligations are nonblocking here only when routed to executable RTL verification checkers.",
+    "Inconclusive is preserved when the checker lacks enough evidence; no fake pass is reported."
+  ]
+}

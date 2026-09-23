@@ -1,0 +1,134 @@
+---BEGIN adaptive_aero_mmio_csr.v---
+module adaptive_aero_mmio_csr (
+    clk,
+    reset_n,
+    mmio_valid,
+    mmio_write,
+    mmio_addr,
+    mmio_wdata,
+    mmio_ready,
+    mmio_rdata,
+    mmio_rvalid,
+    cfg_enable,
+    cfg_clear_fault,
+    cfg_timeout_cycles,
+    cfg_speed_min_mps,
+    cfg_speed_max_mps,
+    cfg_actuator_min,
+    cfg_actuator_max,
+    cfg_model_req_ttl,
+    cfg_operating_mode,
+    fault_latched_in,
+    safety_inhibit_in,
+    operating_mode_in
+);
+    input clk;
+    input reset_n;
+    input mmio_valid;
+    input mmio_write;
+    input [11:0] mmio_addr;
+    input [31:0] mmio_wdata;
+    output mmio_ready;
+    output [31:0] mmio_rdata;
+    output mmio_rvalid;
+    output cfg_enable;
+    output cfg_clear_fault;
+    output [15:0] cfg_timeout_cycles;
+    output [15:0] cfg_speed_min_mps;
+    output [15:0] cfg_speed_max_mps;
+    output [15:0] cfg_actuator_min;
+    output [15:0] cfg_actuator_max;
+    output [15:0] cfg_model_req_ttl;
+    output [1:0] cfg_operating_mode;
+    input fault_latched_in;
+    input safety_inhibit_in;
+    input [1:0] operating_mode_in;
+
+    reg cfg_enable_r;
+    reg cfg_clear_fault_r;
+    reg [15:0] cfg_timeout_cycles_r;
+    reg [15:0] cfg_speed_min_mps_r;
+    reg [15:0] cfg_speed_max_mps_r;
+    reg [15:0] cfg_actuator_min_r;
+    reg [15:0] cfg_actuator_max_r;
+    reg [15:0] cfg_model_req_ttl_r;
+    reg [1:0] cfg_operating_mode_r;
+    reg [31:0] mmio_rdata_r;
+    reg mmio_rvalid_r;
+    reg mmio_ready_r;
+
+    assign cfg_enable = cfg_enable_r;
+    assign cfg_clear_fault = cfg_clear_fault_r;
+    assign cfg_timeout_cycles = cfg_timeout_cycles_r;
+    assign cfg_speed_min_mps = cfg_speed_min_mps_r;
+    assign cfg_speed_max_mps = cfg_speed_max_mps_r;
+    assign cfg_actuator_min = cfg_actuator_min_r;
+    assign cfg_actuator_max = cfg_actuator_max_r;
+    assign cfg_model_req_ttl = cfg_model_req_ttl_r;
+    assign cfg_operating_mode = cfg_operating_mode_r;
+    assign mmio_rdata = mmio_rdata_r;
+    assign mmio_rvalid = mmio_rvalid_r;
+    assign mmio_ready = mmio_ready_r;
+
+    always @(posedge clk or negedge reset_n) begin
+        if (!reset_n) begin
+            cfg_enable_r <= 1'b0;
+            cfg_clear_fault_r <= 1'b0;
+            cfg_timeout_cycles_r <= 16'd250;
+            cfg_speed_min_mps_r <= 16'd20;
+            cfg_speed_max_mps_r <= 16'd55;
+            cfg_actuator_min_r <= 16'd0;
+            cfg_actuator_max_r <= 16'd1023;
+            cfg_model_req_ttl_r <= 16'd50;
+            cfg_operating_mode_r <= 2'd0;
+            mmio_rdata_r <= 32'd0;
+            mmio_rvalid_r <= 1'b0;
+            mmio_ready_r <= 1'b1;
+        end else begin
+            cfg_clear_fault_r <= 1'b0;
+            mmio_rvalid_r <= 1'b0;
+            mmio_ready_r <= 1'b1;
+            if (mmio_valid) begin
+                if (mmio_write) begin
+                    case (mmio_addr)
+                        12'h000: begin
+                            cfg_enable_r <= mmio_wdata[0];
+                            cfg_clear_fault_r <= mmio_wdata[1];
+                            cfg_operating_mode_r <= mmio_wdata[3:2];
+                        end
+                        12'h004: cfg_speed_min_mps_r <= mmio_wdata[15:0];
+                        12'h008: cfg_speed_max_mps_r <= mmio_wdata[15:0];
+                        12'h00C: begin
+                            cfg_actuator_min_r <= mmio_wdata[15:0];
+                            cfg_actuator_max_r <= mmio_wdata[31:16];
+                        end
+                        12'h010: begin
+                            cfg_timeout_cycles_r <= mmio_wdata[15:0];
+                            cfg_model_req_ttl_r <= mmio_wdata[31:16];
+                        end
+                        default: begin
+                        end
+                    endcase
+                end else begin
+                    case (mmio_addr)
+                        12'h000: mmio_rdata_r <= {28'd0, cfg_operating_mode_r, cfg_clear_fault_r, cfg_enable_r};
+                        12'h004: mmio_rdata_r <= {16'd0, cfg_speed_min_mps_r};
+                        12'h008: mmio_rdata_r <= {16'd0, cfg_speed_max_mps_r};
+                        12'h00C: mmio_rdata_r <= {cfg_actuator_max_r, cfg_actuator_min_r};
+                        12'h010: mmio_rdata_r <= {cfg_model_req_ttl_r, cfg_timeout_cycles_r};
+                        12'h014: mmio_rdata_r <= {28'd0, operating_mode_in, safety_inhibit_in, fault_latched_in};
+                        12'h018: mmio_rdata_r <= 32'd0;
+                        12'h01C: mmio_rdata_r <= 32'd0;
+                        12'h020: mmio_rdata_r <= 32'd0;
+                        12'h024: mmio_rdata_r <= 32'd0;
+                        12'h028: mmio_rdata_r <= 32'd0;
+                        12'h02C: mmio_rdata_r <= 32'd0;
+                        default: mmio_rdata_r <= 32'd0;
+                    endcase
+                    mmio_rvalid_r <= 1'b1;
+                end
+            end
+        end
+    end
+endmodule
+---END adaptive_aero_mmio_csr.v---

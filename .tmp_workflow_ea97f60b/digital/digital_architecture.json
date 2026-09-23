@@ -1,0 +1,468 @@
+{
+  "spec_mode": "hierarchical",
+  "derived_from_spec_only": true,
+  "top_module": "adaptive_aero_control_top",
+  "design_summary": {
+    "purpose": "Firmware-configurable active-aerodynamics controller for 20\u201355 m/s operation that integrates MMIO control/status, transparent model-request/model-response transport, safety supervision, timeout and stale-data detection, bounded actuator-command generation, and latched fault reporting.",
+    "operating_model": "The top-level RTL accepts vehicle speed and state validity, exposes a firmware-visible MMIO/CSR interface, issues model requests using the required output-valid/input-ready direction, accepts model responses using the required input-valid/output-ready direction, monitors freshness and operating-envelope compliance, and only asserts actuator command validity when the system is enabled, safe, within bounds, and has observed a valid response. Invalid, stale, timed-out, reset, or faulted conditions inhibit actuator validity and latch faults for firmware handling without synthesizing a substitute or fallback command.",
+    "external_interfaces": [
+      {
+        "name": "mmio_valid",
+        "direction": "input",
+        "width": 1,
+        "notes": "Firmware transaction-valid input to the MMIO/CSR block."
+      },
+      {
+        "name": "mmio_write",
+        "direction": "input",
+        "width": 1,
+        "notes": "Firmware write-enable input to the MMIO/CSR block."
+      },
+      {
+        "name": "mmio_addr",
+        "direction": "input",
+        "width": 12,
+        "notes": "Firmware address input to the MMIO/CSR block."
+      },
+      {
+        "name": "mmio_wdata",
+        "direction": "input",
+        "width": 32,
+        "notes": "Firmware write-data input to the MMIO/CSR block."
+      },
+      {
+        "name": "mmio_ready",
+        "direction": "output",
+        "width": 1,
+        "notes": "Firmware ready response from the MMIO/CSR block."
+      },
+      {
+        "name": "mmio_rdata",
+        "direction": "output",
+        "width": 32,
+        "notes": "Firmware read data from the MMIO/CSR block."
+      },
+      {
+        "name": "mmio_rvalid",
+        "direction": "output",
+        "width": 1,
+        "notes": "Firmware read valid from the MMIO/CSR block."
+      },
+      {
+        "name": "veh_speed_mps",
+        "direction": "input",
+        "width": 16,
+        "notes": "Vehicle speed sample distributed to request, safety, and actuator logic."
+      },
+      {
+        "name": "veh_state_valid",
+        "direction": "input",
+        "width": 1,
+        "notes": "Vehicle state validity input used by request generation and safety supervision."
+      },
+      {
+        "name": "cmd_req_valid",
+        "direction": "input",
+        "width": 1,
+        "notes": "Application command request ingress preserved by the top-level contract."
+      },
+      {
+        "name": "cmd_req_data",
+        "direction": "input",
+        "width": 32,
+        "notes": "Application command request data ingress preserved by the top-level contract."
+      },
+      {
+        "name": "cmd_req_ready",
+        "direction": "output",
+        "width": 1,
+        "notes": "Application command request ready egress preserved by the top-level contract."
+      },
+      {
+        "name": "cmd_rsp_valid",
+        "direction": "output",
+        "width": 1,
+        "notes": "Application command response valid egress preserved by the top-level contract."
+      },
+      {
+        "name": "cmd_rsp_data",
+        "direction": "output",
+        "width": 32,
+        "notes": "Application command response data egress preserved by the top-level contract."
+      },
+      {
+        "name": "cmd_rsp_ready",
+        "direction": "input",
+        "width": 1,
+        "notes": "Application command response ready ingress preserved by the top-level contract."
+      },
+      {
+        "name": "model_req_valid",
+        "direction": "output",
+        "width": 1,
+        "notes": "Model-request valid emitted outward by the RTL as required by the transport contract."
+      },
+      {
+        "name": "model_req_data",
+        "direction": "output",
+        "width": 64,
+        "notes": "Model-request data emitted outward by the RTL as required by the transport contract."
+      },
+      {
+        "name": "model_req_ready",
+        "direction": "input",
+        "width": 1,
+        "notes": "Model-request ready accepted inward by the RTL as required by the transport contract."
+      },
+      {
+        "name": "model_rsp_valid",
+        "direction": "input",
+        "width": 1,
+        "notes": "Model-response valid accepted inward by the RTL as required by the transport contract."
+      },
+      {
+        "name": "model_rsp_data",
+        "direction": "input",
+        "width": 64,
+        "notes": "Model-response data accepted inward by the RTL as required by the transport contract."
+      },
+      {
+        "name": "model_rsp_ready",
+        "direction": "output",
+        "width": 1,
+        "notes": "Model-response ready emitted outward by the RTL as required by the transport contract."
+      },
+      {
+        "name": "actuator_cmd_valid",
+        "direction": "output",
+        "width": 1,
+        "notes": "Final actuator command validity, inhibited on invalid/stale/timeout/fault conditions."
+      },
+      {
+        "name": "actuator_cmd_data",
+        "direction": "output",
+        "width": 16,
+        "notes": "Final bounded actuator command data."
+      },
+      {
+        "name": "fault_latched",
+        "direction": "output",
+        "width": 1,
+        "notes": "Latched fault status for software handling."
+      },
+      {
+        "name": "safety_inhibit",
+        "direction": "output",
+        "width": 1,
+        "notes": "Safety inhibit status driven by the safety monitor."
+      },
+      {
+        "name": "operating_mode",
+        "direction": "output",
+        "width": 2,
+        "notes": "Operating mode status driven by the safety monitor."
+      }
+    ]
+  },
+  "module_architecture": [
+    {
+      "name": "adaptive_aero_mmio_csr",
+      "role": "Firmware-visible CSR/MMIO register block and readback/status endpoint.",
+      "responsibilities": [
+        "Accept MMIO read/write transactions with ready/valid semantics.",
+        "Decode address, write-data, and write-enable into semantic control signals.",
+        "Implement all declared registers and ensure each is reachable through RTL decode.",
+        "Drive enable, fault-clear, timeout, speed-window, actuator-bound, model-request TTL, and operating-mode control outputs.",
+        "Return coherent readback for control, status, and trace registers.",
+        "Expose latched fault, safety inhibit, and operating mode to firmware without exposing inaccessible internal state."
+      ],
+      "interface_notes": [
+        "Consumes mmio_valid/mmio_write/mmio_addr/mmio_wdata from the top-level firmware bus.",
+        "Drives mmio_ready/mmio_rdata/mmio_rvalid outward to firmware.",
+        "Produces cfg_enable, cfg_clear_fault, cfg_timeout_cycles, cfg_speed_min_mps, cfg_speed_max_mps, cfg_actuator_min, cfg_actuator_max, cfg_model_req_ttl, and cfg_operating_mode for downstream control logic.",
+        "Receives fault_latched_in, safety_inhibit_in, and operating_mode_in for readback composition."
+      ],
+      "ownership_notes": [
+        "Owns the firmware-visible control-plane contract.",
+        "Must not be treated as an inaccessible internal-only block; all declared registers are software-visible through decode.",
+        "Does not generate actuator substitution or fallback behavior."
+      ]
+    },
+    {
+      "name": "adaptive_aero_request_scheduler",
+      "role": "Model-request generator and handshake sequencer for transparent reference/surrogate evaluation.",
+      "responsibilities": [
+        "Create model-request payloads from vehicle speed and firmware configuration.",
+        "Respect the configured operating window and enable gating.",
+        "Issue requests only when vehicle state is valid.",
+        "Handshake with the model transport path using valid/ready semantics.",
+        "Emit request token and request age for timeout and traceability logic."
+      ],
+      "interface_notes": [
+        "Consumes veh_speed_mps, veh_state_valid, cfg_enable, cfg_speed_min_mps, cfg_speed_max_mps, cfg_model_req_ttl, and model_req_ready.",
+        "Drives model_req_valid, model_req_data, request_token, and request_age.",
+        "Requests are part of the transparent reference path and preserve traceability for analysis."
+      ],
+      "ownership_notes": [
+        "Owns model-request generation, not the model-response path.",
+        "Must not synthesize substitute requests or fallback command behavior.",
+        "Its outputs feed the transport bridge and history/safety monitoring."
+      ]
+    },
+    {
+      "name": "adaptive_aero_model_transport_bridge",
+      "role": "External model transport adapter implementing the mandated request/response direction contract.",
+      "responsibilities": [
+        "Emit model-request valid/data as outputs.",
+        "Receive model-request ready as an input.",
+        "Receive model-response valid/data as inputs.",
+        "Emit model-response ready as an output.",
+        "Capture a traceable response-word view and response-valid observation for downstream policy and safety logic.",
+        "Preserve transport semantics without altering control decisions."
+      ],
+      "interface_notes": [
+        "Consumes model_req_valid and model_req_data from the scheduler.",
+        "Drives model_req_ready back to the scheduler.",
+        "Consumes model_rsp_valid and model_rsp_data from the external model side.",
+        "Drives model_rsp_ready outward.",
+        "Provides model_response_word and response_valid_seen to internal consumers."
+      ],
+      "ownership_notes": [
+        "Enforces the external model transport direction contract exactly as specified.",
+        "Does not create synthetic responses and does not substitute commands.",
+        "A top-level output must have a real RTL driver; the bridge is the real driver for model_rsp_ready."
+      ]
+    },
+    {
+      "name": "adaptive_aero_safety_monitor",
+      "role": "Safety, freshness, timeout, and bounds supervisor with latched fault behavior.",
+      "responsibilities": [
+        "Evaluate vehicle speed window compliance against the configured operating range.",
+        "Detect invalid vehicle-state samples, stale data, and timeout conditions.",
+        "Check actuator command bounds against firmware-programmed limits.",
+        "Latch faults until explicitly cleared by firmware or reset.",
+        "Assert safety inhibit whenever a violation occurs.",
+        "Report operating mode for firmware and integration readback."
+      ],
+      "interface_notes": [
+        "Consumes veh_speed_mps, veh_state_valid, cfg_timeout_cycles, cfg_speed_min_mps, cfg_speed_max_mps, cfg_actuator_min, cfg_actuator_max, request_age, response_age, response_valid_seen, actuator_cmd_data_in, and fault_clear.",
+        "Drives fault_latched, safety_inhibit, and operating_mode.",
+        "Receives fault-clear strobes from the MMIO block and status inputs from the history and control paths."
+      ],
+      "ownership_notes": [
+        "Owns fault latching and safety inhibit state.",
+        "Must inhibit output validity rather than replace commands on invalid, stale, timeout, reset, or fault conditions.",
+        "Does not generate fallback commands or substitute controller outputs."
+      ]
+    },
+    {
+      "name": "adaptive_aero_actuator_controller",
+      "role": "Bounded actuator-command generator for active aerodynamics.",
+      "responsibilities": [
+        "Consume validated model output and vehicle state to compute actuator commands.",
+        "Clamp command data to firmware-programmed minimum and maximum bounds.",
+        "Assert command validity only when enabled, safe, and response-valid has been observed.",
+        "Deassert validity rather than substituting an alternate or fallback command.",
+        "Maintain deterministic bounded command behavior."
+      ],
+      "interface_notes": [
+        "Consumes cfg_enable, cfg_actuator_min, cfg_actuator_max, fault_latched, safety_inhibit, veh_speed_mps, model_response_word, and response_valid_seen.",
+        "Drives actuator_cmd_valid and actuator_cmd_data to the top level.",
+        "The command path is gated by safety and freshness state, not by fallback substitution."
+      ],
+      "ownership_notes": [
+        "Owns final actuator command generation.",
+        "Must not be treated as a default-command source.",
+        "When gating fails, validity is inhibited and no substitute output is created."
+      ]
+    },
+    {
+      "name": "adaptive_aero_history_buffer",
+      "role": "Technology-neutral history/FIFO storage wrapper for stale-data detection and traceability.",
+      "responsibilities": [
+        "Store request and response history metadata.",
+        "Provide response_age derived from stored history and current observation state.",
+        "Support stale-data and timeout analysis.",
+        "Preserve bulk payload/history storage in memory form suitable for FPGA block RAM mapping.",
+        "Keep storage out of the register file."
+      ],
+      "interface_notes": [
+        "Consumes request_token, request_age, and response_valid_seen.",
+        "Drives response_age.",
+        "Uses a memory-mapped storage structure intended for block RAM inference or the declared wrapper macro; bulk storage is not flattened into registers."
+      ],
+      "ownership_notes": [
+        "Owns the history-storage role only.",
+        "Must remain technology-neutral and memory-based.",
+        "The read-data input from the block RAM macro is functionally consumed by this wrapper and is not treated as a top-level external port."
+      ]
+    },
+    {
+      "name": "generic_bram_wrapper",
+      "role": "Technology-neutral block RAM wrapper that provides observable memory read data for history storage.",
+      "responsibilities": [
+        "Map the declared memory behavior to native FPGA block RAM.",
+        "Drive memory read data to the history buffer.",
+        "Preserve exact width and naming of the memory interface.",
+        "Avoid substitute memory models or fallback behavior."
+      ],
+      "interface_notes": [
+        "Acts as the real child producer of bram_dout used by the history buffer.",
+        "Has a memory-facing role only and is intended for FPGA mapping.",
+        "Keeps bulk storage implementation in memory form rather than registers."
+      ],
+      "ownership_notes": [
+        "Owns the observable memory-read side of the storage path.",
+        "Must not introduce alternate storage or fallback behavior.",
+        "Its memory implementation remains technology-neutral and synthesis-friendly."
+      ]
+    }
+  ],
+  "interface_summary": [
+    {
+      "from": "firmware/MMIO",
+      "to": "adaptive_aero_mmio_csr",
+      "signals": [
+        "mmio_valid",
+        "mmio_write",
+        "mmio_addr",
+        "mmio_wdata",
+        "mmio_ready",
+        "mmio_rdata",
+        "mmio_rvalid"
+      ],
+      "intent": "Provide a real firmware-visible CSR/MMIO control and status plane with address, write-data, read-data, transaction-valid/write-enable, and ready/valid response semantics."
+    },
+    {
+      "from": "adaptive_aero_mmio_csr",
+      "to": "request and control logic",
+      "signals": [
+        "cfg_enable",
+        "cfg_clear_fault",
+        "cfg_timeout_cycles",
+        "cfg_speed_min_mps",
+        "cfg_speed_max_mps",
+        "cfg_actuator_min",
+        "cfg_actuator_max",
+        "cfg_model_req_ttl",
+        "cfg_operating_mode"
+      ],
+      "intent": "Decode firmware registers into semantic control values for request generation, safety supervision, and actuator bounding."
+    },
+    {
+      "from": "vehicle inputs",
+      "to": "request_scheduler/safety_monitor/actuator_controller",
+      "signals": [
+        "veh_speed_mps",
+        "veh_state_valid"
+      ],
+      "intent": "Distribute vehicle speed and validity to request generation, safety supervision, and command generation paths."
+    },
+    {
+      "from": "adaptive_aero_request_scheduler",
+      "to": "adaptive_aero_model_transport_bridge",
+      "signals": [
+        "model_req_valid",
+        "model_req_data"
+      ],
+      "intent": "Emit model-request valid/data outward for external surrogate evaluation."
+    },
+    {
+      "from": "adaptive_aero_model_transport_bridge",
+      "to": "adaptive_aero_request_scheduler",
+      "signals": [
+        "model_req_ready"
+      ],
+      "intent": "Return model-request ready inward to complete the mandated request handshake."
+    },
+    {
+      "from": "external model transport",
+      "to": "adaptive_aero_model_transport_bridge",
+      "signals": [
+        "model_rsp_valid",
+        "model_rsp_data"
+      ],
+      "intent": "Receive model-response valid/data inward exactly as required by the transport contract."
+    },
+    {
+      "from": "adaptive_aero_model_transport_bridge",
+      "to": "external model transport",
+      "signals": [
+        "model_rsp_ready"
+      ],
+      "intent": "Drive model-response ready outward so the RTL, not a child input, owns the required ready output."
+    },
+    {
+      "from": "adaptive_aero_model_transport_bridge",
+      "to": "adaptive_aero_actuator_controller/safety_monitor/history_buffer",
+      "signals": [
+        "model_response_word",
+        "response_valid_seen"
+      ],
+      "intent": "Provide traceable response observation to downstream control and safety logic."
+    },
+    {
+      "from": "adaptive_aero_request_scheduler",
+      "to": "adaptive_aero_history_buffer/safety_monitor",
+      "signals": [
+        "request_token",
+        "request_age"
+      ],
+      "intent": "Provide request trace metadata for memory-backed history and timeout analysis."
+    },
+    {
+      "from": "adaptive_aero_history_buffer",
+      "to": "adaptive_aero_safety_monitor",
+      "signals": [
+        "response_age"
+      ],
+      "intent": "Supply derived freshness history used for stale-data and timeout supervision."
+    },
+    {
+      "from": "adaptive_aero_safety_monitor",
+      "to": "adaptive_aero_mmio_csr/adaptive_aero_actuator_controller",
+      "signals": [
+        "fault_latched",
+        "safety_inhibit",
+        "operating_mode"
+      ],
+      "intent": "Latch and report safety state to firmware while gating actuator command validity."
+    },
+    {
+      "from": "adaptive_aero_actuator_controller",
+      "to": "top level",
+      "signals": [
+        "actuator_cmd_valid",
+        "actuator_cmd_data"
+      ],
+      "intent": "Drive the final bounded actuator command outputs only when safe and valid."
+    }
+  ],
+  "data_flow_summary": [
+    "Firmware writes control registers through mmio_valid/mmio_write/mmio_addr/mmio_wdata and reads status through mmio_ready/mmio_rdata/mmio_rvalid.",
+    "Vehicle speed and state validity enter the request scheduler and safety monitor, where they contribute to request generation and safety qualification.",
+    "The request scheduler builds model_req_valid/model_req_data and forwards them through the transport bridge so the RTL emits model-request traffic as outputs.",
+    "The transport bridge accepts model_rsp_valid/model_rsp_data from the model side and exposes model_rsp_ready as a real RTL output, satisfying the mandated direction contract.",
+    "Response observation and history metadata feed the safety monitor and history buffer for stale-data detection and timeout analysis.",
+    "The actuator controller consumes the validated model response and emits bounded actuator_cmd_data with actuator_cmd_valid only when enable, safety, and freshness conditions are satisfied.",
+    "When any invalid, stale, timeout, reset, or fault condition occurs, command validity is inhibited and fault_latched remains asserted until firmware clears it or reset occurs; no substitute or fallback command is generated."
+  ],
+  "clock_reset_summary": {
+    "clocking": "A single synchronous clk fanout drives all synchronous submodules and the memory wrapper. The design is organized around registered handshakes and sequential safety state so that firmware-visible status, transport handshakes, and command gating are all clocked coherently.",
+    "reset_behavior": "reset_n is active-low. On reset, outgoing valid signals are deasserted, request/response transport is returned to safe inactive values, actuator_cmd_valid is low, and safety state returns to a safe inhibited condition. fault_latched is cleared only by reset or explicit firmware clear, as defined by the CSR/safety contract. No fallback command, substitute command, fallback status, or fallback-on-reset behavior is generated."
+  },
+  "integration_notes": [
+    "The top module must remain adaptive_aero_control_top and must not be substituted with a status-only, telemetry-only, register-bank-only, or leaf module.",
+    "The MMIO/CSR interface is mandatory and coexists with streaming transport; it cannot be replaced by streaming ports.",
+    "The model transport direction contract takes precedence over ambiguous wording: model_req_valid/model_req_data are outputs, model_req_ready is an input, model_rsp_valid/model_rsp_data are inputs, and model_rsp_ready is an output.",
+    "Top-level outputs must have real RTL drivers; required outputs are not permitted to be left to child inputs only.",
+    "Bulk payload/history/FIFO storage is implemented through a technology-neutral memory wrapper suitable for FPGA block RAM mapping and must not be flattened into registers.",
+    "All declared registers in register_contract are reachable through decode, including CTRL, SPEED_WINDOW_MIN, SPEED_WINDOW_MAX, ACTUATOR_BOUNDS, TIMEOUT_CFG, STATUS, and MODEL_TRACE.",
+    "The design explicitly does not create a fallback command, fallback register, fallback status, fallback controller, substitute command, or fallback-on-reset behavior; invalid or faulted conditions inhibit validity and latch faults for software handling.",
+    "The transparent reference path preserves traceability of speed input, request generation, and response consumption for software analysis and surrogate evaluation transparency."
+  ],
+  "consistency_notes": [
+    "This document is descriptive only.",
+    "No hierarchy, ports, or filenames may differ from digital_spec_json."
+  ]
+}

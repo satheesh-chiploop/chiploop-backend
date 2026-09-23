@@ -1,0 +1,50 @@
+RTL Agent Summary
+=================
+Mode: hierarchical
+Top module: adaptive_aero_control_top
+Expected files: ['adaptive_aero_control_top.v', 'adaptive_aero_mmio_csr.v', 'adaptive_aero_request_scheduler.v', 'adaptive_aero_model_transport_bridge.v', 'adaptive_aero_safety_monitor.v', 'adaptive_aero_actuator_controller.v', 'adaptive_aero_history_buffer.v', 'generic_bram_wrapper.v']
+Materialized files: ['adaptive_aero_mmio_csr.v']
+Clock ports: ['clk']
+Reset ports: ['reset_n']
+Icarus compile: pass
+Verilator lint: fatal
+Static Spec2RTL compliance: issues
+Issue count: 36
+
+Issues:
+- ❌ Missing expected RTL files: ['adaptive_aero_actuator_controller.v', 'adaptive_aero_control_top.v', 'adaptive_aero_history_buffer.v', 'adaptive_aero_model_transport_bridge.v', 'adaptive_aero_request_scheduler.v', 'adaptive_aero_safety_monitor.v', 'generic_bram_wrapper.v']
+- ⚠ Top-level connection signal 'veh_speed_mps' not clearly visible in RTL text.
+- ⚠ Top-level connection signal 'veh_state_valid' not clearly visible in RTL text.
+- ⚠ Top-level connection signal 'model_req_ready' not clearly visible in RTL text.
+- ⚠ Top-level connection signal 'model_rsp_valid' not clearly visible in RTL text.
+- ⚠ Top-level connection signal 'model_rsp_data' not clearly visible in RTL text.
+- ⚠ Top-level connection signal 'model_req_valid' not clearly visible in RTL text.
+- ⚠ Top-level connection signal 'model_req_data' not clearly visible in RTL text.
+- ⚠ Top-level connection signal 'model_rsp_ready' not clearly visible in RTL text.
+- ⚠ Top-level connection signal 'actuator_cmd_valid' not clearly visible in RTL text.
+- ⚠ Top-level connection signal 'actuator_cmd_data' not clearly visible in RTL text.
+- ❌ Inter-module signal 'request_token' not found in RTL.
+- ❌ Inter-module signal 'request_age' not found in RTL.
+- ❌ Inter-module signal 'model_response_word' not found in RTL.
+- ❌ Inter-module signal 'response_valid_seen' not found in RTL.
+- ❌ Inter-module signal 'response_age' not found in RTL.
+- ❌ Inter-module signal 'model_req_valid' not found in RTL.
+- ❌ Inter-module signal 'model_req_data' not found in RTL.
+- ❌ Inter-module signal 'model_req_ready' not found in RTL.
+- ❌ Inter-module signal 'model_rsp_ready' not found in RTL.
+- ❌ Inter-module signal 'actuator_cmd_valid' not found in RTL.
+- ❌ Inter-module signal 'actuator_cmd_data' not found in RTL.
+- ⚠ Owned signal 'request_token' from 'adaptive_aero_request_scheduler.request_token' not found in RTL.
+- ⚠ Owned signal 'request_age' from 'adaptive_aero_request_scheduler.request_age' not found in RTL.
+- ⚠ Owned signal 'model_req_valid' from 'adaptive_aero_request_scheduler.model_req_valid' not found in RTL.
+- ⚠ Owned signal 'model_req_data' from 'adaptive_aero_request_scheduler.model_req_data' not found in RTL.
+- ⚠ Owned signal 'model_req_ready' from 'adaptive_aero_model_transport_bridge.model_req_ready' not found in RTL.
+- ⚠ Owned signal 'model_rsp_ready' from 'adaptive_aero_model_transport_bridge.model_rsp_ready' not found in RTL.
+- ⚠ Owned signal 'model_response_word' from 'adaptive_aero_model_transport_bridge.model_response_word' not found in RTL.
+- ⚠ Owned signal 'response_valid_seen' from 'adaptive_aero_model_transport_bridge.response_valid_seen' not found in RTL.
+- ⚠ Owned signal 'response_age' from 'adaptive_aero_history_buffer.response_age' not found in RTL.
+- ⚠ Owned signal 'actuator_cmd_valid' from 'adaptive_aero_actuator_controller.actuator_cmd_valid' not found in RTL.
+- ⚠ Owned signal 'actuator_cmd_data' from 'adaptive_aero_actuator_controller.actuator_cmd_data' not found in RTL.
+- ❌ Top RTL file missing after generation: adaptive_aero_control_top.v
+- ❌ Verilator lint failed.
+- ❌ Static Spec2RTL compliance failed: status=issues, missing=157, partial=0, inconclusive=0.
