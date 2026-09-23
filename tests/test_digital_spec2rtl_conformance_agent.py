@@ -788,6 +788,21 @@ def test_feature_contract_binding_rejects_missing_or_wrong_direction_ports():
     assert feature["wrong_stimulus_directions"] == ["enable"]
 
 
+def test_prose_scenarios_are_not_misreported_as_explicit_feature_contracts():
+    spec = {
+        "name": "counter_top",
+        "ports": [{"name": "count", "direction": "output", "width": 8}],
+        "behavior_rules": ["Count increments after each accepted request."],
+    }
+    modules = [{"name": "counter_top", "ports": [{"name": "count", "direction": "output"}]}]
+
+    result = agent._feature_contract_evidence(spec, modules, "counter_top")
+
+    assert result == {
+        "status": "not_applicable", "checked": 0, "passed": 0, "failed": 0, "features": [],
+    }
+
+
 def test_structured_requirements_preserve_all_items_and_module_scope():
     spec = {
         "hierarchy": {
@@ -992,6 +1007,39 @@ def test_behavioral_miss_routes_to_verification_without_weakening_structural_gat
     assert item["static_precheck_status"] == "missing"
     assert item["verification_method"] == "systemverilog_assertion"
     assert item["blocks_rtl_generation"] is False
+    assert report["summary"]["checked"] == sum(
+        report["summary"][key] for key in ("matched", "partial", "missing", "inconclusive")
+    )
+    assert report["total_requirements"] == len(report["requirements"])
+    assert report["total_evaluations"] == report["summary"]["checked"] + report["summary"]["pending_verification"]
+
+
+def test_behavioral_precheck_match_still_requires_executable_verification(tmp_path, monkeypatch):
+    spec = {"hierarchy": {"top_module": {
+        "name": "controller",
+        "ports": [
+            {"name": "clk", "direction": "input"},
+            {"name": "request_valid", "direction": "output"},
+        ],
+        "behavior_rules": ["request_valid pulses one cycle after an accepted request."],
+    }}}
+    rtl = tmp_path / "controller.sv"
+    rtl.write_text(
+        "module controller(input clk, output reg request_valid); "
+        "always @(posedge clk) request_valid <= 1'b1; endmodule\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(agent, "save_text_artifact_and_record", lambda *args, **kwargs: None)
+
+    report = agent.run_agent({
+        "workflow_id": "behavior-route-test", "spec_json": spec,
+        "rtl_files": [str(rtl)], "top_module": "controller", "_spec2rtl_embedded": True,
+    })["spec2rtl_conformance"]
+
+    item = report["requirements"][0]
+    assert item["static_precheck_status"] in {"matched", "partial"}
+    assert item["status"] == "pending_verification"
+    assert item["verification_method"] == "systemverilog_assertion"
 
 
 def test_frequency_target_routes_to_constraints_sta_without_blocking_rtl(tmp_path, monkeypatch):

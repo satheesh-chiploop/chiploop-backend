@@ -330,6 +330,29 @@ def test_fpga_inferred_memory_internalizes_application_prefixed_macro_pin_group(
     )
 
 
+def test_fpga_inferred_memory_internalizes_active_low_macro_pin_group():
+    module = {
+        "name": "payload_memory_wrapper",
+        "description": "Technology-neutral memory wrapper mapped to native block RAM.",
+        "functionality": "Own inferred bulk storage.",
+        "behavior_rules": ["Implement storage as an inferred memory."],
+        "ports": [
+            _port("write_en", "input"), _port("write_data", "input", 32),
+            _port("read_data", "output", 32),
+            _port("hist_csb_n", "output"), _port("hist_we_n", "output"),
+            _port("hist_addr", "output", 6), _port("hist_din", "output", 32),
+            _port("hist_dout", "input", 32),
+        ],
+    }
+    spec = {"hierarchy": {"top_module": {"name": "top", "ports": []}, "modules": [module]}}
+
+    spec_agent._internalize_fpga_inferred_memory_interfaces(
+        spec, "FPGA MEMORY CONTRACT (mandatory)",
+    )
+
+    assert {port["name"] for port in module["ports"]} == {"write_en", "write_data", "read_data"}
+
+
 def test_fpga_memory_internalization_preserves_hybrid_module_application_ports():
     module = {
         "name": "sensor_ingest_and_history",
@@ -373,6 +396,91 @@ def test_fpga_memory_internalization_preserves_hybrid_module_application_ports()
         spec, "FPGA MEMORY CONTRACT (mandatory)",
     )
     assert spec == once
+
+
+def test_explicit_block_ram_wrapper_does_not_depend_on_port_prefix_grammar():
+    module = {
+        **_module("payload_store"),
+        "description": "Technology-neutral memory wrapper for block-RAM-mappable bulk storage.",
+        "functionality": "FIFO storage without flattened registers.",
+        "behavior_rules": ["Instantiate storage compatible with native block RAM."],
+        "ports": [
+            _port("channel_write_en", "input"), _port("channel_addr", "input", 8),
+            _port("channel_push_data", "input", 64),
+            _port("channel_pop_data", "output", 64), _port("channel_full", "output"),
+        ],
+    }
+    spec = {"hierarchy": {"top_module": _module("top"), "modules": [module]}}
+
+    spec_agent._internalize_fpga_inferred_memory_interfaces(
+        spec, "FPGA MEMORY CONTRACT (mandatory)",
+    )
+
+    assert module["memory_implementation"] == {
+        "kind": "fpga_bram", "depth": 256, "addr_width": 8, "data_width": 64,
+        "technology_binding": "technology_neutral_inferred_memory",
+    }
+    assert {port["name"] for port in module["ports"]} == {
+        "channel_write_en", "channel_addr", "channel_push_data", "channel_pop_data", "channel_full",
+    }
+
+
+def test_child_only_inferred_memory_feature_routes_to_structural_validation():
+    spec = {
+        "hierarchy": {
+            "top_module": {"name": "top", "ports": [_port("done", "output")]},
+            "modules": [{
+                **_module("storage"),
+                "memory_implementation": {"kind": "fpga_bram"},
+                "ports": [
+                    _port("write_en", "input"), _port("write_data", "input", 32),
+                    _port("full", "output"),
+                ],
+            }],
+        },
+        "feature_contracts": [
+            {
+                "id": "bulk_storage_structure",
+                "description": "Bulk storage uses the inferred-memory wrapper.",
+                "stimulus": {"write_en": 1, "write_data": 7},
+                "expected": {"full": {"min": 0, "max": 1}},
+            },
+            {
+                "id": "external_done",
+                "description": "Product completion is externally observable.",
+                "stimulus": {}, "expected": {"done": 1},
+            },
+        ],
+    }
+
+    out = spec_agent._route_internal_memory_features_to_structural_requirements(spec, "hierarchical")
+
+    assert [feature["id"] for feature in out["feature_contracts"]] == ["external_done"]
+    assert out["structural_requirements"] == [{
+        "id": "bulk_storage_structure",
+        "description": "Bulk storage uses the inferred-memory wrapper.",
+        "kind": "fpga_inferred_memory_structure",
+        "modules": ["storage"],
+        "verification": "deterministic_fpga_memory_contract",
+        "source": "feature_contract",
+    }]
+
+
+def test_internal_signal_feature_is_not_routed_without_memory_provenance():
+    spec = {
+        "hierarchy": {
+            "top_module": {"name": "top", "ports": [_port("done", "output")]},
+            "modules": [{**_module("core"), "ports": [_port("internal_state", "output", 8)]}],
+        },
+        "feature_contracts": [{
+            "id": "bad_hidden_state", "stimulus": {}, "expected": {"internal_state": 3},
+        }],
+    }
+
+    out = spec_agent._route_internal_memory_features_to_structural_requirements(spec, "hierarchical")
+
+    assert out["feature_contracts"][0]["id"] == "bad_hidden_state"
+    assert "structural_requirements" not in out
 
 
 def test_fpga_inferred_wrapper_removes_stale_macro_prose_and_accidental_top_ports():
@@ -644,6 +752,24 @@ def test_fpga_memory_contract_rejects_openram_hard_macro():
     assert "technology-neutral wrapper" in prompt
 
 
+@pytest.mark.parametrize("kind", [
+    "prebuilt_sram_macro", "precompiled-sram-macro", "asic_hard_memory", "sky130_sram_1kbyte",
+])
+def test_fpga_memory_kind_aliases_share_one_hard_macro_classifier(kind):
+    assert spec_agent._is_fpga_forbidden_memory_kind(kind) is True
+    spec = {"memory_macros": [{"name": "ram", "kind": kind}]}
+    with pytest.raises(ValueError, match="FPGA-only"):
+        spec_agent._validate_fpga_memory_contract(spec, "FPGA MEMORY CONTRACT (mandatory)")
+
+    normalized = spec_agent._normalize_fpga_memory_contract(
+        spec, "FPGA MEMORY CONTRACT (mandatory)",
+    )
+    assert normalized["memory_macros"][0]["kind"] == "fpga_bram"
+    spec_agent._validate_fpga_memory_contract(
+        normalized, "FPGA MEMORY CONTRACT (mandatory)",
+    )
+
+
 def test_fpga_terminal_closure_normalizes_hard_macro_without_changing_geometry():
     spec = {
         "memory_macros": [{
@@ -740,6 +866,66 @@ def test_fpga_memory_collapses_differently_named_hard_macro_into_explicit_wrappe
         "kind": "fpga_bram", "depth": 256, "data_width": 64,
         "addr_width": 8, "technology_binding": "technology_neutral_inferred_memory",
     }
+
+
+def test_fpga_memory_recognizes_fifo_style_wrapper_over_hard_macro():
+    wrapper = {
+        **_module("payload_store"),
+        "description": "Technology-neutral FIFO wrapper around the underlying SRAM macro.",
+        "ports": [
+            _port("write_en", "input"), _port("read_en", "input"),
+            _port("push_data", "input", 64), _port("pop_data", "output", 64),
+            _port("full", "output"), _port("empty", "output"),
+        ],
+    }
+    spec = {
+        "memory_macros": [{
+            "name": "vendor_ram", "kind": "prebuilt_sram_macro",
+            "depth": 256, "data_width": 64, "addr_width": 8,
+        }],
+        "hierarchy": {"top_module": _module("top"), "modules": [wrapper]},
+    }
+
+    normalized = spec_agent._normalize_fpga_memory_contract(
+        spec, "FPGA MEMORY CONTRACT (mandatory)",
+    )
+
+    assert normalized["memory_macros"] == []
+    assert wrapper["memory_implementation"] == {
+        "kind": "fpga_bram", "depth": 256, "data_width": 64,
+        "addr_width": 8, "technology_binding": "technology_neutral_inferred_memory",
+    }
+
+
+def test_one_explicit_wrapper_can_own_multiple_inferred_memory_banks():
+    wrapper = {
+        **_module("payload_store"),
+        "description": "Technology-neutral wrapper around the declared physical SRAM macros.",
+        "ports": [
+            _port("history_write_en", "input"), _port("history_read_en", "input"),
+            _port("history_push_data", "input", 32), _port("history_pop_data", "output", 32),
+            _port("feature_write_en", "input"), _port("feature_read_en", "input"),
+            _port("feature_push_data", "input", 64), _port("feature_pop_data", "output", 64),
+        ],
+    }
+    spec = {
+        "memory_macros": [
+            {"name": "history_ram", "kind": "openram_sram", "depth": 64, "data_width": 32, "addr_width": 6},
+            {"name": "feature_ram", "kind": "prebuilt_sram_macro", "depth": 256, "data_width": 64, "addr_width": 8},
+        ],
+        "hierarchy": {"top_module": _module("top"), "modules": [wrapper]},
+    }
+
+    normalized = spec_agent._normalize_fpga_memory_contract(
+        spec, "FPGA MEMORY CONTRACT (mandatory)",
+    )
+
+    assert normalized["memory_macros"] == []
+    assert wrapper["memory_implementation"]["kind"] == "fpga_bram"
+    assert wrapper["memory_implementation"]["data_width"] == 64
+    assert [(bank["name"], bank["depth"], bank["data_width"]) for bank in wrapper["memory_banks"]] == [
+        ("history_ram", 64, 32), ("feature_ram", 256, 64),
+    ]
 
 
 def test_fpga_memory_does_not_guess_between_multiple_explicit_wrappers():
@@ -1965,6 +2151,100 @@ def test_single_module_hierarchy_generates_top_self_connections_when_missing():
     ]
 
 
+def test_partial_top_connections_are_completed_and_unique_reversed_ports_are_reconciled():
+    child = {
+        **_module("transport_adapter"),
+        "ports": [
+            _port("clk", "input"),
+            _port("model_req_valid", "input"),
+            _port("model_rsp_valid", "output"),
+        ],
+    }
+    spec = {
+        "hierarchy": {
+            "top_module": {
+                **_module("top"),
+                "ports": [
+                    _port("clk", "input"),
+                    _port("model_req_valid", "output"),
+                    _port("model_rsp_valid", "input"),
+                ],
+            },
+            "modules": [child],
+        },
+        "top_level_connections": [{"top_port": "clk", "connected_to": ["transport_adapter.clk"]}],
+    }
+
+    out = spec_agent._ensure_hierarchical_top_level_connections(spec)
+
+    by_top = {item["top_port"]: item["connected_to"] for item in out["top_level_connections"]}
+    assert by_top["clk"] == ["transport_adapter.clk"]
+    assert by_top["model_req_valid"] == ["transport_adapter.model_req_valid"]
+    assert by_top["model_rsp_valid"] == ["transport_adapter.model_rsp_valid"]
+    directions = {port["name"]: port["direction"] for port in child["ports"]}
+    assert directions["model_req_valid"] == "output"
+    assert directions["model_rsp_valid"] == "input"
+
+
+def test_ambiguous_top_output_producers_are_not_silently_connected():
+    spec = {
+        "hierarchy": {
+            "top_module": {**_module("top"), "ports": [_port("result", "output", 8)]},
+            "modules": [
+                {**_module("a"), "ports": [_port("result", "output", 8)]},
+                {**_module("b"), "ports": [_port("result", "output", 8)]},
+            ],
+        },
+        "top_level_connections": [],
+    }
+
+    out = spec_agent._ensure_hierarchical_top_level_connections(spec)
+
+    assert not out.get("top_level_connections")
+
+
+def test_feature_and_hierarchy_failures_are_reported_in_one_validation_pass():
+    producer = {
+        **_module("producer"),
+        "rtl_output_file": "producer.v",
+        "ports": [_port("clk", "input"), _port("status", "output"), _port("generated", "output")],
+    }
+    consumer = {
+        **_module("consumer"),
+        "rtl_output_file": "consumer.v",
+        "ports": [_port("generated", "input"), _port("orphan", "input")],
+    }
+    spec = {
+        "hierarchy": {
+            "top_module": {
+                **_module("top"), "rtl_output_file": "top.v",
+                "ports": [_port("clk", "input"), _port("status", "output")],
+            },
+            "modules": [producer, consumer],
+        },
+        "top_level_connections": [
+            {"top_port": "clk", "connected_to": ["producer.clk"]},
+            {"top_port": "status", "connected_to": ["producer.status"]},
+        ],
+        "inter_module_signals": [{
+            "name": "generated", "width": 1, "source": "producer.generated",
+            "destinations": ["consumer.generated"],
+        }],
+        "signal_ownership": [{"signal": "status", "owner": "producer.status"}],
+        "feature_contracts": [{
+            "id": "weak_status", "stimulus": {"clk": 1},
+            "expected": {"status": {"min": 0, "max": 1}},
+        }],
+    }
+
+    with pytest.raises(ValueError) as caught:
+        spec_agent._validate_spec_contract(spec, "hierarchical", require_feature_contracts=True)
+
+    message = str(caught.value)
+    assert "full-domain min/max expectations" in message
+    assert "consumer.orphan" in message
+
+
 def test_sanitizer_drops_ownership_for_nonexistent_top_port():
     spec = {
         "hierarchy": {
@@ -2531,3 +2811,44 @@ def test_feature_contract_strength_rejects_weak_signal_even_with_strong_signal()
 
     with pytest.raises(ValueError, match="response: data"):
         spec_agent._validate_feature_contract_strength(ports, contracts)
+
+
+def test_feature_strength_repair_cannot_rewrite_architecture():
+    previous = {
+        "design_name": "top",
+        "hierarchy": {
+            "top_module": {"name": "top", "ports": [_port("ready", "output")]},
+            "modules": [{"name": "core", "ports": [_port("ready", "output")]}],
+        },
+        "feature_contracts": [{
+            "id": "ready", "stimulus": {}, "expected": {"ready": {"min": 0, "max": 1}},
+        }],
+    }
+    repair = {
+        "design_name": "redesigned_top",
+        "hierarchy": {"top_module": {"name": "redesigned_top", "ports": []}, "modules": []},
+        "feature_contracts": [{"id": "ready", "stimulus": {}, "expected": {"ready": 1}}],
+    }
+
+    merged = json.loads(spec_agent._merge_feature_strength_repair(
+        json.dumps(previous), json.dumps(repair),
+    ))
+
+    assert merged["design_name"] == "top"
+    assert merged["hierarchy"] == previous["hierarchy"]
+    assert merged["feature_contracts"] == repair["feature_contracts"]
+
+
+def test_feature_strength_failure_classifier_does_not_capture_graph_failures():
+    assert spec_agent._is_feature_strength_only_failure(
+        "Feature contracts must contain behavior-discriminating checkers; "
+        "full-domain min/max expectations accept every possible output"
+    ) is True
+    assert spec_agent._is_feature_strength_only_failure(
+        "Hierarchical graph validation failed: Required child input has no source"
+    ) is False
+    assert spec_agent._is_feature_strength_only_failure(
+        "Feature contracts must contain behavior-discriminating checkers; "
+        "full-domain min/max expectations accept every possible output | "
+        "FPGA memory contract requires a technology-neutral wrapper"
+    ) is False

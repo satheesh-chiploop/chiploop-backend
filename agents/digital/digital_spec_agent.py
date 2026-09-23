@@ -17,6 +17,19 @@ logger = logging.getLogger("chiploop")
 _VERILOG_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_$]*$")
 
 
+def _is_fpga_forbidden_memory_kind(value: object) -> bool:
+    """Classify ASIC/prebuilt hard-memory aliases consistently for FPGA flows."""
+    kind = re.sub(r"[^a-z0-9]+", "_", str(value or "").strip().lower()).strip("_")
+    if not kind or kind in {"fpga_bram", "inferred_memory", "inferred_bram", "technology_neutral"}:
+        return False
+    if "openram" in kind or "sky130" in kind:
+        return True
+    return bool(
+        re.search(r"(?:^|_)(?:prebuilt|precompiled|hard|asic)(?:_|$)", kind)
+        and re.search(r"(?:^|_)(?:sram|ram|memory|macro)(?:_|$)", kind)
+    )
+
+
 def _default_rtl_output_file(module_name: str) -> str:
     name = str(module_name or "").strip()
     return f"{name}.v" if name else ""
@@ -1170,30 +1183,36 @@ def _project_internal_feature_stimulus_to_register_bus(spec_json: dict, mode: st
 
 
 def _validate_spec_contract(spec_json: dict, mode: str, require_feature_contracts: bool = False) -> None:
+    deferred_errors = []
     if require_feature_contracts:
-        from .feature_contract_compiler import compile_feature_contracts
-        if mode == "flat":
-            feature_ports = spec_json.get("ports") or []
-        else:
-            feature_ports = ((spec_json.get("hierarchy") or {}).get("top_module") or {}).get("ports") or []
-        contracts = compile_feature_contracts(spec_json, feature_ports)
-        if not contracts:
-            raise ValueError("feature_contracts must contain at least one executable feature checker contract.")
-        incomplete = [item for item in contracts if not item.get("executable")]
-        if incomplete:
-            detail = "; ".join(
-                f"{item.get('feature_id')}: {item.get('non_executable_reason')}"
-                + (
-                    f" Unresolved bindings: {', '.join(str(name) for name in item.get('unresolved_bindings') or [])}."
-                    if item.get("unresolved_bindings") else ""
+        try:
+            from .feature_contract_compiler import compile_feature_contracts
+            if mode == "flat":
+                feature_ports = spec_json.get("ports") or []
+            else:
+                feature_ports = ((spec_json.get("hierarchy") or {}).get("top_module") or {}).get("ports") or []
+            contracts = compile_feature_contracts(spec_json, feature_ports)
+            if not contracts:
+                raise ValueError("feature_contracts must contain at least one executable feature checker contract.")
+            incomplete = [item for item in contracts if not item.get("executable")]
+            if incomplete:
+                detail = "; ".join(
+                    f"{item.get('feature_id')}: {item.get('non_executable_reason')}"
+                    + (
+                        f" Unresolved bindings: {', '.join(str(name) for name in item.get('unresolved_bindings') or [])}."
+                        if item.get("unresolved_bindings") else ""
+                    )
+                    for item in incomplete[:12]
                 )
-                for item in incomplete[:12]
-            )
-            raise ValueError(f"Every feature_contracts entry must compile to an executable checker. {detail}")
-        _validate_reset_feature_consistency(spec_json, feature_ports, contracts)
-        _validate_feature_contract_strength(feature_ports, contracts)
-        _validate_feature_contract_feasibility(spec_json, feature_ports, contracts)
+                raise ValueError(f"Every feature_contracts entry must compile to an executable checker. {detail}")
+            _validate_reset_feature_consistency(spec_json, feature_ports, contracts)
+            _validate_feature_contract_strength(feature_ports, contracts)
+            _validate_feature_contract_feasibility(spec_json, feature_ports, contracts)
+        except ValueError as error:
+            deferred_errors.append(str(error))
     if mode == "flat":
+        if deferred_errors:
+            raise ValueError(" | ".join(deferred_errors))
         _validate_module(spec_json, "spec", require_non_empty_ports=False)
         return
 
@@ -1260,7 +1279,9 @@ def _validate_spec_contract(spec_json: dict, mode: str, require_feature_contract
         except ValueError as error:
             graph_errors.append(str(error))
     if graph_errors:
-        raise ValueError("Hierarchical graph validation failed: " + " | ".join(graph_errors))
+        deferred_errors.append("Hierarchical graph validation failed: " + " | ".join(graph_errors))
+    if deferred_errors:
+        raise ValueError(" | ".join(deferred_errors))
 
 
 def _validate_required_memory_observability(spec_json: dict) -> None:
@@ -2054,8 +2075,17 @@ def _internalize_fpga_inferred_memory_interfaces(spec_json: dict, source_prompt:
         functional = [port for port in ports if functional_roles.match(str(port.get("name") or ""))]
         identity = " ".join(str(module.get(key) or "") for key in ("name", "description", "functionality"))
         rules = " ".join(str(item) for item in (module.get("behavior_rules") or []))
+        explicit_storage_wrapper = bool(
+            re.search(r"\b(?:memory|storage|bram|sram)\b", identity, re.I)
+            and re.search(r"\bwrapper\b", identity, re.I)
+            and re.search(
+                r"(?:infer|native block ram|block.ram.mappable|technology.neutral)",
+                rules + " " + identity,
+                re.I,
+            )
+        )
         owns_inferred_storage = bool(
-            functional
+            (functional or explicit_storage_wrapper)
             and re.search(r"(?:memory|storage|bram|ram)", identity, re.I)
             and re.search(r"(?:infer|native block ram|technology.neutral|instantiate.*(?:memory|sram)|macro)", rules + " " + identity, re.I)
         )
@@ -2070,9 +2100,10 @@ def _internalize_fpga_inferred_memory_interfaces(spec_json: dict, source_prompt:
         grouped_roles = {}
         for port in ports:
             port_name = str(port.get("name") or "").strip()
-            match = re.match(r"^(.+?)_(csb|ce|en|web|we|addr|din|dout|rdata|wdata)$", port_name, re.I)
+            match = re.match(r"^(.+?)_(csb_n|ce_n|en_n|web_n|we_n|csb|ce|en|web|we|addr|din|dout|rdata|wdata)$", port_name, re.I)
             if match:
-                grouped_roles.setdefault(match.group(1).lower(), {})[match.group(2).lower()] = port
+                role = re.sub(r"_n$", "", match.group(2).lower())
+                grouped_roles.setdefault(match.group(1).lower(), {})[role] = port
         for role_group in grouped_roles.values():
             roles = set(role_group)
             macro_like = "addr" in roles and bool(roles.intersection({"din", "wdata"})) \
@@ -2095,11 +2126,17 @@ def _internalize_fpga_inferred_memory_interfaces(spec_json: dict, source_prompt:
             if has_write_enable and re.search(r"_(?:csb|chip_select_n)$", str(port.get("name") or ""), re.I)
         }
         internal_pin_names = primitive_names | redundant_select_names
-        addr_port = next((port for port in functional if re.search(r"_addr$", str(port.get("name") or ""), re.I)), None)
-        data_port = next((port for port in functional if re.search(r"_(?:din|dout|wdata|rdata|data)$", str(port.get("name") or ""), re.I)), None)
+        address_ports = [
+            port for port in ports
+            if re.search(r"_(?:addr|address)$", str(port.get("name") or ""), re.I)
+        ]
+        data_ports = [
+            port for port in ports
+            if re.search(r"_(?:din|dout|wdata|rdata|write_data|read_data|push_data|pop_data|data)$", str(port.get("name") or ""), re.I)
+        ]
         try:
-            addr_width = max(1, int((addr_port or {}).get("width") or 1))
-            data_width = max(1, int((data_port or {}).get("width") or 1))
+            addr_width = max([max(1, int(port.get("width") or 1)) for port in address_ports] or [1])
+            data_width = max([max(1, int(port.get("width") or 1)) for port in data_ports] or [1])
         except (TypeError, ValueError):
             addr_width, data_width = 1, 1
         module["ports"] = [port for port in ports if str(port.get("name") or "") not in internal_pin_names]
@@ -2209,6 +2246,96 @@ def _internalize_fpga_inferred_memory_interfaces(spec_json: dict, source_prompt:
             if feature.get("expected"):
                 retained_features.append(feature)
         spec_json["feature_contracts"] = retained_features
+    return spec_json
+
+
+def _route_internal_memory_features_to_structural_requirements(spec_json: dict, mode: str) -> dict:
+    """Move child-only memory implementation checks out of top-level simulation.
+
+    Feature contracts are executable only through product ports (or projected
+    firmware transactions). A scenario whose complete stimulus/expected set
+    exists solely on an inferred-memory child is an implementation-structure
+    obligation, not a top-level behavioral scenario. Preserve its traceability
+    while routing it to the deterministic FPGA-memory validator.
+    """
+    if mode != "hierarchical":
+        return spec_json
+    hierarchy = spec_json.get("hierarchy") if isinstance(spec_json.get("hierarchy"), dict) else {}
+    top = hierarchy.get("top_module") if isinstance(hierarchy.get("top_module"), dict) else {}
+    top_ports = {
+        str(port.get("name") or "").strip()
+        for port in top.get("ports", []) or []
+        if isinstance(port, dict) and str(port.get("name") or "").strip()
+    }
+    memory_port_sets = []
+    memory_modules = []
+    for module in hierarchy.get("modules", []) or []:
+        if not isinstance(module, dict):
+            continue
+        implementation = module.get("memory_implementation")
+        if not isinstance(implementation, dict) or implementation.get("kind") != "fpga_bram":
+            continue
+        ports = {
+            str(port.get("name") or "").strip()
+            for port in module.get("ports", []) or []
+            if isinstance(port, dict) and str(port.get("name") or "").strip()
+        }
+        if ports:
+            memory_port_sets.append(ports)
+            memory_modules.append(str(module.get("name") or "").strip())
+    if not memory_port_sets:
+        return spec_json
+
+    def referenced_names(feature: dict) -> set[str]:
+        names = set()
+        stimulus = feature.get("stimulus")
+        if isinstance(stimulus, dict) and isinstance(stimulus.get("steps"), list):
+            for step in stimulus["steps"]:
+                if not isinstance(step, dict):
+                    continue
+                signals = step.get("signals")
+                if isinstance(signals, dict):
+                    names.update(str(name).strip() for name in signals if str(name).strip())
+        elif isinstance(stimulus, dict):
+            names.update(str(name).strip() for name in stimulus if str(name).strip())
+        expected = feature.get("expected")
+        if isinstance(expected, dict):
+            names.update(str(name).strip() for name in expected if str(name).strip())
+        return names
+
+    retained = []
+    structural = list(spec_json.get("structural_requirements") or [])
+    existing_ids = {
+        str(item.get("id") or "").strip()
+        for item in structural if isinstance(item, dict)
+    }
+    for feature in spec_json.get("feature_contracts", []) or []:
+        if not isinstance(feature, dict):
+            retained.append(feature)
+            continue
+        references = referenced_names(feature)
+        owning_modules = [
+            memory_modules[index]
+            for index, ports in enumerate(memory_port_sets)
+            if references and references.issubset(ports)
+        ]
+        if references and not references.intersection(top_ports) and owning_modules:
+            feature_id = str(feature.get("id") or feature.get("feature_id") or "internal_memory_structure").strip()
+            if feature_id not in existing_ids:
+                structural.append({
+                    "id": feature_id,
+                    "description": str(feature.get("description") or feature.get("statement") or "").strip(),
+                    "kind": "fpga_inferred_memory_structure",
+                    "modules": owning_modules,
+                    "verification": "deterministic_fpga_memory_contract",
+                    "source": "feature_contract",
+                })
+                existing_ids.add(feature_id)
+            continue
+        retained.append(feature)
+    spec_json["feature_contracts"] = retained
+    if structural:
+        spec_json["structural_requirements"] = structural
     return spec_json
 
 
@@ -2325,44 +2452,75 @@ def _reconcile_hierarchical_signal_directions(spec_json: dict, mode: str) -> dic
 def _ensure_hierarchical_top_level_connections(spec_json: dict) -> dict:
     if not isinstance(spec_json.get("hierarchy"), dict):
         return spec_json
-    if isinstance(spec_json.get("top_level_connections"), list) and spec_json["top_level_connections"]:
-        return spec_json
 
     hier = spec_json["hierarchy"]
     top = hier.get("top_module") if isinstance(hier.get("top_module"), dict) else {}
     top_ports = top.get("ports") if isinstance(top.get("ports"), list) else []
     child_modules = [m for m in hier.get("modules", []) if isinstance(m, dict)]
-    child_port_map = {
-        str(m.get("name") or ""): {
-            str(p.get("name") or "")
-            for p in (m.get("ports") or [])
-            if isinstance(p, dict)
-        }
-        for m in child_modules
+    connections = spec_json.get("top_level_connections")
+    if not isinstance(connections, list):
+        connections = []
+    by_top = {
+        str(connection.get("top_port") or ""): connection
+        for connection in connections if isinstance(connection, dict)
     }
-
-    connections = []
+    connected = {
+        str(endpoint)
+        for connection in connections if isinstance(connection, dict)
+        for endpoint in connection.get("connected_to", []) or []
+    }
     top_name = str(top.get("name") or "").strip()
+
+    def port_width(port: dict) -> int:
+        try:
+            return max(1, int(port.get("width") or 1))
+        except (TypeError, ValueError):
+            return 1
+
     for port in top_ports:
         if not isinstance(port, dict):
             continue
         port_name = str(port.get("name") or "").strip()
         if not port_name:
             continue
-        if child_port_map:
-            connected_to = [
-                f"{module_name}.{port_name}"
-                for module_name, ports in child_port_map.items()
-                if module_name and port_name in ports
-            ]
-        else:
-            connected_to = [f"{top_name}.{port_name}"] if top_name else []
-        if connected_to:
-            connections.append({
-                "top_port": port_name,
-                "connected_to": connected_to,
-                "description": f"Top-level port {port_name} connected to matching child module port(s).",
-            })
+        top_direction = str(port.get("direction") or "").lower()
+        desired_child_direction = "input" if top_direction == "input" else "output" if top_direction == "output" else "inout"
+        matches = []
+        for module in child_modules:
+            module_name = str(module.get("name") or "").strip()
+            for child_port in module.get("ports") or []:
+                if not isinstance(child_port, dict):
+                    continue
+                if str(child_port.get("name") or "").strip() != port_name or port_width(child_port) != port_width(port):
+                    continue
+                matches.append((module, child_port, f"{module_name}.{port_name}"))
+        compatible = [item for item in matches if str(item[1].get("direction") or "").lower() in {desired_child_direction, "inout"}]
+        selected = compatible
+        # A unique exact-name/width endpoint is stronger evidence than an LLM
+        # direction label. Reconcile it to the immutable top-level contract.
+        if not compatible and len(matches) == 1:
+            module, _child_port, _endpoint = matches[0]
+            _set_reconciled_port_direction(module, port_name, desired_child_direction)
+            selected = matches
+        # Multiple producers for one top output are ambiguous and must remain
+        # visible to graph validation instead of being silently wired together.
+        if top_direction == "output" and len(selected) > 1:
+            selected = []
+        endpoints = [endpoint for _module, _child_port, endpoint in selected if endpoint not in connected]
+        if not endpoints and not child_modules and top_name:
+            endpoints = [f"{top_name}.{port_name}"]
+        if endpoints:
+            connection = by_top.get(port_name)
+            if connection is None:
+                connection = {
+                    "top_port": port_name,
+                    "connected_to": [],
+                    "description": f"Top-level port {port_name} connected to matching child module port(s).",
+                }
+                connections.append(connection)
+                by_top[port_name] = connection
+            connection.setdefault("connected_to", []).extend(endpoints)
+            connected.update(endpoints)
 
     if connections:
         spec_json["top_level_connections"] = connections
@@ -3163,6 +3321,40 @@ Previous JSON text:
 """.strip()
 
 
+def _is_feature_strength_only_failure(error: object) -> bool:
+    text = str(error or "").lower()
+    return (
+        "feature contracts must contain behavior-discriminating checkers" in text
+        and "full-domain min/max expectations" in text
+        and " | " not in text
+        and "hierarchical graph validation failed" not in text
+    )
+
+
+def _merge_feature_strength_repair(previous_json_text: str, repair_json_text: str) -> str:
+    """Accept checker edits without allowing an architecture rewrite."""
+    try:
+        previous = _loads_model_json(_extract_json_object_text(previous_json_text))
+    except (JSONDecodeError, ValueError, TypeError):
+        previous = _parse_llm_json_object(previous_json_text)
+    try:
+        repair = _loads_model_json(_extract_json_object_text(repair_json_text))
+    except (JSONDecodeError, ValueError, TypeError):
+        repair = _parse_llm_json_object(repair_json_text)
+    repaired_features = repair.get("feature_contracts")
+    if not isinstance(repaired_features, list):
+        repair_top = ((repair.get("hierarchy") or {}).get("top_module") or {})
+        repaired_features = repair_top.get("feature_contracts")
+    if not isinstance(repaired_features, list) or not repaired_features:
+        raise ValueError("Feature-strength repair did not return feature_contracts.")
+    previous["feature_contracts"] = repaired_features
+    hierarchy = previous.get("hierarchy") if isinstance(previous.get("hierarchy"), dict) else {}
+    top = hierarchy.get("top_module") if isinstance(hierarchy.get("top_module"), dict) else None
+    if isinstance(top, dict):
+        top.pop("feature_contracts", None)
+    return json.dumps(previous, separators=(",", ":"), ensure_ascii=False)
+
+
 def _compile_spec_contract(
     llm_output: str,
     spec_dir: str,
@@ -3197,6 +3389,7 @@ def _compile_spec_contract(
     if mode == "hierarchical":
         spec_json = _normalize_memory_wrapper_port_directions(spec_json, mode)
         spec_json = _internalize_fpga_inferred_memory_interfaces(spec_json, source_prompt)
+        spec_json = _route_internal_memory_features_to_structural_requirements(spec_json, mode)
         spec_json = _ensure_hierarchical_top_level_connections(spec_json)
         spec_json = _ensure_hierarchical_inter_module_signals(spec_json)
         spec_json = _materialize_contract_backed_connection_ports(spec_json)
@@ -3367,20 +3560,13 @@ def _validate_fpga_memory_contract(spec_json: dict, source_prompt: str) -> None:
     prompt = str(source_prompt or "")
     if "FPGA MEMORY CONTRACT (mandatory)" not in prompt:
         return
-    forbidden_kinds = {
-        "openram_sram",
-        "prebuilt_sky130_sram",
-        "prebuilt_sram",
-        "precompiled_sram_macro",
-        "sky130_sram",
-    }
     violations = []
     macro_clock_ports = {}
     for macro in spec_json.get("memory_macros", []) or []:
         if not isinstance(macro, dict):
             continue
         kind = str(macro.get("kind") or "").strip().lower()
-        if kind in forbidden_kinds:
+        if _is_fpga_forbidden_memory_kind(kind):
             violations.append(f"{macro.get('name') or 'unnamed'} ({kind})")
         name = str(macro.get("name") or "").strip()
         ports = macro.get("ports") if isinstance(macro.get("ports"), dict) else {}
@@ -3427,10 +3613,6 @@ def _normalize_fpga_memory_contract(spec_json: dict, source_prompt: str) -> dict
     """
     if "FPGA MEMORY CONTRACT (mandatory)" not in str(source_prompt or ""):
         return spec_json
-    forbidden_kinds = {
-        "openram_sram", "prebuilt_sky130_sram", "prebuilt_sram",
-        "precompiled_sram_macro", "sky130_sram",
-    }
     hierarchy = spec_json.get("hierarchy") if isinstance(spec_json.get("hierarchy"), dict) else {}
     modules = hierarchy.get("modules") if isinstance(hierarchy.get("modules"), list) else []
     module_by_name = {
@@ -3452,7 +3634,7 @@ def _normalize_fpga_memory_contract(spec_json: dict, source_prompt: str) -> dict
         ]
         data_widths = [
             positive_width(port.get("width")) for port in wrapper_ports
-            if re.search(r"(?:^|_)(?:din|dout|wdata|rdata|write_data|read_data|data_in|data_out)$", str(port.get("name") or ""), re.I)
+            if re.search(r"(?:^|_)(?:din|dout|wdata|rdata|write_data|read_data|push_data|pop_data|data_in|data_out)$", str(port.get("name") or ""), re.I)
         ]
         addr_width = max(address_widths or [positive_width(macro.get("addr_width"))])
         data_width = max(data_widths or [positive_width(macro.get("data_width"))])
@@ -3467,17 +3649,27 @@ def _normalize_fpga_memory_contract(spec_json: dict, source_prompt: str) -> dict
             "addr_width": addr_width,
             "technology_binding": "technology_neutral_inferred_memory",
         }
+        bank_name = str(macro.get("name") or f"bank_{len(wrapper.get('memory_banks') or [])}").strip()
+        banks = wrapper.setdefault("memory_banks", [])
+        if not any(isinstance(bank, dict) and str(bank.get("name") or "") == bank_name for bank in banks):
+            banks.append({
+                "name": bank_name,
+                "kind": "fpga_bram",
+                "depth": positive_width(macro.get("depth"), depth),
+                "data_width": positive_width(macro.get("data_width"), data_width),
+                "addr_width": positive_width(macro.get("addr_width"), addr_width),
+                "technology_binding": "technology_neutral_inferred_memory",
+            })
         rules = wrapper.setdefault("behavior_rules", [])
         rule = "Implement storage as a synthesizable inferred memory compatible with native FPGA block RAM."
         if rule not in rules:
             rules.append(rule)
 
     normalized_macros = []
-    claimed_wrappers = set()
     for macro in spec_json.get("memory_macros", []) or []:
         if not isinstance(macro, dict):
             continue
-        was_hard_macro = str(macro.get("kind") or "").strip().lower() in forbidden_kinds
+        was_hard_macro = _is_fpga_forbidden_memory_kind(macro.get("kind"))
         if was_hard_macro:
             macro["kind"] = "fpga_bram"
             macro["technology_binding"] = "technology_neutral_inferred_memory"
@@ -3524,7 +3716,6 @@ def _normalize_fpga_memory_contract(spec_json: dict, source_prompt: str) -> dict
                 if (
                     not candidate_name
                     or candidate_name == name
-                    or candidate_name in claimed_wrappers
                     or str(candidate.get("description") or "").strip()
                     == "Memory macro interface module derived from memory_macros."
                 ):
@@ -3537,14 +3728,18 @@ def _normalize_fpga_memory_contract(spec_json: dict, source_prompt: str) -> dict
                 input_ports = [port for port in ports if str(port.get("direction") or "").lower() == "input"]
                 output_ports = [port for port in ports if str(port.get("direction") or "").lower() == "output"]
                 has_address = any(re.search(r"(?:^|_)(?:addr|address)$", str(port.get("name") or ""), re.I) for port in input_ports)
-                has_write_data = any(re.search(r"(?:^|_)(?:din|wdata|write_data|data_in)$", str(port.get("name") or ""), re.I) for port in input_ports)
-                has_read_data = any(re.search(r"(?:^|_)(?:dout|rdata|read_data|data_out)$", str(port.get("name") or ""), re.I) for port in output_ports)
+                has_write_data = any(re.search(r"(?:^|_)(?:din|wdata|write_data|push_data|data_in)$", str(port.get("name") or ""), re.I) for port in input_ports)
+                has_read_data = any(re.search(r"(?:^|_)(?:dout|rdata|read_data|pop_data|data_out)$", str(port.get("name") or ""), re.I) for port in output_ports)
+                has_fifo_control = (
+                    any(re.search(r"(?:^|_)(?:write_en|wr_en|push|push_valid)$", str(port.get("name") or ""), re.I) for port in input_ports)
+                    and any(re.search(r"(?:^|_)(?:read_en|rd_en|pop|pop_ready)$", str(port.get("name") or ""), re.I) for port in input_ports)
+                )
                 explicitly_wraps_macro = bool(re.search(
                     r"\b(?:declared|physical|underlying)\b.{0,48}\b(?:macro|sram)\b|\bmacro\s+(?:identity|interface)\b",
                     prose,
                     re.I,
                 ))
-                if explicitly_wraps_macro and has_address and has_write_data and has_read_data:
+                if explicitly_wraps_macro and (has_address or has_fifo_control) and has_write_data and has_read_data:
                     wrapper_candidates.append((candidate, ports, prose))
             if len(wrapper_candidates) > 1 and name:
                 named_candidates = [
@@ -3556,7 +3751,6 @@ def _normalize_fpga_memory_contract(spec_json: dict, source_prompt: str) -> dict
             if len(wrapper_candidates) == 1:
                 wrapper, _wrapper_ports, _prose = wrapper_candidates[0]
                 assign_inferred_memory(wrapper, macro)
-                claimed_wrappers.add(str(wrapper.get("name") or "").strip())
                 if existing_is_generated_macro:
                     modules.remove(existing_module)
                     module_by_name.pop(name, None)
@@ -4192,6 +4386,8 @@ Return JSON only.
             logger.info(f"Digital Spec Agent pass2 prompt size: {len(repair_prompt)} chars")
             t0 = time.monotonic()
             llm_output_pass2 = _complete_spec_generation(repair_prompt, agent_name, state, "pass2")
+            if _is_feature_strength_only_failure(pass1_error):
+                llm_output_pass2 = _merge_feature_strength_repair(llm_output, llm_output_pass2)
             logger.info(f"Digital Spec Agent pass2 LLM elapsed: {time.monotonic() - t0:.2f}s")
             logger.info(f"🧠 Digital Spec Agent pass2 LLM output size: {len(llm_output_pass2)} chars")
         except Exception as e2:
@@ -4289,6 +4485,11 @@ Return JSON only.
                     failure_log_text=str(e3),
                     strict_connectivity=True,
                 )
+                # Preserve the last valid candidate before entering each LLM
+                # call. Provider/transport failures can occur before a new
+                # response is assigned; later diagnostics and focused repair
+                # must still have a defined architecture to work from.
+                llm_output_pass4 = llm_output_pass3
                 try:
                     logger.info("Digital Spec Agent invoking final contract repair after syntax repair")
                     logger.info(f"Digital Spec Agent pass4 prompt size: {len(final_contract_repair_prompt)} chars")
@@ -4320,6 +4521,7 @@ Return JSON only.
                         strict_connectivity=True,
                         final_graph_closure=True,
                     )
+                    llm_output_pass5 = llm_output_pass4
                     try:
                         logger.info("Digital Spec Agent invoking pass5 focused contract repair")
                         logger.info(f"Digital Spec Agent pass5 prompt size: {len(pass5_prompt)} chars")

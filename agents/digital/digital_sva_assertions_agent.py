@@ -679,6 +679,26 @@ def _checker_quality_issues(sva: str, sva_spec: Dict[str, Any]) -> List[Dict[str
     ):
         assertion_bodies.setdefault(checker.lower(), body)
 
+    cover_bodies: Dict[str, str] = {}
+    for cover, prop_name in re.findall(
+        r"\b(c_req_\d+)\s*:\s*cover\s+property\s*\(\s*(\w+)\s*\)\s*;",
+        sva,
+        re.I,
+    ):
+        cover_bodies[cover.lower()] = named_properties.get(prop_name.lower(), "")
+    for cover, body in re.findall(
+        r"\b(c_req_\d+)\s*:\s*cover\s+property\s*\((.*?)\)\s*;",
+        sva,
+        re.I | re.S,
+    ):
+        cover_bodies.setdefault(cover.lower(), body)
+
+    def constant_true(expression: str) -> bool:
+        cleaned = re.sub(r"@\s*\([^)]*\)", " ", expression, flags=re.I)
+        cleaned = re.sub(r"\bdisable\s+iff\s*\([^)]*\)", " ", cleaned, flags=re.I)
+        cleaned = re.sub(r"[()\s]", "", cleaned).lower()
+        return cleaned in {"1", "1'b1", "1'd1", "true"}
+
     issues: List[Dict[str, str]] = []
     for obligation in sva_spec.get("behavioral_obligations") or []:
         if not isinstance(obligation, dict):
@@ -688,6 +708,37 @@ def _checker_quality_issues(sva: str, sva_spec: Dict[str, Any]) -> List[Dict[str
         body = assertion_bodies.get(checker, "")
         if not body:
             continue
+        cover_id = checker.replace("a_", "c_", 1)
+        cover_body = cover_bodies.get(cover_id, "")
+        if constant_true(body):
+            issues.append({
+                "requirement_id": str(obligation.get("requirement_id") or ""),
+                "checker_id": str(obligation.get("checker_id") or ""),
+                "issue": "assertion is constant true and cannot detect an RTL violation",
+            })
+        if re.search(r"\|[-=]>\s*(?:\(?\s*)?(?:1'b1|1'd1|true)(?:\s*\)?)?(?:\s|$)", body, re.I):
+            issues.append({
+                "requirement_id": str(obligation.get("requirement_id") or ""),
+                "checker_id": str(obligation.get("checker_id") or ""),
+                "issue": "assertion consequent is constant true and cannot check the required response",
+            })
+        self_comparison = re.search(
+            r"\b([A-Za-z_][A-Za-z0-9_$]*)\b\s*(?:===|==|<=|>=)\s*\1\b",
+            body,
+            re.I,
+        )
+        if self_comparison:
+            issues.append({
+                "requirement_id": str(obligation.get("requirement_id") or ""),
+                "checker_id": str(obligation.get("checker_id") or ""),
+                "issue": f"assertion contains tautological self-comparison '{self_comparison.group(0)}'",
+            })
+        if cover_body and constant_true(cover_body):
+            issues.append({
+                "requirement_id": str(obligation.get("requirement_id") or ""),
+                "checker_id": str(obligation.get("checker_id") or ""),
+                "issue": "non-vacuity cover is constant and does not measure requirement activation",
+            })
         req_lower = requirement.lower()
         sequential_transition = bool(re.search(
             r"\b(?:next\s+(?:rising\s+)?(?:edge|cycle)|holds?|advances?|increments?|wraps?|"

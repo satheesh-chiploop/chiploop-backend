@@ -98,19 +98,19 @@ def test_sva_target_preserves_flat_top_module_ports():
 
 def test_sva_completeness_retry_closes_model_omissions(tmp_path, monkeypatch):
     sva_spec = {"behavioral_obligations": [
-        {"requirement_id": "REQ-001", "checker_id": "a_req_001", "requirement": "First"},
-        {"requirement_id": "REQ-002", "checker_id": "a_req_002", "requirement": "Second"},
+        {"requirement_id": "REQ-001", "checker_id": "a_req_001", "requirement": "When enable is high, done asserts."},
+        {"requirement_id": "REQ-002", "checker_id": "a_req_002", "requirement": "When clear is high, done deasserts."},
     ]}
-    incomplete = """module checks(input logic clk);
-a_req_001: assert property (@(posedge clk) 1'b1);
-c_req_001: cover property (@(posedge clk) 1'b1);
+    incomplete = """module checks(input logic clk, input logic enable, input logic clear, input logic done);
+a_req_001: assert property (@(posedge clk) enable |-> done);
+c_req_001: cover property (@(posedge clk) enable);
 endmodule
 """
-    complete = """module checks(input logic clk);
-a_req_001: assert property (@(posedge clk) 1'b1);
-c_req_001: cover property (@(posedge clk) 1'b1);
-a_req_002: assert property (@(posedge clk) 1'b1);
-c_req_002: cover property (@(posedge clk) 1'b1);
+    complete = """module checks(input logic clk, input logic enable, input logic clear, input logic done);
+a_req_001: assert property (@(posedge clk) enable |-> done);
+c_req_001: cover property (@(posedge clk) enable);
+a_req_002: assert property (@(posedge clk) clear |-> !done);
+c_req_002: cover property (@(posedge clk) clear);
 endmodule
 """
     calls = []
@@ -150,6 +150,41 @@ c_req_010: cover property (@(posedge clk) enable);
     good = bad.replace("|->", "|=>")
     issues = sva_agent._checker_quality_issues(bad, spec)
     assert issues[0]["requirement_id"] == "REQ-010"
+    assert sva_agent._checker_quality_issues(good, spec) == []
+
+
+def test_sva_quality_rejects_tautological_assertions_and_constant_covers():
+    spec = {"behavioral_obligations": [{
+        "requirement_id": "REQ-011", "checker_id": "a_req_011",
+        "requirement": "When enable is high, done asserts on the next cycle.",
+    }]}
+    cases = {
+        "constant assertion": """
+a_req_011: assert property (@(posedge clk) 1'b1);
+c_req_011: cover property (@(posedge clk) enable);
+""",
+        "constant consequent": """
+a_req_011: assert property (@(posedge clk) enable |=> 1'b1);
+c_req_011: cover property (@(posedge clk) enable);
+""",
+        "self comparison": """
+a_req_011: assert property (@(posedge clk) enable |=> done == done);
+c_req_011: cover property (@(posedge clk) enable);
+""",
+        "constant cover": """
+a_req_011: assert property (@(posedge clk) enable |=> done);
+c_req_011: cover property (@(posedge clk) 1'b1);
+""",
+    }
+
+    for label, source in cases.items():
+        issues = sva_agent._checker_quality_issues(source, spec)
+        assert issues, label
+
+    good = """
+a_req_011: assert property (@(posedge clk) enable |=> done);
+c_req_011: cover property (@(posedge clk) enable);
+"""
     assert sva_agent._checker_quality_issues(good, spec) == []
 
 

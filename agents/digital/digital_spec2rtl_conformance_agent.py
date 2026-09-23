@@ -620,6 +620,16 @@ def _match_score(
         req_lower,
     ):
         evidence.append("complete_register_contract_traceability")
+    if structural_context.get("register_contract_complete") is True and re.search(
+        r"memory[- ]mapped.*(?:write|read).*transactions?|(?:write|read).*transactions?.*memory[- ]mapped",
+        req_lower,
+    ):
+        evidence.append("register_decode_and_access_paths")
+    if structural_context.get("register_contract_complete") is True and re.search(
+        r"return.*addressed register values?|addressed register values?.*return",
+        req_lower,
+    ):
+        evidence.append("register_decode_and_access_paths")
     if re.search(r"\beach register.*uniquely.*address decode", req_lower):
         case_blocks = re.findall(
             r"\bcase\s*\(\s*\w*(?:addr|address)\w*\s*\)(.*?)\bendcase\b",
@@ -1731,6 +1741,17 @@ def _feature_contract_evidence(
     the responsibility of the independent Verification workflow.
     """
     top_spec = _top_spec_module(spec_obj, top_module) or {}
+    root_contracts = (spec_obj or {}).get("feature_contracts") if isinstance(spec_obj, dict) else None
+    top_contracts = top_spec.get("feature_contracts") if isinstance(top_spec, dict) else None
+    # The compiler can derive candidate scenarios from prose for downstream
+    # verification generation. Static conformance must not reinterpret those
+    # candidates as explicitly required feature contracts or block RTL on
+    # empty stimulus/expected bindings.
+    if not (
+        isinstance(root_contracts, list) and root_contracts
+        or isinstance(top_contracts, list) and top_contracts
+    ):
+        return {"status": "not_applicable", "checked": 0, "passed": 0, "failed": 0, "features": []}
     spec_ports = top_spec.get("ports") if isinstance(top_spec.get("ports"), list) else []
     contracts = compile_feature_contracts(spec_obj or {}, spec_ports)
     rtl_top = next((module for module in modules if module.get("name") == top_module), None)
@@ -1908,9 +1929,12 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
                 scoped_names = set(re.findall(r"\b[A-Za-z_][A-Za-z0-9_$]*\b", scoped_rtl))
                 status, evidence = _match_score(requirement, scoped_rtl, scoped_names, structural_context)
             raw_static_status = status
-            if verification_method != "static_structural" and status not in {"matched", "pass"}:
+            if verification_method != "static_structural":
+                # Static RTL evidence is useful diagnostic context, but it is
+                # never proof of a temporal/behavioral obligation. Route every
+                # such requirement to its executable verification mechanism,
+                # even when lexical/structural precheck evidence looks strong.
                 status = "pending_verification"
-                counts["checked"] += 1
                 counts["pending_verification"] += 1
             else:
                 _add_check(counts, status)
@@ -1943,6 +1967,8 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
         "agent": AGENT_NAME,
         "status": status,
         "summary": counts,
+        "total_requirements": len(requirement_results),
+        "total_evaluations": counts["checked"] + counts["pending_verification"],
         "blocking_summary": blocking_counts,
         "setup_issues": setup_issues,
         "top_module": {"expected": top_module or None, "modules_found": module_names, "status": top_status},

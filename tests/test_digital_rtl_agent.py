@@ -838,6 +838,47 @@ endmodule
     assert not any("memory_implementation" in issue or "memory array" in issue for issue in good_issues)
 
 
+def test_validate_requires_one_inferred_array_per_declared_memory_bank():
+    memory = {
+        "name": "payload_store", "rtl_output_file": "payload_store.v",
+        "ports": [
+            {"name": "clk", "direction": "input", "width": 1},
+            {"name": "write_en", "direction": "input", "width": 1},
+            {"name": "addr", "direction": "input", "width": 6},
+            {"name": "write_data", "direction": "input", "width": 32},
+            {"name": "read_data", "direction": "output", "width": 32},
+        ],
+        "memory_implementation": {"kind": "fpga_bram", "depth": 64, "data_width": 32, "addr_width": 6},
+        "memory_banks": [
+            {"name": "history", "kind": "fpga_bram", "depth": 64, "data_width": 32, "addr_width": 6},
+            {"name": "features", "kind": "fpga_bram", "depth": 64, "data_width": 32, "addr_width": 6},
+        ],
+    }
+    spec = {
+        "hierarchy": {
+            "top_module": {"name": "top", "rtl_output_file": "top.v", "ports": []},
+            "modules": [memory],
+        },
+        "top_level_connections": [], "inter_module_signals": [], "signal_ownership": [],
+    }
+    one_array = """
+module payload_store(input clk, input write_en, input [5:0] addr,
+ input [31:0] write_data, output reg [31:0] read_data);
+ reg [31:0] history [0:63];
+ always @(posedge clk) begin
+   if (write_en) history[addr] <= write_data;
+   read_data <= history[addr];
+ end
+endmodule
+"""
+
+    issues, _, _ = agent._validate_spec_vs_rtl(
+        spec, "hierarchical", {"top.v": "module top(); endmodule", "payload_store.v": one_array},
+    )
+
+    assert any("declares 2 independent fpga_bram memory banks" in issue for issue in issues)
+
+
 def test_inferred_memory_validation_respects_read_only_and_write_only_interfaces():
     def validate(module, code):
         spec = {

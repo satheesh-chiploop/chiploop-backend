@@ -2568,10 +2568,20 @@ def _validate_spec_vs_rtl(spec_json: dict, mode: str, verilog_map: Dict[str, str
                         memory_tainted.add(lhs)
                         changed = True
             observable_read_outputs = [name for name in read_output_names if name in memory_tainted]
+            declared_banks = [
+                bank for bank in (mod.get("memory_banks") or [])
+                if isinstance(bank, dict) and _is_fpga_bram_kind(bank.get("kind"))
+            ]
             if not arrays:
                 issues.append(
                     f"Module '{mod_name}' declares fpga_bram memory_implementation but has no synthesizable "
                     "unpacked memory array; implement inferred storage instead of scalar registers."
+                )
+            elif declared_banks and len(set(arrays)) < len(declared_banks):
+                issues.append(
+                    f"Module '{mod_name}' declares {len(declared_banks)} independent fpga_bram memory banks "
+                    f"but RTL contains only {len(set(arrays))} unpacked memory array(s); implement each declared "
+                    "bank without merging application-distinct storage."
                 )
             elif expects_write and not write_arrays:
                 issues.append(
