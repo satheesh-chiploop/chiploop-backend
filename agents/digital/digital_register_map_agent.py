@@ -151,6 +151,50 @@ def _register_layout_violations(document: dict) -> list[str]:
     return violations
 
 
+def _enforce_authoritative_register_contract(document: dict, spec_obj: dict) -> tuple[dict, bool]:
+    """Replace model-authored layout with the normalized spec contract.
+
+    Architecture prose and the original user request can contain superseded or
+    contradictory register suggestions.  Once Digital Spec has normalized a
+    concrete register_contract, downstream agents must not reintroduce fields
+    from those stale sources.
+    """
+    contract = spec_obj.get("register_contract") if isinstance(spec_obj, dict) else None
+    registers = contract.get("registers") if isinstance(contract, dict) else None
+    if not isinstance(registers, list) or not registers:
+        return document, False
+    enforced = deepcopy(document) if isinstance(document, dict) else {}
+    generated = enforced.get("regmap") if isinstance(enforced.get("regmap"), dict) else {}
+    widths = [_parse_int(register.get("width"), 0) for register in registers if isinstance(register, dict)]
+    data_width = max([width for width in widths if width in {8, 16, 32, 64}] or [_parse_int(generated.get("data_width"), 32)])
+    normalized_registers = []
+    for register in registers:
+        if not isinstance(register, dict):
+            continue
+        addr = register.get("addr", register.get("offset", 0))
+        normalized = deepcopy(register)
+        normalized.pop("addr", None)
+        normalized["offset"] = hex(_parse_int(addr, 0))
+        normalized["fields"] = [deepcopy(field) for field in register.get("fields") or [] if isinstance(field, dict)]
+        normalized_registers.append(normalized)
+    authoritative = {
+        **generated,
+        "bus": str(contract.get("bus_type") or generated.get("bus") or "custom"),
+        "base_address": generated.get("base_address", "0x00"),
+        "addr_width": _parse_int(generated.get("addr_width"), 8),
+        "data_width": data_width,
+        "registers": normalized_registers,
+    }
+    changed = authoritative.get("registers") != generated.get("registers")
+    enforced["derived_from_spec_only"] = True
+    enforced["register_map_required"] = True
+    enforced["regmap"] = authoritative
+    notes = enforced.get("consistency_notes") if isinstance(enforced.get("consistency_notes"), list) else []
+    note = "Register names, addresses, fields, access, and bit ranges are enforced from DIGITAL_SPEC_JSON.register_contract."
+    enforced["consistency_notes"] = [*notes, *([] if note in notes else [note])]
+    return enforced, changed
+
+
 def _repair_overlapping_fields_deterministically(document: dict) -> tuple[dict, bool]:
     """Relocate only overlapping fields into free bits without changing semantics.
 
@@ -407,6 +451,10 @@ OUTPUT SCHEMA
             "parse_error": str(e),
             "raw": llm_output.strip()
         }
+
+    regmap, contract_enforced = _enforce_authoritative_register_contract(regmap, spec_obj)
+    if contract_enforced:
+        state["digital_regmap_contract_enforced"] = True
 
     violations = _register_layout_violations(regmap)
     if violations:

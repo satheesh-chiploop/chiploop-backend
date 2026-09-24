@@ -103,6 +103,43 @@ def _simulation_test_timeout_sec(state: Dict[str, Any]) -> int:
     return max(30, min(value, 1800))
 
 
+def _compile_or_elaboration_failed(
+    returncode: Any, stdout_lines: list[str], stderr_lines: list[str], assertion_failures: list[Dict[str, Any]]
+) -> bool:
+    """Identify deterministic pre-simulation failures that every seed will repeat."""
+    if assertion_failures:
+        return False
+    try:
+        if int(returncode) == 0:
+            return False
+    except (TypeError, ValueError):
+        return False
+    text = "\n".join([*stdout_lines, *stderr_lines])
+    simulation_started = bool(re.search(r"\bRunning tests\b|\bcocotb\.regression\b", text, re.I))
+    compile_error = bool(re.search(
+        r"%Error:|syntax error|unsupported in C|Exiting due to \d+ error|"
+        r"Cannot find file containing module|undefined reference|No rule to make target",
+        text,
+        re.I,
+    ))
+    return compile_error and not simulation_started
+
+
+def _root_failure_class(results: list[Dict[str, Any]]) -> str:
+    if not results:
+        return "no_tests_executed"
+    failed = [result for result in results if not result.get("pass")]
+    if not failed:
+        return "none"
+    if any(result.get("compile_or_elaboration_failed") for result in failed):
+        return "compile_or_elaboration"
+    if any(result.get("timed_out") for result in failed):
+        return "timeout"
+    if any(result.get("assertion_failures") for result in failed):
+        return "behavioral_assertion"
+    return "simulation_test"
+
+
 def _nonvacuity_results(tb_root: str, reports_dir: str, sva_spec: Dict[str, Any]) -> list[Dict[str, Any]]:
     """Resolve companion cover execution from Verilator coverage artifacts."""
     obligations = [item for item in sva_spec.get("behavioral_obligations") or [] if isinstance(item, dict)]
@@ -608,6 +645,9 @@ def run_agent(state: dict) -> dict:
                     # long simulator/coverage epilogue.
                     assertion_failures = _assertion_failures([*stdout_lines, *stderr_lines], sva_spec)
                     timed_out = p.status == "exception" and "timed out" in str(p.error or "").lower()
+                    compile_failed = _compile_or_elaboration_failed(
+                        p.returncode, stdout_lines, stderr_lines, assertion_failures
+                    )
                     results.append({
                         "testcase": t,
                         "seed": s,
@@ -622,6 +662,7 @@ def run_agent(state: dict) -> dict:
                         "tool_execution": p.to_dict(),
                         "timeout_sec": simulation_timeout_sec,
                         "timed_out": timed_out,
+                        "compile_or_elaboration_failed": compile_failed,
                         "assertion_failures": assertion_failures,
                     })
                     run_coverage = _safe_read_json(coverage_json_path)
@@ -632,6 +673,14 @@ def run_agent(state: dict) -> dict:
                         _log(
                             log_path,
                             f"Aborting remaining regression after simulator timeout testcase={t} seed={s}",
+                            level="error",
+                        )
+                        break
+                    if compile_failed:
+                        abort_regression = True
+                        _log(
+                            log_path,
+                            f"Aborting remaining regression after deterministic compile/elaboration failure testcase={t} seed={s}",
                             level="error",
                         )
                         break
@@ -703,6 +752,7 @@ def run_agent(state: dict) -> dict:
             for result in results
             for failure in result.get("assertion_failures") or []
         ]
+        root_failure_class = _root_failure_class(results)
         summary = {
             "type": "simulation_execution_summary",
             "total": len(results),
@@ -722,6 +772,7 @@ def run_agent(state: dict) -> dict:
             "results": results,
             "assertion_failures": assertion_failures,
             "assertion_failure_count": len(assertion_failures),
+            "root_failure_class": root_failure_class,
             "behavioral_repair_required": bool(assertion_failures),
             "behavioral_repair_history": state.get("behavioral_repair_history")
             if isinstance(state.get("behavioral_repair_history"), list) else [],
@@ -740,6 +791,7 @@ def run_agent(state: dict) -> dict:
             f"- Total runs: {summary['total']}",
             f"- Pass count: {summary['pass']}",
             f"- Fail count: {summary['fail']}",
+            f"- Root failure class: {root_failure_class}",
             "",
             "## Results",
         ]
@@ -770,6 +822,7 @@ def run_agent(state: dict) -> dict:
             "seeds": seeds,
             "pass": summary["pass"],
             "fail": summary["fail"],
+            "root_failure_class": root_failure_class,
             "coverage_json_present": summary["coverage_json_present"],
             "coverage_md_present": summary["coverage_md_present"],
             "code_coverage_json_present": summary["code_coverage_json_present"],
@@ -807,6 +860,7 @@ def run_agent(state: dict) -> dict:
             "total": summary["total"],
             "pass": summary["pass"],
             "fail": summary["fail"],
+            "root_failure_class": root_failure_class,
             "simulator": summary["toolchain"].get("simulator"),
             "assertion_failure_count": len(assertion_failures),
             "assertion_nonvacuity_complete": summary["assertion_nonvacuity_complete"],

@@ -36,7 +36,17 @@ def _classify_failure(failure: Dict[str, Any], options: Dict[str, Any]) -> Dict[
     confidence = "low"
     fix_domain = "manual_debug"
     analysis = "Logs do not contain enough expected/actual or assertion context to isolate a fix."
-    if any(token in text for token in ("modulenotfound", "importerror", "no module named", "make:")):
+    if triage_class == "verification_collateral_compile_or_elaboration_failure":
+        root_cause = "verification_collateral_compile_or_elaboration_failure"
+        confidence = "high"
+        fix_domain = "verification_collateral_or_toolchain"
+        analysis = "Compilation/elaboration failed before RTL behavior was exercised; RTL repair is not justified."
+    elif triage_class == "simulation_timeout":
+        root_cause = "simulation_timeout"
+        confidence = "high"
+        fix_domain = "testbench_clock_reset_or_rtl_deadlock"
+        analysis = "The bounded simulation timed out; isolate termination, clock/reset, and deadlock behavior before repair."
+    elif any(token in text for token in ("modulenotfound", "importerror", "no module named", "make:")):
         root_cause = "testbench_or_environment_issue"
         confidence = "medium"
         fix_domain = "testbench_or_environment"

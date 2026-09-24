@@ -214,6 +214,8 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     if not isinstance(assertion_failures, list):
         assertion_failures = []
     quality_gate = state.get("verification_quality_gate") if isinstance(state.get("verification_quality_gate"), dict) else {}
+    root_failure_class = str(quality_gate.get("root_failure_class") or "").strip()
+    infrastructure_failure = root_failure_class in {"compile_or_elaboration", "no_tests_executed"}
     gap_analysis = state.get("coverage_gap_analysis") if isinstance(state.get("coverage_gap_analysis"), dict) else {}
     closed = (
         failures_after == 0
@@ -239,9 +241,10 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
         item for item in history
         if isinstance(item, dict) and item.get("fingerprint") == active_fingerprint
     ])
-    repair_retry = bool(active_checker_ids) and attempted_repairs < max_repair_attempts
+    repair_retry = bool(active_checker_ids) and not infrastructure_failure and attempted_repairs < max_repair_attempts
     stop_reason = (
         "closure_achieved" if closed
+        else "verification_infrastructure_failure" if infrastructure_failure
         else "behavioral_repair_retry" if repair_retry
         else "coverage_improved" if positive_delta
         else "no_measurable_improvement"
@@ -266,6 +269,7 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
         "behavioral_repair_attempts": attempted_repairs,
         "behavioral_repair_max_attempts": max_repair_attempts,
         "verification_quality_gate_passed": quality_gate.get("passed") is True,
+        "root_failure_class": root_failure_class or "unknown",
         "stop_reason": stop_reason,
     }
     prior_chart = state.get("closure_chart") if isinstance(state.get("closure_chart"), dict) else {}

@@ -369,8 +369,55 @@ def _generic_behavior_evidence(requirement: str, rtl_text: str) -> List[str]:
             evidence.append("64bit_status_telemetry_output")
     if re.search(r"firmware-visible.*(?:csr|mmio)|(?:csr|mmio).*control plane", req):
         required_roles = ("addr", "wdata", "rdata", "valid", "write", "ready")
-        if all(re.search(rf"\b\w*(?:csr|mmio)\w*{role}\w*\b|\b\w*{role}\w*(?:csr|mmio)\w*\b", rtl, re.I) for role in required_roles):
+        named_mmio = all(re.search(rf"\b\w*(?:csr|mmio)\w*{role}\w*\b|\b\w*{role}\w*(?:csr|mmio)\w*\b", rtl, re.I) for role in required_roles)
+        declared_ports = {
+            name.lower() for name in re.findall(
+                r"\b(?:input|output|inout)\b(?:\s+(?:reg|wire|logic))?(?:\s*\[[^\]]+\])?\s+([A-Za-z_]\w*)", rtl, re.I
+            )
+        }
+        role_names = {role: {name for name in declared_ports if role in name} for role in required_roles}
+        prefixes = [name[:name.rfind("addr")].rstrip("_") for name in role_names["addr"]]
+        coherent_control_bus = any(
+            prefix and all(any(name.startswith(prefix + "_") for name in role_names[role]) for role in required_roles)
+            for prefix in prefixes
+        )
+        if named_mmio or coherent_control_bus:
             evidence.append("firmware_visible_csr_mmio_interface")
+    if re.search(r"decode\s+64[- ]bit\s+mmio\s+writes?.*semantic control outputs", req):
+        output_names = set(re.findall(
+            r"\boutput\b(?:\s+(?:reg|wire|logic))?(?:\s*\[[^\]]+\])?\s+([A-Za-z_]\w*)", rtl, re.I
+        ))
+        wdata_names = re.findall(
+            r"\binput\b(?:\s+(?:reg|wire|logic))?\s*\[\s*63\s*:\s*0\s*\]\s+([A-Za-z_]\w*(?:wdata|write_data)\w*)", rtl, re.I
+        )
+        has_decode = bool(re.search(r"\bcase\s*\(\s*\w*(?:addr|address)\w*\s*\)", rtl, re.I))
+        driven_outputs = {
+            target for target in output_names
+            if any(re.search(rf"\b{re.escape(target)}\s*<=\s*{re.escape(wdata)}\s*\[", rtl, re.I) for wdata in wdata_names)
+        }
+        has_write = bool(re.search(r"\bif\s*\([^)]*\b\w*(?:write|we)\w*\b[^)]*\)", rtl, re.I))
+        if wdata_names and has_decode and has_write and len(driven_outputs) >= 2:
+            evidence.append("decoded_64bit_writes_to_semantic_outputs")
+    if re.search(r"return\s+64[- ]bit\s+mmio\s+readback", req):
+        rdata_names = re.findall(
+            r"\boutput\b(?:\s+(?:reg|wire|logic))?\s*\[\s*63\s*:\s*0\s*\]\s+([A-Za-z_]\w*(?:rdata|read_data)\w*)", rtl, re.I
+        )
+        has_decode = bool(re.search(r"\bcase\s*\(\s*\w*(?:addr|address)\w*\s*\)", rtl, re.I))
+        if rdata_names and has_decode and any(re.search(rf"\b{re.escape(name)}\s*<=", rtl, re.I) for name in rdata_names):
+            evidence.append("64bit_addressed_configuration_status_readback")
+    if re.search(r"ro\s+live/status fields?.*semantic inputs.*not.*writable storage", req):
+        live_inputs = set(re.findall(
+            r"\binput\b(?:\s+(?:reg|wire|logic))?(?:\s*\[[^\]]+\])?\s+([A-Za-z_]\w*(?:status|fault|live)[A-Za-z0-9_$]*)", rtl, re.I
+        ))
+        readback_uses_input = any(
+            re.search(rf"\b\w*(?:rdata|read_data)\w*\s*<=\s*[^;]*\b{re.escape(name)}\b", rtl, re.I | re.S)
+            for name in live_inputs
+        )
+        internally_written = any(
+            re.search(rf"\b(?:assign\s+)?{re.escape(name)}\s*(?:<=|=)", rtl, re.I) for name in live_inputs
+        )
+        if live_inputs and readback_uses_input and not internally_written:
+            evidence.append("live_status_inputs_are_read_only_readback_sources")
     if re.search(r"packet format.*packet type|packet type.*format", req):
         format_ids = set(re.findall(r"\b\w*format(?:_version)?\w*\b", rtl, re.I))
         type_ids = set(re.findall(r"\b\w*(?:packet|pkt)_type\w*\b", rtl, re.I))
@@ -794,6 +841,8 @@ def _match_score(
         ))
     )
     if no_hierarchy_required and len(re.findall(r"\bmodule\b", rtl_without_comments, re.I)) == 1 and not instance_types:
+        evidence.append("no_internal_hierarchy")
+    if no_hierarchy_required and structural_context.get("design_module_count") == 1:
         evidence.append("no_internal_hierarchy")
     no_memory_required = bool(
         re.search(r"\bno\s+(?:internal\s+)?memory\s+macros?\b", req_lower)
@@ -1915,15 +1964,37 @@ def _add_check(counts: Dict[str, int], status: str) -> None:
     counts[bucket] += 1
 
 
-def _clock_reset_evidence(spec: str, modules: List[Dict[str, Any]]) -> Dict[str, Any]:
+def _clock_reset_evidence(
+    spec: str, modules: List[Dict[str, Any]], spec_obj: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
     ports = [p["name"] for m in modules for p in m.get("ports", [])]
     clock_ports = [p for p in ports if re.search(r"(^|_)(clk|clock)($|_)", p, re.I)]
     reset_ports = [p for p in ports if re.search(r"(^|_)(rst|reset|reset_n|rst_n)($|_)", p, re.I)]
     spec_mentions_reset = bool(re.search(r"\b(reset|reset_n|rst_n|rst)\b", spec or "", re.I))
+    reset_style_violations: List[str] = []
+    constraints = (spec_obj or {}).get("operating_constraints") if isinstance(spec_obj, dict) else {}
+    reset_contracts = constraints.get("reset_signals") if isinstance(constraints, dict) else []
+    rtl = "\n".join(str(module.get("rtl_text") or "") for module in modules)
+    for reset in reset_contracts or []:
+        if not isinstance(reset, dict):
+            continue
+        name = str(reset.get("name") or "").strip()
+        if not name or reset.get("async") is not False:
+            continue
+        if re.search(
+            rf"\balways(?:_ff)?\s*@\s*\([^)]*\bor\s+(?:pos|neg)edge\s+{re.escape(name)}\b",
+            rtl,
+            re.I,
+        ):
+            reset_style_violations.append(
+                f"reset '{name}' is declared synchronous but appears in an asynchronous sensitivity list"
+            )
+    base_pass = bool(clock_ports) and bool(reset_ports or not spec_mentions_reset)
     return {
         "clock_ports": sorted(dict.fromkeys(clock_ports)),
         "reset_ports": sorted(dict.fromkeys(reset_ports)),
-        "status": "pass" if clock_ports and (reset_ports or not spec_mentions_reset) else "issues",
+        "reset_style_violations": reset_style_violations,
+        "status": "pass" if base_pass and not reset_style_violations else "issues",
     }
 
 
@@ -2000,6 +2071,7 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
             )
             for module in modules
         ),
+        "design_module_count": len(modules),
     }
 
     requirements = _structured_requirements(spec_obj, spec)
@@ -2057,7 +2129,7 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
                 "evidence_tokens": evidence,
             })
 
-    clock_reset_check = _clock_reset_evidence(spec, modules)
+    clock_reset_check = _clock_reset_evidence(spec, modules, spec_obj)
     feature_contract_check = _feature_contract_evidence(spec_obj, modules, top_module)
     _add_check(counts, top_status)
     _add_check(counts, interface_status)

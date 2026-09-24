@@ -7,9 +7,35 @@ import pytest
 
 from agents.digital import digital_register_map_agent
 from agents.digital.digital_register_map_agent import (
+    _enforce_authoritative_register_contract,
     _register_layout_violations,
     _repair_overlapping_fields_deterministically,
 )
+
+
+def test_authoritative_spec_contract_removes_model_invented_register_fields():
+    generated = {
+        "regmap": {
+            "bus": "custom", "data_width": 64, "addr_width": 8,
+            "registers": [{
+                "name": "CTRL", "offset": "0x0", "fields": [
+                    {"name": "ENABLE", "lsb": 0, "msb": 0, "access": "RW"},
+                    {"name": "FALLBACK_MODE", "lsb": 4, "msb": 5, "access": "RW"},
+                ],
+            }],
+        },
+    }
+    spec = {"register_contract": {"bus_type": "csr", "registers": [{
+        "name": "CTRL", "addr": 0, "width": 64, "access": "RW", "fields": [
+            {"name": "enable", "lsb": 0, "msb": 0, "access": "RW"},
+        ],
+    }]}}
+    enforced, changed = _enforce_authoritative_register_contract(generated, spec)
+    assert changed is True
+    assert enforced["regmap"]["registers"][0]["fields"] == [
+        {"name": "enable", "lsb": 0, "msb": 0, "access": "RW"}
+    ]
+    assert enforced["regmap"]["registers"][0]["offset"] == "0x0"
 
 
 def test_register_layout_rejects_fields_beyond_declared_bus_width():

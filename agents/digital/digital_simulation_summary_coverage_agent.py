@@ -92,10 +92,10 @@ def _scan_assertion_failures(reports_dir: str) -> int:
     if not os.path.isdir(run_logs_dir):
         return 0
     patterns = (
+        "assertion_failure",
         "assertion failed",
         "assert failed",
         "sva error",
-        "%error",
     )
     for root, _, files in os.walk(run_logs_dir):
         for name in files:
@@ -227,9 +227,24 @@ def run_agent(state: dict) -> dict:
             code_coverage_status = str(code_cov.get("status") or "ok")
 
         assertion_count = _count_sva_assertions(state, workflow_dir)
-        assertion_failures = _scan_assertion_failures(reports_dir)
+        structured_assertion_failures = sim.get("assertion_failure_count")
+        assertion_failures = (
+            int(structured_assertion_failures)
+            if isinstance(structured_assertion_failures, int)
+            else _scan_assertion_failures(reports_dir)
+        )
+        root_failure_class = str(sim.get("root_failure_class") or "")
+        if root_failure_class == "compile_or_elaboration":
+            if coverage_status == "missing":
+                coverage_status = "not_generated_due_to_compile_or_elaboration_failure"
+            if code_coverage_status in {"missing", "missing_data"}:
+                code_coverage_status = "not_generated_due_to_compile_or_elaboration_failure"
         assertion_pass_pct = _pct(max(assertion_count - assertion_failures, 0), assertion_count)
-        assertion_status = "missing" if assertion_count <= 0 else ("failed" if assertion_failures else "ok")
+        if root_failure_class == "compile_or_elaboration":
+            assertion_status = "not_run_compile_or_elaboration_failure"
+            assertion_pass_pct = None
+        else:
+            assertion_status = "missing" if assertion_count <= 0 else ("failed" if assertion_failures else "ok")
 
         formal = ((state.get("vv") or {}).get("formal") or {}) if isinstance(state.get("vv"), dict) else {}
         if not formal:
@@ -269,6 +284,7 @@ def run_agent(state: dict) -> dict:
                 "total": sim.get("total"),
                 "pass": sim.get("pass"),
                 "fail": sim.get("fail"),
+                "root_failure_class": root_failure_class or None,
             },
             "coverage": {
                 "status": coverage_status,
@@ -339,6 +355,7 @@ def run_agent(state: dict) -> dict:
             f"- Total simulation runs: {summary['simulation']['total']}",
             f"- Simulation pass count: {summary['simulation']['pass']}",
             f"- Simulation fail count: {summary['simulation']['fail']}",
+            f"- Root failure class: {summary['simulation']['root_failure_class']}",
             f"- Coverage status: {summary['coverage']['status']}",
             f"- Functional coverage %: {summary['coverage']['functional_coverage_pct']}",
             f"- Coverage bins hit: {summary['coverage']['bins_hit']}",

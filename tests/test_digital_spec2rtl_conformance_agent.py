@@ -882,6 +882,40 @@ def test_observable_registered_state_output_requires_a_real_driver():
     assert "observable_current_state_output_driven" in evidence
 
 
+def test_clock_reset_aggregate_enforces_declared_synchronous_reset_style():
+    spec = {"operating_constraints": {"reset_signals": [
+        {"name": "reset_n", "active_low": True, "async": False},
+    ]}}
+    asynchronous = [{
+        "ports": [{"name": "clk"}, {"name": "reset_n"}],
+        "rtl_text": "module top(input clk, reset_n); always @(posedge clk or negedge reset_n) q <= 0; endmodule",
+    }]
+    synchronous = [{
+        "ports": [{"name": "clk"}, {"name": "reset_n"}],
+        "rtl_text": "module top(input clk, reset_n); always @(posedge clk) if (!reset_n) q <= 0; endmodule",
+    }]
+
+    bad = agent._clock_reset_evidence("reset_n", asynchronous, spec)
+    good = agent._clock_reset_evidence("reset_n", synchronous, spec)
+
+    assert bad["status"] == "issues"
+    assert bad["reset_style_violations"]
+    assert good["status"] == "pass"
+
+
+def test_self_contained_requirement_uses_parsed_design_module_count():
+    requirement = "The module is self-contained and does not instantiate external memories or submodules."
+    status, evidence = agent._match_score(
+        requirement,
+        "module top(input clk); reg [7:0] state; endmodule",
+        set(),
+        {"design_module_count": 1},
+    )
+
+    assert status == "matched"
+    assert "no_internal_hierarchy" in evidence
+
+
 def test_register_and_transport_structural_obligations_use_validated_facts():
     ports = [
         {"name": "model_req_valid", "direction": "output"},
@@ -1261,3 +1295,35 @@ endcase
 '''
     report = agent._register_evidence("", rtl, {}, None, regmap)
     assert report["missing"] == ["CLEAR_STICKY_FAULTS"]
+def test_control_prefixed_mmio_is_recognized_by_structure_not_bus_name():
+    rtl = r"""
+module register_bank(
+  input clk, input ctrl_valid, input ctrl_write, input [7:0] ctrl_addr,
+  input [63:0] ctrl_wdata, output reg [63:0] ctrl_rdata,
+  output reg ctrl_ready, output reg cfg_enable, output reg [15:0] cfg_limit,
+  input status_busy, input [7:0] status_fault
+);
+always @(posedge clk) begin
+  ctrl_ready <= ctrl_valid;
+  if (ctrl_valid && ctrl_write) begin
+    case (ctrl_addr)
+      8'h00: begin cfg_enable <= ctrl_wdata[0]; cfg_limit <= ctrl_wdata[31:16]; end
+      default: begin end
+    endcase
+  end
+  case (ctrl_addr)
+    8'h00: ctrl_rdata <= {47'b0, cfg_limit, cfg_enable};
+    8'h08: ctrl_rdata <= {55'b0, status_fault, status_busy};
+    default: ctrl_rdata <= 64'b0;
+  endcase
+end
+endmodule
+"""
+    expectations = {
+        "Expose a firmware-visible CSR/MMIO control and status interface.": "firmware_visible_csr_mmio_interface",
+        "Decode 64-bit MMIO writes into explicit semantic control outputs.": "decoded_64bit_writes_to_semantic_outputs",
+        "Return 64-bit MMIO readback words for status and configuration.": "64bit_addressed_configuration_status_readback",
+        "RO live/status fields are semantic inputs and shall not be modeled as writable storage in the MMIO block.": "live_status_inputs_are_read_only_readback_sources",
+    }
+    for requirement, expected in expectations.items():
+        assert expected in agent._generic_behavior_evidence(requirement, rtl)

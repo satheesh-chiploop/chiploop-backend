@@ -178,6 +178,22 @@ def test_verify_gate_blocks_explicit_simulation_failure(tmp_path):
     assert gate("verify", state, str(tmp_path / "verify")) == "verification failed (7 passed, 1 failed)"
 
 
+def test_verify_gate_reports_structured_root_failure_class(tmp_path):
+    gate = _load_gate()
+    state = {
+        "verification_quality_gate": {
+            "passed": False,
+            "total": 1,
+            "pass": 0,
+            "fail": 1,
+            "root_failure_class": "compile_or_elaboration",
+        }
+    }
+    assert gate("verify", state, str(tmp_path / "verify")) == (
+        "verification failed (0 passed, 1 failed, root_cause=compile_or_elaboration)"
+    )
+
+
 def test_fpga_explorer_gate_requires_selected_board(tmp_path):
     gate = _load_gate()
     passing = {

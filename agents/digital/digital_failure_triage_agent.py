@@ -22,9 +22,17 @@ def _read_json(path: Path) -> Dict[str, Any]:
         return {}
 
 
-def _classify(result: Dict[str, Any], stdout: List[str], stderr: List[str]) -> Dict[str, Any]:
+def _classify(
+    result: Dict[str, Any], stdout: List[str], stderr: List[str], root_failure_class: str = ""
+) -> Dict[str, Any]:
     text = "\n".join(stdout + stderr).lower()
-    if "assert" in text or "sva" in text:
+    if root_failure_class == "compile_or_elaboration":
+        kind = "verification_collateral_compile_or_elaboration_failure"
+        recommendation = "Repair generated assertions/testbench or tool invocation before evaluating RTL behavior."
+    elif root_failure_class == "timeout":
+        kind = "simulation_timeout"
+        recommendation = "Inspect the bounded run log for clock, reset, termination, or deadlock issues."
+    elif "assert" in text or "sva" in text:
         kind = "rtl_or_assertion_failure"
         recommendation = "Rerun this testcase/seed with waveform enabled and inspect the assertion firing cycle."
     elif "modulenotfound" in text or "importerror" in text or "make:" in text:
@@ -56,6 +64,7 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     current_sim = _read_json(Path(current_summary_path)) if isinstance(current_summary_path, str) else {}
     source_sim = state.get("source_simulation_execution_summary") if isinstance(state.get("source_simulation_execution_summary"), dict) else {}
     sim = current_sim if isinstance(current_sim.get("results"), list) else source_sim
+    root_failure_class = str(sim.get("root_failure_class") or "").strip()
     results = sim.get("results") if isinstance(sim.get("results"), list) else []
     failed = [r for r in results if isinstance(r, dict) and not r.get("pass")]
     log_dir = (
@@ -69,7 +78,7 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
         seed = str(result.get("seed") or "unknown")
         stdout = _read_tail(log_dir / f"{testcase}__seed_{seed}.stdout.log")
         stderr = _read_tail(log_dir / f"{testcase}__seed_{seed}.stderr.log")
-        classified = _classify(result, stdout, stderr)
+        classified = _classify(result, stdout, stderr, root_failure_class)
         triage.append({
             "testcase": testcase,
             "seed": seed,
@@ -94,6 +103,7 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
         "total_failures": len(failed),
         "failures": triage,
         "needs_debug_replay": bool(triage),
+        "root_failure_class": root_failure_class or "unknown",
     }
     txt = json.dumps(report, indent=2)
     md = "\n".join([

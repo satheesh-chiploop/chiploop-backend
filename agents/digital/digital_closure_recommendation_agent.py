@@ -18,6 +18,8 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     gaps = gap.get("gaps") if isinstance(gap.get("gaps"), list) else []
     functional_gaps = gap.get("functional_gaps") if isinstance(gap.get("functional_gaps"), list) else []
     failures = triage.get("failures") if isinstance(triage.get("failures"), list) else []
+    root_failure_class = str(triage.get("root_failure_class") or "").strip()
+    infrastructure_failure = root_failure_class in {"compile_or_elaboration", "no_tests_executed"}
     summary = state.get("closure_cumulative_summary_coverage") if isinstance(state.get("closure_cumulative_summary_coverage"), dict) else {}
     if not summary:
         summary = state.get("source_simulation_summary_coverage") if isinstance(state.get("source_simulation_summary_coverage"), dict) else {}
@@ -34,7 +36,14 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     missing_monitor_checker_plan = not monitor_checker_plan_text.strip()
 
     actions: List[Dict[str, Any]] = []
-    if failures:
+    if infrastructure_failure:
+        actions.append({
+            "id": "repair_verification_collateral_or_toolchain",
+            "priority": "critical",
+            "human_approval_required": False,
+            "description": "Repair generated assertions/testbench compilation or tool invocation before RTL behavioral closure.",
+        })
+    elif failures:
         actions.append({
             "id": "rerun_failed_seeds_with_waveform",
             "priority": "critical",
@@ -73,7 +82,7 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     verdict = (
         "closed"
         if not gaps and not failures and not missing_monitor_checker_plan
-        else ("debug_failures_first" if failures else "coverage_closure_needed")
+        else ("verification_infrastructure_failure" if infrastructure_failure else "debug_failures_first" if failures else "coverage_closure_needed")
     )
     plan = {
         "type": "verify_closure_plan",
@@ -83,6 +92,7 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
         "functional_gap_count": len(functional_gaps),
         "functional_gaps": functional_gaps[:20],
         "failure_count": len(failures),
+        "root_failure_class": root_failure_class or "unknown",
         "verify_evidence": {
             "plans": {
                 "verification_plan_present": bool(verification_plan_text.strip()),
@@ -109,10 +119,10 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
         },
         "recommended_actions": actions,
         "rerun_policy": {
-            "automatic_rtl_edit": bool(any(f.get("assertion_failures") for f in failures if isinstance(f, dict))),
+            "automatic_rtl_edit": bool(not infrastructure_failure and any(f.get("assertion_failures") for f in failures if isinstance(f, dict))),
             "automatic_rtl_edit_scope": "requirement_linked_assertion_failures_only",
             "automatic_coverage_model_edit": False,
-            "rerun_requires_human_approval": not bool(any(
+            "rerun_requires_human_approval": not infrastructure_failure and not bool(any(
                 f.get("assertion_failures") for f in failures if isinstance(f, dict)
             )),
         },

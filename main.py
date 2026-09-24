@@ -4283,7 +4283,9 @@ def _digital_app_gate_failure(app_name: str, state: Dict[str, Any], artifact_dir
             gate_passed = state_gate.get("passed") is True and failed == 0 and passed > 0
             if gate_passed:
                 return None
-            return f"verification failed ({passed} passed, {failed} failed)"
+            failure_class = str(state_gate.get("root_failure_class") or "").strip()
+            detail = f", root_cause={failure_class}" if failure_class and failure_class != "none" else ""
+            return f"verification failed ({passed} passed, {failed} failed{detail})"
 
         # Compatibility with verification agents deployed before the explicit
         # quality-gate contract. The report remains in shared execution state
@@ -4296,7 +4298,9 @@ def _digital_app_gate_failure(app_name: str, state: Dict[str, Any], artifact_dir
             passed = int(execution_report.get("pass") or 0)
             if failed == 0 and passed > 0:
                 return None
-            return f"verification failed ({passed} passed, {failed} failed)"
+            failure_class = str(execution_report.get("root_failure_class") or "").strip()
+            detail = f", root_cause={failure_class}" if failure_class and failure_class != "none" else ""
+            return f"verification failed ({passed} passed, {failed} failed{detail})"
 
         summary = load_named("simulation_execution_summary.json")
         if not summary:
@@ -4304,7 +4308,9 @@ def _digital_app_gate_failure(app_name: str, state: Dict[str, Any], artifact_dir
         failed = int(summary.get("fail") or 0)
         passed = int(summary.get("pass") or 0)
         if failed or passed <= 0:
-            return f"verification failed ({passed} passed, {failed} failed)"
+            failure_class = str(summary.get("root_failure_class") or "").strip()
+            detail = f", root_cause={failure_class}" if failure_class and failure_class != "none" else ""
+            return f"verification failed ({passed} passed, {failed} failed{detail})"
 
     if app_name in {"arch2synthesis", "arch2tapeout"}:
         synth = (state.get("digital") or {}).get("synth") if isinstance(state.get("digital"), dict) else {}

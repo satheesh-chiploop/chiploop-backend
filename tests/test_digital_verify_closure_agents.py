@@ -13,6 +13,7 @@ from agents.digital import digital_coverage_gap_analysis_agent as gap_agent
 from agents.digital import digital_failure_triage_agent as triage_agent
 from agents.digital import digital_failure_debug_agent as debug_agent
 from agents.digital import digital_simulation_execution_agent as execution_agent
+from agents.digital import digital_simulation_summary_coverage_agent as summary_agent
 from agents.digital import digital_sva_assertions_agent as sva_agent
 from agents.digital import digital_behavioral_rtl_repair_agent as behavioral_repair_agent
 from agents.digital import digital_closure_iteration_judge_agent as iteration_judge_agent
@@ -291,6 +292,56 @@ a_req_002: assert property(p_two) else $error("bad");
     assert "$error" not in normalized
 
 
+def test_sva_property_names_are_distinct_from_tracked_cover_labels():
+    source = """
+property c_req_001;
+  @(posedge clk) enable;
+endproperty
+c_req_001: cover property(c_req_001);
+property a_req_002;
+  @(posedge clk) enable |=> done;
+endproperty
+a_req_002: assert property(a_req_002);
+"""
+
+    normalized = sva_agent._rename_property_label_collisions(source)
+
+    assert "property p_c_req_001;" in normalized
+    assert "c_req_001: cover property(p_c_req_001);" in normalized
+    assert "property p_a_req_002;" in normalized
+    assert "a_req_002: assert property(p_a_req_002);" in normalized
+
+
+def test_simulation_compile_failure_is_seed_invariant_and_short_circuited():
+    stderr = [
+        "%Error: assertions.sv:10: Unsupported in C: Block has the same name as PROPERTY",
+        "%Error: Exiting due to 1 error(s)",
+    ]
+    assert execution_agent._compile_or_elaboration_failed(2, [], stderr, []) is True
+    assert execution_agent._compile_or_elaboration_failed(
+        2, ["Running tests"], stderr, []
+    ) is False
+    assert execution_agent._compile_or_elaboration_failed(
+        2, [], stderr, [{"checker_id": "a_req_001"}]
+    ) is False
+    assert execution_agent._root_failure_class([{
+        "pass": False, "compile_or_elaboration_failed": True,
+    }]) == "compile_or_elaboration"
+
+
+def test_summary_assertion_scan_does_not_count_generic_compiler_errors(tmp_path):
+    reports = tmp_path / "reports" / "run_logs"
+    reports.mkdir(parents=True)
+    (reports / "compile.stderr.log").write_text(
+        "%Error: assertions.sv: unsupported syntax\n", encoding="utf-8"
+    )
+    assert summary_agent._scan_assertion_failures(str(tmp_path / "reports")) == 0
+    (reports / "simulation.stdout.log").write_text(
+        "ASSERTION_FAILURE a_req_007\n", encoding="utf-8"
+    )
+    assert summary_agent._scan_assertion_failures(str(tmp_path / "reports")) == 1
+
+
 def test_simulation_timeout_is_bounded_and_configurable():
     assert execution_agent._simulation_test_timeout_sec({}) == 180
     assert execution_agent._simulation_test_timeout_sec({"simulation_test_timeout_sec": 5}) == 30
@@ -385,6 +436,53 @@ def test_failure_triage_prefers_latest_closure_iteration_summary(tmp_path, monke
     triage_agent.run_agent(state)
     assert state["failure_triage"]["failures"][0]["testcase"] == "new_failure"
     assert state["failure_triage"]["failures"][0]["assertion_failures"][0]["checker_id"] == "a_req_200"
+
+
+def test_compile_failure_is_not_routed_to_behavioral_rtl_repair(tmp_path, monkeypatch):
+    _stub_upload(monkeypatch)
+    workflow_dir = tmp_path / "closure"
+    reports = workflow_dir / "vv" / "tb" / "reports"
+    reports.mkdir(parents=True)
+    latest = reports / "simulation_execution_summary.json"
+    latest.write_text(json.dumps({
+        "root_failure_class": "compile_or_elaboration",
+        "results": [{
+            "testcase": "smoke_test", "seed": 1, "pass": False, "rc": 2,
+            "assertion_failures": [],
+        }],
+    }), encoding="utf-8")
+    state = {
+        "workflow_id": "closure", "workflow_dir": str(workflow_dir),
+        "simulation_execution_summary_json": str(latest),
+    }
+    triage_agent.run_agent(state)
+    debug_agent.run_agent(state)
+    assert state["failure_triage"]["root_failure_class"] == "compile_or_elaboration"
+    assert state["failure_triage"]["failures"][0]["classification"] == (
+        "verification_collateral_compile_or_elaboration_failure"
+    )
+    assert state["rtl_repair_request"]["required"] is False
+
+
+def test_closure_judge_stops_on_verification_infrastructure_failure(tmp_path, monkeypatch):
+    monkeypatch.setattr(iteration_judge_agent, "save_text_artifact_and_record", lambda *args, **kwargs: None)
+    workflow_dir = tmp_path / "workflow"
+    reports = workflow_dir / "vv" / "tb" / "reports"
+    reports.mkdir(parents=True)
+    summary_path = reports / "simulation_summary_coverage.json"
+    summary_path.write_text(json.dumps({
+        "simulation": {"total": 1, "pass": 0, "fail": 1},
+    }), encoding="utf-8")
+    state = {
+        "workflow_id": "closure-child", "workflow_dir": str(workflow_dir),
+        "simulation_summary_coverage_json": str(summary_path),
+        "behavioral_assertion_failures": [{"checker_id": "a_req_092"}],
+        "verification_quality_gate": {"passed": False, "root_failure_class": "compile_or_elaboration"},
+    }
+    iteration_judge_agent.run_agent(state)
+    judgement = state["closure_iteration_judgement"]
+    assert judgement["stop_reason"] == "verification_infrastructure_failure"
+    assert judgement["continue_recommended"] is False
 
 
 def test_later_closure_iteration_preserves_validated_repaired_rtl(tmp_path):

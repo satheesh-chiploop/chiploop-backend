@@ -612,6 +612,7 @@ def _maybe_llm_expand(spec: Dict[str, Any], sva: str, log_path: str, sva_spec: D
             "- Generate one labeled assertion for every behavioral_obligation.\n"
             "- Each label MUST exactly equal that obligation's checker_id.\n"
             "- Add a companion cover property named by replacing a_ with c_ in checker_id; cover the assertion antecedent/trigger so vacuity is measurable.\n"
+            "- The c_req_* name is the cover statement LABEL. Internal property declarations must use a distinct name such as p_cover_req_*; property and block labels may not collide.\n"
             "- For behavior that occurs on the next edge/cycle, use non-overlapping implication |=> (or an equivalent explicit one-cycle delay).\n"
             "- Use overlapping implication |-> only for same-sample combinational relationships.\n"
             "- For synchronous reset, check the registered result after the reset edge; do not incorrectly require the pre-edge value to be reset.\n"
@@ -838,6 +839,43 @@ def _make_assertion_failures_terminal(sva: str) -> str:
     return bare.sub(add_fatal, normalized)
 
 
+def _rename_property_label_collisions(sva: str) -> str:
+    """Give properties and assertion/cover blocks distinct SV identifiers.
+
+    Some simulators tolerate overlapping namespaces, while Verilator rejects a
+    property and its labeled assertion/cover when both are named ``c_req_N``.
+    Keep the externally tracked checker/cover label stable and rename only the
+    internal property declaration and its references.
+    """
+    property_names = set(re.findall(r"\bproperty\s+([A-Za-z_]\w*)\s*;", sva, re.I))
+    block_labels = set(re.findall(
+        r"\b([A-Za-z_]\w*)\s*:\s*(?:assert|cover)\s+property\b", sva, re.I
+    ))
+    collisions = sorted(property_names.intersection(block_labels), key=len, reverse=True)
+    normalized = sva
+    occupied = {name.lower() for name in property_names | block_labels}
+    for name in collisions:
+        candidate = f"p_{name}"
+        index = 2
+        while candidate.lower() in occupied:
+            candidate = f"p_{name}_{index}"
+            index += 1
+        occupied.add(candidate.lower())
+        normalized = re.sub(
+            rf"(\bproperty\s+){re.escape(name)}(\s*;)",
+            rf"\g<1>{candidate}\g<2>",
+            normalized,
+            flags=re.I,
+        )
+        normalized = re.sub(
+            rf"(\b(?:assert|cover)\s+property\s*\(\s*){re.escape(name)}(\s*\))",
+            rf"\g<1>{candidate}\g<2>",
+            normalized,
+            flags=re.I,
+        )
+    return normalized
+
+
 def _close_missing_checkers(
     spec: Dict[str, Any],
     sva: str,
@@ -865,6 +903,7 @@ def _close_missing_checkers(
             "Preserve every module declaration, port list, and existing assertion.\n"
             "Add exactly one assert property and one non-vacuity cover property for every missing obligation.\n"
             "Assertion labels must exactly match checker_id; cover labels replace a_ with c_.\n"
+            "Keep internal property names distinct from assertion/cover labels (for example property p_cover_req_001 with label c_req_001).\n"
             "Use only ports declared in the owning verification target. Never invent signals.\n"
             "For next-edge/next-cycle behavior use |=> or an explicit one-cycle delay; reserve |-> for same-sample combinational behavior.\n"
             "Synchronous reset assertions must check state after the reset edge, not the pre-edge sampled state.\n"
@@ -1003,6 +1042,7 @@ def run_agent(state: dict) -> dict:
         _log(log_path, "LLM SVA expansion disabled; using deterministic scaffold.")
         checker_generation_attempts = 0
 
+    sva_sv = _rename_property_label_collisions(sva_sv)
     sva_sv = _make_assertion_failures_terminal(sva_sv)
 
     bind_sv = _gen_bind_sv(top, module_name, sva_spec)
