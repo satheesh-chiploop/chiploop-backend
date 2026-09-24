@@ -762,6 +762,27 @@ def _checker_quality_issues(sva: str, sva_spec: Dict[str, Any]) -> List[Dict[str
                 "checker_id": str(obligation.get("checker_id") or ""),
                 "issue": "non-vacuity cover is constant and does not measure requirement activation",
             })
+        conditional_exception = re.search(
+            r"\buntil\b.{0,120}?\b([A-Za-z_]\w*)\b\s*(<|>|<=|>=|==|!=)\s*"
+            r"\b([A-Za-z_]\w*)\b.{0,40}?\bbecomes?\s+true\b",
+            requirement,
+            re.I | re.S,
+        )
+        if conditional_exception:
+            lhs, comparator, rhs = conditional_exception.groups()
+            if not re.search(
+                rf"\b{re.escape(lhs)}\b\s*{re.escape(comparator)}\s*\b{re.escape(rhs)}\b",
+                body,
+                re.I,
+            ):
+                issues.append({
+                    "requirement_id": str(obligation.get("requirement_id") or ""),
+                    "checker_id": str(obligation.get("checker_id") or ""),
+                    "issue": (
+                        "checker drops the requirement's conditional exception "
+                        f"{lhs} {comparator} {rhs}"
+                    ),
+                })
         sequential_transition = bool(re.search(
             r"\b(?:next\s+(?:rising\s+)?(?:edge|cycle)|holds?|advances?|increments?|wraps?|"
             r"synchronous(?:ly)?|on\s+(?:any\s+)?rising\s+edge)\b",

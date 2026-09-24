@@ -905,10 +905,12 @@ def _validate_feature_contract_strength(feature_ports: list, contracts: list) ->
             vacuous.append(f"{contract.get('feature_id')}: {', '.join(weak_signals)}")
         statement = str(contract.get("statement") or "")
         expected_names = {str(name) for name in (contract.get("expected") or {}).keys()}
-        mentioned_state = {
-            name for name in output_names
-            if re.search(rf"\b{re.escape(name)}\b", statement, re.I)
-        } - expected_names
+        mentioned_state = set()
+        for name in output_names:
+            semantic_name = r"[_\s-]+".join(re.escape(part) for part in name.split("_") if part)
+            if semantic_name and re.search(rf"\b{semantic_name}\b", statement, re.I):
+                mentioned_state.add(name)
+        mentioned_state -= expected_names
         conditional = bool(re.search(
             r"\b(?:when|if|while|greater\s+than|less\s+than|equal\s+to|at\s+least|at\s+most)\b",
             statement,

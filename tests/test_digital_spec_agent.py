@@ -3023,3 +3023,17 @@ def test_fpga_memory_normalization_does_not_choose_between_two_active_owners():
     }
     normalized = spec_agent._normalize_fpga_memory_contract(spec, "FPGA MEMORY CONTRACT (mandatory)")
     assert [module["name"] for module in normalized["hierarchy"]["modules"]] == ["bank_0", "bank_1"]
+def test_feature_strength_recognizes_spaced_reference_to_snake_case_state():
+    ports = [
+        {"name": "counter_value", "direction": "output", "width": 8},
+        {"name": "pwm_out", "direction": "output", "width": 1},
+        {"name": "duty_cycle", "direction": "input", "width": 8},
+    ]
+    contracts = [{
+        "feature_id": "pwm_low_at_or_above_duty",
+        "statement": "PWM is low when the counter value is not less than the duty cycle.",
+        "stimulus_cycles": 1,
+        "expected": {"pwm_out": 0},
+    }]
+    with pytest.raises(ValueError, match="counter_value"):
+        spec_agent._validate_feature_contract_strength(ports, contracts)

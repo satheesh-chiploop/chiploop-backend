@@ -788,3 +788,29 @@ def test_verify_closure_rerun_planner_accepts_inline_fpga_handoff(tmp_path, monk
         / "iteration_001"
         / "rerun_manifest.json"
     ).is_file()
+def test_sva_quality_rejects_checker_that_drops_conditional_exception():
+    requirement = (
+        "When reset_n is low, state is cleared. After reset is released, pwm_out is low "
+        "until the compare condition counter_value < duty_cycle becomes true."
+    )
+    spec = {"behavioral_obligations": [{
+        "requirement_id": "REQ-017", "checker_id": "a_req_017", "requirement": requirement,
+    }]}
+    bad = """
+property p_req_017;
+  @(posedge clk) !reset_n |=> ((counter_value == 8'h00) && (pwm_out == 1'b0));
+endproperty
+a_req_017: assert property (p_req_017);
+c_req_017: cover property (@(posedge clk) !reset_n);
+"""
+    good = """
+property p_req_017;
+  @(posedge clk) !reset_n |=> ((counter_value == 8'h00) &&
+    (pwm_out == ((counter_value < duty_cycle) ? 1'b1 : 1'b0)));
+endproperty
+a_req_017: assert property (p_req_017);
+c_req_017: cover property (@(posedge clk) !reset_n);
+"""
+    issues = sva_agent._checker_quality_issues(bad, spec)
+    assert any("conditional exception" in item["issue"] for item in issues)
+    assert not any("conditional exception" in item["issue"] for item in sva_agent._checker_quality_issues(good, spec))
