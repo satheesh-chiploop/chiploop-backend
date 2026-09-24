@@ -814,3 +814,46 @@ c_req_017: cover property (@(posedge clk) !reset_n);
     issues = sva_agent._checker_quality_issues(bad, spec)
     assert any("conditional exception" in item["issue"] for item in issues)
     assert not any("conditional exception" in item["issue"] for item in sva_agent._checker_quality_issues(good, spec))
+
+
+def test_sva_quality_rejects_invented_output_stability_and_counter_transition():
+    spec = {"behavioral_obligations": [
+        {"requirement_id": "REQ-001", "checker_id": "a_req_001",
+         "requirement": "Maintain an 8-bit counter for PWM phase generation."},
+        {"requirement_id": "REQ-004", "checker_id": "a_req_004",
+         "requirement": "Provide the current counter value on the counter_value output."},
+    ]}
+    sva = """
+property p1; @(posedge clk) 1'b1 |=> counter_value == $past(counter_value) + 1; endproperty
+a_req_001: assert property(p1);
+property p4; @(posedge clk) 1'b1 |-> counter_value == $past(counter_value); endproperty
+a_req_004: assert property(p4);
+"""
+    issues = sva_agent._checker_quality_issues(sva, spec)
+    assert any("invents counter transition" in item["issue"] for item in issues)
+    assert any("invents temporal stability" in item["issue"] for item in issues)
+
+
+def test_sva_quality_rejects_dropped_until_gate_and_combinational_reset_output():
+    spec = {"behavioral_obligations": [
+        {"requirement_id": "REQ-005", "checker_id": "a_req_005",
+         "requirement": "Reset all sequential state to zero when reset_n is low."},
+        {"requirement_id": "REQ-008", "checker_id": "a_req_008",
+         "requirement": "pwm_out is high whenever counter_value < duty_cycle and low otherwise."},
+        {"requirement_id": "REQ-014", "checker_id": "a_req_014",
+         "requirement": (
+             "When reset_n is low, the counter is cleared and pwm_out is driven low; "
+             "upon release, the counter remains at zero until enable is asserted."
+         )},
+    ]}
+    sva = """
+property p5; @(posedge clk) !reset_n |=> counter_value == 0 && pwm_out == 0; endproperty
+a_req_005: assert property(p5);
+property p8; @(posedge clk) pwm_out == (counter_value < duty_cycle); endproperty
+a_req_008: assert property(p8);
+property p14; @(posedge clk) !reset_n |=> counter_value == 0 && pwm_out == 0; endproperty
+a_req_014: assert property(p14);
+"""
+    issues = sva_agent._checker_quality_issues(sva, spec)
+    assert any("combinational output pwm_out" in item["issue"] for item in issues)
+    assert any("until-condition enable" in item["issue"] for item in issues)

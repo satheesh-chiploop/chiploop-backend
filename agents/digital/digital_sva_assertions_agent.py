@@ -705,9 +705,25 @@ def _checker_quality_issues(sva: str, sva_spec: Dict[str, Any]) -> List[Dict[str
         return cleaned in {"1", "1'b1", "1'd1", "true"}
 
     issues: List[Dict[str, str]] = []
-    for obligation in sva_spec.get("behavioral_obligations") or []:
-        if not isinstance(obligation, dict):
-            continue
+    obligations = [
+        item for item in (sva_spec.get("behavioral_obligations") or [])
+        if isinstance(item, dict)
+    ]
+    # Signals described elsewhere as continuously/combinationally derived are
+    # not sequential state merely because an LLM placed them in a reset
+    # consequent.  This catches a common false checker without knowing any
+    # application-specific signal names.
+    combinational_outputs: set[str] = set()
+    for candidate in obligations:
+        candidate_req = str(candidate.get("requirement") or "")
+        relation = re.match(
+            r"\s*([A-Za-z_]\w*)\s+(?:is|shall\s+be)\s+.*\b(?:whenever|otherwise)\b",
+            candidate_req,
+            re.I | re.S,
+        )
+        if relation:
+            combinational_outputs.add(relation.group(1).lower())
+    for obligation in obligations:
         checker = str(obligation.get("checker_id") or "").lower()
         requirement = str(obligation.get("requirement") or "")
         req_lower = requirement.lower()
@@ -783,6 +799,59 @@ def _checker_quality_issues(sva: str, sva_spec: Dict[str, Any]) -> List[Dict[str
                         f"{lhs} {comparator} {rhs}"
                     ),
                 })
+        until_condition = re.search(
+            r"\buntil\b.{0,100}?\b([A-Za-z_]\w*)\b\s+is\s+(?:first\s+)?"
+            r"(?:asserted|deasserted|high|low|true|false)\b",
+            requirement,
+            re.I | re.S,
+        )
+        if until_condition and not re.search(
+            rf"\b{re.escape(until_condition.group(1))}\b", body, re.I
+        ):
+            issues.append({
+                "requirement_id": str(obligation.get("requirement_id") or ""),
+                "checker_id": str(obligation.get("checker_id") or ""),
+                "issue": (
+                    "checker drops the requirement's until-condition "
+                    f"{until_condition.group(1)}"
+                ),
+            })
+        descriptive_only = bool(re.search(
+            r"\b(?:provide|expose|report)\b.*\b(?:current|present)\b.*\boutput\b",
+            req_lower,
+        ))
+        if descriptive_only and re.search(r"\$past\s*\(", body, re.I):
+            issues.append({
+                "requirement_id": str(obligation.get("requirement_id") or ""),
+                "checker_id": str(obligation.get("checker_id") or ""),
+                "issue": "checker invents temporal stability for a current-value output requirement",
+            })
+        counter_declaration_only = bool(re.search(
+            r"\b(?:maintain|provide|implement)\b\s+(?:an?\s+)?(?:\d+\s*-?\s*bit\s+)?counter\b",
+            req_lower,
+        )) and not re.search(
+            r"\b(?:increment|decrement|advance|update|wrap|reset|clear|hold|retain|enable)\w*\b",
+            req_lower,
+        )
+        if counter_declaration_only and (
+            re.search(r"\$past\s*\(", body, re.I)
+            or re.search(r"\$past\s*\([^)]*\)\s*[+-]", body, re.I)
+        ):
+            issues.append({
+                "requirement_id": str(obligation.get("requirement_id") or ""),
+                "checker_id": str(obligation.get("checker_id") or ""),
+                "issue": "checker invents counter transition behavior not stated by the requirement",
+            })
+        if re.search(r"\bsequential\s+state\b", req_lower):
+            for signal in sorted(combinational_outputs):
+                if signal not in req_lower and re.search(rf"\b{re.escape(signal)}\b", body, re.I):
+                    issues.append({
+                        "requirement_id": str(obligation.get("requirement_id") or ""),
+                        "checker_id": str(obligation.get("checker_id") or ""),
+                        "issue": (
+                            f"sequential-state reset checker incorrectly includes combinational output {signal}"
+                        ),
+                    })
         sequential_transition = bool(re.search(
             r"\b(?:next\s+(?:rising\s+)?(?:edge|cycle)|holds?|advances?|increments?|wraps?|"
             r"synchronous(?:ly)?|on\s+(?:any\s+)?rising\s+edge)\b",
