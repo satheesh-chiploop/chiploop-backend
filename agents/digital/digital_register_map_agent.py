@@ -62,18 +62,18 @@ def _spec_requires_register_map(spec_obj: dict) -> bool:
     # creation instead of the no-register-map bypass.
     address = (
         any(name in names for name in {"apb_paddr", "axi_awaddr", "i2c_addr"})
-        or prefixed_signal(("cfg_", "reg_", "csr_"), ("addr", "address"))
+        or prefixed_signal(("cfg_", "reg_", "csr_", "ctrl_", "mmio_"), ("addr", "address"))
     )
     transaction = (
         any(name in names for name in {"apb_psel", "axi_awvalid", "i2c_scl"})
         or prefixed_signal(
-            ("cfg_", "reg_", "csr_"),
+            ("cfg_", "reg_", "csr_", "ctrl_", "mmio_"),
             ("we", "wen", "write", "write_en", "write_enable", "valid", "ren", "read_en", "read_enable"),
         )
     )
     data = (
         any(name in names for name in {"apb_pwdata", "axi_wdata", "i2c_sda"})
-        or prefixed_signal(("cfg_", "reg_", "csr_"), ("wdata", "write_data"))
+        or prefixed_signal(("cfg_", "reg_", "csr_", "ctrl_", "mmio_"), ("wdata", "write_data"))
     )
     return address and transaction and data
 

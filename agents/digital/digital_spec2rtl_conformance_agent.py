@@ -1516,6 +1516,40 @@ def _match_score(
         ]
     if all_state_reset_required and "all_sequential_state_synchronously_reset_zero" not in evidence:
         return "missing", ["not_all_sequential_state_has_synchronous_zero_reset"]
+    combinational_compare = re.search(
+        r"\b([A-Za-z_]\w*)\b\s+shall\s+be\s+combinationally\s+high\s+when\s+"
+        r"\b([A-Za-z_]\w*)\b\s+is\s+(?:strictly\s+)?less\s+than\s+\b([A-Za-z_]\w*)\b",
+        requirement,
+        re.I,
+    )
+    if combinational_compare:
+        output_name, lhs_name, rhs_name = combinational_compare.groups()
+        comparison = rf"\b{re.escape(lhs_name)}\b\s*<\s*\b{re.escape(rhs_name)}\b"
+        direct = re.search(
+            rf"\bassign\s+{re.escape(output_name)}\s*=\s*[^;]*{comparison}",
+            rtl_without_comments,
+            re.I,
+        )
+        combinational = re.search(
+            rf"\balways(?:_comb)?\s*@?\s*\(\s*\*\s*\).*?\b{re.escape(output_name)}\s*=\s*[^;]*{comparison}",
+            rtl_without_comments,
+            re.I | re.S,
+        )
+        alias_match = re.search(
+            rf"\bassign\s+{re.escape(output_name)}\s*=\s*([A-Za-z_]\w*)\s*;",
+            rtl_without_comments,
+            re.I,
+        )
+        alias_combinational = bool(alias_match and re.search(
+            rf"\balways(?:_comb)?\s*@?\s*\(\s*\*\s*\).*?\b{re.escape(alias_match.group(1))}\s*=\s*[^;]*{comparison}",
+            rtl_without_comments,
+            re.I | re.S,
+        ))
+        if not (direct or combinational or alias_combinational):
+            return "missing", [
+                f"combinational_compare_not_implemented:{output_name}={lhs_name}<{rhs_name}"
+            ]
+        evidence.append("explicit_combinational_compare_dataflow")
     if (
         "pwm_out" in req_lower
         and ("combinational" in req_lower or "level-based" in req_lower)
@@ -1842,6 +1876,8 @@ def _requirement_verification_method(requirement: str, section: str = "") -> str
         r"\b(?:synthesizable|infer\s+latches?|asynchronous\s+reset|drive\s+any\s+input\s+ports?)\b",
         text,
     ):
+        return "static_structural"
+    if re.search(r"\b(?:combinationally|combinational\s+(?:decode|output)|level-based)\b", text):
         return "static_structural"
     # Pure interface-shape obligations can mention handshake signal names
     # without describing handshake behavior.

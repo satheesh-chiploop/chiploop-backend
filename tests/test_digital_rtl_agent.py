@@ -1741,3 +1741,10 @@ endmodule
     assert "wire sample_req_unused_from_u_mmio_sample_req;" in out
     assert ".sample_req(sample_req)" in out
     assert ".alert_irq(alert_irq)" in out
+def test_early_rtl_repair_passes_route_semantic_only_failures_to_semantic_prompt():
+    source = Path(agent.__file__).read_text(encoding="utf-8")
+    pass2_region = source.split('if _semantic_only_failure(pass1):', 1)[1].split('_stage("starting_llm_call_pass2")', 1)[0]
+    pass3_region = source.split('if _semantic_only_failure(pass2):', 1)[1].split('_stage("starting_llm_call_pass3")', 1)[0]
+    assert "_build_semantic_conformance_prompt" in pass2_region
+    assert "_build_semantic_conformance_prompt" in pass3_region
+from pathlib import Path

@@ -4687,13 +4687,21 @@ def _run(context: AgentContext) -> dict:
                 with open(pass1["verilator_log_path"], "r", encoding="utf-8") as f:
                     verilator_log_text = f.read()
 
-            repair_prompt = _build_rtl_repair_prompt(
-                base_prompt=prompt,
-                previous_llm_output=llm_output,
-                compile_log_text=compile_log_text,
-                verilator_log_text=verilator_log_text,
-                expected_files=_collect_expected_rtl_files(spec_json, mode),
-            )
+            if _semantic_only_failure(pass1):
+                repair_prompt = _build_semantic_conformance_prompt(
+                    prompt, llm_output, compile_log_text, verilator_log_text,
+                    _collect_expected_rtl_files(spec_json, mode),
+                )
+                _stage("pass2_repair_strategy: semantic_conformance")
+            else:
+                repair_prompt = _build_rtl_repair_prompt(
+                    base_prompt=prompt,
+                    previous_llm_output=llm_output,
+                    compile_log_text=compile_log_text,
+                    verilator_log_text=verilator_log_text,
+                    expected_files=_collect_expected_rtl_files(spec_json, mode),
+                )
+                _stage("pass2_repair_strategy: compile_lint_structural")
 
 
             _stage("starting_llm_call_pass2")
@@ -4763,13 +4771,21 @@ def _run(context: AgentContext) -> dict:
                     with open(pass2["verilator_log_path"], "r", encoding="utf-8") as f:
                         pass2_verilator_log = f.read()
 
-                repair_prompt_pass3 = _build_rtl_repair_prompt(
-                    base_prompt=prompt,
-                    previous_llm_output=llm_output_pass2,
-                    compile_log_text=pass2_compile_log,
-                    verilator_log_text=pass2_verilator_log,
-                    expected_files=_collect_expected_rtl_files(spec_json, mode),
-                )
+                if _semantic_only_failure(pass2):
+                    repair_prompt_pass3 = _build_semantic_conformance_prompt(
+                        prompt, llm_output_pass2, pass2_compile_log, pass2_verilator_log,
+                        _collect_expected_rtl_files(spec_json, mode),
+                    )
+                    _stage("pass3_repair_strategy: semantic_conformance")
+                else:
+                    repair_prompt_pass3 = _build_rtl_repair_prompt(
+                        base_prompt=prompt,
+                        previous_llm_output=llm_output_pass2,
+                        compile_log_text=pass2_compile_log,
+                        verilator_log_text=pass2_verilator_log,
+                        expected_files=_collect_expected_rtl_files(spec_json, mode),
+                    )
+                    _stage("pass3_repair_strategy: compile_lint_structural")
                 _stage("starting_llm_call_pass3")
                 try:
                     llm_output_pass3 = _complete_rtl_text(

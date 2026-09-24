@@ -2954,3 +2954,72 @@ def test_feature_strength_failure_classifier_does_not_capture_graph_failures():
         "full-domain min/max expectations accept every possible output | "
         "FPGA memory contract requires a technology-neutral wrapper"
     ) is False
+def test_fpga_memory_normalization_collapses_only_disconnected_duplicate_wrappers():
+    def memory_module(name, read_name, *, consumed=False):
+        return {
+            "name": name,
+            "ports": [
+                {"name": "clk", "direction": "input", "width": 1},
+                {"name": "addr", "direction": "input", "width": 10},
+                {"name": read_name, "direction": "output", "width": 64},
+            ],
+            "memory_implementation": {"kind": "fpga_bram", "depth": 1024, "data_width": 64, "addr_width": 10},
+            "rtl_output_file": f"{name}.v",
+        }
+
+    spec = {
+        "memory_macros": [],
+        "hierarchy": {"modules": [
+            memory_module("history_controller", "read_data", consumed=True),
+            memory_module("history_wrapper", "sram_dout"),
+            memory_module("history_primitive", "dout"),
+        ]},
+        "top_level_connections": [{
+            "top_port": "clk", "connected_to": [
+                "history_controller.clk", "history_wrapper.clk", "history_primitive.clk",
+            ],
+        }],
+        "inter_module_signals": [{
+            "name": "history_readback", "source": "history_controller.read_data",
+            "destinations": ["csr.live_history"], "width": 64,
+        }],
+        "signal_ownership": [
+            {"signal": "read_data", "owner": "history_controller.read_data"},
+            {"signal": "sram_dout", "owner": "history_wrapper.sram_dout"},
+            {"signal": "dout", "owner": "history_primitive.dout"},
+        ],
+    }
+    # A prior normalizer may have derived scalar geometry from primitive-style
+    # port names while preserving the authoritative bank geometry. Duplicate
+    # detection must use the strongest available width evidence.
+    primitive = spec["hierarchy"]["modules"][2]
+    primitive["memory_implementation"]["data_width"] = 1
+    primitive["memory_banks"] = [{"name": "bank", "data_width": 64, "depth": 1024, "addr_width": 10}]
+    normalized = spec_agent._normalize_fpga_memory_contract(spec, "FPGA MEMORY CONTRACT (mandatory)")
+    assert [module["name"] for module in normalized["hierarchy"]["modules"]] == ["history_controller"]
+    assert normalized["top_level_connections"][0]["connected_to"] == ["history_controller.clk"]
+    assert normalized["signal_ownership"] == [
+        {"signal": "read_data", "owner": "history_controller.read_data"}
+    ]
+
+
+def test_fpga_memory_normalization_does_not_choose_between_two_active_owners():
+    modules = []
+    signals = []
+    for index in (0, 1):
+        name = f"bank_{index}"
+        modules.append({
+            "name": name,
+            "ports": [{"name": "read_data", "direction": "output", "width": 32}],
+            "memory_implementation": {"kind": "fpga_bram", "data_width": 32, "depth": 256, "addr_width": 8},
+        })
+        signals.append({
+            "name": f"readback_{index}", "source": f"{name}.read_data",
+            "destinations": [f"consumer_{index}.data"], "width": 32,
+        })
+    spec = {
+        "memory_macros": [], "hierarchy": {"modules": modules},
+        "top_level_connections": [], "inter_module_signals": signals, "signal_ownership": [],
+    }
+    normalized = spec_agent._normalize_fpga_memory_contract(spec, "FPGA MEMORY CONTRACT (mandatory)")
+    assert [module["name"] for module in normalized["hierarchy"]["modules"]] == ["bank_0", "bank_1"]

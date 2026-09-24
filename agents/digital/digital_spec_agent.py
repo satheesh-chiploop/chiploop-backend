@@ -3857,6 +3857,94 @@ def _normalize_fpga_memory_contract(spec_json: dict, source_prompt: str) -> dict
         if name and name not in module_by_name:
             modules.append(_memory_macro_module(macro))
             module_by_name[name] = modules[-1]
+
+    # Models can materialize the same FPGA storage repeatedly: a functional
+    # controller that already owns inferred BRAM, an extra wrapper, and a
+    # primitive-like module.  Collapse only disconnected duplicates when one
+    # unambiguous inferred-memory owner has a consumed read-data output.
+    inferred_modules = [
+        module for module in modules if isinstance(module, dict)
+        and isinstance(module.get("memory_implementation"), dict)
+        and str(module["memory_implementation"].get("kind") or "").lower()
+        in {"fpga_bram", "inferred_memory", "inferred_bram", "technology_neutral"}
+    ]
+    interconnects = [item for item in spec_json.get("inter_module_signals", []) or [] if isinstance(item, dict)]
+    consumed_sources = {
+        str(item.get("source") or "").strip()
+        for item in interconnects if item.get("destinations")
+    }
+    active_owners = []
+    for module in inferred_modules:
+        module_name = str(module.get("name") or "").strip()
+        data_outputs = {
+            f"{module_name}.{port.get('name')}"
+            for port in module.get("ports") or [] if isinstance(port, dict)
+            and str(port.get("direction") or "").lower() == "output"
+            and re.search(r"(?:^|_)(?:dout|rdata|read_data|pop_data|data_out)$", str(port.get("name") or ""), re.I)
+        }
+        if data_outputs & consumed_sources:
+            active_owners.append(module)
+    if len(active_owners) == 1:
+        owner = active_owners[0]
+        def effective_memory_width(module: dict) -> int:
+            widths = [positive_width((module.get("memory_implementation") or {}).get("data_width"))]
+            widths.extend(
+                positive_width(bank.get("data_width"))
+                for bank in module.get("memory_banks") or [] if isinstance(bank, dict)
+            )
+            port_widths = [
+                positive_width(port.get("width"))
+                for port in module.get("ports") or [] if isinstance(port, dict)
+                and re.search(r"(?:^|_)(?:din|dout|wdata|rdata|write_data|read_data|data_in|data_out)$", str(port.get("name") or ""), re.I)
+            ]
+            return max(widths + port_widths)
+
+        owner_width = effective_memory_width(owner)
+        connected_endpoints = {
+            str(endpoint or "").strip()
+            for item in interconnects
+            for endpoint in [item.get("source"), *(item.get("destinations") or [])]
+        }
+        for item in spec_json.get("top_level_connections", []) or []:
+            if isinstance(item, dict):
+                connected_endpoints.update(str(endpoint or "").strip() for endpoint in item.get("connected_to", []) or [])
+        removable_names = set()
+        for module in inferred_modules:
+            if module is owner:
+                continue
+            width = effective_memory_width(module)
+            if width != owner_width:
+                continue
+            module_name = str(module.get("name") or "").strip()
+            non_clock_endpoints = {
+                f"{module_name}.{port.get('name')}"
+                for port in module.get("ports") or [] if isinstance(port, dict)
+                and not re.search(r"^(?:clk|clock|rst|reset)(?:_n)?$", str(port.get("name") or ""), re.I)
+            }
+            if non_clock_endpoints and not (non_clock_endpoints & connected_endpoints):
+                removable_names.add(module_name)
+        if removable_names:
+            modules[:] = [module for module in modules if str(module.get("name") or "") not in removable_names]
+            for connection in spec_json.get("top_level_connections", []) or []:
+                if isinstance(connection, dict):
+                    connection["connected_to"] = [
+                        endpoint for endpoint in connection.get("connected_to", []) or []
+                        if str(endpoint).split(".", 1)[0] not in removable_names
+                    ]
+            spec_json["top_level_connections"] = [
+                item for item in spec_json.get("top_level_connections", []) or []
+                if not isinstance(item, dict) or item.get("connected_to")
+            ]
+            spec_json["inter_module_signals"] = [
+                item for item in interconnects
+                if str(item.get("source") or "").split(".", 1)[0] not in removable_names
+                and not any(str(endpoint).split(".", 1)[0] in removable_names for endpoint in item.get("destinations", []) or [])
+            ]
+            spec_json["signal_ownership"] = [
+                item for item in spec_json.get("signal_ownership", []) or []
+                if not isinstance(item, dict)
+                or str(item.get("owner") or "").split(".", 1)[0] not in removable_names
+            ]
     spec_json["memory_macros"] = normalized_macros
     if hierarchy:
         hierarchy["modules"] = modules

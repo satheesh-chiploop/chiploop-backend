@@ -110,6 +110,15 @@ def _scan_assertion_failures(reports_dir: str) -> int:
     return count
 
 
+def _unique_failed_checker_count(sim: Dict[str, Any], event_count: int) -> int:
+    failures = sim.get("assertion_failures") if isinstance(sim.get("assertion_failures"), list) else []
+    checker_ids = {
+        str(item.get("checker_id") or "").strip()
+        for item in failures if isinstance(item, dict) and str(item.get("checker_id") or "").strip()
+    }
+    return len(checker_ids) if checker_ids else max(0, int(event_count or 0))
+
+
 def _pct(hit: int, total: int) -> Optional[float]:
     if total <= 0:
         return None
@@ -233,13 +242,17 @@ def run_agent(state: dict) -> dict:
             if isinstance(structured_assertion_failures, int)
             else _scan_assertion_failures(reports_dir)
         )
+        unique_assertions_failed = min(
+            assertion_count,
+            _unique_failed_checker_count(sim, assertion_failures),
+        )
         root_failure_class = str(sim.get("root_failure_class") or "")
         if root_failure_class == "compile_or_elaboration":
             if coverage_status == "missing":
                 coverage_status = "not_generated_due_to_compile_or_elaboration_failure"
             if code_coverage_status in {"missing", "missing_data"}:
                 code_coverage_status = "not_generated_due_to_compile_or_elaboration_failure"
-        assertion_pass_pct = _pct(max(assertion_count - assertion_failures, 0), assertion_count)
+        assertion_pass_pct = _pct(max(assertion_count - unique_assertions_failed, 0), assertion_count)
         if root_failure_class == "compile_or_elaboration":
             assertion_status = "not_run_compile_or_elaboration_failure"
             assertion_pass_pct = None
@@ -321,7 +334,8 @@ def run_agent(state: dict) -> dict:
                 "assertions": {
                     "status": assertion_status,
                     "assertions_generated": assertion_count,
-                    "assertion_failures": assertion_failures,
+                    "assertion_failures": unique_assertions_failed,
+                    "assertion_failure_events": assertion_failures,
                     "assertion_pass_pct": assertion_pass_pct,
                 },
             },

@@ -546,6 +546,23 @@ end
     assert status == "matched"
 
 
+def test_generic_explicit_combinational_compare_rejects_registered_output():
+    requirement = "alarm_out shall be combinationally high when sample_value is strictly less than low_limit, otherwise low."
+    registered = """
+reg alarm_r;
+assign alarm_out = alarm_r;
+always @(posedge clk) alarm_r <= (sample_value < low_limit);
+"""
+    combinational = "assign alarm_out = (sample_value < low_limit);"
+    bad_status, bad_evidence = agent._match_score(requirement, registered, set())
+    good_status, good_evidence = agent._match_score(requirement, combinational, set())
+    assert bad_status == "missing"
+    assert bad_evidence == ["combinational_compare_not_implemented:alarm_out=sample_value<low_limit"]
+    assert good_status == "matched"
+    assert "explicit_combinational_compare_dataflow" in good_evidence
+    assert agent._requirement_verification_method(requirement, "behavior_rules") == "static_structural"
+
+
 def test_match_score_recognizes_high_level_temp_monitor_evidence():
     rtl = """
 module temp_monitor_digital(

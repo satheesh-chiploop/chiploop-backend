@@ -38,6 +38,16 @@ def test_authoritative_spec_contract_removes_model_invented_register_fields():
     assert enforced["regmap"]["registers"][0]["offset"] == "0x0"
 
 
+@pytest.mark.parametrize("prefix", ["ctrl", "mmio", "csr", "cfg", "reg"])
+def test_register_map_requirement_detects_generic_control_bus_prefixes(prefix):
+    spec = {"hierarchy": {"top_module": {"ports": [
+        {"name": f"{prefix}_addr", "direction": "input", "width": 8},
+        {"name": f"{prefix}_wdata", "direction": "input", "width": 32},
+        {"name": f"{prefix}_valid", "direction": "input", "width": 1},
+    ]}}}
+    assert digital_register_map_agent._spec_requires_register_map(spec) is True
+
+
 def test_register_layout_rejects_fields_beyond_declared_bus_width():
     document = {
         "regmap": {

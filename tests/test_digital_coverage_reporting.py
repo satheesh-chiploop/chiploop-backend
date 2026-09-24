@@ -16,6 +16,15 @@ from agents.digital import digital_simulation_summary_coverage_agent as summary_
 from agents.digital import digital_testbench_generator_agent as tb_agent
 
 
+def test_assertion_pass_rate_counts_unique_failed_checkers_not_repeated_events():
+    sim = {"assertion_failures": [
+        {"checker_id": checker}
+        for _seed in range(4)
+        for checker in ("a_req_002", "a_req_010", "a_req_011")
+    ]}
+    assert summary_agent._unique_failed_checker_count(sim, event_count=12) == 3
+
+
 def test_verilator_makefile_enables_code_coverage():
     text = tb_agent._gen_makefile("pwm_controller")
 
