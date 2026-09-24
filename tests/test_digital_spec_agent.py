@@ -2864,6 +2864,46 @@ def test_feature_contract_feasibility_accepts_hex_register_address_and_reset():
     spec_agent._validate_feature_contract_feasibility(spec, ports, contracts)
 
 
+def test_hierarchical_register_semantic_ports_enforce_access_direction():
+    spec = {
+        "register_contract": {"registers": [
+            {"name": "CTRL", "access": "RW", "fields": [{"name": "enable", "access": "RW"}]},
+            {"name": "STATUS", "access": "RO", "fields": [{"name": "engine_busy", "access": "RO"}]},
+        ]},
+        "hierarchy": {"top_module": {"name": "top"}, "modules": [{
+            "name": "control_mmio_csr",
+            "functionality": "Decode registers and expose explicit semantic configuration and live status ports.",
+            "ports": [
+                {"name": "cfg_enable", "direction": "output"},
+                {"name": "status_engine_busy", "direction": "input"},
+            ],
+        }]},
+    }
+
+    spec_agent._validate_register_semantic_port_contract(spec, "hierarchical")
+
+    spec["hierarchy"]["modules"][0]["ports"][1]["direction"] = "output"
+    with pytest.raises(ValueError, match="engine_busy:input"):
+        spec_agent._validate_register_semantic_port_contract(spec, "hierarchical")
+
+
+def test_hierarchical_register_semantic_ports_reject_missing_ro_shadow_source():
+    spec = {
+        "register_contract": {"registers": [{
+            "name": "REQUEST_SHADOW", "access": "RO",
+            "fields": [{"name": "model_request_data_shadow", "access": "RO"}],
+        }]},
+        "hierarchy": {"top_module": {"name": "top"}, "modules": [{
+            "name": "application_register_map",
+            "responsibilities": ["Every register maps to one or more declared semantic ports."],
+            "ports": [{"name": "mmio_rdata", "direction": "output"}],
+        }]},
+    }
+
+    with pytest.raises(ValueError, match="model_request_data_shadow:input"):
+        spec_agent._validate_register_semantic_port_contract(spec, "hierarchical")
+
+
 def test_feature_contract_strength_rejects_weak_signal_even_with_strong_signal():
     ports = [{"name": "valid", "width": 1}, {"name": "data", "width": 8}]
     contracts = [{

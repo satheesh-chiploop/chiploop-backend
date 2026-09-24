@@ -630,6 +630,63 @@ def _match_score(
         req_lower,
     ):
         evidence.append("register_decode_and_access_paths")
+    if structural_context.get("register_contract_complete") is True and re.search(
+        r"(?:implement|decode|represent).*(?:all|every).*(?:software-visible\s+)?register|"
+        r"(?:all|every).*(?:software-visible\s+)?register.*(?:implement|decode|represented)",
+        req_lower,
+    ):
+        evidence.append("complete_register_contract_traceability")
+    if structural_context.get("register_contract_complete") is True and re.search(
+        r"bridge\s+mmio.*(?:configuration|storage|address\s+window)|"
+        r"(?:configuration|storage|address\s+window).*mmio.*bridge",
+        req_lower,
+    ):
+        evidence.append("register_decode_and_access_paths")
+    scoped_ports = structural_context.get("scoped_ports") or []
+    if re.search(r"(?:emit|expose|provide).*model[- ]request.*valid.*data.*(?:receive|input).*ready", req_lower):
+        port_roles = {
+            (str(port.get("name") or "").lower(), str(port.get("direction") or "").lower())
+            for port in scoped_ports if isinstance(port, dict)
+        }
+        has_valid_out = any("req" in name and "valid" in name and direction == "output" for name, direction in port_roles)
+        has_data_out = any("req" in name and "data" in name and direction == "output" for name, direction in port_roles)
+        has_ready_in = any("req" in name and "ready" in name and direction == "input" for name, direction in port_roles)
+        if has_valid_out and has_data_out and has_ready_in:
+            evidence.append("model_request_port_directions")
+    if re.search(r"transport.*(?:coexist|cannot replace|must not replace).*(?:mmio|control plane)|"
+                 r"(?:mmio|control plane).*(?:coexist|cannot replace|must not replace).*transport", req_lower):
+        if structural_context.get("design_has_mmio_control_plane") is True:
+            evidence.append("transport_and_mmio_control_plane_coexist")
+    if re.search(r"memory interface.*separate from actuator|actuator.*separate from.*memory interface", req_lower):
+        port_names = {str(port.get("name") or "").lower() for port in scoped_ports if isinstance(port, dict)}
+        if port_names and not any("actuator" in name or "command" in name for name in port_names):
+            evidence.append("memory_interface_isolated_from_actuator_control")
+    if re.search(r"must not drive any input ports?|input ports?.*must not be driven", req_lower):
+        input_ports = {
+            str(port.get("name") or "") for port in scoped_ports
+            if isinstance(port, dict) and str(port.get("direction") or "").lower() == "input"
+        }
+        driven_inputs = {
+            name for name in input_ports
+            if re.search(rf"\b(?:assign\s+)?{re.escape(name)}\s*(?:<=|=)", rtl_without_comments, re.I)
+        }
+        if driven_inputs:
+            return "missing", [f"input_port_driven_internally:{name}" for name in sorted(driven_inputs)]
+        if input_ports and not driven_inputs:
+            evidence.append("no_internal_input_port_drivers")
+    if re.search(r"(?:provide|expose).*current.*value.*(?:observability|debug)", req_lower):
+        observable_names = [
+            str(port.get("name") or "") for port in scoped_ports
+            if isinstance(port, dict)
+            and str(port.get("direction") or "").lower() == "output"
+            and str(port.get("name") or "").lower() in req_lower
+        ]
+        if any(
+            re.search(rf"\bassign\s+{re.escape(name)}\s*=\s*[A-Za-z_]\w*\s*;", rtl_without_comments, re.I)
+            or re.search(rf"\b{re.escape(name)}\s*<=", rtl_without_comments, re.I)
+            for name in observable_names
+        ):
+            evidence.append("observable_current_state_output_driven")
     if re.search(r"\beach register.*uniquely.*address decode", req_lower):
         case_blocks = re.findall(
             r"\bcase\s*\(\s*\w*(?:addr|address)\w*\s*\)(.*?)\bendcase\b",
@@ -1348,6 +1405,7 @@ def _match_score(
         "bounded_fault_clear_write_pulse",
         "latched_status_fault_state",
         "model_transport_port_directions",
+        "model_request_port_directions",
         "conditional_model_request_handshake",
         "model_response_valid_ready_consumption",
         "history_write_interface_driven",
@@ -1378,6 +1436,10 @@ def _match_score(
         "no_large_fifo_or_learned_history",
         "no_asic_payload_memory_macro",
         "register_block_is_control_plane_only",
+        "transport_and_mmio_control_plane_coexist",
+        "memory_interface_isolated_from_actuator_control",
+        "no_internal_input_port_drivers",
+        "observable_current_state_output_driven",
     }
     if (
         re.search(r"\bsynchronous(?:ly)?\b", req_lower)
@@ -1389,6 +1451,16 @@ def _match_score(
         )
     ):
         return "missing", ["asynchronous_reset_sensitivity_conflicts_with_synchronous_requirement"]
+    if re.search(r"\b(?:must\s+not|shall\s+not|no)\b[^.\n]*\basynchronous\s+reset\b", req_lower):
+        asynchronous_reset = re.search(
+            r"\balways(?:_ff)?\s*@\s*\([^)]*\bor\s+(?:pos|neg)edge\s+"
+            r"(?:reset|reset_n|rst|rst_n)\b",
+            rtl_without_comments,
+            re.I,
+        )
+        if asynchronous_reset:
+            return "missing", ["forbidden_asynchronous_reset_sensitivity"]
+        return "matched", ["no_asynchronous_reset_sensitivity"]
     if unproven_reset_low_outputs:
         return "missing", [
             f"reset_low_not_implemented:{name}" for name in unproven_reset_low_outputs[:8]
@@ -1681,12 +1753,12 @@ def _structured_requirements(spec_obj: Optional[Dict[str, Any]], spec: str) -> L
             values = mod.get(key)
             if isinstance(values, list):
                 reqs.extend(
-                    {"module": module_name, "section": key, "text": str(v).strip()[:240]}
+                    {"module": module_name, "section": key, "text": str(v).strip()}
                     for v in values if len(str(v).strip()) >= 8
                 )
         for key in ("reset_behavior",):
             if isinstance(mod.get(key), str) and mod[key].strip():
-                reqs.append({"module": module_name, "section": key, "text": mod[key].strip()[:240]})
+                reqs.append({"module": module_name, "section": key, "text": mod[key].strip()})
     if reqs:
         unique: List[Dict[str, str]] = []
         seen = set()
@@ -1712,23 +1784,42 @@ def _requirement_verification_method(requirement: str, section: str = "") -> str
         text,
     ):
         return "constraints_sta"
-    # A conditional output rule is behavioral even though it names an output
-    # port. Its truth requires temporal stimulus/checking, not interface shape.
-    if re.search(r"\b(?:drive|assert|deassert|produce|emit)\b.*\boutputs?\b.*\b(?:only\s+when|when|if|unless)\b", text):
+    if section in {"must_drive", "must_receive"}:
+        return "static_structural"
+    if re.search(
+        r"\bmaintain\b.*\bsynchronous\b.*\b(?:counter|register(?:ed)?|state)\b|"
+        r"\breflect\b.*\bcurrent\s+registered\b.*\bstate\b|"
+        r"\b(?:provide|expose)\b.*\bcurrent\b.*\bvalue\b.*\b(?:observability|debug)\b|"
+        r"\b(?:synthesizable|infer\s+latches?|asynchronous\s+reset|drive\s+any\s+input\s+ports?)\b",
+        text,
+    ):
+        return "static_structural"
+    # Pure interface-shape obligations can mention handshake signal names
+    # without describing handshake behavior.
+    if re.search(
+        r"\b(?:emit|expose|provide|declare)\b.*\b(?:valid|data)\b.*\boutputs?\b.*"
+        r"\b(?:receive|accept|declare)\b.*\bready\b.*\binputs?\b",
+        text,
+    ):
+        return "static_structural"
+    # Behavioral meaning takes precedence over nouns such as ``output``,
+    # ``register`` and ``memory``.  Those nouns frequently occur in temporal
+    # rules; classifying them first as structural made the RTL closure loop try
+    # to prove behavior with lexical matching and retry the same design.
+    if re.search(
+        r"\b(?:when|whenever|after|before|until|cycle|pulse|sticky|timeout|priority|handshake|"
+        r"sequence|newer|older|latch|reload|reject|accept(?:ed)?|clamp|fault|valid(?:ity)?|ready|"
+        r"fresh|fallback|override|only\s+(?:from|when)|cannot\s+override|must\s+not\s+assert)\b",
+        text,
+    ):
         return "systemverilog_assertion"
-    if section in {"must_drive", "must_receive"} or re.search(
+    if re.search(
         r"\b(?:port|width|interface|transport signals?|module|instance|hierarchy|register|address|"
         r"reset value|clock|memory|fifo|csr|mmio|connect|driver|combinational depth|"
         r"(?:expose|produce|emit|drive)[^.]{0,40}outputs?)\b",
         text,
     ):
         return "static_structural"
-    if re.search(
-        r"\b(?:when|whenever|after|before|until|cycle|pulse|sticky|timeout|priority|handshake|"
-        r"sequence|newer|older|latch|reload|reject|accept|clamp|fault|valid|ready)\b",
-        text,
-    ):
-        return "systemverilog_assertion"
     return "dynamic_simulation"
 
 
@@ -1901,6 +1992,14 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
         "top_module_present": bool(top_module) and any(
             str(module.get("name") or "") == top_module for module in modules
         ),
+        "design_has_mmio_control_plane": any(
+            any("mmio" in str(port.get("name") or "").lower() for port in module.get("ports") or [])
+            and any(
+                token in str(module.get("name") or "").lower()
+                for token in ("csr", "mmio", "register", "regmap")
+            )
+            for module in modules
+        ),
     }
 
     requirements = _structured_requirements(spec_obj, spec)
@@ -1927,7 +2026,13 @@ def run_agent(state: Dict[str, Any]) -> Dict[str, Any]:
                 # obligations remain strictly scoped to their owning module.
                 scoped_rtl = rtl_text if not owner or owner == top_module else module_rtl[owner]
                 scoped_names = set(re.findall(r"\b[A-Za-z_][A-Za-z0-9_$]*\b", scoped_rtl))
-                status, evidence = _match_score(requirement, scoped_rtl, scoped_names, structural_context)
+                owner_module = next(
+                    (module for module in modules if str(module.get("name") or "") == owner),
+                    None,
+                )
+                obligation_context = dict(structural_context)
+                obligation_context["scoped_ports"] = (owner_module or {}).get("ports") or []
+                status, evidence = _match_score(requirement, scoped_rtl, scoped_names, obligation_context)
             raw_static_status = status
             if verification_method != "static_structural":
                 # Static RTL evidence is useful diagnostic context, but it is

@@ -818,6 +818,93 @@ def test_structured_requirements_preserve_all_items_and_module_scope():
     assert requirements[-1]["module"] == "child"
 
 
+def test_structured_requirements_do_not_truncate_checker_intent():
+    requirement = "Memory access resets to idle. " + ("preserve semantic detail " * 20) + "final obligation"
+    spec = {"hierarchy": {"top_module": {"name": "top", "reset_behavior": requirement}}}
+
+    requirements = agent._structured_requirements(spec, "")
+
+    assert requirements[0]["text"] == requirement
+    assert requirements[0]["text"].endswith("final obligation")
+
+
+@pytest.mark.parametrize("requirement", [
+    "The module may hold the last safe value internally, but must not assert validity without a fresh accepted command.",
+    "The memory interface is separate from actuator control and cannot override fault handling.",
+    "The request path must drive valid/data outputs only from explicit semantic pack inputs and control state.",
+    "On reset, memory access control returns to idle and no fallback data is synthesized.",
+])
+def test_behavioral_meaning_takes_precedence_over_structural_nouns(requirement):
+    assert agent._requirement_verification_method(requirement, "behavior_rules") == "systemverilog_assertion"
+
+
+@pytest.mark.parametrize("requirement", [
+    "Maintain a synchronous 8-bit counter state.",
+    "counter_value shall always reflect the current registered counter state.",
+    "Provide the current counter value on counter_value for observability and debug.",
+    "The design must be synthesizable and must not infer latches.",
+    "The design must not use asynchronous reset behavior.",
+    "The design must not drive any input ports internally.",
+])
+def test_structural_rtl_rules_do_not_become_behavioral_assertions(requirement):
+    assert agent._requirement_verification_method(requirement, "behavior_rules") == "static_structural"
+
+
+def test_forbidden_asynchronous_reset_is_detected_structurally():
+    requirement = "The design must not use asynchronous reset behavior."
+    asynchronous = "always @(posedge clk or negedge reset_n) if (!reset_n) count <= 0;"
+    synchronous = "always @(posedge clk) if (!reset_n) count <= 0;"
+
+    assert agent._match_score(requirement, asynchronous, set())[0] == "missing"
+    assert agent._match_score(requirement, synchronous, set())[0] == "matched"
+
+
+def test_no_internal_input_driver_uses_declared_port_directions():
+    requirement = "The design must not drive any input ports internally."
+    context = {"scoped_ports": [
+        {"name": "request", "direction": "input"},
+        {"name": "response", "direction": "output"},
+    ]}
+
+    assert agent._match_score(requirement, "assign response = request;", set(), context)[0] == "matched"
+    assert agent._match_score(requirement, "assign request = 1'b0;", set(), context)[0] != "matched"
+
+
+def test_observable_registered_state_output_requires_a_real_driver():
+    requirement = "Provide the current counter value on counter_value for observability and debug."
+    context = {"scoped_ports": [{"name": "counter_value", "direction": "output"}]}
+
+    status, evidence = agent._match_score(
+        requirement, "reg [7:0] counter_reg; assign counter_value = counter_reg;", set(), context
+    )
+
+    assert status == "matched"
+    assert "observable_current_state_output_driven" in evidence
+
+
+def test_register_and_transport_structural_obligations_use_validated_facts():
+    ports = [
+        {"name": "model_req_valid", "direction": "output"},
+        {"name": "model_req_data", "direction": "output"},
+        {"name": "model_req_ready", "direction": "input"},
+    ]
+    context = {
+        "register_contract_complete": True,
+        "design_has_mmio_control_plane": True,
+        "scoped_ports": ports,
+    }
+    cases = [
+        "Implement register decode for all declared software-visible registers and fields in register_contract.",
+        "Every register in register_contract must be represented by explicit decode logic.",
+        "Bridge MMIO transaction semantics into controller configuration and storage address windows.",
+        "Emit model-request valid/data outputs and receive model-request ready as input.",
+        "Transport may coexist with the MMIO control plane, but it cannot replace the MMIO control plane.",
+    ]
+    for requirement in cases:
+        status, evidence = agent._match_score(requirement, "module transport; endmodule", set(), context)
+        assert status == "matched", (requirement, evidence)
+
+
 def test_backpressure_evidence_rejects_reset_gated_constant_ready():
     weak = "assign cmd_ready_out = reset_n & 1'b1;"
     dynamic = "assign cmd_ready_out = reset_n && !command_fifo_full;"

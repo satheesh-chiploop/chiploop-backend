@@ -615,6 +615,8 @@ def _maybe_llm_expand(spec: Dict[str, Any], sva: str, log_path: str, sva_spec: D
             "- For behavior that occurs on the next edge/cycle, use non-overlapping implication |=> (or an equivalent explicit one-cycle delay).\n"
             "- Use overlapping implication |-> only for same-sample combinational relationships.\n"
             "- For synchronous reset, check the registered result after the reset edge; do not incorrectly require the pre-edge value to be reset.\n"
+            "- 'Synchronous/registered state' does not mean the value is always stable; use $stable only when the requirement explicitly says hold, stable, or unchanged.\n"
+            "- Never use tautologies such as signal == signal as requirement checkers.\n"
             "- Preserve requirement IDs in adjacent comments.\n"
             "- If an obligation cannot be expressed using available ports, do not invent signals; omit it so validation reports it missing.\n"
             "- Return SystemVerilog code only. No markdown.\n\n"
@@ -667,13 +669,15 @@ def _checker_quality_issues(sva: str, sva_spec: Dict[str, Any]) -> List[Dict[str
     }
     assertion_bodies: Dict[str, str] = {}
     for checker, prop_name in re.findall(
-        r"\b(a_req_\d+)\s*:\s*assert\s+property\s*\(\s*(\w+)\s*\)\s*;",
+        r"\b(a_req_\d+)\s*:\s*assert\s+property\s*\(\s*(\w+)\s*\)"
+        r"(?=\s*(?:;|else\b))",
         sva,
         re.I,
     ):
         assertion_bodies[checker.lower()] = named_properties.get(prop_name.lower(), "")
     for checker, body in re.findall(
-        r"\b(a_req_\d+)\s*:\s*assert\s+property\s*\((.*?)\)\s*;",
+        r"\b(a_req_\d+)\s*:\s*assert\s+property\s*\((.*?)\)"
+        r"(?=\s*(?:;|else\b))",
         sva,
         re.I | re.S,
     ):
@@ -705,6 +709,7 @@ def _checker_quality_issues(sva: str, sva_spec: Dict[str, Any]) -> List[Dict[str
             continue
         checker = str(obligation.get("checker_id") or "").lower()
         requirement = str(obligation.get("requirement") or "")
+        req_lower = requirement.lower()
         body = assertion_bodies.get(checker, "")
         if not body:
             continue
@@ -733,13 +738,29 @@ def _checker_quality_issues(sva: str, sva_spec: Dict[str, Any]) -> List[Dict[str
                 "checker_id": str(obligation.get("checker_id") or ""),
                 "issue": f"assertion contains tautological self-comparison '{self_comparison.group(0)}'",
             })
+        stable_signals = re.findall(r"\$stable\s*\(\s*([A-Za-z_][A-Za-z0-9_$]*)\s*\)", body, re.I)
+        antecedent = re.split(r"\|[-=]>", body, maxsplit=1)[0]
+        explicit_disabled_hold = bool(
+            re.search(r"\benable\s+gat", req_lower)
+            and re.search(r"(?:!\s*\w*enable\w*|\b\w*enable\w*\s*==\s*(?:1'b0|0))", antecedent, re.I)
+        )
+        if stable_signals and not re.search(
+            r"\b(?:hold|holds|held|stable|unchanged|retain|preserve)\b", req_lower
+        ) and not explicit_disabled_hold:
+            issues.append({
+                "requirement_id": str(obligation.get("requirement_id") or ""),
+                "checker_id": str(obligation.get("checker_id") or ""),
+                "issue": (
+                    "checker requires $stable(" + stable_signals[0]
+                    + ") but the requirement does not specify hold/stability behavior"
+                ),
+            })
         if cover_body and constant_true(cover_body):
             issues.append({
                 "requirement_id": str(obligation.get("requirement_id") or ""),
                 "checker_id": str(obligation.get("checker_id") or ""),
                 "issue": "non-vacuity cover is constant and does not measure requirement activation",
             })
-        req_lower = requirement.lower()
         sequential_transition = bool(re.search(
             r"\b(?:next\s+(?:rising\s+)?(?:edge|cycle)|holds?|advances?|increments?|wraps?|"
             r"synchronous(?:ly)?|on\s+(?:any\s+)?rising\s+edge)\b",
@@ -780,7 +801,25 @@ def _checker_quality_issues(sva: str, sva_spec: Dict[str, Any]) -> List[Dict[str
 
 
 def _make_assertion_failures_terminal(sva: str) -> str:
-    """Ensure simulator assertion failures exit instead of entering an interactive stop."""
+    """Make requirement failures machine-readable without hanging the simulator.
+
+    Verilator embedded through cocotb can report ``$fatal`` and finish the
+    Python test while leaving the make/process wrapper alive.  Emit a labeled
+    diagnostic instead; simulation execution treats that checker label as an
+    authoritative failure even when the simulator exits zero.
+    """
+    requirement_action = re.compile(
+        r"(?P<label>\b(a_req_\d+)\s*:\s*assert\s+property\s*\(\s*\w+\s*\))\s*"
+        r"else\s+\$(?:fatal|error)\s*\([^;]*\)\s*;",
+        re.I | re.S,
+    )
+
+    def report_requirement(match: re.Match) -> str:
+        checker_match = re.search(r"\b(a_req_\d+)\b", match.group("label"), re.I)
+        checker = checker_match.group(1) if checker_match else "a_req_unknown"
+        return match.group("label") + f' else $display("ASSERTION_FAILURE {checker}");'
+
+    sva = requirement_action.sub(report_requirement, sva)
     normalized = re.sub(r"\belse\s+\$error\s*\(", "else $fatal(1, ", sva, flags=re.I)
     bare = re.compile(
         r"(?P<label>\b[a-zA-Z_]\w*\s*:\s*assert\s+property\s*\(\s*[a-zA-Z_]\w*\s*\)\s*;)"
@@ -792,6 +831,8 @@ def _make_assertion_failures_terminal(sva: str) -> str:
         label_match = re.match(r"\s*([a-zA-Z_]\w*)", match.group("label"))
         label = label_match.group(1) if label_match else "assertion"
         assertion = match.group("label").rstrip()
+        if re.fullmatch(r"a_req_\d+", label, re.I):
+            return assertion[:-1] + f' else $display("ASSERTION_FAILURE {label}");'
         return assertion[:-1] + f' else $fatal(1, "Assertion {label} failed.");'
 
     return bare.sub(add_fatal, normalized)
@@ -827,6 +868,8 @@ def _close_missing_checkers(
             "Use only ports declared in the owning verification target. Never invent signals.\n"
             "For next-edge/next-cycle behavior use |=> or an explicit one-cycle delay; reserve |-> for same-sample combinational behavior.\n"
             "Synchronous reset assertions must check state after the reset edge, not the pre-edge sampled state.\n"
+            "Do not translate 'synchronous/registered state' into unconditional $stable; $stable is valid only for an explicit hold/stable/unchanged requirement.\n"
+            "Never use signal == signal or another tautology as a checker.\n"
             f"MISSING_OBLIGATIONS:\n{json.dumps(obligations, indent=2)}\n\n"
             f"TEMPORAL_QUALITY_ISSUES:\n{json.dumps(quality_issues, indent=2)}\n\n"
             f"SVA_SPEC:\n{json.dumps(sva_spec, indent=2)}\n\n"

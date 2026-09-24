@@ -3131,7 +3131,11 @@ def _build_repair_prompt(
 ) -> str:
     graph_diagnostics = _build_connectivity_repair_diagnostics(previous_json_text)
     firmware_examples = ""
-    if "firmware control-plane" in str(failure_log_text or "").lower() or "register_contract" in str(failure_log_text or ""):
+    if (
+        "firmware control-plane" in str(failure_log_text or "").lower()
+        or "register_contract" in str(failure_log_text or "")
+        or "semantic field ports" in str(failure_log_text or "").lower()
+    ):
         firmware_examples = """
 
 FIRMWARE CONTROL-PLANE REPAIR EXAMPLES:
@@ -3140,6 +3144,7 @@ FIRMWARE CONTROL-PLANE REPAIR EXAMPLES:
 - GOOD: direct real-time streaming ports may coexist with the CSR interface.
 - BAD: expose only dozens of direct cfg_* value pins while claiming firmware can configure the block.
 - BAD: add register_contract JSON without adding the matching synthesizable top-level bus, or add a bus without concrete addressed registers.
+- In a hierarchical register block, map writable configuration fields to semantic OUTPUT ports and map RO live/status/readback fields to semantic INPUT ports driven by their real producing module. Never turn an RO shadow/status field into writable local storage merely to satisfy decode coverage.
 - Repair the complete specification coherently; do not patch only the validation message.
 """
     hierarchy_examples = ""
@@ -3430,6 +3435,7 @@ def _compile_spec_contract(
         lambda: _validate_mandatory_firmware_control_plane(
             spec_json, mode, source_prompt, required=require_firmware_control_plane,
         ),
+        lambda: _validate_register_semantic_port_contract(spec_json, mode),
         lambda: _validate_fpga_memory_contract(spec_json, source_prompt),
         lambda: _validate_no_command_fallback_contract(spec_json, source_prompt),
     )
@@ -3561,6 +3567,79 @@ def _validate_mandatory_firmware_control_plane(
     if missing:
         raise ValueError(
             "Mandatory firmware control-plane top interface is incomplete; missing " + ", ".join(missing)
+        )
+
+
+def _validate_register_semantic_port_contract(spec_json: dict, mode: str) -> None:
+    """Ensure a hierarchical CSR's externally mapped fields have real ports.
+
+    Writable configuration leaves the CSR block, while read-only live status
+    enters it.  Without this check an LLM can describe every register as
+    externally mapped but omit the live readback inputs; the RTL repair loop
+    then has no legal way to implement the register contract and invents ports.
+    """
+    if mode != "hierarchical":
+        return
+    hierarchy = spec_json.get("hierarchy") if isinstance(spec_json.get("hierarchy"), dict) else {}
+    modules = [module for module in hierarchy.get("modules") or [] if isinstance(module, dict)]
+    candidates = [
+        module for module in modules
+        if re.search(r"(?:^|_)(?:csr|mmio|regmap|register)(?:_|$)", str(module.get("name") or ""), re.I)
+    ]
+    if not candidates:
+        return
+    register_module = max(candidates, key=lambda module: len(module.get("ports") or []))
+    contract_text = " ".join(
+        str(value)
+        for key in ("description", "functionality", "responsibilities", "behavior_rules")
+        for value in (
+            register_module.get(key) if isinstance(register_module.get(key), list)
+            else [register_module.get(key)]
+        )
+        if value
+    )
+    if not re.search(r"explicit semantic|maps? to one or more declared|expose.*configuration", contract_text, re.I):
+        return
+
+    ports = [port for port in register_module.get("ports") or [] if isinstance(port, dict)]
+
+    def semantic_tokens(name: str) -> set[str]:
+        return {
+            token for token in re.split(r"[^a-z0-9]+", str(name or "").lower())
+            if token and token not in {"cfg", "config", "status", "csr", "reg", "register", "shadow"}
+        }
+
+    def mapped(field_name: str, direction: str) -> bool:
+        required = semantic_tokens(field_name)
+        if not required:
+            return True
+        return any(
+            str(port.get("direction") or "").lower() in {direction, "inout"}
+            and required.issubset(semantic_tokens(str(port.get("name") or "")))
+            for port in ports
+        )
+
+    missing = []
+    registers = ((spec_json.get("register_contract") or {}).get("registers") or [])
+    for register in registers:
+        if not isinstance(register, dict):
+            continue
+        register_access = str(register.get("access") or "").upper()
+        for field in register.get("fields") or []:
+            if not isinstance(field, dict):
+                continue
+            field_name = str(field.get("name") or "").strip()
+            if not field_name or re.fullmatch(r"reserved(?:_?\d+)?", field_name, re.I):
+                continue
+            access = str(field.get("access") or register_access).upper()
+            direction = "input" if access == "RO" else "output"
+            if not mapped(field_name, direction):
+                missing.append(f"{field_name}:{direction}")
+    if missing:
+        raise ValueError(
+            f"Hierarchical register block '{register_module.get('name')}' lacks semantic field ports "
+            "with access-correct directions (RO live/readback fields are inputs; writable fields are outputs): "
+            + ", ".join(missing[:24])
         )
 
 
@@ -4234,6 +4313,11 @@ SEMANTIC SIGNAL RESOLUTION RULES (CRITICAL)
    - cfg_adc_start
    - cfg_dac_enable
    - cfg_dac_code
+
+   Register access direction is authoritative:
+   - writable RW/WO/W1* configuration fields consumed elsewhere are semantic OUTPUTS of the register block
+   - RO live/status/readback fields produced elsewhere are semantic INPUTS to the register block
+   - never invent a writable storage element or output port for an RO live/readback field
 
 5. Every semantic signal must follow FULL CONTRACT CLOSURE:
 

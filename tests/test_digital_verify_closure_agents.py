@@ -46,6 +46,35 @@ def test_behavioral_obligations_have_stable_requirement_and_checker_ids():
     assert all(item["verification_method"] == "systemverilog_assertion" for item in obligations)
 
 
+def test_checker_quality_reads_assertions_with_action_clauses_and_rejects_false_stability():
+    sva_spec = {"behavioral_obligations": [{
+        "requirement_id": "REQ-001",
+        "checker_id": "a_req_001",
+        "requirement": "Maintain a synchronous 8-bit counter state.",
+    }, {
+        "requirement_id": "REQ-002",
+        "checker_id": "a_req_002",
+        "requirement": "Expose the current counter value for observability.",
+    }]}
+    sva = """
+property p_a_req_001;
+  @(posedge clk) 1'b1 |=> $stable(counter_value);
+endproperty
+a_req_001: assert property(p_a_req_001)
+  else $fatal(1, "failed");
+property p_a_req_002;
+  @(posedge clk) 1'b1 |-> (counter_value == counter_value);
+endproperty
+a_req_002: assert property(p_a_req_002)
+  else $fatal(1, "failed");
+"""
+
+    issues = sva_agent._checker_quality_issues(sva, sva_spec)
+
+    assert any(item["requirement_id"] == "REQ-001" and "$stable" in item["issue"] for item in issues)
+    assert any(item["requirement_id"] == "REQ-002" and "tautological" in item["issue"] for item in issues)
+
+
 def test_dynamic_classifier_result_does_not_contradict_sva_generation_contract():
     spec = {"hierarchy": {"top_module": {
         "name": "waveform", "ports": [],
@@ -249,13 +278,16 @@ def test_sva_quality_rejects_checker_that_drops_explicit_comparison_relation():
     assert any("does not preserve explicit relation" in item["issue"] for item in issues)
 
 
-def test_sva_assertion_actions_are_terminal_for_error_and_bare_assertions():
+def test_requirement_assertion_actions_report_without_fatal_process_hang():
     source = '''
 a_req_001: assert property(p_one);
 a_req_002: assert property(p_two) else $error("bad");
 '''
     normalized = sva_agent._make_assertion_failures_terminal(source)
-    assert normalized.count("$fatal(1,") == 2
+    assert normalized.count("$display") == 2
+    assert "ASSERTION_FAILURE a_req_001" in normalized
+    assert "ASSERTION_FAILURE a_req_002" in normalized
+    assert "$fatal" not in normalized
     assert "$error" not in normalized
 
 
