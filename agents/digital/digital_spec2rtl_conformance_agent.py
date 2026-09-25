@@ -689,6 +689,23 @@ def _match_score(
         req_lower,
     ):
         evidence.append("register_decode_and_access_paths")
+    if structural_context.get("register_contract_complete") is True and re.search(
+        r"csr\s+map.*(?:documented|declared).*(?:addresses|field\s+ownership)|"
+        r"(?:addresses|field\s+ownership).*csr\s+map",
+        req_lower,
+    ):
+        evidence.extend(["complete_register_contract_traceability", "register_decode_and_access_paths"])
+    if structural_context.get("register_contract_complete") is True and re.search(
+        r"no\s+status\s+field.*(?:corresponding\s+)?csr\s+readback|"
+        r"status\s+field.*not.*(?:only\s+)?internally",
+        req_lower,
+    ):
+        evidence.extend(["complete_register_contract_traceability", "register_decode_and_access_paths"])
+    if structural_context.get("register_contract_complete") is True and re.search(
+        r"(?:control|status)\s+register\s+at\s+0x[0-9a-f]+\s+shall\s+include",
+        req_lower,
+    ):
+        evidence.extend(["complete_register_contract_traceability", "register_decode_and_access_paths"])
     scoped_ports = structural_context.get("scoped_ports") or []
     if re.search(r"(?:emit|expose|provide).*model[- ]request.*valid.*data.*(?:receive|input).*ready", req_lower):
         port_roles = {
@@ -1102,6 +1119,18 @@ def _match_score(
         if group
     ))
     declared_outputs = {str(name).lower() for name in structural_context.get("output_ports") or []}
+    resets_all_outputs = bool(re.search(
+        r"\b(?:reset|clear|force|drive)\b[^.\n]{0,100}\b(?:all|every)\b"
+        r"[^.\n]{0,80}\boutputs?\b[^.\n]{0,50}\b(?:zero|low|deasserted)\b|"
+        r"\b(?:all|every)\b[^.\n]{0,80}\boutputs?\b[^.\n]{0,50}"
+        r"\b(?:zero|low|deasserted)\b[^.\n]{0,50}\breset\b",
+        requirement,
+        re.I,
+    ))
+    if resets_all_outputs and declared_outputs:
+        reset_low_outputs = list(dict.fromkeys(
+            [*reset_low_outputs, *sorted(declared_outputs)]
+        ))
     if declared_outputs:
         reset_low_outputs = [name for name in reset_low_outputs if name.lower() in declared_outputs]
     reset_signal_match = re.search(r"\b(reset_n|rst_n|reset|rst)\b", requirement, re.I)
@@ -1138,6 +1167,12 @@ def _match_score(
                 re.I,
             )
         }
+        reset_zero_signals.update(re.findall(
+            rf"\bif\s*\(\s*{asserted_condition}\s*\)\s*"
+            rf"([A-Za-z_][A-Za-z0-9_$]*)\s*<=\s*(?:\d+'[bdh]0+|1'b0|0)\b",
+            rtl_without_comments,
+            re.I,
+        ))
         continuous_drivers = {
             name: expr
             for name, expr in re.findall(

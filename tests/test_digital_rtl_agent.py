@@ -838,6 +838,62 @@ endmodule
     assert not any("memory_implementation" in issue or "memory array" in issue for issue in good_issues)
 
 
+def test_validate_accepts_nested_slice_memory_write_index():
+    memory = {
+        "name": "history_store", "rtl_output_file": "history_store.v",
+        "ports": [
+            {"name": "clk", "direction": "input", "width": 1},
+            {"name": "we", "direction": "input", "width": 1},
+            {"name": "addr", "direction": "input", "width": 8},
+            {"name": "din", "direction": "input", "width": 64},
+            {"name": "dout", "direction": "output", "width": 64},
+        ],
+        "memory_implementation": {"kind": "fpga_bram", "depth": 64, "data_width": 64, "addr_width": 6},
+    }
+    spec = {"hierarchy": {"top_module": {"name": "top", "rtl_output_file": "top.v", "ports": []},
+                           "modules": [memory]},
+            "top_level_connections": [], "inter_module_signals": [], "signal_ownership": []}
+    code = """
+module history_store(input clk, input we, input [7:0] addr,
+ input [63:0] din, output reg [63:0] dout);
+ reg [63:0] mem [0:63];
+ always @(posedge clk) begin
+   if (we) mem[addr[5:0]] <= din;
+   dout <= mem[addr[5:0]];
+ end
+endmodule
+"""
+    issues, _, _ = agent._validate_spec_vs_rtl(
+        spec, "hierarchical", {"top.v": "module top(); endmodule", "history_store.v": code},
+    )
+    assert not any("no detectable indexed write path" in issue for issue in issues)
+
+
+def test_validate_rejects_unconnected_inter_module_endpoint():
+    spec = {
+        "hierarchy": {
+            "top_module": {"name": "top", "rtl_output_file": "top.v", "ports": []},
+            "modules": [
+                {"name": "producer", "rtl_output_file": "producer.v",
+                 "ports": [{"name": "dout", "direction": "output", "width": 8}]},
+                {"name": "consumer", "rtl_output_file": "consumer.v",
+                 "ports": [{"name": "din", "direction": "input", "width": 8}]},
+            ],
+        },
+        "top_level_connections": [],
+        "inter_module_signals": [{"name": "payload", "width": 8,
+                                  "source": "producer.dout", "destinations": ["consumer.din"]}],
+        "signal_ownership": [],
+    }
+    rtl = {
+        "top.v": "module top(); wire [7:0] payload; producer u_p(.dout()); consumer u_c(.din(payload)); endmodule",
+        "producer.v": "module producer(output [7:0] dout); assign dout = 8'h5a; endmodule",
+        "consumer.v": "module consumer(input [7:0] din); endmodule",
+    }
+    issues, _, _ = agent._validate_spec_vs_rtl(spec, "hierarchical", rtl)
+    assert any("source endpoint 'producer.dout' is unconnected" in issue for issue in issues)
+
+
 def test_validate_requires_one_inferred_array_per_declared_memory_bank():
     memory = {
         "name": "payload_store", "rtl_output_file": "payload_store.v",

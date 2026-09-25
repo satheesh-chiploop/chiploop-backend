@@ -3037,3 +3037,23 @@ def test_feature_strength_recognizes_spaced_reference_to_snake_case_state():
     }]
     with pytest.raises(ValueError, match="counter_value"):
         spec_agent._validate_feature_contract_strength(ports, contracts)
+def test_hierarchical_endpoint_validation_rejects_child_output_into_top_input():
+    spec = {
+        "hierarchy": {
+            "top_module": {"name": "top", "ports": [
+                {"name": "observed", "direction": "input", "width": 8},
+            ]},
+            "modules": [{"name": "producer", "ports": [
+                {"name": "data", "direction": "output", "width": 8},
+            ]}],
+        },
+        "top_level_connections": [],
+        "inter_module_signals": [{
+            "name": "observed_data", "width": 8,
+            "source": "producer.data", "destinations": ["top.observed"],
+        }],
+        "signal_ownership": [],
+    }
+
+    with pytest.raises(ValueError, match="top destination.*external output"):
+        spec_agent._validate_hierarchical_endpoint_coverage(spec)

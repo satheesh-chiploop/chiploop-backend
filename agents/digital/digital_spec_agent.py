@@ -673,6 +673,11 @@ def _validate_hierarchical_endpoint_coverage(spec_json: dict) -> None:
         if smod != top_name and sport not in module_ports[smod]:
             raise ValueError(f"inter_module_signals[{i}] source port '{smod}.{sport}' is not present in module ports.")
         src_dir = (module_dirs.get(smod) or {}).get(sport)
+        if smod == top_name and src_dir not in {"input", "inout"}:
+            raise ValueError(
+                f"inter_module_signals[{i}] top source '{smod}.{sport}' must be an external input/inout, "
+                f"got '{src_dir}'."
+            )
         if smod != top_name and src_dir and src_dir not in {"output", "inout"}:
             raise ValueError(
                 f"inter_module_signals[{i}] source port '{smod}.{sport}' must be output/inout, got '{src_dir}'."
@@ -687,6 +692,11 @@ def _validate_hierarchical_endpoint_coverage(spec_json: dict) -> None:
             if dmod != top_name and dport not in module_ports[dmod]:
                 raise ValueError(f"inter_module_signals[{i}] destination port '{dmod}.{dport}' is not present in module ports.")
             dst_dir = (module_dirs.get(dmod) or {}).get(dport)
+            if dmod == top_name and dst_dir not in {"output", "inout"}:
+                raise ValueError(
+                    f"inter_module_signals[{i}] top destination '{dmod}.{dport}' must be an external output/inout, "
+                    f"got '{dst_dir}'."
+                )
             if dmod != top_name and dst_dir and dst_dir not in {"input", "inout"}:
                 raise ValueError(
                     f"inter_module_signals[{i}] destination port '{dmod}.{dport}' must be input/inout, got '{dst_dir}'."

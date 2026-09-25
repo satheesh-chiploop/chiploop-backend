@@ -2520,7 +2520,9 @@ def _validate_spec_vs_rtl(spec_json: dict, mode: str, verilog_map: Dict[str, str
             write_arrays = [
                 array_name for array_name in arrays
                 if re.search(
-                    rf"\b{re.escape(array_name)}\s*\[[^\]]+\]\s*(?:<=|(?<![=!<>])=(?!=))",
+                    # Permit indexed addresses that themselves contain a
+                    # slice, e.g. mem[addr[5:0]] <= data.
+                    rf"\b{re.escape(array_name)}\s*\[[^;]*?\]\s*(?:<=|(?<![=!<>])=(?!=))",
                     module_code,
                     re.I,
                 )
@@ -2605,6 +2607,54 @@ def _validate_spec_vs_rtl(spec_json: dict, mode: str, verilog_map: Dict[str, str
     if mode == "hierarchical":
         contract = _build_connectivity_contract(spec_json, mode)
 
+        top_code = verilog_map.get(_top_rtl_file(spec_json, mode), "")
+        hierarchy_modules = {
+            str(module.get("name") or "")
+            for module in ((spec_json.get("hierarchy") or {}).get("modules") or [])
+            if isinstance(module, dict) and module.get("name")
+        }
+        endpoint_nets: Dict[tuple[str, str], str] = {}
+        if top_code and hierarchy_modules:
+            instance_pattern = re.compile(
+                rf"\b(?P<cell>{'|'.join(sorted((re.escape(name) for name in hierarchy_modules), key=len, reverse=True))})\s+"
+                r"[A-Za-z_][A-Za-z0-9_$]*\s*\((?P<conns>.*?)\)\s*;",
+                re.S,
+            )
+            for instance in instance_pattern.finditer(top_code):
+                for port, expression in _named_instance_connections(instance.group("conns")).items():
+                    endpoint_nets[(instance.group("cell"), port)] = expression.strip()
+
+        def endpoint_net(endpoint: dict) -> str:
+            module_name = str((endpoint or {}).get("module") or "")
+            port_name = str((endpoint or {}).get("port") or "")
+            if module_name == _top_module_name(spec_json, mode):
+                return port_name
+            return endpoint_nets.get((module_name, port_name), "")
+
+        alias_edges: Dict[str, set[str]] = {}
+        for destination_net, source_net in re.findall(
+            r"\bassign\s+([A-Za-z_]\w*)\s*=\s*([A-Za-z_]\w*)\s*;",
+            top_code,
+            re.I,
+        ):
+            alias_edges.setdefault(source_net, set()).add(destination_net)
+
+        def nets_connected(source_net: str, destination_net: str) -> bool:
+            if source_net == destination_net:
+                return True
+            pending = [source_net]
+            visited = set()
+            while pending:
+                current = pending.pop()
+                if current in visited:
+                    continue
+                visited.add(current)
+                for successor in alias_edges.get(current, set()):
+                    if successor == destination_net:
+                        return True
+                    pending.append(successor)
+            return False
+
         for s in contract["internal_signals"]:
             sig_name = s.get("name")
             endpoints = [str((s.get("source") or {}).get("port") or "")]
@@ -2614,6 +2664,31 @@ def _validate_spec_vs_rtl(spec_json: dict, mode: str, verilog_map: Dict[str, str
                 re.search(rf"\b{re.escape(name)}\b", full_text) for name in endpoints
             ):
                 s["name"] = endpoints[0]
+
+        # Validate real endpoint bindings, not merely whether a signal name
+        # appears somewhere in concatenated RTL.
+        for s in contract["internal_signals"]:
+            sig_name = str(s.get("name") or "")
+            source = s.get("source") or {}
+            source_net = endpoint_net(source)
+            source_label = f"{source.get('module')}.{source.get('port')}"
+            if not source_net:
+                issues.append(
+                    f"Inter-module source endpoint '{source_label}' is unconnected in the top instance."
+                )
+                continue
+            for destination in s.get("destinations") or []:
+                destination_net = endpoint_net(destination)
+                destination_label = f"{destination.get('module')}.{destination.get('port')}"
+                if not destination_net:
+                    issues.append(
+                        f"Inter-module destination endpoint '{destination_label}' is unconnected in the top instance."
+                    )
+                elif not nets_connected(source_net, destination_net):
+                    issues.append(
+                        f"Inter-module connection mismatch for '{sig_name}': producer '{source_label}' uses "
+                        f"net '{source_net}' but consumer '{destination_label}' uses net '{destination_net}'."
+                    )
 
         for o in contract["ownership"]:
             sig_name = o.get("signal")

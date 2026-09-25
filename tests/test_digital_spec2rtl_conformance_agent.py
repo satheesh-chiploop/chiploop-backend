@@ -321,6 +321,46 @@ endmodule
     assert "reset_low_pwm_out" in good_evidence
 
 
+def test_match_score_requires_every_output_for_reset_all_outputs_requirement():
+    requirement = "Reset all registers and outputs to zero when reset_n is low."
+    rtl = """
+module pwm_controller(
+  input clk, input reset_n, input [7:0] duty_cycle,
+  output [7:0] counter_value, output pwm_out
+);
+  reg [7:0] counter_r;
+  always @(posedge clk) begin
+    if (!reset_n) counter_r <= 8'h00;
+  end
+  assign counter_value = counter_r;
+  assign pwm_out = counter_r < duty_cycle;
+endmodule
+"""
+    context = {"output_ports": ["counter_value", "pwm_out"]}
+
+    bad_status, bad_evidence = agent._match_score(
+        requirement,
+        rtl,
+        {"clk", "reset_n", "duty_cycle", "counter_r", "counter_value", "pwm_out"},
+        context,
+    )
+    good_status, good_evidence = agent._match_score(
+        requirement,
+        rtl.replace(
+            "assign pwm_out = counter_r < duty_cycle;",
+            "assign pwm_out = reset_n && (counter_r < duty_cycle);",
+        ),
+        {"clk", "reset_n", "duty_cycle", "counter_r", "counter_value", "pwm_out"},
+        context,
+    )
+
+    assert bad_status == "missing"
+    assert bad_evidence == ["reset_low_not_implemented:pwm_out"]
+    assert good_status == "matched"
+    assert "reset_low_counter_value" in good_evidence
+    assert "reset_low_pwm_out" in good_evidence
+
+
 def test_match_score_accepts_synchronous_reset_through_next_state_mux():
     rtl = """
 module controller(input clk, input reset_n, input enable);
@@ -1344,3 +1384,14 @@ endmodule
     }
     for requirement, expected in expectations.items():
         assert expected in agent._generic_behavior_evidence(requirement, rtl)
+def test_match_score_uses_complete_register_contract_for_map_ownership_requirements():
+    context = {"register_contract_complete": True}
+    rtl = "always @(*) case (csr_addr) 8'h00: csr_rdata = 64'b0; endcase"
+    requirements = [
+        "The CSR map must match the documented addresses and field ownership exactly.",
+        "No status field may be exposed only internally without a corresponding CSR readback path.",
+        "The control register at 0x00 shall include enable, mode, clear_fault, and request_seq_seed fields.",
+    ]
+    for requirement in requirements:
+        status, evidence = agent._match_score(requirement, rtl, {"csr_addr", "csr_rdata"}, context)
+        assert status == "matched", (requirement, evidence)
